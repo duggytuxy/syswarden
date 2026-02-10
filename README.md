@@ -202,6 +202,13 @@ journalctl -k -f | grep "SysWarden-BLOCK"
 
 * ☕ **Ko-Fi:** [https://ko-fi.com/laurentmduggytuxy](https://ko-fi.com/laurentmduggytuxy)
 
+## ABUSEIPDB Contributor
+
+| Duggy Tuxy |
+| :---: |
+| <a href="https://www.abuseipdb.com/user/133059"><img src="https://www.abuseipdb.com/contributor/133059.svg" width="350"></a> |
+| *Verified Contributor* |
+
 ## License & Copyright
 
 - **SysWarden** © 2023–2026  
