@@ -980,6 +980,14 @@ EOF
             log "ERROR" "Unsupported OS for automatic Wazuh install."
             return
         fi
+		
+		# [FIX] Force Manager IP configuration (Universal)
+        # This ensures the Manager IP is applied even if the package was already installed 
+        # and the package manager returned "Nothing to do".
+        if [[ -f /var/ossec/etc/ossec.conf ]]; then
+             log "INFO" "Forcing Wazuh Manager IP to $WAZUH_IP in configuration..."
+             sed -i "s/<address>.*<\/address>/<address>$WAZUH_IP<\/address>/" /var/ossec/etc/ossec.conf
+        fi
 
         # [NEW] Apply Custom Ports Configuration
         if [[ "$WAZUH_PORT" != "1514" ]]; then
