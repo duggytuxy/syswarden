@@ -51,7 +51,8 @@ SysWarden is a tool based on the **[Data-Shield IPv4 Blocklists Community](https
 ├── 👮 Active Defense & Logs
 │   ├── 🐍 Python 3                 # Log Parsing & API Connector
 │   ├── 🚫 Fail2ban                 # Intrusion Prevention System (Jails)
-│   └── 📝 Systemd / Journalctl     # Service Management & Logging
+│   ├── 📝 Systemd / Journalctl     # Service Management & Logging
+│   └── ♻️ Logrotate                # Log Maintenance & Compression
 │
 └── ☁️ External Integrations
     ├── 📦 Data-Shield Repo         # Threat Intelligence Source (Git)
@@ -99,7 +100,8 @@ SysWarden is a tool based on the **[Data-Shield IPv4 Blocklists Community](https
 └── 🖥️ Layer 2: User Space (Allowed Traffic)
     ├── 📁 Services & Logs
     │   ├── 🔓 SSH / Web / Database (Custom Ports Allowed)
-    │   └── 📝 System Logs: /var/log/syslog & journalctl
+    │   ├── 📝 System Logs: /var/log/syslog & journalctl
+    │   └── ♻️ Maintenance: Logrotate (Daily cleanup, 7-day retention)
     │
     └── 📁 Layer 3: Active Response (Dynamic Defense)
         ├── 👮 Fail2ban Service
@@ -166,22 +168,24 @@ journalctl -k -f | grep "SysWarden-BLOCK"
 ```
 📂 / (Root System)
 ├── 📁 etc/
-│   ├── 📄 syswarden.conf             # Main Configuration (Auto-generated)
+│   ├── 📄 syswarden.conf                   # Main Configuration (Auto-generated)
 │   ├── 📁 fail2ban/
-│   │   └── 📄 jail.local             # Custom Jails (SSH, Web, DB) injected by SysWarden
+│   │   └── 📄 jail.local                   # Custom Jails (SSH, Web, DB) injected by SysWarden
+│   ├── 📁 logrotate.d/
+│   │   └── 📄 syswarden                    # Log Rotation Config (7-day retention & compression)
 │   ├── 📁 cron.d/
-│   │   └── 📄 syswarden-update       # Hourly Update Job
+│   │   └── 📄 syswarden-update             # Hourly Update Job
 │   └── 📁 systemd/system/
 │       └── 📄 syswarden-reporter.service
 ├── 📁 usr/local/bin/
-│   ├── 📜 install-syswarden.sh       # Main Script (CLI Tool)
-│   └── 🐍 syswarden_reporter.py      # Python Log Analyzer
+│   ├── 📜 install-syswarden.sh             # Main Script (CLI Tool)
+│   └── 🐍 syswarden_reporter.py            # Python Log Analyzer
 └── 📁 var/
     ├── 📁 log/
-    │   ├── 📄 syswarden-install.log  # Installation & Debug Logs
-    │   └── 📄 fail2ban.log           # Banned IPs logs
+    │   ├── 📄 syswarden-install.log        # Installation & Debug Logs
+    │   └── 📄 fail2ban.log                 # Banned IPs logs
     └── 📁 ossec/etc/
-        └── 📄 ossec.conf             # Wazuh Agent Config (Manager IP & Ports injected here)
+        └── 📄 ossec.conf                   # Wazuh Agent Config (Manager IP & Ports injected here)
 ```
 
 ## Uninstallation (root)
