@@ -586,20 +586,28 @@ def monitor_logs():
     """Reads journalctl and applies advanced logic"""
     print(f"🚀 Monitoring logs (FW: {REPORT_FW}, F2B: {REPORT_F2B})...")
     
+    # [DEBUG] Check firewall backend detection
+    # print("DEBUG: Waiting for logs...")
+
     f = subprocess.Popen(['journalctl', '-f', '-n', '0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     p = select.poll()
     p.register(f.stdout)
 
     # Regex SysWarden (SRC + DPT)
     regex_ds = re.compile(r"\[SysWarden-BLOCK\].*SRC=([\d\.]+).*DPT=(\d+)")
-    # Regex Fail2ban
-    regex_f2b = re.compile(r"fail2ban\.actions.*\[(.*?)\].*?[Bb]an\s+([\d\.]+)", re.IGNORECASE)
+    
+    # [OPTIMIZATION] Regex Fail2ban (More permissive)
+    # Allows "fail2ban.actions", "fail2ban-server", or just "fail2ban"
+    regex_f2b = re.compile(r"fail2ban.*\[(.*?)\].*?[Bb]an\s+([\d\.]+)", re.IGNORECASE)
 
     while True:
         if p.poll(100):
             line = f.stdout.readline().decode('utf-8', errors='ignore')
             if not line:
                 continue
+
+            # [DEBUG] Decomment this line to see EVERY log line passing through
+            # print(f"[RAW] {line.strip()}")
 
             # --- SYSWARDEN LOGIC (KERNEL) ---
             if REPORT_FW:
