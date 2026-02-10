@@ -502,6 +502,17 @@ setup_abuse_reporting() {
             return
         fi
 
+        # --- Scope Selection (New Feature) ---
+        echo "Select reporting scope:"
+        read -p "Report Firewall Blocked IPs (Port Scans)? [Y/n]: " REPORT_FW_CHOICE
+        read -p "Report Fail2ban Banned IPs (Brute Force)? [Y/n]: " REPORT_F2B_CHOICE
+
+        # Logic mapping
+        REPORT_FW="True"
+        REPORT_F2B="True"
+        if [[ "$REPORT_FW_CHOICE" =~ ^[Nn]$ ]]; then REPORT_FW="False"; fi
+        if [[ "$REPORT_F2B_CHOICE" =~ ^[Nn]$ ]]; then REPORT_F2B="False"; fi
+
         log "INFO" "Installing Python dependencies..."
         if [[ -f /etc/debian_version ]]; then
             apt-get install -y python3-requests
@@ -524,6 +535,10 @@ import sys
 API_KEY = "PLACEHOLDER_KEY"
 REPORT_INTERVAL = 900  # 15 minutes
 MY_SERVER_NAME = "SysWarden-Srv"
+
+# --- SCOPE CONFIGURATION (Managed by Installer) ---
+REPORT_FW = True
+REPORT_F2B = True
 
 # --- DEFINITIONS ---
 reported_cache = {}
@@ -566,9 +581,8 @@ def clean_cache():
 
 def monitor_logs():
     """Reads journalctl and applies advanced logic"""
-    print("🚀 Monitoring logs with Advanced Port Detection...")
+    print(f"🚀 Monitoring logs (FW: {REPORT_FW}, F2B: {REPORT_F2B})...")
     
-    # Removed -k to see application logs (Fail2ban) as well as Kernel
     f = subprocess.Popen(['journalctl', '-f', '-n', '0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     p = select.poll()
     p.register(f.stdout)
@@ -585,58 +599,59 @@ def monitor_logs():
                 continue
 
             # --- SYSWARDEN LOGIC (KERNEL) ---
-            match_ds = regex_ds.search(line)
-            if match_ds:
-                ip = match_ds.group(1)
-                try:
-                    port = int(match_ds.group(2))
-                except ValueError:
-                    port = 0
-                
-                # Default category: 14 (Port Scan)
-                cats = ["14"]
-                attack_type = "Port Scan"
+            if REPORT_FW:
+                match_ds = regex_ds.search(line)
+                if match_ds:
+                    ip = match_ds.group(1)
+                    try:
+                        port = int(match_ds.group(2))
+                    except ValueError:
+                        port = 0
+                    
+                    # Default category: 14 (Port Scan)
+                    cats = ["14"]
+                    attack_type = "Port Scan"
 
-                # 1. WEB ATTACK (80, 443)
-                if port in [80, 443]:
-                    cats.extend(["20", "21"])
-                    attack_type = "Web Attack"
+                    # 1. WEB ATTACK (80, 443)
+                    if port in [80, 443]:
+                        cats.extend(["20", "21"])
+                        attack_type = "Web Attack"
 
-                # 2. SSH (22, 2222)
-                elif port in [22, 2222]:
-                    cats.extend(["18", "22"])
-                    attack_type = "SSH Attack"
+                    # 2. SSH (22, 2222)
+                    elif port in [22, 2222]:
+                        cats.extend(["18", "22"])
+                        attack_type = "SSH Attack"
 
-                # 3. TOXIC PORTS & IOT
-                elif port == 23: # Telnet
-                    cats.extend(["18", "23"])
-                    attack_type = "Telnet IoT Attack"
-                
-                elif port == 445: # SMB
-                    cats.extend(["15", "18"])
-                    attack_type = "SMB/Ransomware Attempt"
-                
-                elif port == 1433: # MSSQL
-                    cats.extend(["18", "15"])
-                    attack_type = "MSSQL Probe"
-                
-                elif port in [3389, 5900]: # RDP / VNC
-                    cats.extend(["18"])
-                    attack_type = "Remote Desktop Attack"
+                    # 3. TOXIC PORTS & IOT
+                    elif port == 23: # Telnet
+                        cats.extend(["18", "23"])
+                        attack_type = "Telnet IoT Attack"
+                    
+                    elif port == 445: # SMB
+                        cats.extend(["15", "18"])
+                        attack_type = "SMB/Ransomware Attempt"
+                    
+                    elif port == 1433: # MSSQL
+                        cats.extend(["18", "15"])
+                        attack_type = "MSSQL Probe"
+                    
+                    elif port in [3389, 5900]: # RDP / VNC
+                        cats.extend(["18"])
+                        attack_type = "Remote Desktop Attack"
 
-                # 4. DNS & MAIL
-                elif port in [53, 5353]:
-                    cats.extend(["1", "2", "20"])
-                    attack_type = "DNS Attack"
-                elif port in [25, 110, 143, 465, 587, 993, 995]:
-                    cats.extend(["11", "17"])
-                    attack_type = "Mail Relay/Spam"
+                    # 4. DNS & MAIL
+                    elif port in [53, 5353]:
+                        cats.extend(["1", "2", "20"])
+                        attack_type = "DNS Attack"
+                    elif port in [25, 110, 143, 465, 587, 993, 995]:
+                        cats.extend(["11", "17"])
+                        attack_type = "Mail Relay/Spam"
 
-                final_cats = ",".join(cats)
-                send_report(ip, final_cats, f"Blocked by SysWarden ({attack_type} on Port {port})")
+                    final_cats = ",".join(cats)
+                    send_report(ip, final_cats, f"Blocked by SysWarden ({attack_type} on Port {port})")
 
             # --- FAIL2BAN LOGIC ---
-            else:
+            if REPORT_F2B:
                 match_f2b = regex_f2b.search(line)
                 if match_f2b:
                     jail = match_f2b.group(1)
@@ -655,8 +670,14 @@ EOF
 
         # Inject API Key
         sed -i "s/PLACEHOLDER_KEY/$USER_API_KEY/" /usr/local/bin/syswarden_reporter.py
+        
+        # Inject Reporting Scope (True/False)
+        sed -i "s/REPORT_FW = True/REPORT_FW = $REPORT_FW/" /usr/local/bin/syswarden_reporter.py
+        sed -i "s/REPORT_F2B = True/REPORT_F2B = $REPORT_F2B/" /usr/local/bin/syswarden_reporter.py
+
         # Injection of the custom SSH port into the Python list
         sed -i "s/elif port in \[22, 2222\]:/elif port in \[22, $SSH_PORT\]:/" /usr/local/bin/syswarden_reporter.py
+        
         chmod +x /usr/local/bin/syswarden_reporter.py
 
         # [MODIF] Removal of duplicate jail.local configuration here.
@@ -684,7 +705,7 @@ EOF
 
         systemctl daemon-reload
         systemctl enable --now syswarden-reporter
-        log "INFO" "AbuseIPDB Reporter is now ACTIVE."
+        log "INFO" "AbuseIPDB Reporter is now ACTIVE (Scope: FW=$REPORT_FW, F2B=$REPORT_F2B)."
         
     else
         log "INFO" "Skipping AbuseIPDB reporting setup."
@@ -795,6 +816,34 @@ uninstall_syswarden() {
         ipset destroy "$SET_NAME" 2>/dev/null || true
     fi
 
+    # 3b. Cleaning up Wazuh Agent (Artifacts & Repos)
+    if command -v wazuh-agentd >/dev/null || systemctl list-unit-files | grep -q wazuh-agent; then
+        log "INFO" "Removing Wazuh Agent..."
+
+        # Stop and disable service
+        systemctl disable --now wazuh-agent >/dev/null 2>&1 || true
+
+        # Remove package and repository source list based on OS
+        if [[ -f /etc/debian_version ]]; then
+            # Debian/Ubuntu: Purge package and remove list file
+            apt-get purge -y wazuh-agent >/dev/null 2>&1
+            rm -f /etc/apt/sources.list.d/wazuh.list
+            # Optional: Remove the GPG key added
+            rm -f /usr/share/keyrings/wazuh.gpg
+            
+        elif [[ -f /etc/redhat-release ]]; then
+            # RHEL/Alma/Rocky: Remove package and repo file
+            dnf remove -y wazuh-agent >/dev/null 2>&1
+            rm -f /etc/yum.repos.d/wazuh.repo
+        fi
+
+        # Remove residual configuration directories
+        rm -rf /var/ossec
+        rm -f /etc/ossec-init.conf
+
+        log "INFO" "Wazuh Agent, configurations, and repositories removed."
+    fi
+
     # 4. Cleaning Configs
     rm -f "$CONF_FILE"
     log "INFO" "Configuration file removed."
@@ -803,6 +852,127 @@ uninstall_syswarden() {
     
     echo -e "${GREEN}Uninstallation complete. SysWarden and Reporter have been removed.${NC}"
     exit 0
+}
+
+setup_wazuh_agent() {
+    echo -e "\n${BLUE}=== Step 8: Wazuh Agent Installation ===${NC}"
+    echo "Do you want to install and connect the Wazuh XDR Agent?"
+    echo "This will enable SIEM logging and vulnerability detection."
+    read -p "Install Wazuh Agent? (y/N): " response
+
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        # 1. User Interaction: Collect Manager Info
+        read -p "Enter Wazuh Manager IP (Required): " WAZUH_IP
+        if [[ -z "$WAZUH_IP" ]]; then
+            log "ERROR" "Wazuh Manager IP is missing. Skipping installation."
+            return
+        fi
+		
+		# --- Firewall Whitelisting for Wazuh Manager ---
+        log "INFO" "Whitelisting Wazuh Manager ports (1514/1515) in Firewall..."
+        
+        if [[ "$FIREWALL_BACKEND" == "firewalld" ]]; then
+            # Firewalld handles persistence automatically with --permanent
+            firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='$WAZUH_IP' port port='1514' protocol='tcp' accept" >/dev/null 2>&1
+            firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='$WAZUH_IP' port port='1515' protocol='tcp' accept" >/dev/null 2>&1
+            firewall-cmd --reload >/dev/null 2>&1
+            
+        elif [[ "$FIREWALL_BACKEND" == "nftables" ]]; then
+            # 1. Insert rule in memory (Immediate effect)
+            nft insert rule inet syswarden_table input ip saddr "$WAZUH_IP" tcp sport { 1514, 1515 } accept >/dev/null 2>&1
+            
+            # 2. SAVE rules to disk (Persistence for Debian/Ubuntu)
+            # This exports the current memory state to the config file
+            log "INFO" "Saving Nftables rules to disk..."
+            nft list ruleset > /etc/nftables.conf
+            
+            # 3. Ensure service is enabled at boot
+            systemctl enable nftables >/dev/null 2>&1
+            
+        elif [[ "$FIREWALL_BACKEND" == "ipset" ]] || command -v iptables >/dev/null; then
+            # Insert rule
+            iptables -I INPUT 1 -s "$WAZUH_IP" -p tcp -m multiport --sports 1514,1515 -j ACCEPT
+            
+            # Persistence for IPtables (Debian/Ubuntu usually uses iptables-persistent)
+            if command -v netfilter-persistent >/dev/null; then
+                netfilter-persistent save >/dev/null 2>&1
+            elif [[ -f /etc/iptables/rules.v4 ]]; then
+                iptables-save > /etc/iptables/rules.v4
+            fi
+        fi
+        
+        # Optional: Agent Name (Defaults to Hostname)
+        read -p "Enter Agent Name [Default: $(hostname)]: " WAZUH_NAME
+        WAZUH_NAME=${WAZUH_NAME:-$(hostname)}
+        
+        # Optional: Agent Group (Defaults to 'default')
+        read -p "Enter Agent Group [Default: default]: " WAZUH_GROUP
+        WAZUH_GROUP=${WAZUH_GROUP:-default}
+
+        log "INFO" "Preparing to install Wazuh Agent linked to $WAZUH_IP..."
+
+        # 2. Repository Setup & Installation based on OS
+        if [[ -f /etc/debian_version ]]; then
+            # --- DEBIAN / UBUNTU ---
+            log "INFO" "Setting up APT repository for Wazuh..."
+            
+            # Install prerequisites
+            apt-get install -y gnupg apt-transport-https
+
+            # Import GPG Key (Wazuh Official Method)
+            curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg --import && chmod 644 /usr/share/keyrings/wazuh.gpg
+            
+            # Add Repository
+            echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" | tee /etc/apt/sources.list.d/wazuh.list
+            apt-get update -qq
+
+            # Install Agent with Environment Variables (Auto-Config)
+            log "INFO" "Installing Wazuh Agent package..."
+            WAZUH_MANAGER="$WAZUH_IP" WAZUH_AGENT_NAME="$WAZUH_NAME" WAZUH_AGENT_GROUP="$WAZUH_GROUP" apt-get install -y wazuh-agent
+
+        elif [[ -f /etc/redhat-release ]]; then
+            # --- RHEL / ALMA / ROCKY ---
+            log "INFO" "Setting up YUM/DNF repository for Wazuh..."
+            
+            # Import GPG Key
+            rpm --import https://packages.wazuh.com/key/GPG-KEY-WAZUH
+            
+            # Create Repo File
+            cat <<EOF > /etc/yum.repos.d/wazuh.repo
+[wazuh]
+gpgcheck=1
+gpgkey=https://packages.wazuh.com/key/GPG-KEY-WAZUH
+enabled=1
+name=EL-\$releasever - Wazuh
+baseurl=https://packages.wazuh.com/4.x/yum/
+priority=1
+EOF
+            # Install Agent with Environment Variables (Auto-Config)
+            log "INFO" "Installing Wazuh Agent package..."
+            WAZUH_MANAGER="$WAZUH_IP" WAZUH_AGENT_NAME="$WAZUH_NAME" WAZUH_AGENT_GROUP="$WAZUH_GROUP" dnf install -y wazuh-agent
+        
+        else
+            log "ERROR" "Unsupported OS for automatic Wazuh install."
+            return
+        fi
+
+        # 3. Service Startup
+        log "INFO" "Enabling and starting Wazuh Agent service..."
+        systemctl daemon-reload
+        systemctl enable wazuh-agent
+        systemctl start wazuh-agent
+
+        # 4. Final Status Check
+        if systemctl is-active --quiet wazuh-agent; then
+            log "INFO" "Wazuh Agent is RUNNING."
+            echo -e "${GREEN}SUCCESS: Wazuh Agent installed and connected to $WAZUH_IP (Group: $WAZUH_GROUP).${NC}"
+        else
+            log "WARN" "Wazuh Agent installed but service failed to start. Check logs: journalctl -u wazuh-agent"
+        fi
+
+    else
+        log "INFO" "Skipping Wazuh Agent installation."
+    fi
 }
 
 # ==============================================================================
@@ -850,6 +1020,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     setup_siem_logging
     setup_abuse_reporting
+	setup_wazuh_agent
     setup_cron_autoupdate "$MODE"
     
     echo -e "\n${GREEN}#############################################################"
