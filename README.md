@@ -105,7 +105,7 @@ graph TD
             Agent --"Forward Events"--> WazuhSrv
         end
     end
-
+```
 
 ## Key Features
 
