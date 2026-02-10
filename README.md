@@ -174,7 +174,7 @@ journalctl -k -f | grep "SysWarden-BLOCK"
 │   └── 📁 systemd/system/
 │       └── 📄 syswarden-reporter.service
 ├── 📁 usr/local/bin/
-│   ├── 📜 syswarden                # Main Script (CLI Tool)
+│   ├── 📜 install-syswarden.sh     # Main Script (CLI Tool)
 │   └── 🐍 syswarden_reporter.py    # Python Log Analyzer
 └── 📁 var/
     ├── 📁 log/
