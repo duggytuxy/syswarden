@@ -38,50 +38,25 @@ SysWarden is a tool based on the **[Data-Shield IPv4 Blocklists Community](https
 ## Architecture
 
 ```
-☁️  EXTERNAL SOURCES (Blocklists)
-      (GitHub / GitLab / Codeberg Mirrors)
-                   │
-                   ▼
-      +-----------------------------------+
-      |  🔄  SYSWARDEN CORE (Bash/Cron)   |
-      |-----------------------------------|
-      | 1. Checks Latency (Auto-Select)   |
-      | 2. Downloads & Sanitizes List     |
-      | 3. Detects OS & Firewall Backend  |
-      +-----------------------------------+
-                   │
-                   ▼
-    +---------------------------------------+
-    |  🛡️  LAYER 1: KERNEL FIREWALLING      |
-    |---------------------------------------|
-    |      [ OS ABSTRACTION LAYER ]         |
-    |  Debian   |   RHEL/Alma  |   Legacy   |
-    |     ⬇     |       ⬇      |      ⬇     |
-    | {Nftables}|  {Firewalld} |  {Ipset}   |
-    |           |              |            |
-    |   ⛔ DROP: ~100k Bad IPs (Static)     |
-    |   ✅ ALLOW: Wazuh  (Whitelisted)      |
-    +---------------------------------------+
-                   │
-                   ▼
-    +---------------------------------------+
-    |  🏢  LAYER 2: SERVICES & LOGGING      |
-    |---------------------------------------|
-    |  SSH (22) | HTTP (80/443) | Custom    |
-    |      └───────┬───────┘                |
-    |              ▼                        |
-    |      📄 SYSTEM LOGS (Journald)        |
-    +---------------------------------------+
-           │               │              │
-           ▼               ▼              ▼
-    +-------------+ +-------------+ +-------------+
-    |  FAIL2BAN   |  |  REPORTER  | |  WAZUH Agt  |
-    | (Dynamic Ban)| | (Python 3) | |  (SIEM Fwd) |
-    +-------------+ +-------------+ +-------------+
-           │               │              │
-           ▼               ▼              ▼
-      🚫 BAN IP       📡 AbuseIPDB    🛡️ WAZUH
-      (Firewall)        (API Push)    (Manager)
+🛠️ SysWarden (Technology Stack)
+├── 🐚 Core Orchestration
+│   ├── 📜 Bash Scripting           # Automation, Installation & Logic
+│   └── 🐧 Linux Kernel             # OS Support (Debian/Ubuntu & RHEL/Alma)
+│
+├── 🧱 Firewall Backend (Auto-Detection)
+│   ├── 🛡️ Nftables                 # Modern Packet Filtering (Debian 10+)
+│   ├── 🔥 Firewalld                # Dynamic Zone Management (RHEL 8/9)
+│   └── ⚡ IPSet + Iptables         # High-Performance Hashing (Legacy)
+│
+├── 👮 Active Defense & Logs
+│   ├── 🐍 Python 3                 # Log Parsing & API Connector
+│   ├── 🚫 Fail2ban                 # Intrusion Prevention System (Jails)
+│   └── 📝 Systemd / Journalctl     # Service Management & Logging
+│
+└── ☁️ External Integrations
+    ├── 📦 Data-Shield Repo         # Threat Intelligence Source (Git)
+    ├── 📡 AbuseIPDB API            # Community Reporting (Outbound)
+    └── 🦁 Wazuh XDR Agent          # SIEM & Vulnerability Detection
 ```
 
 ## Key Features
@@ -142,39 +117,29 @@ On Enterprise Linux, proper integration with `firewalld` is critical.
 ## Workflow
 
 ```
-INTERNET TRAFFIC 🌍
-       │
-       ▼
-[ 🔥 FIREWALL GATEKEEPER ] ────────────────────────┐
-| (Nftables / Firewalld / Ipset)                   |
-|                                                  |
-| ❓ Is Source IP in SYSWARDEN_BLACKLIST?          |
-|    │                                             |
-|    ├── YES ⛔ ➔ [ DROP PACKET ] (0 CPU Load)    |
-|    │                                             |
-|    └── NO  ✅ ➔ [ ALLOW TRAFFIC ]               |
-|                        │                         |
-└────────────────────────┼─────────────────────────┘
-                         │
-                         ▼
-                 [ 🖥️  SERVER SERVICES ]
-                 ( SSH / Nginx / Docker )
-                         │
-                         ▼
-                 [ 📄  LOG GENERATION ]
-                         │
-        ┌────────────────┴────────────────┐
-        │                                 │
-  [ 👮 FAIL2BAN ]                 [ 🐍 SYSWARDEN REPORTER ]
-  Did it fail auth?               Reads logs in Real-Time
-  │     │                         │       │
-  │     ▼                         │       ▼
-  └─ YES ➔ 🚫 BAN IP              │   MATCH ATTACK PATTERN?
-                                  │   (SSH, SQLi, IoT, etc.)
-                                  │       │
-                                  │       ▼
-                                  └─ YES ➔ 📡 REPORT TO ABUSEIPDB
-                                           & 🦁 FORWARD TO WAZUH
+📡 / (Network Traffic Flow)
+├── 🛡️ Layer 1: Firewall Shield (Static Defense)
+│   ├── 🧱 Engine: Nftables / Firewalld / Ipset (Auto-detected)
+│   ├── 📄 Blocklist: ~95k - 100k IPs (Data-Shield Source)
+│   └── 🚫 Action: DROP packet before reaching services
+│
+└── 🖥️ Layer 2: User Space (Allowed Traffic)
+    ├── 📁 Services & Logs
+    │   ├── 🔓 SSH / Web / Database (Custom Ports Allowed)
+    │   └── 📝 System Logs: /var/log/syslog & journalctl
+    │
+    └── 📁 Layer 3: Active Response (Dynamic Defense)
+        ├── 👮 Fail2ban Service
+        │   ├── 🔍 Watch: Brute-force patterns (SSH, Nginx, etc.)
+        │   └── ⚡ Action: Ban Dynamic IP locally
+        │
+        ├── 🐍 SysWarden Reporter
+        │   ├── 🔍 Watch: Firewall Drops & Fail2ban Bans
+        │   └── 📡 Action: Report to AbuseIPDB API
+        │
+        └── 🦁 Wazuh Agent
+            ├── 🔍 Watch: File Integrity & System Events
+            └── 📨 Action: Forward alerts to Wazuh SIEM
 ```
 
 ## How to Install (root)
@@ -202,15 +167,21 @@ journalctl -k -f | grep "SysWarden-BLOCK"
 📂 / (Root System)
 ├── 📁 etc/
 │   ├── 📄 syswarden.conf           # Main Configuration (Auto-generated)
+│   ├── 📁 fail2ban/
+│   │   └── 📄 jail.local           # Custom Jails (SSH, Web, DB) injected by SysWarden
 │   ├── 📁 cron.d/
 │   │   └── 📄 syswarden-update     # Hourly Update Job
 │   └── 📁 systemd/system/
 │       └── 📄 syswarden-reporter.service
 ├── 📁 usr/local/bin/
-│   ├── 📜 install-syswarden.sh     # Main Script (CLI Tool)
+│   ├── 📜 syswarden                # Main Script (CLI Tool)
 │   └── 🐍 syswarden_reporter.py    # Python Log Analyzer
-└── 📁 var/log/
-    └── 📄 syswarden-install.log    # Installation & Debug Logs
+└── 📁 var/
+    ├── 📁 log/
+    │   ├── 📄 syswarden-install.log # Installation & Debug Logs
+    │   └── 📄 fail2ban.log          # Banned IPs logs
+    └── 📁 ossec/etc/
+        └── 📄 ossec.conf            # Wazuh Agent Config (Manager IP & Ports injected here)
 ```
 
 ## Uninstallation (root)
