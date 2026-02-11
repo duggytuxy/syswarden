@@ -35,7 +35,7 @@
 
 SysWarden is a tool based on the **[Data-Shield IPv4 Blocklists Community](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist)**, **[Wazuh](https://github.com/wazuh)** and **[Fail2ban](https://github.com/fail2ban/fail2ban)** that blocks up to 99% of noisy, disruptive, and malicious IP addresses and focuses on real signals.
 
-## What Does SysWarden Protect?
+## What Does SysWarden Protect
 
 SysWarden acts as an advanced, preemptive shield for your infrastructure. By dropping known malicious traffic at the firewall (kernel) level **before** it even reaches your applications, it provides a crucial extra layer of security for any exposed asset.
 
