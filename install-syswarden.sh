@@ -907,52 +907,22 @@ setup_abuse_reporting() {
             return
         fi
 
-        # --- SUB-CHOICE 1: FAIL2BAN (App Layer) ---
         echo ""
         read -p "Report Fail2ban Bans (SSH/Web brute-force)? [Y/n]: " REPORT_F2B
         REPORT_F2B=${REPORT_F2B:-y}
 
-        if [[ "$REPORT_F2B" =~ ^[Yy]$ ]]; then
-            log "INFO" "Configuring Fail2ban native reporting..."
-            
-            cp /etc/fail2ban/jail.local "$TMP_DIR/jail.local.tmp"
-            
-            cat <<EOF > /etc/fail2ban/jail.local
-[DEFAULT]
-# --- REGLAGES DE BASE ---
-bantime = 4h
-bantime.increment = true
-findtime = 10m
-maxretry = 3
-ignoreip = 127.0.0.1/8 ::1
-backend = systemd
-
-# --- ACTIONS COMBINEES (FIREWALL + ABUSEIPDB) ---
-banaction = firewallcmd-ipset
-
-# Config AbuseIPDB
-action = %(banaction)s[name=%(__name__)s, bantime="%(bantime)s", port="%(port)s", protocol="%(protocol)s", chain="%(chain)s"]
-          abuseipdb[abuseipdb_apikey="$USER_API_KEY", abuseipdb_category="18,21"]
-
-# --- JAILS ---
-EOF
-            # Append existing jails
-            sed -n '/^\[sshd\]/,$p' "$TMP_DIR/jail.local.tmp" >> /etc/fail2ban/jail.local
-            systemctl restart fail2ban
-        else
-            log "INFO" "Skipping Fail2ban reporting configuration."
-            # Note: We keep the jail.local generated in configure_fail2ban() which has no reporting action.
-        fi
-
-        # --- SUB-CHOICE 2: FIREWALL (Network Layer) ---
         echo ""
         read -p "Report Firewall Drops (Port Scans/Blacklist)? [Y/n]: " REPORT_FW
         REPORT_FW=${REPORT_FW:-y}
 
-        if [[ "$REPORT_FW" =~ ^[Yy]$ ]]; then
-            log "INFO" "Installing Python reporter for Firewall Drops..."
-            
-            cat <<'EOF' > /usr/local/bin/syswarden_reporter.py
+        if [[ "$REPORT_F2B" =~ ^[Nn]$ ]] && [[ "$REPORT_FW" =~ ^[Nn]$ ]]; then
+            log "INFO" "Both reporting options declined. Skipping."
+            return
+        fi
+
+        log "INFO" "Configuring Unified SysWarden Reporter..."
+        
+        cat <<'EOF' > /usr/local/bin/syswarden_reporter.py
 #!/usr/bin/env python3
 import subprocess
 import select
@@ -963,6 +933,8 @@ import time
 # --- CONFIGURATION ---
 API_KEY = "PLACEHOLDER_KEY"
 REPORT_INTERVAL = 900  # 15 minutes
+ENABLE_F2B = PLACEHOLDER_F2B
+ENABLE_FW = PLACEHOLDER_FW
 
 # --- DEFINITIONS ---
 reported_cache = {}
@@ -993,50 +965,75 @@ def clean_cache():
         del reported_cache[ip]
 
 def monitor_logs():
-    print("🚀 Monitoring Firewall Drops (SysWarden)...")
+    print("🚀 Monitoring logs (Unified SysWarden Reporter)...")
     f = subprocess.Popen(['journalctl', '-f', '-n', '0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     p = select.poll()
     p.register(f.stdout)
 
-    regex_ds = re.compile(r"\[SysWarden-BLOCK\].*SRC=([\d\.]+).*DPT=(\d+)")
+    regex_fw = re.compile(r"\[SysWarden-BLOCK\].*SRC=([\d\.]+).*DPT=(\d+)")
+    regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
 
     while True:
         if p.poll(100):
             line = f.stdout.readline().decode('utf-8', errors='ignore')
             if not line: continue
 
-            # --- SYSWARDEN LOGIC (FIREWALL DROPS) ---
-            match_ds = regex_ds.search(line)
-            if match_ds:
-                ip = match_ds.group(1)
-                try:
-                    port = int(match_ds.group(2))
-                except ValueError:
-                    port = 0
-                
-                cats = ["14"] # Port Scan
-                attack_type = "Port Scan"
+            # --- FIREWALL LOGIC ---
+            if ENABLE_FW:
+                match_fw = regex_fw.search(line)
+                if match_fw:
+                    ip = match_fw.group(1)
+                    try:
+                        port = int(match_fw.group(2))
+                    except ValueError:
+                        port = 0
+                    
+                    cats = ["14"]
+                    attack_type = "Port Scan"
 
-                if port in [80, 443]: cats.extend(["20", "21"]); attack_type = "Web Attack"
-                elif port in [22, 2222]: cats.extend(["18", "22"]); attack_type = "SSH Attack"
-                elif port == 23: cats.extend(["18", "23"]); attack_type = "Telnet IoT"
-                elif port == 445: cats.extend(["15", "18"]); attack_type = "SMB"
-                elif port == 1433: cats.extend(["18", "15"]); attack_type = "MSSQL"
-                elif port in [3389, 5900]: cats.extend(["18"]); attack_type = "RDP/VNC"
+                    if port in [80, 443]: cats.extend(["20", "21"]); attack_type = "Web Attack"
+                    elif port in [22, 2222]: cats.extend(["18", "22"]); attack_type = "SSH Attack"
+                    elif port == 23: cats.extend(["18", "23"]); attack_type = "Telnet IoT"
+                    elif port == 445: cats.extend(["15", "18"]); attack_type = "SMB"
+                    elif port == 1433: cats.extend(["18", "15"]); attack_type = "MSSQL"
+                    elif port in [3389, 5900]: cats.extend(["18"]); attack_type = "RDP/VNC"
 
-                send_report(ip, ",".join(cats), f"Blocked by SysWarden ({attack_type} Port {port})")
+                    send_report(ip, ",".join(cats), f"Blocked by SysWarden Firewall ({attack_type} Port {port})")
+                    continue
+
+            # --- FAIL2BAN LOGIC ---
+            if ENABLE_F2B:
+                match_f2b = regex_f2b.search(line)
+                if match_f2b and "SysWarden-BLOCK" not in line:
+                    jail = match_f2b.group(1)
+                    ip = match_f2b.group(2)
+                    
+                    cats = ["18"] # General Abuse
+                    if "ssh" in jail.lower(): cats.extend(["22"])
+                    elif "nginx" in jail.lower() or "apache" in jail.lower() or "wordpress" in jail.lower(): cats.extend(["21"])
+                    elif "postfix" in jail.lower() or "sendmail" in jail.lower(): cats.extend(["5", "11"])
+                    elif "mariadb" in jail.lower() or "mongodb" in jail.lower(): cats.extend(["15"])
+
+                    send_report(ip, ",".join(cats), f"Banned by Fail2ban (Jail: {jail})")
 
 if __name__ == "__main__":
     monitor_logs()
 EOF
 
-            sed -i "s/PLACEHOLDER_KEY/$USER_API_KEY/" /usr/local/bin/syswarden_reporter.py
-            chmod +x /usr/local/bin/syswarden_reporter.py
+        # Replace placeholders based on user choices
+        local PY_F2B="False"; if [[ "$REPORT_F2B" =~ ^[Yy]$ ]]; then PY_F2B="True"; fi
+        local PY_FW="False"; if [[ "$REPORT_FW" =~ ^[Yy]$ ]]; then PY_FW="True"; fi
 
-            log "INFO" "Creating systemd service for Reporter..."
-            cat <<EOF > /etc/systemd/system/syswarden-reporter.service
+        sed -i "s/PLACEHOLDER_KEY/$USER_API_KEY/" /usr/local/bin/syswarden_reporter.py
+        sed -i "s/PLACEHOLDER_F2B/$PY_F2B/" /usr/local/bin/syswarden_reporter.py
+        sed -i "s/PLACEHOLDER_FW/$PY_FW/" /usr/local/bin/syswarden_reporter.py
+        
+        chmod +x /usr/local/bin/syswarden_reporter.py
+
+        log "INFO" "Creating systemd service for Reporter..."
+        cat <<EOF > /etc/systemd/system/syswarden-reporter.service
 [Unit]
-Description=SysWarden Firewall Reporter
+Description=SysWarden Unified Reporter
 After=network.target
 
 [Service]
@@ -1049,12 +1046,9 @@ ProtectSystem=full
 [Install]
 WantedBy=multi-user.target
 EOF
-            systemctl daemon-reload
-            systemctl enable --now syswarden-reporter
-            log "INFO" "AbuseIPDB Reporter (Firewall) is ACTIVE."
-        else
-            log "INFO" "Skipping Firewall reporting configuration."
-        fi
+        systemctl daemon-reload
+        systemctl enable --now syswarden-reporter
+        log "INFO" "AbuseIPDB Unified Reporter is ACTIVE."
         
     else
         log "INFO" "Skipping AbuseIPDB reporting setup."
