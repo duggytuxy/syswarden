@@ -188,16 +188,16 @@ chmod +x install-syswarden.sh
 ./install-syswarden.sh update
 
 # View Alerts
-./install-syswarden alerts
+./install-syswarden.sh alerts
 
 # Check Kernel Logs
 journalctl -k -f | grep "SysWarden-BLOCK"
 
 # Whitelist an IP
-./install-syswarden whitelist
+./install-syswarden.sh whitelist
 
 # Block an IP
-./install-syswarden blocklist
+./install-syswarden.sh blocklist
 ```
 
 ```
