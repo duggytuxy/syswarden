@@ -1157,8 +1157,15 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/syswarden_reporter.py
 Restart=always
-User=root
-ProtectSystem=full
+
+# --- SECURITY & LEAST PRIVILEGE ---
+DynamicUser=yes
+SupplementaryGroups=systemd-journal adm
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+# ----------------------------------
 
 [Install]
 WantedBy=multi-user.target
