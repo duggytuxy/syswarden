@@ -1001,6 +1001,7 @@ import re
 import requests
 import time
 import ipaddress
+import socket
 
 # --- CONFIGURATION ---
 API_KEY = "PLACEHOLDER_KEY"
@@ -1027,7 +1028,8 @@ def send_report(ip, categories, comment):
     
     url = 'https://api.abuseipdb.com/api/v2/report'
     headers = {'Key': API_KEY, 'Accept': 'application/json'}
-    params = {'ip': ip, 'categories': categories, 'comment': comment}
+    full_comment = f"[{socket.gethostname()}] {comment}"
+    params = {'ip': ip, 'categories': categories, 'comment': full_comment}
 
     try:
         response = requests.post(url, params=params, headers=headers)
