@@ -16,7 +16,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v4.00"
+VERSION="v4.01"
 
 # --- LIST URLS ---
 declare -A URLS_STANDARD
@@ -1779,7 +1779,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v4)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v4.01)     #"
     echo -e "#############################################################${NC}"
 fi
 
