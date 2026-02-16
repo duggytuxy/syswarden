@@ -1065,12 +1065,12 @@ def monitor_logs():
                     if port in [80, 443, 4443, 8080, 8443]: cats.extend(["20", "21"]); attack_type = "Web Attack"
                     elif port in [22, 2222, 22222]: cats.extend(["18", "22"]); attack_type = "SSH Attack"
                     elif port == 23: cats.extend(["18", "23"]); attack_type = "Telnet IoT Attack"
-					elif port == 88: cats.extend(["15", "20"]); attack_type = "Kerberos Attack"
+                    elif port == 88: cats.extend(["15", "20"]); attack_type = "Kerberos Attack"
                     elif port in [139, 445]: cats.extend(["15", "18"]); attack_type = "SMB/Possible Ransomware Attack"
-					elif port in [389, 636]: cats.extend(["15", "20"]); attack_type = "LDAP/LDAPS Attack"
+                    elif port in [389, 636]: cats.extend(["15", "20"]); attack_type = "LDAP/LDAPS Attack"
                     elif port == 1433: cats.extend(["18", "15"]); attack_type = "MSSQL Attack"
-					elif port == 3000: cats.extend(["15", "20"]); attack_type = "Possible Vulns Exploit"
-					elif port == 4444: cats.extend(["15", "20"]); attack_type = "Possible C2 Host"
+                    elif port == 3000: cats.extend(["15", "20"]); attack_type = "Possible Vulns Exploit"
+                    elif port == 4444: cats.extend(["15", "20"]); attack_type = "Possible C2 Host"
                     elif port in [3389, 5900]: cats.extend(["18"]); attack_type = "RDP/VNC Attack"
 
                     send_report(ip, ",".join(cats), f"Blocked by SysWarden Firewall ({attack_type} Port {port})")
