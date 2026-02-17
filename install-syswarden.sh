@@ -540,18 +540,18 @@ EOF
         # --- GEOIP INJECTION ---
         if [[ "${GEOBLOCK_COUNTRIES:-none}" != "none" ]] && [[ -s "$GEOIP_FILE" ]]; then
             ipset create "${GEOIP_SET_NAME}_tmp" hash:net maxelem 500000 -exist
-            # Le -! est crucial ici pour éviter qu'ipset ne plante si deux pays partagent un même CIDR
+            # The -! flag is crucial to prevent ipset from crashing if two countries share the same CIDR
             sed "s/^/add ${GEOIP_SET_NAME}_tmp /" "$GEOIP_FILE" | ipset restore -!
             ipset create "$GEOIP_SET_NAME" hash:net maxelem 500000 -exist
             ipset swap "${GEOIP_SET_NAME}_tmp" "$GEOIP_SET_NAME"
             ipset destroy "${GEOIP_SET_NAME}_tmp"
             
             if ! iptables -C INPUT -m set --match-set "$GEOIP_SET_NAME" src -j DROP 2>/dev/null; then
-                # On insère en position 1 (Top priorité, avant même la liste standard)
+                # Insert at position 1 (Top priority, enforced before the standard list)
                 iptables -I INPUT 1 -m set --match-set "$GEOIP_SET_NAME" src -j DROP
                 iptables -I INPUT 1 -m set --match-set "$GEOIP_SET_NAME" src -j LOG --log-prefix "[SysWarden-GEO] "
                 
-                # Persistance indépendante pour s'assurer que le GeoIP survive au reboot
+                # Independent persistence to ensure GeoIP rules survive a reboot
                 if command -v netfilter-persistent >/dev/null; then netfilter-persistent save; 
                 elif command -v service >/dev/null && [ -f /etc/init.d/iptables ]; then service iptables save; fi
             fi
@@ -1311,19 +1311,19 @@ reported_cache = {}
 def send_report(ip, categories, comment):
     current_time = time.time()
     
-    # --- Validation stricte de l'IP ---
+    # --- Strict IP Validation ---
     try:
         ipaddress.ip_address(ip)
     except ValueError:
         print(f"[SKIP] Invalid IP detected by Regex: '{ip}'", flush=True)
         return
 
-    # 1. Vérification du cache anti-spam
+    # 1. Anti-spam cache check
     if ip in reported_cache:
         if current_time - reported_cache[ip] < REPORT_INTERVAL:
             return 
     
-    # 2. Ajout au cache IMMÉDIAT (Évite les rafales/race-conditions multi-threads)
+    # 2. IMMEDIATE cache addition (Prevents burst/multi-threading race conditions)
     reported_cache[ip] = current_time
     
     url = 'https://api.abuseipdb.com/api/v2/report'
@@ -1337,23 +1337,23 @@ def send_report(ip, categories, comment):
             print(f"[SUCCESS] Reported {ip} -> Cats [{categories}]", flush=True)
             clean_cache()
         elif response.status_code == 429:
-            # L'API dit d'attendre : on l'accepte silencieusement (l'IP reste dans notre cache)
+            # API says wait: silently accept (IP remains in our cache)
             print(f"[SKIP] IP {ip} already reported to AbuseIPDB recently (HTTP 429).", flush=True)
             clean_cache()
         else:
             print(f"[API ERROR] HTTP {response.status_code} : {response.text}", flush=True)
-            # Vraie erreur d'API (ex: 401 Unauthorized), on supprime du cache pour retenter plus tard
+            # True API error (e.g., 401 Unauthorized), remove from cache to retry later
             if ip in reported_cache:
                 del reported_cache[ip]
     except Exception as e:
         print(f"[FAIL] Error: {e}", flush=True)
-        # Erreur réseau/Timeout, on supprime du cache pour retenter
+        # Network error/Timeout, remove from cache to retry
         if ip in reported_cache:
             del reported_cache[ip]
 
 def monitor_logs():
     print("🚀 Monitoring logs (Unified SysWarden Reporter)...", flush=True)
-    # Securisation de journalctl pour forcer la sortie brute
+    # Secure journalctl to force raw output
     f = subprocess.Popen(['journalctl', '-f', '-n', '0', '-o', 'cat'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     p = select.poll()
     p.register(f.stdout)
@@ -1510,7 +1510,7 @@ uninstall_syswarden() {
     echo -e "\n${RED}=== Uninstalling SysWarden ===${NC}"
     log "WARN" "Starting Deep Clean Uninstallation..."
 
-    # Charger la conf pour récupérer les variables (Wazuh IP, etc.)
+    # Load config to retrieve variables (Wazuh IP, etc.)
     if [[ -f "$CONF_FILE" ]]; then source "$CONF_FILE"; fi
 
     # 1. Stop & Remove Reporter Service
@@ -1581,8 +1581,8 @@ uninstall_syswarden() {
         mv /etc/fail2ban/jail.local.bak /etc/fail2ban/jail.local
         systemctl restart fail2ban
     elif [[ -f /etc/fail2ban/jail.local ]]; then
-        # Si pas de backup, c'est que jail.local n'existait pas avant (Install propre).
-        # On le supprime pour revenir à l'état par défaut de l'OS.
+        # If no backup exists, jail.local didn't exist before (Clean install).
+        # We delete it to revert to the default OS state.
         log "INFO" "No backup found (was a clean install). Removing SysWarden jail.local..."
         rm /etc/fail2ban/jail.local
         systemctl restart fail2ban
@@ -1760,7 +1760,7 @@ whitelist_ip() {
     echo -e "\n${BLUE}=== SysWarden Whitelist Manager ===${NC}"
     read -p "Enter IP to Whitelist: " WL_IP
 
-    # Validation simple de l'IP
+    # Simple IP validation
     if [[ ! "$WL_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         log "ERROR" "Invalid IP format."
         return
