@@ -1318,9 +1318,13 @@ def send_report(ip, categories, comment):
         print(f"[SKIP] Invalid IP detected by Regex: '{ip}'", flush=True)
         return
 
+    # 1. Vérification du cache anti-spam
     if ip in reported_cache:
         if current_time - reported_cache[ip] < REPORT_INTERVAL:
             return 
+    
+    # 2. Ajout au cache IMMÉDIAT (Évite les rafales/race-conditions multi-threads)
+    reported_cache[ip] = current_time
     
     url = 'https://api.abuseipdb.com/api/v2/report'
     headers = {'Key': API_KEY, 'Accept': 'application/json'}
@@ -1331,18 +1335,21 @@ def send_report(ip, categories, comment):
         response = requests.post(url, params=params, headers=headers)
         if response.status_code == 200:
             print(f"[SUCCESS] Reported {ip} -> Cats [{categories}]", flush=True)
-            reported_cache[ip] = current_time 
+            clean_cache()
+        elif response.status_code == 429:
+            # L'API dit d'attendre : on l'accepte silencieusement (l'IP reste dans notre cache)
+            print(f"[SKIP] IP {ip} already reported to AbuseIPDB recently (HTTP 429).", flush=True)
             clean_cache()
         else:
             print(f"[API ERROR] HTTP {response.status_code} : {response.text}", flush=True)
+            # Vraie erreur d'API (ex: 401 Unauthorized), on supprime du cache pour retenter plus tard
+            if ip in reported_cache:
+                del reported_cache[ip]
     except Exception as e:
         print(f"[FAIL] Error: {e}", flush=True)
-
-def clean_cache():
-    current_time = time.time()
-    to_delete = [ip for ip, ts in reported_cache.items() if current_time - ts > REPORT_INTERVAL]
-    for ip in to_delete:
-        del reported_cache[ip]
+        # Erreur réseau/Timeout, on supprime du cache pour retenter
+        if ip in reported_cache:
+            del reported_cache[ip]
 
 def monitor_logs():
     print("🚀 Monitoring logs (Unified SysWarden Reporter)...", flush=True)
