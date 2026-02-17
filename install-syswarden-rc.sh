@@ -223,7 +223,7 @@ select_list_type() {
         *) log "ERROR" "Invalid choice. Exiting."; exit 1;;
     esac
     
-    echo "LIST_TYPE='$LIST_TYPE'" > "$CONF_FILE"
+    echo "LIST_TYPE='$LIST_TYPE'" >> "$CONF_FILE"
     if [[ -n "${CUSTOM_URL:-}" ]]; then echo "CUSTOM_URL='$CUSTOM_URL'" >> "$CONF_FILE"; fi
     log "INFO" "User selected: $LIST_TYPE Blocklist"
 }
@@ -1988,6 +1988,7 @@ if [[ "$MODE" == "update" ]] && [[ -f "$CONF_FILE" ]]; then
 fi
 
 if [[ "$MODE" != "update" ]]; then
+    > "$CONF_FILE"
     install_dependencies
     define_ssh_port "$MODE"
     define_docker_integration "$MODE"
