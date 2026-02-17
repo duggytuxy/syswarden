@@ -16,7 +16,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v4.02"
+VERSION="v4.03"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -207,7 +207,8 @@ select_list_type() {
     echo "1) Standard List (~85,000 IPs) - Recommended for Web Servers"
     echo "2) Critical List (~100,000 IPs) - Recommended for High Security"
     echo "3) Custom List"
-    read -p "Enter choice [1/2/3]: " choice
+    echo "4) No List (Geo-Blocking / Local rules only)"
+    read -p "Enter choice [1/2/3/4]: " choice
 
     case "$choice" in
         1) LIST_TYPE="Standard";;
@@ -216,6 +217,7 @@ select_list_type() {
            LIST_TYPE="Custom"
            read -p "Enter the full URL: " CUSTOM_URL
            ;;
+        4) LIST_TYPE="None";;
         *) log "ERROR" "Invalid choice. Exiting."; exit 1;;
     esac
     
@@ -245,6 +247,12 @@ select_mirror() {
 
     if [[ "$LIST_TYPE" == "Custom" ]]; then
         SELECTED_URL="$CUSTOM_URL"
+        echo "SELECTED_URL='$SELECTED_URL'" >> "$CONF_FILE"
+        return
+    fi
+	
+	if [[ "$LIST_TYPE" == "None" ]]; then
+        SELECTED_URL="none"
         echo "SELECTED_URL='$SELECTED_URL'" >> "$CONF_FILE"
         return
     fi
@@ -288,6 +296,13 @@ select_mirror() {
 download_list() {
     echo -e "\n${BLUE}=== Step 3: Downloading Blocklist ===${NC}"
     log "INFO" "Fetching list from $SELECTED_URL..."
+	
+	if [[ "$SELECTED_URL" == "none" ]]; then
+        log "INFO" "No global blocklist selected. Skipping download."
+        touch "$TMP_DIR/clean_list.txt"
+        FINAL_LIST="$TMP_DIR/clean_list.txt"
+        return
+    fi
     
     local output_file="$TMP_DIR/blocklist.txt"
     if curl -sS -L --retry 3 --connect-timeout 10 "$SELECTED_URL" -o "$output_file"; then
@@ -1824,7 +1839,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v4.02)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v4.03)     #"
     echo -e "#############################################################${NC}"
 fi
 
