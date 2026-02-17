@@ -347,10 +347,17 @@ download_geoip() {
     fi
 
     echo -e "\n${BLUE}=== Step: Downloading Geo-Blocking Data ===${NC}"
+    
+    # FIX: Create required directories before doing anything
     mkdir -p "$TMP_DIR"
+    mkdir -p "$SYSWARDEN_DIR"
     > "$TMP_DIR/geoip_raw.txt"
 
-    for country in $GEOBLOCK_COUNTRIES; do
+    # FIX: Bypass strict IFS by transforming spaces into newlines for the loop
+    for country in $(echo "$GEOBLOCK_COUNTRIES" | tr ' ' '\n'); do
+        # Skip empty strings just in case
+        if [[ -z "$country" ]]; then continue; fi 
+        
         echo -n "Fetching IP blocks for ${country^^}... "
         if curl -sS -L --retry 3 --connect-timeout 5 "https://www.ipdeny.com/ipblocks/data/countries/${country}.zone" >> "$TMP_DIR/geoip_raw.txt"; then
             echo -e "${GREEN}OK${NC}"
