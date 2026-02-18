@@ -1405,6 +1405,28 @@ maxretry = 5
 bantime  = 24h
 EOF
         fi
+		
+		# 25. DYNAMIC DETECTION: COCKPIT (WEB CONSOLE)
+        if systemctl is-active --quiet cockpit.socket 2>/dev/null || [[ -d "/etc/cockpit" ]]; then
+            log "INFO" "Cockpit Web Console detected. Enabling Cockpit Jail."
+
+            if [[ ! -f "/etc/fail2ban/filter.d/cockpit-custom.conf" ]]; then
+                echo -e "[Definition]\nfailregex = ^.*cockpit-ws.*(?:authentication failed|invalid user).*from <HOST>.*\$\nignoreregex =" > /etc/fail2ban/filter.d/cockpit-custom.conf
+            fi
+
+            cat <<EOF >> /etc/fail2ban/jail.local
+
+# --- Cockpit Web Console Protection ---
+[cockpit-custom]
+enabled = true
+port    = 9090
+filter  = cockpit-custom
+logpath = /var/log/secure
+backend = systemd
+maxretry = 3
+bantime  = 24h
+EOF
+        fi
     fi 
 }
 
@@ -1554,6 +1576,7 @@ def monitor_logs():
                     elif port in [6379, 9200, 11211]: cats.extend(["15", "20"]); attack_type = "NoSQL/Cache Attack"
                     elif port == 1194: cats.extend(["15", "18"]); attack_type = "OpenVPN Attack"
                     elif port in [51820, 51821]: cats.extend(["15", "18"]); attack_type = "WireGuard Attack"
+                    elif port == 9090: cats.extend(["18", "21"]); attack_type = "Cockpit Web Console Attack"
 
                     threading.Thread(target=send_report, args=(ip, ",".join(cats), f"Blocked by SysWarden Firewall ({attack_type} Port {port})")).start()
                     continue
