@@ -1842,8 +1842,6 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
-# Add SELinux context gracefully (ignored if SELinux is disabled/absent)
-SELinuxContext=-system_u:object_r:sysadm_t:s0
 # Ensure script can write its cache file securely via DynamicUser
 StateDirectory=syswarden
 # ----------------------------------
