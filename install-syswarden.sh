@@ -1503,6 +1503,12 @@ maxretry = 3
 bantime  = 24h
 EOF
         fi
+
+        log "INFO" "Starting Fail2ban service..."
+        if command -v systemctl >/dev/null; then
+            systemctl enable --now fail2ban >/dev/null 2>&1 || true
+            systemctl restart fail2ban >/dev/null 2>&1 || true
+        fi
     fi 
 }
 
