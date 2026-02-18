@@ -533,6 +533,13 @@ table inet syswarden_table {
 EOF
         nft -f "$TMP_DIR/syswarden.nft"
 
+        # --- PERSISTENCE & SERVICE ENABLEMENT ---
+        log "INFO" "Saving Nftables ruleset to /etc/nftables.conf for persistence..."
+        nft list ruleset > /etc/nftables.conf
+        if command -v systemctl >/dev/null; then
+            systemctl enable --now nftables 2>/dev/null || true
+        fi
+
     elif [[ "$FIREWALL_BACKEND" == "firewalld" ]]; then
         if ! systemctl is-active --quiet firewalld; then systemctl enable --now firewalld; fi
         
@@ -747,6 +754,33 @@ EOF
             log "INFO" "Docker firewall rules applied successfully."
         else
             log "WARN" "DOCKER-USER chain not found. Docker might not be running yet."
+        fi
+    fi
+	
+    # --- UNIVERSAL IPSET PERSISTENCE (UFW / IPTABLES / DOCKER) ---
+    if command -v ipset >/dev/null && [[ "$FIREWALL_BACKEND" != "firewalld" ]]; then
+        log "INFO" "Configuring universal IPSet persistence for boot survival..."
+        mkdir -p /etc/syswarden
+        ipset save > /etc/syswarden/ipsets.save 2>/dev/null || true
+
+        cat <<'EOF' > /etc/systemd/system/syswarden-ipset.service
+[Unit]
+Description=SysWarden IPSet Restorer
+DefaultDependencies=no
+Before=network-pre.target ufw.service netfilter-persistent.service docker.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "if [ -s /etc/syswarden/ipsets.save ]; then /sbin/ipset restore -! < /etc/syswarden/ipsets.save; fi"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        if command -v systemctl >/dev/null; then
+            systemctl daemon-reload
+            systemctl enable syswarden-ipset.service 2>/dev/null || true
         fi
     fi
 }
@@ -1695,6 +1729,11 @@ uninstall_syswarden() {
     log "INFO" "Removing SysWarden Reporter..."
     systemctl disable --now syswarden-reporter 2>/dev/null || true
     rm -f /etc/systemd/system/syswarden-reporter.service /usr/local/bin/syswarden_reporter.py
+    systemctl daemon-reload
+	
+	log "INFO" "Removing IPSet Restorer Service..."
+    systemctl disable syswarden-ipset 2>/dev/null || true
+    rm -f /etc/systemd/system/syswarden-ipset.service /etc/syswarden/ipsets.save
     systemctl daemon-reload
 
     # 2. Remove Cron & Logrotate
