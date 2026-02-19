@@ -16,7 +16,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v6.00"
+VERSION="v6.50"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -131,6 +131,19 @@ install_dependencies() {
              log "ERROR" "Failed to install 'python3-requests'. AbuseIPDB reporting feature will be disabled."
         fi
     fi
+	
+	# --- CRON DEPENDENCY (For modern minimal OS like Fedora / RHEL 9+) ---
+    if ! command -v crond >/dev/null && ! command -v cron >/dev/null; then
+        log "WARN" "Installing package: cron daemon"
+        if [[ -f /etc/debian_version ]]; then apt-get install -y cron
+        elif [[ -f /etc/redhat-release ]]; then dnf install -y cronie; fi
+    fi
+    
+    # Ensure it's enabled and started (moved outside the install check)
+    if command -v systemctl >/dev/null; then
+        systemctl enable --now crond 2>/dev/null || systemctl enable --now cron 2>/dev/null || true
+    fi
+    # --------------------------------------------------------------------
 
     if ! command -v ipset >/dev/null; then
         log "WARN" "Installing package: ipset"
@@ -155,6 +168,23 @@ install_dependencies() {
         elif [[ -f /etc/redhat-release ]]; then dnf install -y nftables; fi
     fi
 
+    # --- RHEL/ROCKY/CENTOS 10 ZERO-REBOOT FIX ---
+    # Moved to the VERY END of the function to ensure all DNF transactions are flushed to disk
+    if [[ "$FIREWALL_BACKEND" != "nftables" ]] && [[ "$FIREWALL_BACKEND" != "ufw" ]]; then
+        log "INFO" "Synchronizing Kernel modules..."
+        /sbin/depmod -a 2>/dev/null || true
+        /sbin/modprobe ip_set 2>/dev/null || true
+        /sbin/modprobe ip_set_hash_net 2>/dev/null || true
+        
+        # Give Netlink sockets 2 seconds to bind
+        sleep 2
+        
+        if command -v systemctl >/dev/null && systemctl is-active --quiet firewalld; then
+            systemctl restart firewalld 2>/dev/null || true
+        fi
+    fi
+    # --------------------------------------------
+
     log "INFO" "All dependencies check complete."
 }
 
@@ -166,8 +196,15 @@ define_ssh_port() {
     fi
 
     echo -e "\n${BLUE}=== Step: SSH Configuration ===${NC}"
-    read -p "Please enter your current SSH Port [Default: 22]: " input_port
-    SSH_PORT=${input_port:-22}
+    # --- CI/CD AUTO MODE CHECK ---
+    if [[ "${1:-}" == "auto" ]]; then
+        SSH_PORT=${SYSWARDEN_SSH_PORT:-22}
+        log "INFO" "Auto Mode: SSH Port configured via env var [${SSH_PORT}]"
+    else
+        read -p "Please enter your current SSH Port [Default: 22]: " input_port
+        SSH_PORT=${input_port:-22}
+    fi
+    # -----------------------------
 
     if ! [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then
         log "WARN" "Invalid port detected. Defaulting to 22."
@@ -186,7 +223,15 @@ define_docker_integration() {
     fi
 
     echo -e "\n${BLUE}=== Step: Docker Integration ===${NC}"
-    read -p "Do you use Docker on this server? (y/N): " input_docker
+    # --- CI/CD AUTO MODE CHECK ---
+    if [[ "${1:-}" == "auto" ]]; then
+        input_docker=${SYSWARDEN_USE_DOCKER:-n}
+        log "INFO" "Auto Mode: Docker integration loaded via env var [${input_docker}]"
+    else
+        read -p "Do you use Docker on this server? (y/N): " input_docker
+    fi
+    # -----------------------------
+    
     if [[ "$input_docker" =~ ^[Yy]$ ]]; then
         USE_DOCKER="y"
         log "INFO" "Docker integration ENABLED."
@@ -209,21 +254,45 @@ select_list_type() {
     fi
 
     echo -e "\n${BLUE}=== Step 1: Select Blocklist Type ===${NC}"
-    echo "1) Standard List (~85,000 IPs) - Recommended for Web Servers"
-    echo "2) Critical List (~100,000 IPs) - Recommended for High Security"
-    echo "3) Custom List"
-    echo "4) No List (Geo-Blocking / Local rules only)"
-    read -p "Enter choice [1/2/3/4]: " choice
+    
+    # --- CI/CD AUTO MODE CHECK ---
+    if [[ "${1:-}" == "auto" ]]; then
+        choice=${SYSWARDEN_LIST_CHOICE:-1}
+        log "INFO" "Auto Mode: Blocklist choice loaded via env var [${choice}]"
+    else
+        echo "1) Standard List (~85,000 IPs) - Recommended for Web Servers"
+        echo "2) Critical List (~100,000 IPs) - Recommended for High Security"
+        echo "3) Custom List"
+        echo "4) No List (Geo-Blocking / Local rules only)"
+        read -p "Enter choice [1/2/3/4]: " choice
+    fi
+    # -----------------------------
 
     case "$choice" in
         1) LIST_TYPE="Standard";;
         2) LIST_TYPE="Critical";;
         3) 
            LIST_TYPE="Custom"
-           read -p "Enter the full URL: " CUSTOM_URL
+           if [[ "${1:-}" == "auto" ]]; then
+               CUSTOM_URL=${SYSWARDEN_CUSTOM_URL:-""}
+               log "INFO" "Auto Mode: Custom URL loaded via env var"
+           else
+               read -p "Enter the full URL: " CUSTOM_URL
+           fi
+           # Sanitize: Remove spaces, quotes, and dangerous shell characters
+           CUSTOM_URL=$(echo "$CUSTOM_URL" | tr -d " '\"\;\$\|\&\<\>\`")
+           
+           # Fail-Safe: If custom URL is empty/invalid, revert to standard to avoid leaving server unprotected
+           if [[ -z "$CUSTOM_URL" ]]; then
+               log "WARN" "Custom URL is empty. Defaulting to Standard List."
+               LIST_TYPE="Standard"
+           fi
            ;;
         4) LIST_TYPE="None";;
-        *) log "ERROR" "Invalid choice. Exiting."; exit 1;;
+        *) 
+           log "WARN" "Invalid choice detected. Defaulting to Standard List."
+           LIST_TYPE="Standard"
+           ;;
     esac
     
     echo "LIST_TYPE='$LIST_TYPE'" >> "$CONF_FILE"
@@ -239,11 +308,25 @@ define_geoblocking() {
     fi
 
     echo -e "\n${BLUE}=== Step: Geo-Blocking (High-Risk Countries) ===${NC}"
-    echo "Do you want to block all inbound traffic from specific countries?"
-    read -p "Enable Geo-Blocking? (y/N): " input_geo
+    
+    # --- CI/CD AUTO MODE CHECK ---
+    if [[ "${1:-}" == "auto" ]]; then
+        input_geo=${SYSWARDEN_ENABLE_GEO:-n}
+        log "INFO" "Auto Mode: Geo-Blocking choice loaded via env var [${input_geo}]"
+    else
+        echo "Do you want to block all inbound traffic from specific countries?"
+        read -p "Enable Geo-Blocking? (y/N): " input_geo
+    fi
+    # -----------------------------
 
     if [[ "$input_geo" =~ ^[Yy]$ ]]; then
-        read -p "Enter country codes separated by space [Default: ru cn kp ir]: " geo_codes
+        if [[ "${1:-}" == "auto" ]]; then
+            geo_codes=${SYSWARDEN_GEO_CODES:-"ru cn kp ir"}
+            log "INFO" "Auto Mode: Geo-Codes loaded via env var [${geo_codes}]"
+        else
+            read -p "Enter country codes separated by space [Default: ru cn kp ir]: " geo_codes
+        fi
+        
         GEOBLOCK_COUNTRIES=${geo_codes:-ru cn kp ir}
         # Force lowercase for the URL
         GEOBLOCK_COUNTRIES=$(echo "$GEOBLOCK_COUNTRIES" | tr '[:upper:]' '[:lower:]')
@@ -263,15 +346,36 @@ define_asnblocking() {
     fi
 
     echo -e "\n${BLUE}=== Step: ASN Blocking (Hosters/ISPs) ===${NC}"
-    echo "Do you want to block entire Autonomous Systems (e.g., AS16276 for OVH)?"
-    read -p "Enable ASN Blocking? (y/N): " input_asn
+    
+    # --- CI/CD AUTO MODE CHECK ---
+    if [[ "${1:-}" == "auto" ]]; then
+        input_asn=${SYSWARDEN_ENABLE_ASN:-n}
+        log "INFO" "Auto Mode: ASN-Blocking choice loaded via env var [${input_asn}]"
+    else
+        echo "Do you want to block entire Autonomous Systems (e.g., AS16276 for OVH)?"
+        read -p "Enable ASN Blocking? (y/N): " input_asn
+    fi
+    # -----------------------------
 
     if [[ "$input_asn" =~ ^[Yy]$ ]]; then
-        read -p "Enter ASN numbers separated by space (e.g., AS123 AS456): " asn_list
+        if [[ "${1:-}" == "auto" ]]; then
+            asn_list=${SYSWARDEN_ASN_LIST:-""}
+            log "INFO" "Auto Mode: ASN List loaded via env var [${asn_list}]"
+        else
+            read -p "Enter ASN numbers separated by space (e.g., AS123 AS456): " asn_list
+        fi
+        
         BLOCK_ASNS=${asn_list:-none}
-        # Force uppercase
-        BLOCK_ASNS=$(echo "$BLOCK_ASNS" | tr '[:lower:]' '[:upper:]')
-        log "INFO" "ASN Blocking ENABLED for: $BLOCK_ASNS"
+        
+        # Fail-Safe: Revert to 'none' if empty input was given
+        if [[ -z "$BLOCK_ASNS" ]] || [[ "$BLOCK_ASNS" == "none" ]]; then
+            BLOCK_ASNS="none"
+            log "WARN" "ASN list empty. ASN Blocking DISABLED."
+        else
+            # Force uppercase
+            BLOCK_ASNS=$(echo "$BLOCK_ASNS" | tr '[:lower:]' '[:upper:]')
+            log "INFO" "ASN Blocking ENABLED for: $BLOCK_ASNS"
+        fi
     else
         BLOCK_ASNS="none"
         log "INFO" "ASN Blocking DISABLED."
@@ -456,6 +560,19 @@ apply_firewall_rules() {
     # --- LOCAL PERSISTENCE INJECTION ---
     mkdir -p "$SYSWARDEN_DIR"
     touch "$WHITELIST_FILE" "$BLOCKLIST_FILE"
+
+    # --- PREVENT ADMIN LOCK-OUT (AUTO-WHITELIST CURRENT SSH SESSION) ---
+    if [[ -n "${SSH_CLIENT:-}" ]]; then
+        local ADMIN_IP
+        ADMIN_IP=$(echo "$SSH_CLIENT" | awk '{print $1}')
+        if [[ "$ADMIN_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            if ! grep -q "^${ADMIN_IP}$" "$WHITELIST_FILE" 2>/dev/null; then
+                log "INFO" "Auto-whitelisting current admin SSH session IP: $ADMIN_IP"
+                echo "$ADMIN_IP" >> "$WHITELIST_FILE"
+            fi
+        fi
+    fi
+    # -------------------------------------------------------------------
 
     # 1. Inject local blocklist into the global list
     cat "$BLOCKLIST_FILE" >> "$FINAL_LIST"
@@ -689,7 +806,7 @@ EOF
     else
         # Fallback IPSET / IPTABLES
         ipset create "${SET_NAME}_tmp" hash:net maxelem 200000 -exist
-        sed "s/^/add ${SET_NAME}_tmp /" "$FINAL_LIST" | ipset restore
+        sed "s/^/add ${SET_NAME}_tmp /" "$FINAL_LIST" | ipset restore -!
         ipset create "$SET_NAME" hash:net maxelem 200000 -exist
         ipset swap "${SET_NAME}_tmp" "$SET_NAME"
         ipset destroy "${SET_NAME}_tmp"
@@ -1514,24 +1631,44 @@ EOF
 
 setup_abuse_reporting() {
     echo -e "\n${BLUE}=== Step 7: AbuseIPDB Reporting Setup ===${NC}"
-    echo "Would you like to automatically report blocked IPs to AbuseIPDB?"
-    read -p "Enable AbuseIPDB reporting? (y/N): " response
+    
+    # --- CI/CD AUTO MODE CHECK ---
+    if [[ "${1:-}" == "auto" ]]; then
+        response=${SYSWARDEN_ENABLE_ABUSE:-n}
+        log "INFO" "Auto Mode: AbuseIPDB choice loaded via env var [${response}]"
+    else
+        echo "Would you like to automatically report blocked IPs to AbuseIPDB?"
+        read -p "Enable AbuseIPDB reporting? (y/N): " response
+    fi
+    # -----------------------------
 
     if [[ "$response" =~ ^[Yy]$ ]]; then
-        read -p "Enter your AbuseIPDB API Key: " USER_API_KEY
+        if [[ "${1:-}" == "auto" ]]; then
+            USER_API_KEY=${SYSWARDEN_ABUSE_API_KEY:-""}
+        else
+            read -p "Enter your AbuseIPDB API Key: " USER_API_KEY
+        fi
         
+        # Sanitize: Allow only alphanumeric characters, dashes, and underscores
+        USER_API_KEY=$(echo "$USER_API_KEY" | tr -cd 'a-zA-Z0-9_-')
+
         if [[ -z "$USER_API_KEY" ]]; then
             log "ERROR" "No API Key provided. Skipping reporting setup."
             return
         fi
 
-        echo ""
-        read -p "Report Fail2ban Bans (SSH/Web brute-force)? [Y/n]: " REPORT_F2B
-        REPORT_F2B=${REPORT_F2B:-y}
+        if [[ "${1:-}" == "auto" ]]; then
+            REPORT_F2B=${SYSWARDEN_REPORT_F2B:-y}
+            REPORT_FW=${SYSWARDEN_REPORT_FW:-y}
+        else
+            echo ""
+            read -p "Report Fail2ban Bans (SSH/Web brute-force)? [Y/n]: " REPORT_F2B
+            REPORT_F2B=${REPORT_F2B:-y}
 
-        echo ""
-        read -p "Report Firewall Drops (Port Scans/Blacklist)? [Y/n]: " REPORT_FW
-        REPORT_FW=${REPORT_FW:-y}
+            echo ""
+            read -p "Report Firewall Drops (Port Scans/Blacklist)? [Y/n]: " REPORT_FW
+            REPORT_FW=${REPORT_FW:-y}
+        fi
 
         if [[ "$REPORT_F2B" =~ ^[Nn]$ ]] && [[ "$REPORT_FW" =~ ^[Nn]$ ]]; then
             log "INFO" "Both reporting options declined. Skipping."
@@ -1550,22 +1687,45 @@ import time
 import ipaddress
 import socket
 import threading
+import json
+import os
 
 # --- CONFIGURATION ---
 API_KEY = "PLACEHOLDER_KEY"
 REPORT_INTERVAL = 900  # 15 minutes
 ENABLE_F2B = PLACEHOLDER_F2B
 ENABLE_FW = PLACEHOLDER_FW
+CACHE_FILE = "/var/lib/syswarden/abuse_cache.json"
 
 # --- DEFINITIONS ---
 reported_cache = {}
+cache_lock = threading.Lock()
+
+def load_cache():
+    global reported_cache
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r') as f:
+                reported_cache = json.load(f)
+        except Exception:
+            reported_cache = {}
+
+def save_cache():
+    try:
+        with cache_lock:
+            with open(CACHE_FILE, 'w') as f:
+                json.dump(reported_cache, f)
+    except Exception as e:
+        print(f"[WARN] Failed to write cache: {e}", flush=True)
 
 def clean_cache():
     current_time = time.time()
-    # Create a list of expired IPs to avoid modifying the dictionary during iteration
-    expired = [ip for ip, ts in reported_cache.items() if current_time - ts > REPORT_INTERVAL]
-    for ip in expired:
-        del reported_cache[ip]
+    with cache_lock:
+        expired = [ip for ip, ts in reported_cache.items() if current_time - ts > REPORT_INTERVAL]
+        for ip in expired:
+            del reported_cache[ip]
+    if expired:
+        save_cache()
 
 def send_report(ip, categories, comment):
     current_time = time.time()
@@ -1577,13 +1737,12 @@ def send_report(ip, categories, comment):
         print(f"[SKIP] Invalid IP detected by Regex: '{ip}'", flush=True)
         return
 
-    # 1. Anti-spam cache check
-    if ip in reported_cache:
-        if current_time - reported_cache[ip] < REPORT_INTERVAL:
+    # 1. Thread-safe cache check and update
+    with cache_lock:
+        if ip in reported_cache and (current_time - reported_cache[ip] < REPORT_INTERVAL):
             return 
-    
-    # 2. IMMEDIATE cache addition (Prevents burst/multi-threading race conditions)
-    reported_cache[ip] = current_time
+        reported_cache[ip] = current_time
+    save_cache()
     
     url = 'https://api.abuseipdb.com/api/v2/report'
     headers = {'Key': API_KEY, 'Accept': 'application/json'}
@@ -1596,22 +1755,25 @@ def send_report(ip, categories, comment):
             print(f"[SUCCESS] Reported {ip} -> Cats [{categories}]", flush=True)
             clean_cache()
         elif response.status_code == 429:
-            # API says wait: silently accept (IP remains in our cache)
             print(f"[SKIP] IP {ip} already reported to AbuseIPDB recently (HTTP 429).", flush=True)
             clean_cache()
         else:
             print(f"[API ERROR] HTTP {response.status_code} : {response.text}", flush=True)
-            # True API error (e.g., 401 Unauthorized), remove from cache to retry later
-            if ip in reported_cache:
-                del reported_cache[ip]
+            with cache_lock:
+                if ip in reported_cache:
+                    del reported_cache[ip]
+            save_cache()
     except Exception as e:
         print(f"[FAIL] Error: {e}", flush=True)
-        # Network error/Timeout, remove from cache to retry
-        if ip in reported_cache:
-            del reported_cache[ip]
+        with cache_lock:
+            if ip in reported_cache:
+                del reported_cache[ip]
+        save_cache()
 
 def monitor_logs():
     print("🚀 Monitoring logs (Unified SysWarden Reporter)...", flush=True)
+    load_cache() # Load JSON cache on startup
+    
     # Secure journalctl to force raw output
     f = subprocess.Popen(['journalctl', '-f', '-n', '0', '-o', 'cat'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     p = select.poll()
@@ -1710,6 +1872,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
+# Ensure script can write its cache file securely via DynamicUser
+StateDirectory=syswarden
 # ----------------------------------
 
 [Install]
@@ -1900,33 +2064,53 @@ uninstall_syswarden() {
 setup_wazuh_agent() {
     echo -e "\n${BLUE}=== Step 8: Wazuh Agent Installation (Custom) ===${NC}"
     
-    # 1. Ask for confirmation
-    read -p "Install Wazuh Agent? (y/N): " response
+    # --- CI/CD AUTO MODE CHECK ---
+    if [[ "${1:-}" == "auto" ]]; then
+        response=${SYSWARDEN_ENABLE_WAZUH:-n}
+        log "INFO" "Auto Mode: Wazuh Agent choice loaded via env var [${response}]"
+    else
+        # 1. Ask for confirmation
+        read -p "Install Wazuh Agent? (y/N): " response
+    fi
+    # -----------------------------
+    
     if [[ ! "$response" =~ ^[Yy]$ ]]; then
         log "INFO" "Skipping Wazuh Agent installation."
         return
     fi
 
     # 2. Gather Configuration Data
-    # IP Serveur
-    read -p "Enter Wazuh Manager IP: " WAZUH_IP
-    if [[ -z "$WAZUH_IP" ]]; then log "ERROR" "Missing IP. Skipping."; return; fi
+    if [[ "${1:-}" == "auto" ]]; then
+        WAZUH_IP=${SYSWARDEN_WAZUH_IP:-""}
+        W_NAME=${SYSWARDEN_WAZUH_NAME:-$(hostname)}
+        W_GROUP=${SYSWARDEN_WAZUH_GROUP:-default}
+        W_PORT_COMM=${SYSWARDEN_WAZUH_COMM_PORT:-1514}
+        W_PORT_ENROLL=${SYSWARDEN_WAZUH_ENROLL_PORT:-1515}
+        log "INFO" "Auto Mode: Wazuh settings loaded via env vars."
+    else
+        # IP Serveur
+        read -p "Enter Wazuh Manager IP: " WAZUH_IP
+        if [[ -z "$WAZUH_IP" ]]; then log "ERROR" "Missing IP. Skipping."; return; fi
 
-    # Hostname (Agent Name)
-    read -p "Agent Name [Press Enter for '$(hostname)']: " W_NAME
-    W_NAME=${W_NAME:-$(hostname)}
+        # Hostname (Agent Name)
+        read -p "Agent Name [Press Enter for '$(hostname)']: " W_NAME
+        W_NAME=${W_NAME:-$(hostname)}
 
-    # Group
-    read -p "Agent Group [Press Enter for 'default']: " W_GROUP
-    W_GROUP=${W_GROUP:-default}
+        # Group
+        read -p "Agent Group [Press Enter for 'default']: " W_GROUP
+        W_GROUP=${W_GROUP:-default}
 
-    # Agent Port (Communication)
-    read -p "Agent Communication Port [Press Enter for '1514']: " W_PORT_COMM
-    W_PORT_COMM=${W_PORT_COMM:-1514}
+        # Agent Port (Communication)
+        read -p "Agent Communication Port [Press Enter for '1514']: " W_PORT_COMM
+        W_PORT_COMM=${W_PORT_COMM:-1514}
 
-    # Enrollment Port (Registration)
-    read -p "Enrollment Port [Press Enter for '1515']: " W_PORT_ENROLL
-    W_PORT_ENROLL=${W_PORT_ENROLL:-1515}
+        # Enrollment Port (Registration)
+        read -p "Enrollment Port [Press Enter for '1515']: " W_PORT_ENROLL
+        W_PORT_ENROLL=${W_PORT_ENROLL:-1515}
+    fi
+    
+    # Fail-Safe: Interdire l'installation si l'IP n'est pas fournie en mode auto
+    if [[ -z "$WAZUH_IP" ]]; then log "ERROR" "Missing Wazuh IP. Skipping."; return; fi
 
     # Protocol (Default TCP)
     W_PROTO="TCP"
@@ -2154,8 +2338,8 @@ protect_docker_jail() {
 
     read -p "Enter the exact name of your custom Docker Jail (e.g. 'nginx-docker'): " jail_name
     
-    # Trim whitespace
-    jail_name=$(echo "$jail_name" | xargs)
+    # Trim whitespace and sanitize: allow only alphanumeric, dashes, and underscores
+    jail_name=$(echo "$jail_name" | xargs | tr -cd 'a-zA-Z0-9_-')
 
     if [[ -z "$jail_name" ]]; then
         log "ERROR" "Jail name cannot be empty."
@@ -2346,6 +2530,12 @@ show_alerts_dashboard() {
 # ==============================================================================
 
 MODE="${1:-install}"
+# --- AUTOMATION / CI-CD SUPPORT ---
+# Permet de capturer ./install.sh --auto et de le normaliser
+if [[ "$MODE" == "--auto" ]]; then
+    MODE="auto"
+fi
+# ----------------------------------
 
 if [[ "$MODE" == "whitelist" ]]; then
     check_root
@@ -2388,12 +2578,18 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v6.00)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v6.50)     #"
     echo -e "#############################################################${NC}"
 fi
 
 check_root
 detect_os_backend
+
+# --- SECURITY: ENFORCE STRICT PERMISSIONS ---
+touch "$CONF_FILE" "$LOG_FILE" 2>/dev/null || true
+chmod 600 "$CONF_FILE" 2>/dev/null || true
+chmod 640 "$LOG_FILE" 2>/dev/null || true
+# ------------------------------------------
 
 if [[ "$MODE" == "update" ]] && [[ -f "$CONF_FILE" ]]; then
     source "$CONF_FILE"
@@ -2402,10 +2598,16 @@ fi
 if [[ "$MODE" != "update" ]]; then
     > "$CONF_FILE"
     install_dependencies
+    
+    # --- CRITICAL ARCHITECTURE FIX ---
+    # Re-detect backend! DNF might have just installed Firewalld or Nftables (via fail2ban)
+    detect_os_backend
+    # ---------------------------------
+    
     define_ssh_port "$MODE"
     define_docker_integration "$MODE"
-	define_geoblocking "$MODE"
-	define_asnblocking "$MODE"
+    define_geoblocking "$MODE"
+    define_asnblocking "$MODE"
     configure_fail2ban
 fi
 
@@ -2423,12 +2625,18 @@ fi
 
 if [[ "$MODE" != "update" ]]; then
     setup_siem_logging
-    setup_abuse_reporting
-    setup_wazuh_agent
+    setup_abuse_reporting "$MODE"
+    setup_wazuh_agent "$MODE"
     setup_cron_autoupdate "$MODE"
     
     echo -e "\n${GREEN}INSTALLATION SUCCESSFUL${NC}"
     echo -e " -> List loaded: $LIST_TYPE"
-    echo -e " -> Mode: Universal (Auto-Detection)"
+    
+    if [[ "$MODE" == "auto" ]]; then
+        echo -e " -> Mode: Automated (CI/CD Deployment)"
+    else
+        echo -e " -> Mode: Universal (Interactive)"
+    fi
+    
     echo -e " -> Protection: Active"
 fi
