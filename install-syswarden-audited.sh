@@ -152,10 +152,10 @@ install_dependencies() {
     fi
 
     # --- RHEL/ROCKY ZERO-REBOOT FIX ---
-    # Force kernel module load and restart Firewalld to detect ipset immediately
-    modprobe ip_set 2>/dev/null || true
-    modprobe ip_set_hash_net 2>/dev/null || true
-    if systemctl is-active --quiet firewalld; then
+    # Force kernel module load using absolute paths to bypass sudo $PATH restrictions
+    /sbin/modprobe ip_set 2>/dev/null || true
+    /sbin/modprobe ip_set_hash_net 2>/dev/null || true
+    if command -v systemctl >/dev/null && systemctl is-active --quiet firewalld; then
         systemctl restart firewalld 2>/dev/null || true
     fi
     # ----------------------------------
