@@ -151,22 +151,6 @@ install_dependencies() {
         elif [[ -f /etc/redhat-release ]]; then dnf install -y ipset; fi
     fi
 
-    # --- RHEL/ROCKY/CENTOS 10 ZERO-REBOOT FIX ---
-    # 1. Force kernel to rebuild its module index immediately after DNF installs them
-    /sbin/depmod -a 2>/dev/null || true
-    
-    # 2. Force kernel module load using absolute paths
-    /sbin/modprobe ip_set 2>/dev/null || true
-    /sbin/modprobe ip_set_hash_net 2>/dev/null || true
-    
-    # 3. KERNEL SETTLE: Wait 3 seconds for Netlink sockets to initialize
-    sleep 3
-    
-    if command -v systemctl >/dev/null && systemctl is-active --quiet firewalld; then
-        systemctl restart firewalld 2>/dev/null || true
-    fi
-    # --------------------------------------------
-
     if ! command -v fail2ban-client >/dev/null; then
         log "WARN" "Installing package: fail2ban"
         if [[ -f /etc/debian_version ]]; then
@@ -183,6 +167,23 @@ install_dependencies() {
         if [[ -f /etc/debian_version ]]; then apt-get install -y nftables;
         elif [[ -f /etc/redhat-release ]]; then dnf install -y nftables; fi
     fi
+
+    # --- RHEL/ROCKY/CENTOS 10 ZERO-REBOOT FIX ---
+    # Moved to the VERY END of the function to ensure all DNF transactions are flushed to disk
+    if [[ "$FIREWALL_BACKEND" != "nftables" ]] && [[ "$FIREWALL_BACKEND" != "ufw" ]]; then
+        log "INFO" "Synchronizing Kernel modules..."
+        /sbin/depmod -a 2>/dev/null || true
+        /sbin/modprobe ip_set 2>/dev/null || true
+        /sbin/modprobe ip_set_hash_net 2>/dev/null || true
+        
+        # Give Netlink sockets 2 seconds to bind
+        sleep 2
+        
+        if command -v systemctl >/dev/null && systemctl is-active --quiet firewalld; then
+            systemctl restart firewalld 2>/dev/null || true
+        fi
+    fi
+    # --------------------------------------------
 
     log "INFO" "All dependencies check complete."
 }
