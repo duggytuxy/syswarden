@@ -806,7 +806,7 @@ EOF
     else
         # Fallback IPSET / IPTABLES
         ipset create "${SET_NAME}_tmp" hash:net maxelem 200000 -exist
-        sed "s/^/add ${SET_NAME}_tmp /" "$FINAL_LIST" | ipset restore
+        sed "s/^/add ${SET_NAME}_tmp /" "$FINAL_LIST" | ipset restore -!
         ipset create "$SET_NAME" hash:net maxelem 200000 -exist
         ipset swap "${SET_NAME}_tmp" "$SET_NAME"
         ipset destroy "${SET_NAME}_tmp"
@@ -2598,10 +2598,16 @@ fi
 if [[ "$MODE" != "update" ]]; then
     > "$CONF_FILE"
     install_dependencies
+    
+    # --- CRITICAL ARCHITECTURE FIX ---
+    # Re-detect backend! DNF might have just installed Firewalld or Nftables (via fail2ban)
+    detect_os_backend
+    # ---------------------------------
+    
     define_ssh_port "$MODE"
     define_docker_integration "$MODE"
-	define_geoblocking "$MODE"
-	define_asnblocking "$MODE"
+    define_geoblocking "$MODE"
+    define_asnblocking "$MODE"
     configure_fail2ban
 fi
 
