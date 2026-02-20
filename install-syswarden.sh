@@ -557,13 +557,29 @@ download_asn() {
         fi
         
         echo -n "Fetching IP blocks for ${asn}... "
-        # Extract CIDRs accurately using RADB routing database
-        if whois -h whois.radb.net -- "-i origin $asn" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}' >> "$TMP_DIR/asn_raw.txt"; then
+        
+        # --- FIX: ANTI-RATE LIMITING & RETRY LOGIC ---
+        local success=false
+        for attempt in 1 2 3; do
+            # 2>/dev/null hides unsightly text "Connection reset by peer"
+            if whois -h whois.radb.net -- "-i origin $asn" 2>/dev/null | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}' >> "$TMP_DIR/asn_raw.txt"; then
+                success=true
+                break # We exit the test loop if it is successful.
+            else
+                sleep 2 # If the server has disconnected, wait 2 seconds before trying again.
+            fi
+        done
+
+        if [ "$success" = true ]; then
             echo -e "${GREEN}OK${NC}"
         else
             echo -e "${RED}FAIL${NC}"
-            log "WARN" "Failed to download data for $asn."
+            log "WARN" "Failed to fetch data for $asn (May be empty or blocked by RADB)."
         fi
+        
+        # A brief, systematic pause of one second to avoid upsetting the Whois server
+        sleep 1
+        # ---------------------------------------------
     done
     
     # Restore strict security IFS
