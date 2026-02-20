@@ -520,10 +520,11 @@ download_asn() {
 
     # --- SPAMHAUS ASN-DROP INTEGRATION ---
     echo -n "Fetching Spamhaus ASN-DROP list (Cybercrime Hosters)... "
-    local spamhaus_url="https://www.spamhaus.org/drop/asndrop.txt"
-    # FIX 1: Added a Browser User-Agent (-A) to bypass Spamhaus WAF/Cloudflare blocks
+    local spamhaus_url="https://www.spamhaus.org/drop/asndrop.json"
+    
+    # Extract ASNs from JSON format securely using grep and sed
     local spamhaus_asns
-    spamhaus_asns=$(curl -sS -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" --retry 2 --connect-timeout 5 "$spamhaus_url" 2>/dev/null | grep -Eo '^AS[0-9]+' | tr '\n' ' ' || true)
+    spamhaus_asns=$(curl -sS -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" --retry 2 --connect-timeout 5 "$spamhaus_url" 2>/dev/null | grep -Eo '"asn":[[:space:]]*[0-9]+' | grep -Eo '[0-9]+' | sed 's/^/AS/' | tr '\n' ' ' || true)
     
     if [[ -n "$spamhaus_asns" ]]; then
         echo -e "${GREEN}OK${NC}"
