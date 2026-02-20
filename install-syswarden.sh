@@ -536,12 +536,16 @@ download_asn() {
     fi
     # -------------------------------------
 
-    # Remove duplicates from the combined list (User + Spamhaus)
+    # --- FIX: TEMPORARY IFS RESTORE ---
+    # We must allow space separation just for this loop, bypassing the global IFS=$'\n\t'
+    local OLD_IFS="$IFS"
+    IFS=$' \n\t'
+    # ----------------------------------
+    
     local combined_asns
     combined_asns=$(echo "$BLOCK_ASNS" | tr ' ' '\n' | sort -u | tr '\n' ' ')
 
     for asn in $combined_asns; do
-        # --- FIX 2: PREVENT LOGIC LEAK ---
         # Ignore empty strings or our "auto"/"none" placeholder keywords
         if [[ -z "$asn" ]] || [[ "$asn" == "auto" ]] || [[ "$asn" == "none" ]]; then continue; fi
         
@@ -551,7 +555,6 @@ download_asn() {
             if [[ -z "$clean_num" ]]; then continue; fi # Failsafe
             asn="AS${clean_num}"
         fi
-        # ---------------------------------
         
         echo -n "Fetching IP blocks for ${asn}... "
         # Extract CIDRs accurately using RADB routing database
@@ -562,6 +565,9 @@ download_asn() {
             log "WARN" "Failed to download data for $asn."
         fi
     done
+    
+    # Restore strict security IFS
+    IFS="$OLD_IFS"
 
     if [[ -s "$TMP_DIR/asn_raw.txt" ]]; then
         # Use Python to mathematically collapse overlapping CIDRs and prevent Firewalld INVALID_ENTRY errors
