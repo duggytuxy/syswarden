@@ -10,6 +10,7 @@ fi
 
 set -euo pipefail
 IFS=$'\n\t'
+
 # --- SECURE PATH FOR ALPINE ---
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -100,19 +101,28 @@ detect_os_backend() {
 install_dependencies() {
     log "INFO" "Installing required dependencies..."
     
-    # Using a Bash array to respect the strict IFS=$'\n\t' security setting
-    local deps=(curl python3 py3-requests ipset fail2ban bash coreutils grep gawk sed procps logrotate ncurses whois)
+    local deps="curl python3 py3-requests ipset fail2ban bash coreutils grep gawk sed procps logrotate ncurses whois"
     
     if [[ "$FIREWALL_BACKEND" == "nftables" ]]; then
-        deps+=(nftables)
+        deps="$deps nftables"
     else
-        deps+=(iptables ip6tables)
+        deps="$deps iptables ip6tables"
     fi
 
-    if ! apk add --no-cache "${deps[@]}" >/dev/null; then
+    # --- ALPINE / POSIX FIX FOR IFS ---
+    # Temporarily restore default IFS (space) so word splitting works for apk
+    local OLD_IFS="$IFS"
+    IFS=$' \t\n'
+    
+    # shellcheck disable=SC2086
+    if ! apk add --no-cache $deps >/dev/null; then
+        IFS="$OLD_IFS" # Restore strict IFS before exiting on error
         log "ERROR" "Failed to install dependencies via apk. Check your network or repositories."
         exit 1
     fi
+    
+    IFS="$OLD_IFS" # Restore strict IFS for the rest of the script
+    # ----------------------------------
 
     if ! command -v rc-update >/dev/null; then
         log "ERROR" "OpenRC is missing. This script requires a standard Alpine setup."
