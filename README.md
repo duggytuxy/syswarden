@@ -30,6 +30,7 @@
 </p>
 
 <div align="center">
+
 [![SysWarden Security Audit](https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml/badge.svg)](https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml)
 </div>
 
