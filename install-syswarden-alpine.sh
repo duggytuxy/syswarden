@@ -1663,7 +1663,7 @@ def monitor_logs():
     p = select.poll()
     p.register(tail_proc.stdout)
 
-    regex_fw = re.compile(r"\[SysWarden-(BLOCK|GEO|ASN|DOCKER)\].*SRC=([\d\.]+)(?:.*DPT=(\d+))?")
+    regex_fw = re.compile(r"\[SysWarden-BLOCK\].*?SRC=([\d\.]+)(?:.*?DPT=(\d+))?")
     regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
 
     while True:
@@ -1677,9 +1677,8 @@ def monitor_logs():
                 if match_fw:
                     ip = match_fw.group(2)
                     port_val = match_fw.group(3)
-                    try:
-                        # If port_val exists, convert it; otherwise, set port = 0.
-                        port = int(port_val) if port_val else 0
+                    # Use port if found, otherwise default to 0 for standard category mapping
+                    port = int(port_val) if port_val else 0
                     except (ValueError, TypeError):
                         port = 0
                     
@@ -1714,6 +1713,7 @@ def monitor_logs():
             # --- FAIL2BAN LOGIC ---
             if ENABLE_F2B:
                 match_f2b = regex_f2b.search(line)
+                # Only report if it's a real Fail2ban ban and not a duplicate of a firewall log
                 if match_f2b and "SysWarden-BLOCK" not in line:
                     jail = match_f2b.group(1)
                     ip = match_f2b.group(2)
