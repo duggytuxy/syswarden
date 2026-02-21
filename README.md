@@ -29,9 +29,9 @@
   <br />
 </p>
 
-<p align="center">
+<div align="center">
 [![SysWarden Security Audit](https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml/badge.svg)](https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml)
-</p>
+</div>
 
 ![Alt](https://repobeats.axiom.co/api/embed/d909eab3c0cafb3a64294546f37a130f18a7e2f0.svg "Repobeats analytics image")
 
