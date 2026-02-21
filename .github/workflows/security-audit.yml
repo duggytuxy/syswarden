@@ -1,0 +1,43 @@
+name: SysWarden Security Audit
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - '**.sh'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [ "main", "master" ]
+    paths:
+      - '**.sh'
+
+jobs:
+  shellcheck:
+    name: Bash Static Analysis (ShellCheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck on SysWarden script
+        # On cible uniquement les avertissements et erreurs pour ne pas polluer les logs
+        run: shellcheck --severity=warning install-syswarden.sh
+
+  trivy:
+    name: Vulnerability & Secret Scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          # Force l'échec du job si une vulnérabilité critique est trouvée
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
