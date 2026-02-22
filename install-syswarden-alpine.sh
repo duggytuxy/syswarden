@@ -1646,25 +1646,21 @@ def send_report(ip, categories, comment):
 
 def monitor_logs():
     global tail_proc
-    print("🚀 Monitoring logs (Alpine Unified SysWarden Reporter)...", flush=True)
+    print("🚀 Monitoring logs (dmesg + fail2ban)...", flush=True)
     load_cache() # Load JSON cache on startup
     
-    # Files to watch on Alpine
-    files_to_watch = []
-    if os.path.exists("/var/log/messages"): files_to_watch.append("/var/log/messages")
-    if os.path.exists("/var/log/fail2ban.log"): files_to_watch.append("/var/log/fail2ban.log")
+    # We combine dmesg (for Firewall) and tail (for Fail2ban)
+    # Using 'dmesg -w' to follow kernel logs in real-time, bypassing rsyslog completely
+    cmd = "dmesg -w & tail -F /var/log/fail2ban.log 2>/dev/null"
     
-    if not files_to_watch:
-        print("[FAIL] No log files found to monitor.", flush=True)
-        return
-
-    cmd = ['tail', '-F'] + files_to_watch
-    tail_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # shell=True interleaves the output of both commands into our single pipe
+    tail_proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     p = select.poll()
     p.register(tail_proc.stdout)
 
-    # Filter ONLY [SysWarden-BLOCK] as per v8.00 logic. Port (DPT) is optional.
-    regex_fw = re.compile(r"\[SysWarden-(BLOCK)\].*?SRC=([\d\.]+)(?:.*?DPT=(\d+))?")
+    # v8.00 Logic: STRICT filter on [SysWarden-BLOCK] only.
+    # Group 1: IP Address | Group 2: Port (Optional)
+    regex_fw = re.compile(r"\[SysWarden-BLOCK\].*?SRC=([\d\.]+)(?:.*?DPT=(\d+))?")
     regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
 
     while True:
@@ -1676,10 +1672,9 @@ def monitor_logs():
             if ENABLE_FW:
                 match_fw = regex_fw.search(line)
                 if match_fw:
-                    ip = match_fw.group(2)
-                    port_str = match_fw.group(3)
+                    ip = match_fw.group(1)
+                    port_str = match_fw.group(2)
                     
-                    # Correct try/except block to avoid SyntaxError
                     try:
                         port = int(port_str) if port_str else 0
                     except (ValueError, TypeError):
@@ -1688,6 +1683,7 @@ def monitor_logs():
                     cats = ["14"]
                     attack_type = "Port Scan"
 
+                    # Original v8.00 categorization logic
                     if port in [80, 443, 4443, 8080, 8443]: cats.extend(["20", "21"]); attack_type = "Web Attack"
                     elif port in [22, 2222, 22222]: cats.extend(["18", "22"]); attack_type = "SSH Attack"
                     elif port == 23: cats.extend(["18", "23"]); attack_type = "Telnet IoT Attack"
@@ -1716,7 +1712,7 @@ def monitor_logs():
             # --- FAIL2BAN LOGIC ---
             if ENABLE_F2B:
                 match_f2b = regex_f2b.search(line)
-                # Only report if it's a real Fail2ban ban and not a duplicate of a firewall log
+                # Ensure we don't double-report if Fail2ban logs a firewall hit somehow
                 if match_f2b and "SysWarden-BLOCK" not in line:
                     jail = match_f2b.group(1)
                     ip = match_f2b.group(2)
@@ -2150,26 +2146,24 @@ show_alerts_dashboard() {
             done
         fi
 
-        # 2. FIREWALL ENTRIES
-        if [[ -f "/var/log/messages" ]]; then
-             { grep -E "SysWarden-(BLOCK|GEO|ASN|DOCKER)" "/var/log/messages" || true; } | tail -n 20 | while read -r line; do
-                if [[ $line =~ SRC=([0-9.]+) ]]; then
-                    ip="${BASH_REMATCH[1]}"
-                    rule="Unknown"
-                    # Capture précise du type de règle
-                    if [[ $line =~ (SysWarden-(BLOCK|GEO|ASN|DOCKER)) ]]; then rule="${BASH_REMATCH[1]}"; fi
-                    
-                    port="Global"
-                    if [[ $line =~ DPT=([0-9]+) ]]; then port="TCP/${BASH_REMATCH[1]}"; fi
-                    
-                    dtime="Unknown"
-                    if [[ $line =~ $date_regex ]]; then dtime="${BASH_REMATCH[1]}"; fi
-                    
-                    printf "%-19s | %-10s | %-16s | %-20s | %-12s | %-8s\n" "$dtime" "Firewall" "$ip" "$rule" "$port" "BLOCK"
-                fi
-             done
-        fi
-        
+        # 2. FIREWALL ENTRIES (Direct from Kernel Buffer)
+        { dmesg | grep -E "\[SysWarden-BLOCK\]|\[SysWarden-GEO\]|\[SysWarden-ASN\]" | tail -n 20; } | while read -r line; do
+            if [[ $line =~ SRC=([0-9.]+) ]]; then
+                ip="${BASH_REMATCH[1]}"
+                rule="Unknown"
+                if [[ $line =~ (SysWarden-[A-Z]+) ]]; then rule="${BASH_REMATCH[1]}"; fi
+                
+                port="Global"
+                if [[ $line =~ DPT=([0-9]+) ]]; then port="TCP/${BASH_REMATCH[1]}"; fi
+                
+                # Extract Kernel Timestamp
+                dtime="Kernel-TS"
+                if [[ $line =~ ^\[[[:space:]]*([0-9.]+)\] ]]; then dtime="${BASH_REMATCH[1]}s"; fi
+                
+                printf "%-19s | %-10s | %-16s | %-20s | %-12s | %-8s\n" "$dtime" "Firewall" "$ip" "$rule" "$port" "BLOCK"
+            fi
+         done
+                
         echo "----------------------------------------------------------------------------------------------------"
         echo -e "Press [ESC] to Quit."
         
