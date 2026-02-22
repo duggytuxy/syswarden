@@ -2144,6 +2144,11 @@ show_alerts_dashboard() {
         fi
 
         # 2. FIREWALL ENTRIES (Direct from Kernel Buffer)
+        # Calculate boot time to translate kernel uptime to human-readable date
+        local uptime_sec; uptime_sec=$(cut -d. -f1 /proc/uptime)
+        local now_sec; now_sec=$(date +%s)
+        local boot_sec=$((now_sec - uptime_sec))
+
         { dmesg | grep -E "\[SysWarden-BLOCK\]|\[SysWarden-GEO\]|\[SysWarden-ASN\]" | tail -n 20; } | while read -r line; do
             if [[ $line =~ SRC=([0-9.]+) ]]; then
                 ip="${BASH_REMATCH[1]}"
@@ -2153,9 +2158,13 @@ show_alerts_dashboard() {
                 port="Global"
                 if [[ $line =~ DPT=([0-9]+) ]]; then port="TCP/${BASH_REMATCH[1]}"; fi
                 
-                # Extract Kernel Timestamp
+                # Extract Kernel Timestamp and convert to YYYY-MM-DD HH:MM:SS format
                 dtime="Kernel-TS"
-                if [[ $line =~ ^\[[[:space:]]*([0-9.]+)\] ]]; then dtime="${BASH_REMATCH[1]}s"; fi
+                if [[ $line =~ ^\[[[:space:]]*([0-9]+)\.[0-9]+\] ]]; then
+                    local kernel_sec="${BASH_REMATCH[1]}"
+                    local event_sec=$((boot_sec + kernel_sec))
+                    dtime=$(date -d "@$event_sec" "+%Y-%m-%d %H:%M:%S")
+                fi
                 
                 printf "%-19s | %-10s | %-16s | %-20s | %-12s | %-8s\n" "$dtime" "Firewall" "$ip" "$rule" "$port" "BLOCK"
             fi
