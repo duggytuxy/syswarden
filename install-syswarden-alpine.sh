@@ -1650,8 +1650,8 @@ def monitor_logs():
     load_cache() # Load JSON cache on startup
     
     # We combine dmesg (for Firewall) and tail (for Fail2ban)
-    # Using 'dmesg -w' to follow kernel logs in real-time, bypassing rsyslog completely
-    cmd = "dmesg -w & tail -F /var/log/fail2ban.log 2>/dev/null"
+    # Added explicit error suppression and continuous reading for dmesg
+    cmd = "dmesg -w --facility=kern 2>/dev/null & tail -F /var/log/fail2ban.log 2>/dev/null"
     
     # shell=True interleaves the output of both commands into our single pipe
     tail_proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -1659,8 +1659,8 @@ def monitor_logs():
     p.register(tail_proc.stdout)
 
     # v8.00 Logic: STRICT filter on [SysWarden-BLOCK] only.
-    # Group 1: IP Address | Group 2: Port (Optional)
-    regex_fw = re.compile(r"\[SysWarden-BLOCK\].*?SRC=([\d\.]+)(?:.*?DPT=(\d+))?")
+    # We use a broad regex that handles Alpine's dmesg timestamp prefixes
+    regex_fw = re.compile(r"\[SysWarden-BLOCK\].*?SRC=([\d\.]+).*?DPT=(\d+)")
     regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
 
     while True:
@@ -1673,11 +1673,9 @@ def monitor_logs():
                 match_fw = regex_fw.search(line)
                 if match_fw:
                     ip = match_fw.group(1)
-                    port_str = match_fw.group(2)
-                    
                     try:
-                        port = int(port_str) if port_str else 0
-                    except (ValueError, TypeError):
+                        port = int(match_fw.group(2))
+                    except ValueError:
                         port = 0
                     
                     cats = ["14"]
@@ -1712,7 +1710,6 @@ def monitor_logs():
             # --- FAIL2BAN LOGIC ---
             if ENABLE_F2B:
                 match_f2b = regex_f2b.search(line)
-                # Ensure we don't double-report if Fail2ban logs a firewall hit somehow
                 if match_f2b and "SysWarden-BLOCK" not in line:
                     jail = match_f2b.group(1)
                     ip = match_f2b.group(2)
