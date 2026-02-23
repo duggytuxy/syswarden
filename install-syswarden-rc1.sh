@@ -2442,42 +2442,42 @@ setup_ztna_spa() {
     echo -e "\n${BLUE}=== Step: Configuring ZTNA / fwknop ===${NC}"
     log "INFO" "Generating SPA cryptographic keys..."
 
-    # Generate secure Alphanumeric keys (Bypasses fwknopd strict Base64 bugs and pipefail traps)
+    # Bypass fwknopd strict bugs and pipefail traps
     local KEY_NORMAL; KEY_NORMAL=$(LC_ALL=C tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 32 || true)
     local HMAC_NORMAL; HMAC_NORMAL=$(LC_ALL=C tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 64 || true)
     
-    # Auto-detect the primary network interface facing the internet
     local ACTIVE_IF; ACTIVE_IF=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \K\S+' | head -n 1)
     if [[ -z "$ACTIVE_IF" ]]; then
         ACTIVE_IF="eth0"
-        log "WARN" "Could not auto-detect interface. Defaulting to $ACTIVE_IF"
     fi
 
-    # Write fwknop access configuration
+    # 1. Purge and recreate directory with EXPLICIT permissions
+    rm -rf /etc/fwknop
     mkdir -p /etc/fwknop
-    cat <<EOF > /etc/fwknop/access.conf
-SOURCE ANY
-KEY $KEY_NORMAL
-HMAC_KEY $HMAC_NORMAL
-FW_ACCESS_TIMEOUT 30
-EOF
+    chmod 755 /etc/fwknop
 
-    # Write fwknop server configuration (fwknopd auto-detects iptables)
-    cat <<EOF > /etc/fwknop/fwknopd.conf
-PCAP_INTF                   $ACTIVE_IF;
-EOF
+    # 2. Use ECHO to prevent any nano/copy-paste indentation corruption
+    echo "SOURCE ANY" > /etc/fwknop/access.conf
+    echo "KEY $KEY_NORMAL" >> /etc/fwknop/access.conf
+    echo "HMAC_KEY $HMAC_NORMAL" >> /etc/fwknop/access.conf
+    echo "FW_ACCESS_TIMEOUT 30" >> /etc/fwknop/access.conf
 
-    chmod 600 /etc/fwknop/access.conf /etc/fwknop/fwknopd.conf
+    echo "PCAP_INTF $ACTIVE_IF;" > /etc/fwknop/fwknopd.conf
 
-    # Enable and restart service (Handles both Debian and RHEL service names)
+    # 3. Explicit ownership and file permissions
+    chown -R root:root /etc/fwknop
+    chmod 600 /etc/fwknop/access.conf
+    chmod 644 /etc/fwknop/fwknopd.conf
+
+    # 4. Reload systemd to clear namespace caches
     if command -v systemctl >/dev/null; then
+        systemctl daemon-reload
         systemctl enable fwknop-server 2>/dev/null || systemctl enable fwknopd 2>/dev/null || true
         systemctl restart fwknop-server 2>/dev/null || systemctl restart fwknopd 2>/dev/null || true
     fi
 
     log "INFO" "SPA configured successfully on interface $ACTIVE_IF."
 
-    # Extract Public IP for the client command
     local SERVER_IP; SERVER_IP=$(curl -4 -s ifconfig.me 2>/dev/null || echo "YOUR_SERVER_IP")
 
     echo -e "\n${RED}!!! CRITICAL: SAVE THESE INSTRUCTIONS NOW !!!${NC}"
