@@ -2406,11 +2406,8 @@ HMAC_KEY_BASE64 $HMAC_BASE64
 FW_ACCESS_TIMEOUT 30
 EOF
 
-    # Adapt backend commands (fwknop seamlessly uses iptables-nft for Debian Nftables)
+    # Adapt backend commands (fwknop seamlessly uses iptables-nft for both Debian and RHEL/Alma)
     local FW_TYPE="ENABLE_IPTABLES"
-    if [[ "$FIREWALL_BACKEND" == "firewalld" ]]; then
-        FW_TYPE="ENABLE_FIREWD"
-    fi
 
     cat <<EOF > /etc/fwknop/fwknopd.conf
 PCAP_INTF                   $ACTIVE_IF;
