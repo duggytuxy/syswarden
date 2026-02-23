@@ -2461,12 +2461,9 @@ HMAC_KEY_BASE64 $HMAC_BASE64
 FW_ACCESS_TIMEOUT 30
 EOF
 
-    # Adapt backend commands (fwknop seamlessly uses iptables-nft for both Debian and RHEL/Alma)
-    local FW_TYPE="ENABLE_IPTABLES"
-
+    # Write fwknop server configuration (fwknopd auto-detects iptables)
     cat <<EOF > /etc/fwknop/fwknopd.conf
 PCAP_INTF                   $ACTIVE_IF;
-$FW_TYPE                    Y;
 EOF
     chmod 600 /etc/fwknop/access.conf /etc/fwknop/fwknopd.conf
 
