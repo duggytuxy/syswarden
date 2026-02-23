@@ -2452,7 +2452,6 @@ setup_ztna_spa() {
     fi
 
     # 1. Purge and recreate directory with EXPLICIT permissions
-    rm -rf /etc/fwknop
     mkdir -p /etc/fwknop
     chmod 755 /etc/fwknop
 
@@ -2727,7 +2726,8 @@ uninstall_syswarden() {
         log "INFO" "Stopping ZTNA/SPA service..."
         systemctl disable --now fwknop-server 2>/dev/null || true
         systemctl disable --now fwknopd 2>/dev/null || true
-        rm -rf /etc/fwknop
+        > /etc/fwknop/access.conf 2>/dev/null || true
+        > /etc/fwknop/fwknopd.conf 2>/dev/null || true
     fi
     
     systemctl daemon-reload
