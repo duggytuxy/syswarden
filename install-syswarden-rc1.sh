@@ -852,21 +852,12 @@ EOF
             while iptables -D INPUT -p tcp --dport "$SSH_PORT" -j DROP 2>/dev/null; do :; done
 
             # 2. Insert the Absolute Drop Rule at Position 1 (Highest priority)
+            # HARDCORE MODE: No exceptions. Everyone hits the wall.
             iptables -I INPUT 1 -p tcp --dport "$SSH_PORT" -j DROP
-
-            # 3. Exempt whitelisted IPs (Insert at Position 1, pushing the Drop down to Pos 2+)
-            if [[ -s "$WHITELIST_FILE" ]]; then
-                while read -r ip; do
-                    if [[ -n "$ip" ]]; then
-                        while iptables -D INPUT -s "$ip" -p tcp --dport "$SSH_PORT" -j ACCEPT 2>/dev/null; do :; done
-                        iptables -I INPUT 1 -s "$ip" -p tcp --dport "$SSH_PORT" -j ACCEPT
-                    fi
-                done < "$WHITELIST_FILE"
-            fi
 
             if command -v netfilter-persistent >/dev/null; then netfilter-persistent save >/dev/null 2>&1 || true; fi
 
-            # 4. CRITICAL: Restart fwknopd to guarantee its dynamic hook is strictly above our DROP
+            # 3. CRITICAL: Restart fwknopd to guarantee its dynamic hook is strictly above our DROP
             log "INFO" "ZTNA: Restarting SPA service to ensure correct iptables hook priority..."
             if command -v systemctl >/dev/null; then
                 systemctl restart fwknop-server 2>/dev/null || systemctl restart fwknopd 2>/dev/null || true
