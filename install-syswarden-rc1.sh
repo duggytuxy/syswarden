@@ -2466,6 +2466,7 @@ EOF
     cat <<EOF > /etc/fwknop/fwknopd.conf
 PCAP_INTF                   $ACTIVE_IF;
 EOF
+
     chmod 600 /etc/fwknop/access.conf /etc/fwknop/fwknopd.conf
 
     # Enable and restart service (Handles both Debian and RHEL service names)
