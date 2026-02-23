@@ -2386,8 +2386,8 @@ setup_ztna_spa() {
     log "INFO" "Generating SPA cryptographic keys..."
 
     # Generate secure Base64 keys
-    local KEY_BASE64; KEY_BASE64=$(head -c 32 /dev/urandom | base64)
-    local HMAC_BASE64; HMAC_BASE64=$(head -c 64 /dev/urandom | base64)
+    local KEY_BASE64; KEY_BASE64=$(head -c 32 /dev/urandom | base64 -w 0)
+    local HMAC_BASE64; HMAC_BASE64=$(head -c 64 /dev/urandom | base64 -w 0)
     
     # Auto-detect the primary network interface facing the internet
     local ACTIVE_IF; ACTIVE_IF=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \K\S+' | head -n 1)
@@ -2409,7 +2409,7 @@ EOF
     # Adapt backend commands (fwknop seamlessly uses iptables-nft for Debian Nftables)
     local FW_TYPE="ENABLE_IPTABLES"
     if [[ "$FIREWALL_BACKEND" == "firewalld" ]]; then
-        FW_TYPE="ENABLE_FIREWALLD"
+        FW_TYPE="ENABLE_FIREWD"
     fi
 
     cat <<EOF > /etc/fwknop/fwknopd.conf
