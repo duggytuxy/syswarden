@@ -850,14 +850,18 @@ EOF
             
             # 1. Clean existing ZTNA rules to prevent duplicates
             while iptables -D INPUT -p tcp --dport "$SSH_PORT" -j DROP 2>/dev/null; do :; done
+            while iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
 
-            # 2. Insert the Absolute Drop Rule at Position 1 (Highest priority)
-            # HARDCORE MODE: No exceptions. Everyone hits the wall.
+            # 2. Insert the Absolute Drop Rule (HARDCORE MODE)
             iptables -I INPUT 1 -p tcp --dport "$SSH_PORT" -j DROP
+            
+            # 3. CRITICAL: Save the current SSH session so the script can finish!
+            # We insert this ABOVE the drop rule (at position 1, pushing DROP to position 2)
+            iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
             if command -v netfilter-persistent >/dev/null; then netfilter-persistent save >/dev/null 2>&1 || true; fi
 
-            # 3. CRITICAL: Restart fwknopd to guarantee its dynamic hook is strictly above our DROP
+            # 4. Restart fwknopd to guarantee its dynamic hook is at the very top
             log "INFO" "ZTNA: Restarting SPA service to ensure correct iptables hook priority..."
             if command -v systemctl >/dev/null; then
                 systemctl restart fwknop-server 2>/dev/null || systemctl restart fwknopd 2>/dev/null || true
@@ -1030,7 +1034,10 @@ EOF
         # --- ZTNA / SPA INJECTION ---
             if [[ "${USE_SPA:-n}" == "y" ]]; then
                 while iptables -D INPUT -p tcp --dport "$SSH_PORT" -j DROP 2>/dev/null; do :; done
+                while iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
+                
                 iptables -I INPUT 1 -p tcp --dport "$SSH_PORT" -j DROP
+                iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
                 
                 # CRITICAL: Restart fwknopd to ensure it hooks above this drop rule
                 if command -v systemctl >/dev/null; then
