@@ -2466,7 +2466,7 @@ setup_ztna_spa() {
     # 3. Explicit ownership and file permissions
     chown -R root:root /etc/fwknop
     chmod 600 /etc/fwknop/access.conf
-    chmod 644 /etc/fwknop/fwknopd.conf
+    chmod 600 /etc/fwknop/fwknopd.conf
 
     # 4. Reload systemd to clear namespace caches
     if command -v systemctl >/dev/null; then
