@@ -802,9 +802,21 @@ apply_firewall_rules() {
             ztna_rule="tcp dport $SSH_PORT log prefix \"[SysWarden-ZTNA] \" drop"
         fi
 
+        # 4.5. Build Whitelist Set for Nftables
+        local wl_elements=""
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            wl_elements="elements = { $(awk '{print $1 ","}' "$WHITELIST_FILE") }"
+        fi
+
         # 5. Build and Apply Nftables config (Respecting Priority)
         cat <<EOF > "$TMP_DIR/syswarden.nft"
 table inet syswarden_table {
+    set syswarden_whitelist {
+        type ipv4_addr
+        flags interval
+        auto-merge
+        $wl_elements
+    }
     set $SET_NAME {
         type ipv4_addr
         flags interval
@@ -813,6 +825,10 @@ table inet syswarden_table {
     }$geoip_block$asn_block
     chain input {
         type filter hook input priority filter - 10; policy accept;
+        
+        # PRIORITY 0: Critical Bypasses (Keep SSH alive & Admin Whitelist)
+        ct state established,related accept
+        ip saddr @syswarden_whitelist accept
         
         # PRIORITY 1: Geo-Blocking (Broadest scope)
         $geoip_rule
