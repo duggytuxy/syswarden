@@ -101,7 +101,7 @@ detect_os_backend() {
 install_dependencies() {
     log "INFO" "Installing required dependencies..."
     
-    local deps="curl python3 py3-requests ipset fail2ban bash coreutils grep gawk sed procps logrotate ncurses whois rsyslog util-linux"
+    local deps="curl python3 py3-requests ipset fail2ban bash coreutils grep gawk sed procps logrotate ncurses whois rsyslog util-linux wireguard-tools qrencode"
     
     if [[ "$FIREWALL_BACKEND" == "nftables" ]]; then
         deps="$deps nftables"
@@ -154,6 +154,39 @@ define_ssh_port() {
 
     echo "SSH_PORT='$SSH_PORT'" >> "$CONF_FILE"
     log "INFO" "SSH Port configured as: $SSH_PORT"
+}
+
+define_wireguard() {
+    if [[ "${1:-}" == "update" ]] && [[ -f "$CONF_FILE" ]]; then
+        if [[ -z "${USE_WIREGUARD:-}" ]]; then USE_WIREGUARD="n"; fi
+        log "INFO" "Update Mode: Preserving WireGuard setting ($USE_WIREGUARD)"
+        return
+    fi
+
+    echo -e "\n${BLUE}=== Step: WireGuard Management VPN ===${NC}"
+    echo -e "${YELLOW}Deploy an ultra-secure, invisible WireGuard VPN for administration?${NC}"
+    read -p "Enable WireGuard Management VPN? (y/N): " input_wg
+
+    if [[ "$input_wg" =~ ^[Yy]$ ]]; then
+        USE_WIREGUARD="y"
+        read -p "Enter WireGuard Port [Default: 51820]: " input_wg_port
+        WG_PORT=${input_wg_port:-51820}
+        read -p "Enter VPN Subnet (CIDR) [Default: 10.66.66.0/24]: " input_wg_subnet
+        WG_SUBNET=${input_wg_subnet:-"10.66.66.0/24"}
+        
+        # PRE-CREATION: Ensure /etc/wireguard exists EARLY
+        mkdir -p /etc/wireguard
+        log "INFO" "WireGuard ENABLED (Port: $WG_PORT, Subnet: $WG_SUBNET)."
+    else
+        USE_WIREGUARD="n"
+        log "INFO" "WireGuard DISABLED."
+    fi
+    
+    echo "USE_WIREGUARD='$USE_WIREGUARD'" >> "$CONF_FILE"
+    if [[ "$USE_WIREGUARD" == "y" ]]; then
+        echo "WG_PORT='$WG_PORT'" >> "$CONF_FILE"
+        echo "WG_SUBNET='$WG_SUBNET'" >> "$CONF_FILE"
+    fi
 }
 
 define_docker_integration() {
@@ -543,8 +576,19 @@ apply_firewall_rules() {
     }"
             asn_rule="ip saddr @$ASN_SET_NAME log prefix \"[SysWarden-ASN] \" flags all drop"
         fi
+		
+		# --- WIREGUARD SSH CLOAKING ---
+        local wg_ssh_rule=""
+        local ct_rule=""
+        if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
+            ct_rule="ct state established,related accept"
+            wg_ssh_rule="iifname != \"wg0\" iifname != \"lo\" tcp dport ${SSH_PORT:-22} log prefix \"[SysWarden-SSH-DROP] \" drop"
+        fi
 
         cat <<EOF > "$TMP_DIR/syswarden.nft"
+add table inet syswarden_table
+flush table inet syswarden_table
+
 table inet syswarden_table {
     set $SET_NAME {
         type ipv4_addr
@@ -555,6 +599,9 @@ table inet syswarden_table {
     chain input {
         type filter hook input priority filter - 10; policy accept;
         
+        # State tracking to keep current SSH session alive
+        $ct_rule
+        
         # PRIORITY 1: Geo-Blocking
         $geoip_rule
         
@@ -564,6 +611,9 @@ table inet syswarden_table {
         # PRIORITY 3: Standard Blocklist
         ip saddr @$SET_NAME log prefix "[SysWarden-BLOCK] " flags all drop
         tcp dport { 23, 445, 1433, 3389, 5900 } log prefix "[SysWarden-BLOCK] " flags all drop
+        
+        # PRIORITY 4: WireGuard SSH Cloaking
+        $wg_ssh_rule
     }
 }
 EOF
@@ -615,6 +665,19 @@ EOF
                 iptables -I INPUT 1 -m set --match-set "$GEOIP_SET_NAME" src -j DROP
                 iptables -I INPUT 1 -m set --match-set "$GEOIP_SET_NAME" src -j LOG --log-prefix "[SysWarden-GEO] "
             fi
+        fi
+		
+		# --- WIREGUARD SSH CLOAKING ---
+        if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
+            # Clean existing rules
+            while iptables -D INPUT -p tcp --dport "${SSH_PORT:-22}" -j DROP 2>/dev/null; do :; done
+            while iptables -D INPUT -i wg0 -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT 2>/dev/null; do :; done
+            while iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
+            
+            # Insert top-priority rules
+            iptables -I INPUT 1 -p tcp --dport "${SSH_PORT:-22}" -j DROP
+            iptables -I INPUT 1 -i wg0 -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT
+            iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         fi
         
         /etc/init.d/iptables save >/dev/null 2>&1 || true
@@ -1826,9 +1889,136 @@ EOF
     fi
 }
 
+setup_wireguard() {
+    if [[ "${USE_WIREGUARD:-n}" != "y" ]]; then
+        return
+    fi
+
+    echo -e "\n${BLUE}=== Step: Configuring WireGuard VPN ===${NC}"
+    
+    if [[ -f "/etc/wireguard/wg0.conf" ]]; then
+        log "INFO" "WireGuard configuration already exists. Skipping key generation."
+        return
+    fi
+
+    log "INFO" "Initializing WireGuard cryptographic engine..."
+    mkdir -p /etc/wireguard/clients
+    chmod 700 /etc/wireguard
+    chmod 700 /etc/wireguard/clients
+
+    log "INFO" "Enabling Kernel IPv4 Forwarding..."
+    echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-syswarden-wireguard.conf
+    sysctl -p /etc/sysctl.d/99-syswarden-wireguard.conf >/dev/null 2>&1 || true
+
+    local SERVER_PRIV; SERVER_PRIV=$(wg genkey)
+    local SERVER_PUB; SERVER_PUB=$(echo "$SERVER_PRIV" | wg pubkey)
+    local CLIENT_PRIV; CLIENT_PRIV=$(wg genkey)
+    local CLIENT_PUB; CLIENT_PUB=$(echo "$CLIENT_PRIV" | wg pubkey)
+    local PRESHARED_KEY; PRESHARED_KEY=$(wg genpsk)
+
+    local ACTIVE_IF; ACTIVE_IF=$(ip route get 8.8.8.8 2>/dev/null | grep -oEo 'dev [a-zA-Z0-9]+' | awk '{print $2}' | head -n 1)
+    [[ -z "$ACTIVE_IF" ]] && ACTIVE_IF="eth0"
+    
+    local SERVER_IP
+    SERVER_IP=$(curl -4 -s --connect-timeout 3 api.ipify.org 2>/dev/null || \
+                curl -4 -s --connect-timeout 3 ifconfig.me 2>/dev/null || \
+                curl -4 -s --connect-timeout 3 icanhazip.com 2>/dev/null || \
+                ip -4 addr show "$ACTIVE_IF" | grep -oEo 'inet [0-9.]+' | awk '{print $2}' | head -n 1)
+    
+    local SUBNET_BASE; SUBNET_BASE=$(echo "$WG_SUBNET" | cut -d'.' -f1,2,3)
+    local SERVER_VPN_IP="${SUBNET_BASE}.1"
+    local CLIENT_VPN_IP="${SUBNET_BASE}.2"
+
+    local POSTUP=""
+    local POSTDOWN=""
+    
+    if [[ "$FIREWALL_BACKEND" == "nftables" ]]; then
+        POSTUP="nft add table inet syswarden_wg; nft add chain inet syswarden_wg prerouting { type nat hook prerouting priority 0 \\; }; nft add chain inet syswarden_wg postrouting { type nat hook postrouting priority 100 \\; }; nft add rule inet syswarden_wg postrouting oifname \"$ACTIVE_IF\" masquerade"
+        POSTDOWN="nft delete table inet syswarden_wg 2>/dev/null || true"
+    else
+        POSTUP="iptables -t nat -A POSTROUTING -s $WG_SUBNET -o $ACTIVE_IF -j MASQUERADE; iptables -I FORWARD 1 -i wg0 -j ACCEPT; iptables -I FORWARD 1 -o wg0 -j ACCEPT"
+        POSTDOWN="iptables -t nat -D POSTROUTING -s $WG_SUBNET -o $ACTIVE_IF -j MASQUERADE; iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT"
+    fi
+
+    log "INFO" "Deploying WireGuard Server Profile..."
+    cat <<EOF > /etc/wireguard/wg0.conf
+[Interface]
+Address = ${SERVER_VPN_IP}/24
+ListenPort = $WG_PORT
+PrivateKey = $SERVER_PRIV
+PostUp = $POSTUP
+PostDown = $POSTDOWN
+
+[Peer]
+PublicKey = $CLIENT_PUB
+PresharedKey = $PRESHARED_KEY
+AllowedIPs = ${CLIENT_VPN_IP}/32
+EOF
+    chmod 600 /etc/wireguard/wg0.conf
+
+    log "INFO" "Generating Secure Client Profile..."
+    cat <<EOF > /etc/wireguard/clients/admin-pc.conf
+[Interface]
+PrivateKey = $CLIENT_PRIV
+Address = ${CLIENT_VPN_IP}/24
+DNS = 94.140.14.14, 94.140.15.15
+
+[Peer]
+PublicKey = $SERVER_PUB
+PresharedKey = $PRESHARED_KEY
+Endpoint = ${SERVER_IP}:${WG_PORT}
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+EOF
+    chmod 600 /etc/wireguard/clients/admin-pc.conf
+
+    # --- OPENRC SPECIFIC SERVICE HANDLING ---
+    log "INFO" "Starting WireGuard Tunnel Interface (wg0)..."
+    if [[ ! -L "/etc/init.d/wg-quick.wg0" ]]; then
+        ln -s /etc/init.d/wg-quick /etc/init.d/wg-quick.wg0
+    fi
+    rc-update add wg-quick.wg0 default >/dev/null 2>&1 || true
+    rc-service wg-quick.wg0 restart >/dev/null 2>&1 || true
+    
+    log "INFO" "WireGuard VPN deployed successfully."
+}
+
+display_wireguard_qr() {
+    if [[ "${USE_WIREGUARD:-n}" == "y" ]] && [[ -f "/etc/wireguard/clients/admin-pc.conf" ]]; then
+        echo -e "\n${RED}========================================================================${NC}"
+        echo -e "${YELLOW}           WIREGUARD MANAGEMENT VPN - SCAN TO CONNECT${NC}"
+        echo -e "${RED}========================================================================${NC}\n"
+        
+        qrencode -t ansiutf8 < /etc/wireguard/clients/admin-pc.conf
+        
+        echo -e "\n${GREEN}[✔] Client Configuration File Saved At:${NC} /etc/wireguard/clients/admin-pc.conf"
+        echo -e "${YELLOW}Keep this secure! Scan this code with the WireGuard App to connect.${NC}"
+    fi
+}
+
 uninstall_syswarden() {
     echo -e "\n${RED}=== Uninstalling SysWarden (Alpine) ===${NC}"
     log "WARN" "Starting Deep Clean Uninstallation..."
+	
+	# --- WIREGUARD CLEANUP (OPENRC) ---
+    if [[ -d "/etc/wireguard" ]] || [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
+        log "INFO" "Stopping and removing WireGuard VPN..."
+        
+        rc-service wg-quick.wg0 stop 2>/dev/null || true
+        rc-update del wg-quick.wg0 default 2>/dev/null || true
+        rm -f /etc/init.d/wg-quick.wg0
+        rm -rf /etc/wireguard
+        
+        rm -f /etc/sysctl.d/99-syswarden-wireguard.conf
+        sysctl -p 2>/dev/null || true
+        
+        # EMERGENCY SSH RESTORE FOR IPTABLES
+        if command -v iptables >/dev/null; then
+            while iptables -D INPUT -p tcp --dport "${SSH_PORT:-22}" -j DROP 2>/dev/null; do :; done
+            /etc/init.d/iptables save >/dev/null 2>&1 || true
+        fi
+    fi
+    # ----------------------------------
 
     if [[ -f "$CONF_FILE" ]]; then 
         # shellcheck source=/dev/null
@@ -2256,6 +2446,7 @@ detect_os_backend
 if [[ "$MODE" != "update" ]]; then
     install_dependencies
     define_ssh_port "$MODE"
+	define_wireguard "$MODE"
     define_docker_integration "$MODE"
     define_geoblocking "$MODE"
     define_asnblocking "$MODE"
@@ -2275,6 +2466,7 @@ if rc-service syswarden-reporter status 2>/dev/null | grep -q "started"; then
 fi
 
 if [[ "$MODE" != "update" ]]; then
+    setup_wireguard
     setup_siem_logging
     setup_abuse_reporting
     setup_wazuh_agent
@@ -2284,4 +2476,6 @@ if [[ "$MODE" != "update" ]]; then
     echo -e " -> OS Detected: Alpine Linux (OpenRC)"
     echo -e " -> List loaded: $LIST_TYPE"
     echo -e " -> Protection: Active"
+	
+	display_wireguard_qr
 fi
