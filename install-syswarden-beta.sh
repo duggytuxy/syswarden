@@ -2172,7 +2172,7 @@ EOF
 [Interface]
 PrivateKey = $CLIENT_PRIV
 Address = ${CLIENT_VPN_IP}/24
-DNS = 1.1.1.1, 8.8.8.8
+DNS = 94.140.14.14, 94.140.15.15
 
 [Peer]
 PublicKey = $SERVER_PUB
