@@ -2255,6 +2255,108 @@ display_wireguard_qr() {
     fi
 }
 
+add_wireguard_client() {
+    echo -e "\n${BLUE}=== SysWarden WireGuard Client Generator ===${NC}"
+
+    local wg_conf="/etc/wireguard/wg0.conf"
+    local admin_conf="/etc/wireguard/clients/admin-pc.conf"
+
+    # 1. Verification
+    if [[ ! -f "$wg_conf" ]] || [[ ! -f "$admin_conf" ]]; then
+        log "ERROR" "WireGuard is not configured on this server. Run the main installer first."
+        exit 1
+    fi
+
+    # 2. Ask for Client Name
+    read -p "Enter a name for the new client (e.g., mobile, laptop-john): " client_name
+    # Sanitize name
+    client_name=$(echo "$client_name" | tr -cd 'a-zA-Z0-9_-')
+    if [[ -z "$client_name" ]]; then
+        log "ERROR" "Invalid client name."
+        exit 1
+    fi
+
+    local client_conf="/etc/wireguard/clients/${client_name}.conf"
+    if [[ -f "$client_conf" ]]; then
+        log "ERROR" "Client '$client_name' already exists at $client_conf"
+        exit 1
+    fi
+
+    log "INFO" "Generating keys for $client_name..."
+
+    # 3. Cryptography
+    local CLIENT_PRIV; CLIENT_PRIV=$(wg genkey)
+    local CLIENT_PUB; CLIENT_PUB=$(echo "$CLIENT_PRIV" | wg pubkey)
+    local PRESHARED_KEY; PRESHARED_KEY=$(wg genpsk)
+
+    # 4. Extract Server Params
+    local SERVER_PUB
+    SERVER_PUB=$(grep "PublicKey" "$admin_conf" | head -n 1 | awk -F'= ' '{print $2}' | tr -d '\r')
+    local ENDPOINT
+    ENDPOINT=$(grep "Endpoint" "$admin_conf" | head -n 1 | awk -F'= ' '{print $2}' | tr -d '\r')
+
+    # 5. IP Calculation (Find highest IP and increment)
+    # Extract the base subnet (e.g., 10.66.66)
+    local SUBNET_BASE
+    SUBNET_BASE=$(grep "Address" "$wg_conf" | head -n 1 | awk -F'= ' '{print $2}' | cut -d'/' -f1 | awk -F'.' '{print $1"."$2"."$3}')
+    
+    # Find the highest 4th octet currently in use
+    local LAST_OCTET
+    LAST_OCTET=$(grep "AllowedIPs" "$wg_conf" | awk -F'= ' '{print $2}' | cut -d'/' -f1 | awk -F'.' '{print $4}' | sort -n | tail -n 1)
+    
+    local NEXT_OCTET=$((LAST_OCTET + 1))
+    if [[ "$NEXT_OCTET" -ge 254 ]]; then
+        log "ERROR" "Subnet exhausted. No more IPs available."
+        exit 1
+    fi
+    local CLIENT_VPN_IP="${SUBNET_BASE}.${NEXT_OCTET}"
+
+    # 6. Append to Server Config
+    log "INFO" "Registering $client_name with IP $CLIENT_VPN_IP..."
+    cat <<EOF >> "$wg_conf"
+
+# Client: $client_name
+[Peer]
+PublicKey = $CLIENT_PUB
+PresharedKey = $PRESHARED_KEY
+AllowedIPs = ${CLIENT_VPN_IP}/32
+EOF
+
+    # 7. Create Client Config
+    cat <<EOF > "$client_conf"
+[Interface]
+PrivateKey = $CLIENT_PRIV
+Address = ${CLIENT_VPN_IP}/24
+DNS = 94.140.14.14, 94.140.15.15
+
+[Peer]
+PublicKey = $SERVER_PUB
+PresharedKey = $PRESHARED_KEY
+Endpoint = $ENDPOINT
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+EOF
+    chmod 600 "$client_conf"
+
+    # 8. Hot-Reload WireGuard Interface
+    log "INFO" "Reloading WireGuard interface..."
+    if command -v wg >/dev/null && wg show wg0 >/dev/null 2>&1; then
+        # Hot reload without dropping connection
+        wg syncconf wg0 <(wg-quick strip wg0)
+    else
+        # Fallback if interface is down
+        if command -v systemctl >/dev/null; then systemctl restart wg-quick@wg0 2>/dev/null || true
+        elif command -v rc-service >/dev/null; then rc-service wg-quick restart 2>/dev/null || true; fi
+    fi
+
+    # 9. Display Output
+    echo -e "\n${RED}========================================================================${NC}"
+    echo -e "${YELLOW}           WIREGUARD CLIENT: ${client_name^^}${NC}"
+    echo -e "${RED}========================================================================${NC}\n"
+    qrencode -t ansiutf8 < "$client_conf"
+    echo -e "\n${GREEN}[✔] Client Configuration File Saved At:${NC} $client_conf"
+}
+
 setup_abuse_reporting() {
     echo -e "\n${BLUE}=== Step 7: AbuseIPDB Reporting Setup ===${NC}"
     
@@ -3218,6 +3320,12 @@ if [[ "$MODE" == "blocklist" ]]; then
     check_root
     detect_os_backend
     blocklist_ip
+    exit 0
+fi
+
+if [[ "$MODE" == "wireguard-client" ]]; then
+    check_root
+    add_wireguard_client
     exit 0
 fi
 
