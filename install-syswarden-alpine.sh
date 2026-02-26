@@ -590,6 +590,15 @@ EOF
         if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
             echo "add rule inet syswarden_table input ct state established,related accept" >> "$TMP_DIR/syswarden.nft"
         fi
+		
+		# --- FIX: RE-INJECT WHITELIST ACCEPT RULES (Top Priority) ---
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            while IFS= read -r wl_ip; do
+                [[ -z "$wl_ip" ]] && continue
+                echo "add rule inet syswarden_table input ip saddr $wl_ip accept" >> "$TMP_DIR/syswarden.nft"
+            done < "$WHITELIST_FILE"
+        fi
+        # ------------------------------------------------------------
 
         if [[ "${GEOBLOCK_COUNTRIES:-none}" != "none" ]] && [[ -s "$GEOIP_FILE" ]]; then
             echo "add rule inet syswarden_table input ip saddr @$GEOIP_SET_NAME log prefix \"[SysWarden-GEO] \" drop" >> "$TMP_DIR/syswarden.nft"
@@ -685,17 +694,31 @@ EOF
 		
 		# --- WIREGUARD SSH CLOAKING ---
         if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
-            # Clean existing rules
+            # Clean existing WG rules first to prevent duplicates
             while iptables -D INPUT -p tcp --dport "${SSH_PORT:-22}" -j DROP 2>/dev/null; do :; done
             while iptables -D INPUT -i wg0 -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT 2>/dev/null; do :; done
             while iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
             
-            # Insert top-priority rules
+            # Insert top-priority rules (inserted in reverse order, position 1)
             iptables -I INPUT 1 -p tcp --dport "${SSH_PORT:-22}" -j DROP
             iptables -I INPUT 1 -i wg0 -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT
             iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         fi
+        # ------------------------------
+
+        # --- FIX: RE-INJECT WHITELIST ACCEPT RULES ---
+        # Ensures whitelisted IPs bypass all subsequent drops and are re-applied on update
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            while IFS= read -r wl_ip; do
+                [[ -z "$wl_ip" ]] && continue
+                if ! iptables -C INPUT -s "$wl_ip" -j ACCEPT 2>/dev/null; then
+                    iptables -I INPUT 1 -s "$wl_ip" -j ACCEPT
+                fi
+            done < "$WHITELIST_FILE"
+        fi
+        # ---------------------------------------------
         
+        # Save IPtables persistence for Alpine / OpenRC
         /etc/init.d/iptables save >/dev/null 2>&1 || true
     fi
     
@@ -777,6 +800,17 @@ EOF
         local f2b_action="iptables-multiport"
         if [[ "$FIREWALL_BACKEND" == "nftables" ]]; then f2b_action="nftables-multiport"; fi
 
+        # --- FIX: DYNAMIC FAIL2BAN WHITELIST ---
+        local f2b_ignoreip="127.0.0.1/8 ::1"
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            # Extract IPs safely (ignore comments and empty lines) and format as space-separated
+            local wl_ips
+            wl_ips=$(grep -vE '^\s*#|^\s*$' "$WHITELIST_FILE" | tr '\n' ' ' || true)
+            f2b_ignoreip="$f2b_ignoreip $wl_ips"
+            log "INFO" "Fail2ban whitelist extended with: $wl_ips"
+        fi
+        # ---------------------------------------
+
         # 3. HEADER & SSH (Always Active - Backend MUST be auto for Alpine)
         cat <<EOF > /etc/fail2ban/jail.local
 [DEFAULT]
@@ -784,7 +818,7 @@ bantime = 4h
 bantime.increment = true
 findtime = 10m
 maxretry = 3
-ignoreip = 127.0.0.1/8 ::1
+ignoreip = $f2b_ignoreip
 backend = auto
 banaction = $f2b_action
 

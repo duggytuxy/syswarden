@@ -784,6 +784,15 @@ EOF
         if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
             echo "add rule inet syswarden_table input ct state established,related accept" >> "$TMP_DIR/syswarden.nft"
         fi
+		
+		# --- FIX: RE-INJECT WHITELIST ACCEPT RULES (Top Priority) ---
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            while IFS= read -r wl_ip; do
+                [[ -z "$wl_ip" ]] && continue
+                echo "add rule inet syswarden_table input ip saddr $wl_ip accept" >> "$TMP_DIR/syswarden.nft"
+            done < "$WHITELIST_FILE"
+        fi
+        # ------------------------------------------------------------
 
         if [[ "${GEOBLOCK_COUNTRIES:-none}" != "none" ]] && [[ -s "$GEOIP_FILE" ]]; then
             echo "add rule inet syswarden_table input ip saddr @$GEOIP_SET_NAME log prefix \"[SysWarden-GEO] \" drop" >> "$TMP_DIR/syswarden.nft"
@@ -893,6 +902,15 @@ EOF
 
         # 3. Fast reload to register empty sets
         firewall-cmd --reload >/dev/null 2>&1 || true
+		
+		# --- FIX: RE-INJECT WHITELIST ACCEPT RULES ---
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            while IFS= read -r wl_ip; do
+                [[ -z "$wl_ip" ]] && continue
+                firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='$wl_ip' accept" >/dev/null 2>&1 || true
+            done < "$WHITELIST_FILE"
+        fi
+        # ---------------------------------------------
 
         # 4. Add all Rich Rules
         firewall-cmd --permanent --add-rich-rule="rule source ipset='$SET_NAME' log prefix='[SysWarden-BLOCK] ' level='info' drop" >/dev/null 2>&1 || true
@@ -998,6 +1016,15 @@ EOF
                 echo "-A ufw-before-input -m set --match-set $ASN_SET_NAME src -j DROP" >> "$UFW_RULES"
             fi
         fi
+		
+		# --- FIX: RE-INJECT WHITELIST ACCEPT RULES ---
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            while IFS= read -r wl_ip; do
+                [[ -z "$wl_ip" ]] && continue
+                ufw insert 1 allow from "$wl_ip" >/dev/null 2>&1 || true
+            done < "$WHITELIST_FILE"
+        fi
+        # ---------------------------------------------
 
         ufw reload
         log "INFO" "UFW rules applied."
@@ -1064,6 +1091,18 @@ EOF
             iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         fi
         # ------------------------------
+
+        # --- FIX: RE-INJECT WHITELIST ACCEPT RULES ---
+        # Ensures whitelisted IPs bypass all subsequent drops and are re-applied on update
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            while IFS= read -r wl_ip; do
+                [[ -z "$wl_ip" ]] && continue
+                if ! iptables -C INPUT -s "$wl_ip" -j ACCEPT 2>/dev/null; then
+                    iptables -I INPUT 1 -s "$wl_ip" -j ACCEPT
+                fi
+            done < "$WHITELIST_FILE"
+        fi
+        # ---------------------------------------------
         
         # Save IPtables persistence for legacy OS
         if command -v netfilter-persistent >/dev/null; then netfilter-persistent save; 
@@ -1186,13 +1225,24 @@ EOF
         elif [[ "$FIREWALL_BACKEND" == "nftables" ]]; then f2b_action="nftables-multiport";
         elif [[ "$FIREWALL_BACKEND" == "ufw" ]]; then f2b_action="ufw"; fi
 
+        # --- FIX: DYNAMIC FAIL2BAN WHITELIST ---
+        local f2b_ignoreip="127.0.0.1/8 ::1"
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            # Extract IPs safely (ignore comments and empty lines) and format as space-separated
+            local wl_ips
+            wl_ips=$(grep -vE '^\s*#|^\s*$' "$WHITELIST_FILE" | tr '\n' ' ' || true)
+            f2b_ignoreip="$f2b_ignoreip $wl_ips"
+            log "INFO" "Fail2ban whitelist extended with: $wl_ips"
+        fi
+        # ---------------------------------------
+
         cat <<EOF > /etc/fail2ban/jail.local
 [DEFAULT]
 bantime = 4h
 bantime.increment = true
 findtime = 10m
 maxretry = 3
-ignoreip = 127.0.0.1/8 ::1
+ignoreip = $f2b_ignoreip
 backend = systemd
 # Default Action dynamically set based on OS backend
 banaction = $f2b_action
