@@ -290,6 +290,33 @@ define_asnblocking() {
     echo "USE_SPAMHAUS_ASN='$USE_SPAMHAUS_ASN'" >> "$CONF_FILE"
 }
 
+auto_whitelist_admin() {
+    mkdir -p "$SYSWARDEN_DIR"
+    touch "$WHITELIST_FILE"
+    
+    local admin_ip=""
+    
+    # 1. Standard SSH env variables
+    if [[ -n "${SSH_CLIENT:-}" ]]; then admin_ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
+    elif [[ -n "${SSH_CONNECTION:-}" ]]; then admin_ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+    fi
+    
+    # 2. Sudo/Su fallback using 'who am i'
+    if [[ -z "$admin_ip" || ! "$admin_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        admin_ip=$(who am i 2>/dev/null | awk '{print $NF}' | tr -d '()')
+    fi
+    
+    # 3. Process the IP
+    if [[ "$admin_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$admin_ip" != "127.0.0.1" ]]; then
+        if ! grep -q "^${admin_ip}$" "$WHITELIST_FILE" 2>/dev/null; then
+            log "INFO" "Auto-whitelisting current admin SSH session IP: $admin_ip"
+            echo "$admin_ip" >> "$WHITELIST_FILE"
+        fi
+    else
+        log "WARN" "Could not auto-detect admin SSH IP. (Expected if run from local console)"
+    fi
+}
+
 # ==============================================================================
 # CORE LOGIC
 # ==============================================================================
@@ -534,18 +561,6 @@ apply_firewall_rules() {
     # --- LOCAL PERSISTENCE INJECTION ---
     mkdir -p "$SYSWARDEN_DIR"
     touch "$WHITELIST_FILE" "$BLOCKLIST_FILE"
-
-    # --- PREVENT ADMIN LOCK-OUT (AUTO-WHITELIST CURRENT SSH SESSION) ---
-    if [[ -n "${SSH_CLIENT:-}" ]]; then
-        local ADMIN_IP; ADMIN_IP=$(echo "$SSH_CLIENT" | awk '{print $1}')
-        if [[ "$ADMIN_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            if ! grep -q "^${ADMIN_IP}$" "$WHITELIST_FILE" 2>/dev/null; then
-                log "INFO" "Auto-whitelisting current admin SSH session IP: $ADMIN_IP"
-                echo "$ADMIN_IP" >> "$WHITELIST_FILE"
-            fi
-        fi
-    fi
-    # -------------------------------------------------------------------
 
     # 1. Inject local blocklist into the global list
     cat "$BLOCKLIST_FILE" >> "$FINAL_LIST"
@@ -2606,6 +2621,10 @@ fi
 
 check_root
 detect_os_backend
+
+# --- PREVENT ADMIN LOCK-OUT (EXECUTE BEFORE FAIL2BAN/FIREWALL) ---
+auto_whitelist_admin
+# -----------------------------------------------------------------
 
 if [[ "$MODE" != "update" ]]; then
     install_dependencies
