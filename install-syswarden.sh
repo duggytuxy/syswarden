@@ -232,13 +232,25 @@ define_ssh_port() {
     fi
 
     echo -e "\n${BLUE}=== Step: SSH Configuration ===${NC}"
+    
+    # --- DYNAMIC SSH PORT DETECTION ---
+    local detected_port=22
+    if command -v sshd >/dev/null; then
+        local parsed_port
+        parsed_port=$(sshd -T 2>/dev/null | grep -i '^port ' | awk '{print $2}')
+        if [[ "$parsed_port" =~ ^[0-9]+$ ]] && [ "$parsed_port" -ge 1 ] && [ "$parsed_port" -le 65535 ]; then
+            detected_port="$parsed_port"
+        fi
+    fi
+    # ----------------------------------
+
     # --- CI/CD AUTO MODE CHECK ---
     if [[ "${1:-}" == "auto" ]]; then
-        SSH_PORT=${SYSWARDEN_SSH_PORT:-22}
+        SSH_PORT=${SYSWARDEN_SSH_PORT:-$detected_port}
         log "INFO" "Auto Mode: SSH Port configured via env var [${SSH_PORT}]"
     else
-        read -p "Please enter your current SSH Port [Default: 22]: " input_port
-        SSH_PORT=${input_port:-22}
+        read -p "Please enter your current SSH Port [Default: $detected_port]: " input_port
+        SSH_PORT=${input_port:-$detected_port}
     fi
     # -----------------------------
 
