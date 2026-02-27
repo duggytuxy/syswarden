@@ -2443,6 +2443,14 @@ EOF
 setup_abuse_reporting() {
     echo -e "\n${BLUE}=== Step 7: AbuseIPDB Reporting Setup ===${NC}"
     
+    # --- ENTERPRISE COMPLIANCE KILL-SWITCH ---
+    # Strictly prevents telemetry exfiltration regardless of other variables
+    if [[ "${SYSWARDEN_ENTERPRISE_MODE:-n}" =~ ^[Yy]$ ]]; then
+        log "WARN" "Enterprise Mode Active: Third-party telemetry (AbuseIPDB) is strictly DISABLED by corporate policy."
+        return
+    fi
+    # -----------------------------------------
+
     # --- CI/CD AUTO MODE CHECK ---
     if [[ "${1:-}" == "auto" ]]; then
         response=${SYSWARDEN_ENABLE_ABUSE:-n}
