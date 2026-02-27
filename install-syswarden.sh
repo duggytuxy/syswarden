@@ -32,7 +32,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v9.21"
+VERSION="v9.22"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -3253,7 +3253,7 @@ protect_docker_jail() {
 }
 
 check_upgrade() {
-    echo -e "\n${BLUE}=== SysWarden Upgrade Checker ===${NC}"
+    echo -e "\n${BLUE}=== SysWarden Upgrade Checker (Universal) ===${NC}"
     log "INFO" "Checking for updates on GitHub API..."
 
     local api_url="https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
@@ -3265,18 +3265,19 @@ check_upgrade() {
         exit 1
     }
 
-    # Extract tag_name (e.g., "v3.00") using standard POSIX grep/cut (no external dependencies needed)
-    local latest_version
-    latest_version=$(echo "$response" | grep -o '"tag_name": "[^"]*"' | head -n 1 | cut -d'"' -f4)
-    
-    if [[ -z "$latest_version" ]]; then
-        log "ERROR" "Could not parse latest version from GitHub."
-        exit 1
+    # STRICT MATCH: Extract download URL specifically for the Universal script
+    local download_url
+    download_url=$(echo "$response" | grep -o '"browser_download_url": "[^"]*/install-syswarden\.sh"' | head -n 1 | cut -d'"' -f4)
+
+    # ARCHITECTURE ISOLATION: If the latest release doesn't contain the Universal script (e.g., Alpine-only release)
+    if [[ -z "$download_url" ]]; then
+        echo -e "${GREEN}No specific update found for the Universal version in the latest release. You are up to date!${NC}"
+        return
     fi
 
-    # Extract download URL for the .sh script from the release assets
-    local download_url
-    download_url=$(echo "$response" | grep -o '"browser_download_url": "[^"]*\.sh"' | head -n 1 | cut -d'"' -f4)
+    # Extract tag_name (e.g., "v9.21")
+    local latest_version
+    latest_version=$(echo "$response" | grep -o '"tag_name": "[^"]*"' | head -n 1 | cut -d'"' -f4)
 
     echo -e "Current Version : ${YELLOW}${VERSION}${NC}"
     echo -e "Latest Version  : ${GREEN}${latest_version}${NC}\n"
@@ -3284,20 +3285,11 @@ check_upgrade() {
     if [[ "$VERSION" == "$latest_version" ]]; then
         echo -e "${GREEN}You are already using the latest version of SysWarden!${NC}"
     else
-        echo -e "${YELLOW}A new version ($latest_version) is available!${NC}"
+        echo -e "${YELLOW}A new Universal version ($latest_version) is available!${NC}"
         echo -e "To upgrade safely, please run the following commands:\n"
-        
-        # If the API returned a direct .sh link, provide the wget shortcut
-        if [[ -n "$download_url" ]]; then
-            echo -e "  wget -qO install-syswarden.sh \"$download_url\""
-            echo -e "  chmod +x install-syswarden.sh"
-            echo -e "  ./install-syswarden.sh\n"
-        else
-            # Fallback to the main releases page if no .sh asset is directly found
-            echo -e "  Please download the new release manually from:"
-            echo -e "  https://github.com/duggytuxy/syswarden/releases/latest\n"
-        fi
-        
+        echo -e "  wget -qO install-syswarden.sh \"$download_url\""
+        echo -e "  chmod +x install-syswarden.sh"
+        echo -e "  ./install-syswarden.sh\n"
         echo -e "Note: Running the updated script will cleanly overwrite old configurations if necessary."
     fi
 }
@@ -3469,7 +3461,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v9.21)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v9.22)     #"
     echo -e "#############################################################${NC}"
 fi
 
