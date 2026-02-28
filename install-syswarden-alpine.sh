@@ -1682,14 +1682,17 @@ EOF
 
         if [[ -n "$RCE_LOGS" ]]; then
             log "INFO" "Web access logs detected. Enabling Reverse Shell & RCE Guard."
+            # Create Filter for Remote Code Execution and Reverse Shell signatures
+            # Catches common payloads: bash interactive, netcat, wget/curl drops, and python/php one-liners
+            # FIX: Using regex hex escape '\x25' instead of '%' to strictly bypass Python configparser interpolation crashes
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-revshell.conf" ]]; then
-                # FIX: Escape '%' with '%%' to prevent Python configparser InterpolationError
                 cat <<'EOF' > /etc/fail2ban/filter.d/syswarden-revshell.conf
 [Definition]
-failregex = ^<HOST> .* "(?:GET|POST|HEAD|PUT) .*(?:/bin/bash|%%2Fbin%%2Fbash|/bin/sh|%%2Fbin%%2Fsh|nc\s+-e|nc%%20-e|nc\s+-c|curl\s+http|curl%%20http|wget\s+http|wget%%20http|python\s+-c|php\s+-r|;\s*bash\s+-i|&\s*bash\s+-i).*" .*$
+failregex = ^<HOST> .* "(?:GET|POST|HEAD|PUT) .*(?:/bin/bash|\x252Fbin\x252Fbash|/bin/sh|\x252Fbin\x252Fsh|nc\s+-e|nc\x2520-e|nc\s+-c|curl\s+http|curl\x2520http|wget\s+http|wget\x2520http|python\s+-c|php\s+-r|;\s*bash\s+-i|&\s*bash\s+-i).*" .*$
 ignoreregex = 
 EOF
             fi
+			
             cat <<EOF >> /etc/fail2ban/jail.local
 
 # --- Reverse Shell & RCE Injection Protection ---
