@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v9.23"
+VERSION="v9.24"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -1704,6 +1704,35 @@ logpath  = $RCE_LOGS
 backend  = auto
 maxretry = 1
 bantime  = 24h
+EOF
+        fi
+		
+		# 32. DYNAMIC DETECTION: MALICIOUS AI BOTS & SCRAPERS
+        if [[ -n "$RCE_LOGS" ]]; then
+            log "INFO" "Web access logs detected. Enabling AI-Bot Guard."
+
+            # Create Filter for aggressive AI Scrapers, Crawlers, and LLM data miners
+            # Matches HTTP requests containing known AI User-Agents regardless of the HTTP status code (\d{3})
+            if [[ ! -f "/etc/fail2ban/filter.d/syswarden-aibots.conf" ]]; then
+                cat <<'EOF' > /etc/fail2ban/filter.d/syswarden-aibots.conf
+[Definition]
+failregex = ^<HOST> .* "(?:GET|POST|HEAD) .*" \d{3} .* ".*(?:GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-Web|Anthropic-ai|Google-Extended|PerplexityBot|Omgili|FacebookBot|Bytespider|CCBot|Diffbot|Amazonbot|Applebot-Extended|cohere-ai).*".*$
+ignoreregex = 
+EOF
+            fi
+
+            cat <<EOF >> /etc/fail2ban/jail.local
+
+# --- Malicious AI Bots & Scrapers Protection ---
+[syswarden-aibots]
+enabled  = true
+port     = http,https
+filter   = syswarden-aibots
+logpath  = $RCE_LOGS
+backend  = auto
+# Zero-Tolerance policy: 1 hit = 48 hours ban at the kernel level
+maxretry = 1
+bantime  = 48h
 EOF
         fi
 
