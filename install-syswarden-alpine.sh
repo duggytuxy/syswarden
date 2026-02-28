@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # SysWarden for Alpine Linux - Advanced Firewall & Blocklist Orchestrator
-# Copyright (C) 2026 duggytuxy
+# Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
