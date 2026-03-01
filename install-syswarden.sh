@@ -32,7 +32,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v9.24"
+VERSION="v9.25"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -1300,12 +1300,6 @@ port = http,https
 logpath = /var/log/nginx/error.log
 backend = auto
 
-[nginx-botsearch]
-enabled = true
-port = http,https
-logpath = /var/log/nginx/access.log
-backend = auto
-
 [nginx-scanner]
 enabled = true
 port    = http,https
@@ -1343,12 +1337,6 @@ EOF
 enabled = true
 port = http,https
 logpath = $APACHE_LOG
-backend = auto
-
-[apache-badbots]
-enabled = true
-port = http,https
-logpath = $APACHE_ACCESS
 backend = auto
 
 [apache-scanner]
@@ -2216,6 +2204,38 @@ EOF
 enabled  = true
 port     = http,https
 filter   = syswarden-aibots
+logpath  = $RCE_LOGS
+backend  = auto
+# Zero-Tolerance policy: 1 hit = 48 hours ban at the kernel level
+maxretry = 1
+bantime  = 48h
+EOF
+        fi
+		
+		# ---------------------------------------------------------
+        # COLLES LE NOUVEAU BLOC 33 EXACTEMENT ICI
+        # ---------------------------------------------------------
+        # 33. DYNAMIC DETECTION: MALICIOUS SCANNERS & PENTEST TOOLS
+        if [[ -n "$RCE_LOGS" ]]; then
+            log "INFO" "Web access logs detected. Enabling Bad-Bot & Scanner Guard."
+
+            # Create Filter for aggressive pentest tools, vulnerability scanners, and malicious crawlers
+            # Matches HTTP requests containing known offensive User-Agents regardless of the HTTP status code (\d{3})
+            if [[ ! -f "/etc/fail2ban/filter.d/syswarden-badbots.conf" ]]; then
+                cat <<'EOF' > /etc/fail2ban/filter.d/syswarden-badbots.conf
+[Definition]
+failregex = ^<HOST> .* "(?:GET|POST|HEAD|PUT|DELETE|OPTIONS) .*" \d{3} .* ".*(?:Nuclei|sqlmap|Nikto|ZmEu|OpenVAS|wpscan|masscan|zgrab|CensysInspect|Shodan|NetSystemsResearch|projectdiscovery|Go-http-client|Java/|Hello World|python-requests|libwww-perl|Acunetix|Nmap|Netsparker|BurpSuite|DirBuster|dirb|gobuster|httpx|ffuf).*".*$
+ignoreregex = 
+EOF
+            fi
+
+            cat <<EOF >> /etc/fail2ban/jail.local
+
+# --- Malicious Scanners & Pentest Tools Protection ---
+[syswarden-badbots]
+enabled  = true
+port     = http,https
+filter   = syswarden-badbots
 logpath  = $RCE_LOGS
 backend  = auto
 # Zero-Tolerance policy: 1 hit = 48 hours ban at the kernel level
@@ -3489,7 +3509,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v9.24)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v9.25)     #"
     echo -e "#############################################################${NC}"
 fi
 
