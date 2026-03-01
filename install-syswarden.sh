@@ -2306,10 +2306,11 @@ EOF
 
             # Create Filter for SQLi, XSS, and Path Traversal payloads in URIs
             # Catches: UNION SELECT, CONCAT, SLEEP, <script>, alert(), document.cookie, eval(), ../../
+            # FIX: Used \x25 instead of % to prevent Python ConfigParser interpolation crashes
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-sqli-xss.conf" ]]; then
                 cat <<'EOF' > /etc/fail2ban/filter.d/syswarden-sqli-xss.conf
 [Definition]
-failregex = ^<HOST> .* "(?:GET|POST|HEAD|PUT) .*(?:UNION(?:\s|\+|%20)SELECT|CONCAT(?:\s|\+|%20)?\(|WAITFOR(?:\s|\+|%20)DELAY|SLEEP(?:\s|\+|%20)?\(|%3Cscript|%3E|%3C%2Fscript|<script|alert\(|onerror=|onload=|document\.cookie|base64_decode\(|eval\(|\.\./\.\./|%2E%2E%2F).*" \d{3} .*$
+failregex = ^<HOST> .* "(?:GET|POST|HEAD|PUT) .*(?:UNION(?:\s|\+|\x2520)SELECT|CONCAT(?:\s|\+|\x2520)?\(|WAITFOR(?:\s|\+|\x2520)DELAY|SLEEP(?:\s|\+|\x2520)?\(|\x253Cscript|\x253E|\x253C\x252Fscript|<script|alert\(|onerror=|onload=|document\.cookie|base64_decode\(|eval\(|\.\./\.\./|\x252E\x252E\x252F).*" \d{3} .*$
 ignoreregex = 
 EOF
             fi
