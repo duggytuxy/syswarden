@@ -50,6 +50,7 @@ GEOIP_SET_NAME="syswarden_geoip"
 GEOIP_FILE="$SYSWARDEN_DIR/geoip.txt"
 ASN_SET_NAME="syswarden_asn"
 ASN_FILE="$SYSWARDEN_DIR/asn.txt"
+VPN_SET_NAME="syswarden_vpn"
 VPN_FILE="$SYSWARDEN_DIR/vpn.txt"
 
 # --- LIST URLS ---
@@ -695,9 +696,19 @@ download_vpn() {
     fi
 
     if [[ -s "$TMP_DIR/vpn_raw.txt" ]]; then
-        # Extract strictly valid IPv4 and CIDRs, sort and remove duplicates
-        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$' "$TMP_DIR/vpn_raw.txt" | sort -u > "$VPN_FILE"
-        log "INFO" "VPN Blocklist updated successfully."
+        # Use Python to mathematically collapse overlapping CIDRs and prevent kernel crash
+        python3 -c '
+import sys, ipaddress
+nets = []
+for line in sys.stdin:
+    line = line.strip()
+    if line and ":" not in line:
+        try: nets.append(ipaddress.ip_network(line, strict=False))
+        except ValueError: pass
+for net in ipaddress.collapse_addresses(nets):
+    print(net)' < "$TMP_DIR/vpn_raw.txt" > "$VPN_FILE"
+        
+        log "INFO" "VPN Blocklist updated and mathematically optimized."
     else
         log "WARN" "VPN Blocklist is empty. Sources might be unreachable."
         touch "$VPN_FILE"
@@ -714,13 +725,6 @@ apply_firewall_rules() {
     # 1. Inject local blocklist into the global list
     cat "$BLOCKLIST_FILE" >> "$FINAL_LIST"
     
-    # --- DYNAMIC VPN MERGE ---
-    # We silently merge the massive VPN list directly into the main blocklist.
-    # This prevents adding redundant iptables/nftables chains and keeps the script strictly lightweight.
-    if [[ "${BLOCK_VPNS:-n}" == "y" ]] && [[ -s "$VPN_FILE" ]]; then
-        cat "$VPN_FILE" >> "$FINAL_LIST"
-    fi
-
     # 2. Clean duplicates to ensure firewall stability
     sort -u "$FINAL_LIST" -o "$FINAL_LIST"
 
@@ -734,11 +738,9 @@ apply_firewall_rules() {
     if [[ "$FIREWALL_BACKEND" == "nftables" ]]; then
         log "INFO" "Configuring Nftables Base Structure (Flat Syntax for Alpine compatibility)..."
         
-        # OpenRC: Ensure service is enabled before applying rules
         rc-update add nftables default >/dev/null 2>&1 || true
         rc-service nftables start >/dev/null 2>&1 || true
 
-        # 1. Create Base Structure using Flat Commands (Bypasses nested parser Segfaults)
         cat <<EOF > "$TMP_DIR/syswarden.nft"
 add table inet syswarden_table
 flush table inet syswarden_table
@@ -752,24 +754,25 @@ EOF
         if [[ "${BLOCK_ASNS:-none}" != "none" ]] && [[ -s "$ASN_FILE" ]]; then
             echo "add set inet syswarden_table $ASN_SET_NAME { type ipv4_addr; flags interval; auto-merge; }" >> "$TMP_DIR/syswarden.nft"
         fi
+        
+        if [[ "${BLOCK_VPNS:-n}" == "y" ]] && [[ -s "$VPN_FILE" ]]; then
+            echo "add set inet syswarden_table $VPN_SET_NAME { type ipv4_addr; flags interval; auto-merge; }" >> "$TMP_DIR/syswarden.nft"
+        fi
 
         cat <<EOF >> "$TMP_DIR/syswarden.nft"
 add chain inet syswarden_table input { type filter hook input priority filter - 10; policy accept; }
 EOF
 
-        # 2. Add Rules (Removed 'flags all' which causes crashes on older kernels)
         if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
             echo "add rule inet syswarden_table input ct state established,related accept" >> "$TMP_DIR/syswarden.nft"
         fi
 		
-		# --- FIX: RE-INJECT WHITELIST ACCEPT RULES (Top Priority) ---
         if [[ -s "$WHITELIST_FILE" ]]; then
             while IFS= read -r wl_ip; do
                 [[ -z "$wl_ip" ]] && continue
                 echo "add rule inet syswarden_table input ip saddr $wl_ip accept" >> "$TMP_DIR/syswarden.nft"
             done < "$WHITELIST_FILE"
         fi
-        # ------------------------------------------------------------
 
         if [[ "${GEOBLOCK_COUNTRIES:-none}" != "none" ]] && [[ -s "$GEOIP_FILE" ]]; then
             echo "add rule inet syswarden_table input ip saddr @$GEOIP_SET_NAME log prefix \"[SysWarden-GEO] \" drop" >> "$TMP_DIR/syswarden.nft"
@@ -777,6 +780,10 @@ EOF
 
         if [[ "${BLOCK_ASNS:-none}" != "none" ]] && [[ -s "$ASN_FILE" ]]; then
             echo "add rule inet syswarden_table input ip saddr @$ASN_SET_NAME log prefix \"[SysWarden-ASN] \" drop" >> "$TMP_DIR/syswarden.nft"
+        fi
+        
+        if [[ "${BLOCK_VPNS:-n}" == "y" ]] && [[ -s "$VPN_FILE" ]]; then
+            echo "add rule inet syswarden_table input ip saddr @$VPN_SET_NAME log prefix \"[SysWarden-VPN] \" drop" >> "$TMP_DIR/syswarden.nft"
         fi
 
         cat <<EOF >> "$TMP_DIR/syswarden.nft"
@@ -788,12 +795,9 @@ EOF
             echo "add rule inet syswarden_table input iifname != \"wg0\" iifname != \"lo\" tcp dport ${SSH_PORT:-22} log prefix \"[SysWarden-SSH-DROP] \" drop" >> "$TMP_DIR/syswarden.nft"
         fi
 
-        # Apply Base Structure First
         nft -f "$TMP_DIR/syswarden.nft"
 
-        # 3. Populate Sets in Chunks
         log "INFO" "Populating Nftables sets in chunks (Bypassing memory limits)..."
-        
         if [[ -s "$FINAL_LIST" ]]; then
             cat "$FINAL_LIST" | xargs -n 5000 | while read -r chunk; do
                 nft "add element inet syswarden_table $SET_NAME { $(echo "$chunk" | tr ' ' ',') }" 2>/dev/null || true
@@ -811,18 +815,21 @@ EOF
                 nft "add element inet syswarden_table $ASN_SET_NAME { $(echo "$chunk" | tr ' ' ',') }" 2>/dev/null || true
             done
         fi
+        
+        if [[ "${BLOCK_VPNS:-n}" == "y" ]] && [[ -s "$VPN_FILE" ]]; then
+            cat "$VPN_FILE" | xargs -n 5000 | while read -r chunk; do
+                nft "add element inet syswarden_table $VPN_SET_NAME { $(echo "$chunk" | tr ' ' ',') }" 2>/dev/null || true
+            done
+        fi
 
-        # --- PERSISTENCE & SERVICE ENABLEMENT (ALPINE SPECIFIC) ---
         log "INFO" "Saving Nftables ruleset to /etc/nftables.nft for persistence..."
         nft list ruleset > /etc/nftables.nft
 
     else
-        # Fallback IPSET / IPTABLES
 		log "INFO" "Applying Iptables rules and loading IPSet lists..."
         rc-update add iptables default >/dev/null 2>&1 || true
         
         ipset create "${SET_NAME}_tmp" hash:net maxelem 200000 -exist
-        # Shellcheck fix: -! prevents crash on duplicates
         sed "s/^/add ${SET_NAME}_tmp /" "$FINAL_LIST" | ipset restore -!
         ipset create "$SET_NAME" hash:net maxelem 200000 -exist
         ipset swap "${SET_NAME}_tmp" "$SET_NAME"
@@ -835,7 +842,6 @@ EOF
             iptables -I INPUT 2 -p tcp -m multiport --dports 23,445,1433,3389,5900 -j LOG --log-prefix "[SysWarden-BLOCK] "
         fi
 
-        # --- ASN INJECTION (Priority 2) ---
         if [[ "${BLOCK_ASNS:-none}" != "none" ]] && [[ -s "$ASN_FILE" ]]; then
             ipset create "${ASN_SET_NAME}_tmp" hash:net maxelem 500000 -exist
             sed "s/^/add ${ASN_SET_NAME}_tmp /" "$ASN_FILE" | ipset restore -!
@@ -848,8 +854,20 @@ EOF
                 iptables -I INPUT 1 -m set --match-set "$ASN_SET_NAME" src -j LOG --log-prefix "[SysWarden-ASN] "
             fi
         fi
+        
+        if [[ "${BLOCK_VPNS:-n}" == "y" ]] && [[ -s "$VPN_FILE" ]]; then
+            ipset create "${VPN_SET_NAME}_tmp" hash:net maxelem 500000 -exist
+            sed "s/^/add ${VPN_SET_NAME}_tmp /" "$VPN_FILE" | ipset restore -!
+            ipset create "$VPN_SET_NAME" hash:net maxelem 500000 -exist
+            ipset swap "${VPN_SET_NAME}_tmp" "$VPN_SET_NAME"
+            ipset destroy "${VPN_SET_NAME}_tmp"
+            
+            if ! iptables -C INPUT -m set --match-set "$VPN_SET_NAME" src -j DROP 2>/dev/null; then
+                iptables -I INPUT 1 -m set --match-set "$VPN_SET_NAME" src -j DROP
+                iptables -I INPUT 1 -m set --match-set "$VPN_SET_NAME" src -j LOG --log-prefix "[SysWarden-VPN] "
+            fi
+        fi
 
-        # --- GEOIP INJECTION (Priority 1) ---
         if [[ "${GEOBLOCK_COUNTRIES:-none}" != "none" ]] && [[ -s "$GEOIP_FILE" ]]; then
             ipset create "${GEOIP_SET_NAME}_tmp" hash:net maxelem 500000 -exist
             sed "s/^/add ${GEOIP_SET_NAME}_tmp /" "$GEOIP_FILE" | ipset restore -!
@@ -863,22 +881,16 @@ EOF
             fi
         fi
 		
-		# --- WIREGUARD SSH CLOAKING ---
         if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
-            # Clean existing WG rules first to prevent duplicates
             while iptables -D INPUT -p tcp --dport "${SSH_PORT:-22}" -j DROP 2>/dev/null; do :; done
             while iptables -D INPUT -i wg0 -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT 2>/dev/null; do :; done
             while iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
             
-            # Insert top-priority rules (inserted in reverse order, position 1)
             iptables -I INPUT 1 -p tcp --dport "${SSH_PORT:-22}" -j DROP
             iptables -I INPUT 1 -i wg0 -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT
             iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         fi
-        # ------------------------------
 
-        # --- FIX: RE-INJECT WHITELIST ACCEPT RULES ---
-        # Ensures whitelisted IPs bypass all subsequent drops and are re-applied on update
         if [[ -s "$WHITELIST_FILE" ]]; then
             while IFS= read -r wl_ip; do
                 [[ -z "$wl_ip" ]] && continue
@@ -887,23 +899,18 @@ EOF
                 fi
             done < "$WHITELIST_FILE"
         fi
-        # ---------------------------------------------
         
-        # Save IPtables persistence for Alpine / OpenRC
         /etc/init.d/iptables save >/dev/null 2>&1 || true
     fi
     
-    # --- DOCKER HERMETIC FIREWALL BLOCK ---
     if [[ "${USE_DOCKER:-n}" == "y" ]]; then
         log "INFO" "Applying Global Rules to Docker (DOCKER-USER chain)..."
         
-        # 1. Standard Blocklist
         if ! ipset list "$SET_NAME" >/dev/null 2>&1; then
              ipset create "$SET_NAME" hash:net maxelem 200000 -exist
              sed "s/^/add $SET_NAME /" "$FINAL_LIST" | ipset restore -!
         fi
 
-        # 2. Geo-Blocking Set
         if [[ "${GEOBLOCK_COUNTRIES:-none}" != "none" ]] && [[ -s "$GEOIP_FILE" ]]; then
             if ! ipset list "$GEOIP_SET_NAME" >/dev/null 2>&1; then
                  ipset create "$GEOIP_SET_NAME" hash:net maxelem 500000 -exist
@@ -911,34 +918,43 @@ EOF
             fi
         fi
 
-        # 3. ASN-Blocking Set
         if [[ "${BLOCK_ASNS:-none}" != "none" ]] && [[ -s "$ASN_FILE" ]]; then
             if ! ipset list "$ASN_SET_NAME" >/dev/null 2>&1; then
                  ipset create "$ASN_SET_NAME" hash:net maxelem 500000 -exist
                  sed "s/^/add $ASN_SET_NAME /" "$ASN_FILE" | ipset restore -!
             fi
         fi
+        
+        if [[ "${BLOCK_VPNS:-n}" == "y" ]] && [[ -s "$VPN_FILE" ]]; then
+            if ! ipset list "$VPN_SET_NAME" >/dev/null 2>&1; then
+                 ipset create "$VPN_SET_NAME" hash:net maxelem 500000 -exist
+                 sed "s/^/add $VPN_SET_NAME /" "$VPN_FILE" | ipset restore -!
+            fi
+        fi
 
         if iptables -n -L DOCKER-USER >/dev/null 2>&1; then
-            # Clean old rules
             iptables -D DOCKER-USER -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null || true
             iptables -D DOCKER-USER -m set --match-set "$SET_NAME" src -j LOG --log-prefix "[SysWarden-DOCKER] " 2>/dev/null || true
             iptables -D DOCKER-USER -m set --match-set "$GEOIP_SET_NAME" src -j DROP 2>/dev/null || true
             iptables -D DOCKER-USER -m set --match-set "$GEOIP_SET_NAME" src -j LOG --log-prefix "[SysWarden-GEO] " 2>/dev/null || true
             iptables -D DOCKER-USER -m set --match-set "$ASN_SET_NAME" src -j DROP 2>/dev/null || true
             iptables -D DOCKER-USER -m set --match-set "$ASN_SET_NAME" src -j LOG --log-prefix "[SysWarden-ASN] " 2>/dev/null || true
+            iptables -D DOCKER-USER -m set --match-set "$VPN_SET_NAME" src -j DROP 2>/dev/null || true
+            iptables -D DOCKER-USER -m set --match-set "$VPN_SET_NAME" src -j LOG --log-prefix "[SysWarden-VPN] " 2>/dev/null || true
             
-            # Apply Standard Blocklist (Priority 3)
             iptables -I DOCKER-USER 1 -m set --match-set "$SET_NAME" src -j DROP
             iptables -I DOCKER-USER 1 -m set --match-set "$SET_NAME" src -j LOG --log-prefix "[SysWarden-DOCKER] "
 
-            # Apply ASN-Blocklist (Priority 2)
             if [[ "${BLOCK_ASNS:-none}" != "none" ]] && [[ -s "$ASN_FILE" ]]; then
                 iptables -I DOCKER-USER 1 -m set --match-set "$ASN_SET_NAME" src -j DROP
                 iptables -I DOCKER-USER 1 -m set --match-set "$ASN_SET_NAME" src -j LOG --log-prefix "[SysWarden-ASN] "
             fi
+            
+            if [[ "${BLOCK_VPNS:-n}" == "y" ]] && [[ -s "$VPN_FILE" ]]; then
+                iptables -I DOCKER-USER 1 -m set --match-set "$VPN_SET_NAME" src -j DROP
+                iptables -I DOCKER-USER 1 -m set --match-set "$VPN_SET_NAME" src -j LOG --log-prefix "[SysWarden-VPN] "
+            fi
 
-            # Apply Geo-Blocklist (Priority 1)
             if [[ "${GEOBLOCK_COUNTRIES:-none}" != "none" ]] && [[ -s "$GEOIP_FILE" ]]; then
                 iptables -I DOCKER-USER 1 -m set --match-set "$GEOIP_SET_NAME" src -j DROP
                 iptables -I DOCKER-USER 1 -m set --match-set "$GEOIP_SET_NAME" src -j LOG --log-prefix "[SysWarden-GEO] "
@@ -2860,7 +2876,7 @@ show_alerts_dashboard() {
         local now_sec; now_sec=$(date +%s)
         local boot_sec=$((now_sec - uptime_sec))
 
-        { dmesg | grep -E "\[SysWarden-BLOCK\]|\[SysWarden-GEO\]|\[SysWarden-ASN\]" | tail -n 20; } | while read -r line; do
+        { dmesg | grep -E "\[SysWarden-BLOCK\]|\[SysWarden-GEO\]|\[SysWarden-ASN\]|\[SysWarden-VPN\]" | tail -n 20; } | while read -r line; do
             if [[ $line =~ SRC=([0-9.]+) ]]; then
                 ip="${BASH_REMATCH[1]}"
                 rule="Unknown"
