@@ -32,7 +32,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v9.26"
+VERSION="v9.27"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -40,6 +40,7 @@ GEOIP_SET_NAME="syswarden_geoip"
 GEOIP_FILE="$SYSWARDEN_DIR/geoip.txt"
 ASN_SET_NAME="syswarden_asn"
 ASN_FILE="$SYSWARDEN_DIR/asn.txt"
+VPN_FILE="$SYSWARDEN_DIR/vpn.txt"
 
 # --- LIST URLS ---
 # shellcheck disable=SC2034
@@ -520,6 +521,34 @@ define_asnblocking() {
     echo "USE_SPAMHAUS_ASN='$USE_SPAMHAUS_ASN'" >> "$CONF_FILE"
 }
 
+define_vpnblocking() {
+    if [[ "${1:-}" == "update" ]] && [[ -f "$CONF_FILE" ]]; then
+        if [[ -z "${BLOCK_VPNS:-}" ]]; then BLOCK_VPNS="n"; fi
+        log "INFO" "Update Mode: Preserving VPN-Blocking setting ($BLOCK_VPNS)"
+        return
+    fi
+
+    echo -e "\n${BLUE}=== Step: Commercial VPN & Datacenter Blocking ===${NC}"
+    # --- CI/CD AUTO MODE CHECK ---
+    if [[ "${1:-}" == "auto" ]]; then
+        input_vpn=${SYSWARDEN_ENABLE_VPN:-n}
+        log "INFO" "Auto Mode: VPN-Blocking choice loaded via env var [${input_vpn}]"
+    else
+        echo "Do you want to block Commercial VPNs and Datacenter IP ranges?"
+        echo -e "${YELLOW}Note: This blocks NordVPN, ExpressVPN, and major cloud providers (AWS, DO, OVH, etc.)${NC}"
+        read -p "Enable VPN Blocking? (y/N): " input_vpn
+    fi
+
+    if [[ "$input_vpn" =~ ^[Yy]$ ]]; then
+        BLOCK_VPNS="y"
+        log "INFO" "Commercial VPN Blocking ENABLED."
+    else
+        BLOCK_VPNS="n"
+        log "INFO" "Commercial VPN Blocking DISABLED."
+    fi
+    echo "BLOCK_VPNS='$BLOCK_VPNS'" >> "$CONF_FILE"
+}
+
 measure_latency() {
     local url="$1"
     local time_sec
@@ -764,6 +793,43 @@ for net in ipaddress.collapse_addresses(nets):
     fi
 }
 
+download_vpn() {
+    # Exit if user declined
+    if [[ "${BLOCK_VPNS:-n}" == "n" ]]; then
+        return
+    fi
+
+    echo -e "\n${BLUE}=== Step: Downloading VPN & Datacenter Lists ===${NC}"
+    mkdir -p "$TMP_DIR"
+    mkdir -p "$SYSWARDEN_DIR"
+    : > "$TMP_DIR/vpn_raw.txt"
+
+    # 1. X4B Net VPN & Datacenter List (Highly reliable, ~40k subnets)
+    echo -n "Fetching X4B Commercial VPN/Datacenter list... "
+    if curl -sS -L --retry 3 --connect-timeout 10 "https://raw.githubusercontent.com/X4BNet/lists_vpn/main/ipv4.txt" >> "$TMP_DIR/vpn_raw.txt"; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAIL${NC}"
+    fi
+
+    # 2. EJRV VPN List (Complementary endpoints)
+    echo -n "Fetching EJRV VPN list... "
+    if curl -sS -L --retry 3 --connect-timeout 10 "https://raw.githubusercontent.com/ejrv/VPNs/master/vpn-ipv4.txt" >> "$TMP_DIR/vpn_raw.txt"; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAIL${NC}"
+    fi
+
+    if [[ -s "$TMP_DIR/vpn_raw.txt" ]]; then
+        # Extract strictly valid IPv4 and CIDRs, sort and remove duplicates
+        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$' "$TMP_DIR/vpn_raw.txt" | sort -u > "$VPN_FILE"
+        log "INFO" "VPN Blocklist updated successfully."
+    else
+        log "WARN" "VPN Blocklist is empty. Sources might be unreachable."
+        touch "$VPN_FILE"
+    fi
+}
+
 apply_firewall_rules() {
     echo -e "\n${BLUE}=== Step 4: Applying Firewall Rules ($FIREWALL_BACKEND) ===${NC}"
     
@@ -775,6 +841,13 @@ apply_firewall_rules() {
     # 1. Inject local blocklist into the global list
     cat "$BLOCKLIST_FILE" >> "$FINAL_LIST"
     
+    # --- DYNAMIC VPN MERGE ---
+    # We silently merge the massive VPN list directly into the main blocklist.
+    # This prevents adding redundant iptables/nftables chains and keeps the script strictly lightweight.
+    if [[ "${BLOCK_VPNS:-n}" == "y" ]] && [[ -s "$VPN_FILE" ]]; then
+        cat "$VPN_FILE" >> "$FINAL_LIST"
+    fi
+
     # 2. Clean duplicates to ensure firewall stability
     sort -u "$FINAL_LIST" -o "$FINAL_LIST"
 
@@ -3595,7 +3668,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v9.26)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v9.27)     #"
     echo -e "#############################################################${NC}"
 fi
 
@@ -3631,6 +3704,7 @@ if [[ "$MODE" != "update" ]]; then
     define_docker_integration "$MODE"
     define_geoblocking "$MODE"
     define_asnblocking "$MODE"
+	define_vpnblocking "$MODE"
     configure_fail2ban
 fi
 
@@ -3639,6 +3713,7 @@ select_mirror "$MODE"
 download_list
 download_geoip
 download_asn
+download_vpn
 apply_firewall_rules
 detect_protected_services
 
