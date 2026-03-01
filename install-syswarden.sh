@@ -32,7 +32,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v9.25"
+VERSION="v9.26"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -2210,11 +2210,8 @@ backend  = auto
 maxretry = 1
 bantime  = 48h
 EOF
-        fi
+        fi		
 		
-		# ---------------------------------------------------------
-        # COLLES LE NOUVEAU BLOC 33 EXACTEMENT ICI
-        # ---------------------------------------------------------
         # 33. DYNAMIC DETECTION: MALICIOUS SCANNERS & PENTEST TOOLS
         if [[ -n "$RCE_LOGS" ]]; then
             log "INFO" "Web access logs detected. Enabling Bad-Bot & Scanner Guard."
@@ -2239,6 +2236,94 @@ filter   = syswarden-badbots
 logpath  = $RCE_LOGS
 backend  = auto
 # Zero-Tolerance policy: 1 hit = 48 hours ban at the kernel level
+maxretry = 1
+bantime  = 48h
+EOF
+        fi
+		
+		# 34. DYNAMIC DETECTION: LAYER 7 DDOS (HTTP FLOOD)
+        if [[ -n "$RCE_LOGS" ]]; then
+            log "INFO" "Web access logs detected. Enabling Layer 7 Anti-DDoS Guard."
+
+            # Create Filter for HTTP Floods
+            # Matches absolutely ANY request (GET, POST, etc.) to count the raw volume per IP
+            if [[ ! -f "/etc/fail2ban/filter.d/syswarden-httpflood.conf" ]]; then
+                cat <<'EOF' > /etc/fail2ban/filter.d/syswarden-httpflood.conf
+[Definition]
+failregex = ^<HOST> .* "(?:GET|POST|HEAD|PUT|DELETE|OPTIONS) .*" \d{3} .*$
+ignoreregex = 
+EOF
+            fi
+
+            cat <<EOF >> /etc/fail2ban/jail.local
+
+# --- Layer 7 DDoS & HTTP Flood Protection ---
+[syswarden-httpflood]
+enabled  = true
+port     = http,https
+filter   = syswarden-httpflood
+logpath  = $RCE_LOGS
+backend  = auto
+# Policy: 150 requests within 2 seconds triggers an immediate drop
+maxretry = 150
+findtime = 2
+bantime  = 24h
+EOF
+        fi
+
+        # 35. DYNAMIC DETECTION: WEBSHELL UPLOADS (LFI / RFI)
+        if [[ -n "$RCE_LOGS" ]]; then
+            log "INFO" "Web access logs detected. Enabling WebShell Upload Guard."
+
+            # Create Filter for malicious file uploads
+            # Targets specifically POST requests aimed at common upload folders, pushing executable extensions
+            if [[ ! -f "/etc/fail2ban/filter.d/syswarden-webshell.conf" ]]; then
+                cat <<'EOF' > /etc/fail2ban/filter.d/syswarden-webshell.conf
+[Definition]
+failregex = ^<HOST> .* "POST .*(?:/upload|/media|/images|/assets|/files|/tmp|/wp-content/uploads).*\.(?:php\d?|phtml|phar|aspx?|ashx|jsp|cgi|pl|py|sh|exe)(?:\?.*)? HTTP/.*" \d{3} .*$
+ignoreregex = 
+EOF
+            fi
+
+            cat <<EOF >> /etc/fail2ban/jail.local
+
+# --- Malicious WebShell Upload Protection ---
+[syswarden-webshell]
+enabled  = true
+port     = http,https
+filter   = syswarden-webshell
+logpath  = $RCE_LOGS
+backend  = auto
+# Zero-Tolerance policy: 1 attempt to upload a shell = 48 hours kernel ban
+maxretry = 1
+bantime  = 48h
+EOF
+        fi
+
+        # 36. DYNAMIC DETECTION: SQL INJECTION (SQLi) & XSS PAYLOADS
+        if [[ -n "$RCE_LOGS" ]]; then
+            log "INFO" "Web access logs detected. Enabling SQLi & XSS Payload Guard."
+
+            # Create Filter for SQLi, XSS, and Path Traversal payloads in URIs
+            # Catches: UNION SELECT, CONCAT, SLEEP, <script>, alert(), document.cookie, eval(), ../../
+            if [[ ! -f "/etc/fail2ban/filter.d/syswarden-sqli-xss.conf" ]]; then
+                cat <<'EOF' > /etc/fail2ban/filter.d/syswarden-sqli-xss.conf
+[Definition]
+failregex = ^<HOST> .* "(?:GET|POST|HEAD|PUT) .*(?:UNION(?:\s|\+|%20)SELECT|CONCAT(?:\s|\+|%20)?\(|WAITFOR(?:\s|\+|%20)DELAY|SLEEP(?:\s|\+|%20)?\(|%3Cscript|%3E|%3C%2Fscript|<script|alert\(|onerror=|onload=|document\.cookie|base64_decode\(|eval\(|\.\./\.\./|%2E%2E%2F).*" \d{3} .*$
+ignoreregex = 
+EOF
+            fi
+
+            cat <<EOF >> /etc/fail2ban/jail.local
+
+# --- SQL Injection (SQLi) & XSS Protection ---
+[syswarden-sqli-xss]
+enabled  = true
+port     = http,https
+filter   = syswarden-sqli-xss
+logpath  = $RCE_LOGS
+backend  = auto
+# Zero-Tolerance policy: 1 blatant SQLi/XSS payload = 48 hours kernel ban
 maxretry = 1
 bantime  = 48h
 EOF
@@ -3509,7 +3594,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v9.25)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v9.26)     #"
     echo -e "#############################################################${NC}"
 fi
 
