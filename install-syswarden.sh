@@ -813,14 +813,6 @@ download_vpn() {
         echo -e "${RED}FAIL${NC}"
     fi
 
-    # 2. EJRV VPN List (Complementary endpoints)
-    echo -n "Fetching EJRV VPN list... "
-    if curl -sS -L --retry 3 --connect-timeout 10 "https://raw.githubusercontent.com/ejrv/VPNs/master/vpn-ipv4.txt" >> "$TMP_DIR/vpn_raw.txt"; then
-        echo -e "${GREEN}OK${NC}"
-    else
-        echo -e "${RED}FAIL${NC}"
-    fi
-
     if [[ -s "$TMP_DIR/vpn_raw.txt" ]]; then
         # Use Python to mathematically collapse overlapping CIDRs and prevent kernel crash
         python3 -c '
