@@ -644,7 +644,7 @@ apply_firewall_rules() {
     # --- LOCAL PERSISTENCE INJECTION ---
     mkdir -p "$SYSWARDEN_DIR"
     touch "$WHITELIST_FILE" "$BLOCKLIST_FILE"
-
+    
     # 1. Inject local blocklist into the global list
     cat "$BLOCKLIST_FILE" >> "$FINAL_LIST"
     
@@ -656,6 +656,11 @@ apply_firewall_rules() {
         grep -vFf "$WHITELIST_FILE" "$FINAL_LIST" > "$TMP_DIR/clean_final.txt" || true
         mv "$TMP_DIR/clean_final.txt" "$FINAL_LIST"
     fi
+    
+    # --- FIX: TELEMETRY PERSISTENCE ---
+    # Save the massive compiled list to disk so the telemetry engine can count it instantly
+    # without running heavy queries against the kernel every minute.
+    cp "$FINAL_LIST" "$SYSWARDEN_DIR/active_global_blocklist.txt"
     # -----------------------------------
     
     if [[ "$FIREWALL_BACKEND" == "nftables" ]]; then
@@ -2780,11 +2785,11 @@ SYS_LOAD=$(cat /proc/loadavg | awk '{print $1", "$2", "$3}')
 SYS_RAM_USED=$(free -m | awk '/^Mem:/{print $3}')
 SYS_RAM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
 
-L3_STANDARD=0; L3_GEOIP=0; L3_ASN=0
+L3_GLOBAL=0; L3_GEOIP=0; L3_ASN=0
 
-# FIX: Using proper IF blocks instead of '&&' to prevent 'set -e' from killing the script
-if [[ -f "$SYSWARDEN_DIR/blocklist.txt" ]]; then
-    L3_STANDARD=$(wc -l < "$SYSWARDEN_DIR/blocklist.txt")
+# FIX: Using proper IF blocks to prevent 'set -e' crashes and reading the global compiled list
+if [[ -f "$SYSWARDEN_DIR/active_global_blocklist.txt" ]]; then
+    L3_GLOBAL=$(wc -l < "$SYSWARDEN_DIR/active_global_blocklist.txt")
 fi
 
 if [[ -f "$SYSWARDEN_DIR/geoip.txt" ]]; then
@@ -2799,7 +2804,8 @@ L7_TOTAL_BANNED=0; L7_ACTIVE_JAILS=0; JAIL_JSON_ARRAY=""
 if command -v fail2ban-client >/dev/null && fail2ban-client ping >/dev/null 2>&1; then
     JAIL_LIST=$(fail2ban-client status | grep "Jail list:" | sed 's/.*Jail list:[ \t]*//' | tr -d ',')
     for JAIL in $JAIL_LIST; do
-        ((L7_ACTIVE_JAILS++))
+        # FIX: Using standard POSIX addition instead of ((++)) which causes Bash Exit Code 1
+        L7_ACTIVE_JAILS=$((L7_ACTIVE_JAILS + 1))
         BANNED_COUNT=$(fail2ban-client status "$JAIL" | grep "Currently banned:" | awk '{print $4}' || echo "0")
         BANNED_COUNT=${BANNED_COUNT:-0}
         L7_TOTAL_BANNED=$((L7_TOTAL_BANNED + BANNED_COUNT))
@@ -2816,11 +2822,12 @@ if [[ -f "$SYSWARDEN_DIR/whitelist.txt" ]]; then
     WHITELIST_COUNT=$(grep -cvE '^\s*(#|$)' "$SYSWARDEN_DIR/whitelist.txt" || true)
 fi
 
+# Generate atomic JSON payload matching the UI mapping
 cat <<JSON_EOF > "$TMP_FILE"
 {
   "timestamp": "$SYS_TIMESTAMP",
   "system": { "hostname": "$SYS_HOSTNAME", "uptime": "$SYS_UPTIME", "load_average": "$SYS_LOAD", "ram_used_mb": $SYS_RAM_USED, "ram_total_mb": $SYS_RAM_TOTAL },
-  "layer3": { "standard_blocked": $L3_STANDARD, "geoip_blocked": $L3_GEOIP, "asn_blocked": $L3_ASN },
+  "layer3": { "global_blocked": $L3_GLOBAL, "geoip_blocked": $L3_GEOIP, "asn_blocked": $L3_ASN },
   "layer7": { "total_banned": $L7_TOTAL_BANNED, "active_jails": $L7_ACTIVE_JAILS, "jails_data": [ $JAIL_JSON_ARRAY ] },
   "whitelist": { "active_ips": $WHITELIST_COUNT }
 }
@@ -2934,8 +2941,8 @@ function generate_dashboard() {
                 <h2 class="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">Layer 3 Kernel Shield</h2>
                 <div class="space-y-3">
                     <div class="flex justify-between items-center">
-                        <span class="text-gray-600 dark:text-gray-300">Standard Blocklist</span>
-                        <span class="font-mono font-bold text-blue-600 dark:text-blue-400" id="l3-standard">0</span>
+                        <span class="text-gray-600 dark:text-gray-300">Global Blocklist</span>
+                        <span class="font-mono font-bold text-blue-600 dark:text-blue-400" id="l3-global">0</span>
                     </div>
                     <div class="flex justify-between items-center">
                         <span class="text-gray-600 dark:text-gray-300">GeoIP Blocks</span>
@@ -3061,8 +3068,8 @@ function generate_dashboard() {
                 document.getElementById('sys-load').innerText = data.system.load_average;
                 document.getElementById('sys-ram').innerText = `${data.system.ram_used_mb} MB / ${data.system.ram_total_mb} MB`;
 
-                // Update L3 DOM
-                document.getElementById('l3-standard').innerText = data.layer3.standard_blocked.toLocaleString();
+                // Update L3 DOM (Using the new global_blocked variable)
+                document.getElementById('l3-global').innerText = data.layer3.global_blocked.toLocaleString();
                 document.getElementById('l3-geoip').innerText = data.layer3.geoip_blocked.toLocaleString();
                 document.getElementById('l3-asn').innerText = data.layer3.asn_blocked.toLocaleString();
 
@@ -3132,7 +3139,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/etc/syswarden/ui
-ExecStart=/usr/bin/python3 -m http.server 9999 --bind 127.0.0.1
+ExecStart=/usr/bin/python3 -m http.server 9999 --bind 10.66.66.1
 Restart=on-failure
 
 [Install]
@@ -3148,7 +3155,7 @@ EOF
 name="syswarden-ui"
 description="SysWarden Minimal Web UI"
 command="/usr/bin/python3"
-command_args="-m http.server 9999 --bind 127.0.0.1"
+command_args="-m http.server 9999 --bind 10.66.66.1"
 command_background="yes"
 directory="/etc/syswarden/ui"
 pidfile="/run/${name}.pid"
@@ -3162,7 +3169,7 @@ EOF
         rc-service syswarden-ui start >/dev/null 2>&1 || true
     fi
     
-    log "INFO" "Dashboard UI enabled. Accessible locally at 127.0.0.1:9999"
+    log "INFO" "Dashboard UI enabled. Accessible via VPN at 10.66.66.1:9999"
 }
 
 whitelist_ip() {
