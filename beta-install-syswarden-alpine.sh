@@ -2757,10 +2757,10 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN V9.30 - TELEMETRY BACKEND (SERVERLESS)
+# SYSWARDEN V9.30 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
-    log "INFO" "Installation of the telemetry engine (Backend)..."
+    log "INFO" "Installation of the advanced telemetry engine (Backend)..."
     
     local BIN_PATH="/usr/local/bin/syswarden-telemetry.sh"
     local UI_DIR="/etc/syswarden/ui"
@@ -2771,6 +2771,7 @@ function setup_telemetry_backend() {
 set -euo pipefail
 IFS=$'\n\t'
 
+# --- Configuration Paths ---
 SYSWARDEN_DIR="/etc/syswarden"
 UI_DIR="/etc/syswarden/ui"
 TMP_FILE="$UI_DIR/data.json.tmp"
@@ -2778,6 +2779,7 @@ DATA_FILE="$UI_DIR/data.json"
 
 mkdir -p "$UI_DIR"
 
+# --- System Metrics Gathering ---
 SYS_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 SYS_HOSTNAME=$(hostname)
 SYS_UPTIME=$(uptime -p | sed 's/up //')
@@ -2785,9 +2787,9 @@ SYS_LOAD=$(cat /proc/loadavg | awk '{print $1", "$2", "$3}')
 SYS_RAM_USED=$(free -m | awk '/^Mem:/{print $3}')
 SYS_RAM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
 
+# --- Layer 3 Metrics (Persistent lists) ---
 L3_GLOBAL=0; L3_GEOIP=0; L3_ASN=0
 
-# FIX: Using proper IF blocks to prevent 'set -e' crashes and reading the global compiled list
 if [[ -f "$SYSWARDEN_DIR/active_global_blocklist.txt" ]]; then
     L3_GLOBAL=$(wc -l < "$SYSWARDEN_DIR/active_global_blocklist.txt")
 fi
@@ -2800,37 +2802,84 @@ if [[ -f "$SYSWARDEN_DIR/asn.txt" ]]; then
     L3_ASN=$(wc -l < "$SYSWARDEN_DIR/asn.txt")
 fi
 
-L7_TOTAL_BANNED=0; L7_ACTIVE_JAILS=0; JAIL_JSON_ARRAY=""
+# --- Layer 7 Metrics & IP Registry ---
+L7_TOTAL_BANNED=0; L7_ACTIVE_JAILS=0; JAIL_JSON_ARRAY=""; L7_BANNED_IPS_JSON=""
+
 if command -v fail2ban-client >/dev/null && fail2ban-client ping >/dev/null 2>&1; then
-    # FIX: Convert space-separated list to newline-separated to respect strict IFS=$'\n\t'
+    # Respecting strict IFS for multi-jail extraction
     JAIL_LIST=$(fail2ban-client status | grep "Jail list:" | sed 's/.*Jail list:[ \t]*//' | tr -d ' ' | tr ',' '\n')
+    
     for JAIL in $JAIL_LIST; do
-        # FIX: Using standard POSIX addition instead of ((++)) which causes Bash Exit Code 1
         L7_ACTIVE_JAILS=$((L7_ACTIVE_JAILS + 1))
-        BANNED_COUNT=$(fail2ban-client status "$JAIL" | grep "Currently banned:" | awk '{print $4}' || echo "0")
+        
+        # Get detailed status per jail
+        STATUS_OUT=$(fail2ban-client status "$JAIL")
+        BANNED_COUNT=$(echo "$STATUS_OUT" | grep "Currently banned:" | awk '{print $4}' || echo "0")
         BANNED_COUNT=${BANNED_COUNT:-0}
         L7_TOTAL_BANNED=$((L7_TOTAL_BANNED + BANNED_COUNT))
+        
         if [[ "$BANNED_COUNT" -gt 0 ]]; then
             JAIL_JSON_ARRAY+="{\"name\": \"$JAIL\", \"count\": $BANNED_COUNT},"
+            
+            # Extract actual banned IPs (limiting to last 50 entries for browser performance)
+            BANNED_IPS=$(echo "$STATUS_OUT" | grep "Banned IP list:" | sed 's/.*Banned IP list:[ \t]*//' | tr -d ',' | tr ' ' '\n' | tail -n 50 || true)
+            for IP in $BANNED_IPS; do
+                if [[ -n "$IP" ]]; then
+                    L7_BANNED_IPS_JSON+="{\"ip\": \"$IP\", \"jail\": \"$JAIL\"},"
+                fi
+            done
         fi
     done
 fi
-JAIL_JSON_ARRAY=${JAIL_JSON_ARRAY%,}
 
-WHITELIST_COUNT=0
+# Remove trailing commas for valid JSON
+JAIL_JSON_ARRAY=${JAIL_JSON_ARRAY%,}
+L7_BANNED_IPS_JSON=${L7_BANNED_IPS_JSON%,}
+
+# --- Whitelist Registry Extraction ---
+WHITELIST_COUNT=0; WHITELIST_IPS_JSON=""
+
 if [[ -f "$SYSWARDEN_DIR/whitelist.txt" ]]; then
-    # FIX: Adding '|| true' so grep exit code 1 (no match) doesn't kill the script
     WHITELIST_COUNT=$(grep -cvE '^\s*(#|$)' "$SYSWARDEN_DIR/whitelist.txt" || true)
+    
+    # Extract actual Whitelist IPs (cleaning comments and empty lines)
+    WL_IPS=$(grep -vE '^\s*(#|$)' "$SYSWARDEN_DIR/whitelist.txt" || true)
+    for IP in $WL_IPS; do
+        if [[ -n "$IP" ]]; then
+            WHITELIST_IPS_JSON+="\"$IP\","
+        fi
+    done
 fi
 
-# Generate atomic JSON payload matching the UI mapping
+# Remove trailing comma for valid JSON
+WHITELIST_IPS_JSON=${WHITELIST_IPS_JSON%,}
+
+# --- Generate Atomic JSON Payload ---
 cat <<JSON_EOF > "$TMP_FILE"
 {
   "timestamp": "$SYS_TIMESTAMP",
-  "system": { "hostname": "$SYS_HOSTNAME", "uptime": "$SYS_UPTIME", "load_average": "$SYS_LOAD", "ram_used_mb": $SYS_RAM_USED, "ram_total_mb": $SYS_RAM_TOTAL },
-  "layer3": { "global_blocked": $L3_GLOBAL, "geoip_blocked": $L3_GEOIP, "asn_blocked": $L3_ASN },
-  "layer7": { "total_banned": $L7_TOTAL_BANNED, "active_jails": $L7_ACTIVE_JAILS, "jails_data": [ $JAIL_JSON_ARRAY ] },
-  "whitelist": { "active_ips": $WHITELIST_COUNT }
+  "system": { 
+      "hostname": "$SYS_HOSTNAME", 
+      "uptime": "$SYS_UPTIME", 
+      "load_average": "$SYS_LOAD", 
+      "ram_used_mb": $SYS_RAM_USED, 
+      "ram_total_mb": $SYS_RAM_TOTAL 
+  },
+  "layer3": { 
+      "global_blocked": $L3_GLOBAL, 
+      "geoip_blocked": $L3_GEOIP, 
+      "asn_blocked": $L3_ASN 
+  },
+  "layer7": { 
+      "total_banned": $L7_TOTAL_BANNED, 
+      "active_jails": $L7_ACTIVE_JAILS, 
+      "jails_data": [ $JAIL_JSON_ARRAY ],
+      "banned_ips": [ $L7_BANNED_IPS_JSON ]
+  },
+  "whitelist": { 
+      "active_ips": $WHITELIST_COUNT,
+      "ips": [ $WHITELIST_IPS_JSON ]
+  }
 }
 JSON_EOF
 
@@ -2847,17 +2896,16 @@ EOF
     fi
     
     # 4. First immediate run to generate data.json before the UI starts
-    # FIX: Enclose the execution in an 'if' block to catch failures gracefully
     if ! "$BIN_PATH"; then
         log "WARN" "Initial telemetry run failed, but script will continue."
     fi
 }
 
 # ==============================================================================
-# SYSWARDEN V9.30 - UI DASHBOARD GENERATION
+# SYSWARDEN V9.30 - UI DASHBOARD GENERATION (EXPANDED REGISTRY)
 # ==============================================================================
 function generate_dashboard() {
-    log "INFO" "Generating the Serverless Dashboard UI (Tailwind CSS)..."
+    log "INFO" "Generating the Serverless Dashboard UI (Expanded v9.30)..."
     
     local UI_DIR="/etc/syswarden/ui"
     mkdir -p "$UI_DIR"
@@ -2874,6 +2922,14 @@ function generate_dashboard() {
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
+    <style>
+        /* Modern Thin Scrollbars for IP Registries */
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+    </style>
+
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -2889,6 +2945,7 @@ function generate_dashboard() {
     </script>
 
     <script>
+        // Initial Theme Detection
         if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
             document.documentElement.classList.add('dark')
         } else {
@@ -2976,7 +3033,7 @@ function generate_dashboard() {
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
             
             <div class="lg:col-span-2 bg-white dark:bg-dark-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm">
                 <h2 class="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">L7 Threat Telemetry (Live)</h2>
@@ -2985,12 +3042,40 @@ function generate_dashboard() {
                 </div>
             </div>
 
-            <div class="bg-white dark:bg-dark-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm h-64 lg:h-auto overflow-y-auto">
+            <div class="bg-white dark:bg-dark-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm h-64 lg:h-auto overflow-y-auto custom-scrollbar">
                 <h2 class="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">Active Jail Triggers</h2>
                 <ul id="jail-list" class="space-y-3">
                     <li class="text-sm text-gray-500 italic">Awaiting telemetry data...</li>
                 </ul>
             </div>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            
+            <div class="bg-white dark:bg-dark-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm">
+                <h2 class="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">L7 Banned IP Registry</h2>
+                <div class="overflow-y-auto max-h-72 pr-2 custom-scrollbar">
+                     <table class="w-full text-left text-sm">
+                        <thead class="sticky top-0 bg-white dark:bg-dark-800 z-10">
+                            <tr class="text-gray-500 border-b border-gray-100 dark:border-gray-700/50">
+                                <th class="pb-2 font-semibold">IP Address</th>
+                                <th class="pb-2 font-semibold text-right">Target Jail</th>
+                            </tr>
+                        </thead>
+                        <tbody id="banned-ips-list">
+                            </tbody>
+                     </table>
+                </div>
+            </div>
+
+            <div class="bg-white dark:bg-dark-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm">
+                <h2 class="text-sm font-bold text-green-500 uppercase tracking-widest mb-4">Global Whitelist Registry</h2>
+                <div class="overflow-y-auto max-h-72 pr-2 custom-scrollbar">
+                     <ul id="whitelist-ips-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        </ul>
+                </div>
+            </div>
+            
         </div>
     </main>
 
@@ -3069,7 +3154,7 @@ function generate_dashboard() {
                 document.getElementById('sys-load').innerText = data.system.load_average;
                 document.getElementById('sys-ram').innerText = `${data.system.ram_used_mb} MB / ${data.system.ram_total_mb} MB`;
 
-                // Update L3 DOM (Using the new global_blocked variable)
+                // Update L3 DOM
                 document.getElementById('l3-global').innerText = data.layer3.global_blocked.toLocaleString();
                 document.getElementById('l3-geoip').innerText = data.layer3.geoip_blocked.toLocaleString();
                 document.getElementById('l3-asn').innerText = data.layer3.asn_blocked.toLocaleString();
@@ -3079,7 +3164,7 @@ function generate_dashboard() {
                 document.getElementById('l7-jails').innerText = data.layer7.active_jails;
                 document.getElementById('wl-count').innerText = data.whitelist.active_ips;
 
-                // Update Active Jails List
+                // --- DOM UPDATE: Active Jails List ---
                 const jailListEl = document.getElementById('jail-list');
                 if (data.layer7.jails_data && data.layer7.jails_data.length > 0) {
                     jailListEl.innerHTML = '';
@@ -3093,6 +3178,39 @@ function generate_dashboard() {
                     });
                 } else {
                     jailListEl.innerHTML = '<li class="text-sm text-gray-500 italic">No active bans found. Server is quiet.</li>';
+                }
+
+                // --- DOM UPDATE: Banned IPs Registry Table ---
+                const bannedIpsEl = document.getElementById('banned-ips-list');
+                if (data.layer7.banned_ips && data.layer7.banned_ips.length > 0) {
+                    bannedIpsEl.innerHTML = '';
+                    // Displaying in reverse order so the newest extracted IPs appear at the top
+                    data.layer7.banned_ips.reverse().forEach(entry => {
+                        bannedIpsEl.innerHTML += `
+                            <tr class="border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-700/20 transition">
+                                <td class="py-2 font-mono text-xs text-brand-500 font-bold">${entry.ip}</td>
+                                <td class="py-2 text-right text-[10px] text-gray-500 font-black uppercase tracking-tighter">${entry.jail}</td>
+                            </tr>
+                        `;
+                    });
+                } else {
+                    bannedIpsEl.innerHTML = '<tr><td colspan="2" class="py-4 text-center text-xs text-gray-500 italic">Registry is empty.</td></tr>';
+                }
+
+                // --- DOM UPDATE: Whitelist IPs Registry Grid ---
+                const wlIpsEl = document.getElementById('whitelist-ips-list');
+                if (data.whitelist.ips && data.whitelist.ips.length > 0) {
+                    wlIpsEl.innerHTML = '';
+                    data.whitelist.ips.forEach(ip => {
+                        wlIpsEl.innerHTML += `
+                            <li class="flex justify-between items-center p-2 rounded bg-green-500/5 border border-green-500/10">
+                                <span class="font-mono text-[11px] text-green-600 dark:text-green-400 font-bold">${ip}</span>
+                                <span class="text-[9px] uppercase font-black text-green-500/30 select-none">Safe</span>
+                            </li>
+                        `;
+                    });
+                } else {
+                    wlIpsEl.innerHTML = '<li class="text-xs text-gray-500 italic col-span-2">Registry is empty.</li>';
                 }
 
                 // Update Chart
