@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/powered%20by-DuggyTuxy-darkred?logo=apachekafka">
   <img src="https://img.shields.io/badge/Status-Community--Professional-brightgreen?logo=status">
   <img src="https://img.shields.io/badge/Security-Hardened-blue?logo=security">
-  <img src="https://img.shields.io/badge/Platform-Debian%20%7C%20Ubuntu%20%7C%20AlmaLinux%20%7C%20RockyLinux%20%7C%20CENTOS%20%7C%20FEDORA-blue?logo=platform">
+  <img src="https://img.shields.io/badge/Platform-Debian%20%7C%20Ubuntu%20%7C%20AlmaLinux%20%7C%20RockyLinux%20%7C%20CENTOS%20%7C%20FEDORA%20%7C%20ALPINELINUX-blue?logo=platform">
   <img src="https://img.shields.io/badge/License-GNU_GPLv3-0052cc?logo=license">
   <img src="https://img.shields.io/github/last-commit/duggytuxy/syswarden?label=Last%20Update&color=informational&logo=github">
 </p>
