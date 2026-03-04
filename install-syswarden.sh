@@ -828,9 +828,7 @@ add chain inet syswarden_table input { type filter hook input priority filter - 
 EOF
 
         # 2. Top Priority Rules (Connection Tracking)
-        if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
-            echo "add rule inet syswarden_table input ct state established,related accept" >> "$TMP_DIR/syswarden.nft"
-        fi
+        echo "add rule inet syswarden_table input ct state established,related accept" >> "$TMP_DIR/syswarden.nft"
 
         # --- STRICT WIREGUARD SSH CLOAKING ---
         if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
@@ -1168,20 +1166,22 @@ EOF
         fi
         # ---------------------------------------------
 
+        # --- ESSENTIAL CONNECTION TRACKING (ALWAYS ACTIVE) ---
+        while iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
+        iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        # -----------------------------------------------------
+
         # --- STRICT WIREGUARD SSH CLOAKING ---
         if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
             # Clean existing WG rules first to prevent duplicates
             while iptables -D INPUT -p tcp --dport "${SSH_PORT:-22}" -j DROP 2>/dev/null; do :; done
             while iptables -D INPUT -i wg0 -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT 2>/dev/null; do :; done
             while iptables -D INPUT -i lo -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT 2>/dev/null; do :; done
-            while iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
             
-            # Insert top-priority rules (inserted in reverse order, so ESTABLISHED stays at absolute position 1)
-            # This explicitly overwrites the Whitelist for SSH traffic.
-            iptables -I INPUT 1 -p tcp --dport "${SSH_PORT:-22}" -j DROP
-            iptables -I INPUT 1 -i wg0 -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT
-            iptables -I INPUT 1 -i lo -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT
-            iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+            # Insert top-priority rules (inserted in reverse order so they stack correctly below ESTABLISHED)
+            iptables -I INPUT 2 -p tcp --dport "${SSH_PORT:-22}" -j DROP
+            iptables -I INPUT 2 -i wg0 -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT
+            iptables -I INPUT 2 -i lo -p tcp --dport "${SSH_PORT:-22}" -j ACCEPT
         fi
         # -------------------------------------
         
