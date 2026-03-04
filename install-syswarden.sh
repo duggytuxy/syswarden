@@ -4000,7 +4000,7 @@ whitelist_ip() {
     fi
     if command -v nft >/dev/null; then
         # Bypasses the active drop rule temporarily before reload
-        nft delete element inet syswarden_table "$SET_NAME" { "$WL_IP" } 2>/dev/null || true
+        nft delete element inet syswarden_table "$SET_NAME" '{' "$WL_IP" '}' 2>/dev/null || true
     fi
     
     # 3. Trigger the orchestrator to rebuild rules with the strict hierarchy
