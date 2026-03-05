@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v9.30"
+VERSION="v9.40"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -2809,7 +2809,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN V9.30 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN V9.40 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -2954,10 +2954,10 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN V9.30 - UI DASHBOARD GENERATION (EXPANDED REGISTRY)
+# SYSWARDEN V9.40 - UI DASHBOARD GENERATION (EXPANDED REGISTRY)
 # ==============================================================================
 function generate_dashboard() {
-    log "INFO" "Generating the Serverless Dashboard UI (Expanded v9.30)..."
+    log "INFO" "Generating the Serverless Dashboard UI (Expanded v9.40)..."
     
     local UI_DIR="/etc/syswarden/ui"
     mkdir -p "$UI_DIR"
@@ -3020,7 +3020,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v9.30</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v9.40</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -3656,6 +3656,44 @@ if [[ "$MODE" == "protect-docker" ]]; then
     exit 0
 fi
 
+if [[ "$MODE" == "fail2ban-jails" ]]; then
+    check_root
+    detect_os_backend
+
+    echo -e "\n${BLUE}======================================================================${NC}"
+    echo -e "${GREEN}SysWarden - Fail2ban Jails Auto-Discovery & Reload${NC}"
+    echo -e "${BLUE}======================================================================${NC}"
+
+    # 1. Load existing configuration to retrieve custom settings (e.g., SSH_PORT)
+    if [[ -f "$CONF_FILE" ]]; then
+        # shellcheck source=/dev/null
+        source "$CONF_FILE"
+        log "INFO" "Configuration loaded successfully."
+    else
+        log "ERROR" "Configuration file ($CONF_FILE) not found. Please install SysWarden first."
+        exit 1
+    fi
+
+    # 2. Trigger the existing Fail2ban configuration function (Auto-Discovery)
+    log "INFO" "Scanning system for active services (Nginx, Apache, MongoDB, etc.)..."
+    configure_fail2ban
+
+    # 3. Reload the Fail2ban service natively based on the OS Init System
+    log "INFO" "Restarting Fail2ban to apply new jails..."
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart fail2ban 2>/dev/null || true
+    elif command -v rc-service >/dev/null 2>&1; then
+        rc-service fail2ban restart 2>/dev/null || true
+    else
+        fail2ban-client reload 2>/dev/null || true
+    fi
+
+    # 4. Show the final status to the administrator
+    echo -e "\n${GREEN}[+] Fail2ban jails successfully updated! Active jails:${NC}"
+    fail2ban-client status
+    exit 0
+fi
+
 if [[ "$MODE" == "alerts" ]]; then
     check_root
     show_alerts_dashboard
@@ -3739,7 +3777,7 @@ if [[ "$MODE" != "update" ]]; then
     setup_wazuh_agent "$MODE"
     setup_cron_autoupdate "$MODE"
 	
-	# --- DASHBOARD MODULE V9.30 ---
+	# --- DASHBOARD MODULE V9.40 ---
     setup_telemetry_backend  # Creates the script, the cron, and generates the first JSON
     generate_dashboard       # Creates the HTML UI and launches the Python web server
     # ------------------------------
