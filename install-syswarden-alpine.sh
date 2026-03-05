@@ -1151,26 +1151,26 @@ EOF
         fi
 		
 		# 10.5. DYNAMIC DETECTION: DRUPAL CMS
-        DRUPAL_LOG=""
-        # Check for standard web access logs across OS distributions
-        if [[ -n "${APACHE_ACCESS:-}" ]]; then DRUPAL_LOG="$APACHE_ACCESS";
-        elif [[ -f "/var/log/nginx/access.log" ]]; then DRUPAL_LOG="/var/log/nginx/access.log"; fi
+        DRUPAL_LOG=""
+        # Check for standard web access logs across OS distributions
+        if [[ -n "${APACHE_ACCESS:-}" ]]; then DRUPAL_LOG="$APACHE_ACCESS";
+        elif [[ -f "/var/log/nginx/access.log" ]]; then DRUPAL_LOG="/var/log/nginx/access.log"; fi
 
-        if [[ -n "$DRUPAL_LOG" ]]; then
-            log "INFO" "Web logs detected. Enabling Drupal Guard."
+        if [[ -n "$DRUPAL_LOG" ]]; then
+            log "INFO" "Web logs detected. Enabling Drupal Guard."
 
-            # Create Filter for Drupal Authentication Failures
-            # Matches POST requests to /user/login (Modern Clean URLs) and ?q=user/login (Legacy D7)
-            # Logic: A failed login returns HTTP 200 (Form reloads with error). Success returns HTTP 302/303.
-            if [[ ! -f "/etc/fail2ban/filter.d/drupal-auth.conf" ]]; then
-                cat <<'EOF' > /etc/fail2ban/filter.d/drupal-auth.conf
+            # Create Filter for Drupal Authentication Failures
+            # Matches POST requests to /user/login (Modern Clean URLs) and ?q=user/login (Legacy D7)
+            # Logic: A failed login returns HTTP 200 (Form reloads with error). Success returns HTTP 302/303.
+            if [[ ! -f "/etc/fail2ban/filter.d/drupal-auth.conf" ]]; then
+                cat <<'EOF' > /etc/fail2ban/filter.d/drupal-auth.conf
 [Definition]
 failregex = ^<HOST> .* "POST .*(?:/user/login|\?q=user/login) HTTP.*" 200.*$
 ignoreregex = 
 EOF
-            fi
+            fi
 
-            cat <<EOF >> /etc/fail2ban/jail.local
+            cat <<EOF >> /etc/fail2ban/jail.local
 
 # --- Drupal CMS Protection ---
 [drupal-auth]
@@ -1182,7 +1182,7 @@ backend  = auto
 maxretry = 3
 bantime  = 24h
 EOF
-        fi
+        fi
         
         # 11. DYNAMIC DETECTION: NEXTCLOUD
         NC_LOG=""
