@@ -1,0 +1,355 @@
+#!/bin/bash
+
+# SysWarden Management - Blocklists and Whitelists Manager
+# Copyright (C) 2026 duggytuxy - Laurent M.
+# Version: v9.51
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# --- SAFETY & ENVIRONMENT ---
+set -euo pipefail
+IFS=$'\n\t'
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# --- COLORS ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# --- CONSTANTS ---
+SYSWARDEN_DIR="/etc/syswarden"
+WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
+BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
+SET_NAME="syswarden_blacklist"
+VERSION="v9.51"
+
+# --- ROOT ENFORCEMENT ---
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${RED}ERROR: SysWarden Management requires root privileges.${NC}"
+   exit 1
+fi
+
+# --- FIREWALL BACKEND DETECTION ---
+# We dynamically detect the currently active firewall in RAM.
+detect_backend() {
+    if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+        FW_BACKEND="ufw"
+    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        FW_BACKEND="firewalld"
+    elif command -v nft >/dev/null 2>&1 && nft list table inet syswarden_table >/dev/null 2>&1; then
+        FW_BACKEND="nftables"
+    elif command -v ipset >/dev/null 2>&1 && ipset list "$SET_NAME" >/dev/null 2>&1; then
+        FW_BACKEND="ipset"
+    else
+        FW_BACKEND="unknown"
+    fi
+}
+
+# --- IP VALIDATION ---
+# Prevents catastrophic regex failures by enforcing strict IPv4 format
+validate_ip() {
+    local ip="$1"
+    if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo -e "${RED}ERROR: Invalid IPv4 address format: '$ip'${NC}"
+        exit 1
+    fi
+}
+
+# --- DIAGNOSTIC ENGINE: CHECK IP STATUS ---
+check_ip() {
+    local target_ip="$1"
+    validate_ip "$target_ip"
+    
+    echo -e "\n${CYAN}=== SysWarden Global XDR Search: $target_ip ===${NC}"
+    detect_backend
+    
+    # 1. Check Local Persistence
+    echo -n "[Storage] Whitelist    : "
+    if grep -q "^${target_ip}$" "$WHITELIST_FILE" 2>/dev/null; then echo -e "${GREEN}PRESENT${NC}"; else echo -e "${YELLOW}Not Found${NC}"; fi
+    
+    echo -n "[Storage] Blocklist    : "
+    if grep -q "^${target_ip}$" "$BLOCKLIST_FILE" 2>/dev/null; then echo -e "${RED}PRESENT${NC}"; else echo -e "${YELLOW}Not Found${NC}"; fi
+
+    # 2. Check Active Kernel Firewall (Layer 3)
+    echo -n "[Kernel]  L3 Firewall  : "
+    local is_blocked_fw=false
+    
+    case "$FW_BACKEND" in
+        nftables)
+            if nft get element inet syswarden_table "$SET_NAME" "{ $target_ip }" >/dev/null 2>&1; then is_blocked_fw=true; fi
+            ;;
+        firewalld|ipset|ufw)
+            if ipset test "$SET_NAME" "$target_ip" >/dev/null 2>&1; then is_blocked_fw=true; fi
+            ;;
+    esac
+
+    if [ "$is_blocked_fw" = true ]; then
+        echo -e "${RED}DROPPED (In Active Set)${NC}"
+    else
+        echo -e "${GREEN}CLEAR (Not in main drop set)${NC}"
+    fi
+
+    # 3. Check Fail2ban RAM (Layer 7)
+    echo -n "[WAF]     L7 Fail2ban  : "
+    local is_banned_f2b=false
+    local f2b_jails=""
+
+    if command -v fail2ban-client >/dev/null 2>&1 && fail2ban-client ping >/dev/null 2>&1; then
+        # Fetching all active jails
+        local active_jails=$(fail2ban-client status | grep "Jail list:" | sed 's/.*Jail list:[ \t]*//' | tr -d ' ' | tr ',' '\n')
+        
+        for jail in $active_jails; do
+            # Silent check across all jails
+            if fail2ban-client status "$jail" 2>/dev/null | grep -q "$target_ip"; then
+                is_banned_f2b=true
+                f2b_jails="$f2b_jails $jail"
+            fi
+        done
+    fi
+
+    if [ "$is_banned_f2b" = true ]; then
+        echo -e "${RED}BANNED${NC} -> Triggered by:${YELLOW}$f2b_jails${NC}"
+    else
+        echo -e "${GREEN}CLEAR (No active behavioral bans)${NC}"
+    fi
+    echo ""
+}
+
+# --- SURGICAL UNBAN: HOT REMOVE FROM BLOCKLIST & F2B ---
+unblock_ip() {
+    local target_ip="$1"
+    validate_ip "$target_ip"
+    detect_backend
+
+    echo -e "\n${BLUE}>> Initiating Surgical Unban for $target_ip...${NC}"
+
+    # 1. Clean Persistence securely (Delete specific IP line, then remove empty lines)
+    if [[ -f "$BLOCKLIST_FILE" ]]; then
+        sed -i "\|^${target_ip}$|d" "$BLOCKLIST_FILE"
+        sed -i '/^$/d' "$BLOCKLIST_FILE"
+        echo -e "${GREEN}[✔] Removed from persistent $BLOCKLIST_FILE${NC}"
+    fi
+
+    # 2. Hot-Remove from Kernel Firewall
+    case "$FW_BACKEND" in
+        nftables)
+            nft delete element inet syswarden_table "$SET_NAME" "{ $target_ip }" 2>/dev/null || true
+            ;;
+        firewalld)
+            firewall-cmd --permanent --ipset="$SET_NAME" --remove-entry="$target_ip" >/dev/null 2>&1 || true
+            ipset del "$SET_NAME" "$target_ip" 2>/dev/null || true
+            ;;
+        ipset|ufw)
+            ipset del "$SET_NAME" "$target_ip" 2>/dev/null || true
+            ;;
+    esac
+    echo -e "${GREEN}[✔] Removed from Active Kernel Set ($FW_BACKEND)${NC}"
+
+    # 3. Global Fail2ban Amnesty
+    if command -v fail2ban-client >/dev/null 2>&1 && fail2ban-client ping >/dev/null 2>&1; then
+        local active_jails=$(fail2ban-client status | grep "Jail list:" | sed 's/.*Jail list:[ \t]*//' | tr -d ' ' | tr ',' '\n')
+        local f2b_cleared=false
+        
+        for jail in $active_jails; do
+            # fail2ban-client set <jail> unbanip returns 1 if it unbanned something, 0 if it wasn't banned
+            local result=$(fail2ban-client set "$jail" unbanip "$target_ip" 2>/dev/null || echo "0")
+            if [[ "$result" == "1" ]]; then
+                echo -e "${GREEN}[✔] Amnesty granted on Fail2ban Jail: $jail${NC}"
+                f2b_cleared=true
+            fi
+        done
+        if [ "$f2b_cleared" = false ]; then
+            echo -e "${GREEN}[✔] Checked Fail2ban (IP was not currently in behavioral timeout)${NC}"
+        fi
+    fi
+
+    echo -e "${CYAN}>> IP $target_ip is now fully unblocked.${NC}\n"
+}
+
+# --- HOT WHITELIST: GRANT VIP ACCESS ---
+whitelist_ip() {
+    local target_ip="$1"
+    validate_ip "$target_ip"
+    detect_backend
+
+    echo -e "\n${BLUE}>> Whitelisting IP $target_ip...${NC}"
+
+    # 1. Force Unban first (Cleanup)
+    unblock_ip "$target_ip" >/dev/null 2>&1 || true
+
+    # 2. Add to Persistence
+    mkdir -p "$SYSWARDEN_DIR"
+    touch "$WHITELIST_FILE"
+    if ! grep -q "^${target_ip}$" "$WHITELIST_FILE" 2>/dev/null; then
+        echo "$target_ip" >> "$WHITELIST_FILE"
+        echo -e "${GREEN}[✔] Saved to persistent $WHITELIST_FILE${NC}"
+    else
+        echo -e "${YELLOW}[i] IP is already in $WHITELIST_FILE${NC}"
+    fi
+
+    # 3. Inject Absolute Priority Accept Rule in RAM
+    case "$FW_BACKEND" in
+        nftables)
+            # Insert at the very top of the input chain
+            nft insert rule inet syswarden_table input ip saddr "$target_ip" accept 2>/dev/null || true
+            nft list table inet syswarden_table > /etc/syswarden/syswarden.nft 2>/dev/null || true
+            ;;
+        firewalld)
+            firewall-cmd --permanent --add-rich-rule="rule priority='-100' family='ipv4' source address='$target_ip' accept" >/dev/null 2>&1 || true
+            firewall-cmd --add-rich-rule="rule priority='-100' family='ipv4' source address='$target_ip' accept" >/dev/null 2>&1 || true
+            ;;
+        ufw)
+            ufw insert 1 allow from "$target_ip" >/dev/null 2>&1 || true
+            ;;
+        ipset)
+            iptables -I INPUT 1 -s "$target_ip" -j ACCEPT 2>/dev/null || true
+            if command -v netfilter-persistent >/dev/null; then netfilter-persistent save 2>/dev/null || true; 
+            elif command -v /etc/init.d/iptables >/dev/null; then /etc/init.d/iptables save 2>/dev/null || true; fi
+            ;;
+    esac
+    echo -e "${GREEN}[✔] Hot-injected VIP Accept Rule into Kernel ($FW_BACKEND)${NC}"
+
+    # 4. Fail2ban IgnoreIP Update (Requires reload to apply to F2B config)
+    if command -v fail2ban-client >/dev/null 2>&1; then
+        # F2b dynamic reload is complex, we just inform the user
+        echo -e "${YELLOW}[i] Note: Fail2ban requires a service reload to natively ignore this IP.${NC}"
+        echo -e "${YELLOW}    Run 'syswarden-mng reload' later to synchronize Fail2ban.${NC}"
+    fi
+
+    echo -e "${CYAN}>> IP $target_ip is now Whitelisted.${NC}\n"
+}
+
+# --- HOT BLOCK: IMMEDIATE KERNEL DROP ---
+block_ip() {
+    local target_ip="$1"
+    validate_ip "$target_ip"
+    detect_backend
+
+    echo -e "\n${BLUE}>> Manually Blocking IP $target_ip...${NC}"
+
+    # 1. Ensure not whitelisted
+    if grep -q "^${target_ip}$" "$WHITELIST_FILE" 2>/dev/null; then
+        echo -e "${RED}ERROR: IP is in the Whitelist. Unwhitelist it first!${NC}"
+        exit 1
+    fi
+
+    # 2. Add to Persistence
+    mkdir -p "$SYSWARDEN_DIR"
+    touch "$BLOCKLIST_FILE"
+    if ! grep -q "^${target_ip}$" "$BLOCKLIST_FILE" 2>/dev/null; then
+        echo "$target_ip" >> "$BLOCKLIST_FILE"
+        echo -e "${GREEN}[✔] Saved to persistent $BLOCKLIST_FILE${NC}"
+    fi
+
+    # 3. Hot-Add to Kernel Set
+    case "$FW_BACKEND" in
+        nftables)
+            nft add element inet syswarden_table "$SET_NAME" "{ $target_ip }" 2>/dev/null || true
+            ;;
+        firewalld)
+            firewall-cmd --permanent --ipset="$SET_NAME" --add-entry="$target_ip" >/dev/null 2>&1 || true
+            ipset add "$SET_NAME" "$target_ip" 2>/dev/null || true
+            ;;
+        ipset|ufw)
+            ipset add "$SET_NAME" "$target_ip" 2>/dev/null || true
+            ;;
+    esac
+    
+    echo -e "${GREEN}[✔] Injected into Active Kernel Drop Set ($FW_BACKEND)${NC}"
+    echo -e "${CYAN}>> IP $target_ip is now Blocked.${NC}\n"
+}
+
+# --- LIST ALL CUSTOM IPs ---
+list_ips() {
+    echo -e "\n${CYAN}=== SysWarden Custom IP Registry ===${NC}"
+    
+    echo -e "\n${GREEN}[ Whitelisted IPs (VIP) ]${NC}"
+    if [[ -s "$WHITELIST_FILE" ]]; then
+        cat "$WHITELIST_FILE" | while read -r line; do echo "  -> $line"; done
+    else
+        echo -e "${YELLOW}  No custom whitelisted IPs.${NC}"
+    fi
+
+    echo -e "\n${RED}[ Manually Blocked IPs ]${NC}"
+    if [[ -s "$BLOCKLIST_FILE" ]]; then
+        cat "$BLOCKLIST_FILE" | while read -r line; do echo "  -> $line"; done
+    else
+        echo -e "${YELLOW}  No custom manually blocked IPs.${NC}"
+    fi
+    echo ""
+}
+
+# --- CLI ROUTER & HELP MENU ---
+show_help() {
+    echo -e "${GREEN}======================================================${NC}"
+    echo -e "${YELLOW}  SysWarden Management CLI (v9.51) - Day 2 Operations ${NC}"
+    echo -e "${GREEN}======================================================${NC}"
+    echo -e "Usage: syswarden-mng [COMMAND] [IP]"
+    echo -e ""
+    echo -e "Commands:"
+    echo -e "  ${CYAN}check${NC} <IP>      : Full XDR diagnostic of an IP (Files, F2B, Kernel)"
+    echo -e "  ${CYAN}block${NC} <IP>      : Hot-adds IP to kernel drop set and blocklist file"
+    echo -e "  ${CYAN}unblock${NC} <IP>    : Purges IP from blocklist, kernel, and Fail2ban"
+    echo -e "  ${CYAN}whitelist${NC} <IP>  : Grants absolute VIP access & bypasses firewall"
+    echo -e "  ${CYAN}list${NC}            : Displays all manually whitelisted and blocked IPs"
+    echo -e "  ${CYAN}reload${NC}          : Forces main scripts to safely re-sync entirely"
+    echo -e ""
+    echo -e "Examples:"
+    echo -e "  syswarden-mng check 192.168.1.50"
+    echo -e "  syswarden-mng unblock 8.8.8.8"
+    echo -e "  syswarden-mng list"
+    echo -e "======================================================"
+}
+
+if [[ $# -eq 0 ]]; then
+    show_help
+    exit 0
+fi
+
+COMMAND=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+
+case "$COMMAND" in
+    check)
+        if [[ -z "${2:-}" ]]; then echo "Missing IP address."; exit 1; fi
+        check_ip "$2"
+        ;;
+    block)
+        if [[ -z "${2:-}" ]]; then echo "Missing IP address."; exit 1; fi
+        block_ip "$2"
+        ;;
+    unblock)
+        if [[ -z "${2:-}" ]]; then echo "Missing IP address."; exit 1; fi
+        unblock_ip "$2"
+        ;;
+    whitelist)
+        if [[ -z "${2:-}" ]]; then echo "Missing IP address."; exit 1; fi
+        whitelist_ip "$2"
+        ;;
+    reload)
+        echo -e "${YELLOW}Triggering full orchestrator synchronization...${NC}"
+        # We safely call the main installer to rebuild everything globally
+        if [[ -f "/root/install-syswarden.sh" ]]; then bash /root/install-syswarden.sh update
+        elif [[ -f "/root/install-syswarden-alpine.sh" ]]; then bash /root/install-syswarden-alpine.sh update
+        else echo -e "${RED}Main installation script not found in /root. Please run it manually.${NC}"; fi
+        ;;
+    list)
+        list_ips
+        ;;
+    *)
+        show_help
+        exit 1
+        ;;
+esac
