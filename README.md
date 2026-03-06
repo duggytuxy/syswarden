@@ -197,7 +197,7 @@ For Universal OS (Debian / Ubuntu / RHEL ecosystem):
 
 ```bash
 cd /usr/local/bin/
-wget https://github.com/duggytuxy/syswarden/releases/download/v9.40/install-syswarden.sh
+wget https://github.com/duggytuxy/syswarden/releases/download/v9.41/install-syswarden.sh
 chmod +x install-syswarden.sh
 ./install-syswarden.sh
 ```
@@ -206,7 +206,7 @@ For Alpine Linux (OpenRC):
 
 ```bash
 cd /usr/local/bin/
-wget https://github.com/duggytuxy/syswarden/releases/download/v9.40/install-syswarden-alpine.sh
+wget https://github.com/duggytuxy/syswarden/releases/download/v9.41/install-syswarden-alpine.sh
 chmod +x install-syswarden-alpine.sh
 ./install-syswarden-alpine.sh
 ```
