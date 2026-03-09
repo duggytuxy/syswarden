@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v9.53"
+VERSION="v9.60"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -147,7 +147,58 @@ install_dependencies() {
 	
 	# Ensure standard syslog is active to capture Kernel Firewall Drops
     rc-update add rsyslog default >/dev/null 2>&1 || true
+    
+    # --- SECURITY FIX: ALPINE KERNEL LOGGING & LOG INJECTION PREVENTION ---
+    # Force rsyslog to write all Netfilter/Nftables drops and Auth logs to DEDICATED files.
+    # This prevents unprivileged users from injecting fake logs via logger(1)
+    # into /var/log/messages, stopping Fail2ban Log Injection & Mass DoS attacks.
+    if [[ -f /etc/rsyslog.conf ]]; then
+        # 1. Isolate Kernel Firewall logs
+        sed -i '/^kern\./d' /etc/rsyslog.conf
+        echo "kern.* /var/log/kern-firewall.log" >> /etc/rsyslog.conf
+        touch /var/log/kern-firewall.log && chmod 600 /var/log/kern-firewall.log
+        
+        # 2. Isolate Auth/PAM logs (su, sudo, sshd)
+        sed -i '/^authpriv\./d' /etc/rsyslog.conf
+        sed -i '/^auth\./d' /etc/rsyslog.conf
+        echo "auth,authpriv.* /var/log/auth.log" >> /etc/rsyslog.conf
+        touch /var/log/auth.log && chmod 600 /var/log/auth.log
+    fi
+    # ----------------------------------------------------------------------
+    
     rc-service rsyslog restart >/dev/null 2>&1 || true
+	
+	# --- SECURITY FIX: OS HARDENING & ANTI-PERSISTENCE ---
+    log "INFO" "Applying strict OS hardening (Crontab, Wheel group, Profiles)..."
+    
+    # 1. Lock down Crontab (Only root can schedule tasks)
+    echo "root" > /etc/cron.allow
+    chmod 600 /etc/cron.allow
+    rm -f /etc/cron.deny
+    
+    # 2. Purge non-root users from the 'wheel' group (Prevents sudo escalation)
+    for user in $(awk -F':' '/^wheel:/ {print $4}' /etc/group | tr ',' ' '); do
+        if [[ -n "$user" ]] && [[ "$user" != "root" ]]; then
+            gpasswd -d "$user" wheel >/dev/null 2>&1 || true
+            log "INFO" "Removed user '$user' from wheel group to prevent privilege escalation."
+        fi
+    done
+    
+    # 3. Lock down .profile for existing standard users (Prevents SSH Login backdoors)
+    for user_dir in /home/*; do
+        if [[ -d "$user_dir" ]]; then
+            local user_name; user_name=$(basename "$user_dir")
+            local profile_file="$user_dir/.profile"
+            
+            # Remove immutable flag if it exists, create/own it, then lock it forever
+            chattr -i "$profile_file" 2>/dev/null || true
+            touch "$profile_file"
+            chown "$user_name:$user_name" "$profile_file"
+            chmod 644 "$profile_file"
+            chattr +i "$profile_file" 2>/dev/null || true
+        fi
+    done
+    # -----------------------------------------------------
 
     log "INFO" "All dependencies check complete."
 }
@@ -190,19 +241,18 @@ define_ssh_port() {
     echo "SSH_PORT='$SSH_PORT'" >> "$CONF_FILE"
     log "INFO" "SSH Port configured as: $SSH_PORT"
 	
-	# --- ENABLE SSH TCP FORWARDING (REQUIRED FOR DASHBOARD TUNNELING) ---
+	# --- SECURITY FIX: DISABLE TCP FORWARDING (ANTI-PIVOTING & EXPOSURE) ---
+    # TCP Forwarding allows non-privileged users to bypass firewall rules and expose
+    # internal services. We strictly enforce it to 'no'. Dashboard access MUST use WireGuard.
     if [[ -f /etc/ssh/sshd_config ]]; then
-        log "INFO" "Ensuring SSH TCP Forwarding is enabled for Dashboard UI..."
+        log "INFO" "Ensuring SSH TCP Forwarding is strictly DISABLED..."
         
-        # Uncomment the directive if it's commented out
-        sed -i 's/^#AllowTcpForwarding.*/AllowTcpForwarding yes/' /etc/ssh/sshd_config
-        # Force it to 'yes' if it was explicitly set to 'no'
-        sed -i 's/^[[:space:]]*AllowTcpForwarding[[:space:]]*no/AllowTcpForwarding yes/' /etc/ssh/sshd_config
+        sed -i 's/^#AllowTcpForwarding.*/AllowTcpForwarding no/' /etc/ssh/sshd_config
+        sed -i 's/^[[:space:]]*AllowTcpForwarding[[:space:]]*yes/AllowTcpForwarding no/' /etc/ssh/sshd_config
         
-        # Restart SSH service quietly to apply changes (will not drop existing connections)
         rc-service sshd restart >/dev/null 2>&1 || true
     fi
-    # --------------------------------------------------------------------
+    # ------------------------------------------------------------------------
 }
 
 define_wireguard() {
@@ -515,7 +565,14 @@ download_list() {
     
     local output_file="$TMP_DIR/blocklist.txt"
     if curl -sS -L --retry 3 --connect-timeout 10 "$SELECTED_URL" -o "$output_file"; then
-        tr -d '\r' < "$output_file" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$' > "$TMP_DIR/clean_list.txt"
+        # --- SECURITY FIX: STRICT CIDR SEMANTIC VALIDATION ---
+        # Validates exact octet ranges (0-255) and subnet masks (0-32) to prevent iptables crash (F13)
+        tr -d '\r' < "$output_file" | awk -F'[/.]' 'NF==4 || NF==5 {
+            valid=1; for(i=1;i<=4;i++) if($i<0 || $i>255 || $i=="") valid=0;
+            if(NF==5 && ($5<0 || $5>32 || $5=="")) valid=0;
+            if(valid) print $0;
+        }' > "$TMP_DIR/clean_list.txt"
+        # -----------------------------------------------------
         FINAL_LIST="$TMP_DIR/clean_list.txt"
         log "INFO" "Download success."
     else
@@ -547,7 +604,13 @@ download_geoip() {
     done
 
     if [[ -s "$TMP_DIR/geoip_raw.txt" ]]; then
-        grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$' "$TMP_DIR/geoip_raw.txt" | sort -u > "$GEOIP_FILE"
+        # --- SECURITY FIX: STRICT CIDR SEMANTIC VALIDATION ---
+        awk -F'[/.]' 'NF==4 || NF==5 {
+            valid=1; for(i=1;i<=4;i++) if($i<0 || $i>255 || $i=="") valid=0;
+            if(NF==5 && ($5<0 || $5>32 || $5=="")) valid=0;
+            if(valid) print $0;
+        }' "$TMP_DIR/geoip_raw.txt" | sort -u > "$GEOIP_FILE"
+        # -----------------------------------------------------
         log "INFO" "Geo-Blocking list updated successfully."
     else
         log "WARN" "Geo-Blocking list is empty. IPDeny might be unreachable."
@@ -919,6 +982,15 @@ configure_fail2ban() {
     if command -v fail2ban-client >/dev/null; then
         log "INFO" "Generating Fail2ban configuration (Alpine Zero Trust Mode)..."
         
+        # --- SECURITY FIX: ALPINE SSH CONFLICT (ANTI-LOCKOUT) ---
+        # Alpine's default jail.d/alpine-ssh.conf overrides our jail.local maxretry (10 vs 3)
+        # and port settings. We must delete it to enforce SysWarden's strict rules.
+        if [[ -f /etc/fail2ban/jail.d/alpine-ssh.conf ]]; then
+            rm -f /etc/fail2ban/jail.d/alpine-ssh.conf
+            log "INFO" "Removed conflicting default Alpine SSH jail configuration."
+        fi
+        # --------------------------------------------------------
+        
         if [[ -f /etc/fail2ban/jail.local ]] && [[ ! -f /etc/fail2ban/jail.local.bak ]]; then
             log "INFO" "Creating backup of existing jail.local"
             cp /etc/fail2ban/jail.local /etc/fail2ban/jail.local.bak
@@ -934,16 +1006,30 @@ EOF
         local f2b_action="iptables-multiport"
         if [[ "$FIREWALL_BACKEND" == "nftables" ]]; then f2b_action="nftables-multiport"; fi
 
-        # --- FIX: DYNAMIC FAIL2BAN WHITELIST ---
+        # --- FIX: DYNAMIC FAIL2BAN INFRASTRUCTURE WHITELIST (ANTI SELF-DOS) ---
         local f2b_ignoreip="127.0.0.1/8 ::1"
+        
+        # 1. Dynamically extract Public IP of the server
+        local public_ip
+        public_ip=$(ip -4 addr show | grep -oEo 'inet [0-9.]+' | awk '{print $2}' | grep -v '127.0.0.1' | head -n 1 || true)
+        if [[ -n "$public_ip" ]]; then f2b_ignoreip="$f2b_ignoreip $public_ip"; fi
+        
+        # 2. Dynamically extract active DNS resolvers (Prevents Linode/AWS DNS DoS)
+        local dns_ips
+        if [[ -f /etc/resolv.conf ]]; then
+            dns_ips=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | grep -Eo '^[0-9.]+' | tr '\n' ' ' || true)
+            if [[ -n "$dns_ips" ]]; then f2b_ignoreip="$f2b_ignoreip $dns_ips"; fi
+        fi
+
+        # 3. Add Custom Whitelist entries
         if [[ -s "$WHITELIST_FILE" ]]; then
-            # Extract IPs safely (ignore comments and empty lines) and format as space-separated
             local wl_ips
             wl_ips=$(grep -vE '^\s*#|^\s*$' "$WHITELIST_FILE" | tr '\n' ' ' || true)
             f2b_ignoreip="$f2b_ignoreip $wl_ips"
-            log "INFO" "Fail2ban whitelist extended with: $wl_ips"
         fi
-        # ---------------------------------------
+        
+        log "INFO" "Fail2ban infrastructure whitelist enforced: $f2b_ignoreip"
+        # ----------------------------------------------------------------------
 
         # 3. HEADER & SSH (Always Active - Backend MUST be auto for Alpine)
         cat <<EOF > /etc/fail2ban/jail.local
@@ -1260,7 +1346,8 @@ EOF
         # 15. DYNAMIC DETECTION: WIREGUARD
         if [[ -d "/etc/wireguard" ]]; then
             WG_LOG=""
-            if [[ -f "/var/log/messages" ]]; then WG_LOG="/var/log/messages"; fi
+            if [[ -f "/var/log/kern-firewall.log" ]]; then WG_LOG="/var/log/kern-firewall.log";
+            elif [[ -f "/var/log/messages" ]]; then WG_LOG="/var/log/messages"; fi
 
             if [[ -n "$WG_LOG" ]]; then
                 log "INFO" "WireGuard detected. Enabling UDP Jail."
@@ -1681,14 +1768,16 @@ EOF
         
         # 29. DYNAMIC DETECTION: PORT SCANNERS (Alpine kernel logs)
         FIREWALL_LOG=""
-        if [[ -f "/var/log/messages" ]]; then FIREWALL_LOG="/var/log/messages"; fi 
+        if [[ -f "/var/log/kern-firewall.log" ]]; then FIREWALL_LOG="/var/log/kern-firewall.log";
+        elif [[ -f "/var/log/messages" ]]; then FIREWALL_LOG="/var/log/messages"; fi 
 
         if [[ -n "$FIREWALL_LOG" ]]; then
             log "INFO" "Kernel logs detected. Enabling Port Scanner Guard."
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-portscan.conf" ]]; then
                 cat <<'EOF' > /etc/fail2ban/filter.d/syswarden-portscan.conf
 [Definition]
-failregex = ^.*(?:kernel: |\[[0-9. ]+\] ).*\[SysWarden-BLOCK\].*SRC=<HOST> .*$
+# FIX: Strict anchor ^%(__prefix_line)s prevents Log Injection from users.
+failregex = ^%(__prefix_line)s(?:kernel: |\[[0-9. ]+\] ).*\[SysWarden-BLOCK\].*SRC=<HOST> .*$
 ignoreregex = 
 EOF
             fi
@@ -2987,6 +3076,10 @@ function setup_telemetry_backend() {
 set -euo pipefail
 IFS=$'\n\t'
 
+# --- SECURITY FIX: ZOMBIE PROCESS PREVENTION ---
+# Ensures all background processes spawned by Fail2ban checks are cleanly reaped.
+trap 'wait' EXIT
+
 # --- Configuration Paths ---
 SYSWARDEN_DIR="/etc/syswarden"
 UI_DIR="/etc/syswarden/ui"
@@ -2994,6 +3087,9 @@ TMP_FILE="$UI_DIR/data.json.tmp"
 DATA_FILE="$UI_DIR/data.json"
 
 mkdir -p "$UI_DIR"
+
+# Ensure jq is installed for atomic and safe JSON serialization
+if ! command -v jq >/dev/null; then apk add --no-cache jq >/dev/null 2>&1 || true; fi
 
 # --- System Metrics Gathering ---
 SYS_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -3003,104 +3099,87 @@ SYS_LOAD=$(cat /proc/loadavg | awk '{print $1", "$2", "$3}')
 SYS_RAM_USED=$(free -m | awk '/^Mem:/{print $3}')
 SYS_RAM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
 
-# --- Layer 3 Metrics (Persistent lists) ---
+# --- Layer 3 Metrics ---
 L3_GLOBAL=0; L3_GEOIP=0; L3_ASN=0
+[[ -f "$SYSWARDEN_DIR/active_global_blocklist.txt" ]] && L3_GLOBAL=$(wc -l < "$SYSWARDEN_DIR/active_global_blocklist.txt")
+[[ -f "$SYSWARDEN_DIR/geoip.txt" ]] && L3_GEOIP=$(wc -l < "$SYSWARDEN_DIR/geoip.txt")
+[[ -f "$SYSWARDEN_DIR/asn.txt" ]] && L3_ASN=$(wc -l < "$SYSWARDEN_DIR/asn.txt")
 
-if [[ -f "$SYSWARDEN_DIR/active_global_blocklist.txt" ]]; then
-    L3_GLOBAL=$(wc -l < "$SYSWARDEN_DIR/active_global_blocklist.txt")
-fi
-
-if [[ -f "$SYSWARDEN_DIR/geoip.txt" ]]; then
-    L3_GEOIP=$(wc -l < "$SYSWARDEN_DIR/geoip.txt")
-fi
-
-if [[ -f "$SYSWARDEN_DIR/asn.txt" ]]; then
-    L3_ASN=$(wc -l < "$SYSWARDEN_DIR/asn.txt")
-fi
-
-# --- Layer 7 Metrics & IP Registry ---
-L7_TOTAL_BANNED=0; L7_ACTIVE_JAILS=0; JAIL_JSON_ARRAY=""; L7_BANNED_IPS_JSON=""
+# --- Layer 7 Metrics & IP Registry (SECURE JSON ARRAYS) ---
+L7_TOTAL_BANNED=0; L7_ACTIVE_JAILS=0
+JAILS_JSON="[]"
+BANNED_IPS_JSON="[]"
 
 if command -v fail2ban-client >/dev/null && fail2ban-client ping >/dev/null 2>&1; then
-    # Respecting strict IFS for multi-jail extraction
-    JAIL_LIST=$(fail2ban-client status | grep "Jail list:" | sed 's/.*Jail list:[ \t]*//' | tr -d ' ' | tr ',' '\n')
+    JAIL_LIST=$(fail2ban-client status | awk -F'Jail list:[ \t]*' '/Jail list:/ {print $2}' | tr -d ' ' | tr ',' '\n')
     
     for JAIL in $JAIL_LIST; do
+        [[ -z "$JAIL" ]] && continue
         L7_ACTIVE_JAILS=$((L7_ACTIVE_JAILS + 1))
         
-        # Get detailed status per jail
         STATUS_OUT=$(fail2ban-client status "$JAIL")
-        BANNED_COUNT=$(echo "$STATUS_OUT" | grep "Currently banned:" | awk '{print $4}' || echo "0")
+        BANNED_COUNT=$(echo "$STATUS_OUT" | awk '/Currently banned:/ {print $4}' || echo "0")
         BANNED_COUNT=${BANNED_COUNT:-0}
         L7_TOTAL_BANNED=$((L7_TOTAL_BANNED + BANNED_COUNT))
         
         if [[ "$BANNED_COUNT" -gt 0 ]]; then
-            JAIL_JSON_ARRAY+="{\"name\": \"$JAIL\", \"count\": $BANNED_COUNT},"
+            # Safely append jail object using jq
+            JAILS_JSON=$(echo "$JAILS_JSON" | jq --arg n "$JAIL" --argjson c "$BANNED_COUNT" '. + [{"name": $n, "count": $c}]')
             
-            # Extract actual banned IPs (limiting to last 50 entries for browser performance)
-            BANNED_IPS=$(echo "$STATUS_OUT" | grep "Banned IP list:" | sed 's/.*Banned IP list:[ \t]*//' | tr -d ',' | tr ' ' '\n' | tail -n 50 || true)
+            # Extract and safely append IPs
+            BANNED_IPS=$(echo "$STATUS_OUT" | awk -F'Banned IP list:[ \t]*' '/Banned IP list:/ {print $2}' | tr -d ',' | tr ' ' '\n' | tail -n 50 || true)
             for IP in $BANNED_IPS; do
                 if [[ -n "$IP" ]]; then
-                    L7_BANNED_IPS_JSON+="{\"ip\": \"$IP\", \"jail\": \"$JAIL\"},"
+                    BANNED_IPS_JSON=$(echo "$BANNED_IPS_JSON" | jq --arg ip "$IP" --arg j "$JAIL" '. + [{"ip": $ip, "jail": $j}]')
                 fi
             done
         fi
     done
 fi
 
-# Remove trailing commas for valid JSON
-JAIL_JSON_ARRAY=${JAIL_JSON_ARRAY%,}
-L7_BANNED_IPS_JSON=${L7_BANNED_IPS_JSON%,}
-
 # --- Whitelist Registry Extraction ---
-WHITELIST_COUNT=0; WHITELIST_IPS_JSON=""
+WHITELIST_COUNT=0
+WL_JSON="[]"
 
 if [[ -f "$SYSWARDEN_DIR/whitelist.txt" ]]; then
     WHITELIST_COUNT=$(grep -cvE '^\s*(#|$)' "$SYSWARDEN_DIR/whitelist.txt" || true)
-    
-    # Extract actual Whitelist IPs (cleaning comments and empty lines)
     WL_IPS=$(grep -vE '^\s*(#|$)' "$SYSWARDEN_DIR/whitelist.txt" || true)
     for IP in $WL_IPS; do
         if [[ -n "$IP" ]]; then
-            WHITELIST_IPS_JSON+="\"$IP\","
+            WL_JSON=$(echo "$WL_JSON" | jq --arg ip "$IP" '. + [$ip]')
         fi
     done
 fi
 
-# Remove trailing comma for valid JSON
-WHITELIST_IPS_JSON=${WHITELIST_IPS_JSON%,}
+# --- Generate Atomic JSON Payload (SECURITY FIX: jq escaping) ---
+jq -n \
+  --arg ts "$SYS_TIMESTAMP" \
+  --arg host "$SYS_HOSTNAME" \
+  --arg up "$SYS_UPTIME" \
+  --arg load "$SYS_LOAD" \
+  --argjson ru "$SYS_RAM_USED" \
+  --argjson rt "$SYS_RAM_TOTAL" \
+  --argjson lg "$L3_GLOBAL" \
+  --argjson lgeo "$L3_GEOIP" \
+  --argjson lasn "$L3_ASN" \
+  --argjson ltb "$L7_TOTAL_BANNED" \
+  --argjson laj "$L7_ACTIVE_JAILS" \
+  --argjson jj "$JAILS_JSON" \
+  --argjson bip "$BANNED_IPS_JSON" \
+  --argjson wlc "$WHITELIST_COUNT" \
+  --argjson wlip "$WL_JSON" \
+'{
+  timestamp: $ts,
+  system: { hostname: $host, uptime: $up, load_average: $load, ram_used_mb: $ru, ram_total_mb: $rt },
+  layer3: { global_blocked: $lg, geoip_blocked: $lgeo, asn_blocked: $lasn },
+  layer7: { total_banned: $ltb, active_jails: $laj, jails_data: $jj, banned_ips: $bip },
+  whitelist: { active_ips: $wlc, ips: $wlip }
+}' > "$TMP_FILE"
 
-# --- Generate Atomic JSON Payload ---
-cat <<JSON_EOF > "$TMP_FILE"
-{
-  "timestamp": "$SYS_TIMESTAMP",
-  "system": { 
-      "hostname": "$SYS_HOSTNAME", 
-      "uptime": "$SYS_UPTIME", 
-      "load_average": "$SYS_LOAD", 
-      "ram_used_mb": $SYS_RAM_USED, 
-      "ram_total_mb": $SYS_RAM_TOTAL 
-  },
-  "layer3": { 
-      "global_blocked": $L3_GLOBAL, 
-      "geoip_blocked": $L3_GEOIP, 
-      "asn_blocked": $L3_ASN 
-  },
-  "layer7": { 
-      "total_banned": $L7_TOTAL_BANNED, 
-      "active_jails": $L7_ACTIVE_JAILS, 
-      "jails_data": [ $JAIL_JSON_ARRAY ],
-      "banned_ips": [ $L7_BANNED_IPS_JSON ]
-  },
-  "whitelist": { 
-      "active_ips": $WHITELIST_COUNT,
-      "ips": [ $WHITELIST_IPS_JSON ]
-  }
-}
-JSON_EOF
-
+# --- SECURITY FIX: STRICT JSON EXPOSURE CONTROL ---
 mv -f "$TMP_FILE" "$DATA_FILE"
-chmod 644 "$DATA_FILE"
+chown nobody:nobody "$DATA_FILE"
+chmod 600 "$DATA_FILE"
 EOF
 
     # 2. Make executable
@@ -3121,7 +3200,7 @@ EOF
 # SYSWARDEN V9.40 - UI DASHBOARD GENERATION (EXPANDED REGISTRY)
 # ==============================================================================
 function generate_dashboard() {
-    log "INFO" "Generating the Serverless Dashboard UI (Expanded v9.53)..."
+    log "INFO" "Generating the Serverless Dashboard UI (Expanded v9.60)..."
     
     local UI_DIR="/etc/syswarden/ui"
     mkdir -p "$UI_DIR"
@@ -3144,7 +3223,7 @@ function generate_dashboard() {
     <title>SysWarden | Fortress Dashboard</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" integrity="sha512-CQBWl4fJHWbryI+u8E42Zb80kG42nPTK897HkXKaQWw8jZ8BbhYl+r8ZpP0q/o7vIxxn9gI+l55JqW7O3f5s5g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     
     <style>
         /* Modern Thin Scrollbars for IP Registries */
@@ -3184,7 +3263,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v9.53</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v9.60</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -3388,50 +3467,73 @@ function generate_dashboard() {
                 document.getElementById('l7-jails').innerText = data.layer7.active_jails;
                 document.getElementById('wl-count').innerText = data.whitelist.active_ips;
 
-                // --- DOM UPDATE: Active Jails List ---
+                // --- DOM UPDATE: Active Jails List (XSS SECURED) ---
                 const jailListEl = document.getElementById('jail-list');
+                jailListEl.innerHTML = ''; // Clear securely
                 if (data.layer7.jails_data && data.layer7.jails_data.length > 0) {
-                    jailListEl.innerHTML = '';
                     data.layer7.jails_data.forEach(jail => {
-                        jailListEl.innerHTML += `
-                            <li class="flex justify-between items-center p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition">
-                                <span class="font-mono text-sm">${jail.name}</span>
-                                <span class="bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 py-0.5 px-2 rounded-full text-xs font-bold">${jail.count}</span>
-                            </li>
-                        `;
+                        const li = document.createElement('li');
+                        li.className = 'flex justify-between items-center p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition';
+                        
+                        const spanName = document.createElement('span');
+                        spanName.className = 'font-mono text-sm';
+                        spanName.textContent = jail.name; // textContent prevents HTML execution
+                        
+                        const spanCount = document.createElement('span');
+                        spanCount.className = 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 py-0.5 px-2 rounded-full text-xs font-bold';
+                        spanCount.textContent = jail.count;
+                        
+                        li.appendChild(spanName);
+                        li.appendChild(spanCount);
+                        jailListEl.appendChild(li);
                     });
                 } else {
                     jailListEl.innerHTML = '<li class="text-sm text-gray-500 italic">No active bans found. Server is quiet.</li>';
                 }
 
-                // --- DOM UPDATE: Banned IPs Registry Table ---
+                // --- DOM UPDATE: Banned IPs Registry Table (XSS SECURED) ---
                 const bannedIpsEl = document.getElementById('banned-ips-list');
+                bannedIpsEl.innerHTML = '';
                 if (data.layer7.banned_ips && data.layer7.banned_ips.length > 0) {
-                    bannedIpsEl.innerHTML = '';
-                    // Displaying in reverse order so the newest extracted IPs appear at the top
                     data.layer7.banned_ips.reverse().forEach(entry => {
-                        bannedIpsEl.innerHTML += `
-                            <tr class="border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-700/20 transition">
-                                <td class="py-2 font-mono text-xs text-brand-500 font-bold">${entry.ip}</td>
-                                <td class="py-2 text-right text-[10px] text-gray-500 font-black uppercase tracking-tighter">${entry.jail}</td>
-                            </tr>
-                        `;
+                        const tr = document.createElement('tr');
+                        tr.className = 'border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-700/20 transition';
+                        
+                        const tdIp = document.createElement('td');
+                        tdIp.className = 'py-2 font-mono text-xs text-brand-500 font-bold';
+                        tdIp.textContent = entry.ip;
+                        
+                        const tdJail = document.createElement('td');
+                        tdJail.className = 'py-2 text-right text-[10px] text-gray-500 font-black uppercase tracking-tighter';
+                        tdJail.textContent = entry.jail;
+                        
+                        tr.appendChild(tdIp);
+                        tr.appendChild(tdJail);
+                        bannedIpsEl.appendChild(tr);
                     });
                 } else {
                     bannedIpsEl.innerHTML = '<tr><td colspan="2" class="py-4 text-center text-xs text-gray-500 italic">Registry is empty.</td></tr>';
                 }
 
-                // --- DOM UPDATE: Whitelist IPs Registry Grid ---
+                // --- DOM UPDATE: Whitelist IPs Registry Grid (XSS SECURED) ---
                 const wlIpsEl = document.getElementById('whitelist-ips-list');
+                wlIpsEl.innerHTML = '';
                 if (data.whitelist.ips && data.whitelist.ips.length > 0) {
-                    wlIpsEl.innerHTML = '';
                     data.whitelist.ips.forEach(ip => {
-                        wlIpsEl.innerHTML += `
-                            <li class="flex justify-between items-center p-2 rounded bg-green-500/5 border border-green-500/10">
-                                <span class="font-mono text-[11px] text-green-600 dark:text-green-400 font-bold">${ip}</span>
-                                <span class="text-[9px] uppercase font-black text-green-500/30 select-none">Safe</span>
-                            </li>
-                        `;
+                        const li = document.createElement('li');
+                        li.className = 'flex justify-between items-center p-2 rounded bg-green-500/5 border border-green-500/10';
+                        
+                        const spanIp = document.createElement('span');
+                        spanIp.className = 'font-mono text-[11px] text-green-600 dark:text-green-400 font-bold';
+                        spanIp.textContent = ip;
+                        
+                        const spanBadge = document.createElement('span');
+                        spanBadge.className = 'text-[9px] uppercase font-black text-green-500/30 select-none';
+                        spanBadge.textContent = 'Safe';
+                        
+                        li.appendChild(spanIp);
+                        li.appendChild(spanBadge);
+                        wlIpsEl.appendChild(li);
                     });
                 } else {
                     wlIpsEl.innerHTML = '<li class="text-xs text-gray-500 italic col-span-2">Registry is empty.</li>';
@@ -3470,20 +3572,54 @@ function generate_dashboard() {
 </html>
 EOF
 
+# --- SECURITY FIX: SECURE PYTHON HTTP SERVER (HEADERS & VERSION HIDING) ---
+    # Replaces the default python -m http.server to inject strict security headers
+    # and prevent Server version disclosure (Mitigates F11 and F17).
+    local UI_SERVER_BIN="/usr/local/bin/syswarden-ui-server.py"
+    cat << 'EOF' > "$UI_SERVER_BIN"
+#!/usr/bin/env python3
+import http.server
+import socketserver
+import sys
+import os
+
+BIND_IP = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
+PORT = 9999
+os.chdir("/etc/syswarden/ui")
+
+class SecureHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+    # Hide Python and SimpleHTTP versions
+    server_version = "SysWarden-UI/1.0"
+    sys_version = ""
+
+    def end_headers(self):
+        # Inject Strict Security Headers (Mitigates XSS, Clickjacking, MIME Sniffing)
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline';")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+        super().end_headers()
+
+with socketserver.TCPServer((BIND_IP, PORT), SecureHTTPRequestHandler) as httpd:
+    httpd.serve_forever()
+EOF
+    chmod +x "$UI_SERVER_BIN"
+    # --------------------------------------------------------------------------
+
     # 2. Creation of the Systemd/OpenRC service according to the OS
     if command -v systemctl >/dev/null; then
-        # Backend Systemd (Debian, Ubuntu, RHEL)
-        # FIX: Removed quotes around EOF to allow $UI_BIND_IP expansion
         cat << EOF > /etc/systemd/system/syswarden-ui.service
 [Unit]
-Description=SysWarden Minimal Web UI
+Description=SysWarden Secure Web UI
 After=network.target
 
 [Service]
 Type=simple
-User=root
+User=nobody
 WorkingDirectory=/etc/syswarden/ui
-ExecStart=/usr/bin/python3 -m http.server 9999 --bind $UI_BIND_IP
+ExecStart=$UI_SERVER_BIN $UI_BIND_IP
 Restart=on-failure
 
 [Install]
@@ -3492,18 +3628,15 @@ EOF
         systemctl daemon-reload
         systemctl enable --now syswarden-ui >/dev/null 2>&1
     else
-        # Backend OpenRC (Alpine Linux)
         cat << EOF > /etc/init.d/syswarden-ui
 #!/sbin/openrc-run
 
 name="syswarden-ui"
-description="SysWarden Minimal Web UI"
-command="/usr/bin/python3"
-command_args="-m http.server 9999 --bind $UI_BIND_IP"
+description="SysWarden Secure Web UI"
+command="$UI_SERVER_BIN"
+command_args="$UI_BIND_IP"
 command_background="yes"
-# --- SECURITY FIX: PRIVILEGE ESCALATION PREVENTION ---
 command_user="nobody:nobody"
-# -----------------------------------------------------
 directory="/etc/syswarden/ui"
 pidfile="/run/\${name}.pid"
 
@@ -3513,7 +3646,7 @@ depend() {
 EOF
         chmod +x /etc/init.d/syswarden-ui
         rc-update add syswarden-ui default >/dev/null 2>&1
-        rc-service syswarden-ui start >/dev/null 2>&1 || true
+        rc-service syswarden-ui restart >/dev/null 2>&1 || true
     fi
     
     log "INFO" "Dashboard UI enabled at $UI_BIND_IP:9999"

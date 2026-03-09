@@ -2,7 +2,7 @@
 
 # SysWarden Management - Blocklists and Whitelists Manager
 # Copyright (C) 2026 duggytuxy - Laurent M.
-# Version: v9.53
+# Version: v9.60
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
@@ -34,7 +34,7 @@ SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
 SET_NAME="syswarden_blacklist"
-VERSION="v9.53"
+VERSION="v9.60"
 
 # --- ROOT ENFORCEMENT ---
 if [[ $EUID -ne 0 ]]; then
@@ -295,7 +295,7 @@ list_ips() {
 # --- CLI ROUTER & HELP MENU ---
 show_help() {
     echo -e "${GREEN}======================================================${NC}"
-    echo -e "${YELLOW}  SysWarden Management CLI (v9.53) - Day 2 Operations ${NC}"
+    echo -e "${YELLOW}  SysWarden Management CLI (v9.60) - Day 2 Operations ${NC}"
     echo -e "${GREEN}======================================================${NC}"
     echo -e "Usage: syswarden-mng [COMMAND] [IP]"
     echo -e ""
