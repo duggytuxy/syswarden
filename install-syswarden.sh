@@ -33,7 +33,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v9.79"
+VERSION="v9.80"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -1050,16 +1050,28 @@ EOF
     elif [[ "$FIREWALL_BACKEND" == "firewalld" ]]; then
         if ! systemctl is-active --quiet firewalld; then systemctl enable --now firewalld; fi
         
-        # --- WIREGUARD SSH CLOAKING ---
+        # --- WIREGUARD SSH CLOAKING & NATIVE NAT ---
         if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
-            log "INFO" "WireGuard: Removing public SSH port access from Firewalld..."
-            firewall-cmd --permanent --remove-port="${SSH_PORT:-22}/tcp" >/dev/null 2>&1 || true
-            firewall-cmd --permanent --remove-service="ssh" >/dev/null 2>&1 || true
-            firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
+            log "INFO" "WireGuard: Configuring Native Firewalld Routing and SSH Cloaking..."
             
-            # Explicitly allow SSH and UI Dashboard from the WireGuard Subnet ONLY
+            # 1. Native NAT for VPN Internet Access (Alma/RHEL/Fedora)
+            firewall-cmd --permanent --add-masquerade >/dev/null 2>&1 || true
+            firewall-cmd --permanent --zone=trusted --add-interface=wg0 >/dev/null 2>&1 || true
+            
+            # 2. Universal SSH Port Removal (Purges SSH from ALL zones)
+            for zone in $(firewall-cmd --get-zones 2>/dev/null || echo "public"); do
+                firewall-cmd --permanent --zone="$zone" --remove-port="${SSH_PORT:-22}/tcp" >/dev/null 2>&1 || true
+                firewall-cmd --permanent --zone="$zone" --remove-service="ssh" >/dev/null 2>&1 || true
+            done
+            
+            # 3. Explicitly allow VPN traffic and Dashboard
+            firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='${WG_SUBNET}' port port='9999' protocol='tcp' accept" >/dev/null 2>&1 || true
+            
+            # 4. BULLETPROOF DROP: Explicitly block SSH from anywhere else
+            # Priority 100 ensures this runs AFTER the Whitelist (-100) and VPN Subnet (0)
+            firewall-cmd --permanent --add-rich-rule="rule priority='100' family='ipv4' port port='${SSH_PORT:-22}' protocol='tcp' drop" >/dev/null 2>&1 || true
         fi
         # ------------------------------
 
@@ -2933,11 +2945,18 @@ setup_wireguard() {
     
     case "$FIREWALL_BACKEND" in
         "nftables")
+            # NATIVE DEBIAN/UBUNTU
             POSTUP="nft add table inet syswarden_wg; nft add chain inet syswarden_wg prerouting { type nat hook prerouting priority 0 \\; }; nft add chain inet syswarden_wg postrouting { type nat hook postrouting priority 100 \\; }; nft add rule inet syswarden_wg postrouting oifname \"$ACTIVE_IF\" masquerade"
             POSTDOWN="nft delete table inet syswarden_wg 2>/dev/null || true"
             ;;
+        "firewalld")
+            # --- FIX ALMA/RHEL 10: NATIVE FIREWALLD ROUTING ---
+            # No iptables/nft hacks. Firewalld handles NAT natively via its trusted zone.
+            POSTUP=""
+            POSTDOWN=""
+            ;;
         *)
-            # Standard Iptables / UFW / Firewalld Fallback (Bypasses SELinux DBus limits)
+            # Fallback for UFW / Alpine Legacy
             POSTUP="iptables -t nat -I POSTROUTING 1 -s $WG_SUBNET -o $ACTIVE_IF -j MASQUERADE; iptables -I FORWARD 1 -i wg0 -j ACCEPT; iptables -I FORWARD 1 -o wg0 -j ACCEPT"
             POSTDOWN="iptables -t nat -D POSTROUTING -s $WG_SUBNET -o $ACTIVE_IF -j MASQUERADE 2>/dev/null || true; iptables -D FORWARD -i wg0 -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o wg0 -j ACCEPT 2>/dev/null || true"
             ;;
@@ -3971,7 +3990,7 @@ EOF
 # SYSWARDEN v9.40 - UI DASHBOARD GENERATION (EXPANDED REGISTRY)
 # ==============================================================================
 function generate_dashboard() {
-    log "INFO" "Generating the Serverless Dashboard UI (Expanded v9.79)..."
+    log "INFO" "Generating the Serverless Dashboard UI (Expanded v9.80)..."
     
     local UI_DIR="/etc/syswarden/ui"
     mkdir -p "$UI_DIR"
@@ -4036,7 +4055,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v9.79</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v9.80</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -4873,7 +4892,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v9.79)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v9.80)     #"
     echo -e "#############################################################${NC}"
 fi
 
