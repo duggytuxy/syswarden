@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SysWarden v10.02 - Audit Tool
+# SysWarden v10.03 - Audit Tool
 # Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -193,22 +193,34 @@ else
     fail "Global Blocklist is missing or empty."
 fi
 
-# Verify GeoIP Threat Intelligence
-GEO_ENABLED=$(grep -E "^SYSWARDEN_ENABLE_GEO=" /etc/syswarden/syswarden.conf 2>/dev/null | cut -d'"' -f2 || echo "n")
-if [[ "$GEO_ENABLED" == "y" ]]; then
+# --- Verify GeoIP Threat Intelligence ---
+# Robust parsing: extracts GEOBLOCK_COUNTRIES and checks if the list is non-empty
+GEO_COUNTRIES=$(grep -E "^GEOBLOCK_COUNTRIES=" /etc/syswarden/syswarden.conf 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+
+if [[ -n "$GEO_COUNTRIES" ]]; then
     TOTAL=$((TOTAL + 1))
     pass "GeoIP Threat Intelligence is actively deployed and enforced."
 else
     info "GeoIP Threat Intelligence (Skipped by user)."
 fi
 
-# Verify ASN Routing Threat Intelligence
-ASN_ENABLED=$(grep -E "^SYSWARDEN_ENABLE_ASN=" /etc/syswarden/syswarden.conf 2>/dev/null | cut -d'"' -f2 || echo "n")
-if [[ "$ASN_ENABLED" == "y" ]]; then
+# --- Verify ASN Routing Threat Intelligence ---
+# Robust parsing: checks if BLOCK_ASNS list is non-empty
+ASN_LIST=$(grep -E "^BLOCK_ASNS=" /etc/syswarden/syswarden.conf 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+if [[ -n "$ASN_LIST" ]]; then
     TOTAL=$((TOTAL + 1))
-    pass "Spamhaus/RADB ASN Routing Threat Intelligence is actively deployed."
+    pass "Manual ASN Routing Defense is actively deployed."
 else
-    info "ASN Routing Threat Intelligence (Skipped by user)."
+    info "Manual ASN Routing Defense (Skipped by user)."
+fi
+
+# Robust parsing: checks if USE_SPAMHAUS_ASN is set to 'y'
+SPAMHAUS_ENABLED=$(grep -E "^USE_SPAMHAUS_ASN=" /etc/syswarden/syswarden.conf 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d ' ')
+if [[ "$SPAMHAUS_ENABLED" == "y" ]]; then
+    TOTAL=$((TOTAL + 1))
+    pass "Spamhaus Dynamic Feed is actively deployed."
+else
+    info "Spamhaus Dynamic Feed (Skipped by user)."
 fi
 
 # Firewall Engine Discovery & Rules Injection Audit
