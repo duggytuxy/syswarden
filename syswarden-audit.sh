@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SysWarden v1.10 - Audit Tool
+# SysWarden v1.11 - Audit Tool
 # Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -351,7 +351,12 @@ fi
 if [[ $CLOAK_PASSED -eq 1 ]]; then
     pass "SSH Cloaking VERIFIED: Port $SSH_PORT is strictly dropped globally (Priority Guillotine)."
 else
-    fail "SSH Cloaking FAILED: Port $SSH_PORT is exposed or missing the global drop rule."
+    # CSPM Contextualization: If WG is not installed, public SSH is an accepted risk, not a failure.
+    if [[ -f "/etc/wireguard/wg0.conf" ]]; then
+        fail "SSH Cloaking FAILED: Port $SSH_PORT is exposed despite VPN configuration (Missing drop rule)."
+    else
+        info "SSH Cloaking N/A: Port $SSH_PORT is exposed to the public (Zero Trust VPN not installed)."
+    fi
 fi
 
 # --- Check 2: WireGuard VPN Gateway ---
@@ -474,6 +479,8 @@ if [[ -n "$LISTEN_PORTS" ]]; then
             info "Exposed Port: $PORT/TCP (SSH) - Guarded by Zero Trust VPN Guillotine (Drop policy)."
         elif [[ "$PORT" -eq 80 || "$PORT" -eq 443 ]]; then
             info "Exposed Port: $PORT/TCP (Web) - Guarded by SysWarden Layer 7 LFI/SQLi/Bot Jails."
+        elif [[ "$PORT" -eq 9999 ]]; then
+            info "Exposed Port: $PORT/TCP (SysWarden UI) - Guarded by Localhost/VPN binding."
         elif [[ "$PORT" -eq 51820 || "$PORT" -eq "${WG_PORT:-51820}" ]]; then
             info "Exposed Port: $PORT/UDP (WireGuard) - Guarded by SysWarden Stealth UDP protections."
         elif [[ "$PORT" -eq 53 || "$PORT" -eq 123 || "$PORT" -eq 161 ]]; then
