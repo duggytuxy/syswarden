@@ -2,7 +2,7 @@
 
 # SysWarden Management - Blocklists and Whitelists Manager
 # Copyright (C) 2026 duggytuxy - Laurent M.
-# Version: v1.22
+# Version: v1.23
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
@@ -27,7 +27,7 @@ WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
 SSH_WHITELIST_FILE="$SYSWARDEN_DIR/ssh_whitelist.txt"
 SET_NAME="syswarden_blacklist"
-VERSION="v1.22"
+VERSION="v1.23"
 
 # --- ROOT ENFORCEMENT ---
 if [[ $EUID -ne 0 ]]; then
@@ -71,102 +71,6 @@ get_ssh_port() {
 
     # 3. Absolute Fallback
     SSH_PORT=${SSH_PORT:-22}
-}
-
-# --- DYNAMIC SSH TCP FORWARDING MANAGER (ANTI-PIVOTING TOGGLE) ---
-manage_tcp_forwarding() {
-    local state="$1" # "yes" or "no"
-    local config_file="/etc/ssh/sshd_config"
-
-    if [[ -f "$config_file" ]]; then
-        local current_state
-        current_state=$(grep -E "^[[:space:]]*AllowTcpForwarding" "$config_file" | tail -n 1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]' || echo "unknown")
-
-        if [[ "$current_state" != "$state" ]]; then
-            echo -e "${YELLOW}>> Dynamically adjusting SSH TCP Forwarding to: ${state^^}${NC}"
-
-            if grep -qE "^[[:space:]]*#?[[:space:]]*AllowTcpForwarding" "$config_file"; then
-                sed -i "s/^[[:space:]]*#\?[[:space:]]*AllowTcpForwarding.*/AllowTcpForwarding $state/" "$config_file"
-            else
-                echo "AllowTcpForwarding $state" >>"$config_file"
-            fi
-
-            # Graceful reload to apply changes without dropping active sessions
-            if command -v systemctl >/dev/null; then
-                systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
-            elif command -v rc-service >/dev/null; then
-                rc-service sshd reload 2>/dev/null || true
-            fi
-            echo -e "${GREEN}[✔] SSH Daemon updated. Tunneling/Pivoting is now ${state^^}.${NC}"
-        fi
-    fi
-}
-
-# --- DYNAMIC INTERNAL BRIDGE (UI TUNNELING) ---
-# Creates a strict micro-segmentation bridge allowing local SSH port forwarding
-# to reach the WireGuard-bound UI daemon without exposing it to the public interface.
-manage_ui_bridge() {
-    local state="$1" # "open" or "close"
-    local ui_port="9999"
-    local ui_ip="10.66.66.1"
-
-    # Dynamically extract WireGuard IP if customized in config
-    if [[ -f "/etc/syswarden.conf" ]]; then
-        local parsed_subnet
-        parsed_subnet=$(grep "^SYSWARDEN_WG_SUBNET=" /etc/syswarden.conf | cut -d'"' -f2 || true)
-        if [[ -n "$parsed_subnet" ]]; then
-            # Transforms Subnet (e.g., 10.66.66.0/24) into the Bind IP (10.66.66.1)
-            ui_ip=$(echo "$parsed_subnet" | sed 's/\.0\/[0-9]*$/.1/')
-        fi
-    fi
-
-    if [[ "$state" == "open" ]]; then
-        echo -e "${YELLOW}>> Opening internal UI bridge (lo -> ${ui_ip}:${ui_port})...${NC}"
-    else
-        echo -e "${YELLOW}>> Closing internal UI bridge (lo -> ${ui_ip}:${ui_port})...${NC}"
-    fi
-
-    case "$FW_BACKEND" in
-        nftables)
-            local handle
-            # Always sweep and delete existing rules to ensure absolute idempotency
-            while handle=$(nft -a list chain inet syswarden_table input 2>/dev/null | grep -E "iif(name)? .*lo" | grep "$ui_ip" | grep "$ui_port" | grep -oE 'handle [0-9]+' | awk '{print $2}' | head -n 1) && [[ -n "$handle" ]]; do
-                nft delete rule inet syswarden_table input handle "$handle" 2>/dev/null || break
-            done
-            if [[ "$state" == "open" ]]; then
-                nft insert rule inet syswarden_table input iifname "lo" ip daddr "$ui_ip" tcp dport "$ui_port" accept 2>/dev/null || true
-            fi
-            nft list table inet syswarden_table >/etc/syswarden/syswarden.nft 2>/dev/null || true
-            ;;
-        firewalld)
-            local fw_rule="rule priority='-1000' family='ipv4' source address='127.0.0.0/8' destination address='$ui_ip' port port='$ui_port' protocol='tcp' accept"
-            if [[ "$state" == "open" ]]; then
-                firewall-cmd --permanent --add-rich-rule="$fw_rule" >/dev/null 2>&1 || true
-                firewall-cmd --add-rich-rule="$fw_rule" >/dev/null 2>&1 || true
-            else
-                firewall-cmd --permanent --remove-rich-rule="$fw_rule" >/dev/null 2>&1 || true
-                firewall-cmd --remove-rich-rule="$fw_rule" >/dev/null 2>&1 || true
-            fi
-            ;;
-        ufw)
-            if [[ "$state" == "open" ]]; then
-                ufw insert 1 allow in on lo to "$ui_ip" port "$ui_port" proto tcp >/dev/null 2>&1 || true
-            else
-                while ufw delete allow in on lo to "$ui_ip" port "$ui_port" proto tcp >/dev/null 2>&1; do :; done
-            fi
-            ;;
-        ipset | unknown)
-            while iptables -D INPUT -i lo -d "$ui_ip" -p tcp --dport "$ui_port" -j ACCEPT 2>/dev/null; do :; done
-            if [[ "$state" == "open" ]]; then
-                iptables -I INPUT 1 -i lo -d "$ui_ip" -p tcp --dport "$ui_port" -j ACCEPT 2>/dev/null || true
-            fi
-            if command -v netfilter-persistent >/dev/null; then
-                netfilter-persistent save 2>/dev/null || true
-            elif command -v /etc/init.d/iptables >/dev/null; then
-                /etc/init.d/iptables save 2>/dev/null || true
-            fi
-            ;;
-    esac
 }
 
 # --- STRICT SEMANTIC IP VALIDATION ---
@@ -387,13 +291,9 @@ allow_ssh_ip() {
             ;;
     esac
 
-    # 3. Dynamic Tunneling Enable
-    manage_tcp_forwarding "yes"
-    manage_ui_bridge "open"
-
     if [[ "$silent_mode" == "no" ]]; then
         echo -e "${GREEN}[✔] Hot-injected SSH Bypass Rule into Kernel ($FW_BACKEND)${NC}"
-        echo -e "${CYAN}>> IP $target_ip can now access SSH directly and use Port Forwarding.${NC}\n"
+        echo -e "${CYAN}>> IP $target_ip can now access SSH directly.${NC}\n"
     fi
 }
 
@@ -453,14 +353,6 @@ revoke_ssh_ip() {
     esac
 
     echo -e "${GREEN}[✔] Removed SSH Bypass Rule from Kernel ($FW_BACKEND)${NC}"
-
-    # 3. Anti-Pivoting Auto-Lock
-    if [[ ! -s "$SSH_WHITELIST_FILE" ]]; then
-        echo -e "${YELLOW}[i] No more IPs in SSH whitelist. Re-locking TCP Forwarding to secure the server...${NC}"
-        manage_tcp_forwarding "no"
-        manage_ui_bridge "close"
-    fi
-
     echo -e "${CYAN}>> IP $target_ip is now subject to the standard WireGuard restrictions.${NC}\n"
 }
 
@@ -542,7 +434,7 @@ list_ips() {
 # --- CLI ROUTER & HELP MENU ---
 show_help() {
     echo -e "${GREEN}======================================================${NC}"
-    echo -e "${YELLOW}  SysWarden Management CLI (v1.22) - Day 2 Operations ${NC}"
+    echo -e "${YELLOW}  SysWarden Management CLI (v1.23) - Day 2 Operations ${NC}"
     echo -e "${GREEN}======================================================${NC}"
     echo -e "Usage: syswarden-mng [COMMAND] [IP] [PORT]"
     echo -e ""
@@ -551,8 +443,8 @@ show_help() {
     echo -e "  ${CYAN}block${NC} <IP>             : Hot-adds IP to kernel drop set and blocklist file"
     echo -e "  ${CYAN}unblock${NC} <IP>           : Purges IP from blocklist, kernel, and Fail2ban"
     echo -e "  ${CYAN}whitelist${NC} <IP>         : Grants absolute VIP access & bypasses firewall"
-    echo -e "  ${CYAN}allow-ssh${NC} <IP> [PORT]  : Allows direct SSH access (+ Port Forwarding) for this IP"
-    echo -e "  ${CYAN}revoke-ssh${NC} <IP>        : Revokes direct SSH access and locks TCP Forwarding"
+    echo -e "  ${CYAN}allow-ssh${NC} <IP> [PORT]  : Allows direct SSH access for this IP"
+    echo -e "  ${CYAN}revoke-ssh${NC} <IP>        : Revokes direct SSH access for this IP"
     echo -e "  ${CYAN}list${NC}                   : Displays all manually whitelisted and blocked IPs"
     echo -e "  ${CYAN}reload${NC}                 : Forces main scripts to safely re-sync entirely"
     echo -e ""
