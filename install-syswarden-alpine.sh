@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v1.23"
+VERSION="v1.24"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -3288,7 +3288,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v1.23 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v1.24 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -3370,6 +3370,24 @@ if command -v fail2ban-client >/dev/null && fail2ban-client ping >/dev/null 2>&1
     done
 fi
 
+# --- DEVSECOPS: Top 10 Historical Attacking IPs (Aggregated & Bulletproof Alpine) ---
+TOP_ATTACKERS_JSON="[]"
+TOP_STATS=""
+
+# We aggregate all possible log sources and catch both fresh "Ban" and F2B restart "Restore Ban"
+TOP_STATS=$( { 
+    cat /var/log/fail2ban.log /var/log/messages 2>/dev/null || true
+} | grep -E "\] (Restore )?Ban " | grep -Eo "([0-9]{1,3}\.){3}[0-9]{1,3}" | sort | uniq -c | sort -nr | head -n 10 || true )
+
+if [[ -n "$TOP_STATS" ]]; then
+    while IFS=" " read -r count ip; do
+        if [[ -n "$ip" && -n "$count" ]]; then
+            TOP_ATTACKERS_JSON=$(echo "$TOP_ATTACKERS_JSON" | jq --arg ip "$ip" --argjson c "$count" '. + [{"ip": $ip, "count": $c}]')
+        fi
+    done <<< "$TOP_STATS"
+fi
+# ------------------------------------------------------------------------------------
+
 # --- Whitelist Registry Extraction ---
 WHITELIST_COUNT=0
 WL_JSON="[]"
@@ -3399,13 +3417,14 @@ jq -n \
   --argjson laj "$L7_ACTIVE_JAILS" \
   --argjson jj "$JAILS_JSON" \
   --argjson bip "$BANNED_IPS_JSON" \
+  --argjson top "$TOP_ATTACKERS_JSON" \
   --argjson wlc "$WHITELIST_COUNT" \
   --argjson wlip "$WL_JSON" \
 '{
   timestamp: $ts,
   system: { hostname: $host, uptime: $up, load_average: $load, ram_used_mb: $ru, ram_total_mb: $rt },
   layer3: { global_blocked: $lg, geoip_blocked: $lgeo, asn_blocked: $lasn },
-  layer7: { total_banned: $ltb, active_jails: $laj, jails_data: $jj, banned_ips: $bip },
+  layer7: { total_banned: $ltb, active_jails: $laj, jails_data: $jj, banned_ips: $bip, top_attackers: $top },
   whitelist: { active_ips: $wlc, ips: $wlip }
 }' > "$TMP_FILE"
 
@@ -3433,7 +3452,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.23 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
+# SYSWARDEN v1.24 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Nginx-secured Dashboard UI (HTTPS/CSP/IP-Restricted)..."
@@ -3492,7 +3511,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.23</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.24</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -3565,6 +3584,26 @@ function generate_dashboard() {
             </div>
         </div>
 
+        <div class="bg-white dark:bg-dark-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm mb-8">
+            <h2 class="text-sm font-bold text-brand-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                Top 10 Attacks (Vectors & Repeat Offenders)
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <h3 class="text-xs font-semibold text-gray-500 uppercase mb-3">Most Triggered Jails</h3>
+                    <ul id="top-jails-list" class="space-y-2">
+                        <li class="text-xs text-gray-500 italic">Awaiting telemetry...</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="text-xs font-semibold text-gray-500 uppercase mb-3">Top Attacking IPs</h3>
+                    <ul id="top-ips-list" class="space-y-2">
+                        <li class="text-xs text-gray-500 italic">Awaiting telemetry...</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
             
             <div class="lg:col-span-2 bg-white dark:bg-dark-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm">
@@ -3590,7 +3629,7 @@ function generate_dashboard() {
                      <table class="w-full text-left text-sm">
                         <thead class="sticky top-0 bg-white dark:bg-dark-800 z-10">
                             <tr class="text-gray-500 border-b border-gray-100 dark:border-gray-700/50">
-                                <th class="pb-2 font-semibold">IP Address</th>
+                                <th class="pb-2 font-semibold">IP Address (OSINT)</th>
                                 <th class="pb-2 font-semibold text-right">Target Jail</th>
                             </tr>
                         </thead>
@@ -3701,9 +3740,76 @@ function generate_dashboard() {
                 document.getElementById('l7-jails').innerText = data.layer7.active_jails;
                 document.getElementById('wl-count').innerText = data.whitelist.active_ips;
 
+                // --- DOM UPDATE: Top 10 Jails ---
+                const topJailsEl = document.getElementById('top-jails-list');
+                topJailsEl.innerHTML = '';
+                if (data.layer7.jails_data && data.layer7.jails_data.length > 0) {
+                    const sortedJails = [...data.layer7.jails_data].sort((a, b) => b.count - a.count).slice(0, 10);
+                    sortedJails.forEach((jail, index) => {
+                        const li = document.createElement('li');
+                        li.className = 'flex justify-between items-center bg-gray-50 dark:bg-dark-900/50 p-2 rounded border border-gray-100 dark:border-gray-800';
+                        
+                        const leftDiv = document.createElement('div');
+                        leftDiv.className = 'flex items-center gap-3';
+                        const rankSpan = document.createElement('span');
+                        rankSpan.className = 'text-xs font-black text-gray-400 dark:text-gray-600 w-4';
+                        rankSpan.textContent = `#${index + 1}`;
+                        const nameSpan = document.createElement('span');
+                        nameSpan.className = 'font-mono text-xs text-gray-700 dark:text-gray-300';
+                        nameSpan.textContent = jail.name;
+                        
+                        const countSpan = document.createElement('span');
+                        countSpan.className = 'text-xs font-bold text-brand-500';
+                        countSpan.textContent = jail.count + ' bans';
+                        
+                        leftDiv.appendChild(rankSpan);
+                        leftDiv.appendChild(nameSpan);
+                        li.appendChild(leftDiv);
+                        li.appendChild(countSpan);
+                        topJailsEl.appendChild(li);
+                    });
+                } else {
+                    topJailsEl.innerHTML = '<li class="text-xs text-gray-500 italic">No active vectors.</li>';
+                }
+
+                // --- DOM UPDATE: Top 10 Attacking IPs (Log Parsed) ---
+                const topIpsEl = document.getElementById('top-ips-list');
+                topIpsEl.innerHTML = '';
+                if (data.layer7.top_attackers && data.layer7.top_attackers.length > 0) {
+                    data.layer7.top_attackers.forEach((attacker, index) => {
+                        const li = document.createElement('li');
+                        li.className = 'flex justify-between items-center bg-gray-50 dark:bg-dark-900/50 p-2 rounded border border-gray-100 dark:border-gray-800';
+                        
+                        const leftDiv = document.createElement('div');
+                        leftDiv.className = 'flex items-center gap-3';
+                        const rankSpan = document.createElement('span');
+                        rankSpan.className = 'text-xs font-black text-gray-400 dark:text-gray-600 w-4';
+                        rankSpan.textContent = `#${index + 1}`;
+                        
+                        const ipLink = document.createElement('a');
+                        ipLink.href = `https://www.abuseipdb.com/check/${attacker.ip}`;
+                        ipLink.target = '_blank';
+                        ipLink.rel = 'noopener noreferrer';
+                        ipLink.className = 'font-mono text-xs text-brand-500 font-bold hover:text-brand-400 hover:underline transition';
+                        ipLink.textContent = attacker.ip;
+                        
+                        const countSpan = document.createElement('span');
+                        countSpan.className = 'text-xs font-bold text-gray-600 dark:text-gray-400';
+                        countSpan.textContent = attacker.count + ' hits';
+                        
+                        leftDiv.appendChild(rankSpan);
+                        leftDiv.appendChild(ipLink);
+                        li.appendChild(leftDiv);
+                        li.appendChild(countSpan);
+                        topIpsEl.appendChild(li);
+                    });
+                } else {
+                    topIpsEl.innerHTML = '<li class="text-xs text-gray-500 italic">No attackers recorded yet.</li>';
+                }
+
                 // --- DOM UPDATE: Active Jails List (XSS SECURED) ---
                 const jailListEl = document.getElementById('jail-list');
-                jailListEl.innerHTML = ''; // Clear securely
+                jailListEl.innerHTML = '';
                 if (data.layer7.jails_data && data.layer7.jails_data.length > 0) {
                     data.layer7.jails_data.forEach(jail => {
                         const li = document.createElement('li');
@@ -3711,7 +3817,7 @@ function generate_dashboard() {
                         
                         const spanName = document.createElement('span');
                         spanName.className = 'font-mono text-sm';
-                        spanName.textContent = jail.name; // textContent prevents HTML execution
+                        spanName.textContent = jail.name;
                         
                         const spanCount = document.createElement('span');
                         spanCount.className = 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 py-0.5 px-2 rounded-full text-xs font-bold';
@@ -3725,7 +3831,7 @@ function generate_dashboard() {
                     jailListEl.innerHTML = '<li class="text-sm text-gray-500 italic">No active bans found. Server is quiet.</li>';
                 }
 
-                // --- DOM UPDATE: Banned IPs Registry Table (XSS SECURED) ---
+                // --- DOM UPDATE: Banned IPs Registry Table (XSS SECURED + OSINT LINK) ---
                 const bannedIpsEl = document.getElementById('banned-ips-list');
                 bannedIpsEl.innerHTML = '';
                 if (data.layer7.banned_ips && data.layer7.banned_ips.length > 0) {
@@ -3734,8 +3840,15 @@ function generate_dashboard() {
                         tr.className = 'border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-700/20 transition';
                         
                         const tdIp = document.createElement('td');
-                        tdIp.className = 'py-2 font-mono text-xs text-brand-500 font-bold';
-                        tdIp.textContent = entry.ip;
+                        tdIp.className = 'py-2';
+                        
+                        const ipLink = document.createElement('a');
+                        ipLink.href = `https://www.abuseipdb.com/check/${entry.ip}`;
+                        ipLink.target = '_blank';
+                        ipLink.rel = 'noopener noreferrer';
+                        ipLink.className = 'font-mono text-xs text-brand-500 font-bold hover:text-brand-400 hover:underline transition';
+                        ipLink.textContent = entry.ip;
+                        tdIp.appendChild(ipLink);
                         
                         const tdJail = document.createElement('td');
                         tdJail.className = 'py-2 text-right text-[10px] text-gray-500 font-black uppercase tracking-tighter';
@@ -4350,6 +4463,12 @@ if command -v rc-service >/dev/null && rc-service syswarden-reporter status 2>/d
     rc-service syswarden-reporter restart >/dev/null 2>&1 || true
 fi
 
+# --- DEVSECOPS FIX: DASHBOARD & FAIL2BAN ORCHESTRATION ---
+# Telemetry & Dashboard ALWAYS run (Install & Update) to deploy/update Nginx and the UI.
+setup_telemetry_backend
+generate_dashboard
+# ---------------------------------------------------------
+
 if [[ "$MODE" != "update" ]]; then
     setup_wireguard
     setup_siem_logging
@@ -4357,20 +4476,21 @@ if [[ "$MODE" != "update" ]]; then
     setup_wazuh_agent "$MODE"
     setup_cron_autoupdate "$MODE"
 
-    # --- DASHBOARD MODULE V1.20 ---
-    setup_telemetry_backend
-    generate_dashboard
-    # ------------------------------
-
     echo -e "\n${GREEN}INSTALLATION SUCCESSFUL${NC}"
     echo -e " -> OS Detected: Alpine Linux (OpenRC)"
     echo -e " -> List loaded: $LIST_TYPE"
+
     if [[ "$MODE" == "auto" ]]; then
         echo -e " -> Mode: Automated (CI/CD Deployment)"
     else
-        echo -e " -> Mode: Interactive"
+        echo -e " -> Mode: Alpine (Interactive)"
     fi
+
     echo -e " -> Protection: Active"
 
     display_wireguard_qr
+else
+    # Give clear feedback during an update
+    echo -e "\n${GREEN}UPDATE SUCCESSFUL${NC}"
+    echo -e " -> SysWarden Engine & Dashboard UI have been updated to the latest version."
 fi
