@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v1.30"
+VERSION="v1.31"
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
@@ -190,55 +190,6 @@ install_dependencies() {
 
     rc-service rsyslog restart >/dev/null 2>&1 || true
 
-    # --- SECURITY FIX: OS HARDENING & ANTI-PERSISTENCE ---
-    log "INFO" "Applying strict OS hardening (Crontab, Wheel group, Profiles)..."
-
-    # 1. Lock down Crontab (Only root can schedule tasks)
-    echo "root" >/etc/cron.allow
-    chmod 600 /etc/cron.allow
-    rm -f /etc/cron.deny
-
-    # 2. Backup and Purge non-root users from privileged groups (wheel/adm/sudo)
-    # FIX: Alpine natively places 'daemon' in the 'adm' group, triggering the audit fail.
-    # --- DEVSECOPS FIX: OS HARDENING WITH BACKUP (ALPINE) ---
-    mkdir -p "$SYSWARDEN_DIR"
-    for grp in wheel adm sudo; do
-        if grep -q "^${grp}:" /etc/group 2>/dev/null; then
-            # Backup current members
-            local members
-            members=$(awk -F':' -v g="$grp" '$1==g {print $4}' /etc/group)
-            if [[ -n "$members" && "$members" != "root" ]]; then
-                echo "${grp}:${members}" >>"$SYSWARDEN_DIR/group_backup.txt"
-            fi
-
-            # Purge non-root users using Alpine's delgroup
-            for user in $(awk -F':' -v g="$grp" '$1==g {print $4}' /etc/group | tr ',' ' ' 2>/dev/null); do
-                if [[ -n "$user" ]] && [[ "$user" != "root" ]]; then
-                    delgroup "$user" "$grp" >/dev/null 2>&1 || true
-                    log "INFO" "Removed user '$user' from '$grp' group to prevent privilege escalation."
-                fi
-            done
-        fi
-    done
-    # -----------------------------------------------
-
-    # 3. Lock down .profile for existing standard users (Prevents SSH Login backdoors)
-    for user_dir in /home/*; do
-        if [[ -d "$user_dir" ]]; then
-            local user_name
-            user_name=$(basename "$user_dir")
-            local profile_file="$user_dir/.profile"
-
-            # Remove immutable flag if it exists, create/own it, then lock it forever
-            chattr -i "$profile_file" 2>/dev/null || true
-            touch "$profile_file"
-            chown "$user_name:$user_name" "$profile_file"
-            chmod 644 "$profile_file"
-            chattr +i "$profile_file" 2>/dev/null || true
-        fi
-    done
-    # -----------------------------------------------------
-
     log "INFO" "All dependencies check complete."
 }
 
@@ -364,6 +315,106 @@ define_docker_integration() {
         log "INFO" "Docker integration DISABLED."
     fi
     echo "USE_DOCKER='$USE_DOCKER'" >>"$CONF_FILE"
+}
+
+define_os_hardening() {
+    if [[ "${1:-}" == "update" ]] && [[ -f "$CONF_FILE" ]]; then
+        if [[ -z "${APPLY_OS_HARDENING:-}" ]]; then APPLY_OS_HARDENING="n"; fi
+        log "INFO" "Update Mode: Preserving OS Hardening setting ($APPLY_OS_HARDENING)"
+        return
+    fi
+
+    echo -e "\n${BLUE}=== Step: OS Security & Hardening ===${NC}"
+    # --- CI/CD AUTO MODE CHECK ---
+    if [[ "${1:-}" == "auto" ]]; then
+        input_hard=${SYSWARDEN_HARDENING:-n}
+        log "INFO" "Auto Mode: OS Hardening choice loaded via env var [${input_hard}]"
+    else
+        echo -e "${YELLOW}WARNING: Strict OS hardening will restrict CRON to root and remove non-root users from wheel/sudo groups.${NC}"
+        read -p "Apply strict OS Hardening? (Recommended for NEW servers only) [y/N]: " input_hard
+    fi
+
+    if [[ "$input_hard" =~ ^[Yy]$ ]]; then
+        APPLY_OS_HARDENING="y"
+        log "INFO" "OS Hardening ENABLED. Privileged groups and Cron will be strictly restricted."
+    else
+        APPLY_OS_HARDENING="n"
+        log "INFO" "OS Hardening DISABLED. Preserving existing Alpine system permissions."
+    fi
+    echo "APPLY_OS_HARDENING='$APPLY_OS_HARDENING'" >>"$CONF_FILE"
+}
+
+apply_os_hardening() {
+    if [[ "${APPLY_OS_HARDENING:-n}" != "y" ]]; then
+        return
+    fi
+
+    log "INFO" "Applying strict OS hardening (Crontab, Wheel group, Profiles)..."
+
+    # 1. Lock down Crontab (Only root can schedule tasks)
+    echo "root" >/etc/cron.allow
+    chmod 600 /etc/cron.allow
+    rm -f /etc/cron.deny 2>/dev/null || true
+
+    # 2. Backup and Purge non-root users from privileged groups (wheel/adm/sudo)
+    # FIX: Alpine natively places 'daemon' in the 'adm' group.
+    mkdir -p "$SYSWARDEN_DIR"
+    local current_admin="${SUDO_USER:-}"
+
+    for grp in wheel adm sudo; do
+        if grep -q "^${grp}:" /etc/group 2>/dev/null; then
+            # Backup current members
+            local members
+            members=$(awk -F':' -v g="$grp" '$1==g {print $4}' /etc/group)
+            if [[ -n "$members" && "$members" != "root" ]]; then
+                echo "${grp}:${members}" >>"$SYSWARDEN_DIR/group_backup.txt"
+            fi
+
+            # Purge non-root users using Alpine's delgroup
+            for user in $(awk -F':' -v g="$grp" '$1==g {print $4}' /etc/group | tr ',' ' ' 2>/dev/null); do
+                if [[ -n "$user" ]] && [[ "$user" != "root" ]]; then
+                    # --- SAFEGUARD: Never purge the executing admin ---
+                    if [[ -n "$current_admin" ]] && [[ "$user" == "$current_admin" ]]; then
+                        log "INFO" "SAFEGUARD: Preserving current admin '$user' in '$grp' group."
+                        continue
+                    fi
+                    delgroup "$user" "$grp" >/dev/null 2>&1 || true
+                    log "INFO" "Removed user '$user' from '$grp' group to prevent privilege escalation."
+                fi
+            done
+        fi
+    done
+
+    # 3. Lock down .profile for existing standard users (Prevents SSH Login backdoors)
+    for user_dir in /home/*; do
+        if [[ -d "$user_dir" ]]; then
+            local user_name
+            user_name=$(basename "$user_dir")
+
+            # --- SAFEGUARD: Preserve current admin's profile to avoid breaking active SSH sessions
+            if [[ -n "$current_admin" ]] && [[ "$user_name" == "$current_admin" ]]; then
+                continue
+            fi
+
+            local profile_file="$user_dir/.profile"
+            # Remove immutable flag if it exists, create/own it, then lock it forever
+            chattr -i "$profile_file" 2>/dev/null || true
+            touch "$profile_file"
+            chown "$user_name:$user_name" "$profile_file"
+            chmod 644 "$profile_file"
+            chattr +i "$profile_file" 2>/dev/null || true
+
+            # Also lock .bashrc and .bash_profile if they exist (for users with bash installed)
+            for extra_file in "$user_dir/.bashrc" "$user_dir/.bash_profile"; do
+                if [[ -f "$extra_file" ]]; then
+                    chattr -i "$extra_file" 2>/dev/null || true
+                    chown "$user_name:$user_name" "$extra_file"
+                    chmod 644 "$extra_file"
+                    chattr +i "$extra_file" 2>/dev/null || true
+                fi
+            done
+        fi
+    done
 }
 
 define_geoblocking() {
@@ -3429,7 +3480,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v1.30 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v1.31 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -3593,7 +3644,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.30 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
+# SYSWARDEN v1.31 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Nginx-secured Dashboard UI (HTTPS/CSP/IP-Restricted)..."
@@ -3652,7 +3703,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.30</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.31</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -4597,7 +4648,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.30 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.31 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
@@ -4612,24 +4663,27 @@ if [[ "$MODE" != "update" ]]; then
         echo -e "\n${BOLD}3. DOCKER INTEGRATION${NC} ${YELLOW}(Optional)${NC}"
         echo -e "   Requires Layer 3 routing adjustments for containers. If unsure, consult your SysAdmin."
 
-        echo -e "\n${BOLD}4. GEOIP BLOCKING${NC} ${YELLOW}(Optional)${NC}"
+        echo -e "\n${BOLD}4. OS HARDENING${NC} ${YELLOW}(Optional)${NC}"
+        echo -e "   Strict restrictions for privileged groups (Sudo/Wheel) & Cron. Recommended for NEW servers only."
+
+        echo -e "\n${BOLD}5. GEOIP BLOCKING${NC} ${YELLOW}(Optional)${NC}"
         echo -e "   ISO country codes to drop instantly (e.g., RU,CN,KP)."
         echo -e "   Reference: ${CYAN}https://www.ipdeny.com/ipblocks/${NC}"
 
-        echo -e "\n${BOLD}5. ASN BLOCKING${NC} ${YELLOW}(Optional)${NC}"
+        echo -e "\n${BOLD}6. ASN BLOCKING${NC} ${YELLOW}(Optional)${NC}"
         echo -e "   Target Autonomous System Numbers to drop (e.g., AS1234, AS5678)."
         echo -e "   Reference: ${CYAN}https://www.spamhaus.org/drop/asndrop.json${NC}"
 
-        echo -e "\n${BOLD}6. THREAT INTEL BLOCKLISTS${NC}"
+        echo -e "\n${BOLD}7. THREAT INTEL BLOCKLISTS${NC}"
         echo -e "   [1] Standard (Web Servers)      [2] Critical (High Security)"
         echo -e "   [3] Custom (Plaintext URL .txt) [4] Disabled"
 
-        echo -e "\n${BOLD}7. ABUSEIPDB INTEGRATION${NC} ${YELLOW}(Optional)${NC}"
+        echo -e "\n${BOLD}8. ABUSEIPDB INTEGRATION${NC} ${YELLOW}(Optional)${NC}"
         echo -e "   Requires a valid API Key to automatically report Layer 7 attackers."
         echo -e "   Get one at: ${CYAN}https://www.abuseipdb.com/account/api${NC}"
 
-        echo -e "\n${BOLD}8. WAZUH SIEM AGENT${NC} ${YELLOW}(Optional)${NC}"
-        echo -e "   Required: Manager IP, Enrollment Port (1515), Listen Port (1514), Agent Group."
+        echo -e "\n${BOLD}9. WAZUH SIEM AGENT${NC} ${YELLOW}(Optional)${NC}"
+        echo -e "   Required: Manager IP, Enrollment Port (1515), Listen Port (1514)."
         echo -e "   If unsure about your SIEM architecture, consult your Security Admin."
 
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
@@ -4642,6 +4696,7 @@ if [[ "$MODE" != "update" ]]; then
     define_ssh_port "$MODE"
     define_wireguard "$MODE"
     define_docker_integration "$MODE"
+    define_os_hardening "$MODE"
     define_geoblocking "$MODE"
     define_asnblocking "$MODE"
     configure_fail2ban
@@ -4696,6 +4751,9 @@ if [[ "$MODE" != "update" ]]; then
     setup_abuse_reporting "$MODE"
     setup_wazuh_agent "$MODE"
     setup_cron_autoupdate "$MODE"
+
+    # --- EXECUTE OS HARDENING (If authorized by the user) ---
+    apply_os_hardening
 
     echo -e "\n${GREEN}INSTALLATION SUCCESSFUL${NC}"
     echo -e " -> OS Detected: Alpine Linux (OpenRC)"

@@ -199,7 +199,7 @@ For Universal OS (Debian / Ubuntu / RHEL ecosystem):
 
 ```bash
 cd /usr/local/bin/
-wget https://github.com/duggytuxy/syswarden/releases/download/v1.30/install-syswarden.sh
+wget https://github.com/duggytuxy/syswarden/releases/download/v1.31/install-syswarden.sh
 chmod +x install-syswarden.sh
 ./install-syswarden.sh
 ```
@@ -208,7 +208,7 @@ For Alpine Linux (OpenRC):
 
 ```bash
 cd /usr/local/bin/
-wget https://github.com/duggytuxy/syswarden/releases/download/v1.30/install-syswarden-alpine.sh
+wget https://github.com/duggytuxy/syswarden/releases/download/v1.31/install-syswarden-alpine.sh
 chmod +x install-syswarden-alpine.sh
 ./install-syswarden-alpine.sh
 ```
@@ -227,7 +227,7 @@ Paste the following configuration into the file (exemple:)
 
 ```
 # ==============================================================================
-# Version=v1.30
+# Version=v1.31
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -262,6 +262,10 @@ SYSWARDEN_WG_SUBNET="10.66.66.0/24"
 # --- Docker Integration ---
 # y = Enable, n = Disable
 SYSWARDEN_USE_DOCKER="n"
+
+# --- OS Hardening ---
+# y = Enable, n = Disable (Strict restrictions for privileged groups & Cron. Recommended for NEW servers only)
+SYSWARDEN_HARDENING="n"
 
 # --- Blocklist Selection ---
 # 1 = Standard, 2 = Critical, 3 = Custom, 4 = None
