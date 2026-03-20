@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SysWarden v1.27 - DevSecOps Audit & Compliance Tool
+# SysWarden v1.28 - DevSecOps Audit & Compliance Tool
 # Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -236,6 +236,35 @@ if [[ "$FW_ENGINE" != "Unknown" ]]; then
 else
     fail "SysWarden firewall rules not found in kernel space."
 fi
+
+# --- DEVSECOPS FIX: STATEFUL DOCKER ROUTING AUDIT (v1.28) ---
+if command -v docker >/dev/null 2>&1 && is_service_active "docker"; then
+    if command -v iptables >/dev/null 2>&1 && iptables -n -L DOCKER-USER >/dev/null 2>&1; then
+
+        # 1. Verify SysWarden Blocklist Injection
+        if iptables -S DOCKER-USER 2>/dev/null | grep -q "syswarden_blacklist"; then
+            pass "Docker Integration: SysWarden blocklists are actively shielding containers."
+        else
+            fail "Docker Integration: SysWarden blocklists are missing from the DOCKER-USER chain."
+        fi
+
+        # 2. Verify Stateful Bypass is at Absolute Priority 0 (Rule #1)
+        # iptables -S DOCKER-USER 1 outputs the exact first rule of the chain.
+        DOCKER_RULE_1=$(iptables -S DOCKER-USER 1 2>/dev/null || true)
+
+        if [[ "$DOCKER_RULE_1" == *"-j RETURN"* ]] && [[ "$DOCKER_RULE_1" == *"ESTABLISHED"* ]]; then
+            pass "Docker Stateful Bypass VERIFIED: Return routing is locked at Absolute Priority 0 (Zero Timeout safe)."
+        else
+            fail "Docker Stateful Bypass FAILED: Return routing is missing or pushed down by another rule. Run 'install-syswarden update'."
+        fi
+
+    else
+        warn "Docker is running, but the DOCKER-USER chain is inaccessible or missing."
+    fi
+else
+    info "Docker engine not detected or offline (Skipped container routing audit)."
+fi
+# ------------------------------------------------------------
 
 # --- 5. ZERO TRUST FAIL2BAN ENGINE ---
 log_header "Phase 4: Layer 7 Active Defense (Fail2ban)"
