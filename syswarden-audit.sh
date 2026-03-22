@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SysWarden v1.43 - DevSecOps Audit & Compliance Tool
+# SysWarden v1.44 - DevSecOps Audit & Compliance Tool
 # Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -237,7 +237,7 @@ else
     fail "SysWarden firewall rules not found in kernel space."
 fi
 
-# --- Verify Catch-All Drop Policy (v1.43 Zero Trust Architecture) ---
+# --- Verify Catch-All Drop Policy (v1.44 Zero Trust Architecture) ---
 CATCH_ALL_PASSED=0
 if [[ "$FW_ENGINE" == "Nftables" ]]; then
     if nft list chain inet syswarden_table input 2>/dev/null | grep -q "\[Catch-All\]"; then
@@ -266,7 +266,7 @@ else
 fi
 # ----------------------------------------------------------------
 
-# --- DEVSECOPS FIX: STATEFUL DOCKER ROUTING AUDIT (v1.43) ---
+# --- DEVSECOPS FIX: STATEFUL DOCKER ROUTING AUDIT (v1.44) ---
 if command -v docker >/dev/null 2>&1 && is_service_active "docker"; then
     if command -v iptables >/dev/null 2>&1 && iptables -n -L DOCKER-USER >/dev/null 2>&1; then
 
