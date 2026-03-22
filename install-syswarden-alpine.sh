@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v1.45"
+VERSION="v1.46"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -134,7 +134,7 @@ install_dependencies() {
     fi
     # ==============================================================================
 
-    local deps="curl python3 py3-requests py3-inotify ipset fail2ban bash coreutils grep gawk sed procps logrotate ncurses whois rsyslog util-linux wireguard-tools libqrencode libqrencode-tools nginx openssl"
+    local deps="curl python3 py3-requests ipset fail2ban bash coreutils grep gawk sed procps logrotate ncurses whois rsyslog util-linux wireguard-tools libqrencode libqrencode-tools nginx openssl"
 
     if [[ "$FIREWALL_BACKEND" == "nftables" ]]; then
         deps="$deps nftables"
@@ -1302,7 +1302,7 @@ EOF
         log "INFO" "Fail2ban infrastructure whitelist enforced: $f2b_ignoreip"
         # ----------------------------------------------------------------------
 
-        # 3. HEADER & SSH (Optimized for Alpine with PyInotify)
+        # 3. HEADER & SSH (Always Active - Backend MUST be auto for Alpine)
         cat <<EOF >/etc/fail2ban/jail.local
 [DEFAULT]
 bantime = 4h
@@ -1310,8 +1310,7 @@ bantime.increment = true
 findtime = 10m
 maxretry = 3
 ignoreip = $f2b_ignoreip
-usedns = no
-backend = pyinotify
+backend = auto
 banaction = $f2b_action
 
 # --- SSH Protection ---
@@ -1320,7 +1319,7 @@ enabled = true
 mode = aggressive
 port = ${SSH_PORT:-22}
 logpath = /var/log/messages
-backend = pyinotify
+backend = auto
 
 # --- ALPINE FIX: Disable redundant default jails ---
 [sshd-ddos]
@@ -1340,14 +1339,14 @@ EOF
 enabled = true
 port = http,https
 logpath = /var/log/nginx/error.log
-backend = pyinotify
+backend = auto
 
 [nginx-scanner]
 enabled = true
 port    = http,https
 filter  = nginx-scanner
 logpath = /var/log/nginx/access.log
-backend = pyinotify
+backend = auto
 maxretry = 15
 bantime  = 24h
 EOF
@@ -1373,14 +1372,14 @@ EOF
 enabled = true
 port = http,https
 logpath = $APACHE_LOG
-backend = pyinotify
+backend = auto
 
 [apache-scanner]
 enabled = true
 port    = http,https
 filter  = apache-scanner
 logpath = $APACHE_ACCESS
-backend = pyinotify
+backend = auto
 maxretry = 15
 bantime  = 24h
 EOF
@@ -1400,7 +1399,7 @@ enabled = true
 port = 27017
 filter = mongodb-guard
 logpath = /var/log/mongodb/mongod.log
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1425,7 +1424,7 @@ enabled = true
 port = 3306
 filter = mariadb-auth
 logpath = $MARIADB_LOG
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1447,13 +1446,13 @@ enabled = true
 mode    = aggressive
 port    = smtp,465,submission
 logpath = $POSTFIX_LOG
-backend = pyinotify
+backend = auto
 
 [postfix-sasl]
 enabled = true
 port    = smtp,465,submission
 logpath = $POSTFIX_LOG
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1469,7 +1468,7 @@ EOF
 enabled = true
 port    = ftp,ftp-data,ftps,20,21
 logpath = /var/log/vsftpd.log
-backend = pyinotify
+backend = auto
 maxretry = 5
 bantime  = 24h
 EOF
@@ -1494,7 +1493,7 @@ enabled = true
 port = http,https
 filter = wordpress-auth
 logpath = $WP_LOG
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1529,7 +1528,7 @@ enabled  = true
 port     = http,https
 filter   = drupal-auth
 logpath  = $DRUPAL_LOG
-backend  = pyinotify
+backend  = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1557,7 +1556,7 @@ enabled = true
 port    = http,https
 filter  = nextcloud
 logpath = $NC_LOG
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1617,7 +1616,7 @@ enabled = true
 port    = http,https,8080
 filter  = haproxy-guard
 logpath = /var/log/haproxy.log
-backend = pyinotify
+backend = auto
 maxretry = 5
 bantime  = 24h
 EOF
@@ -1720,7 +1719,7 @@ enabled = true
 port    = 3000,http,https
 filter  = grafana-auth
 logpath = /var/log/grafana/grafana.log
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1741,7 +1740,7 @@ EOF
 enabled = true
 port    = smtp,465,submission
 logpath = $SM_LOG
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 
@@ -1749,7 +1748,7 @@ bantime  = 24h
 enabled = true
 port    = smtp,465,submission
 logpath = $SM_LOG
-backend = pyinotify
+backend = auto
 maxretry = 5
 bantime  = 24h
 EOF
@@ -1811,7 +1810,7 @@ enabled = true
 port    = pop3,pop3s,imap,imaps,submission,465,587
 filter  = dovecot-custom
 logpath = $DOVECOT_LOG
-backend = pyinotify
+backend = auto
 maxretry = 5
 bantime  = 24h
 EOF
@@ -1832,7 +1831,7 @@ enabled = true
 port    = https,8006
 filter  = proxmox-custom
 logpath = $PVE_LOG
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1860,7 +1859,7 @@ port    = 1194
 protocol= udp
 filter  = openvpn-custom
 logpath = $OVPN_LOG
-backend = pyinotify
+backend = auto
 maxretry = 5
 bantime  = 24h
 EOF
@@ -1885,7 +1884,7 @@ enabled = true
 port    = http,https,3000
 filter  = gitea-custom
 logpath = $GITEA_LOG
-backend = pyinotify
+backend = auto
 maxretry = 5
 bantime  = 24h
 EOF
@@ -1905,7 +1904,7 @@ enabled = true
 port    = 9090
 filter  = cockpit-custom
 logpath = /var/log/messages
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1937,7 +1936,7 @@ enabled = true
 port    = 0:65535
 filter  = syswarden-privesc
 logpath = $AUTH_LOG
-backend = pyinotify
+backend = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -1962,7 +1961,7 @@ enabled  = true
 port     = http,https,8080
 filter   = syswarden-jenkins
 logpath  = /var/log/jenkins/jenkins.log
-backend  = pyinotify
+backend  = auto
 maxretry = 5
 bantime  = 24h
 EOF
@@ -1991,7 +1990,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-gitlab
 logpath  = $GITLAB_LOG
-backend  = pyinotify
+backend  = auto
 maxretry = 5
 bantime  = 24h
 EOF
@@ -2021,7 +2020,7 @@ enabled  = true
 port     = 6379
 filter   = syswarden-redis
 logpath  = $REDIS_LOG
-backend  = pyinotify
+backend  = auto
 maxretry = 4
 bantime  = 24h
 EOF
@@ -2053,7 +2052,7 @@ enabled  = true
 port     = 5672,15672
 filter   = syswarden-rabbitmq
 logpath  = $RABBIT_LOG
-backend  = pyinotify
+backend  = auto
 maxretry = 4
 bantime  = 24h
 EOF
@@ -2087,7 +2086,7 @@ enabled  = true
 port     = 0:65535
 filter   = syswarden-portscan
 logpath  = $FIREWALL_LOG
-backend  = pyinotify
+backend  = auto
 maxretry = 3
 findtime = 10m
 bantime  = 24h
@@ -2115,7 +2114,7 @@ enabled  = true
 port     = 0:65535
 filter   = syswarden-auditd
 logpath  = $AUDIT_LOG
-backend  = pyinotify
+backend  = auto
 maxretry = 3
 bantime  = 24h
 EOF
@@ -2149,7 +2148,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-revshell
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 maxretry = 1
 bantime  = 24h
 EOF
@@ -2177,7 +2176,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-aibots
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance policy: 1 hit = 48 hours ban at the kernel level
 maxretry = 1
 bantime  = 48h
@@ -2206,7 +2205,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-badbots
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance policy: 1 hit = 48 hours ban at the kernel level
 maxretry = 1
 bantime  = 48h
@@ -2235,7 +2234,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-httpflood
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Policy: 150 requests within 2 seconds triggers an immediate drop
 maxretry = 150
 findtime = 2
@@ -2265,7 +2264,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-webshell
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance policy: 1 attempt to upload a shell = 48 hours kernel ban
 maxretry = 1
 bantime  = 48h
@@ -2295,7 +2294,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-sqli-xss
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance policy: 1 blatant SQLi/XSS payload = 48 hours kernel ban
 maxretry = 1
 bantime  = 48h
@@ -2324,7 +2323,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-secretshunter
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance policy: 1 attempt to access a sensitive config file = 48 hours kernel ban
 maxretry = 1
 bantime  = 48h
@@ -2353,7 +2352,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-ssrf
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance
 maxretry = 1
 bantime  = 48h
@@ -2383,7 +2382,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-jndi-ssti
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance
 maxretry = 1
 bantime  = 48h
@@ -2412,7 +2411,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-apimapper
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Policy: 2 attempts to find hidden API documentation = 48 hours ban
 maxretry = 2
 bantime  = 48h
@@ -2442,7 +2441,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-lfi-advanced
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance
 maxretry = 1
 bantime  = 48h
@@ -2483,7 +2482,7 @@ enabled  = true
 port     = http,https,80,443,8080
 filter   = syswarden-vaultwarden
 logpath  = $VW_LOG
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance for the password vault: 3 failed attempts = 24h ban
 maxretry = 3
 bantime  = 24h
@@ -2522,7 +2521,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-sso
 logpath  = $SSO_LOG
-backend  = pyinotify
+backend  = auto
 # Strict policy to prevent SSO compromise
 maxretry = 3
 bantime  = 24h
@@ -2552,7 +2551,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-silent-scanner
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Policy: 20 anomalous HTTP errors within 10 seconds triggers an immediate drop
 maxretry = 20
 findtime = 10
@@ -2587,7 +2586,7 @@ enabled  = true
 port     = http,https
 filter   = syswarden-proxy-abuse
 logpath  = $RCE_LOGS
-backend  = pyinotify
+backend  = auto
 # Zero-Tolerance policy: 1 attempt to use the server as a proxy = 48 hours kernel ban
 maxretry = 1
 bantime  = 48h
@@ -2636,7 +2635,7 @@ enabled  = true
 port     = 23,telnet
 filter   = syswarden-telnet
 logpath  = $TELNET_LOG
-backend  = pyinotify
+backend  = auto
 # Purple Team Policy: Allow 3 attempts to capture the attacker's payload/credentials in logs for Threat Intel, then drop.
 maxretry = 3
 findtime = 10m
@@ -3581,7 +3580,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v1.45 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v1.46 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -3745,7 +3744,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.45 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
+# SYSWARDEN v1.46 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Nginx-secured Dashboard UI (HTTPS/CSP/IP-Restricted)..."
@@ -3804,7 +3803,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.45</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.46</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -4749,7 +4748,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.45 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.46 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
