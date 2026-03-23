@@ -33,7 +33,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v1.52"
+VERSION="v1.53"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -1210,7 +1210,7 @@ EOF
             # 3. Allow WireGuard UDP port for tunnel establishment
             firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
 
-            # --- STRICT ZERO TRUST HIERARCHY (v1.52) - DEBIAN PARITY) ---
+            # --- STRICT ZERO TRUST HIERARCHY (v1.53) - DEBIAN PARITY) ---
 
             # Priority -1000: Highest priority. Allow SSH & Dashboard strictly from VPN.
             firewall-cmd --permanent --add-rich-rule="rule priority='-1000' family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
@@ -1310,16 +1310,20 @@ EOF
         fi
 
         # --- ZERO TRUST: DYNAMIC ALLOW & CATCH-ALL DROP ---
-        # Firewalld uses Zones. We force the target of the 'public' zone to DROP.
+        # Firewalld uses Zones. We dynamically force the target of the active default zone to DROP.
         # This acts as our Catch-All (Priority Guillotine).
-        firewall-cmd --permanent --zone=public --set-target=DROP >/dev/null 2>&1 || true
+        local ACTIVE_ZONE
+        ACTIVE_ZONE=$(firewall-cmd --get-default-zone 2>/dev/null || echo "public")
+
+        firewall-cmd --permanent --zone="$ACTIVE_ZONE" --set-target=DROP >/dev/null 2>&1 || true
 
         # Explicitly allow discovered services to override the DROP target
-        firewall-cmd --permanent --zone=public --add-port="${SSH_PORT:-22}/tcp" >/dev/null 2>&1 || true
+        firewall-cmd --permanent --zone="$ACTIVE_ZONE" --add-port="${SSH_PORT:-22}/tcp" >/dev/null 2>&1 || true
 
         if [[ -n "$ACTIVE_PORTS" ]] && [[ "$ACTIVE_PORTS" != "none" ]]; then
             for port in $(echo "$ACTIVE_PORTS" | tr ',' ' '); do
-                firewall-cmd --permanent --zone=public --add-port="${port}/tcp" >/dev/null 2>&1 || true
+                # DEVSECOPS FIX: Use dynamic ACTIVE_ZONE instead of hardcoded public
+                firewall-cmd --permanent --zone="$ACTIVE_ZONE" --add-port="${port}/tcp" >/dev/null 2>&1 || true
             done
         fi
 
@@ -4278,7 +4282,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.52 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v1.53 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -4443,7 +4447,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.52 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
+# SYSWARDEN v1.53 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Nginx-secured Dashboard UI (HTTPS/CSP/IP-Restricted)..."
@@ -4505,7 +4509,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.52</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.53</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -5004,8 +5008,11 @@ EOF
     # --- 6. EXPOSE DASHBOARD PORT NATIVELY (Let Nginx handle the drops) ---
     log "INFO" "Opening Port 9999 in OS Firewall to enable Nginx routing..."
     if [[ "$FIREWALL_BACKEND" == "firewalld" ]]; then
-        firewall-cmd --permanent --zone=public --add-port=9999/tcp >/dev/null 2>&1 || true
-        firewall-cmd --zone=public --add-port=9999/tcp >/dev/null 2>&1 || true
+        # DEVSECOPS FIX: Dynamic Zone detection for Dashboard UI
+        local DASH_ZONE
+        DASH_ZONE=$(firewall-cmd --get-default-zone 2>/dev/null || echo "public")
+        firewall-cmd --permanent --zone="$DASH_ZONE" --add-port=9999/tcp >/dev/null 2>&1 || true
+        firewall-cmd --zone="$DASH_ZONE" --add-port=9999/tcp >/dev/null 2>&1 || true
     elif [[ "$FIREWALL_BACKEND" == "ufw" ]]; then
         ufw allow 9999/tcp >/dev/null 2>&1 || true
     elif [[ "$FIREWALL_BACKEND" == "iptables" ]]; then
@@ -5547,7 +5554,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v1.52)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v1.53)     #"
     echo -e "#############################################################${NC}"
 fi
 
@@ -5584,7 +5591,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.52 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.53 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
