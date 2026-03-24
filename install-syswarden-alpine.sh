@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v1.55"
+VERSION="v1.60"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -2142,16 +2142,9 @@ EOF
         # 31. DYNAMIC DETECTION: RCE & REVERSE SHELL PAYLOADS
         RCE_LOGS=""
         for log_file in "/var/log/nginx/access.log" "/var/log/apache2/access.log"; do
-            if [[ -f "$log_file" ]]; then
-                if [[ -z "$RCE_LOGS" ]]; then
-                    RCE_LOGS="$log_file"
-                else
-                    # DEVSECOPS FIX: Strict ConfigParser multiline format for Fail2ban (newline + 10 spaces)
-                    # Prevents the fatal "File option must be 'head' or 'tail'" async socket crash
-                    RCE_LOGS+=$'\n          '"$log_file"
-                fi
-            fi
+            if [[ -f "$log_file" ]]; then RCE_LOGS="$RCE_LOGS $log_file"; fi
         done
+        RCE_LOGS=$(echo "$RCE_LOGS" | xargs)
 
         if [[ -n "$RCE_LOGS" ]]; then
             log "INFO" "Web access logs detected. Enabling Reverse Shell & RCE Guard."
@@ -3618,7 +3611,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v1.55 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v1.60 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -3679,11 +3672,6 @@ if command -v fail2ban-client >/dev/null && fail2ban-client ping >/dev/null 2>&1
     for JAIL in $JAIL_LIST; do
         [[ -z "$JAIL" ]] && continue
         L7_ACTIVE_JAILS=$((L7_ACTIVE_JAILS + 1))
-        
-        # --- DEVSECOPS FIX: SOCKET RATE LIMITING ---
-        # Micro-pause of 100ms to prevent Python async socket Self-DoS 
-        # (NoneType crash) when sequentially querying 40+ Honeypot jails.
-        sleep 0.1
         
         STATUS_OUT=$(fail2ban-client status "$JAIL")
         BANNED_COUNT=$(echo "$STATUS_OUT" | awk '/Currently banned:/ {print $4}' || echo "0")
@@ -3787,7 +3775,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.55 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
+# SYSWARDEN v1.60 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Nginx-secured Dashboard UI (HTTPS/CSP/IP-Restricted)..."
@@ -3847,7 +3835,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.55</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.60</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -4821,7 +4809,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.55 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.60 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
