@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v1.61"
+VERSION="v1.62"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -3302,46 +3302,42 @@ uninstall_syswarden() {
     # Nftables
     if command -v nft >/dev/null; then
         nft delete table inet syswarden_table 2>/dev/null || true
-        # DEVSECOPS FIX: Purge WG NAT table left by PostUp
+        # DEVSECOPS FIX: Purge WG NAT table
         nft delete table inet syswarden_wg 2>/dev/null || true
-        rm -f /etc/syswarden/syswarden.nft
 
-        # DEVSECOPS FIX: Purge ALL Ghost Rules injected in OS tables (Loops through duplicates)
-        for rule in 'tcp dport 9999 accept' 'udp dport 51820 accept' 'iifname "wg0" accept' 'oifname "wg0" accept'; do
-            # Clean INPUT chain
-            while nft -a list chain inet filter input 2>/dev/null | grep -q "$rule"; do
+        # 1. Clean physical files
+        rm -f /etc/syswarden/syswarden.nft
+        rm -f /etc/nftables.d/syswarden-os-bypass.nft 2>/dev/null || true
+
+        # 2. DEVSECOPS FIX: Purge rules from RAM matching the SysWarden comments
+        for chain in input forward; do
+            while nft -a list chain inet filter "$chain" 2>/dev/null | grep -q "SysWarden:"; do
                 local handle
-                handle=$(nft -a list chain inet filter input 2>/dev/null | grep "$rule" | awk '{print $NF}' | head -n 1)
+                handle=$(nft -a list chain inet filter "$chain" 2>/dev/null | grep "SysWarden:" | awk '{print $NF}' | head -n 1)
                 if [[ -n "$handle" ]]; then
-                    nft delete rule inet filter input handle "$handle" 2>/dev/null || true
-                else
-                    break
-                fi
-            done
-            # Clean FORWARD chain
-            while nft -a list chain inet filter forward 2>/dev/null | grep -q "$rule"; do
-                local handle
-                handle=$(nft -a list chain inet filter forward 2>/dev/null | grep "$rule" | awk '{print $NF}' | head -n 1)
-                if [[ -n "$handle" ]]; then
-                    nft delete rule inet filter forward handle "$handle" 2>/dev/null || true
+                    nft delete rule inet filter "$chain" handle "$handle" 2>/dev/null || true
                 else
                     break
                 fi
             done
         done
 
-        if [[ -f "/etc/nftables.conf" ]]; then
-            sed -i '\|include "/etc/syswarden/syswarden.nft"|d' /etc/nftables.conf
-            sed -i '/# Added by SysWarden/d' /etc/nftables.conf
+        # 3. DEVSECOPS FIX: Alpine uses .nft, Debian uses .conf
+        local MAIN_NFT_CONF="/etc/nftables.nft"
+        if [[ -f "$MAIN_NFT_CONF" ]]; then
+            sed -i '\|include "/etc/syswarden/syswarden.nft"|d' "$MAIN_NFT_CONF"
+            sed -i '/# Added by SysWarden/d' "$MAIN_NFT_CONF"
 
-            # DEVSECOPS FIX: Persist the cleaned table!
-            # The installer overwrote this file originally, so we must snapshot the cleaned memory back to it.
-            if grep -q "flush ruleset" /etc/nftables.conf; then
-                echo '#!/usr/sbin/nft -f' >/etc/nftables.conf
-                echo 'flush ruleset' >>/etc/nftables.conf
-                nft list table inet filter >>/etc/nftables.conf 2>/dev/null || true
+            # Save the clean RAM state to disk to prevent reboot ghosts
+            if grep -q "flush ruleset" "$MAIN_NFT_CONF"; then
+                echo '#!/usr/sbin/nft -f' >"$MAIN_NFT_CONF"
+                echo 'flush ruleset' >>"$MAIN_NFT_CONF"
+                nft list table inet filter >>"$MAIN_NFT_CONF" 2>/dev/null || true
             fi
         fi
+
+        # Reload the clean state cleanly via OpenRC
+        rc-service nftables reload >/dev/null 2>&1 || true
     fi
 
     # Docker (DOCKER-USER chain)
@@ -3603,7 +3599,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v1.61 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v1.62 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -3767,7 +3763,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.61 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
+# SYSWARDEN v1.62 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Nginx-secured Dashboard UI (HTTPS/CSP/IP-Restricted)..."
@@ -3827,7 +3823,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.61</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.62</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -4801,7 +4797,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.61 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.62 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"

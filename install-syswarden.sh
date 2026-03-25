@@ -33,7 +33,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v1.61"
+VERSION="v1.62"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -1224,7 +1224,7 @@ EOF
             # 3. Allow WireGuard UDP port for tunnel establishment
             firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
 
-            # --- STRICT ZERO TRUST HIERARCHY (v1.61) - DEBIAN PARITY) ---
+            # --- STRICT ZERO TRUST HIERARCHY (v1.62) - DEBIAN PARITY) ---
 
             # Priority -1000: Highest priority. Allow SSH & Dashboard strictly from VPN.
             firewall-cmd --permanent --add-rich-rule="rule priority='-1000' family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
@@ -3264,6 +3264,14 @@ bantime  = 48h
 EOF
         fi
 
+        # --- DEVSECOPS FIX: RHEL/ALMA CHICKEN & EGG LOG FIX ---
+        if [[ ! -f /var/log/fail2ban.log ]]; then
+            touch /var/log/fail2ban.log
+            chmod 640 /var/log/fail2ban.log
+            chown root:root /var/log/fail2ban.log 2>/dev/null || true
+        fi
+        # ------------------------------------------------------
+
         log "INFO" "Starting Fail2ban service..."
         if command -v systemctl >/dev/null; then
             systemctl enable --now fail2ban >/dev/null 2>&1 || true
@@ -4394,7 +4402,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.61 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v1.62 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -4559,7 +4567,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.61 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
+# SYSWARDEN v1.62 - NGINX SECURE DASHBOARD (HTTPS / CSP / IP-RESTRICTED)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Nginx-secured Dashboard UI (HTTPS/CSP/IP-Restricted)..."
@@ -4621,7 +4629,7 @@ function generate_dashboard() {
             <div class="flex justify-between h-16 items-center">
                 <div class="flex items-center gap-3">
                     <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.7)]" id="status-indicator"></div>
-                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.61</span></h1>
+                    <h1 class="text-xl font-bold tracking-tight">SysWarden <span class="text-brand-500">v1.62</span></h1>
                 </div>
                 
                 <div class="flex items-center gap-2 bg-gray-100 dark:bg-dark-900 p-1 rounded-lg border border-gray-200 dark:border-gray-700">
@@ -5599,6 +5607,15 @@ if [[ "$MODE" == "fail2ban-jails" ]]; then
     log "INFO" "Scanning system for active services (Nginx, Apache, MongoDB, etc.)..."
     configure_fail2ban
 
+    # --- DEVSECOPS FIX: RHEL/ALMA CHICKEN & EGG LOG FIX ---
+    # Ensure the log file exists before restarting, in case of logrotate or fresh env.
+    if [[ ! -f /var/log/fail2ban.log ]]; then
+        touch /var/log/fail2ban.log
+        chmod 640 /var/log/fail2ban.log
+        chown root:root /var/log/fail2ban.log 2>/dev/null || true
+    fi
+    # ------------------------------------------------------
+
     # 3. Reload the Fail2ban service natively based on the OS Init System
     log "INFO" "Restarting Fail2ban to apply new jails..."
     if command -v systemctl >/dev/null 2>&1; then
@@ -5666,7 +5683,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v1.61)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v1.62)     #"
     echo -e "#############################################################${NC}"
 fi
 
@@ -5703,7 +5720,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.61 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.62 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
