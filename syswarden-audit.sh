@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SysWarden v1.78 - DevSecOps Audit & Compliance Tool
+# SysWarden v1.79 - DevSecOps Audit & Compliance Tool
 # Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -268,7 +268,7 @@ else
     fail "SysWarden firewall rules not found in kernel space."
 fi
 
-# --- Verify Catch-All Drop Policy (v1.78 Zero Trust Architecture) ---
+# --- Verify Catch-All Drop Policy (v1.79 Zero Trust Architecture) ---
 CATCH_ALL_PASSED=0
 if [[ "$FW_ENGINE" == "Nftables" ]]; then
     # 1. Debian Architecture (Explicit Catch-All rule in backend chain)
@@ -608,11 +608,13 @@ if [[ -f "/etc/nftables.d/syswarden-os-bypass.nft" ]]; then
     DISCOVERED_PORTS=$(echo "$RAW_PORTS" | tr ',' '\n')
 fi
 
-# Extract live sockets directly from the kernel
+# Extract live sockets directly from the kernel (Excluding local loopback natively)
 if command -v ss >/dev/null 2>&1; then
-    LISTEN_PORTS=$(ss -tlnp 2>/dev/null | grep -E '0\.0\.0\.0|::' | awk '{print $4}' | awk -F':' '{print $NF}' | sort -nu || true)
+    # DEVSECOPS FIX: Strictly parse 4th column (Local Address), exclude loopback, and extract valid port numbers
+    LISTEN_PORTS=$(ss -tlnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -vE '^(127\.|::1|\[::1\])' | awk -F':' '{print $NF}' | grep -E '^[0-9]+$' | sort -nu || true)
 else
-    LISTEN_PORTS=$(netstat -tlnp 2>/dev/null | grep -E '0\.0\.0\.0|::' | awk '{print $4}' | awk -F':' '{print $NF}' | sort -nu || true)
+    # Fallback for netstat: Ensure we only parse actual TCP socket lines to avoid header pollution
+    LISTEN_PORTS=$(netstat -tlnp 2>/dev/null | awk '/^tcp/ {print $4}' | grep -vE '^(127\.|::1|\[::1\])' | awk -F':' '{print $NF}' | grep -E '^[0-9]+$' | sort -nu || true)
 fi
 
 if [[ -n "$LISTEN_PORTS" ]]; then
