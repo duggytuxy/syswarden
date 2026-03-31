@@ -87,6 +87,55 @@ cleanup() {
 }
 trap cleanup EXIT
 
+conf_escape_value() {
+    local value="$1"
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    printf '%s' "$value"
+}
+
+append_conf_value() {
+    local key="$1"
+    local value="$2"
+    printf '%s="%s"\n' "$key" "$(conf_escape_value "$value")" >>"$CONF_FILE"
+}
+
+load_conf_file() {
+    local file="${1:-$CONF_FILE}"
+    local line key value
+
+    [[ -f "$file" ]] || return 1
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+        [[ "$line" != *=* ]] && continue
+
+        key=${line%%=*}
+        value=${line#*=}
+
+        key=$(printf '%s' "$key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        value=$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+        case "$key" in
+            NGINX_INSTALLED_BY_SYSWARDEN | FAIL2BAN_INSTALLED_BY_SYSWARDEN | SSH_PORT | USE_WIREGUARD | WG_PORT | WG_SUBNET | USE_DOCKER | APPLY_OS_HARDENING | LIST_TYPE | CUSTOM_URL | GEOBLOCK_COUNTRIES | BLOCK_ASNS | USE_SPAMHAUS_ASN | SELECTED_URL | WAZUH_IP | WAZUH_AGENT_NAME | WAZUH_COMM_PORT | WAZUH_ENROLL_PORT)
+                ;;
+            *)
+                continue
+                ;;
+        esac
+
+        if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+            value=${value:1:-1}
+            value=${value//\\\"/\"}
+            value=${value//\\\\/\\}
+        elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+            value=${value:1:-1}
+        fi
+
+        printf -v "$key" '%s' "$value"
+    done <"$file"
+}
 detect_os_backend() {
     log "INFO" "Detecting Operating System and Firewall Backend..."
 
@@ -130,10 +179,10 @@ install_dependencies() {
         chmod 600 "$CONF_FILE"
     fi
     if ! command -v nginx >/dev/null 2>&1; then
-        echo "NGINX_INSTALLED_BY_SYSWARDEN='y'" >>"$CONF_FILE"
+        append_conf_value "NGINX_INSTALLED_BY_SYSWARDEN" "y"
     fi
     if ! command -v fail2ban-client >/dev/null 2>&1; then
-        echo "FAIL2BAN_INSTALLED_BY_SYSWARDEN='y'" >>"$CONF_FILE"
+        append_conf_value "FAIL2BAN_INSTALLED_BY_SYSWARDEN" "y"
     fi
     # ==============================================================================
 
@@ -361,7 +410,7 @@ define_ssh_port() {
     fi
     # ------------------------------------------------------------
 
-    echo "SSH_PORT='$SSH_PORT'" >>"$CONF_FILE"
+    append_conf_value "SSH_PORT" "$SSH_PORT"
     log "INFO" "SSH Port configured as: $SSH_PORT"
 }
 
@@ -402,10 +451,10 @@ define_wireguard() {
         log "INFO" "WireGuard DISABLED."
     fi
 
-    echo "USE_WIREGUARD='$USE_WIREGUARD'" >>"$CONF_FILE"
+    append_conf_value "USE_WIREGUARD" "$USE_WIREGUARD"
     if [[ "$USE_WIREGUARD" == "y" ]]; then
-        echo "WG_PORT='$WG_PORT'" >>"$CONF_FILE"
-        echo "WG_SUBNET='$WG_SUBNET'" >>"$CONF_FILE"
+        append_conf_value "WG_PORT" "$WG_PORT"
+        append_conf_value "WG_SUBNET" "$WG_SUBNET"
     fi
 }
 
@@ -433,7 +482,7 @@ define_docker_integration() {
         USE_DOCKER="n"
         log "INFO" "Docker integration DISABLED."
     fi
-    echo "USE_DOCKER='$USE_DOCKER'" >>"$CONF_FILE"
+    append_conf_value "USE_DOCKER" "$USE_DOCKER"
 }
 
 define_os_hardening() {
@@ -460,7 +509,7 @@ define_os_hardening() {
         APPLY_OS_HARDENING="n"
         log "INFO" "OS Hardening DISABLED. Preserving existing system permissions."
     fi
-    echo "APPLY_OS_HARDENING='$APPLY_OS_HARDENING'" >>"$CONF_FILE"
+    append_conf_value "APPLY_OS_HARDENING" "$APPLY_OS_HARDENING"
 }
 
 apply_os_hardening() {
@@ -592,7 +641,7 @@ auto_whitelist_admin() {
 select_list_type() {
     if [[ "${1:-}" == "update" ]] && [[ -f "$CONF_FILE" ]]; then
         # shellcheck source=/dev/null
-        source "$CONF_FILE"
+        load_conf_file "$CONF_FILE"
         log "INFO" "Update Mode: Loaded configuration (Type: $LIST_TYPE)"
         return
     fi
@@ -639,8 +688,8 @@ select_list_type() {
             ;;
     esac
 
-    echo "LIST_TYPE='$LIST_TYPE'" >>"$CONF_FILE"
-    if [[ -n "${CUSTOM_URL:-}" ]]; then echo "CUSTOM_URL='$CUSTOM_URL'" >>"$CONF_FILE"; fi
+    append_conf_value "LIST_TYPE" "$LIST_TYPE"
+    if [[ -n "${CUSTOM_URL:-}" ]]; then append_conf_value "CUSTOM_URL" "$CUSTOM_URL"; fi
     log "INFO" "User selected: $LIST_TYPE Blocklist"
 }
 
@@ -679,7 +728,7 @@ define_geoblocking() {
         GEOBLOCK_COUNTRIES="none"
         log "INFO" "Geo-Blocking DISABLED."
     fi
-    echo "GEOBLOCK_COUNTRIES='$GEOBLOCK_COUNTRIES'" >>"$CONF_FILE"
+    append_conf_value "GEOBLOCK_COUNTRIES" "$GEOBLOCK_COUNTRIES"
 }
 
 define_asnblocking() {
@@ -740,8 +789,8 @@ define_asnblocking() {
         USE_SPAMHAUS_ASN="n"
         log "INFO" "ASN Blocking DISABLED."
     fi
-    echo "BLOCK_ASNS='$BLOCK_ASNS'" >>"$CONF_FILE"
-    echo "USE_SPAMHAUS_ASN='$USE_SPAMHAUS_ASN'" >>"$CONF_FILE"
+    append_conf_value "BLOCK_ASNS" "$BLOCK_ASNS"
+    append_conf_value "USE_SPAMHAUS_ASN" "$USE_SPAMHAUS_ASN"
 }
 
 measure_latency() {
@@ -759,20 +808,20 @@ measure_latency() {
 select_mirror() {
     if [[ "${1:-}" == "update" ]] && [[ -f "$CONF_FILE" ]]; then
         # shellcheck source=/dev/null
-        source "$CONF_FILE"
+        load_conf_file "$CONF_FILE"
         log "INFO" "Update Mode: keeping mirror $SELECTED_URL"
         return
     fi
 
     if [[ "$LIST_TYPE" == "Custom" ]]; then
         SELECTED_URL="$CUSTOM_URL"
-        echo "SELECTED_URL='$SELECTED_URL'" >>"$CONF_FILE"
+        append_conf_value "SELECTED_URL" "$SELECTED_URL"
         return
     fi
 
     if [[ "$LIST_TYPE" == "None" ]]; then
         SELECTED_URL="none"
-        echo "SELECTED_URL='$SELECTED_URL'" >>"$CONF_FILE"
+        append_conf_value "SELECTED_URL" "$SELECTED_URL"
         return
     fi
 
@@ -809,7 +858,7 @@ select_mirror() {
         SELECTED_URL="$fastest_url"
     fi
 
-    echo "SELECTED_URL='$SELECTED_URL'" >>"$CONF_FILE"
+    append_conf_value "SELECTED_URL" "$SELECTED_URL"
 }
 
 download_list() {
@@ -3909,7 +3958,7 @@ uninstall_syswarden() {
     # Load config to retrieve variables
     if [[ -f "$CONF_FILE" ]]; then
         # shellcheck source=/dev/null
-        source "$CONF_FILE"
+        load_conf_file "$CONF_FILE"
     fi
 
     # --- DEVSECOPS FIX: GLOBAL ZOMBIE PROCESS PURGE ---
@@ -4422,10 +4471,10 @@ EOF
         systemctl enable --now wazuh-agent
 
         # Save config for uninstall reference
-        echo "WAZUH_IP='$WAZUH_IP'" >>"$CONF_FILE"
-        echo "WAZUH_AGENT_NAME='$W_NAME'" >>"$CONF_FILE"
-        echo "WAZUH_COMM_PORT='$W_PORT_COMM'" >>"$CONF_FILE"
-        echo "WAZUH_ENROLL_PORT='$W_PORT_ENROLL'" >>"$CONF_FILE"
+        append_conf_value "WAZUH_IP" "$WAZUH_IP"
+        append_conf_value "WAZUH_AGENT_NAME" "$W_NAME"
+        append_conf_value "WAZUH_COMM_PORT" "$W_PORT_COMM"
+        append_conf_value "WAZUH_ENROLL_PORT" "$W_PORT_ENROLL"
 
         log "INFO" "Wazuh Agent '$W_NAME' installed (Group: $W_GROUP, Ports: $W_PORT_COMM/$W_PORT_ENROLL)."
     else
@@ -5417,7 +5466,7 @@ whitelist_ip() {
     # 1. Force loading config to ensure core variables (SSH_PORT, USE_WIREGUARD) are in RAM
     if [[ -f "$CONF_FILE" ]]; then
         # shellcheck source=/dev/null
-        source "$CONF_FILE"
+        load_conf_file "$CONF_FILE"
     fi
 
     # 2. Universally remove the IP from the active blocklist in memory to prevent conflicts
@@ -5465,7 +5514,7 @@ blocklist_ip() {
     # 1. Force loading config to ensure core variables (SSH_PORT, USE_WIREGUARD) are in RAM
     if [[ -f "$CONF_FILE" ]]; then
         # shellcheck source=/dev/null
-        source "$CONF_FILE"
+        load_conf_file "$CONF_FILE"
     fi
 
     # 2. Trigger the orchestrator to rebuild rules and load the IP into active sets
@@ -5481,7 +5530,7 @@ protect_docker_jail() {
     # --- DEVSECOPS FIX: DEPENDENCY & STATE VERIFICATION ---
     if [[ -f "$CONF_FILE" ]]; then
         # shellcheck source=/dev/null
-        source "$CONF_FILE"
+        load_conf_file "$CONF_FILE"
     fi
 
     if [[ "${USE_DOCKER:-n}" != "y" ]]; then
@@ -5807,7 +5856,7 @@ if [[ "$MODE" == "fail2ban-jails" ]]; then
     # 1. Load existing configuration to retrieve custom settings (e.g., SSH_PORT)
     if [[ -f "$CONF_FILE" ]]; then
         # shellcheck source=/dev/null
-        source "$CONF_FILE"
+        load_conf_file "$CONF_FILE"
         log "INFO" "Configuration loaded successfully."
     else
         log "ERROR" "Configuration file ($CONF_FILE) not found. Please install SysWarden first."
@@ -5869,7 +5918,7 @@ if [[ "$MODE" == "cron-update" ]]; then
 
     if [[ -f "$CONF_FILE" ]]; then
         # shellcheck source=/dev/null
-        source "$CONF_FILE"
+        load_conf_file "$CONF_FILE"
     else
         log "ERROR" "Config file missing. Aborting cron update."
         exit 1
@@ -5913,7 +5962,7 @@ chmod 640 "$LOG_FILE" 2>/dev/null || true
 
 if [[ "$MODE" == "update" ]] && [[ -f "$CONF_FILE" ]]; then
     # shellcheck source=/dev/null
-    source "$CONF_FILE"
+    load_conf_file "$CONF_FILE"
 fi
 
 if [[ "$MODE" != "update" ]]; then
@@ -5990,7 +6039,7 @@ fi
 # are loaded in RAM even during a fresh install.
 if [[ -f "$CONF_FILE" ]]; then
     # shellcheck source=/dev/null
-    source "$CONF_FILE"
+    load_conf_file "$CONF_FILE"
 fi
 # -----------------------------
 
