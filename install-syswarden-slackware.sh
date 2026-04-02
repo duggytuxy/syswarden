@@ -34,7 +34,7 @@ CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
 # shellcheck disable=SC2034
-VERSION="v1.83"
+VERSION="v1.84"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -558,6 +558,7 @@ download_geoip() {
     : >"$TMP_DIR/geoip_raw.txt"
     for country in $(echo "$GEOBLOCK_COUNTRIES" | tr ' ' '\n'); do
         if [[ -z "$country" ]]; then continue; fi
+        echo -e "${BLUE} -> Fetching GeoIP zone: ${country^^}...${NC}"
         curl -sS -L --retry 3 --connect-timeout 5 "https://www.ipdeny.com/ipblocks/data/countries/${country}.zone" >>"$TMP_DIR/geoip_raw.txt" || true
     done
     if [[ -s "$TMP_DIR/geoip_raw.txt" ]]; then
@@ -597,6 +598,7 @@ download_asn() {
             asn="AS${clean_num}"
         fi
 
+        echo -e "${BLUE} -> Resolving ASN routes: ${asn}...${NC}"
         local whois_out=""
         for _ in 1 2 3; do
             whois_out=$(whois -h whois.radb.net -- "-i origin $asn" 2>&1 || true)
@@ -870,6 +872,9 @@ EOF
         fi
 
         # Slackware uses syslogd (messages, secure) and auto/polling backend natively
+        # DEVSECOPS FIX: Backup existing jail.local before overwriting
+        if [[ -f /etc/fail2ban/jail.local && ! -f /etc/fail2ban/jail.local.syswarden-bak ]]; then cp /etc/fail2ban/jail.local /etc/fail2ban/jail.local.syswarden-bak; fi
+
         cat <<EOF >/etc/fail2ban/jail.local
 [DEFAULT]
 bantime = 4h
@@ -1942,9 +1947,9 @@ EOF
         fi
 
         if [[ -x /etc/rc.d/rc.fail2ban ]]; then
-            /etc/rc.d/rc.fail2ban restart 2>/dev/null || true
+            /etc/rc.d/rc.fail2ban restart </dev/null 2>/dev/null || true
         else
-            fail2ban-client reload 2>/dev/null || fail2ban-client start 2>/dev/null || true
+            fail2ban-client reload </dev/null 2>/dev/null || fail2ban-client start </dev/null 2>/dev/null || true
         fi
     fi
 }
@@ -2043,6 +2048,17 @@ display_wireguard_qr() {
         fi
         echo -e "\n${GREEN}[✔] Client Configuration File Saved At:${NC} /etc/wireguard/clients/admin-pc.conf"
     fi
+}
+
+display_dashboard_info() {
+    local public_ip
+    public_ip=$(curl -4 -s ifconfig.me 2>/dev/null || echo "127.0.0.1")
+    echo -e "\n${BLUE}========================================================================${NC}"
+    echo -e "${GREEN}  [✔] SYSWARDEN DASHBOARD IS LIVE${NC}"
+    echo -e "${BLUE}========================================================================${NC}"
+    echo -e "Access your telemetry interface securely via your web browser:"
+    echo -e "${YELLOW}URL:${NC} https://${public_ip}:9999"
+    echo -e "${YELLOW}Note:${NC} A self-signed SSL certificate is used. You must accept the security warning."
 }
 
 setup_abuse_reporting() {
@@ -2621,7 +2637,7 @@ generate_dashboard() {
         <div class="container flex-between">
             <div class="flex-align">
                 <h1 style="font-size: 1.3rem; font-weight: bold; letter-spacing: -0.05em; display: flex; align-items: flex-start;">
-                    SYSWARDEN&nbsp;<span class="text-brand">v1.81</span>
+                    SYSWARDEN&nbsp;<span class="text-brand">v1.84</span>
                     <div class="syswarden-pulse"></div>
                 </h1>
             </div>
@@ -3178,27 +3194,109 @@ EOF
     fi
 }
 
+show_alerts() {
+    echo -e "\n${BLUE}=========================================================================================${NC}"
+    echo -e "${GREEN}                        SYSWARDEN CLI DASHBOARD (Live Alerts)                            ${NC}"
+    echo -e "${BLUE}=========================================================================================${NC}"
+
+    if [[ ! -f "/var/log/kern-firewall.log" ]] && [[ ! -f "/var/log/fail2ban.log" ]]; then
+        echo -e "${RED}[!] Error: Telemetry logs not found. Is SysWarden fully installed?${NC}"
+        exit 1
+    fi
+
+    echo -e "${YELLOW}[i] Tailing live Threat Intelligence Logs... (Press Ctrl+C to stop)${NC}\n"
+
+    # --- TABLE HEADER ---
+    printf "\033[1m\033[36m%-19s | %-16s | %-10s | %-15s | %s\033[0m\n" "TIMESTAMP" "MODULE" "ACTION" "SOURCE IP" "TARGET (PORT/JAIL)"
+    echo -e "${BLUE}--------------------+------------------+------------+-----------------+--------------------${NC}"
+
+    # Read-only live tail parsed by awk for tabular DevSecOps visualization
+    tail -F -q /var/log/kern-firewall.log /var/log/fail2ban.log 2>/dev/null | awk '
+    BEGIN {
+        # DevSecOps Fix: Map syslog months to ISO numbers and fetch current year
+        m["Jan"]="01"; m["Feb"]="02"; m["Mar"]="03"; m["Apr"]="04"; m["May"]="05"; m["Jun"]="06";
+        m["Jul"]="07"; m["Aug"]="08"; m["Sep"]="09"; m["Oct"]="10"; m["Nov"]="11"; m["Dec"]="12";
+        "date +%Y" | getline current_year; close("date +%Y")
+    }
+    /SysWarden-BLOCK|SysWarden-GEO|SysWarden-ASN|Catch-All/ {
+        # Transform traditional syslog date (Apr 2 12:56:01) to ISO (YYYY-MM-DD 12:56:01)
+        if ($1 in m) {
+            date = sprintf("%s-%s-%02d %s", current_year, m[$1], $2, $3)
+        } else {
+            date = $1 " " $2 " " $3
+        }
+        
+        match($0, /\[SysWarden-[A-Za-z-]+\]/)
+        module = substr($0, RSTART+1, RLENGTH-2)
+        if ($0 ~ /Catch-All/) module = "SysWarden-CATCH"
+        
+        match($0, /SRC=[0-9\.]+/)
+        src = substr($0, RSTART+4, RLENGTH-4)
+        if (src == "") src = "N/A"
+        
+        match($0, /DPT=[0-9]+/)
+        dpt = substr($0, RSTART+4, RLENGTH-4)
+        if (dpt == "") dpt = "N/A"
+        
+        # Color coding: Grey Date, Blue Module, Red Action, Yellow IP, Cyan Target
+        printf "\033[1;30m%-19s\033[0m | \033[1;34m%-16s\033[0m | \033[1;31m%-10s\033[0m | \033[1;33m%-15s\033[0m | \033[1;36mPORT: %s\033[0m\n", date, module, "BLOCKED", src, dpt
+        fflush(stdout)
+        next
+    }
+    /Ban |Found / && !/Restore/ {
+        date = $1 " " $2
+        sub(/,.*/, "", date)
+        
+        match($0, /\[[a-zA-Z0-9_-]+\] (Found|Ban)/)
+        str = substr($0, RSTART, RLENGTH)
+        
+        match(str, /\[[a-zA-Z0-9_-]+\]/)
+        jail = substr(str, RSTART+1, RLENGTH-2)
+        
+        act = ($0 ~ /Ban /) ? "BANNED" : "DETECTED"
+        act_color = ($0 ~ /Ban /) ? "\033[1;31m" : "\033[1;35m"
+        
+        match($0, /(Found|Ban) [0-9\.]+/)
+        ip = substr($0, RSTART, RLENGTH)
+        sub(/(Found|Ban) /, "", ip)
+        
+        printf "\033[1;30m%-19s\033[0m | \033[1;35m%-16s\033[0m | %s%-10s\033[0m | \033[1;33m%-15s\033[0m | \033[1;36mJAIL: %s\033[0m\n", date, "FAIL2BAN WAF", act_color, act, ip, jail
+        fflush(stdout)
+    }' || true
+}
+
 uninstall_syswarden() {
     echo -e "\n${RED}=== Uninstalling SysWarden (Slackware) ===${NC}"
-    log "WARN" "Starting Deep Clean Uninstallation (Scorched Earth)..."
+    log "WARN" "Starting Deep Clean Uninstallation (Rollback & Scorched Earth)..."
 
-    # --- PROCESS PURGE ---
+    # --- 1. PROCESS PURGE ---
     pkill -9 -f syswarden-telemetry 2>/dev/null || true
     pkill -9 -f syswarden_reporter 2>/dev/null || true
 
-    # --- REMOVE DAEMONS & SERVICES ---
+    # --- 2. RESTORE OS HARDENING (Privileges) ---
+    if [[ -f "$SYSWARDEN_DIR/group_backup.txt" ]]; then
+        log "INFO" "Restoring user privileges (wheel/adm groups)..."
+        while IFS=':' read -r grp members; do
+            for user in $(echo "$members" | tr ',' ' '); do
+                [[ -n "$user" ]] && gpasswd -a "$user" "$grp" >/dev/null 2>&1 || true
+            done
+        done <"$SYSWARDEN_DIR/group_backup.txt"
+    fi
+
+    # --- 3. RESTORE SYSLOG CONF ---
+    if [[ -f /etc/syslog.conf ]]; then
+        sed -i '/kern-firewall\.log/d' /etc/syslog.conf
+        sed -i '/auth-syswarden\.log/d' /etc/syslog.conf
+        if [[ -x /etc/rc.d/rc.syslog ]]; then /etc/rc.d/rc.syslog restart 2>/dev/null || true; fi
+    fi
+
+    # --- 4. REMOVE DAEMONS & SERVICES ---
     if [[ -x /etc/rc.d/rc.syswarden-reporter ]]; then /etc/rc.d/rc.syswarden-reporter stop 2>/dev/null || true; fi
     rm -f /etc/rc.d/rc.syswarden-reporter /usr/local/bin/syswarden_reporter.py
 
     if [[ -x /etc/rc.d/rc.wireguard ]]; then /etc/rc.d/rc.wireguard stop 2>/dev/null || true; fi
     rm -f /etc/rc.d/rc.wireguard /etc/wireguard/wg0.conf
     rm -rf /etc/wireguard/clients
-
-    if [[ -x /etc/rc.d/rc.syswarden-firewall ]]; then
-        if command -v nft >/dev/null; then nft flush ruleset 2>/dev/null || true; fi
-        if command -v iptables >/dev/null; then iptables -F 2>/dev/null || true; fi
-    fi
-    rm -f /etc/rc.d/rc.syswarden-firewall
 
     # Clear rc.local entries
     if [[ -f /etc/rc.d/rc.local ]]; then
@@ -3207,28 +3305,43 @@ uninstall_syswarden() {
         sed -i '/rc\.wireguard/d' /etc/rc.d/rc.local
     fi
 
-    # --- CRON CLEANUP ---
+    # --- 5. SURGICAL FIREWALL REMOVAL ---
+    if command -v nft >/dev/null 2>&1; then
+        nft delete table inet syswarden_table 2>/dev/null || true
+        nft delete table inet syswarden_wg 2>/dev/null || true
+    elif command -v iptables >/dev/null 2>&1; then
+        # Remove specific iptables rules by recreating logic in delete mode or flush specific
+        iptables-save | grep -v 'SysWarden' | iptables-restore 2>/dev/null || true
+        ipset destroy $SET_NAME 2>/dev/null || true
+        ipset destroy $GEOIP_SET_NAME 2>/dev/null || true
+        ipset destroy $ASN_SET_NAME 2>/dev/null || true
+    fi
+    if [[ -x /etc/rc.d/rc.syswarden-firewall ]]; then /etc/rc.d/rc.syswarden-firewall stop 2>/dev/null || true; fi
+    rm -f /etc/rc.d/rc.syswarden-firewall
+
+    # --- 6. CRON CLEANUP ---
     if [[ -f /etc/crontabs/root ]]; then sed -i '/syswarden/d' /etc/crontabs/root 2>/dev/null || true; fi
     if [[ -f /var/spool/cron/crontabs/root ]]; then sed -i '/syswarden/d' /var/spool/cron/crontabs/root 2>/dev/null || true; fi
 
-    # --- FAIL2BAN CLEANUP ---
+    # --- 7. FAIL2BAN CLEANUP ---
     rm -f /var/lib/fail2ban/fail2ban.sqlite3
     : >/var/log/fail2ban.log
     rm -f /etc/fail2ban/jail.local /etc/fail2ban/fail2ban.local
     rm -f /etc/fail2ban/filter.d/syswarden-*.conf /etc/fail2ban/filter.d/*-custom.conf /etc/fail2ban/filter.d/*-auth.conf /etc/fail2ban/filter.d/*-scanner.conf /etc/fail2ban/filter.d/mongodb-guard.conf /etc/fail2ban/filter.d/haproxy-guard.conf
-    if [[ -f /etc/fail2ban/jail.local.bak ]]; then mv /etc/fail2ban/jail.local.bak /etc/fail2ban/jail.local; fi
-    if [[ -x /etc/rc.d/rc.fail2ban ]]; then /etc/rc.d/rc.fail2ban restart 2>/dev/null || true; fi
+    # Restore original jail.local if we had one
+    if [[ -f /etc/fail2ban/jail.local.syswarden-bak ]]; then mv /etc/fail2ban/jail.local.syswarden-bak /etc/fail2ban/jail.local; fi
+    if [[ -x /etc/rc.d/rc.fail2ban ]]; then /etc/rc.d/rc.fail2ban restart </dev/null 2>/dev/null || true; fi
 
-    # --- NGINX CLEANUP ---
+    # --- 8. NGINX CLEANUP ---
     rm -f /etc/nginx/conf.d/syswarden-ui.conf
     if [[ -x /etc/rc.d/rc.nginx ]]; then /etc/rc.d/rc.nginx restart 2>/dev/null || true; fi
 
-    # --- SCORCHED EARTH ---
+    # --- 9. SCORCHED EARTH (Files & Folders) ---
     rm -rf /etc/syswarden
-    rm -f /usr/local/bin/syswarden*
+    rm -f /usr/local/bin/syswarden-telemetry.sh
     rm -f /var/log/kern-firewall.log /var/log/auth-syswarden.log
 
-    echo -e "${GREEN}Uninstallation complete (Scorched Earth).${NC}"
+    echo -e "${GREEN}Uninstallation complete. System restored to initial state.${NC}"
     echo -e "${YELLOW}[i] A reboot is recommended to ensure all network routes are completely flushed.${NC}"
     exit 0
 }
@@ -3238,12 +3351,20 @@ uninstall_syswarden() {
 # ==============================================================================
 MODE="${1:-install}"
 
+# --- DEVSECOPS FIX: Intercept 'alerts' mode for CLI Dashboard ---
+if [[ "$MODE" == "alerts" ]]; then
+    check_root
+    show_alerts
+    exit 0
+fi
+# ----------------------------------------------------------------
+
 if [[ "$MODE" == "uninstall" ]]; then
     check_root
     uninstall_syswarden
 fi
 
-if [[ "$MODE" != "update" ]]; then
+if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
     echo -e "#     SysWarden Tool Installer (Slackware $VERSION)     #"
@@ -3265,7 +3386,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.83 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.84 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
@@ -3322,6 +3443,7 @@ if [[ "$MODE" != "update" ]]; then
     apply_os_hardening
     echo -e "\n${GREEN}INSTALLATION SUCCESSFUL (Slackware Edition)${NC}"
     echo -e "${YELLOW}Please ensure your Nginx configuration includes /etc/nginx/conf.d/*.conf${NC}"
+    display_dashboard_info
     display_wireguard_qr
 else
     # Update logic

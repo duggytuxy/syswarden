@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v1.83"
+VERSION="v1.84"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -3713,7 +3713,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v1.83 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v1.84 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -3890,7 +3890,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.83 - NGINX SECURE DASHBOARD (HTTPS / CSP / LOCAL FONTS / BENTO-DARK)
+# SYSWARDEN v1.84 - NGINX SECURE DASHBOARD (HTTPS / CSP / LOCAL FONTS / BENTO-DARK)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Nginx-secured Dashboard UI (HTTPS/CSP/Local-Fonts)..."
@@ -4174,7 +4174,7 @@ function generate_dashboard() {
         <div class="container flex-between">
             <div class="flex-align">
                 <h1 style="font-size: 1.3rem; font-weight: bold; letter-spacing: -0.05em; display: flex; align-items: flex-start;">
-                    SYSWARDEN&nbsp;<span class="text-brand">v1.81</span>
+                    SYSWARDEN&nbsp;<span class="text-brand">v1.84</span>
                     <div class="syswarden-pulse"></div>
                 </h1>
             </div>
@@ -4985,77 +4985,119 @@ check_upgrade() {
 }
 
 show_alerts_dashboard() {
-    # Trap Ctrl+C/Exit to restore cursor
-    trap "tput cnorm; clear; exit 0" INT TERM
+    # Trap Ctrl+C/Exit to restore cursor safely
+    trap "tput cnorm; echo -e '\n${GREEN}Exiting Dashboard...${NC}'; exit 0" INT TERM
     tput civis # Hide cursor for cleaner UI
 
-    while true; do
-        clear
-        local NOW
-        NOW=$(date "+%H:%M:%S")
+    echo -e "\n${BLUE}=========================================================================================${NC}"
+    echo -e "${GREEN}                        SYSWARDEN CLI DASHBOARD (Live Alerts)                            ${NC}"
+    echo -e "${BLUE}=========================================================================================${NC}"
+    echo -e "${YELLOW}[i] Tailing live Threat Intelligence Logs... (Press Ctrl+C to stop)${NC}\n"
 
-        echo -e "${BLUE}====================================================================================================${NC}"
-        echo -e "${BLUE}   SysWarden Live Attack Dashboard (Last Update: $NOW)        ${NC}"
-        echo -e "${BLUE}====================================================================================================${NC}"
-        # HEADER: 6 Columns
-        printf "${YELLOW}%-19s | %-10s | %-16s | %-20s | %-12s | %-8s${NC}\n" "DATE / HOUR" "SOURCE" "IP ADDRESS" "RULES" "PORT" "DECISION"
-        echo "----------------------------------------------------------------------------------------------------"
+    # --- TABLE HEADER ---
+    printf "\033[1m\033[36m%-19s | %-16s | %-10s | %-15s | %s\033[0m\n" "TIMESTAMP" "MODULE" "ACTION" "SOURCE IP" "TARGET (PORT/JAIL)"
+    echo -e "${BLUE}--------------------+------------------+------------+-----------------+--------------------${NC}"
 
-        # Regex corrigée pour capturer proprement la date Rsyslog (Format ISO avec T)
-        local date_regex="^([A-Z][a-z]{2}[[:space:]]+[0-9]+[[:space:]]+[0-9:]+|[0-9]{4}-[0-9]{2}-[0-9]{2}[T[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2})"
+    local NOW_SEC
+    NOW_SEC=$(date +%s)
 
-        # 1. FAIL2BAN ENTRIES
-        if [[ -f "/var/log/fail2ban.log" ]]; then
-            { grep " Ban " "/var/log/fail2ban.log" || true; } | tail -n 10 | while read -r line; do
-                if [[ $line =~ \[([a-zA-Z0-9_-]+)\][[:space:]]+Ban[[:space:]]+([0-9.]+) ]]; then
-                    jail="${BASH_REMATCH[1]}"
-                    ip="${BASH_REMATCH[2]}"
-                    dtime="Unknown"
-                    if [[ $line =~ $date_regex ]]; then dtime="${BASH_REMATCH[1]}"; fi
-                    printf "%-19s | %-10s | %-16s | %-20s | %-12s | %-8s\n" "$dtime" "Fail2ban" "$ip" "$jail" "Dynamic" "BAN"
-                fi
-            done
+    # Multiplex Alpine dmesg and fail2ban logs safely without creating orphan processes
+    (
+        P1=""
+        if command -v dmesg >/dev/null 2>&1; then
+            dmesg -w 2>/dev/null &
+            P1=$!
         fi
 
-        # 2. FIREWALL ENTRIES (Direct from Kernel Buffer)
-        # Calculate boot time to translate kernel uptime to human-readable date
-        local uptime_sec
-        uptime_sec=$(cut -d. -f1 /proc/uptime)
-        local now_sec
-        now_sec=$(date +%s)
-        local boot_sec=$((now_sec - uptime_sec))
-
-        { dmesg | grep -E "\[SysWarden-BLOCK\]|\[SysWarden-GEO\]|\[SysWarden-ASN\]" | tail -n 20; } | while read -r line; do
-            if [[ $line =~ SRC=([0-9.]+) ]]; then
-                ip="${BASH_REMATCH[1]}"
-                rule="Unknown"
-                if [[ $line =~ (SysWarden-[A-Z]+) ]]; then rule="${BASH_REMATCH[1]}"; fi
-
-                port="Global"
-                if [[ $line =~ DPT=([0-9]+) ]]; then port="TCP/${BASH_REMATCH[1]}"; fi
-
-                # Extract Kernel Timestamp and convert to YYYY-MM-DD HH:MM:SS format
-                dtime="Kernel-TS"
-                if [[ $line =~ ^\[[[:space:]]*([0-9]+)\.[0-9]+\] ]]; then
-                    local kernel_sec="${BASH_REMATCH[1]}"
-                    local event_sec=$((boot_sec + kernel_sec))
-                    dtime=$(date -d "@$event_sec" "+%Y-%m-%d %H:%M:%S")
-                fi
-
-                printf "%-19s | %-10s | %-16s | %-20s | %-12s | %-8s\n" "$dtime" "Firewall" "$ip" "$rule" "$port" "BLOCK"
-            fi
-        done
-
-        echo "----------------------------------------------------------------------------------------------------"
-        echo -e "Press [ESC] to Quit."
-
-        read -t 10 -n 1 -s -r key || true
-        if [[ $key == $'\e' ]]; then
-            break
+        P2=""
+        if [[ -f /var/log/fail2ban.log ]]; then
+            tail -F -q /var/log/fail2ban.log 2>/dev/null &
+            P2=$!
         fi
-    done
+
+        trap '[[ -n "$P1" ]] && kill $P1 2>/dev/null; [[ -n "$P2" ]] && kill $P2 2>/dev/null' EXIT
+        wait
+    ) | awk -v script_start="$NOW_SEC" '
+    BEGIN {
+        # Alpine specific: Calculate boot time for pure kernel (dmesg) timestamps
+        if ((getline uptime_str < "/proc/uptime") > 0) {
+            split(uptime_str, up_arr, " ")
+            uptime_sec = up_arr[1]
+            boot_sec = script_start - uptime_sec
+        }
+        close("/proc/uptime")
+
+        # Map syslog months to ISO numbers and fetch current year (Fallback)
+        m["Jan"]="01"; m["Feb"]="02"; m["Mar"]="03"; m["Apr"]="04"; m["May"]="05"; m["Jun"]="06";
+        m["Jul"]="07"; m["Aug"]="08"; m["Sep"]="09"; m["Oct"]="10"; m["Nov"]="11"; m["Dec"]="12";
+        "date +%Y" | getline current_year; close("date +%Y")
+    }
+    /SysWarden-BLOCK|SysWarden-GEO|SysWarden-ASN|Catch-All/ {
+        # Transform Alpine dmesg timestamp [  1234.56 ] to ISO (YYYY-MM-DD HH:MM:SS)
+        if ($0 ~ /^\[[ \t]*[0-9]+\.[0-9]+\]/) {
+            match($0, /[0-9]+\.[0-9]+/)
+            ksec = substr($0, RSTART, RLENGTH)
+            event_sec = boot_sec + ksec
+            
+            # --- DEVSECOPS FIX: Drop old dmesg history to only show LIVE events ---
+            if (event_sec < script_start - 5) next;
+            # ----------------------------------------------------------------------
+            
+            cmd = "date -d @" int(event_sec) " \"+%Y-%m-%d %H:%M:%S\" 2>/dev/null"
+            if ((cmd | getline dtime) > 0) {
+                date = dtime
+            } else {
+                date = "Kernel-TS"
+            }
+            close(cmd)
+        } 
+        # Transform traditional syslog date (Apr 2 12:56:01) to ISO if rsyslog is present
+        else if ($1 in m) {
+            date = sprintf("%s-%s-%02d %s", current_year, m[$1], $2, $3)
+        } 
+        else {
+            date = $1 " " $2 " " $3
+        }
+        
+        match($0, /\[SysWarden-[A-Za-z-]+\]/)
+        module = substr($0, RSTART+1, RLENGTH-2)
+        if ($0 ~ /Catch-All/) module = "SysWarden-CATCH"
+        
+        match($0, /SRC=[0-9\.]+/)
+        src = substr($0, RSTART+4, RLENGTH-4)
+        if (src == "") src = "N/A"
+        
+        match($0, /DPT=[0-9]+/)
+        dpt = substr($0, RSTART+4, RLENGTH-4)
+        if (dpt == "") dpt = "N/A"
+        
+        # Color coding: Grey Date, Blue Module, Red Action, Yellow IP, Cyan Target
+        printf "\033[1;30m%-19s\033[0m | \033[1;34m%-16s\033[0m | \033[1;31m%-10s\033[0m | \033[1;33m%-15s\033[0m | \033[1;36mPORT: %s\033[0m\n", date, module, "BLOCKED", src, dpt
+        fflush(stdout)
+        next
+    }
+    /Ban |Found / && !/Restore/ {
+        date = $1 " " $2
+        sub(/,.*/, "", date)
+        
+        match($0, /\[[a-zA-Z0-9_-]+\] (Found|Ban)/)
+        str = substr($0, RSTART, RLENGTH)
+        
+        match(str, /\[[a-zA-Z0-9_-]+\]/)
+        jail = substr(str, RSTART+1, RLENGTH-2)
+        
+        act = ($0 ~ /Ban /) ? "BANNED" : "DETECTED"
+        act_color = ($0 ~ /Ban /) ? "\033[1;31m" : "\033[1;35m"
+        
+        match($0, /(Found|Ban) [0-9\.]+/)
+        ip = substr($0, RSTART, RLENGTH)
+        sub(/(Found|Ban) /, "", ip)
+        
+        printf "\033[1;30m%-19s\033[0m | \033[1;35m%-16s\033[0m | %s%-10s\033[0m | \033[1;33m%-15s\033[0m | \033[1;36mJAIL: %s\033[0m\n", date, "FAIL2BAN WAF", act_color, act, ip, jail
+        fflush(stdout)
+    }' || true
+
     tput cnorm # Restore cursor
-    clear
 }
 
 # ==============================================================================
@@ -5228,7 +5270,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.83 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.84 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"

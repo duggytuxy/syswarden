@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SysWarden v1.83 - DevSecOps Audit & Compliance Tool
+# SysWarden v1.84 - DevSecOps Audit & Compliance Tool
 # Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -268,7 +268,7 @@ else
     fail "SysWarden firewall rules not found in kernel space."
 fi
 
-# --- Verify Catch-All Drop Policy (v1.83 Zero Trust Architecture) ---
+# --- Verify Catch-All Drop Policy (v1.84 Zero Trust Architecture) ---
 CATCH_ALL_PASSED=0
 if [[ "$FW_ENGINE" == "Nftables" ]]; then
     # 1. Debian Architecture (Explicit Catch-All rule in backend chain)

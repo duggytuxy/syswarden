@@ -33,7 +33,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v1.83"
+VERSION="v1.84"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -1280,7 +1280,7 @@ EOF
             # 3. Allow WireGuard UDP port for tunnel establishment
             firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
 
-            # --- STRICT ZERO TRUST HIERARCHY (v1.83) - DEBIAN PARITY) ---
+            # --- STRICT ZERO TRUST HIERARCHY (v1.84) - DEBIAN PARITY) ---
 
             # Priority -1000: Highest priority. Allow SSH & Dashboard strictly from VPN.
             firewall-cmd --permanent --add-rich-rule="rule priority='-1000' family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
@@ -4488,7 +4488,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.83 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v1.84 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -4658,7 +4658,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v1.83 - NGINX SECURE DASHBOARD (HTTPS / CSP / LOCAL FONTS / BENTO-DARK)
+# SYSWARDEN v1.84 - NGINX SECURE DASHBOARD (HTTPS / CSP / LOCAL FONTS / BENTO-DARK)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Nginx-secured Dashboard UI (HTTPS/CSP/Local-Fonts)..."
@@ -4942,7 +4942,7 @@ function generate_dashboard() {
         <div class="container flex-between">
             <div class="flex-align">
                 <h1 style="font-size: 1.3rem; font-weight: bold; letter-spacing: -0.05em; display: flex; align-items: flex-start;">
-                    SYSWARDEN&nbsp;<span class="text-brand">v1.81</span>
+                    SYSWARDEN&nbsp;<span class="text-brand">v1.84</span>
                     <div class="syswarden-pulse"></div>
                 </h1>
             </div>
@@ -5826,90 +5826,95 @@ check_upgrade() {
 }
 
 show_alerts_dashboard() {
-    # Trap Ctrl+C/Exit to restore cursor
-    trap "tput cnorm; clear; exit 0" INT TERM
+    # Trap Ctrl+C/Exit to restore cursor safely
+    trap "tput cnorm; echo -e '\n${GREEN}Exiting Dashboard...${NC}'; exit 0" INT TERM
     tput civis # Hide cursor for cleaner UI
 
-    while true; do
-        clear
-        local NOW
-        NOW=$(date "+%H:%M:%S")
+    echo -e "\n${BLUE}=========================================================================================${NC}"
+    echo -e "${GREEN}                        SYSWARDEN CLI DASHBOARD (Live Alerts)                            ${NC}"
+    echo -e "${BLUE}=========================================================================================${NC}"
+    echo -e "${YELLOW}[i] Tailing live Threat Intelligence Logs... (Press Ctrl+C to stop)${NC}\n"
 
-        echo -e "${BLUE}====================================================================================================${NC}"
-        echo -e "${BLUE}   SysWarden Live Attack Dashboard (Last Update: $NOW)        ${NC}"
-        echo -e "${BLUE}====================================================================================================${NC}"
-        # HEADER: 6 Columns (DATE / HOUR aligned to max 19 characters)
-        printf "${YELLOW}%-19s | %-10s | %-16s | %-20s | %-12s | %-8s${NC}\n" "DATE / HOUR" "SOURCE" "IP ADDRESS" "RULES" "PORT" "DECISION"
-        echo "----------------------------------------------------------------------------------------------------"
+    # --- TABLE HEADER ---
+    printf "\033[1m\033[36m%-19s | %-16s | %-10s | %-15s | %s\033[0m\n" "TIMESTAMP" "MODULE" "ACTION" "SOURCE IP" "TARGET (PORT/JAIL)"
+    echo -e "${BLUE}--------------------+------------------+------------+-----------------+--------------------${NC}"
 
-        # Regex to cleanly extract the date: "Feb 14 10:05:10" OR "2026-02-14 10:05:10"
-        local date_regex="^([A-Z][a-z]{2}[[:space:]]+[0-9]+[[:space:]]+[0-9:]+|[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]+[0-9:]+)"
-
-        # 1. FAIL2BAN ENTRIES (Via Journalctl)
-        if command -v journalctl >/dev/null; then
-            journalctl -u fail2ban -n 100 --no-pager 2>/dev/null | { grep " Ban " || true; } | tail -n 10 | while read -r line; do
-                if [[ $line =~ \[([a-zA-Z0-9_-]+)\][[:space:]]+Ban[[:space:]]+([0-9.]+) ]]; then
-                    jail="${BASH_REMATCH[1]}"
-                    ip="${BASH_REMATCH[2]}"
-                    dtime="Unknown"
-                    if [[ $line =~ $date_regex ]]; then dtime="${BASH_REMATCH[1]}"; fi
-                    printf "%-19s | %-10s | %-16s | %-20s | %-12s | %-8s\n" "$dtime" "Fail2ban" "$ip" "$jail" "Dynamic" "BAN"
-                fi
-            done
-        elif [[ -f "/var/log/fail2ban.log" ]]; then
-            { grep " Ban " "/var/log/fail2ban.log" || true; } | tail -n 10 | while read -r line; do
-                if [[ $line =~ \[([a-zA-Z0-9_-]+)\][[:space:]]+Ban[[:space:]]+([0-9.]+) ]]; then
-                    jail="${BASH_REMATCH[1]}"
-                    ip="${BASH_REMATCH[2]}"
-                    dtime="Unknown"
-                    if [[ $line =~ $date_regex ]]; then dtime="${BASH_REMATCH[1]}"; fi
-                    printf "%-19s | %-10s | %-16s | %-20s | %-12s | %-8s\n" "$dtime" "Fail2ban" "$ip" "$jail" "Dynamic" "BAN"
-                fi
-            done
+    # Multiplex Systemd Journal and Flat files safely without creating orphan processes
+    (
+        P1=""
+        if command -v journalctl >/dev/null 2>&1; then
+            journalctl -f -q 2>/dev/null &
+            P1=$!
         fi
 
-        # 2. FIREWALL ENTRIES (Via Journalctl)
-        # Increased journalctl to -n 500 to ensure enough lines are found
-        if command -v journalctl >/dev/null; then
-            journalctl -k -n 500 --no-pager 2>/dev/null | { grep -E "SysWarden-(BLOCK|GEO|ASN)" || true; } | tail -n 20 | while read -r line; do
-                if [[ $line =~ SRC=([0-9.]+) ]]; then
-                    ip="${BASH_REMATCH[1]}"
-                    rule="Unknown"
-                    if [[ $line =~ (SysWarden-[A-Z]+) ]]; then rule="${BASH_REMATCH[1]}"; fi
-                    port="Global"
-                    if [[ $line =~ DPT=([0-9]+) ]]; then port="TCP/${BASH_REMATCH[1]}"; fi
-                    dtime="Unknown"
-                    if [[ $line =~ $date_regex ]]; then dtime="${BASH_REMATCH[1]}"; fi
+        P2=""
+        local LOGS=()
+        [[ -f /var/log/fail2ban.log ]] && LOGS+=(/var/log/fail2ban.log)
+        [[ -f /var/log/kern.log ]] && LOGS+=(/var/log/kern.log)
+        [[ -f /var/log/syslog ]] && LOGS+=(/var/log/syslog)
+        [[ -f /var/log/messages ]] && LOGS+=(/var/log/messages)
 
-                    printf "%-19s | %-10s | %-16s | %-20s | %-12s | %-8s\n" "$dtime" "Firewall" "$ip" "$rule" "$port" "BLOCK"
-                fi
-            done
-        elif [[ -f "/var/log/kern.log" ]]; then
-            { grep -E "SysWarden-(BLOCK|GEO|ASN)" "/var/log/kern.log" || true; } | tail -n 20 | while read -r line; do
-                if [[ $line =~ SRC=([0-9.]+) ]]; then
-                    ip="${BASH_REMATCH[1]}"
-                    rule="Unknown"
-                    if [[ $line =~ (SysWarden-[A-Z]+) ]]; then rule="${BASH_REMATCH[1]}"; fi
-                    port="Global"
-                    if [[ $line =~ DPT=([0-9]+) ]]; then port="TCP/${BASH_REMATCH[1]}"; fi
-                    dtime="Unknown"
-                    if [[ $line =~ $date_regex ]]; then dtime="${BASH_REMATCH[1]}"; fi
-
-                    printf "%-19s | %-10s | %-16s | %-20s | %-12s | %-8s\n" "$dtime" "Firewall" "$ip" "$rule" "$port" "BLOCK"
-                fi
-            done
+        if [[ ${#LOGS[@]} -gt 0 ]]; then
+            tail -F -q "${LOGS[@]}" 2>/dev/null &
+            P2=$!
         fi
 
-        echo "----------------------------------------------------------------------------------------------------"
-        echo -e "Press [ESC] to Quit."
+        trap '[[ -n "$P1" ]] && kill $P1 2>/dev/null; [[ -n "$P2" ]] && kill $P2 2>/dev/null' EXIT
+        wait
+    ) | awk '
+    BEGIN {
+        # DevSecOps Fix: Map syslog months to ISO numbers and fetch current year
+        m["Jan"]="01"; m["Feb"]="02"; m["Mar"]="03"; m["Apr"]="04"; m["May"]="05"; m["Jun"]="06";
+        m["Jul"]="07"; m["Aug"]="08"; m["Sep"]="09"; m["Oct"]="10"; m["Nov"]="11"; m["Dec"]="12";
+        "date +%Y" | getline current_year; close("date +%Y")
+    }
+    /SysWarden-BLOCK|SysWarden-GEO|SysWarden-ASN|Catch-All/ {
+        # Transform traditional syslog date (Apr 2 12:56:01) to ISO (YYYY-MM-DD 12:56:01)
+        if ($1 in m) {
+            date = sprintf("%s-%s-%02d %s", current_year, m[$1], $2, $3)
+        } else {
+            date = $1 " " $2 " " $3
+        }
+        
+        match($0, /\[SysWarden-[A-Za-z-]+\]/)
+        module = substr($0, RSTART+1, RLENGTH-2)
+        if ($0 ~ /Catch-All/) module = "SysWarden-CATCH"
+        
+        match($0, /SRC=[0-9\.]+/)
+        src = substr($0, RSTART+4, RLENGTH-4)
+        if (src == "") src = "N/A"
+        
+        match($0, /DPT=[0-9]+/)
+        dpt = substr($0, RSTART+4, RLENGTH-4)
+        if (dpt == "") dpt = "N/A"
+        
+        # Color coding: Grey Date, Blue Module, Red Action, Yellow IP, Cyan Target
+        printf "\033[1;30m%-19s\033[0m | \033[1;34m%-16s\033[0m | \033[1;31m%-10s\033[0m | \033[1;33m%-15s\033[0m | \033[1;36mPORT: %s\033[0m\n", date, module, "BLOCKED", src, dpt
+        fflush(stdout)
+        next
+    }
+    /Ban |Found / && !/Restore/ {
+        date = $1 " " $2
+        sub(/,.*/, "", date)
+        
+        match($0, /\[[a-zA-Z0-9_-]+\] (Found|Ban)/)
+        str = substr($0, RSTART, RLENGTH)
+        
+        match(str, /\[[a-zA-Z0-9_-]+\]/)
+        jail = substr(str, RSTART+1, RLENGTH-2)
+        
+        act = ($0 ~ /Ban /) ? "BANNED" : "DETECTED"
+        act_color = ($0 ~ /Ban /) ? "\033[1;31m" : "\033[1;35m"
+        
+        match($0, /(Found|Ban) [0-9\.]+/)
+        ip = substr($0, RSTART, RLENGTH)
+        sub(/(Found|Ban) /, "", ip)
+        
+        printf "\033[1;30m%-19s\033[0m | \033[1;35m%-16s\033[0m | %s%-10s\033[0m | \033[1;33m%-15s\033[0m | \033[1;36mJAIL: %s\033[0m\n", date, "FAIL2BAN WAF", act_color, act, ip, jail
+        fflush(stdout)
+    }' || true
 
-        read -t 10 -n 1 -s -r key || true
-        if [[ $key == $'\e' ]]; then
-            break
-        fi
-    done
     tput cnorm # Restore cursor
-    clear
 }
 
 # ==============================================================================
@@ -6077,7 +6082,7 @@ fi
 if [[ "$MODE" != "update" ]]; then
     clear
     echo -e "${GREEN}#############################################################"
-    echo -e "#     SysWarden Tool Installer (Universal v1.83)     #"
+    echo -e "#     SysWarden Tool Installer (Universal v1.84)     #"
     echo -e "#############################################################${NC}"
 fi
 
@@ -6115,7 +6120,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.83 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.84 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
