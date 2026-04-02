@@ -34,7 +34,7 @@ CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
 # shellcheck disable=SC2034
-VERSION="v1.85"
+VERSION="v1.86"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -916,6 +916,14 @@ EOF
 
         # 4. DYNAMIC DETECTION: NGINX
         if [[ -f "/var/log/nginx/access.log" ]] || [[ -f "/var/log/nginx/error.log" ]]; then
+            # DEVSECOPS FIX: Self-healing native filter
+            if [[ ! -f "/etc/fail2ban/filter.d/nginx-http-auth.conf" ]]; then
+                cat <<'EOF' >/etc/fail2ban/filter.d/nginx-http-auth.conf
+[Definition]
+failregex = ^ \[error\] \d+#\d+: \*\d+ user "\S+":? (password mismatch|was not found in "[^\"]*"), client: <HOST>, server: \S+, request: "\S+ \S+ HTTP/\d+\.\d+", host: "\S+"(?:, referrer: "\S+")?\s*$
+ignoreregex = 
+EOF
+            fi
             if [[ ! -f "/etc/fail2ban/filter.d/nginx-scanner.conf" ]]; then
                 echo -e "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ \\[.*?\\] \"(GET|POST|HEAD).*\" (400|401|403|404|444) .*$\nignoreregex =" >/etc/fail2ban/filter.d/nginx-scanner.conf
             fi
@@ -946,6 +954,15 @@ EOF
             APACHE_ACCESS="/var/log/httpd/access_log"
         fi
         if [[ -n "$APACHE_LOG" ]]; then
+            # DEVSECOPS FIX: Self-healing native filter
+            if [[ ! -f "/etc/fail2ban/filter.d/apache-auth.conf" ]]; then
+                cat <<'EOF' >/etc/fail2ban/filter.d/apache-auth.conf
+[Definition]
+failregex = ^\[[^\]]+\] \[error\] \[client <HOST>\] user .* not found(: )?
+            ^\[[^\]]+\] \[error\] \[client <HOST>\] user .* password mismatch(: )?
+ignoreregex = 
+EOF
+            fi
             if [[ ! -f "/etc/fail2ban/filter.d/apache-scanner.conf" ]]; then
                 echo -e "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ \\[.*?\\] \"(GET|POST|HEAD) .+\" (400|401|403|404) .+\$\nignoreregex =" >/etc/fail2ban/filter.d/apache-scanner.conf
             fi
@@ -1256,6 +1273,21 @@ EOF
         SM_LOG=""
         if [[ -f "/var/log/maillog" ]]; then SM_LOG="/var/log/maillog"; fi
         if [[ -n "$SM_LOG" ]] && [[ -f "/usr/sbin/sendmail" ]]; then
+            # DEVSECOPS FIX: Self-healing native filters
+            if [[ ! -f "/etc/fail2ban/filter.d/sendmail-auth.conf" ]]; then
+                cat <<'EOF' >/etc/fail2ban/filter.d/sendmail-auth.conf
+[Definition]
+failregex = ^.*sendmail\[\d+\]: .*: \[<HOST>\] .*: AUTH=server, relay=.*, authid=.*, status=.*(?:fail|NO|temporarily).*$
+ignoreregex = 
+EOF
+            fi
+            if [[ ! -f "/etc/fail2ban/filter.d/sendmail-reject.conf" ]]; then
+                cat <<'EOF' >/etc/fail2ban/filter.d/sendmail-reject.conf
+[Definition]
+failregex = ^.*sendmail\[\d+\]: .*: ruleset=check_rcpt, arg1=.*, relay=.* \[<HOST>\], reject=.*$
+ignoreregex = 
+EOF
+            fi
             cat <<EOF >>/etc/fail2ban/jail.local
 
 [sendmail-auth]
@@ -2637,7 +2669,7 @@ generate_dashboard() {
         <div class="container flex-between">
             <div class="flex-align">
                 <h1 style="font-size: 1.3rem; font-weight: bold; letter-spacing: -0.05em; display: flex; align-items: flex-start;">
-                    SYSWARDEN&nbsp;<span class="text-brand">v1.85</span>
+                    SYSWARDEN&nbsp;<span class="text-brand">v1.86</span>
                     <div class="syswarden-pulse"></div>
                 </h1>
             </div>
@@ -3136,12 +3168,14 @@ EOF
 
     local NGINX_ALLOW_RULES=""
     if [[ -s "$WHITELIST_FILE" ]]; then
-        while IFS= read -r wl_ip; do
-            [[ -z "$wl_ip" ]] || [[ "$wl_ip" =~ ^# ]] && continue
+        # DEVSECOPS FIX: Read securely and strip hidden carriage returns (\r) to prevent Nginx fatal syntax crashes
+        while IFS= read -r wl_ip || [[ -n "$wl_ip" ]]; do
+            wl_ip=$(echo "$wl_ip" | tr -d '\r' | awk '{$1=$1};1')
+            if [[ -z "$wl_ip" ]] || [[ "$wl_ip" =~ ^# ]]; then continue; fi
             NGINX_ALLOW_RULES+="    allow $wl_ip;\n"
         done <"$WHITELIST_FILE"
     fi
-    if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
+    if [[ "${USE_WIREGUARD:-n}" == "y" ]] && [[ -n "${WG_SUBNET:-}" ]]; then
         NGINX_ALLOW_RULES+="    allow ${WG_SUBNET};\n"
     fi
     NGINX_ALLOW_RULES+="    allow 127.0.0.1;\n    deny all;"
@@ -3184,12 +3218,20 @@ EOF
         fi
     fi
 
-    # --- DEVSECOPS FIX: Ensure daemon is executable on Slackware ---
+    # --- DEVSECOPS FIX: Safely reload or restart Nginx (Zero Downtime) ---
     if [[ -f /etc/rc.d/rc.nginx ]]; then
         chmod +x /etc/rc.d/rc.nginx
     fi
 
-    if [[ -x /etc/rc.d/rc.nginx ]]; then
+    if command -v nginx >/dev/null 2>&1; then
+        if nginx -t >/dev/null 2>&1; then
+            log "INFO" "Reloading Nginx gracefully..."
+            nginx -s reload 2>/dev/null || /etc/rc.d/rc.nginx restart 2>/dev/null || true
+        else
+            log "ERROR" "Nginx configuration syntax error. Preserving old config to avoid crash."
+            /etc/rc.d/rc.nginx restart 2>/dev/null || true
+        fi
+    elif [[ -x /etc/rc.d/rc.nginx ]]; then
         /etc/rc.d/rc.nginx restart 2>/dev/null || true
     fi
 }
@@ -3327,7 +3369,7 @@ uninstall_syswarden() {
     rm -f /var/lib/fail2ban/fail2ban.sqlite3
     : >/var/log/fail2ban.log
     rm -f /etc/fail2ban/jail.local /etc/fail2ban/fail2ban.local
-    rm -f /etc/fail2ban/filter.d/syswarden-*.conf /etc/fail2ban/filter.d/*-custom.conf /etc/fail2ban/filter.d/*-auth.conf /etc/fail2ban/filter.d/*-scanner.conf /etc/fail2ban/filter.d/mongodb-guard.conf /etc/fail2ban/filter.d/haproxy-guard.conf
+    rm -f /etc/fail2ban/filter.d/syswarden-*.conf /etc/fail2ban/filter.d/*-custom.conf /etc/fail2ban/filter.d/*-scanner.conf /etc/fail2ban/filter.d/mongodb-guard.conf /etc/fail2ban/filter.d/haproxy-guard.conf /etc/fail2ban/filter.d/mariadb-auth.conf /etc/fail2ban/filter.d/wordpress-auth.conf /etc/fail2ban/filter.d/drupal-auth.conf /etc/fail2ban/filter.d/nextcloud.conf /etc/fail2ban/filter.d/zabbix-auth.conf /etc/fail2ban/filter.d/laravel-auth.conf /etc/fail2ban/filter.d/grafana-auth.conf
     # Restore original jail.local if we had one
     if [[ -f /etc/fail2ban/jail.local.syswarden-bak ]]; then mv /etc/fail2ban/jail.local.syswarden-bak /etc/fail2ban/jail.local; fi
     if [[ -x /etc/rc.d/rc.fail2ban ]]; then /etc/rc.d/rc.fail2ban restart </dev/null 2>/dev/null || true; fi
@@ -3386,7 +3428,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.85 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v1.86 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
@@ -3451,14 +3493,28 @@ else
         # shellcheck source=/dev/null
         source "$CONF_FILE"
     fi
+
+    # --- DEVSECOPS FIX: Ensure all configuration defaults & whitelists are applied during update ---
+    define_ssh_port "update"
+    define_wireguard "update"
+    define_os_hardening "update"
+    define_geoblocking "update"
+    define_asnblocking "update"
     select_list_type "update"
     select_mirror "update"
+
+    auto_whitelist_admin
+    process_auto_whitelist "update"
+    # -----------------------------------------------------------------------------------------------
+
     download_list
     download_geoip
     download_asn
     discover_active_services
     apply_firewall_rules
+    configure_fail2ban
     setup_telemetry_backend
     generate_dashboard
+    display_dashboard_info
     echo -e "\n${GREEN}UPDATE SUCCESSFUL${NC}"
 fi
