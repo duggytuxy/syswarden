@@ -191,7 +191,7 @@ For Universal OS (Debian / Ubuntu / RHEL ecosystem):
 
 ```bash
 cd /usr/local/bin/
-wget https://github.com/duggytuxy/syswarden/releases/download/v1.86/install-syswarden.sh
+wget https://github.com/duggytuxy/syswarden/releases/download/v1.87/install-syswarden.sh
 chmod +x install-syswarden.sh
 ./install-syswarden.sh
 ```
@@ -200,7 +200,7 @@ For Alpine Linux (OpenRC):
 
 ```bash
 cd /usr/local/bin/
-wget https://github.com/duggytuxy/syswarden/releases/download/v1.86/install-syswarden-alpine.sh
+wget https://github.com/duggytuxy/syswarden/releases/download/v1.87/install-syswarden-alpine.sh
 chmod +x install-syswarden-alpine.sh
 ./install-syswarden-alpine.sh
 ```
@@ -219,7 +219,7 @@ Paste the following configuration into the file (exemple:)
 
 ```
 # ==============================================================================
-# Version=v1.86
+# Version=v1.87
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
