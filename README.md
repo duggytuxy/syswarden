@@ -108,7 +108,9 @@ Uninstall Syswarden properly while keeping your original settings.
 
 To learn everything about the SysWarden ecosystem, explore detailed configurations, and read advanced usage guides, please visit our dedicated [documentation page](/DOCS.md)
 
-## Target: €3,000/year to fuel continuous DevSecOps improvements and integrations
+## Target and support
+
+> €3,000/year to fuel continuous DevSecOps improvements and integrations
 
 Developing **SysWarden** and curating the zero-false-positive **Data-Shield IPv4 Blocklists** requires dedicated server infrastructure and non-stop threat monitoring. 
 
