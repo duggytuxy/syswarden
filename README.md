@@ -8,7 +8,7 @@
 
 # SysWarden
 
-**An ultra-lightweight DevSecOps firewall orchestrator for Linux.** SysWarden (ver: v2.03) proactively drops 97% of malicious internet traffic by fusing [Data-Shield IPv4 blocklists](https://duggytuxy.github.io/), [IPdeny](https://www.ipdeny.com/ipblocks/), [Spamhaus ASN](https://www.spamhaus.org/drop/asndrop.json), [CINS Army](https://cinsscore.com/list/ci-badguys.txt), [Blocklist.de](https://www.blocklist.de/en/index.html), and dynamic [Fail2ban](https://github.com/fail2ban/fail2ban) jails with a near-zero memory footprint.
+**An ultra-lightweight DevSecOps firewall orchestrator for Linux.** SysWarden (ver: v2.04) proactively drops 97% of malicious internet traffic by fusing [Data-Shield IPv4 blocklists](https://duggytuxy.github.io/), [IPdeny](https://www.ipdeny.com/ipblocks/), [Spamhaus ASN](https://www.spamhaus.org/drop/asndrop.json), [CINS Army](https://cinsscore.com/list/ci-badguys.txt), [Blocklist.de](https://www.blocklist.de/en/index.html), and dynamic [Fail2ban](https://github.com/fail2ban/fail2ban) jails with a near-zero memory footprint.
 
 ## Core Capabilities
 
