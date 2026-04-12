@@ -10,14 +10,28 @@
 
 **An ultra-lightweight DevSecOps firewall orchestrator for Linux.** SysWarden (ver: v2.10) proactively drops 97% of malicious internet traffic by fusing [Data-Shield IPv4 blocklists](https://duggytuxy.github.io/), [IPdeny](https://www.ipdeny.com/ipblocks/), [Spamhaus ASN](https://www.spamhaus.org/drop/asndrop.json), [CINS Army](https://cinsscore.com/list/ci-badguys.txt), [Blocklist.de](https://www.blocklist.de/en/index.html), and dynamic [Fail2ban](https://github.com/fail2ban/fail2ban) jails with a near-zero memory footprint.
 
-## Core Capabilities
+## Enterprise-Grade Features
 
-* **Drop 97% of background noise** and scanner traffic instantly at the kernel level.
+* **Drop 97% of background noise** and scanner traffic instantly.
+* **Layer 2 Hardware Acceleration (Nftables):** Threat intelligence lists are injected directly into a dedicated `netdev` table. Malicious packets are dropped at the Network Interface Card (NIC) ingress hook, bypassing the kernel routing and connection tracking modules entirely for zero CPU overhead during volumetric DDoS attacks.
+* **Pre-Routing Acceleration (IPtables):** Legacy environments benefit from the `raw PREROUTING` chain, dropping massive automated scans before memory-heavy state tracking (`conntrack`) is allocated.
+* **Exclusive SIEM Log Forwarding:** Natively integrates with `rsyslog` (Universal/Alpine) and `syslogd` (Slackware) to forward only Layer 7 behavioral bans (Fail2ban) to an external SOC/SIEM (ISO 27001 / NIS2 compliant), deliberately filtering out noisy Layer 3 blocks to prevent index saturation.
+* **High Availability (HA) Cluster Sync:** Securely replicates threat intelligence states, whitelists, and configurations to a standby node via an automated, SSH-encrypted cron job (`syswarden-sync.sh`).
+* **Scorched Earth Uninstallation:** The uninstall routine performs a deep rollback, ensuring absolute eradication of `netdev` and `raw` tables, instantly restoring the OS networking stack to its pristine original state without requiring a reboot.
 * **Cloak your SSH port** and administration panels behind an invisible WireGuard VPN.
 * **Block hostile countries**, Cybercrime Hosters and rogue Autonomous System Numbers (ASN) automatically.
-* **Protect 46+ services dynamically** (Docker, Nginx, Databases, CMS) via heavily optimized Fail2ban jails.
+* **Protect 51+ services dynamically** (Docker, Nginx, Databases, CMS) via heavily optimized Fail2ban jails.
 * **Monitor live threats** through a secure, self-hosted, and responsive Web Dashboard and CLI Dashboard.
 * **Report attackers automatically** to the global AbuseIPDB network.
+
+## Hardware-Aware Zero Trust Architecture
+
+SysWarden does not simply append rules to standard firewall chains; it fundamentally alters how the Linux kernel handles incoming traffic:
+
+1. **Hardware Ingress Drop (Priority -500):** Using the Nftables `netdev` family (or IPtables `raw PREROUTING`), known malicious IPs from global blocklists, Spamhaus ASNs, and GeoIP restrictions are terminated at the absolute edge of the network interface.
+2. **Stateful Bypass (Priority 0):** Established connections and containerized traffic (Docker `DOCKER-USER` chain) are processed first to ensure zero latency for legitimate application traffic.
+3. **Layer 7 Active Defense:** Fail2ban analyzes application logs (Nginx, Apache, SSH, DevOps tools) and dynamically orchestrates bans against behavioral anomalies (SQLi, LFI, Brute-force).
+4. **Catch-All Guillotine:** Any traffic not explicitly allowed by the administrator or the automated service discovery engine is dropped and logged, enforcing strict Zero Trust.
 
 ## Supported Environments
 
@@ -32,6 +46,16 @@ SysWarden comes with dedicated built-in utilities to maintain and verify your in
 
 * **`syswarden-manager.sh`**: The core administration utility. Use it to manually trigger threat-intel updates, manage your IP whitelists/blocklists, and check the firewall's operational status.
 * **`syswarden-audit.sh`**: A comprehensive DevSecOps auditing tool designed to evaluate your server's security posture, analyze logs, and verify SysWarden's architectural integrity.
+
+## Compliance Auditing
+
+SysWarden includes a strict DevSecOps auditing script (`syswarden-audit.sh`) designed to generate compliance reports for ISO 27001 and NIS2. It maps the active system against expected Zero Trust benchmarks:
+
+* **Phase 1-2:** OS Hardening, Privilege Separation, and Log Anti-Injection.
+* **Phase 3-4:** Hardware Layer 2 Shielding, Threat Intelligence, and Layer 7 Active Defense.
+* **Phase 5-7:** Enterprise Dashboard Telemetry, Zero Trust VPN Cloaking, and Exposed Services mapping (CSPM).
+* **Phase 8:** Enterprise SOC Integration. Verifies SIEM log forwarding paths and High Availability (HA) cluster replication.
+* **Phase 9:** Firewall Idempotency. Scans for ghost rules and duplicated configurations post-update.
 
 ## The Fortress Dashboard
 
@@ -85,6 +109,16 @@ For large-scale infrastructures and Infrastructure as Code (IaC) environments, S
 ```bash
 ./install-syswarden*.sh syswarden-auto.conf
 ```
+
+## Day-2 Operations (SysWarden Manager)
+
+The `syswarden-manager.sh` CLI allows administrators to perform surgical operations on the active firewall without interrupting service. All operations dynamically target the hardware acceleration layers (`netdev` or `raw PREROUTING`) to ensure consistency.
+
+* `check <IP>`: Full XDR diagnostic. Checks local storage, HA sync state, Layer 3 hardware tables, and Layer 7 active behavioral jails.
+* `block <IP>`: Hot-injects an IP directly into the kernel's Layer 2 drop set and ensures persistence.
+* `whitelist <IP>`: Grants absolute VIP access. Injects a bypass rule at the hardware ingress level and updates the Nginx Dashboard ACL.
+* `allow-ssh <IP> [PORT]`: Punctures a targeted hole in the stealth VPN perimeter to allow direct SSH access for a specific IP.
+* `unblock <IP>` / `revoke-ssh <IP>`: Reverts access and safely purges records from hardware memory sets without flushing the entire firewall.
 
 ## Quick uninstall
 
