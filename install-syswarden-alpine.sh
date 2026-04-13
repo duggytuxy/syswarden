@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v2.10"
+VERSION="v2.11"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -3236,7 +3236,7 @@ def monitor_logs():
         proc_f2b.stdout.fileno(): 'f2b'
     }
 
-    # v2.10 Logic: STRICT filter on [SysWarden-BLOCK] only.
+    # v2.11 Logic: STRICT filter on [SysWarden-BLOCK] only.
     regex_fw = re.compile(r"\[SysWarden-BLOCK\].*?SRC=([\d\.]+).*?DPT=(\d+)")
     regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
 
@@ -3898,7 +3898,7 @@ uninstall_syswarden() {
     rm -rf /var/lib/syswarden/* 2>/dev/null || true
     # -------------------------------------------------------------------------
 
-    # --- Clean up all SysWarden Fail2ban filters (Including v2.10 additions) ---
+    # --- Clean up all SysWarden Fail2ban filters (Including v2.11 additions) ---
     for filter in nginx-scanner mariadb-auth mongodb-guard syswarden-privesc syswarden-portscan \
         syswarden-revshell syswarden-aibots syswarden-badbots syswarden-httpflood syswarden-webshell \
         syswarden-sqli-xss syswarden-secretshunter syswarden-ssrf syswarden-jndi-ssti syswarden-apimapper \
@@ -4099,7 +4099,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v2.10 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v2.11 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -4276,7 +4276,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.10 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.11 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -4414,7 +4414,7 @@ function generate_dashboard() {
         <div class="d-flex align-items-center gap-2 px-2 mb-5">
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-            <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 rounded-pill font-mono small ms-auto">v2.10</span>
+            <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 rounded-pill font-mono small ms-auto">v2.11</span>
         </div>
 
         <nav class="flex-grow-1">
@@ -5155,6 +5155,13 @@ check_upgrade() {
     else
         echo -e "${YELLOW}A new Alpine version ($latest_version) is available!${NC}"
 
+        # --- DEVSECOPS: INTERACTIVE CONFIRMATION ---
+        read -p "Do you want to proceed with the automated in-place upgrade now? (y/N): " proceed_upgrade
+        if [[ ! "$proceed_upgrade" =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}Upgrade aborted by user. System remains on $VERSION.${NC}"
+            return
+        fi
+
         # --- SECURITY FIX: MITM PROTECTION & SECURE UPDATE ---
         echo -e "${YELLOW}Downloading and verifying update securely...${NC}"
 
@@ -5172,14 +5179,36 @@ check_upgrade() {
             exit 1
         fi
 
-        echo -e "${GREEN}Checksum validated successfully. Applying update...${NC}"
+        echo -e "${GREEN}Checksum validated successfully. Preparing in-place upgrade...${NC}"
 
-        mv "$TMP_DIR/install-syswarden-alpine.sh" "/root/install-syswarden-alpine.sh"
-        chmod 700 "/root/install-syswarden-alpine.sh"
+        # --- PRE-UPGRADE: SURGICAL PROCESS TERMINATION (OPENRC) ---
+        log "INFO" "Terminating existing SysWarden background processes safely..."
+        pkill -9 -f syswarden-telemetry 2>/dev/null || true
+        pkill -9 -f syswarden_reporter 2>/dev/null || true
 
-        echo -e "${GREEN}Update secured and installed in /root/install-syswarden-alpine.sh${NC}"
-        echo -e "Please run ${YELLOW}./install-syswarden-alpine.sh update${NC} to apply the new orchestrator rules."
-        # -----------------------------------------------------
+        if command -v rc-service >/dev/null; then
+            rc-service syswarden-ui stop 2>/dev/null || true
+            rc-service syswarden-reporter stop 2>/dev/null || true
+        fi
+
+        # --- IN-PLACE SCRIPT REPLACEMENT ---
+        local current_script
+        current_script=$(realpath "$0")
+
+        log "INFO" "Replacing current orchestrator at $current_script..."
+        mv -f "$TMP_DIR/install-syswarden-alpine.sh" "$current_script"
+        chmod 700 "$current_script"
+
+        if [[ ! -f "$CONF_FILE" ]]; then
+            log "WARN" "Configuration file $CONF_FILE missing! The upgrade will behave as a fresh install."
+        else
+            log "INFO" "Configuration file $CONF_FILE found. User settings will be strictly preserved."
+        fi
+
+        echo -e "${GREEN}In-place upgrade sequence initiated. Handing over to the new version...${NC}"
+
+        # --- EXECUTE NEW VERSION (PROCESS HANDOFF) ---
+        exec bash "$current_script" update
     fi
 }
 
@@ -5460,7 +5489,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.10                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.11                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -5481,7 +5510,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.10 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.11 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
@@ -5572,7 +5601,13 @@ download_asn
 log "INFO" "Applying massive downloaded lists to active firewall..."
 discover_active_services
 apply_firewall_rules
-# --------------------------------------
+
+# --- NEW DEVSECOPS UPGRADE LOGIC ---
+# Ensures that both fresh installs and in-place upgrades receive the
+# absolute latest Layer 7 application firewall rules and regex payloads.
+log "INFO" "Applying Layer 7 Application Firewall Rules (Fail2ban)..."
+configure_fail2ban
+# -----------------------------------
 
 detect_protected_services
 
@@ -5580,8 +5615,7 @@ if command -v rc-service >/dev/null && rc-service syswarden-reporter status 2>/d
     rc-service syswarden-reporter restart >/dev/null 2>&1 || true
 fi
 
-# --- HOTFIX: DASHBOARD & FAIL2BAN ORCHESTRATION ---
-# Telemetry & Dashboard ALWAYS run (Install & Update) to deploy/update Nginx and the UI.
+# --- HOTFIX: DASHBOARD & TELEMETRY ORCHESTRATION ---
 setup_telemetry_backend
 generate_dashboard
 # ---------------------------------------------------------
@@ -5619,7 +5653,22 @@ else
     fi
     # --------------------------------------------------------------
 
+    # Restart Fail2ban gracefully to compile the newly injected Python/Regex rules
+    log "INFO" "Restarting Fail2ban engine to compile new definitions..."
+
+    if command -v rc-service >/dev/null; then
+        # --- HOTFIX: SOCKET RACE CONDITION PREVENTION (OPENRC) ---
+        rc-service fail2ban stop >/dev/null 2>&1 || true
+        sleep 5
+        rc-service fail2ban start >/dev/null 2>&1 || true
+    else
+        # Fallback directly to client if OpenRC fails
+        fail2ban-client stop >/dev/null 2>&1 || true
+        sleep 5
+        fail2ban-client start >/dev/null 2>&1 || true
+    fi
+
     # Give clear feedback during an update
     echo -e "\n${GREEN}UPDATE SUCCESSFUL${NC}"
-    echo -e " -> SysWarden Engine & Dashboard UI have been updated to the latest version."
+    echo -e " -> SysWarden Engine (L3/L4 & L7) and Dashboard UI have been updated to the latest version."
 fi
