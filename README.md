@@ -103,16 +103,6 @@ Uninstall Syswarden properly while keeping your original settings.
 ./install-syswarden*.sh uninstall
 ```
 
-## Compliance Auditing
-
-SysWarden includes a strict DevSecOps auditing script (`syswarden-audit.sh`) designed to generate compliance reports for ISO 27001 and NIS2. It maps the active system against expected Zero Trust benchmarks:
-
-* **Phase 1-2:** OS Hardening, Privilege Separation, and Log Anti-Injection.
-* **Phase 3-4:** Hardware Layer 2 Shielding, Threat Intelligence, and Layer 7 Active Defense.
-* **Phase 5-7:** Enterprise Dashboard Telemetry, Zero Trust VPN Cloaking, and Exposed Services mapping (CSPM).
-* **Phase 8:** Enterprise SOC Integration. Verifies SIEM log forwarding paths and High Availability (HA) cluster replication.
-* **Phase 9:** Firewall Idempotency. Scans for ghost rules and duplicated configurations post-update.
-
 ## Documentation
 
 To learn everything about the SysWarden ecosystem, explore detailed configurations, and read advanced usage guides, please visit our dedicated [documentation page](https://syswarden.io/docs/)
