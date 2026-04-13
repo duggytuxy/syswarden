@@ -62,7 +62,7 @@ SysWarden provides dual-layer observability, ensuring you maintain complete situ
 
 **Interactive CLI & Orchestration**
 * **Terminal Dashboard:** Manage your infrastructure directly from the shell using the `syswarden-manager` (instant visibility into blocked IPs, whitelists, and rule idempotency).
-* **Rich Installation Alerts:** The core orchestration scripts (`install-syswarden.sh`) provide structured, color-coded logging for instant feedback on OS hardening, SIEM (Wazuh) integration, and Zero-Trust policy enforcement.
+* **Rich Installation Alerts:** The core orchestration scripts (`install-syswarden.sh alerts`) provide structured, color-coded logging for instant feedback on OS hardening, SIEM (Wazuh) integration, and Zero-Trust policy enforcement.
 
 ## Quick Start
 
