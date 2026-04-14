@@ -33,7 +33,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v2.14"
+VERSION="v2.15"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -1437,7 +1437,7 @@ EOF
             # 3. Allow WireGuard UDP port for tunnel establishment
             firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
 
-            # --- STRICT ZERO TRUST HIERARCHY (v2.14) - DEBIAN PARITY) ---
+            # --- STRICT ZERO TRUST HIERARCHY (v2.15) - DEBIAN PARITY) ---
 
             # Priority -1000: Highest priority. Allow SSH & Dashboard strictly from VPN.
             firewall-cmd --permanent --add-rich-rule="rule priority='-1000' family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
@@ -4628,7 +4628,7 @@ uninstall_syswarden() {
     rm -rf /var/log/syswarden/* 2>/dev/null || true
     # ----------------------------------------------------------------
 
-    # --- Clean up all SysWarden Fail2ban filters (Including v2.14 additions) ---
+    # --- Clean up all SysWarden Fail2ban filters (Including v2.15 additions) ---
     for filter in nginx-scanner mariadb-auth mongodb-guard syswarden-privesc syswarden-portscan \
         syswarden-revshell syswarden-aibots syswarden-badbots syswarden-httpflood syswarden-webshell \
         syswarden-sqli-xss syswarden-secretshunter syswarden-ssrf syswarden-jndi-ssti syswarden-apimapper \
@@ -4920,7 +4920,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.14 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
+# SYSWARDEN v2.15 - TELEMETRY BACKEND (SERVERLESS - IP REGISTRY UPDATE)
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -5090,7 +5090,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.14 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.15 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -5228,7 +5228,7 @@ function generate_dashboard() {
         <div class="d-flex align-items-center gap-2 px-2 mb-5">
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-            <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 rounded-pill font-mono small ms-auto">v2.14</span>
+            <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 rounded-pill font-mono small ms-auto">v2.15</span>
         </div>
 
         <nav class="flex-grow-1">
@@ -6033,17 +6033,23 @@ check_upgrade() {
         # --- SECURITY FIX: MITM PROTECTION & SECURE UPDATE ---
         echo -e "${YELLOW}Downloading and verifying update securely...${NC}"
 
-        wget --https-only --secure-protocol=TLSv1_2 --max-redirect=2 --no-hsts -qO "$TMP_DIR/install-syswarden.sh" "$download_url"
-        wget --https-only --secure-protocol=TLSv1_2 --max-redirect=2 --no-hsts -qO "$TMP_DIR/install-syswarden.sh.sha256" "$hash_url"
+        # --- HOTFIX: SAME-FILE COLLISION PREVENTION ---
+        # Create an isolated sub-directory for the update payload to guarantee
+        # it never collides with the script's current execution path.
+        local UPGRADE_DIR="$TMP_DIR/syswarden_upgrade_payload"
+        mkdir -p "$UPGRADE_DIR"
 
-        cd "$TMP_DIR" || exit 1
+        wget --https-only --secure-protocol=TLSv1_2 --max-redirect=2 --no-hsts -qO "$UPGRADE_DIR/install-syswarden.sh" "$download_url"
+        wget --https-only --secure-protocol=TLSv1_2 --max-redirect=2 --no-hsts -qO "$UPGRADE_DIR/install-syswarden.sh.sha256" "$hash_url"
+
+        cd "$UPGRADE_DIR" || exit 1
 
         if ! sha256sum -c install-syswarden.sh.sha256 --status; then
             echo -e "${RED}[ CRITICAL ALERT ]${NC}"
             echo -e "${RED}The downloaded script failed cryptographic validation!${NC}"
             echo -e "${RED}Possible causes: Man-In-The-Middle (MITM) attack, DNS poisoning, or incomplete download.${NC}"
             echo -e "${RED}Update aborted to protect system integrity.${NC}"
-            rm -f "$TMP_DIR/install-syswarden.sh*"
+            rm -rf "$UPGRADE_DIR"
             exit 1
         fi
 
@@ -6063,11 +6069,13 @@ check_upgrade() {
 
         # --- IN-PLACE SCRIPT REPLACEMENT ---
         local current_script
-        # realpath ensures we target the exact executing script path (e.g. /usr/local/bin or /root)
-        current_script=$(realpath "$0")
+        # realpath ensures we target the exact executing script path
+        current_script=$(realpath "$0" 2>/dev/null || echo "$0")
 
         log "INFO" "Replacing current orchestrator at $current_script..."
-        mv -f "$TMP_DIR/install-syswarden.sh" "$current_script"
+
+        # We explicitly copy instead of move in case the OS locks the executing file
+        cp -f "$UPGRADE_DIR/install-syswarden.sh" "$current_script"
         chmod 700 "$current_script"
 
         # Configuration sanity check
@@ -6080,8 +6088,6 @@ check_upgrade() {
         echo -e "${GREEN}In-place upgrade sequence initiated. Handing over to the new version...${NC}"
 
         # --- EXECUTE NEW VERSION (PROCESS HANDOFF) ---
-        # 'exec' replaces the current bash shell process entirely with the new script.
-        # This ensures no old memory artifacts remain, and the new script directly triggers its 'update' orchestrator.
         exec bash "$current_script" update
     fi
 }
@@ -6388,7 +6394,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.14                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.15                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -6426,7 +6432,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.14 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.15 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
