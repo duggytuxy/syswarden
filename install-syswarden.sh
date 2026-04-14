@@ -6607,5 +6607,5 @@ else
 
     # Give clear feedback during an update
     echo -e "\n${GREEN}UPDATE SUCCESSFUL${NC}"
-    echo -e " -> SysWarden Engine (L3/L4 & L7) and Dashboard UI have been updated to the latest version."
+    echo -e " -> SysWarden Engine (L2/L3 & L7) and Dashboard UI have been updated to the latest version."
 fi

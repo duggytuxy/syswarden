@@ -10,7 +10,7 @@
 
 **SysWarden** is an ultra-lightweight **Host-based Security Orchestrator** for Linux. Acting as a powerful alternative to eBPF/XDP, it drops malicious packets directly at the hardware level (Layer 2) to prevent CPU overhead
 
-By fusing [Data-Shield OSINT blocklists](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), CINS Army, Blocklist.de, GeoIP, ASN tracking, a dynamic L7 WAF (Fail2ban), and a strict Zero-Trust Catch-All policy, it neutralizes 97% of internet noise with a near-zero memory footprint. 
+By fusing [Data-Shield IPv4 blocklists](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), CINS Army, Blocklist.de, GeoIP, ASN tracking, a dynamic L7 WAF (Fail2ban), and a strict Zero-Trust Catch-All policy, it neutralizes 97% of internet noise with a near-zero memory footprint. 
 
 > Built for critical infrastructures, SysWarden enforces automated server hardening to accelerate your ISO 27001 and NIS2 compliance.
 
