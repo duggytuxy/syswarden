@@ -34,7 +34,7 @@ CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
 # shellcheck disable=SC2034
-VERSION="v2.32"
+VERSION="v2.33"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -2995,7 +2995,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.32 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.33 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -3149,7 +3149,7 @@ function generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-flex align-items-baseline gap-2 hide-collapsed">
                 <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-                <span class="stat-label" style="margin-bottom: 0;">v2.32</span>
+                <span class="stat-label" style="margin-bottom: 0;">v2.33</span>
             </div>
         </div>
 
@@ -3370,9 +3370,9 @@ function generate_dashboard() {
                                         <table class="table table-striped table-sm mb-0 small">
                                             <thead style="position: sticky; top: 0; background: var(--sw-card-bg); z-index: 2; border: none; box-shadow: none;">
                                                 <tr>
-                                                    <th class="text-muted small fw-normal pb-2 ps-4">IP ADDRESS</th>
-                                                    <th class="text-muted small fw-normal pb-2">TARGET JAIL</th>
-                                                    <th class="text-muted small fw-normal pb-2 pe-4">TRIGGER</th>
+                                                    <th class="text-muted small fw-normal pb-2 ps-4" style="min-width: 180px; width: 180px;">IP ADDRESS</th>
+                                                    <th class="text-muted small fw-normal pb-2" style="min-width: 160px; width: 160px;">TARGET JAIL</th>
+                                                    <th class="text-muted small fw-normal pb-2 pe-4" style="min-width: 350px;">TRIGGER</th>
                                                 </tr>
                                             </thead>
                                             <tbody id="banned-ips-list"></tbody>
@@ -4007,9 +4007,33 @@ uninstall_syswarden() {
     echo -e "\n${RED}=== Uninstalling SysWarden (Slackware) ===${NC}"
     log "WARN" "Starting Deep Clean Uninstallation (Rollback & Scorched Earth)..."
 
-    # --- 1. PROCESS PURGE ---
+    # --- 1. PROCESS PURGE (DEVSECOPS FIX: GRACEFUL TERMINATION & I/O RELEASE) ---
+    log "INFO" "Sending SIGTERM to gracefully shutdown background processes..."
+
+    # A. Stop Fail2ban FIRST to safely release the SQLite database lock
+    if [[ -x /etc/rc.d/rc.fail2ban ]]; then
+        /etc/rc.d/rc.fail2ban stop 2>/dev/null || true
+    elif command -v fail2ban-client >/dev/null 2>&1; then
+        fail2ban-client stop 2>/dev/null || true
+    fi
+
+    # B. Graceful stop for UI and Telemetry (Allows closing network sockets)
+    pkill -15 -f syswarden-telemetry 2>/dev/null || true
+    pkill -15 -f syswarden_reporter 2>/dev/null || true
+    pkill -15 -f syswarden-ui 2>/dev/null || true
+    pkill -15 -f syswarden-ui-sync 2>/dev/null || true
+
+    # Wait for I/O buffers and database WAL journals to flush to disk
+    sleep 2
+
+    # C. Hunt down any surviving orphans (Absolute SIGKILL)
+    log "INFO" "Executing Scorched Earth (SIGKILL) on surviving orphans..."
     pkill -9 -f syswarden-telemetry 2>/dev/null || true
     pkill -9 -f syswarden_reporter 2>/dev/null || true
+    pkill -9 -f syswarden-ui 2>/dev/null || true
+    pkill -9 -f syswarden-ui-sync 2>/dev/null || true
+    pkill -9 -f fail2ban-server 2>/dev/null || true
+    # ----------------------------------------------------------------------------
 
     # --- 2. RESTORE OS HARDENING (Privileges) ---
     if [[ -f "$SYSWARDEN_DIR/group_backup.txt" ]]; then
@@ -4117,7 +4141,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.32                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.33                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -4136,7 +4160,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.32 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.33 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"

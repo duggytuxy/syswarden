@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v2.32"
+VERSION="v2.33"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -3245,7 +3245,7 @@ def monitor_logs():
         proc_f2b.stdout.fileno(): 'f2b'
     }
 
-    # v2.32 Logic: STRICT filter on [SysWarden-BLOCK] only.
+    # v2.33 Logic: STRICT filter on [SysWarden-BLOCK] only.
     regex_fw = re.compile(r"\[SysWarden-BLOCK\].*?SRC=([\d\.]+).*?DPT=(\d+)")
     regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
 
@@ -3801,18 +3801,23 @@ uninstall_syswarden() {
         rm -f /etc/syswarden/syswarden.nft
         rm -f /etc/nftables.d/syswarden-os-bypass.nft 2>/dev/null || true
 
-        # 2. HOTFIX: Purge rules from RAM matching the SysWarden comments
+        # --- DEVSECOPS FIX: BULLETPROOF NFTABLES HANDLE EXTRACTION ---
+        # Relying on the last field ($NF) is dangerous if Nftables output formatting changes.
+        # We use explicit Regex to strictly isolate the 'handle X' structure, preventing infinite loops.
         for chain in input forward; do
             while nft -a list chain inet filter "$chain" 2>/dev/null | grep -q "SysWarden:"; do
                 local handle
-                handle=$(nft -a list chain inet filter "$chain" 2>/dev/null | grep "SysWarden:" | awk '{print $NF}' | head -n 1)
+                handle=$(nft -a list chain inet filter "$chain" 2>/dev/null | grep "SysWarden:" | grep -oE 'handle [0-9]+' | awk '{print $2}' | head -n 1)
+
                 if [[ -n "$handle" ]]; then
                     nft delete rule inet filter "$chain" handle "$handle" 2>/dev/null || true
                 else
+                    log "WARN" "SAFEGUARD: Could not extract handle for SysWarden rule in '$chain' chain. Breaking loop."
                     break
                 fi
             done
         done
+        # -------------------------------------------------------------
 
         # 3. HOTFIX: Alpine uses .nft, Debian uses .conf
         local MAIN_NFT_CONF="/etc/nftables.nft"
@@ -3880,13 +3885,26 @@ uninstall_syswarden() {
     rc-service syswarden-reporter stop 2>/dev/null || true
     rc-service syswarden-ui stop 2>/dev/null || true
 
-    # 2. Hunt down any surviving processes or active cron jobs
-    pkill -9 fail2ban 2>/dev/null || true
+    # --- DEVSECOPS FIX: GRACEFUL TO SCORCHED EARTH TERMINATION ---
+    # We first send SIGTERM (-15) to allow daemons to cleanly close file descriptors and sockets.
+    log "INFO" "Sending SIGTERM to gracefully shutdown processes..."
+    pkill -15 -f fail2ban 2>/dev/null || true
+    pkill -15 -f syswarden-telemetry 2>/dev/null || true
+    pkill -15 -f syswarden_reporter 2>/dev/null || true
+    pkill -15 -f syswarden-ui 2>/dev/null || true
+    pkill -15 -f syswarden-ui-sync 2>/dev/null || true
+
+    # Wait for I/O buffers to flush natively
+    sleep 2
+
+    # 2. Hunt down any surviving orphans (Absolute SIGKILL)
+    log "INFO" "Executing Scorched Earth (SIGKILL) on surviving orphans..."
+    pkill -9 -f fail2ban 2>/dev/null || true
     pkill -9 -f syswarden-telemetry 2>/dev/null || true
     pkill -9 -f syswarden_reporter 2>/dev/null || true
     pkill -9 -f syswarden-ui 2>/dev/null || true
     pkill -9 -f syswarden-ui-sync 2>/dev/null || true
-    # --------------------------------------------------
+    # -------------------------------------------------------------
 
     # 3. Destroy the SQLite database
     rm -f /var/lib/fail2ban/fail2ban.sqlite3
@@ -3907,7 +3925,7 @@ uninstall_syswarden() {
     rm -rf /var/lib/syswarden/* 2>/dev/null || true
     # -------------------------------------------------------------------------
 
-    # --- Clean up all SysWarden Fail2ban filters (Including v2.32 additions) ---
+    # --- Clean up all SysWarden Fail2ban filters (Including v2.33 additions) ---
     for filter in nginx-scanner mariadb-auth mongodb-guard syswarden-privesc syswarden-portscan \
         syswarden-revshell syswarden-aibots syswarden-badbots syswarden-httpflood syswarden-webshell \
         syswarden-sqli-xss syswarden-secretshunter syswarden-ssrf syswarden-jndi-ssti syswarden-apimapper \
@@ -4108,7 +4126,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v2.32 - TELEMETRY BACKEND
+# SYSWARDEN v2.33 - TELEMETRY BACKEND
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -4382,7 +4400,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.32 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.33 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -4536,7 +4554,7 @@ function generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-flex align-items-baseline gap-2 hide-collapsed">
                 <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-                <span class="stat-label" style="margin-bottom: 0;">v2.32</span>
+                <span class="stat-label" style="margin-bottom: 0;">v2.33</span>
             </div>
         </div>
 
@@ -4757,9 +4775,9 @@ function generate_dashboard() {
                                         <table class="table table-striped table-sm mb-0 small">
                                             <thead style="position: sticky; top: 0; background: var(--sw-card-bg); z-index: 2; border: none; box-shadow: none;">
                                                 <tr>
-                                                    <th class="text-muted small fw-normal pb-2 ps-4">IP ADDRESS</th>
-                                                    <th class="text-muted small fw-normal pb-2">TARGET JAIL</th>
-                                                    <th class="text-muted small fw-normal pb-2 pe-4">TRIGGER</th>
+                                                    <th class="text-muted small fw-normal pb-2 ps-4" style="min-width: 180px; width: 180px;">IP ADDRESS</th>
+                                                    <th class="text-muted small fw-normal pb-2" style="min-width: 160px; width: 160px;">TARGET JAIL</th>
+                                                    <th class="text-muted small fw-normal pb-2 pe-4" style="min-width: 350px;">TRIGGER</th>
                                                 </tr>
                                             </thead>
                                             <tbody id="banned-ips-list"></tbody>
@@ -5872,7 +5890,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.32                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.33                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -5893,7 +5911,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.32 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.33 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"

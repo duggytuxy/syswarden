@@ -33,7 +33,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v2.32"
+VERSION="v2.33"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -1561,7 +1561,7 @@ EOF
             # 3. Allow WireGuard UDP port for tunnel establishment
             firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
 
-            # --- STRICT ZERO TRUST HIERARCHY (v2.32) - DEBIAN PARITY) ---
+            # --- STRICT ZERO TRUST HIERARCHY (v2.33) - DEBIAN PARITY) ---
 
             # Priority -1000: Highest priority. Allow SSH & Dashboard strictly from VPN.
             firewall-cmd --permanent --add-rich-rule="rule priority='-1000' family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
@@ -4503,13 +4503,24 @@ uninstall_syswarden() {
         source "$CONF_FILE"
     fi
 
-    # --- HOTFIX: GLOBAL ZOMBIE PROCESS PURGE ---
-    log "INFO" "Terminating all SysWarden background processes..."
+    # --- DEVSECOPS FIX: GRACEFUL TO SCORCHED EARTH TERMINATION ---
+    # We first send SIGTERM (-15) to allow daemons to cleanly close file descriptors and SQLite transactions.
+    log "INFO" "Sending SIGTERM to gracefully shutdown background processes..."
+    pkill -15 -f syswarden-telemetry 2>/dev/null || true
+    pkill -15 -f syswarden_reporter 2>/dev/null || true
+    pkill -15 -f syswarden-ui 2>/dev/null || true
+    pkill -15 -f syswarden-ui-sync 2>/dev/null || true
+
+    # Wait for I/O buffers to flush natively
+    sleep 2
+
+    # Hunt down any surviving orphans (Absolute SIGKILL)
+    log "INFO" "Executing Scorched Earth (SIGKILL) on surviving orphans..."
     pkill -9 -f syswarden-telemetry 2>/dev/null || true
     pkill -9 -f syswarden_reporter 2>/dev/null || true
     pkill -9 -f syswarden-ui 2>/dev/null || true
     pkill -9 -f syswarden-ui-sync 2>/dev/null || true
-    # --------------------------------------------------
+    # -------------------------------------------------------------
 
     # 1. Stop & Remove Reporter Service
     log "INFO" "Removing SysWarden Reporter..."
@@ -4595,29 +4606,34 @@ uninstall_syswarden() {
         nft delete table inet syswarden_wg 2>/dev/null || true
         rm -f /etc/syswarden/syswarden.nft
 
-        # HOTFIX: Purge ALL Ghost Rules injected in OS tables (Loops through duplicates)
+        # --- DEVSECOPS FIX: BULLETPROOF NFTABLES GHOST RULE PURGE ---
+        # Relying on the last field ($NF) is dangerous if Nftables output formatting changes.
+        # We use explicit Regex to strictly isolate the 'handle X' structure, preventing infinite loops.
         for rule in 'tcp dport 9999 accept' 'udp dport 51820 accept' 'iifname "wg0" accept' 'oifname "wg0" accept'; do
             # Clean INPUT chain
             while nft -a list chain inet filter input 2>/dev/null | grep -q "$rule"; do
                 local handle
-                handle=$(nft -a list chain inet filter input 2>/dev/null | grep "$rule" | awk '{print $NF}' | head -n 1)
+                handle=$(nft -a list chain inet filter input 2>/dev/null | grep "$rule" | grep -oE 'handle [0-9]+' | awk '{print $2}' | head -n 1)
                 if [[ -n "$handle" ]]; then
                     nft delete rule inet filter input handle "$handle" 2>/dev/null || true
                 else
+                    log "WARN" "SAFEGUARD: Could not extract handle in INPUT chain. Breaking loop."
                     break
                 fi
             done
             # Clean FORWARD chain
             while nft -a list chain inet filter forward 2>/dev/null | grep -q "$rule"; do
                 local handle
-                handle=$(nft -a list chain inet filter forward 2>/dev/null | grep "$rule" | awk '{print $NF}' | head -n 1)
+                handle=$(nft -a list chain inet filter forward 2>/dev/null | grep "$rule" | grep -oE 'handle [0-9]+' | awk '{print $2}' | head -n 1)
                 if [[ -n "$handle" ]]; then
                     nft delete rule inet filter forward handle "$handle" 2>/dev/null || true
                 else
+                    log "WARN" "SAFEGUARD: Could not extract handle in FORWARD chain. Breaking loop."
                     break
                 fi
             done
         done
+        # -------------------------------------------------------------
 
         if [[ -f "/etc/nftables.conf" ]]; then
             sed -i '\|include "/etc/syswarden/syswarden.nft"|d' /etc/nftables.conf
@@ -4758,7 +4774,7 @@ uninstall_syswarden() {
     rm -rf /var/log/syswarden/* 2>/dev/null || true
     # ----------------------------------------------------------------
 
-    # --- Clean up all SysWarden Fail2ban filters (Including v2.32 additions) ---
+    # --- Clean up all SysWarden Fail2ban filters (Including v2.33 additions) ---
     for filter in nginx-scanner mariadb-auth mongodb-guard syswarden-privesc syswarden-portscan \
         syswarden-revshell syswarden-aibots syswarden-badbots syswarden-httpflood syswarden-webshell \
         syswarden-sqli-xss syswarden-secretshunter syswarden-ssrf syswarden-jndi-ssti syswarden-apimapper \
@@ -5050,7 +5066,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.32 - TELEMETRY BACKEND
+# SYSWARDEN v2.33 - TELEMETRY BACKEND
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -5317,7 +5333,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.32 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.33 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -5471,7 +5487,7 @@ function generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-flex align-items-baseline gap-2 hide-collapsed">
                 <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-                <span class="stat-label" style="margin-bottom: 0;">v2.32</span>
+                <span class="stat-label" style="margin-bottom: 0;">v2.33</span>
             </div>
         </div>
 
@@ -5692,9 +5708,9 @@ function generate_dashboard() {
                                         <table class="table table-striped table-sm mb-0 small">
                                             <thead style="position: sticky; top: 0; background: var(--sw-card-bg); z-index: 2; border: none; box-shadow: none;">
                                                 <tr>
-                                                    <th class="text-muted small fw-normal pb-2 ps-4">IP ADDRESS</th>
-                                                    <th class="text-muted small fw-normal pb-2">TARGET JAIL</th>
-                                                    <th class="text-muted small fw-normal pb-2 pe-4">TRIGGER</th>
+                                                    <th class="text-muted small fw-normal pb-2 ps-4" style="min-width: 180px; width: 180px;">IP ADDRESS</th>
+                                                    <th class="text-muted small fw-normal pb-2" style="min-width: 160px; width: 160px;">TARGET JAIL</th>
+                                                    <th class="text-muted small fw-normal pb-2 pe-4" style="min-width: 350px;">TRIGGER</th>
                                                 </tr>
                                             </thead>
                                             <tbody id="banned-ips-list"></tbody>
@@ -6892,7 +6908,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.32                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.33                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -6930,7 +6946,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.32 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.33 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
