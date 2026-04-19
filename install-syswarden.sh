@@ -33,7 +33,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v2.35"
+VERSION="v2.36"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -1561,7 +1561,7 @@ EOF
             # 3. Allow WireGuard UDP port for tunnel establishment
             firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
 
-            # --- STRICT ZERO TRUST HIERARCHY (v2.35) - DEBIAN PARITY) ---
+            # --- STRICT ZERO TRUST HIERARCHY (v2.36) - DEBIAN PARITY) ---
 
             # Priority -1000: Highest priority. Allow SSH & Dashboard strictly from VPN.
             firewall-cmd --permanent --add-rich-rule="rule priority='-1000' family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
@@ -4774,7 +4774,7 @@ uninstall_syswarden() {
     rm -rf /var/log/syswarden/* 2>/dev/null || true
     # ----------------------------------------------------------------
 
-    # --- Clean up all SysWarden Fail2ban filters (Including v2.35 additions) ---
+    # --- Clean up all SysWarden Fail2ban filters (Including v2.36 additions) ---
     for filter in nginx-scanner mariadb-auth mongodb-guard syswarden-privesc syswarden-portscan \
         syswarden-revshell syswarden-aibots syswarden-badbots syswarden-httpflood syswarden-webshell \
         syswarden-sqli-xss syswarden-secretshunter syswarden-ssrf syswarden-jndi-ssti syswarden-apimapper \
@@ -5066,7 +5066,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.35 - TELEMETRY BACKEND
+# SYSWARDEN v2.36 - TELEMETRY BACKEND
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -5292,7 +5292,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.35 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.36 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -5422,11 +5422,6 @@ function generate_dashboard() {
         .table > :not(caption) > * > * { background-color: transparent !important; border-color: var(--sw-border) !important; }
         .ip-font { font-size: 85% !important; }
         
-        /* Striped Services Table */
-        .table-striped > tbody > tr:nth-of-type(odd) > * {
-            --bs-table-bg-type: var(--sw-sidebar-hover);
-        }
-
         /* Mobile Adjustments */
         @media (max-width: 991px) {
             .sidebar { position: fixed; transform: translateX(-100%); width: 280px !important; }
@@ -5446,7 +5441,7 @@ function generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-flex align-items-baseline gap-2 hide-collapsed">
                 <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-                <span class="stat-label" style="margin-bottom: 0;">v2.35</span>
+                <span class="stat-label" style="margin-bottom: 0;">v2.36</span>
             </div>
         </div>
 
@@ -5623,11 +5618,11 @@ function generate_dashboard() {
                     <div class="row g-4">
                         <div class="col-xl-6">
                             <div class="card h-100">
-                                <div class="card-header bg-transparent pt-4 pb-3 px-4">🎯 Top Attackers (OSINT History)</div>
+                                <div class="card-header bg-transparent pt-4 pb-3 px-4 border-bottom-0">🎯 Top Attackers (OSINT History)</div>
                                 <div class="card-body p-0">
                                     <div class="table-responsive table-container">
-                                        <table class="table table-striped table-sm mb-0 small">
-                                            <thead style="position: sticky; top: 0; background: var(--sw-card-bg); z-index: 2; border: none; box-shadow: none;">
+                                        <table class="table table-sm mb-0 small">
+                                            <thead style="position: sticky; top: 0; background: var(--sw-card-bg); z-index: 2; border: none; box-shadow: inset 0 -1px 0 var(--sw-border);">
                                                 <tr>
                                                     <th class="text-muted small fw-normal pb-2 ps-4">IP ADDRESS</th>
                                                     <th class="text-end text-muted small fw-normal pb-2 pe-4">HITS</th>
@@ -5642,11 +5637,11 @@ function generate_dashboard() {
                         
                         <div class="col-xl-6">
                             <div class="card h-100">
-                                <div class="card-header bg-transparent pt-4 pb-3 px-4">🏢 Jails Load Distribution</div>
+                                <div class="card-header bg-transparent pt-4 pb-3 px-4 border-bottom-0">🏢 Jails Load Distribution</div>
                                 <div class="card-body p-0">
-                                    <div class="table-responsive table-container">
-                                        <table class="table table-striped table-sm mb-0 small">
-                                            <thead style="position: sticky; top: 0; background: var(--sw-card-bg); z-index: 2; border: none; box-shadow: none;">
+                                    <div class="table-responsive table-container" style="max-height: 350px; overflow-y: auto;">
+                                        <table class="table table-sm mb-0 small">
+                                            <thead style="position: sticky; top: 0; background: var(--sw-card-bg); z-index: 2; border: none; box-shadow: inset 0 -1px 0 var(--sw-border);">
                                                 <tr>
                                                     <th class="text-muted small fw-normal pb-2 ps-4">TARGET JAIL</th>
                                                     <th class="text-end text-muted small fw-normal pb-2 pe-4">LOAD</th>
@@ -5661,11 +5656,11 @@ function generate_dashboard() {
 
                         <div class="col-12">
                             <div class="card">
-                                <div class="card-header bg-transparent pt-4 pb-3 px-4">🔴 L7 Banned IP Registry (Live Jail Allocations)</div>
+                                <div class="card-header bg-transparent pt-4 pb-3 px-4 border-bottom-0">🔴 L7 Banned IP Registry (Live Jail Allocations)</div>
                                 <div class="card-body p-0">
                                     <div class="table-responsive table-container" style="max-height: 450px;">
-                                        <table class="table table-striped table-sm mb-0 small">
-                                            <thead style="position: sticky; top: 0; background: var(--sw-card-bg); z-index: 2; border: none; box-shadow: none;">
+                                        <table class="table table-sm mb-0 small">
+                                            <thead style="position: sticky; top: 0; background: var(--sw-card-bg); z-index: 2; border: none;">
                                                 <tr>
                                                     <th class="text-muted small fw-normal pb-2 ps-4" style="min-width: 170px; width: 170px;">IP ADDRESS</th>
                                                     <th class="text-muted small fw-normal pb-2" style="min-width: 160px; width: 160px;">TARGET JAIL</th>
@@ -5725,7 +5720,7 @@ function generate_dashboard() {
                                     ⚙️ Core Processes
                                 </div>
                                 <div class="card-body px-0 pt-0">
-                                    <table class="table table-striped table-sm mb-0 small">
+                                    <table class="table table-sm mb-0 small">
                                         <tbody id="sys-services-list"></tbody>
                                     </table>
                                 </div>
@@ -6023,13 +6018,13 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('signal-bar').style.width = `${signalPercent}%`;
             // ----------------------------------------------------
             
-            // Inject Striped Services Table
+            // Inject Services Table
             const srvEl = document.getElementById('sys-services-list');
             if(data.system.services && srvEl) {
                 srvEl.innerHTML = data.system.services.map(srv => `
                     <tr>
-                        <td class="text-body fw-bold align-middle border-0 py-2 ps-4">${srv.name}</td>
-                        <td class="text-end align-middle border-0 py-2 pe-4">
+                        <td class="text-body fw-bold align-middle py-3 ps-4">${srv.name}</td>
+                        <td class="text-end align-middle py-3 pe-4">
                             ${srv.status === 'active' 
                                 ? '<span class="badge bg-success bg-opacity-10 text-success rounded-pill border border-success border-opacity-25 px-3">ACTIVE</span>' 
                                 : '<span class="badge bg-danger bg-opacity-10 text-danger rounded-pill border border-danger border-opacity-25 px-3">OFFLINE</span>'}
@@ -6050,30 +6045,30 @@ document.addEventListener('DOMContentLoaded', () => {
             if(data.layer7.top_attackers.length > 0) {
                 topIpsEl.innerHTML = data.layer7.top_attackers.map(attacker => `
                     <tr>
-                        <td class="align-middle border-0 py-2 ps-4 font-mono"><a href="https://www.abuseipdb.com/check/${attacker.ip}" target="_blank" rel="noopener noreferrer" class="text-decoration-none ip-font" style="color: var(--sw-text);">${attacker.ip}</a></td>
-                        <td class="text-end align-middle border-0 py-2 pe-4 font-mono text-body-secondary">${attacker.count.toLocaleString()}</td>
+                        <td class="align-middle py-3 ps-4 font-mono"><a href="https://www.abuseipdb.com/check/${attacker.ip}" target="_blank" rel="noopener noreferrer" class="text-decoration-none ip-font" style="color: var(--sw-text);">${attacker.ip}</a></td>
+                        <td class="text-end align-middle py-3 pe-4 font-mono text-body-secondary">${attacker.count.toLocaleString()}</td>
                     </tr>`).join('');
-            } else { topIpsEl.innerHTML = `<tr><td colspan="2" class="text-center text-muted small py-4 border-0">No attackers recorded.</td></tr>`; }
+            } else { topIpsEl.innerHTML = `<tr><td colspan="2" class="text-center text-muted small py-4">No attackers recorded.</td></tr>`; }
 
             const jailsEl = document.getElementById('top-jails-list');
             if(data.layer7.jails_data.length > 0) {
                 jailsEl.innerHTML = [...data.layer7.jails_data].sort((a, b) => b.count - a.count).map(jail => `
                     <tr>
-                        <td class="align-middle border-0 py-2 ps-4 font-mono"><span class="badge rounded-pill" style="${getJailBadgeStyle(jail.name)}">${jail.name}</span></td>
-                        <td class="text-end align-middle border-0 py-2 pe-4 font-mono text-body-secondary">${jail.count}</td>
+                        <td class="align-middle py-3 ps-4 font-mono"><span class="badge rounded-pill" style="${getJailBadgeStyle(jail.name)}">${jail.name}</span></td>
+                        <td class="text-end align-middle py-3 pe-4 font-mono text-body-secondary">${jail.count}</td>
                     </tr>`).join('');
-            } else { jailsEl.innerHTML = `<tr><td colspan="2" class="text-center text-muted small py-4 border-0">No active jails loaded.</td></tr>`; }
+            } else { jailsEl.innerHTML = `<tr><td colspan="2" class="text-center text-muted small py-4">No active jails loaded.</td></tr>`; }
 
             const bannedEl = document.getElementById('banned-ips-list');
             if(data.layer7.banned_ips.length > 0) {
                 bannedEl.innerHTML = [...data.layer7.banned_ips].reverse().map(entry => `
                     <tr>
-                        <td class="align-middle border-0 py-2 ps-4 font-mono"><a href="https://www.abuseipdb.com/check/${entry.ip}" target="_blank" rel="noopener noreferrer" class="text-decoration-none ip-font" style="color: var(--sw-text);">${entry.ip}</a></td>
-                        <td class="align-middle border-0 py-2 font-mono"><span class="badge rounded-pill" style="${getJailBadgeStyle(entry.jail)}">${entry.jail}</span></td>
-                        <td class="align-middle border-0 py-2 font-mono text-muted small" style="font-size: 0.75rem;">${entry.timestamp || 'N/A'}</td>
-                        <td class="align-middle border-0 py-2 pe-4 font-mono text-muted small text-nowrap" style="font-size: 0.75rem;">${entry.payload || 'N/A'}</td>
+                        <td class="align-middle py-3 ps-4 font-mono"><a href="https://www.abuseipdb.com/check/${entry.ip}" target="_blank" rel="noopener noreferrer" class="text-decoration-none ip-font" style="color: var(--sw-text);">${entry.ip}</a></td>
+                        <td class="align-middle py-3 font-mono"><span class="badge rounded-pill" style="${getJailBadgeStyle(entry.jail)}">${entry.jail}</span></td>
+                        <td class="align-middle py-3 font-mono text-muted small" style="font-size: 0.75rem;">${entry.timestamp || 'N/A'}</td>
+                        <td class="align-middle py-3 pe-4 font-mono text-muted small text-nowrap" style="font-size: 0.75rem;">${entry.payload || 'N/A'}</td>
                     </tr>`).join('');
-            } else { bannedEl.innerHTML = `<tr><td colspan="4" class="text-center text-muted small py-5 border-0">Registry is empty. Architecture is secure.</td></tr>`; }
+            } else { bannedEl.innerHTML = `<tr><td colspan="4" class="text-center text-muted small py-5">Registry is empty. Architecture is secure.</td></tr>`; }
 
             // Chart Updater (Live Timeline)
             const now = new Date();
@@ -6869,7 +6864,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.35                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.36                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -6907,7 +6902,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.35 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.36 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
