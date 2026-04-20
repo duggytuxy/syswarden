@@ -33,7 +33,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v2.40"
+VERSION="v2.41"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -1561,7 +1561,7 @@ EOF
             # 3. Allow WireGuard UDP port for tunnel establishment
             firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
 
-            # --- STRICT ZERO TRUST HIERARCHY (v2.40) - DEBIAN PARITY) ---
+            # --- STRICT ZERO TRUST HIERARCHY (v2.41) - DEBIAN PARITY) ---
 
             # Priority -1000: Highest priority. Allow SSH & Dashboard strictly from VPN.
             firewall-cmd --permanent --add-rich-rule="rule priority='-1000' family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
@@ -4493,9 +4493,35 @@ EOF
     fi
 }
 
+# ==============================================================================
+# Function: uninstall_syswarden
+# Purpose: Safely and completely removes SysWarden and all its components.
+#          Restores the system to its pre-installation state (Scorched Earth).
+# Arguments: None
+# Returns: 0 on successful removal, exits 1 on critical failure.
+# ==============================================================================
 uninstall_syswarden() {
+    # --- DEFENSE IN DEPTH: Absolute Privilege Check ---
+    if [[ $EUID -ne 0 ]]; then
+        log "ERROR" "CRITICAL: uninstall_syswarden() must be executed as root."
+        exit 1
+    fi
+
     echo -e "\n${RED}=== Uninstalling SysWarden ===${NC}"
     log "WARN" "Starting Deep Clean Uninstallation (Scorched Earth)..."
+
+    # --- LOCAL VARIABLE DECLARATIONS (Strict Scope Enforcement) ---
+    local os_log
+    local filter
+    local rule
+    local handle
+    local user_dir
+    local profile_file
+    local rm_wazuh="N"
+    local active_jails
+    local user
+    local grp
+    local members
 
     # Load config to retrieve variables
     if [[ -f "$CONF_FILE" ]]; then
@@ -4506,20 +4532,20 @@ uninstall_syswarden() {
     # --- DEVSECOPS FIX: GRACEFUL TO SCORCHED EARTH TERMINATION ---
     # We first send SIGTERM (-15) to allow daemons to cleanly close file descriptors and SQLite transactions.
     log "INFO" "Sending SIGTERM to gracefully shutdown background processes..."
-    pkill -15 -f syswarden-telemetry 2>/dev/null || true
-    pkill -15 -f syswarden_reporter 2>/dev/null || true
-    pkill -15 -f syswarden-ui 2>/dev/null || true
-    pkill -15 -f syswarden-ui-sync 2>/dev/null || true
+    pkill -15 -f "^/bin/bash.*syswarden-telemetry" 2>/dev/null || true
+    pkill -15 -f "syswarden_reporter.py" 2>/dev/null || true
+    pkill -15 -f "syswarden-ui-server.py" 2>/dev/null || true
+    pkill -15 -f "syswarden-ui-sync" 2>/dev/null || true
 
     # Wait for I/O buffers to flush natively
     sleep 2
 
     # Hunt down any surviving orphans (Absolute SIGKILL)
     log "INFO" "Executing Scorched Earth (SIGKILL) on surviving orphans..."
-    pkill -9 -f syswarden-telemetry 2>/dev/null || true
-    pkill -9 -f syswarden_reporter 2>/dev/null || true
-    pkill -9 -f syswarden-ui 2>/dev/null || true
-    pkill -9 -f syswarden-ui-sync 2>/dev/null || true
+    pkill -9 -f "^/bin/bash.*syswarden-telemetry" 2>/dev/null || true
+    pkill -9 -f "syswarden_reporter.py" 2>/dev/null || true
+    pkill -9 -f "syswarden-ui-server.py" 2>/dev/null || true
+    pkill -9 -f "syswarden-ui-sync" 2>/dev/null || true
     # -------------------------------------------------------------
 
     # 1. Stop & Remove Reporter Service
@@ -4537,7 +4563,7 @@ uninstall_syswarden() {
     rm -rf /etc/syswarden/ui
     rm -f /var/log/syswarden-audit.log
 
-    # --- NOUVEAU : PURGE DU MOTEUR HA CLUSTER ---
+    # --- HA CLUSTER ENGINE PURGE ---
     log "INFO" "Removing HA Cluster Sync Engine..."
     rm -f /usr/local/bin/syswarden-sync.sh
     if crontab -l 2>/dev/null | grep -q "syswarden-sync"; then
@@ -4598,7 +4624,7 @@ uninstall_syswarden() {
     log "INFO" "Cleaning Firewall Rules..."
 
     if command -v nft >/dev/null; then
-        # --- NOUVEAU : PURGE DE LA TABLE NETDEV (L2 HARDWARE DROP) ---
+        # --- NETDEV TABLE PURGE (L2 HARDWARE DROP) ---
         nft delete table netdev syswarden_hw_drop 2>/dev/null || true
         # -------------------------------------------------------------
         nft delete table inet syswarden_table 2>/dev/null || true
@@ -4607,12 +4633,9 @@ uninstall_syswarden() {
         rm -f /etc/syswarden/syswarden.nft
 
         # --- DEVSECOPS FIX: BULLETPROOF NFTABLES GHOST RULE PURGE ---
-        # Relying on the last field ($NF) is dangerous if Nftables output formatting changes.
-        # We use explicit Regex to strictly isolate the 'handle X' structure, preventing infinite loops.
         for rule in 'tcp dport 9999 accept' 'udp dport 51820 accept' 'iifname "wg0" accept' 'oifname "wg0" accept'; do
             # Clean INPUT chain
             while nft -a list chain inet filter input 2>/dev/null | grep -q "$rule"; do
-                local handle
                 handle=$(nft -a list chain inet filter input 2>/dev/null | grep "$rule" | grep -oE 'handle [0-9]+' | awk '{print $2}' | head -n 1)
                 if [[ -n "$handle" ]]; then
                     nft delete rule inet filter input handle "$handle" 2>/dev/null || true
@@ -4623,7 +4646,6 @@ uninstall_syswarden() {
             done
             # Clean FORWARD chain
             while nft -a list chain inet filter forward 2>/dev/null | grep -q "$rule"; do
-                local handle
                 handle=$(nft -a list chain inet filter forward 2>/dev/null | grep "$rule" | grep -oE 'handle [0-9]+' | awk '{print $2}' | head -n 1)
                 if [[ -n "$handle" ]]; then
                     nft delete rule inet filter forward handle "$handle" 2>/dev/null || true
@@ -4640,7 +4662,6 @@ uninstall_syswarden() {
             sed -i '/# Added by SysWarden/d' /etc/nftables.conf
 
             # HOTFIX: Persist the cleaned table!
-            # The installer overwrote this file originally, so we must snapshot the cleaned memory back to it.
             if grep -q "flush ruleset" /etc/nftables.conf; then
                 echo '#!/usr/sbin/nft -f' >/etc/nftables.conf
                 echo 'flush ruleset' >>/etc/nftables.conf
@@ -4682,7 +4703,7 @@ uninstall_syswarden() {
             while iptables -D DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2>/dev/null; do :; done
         fi
 
-        # IPtables Standard (Purge des IPsets et de la table RAW)
+        # IPtables Standard (Purge of IPsets and RAW table)
         while iptables -t raw -D PREROUTING -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; do :; done
         while iptables -t raw -D PREROUTING -m set --match-set "$SET_NAME" src -j LOG --log-prefix "[SysWarden-BLOCK] " 2>/dev/null; do :; done
         while iptables -t raw -D PREROUTING -m set --match-set "$GEOIP_SET_NAME" src -j DROP 2>/dev/null; do :; done
@@ -4695,8 +4716,6 @@ uninstall_syswarden() {
         while iptables -D INPUT -m set --match-set "$ASN_SET_NAME" src -j DROP 2>/dev/null; do :; done
 
         # --- HOTFIX: IPTABLES-NFT GHOST RULE PURGE ---
-        # We must explicitly delete old dynamically injected ports using the exact iptables syntax
-        # so the iptables-nft translation layer can find and destroy them properly.
         log "INFO" "Purging translated iptables-nft ghost rules..."
         while iptables -D INPUT -p tcp --dport 9999 -j ACCEPT 2>/dev/null; do :; done
         while iptables -D INPUT -p udp --dport "${WG_PORT:-51820}" -j ACCEPT 2>/dev/null; do :; done
@@ -4749,10 +4768,6 @@ uninstall_syswarden() {
 
     # =====================================================================
     # --- HOTFIX: SCORCHED EARTH OS LOG SCRUBBING (ANTI-GHOST) ---
-    # System logs and Systemd journals retain a deep history of "Ban" events.
-    # A future re-installation would parse these old logs and resurrect ghost IPs.
-
-    # 1. Surgically scrub plaintext files (Alma/RHEL heavily uses /var/log/messages)
     for os_log in "/var/log/messages" "/var/log/syslog" "/var/log/daemon.log"; do
         if [[ -f "$os_log" ]]; then
             sed -i '/\] Ban /d' "$os_log" 2>/dev/null || true
@@ -4760,8 +4775,7 @@ uninstall_syswarden() {
         fi
     done
 
-    # 2. Flush the Systemd Journal (The actual source of ghosts on AlmaLinux)
-    # We rotate the active journal and vacuum it to forcefully wipe old binary traces.
+    # Flush the Systemd Journal
     if command -v journalctl >/dev/null 2>&1; then
         journalctl --flush >/dev/null 2>&1 || true
         journalctl --rotate >/dev/null 2>&1 || true
@@ -4774,7 +4788,7 @@ uninstall_syswarden() {
     rm -rf /var/log/syswarden/* 2>/dev/null || true
     # ----------------------------------------------------------------
 
-    # --- Clean up all SysWarden Fail2ban filters (Including v2.40 additions) ---
+    # --- Clean up all SysWarden Fail2ban filters ---
     for filter in nginx-scanner mariadb-auth mongodb-guard syswarden-privesc syswarden-portscan \
         syswarden-revshell syswarden-aibots syswarden-badbots syswarden-httpflood syswarden-webshell \
         syswarden-sqli-xss syswarden-secretshunter syswarden-ssrf syswarden-jndi-ssti syswarden-apimapper \
@@ -4814,19 +4828,15 @@ EOF
     fi
 
     # 5. Remove Nginx Dashboard (State Aware)
-
     # --- HOTFIX: CLEAN UNINSTALL ---
-    # Remove Nginx virtual host configurations unconditionally
     log "INFO" "Removing Nginx UI configuration..."
     rm -f /etc/nginx/conf.d/syswarden-ui.conf
     rm -f /etc/nginx/sites-available/syswarden-ui.conf
     rm -f /etc/nginx/sites-enabled/syswarden-ui.conf
 
-    # Reload Nginx gracefully if it is still running
     if systemctl is-active --quiet nginx; then
         systemctl reload nginx >/dev/null 2>&1 || true
     fi
-    # --------------------------------------
 
     if [[ "${NGINX_INSTALLED_BY_SYSWARDEN:-n}" == "y" ]]; then
         log "INFO" "Purging Nginx (installed by SysWarden)..."
@@ -4834,9 +4844,16 @@ EOF
         if [[ -f /etc/debian_version ]]; then apt-get purge -y nginx 2>/dev/null || true; else dnf remove -y nginx 2>/dev/null || true; fi
     fi
 
-    # 6. Remove Wazuh Agent
+    # 6. Remove Wazuh Agent (With Auto-Mode CI/CD Protection)
     if command -v systemctl >/dev/null && systemctl list-unit-files | grep -q wazuh-agent; then
-        read -p "Do you also want to UNINSTALL the Wazuh Agent? (y/N): " rm_wazuh
+        # CI/CD SAFEGUARD: Don't hang on read prompt if running unattended
+        if [[ "${MODE:-}" == "auto" ]]; then
+            log "INFO" "Auto Mode: Skipping Wazuh Agent uninstallation to prevent accidental SIEM disconnection."
+            rm_wazuh="N"
+        else
+            read -r -p "Do you also want to UNINSTALL the Wazuh Agent? (y/N): " rm_wazuh
+        fi
+
         if [[ "$rm_wazuh" =~ ^[Yy]$ ]]; then
             log "INFO" "Removing Wazuh Agent..."
             systemctl disable --now wazuh-agent 2>/dev/null || true
@@ -4854,9 +4871,8 @@ EOF
     # --- 7. OS & SECURITY REVERT ---
     log "INFO" "Reverting OS Hardening & Log Routing..."
 
-    # --- NOUVEAU : PURGE DU FORWARDING SIEM (ISO 27001) ---
+    # SIEM Forwarding Purge
     rm -f /etc/rsyslog.d/99-syswarden-siem.conf 2>/dev/null || true
-    # ------------------------------------------------------
 
     if [[ -f /etc/rsyslog.conf ]]; then
         sed -i '/kern-firewall\.log/d' /etc/rsyslog.conf
@@ -4864,10 +4880,9 @@ EOF
         if command -v systemctl >/dev/null; then systemctl restart rsyslog 2>/dev/null || true; fi
     fi
 
-    # --- HOTFIX: PURGE PHYSICAL ISOLATED LOGS ---
+    # Isolated Logs Purge
     rm -f /var/log/kern-firewall.log 2>/dev/null || true
     rm -f /var/log/auth-syswarden.log 2>/dev/null || true
-    # --------------------------------------------------
 
     if command -v chattr >/dev/null; then
         for user_dir in /home/*; do
@@ -4894,7 +4909,6 @@ EOF
             done
         done <"$SYSWARDEN_DIR/group_backup.txt"
     fi
-    # --------------------------------
 
     # --- HOTFIX: ABSOLUTE FILE SYSTEM SCORCHED EARTH ---
     rm -rf "$SYSWARDEN_DIR" # This automatically removes /etc/syswarden/ssl (Self-signed certs)
@@ -5066,7 +5080,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.40 - TELEMETRY BACKEND
+# SYSWARDEN v2.41 - TELEMETRY BACKEND
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -5390,7 +5404,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.40 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.41 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -5539,7 +5553,7 @@ function generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-flex align-items-baseline gap-2 hide-collapsed">
                 <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-                <span class="stat-label" style="margin-bottom: 0;">v2.40</span>
+                <span class="stat-label" style="margin-bottom: 0;">v2.41</span>
             </div>
         </div>
 
@@ -7084,7 +7098,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.40                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.41                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -7122,7 +7136,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.40 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.41 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"

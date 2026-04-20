@@ -34,7 +34,7 @@ CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
 # shellcheck disable=SC2034
-VERSION="v2.40"
+VERSION="v2.41"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -3094,7 +3094,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.40 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.41 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -3243,7 +3243,7 @@ function generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-flex align-items-baseline gap-2 hide-collapsed">
                 <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-                <span class="stat-label" style="margin-bottom: 0;">v2.40</span>
+                <span class="stat-label" style="margin-bottom: 0;">v2.41</span>
             </div>
         </div>
 
@@ -4221,11 +4221,16 @@ show_alerts() {
     }' || true
 }
 
+# ==============================================================================
+# FUNCTION: uninstall_syswarden
+# DESCRIPTION: Performs a "Scorched Earth" uninstallation of SysWarden.
+# It safely removes all rules, restores original configurations, and cleans up.
+# ==============================================================================
 uninstall_syswarden() {
     echo -e "\n${RED}=== Uninstalling SysWarden (Slackware) ===${NC}"
     log "WARN" "Starting Deep Clean Uninstallation (Rollback & Scorched Earth)..."
 
-    # --- 1. PROCESS PURGE (DEVSECOPS FIX: GRACEFUL TERMINATION & I/O RELEASE) ---
+    # --- 1. PROCESS PURGE (DEVSECOPS FIX: PID & PRECISE MATCHING) ---
     log "INFO" "Sending SIGTERM to gracefully shutdown background processes..."
 
     # A. Stop Fail2ban FIRST to safely release the SQLite database lock
@@ -4235,31 +4240,40 @@ uninstall_syswarden() {
         fail2ban-client stop 2>/dev/null || true
     fi
 
-    # B. Graceful stop for UI and Telemetry (Allows closing network sockets)
-    pkill -15 -f syswarden-telemetry 2>/dev/null || true
-    pkill -15 -f syswarden_reporter 2>/dev/null || true
-    pkill -15 -f syswarden-ui 2>/dev/null || true
-    pkill -15 -f syswarden-ui-sync 2>/dev/null || true
+    # B. Graceful stop for UI and Telemetry (using PID files where available to prevent collateral damage)
+    if [[ -f "/var/run/syswarden-reporter.pid" ]]; then
+        kill -15 "$(cat /var/run/syswarden-reporter.pid)" 2>/dev/null || true
+        rm -f "/var/run/syswarden-reporter.pid"
+    else
+        # Fallback with exact script path match to avoid killing legitimate editors
+        pkill -15 -f "/usr/local/bin/syswarden_reporter.py" 2>/dev/null || true
+    fi
+    pkill -15 -f "/usr/local/bin/syswarden-telemetry.sh" 2>/dev/null || true
 
     # Wait for I/O buffers and database WAL journals to flush to disk
     sleep 2
 
     # C. Hunt down any surviving orphans (Absolute SIGKILL)
     log "INFO" "Executing Scorched Earth (SIGKILL) on surviving orphans..."
-    pkill -9 -f syswarden-telemetry 2>/dev/null || true
-    pkill -9 -f syswarden_reporter 2>/dev/null || true
-    pkill -9 -f syswarden-ui 2>/dev/null || true
-    pkill -9 -f syswarden-ui-sync 2>/dev/null || true
-    pkill -9 -f fail2ban-server 2>/dev/null || true
+    pkill -9 -f "/usr/local/bin/syswarden-telemetry.sh" 2>/dev/null || true
+    pkill -9 -f "/usr/local/bin/syswarden_reporter.py" 2>/dev/null || true
+    pkill -9 -x fail2ban-server 2>/dev/null || true
     # ----------------------------------------------------------------------------
 
     # --- 2. RESTORE OS HARDENING (Privileges) ---
+    # DEVSECOPS FIX: Input validation on user and group existence before modifying
     if [[ -f "$SYSWARDEN_DIR/group_backup.txt" ]]; then
         log "INFO" "Restoring user privileges (wheel/adm groups)..."
         while IFS=':' read -r grp members; do
-            for user in $(echo "$members" | tr ',' ' '); do
-                [[ -n "$user" ]] && gpasswd -a "$user" "$grp" >/dev/null 2>&1 || true
-            done
+            # Check if group exists
+            if grep -q "^${grp}:" /etc/group 2>/dev/null; then
+                for user in $(echo "$members" | tr ',' ' '); do
+                    # Check if user string is not empty and user exists on system
+                    if [[ -n "$user" ]] && id "$user" >/dev/null 2>&1; then
+                        gpasswd -a "$user" "$grp" >/dev/null 2>&1 || true
+                    fi
+                done
+            fi
         done <"$SYSWARDEN_DIR/group_backup.txt"
     fi
 
@@ -4281,11 +4295,12 @@ uninstall_syswarden() {
     rm -f /etc/rc.d/rc.wireguard /etc/wireguard/wg0.conf
     rm -rf /etc/wireguard/clients
 
-    # Clear rc.local entries
+    # Clear rc.local entries (Ensured complete cleanup of all components)
     if [[ -f /etc/rc.d/rc.local ]]; then
         sed -i '/rc\.syswarden-firewall/d' /etc/rc.d/rc.local
         sed -i '/rc\.syswarden-reporter/d' /etc/rc.d/rc.local
         sed -i '/rc\.wireguard/d' /etc/rc.d/rc.local
+        sed -i '/rc\.syswarden-siem/d' /etc/rc.d/rc.local
     fi
 
     # --- 5. SURGICAL FIREWALL REMOVAL ---
@@ -4294,24 +4309,45 @@ uninstall_syswarden() {
         nft delete table inet syswarden_table 2>/dev/null || true
         nft delete table inet syswarden_wg 2>/dev/null || true
     elif command -v iptables >/dev/null 2>&1; then
-        iptables-save | grep -v 'SysWarden' | iptables-restore 2>/dev/null || true
+        # DEVSECOPS FIX: Dry-run test before restoring to avoid locking out the admin
+        local TMP_IPTABLES
+        TMP_IPTABLES=$(mktemp)
+        iptables-save | grep -v 'SysWarden' >"$TMP_IPTABLES"
+
+        if iptables-restore -t <"$TMP_IPTABLES" 2>/dev/null; then
+            iptables-restore <"$TMP_IPTABLES"
+        else
+            log "WARN" "Iptables restore test failed. Preserving current rules to avoid SSH lockout."
+        fi
+
         iptables -t raw -S PREROUTING 2>/dev/null | grep -v 'SysWarden' | iptables-restore -c -T raw 2>/dev/null || true
-        ipset destroy $SET_NAME 2>/dev/null || true
-        ipset destroy $GEOIP_SET_NAME 2>/dev/null || true
-        ipset destroy $ASN_SET_NAME 2>/dev/null || true
+        rm -f "$TMP_IPTABLES"
+
+        ipset destroy "$SET_NAME" 2>/dev/null || true
+        ipset destroy "$GEOIP_SET_NAME" 2>/dev/null || true
+        ipset destroy "$ASN_SET_NAME" 2>/dev/null || true
     fi
     if [[ -x /etc/rc.d/rc.syswarden-firewall ]]; then /etc/rc.d/rc.syswarden-firewall stop 2>/dev/null || true; fi
     rm -f /etc/rc.d/rc.syswarden-firewall
 
     # --- 6. CRON CLEANUP ---
-    if [[ -f /etc/crontabs/root ]]; then sed -i '/syswarden/d' /etc/crontabs/root 2>/dev/null || true; fi
-    if [[ -f /var/spool/cron/crontabs/root ]]; then sed -i '/syswarden/d' /var/spool/cron/crontabs/root 2>/dev/null || true; fi
+    # DEVSECOPS FIX: Exact script name matching to avoid deleting user crons containing "syswarden"
+    if [[ -f /etc/crontabs/root ]]; then
+        sed -i '/syswarden-telemetry\.sh/d' /etc/crontabs/root 2>/dev/null || true
+        sed -i '/syswarden-sync\.sh/d' /etc/crontabs/root 2>/dev/null || true
+    fi
+    if [[ -f /var/spool/cron/crontabs/root ]]; then
+        sed -i '/syswarden-telemetry\.sh/d' /var/spool/cron/crontabs/root 2>/dev/null || true
+        sed -i '/syswarden-sync\.sh/d' /var/spool/cron/crontabs/root 2>/dev/null || true
+    fi
 
     # --- 7. FAIL2BAN CLEANUP ---
-    rm -f /var/lib/fail2ban/fail2ban.sqlite3
+    # DEVSECOPS FIX: Purge WAL and SHM temp files from SQLite
+    rm -f /var/lib/fail2ban/fail2ban.sqlite3*
     : >/var/log/fail2ban.log
     rm -f /etc/fail2ban/jail.local /etc/fail2ban/fail2ban.local
     rm -f /etc/fail2ban/filter.d/syswarden-*.conf /etc/fail2ban/filter.d/*-custom.conf /etc/fail2ban/filter.d/*-scanner.conf /etc/fail2ban/filter.d/mongodb-guard.conf /etc/fail2ban/filter.d/haproxy-guard.conf /etc/fail2ban/filter.d/mariadb-auth.conf /etc/fail2ban/filter.d/wordpress-auth.conf /etc/fail2ban/filter.d/drupal-auth.conf /etc/fail2ban/filter.d/nextcloud.conf /etc/fail2ban/filter.d/zabbix-auth.conf /etc/fail2ban/filter.d/laravel-auth.conf /etc/fail2ban/filter.d/grafana-auth.conf
+
     # Restore original jail.local if we had one
     if [[ -f /etc/fail2ban/jail.local.syswarden-bak ]]; then mv /etc/fail2ban/jail.local.syswarden-bak /etc/fail2ban/jail.local; fi
     if [[ -x /etc/rc.d/rc.fail2ban ]]; then /etc/rc.d/rc.fail2ban restart </dev/null 2>/dev/null || true; fi
@@ -4359,7 +4395,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.40                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.41                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -4378,7 +4414,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.40 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.41 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"

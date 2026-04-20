@@ -42,7 +42,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v2.40"
+VERSION="v2.41"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -3245,7 +3245,7 @@ def monitor_logs():
         proc_f2b.stdout.fileno(): 'f2b'
     }
 
-    # v2.40 Logic: STRICT filter on [SysWarden-BLOCK] only.
+    # v2.41 Logic: STRICT filter on [SysWarden-BLOCK] only.
     regex_fw = re.compile(r"\[SysWarden-BLOCK\].*?SRC=([\d\.]+).*?DPT=(\d+)")
     regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
 
@@ -3722,6 +3722,12 @@ EOF
     echo -e "\n${GREEN}[✔] Client Configuration File Saved At:${NC} $client_conf"
 }
 
+# ==============================================================================
+# FUNCTION: uninstall_syswarden
+# DESCRIPTION: Executes a secure, deep-clean uninstallation of SysWarden.
+# It reverts OS hardening, purges firewall rules, cleans telemetry, and
+# gracefully removes OpenRC services without causing collateral damage.
+# ==============================================================================
 uninstall_syswarden() {
     echo -e "\n${RED}=== Uninstalling SysWarden (Alpine) ===${NC}"
     log "WARN" "Starting Deep Clean Uninstallation..."
@@ -3746,11 +3752,21 @@ uninstall_syswarden() {
         fi
 
         rm -f /etc/sysctl.d/99-syswarden-wireguard.conf
-        sysctl -p 2>/dev/null || true
+        # DEVSECOPS FIX: Use OpenRC native sysctl restart to properly flush /etc/sysctl.d/ kernel states
+        if command -v rc-service >/dev/null 2>&1; then
+            rc-service sysctl restart 2>/dev/null || true
+        else
+            sysctl -p 2>/dev/null || true
+        fi
 
         # EMERGENCY SSH RESTORE FOR IPTABLES
         if command -v iptables >/dev/null; then
-            while iptables -D INPUT -p tcp --dport "${SSH_PORT:-22}" -j DROP 2>/dev/null; do :; done
+            # Safe loop: prevent infinite hangs by capping attempts
+            local loop_cap=0
+            while iptables -D INPUT -p tcp --dport "${SSH_PORT:-22}" -j DROP 2>/dev/null; do
+                ((loop_cap++))
+                [[ $loop_cap -gt 10 ]] && break
+            done
             /etc/init.d/iptables save >/dev/null 2>&1 || true
         fi
     fi
@@ -3778,6 +3794,7 @@ uninstall_syswarden() {
     log "INFO" "Removing HA Cluster Sync Engine..."
     rm -f /usr/local/bin/syswarden-sync.sh
     if crontab -l 2>/dev/null | grep -q "syswarden-sync"; then
+        # Atomic crontab update
         crontab -l 2>/dev/null | grep -v "syswarden-sync" | crontab -
     fi
 
@@ -3802,12 +3819,14 @@ uninstall_syswarden() {
         rm -f /etc/nftables.d/syswarden-os-bypass.nft 2>/dev/null || true
 
         # --- DEVSECOPS FIX: BULLETPROOF NFTABLES HANDLE EXTRACTION ---
-        # Relying on the last field ($NF) is dangerous if Nftables output formatting changes.
-        # We use explicit Regex to strictly isolate the 'handle X' structure, preventing infinite loops.
         for chain in input forward; do
+            local loop_cap=0
             while nft -a list chain inet filter "$chain" 2>/dev/null | grep -q "SysWarden:"; do
+                ((loop_cap++))
+                [[ $loop_cap -gt 50 ]] && break # Failsafe against infinite loops
+
                 local handle
-                handle=$(nft -a list chain inet filter "$chain" 2>/dev/null | grep "SysWarden:" | grep -oE 'handle [0-9]+' | awk '{print $2}' | head -n 1)
+                handle=$(nft -a list chain inet filter "$chain" 2>/dev/null | awk '/SysWarden:/ {match($0, /handle [0-9]+/); if(RSTART) print substr($0, RSTART+7, RLENGTH-7); exit}')
 
                 if [[ -n "$handle" ]]; then
                     nft delete rule inet filter "$chain" handle "$handle" 2>/dev/null || true
@@ -3819,7 +3838,7 @@ uninstall_syswarden() {
         done
         # -------------------------------------------------------------
 
-        # 3. HOTFIX: Alpine uses .nft, Debian uses .conf
+        # 3. HOTFIX: Alpine uses .nft
         local MAIN_NFT_CONF="/etc/nftables.nft"
         if [[ -f "$MAIN_NFT_CONF" ]]; then
             sed -i '\|include "/etc/syswarden/syswarden.nft"|d' "$MAIN_NFT_CONF"
@@ -3839,32 +3858,26 @@ uninstall_syswarden() {
 
     # Docker (DOCKER-USER chain)
     if command -v iptables >/dev/null && iptables -n -L DOCKER-USER >/dev/null 2>&1; then
-        while iptables -D DOCKER-USER -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; do :; done
-        while iptables -D DOCKER-USER -m set --match-set "$SET_NAME" src -j LOG --log-prefix "[SysWarden-DOCKER] " 2>/dev/null; do :; done
-        while iptables -D DOCKER-USER -m set --match-set "$GEOIP_SET_NAME" src -j DROP 2>/dev/null; do :; done
-        while iptables -D DOCKER-USER -m set --match-set "$GEOIP_SET_NAME" src -j LOG --log-prefix "[SysWarden-GEO] " 2>/dev/null; do :; done
-        while iptables -D DOCKER-USER -m set --match-set "$ASN_SET_NAME" src -j DROP 2>/dev/null; do :; done
-        while iptables -D DOCKER-USER -m set --match-set "$ASN_SET_NAME" src -j LOG --log-prefix "[SysWarden-ASN] " 2>/dev/null; do :; done
-        while iptables -D DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2>/dev/null; do :; done
+        for rule in "-m set --match-set $SET_NAME src -j DROP" \
+            "-m set --match-set $SET_NAME src -j LOG --log-prefix \"[SysWarden-DOCKER] \"" \
+            "-m set --match-set $GEOIP_SET_NAME src -j DROP" \
+            "-m set --match-set $GEOIP_SET_NAME src -j LOG --log-prefix \"[SysWarden-GEO] \"" \
+            "-m set --match-set $ASN_SET_NAME src -j DROP" \
+            "-m set --match-set $ASN_SET_NAME src -j LOG --log-prefix \"[SysWarden-ASN] \"" \
+            "-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN"; do
+            while iptables -D DOCKER-USER $rule 2>/dev/null; do :; done
+        done
     fi
 
     # IPSet / Iptables (Legacy)
     if command -v ipset >/dev/null; then
-        while iptables -t raw -D PREROUTING -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; do :; done
-        while iptables -t raw -D PREROUTING -m set --match-set "$SET_NAME" src -j LOG --log-prefix "[SysWarden-BLOCK] " 2>/dev/null; do :; done
-        while iptables -t raw -D PREROUTING -m set --match-set "$GEOIP_SET_NAME" src -j DROP 2>/dev/null; do :; done
-        while iptables -t raw -D PREROUTING -m set --match-set "$GEOIP_SET_NAME" src -j LOG --log-prefix "[SysWarden-GEO] " 2>/dev/null; do :; done
-        while iptables -t raw -D PREROUTING -m set --match-set "$ASN_SET_NAME" src -j DROP 2>/dev/null; do :; done
-        while iptables -t raw -D PREROUTING -m set --match-set "$ASN_SET_NAME" src -j LOG --log-prefix "[SysWarden-ASN] " 2>/dev/null; do :; done
-
-        while iptables -D INPUT -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; do :; done
-        while iptables -D INPUT -m set --match-set "$GEOIP_SET_NAME" src -j DROP 2>/dev/null; do :; done
-        while iptables -D INPUT -m set --match-set "$ASN_SET_NAME" src -j DROP 2>/dev/null; do :; done
-
-        ipset destroy "$SET_NAME" 2>/dev/null || true
-        ipset destroy "$GEOIP_SET_NAME" 2>/dev/null || true
-        ipset destroy "$ASN_SET_NAME" 2>/dev/null || true
-        /etc/init.d/iptables save 2>/dev/null || true
+        for set in "$SET_NAME" "$GEOIP_SET_NAME" "$ASN_SET_NAME"; do
+            while iptables -t raw -D PREROUTING -m set --match-set "$set" src -j DROP 2>/dev/null; do :; done
+            while iptables -t raw -D PREROUTING -m set --match-set "$set" src -j LOG --log-prefix "[SysWarden-BLOCK] " 2>/dev/null; do :; done
+            while iptables -D INPUT -m set --match-set "$set" src -j DROP 2>/dev/null; do :; done
+            ipset destroy "$set" 2>/dev/null || true
+        done
+        /etc/init.d/iptables save >/dev/null 2>&1 || true
     fi
 
     # --- HOTFIX: DOCKER NETWORK RESURRECTION ---
@@ -3886,30 +3899,26 @@ uninstall_syswarden() {
     rc-service syswarden-ui stop 2>/dev/null || true
 
     # --- DEVSECOPS FIX: GRACEFUL TO SCORCHED EARTH TERMINATION ---
-    # We first send SIGTERM (-15) to allow daemons to cleanly close file descriptors and sockets.
-    log "INFO" "Sending SIGTERM to gracefully shutdown processes..."
-    pkill -15 -f fail2ban 2>/dev/null || true
-    pkill -15 -f syswarden-telemetry 2>/dev/null || true
-    pkill -15 -f syswarden_reporter 2>/dev/null || true
-    pkill -15 -f syswarden-ui 2>/dev/null || true
-    pkill -15 -f syswarden-ui-sync 2>/dev/null || true
+    # Using strict regex boundaries or exact binary paths to prevent killing unrelated admin scripts
+    log "INFO" "Sending SIGTERM to gracefully shutdown specific processes..."
+    pkill -15 -x "fail2ban-server" 2>/dev/null || true
+    pkill -15 -f "/usr/local/bin/syswarden-telemetry.sh" 2>/dev/null || true
+    pkill -15 -f "/usr/local/bin/syswarden_reporter.py" 2>/dev/null || true
 
     # Wait for I/O buffers to flush natively
     sleep 2
 
     # 2. Hunt down any surviving orphans (Absolute SIGKILL)
     log "INFO" "Executing Scorched Earth (SIGKILL) on surviving orphans..."
-    pkill -9 -f fail2ban 2>/dev/null || true
-    pkill -9 -f syswarden-telemetry 2>/dev/null || true
-    pkill -9 -f syswarden_reporter 2>/dev/null || true
-    pkill -9 -f syswarden-ui 2>/dev/null || true
-    pkill -9 -f syswarden-ui-sync 2>/dev/null || true
+    pkill -9 -x "fail2ban-server" 2>/dev/null || true
+    pkill -9 -f "/usr/local/bin/syswarden-telemetry.sh" 2>/dev/null || true
+    pkill -9 -f "/usr/local/bin/syswarden_reporter.py" 2>/dev/null || true
     # -------------------------------------------------------------
 
     # 3. Destroy the SQLite database
     rm -f /var/lib/fail2ban/fail2ban.sqlite3
 
-    # 3. Truncate historical logs
+    # 3. Truncate historical logs securely
     if [[ -f /var/log/fail2ban.log ]]; then
         : >/var/log/fail2ban.log
     fi
@@ -3925,22 +3934,17 @@ uninstall_syswarden() {
     rm -rf /var/lib/syswarden/* 2>/dev/null || true
     # -------------------------------------------------------------------------
 
-    # --- Clean up all SysWarden Fail2ban filters (Including v2.40 additions) ---
-    for filter in nginx-scanner mariadb-auth mongodb-guard syswarden-privesc syswarden-portscan \
-        syswarden-revshell syswarden-aibots syswarden-badbots syswarden-httpflood syswarden-webshell \
-        syswarden-sqli-xss syswarden-secretshunter syswarden-ssrf syswarden-jndi-ssti syswarden-apimapper \
-        syswarden-lfi-advanced syswarden-vaultwarden syswarden-sso syswarden-silent-scanner syswarden-recidive syswarden-generic-auth \
-        syswarden-proxy-abuse syswarden-jenkins syswarden-gitlab syswarden-redis syswarden-rabbitmq \
-        syswarden-idor-enum syswarden-odoo syswarden-prestashop syswarden-atlassian \
-        wordpress-auth drupal-auth nextcloud openvpn-custom gitea-custom cockpit-custom proxmox-custom \
-        haproxy-guard phpmyadmin-custom squid-custom dovecot-custom laravel-auth grafana-auth zabbix-auth wireguard; do
+    # --- Clean up all SysWarden Fail2ban filters ---
+    rm -rf /etc/fail2ban/filter.d/syswarden-*.conf 2>/dev/null || true
+    for filter in wordpress-auth drupal-auth nextcloud openvpn-custom gitea-custom cockpit-custom proxmox-custom \
+        haproxy-guard phpmyadmin-custom squid-custom dovecot-custom laravel-auth grafana-auth zabbix-auth wireguard \
+        mariadb-auth mongodb-guard nginx-scanner; do
         rm -f "/etc/fail2ban/filter.d/${filter}.conf"
     done
     rm -f /etc/fail2ban/fail2ban.local /etc/fail2ban/action.d/syswarden-docker.conf /etc/fail2ban/jail.local
 
     if [[ "${FAIL2BAN_INSTALLED_BY_SYSWARDEN:-n}" == "y" ]]; then
         log "INFO" "Purging Fail2ban (installed by SysWarden)..."
-        # Already stopped by Scorched Earth
         rc-update del fail2ban default 2>/dev/null || true
         apk del fail2ban 2>/dev/null || true
     else
@@ -3965,17 +3969,12 @@ EOF
     fi
 
     # 5. Remove Nginx Dashboard (State Aware)
-
-    # --- HOTFIX: CLEAN UNINSTALL ---
-    # Remove Nginx virtual host configuration unconditionally
     log "INFO" "Removing Nginx UI configuration..."
     rm -f /etc/nginx/http.d/syswarden-ui.conf
 
-    # Reload Nginx gracefully if it is still running
     if rc-service nginx status 2>/dev/null | grep -q "started"; then
         rc-service nginx reload >/dev/null 2>&1 || true
     fi
-    # --------------------------------------
 
     if [[ "${NGINX_INSTALLED_BY_SYSWARDEN:-n}" == "y" ]]; then
         log "INFO" "Purging Nginx (installed by SysWarden)..."
@@ -3985,15 +3984,25 @@ EOF
     fi
 
     # 6. Remove Wazuh Agent (If installed)
+    # DEVSECOPS FIX: Prevent unattended hang in CI/CD or Auto mode.
     if apk info -e wazuh-agent >/dev/null 2>&1; then
-        read -p "Do you also want to UNINSTALL the Wazuh Agent? (y/N): " rm_wazuh
+        local rm_wazuh="n"
+        if [[ "${MODE:-}" == "auto" ]]; then
+            rm_wazuh=${SYSWARDEN_UNINSTALL_WAZUH:-n}
+            log "INFO" "Auto Mode: Wazuh uninstall choice loaded via env var [${rm_wazuh}]"
+        else
+            read -p "Do you also want to UNINSTALL the Wazuh Agent? (y/N): " rm_wazuh
+        fi
+
         if [[ "$rm_wazuh" =~ ^[Yy]$ ]]; then
             log "INFO" "Removing Wazuh Agent..."
             rc-service wazuh-agent stop 2>/dev/null || true
             rc-update del wazuh-agent default 2>/dev/null || true
-            apk del wazuh-agent
+            apk del wazuh-agent 2>/dev/null || true
             rm -rf /var/ossec
             log "INFO" "Wazuh Agent removed."
+        else
+            log "INFO" "Wazuh Agent preserved on the system."
         fi
     fi
 
@@ -4004,11 +4013,9 @@ EOF
         rc-service rsyslog restart 2>/dev/null || true
     fi
 
-    # --- HOTFIX: PURGE DES LOGS PHYSIQUES ---
     rm -f /var/log/kern-firewall.log 2>/dev/null || true
     rm -f /var/log/auth-syswarden.log 2>/dev/null || true
     rm -f /var/log/syswarden* 2>/dev/null || true
-    # -----------------------------------------------
 
     if command -v chattr >/dev/null; then
         for user_dir in /home/*; do
@@ -4027,15 +4034,25 @@ EOF
 
     if [[ -f /etc/cron.allow ]] && [[ "$(cat /etc/cron.allow)" == "root" ]]; then rm -f /etc/cron.allow; fi
 
-    # HOTFIX: RESTORE GROUPS (ALPINE ADDGROUP)
+    # --- DEVSECOPS FIX: SECURE GROUP RESTORATION ---
+    # We strictly validate the username and group name against regex to prevent
+    # maliciously crafted group_backup.txt files from elevating privileges (e.g. root/hacker).
     if [[ -f "$SYSWARDEN_DIR/group_backup.txt" ]]; then
+        log "INFO" "Restoring administrative groups safely..."
         while IFS=':' read -r grp members; do
+            # Sanitize group name strictly (alphanumeric and dashes only)
+            if [[ ! "$grp" =~ ^[a-z_][a-z0-9_-]*$ ]]; then continue; fi
+
             for user in $(echo "$members" | tr ',' ' '); do
-                if [[ -n "$user" ]] && id "$user" >/dev/null 2>&1; then addgroup "$user" "$grp" 2>/dev/null || true; fi
+                # Sanitize user name and verify exact existence via 'id'
+                if [[ -n "$user" ]] && [[ "$user" =~ ^[a-z_][a-z0-9_-]*$ ]] && id "$user" >/dev/null 2>&1; then
+                    addgroup "$user" "$grp" 2>/dev/null || true
+                    log "INFO" "Restored user $user to $grp."
+                fi
             done
         done <"$SYSWARDEN_DIR/group_backup.txt"
     fi
-    # --------------------------------
+    # ------------------------------------------------
 
     rm -rf "$SYSWARDEN_DIR"
     rm -f "$CONF_FILE"
@@ -4126,7 +4143,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v2.40 - TELEMETRY BACKEND
+# SYSWARDEN v2.41 - TELEMETRY BACKEND
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -4450,7 +4467,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.40 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.41 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -4599,7 +4616,7 @@ function generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-flex align-items-baseline gap-2 hide-collapsed">
                 <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-                <span class="stat-label" style="margin-bottom: 0;">v2.40</span>
+                <span class="stat-label" style="margin-bottom: 0;">v2.41</span>
             </div>
         </div>
 
@@ -6059,7 +6076,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.40                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.41                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -6080,7 +6097,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.40 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.41 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
