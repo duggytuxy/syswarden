@@ -45,7 +45,7 @@ SET_NAME="syswarden_blacklist"
 # Ensure absolute privacy for the temporary directory to prevent unauthorized access
 TMP_DIR=$(mktemp -d -t syswarden-install-XXXXXX)
 chmod 0700 "$TMP_DIR"
-VERSION="v2.48"
+VERSION="v2.49"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -3363,7 +3363,7 @@ def monitor_logs():
         proc_f2b.stdout.fileno(): 'f2b'
     }
 
-    # v2.48 Logic: STRICT filter on [SysWarden-BLOCK] only.
+    # v2.49 Logic: STRICT filter on [SysWarden-BLOCK] only.
     regex_fw = re.compile(r"\[SysWarden-BLOCK\].*?SRC=([\d\.]+).*?DPT=(\d+)")
     regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
 
@@ -4259,7 +4259,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v2.48 - TELEMETRY BACKEND
+# SYSWARDEN v2.49 - TELEMETRY BACKEND
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -4511,27 +4511,47 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                 BANNED_IPS=$(echo "$STATUS_OUT" | grep -i 'Banned IP list:' | head -n 1 | sed 's/.*Banned IP list://I' | tr -d ',' | tr -s ' \t' '\n' | grep -vE '^\s*$' | tail -n 50 || true)
                 for IP in $BANNED_IPS; do
                     if [[ -n "$IP" ]]; then
-                        # 1. Get the exact Ban Timestamp from Fail2ban (Supports Restore Ban after Upgrade/Restart)
-                        TS=$(timeout 1 grep -E "\[$JAIL\] (Ban|Restore Ban) $IP" /var/log/fail2ban.log | tail -n 1 | awk '{print $1" "$2}' | cut -d',' -f1 || true)
-                        TS=${TS:-"Time Unknown"}
-                        
-                        # 2. Dynamic Source Log Scraper (RAW LOGS ONLY as requested)
+                        # --- 1. DYNAMIC PAYLOAD SCRAPING (Executed First for Fallback Access) ---
                         L7_PAYLOAD=""
-                        
                         if [[ "$JAIL" =~ (recidive) ]]; then
                             L7_PAYLOAD="Repeat Offender (Recidive Module)"
                         else
-                            # Grab the raw log line that triggered the ban across all standard logs
                             L7_PAYLOAD=$(timeout 1 grep -h -F "$IP" /var/log/kern-firewall.log /var/log/kern.log /var/log/messages /var/log/syslog /var/log/nginx/access.log /var/log/nginx/error.log /var/log/apache2/access.log /var/log/apache2/error.log /var/log/httpd/access_log /var/log/httpd/error_log /var/log/auth-syswarden.log /var/log/secure /var/log/auth.log /var/log/maillog /var/log/mail.log /var/log/daemon.log /var/log/audit/audit.log 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | tail -n 1 || true)
                         fi
                         
                         # Secure Whitespace Trimming
                         L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
-                        
-                        # Ultimate Fallback
                         [[ -z "$L7_PAYLOAD" ]] && L7_PAYLOAD="Log rotated or payload obscured"
+
+                        # --- 2. FAIL2BAN LOG TIMESTAMP DETECTION ---
+                        # Uses explicit word boundaries (\b) to avoid matching IPs with identical prefixes
+                        TS=$(timeout 1 grep -hE "\[$JAIL\] (Ban|Restore[d]? [Bb]an) $IP\b" /var/log/fail2ban.log 2>/dev/null | tail -n 1 | awk '{print $1" "$2}' | cut -d',' -f1 | cut -d'.' -f1 || true)
                         
-                        # Safe JSON injection via jq --arg (Separated Timestamp and Payload for UI columns)
+                        # Fallback to older rotated log if current log doesn't hold the record
+                        if [[ -z "$TS" ]]; then
+                            TS=$(timeout 1 grep -hE "\[$JAIL\] (Ban|Restore[d]? [Bb]an) $IP\b" /var/log/fail2ban.log.1 2>/dev/null | tail -n 1 | awk '{print $1" "$2}' | cut -d',' -f1 | cut -d'.' -f1 || true)
+                        fi
+
+                        # --- 3. SMART TIMESTAMP FALLBACK (Payload Analysis) ---
+                        # If Fail2ban logs have rotated but the IP is still actively banned, extract exact timestamp from L7 Payload
+                        if [[ -z "$TS" && "$L7_PAYLOAD" != "Log rotated or payload obscured" && "$L7_PAYLOAD" != "Repeat Offender (Recidive Module)" ]]; then
+                            if echo "$L7_PAYLOAD" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'; then
+                                # Kernel ISO format (e.g., 2026-04-22T10:54:18)
+                                TS=$(echo "$L7_PAYLOAD" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n 1 | tr 'T' ' ')
+                            elif echo "$L7_PAYLOAD" | grep -qE '[0-9]{2}/[A-Za-z]{3}/[0-9]{4}:[0-9]{2}:[0-9]{2}:[0-9]{2}'; then
+                                # Nginx format (e.g., 22/Apr/2026:10:46:38)
+                                TS=$(echo "$L7_PAYLOAD" | grep -oE '[0-9]{2}/[A-Za-z]{3}/[0-9]{4}:[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n 1 | sed 's/:/ /')
+                            elif echo "$L7_PAYLOAD" | grep -qE '[A-Z][a-z]{2}\s+[0-9]+\s+[0-9]{2}:[0-9]{2}:[0-9]{2}'; then
+                                # Traditional Syslog format (e.g., Apr 22 10:54:18)
+                                TS_SYS=$(echo "$L7_PAYLOAD" | grep -oE '[A-Z][a-z]{2}\s+[0-9]+\s+[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n 1)
+                                TS="$(date +%Y)-$TS_SYS"
+                            fi
+                        fi
+                        
+                        # Ultimate UI Fallback
+                        TS=${TS:-"Log Rotated"}
+                        
+                        # Safe JSON injection via jq --arg 
                         BANNED_IPS_JSON=$(echo "$BANNED_IPS_JSON" | jq --arg ip "$IP" --arg j "$JAIL" --arg ts "$TS" --arg p "$L7_PAYLOAD" --arg ttp "$MITRE_PAYLOAD" '. + [{"ip": $ip, "jail": $j, "timestamp": $ts, "payload": $p, "mitre": $ttp}]')
                     fi
                 done
@@ -4658,7 +4678,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.48 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.49 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -4807,7 +4827,7 @@ function generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-flex align-items-baseline gap-2 hide-collapsed">
                 <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-                <span class="stat-label" style="margin-bottom: 0;">v2.48</span>
+                <span class="stat-label" style="margin-bottom: 0;">v2.49</span>
             </div>
         </div>
 
@@ -5992,10 +6012,16 @@ check_upgrade() {
     fi
 }
 
+# -----------------------------------------------------------------------------
+# Function: show_alerts_dashboard
+# Purpose : Displays a real-time dashboard of detected threats by safely
+#           multiplexing dmesg and fail2ban logs.
+# Security: Child process management (trap) to prevent PID leaks.
+# -----------------------------------------------------------------------------
 show_alerts_dashboard() {
-    # Trap Ctrl+C/Exit to restore cursor safely
+    # Trap Ctrl+C/Exit to safely restore the cursor
     trap 'tput cnorm; echo -e "\n${GREEN}Exiting Dashboard...${NC}"; exit 0' INT TERM
-    tput civis # Hide cursor for cleaner UI
+    tput civis # Hide the cursor for a cleaner CLI interface
 
     echo -e "\n${BLUE}=========================================================================================${NC}"
     echo -e "${GREEN}                        SYSWARDEN CLI DASHBOARD (Live Alerts)                            ${NC}"
@@ -6009,7 +6035,7 @@ show_alerts_dashboard() {
     local NOW_SEC
     NOW_SEC=$(date +%s)
 
-    # Multiplex Alpine dmesg and fail2ban logs safely without creating orphan processes
+    # Secure multiplexing (subshell) for dmesg (Alpine) and fail2ban logs
     (
         P1=""
         if command -v dmesg >/dev/null 2>&1; then
@@ -6023,11 +6049,12 @@ show_alerts_dashboard() {
             P2=$!
         fi
 
+        # Strict cleanup of orphan processes on exit
         trap '[[ -n "$P1" ]] && kill $P1 2>/dev/null; [[ -n "$P2" ]] && kill $P2 2>/dev/null' EXIT
         wait
     ) | awk -v script_start="$NOW_SEC" '
     BEGIN {
-        # Alpine specific: Calculate boot time for pure kernel (dmesg) timestamps
+        # Alpine specific: Calculate boot time for pure kernel timestamps (dmesg)
         if ((getline uptime_str < "/proc/uptime") > 0) {
             split(uptime_str, up_arr, " ")
             uptime_sec = up_arr[1]
@@ -6035,21 +6062,22 @@ show_alerts_dashboard() {
         }
         close("/proc/uptime")
 
-        # Map syslog months to ISO numbers and fetch current year (Fallback)
+        # Map syslog months to ISO numbers
         m["Jan"]="01"; m["Feb"]="02"; m["Mar"]="03"; m["Apr"]="04"; m["May"]="05"; m["Jun"]="06";
         m["Jul"]="07"; m["Aug"]="08"; m["Sep"]="09"; m["Oct"]="10"; m["Nov"]="11"; m["Dec"]="12";
         "date +%Y" | getline current_year; close("date +%Y")
     }
+    
+    # 1. IPTABLES/NETFILTER LOG MANAGEMENT (dmesg)
     /SysWarden-BLOCK|SysWarden-GEO|SysWarden-ASN|Catch-All/ {
-        # Transform Alpine dmesg timestamp [  1234.56 ] to ISO (YYYY-MM-DD HH:MM:SS)
+        # Transform Alpine dmesg timestamp [ 1234.56 ] to ISO format
         if ($0 ~ /^\[[ \t]*[0-9]+\.[0-9]+\]/) {
             match($0, /[0-9]+\.[0-9]+/)
             ksec = substr($0, RSTART, RLENGTH)
             event_sec = boot_sec + ksec
             
-            # --- HOTFIX: Drop old dmesg history to only show LIVE events ---
+            # --- HOTFIX: Ignore dmesg history to only display LIVE events ---
             if (event_sec < script_start - 5) next;
-            # ----------------------------------------------------------------------
             
             cmd = "date -d @" int(event_sec) " \"+%Y-%m-%d %H:%M:%S\" 2>/dev/null"
             if ((cmd | getline dtime) > 0) {
@@ -6059,7 +6087,7 @@ show_alerts_dashboard() {
             }
             close(cmd)
         } 
-        # Transform traditional syslog date (Apr 2 12:56:01) to ISO if rsyslog is present
+        # Transform traditional syslog date if rsyslog is present
         else if ($1 in m) {
             date = sprintf("%s-%s-%02d %s", current_year, m[$1], $2, $3)
         } 
@@ -6075,7 +6103,7 @@ show_alerts_dashboard() {
         src = substr($0, RSTART+4, RLENGTH-4)
         if (src == "") src = "N/A"
         
-        # --- HOTFIX: Dynamic Target Info (Port vs Protocol for ICMP/IGMP on Alpine) ---
+        # --- HOTFIX: Dynamic target info (Port vs Protocol for ICMP/IGMP) ---
         target_info = "PORT: N/A"
         if (match($0, /DPT=[0-9]+/)) {
             target_info = "PORT: " substr($0, RSTART+4, RLENGTH-4)
@@ -6083,12 +6111,15 @@ show_alerts_dashboard() {
             target_info = "PROTO: " substr($0, RSTART+6, RLENGTH-6)
         }
         
-        # Color coding: Grey Date, Blue Module, Red Action, Yellow IP, Cyan Target
+        # Color coding output
         printf "\033[1;30m%-19s\033[0m | \033[1;34m%-16s\033[0m | \033[1;31m%-10s\033[0m | \033[1;33m%-15s\033[0m | \033[1;36m%s\033[0m\n", date, module, "BLOCKED", src, target_info
         fflush(stdout)
         next
     }
-    /Ban |Found / && !/Restore/ {
+    
+    # 2. FAIL2BAN LOG MANAGEMENT
+    # --- HOTFIX: Hardened regex with "fail2ban." to avoid collision with kernel dmesg [drm] ---
+    /fail2ban\..*(Ban |Found )/ && !/Restore/ {
         date = $1 " " $2
         sub(/,.*/, "", date)
         
@@ -6109,7 +6140,7 @@ show_alerts_dashboard() {
         fflush(stdout)
     }' || true
 
-    tput cnorm # Restore cursor
+    tput cnorm # Guaranteed cursor restoration
 }
 
 # ==============================================================================
@@ -6273,7 +6304,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.48                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.49                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -6295,7 +6326,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.48 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.49 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"

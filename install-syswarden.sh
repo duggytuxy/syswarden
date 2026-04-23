@@ -33,7 +33,7 @@ LOG_FILE="/var/log/syswarden-install.log"
 CONF_FILE="/etc/syswarden.conf"
 SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d)
-VERSION="v2.48"
+VERSION="v2.49"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -1662,7 +1662,7 @@ EOF
             # 3. Allow WireGuard UDP port for tunnel establishment
             firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
 
-            # --- STRICT ZERO TRUST HIERARCHY (v2.48) - DEBIAN PARITY) ---
+            # --- STRICT ZERO TRUST HIERARCHY (v2.49) - DEBIAN PARITY) ---
 
             # Priority -1000: Highest priority. Allow SSH & Dashboard strictly from VPN.
             firewall-cmd --permanent --add-rich-rule="rule priority='-1000' family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
@@ -5185,7 +5185,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.48 - TELEMETRY BACKEND
+# SYSWARDEN v2.49 - TELEMETRY BACKEND
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -5442,27 +5442,47 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                 BANNED_IPS=$(echo "$STATUS_OUT" | grep -i 'Banned IP list:' | head -n 1 | sed 's/.*Banned IP list://I' | tr -d ',' | tr -s ' \t' '\n' | grep -vE '^\s*$' | tail -n 50 || true)
                 for IP in $BANNED_IPS; do
                     if [[ -n "$IP" ]]; then
-                        # 1. Get the exact Ban Timestamp from Fail2ban (Supports Restore Ban after Upgrade/Restart)
-                        TS=$(timeout 1 grep -E "\[$JAIL\] (Ban|Restore Ban) $IP" /var/log/fail2ban.log | tail -n 1 | awk '{print $1" "$2}' | cut -d',' -f1 || true)
-                        TS=${TS:-"Time Unknown"}
-                        
-                        # 2. Dynamic Source Log Scraper (RAW LOGS ONLY as requested)
+                        # --- 1. DYNAMIC PAYLOAD SCRAPING (Executed First for Fallback Access) ---
                         L7_PAYLOAD=""
-                        
                         if [[ "$JAIL" =~ (recidive) ]]; then
                             L7_PAYLOAD="Repeat Offender (Recidive Module)"
                         else
-                            # Grab the raw log line that triggered the ban across all standard logs
                             L7_PAYLOAD=$(timeout 1 grep -h -F "$IP" /var/log/kern-firewall.log /var/log/kern.log /var/log/messages /var/log/syslog /var/log/nginx/access.log /var/log/nginx/error.log /var/log/apache2/access.log /var/log/apache2/error.log /var/log/httpd/access_log /var/log/httpd/error_log /var/log/auth-syswarden.log /var/log/secure /var/log/auth.log /var/log/maillog /var/log/mail.log /var/log/daemon.log /var/log/audit/audit.log 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | tail -n 1 || true)
                         fi
                         
                         # Secure Whitespace Trimming
                         L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
-                        
-                        # Ultimate Fallback
                         [[ -z "$L7_PAYLOAD" ]] && L7_PAYLOAD="Log rotated or payload obscured"
+
+                        # --- 2. FAIL2BAN LOG TIMESTAMP DETECTION ---
+                        # Uses explicit word boundaries (\b) to avoid matching IPs with identical prefixes
+                        TS=$(timeout 1 grep -hE "\[$JAIL\] (Ban|Restore[d]? [Bb]an) $IP\b" /var/log/fail2ban.log 2>/dev/null | tail -n 1 | awk '{print $1" "$2}' | cut -d',' -f1 | cut -d'.' -f1 || true)
                         
-                        # Safe JSON injection via jq --arg (Separated Timestamp and Payload for UI columns)
+                        # Fallback to older rotated log if current log doesn't hold the record
+                        if [[ -z "$TS" ]]; then
+                            TS=$(timeout 1 grep -hE "\[$JAIL\] (Ban|Restore[d]? [Bb]an) $IP\b" /var/log/fail2ban.log.1 2>/dev/null | tail -n 1 | awk '{print $1" "$2}' | cut -d',' -f1 | cut -d'.' -f1 || true)
+                        fi
+
+                        # --- 3. SMART TIMESTAMP FALLBACK (Payload Analysis) ---
+                        # If Fail2ban logs have rotated but the IP is still actively banned, extract exact timestamp from L7 Payload
+                        if [[ -z "$TS" && "$L7_PAYLOAD" != "Log rotated or payload obscured" && "$L7_PAYLOAD" != "Repeat Offender (Recidive Module)" ]]; then
+                            if echo "$L7_PAYLOAD" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'; then
+                                # Kernel ISO format (e.g., 2026-04-22T10:54:18)
+                                TS=$(echo "$L7_PAYLOAD" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n 1 | tr 'T' ' ')
+                            elif echo "$L7_PAYLOAD" | grep -qE '[0-9]{2}/[A-Za-z]{3}/[0-9]{4}:[0-9]{2}:[0-9]{2}:[0-9]{2}'; then
+                                # Nginx format (e.g., 22/Apr/2026:10:46:38)
+                                TS=$(echo "$L7_PAYLOAD" | grep -oE '[0-9]{2}/[A-Za-z]{3}/[0-9]{4}:[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n 1 | sed 's/:/ /')
+                            elif echo "$L7_PAYLOAD" | grep -qE '[A-Z][a-z]{2}\s+[0-9]+\s+[0-9]{2}:[0-9]{2}:[0-9]{2}'; then
+                                # Traditional Syslog format (e.g., Apr 22 10:54:18)
+                                TS_SYS=$(echo "$L7_PAYLOAD" | grep -oE '[A-Z][a-z]{2}\s+[0-9]+\s+[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n 1)
+                                TS="$(date +%Y)-$TS_SYS"
+                            fi
+                        fi
+                        
+                        # Ultimate UI Fallback
+                        TS=${TS:-"Log Rotated"}
+                        
+                        # Safe JSON injection via jq --arg 
                         BANNED_IPS_JSON=$(echo "$BANNED_IPS_JSON" | jq --arg ip "$IP" --arg j "$JAIL" --arg ts "$TS" --arg p "$L7_PAYLOAD" --arg ttp "$MITRE_PAYLOAD" '. + [{"ip": $ip, "jail": $j, "timestamp": $ts, "payload": $p, "mitre": $ttp}]')
                     fi
                 done
@@ -5585,7 +5605,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.48 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.49 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -5741,7 +5761,7 @@ function generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-flex align-items-baseline gap-2 hide-collapsed">
                 <span class="fs-5 fw-bold" style="color: var(--sw-brand-text); letter-spacing: -0.5px;">SYSWARDEN</span>
-                <span class="stat-label" style="margin-bottom: 0;">v2.48</span>
+                <span class="stat-label" style="margin-bottom: 0;">v2.49</span>
             </div>
         </div>
 
@@ -7298,7 +7318,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.48                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.49                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -7337,7 +7357,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.48 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.49 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
