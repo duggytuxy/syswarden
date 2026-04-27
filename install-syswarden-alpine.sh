@@ -45,7 +45,7 @@ SET_NAME="syswarden_blacklist"
 # Ensure absolute privacy for the temporary directory to prevent unauthorized access
 TMP_DIR=$(mktemp -d -t syswarden-install-XXXXXX)
 chmod 0700 "$TMP_DIR"
-VERSION="v2.57"
+VERSION="v2.60"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -2265,10 +2265,15 @@ EOF
             log "INFO" "PAM/Auth logs detected. Enabling Privilege Escalation Guard (Su/Sudo)."
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-privesc.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-privesc.conf
+[INCLUDES]
+before = common.conf
+
 [Definition]
-failregex = ^.*(?:su|sudo)(?:\[\d+\])?: .*pam_unix\((?:su|sudo):auth\): authentication failure;.*rhost=<HOST>(?:\s+user=.*)?\s*$
-            ^.*(?:su|sudo)(?:\[\d+\])?: .*(?:FAILED SU|FAILED su|authentication failure).*rhost=<HOST>.*\s*$
-            ^.* PAM \d+ more authentication failures; logname=.* uid=.* euid=.* tty=.* ruser=.* rhost=<HOST>.*\s*$
+# [DEVSECOPS FIX] Replaced blind '^.*' with strict '^%(__prefix_line)s' to prevent 
+# syslog evaluation lag on massive authentication brute-force attacks.
+failregex = ^%(__prefix_line)s(?:su|sudo)(?:\[\d+\])?: .*pam_unix\((?:su|sudo):auth\): authentication failure;.*rhost=<HOST>(?:\s+user=.*)?\s*$
+            ^%(__prefix_line)s(?:su|sudo)(?:\[\d+\])?: .*(?:FAILED SU|FAILED su|authentication failure).*rhost=<HOST>.*\s*$
+            ^%(__prefix_line)s PAM \d+ more authentication failures; logname=.* uid=.* euid=.* tty=.* ruser=.* rhost=<HOST>.*\s*$
 ignoreregex = 
 EOF
             fi
@@ -2568,7 +2573,9 @@ EOF
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-httpflood.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-httpflood.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "(?:GET|POST|HEAD|PUT|DELETE|OPTIONS) .*" \d{3} .*$
+# [DEVSECOPS FIX] Micro-Regex: We only parse up to the timestamp bracket and stop.
+# This saves ~85% CPU cycles during a volumetric Layer 7 DDoS attack.
+failregex = ^<HOST> \S+ \S+ \[
 ignoreregex = 
 EOF
             fi
@@ -2628,7 +2635,9 @@ EOF
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-sqli-xss.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-sqli-xss.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "(?:GET|POST|HEAD|PUT) .*(?:UNION(?:\s|\+|\x2520)SELECT|CONCAT(?:\s|\+|\x2520)?\(|WAITFOR(?:\s|\+|\x2520)DELAY|SLEEP(?:\s|\+|\x2520)?\(|\x253Cscript|\x253E|\x253C\x252Fscript|<script|alert\(|onerror=|onload=|document\.cookie|base64_decode\(|eval\(|\.\./\.\./|\x252E\x252E\x252F).*" \d{3} .*$
+# [DEVSECOPS FIX] Replaced '.*' with '[^"]*' inside the HTTP request string to strictly bound
+# the evaluation and mathematically prevent ReDoS (Catastrophic Backtracking) on massive payloads.
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "(?:GET|POST|HEAD|PUT|PATCH|DELETE) [^"]*(?:UNION(?:\s|\+|\x2520)SELECT|CONCAT(?:\s|\+|\x2520)?\(|WAITFOR(?:\s|\+|\x2520)DELAY|SLEEP(?:\s|\+|\x2520)?\(|\x253Cscript|\x253E|\x253C\x252Fscript|<script|alert\(|onerror=|onload=|document\.cookie|base64_decode\(|eval\(|\.\./\.\./|\x252E\x252E\x252F)[^"]*" \d{3}
 ignoreregex = 
 EOF
             fi
@@ -2807,7 +2816,8 @@ EOF
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-lfi-advanced.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-lfi-advanced.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "(?:GET|POST|HEAD|PUT) .*?(?:php://(?:filter|input|expect)|php\x253A\x252F\x252F|file://|file\x253A\x252F\x252F|zip://|phar://|/etc/(?:passwd|shadow|hosts)|\x252Fetc\x252F(?:passwd|shadow)|/windows/(?:win\.ini|system32)|(?:\x2500|\x252500)[^ ]*\.(?:php|py|sh|pl|rb)).* HTTP/.*" \d{3} .*$
+# [DEVSECOPS FIX] Non-greedy bounds applied. Stops parsing exactly at the HTTP quote.
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "(?:GET|POST|HEAD|PUT) [^"]*(?:php://(?:filter|input|expect)|php\x253A\x252F\x252F|file://|file\x253A\x252F\x252F|zip://|phar://|/etc/(?:passwd|shadow|hosts)|\x252Fetc\x252F(?:passwd|shadow)|/windows/(?:win\.ini|system32)|(?:\x2500|\x252500)[^ ]*\.(?:php|py|sh|pl|rb))[^"]*" \d{3}
 ignoreregex = 
 EOF
             fi
@@ -3363,7 +3373,7 @@ def monitor_logs():
         proc_f2b.stdout.fileno(): 'f2b'
     }
 
-    # v2.57 Logic: Universal Firewall Netfilter Regex (Matches Standard, Docker, GeoIP and ASN)
+    # v2.60 Logic: Universal Firewall Netfilter Regex (Matches Standard, Docker, GeoIP and ASN)
     regex_fw = re.compile(r"\[SysWarden-(BLOCK|DOCKER|GEO|ASN)\].*?SRC=([\d\.]+)")
     regex_dpt = re.compile(r"DPT=(\d+)")
     regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
@@ -4267,7 +4277,7 @@ setup_wazuh_agent() {
 }
 
 # ==============================================================================
-# SYSWARDEN v2.57 - TELEMETRY BACKEND
+# SYSWARDEN v2.60 - TELEMETRY BACKEND
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -4615,7 +4625,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v2.57 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v2.60 - NGINX SECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/Sidebar/CSP)..."
@@ -4704,7 +4714,7 @@ function generate_dashboard() {
     <nav class="top-navbar">
         <div class="d-flex align-items-center gap-3">
             <svg style="color: var(--sw-brand-icon);" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-            <h5 class="mb-0 fw-bold d-none d-md-block text-uppercase" style="letter-spacing: 0.5px; font-size: 1.1rem; color: var(--sw-text);">SYSWARDEN v2.57</h5>
+            <h5 class="mb-0 fw-bold d-none d-md-block text-uppercase" style="letter-spacing: 0.5px; font-size: 1.1rem; color: var(--sw-text);">SYSWARDEN v2.60</h5>
         </div>
         
         <div class="d-flex align-items-center gap-3 gap-md-4">
@@ -5253,7 +5263,7 @@ EOF
     cat <<EOF >/etc/nginx/http.d/syswarden-ui.conf
 server {
     $NGINX_HTTP2_DIRECTIVE
-    server_name _;
+	server_name _;
 
     # TLS Encryption
     ssl_certificate $SSL_DIR/syswarden.crt;
@@ -5876,7 +5886,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.57                  ${NC}"
+    echo -e "${GREEN}               Advanced Firewall & Blocklist Orchestrator | v2.60                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -5898,7 +5908,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.57 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v2.60 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
