@@ -35,7 +35,7 @@ jobs:
         run: shellcheck --severity=warning *.sh
 
       - name: Setup shfmt
-        uses: mfinelli/setup-shfmt@v3
+        uses: mfinelli/setup-shfmt@v4
         
       - name: Check Bash formatting (shfmt)
         # -d: diff (do not modify files, fail if improperly formatted)
