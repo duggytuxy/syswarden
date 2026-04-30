@@ -39,7 +39,7 @@ TMP_DIR=$(mktemp -d -t syswarden-install-XXXXXX)
 chmod 0700 "$TMP_DIR"
 # ------------------------------------
 
-VERSION="v0.27.2"
+VERSION="v0.27.3"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
@@ -1757,7 +1757,7 @@ EOF
             # 3. Allow WireGuard UDP port for tunnel establishment
             firewall-cmd --permanent --add-port="${WG_PORT:-51820}/udp" >/dev/null 2>&1 || true
 
-            # --- STRICT ZERO TRUST HIERARCHY (v0.27.2) - DEBIAN PARITY) ---
+            # --- STRICT ZERO TRUST HIERARCHY (v0.27.3) - DEBIAN PARITY) ---
 
             # Priority -1000: Highest priority. Allow SSH & Dashboard strictly from VPN.
             firewall-cmd --permanent --add-rich-rule="rule priority='-1000' family='ipv4' source address='${WG_SUBNET}' port port='${SSH_PORT:-22}' protocol='tcp' accept" >/dev/null 2>&1 || true
@@ -2368,8 +2368,14 @@ EOF
         if [[ -f "/var/log/nginx/access.log" ]] || [[ -f "/var/log/nginx/error.log" ]]; then
             log "INFO" "Nginx logs detected. Enabling Nginx Jail."
             # Create Filter for 404/403 scanners
+            # RED TEAM FIX: Replaced greedy '.*' with strictly bounded '[^"]*?' to prevent URI-based ReDoS.
+            # Expanded HTTP methods to catch evasion techniques.
             if [[ ! -f "/etc/fail2ban/filter.d/nginx-scanner.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ \\[.*?\\] \"(GET|POST|HEAD).*\" (400|401|403|404|444) .*$\nignoreregex =" >/etc/fail2ban/filter.d/nginx-scanner.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/nginx-scanner.conf
+[Definition]
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "(?:GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS|PROPFIND|TRACE) [^"]*?" (?:400|401|403|404|405|444)
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -2407,8 +2413,13 @@ EOF
             log "INFO" "Apache logs detected. Enabling Apache Jail."
 
             # Create Filter for 404/403 scanners (Apache specific)
+            # RED TEAM FIX: ReDoS prevention and HTTP method expansion.
             if [[ ! -f "/etc/fail2ban/filter.d/apache-scanner.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ \\[.*?\\] \"(GET|POST|HEAD) .+\" (400|401|403|404) .+\$\nignoreregex =" >/etc/fail2ban/filter.d/apache-scanner.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/apache-scanner.conf
+[Definition]
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "(?:GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS|PROPFIND|TRACE) [^"]*?" (?:400|401|403|404|405)
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -2436,9 +2447,13 @@ EOF
             log "INFO" "MongoDB logs detected. Enabling Mongo Jail."
 
             # Create strict Filter for Auth failures & Unauthorized commands (Injection probing)
-            # Catches: "Authentication failed", "SASL authentication failed", "unauthorized", "not authorized"
+            # RED TEAM FIX: Replaced '^.*' with non-greedy '^.*?' to stop deep engine traversal.
             if [[ ! -f "/etc/fail2ban/filter.d/mongodb-guard.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^.*(?:Authentication failed|SASL authentication \S+ failed|Command not found|unauthorized|not authorized).* <HOST>(:[0-9]+)?.*\$\nignoreregex =" >/etc/fail2ban/filter.d/mongodb-guard.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/mongodb-guard.conf
+[Definition]
+failregex = ^.*? (?:Authentication failed|SASL authentication \S+ failed|Command not found|unauthorized|not authorized).*? (?:<HOST>|remote:\s*<HOST>:\d+)
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -2467,8 +2482,13 @@ EOF
             log "INFO" "MariaDB logs detected. Enabling MariaDB Jail."
 
             # Create Filter for Authentication Failures (Access Denied brute-force)
+            # RED TEAM FIX: Non-greedy start and structured matching to prevent log spoofing.
             if [[ ! -f "/etc/fail2ban/filter.d/mariadb-auth.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^.*[Aa]ccess denied for user .*@'<HOST>'.*\$\nignoreregex =" >/etc/fail2ban/filter.d/mariadb-auth.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/mariadb-auth.conf
+[Definition]
+failregex = ^.*? \[?(?:Note|Warning|ERROR)\]? [Aa]ccess denied for user .*?@'<HOST>'(?: \(using password: (?:YES|NO)\))?
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -2544,8 +2564,13 @@ EOF
             log "INFO" "Web logs available. Configuring WordPress Jail."
 
             # Create specific filter for WP Login & XMLRPC
+            # RED TEAM FIX: Prevent query string evasion and ReDoS by bounding quotes.
             if [[ ! -f "/etc/fail2ban/filter.d/wordpress-auth.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ \\[.*?\\] \"POST .*(wp-login\.php|xmlrpc\.php) HTTP.*\" 200\nignoreregex =" >/etc/fail2ban/filter.d/wordpress-auth.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/wordpress-auth.conf
+[Definition]
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?(?:wp-login\.php|xmlrpc\.php)[^"]*?" 200
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -2573,12 +2598,11 @@ EOF
             log "INFO" "Web logs detected. Enabling Drupal Guard."
 
             # Create Filter for Drupal Authentication Failures
-            # Matches POST requests to /user/login (Modern Clean URLs) and ?q=user/login (Legacy D7)
-            # Logic: A failed login returns HTTP 200 (Form reloads with error). Success returns HTTP 302/303.
+            # RED TEAM FIX: Prevent query string evasion and ReDoS.
             if [[ ! -f "/etc/fail2ban/filter.d/drupal-auth.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/drupal-auth.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "POST .*(?:/user/login|\?q=user/login) HTTP.*" 200.*$
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?(?:/user/login|\?q=user/login)[^"]*?" 200
 ignoreregex = 
 EOF
             fi
@@ -2611,8 +2635,13 @@ EOF
             log "INFO" "Nextcloud logs detected. Enabling Nextcloud Jail."
 
             # Create Filter (Supports both JSON and Legacy text logs)
+            # RED TEAM FIX: Switched to Heredoc and non-greedy start to prevent log parsing lag
             if [[ ! -f "/etc/fail2ban/filter.d/nextcloud.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^.*Login failed: .* \(Remote IP: '<HOST>'\).*$\nignoreregex =" >/etc/fail2ban/filter.d/nextcloud.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/nextcloud.conf
+[Definition]
+failregex = ^.*?Login failed: .*? \(Remote IP: '<HOST>'\).*$
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -2659,7 +2688,11 @@ EOF
 
             # Create Filter for Zabbix Server Login Failures
             if [[ ! -f "/etc/fail2ban/filter.d/zabbix-auth.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^.*failed login of user .* from <HOST>.*\$\nignoreregex =" >/etc/fail2ban/filter.d/zabbix-auth.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/zabbix-auth.conf
+[Definition]
+failregex = ^.*?failed login of user .*? from <HOST>.*$
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -2681,7 +2714,11 @@ EOF
 
             # Create Filter for HTTP Errors (403 Forbidden, 404 Scan, 429 RateLimit)
             if [[ ! -f "/etc/fail2ban/filter.d/haproxy-guard.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^.* <HOST>:\d+ .+(400|403|404|429) .+\$\nignoreregex =" >/etc/fail2ban/filter.d/haproxy-guard.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/haproxy-guard.conf
+[Definition]
+failregex = ^.*? <HOST>:\d+ .*? (?:400|403|404|429) .*$
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -2712,7 +2749,11 @@ EOF
 
                 # Create Filter for Handshake Failures (Requires Kernel Logging)
                 if [[ ! -f "/etc/fail2ban/filter.d/wireguard.conf" ]]; then
-                    echo -e "[Definition]\nfailregex = ^.*wireguard: .* Handshake for peer .* \\(<HOST>:[0-9]+\\) did not complete.*\$\nignoreregex =" >/etc/fail2ban/filter.d/wireguard.conf
+                    cat <<'EOF' >/etc/fail2ban/filter.d/wireguard.conf
+[Definition]
+failregex = ^.*?wireguard: .*? Handshake for peer .*? \(<HOST>:\d+\) did not complete.*$
+ignoreregex = 
+EOF
                 fi
 
                 cat <<EOF >>/etc/fail2ban/jail.local
@@ -2742,9 +2783,13 @@ EOF
             if [[ -n "$PMA_LOG" ]]; then
                 log "INFO" "phpMyAdmin detected. Enabling PMA Jail."
 
-                # Create Filter for POST requests to PMA (Bruteforce usually returns 200 OK)
+                # Create Filter for POST requests to PMA
                 if [[ ! -f "/etc/fail2ban/filter.d/phpmyadmin-custom.conf" ]]; then
-                    echo -e "[Definition]\nfailregex = ^<HOST> \\S+ \\S+ \\[.*?\\] \"POST .*phpmyadmin.* HTTP.*\" 200\nignoreregex =" >/etc/fail2ban/filter.d/phpmyadmin-custom.conf
+                    cat <<'EOF' >/etc/fail2ban/filter.d/phpmyadmin-custom.conf
+[Definition]
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?phpmyadmin[^"]*? HTTP[^"]*?" 200
+ignoreregex = 
+EOF
                 fi
 
                 cat <<EOF >>/etc/fail2ban/jail.local
@@ -2992,7 +3037,11 @@ EOF
 
             # Filter for Git Web UI Auth Failures
             if [[ ! -f "/etc/fail2ban/filter.d/gitea-custom.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^.*Failed authentication attempt for .* from <HOST>:.*\$\nignoreregex =" >/etc/fail2ban/filter.d/gitea-custom.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/gitea-custom.conf
+[Definition]
+failregex = ^.*?Failed authentication attempt for .*? from <HOST>:.*$
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -3014,7 +3063,11 @@ EOF
             log "INFO" "Cockpit Web Console detected. Enabling Cockpit Jail."
 
             if [[ ! -f "/etc/fail2ban/filter.d/cockpit-custom.conf" ]]; then
-                echo -e "[Definition]\nfailregex = ^.*cockpit-ws.*(?:authentication failed|invalid user).*from <HOST>.*\$\nignoreregex =" >/etc/fail2ban/filter.d/cockpit-custom.conf
+                cat <<'EOF' >/etc/fail2ban/filter.d/cockpit-custom.conf
+[Definition]
+failregex = ^.*?cockpit-ws.*?(?:authentication failed|invalid user).*?from <HOST>.*$
+ignoreregex = 
+EOF
             fi
 
             cat <<EOF >>/etc/fail2ban/jail.local
@@ -3310,11 +3363,19 @@ EOF
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-revshell.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-revshell.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "(?:GET|POST|HEAD|PUT) .*(?:/bin/bash|\x252Fbin\x252Fbash|/bin/sh|\x252Fbin\x252Fsh|nc\s+-e|nc\x2520-e|nc\s+-c|curl\s+http|curl\x2520http|wget\s+http|wget\x2520http|python\s+-c|php\s+-r|;\s*bash\s+-i|&\s*bash\s+-i).*" .*$
+# DEVSECOPS NOTES:
+# 1. Replaced '.*' with '[^"]*?' inside the HTTP request string to prevent ReDoS (Catastrophic Backtracking).
+# 2. Expanded HTTP methods (DELETE, PATCH, OPTIONS can be used to bypass WAFs).
+# 3. Clustered space bypasses: whitespace, URL-encoded space (\x2520), tab (\x2509), and plus sign (+).
+# 4. Added command execution chaining (; | ` $) followed by critical binaries.
+failregex = ^<HOST> \S+ \S+ \[.*?\] "(?:GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS) [^"]*?(?:/bin/bash|\x252Fbin\x252Fbash|/bin/sh|\x252Fbin\x252Fsh|nc(?:\s+|\x2520|\x2509|\+)+(?:-e|-c)|(?:curl|wget)(?:\s+|\x2520|\x2509|\+)+(?:-q|-s|-O|http)|python(?:\s+|\x2520|\x2509|\+)+-c|php(?:\s+|\x2520|\x2509|\+)+-r|(?:\x253B|;|\x257C|\||`|\x2560|\$|\x2524)(?:\s+|\x2520|\x2509|\+)*(?:bash|sh|nc|curl|wget|chmod)).*?" .*$
+
 ignoreregex = 
 EOF
             fi
 
+            # Ensure the jail configuration is appended securely
+            # Relying on Fail2ban's default banaction to seamlessly support iptables, nftables, ufw, and firewalld
             cat <<EOF >>/etc/fail2ban/jail.local
 
 # --- Reverse Shell & RCE Injection Protection ---
@@ -3326,6 +3387,7 @@ logpath  = $RCE_LOGS
 backend  = auto
 # Zero-Tolerance policy for RCE payloads
 maxretry = 1
+findtime = 3600
 bantime  = 24h
 EOF
         fi
@@ -3335,11 +3397,11 @@ EOF
             log "INFO" "Web access logs detected. Enabling AI-Bot Guard."
 
             # Create Filter for aggressive AI Scrapers, Crawlers, and LLM data miners
-            # Matches HTTP requests containing known AI User-Agents regardless of the HTTP status code (\d{3})
+            # RED TEAM FIX: Strictly bound the URI and User-Agent parsing fields to prevent ReDoS payloads in User-Agent strings.
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-aibots.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-aibots.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "(?:GET|POST|HEAD) .*" \d{3} .* ".*(?:GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-Web|Anthropic-ai|Google-Extended|PerplexityBot|Omgili|FacebookBot|Bytespider|CCBot|Diffbot|Amazonbot|Applebot-Extended|cohere-ai).*".*$
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "(?:GET|POST|HEAD|PUT|OPTIONS) [^"]*?" \d{3} [^"]*? "[^"]*?(?:GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-Web|Anthropic-ai|Google-Extended|PerplexityBot|Omgili|FacebookBot|Bytespider|CCBot|Diffbot|Amazonbot|Applebot-Extended|cohere-ai)[^"]*?"
 ignoreregex = 
 EOF
             fi
@@ -3364,11 +3426,11 @@ EOF
             log "INFO" "Web access logs detected. Enabling Bad-Bot & Scanner Guard."
 
             # Create Filter for aggressive pentest tools, vulnerability scanners, and malicious crawlers
-            # Matches HTTP requests containing known offensive User-Agents regardless of the HTTP status code (\d{3})
+            # RED TEAM FIX: Same strict bounds for offensive User-Agents.
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-badbots.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-badbots.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "(?:GET|POST|HEAD|PUT|DELETE|OPTIONS) .*" \d{3} .* ".*(?:Nuclei|sqlmap|Nikto|ZmEu|OpenVAS|wpscan|masscan|zgrab|CensysInspect|Shodan|NetSystemsResearch|projectdiscovery|Go-http-client|Java/|Hello World|python-requests|libwww-perl|Acunetix|Nmap|Netsparker|BurpSuite|DirBuster|dirb|gobuster|httpx|ffuf).*".*$
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "(?:GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH|CONNECT) [^"]*?" \d{3} [^"]*? "[^"]*?(?:Nuclei|sqlmap|Nikto|ZmEu|OpenVAS|wpscan|masscan|zgrab|CensysInspect|Shodan|NetSystemsResearch|projectdiscovery|Go-http-client|Java/|Hello World|python-requests|libwww-perl|Acunetix|Nmap|Netsparker|BurpSuite|DirBuster|dirb|gobuster|httpx|ffuf)[^"]*?"
 ignoreregex = 
 EOF
             fi
@@ -3775,16 +3837,12 @@ EOF
             log "INFO" "Web access logs detected. Enabling Open Proxy & Exotic Method Guard."
 
             # Create Filter for Open Proxy Probing and Tunneling attempts
-            # Attackers send absolute URIs (GET http://target.com) or use the CONNECT method
-            # to check if your web server can be abused as an anonymous forward proxy for botnets.
-            # Also catches TRACE/TRACK (Cross-Site Tracing) and WebDAV methods (PROPFIND, MKCOL)
-            # often used by ransomware to discover or mount network drives.
-            # Note: We use \x253A for the URL-encoded colon ':' to ensure strict matching.
+            # RED TEAM FIX: Non-greedy bounds to prevent ReDoS on massive CONNECT requests.
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-proxy-abuse.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-proxy-abuse.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "(?:CONNECT|TRACE|TRACK|PROPFIND|PROPPATCH|MKCOL|COPY|MOVE|LOCK|UNLOCK) .*" \d{3} .*$
-            ^<HOST> \S+ \S+ \[.*?\] "(?:GET|POST|HEAD) (?:http|https)(?:\x253A|:)//.*" \d{3} .*$
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "(?:CONNECT|TRACE|TRACK|PROPFIND|PROPPATCH|MKCOL|COPY|MOVE|LOCK|UNLOCK) [^"]*?" \d{3}
+            ^<HOST> \S+ \S+ \[[^\]]+\] "(?:GET|POST|HEAD) (?:http|https)(?:\x253A|:)//[^"]*?" \d{3}
 ignoreregex = 
 EOF
             fi
@@ -3860,11 +3918,11 @@ EOF
             log "INFO" "Web access logs detected. Enabling Generic Brute-Force & Password Spraying Guard."
 
             # Create Filter for generic login endpoints
-            # Catches POST requests to common auth endpoints returning 200 (form reload on fail), 401, or 403
+            # RED TEAM FIX: Removed inner greedy match to prevent regex engine exhaustion on fake auth endpoints.
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-generic-auth.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-generic-auth.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "POST .*(?:/login|/sign-in|/signin|/log-in|/auth|/authenticate|/admin/login|/user/login|/member/login)[^ ]*(?:\.php|\.html|\.htm|\.jsp|\.aspx)? HTTP/.*" (?:200|401|403) .*$
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?(?:/login|/sign-in|/signin|/log-in|/auth|/authenticate|/admin/login|/user/login|/member/login)[^"]*?(?:\.php|\.html|\.htm|\.jsp|\.aspx)?[^"]*?" (?:200|401|403)
 ignoreregex = 
 EOF
             fi
@@ -3898,11 +3956,10 @@ EOF
             log "INFO" "Odoo ERP logs detected. Enabling Odoo Guard."
 
             # Create Filter for Odoo Authentication Failures
-            # Catches standard Werkzeug auth errors across Odoo v12 to v17
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-odoo.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-odoo.conf
 [Definition]
-failregex = ^.* \d+ INFO \S+ odoo\.addons\.base\.models\.res_users: Login failed for db:.* login:.* from <HOST>
+failregex = ^.*? \d+ INFO \S+ odoo\.addons\.base\.models\.res_users: Login failed for db:.*? login:.*? from <HOST>.*$
 ignoreregex = 
 EOF
             fi
@@ -3928,11 +3985,11 @@ EOF
             log "INFO" "Web access logs detected. Enabling PrestaShop Guard."
 
             # Create Filter for PrestaShop Backoffice Brute-Force
-            # The admin URL is dynamic, but it always POSTs to a controller named AdminLogin
+            # RED TEAM FIX: Bounded the URI parsing to strictly prevent query string ReDoS.
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-prestashop.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-prestashop.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "POST /[^ ]*index\.php\?.*controller=AdminLogin.* HTTP/.*" 200 .*$
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?index\.php\?[^"]*?controller=AdminLogin[^"]*?" 200
 ignoreregex = 
 EOF
             fi
@@ -3956,12 +4013,11 @@ EOF
             log "INFO" "Web access logs detected. Enabling Atlassian Guard."
 
             # Create Filter for Jira and Confluence Auth Failures
-            # Catches: Jira (/login.jsp, /rest/auth) and Confluence (/dologin.action)
-            # HTTP 200 (Form reload), 401 (Unauthorized API), 403 (Forbidden API)
+            # RED TEAM FIX: Strict non-greedy bounds inside the HTTP method quotes.
             if [[ ! -f "/etc/fail2ban/filter.d/syswarden-atlassian.conf" ]]; then
                 cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-atlassian.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[.*?\] "POST .*(?:/login\.jsp|/dologin\.action|/rest/auth/\d+/session) HTTP/.*" (?:401|403|200) .*$
+failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?(?:/login\.jsp|/dologin\.action|/rest/auth/\d+/session)[^"]*?" (?:401|403|200)
 ignoreregex = 
 EOF
             fi
@@ -4444,7 +4500,7 @@ def monitor_logs():
     p = select.poll()
     p.register(f.stdout)
 
-    # v0.27.2 Logic: Universal Firewall Netfilter Regex (Matches Standard, Docker, GeoIP and ASN)
+    # v0.27.3 Logic: Universal Firewall Netfilter Regex (Matches Standard, Docker, GeoIP and ASN)
     regex_fw = re.compile(r"\[SysWarden-(BLOCK|DOCKER|GEO|ASN)\].*?SRC=([\d\.]+)")
     regex_dpt = re.compile(r"DPT=(\d+)")
     regex_f2b = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s+Ban\s+([\d\.]+)")
@@ -5366,7 +5422,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v0.27.2 - TELEMETRY BACKEND
+# SYSWARDEN v0.27.3 - TELEMETRY BACKEND
 # ==============================================================================
 function setup_telemetry_backend() {
     log "INFO" "Installation of the advanced telemetry engine (Backend)..."
@@ -5721,7 +5777,7 @@ EOF
 }
 
 # ==============================================================================
-# SYSWARDEN v0.27.2 - NGINX / APACHESECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
+# SYSWARDEN v0.27.3 - NGINX / APACHESECURE DASHBOARD (ENTERPRISE SAAS UI / SPA / CSP)
 # ==============================================================================
 function generate_dashboard() {
     log "INFO" "Generating the Enterprise SaaS Nginx Dashboard (SPA/CSP)..."
@@ -5817,7 +5873,7 @@ function generate_dashboard() {
     <nav class="top-navbar">
         <div class="d-flex align-items-center gap-3">
             <svg style="color: var(--sw-brand-icon);" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-            <h5 class="mb-0 fw-bold d-none d-md-block text-uppercase" style="letter-spacing: 0.5px; font-size: 1.1rem; color: var(--sw-text);">SYSWARDEN v0.27.2</h5>
+            <h5 class="mb-0 fw-bold d-none d-md-block text-uppercase" style="letter-spacing: 0.5px; font-size: 1.1rem; color: var(--sw-text);">SYSWARDEN v0.27.3</h5>
         </div>
         
         <div class="d-flex align-items-center gap-3 gap-md-4">
@@ -7124,7 +7180,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.27.2                  ${NC}"
+    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.27.3                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -7163,7 +7219,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.27.2 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.27.3 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
