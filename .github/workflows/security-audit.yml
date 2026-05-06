@@ -19,6 +19,13 @@ on:
       - '**.sh'
       - '**.py'
 
+# ==========================================
+# GLOBAL PERMISSIONS (ISO 27001 A.9 Access Control)
+# Default to read-only. Elevate per job if strictly necessary.
+# ==========================================
+permissions:
+  contents: read
+
 jobs:
   # ==========================================
   # JOB 1: CODE HYGIENE (ShellCheck & shfmt)
@@ -61,23 +68,92 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ==========================================
-  # JOB 3 : SAST & VULNERABILITIES (Trivy)
+  # JOB 3 : SAST, VULNERABILITIES & SBOM (Trivy)
   # ==========================================
   sast:
-    name: SAST & Vulnerability Scan
+    name: SAST & Supply Chain Security
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required to upload SARIF results to GitHub Security tab
+      security-events: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      # --- OS Dependency Vulnerability Analysis (Trivy) ---
-      - name: Run Trivy filesystem scan
+      - name: Generate SBOM (SPDX format)
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '.'
-          format: 'table'
-          exit-code: '1' # Block the CI if a critical vulnerability is found
+          format: 'spdx-json'
+          output: 'syswarden-sbom.spdx.json'
+
+      - name: Store SBOM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: syswarden-sbom
+          path: syswarden-sbom.spdx.json
+          retention-days: 90
+
+      - name: Run Trivy Vulnerability Scanner (SARIF output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        # Ensure upload happens even if the previous step fails (finds vulnerabilities)
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # ==========================================
+  # JOB 4 : CRYPTOGRAPHIC SIGNING (Cosign)
+  # ==========================================
+  signing:
+    name: Artifact Integrity Signing
+    # Only sign if all security checks pass
+    needs: [hygiene, anti-leaks, sast]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for OIDC identity token generation (Keyless signing)
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.5.0
+
+      - name: Sign Bash Scripts
+        run: |
+          # Create a directory to store signatures and certificates
+          mkdir -p signatures
+          
+          # Iterate over all shell scripts and sign them individually
+          for script in $(find . -maxdepth 1 -name "*.sh"); do
+            filename=$(basename "$script")
+            echo "[*] Signing $filename..."
+            
+            cosign sign-blob \
+              --yes \
+              --output-signature "signatures/${filename}.sig" \
+              --output-certificate "signatures/${filename}.crt" \
+              "$script"
+          done
+
+      - name: Store Signatures as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: syswarden-signatures
+          path: signatures/
+          retention-days: 90    
