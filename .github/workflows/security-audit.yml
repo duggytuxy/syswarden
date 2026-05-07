@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Run ShellCheck on Bash scripts
         # Scan all .sh scripts with a minimum severity of 'warning'
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Required by Gitleaks to scan the entire commit history
 
@@ -116,44 +116,34 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
   # ==========================================
-  # JOB 4 : CRYPTOGRAPHIC SIGNING (Cosign)
+  # JOB 4 : NATIVE GITHUB ATTESTATIONS
   # ==========================================
-  signing:
-    name: Artifact Integrity Signing
-    # Only sign if all security checks pass
+  provenance-attestation:
+    name: Generate Build Provenance
     needs: [hygiene, anti-leaks, sast]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Required for OIDC identity token generation (Keyless signing)
-      id-token: write
+      id-token: write       # Required for OIDC identity token generation
+      attestations: write   # Required to write to the GitHub attestations registry
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v3.5.0
+      # The attestation action prefers a single file to sign.
+      # Create a clean archive of the SysWarden scripts.
+      - name: Bundle SysWarden Scripts
+        run: tar -czvf syswarden-release.tar.gz *.sh
 
-      - name: Sign Bash Scripts
-        run: |
-          # Create a directory to store signatures and certificates
-          mkdir -p signatures
+      - name: Generate Artifact Attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          # The path to the artifact we want to attest
+          subject-path: 'syswarden-release.tar.gz'
           
-          # Iterate over all shell scripts and sign them individually
-          for script in $(find . -maxdepth 1 -name "*.sh"); do
-            filename=$(basename "$script")
-            echo "[*] Signing $filename..."
-            
-            cosign sign-blob \
-              --yes \
-              --output-signature "signatures/${filename}.sig" \
-              --output-certificate "signatures/${filename}.crt" \
-              "$script"
-          done
-
-      - name: Store Signatures as Artifact
+      # Optional: Make the archive available within the workflow run
+      - name: Upload Attested Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: syswarden-signatures
-          path: signatures/
-          retention-days: 90    
+          name: syswarden-attested-bundle
+          path: syswarden-release.tar.gz
