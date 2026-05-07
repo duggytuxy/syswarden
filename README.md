@@ -99,7 +99,7 @@ To learn everything about the SysWarden ecosystem, explore detailed configuratio
 
 ## Target and support
 
-> €3,000/year to fuel continuous DevSecOps improvements and integrations
+> €3,500/year to fuel continuous DevSecOps improvements and integrations
 
 Developing **SysWarden** and curating the zero-false-positive **Data-Shield IPv4 Blocklists** requires dedicated server infrastructure and non-stop threat monitoring. 
 
