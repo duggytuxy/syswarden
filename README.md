@@ -79,7 +79,7 @@ chmod +x *.sh
 
 **2. Execute the installer matching your OS:**
 
-*For Debian, Ubuntu, RHEL, AlmaLinux & Rocky Linux:*
+*For Debian 12+, Ubuntu 24.04+, RHEL 9+, Fedora 43+, CentOS Stream, AlmaLinux 10+ & Rocky Linux 9+:*
 
 ```bash
 ./install-syswarden.sh
