@@ -1,8 +1,5 @@
 name: SysWarden Security Audit
 
-# --- GLOBAL ENVIRONMENT VARIABLES ---
-# Forces GitHub Actions to use Node.js 24 for all JavaScript-based actions,
-# bypassing the upcoming Node.js 20 deprecation warnings.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -19,17 +16,10 @@ on:
       - '**.sh'
       - '**.py'
 
-# ==========================================
-# GLOBAL PERMISSIONS (ISO 27001 A.9 Access Control)
-# Default to read-only. Elevate per job if strictly necessary.
-# ==========================================
 permissions:
   contents: read
 
 jobs:
-  # ==========================================
-  # JOB 1: CODE HYGIENE (ShellCheck & shfmt)
-  # ==========================================
   hygiene:
     name: Code Hygiene
     runs-on: ubuntu-latest
@@ -38,21 +28,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run ShellCheck on Bash scripts
-        # Scan all .sh scripts with a minimum severity of 'warning'
-        run: shellcheck --severity=warning *.sh
+        run: find . -type f -name "*.sh" -exec shellcheck --severity=warning {} +
 
       - name: Setup shfmt
         uses: mfinelli/setup-shfmt@v4
         
       - name: Check Bash formatting (shfmt)
-        # -d: diff (do not modify files, fail if improperly formatted)
-        # -i 4: indent with 4 spaces
-        # -ci: correctly indent switch cases
-        run: shfmt -d -i 4 -ci *.sh
+        run: shfmt -d -i 4 -ci .
 
-  # ==========================================
-  # JOB 2: SECRET SCANNING (Gitleaks)
-  # ==========================================
   anti-leaks:
     name: Secret Scanning
     runs-on: ubuntu-latest
@@ -60,22 +43,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Required by Gitleaks to scan the entire commit history
+          fetch-depth: 0
 
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ==========================================
-  # JOB 3 : SAST, VULNERABILITIES & SBOM (Trivy)
-  # ==========================================
   sast:
     name: SAST & Supply Chain Security
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Required to upload SARIF results to GitHub Security tab
       security-events: write
     steps:
       - name: Checkout repository
@@ -108,40 +87,37 @@ jobs:
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
-      - name: Upload Trivy scan results to GitHub Security tab
+      - name: Upload Trivy scan results
         uses: github/codeql-action/upload-sarif@v3
-        # Ensure upload happens even if the previous step fails (finds vulnerabilities)
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
 
-  # ==========================================
-  # JOB 4 : NATIVE GITHUB ATTESTATIONS
-  # ==========================================
   provenance-attestation:
     name: Generate Build Provenance
     needs: [hygiene, anti-leaks, sast]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write       # Required for OIDC identity token generation
-      attestations: write   # Required to write to the GitHub attestations registry
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # The attestation action prefers a single file to sign.
-      # Create a clean archive of the SysWarden scripts.
-      - name: Bundle SysWarden Scripts
-        run: tar -czvf syswarden-release.tar.gz *.sh
+      - name: Compile Modular Source Code
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Bundle Compiled SysWarden Scripts
+        run: tar -czvf syswarden-release.tar.gz -C dist .
 
       - name: Generate Artifact Attestation
         uses: actions/attest-build-provenance@v1
         with:
-          # The path to the artifact we want to attest
           subject-path: 'syswarden-release.tar.gz'
           
-      # Optional: Make the archive available within the workflow run
       - name: Upload Attested Artifact
         uses: actions/upload-artifact@v4
         with:
