@@ -10,12 +10,12 @@ OUTPUT="${DIST_DIR}/install-syswarden.sh"
 
 echo "[*] Initializing SysWarden Universal Build..."
 mkdir -p "${DIST_DIR}"
-: > "${OUTPUT}"
+: >"${OUTPUT}"
 
 # ==========================================
 # 1. BASE SECURITY HEADERS
 # ==========================================
-cat << 'EOF' > "${OUTPUT}"
+cat <<'EOF' >"${OUTPUT}"
 #!/bin/bash
 # SysWarden - Enterprise Compiled Build
 # Copyright (C) 2026 duggytuxy - Laurent M.
@@ -33,8 +33,8 @@ EOF
 echo "[*] Injecting core configurations..."
 for file in src/core/*.sh; do
     if [[ -f "$file" ]]; then
-        cat "$file" >> "${OUTPUT}"
-        echo -e "\n" >> "${OUTPUT}"
+        cat "$file" >>"${OUTPUT}"
+        echo -e "\n" >>"${OUTPUT}"
     fi
 done
 
@@ -44,9 +44,9 @@ done
 echo "[*] Injecting universal modules..."
 for file in src/universel/*.sh; do
     if [[ -f "$file" ]]; then
-        echo "# --- SOURCE: $(basename "$file") ---" >> "${OUTPUT}"
-        cat "$file" >> "${OUTPUT}"
-        echo -e "\n" >> "${OUTPUT}"
+        echo "# --- SOURCE: $(basename "$file") ---" >>"${OUTPUT}"
+        cat "$file" >>"${OUTPUT}"
+        echo -e "\n" >>"${OUTPUT}"
     fi
 done
 
@@ -55,8 +55,8 @@ done
 # ==========================================
 echo "[*] Injecting main orchestrator..."
 if [[ -f "src/main.sh" ]]; then
-    echo "# --- SOURCE: main.sh ---" >> "${OUTPUT}"
-    cat "src/main.sh" >> "${OUTPUT}"
+    echo "# --- SOURCE: main.sh ---" >>"${OUTPUT}"
+    cat "src/main.sh" >>"${OUTPUT}"
 else
     echo "[-] CRITICAL: src/main.sh not found. Build aborted." >&2
     exit 1
