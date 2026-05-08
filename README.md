@@ -78,7 +78,7 @@ It supports two installation methods: a standard interactive mode and an Enterpr
 Download the execution script and run it as root. Supported OS: *Debian 12+, Ubuntu 24.04+, RHEL 9+, Fedora 43+, CentOS Stream, AlmaLinux 10+ & Rocky Linux 9+*.
 
 ```bash
-wget [https://github.com/duggytuxy/syswarden/releases/latest/download/install-syswarden.sh](https://github.com/duggytuxy/syswarden/releases/latest/download/install-syswarden.sh)
+wget https://github.com/duggytuxy/syswarden/releases/latest/download/install-syswarden.sh
 chmod +x install-syswarden.sh
 sudo ./install-syswarden.sh
 ```
@@ -89,7 +89,7 @@ SysWarden releases are cryptographically signed using GitHub Artifact Attestatio
 
 ```bash
 # 1. Download the release bundle
-wget [https://github.com/duggytuxy/syswarden/releases/latest/download/syswarden-release.tar.gz](https://github.com/duggytuxy/syswarden/releases/latest/download/syswarden-release.tar.gz)
+wget https://github.com/duggytuxy/syswarden/releases/latest/download/syswarden-release.tar.gz
 
 # 2. Verify the cryptographic attestation using the official GitHub CLI
 gh attestation verify syswarden-release.tar.gz --owner duggytuxy
