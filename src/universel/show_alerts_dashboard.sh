@@ -32,7 +32,7 @@ show_alerts_dashboard() {
 
         P2=""
         local LOGS=()
-        # HOTFIX: Integration of all possible log targets across Debian, Alpine, and Slackware
+        # HOTFIX: Integration of all possible log targets across Debian, Alpine, RHEL and Slackware
         [[ -f /var/log/kern-firewall.log ]] && LOGS+=(/var/log/kern-firewall.log)
         [[ -f /var/log/auth-syswarden.log ]] && LOGS+=(/var/log/auth-syswarden.log)
         [[ -f /var/log/fail2ban.log ]] && LOGS+=(/var/log/fail2ban.log)
@@ -96,12 +96,23 @@ show_alerts_dashboard() {
         }
         
         # --- 2. FAIL2BAN ALERTS PROCESSING ---
-        if (($0 ~ /Ban / || $0 ~ /Found /) && $0 !~ /Restore/) {
-            date = $1 " " $2
-            sub(/,.*/, "", date)
+        # DEVSECOPS FIX: Strict requirement for the word "fail2ban" to prevent false positives from Kernel logs like "[drm] Found CRTC"
+        if ($0 ~ /fail2ban/i && ($0 ~ /Ban / || $0 ~ /Found /) && $0 !~ /Restore/) {
+            
+            # Universal Date Parsing (Supports ISO-8601, Fail2ban default, and Legacy Syslog)
+            if ($1 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T/) {
+                date = substr($1, 1, 10) " " substr($1, 12, 8)
+            } else if ($1 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}/) {
+                date = substr($1, 1, 10) " " substr($2, 1, 8)
+            } else if ($1 in m) {
+                date = sprintf("%s-%s-%02d %s", current_year, m[$1], $2, $3)
+            } else {
+                date = $1 " " $2 " " $3
+                sub(/,.*/, "", date)
+            }
             
             jail = "Unknown"
-            if (match($0, /\[[-_A-Za-z0-9]+\] (Found|Ban)/)) {
+            if (match($0, /\[[-_A-Za-z0-9]+\] (Found|Ban) /)) {
                 str = substr($0, RSTART, RLENGTH)
                 if (match(str, /\[[-_A-Za-z0-9]+\]/)) {
                     jail = substr(str, RSTART+1, RLENGTH-2)
@@ -112,10 +123,12 @@ show_alerts_dashboard() {
             act_color = ($0 ~ /Ban /) ? "\033[1;31m" : "\033[1;35m"
             
             ip = "Unknown"
-            # IPv4 Strict Matching
-            if (match($0, /(Found|Ban) [0-9.]+/)) {
-                ip = substr($0, RSTART, RLENGTH)
-                sub(/(Found|Ban) /, "", ip)
+            # Strict IPv4 Extraction bound to the Found/Ban keyword
+            if (match($0, /(Found|Ban)[ \t]+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+                str = substr($0, RSTART, RLENGTH)
+                if (match(str, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+                    ip = substr(str, RSTART, RLENGTH)
+                }
             }
             
             printf "\033[1;30m%-19s\033[0m | \033[1;35m%-16s\033[0m | %s%-10s\033[0m | \033[1;33m%-15s\033[0m | \033[1;36mJAIL: %s\033[0m\n", date, "FAIL2BAN WAF", act_color, act, ip, jail

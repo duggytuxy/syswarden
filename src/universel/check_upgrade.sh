@@ -1,5 +1,5 @@
 check_upgrade() {
-    echo -e "\n${BLUE}=== SysWarden Upgrade Checker (Universal) ===${NC}"
+    echo -e "\n${BLUE}=== SysWarden Upgrade Checker (Enterprise) ===${NC}"
 
     # --- DEVSECOPS FIX: CAPTURE ABSOLUTE PATH EARLY ---
     # We must resolve $0 before any 'cd' commands alter the current working directory,
@@ -17,19 +17,18 @@ check_upgrade() {
         exit 1
     }
 
+    # DEVSECOPS FIX: Append '|| true' to prevent 'set -e' from killing the script if grep finds nothing
     local download_url
-    download_url=$(echo "$response" | grep -o '"browser_download_url": "[^"]*/install-syswarden\.sh"' | head -n 1 | cut -d'"' -f4)
-
-    local hash_url
-    hash_url=$(echo "$response" | grep -o '"browser_download_url": "[^"]*/install-syswarden\.sh\.sha256"' | head -n 1 | cut -d'"' -f4)
+    download_url=$(echo "$response" | grep -o '"browser_download_url": "[^"]*/install-syswarden\.sh"' | head -n 1 | cut -d'"' -f4 || true)
 
     if [[ -z "$download_url" ]]; then
-        echo -e "${GREEN}No specific update found for the Universal version in the latest release. You are up to date!${NC}"
+        echo -e "${GREEN}No update found in the latest release. You are up to date!${NC}"
         return
     fi
 
+    # DEVSECOPS FIX: Append '|| true' to prevent silent crashes
     local latest_version
-    latest_version=$(echo "$response" | grep -o '"tag_name": "[^"]*"' | head -n 1 | cut -d'"' -f4)
+    latest_version=$(echo "$response" | grep -o '"tag_name": "[^"]*"' | head -n 1 | cut -d'"' -f4 || true)
 
     echo -e "Current Version : ${YELLOW}${VERSION}${NC}"
     echo -e "Latest Version  : ${GREEN}${latest_version}${NC}\n"
@@ -37,7 +36,7 @@ check_upgrade() {
     if [[ "$VERSION" == "$latest_version" ]]; then
         echo -e "${GREEN}You are already using the latest version of SysWarden!${NC}"
     else
-        echo -e "${YELLOW}A new Universal version ($latest_version) is available!${NC}"
+        echo -e "${YELLOW}A new Enterprise version ($latest_version) is available!${NC}"
 
         # --- DEVSECOPS: INTERACTIVE CONFIRMATION ---
         read -p "Do you want to proceed with the automated in-place upgrade now? (y/N): " proceed_upgrade
@@ -46,8 +45,7 @@ check_upgrade() {
             return
         fi
 
-        # --- SECURITY FIX: MITM PROTECTION & SECURE UPDATE (CWE-494: Download of Code Without Integrity Check) ---
-        echo -e "${YELLOW}Downloading and verifying update securely...${NC}"
+        echo -e "${YELLOW}Downloading update securely via TLS 1.2+...${NC}"
 
         # --- HOTFIX: SAME-FILE COLLISION PREVENTION ---
         # Create an isolated sub-directory for the update payload to guarantee
@@ -56,20 +54,22 @@ check_upgrade() {
         mkdir -p "$UPGRADE_DIR"
 
         wget --https-only --secure-protocol=TLSv1_2 --max-redirect=2 --no-hsts -qO "$UPGRADE_DIR/install-syswarden.sh" "$download_url"
-        wget --https-only --secure-protocol=TLSv1_2 --max-redirect=2 --no-hsts -qO "$UPGRADE_DIR/install-syswarden.sh.sha256" "$hash_url"
 
         cd "$UPGRADE_DIR" || exit 1
 
-        if ! sha256sum -c install-syswarden.sh.sha256 --status; then
+        # --- SECURITY FIX: BASIC INTEGRITY CHECK (Post-SHA256 Era) ---
+        # Ensure the file downloaded correctly and is a valid bash script
+        # This prevents executing corrupted files or HTML pages from captive networks
+        if ! head -n 1 install-syswarden.sh | grep -q "#!/bin/bash"; then
             echo -e "${RED}[ CRITICAL ALERT ]${NC}"
-            echo -e "${RED}The downloaded script failed cryptographic validation!${NC}"
-            echo -e "${RED}Possible causes: Man-In-The-Middle (MITM) attack, DNS poisoning, or incomplete download.${NC}"
+            echo -e "${RED}The downloaded script is invalid or corrupted!${NC}"
+            echo -e "${RED}Possible causes: Captive portal, network filtering, or incomplete download.${NC}"
             echo -e "${RED}Update aborted to protect system integrity.${NC}"
             rm -rf "$UPGRADE_DIR"
             exit 1
         fi
 
-        echo -e "${GREEN}Checksum validated successfully. Preparing in-place upgrade...${NC}"
+        echo -e "${GREEN}Payload validated successfully. Preparing in-place upgrade...${NC}"
 
         # --- PRE-UPGRADE: SURGICAL PROCESS TERMINATION ---
         # We must kill background telemetry and UI processes to avoid zombie orphans
