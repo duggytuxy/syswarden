@@ -46,7 +46,7 @@ By fusing [Data-Shield IPv4 blocklists](https://github.com/duggytuxy/Data-Shield
 
 **Zero-Trust & Compliance Architecture**
 * **Service Cloaking:** Hides your SSH port and administrative panels behind a seamlessly deployed, invisible WireGuard VPN tunnel.
-* **Smart SIEM Log Forwarding:** Natively integrates with `rsyslog` (Universal/Alpine) and `syslogd` (Slackware) to forward only high-value, behavioral Layer 7 bans to your SOC/SIEM (Wazuh). Intentionally filters out L3 noise to prevent index saturation, accelerating **ISO 27001 and NIS2 compliance**.
+* **Smart SIEM Log Forwarding:** Natively integrates with `rsyslog` (Universal) to forward only high-value, behavioral Layer 7 bans to your SOC/SIEM (Wazuh). Intentionally filters out L3 noise to prevent index saturation, accelerating **ISO 27001 and NIS2 compliance**.
 * **High Availability (HA) Cluster Sync:** Securely replicates threat intelligence states, whitelists, and configurations to standby nodes via an automated, SSH-encrypted cron job.
 
 **Observability & Lifecycle Management**
