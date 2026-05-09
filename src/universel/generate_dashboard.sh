@@ -124,7 +124,7 @@ generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-none d-md-flex align-items-baseline gap-2">
                 <h5 class="mb-0 fw-bold text-uppercase" style="letter-spacing: 0.5px; font-size: 1rem; color: var(--sw-text);">SYSWARDEN</h5>
-                <span class="font-mono text-muted" style="font-size: 0.80rem;">v0.30.2</span>
+                <span class="font-mono text-muted" style="font-size: 0.80rem;">v0.30.3</span>
             </div>
         </div>
         

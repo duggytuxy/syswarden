@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # SysWarden WAF - Enterprise ModSecurity v3 & OWASP CRS Deployment Module
-# Designed for SysWarden v0.30.2 Architecture
+# Designed for SysWarden v0.30.3 Architecture
 # Compatibility: Ubuntu, Debian, RHEL, AlmaLinux, Rocky, CentOS
 
 # --- SAFETY FIRST ---
@@ -88,9 +88,48 @@ install_dependencies() {
         dnf install -y dnf-plugins-core || yum install -y yum-utils
         dnf config-manager --set-enabled crb 2>/dev/null || dnf config-manager --set-enabled PowerTools 2>/dev/null || true
         dnf install -y epel-release || true
-        dnf install -y gcc-c++ flex bison yajl yajl-devel curl-devel curl GeoIP-devel doxygen \
-            zlib-devel pcre-devel pcre2-devel libxml2-devel lmdb-devel autoconf automake libtool \
-            wget git pkgconf python3 libxslt-devel gd-devel perl-devel httpd-devel
+
+        # --- DEVSECOPS FIX: DYNAMIC DEPENDENCY RESOLUTION ---
+        # RHEL/Rocky 10 deprecates legacy pcre, GeoIP, and yajl from standard repositories.
+        # We segregate the installation to prevent complete compilation failure.
+
+        # 1. Universal Core Compilation Packages (cmake added for potential YAJL build)
+        dnf install -y gcc-c++ flex bison curl-devel curl doxygen zlib-devel \
+            pcre2-devel libxml2-devel lmdb-devel autoconf automake libtool \
+            wget git pkgconf python3 libxslt-devel gd-devel perl-devel httpd-devel cmake
+
+        # 2. Geolocation Engine (libmaxminddb replaces legacy GeoIP in RHEL 9/10)
+        dnf install -y libmaxminddb-devel || dnf install -y GeoIP-devel || true
+
+        # 3. Legacy PCRE (Safe fallback for older RHEL 8 systems if pcre2 is not enough)
+        dnf install -y pcre-devel || true
+
+        # 4. JSON Support (YAJL) - Fallback to source compilation if natively missing
+        if ! dnf install -y yajl yajl-devel; then
+            log "WARN" "YAJL packages are missing from the package manager (expected on RHEL 10)."
+            log "INFO" "SysWarden will compile YAJL from source to guarantee ModSecurity JSON audit logging..."
+
+            local yajl_build_dir="$TMP_DIR/yajl_build"
+            rm -rf "$yajl_build_dir"
+            git clone --depth 1 https://github.com/lloyd/yajl.git "$yajl_build_dir"
+
+            # Isolated subshell for compilation to preserve the working directory
+            (
+                cd "$yajl_build_dir" || exit 1
+                ./configure
+                make
+                make install
+            ) || log "WARN" "YAJL compilation failed. ModSecurity will build without JSON support."
+
+            # --- DEVSECOPS FIX: SYSTEM RUNTIME LINKING FOR YAJL ---
+            # YAJL installs to /usr/local/lib by default. RHEL/Rocky 10 ld.so does NOT
+            # scan this directory by default, causing Apache to crash with 'cannot load libyajl.so.2'.
+            # We must explicitly register it.
+            echo "/usr/local/lib" >/etc/ld.so.conf.d/usr-local-lib.conf
+
+            # Ensure the dynamic linker cache is fully rebuilt
+            ldconfig 2>/dev/null || true
+        fi
 
     else
         log "ERROR" "Unsupported OS for automated ModSecurity compilation: $OS_ID"
@@ -192,13 +231,30 @@ compile_apache_connector() {
     log "INFO" "Preparing Apache ModSecurity v3 connector..."
     cd "$TMP_DIR"
 
+    # --- DEVSECOPS FIX: SYSTEM LIBRARY LINKING ---
+    # Register ModSecurity in the dynamic linker for runtime
+    log "INFO" "Registering ModSecurity library paths in ld.so.conf..."
+    echo "/usr/local/modsecurity/lib" >/etc/ld.so.conf.d/modsecurity.conf
+    ldconfig 2>/dev/null || true
+
+    export PKG_CONFIG_PATH="/usr/local/modsecurity/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export LD_LIBRARY_PATH="/usr/local/modsecurity/lib:${LD_LIBRARY_PATH:-}"
+
+    # Force optimization to clear EL10 _FORTIFY_SOURCE warnings during apxs build
+    export CFLAGS="-O2 ${CFLAGS:-}"
+
     # Clone the official ModSecurity-apache connector
     git clone --depth 1 https://github.com/owasp-modsecurity/ModSecurity-apache.git
     cd ModSecurity-apache
 
     log "INFO" "Compiling Apache ModSecurity Connector..."
     ./autogen.sh
-    ./configure
+
+    # --- DEVSECOPS FIX: EXPLICIT APXS INCLUDES ---
+    # apxs (Apache Extension Tool) drops environment CFLAGS during the make phase.
+    # We must explicitly bind the library path via --with-libmodsecurity so
+    # configure natively injects -I/usr/local/modsecurity/include into the Makefile.
+    ./configure --with-libmodsecurity=/usr/local/modsecurity
     make
 
     # 'make install' relies on apxs to automatically place the .so in the correct Apache modules directory
@@ -208,22 +264,19 @@ compile_apache_connector() {
     local APACHE_MOD_DIR="/etc/apache2/mods-available"
     if command -v httpd >/dev/null 2>&1 || [[ -d "/etc/httpd" ]]; then
         APACHE_MOD_DIR="/etc/httpd/conf.modules.d"
+        mkdir -p "$APACHE_MOD_DIR"
     fi
 
-    mkdir -p "$APACHE_MOD_DIR"
-    local LOAD_CONF="$APACHE_MOD_DIR/modsecurity3.load"
+    log "INFO" "Configuring Apache to load ModSecurity..."
 
-    # Create the module load directive
-    cat <<EOF >"$LOAD_CONF"
-LoadModule security2_module /usr/lib/apache2/modules/mod_security2.so
-EOF
-
-    # Enable the module natively on Debian/Ubuntu
-    if command -v a2enmod >/dev/null 2>&1; then
-        a2enmod modsecurity3 >/dev/null 2>&1 || true
+    # Handle module loading based on OS architecture (Debian vs RHEL)
+    if [[ -d "/etc/apache2/mods-available" ]]; then
+        echo "LoadModule security3_module /usr/lib/apache2/modules/mod_security3.so" >/etc/apache2/mods-available/security3.load
+        a2enmod security3 >/dev/null 2>&1 || true
+    else
+        # For RHEL/Alma/Rocky (httpd)
+        echo "LoadModule security3_module modules/mod_security3.so" >"$APACHE_MOD_DIR/10-mod_security.conf"
     fi
-
-    log "SUCCESS" "Apache ModSecurity v3 dynamic module created and enabled."
 }
 
 # ==============================================================================
@@ -234,34 +287,33 @@ configure_owasp_crs() {
     log "INFO" "Deploying OWASP Core Rule Set and ModSecurity configuration..."
 
     mkdir -p "$MODSEC_DIR"
-    cd "$MODSEC_DIR"
+    cd "$MODSEC_DIR" || exit 1
 
-    # Fetch default unicode mapping and recommended config from the repo we just cloned
+    # Configure ModSecurity core rules
     cp "$TMP_DIR/ModSecurity/modsecurity.conf-recommended" "$MODSEC_DIR/modsecurity.conf"
     cp "$TMP_DIR/ModSecurity/unicode.mapping" "$MODSEC_DIR/"
 
-    # --- DEVSECOPS: MODSECURITY HARDENING ---
     log "INFO" "Hardening modsecurity.conf for SysWarden Telemetry..."
-
-    # 1. Enable Rule Engine (Switch from DetectionOnly to On)
+    # Switch to block mode and enforce JSON logging for telemetry ingestion
     sed -i 's/SecRuleEngine DetectionOnly/SecRuleEngine On/' "$MODSEC_DIR/modsecurity.conf"
-
-    # 2. Configure Audit Log path to match SysWarden Fail2ban Jails
+    sed -i 's/SecAuditLogParts ABDEFHIJZ/SecAuditLogParts ABCEFHJKZ/' "$MODSEC_DIR/modsecurity.conf"
+    sed -i 's/SecAuditLogType Serial/SecAuditLogType Serial\nSecAuditLogFormat JSON/' "$MODSEC_DIR/modsecurity.conf"
     sed -i "s|^SecAuditLog .*|SecAuditLog $AUDIT_LOG|" "$MODSEC_DIR/modsecurity.conf"
 
-    # 3. Create the log file securely
+    # Create the log file securely
     touch "$AUDIT_LOG"
     chown root:root "$AUDIT_LOG"
     chmod 640 "$AUDIT_LOG"
 
-    # Fetch OWASP CRS (v4.0 is the modern standard, cloning main branch)
+    # Clone CRS
     log "INFO" "Cloning OWASP CRS..."
-    rm -rf "$CRS_DIR"
-    git clone https://github.com/coreruleset/coreruleset.git "$CRS_DIR"
+    if [[ ! -d "$CRS_DIR" ]]; then
+        git clone --depth 1 https://github.com/coreruleset/coreruleset.git "$CRS_DIR"
+    fi
 
     cp "$CRS_DIR/crs-setup.conf.example" "$CRS_DIR/crs-setup.conf"
 
-    # Create the master config inclusion file
+    # Generate the main ModSecurity entry file
     cat <<EOF >"$MODSEC_DIR/main.conf"
 # SysWarden - ModSecurity Master Configuration
 Include /etc/modsecurity/modsecurity.conf
@@ -269,9 +321,10 @@ Include /etc/modsecurity/owasp-crs/crs-setup.conf
 Include /etc/modsecurity/owasp-crs/rules/*.conf
 EOF
 
+    # --- DEVSECOPS FIX: NGINX EXISTENCE CHECK ---
     # Configure Nginx to activate ModSecurity in its server blocks
     local NGINX_MAIN_CONF="/etc/nginx/nginx.conf"
-    if grep -q "http {" "$NGINX_MAIN_CONF"; then
+    if [[ -f "$NGINX_MAIN_CONF" ]] && grep -q "http {" "$NGINX_MAIN_CONF"; then
         if ! grep -q "modsecurity on;" "$NGINX_MAIN_CONF"; then
             log "INFO" "Enabling ModSecurity globally in Nginx HTTP block..."
             sed -i '/http {/a \    modsecurity on;\n    modsecurity_rules_file /etc/modsecurity/main.conf;' "$NGINX_MAIN_CONF"
@@ -292,10 +345,14 @@ EOF
         local APACHE_WAF_CONF="$APACHE_CONF_DIR/syswarden-waf.conf"
 
         log "INFO" "Enabling ModSecurity globally for Apache..."
+
+        # --- DEVSECOPS FIX: APACHE MODSEC V3 DIRECTIVES ---
+        # ModSecurity v3 utilizes a connector that no longer supports native SecRule directives
+        # inside the Apache conf. It must map the rules file externally.
         cat <<EOF >"$APACHE_WAF_CONF"
-<IfModule security2_module>
-    SecRuleEngine On
-    Include /etc/modsecurity/main.conf
+<IfModule security3_module>
+    modsecurity on
+    modsecurity_rules_file /etc/modsecurity/main.conf
 </IfModule>
 EOF
 
@@ -303,16 +360,36 @@ EOF
             a2enconf syswarden-waf >/dev/null 2>&1 || true
         fi
 
+        # --- DEVSECOPS FIX: SELINUX CONTEXT RESTORATION ---
+        # Rocky Linux 10 enforces strict SELinux rules. If the compiled modules or libs
+        # possess user_home_t contexts, httpd -t will throw a fatal error.
+        if command -v restorecon >/dev/null 2>&1; then
+            restorecon -R /usr/lib64/httpd/modules/ 2>/dev/null || true
+            restorecon -R /usr/lib/apache2/modules/ 2>/dev/null || true
+            restorecon -R /usr/local/modsecurity/lib/ 2>/dev/null || true
+            restorecon -R /etc/modsecurity/ 2>/dev/null || true
+        fi
+
         log "INFO" "Validating Apache configuration..."
         if $APACHE_DAEMON -t >/dev/null 2>&1; then
-            if command -v systemctl >/dev/null 2>&1; then
-                systemctl restart $APACHE_DAEMON
-            elif command -v rc-service >/dev/null 2>&1; then
-                rc-service $APACHE_DAEMON restart
+            # DEVSECOPS FIX: Check if the service actually exists before trying to restart it.
+            # On minimal installs, httpd-devel provides the binary for compilation but not the systemd unit.
+            if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "${APACHE_DAEMON}.service" >/dev/null 2>&1; then
+                systemctl restart "$APACHE_DAEMON"
+                log "SUCCESS" "WAF Active. Apache successfully restarted with ModSecurity enabled."
+            elif command -v rc-service >/dev/null 2>&1 && rc-service -e "$APACHE_DAEMON"; then
+                rc-service "$APACHE_DAEMON" restart
+                log "SUCCESS" "WAF Active. Apache successfully restarted with ModSecurity enabled."
+            else
+                log "WARN" "WAF configured successfully, but the $APACHE_DAEMON service is not installed or enabled as a daemon."
+                log "INFO" "The WAF module is ready for when you set up your web server."
             fi
-            log "SUCCESS" "WAF Active. Apache successfully restarted with ModSecurity enabled."
         else
             log "ERROR" "Apache configuration test failed. WAF integration requires manual review."
+            # DEVSECOPS FIX: Output the actual syntax error to the user instead of swallowing it
+            echo -e "\n--- APACHE TEST OUTPUT ---"
+            $APACHE_DAEMON -t || true
+            echo -e "--------------------------\n"
         fi
     fi
 
