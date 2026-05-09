@@ -23,7 +23,7 @@
 
 # SysWarden
 
-**SysWarden** is an ultra-lightweight **Enterprise Host-based Intrusion Detection System (HIDS)** for Linux. Acting as a powerful alternative to eBPF/XDP, it drops malicious packets directly at the hardware level (Layer 2/3) to prevent CPU overhead.
+**SysWarden** is an ultra-lightweight **Enterprise Host-based Security Orchestrator (HIDS / HIPS)** for Linux. Acting as a powerful alternative to eBPF/XDP, it drops malicious packets directly at the hardware level (Layer 2/3) to prevent CPU overhead.
 
 By fusing [Data-Shield IPv4 blocklists](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), CINS Army, Blocklist.de, GeoIP, ASN tracking, a dynamic L7 WAF (Fail2ban), and real-time SIEM logging, SysWarden transforms any bare-metal server or VM into a Zero-Trust fortress within seconds.
 
