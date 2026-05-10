@@ -51,6 +51,22 @@ for file in src/universel/*.sh; do
 done
 
 # ==========================================
+# 3.5. INJECT MODULAR FAIL2BAN JAILS
+# ==========================================
+echo "[*] Injecting modular Fail2ban jails..."
+if [[ -d "src/jails" ]]; then
+    for file in src/jails/*.sh; do
+        if [[ -f "$file" ]]; then
+            echo "# --- JAIL MODULE: $(basename "$file") ---" >>"${OUTPUT}"
+            cat "$file" >>"${OUTPUT}"
+            echo -e "\n" >>"${OUTPUT}"
+        fi
+    done
+else
+    echo "[-] WARNING: src/jails directory not found. Skipping jail modules."
+fi
+
+# ==========================================
 # 4. INJECT MAIN ORCHESTRATOR
 # ==========================================
 echo "[*] Injecting main orchestrator..."

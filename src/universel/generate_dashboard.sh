@@ -124,7 +124,7 @@ generate_dashboard() {
             <svg style="color: var(--sw-brand-icon);" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
             <div class="d-none d-md-flex align-items-baseline gap-2">
                 <h5 class="mb-0 fw-bold text-uppercase" style="letter-spacing: 0.5px; font-size: 1rem; color: var(--sw-text);">SYSWARDEN</h5>
-                <span class="font-mono text-muted" style="font-size: 0.80rem;">v0.30.3</span>
+                <span class="font-mono text-muted" style="font-size: 0.80rem;">v0.31.0</span>
             </div>
         </div>
         
@@ -393,7 +393,7 @@ generate_dashboard() {
             const j = jailName.toLowerCase();
             const baseStyle = 'padding: 0.35em 0.65em; border-radius: 3px; font-weight: 600; font-size: 0.70rem; ';
             
-            if (j.match(/(sqli|xss|lfi|revshell|webshell|ssti|ssrf|jndi|prestashop|atlassian|wordpress|drupal|nginx|apache)/)) 
+            if (j.match(/(sqli|xss|lfi|revshell|webshell|ssti|ssrf|jndi|homoglyph|prestashop|atlassian|wordpress|drupal|nginx|apache)/)) 
                 return baseStyle + 'background-color: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3);';
             if (j.match(/(portscan|scan|bot|mapper|enum|hunter|proxy|tls)/))
                 return baseStyle + 'background-color: rgba(59, 130, 246, 0.15); color: #3b82f6; border: 1px solid rgba(59,130,246,0.3);';

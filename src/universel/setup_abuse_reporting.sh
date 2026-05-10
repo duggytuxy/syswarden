@@ -249,8 +249,8 @@ def monitor_logs():
                     if any(x in jail for x in ["badbot", "scanner", "apimapper", "secretshunter", "idor"]): cats.extend(["14", "15", "19", "21"])
                     # 2. SQLi & XSS
                     elif "sqli" in jail or "xss" in jail: cats.extend(["15", "16", "21"])
-                    # 3. RCE, WebShells, LFI/RFI, SSRF, JNDI, ModSecurity
-                    elif any(x in jail for x in ["revshell", "webshell", "lfi", "ssrf", "jndi", "modsec"]): cats.extend(["15", "21"])
+                    # 3. RCE, WebShells, LFI/RFI, SSRF, JNDI, ModSecurity, Obfuscation
+                    elif any(x in jail for x in ["revshell", "webshell", "lfi", "ssrf", "jndi", "modsec", "homoglyph"]): cats.extend(["15", "21"])
                     # 4. Layer 7 DDoS (HTTP Flood)
                     elif "httpflood" in jail: cats.extend(["4", "21"])
                     # 5. AI Bots & Scrapers

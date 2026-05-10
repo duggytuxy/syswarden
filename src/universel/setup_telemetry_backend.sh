@@ -209,6 +209,7 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                     *webshell*) MITRE_ID="T1505.003"; MITRE_NAME="Server Software Component: Web Shell" ;;
                     *revshell*|*rce*) MITRE_ID="T1059"; MITRE_NAME="Command and Scripting Interpreter" ;;
                     *sqli*|*xss*|*lfi*|*ssti*|*jndi*|*haproxy*|*modsec*) MITRE_ID="T1190"; MITRE_NAME="Exploit Public-Facing Application" ;;
+                    *homoglyph*) MITRE_ID="T1027"; MITRE_NAME="Obfuscated Files or Information" ;;
                     *privesc*|*auditd*) MITRE_ID="T1068"; MITRE_NAME="Exploitation for Privilege Escalation" ;;
                     *secretshunter*|*hunter*|*ssrf*|*idor*) MITRE_ID="T1552"; MITRE_NAME="Unsecured Credentials / Cloud Discovery" ;;
                     *proxy-abuse*|*squid*) MITRE_ID="T1090"; MITRE_NAME="Connection Proxy" ;;
@@ -224,7 +225,7 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                 JAILS_JSON=$(echo "$JAILS_JSON" | jq --arg n "$JAIL" --argjson c "$BANNED_COUNT" --arg ttp "$MITRE_PAYLOAD" '. + [{"name": $n, "count": $c, "mitre": $ttp}]')
                 
                 # --- RISK RADAR CALCULATION ---
-                if [[ "$JAIL" =~ (sqli|xss|lfi|revshell|webshell|ssti|ssrf|jndi|modsec) ]]; then R_EXP=$((R_EXP + BANNED_COUNT))
+                if [[ "$JAIL" =~ (sqli|xss|lfi|revshell|webshell|ssti|ssrf|jndi|modsec|homoglyph) ]]; then R_EXP=$((R_EXP + BANNED_COUNT))
                 elif [[ "$JAIL" =~ (ssh|auth|privesc|prestashop) ]]; then R_BF=$((R_BF + BANNED_COUNT))
                 elif [[ "$JAIL" =~ (scan|bot|mapper|enum|hunter|tls) ]]; then R_REC=$((R_REC + BANNED_COUNT))
                 elif [[ "$JAIL" =~ (flood) ]]; then R_DOS=$((R_DOS + BANNED_COUNT))
