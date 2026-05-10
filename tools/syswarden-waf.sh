@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # SysWarden WAF - Enterprise ModSecurity v3 & OWASP CRS Deployment Module
-# Designed for SysWarden v0.31.0 Architecture
+# Designed for SysWarden v0.31.1 Architecture
 # Compatibility: Ubuntu, Debian, RHEL, AlmaLinux, Rocky, CentOS
 
 # --- SAFETY FIRST ---

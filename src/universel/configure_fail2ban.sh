@@ -36,19 +36,24 @@ EOF
 
         # 3. Dynamic Whitelist Array Construction
         local f2b_ignoreip="127.0.0.1/8 ::1 fe80::/10"
-        local public_ip=$(ip -4 addr show | grep -oEo 'inet [0-9.]+' | awk '{print $2}' | grep -v '127.0.0.1' | head -n 1 || true)
+
+        local public_ip
+        public_ip=$(ip -4 addr show | grep -oEo 'inet [0-9.]+' | awk '{print $2}' | grep -v '127.0.0.1' | head -n 1 || true)
         if [[ -n "$public_ip" ]]; then f2b_ignoreip="$f2b_ignoreip $public_ip"; fi
 
-        local local_subnets=$(ip -4 route | grep -v default | awk '{print $1}' | tr '\n' ' ' || true)
+        local local_subnets
+        local_subnets=$(ip -4 route | grep -v default | awk '{print $1}' | tr '\n' ' ' || true)
         if [[ -n "$local_subnets" ]]; then f2b_ignoreip="$f2b_ignoreip $local_subnets"; fi
 
         if [[ -f /etc/resolv.conf ]]; then
-            local dns_ips=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | grep -Eo '^[0-9.]+' | tr '\n' ' ' || true)
+            local dns_ips
+            dns_ips=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | grep -Eo '^[0-9.]+' | tr '\n' ' ' || true)
             if [[ -n "$dns_ips" ]]; then f2b_ignoreip="$f2b_ignoreip $dns_ips"; fi
         fi
 
         if [[ -s "$WHITELIST_FILE" ]]; then
-            local wl_ips=$(grep -vE '^\s*#|^\s*$' "$WHITELIST_FILE" | tr '\n' ' ' || true)
+            local wl_ips
+            wl_ips=$(grep -vE '^\s*#|^\s*$' "$WHITELIST_FILE" | tr '\n' ' ' || true)
             f2b_ignoreip="$f2b_ignoreip $wl_ips"
         fi
 
@@ -127,7 +132,8 @@ EOF
 
         # 6. DYNAMIC MODULE INVOCATION
         log "INFO" "Executing modular jail definitions..."
-        local jail_functions=$(compgen -A function | grep '^syswarden_jail_' || true)
+        local jail_functions
+        jail_functions=$(compgen -A function | grep '^syswarden_jail_' || true)
         if [[ -n "$jail_functions" ]]; then
             for func in $jail_functions; do
                 "$func"
