@@ -13,9 +13,6 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
-    env:
-      # Scope isolation: Required to prevent Node.js 20 deprecation warnings
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       # Required to upload the SARIF results to GitHub Code Scanning
       security-events: write
