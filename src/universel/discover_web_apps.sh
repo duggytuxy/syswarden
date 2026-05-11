@@ -39,13 +39,14 @@ discover_web_apps() {
 
     # 2. Application Heuristic Discovery (Only if a Web Server runs)
     if [[ -n "$web_conf_dirs" ]]; then
-        grep -riEq 'dolibarr' $web_conf_dirs 2>/dev/null && SYSW_HAS_DOLIBARR=true || true
-        grep -riEq 'prestashop' $web_conf_dirs 2>/dev/null && SYSW_HAS_PRESTASHOP=true || true
-        grep -riEq 'wp-config|wordpress' $web_conf_dirs 2>/dev/null && SYSW_HAS_WORDPRESS=true || true
-        grep -riEq 'drupal' $web_conf_dirs 2>/dev/null && SYSW_HAS_DRUPAL=true || true
-        grep -riEq 'nextcloud' $web_conf_dirs 2>/dev/null && SYSW_HAS_NEXTCLOUD=true || true
-        grep -riEq 'phpmyadmin' $web_conf_dirs 2>/dev/null && SYSW_HAS_PHPMYADMIN=true || true
-        grep -riEq 'laravel|artisan' $web_conf_dirs 2>/dev/null && SYSW_HAS_LARAVEL=true || true
+        # Fast configuration parsing (Reverse lookup, strictly ignoring commented lines)
+        grep -rhIEi 'dolibarr' $web_conf_dirs 2>/dev/null | grep -vE '^\s*#' | grep -q . && SYSW_HAS_DOLIBARR=true || true
+        grep -rhIEi 'prestashop' $web_conf_dirs 2>/dev/null | grep -vE '^\s*#' | grep -q . && SYSW_HAS_PRESTASHOP=true || true
+        grep -rhIEi 'wp-config|wordpress' $web_conf_dirs 2>/dev/null | grep -vE '^\s*#' | grep -q . && SYSW_HAS_WORDPRESS=true || true
+        grep -rhIEi 'drupal' $web_conf_dirs 2>/dev/null | grep -vE '^\s*#' | grep -q . && SYSW_HAS_DRUPAL=true || true
+        grep -rhIEi 'nextcloud' $web_conf_dirs 2>/dev/null | grep -vE '^\s*#' | grep -q . && SYSW_HAS_NEXTCLOUD=true || true
+        grep -rhIEi 'phpmyadmin' $web_conf_dirs 2>/dev/null | grep -vE '^\s*#' | grep -q . && SYSW_HAS_PHPMYADMIN=true || true
+        grep -rhIEi 'laravel|artisan' $web_conf_dirs 2>/dev/null | grep -vE '^\s*#' | grep -q . && SYSW_HAS_LARAVEL=true || true
 
         # Shallow filesystem probing (Depth 4 max for strict I/O optimization)
         for root in /var/www /usr/share/nginx/html /opt; do

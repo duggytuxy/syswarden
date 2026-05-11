@@ -1,6 +1,6 @@
 syswarden_jail_prestashop() {
-    # 1. Fail-Fast: Check against discovery engine results (Zero I/O overhead)
-    if [[ -z "${SYSW_RCE_LOGS:-}" ]]; then
+    # 1. Fail-Fast: Surgical check against discovery engine state
+    if [[ "${SYSW_HAS_PRESTASHOP:-false}" != "true" ]] || [[ -z "${SYSW_RCE_LOGS:-}" ]]; then
         return 0
     fi
 
