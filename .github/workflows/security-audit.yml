@@ -1,8 +1,5 @@
 name: SysWarden Security Audit
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 on:
   push:
     branches: [ "main", "master" ]
@@ -23,6 +20,9 @@ jobs:
   hygiene:
     name: Code Hygiene
     runs-on: ubuntu-latest
+    env:
+      # Scope isolation: Required to prevent Node.js 20 deprecation warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -41,6 +41,9 @@ jobs:
   ossf-scorecard:
     name: OSSF Scorecard Supply Chain Security
     runs-on: ubuntu-latest
+    env:
+      # Scope isolation: Required to prevent Node.js 20 deprecation warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       # Required to upload the SARIF results to GitHub Code Scanning
       security-events: write
@@ -67,6 +70,9 @@ jobs:
   anti-leaks:
     name: Secret Scanning
     runs-on: ubuntu-latest
+    env:
+      # Scope isolation: Required to prevent Node.js 20 deprecation warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -81,6 +87,9 @@ jobs:
   sast:
     name: SAST & Supply Chain Security
     runs-on: ubuntu-latest
+    env:
+      # Scope isolation: Required to prevent Node.js 20 deprecation warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       contents: read
       security-events: write
@@ -125,6 +134,9 @@ jobs:
     name: Generate Build Provenance
     needs: [hygiene, anti-leaks, sast]
     runs-on: ubuntu-latest
+    env:
+      # Scope isolation: Required to prevent Node.js 20 deprecation warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       contents: read
       id-token: write
