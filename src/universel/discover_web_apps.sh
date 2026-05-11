@@ -28,19 +28,31 @@ discover_web_apps() {
         web_conf_dirs="${web_conf_dirs:+$web_conf_dirs }/etc/httpd"
     fi
 
-    # --- LOG SANITIZER ENGINE (Zero-Crash Policy) ---
+    # --- LOG SANITIZER ENGINE (v0.32.3 - Global Expansion Fix) ---
     local verified_logs=""
     if [[ -n "$raw_web_logs" ]]; then
         for pattern in $raw_web_logs; do
-            # Expand wildcard and check if at least one file exists
-            # We use 'ls' to handle the wildcard expansion safely
-            if ls $pattern >/dev/null 2>&1; then
-                verified_logs="${verified_logs:+$verified_logs }$pattern"
+            # Use a local array to force shell globbing expansion (e.g., *.log -> access.log error.log)
+            # This ensures Fail2ban receives absolute file paths instead of literal wildcards
+            # shellcheck disable=SC2086
+            local files=($pattern)
+
+            # Check if the first element of the expanded array physically exists on the disk
+            # If the wildcard doesn't match anything, the first element remains the literal pattern
+            if [[ -e "${files[0]}" ]]; then
+                # Iterate through all expanded file paths and append them to the verified list
+                for file in "${files[@]}"; do
+                    # Add to the string with a space separator to comply with Fail2ban's logpath syntax
+                    verified_logs="${verified_logs:+$verified_logs }$file"
+                done
             fi
         done
     fi
+
+    # Export a clean, space-separated list of REAL existing files to the global environment
+    # This prevents Fail2ban from crashing (Exit 255) due to missing log targets or invalid commas
     export SYSW_RCE_LOGS="${verified_logs}"
-    # ------------------------------------------------
+    # -------------------------------------------------------------
 
     # 2. Application Heuristic Discovery (Only if a Web Server runs)
     if [[ -n "$web_conf_dirs" ]]; then
