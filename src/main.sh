@@ -1,29 +1,30 @@
 MODE="${1:-install}"
 
-# --- HEADLESS / UNATTENDED INSTALLATION PARSER ---
-# Safely parses a provided .conf file to inject environment variables
+# ==============================================================================
+# --- HEADLESS / UNATTENDED INSTALLATION PARSER (ANTI-POISONING) ---
+# Safely load the configuration file without executing arbitrary injected commands.
+# Strictly ISO 27001 / NIS2 Compliant against Supply Chain Poisoning.
+# ==============================================================================
 if [[ -f "${1:-}" ]]; then
     echo -e "${GREEN}>>> Unattended configuration file detected: $1${NC}"
 
-    # --- SECURITY FIX: SECURE AUTO-CONF FILE (CWE-732: Incorrect Permission Assignment for Critical Resource) ---
-    # Restrict permissions immediately so local non-root users cannot read
-    # the secrets inside (e.g., API keys, custom network configurations)
+    # --- SECURITY FIX: SECURE AUTO-CONF FILE (CWE-732) ---
+    # Restrict permissions immediately so local non-root users cannot read secrets
     chmod 600 "$1"
     # -------------------------------------------
 
-    while IFS='=' read -r key val; do
-        # Ignore comments and empty lines
-        [[ "$key" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "$key" ]] && continue
+    # Read file line by line, evaluating ONLY VAR="VALUE" regex patterns
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        [[ "$line" =~ ^[[:space:]]*#.*$ || -z "$line" ]] && continue
 
-        # Clean up the key and value (remove whitespaces and quotes)
-        key=$(echo "$key" | xargs)
-        val=$(echo "$val" | xargs | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-
-        # STRICT SECURITY: Only export variables starting with SYSWARDEN_
-        # Prevents arbitrary code execution or PATH manipulation
-        if [[ "$key" =~ ^SYSWARDEN_[A-Z0-9_]+$ ]]; then
-            export "$key"="$val"
+        # Match strict Variable="Value" syntax. ONLY allows SYSWARDEN_ prefix.
+        # Only allows safe characters in values (alphanumeric, spaces, dots, slashes, colons, hyphens, commas).
+        if [[ "$line" =~ ^(SYSWARDEN_[A-Z0-9_]+)=\"([a-zA-Z0-9_./: ,-]*)\"$ ]]; then
+            export "${BASH_REMATCH[1]}"="${BASH_REMATCH[2]}"
+        else
+            echo -e "${RED}[!] ERROR: Configuration poisoning detected or invalid format at line: $line${NC}"
+            exit 1
         fi
     done <"$1"
 
@@ -33,7 +34,7 @@ elif [[ "$MODE" == "--auto" ]]; then
     # Legacy CI/CD support
     MODE="auto"
 fi
-# -------------------------------------------------
+# ==============================================================================
 
 if [[ "$MODE" == "whitelist" ]]; then
     check_root
@@ -174,7 +175,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.32.9                  ${NC}"
+    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.32.10                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -213,7 +214,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.32.9 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.32.10 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
