@@ -20,6 +20,25 @@ install_dependencies() {
     fi
     # ==============================================================================
 
+    # ==============================================================================
+    # --- SECURE PACKAGE MANAGERS WRAPPERS (ISO 27001 / NIS2 COMPLIANCE) ---
+    # Enforce strict GPG signature verification for all package operations
+    # to prevent supply chain poisoning and Man-in-the-Middle (MitM) attacks.
+    # ==============================================================================
+    secure_apt() {
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Acquire::AllowInsecureRepositories=false \
+            -o Acquire::AllowDowngradeToInsecureRepositories=false \
+            -o APT::Get::AllowUnauthenticated=false "$@"
+    }
+
+    secure_dnf() {
+        dnf install -y \
+            --setopt=gpgcheck=1 \
+            --setopt=localpkg_gpgcheck=1 "$@"
+    }
+    # ==============================================================================
+
     if [[ -f /etc/debian_version ]]; then
         log "INFO" "Updating apt repositories..."
         apt-get update -qq
@@ -67,11 +86,11 @@ install_dependencies() {
         fi
         # -----------------------------------------------------
 
+        # --- SECURE INSTALLATION OF ACCUMULATED DEPENDENCIES ---
         if [[ -f /etc/debian_version ]]; then
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get install -y "${missing_common[@]}"
+            secure_apt "${missing_common[@]}"
         elif [[ -f /etc/redhat-release ]]; then
-            dnf install -y "${missing_common[@]}"
+            secure_dnf "${missing_common[@]}"
         fi
     fi
 
@@ -100,13 +119,13 @@ install_dependencies() {
 
         if [[ -f /etc/debian_version ]]; then
             # Debian/Ubuntu: MANDATORY usage of apt to avoid breaking system python
-            apt-get install -y python3-requests
+            secure_apt python3-requests
 
         elif [[ -f /etc/redhat-release ]]; then
             # RHEL/Alma: Prioritize RPM. Fallback to pip only if RPM fails (RHEL behavior is less strict than Debian yet)
-            if ! dnf install -y python3-requests; then
+            if ! secure_dnf python3-requests; then
                 log "WARN" "python3-requests RPM not found. Trying pip fallback..."
-                dnf install -y python3-pip
+                secure_dnf python3-pip
                 pip3 install requests
             fi
         fi
@@ -121,8 +140,8 @@ install_dependencies() {
     if ! command -v crond >/dev/null && ! command -v cron >/dev/null; then
         log "WARN" "Installing package: cron daemon"
         if [[ -f /etc/debian_version ]]; then
-            apt-get install -y cron
-        elif [[ -f /etc/redhat-release ]]; then dnf install -y cronie; fi
+            secure_apt cron
+        elif [[ -f /etc/redhat-release ]]; then secure_dnf cronie; fi
     fi
 
     # Ensure it's enabled and started (moved outside the install check)
@@ -136,8 +155,8 @@ install_dependencies() {
     if ! command -v rsyslogd >/dev/null && [ ! -f /usr/sbin/rsyslogd ]; then
         log "WARN" "Installing package: rsyslog"
         if [[ -f /etc/debian_version ]]; then
-            apt-get install -y rsyslog
-        elif [[ -f /etc/redhat-release ]]; then dnf install -y rsyslog; fi
+            secure_apt rsyslog
+        elif [[ -f /etc/redhat-release ]]; then secure_dnf rsyslog; fi
     fi
 
     if command -v systemctl >/dev/null; then
@@ -168,11 +187,11 @@ install_dependencies() {
     if ! command -v wg >/dev/null || ! command -v qrencode >/dev/null; then
         log "WARN" "Installing package: WireGuard & Qrencode"
         if [[ -f /etc/debian_version ]]; then
-            apt-get install -y wireguard qrencode
+            secure_apt wireguard qrencode
         elif [[ -f /etc/redhat-release ]]; then
             log "INFO" "Enabling EPEL repository (Required for Qrencode)..."
-            dnf install -y epel-release || true
-            dnf install -y wireguard-tools qrencode
+            secure_dnf epel-release || true
+            secure_dnf wireguard-tools qrencode
         fi
     fi
     # ----------------------------------------
@@ -180,26 +199,26 @@ install_dependencies() {
     if ! command -v ipset >/dev/null; then
         log "WARN" "Installing package: ipset"
         if [[ -f /etc/debian_version ]]; then
-            apt-get install -y ipset
-        elif [[ -f /etc/redhat-release ]]; then dnf install -y ipset; fi
+            secure_apt ipset
+        elif [[ -f /etc/redhat-release ]]; then secure_dnf ipset; fi
     fi
 
     if ! command -v fail2ban-client >/dev/null; then
         log "WARN" "Installing package: fail2ban"
         if [[ -f /etc/debian_version ]]; then
-            apt-get install -y fail2ban
+            secure_apt fail2ban
         elif [[ -f /etc/redhat-release ]]; then
             log "INFO" "Enabling EPEL repository (Required for Fail2ban)..."
-            dnf install -y epel-release || true
-            dnf install -y fail2ban
+            secure_dnf epel-release || true
+            secure_dnf fail2ban
         fi
     fi
 
     if [[ "$FIREWALL_BACKEND" == "nftables" ]] && ! command -v nft >/dev/null; then
         log "WARN" "Installing package: nftables"
         if [[ -f /etc/debian_version ]]; then
-            apt-get install -y nftables
-        elif [[ -f /etc/redhat-release ]]; then dnf install -y nftables; fi
+            secure_apt nftables
+        elif [[ -f /etc/redhat-release ]]; then secure_dnf nftables; fi
     fi
 
     # --- RHEL/ROCKY/CENTOS 10 ZERO-REBOOT FIX ---

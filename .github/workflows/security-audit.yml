@@ -38,6 +38,32 @@ jobs:
       - name: Check Bash formatting (shfmt)
         run: shfmt -d -i 4 -ci .
 
+  ossf-scorecard:
+    name: OSSF Scorecard Supply Chain Security
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to upload the SARIF results to GitHub Code Scanning
+      security-events: write
+      # Required to publish results and get a badge
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run OSSF Scorecard analysis
+        uses: ossf/scorecard-action@v2.3.1
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload SARIF results to Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+
   anti-leaks:
     name: Secret Scanning
     runs-on: ubuntu-latest
