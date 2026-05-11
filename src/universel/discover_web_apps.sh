@@ -23,16 +23,22 @@ discover_web_apps() {
         web_logs="/var/log/nginx/*access.log${nl}/var/log/nginx/*error.log"
         web_conf_dirs="/etc/nginx"
         touch /var/log/nginx/access.log /var/log/nginx/error.log 2>/dev/null || true
+        # --- SELINUX FIX ---
+        command -v restorecon >/dev/null 2>&1 && restorecon -F -R /var/log/nginx/ 2>/dev/null || true
     fi
 
     if command -v apache2 >/dev/null 2>&1 && systemctl is-active --quiet apache2 2>/dev/null; then
         web_logs="${web_logs:+$web_logs$nl}/var/log/apache2/*access.log${nl}/var/log/apache2/*error.log"
         web_conf_dirs="${web_conf_dirs:+$web_conf_dirs }/etc/apache2"
         touch /var/log/apache2/access.log /var/log/apache2/error.log 2>/dev/null || true
+        # --- SELINUX FIX ---
+        command -v restorecon >/dev/null 2>&1 && restorecon -F -R /var/log/apache2/ 2>/dev/null || true
     elif command -v httpd >/dev/null 2>&1 && systemctl is-active --quiet httpd 2>/dev/null; then
         web_logs="${web_logs:+$web_logs$nl}/var/log/httpd/*access.log${nl}/var/log/httpd/*error_log"
         web_conf_dirs="${web_conf_dirs:+$web_conf_dirs }/etc/httpd"
         touch /var/log/httpd/access_log /var/log/httpd/error_log 2>/dev/null || true
+        # --- SELINUX FIX ---
+        command -v restorecon >/dev/null 2>&1 && restorecon -F -R /var/log/httpd/ 2>/dev/null || true
     fi
 
     export SYSW_RCE_LOGS="${web_logs}"

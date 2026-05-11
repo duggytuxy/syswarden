@@ -156,6 +156,16 @@ EOF
             log "WARN" "No external jail modules loaded. Only SSH and Recidive are active."
         fi
 
+        # ==============================================================================
+        # --- HOTFIX: FAIL2BAN PYTHON CONFIGPARSER ALIGNMENT ---
+        # Enforces strict multi-line indentation for all logpath arrays.
+        # Automatically finds space-separated paths (e.g., flattened by Bash injection)
+        # and replaces the space with an explicit newline and 10 spaces.
+        # ==============================================================================
+        log "INFO" "Sanitizing multi-line logpath arrays for strict ConfigParser alignment..."
+        sed -i -E 's|[[:space:]]+(/var/log/[^[:space:]]+)|\n          \1|g' /etc/fail2ban/jail.local /etc/fail2ban/jail.d/*.local 2>/dev/null || true
+        # ==============================================================================
+
         # 7. SERVICE RESTART & SOCKET WAIT
         if [[ ! -f /var/log/fail2ban.log ]]; then
             touch /var/log/fail2ban.log
