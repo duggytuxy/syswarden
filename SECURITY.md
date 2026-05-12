@@ -10,4 +10,8 @@ I typically and primarily support the latest releases of my products for mainten
 
 If you discover any issue regarding security, please disclose the information responsibly by sending an email to security[at]syswarden[.]io and not by creating a GitHub issue. I'll get back to you ASAP and work with you to confirm and plan a fix for the issue.
 
+## Audit Report
+
+Coming soon ...
+
 Please note that I do not currently offer a bug bounty program.
