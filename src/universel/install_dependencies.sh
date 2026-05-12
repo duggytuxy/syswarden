@@ -126,7 +126,13 @@ install_dependencies() {
             if ! secure_dnf python3-requests; then
                 log "WARN" "python3-requests RPM not found. Trying pip fallback..."
                 secure_dnf python3-pip
-                pip3 install requests
+
+                # Conditionally bypass PEP-668 restrictions for critical security dependencies
+                if pip3 --help | grep -q "break-system-packages"; then
+                    pip3 install requests --break-system-packages
+                else
+                    pip3 install requests
+                fi
             fi
         fi
 

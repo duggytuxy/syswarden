@@ -12,7 +12,15 @@ apply_os_hardening() {
 
     # 2. Backup and Purge non-root users from privileged groups (sudo/wheel/adm)
     mkdir -p "$SYSWARDEN_DIR"
+
+    # Cascade detection to reliably identify the authenticating user even if 'su -' was used
     local current_admin="${SUDO_USER:-}"
+    if [[ -z "$current_admin" ]]; then
+        current_admin=$(logname 2>/dev/null || true)
+    fi
+    if [[ -z "$current_admin" ]]; then
+        current_admin=$(who am i | awk '{print $1}' 2>/dev/null || true)
+    fi
 
     for grp in sudo wheel adm; do
         if grep -q "^${grp}:" /etc/group 2>/dev/null; then

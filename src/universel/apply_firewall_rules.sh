@@ -66,7 +66,12 @@ EOF
         if [[ -s "$WHITELIST_FILE" ]]; then
             while IFS= read -r wl_ip; do
                 [[ -z "$wl_ip" ]] && continue
-                echo "        ip saddr $wl_ip accept" >>"$TMP_DIR/syswarden.nft"
+                # Prevent syntax crash by determining IP family dynamically
+                if [[ "$wl_ip" =~ : ]]; then
+                    echo "        ip6 saddr $wl_ip accept" >>"$TMP_DIR/syswarden.nft"
+                else
+                    echo "        ip saddr $wl_ip accept" >>"$TMP_DIR/syswarden.nft"
+                fi
             done <"$WHITELIST_FILE"
         fi
 
@@ -102,7 +107,12 @@ EOF
         if [[ -s "$WHITELIST_FILE" ]]; then
             while IFS= read -r wl_ip; do
                 [[ -z "$wl_ip" ]] && continue
-                echo "        ip saddr $wl_ip accept" >>"$TMP_DIR/syswarden.nft"
+                # Prevent syntax crash by determining IP family dynamically
+                if [[ "$wl_ip" =~ : ]]; then
+                    echo "        ip6 saddr $wl_ip accept" >>"$TMP_DIR/syswarden.nft"
+                else
+                    echo "        ip saddr $wl_ip accept" >>"$TMP_DIR/syswarden.nft"
+                fi
             done <"$WHITELIST_FILE"
         fi
 
