@@ -116,7 +116,7 @@ jobs:
         run: tar -czvf syswarden-release.tar.gz -C dist .
 
       - name: Generate Artifact Attestation
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'syswarden-release.tar.gz'
           
