@@ -23,15 +23,15 @@ logtarget = /var/log/fail2ban.log
 dbpurgeage = 691200
 EOF
 
-        # 2. Firewall Backend & OS Optimization
-        export SYSW_F2B_ACTION="iptables-multiport"
+        # 2. Firewall Backend & OS Optimization (Zero Trust AllPorts)
+        export SYSW_F2B_ACTION="iptables-allports"
         export SYSW_F2B_ACTION_ALLPORTS="iptables-allports"
 
         if [[ "$FIREWALL_BACKEND" == "firewalld" ]]; then
             export SYSW_F2B_ACTION="firewallcmd-ipset"
             export SYSW_F2B_ACTION_ALLPORTS="firewallcmd-ipset"
         elif [[ "$FIREWALL_BACKEND" == "nftables" ]]; then
-            export SYSW_F2B_ACTION="nftables-multiport"
+            export SYSW_F2B_ACTION="nftables-allports"
             export SYSW_F2B_ACTION_ALLPORTS="nftables-allports"
         elif [[ "$FIREWALL_BACKEND" == "ufw" ]]; then
             export SYSW_F2B_ACTION="ufw"
