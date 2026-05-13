@@ -94,6 +94,7 @@ It supports two installation methods: a standard interactive mode and an Enterpr
 
 ```bash
 # Clone the repository and enter the directory (root)
+cd /usr/local/bin
 git clone https://github.com/duggytuxy/syswarden.git
 cd syswarden || exit
 
@@ -112,6 +113,7 @@ SysWarden releases are cryptographically signed using GitHub Artifact Attestatio
 
 ```bash
 # 1. Download the release bundle
+cd /usr/local/bin
 wget https://github.com/duggytuxy/syswarden/releases/latest/download/syswarden-release.tar.gz
 
 # 2. Verify the cryptographic attestation using the official GitHub CLI
