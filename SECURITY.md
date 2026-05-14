@@ -12,6 +12,6 @@ If you discover any issue regarding security, please disclose the information re
 
 ## Audit Report
 
-Coming soon ...
+- [SysWarden Solution Brief (EN), May 2026](security/SysWarden_Solution_Brief_EN.pdf)
 
 Please note that I do not currently offer a bug bounty program.
