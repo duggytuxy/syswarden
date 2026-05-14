@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SysWarden v0.34.3 - DevSecOps Audit & Compliance Tool
+# SysWarden v0.34.4 - DevSecOps Audit & Compliance Tool
 # Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -264,7 +264,7 @@ if [[ "$RUN_ALL" -eq 1 || "$USER_PHASES" == *" 1 "* ]]; then
             if echo "$SEEN_CRON_FILES" | grep -q "$real_path"; then continue; fi
             SEEN_CRON_FILES="$SEEN_CRON_FILES $real_path"
 
-            file_count=$(grep -v "^[[:space:]]*#" "$cron_file" 2>/dev/null | { grep -c "syswarden.*update" || true; })
+            file_count=$(grep -v "^[[:space:]]*#" "$cron_file" 2>/dev/null | { grep -c "syswarden-cron-update" || true; })
             CRON_COUNT=$((CRON_COUNT + file_count))
 
             if grep -v "^[[:space:]]*#" "$cron_file" 2>/dev/null | grep "\.sh update >" >/dev/null 2>&1; then
@@ -295,6 +295,16 @@ if [[ "$RUN_ALL" -eq 1 || "$USER_PHASES" == *" 2 "* ]]; then
     check_file_perms "/var/log/kern-firewall.log" "600" "root"
 
     check_file_perms "/var/log/auth-syswarden.log" "600" "root"
+
+    # Audit OS Hardening on system auth log (F-008)
+    if [[ -f "/var/log/auth.log" ]]; then
+        auth_perms=$(stat -c "%a" "/var/log/auth.log" 2>/dev/null || stat -f "%Op" "/var/log/auth.log" | cut -c4-6)
+        if [[ "$auth_perms" == *"640" ]] || [[ "$auth_perms" == *"600" ]]; then
+            pass "Auth Log Isolation VERIFIED: /var/log/auth.log is secured against non-privileged reads ($auth_perms)."
+        else
+            fail "Auth Log Isolation FAILED: /var/log/auth.log permissions are too open ($auth_perms)."
+        fi
+    fi
 
     if is_service_active "rsyslog"; then
         pass "Rsyslog daemon is active and routing logs securely."
@@ -408,6 +418,20 @@ if [[ "$RUN_ALL" -eq 1 || "$USER_PHASES" == *" 3 "* ]]; then
     fi
 fi
 
+# Audit Cloud Metadata Isolation (F-015)
+IMDS_BLOCKED=0
+if command -v iptables >/dev/null 2>&1 && iptables -S OUTPUT 2>/dev/null | grep -E "169\.254\.169\.254.*owner ! --uid-owner (0|root).*DROP" >/dev/null; then
+    IMDS_BLOCKED=1
+elif command -v nft >/dev/null 2>&1 && nft list chain inet filter output 2>/dev/null | grep -E "ip daddr 169.254.169.254 skuid != (0|root) drop" >/dev/null; then
+    IMDS_BLOCKED=1
+fi
+
+if [[ $IMDS_BLOCKED -eq 1 ]]; then
+    pass "Cloud Egress Guard VERIFIED: IMDS Metadata Service is sealed for non-root users."
+else
+    fail "Cloud Egress Guard FAILED: Firewall rule restricting non-root outbound access to 169.254.169.254 is missing."
+fi
+
 # ==============================================================================
 # --- Phase 4: Layer 7 Active Defense (Fail2ban) ---
 # ==============================================================================
@@ -457,6 +481,13 @@ if [[ "$RUN_ALL" -eq 1 || "$USER_PHASES" == *" 4 "* ]]; then
                 pass "Dynamic IgnoreIP is populated (Anti-Lockout verified)."
             else
                 warn "IgnoreIP might only contain localhost. Infrastructure whitelisting may have failed."
+            fi
+
+            # Audit Zero Trust Action (F-002 & Architecture)
+            if fail2ban-client -d 2>/dev/null | grep -iE "multiport" >/dev/null; then
+                fail "Zero Trust FAILED: Fail2ban is using legacy 'multiport' actions instead of strict total-host isolation."
+            else
+                pass "Zero Trust Action VERIFIED: Fail2ban is enforcing strict global isolation (AllPorts/IPSet)."
             fi
         else
             fail "Fail2ban service is running but the IPC socket is unresponsive."

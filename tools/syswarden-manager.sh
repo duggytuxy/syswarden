@@ -2,7 +2,7 @@
 
 # SysWarden Manager - Blocklists and Whitelists Manager
 # Copyright (C) 2026 duggytuxy - Laurent M.
-# Version: v0.34.3
+# Version: v0.34.4
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
@@ -27,7 +27,7 @@ WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
 SSH_WHITELIST_FILE="$SYSWARDEN_DIR/ssh_whitelist.txt"
 SET_NAME="syswarden_blacklist"
-VERSION="v0.34.3"
+VERSION="v0.34.4"
 
 # --- ROOT ENFORCEMENT ---
 if [[ $EUID -ne 0 ]]; then
