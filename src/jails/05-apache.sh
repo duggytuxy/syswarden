@@ -27,7 +27,7 @@ syswarden_jail_apache() {
     if [[ ! -f "/etc/fail2ban/filter.d/apache-scanner.conf" ]]; then
         cat <<'EOF' >/etc/fail2ban/filter.d/apache-scanner.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "(?:GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS|PROPFIND|TRACE) [^"]*?" (?:400|401|403|404|405)
+failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS|PROPFIND|TRACE) [^"]*?" (?:400|401|403|404|405)
 ignoreregex = 
 EOF
     fi
