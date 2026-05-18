@@ -38,7 +38,7 @@ generate_dashboard() {
     fi
 
     # --- 3. GENERATE FULL-SCREEN PRECISION TUI ENGINE ---
-    log "INFO" "Compiling the advanced 5s-refresh TUI Engine..."
+    log "INFO" "Compiling the advanced 5s-refresh TUI Engine (Zero-CPU Engine)..."
     cat <<'EOF' >"$TUI_BIN"
 #!/bin/bash
 # SysWarden Enterprise TUI Dashboard
@@ -64,6 +64,11 @@ LAST_TELEMETRY_DATA=""
 LAST_FETCH_TS=0
 LAST_GITHUB_TS=0
 
+# Declare arrays to prevent uninitialized errors on first boot
+declare -a JAILS_LIST=()
+declare -a TOP_LIST=()
+declare -a BANNED_LIST=()
+
 # --- SIGNAL HANDLING (Graceful Exit) ---
 trap 'tput cnorm; echo -e "${C_0}"; clear; exit 0' SIGINT SIGTERM
 tput civis # Hide cursor
@@ -83,63 +88,72 @@ while true; do
         continue
     fi
 
-    # --- STRICT 5-SECOND TELEMETRY DATA INGESTION ENGINE ---
+    # --- CPU OPTIMIZATION: PARSE DATA ONLY EVERY 5 SECONDS ---
     if (( CURRENT_TS - LAST_FETCH_TS >= 5 )) || [[ -z "$LAST_TELEMETRY_DATA" ]]; then
         LAST_TELEMETRY_DATA=$(cat "$DATA_FILE")
         LAST_FETCH_TS=$CURRENT_TS
+
+        # --- APIS TIMING LIMITATION (10 Minutes Cache for GitHub) ---
+        if (( CURRENT_TS - LAST_GITHUB_TS >= 600 )) || [[ "$GH_STARS" == "--" ]]; then
+            GH_DATA=$(curl -s --max-time 1.2 https://api.github.com/repos/duggytuxy/syswarden || echo "")
+            GH_REL_DATA=$(curl -s --max-time 1.2 https://api.github.com/repos/duggytuxy/syswarden/releases/latest || echo "")
+            GH_STARS=$(echo "$GH_DATA" | jq -r '.stargazers_count // "--"' 2>/dev/null || echo "--")
+            GH_RELEASE=$(echo "$GH_REL_DATA" | jq -r '.tag_name // "--"' 2>/dev/null || echo "--")
+            LAST_GITHUB_TS=$CURRENT_TS
+        fi
+
+        # --- DATA PARSING FROM CACHED payload ---
+        SYS_HOST=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.hostname // "Node"')
+        SYS_OS=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.os // "Linux"')
+        SYS_CPU=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.cpu_model // "Unknown"')
+        SYS_CORES=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.cores // "1"')
+        SYS_ARCH=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.arch // "Unknown"')
+        SYS_LOAD=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.load_average // "0, 0, 0"')
+        SYS_UP=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.uptime // "Unknown"')
+        SYS_RAM_U=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ram_used_mb // 0')
+        SYS_RAM_T=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ram_total_mb // 0')
+        SYS_DISK_U=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.disk_used_mb // 0')
+        SYS_DISK_T=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.disk_total_mb // 0')
+        
+        L3_G=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer3.global_blocked // 0')
+        L3_GEO=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer3.geoip_blocked // 0')
+        L3_ASN=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer3.asn_blocked // 0')
+        L7_BAN=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.total_banned // 0')
+        L7_JAIL=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.active_jails // 0')
+        WL_ACT=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.whitelist.active_ips // 0')
+        
+        R_EXP=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[0] // 0')
+        R_BF=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[1] // 0')
+        R_REC=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[2] // 0')
+        R_DOS=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[3] // 0')
+        R_ABU=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[4] // 0')
+
+        # --- PRECISION FILTRATION EFFICIENCY MATRIX ---
+        TOTAL_THREATS=$(( L3_G + L7_BAN ))
+        NOISE_PCT="0.00%"
+        SIGNAL_PCT="0.00%"
+        if (( TOTAL_THREATS > 0 )); then
+            NOISE_PCT=$(awk "BEGIN {printf \"%.2f%%\", ($L3_G / $TOTAL_THREATS) * 100}")
+            SIGNAL_PCT=$(awk "BEGIN {printf \"%.2f%%\", ($L7_BAN / $TOTAL_THREATS) * 100}")
+        fi
+
+        SERVICES_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.services[] | "\(.name | split(" ")[0]):\(.status)"' | tr '\n' ' ' | sed 's/ / | /g' | sed 's/ | $//' | tr 'a-z' 'A-Z')
+        PORTS_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ports[] | "\(.protocol):\(.port)"' | tr '\n' ' ' | sed 's/ / | /g' | sed 's/ | $//')
+        [[ -z "$PORTS_STR" ]] && PORTS_STR="No external ports exposed. Architecture is fully locked down."
+
+        mapfile -t JAILS_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.jails_data | sort_by(.count) | reverse | .[] | "\(.name)|\(.mitre)|\(.count)"' | head -n 5)
+        mapfile -t TOP_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.top_attackers[] | "\(.ip)|\(.port)|\(.count)"' | head -n 5)
+        mapfile -t BANNED_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.banned_ips | reverse | .[] | "\(.ip)|\(.jail)|\(.mitre)|\(.payload)"')
+        TOTAL_BANS=${#BANNED_LIST[@]}
     fi
 
-    # --- APIS TIMING LIMITATION (10 Minutes Cache for GitHub to prevent API Rate Limits) ---
-    if (( CURRENT_TS - LAST_GITHUB_TS >= 600 )) || [[ "$GH_STARS" == "--" ]]; then
-        GH_DATA=$(curl -s --max-time 1.2 https://api.github.com/repos/duggytuxy/syswarden || echo "")
-        GH_REL_DATA=$(curl -s --max-time 1.2 https://api.github.com/repos/duggytuxy/syswarden/releases/latest || echo "")
-        GH_STARS=$(echo "$GH_DATA" | jq -r '.stargazers_count // "--"' 2>/dev/null || echo "--")
-        GH_RELEASE=$(echo "$GH_REL_DATA" | jq -r '.tag_name // "--"' 2>/dev/null || echo "--")
-        LAST_GITHUB_TS=$CURRENT_TS
-    fi
-
-    # --- DATA PARSING FROM CACHED payload ---
-    SYS_HOST=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.hostname // "Node"')
-    SYS_OS=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.os // "Linux"')
-    SYS_CPU=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.cpu_model // "Unknown"')
-    SYS_CORES=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.cores // "1"')
-    SYS_ARCH=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.arch // "Unknown"')
-    SYS_LOAD=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.load_average // "0, 0, 0"')
-    SYS_UP=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.uptime // "Unknown"')
-    SYS_RAM_U=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ram_used_mb // 0')
-    SYS_RAM_T=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ram_total_mb // 0')
-    SYS_DISK_U=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.disk_used_mb // 0')
-    SYS_DISK_T=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.disk_total_mb // 0')
-    
-    L3_G=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer3.global_blocked // 0')
-    L3_GEO=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer3.geoip_blocked // 0')
-    L3_ASN=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer3.asn_blocked // 0')
-    L7_BAN=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.total_banned // 0')
-    L7_JAIL=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.active_jails // 0')
-    WL_ACT=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.whitelist.active_ips // 0')
-    
-    R_EXP=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[0] // 0')
-    R_BF=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[1] // 0')
-    R_REC=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[2] // 0')
-    R_DOS=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[3] // 0')
-    R_ABU=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[4] // 0')
-
-    # --- PRECISION FILTRATION EFFICIENCY MATRIX ---
-    TOTAL_THREATS=$(( L3_G + L7_BAN ))
-    NOISE_PCT="0.00%"
-    SIGNAL_PCT="0.00%"
-    if (( TOTAL_THREATS > 0 )); then
-        NOISE_PCT=$(awk "BEGIN {printf \"%.2f%%\", ($L3_G / $TOTAL_THREATS) * 100}")
-        SIGNAL_PCT=$(awk "BEGIN {printf \"%.2f%%\", ($L7_BAN / $TOTAL_THREATS) * 100}")
-    fi
-
-    # --- RENDERING GENERATION ---
+    # --- RENDERING GENERATION (Pure Bash Cache Drawing) ---
     OUT=""
     add_line() { OUT+="${1}\033[K\n"; }
 
     # --- TOP BRANDING NAVBAR ---
     add_line "${C_B}${SEP}${C_0}"
-    add_line "${C_W} SYSWARDEN v0.35.6 ${C_0}| Noise: ${C_G}${NOISE_PCT}${C_0} | Signal: ${C_R}${SIGNAL_PCT}${C_0} | Stars: ${C_Y}${GH_STARS}${C_0} | Release: ${C_C}${GH_RELEASE}${C_0} | Node: ${C_G}${SYS_HOST}${C_0}"
+    add_line "${C_W} SYSWARDEN v0.35.5 ${C_0}| Noise: ${C_G}${NOISE_PCT}${C_0} | Signal: ${C_R}${SIGNAL_PCT}${C_0} | Stars: ${C_Y}${GH_STARS}${C_0} | Release: ${C_C}${GH_RELEASE}${C_0} | Node: ${C_G}${SYS_HOST}${C_0}"
     add_line "${C_B}${SEP_D}${C_0}"
     
     # --- HARDWARE SPECS HEADER PANEL ---
@@ -147,9 +161,6 @@ while true; do
     add_line " Uptime: ${C_C}${SYS_UP}${C_0} | Load Avg: ${C_W}${SYS_LOAD}${C_0} | RAM: ${C_W}${SYS_RAM_U} / ${SYS_RAM_T} MB${C_0} | Storage: ${C_W}$(awk "BEGIN {printf \"%.1f\", $SYS_DISK_U/1024}") / $(awk "BEGIN {printf \"%.1f\", $SYS_DISK_T/1024}") GB${C_0}"
     
     # --- FLAT SERVICES & EXPOSED NETWORK PORTS PANEL ---
-    SERVICES_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.services[] | "\(.name | split(" ")[0]):\(.status)"' | tr '\n' ' ' | sed 's/ / | /g' | sed 's/ | $//' | tr 'a-z' 'A-Z')
-    PORTS_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ports[] | "\(.protocol):\(.port)"' | tr '\n' ' ' | sed 's/ / | /g' | sed 's/ | $//')
-    [[ -z "$PORTS_STR" ]] && PORTS_STR="No external ports exposed. Architecture is fully locked down."
     add_line " Services: [ ${C_W}${SERVICES_STR}${C_0} ]"
     add_line " Ports: [ ${C_B}${PORTS_STR}${C_0} ]"
     add_line "${C_B}${SEP}${C_0}"
@@ -176,9 +187,6 @@ while true; do
     HEAD_L=" TARGET JAIL      MITRE ATT&CK         LOAD"
     HEAD_R=" IP ADDRESS           PORT       HITS"
     add_line "${C_D}${HEAD_L}$(printf '%*s' $(( HALF_WIDTH - ${#HEAD_L} + 4 )) '')${HEAD_R}${C_0}"
-
-    mapfile -t JAILS_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.jails_data | sort_by(.count) | reverse | .[] | "\(.name)|\(.mitre)|\(.count)"' | head -n 5)
-    mapfile -t TOP_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.top_attackers[] | "\(.ip)|\(.port)|\(.count)"' | head -n 5)
 
     for i in {0..4}; do
         J_LINE=""
@@ -211,15 +219,11 @@ while true; do
     HEAD_REG=$(printf " %-${W_IP}s %-${W_JAIL}s %-${W_MITRE}s %s" "IP ADDRESS" "TARGET JAIL" "MITRE ATT&CK" "TRIGGER PAYLOAD")
     add_line "${C_D}${HEAD_REG}${C_0}"
 
-    # Dynamically compute the lines available for layout logs rendering
     USED_LINES=$(echo -ne "$OUT" | wc -l)
     MAX_BANS=$(( LINES - USED_LINES - 4 ))
     [[ $MAX_BANS -lt 4 ]] && MAX_BANS=4
 
-    mapfile -t BANNED_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.banned_ips | reverse | .[] | "\(.ip)|\(.jail)|\(.mitre)|\(.payload)"')
-    TOTAL_BANS=${#BANNED_LIST[@]}
-
-    # Check bounds containment
+    # Bounds alignment
     if (( SCROLL_OFFSET > TOTAL_BANS - MAX_BANS )); then SCROLL_OFFSET=$(( TOTAL_BANS - MAX_BANS )); fi
     if (( SCROLL_OFFSET < 0 )); then SCROLL_OFFSET=0; fi
 
@@ -232,11 +236,9 @@ while true; do
                 IFS='|' read -r b_ip b_jail b_mitre b_payload <<< "${BANNED_LIST[$IDX]}"
                 b_mitre_short=$(echo "$b_mitre" | cut -d':' -f1)
                 
-                # Precise formatting without text corruption or cutting off strings out of scope
                 P_CLEAN=$(echo "$b_payload" | tr -d '\n\r' | cut -c 1-$W_PAYLOAD)
                 LINE_STR=$(printf " %-${W_IP}s %-${W_JAIL}s %-${W_MITRE}s %s" "${b_ip:0:$W_IP}" "${b_jail:0:$W_JAIL}" "${b_mitre_short:0:$W_MITRE}" "$P_CLEAN")
                 
-                # Dynamic terminal track rendering
                 SCROLL_CHAR="│"
                 if (( TOTAL_BANS > MAX_BANS )); then
                     SLIDER_START=$(( SCROLL_OFFSET * MAX_BANS / TOTAL_BANS ))
@@ -244,7 +246,6 @@ while true; do
                     if (( i >= SLIDER_START && i <= SLIDER_END )); then SCROLL_CHAR="█"; fi
                 fi
                 
-                # Apply high-contrast visibility color schemas for pure kernel logs matching context
                 if [[ "$b_payload" =~ "kernel:" || "$b_payload" =~ "SysWarden" ]]; then
                     add_line "${C_Y}${LINE_STR:0:$((COLS-2))}${C_0}${C_B}${SCROLL_CHAR}${C_0}"
                 else
@@ -258,7 +259,7 @@ while true; do
         done
     fi
 
-    # Align baseline terminal matrices
+    # Fill footer
     CURRENT_LINES=$(echo -ne "$OUT" | wc -l)
     REMAIN=$(( LINES - CURRENT_LINES - 2 ))
     if [[ $REMAIN -gt 0 ]]; then
@@ -271,10 +272,10 @@ while true; do
     # --- FLUSH THE INSTANT RENDERING MATRIX ---
     echo -ne "\033[H${OUT}"
 
-    # Catch keyboard actions sub-second without lagging the 5s refresh execution window
-    read -s -n 1 -t 0.1 key || true
+    # DEVSECOPS FIX: Keyboard hook logic forces CPU idle cycle
+    read -s -n 1 -t 0.1 key || sleep 0.1
     if [[ "$key" == $'\x1b' ]]; then
-        read -s -n 2 -t 0.05 next_keys || true
+        read -s -n 2 -t 0.05 next_keys || sleep 0.05
         if [[ "$next_keys" == "[A" ]]; then
             if (( SCROLL_OFFSET > 0 )); then SCROLL_OFFSET=$(( SCROLL_OFFSET - 1 )); fi
         elif [[ "$next_keys" == "[B" ]]; then
