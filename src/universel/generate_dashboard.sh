@@ -243,12 +243,15 @@ while true; do
         D3="IPs: ${WL_IPS_STR}"
         add_line " ${C_D}GeoIP: ${C_W}${L3_GEO}${C_D} | ASN: ${C_W}${L3_ASN}${C_0}$(pad "$D1" $((W3-1)))${C_D}Active Guard Jails: ${C_W}${L7_JAIL}${C_0}$(pad "$D2" $W3)${C_D}IPs: ${C_G}${WL_IPS_STR}${C_0}"
         
+        add_line ""
         add_line "${C_B}${SEP_D}${C_0}"
         add_line ""
         
         # --- GLOBAL RISK RADAR VECTOR MATRIX ---
         add_line " ${C_W}[ GLOBAL RISK VECTORS ]${C_0}"
         add_line " ${C_R}Exploits:${C_0} ${R_EXP}   |   ${C_Y}Brute-Force:${C_0} ${R_BF}   |   ${C_B}Recon:${C_0} ${R_REC}   |   ${C_D}DDoS:${C_0} ${R_DOS}   |   ${C_Y}Abuse/Spam:${C_0} ${R_ABU}"
+        
+        add_line ""
         add_line "${C_B}${SEP}${C_0}"
         add_line ""
 
