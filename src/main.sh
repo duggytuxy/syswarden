@@ -176,7 +176,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.34.7                  ${NC}"
+    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.35.0                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -215,7 +215,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.34.7 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.35.0 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
@@ -371,6 +371,9 @@ if [[ "$MODE" != "update" ]]; then
 
     # User-authorized IT hardening
     apply_os_hardening
+    
+    # Apply advanced CIS Level 2 hardening (Defense-in-Depth)
+    apply_cis_level2_hardening
 
     echo -e "\n${GREEN}INSTALLATION SUCCESSFUL${NC}"
     echo -e " -> List loaded: $LIST_TYPE"
