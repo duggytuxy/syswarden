@@ -29,7 +29,7 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 > **Deprecation Notice: Alpine Linux Support**
 > Alpine Linux support is officially deprecated. SysWarden is evolving into a pure Enterprise HIPS standard. While Alpine remains a gold standard for ephemeral containers, the bare-metal servers and critical virtual machines that SysWarden is designed to protect rely predominantly on the `systemd` ecosystem (RHEL, Debian, Ubuntu). Unifying the architecture around `systemd` allows for much deeper security integrations and ensures reliability that meets production requirements.
 
-> Designed for critical infrastructures, SysWarden automates server hardening to accelerate your **ISO 27001 and NIS2** compliance.
+> Designed for critical infrastructures, SysWarden automates server hardening to accelerate your **ISO 27001, NIS2, and CIS Benchmark** compliance.
 
 ## Enterprise-Grade Features
 
@@ -43,13 +43,14 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 * **Automated Retaliation:** Natively interfaces with the AbuseIPDB network to proactively report attackers and share telemetry.
 
 **Zero-Trust & Compliance Architecture**
+* **CIS Benchmark Level 2 (Defense-in-Depth):** Optional surgical hardening of the kernel (eBPF, ASLR, source routing), memory (core dumps limits), SSH, and filesystems. It strictly conforms to CIS Level 2 requirements without breaking modern containerized production stacks.
 * **Service Cloaking:** Hides your SSH port and administrative interfaces behind a stealthy WireGuard VPN tunnel, deployed seamlessly.
 * **Smart SIEM Routing:** Integrates with `rsyslog` to natively forward only high-value behavioral bans (Layer 7) to your SOC/SIEM (e.g., Wazuh). Intentionally filters out Layer 3 noise to prevent index saturation and control ingestion costs.
 * **High Availability (HA) Cluster Sync:** Securely replicates Threat Intelligence states, whitelists, and configurations to passive nodes via an SSH-encrypted cron job.
 
 **Observability & Lifecycle Management**
 * **Real-Time Telemetry:** Monitor active threats, blocked IPs, and system health via a secure, self-hosted Web Dashboard (sterilized against XSS attacks) and a dedicated CLI interface.
-* **"Scorched Earth" Surgical Rollback:** The uninstallation routine performs a deep cleanup. It eradicates custom `netdev` and `raw` tables, instantly restoring the OS network stack to its pristine original state without requiring a reboot.
+* **"Scorched Earth" Surgical Rollback:** The uninstallation routine performs a deep cleanup. It safely reverts all CIS Level 2 configurations (sysctl, modprobe, cron permissions), eradicates custom `netdev` and `raw` tables, and instantly restores the OS to its pristine original state without requiring a reboot.
 
 ## Hardware-Aware Zero-Trust Architecture
 
