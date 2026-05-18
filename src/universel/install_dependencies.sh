@@ -11,10 +11,6 @@ install_dependencies() {
         touch "$CONF_FILE"
         chmod 600 "$CONF_FILE"
     fi
-    # Detect if ANY web server is already present to prevent uninstall disasters
-    if ! command -v nginx >/dev/null 2>&1 && ! command -v apache2 >/dev/null 2>&1 && ! command -v httpd >/dev/null 2>&1; then
-        echo "NGINX_INSTALLED_BY_SYSWARDEN='y'" >>"$CONF_FILE"
-    fi
     if ! command -v fail2ban-client >/dev/null 2>&1; then
         echo "FAIL2BAN_INSTALLED_BY_SYSWARDEN='y'" >>"$CONF_FILE"
     fi
@@ -54,37 +50,12 @@ install_dependencies() {
     if ! command -v jq >/dev/null; then missing_common+=("jq"); fi
     # -----------------------------------------------------------------------
 
-    # --- HOTFIX: WEB SERVER & OPENSSL AS CORE DEPENDENCIES ---
-    # We install Nginx only if absolutely no supported web server is found
-    if ! command -v nginx >/dev/null 2>&1 && ! command -v apache2 >/dev/null 2>&1 && ! command -v httpd >/dev/null 2>&1; then
-        missing_common+=("nginx")
-    fi
-
-    # --- FIX: RHEL/ROCKY APACHE MOD_SSL DEPENDENCY ---
-    # Ensure mod_ssl is installed for httpd to recognize SSLEngine directives
-    if command -v httpd >/dev/null 2>&1 && [[ -f /etc/redhat-release ]]; then
-        if ! rpm -q mod_ssl >/dev/null 2>&1; then
-            missing_common+=("mod_ssl")
-        fi
-    fi
-
+    # --- HOTFIX: OPENSSL AS CORE DEPENDENCY ---
     if ! command -v openssl >/dev/null; then missing_common+=("openssl"); fi
-    # -----------------------------------------------------------
+    # ----------------------------------------------------------
 
     # Check if array is not empty
     if [[ ${#missing_common[@]} -gt 0 ]]; then
-
-        # --- HOTFIX: GHOST CONFIGURATION PREVENTION ---
-        # Debian/Ubuntu automatically starts Nginx post-installation.
-        # If a previous SysWarden configuration exists but the SSL certs were wiped,
-        # dpkg will crash. We aggressively clean legacy configs before installing.
-        if [[ -f /etc/debian_version ]] && [[ " ${missing_common[*]} " =~ " nginx " ]]; then
-            log "INFO" "Cleaning up potential legacy Nginx configurations before install..."
-            rm -f /etc/nginx/conf.d/syswarden-ui.conf
-            rm -f /etc/nginx/sites-available/syswarden-ui.conf
-            rm -f /etc/nginx/sites-enabled/syswarden-ui.conf
-        fi
-        # -----------------------------------------------------
 
         # --- SECURE INSTALLATION OF ACCUMULATED DEPENDENCIES ---
         if [[ -f /etc/debian_version ]]; then

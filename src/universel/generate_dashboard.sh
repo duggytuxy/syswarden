@@ -82,7 +82,8 @@ pad() {
 }
 
 # --- SIGNAL HANDLING (Graceful Exit) ---
-trap 'tput cnorm; echo -e "${C_0}"; clear; exit 0' SIGINT SIGTERM
+trap 'tput cnorm; tput rmcup 2>/dev/null || true; echo -e "${C_0}"; clear; exit 0' SIGINT SIGTERM
+tput smcup 2>/dev/null || true # Enter alternate screen buffer to prevent scrollback stacking
 tput civis # Hide cursor
 clear
 
@@ -97,6 +98,7 @@ while true; do
         LINES=$NEW_LINES
         SEP=$(printf '%*s' "$COLS" '' | tr ' ' '=')
         SEP_D=$(printf '%*s' "$COLS" '' | tr ' ' '-')
+        clear # Force screen wipe to prevent artifacts during window resizing
         NEEDS_RENDER=1
     fi
 
@@ -345,7 +347,7 @@ while true; do
         fi
 
         add_line "${C_B}${SEP}${C_0}"
-        OUT+=" ${C_D}Registry Index: $((SCROLL_OFFSET + 1))-${TOTAL_BANS} of ${TOTAL_BANS} | Interval: 5s | Navigate: Up/Down Arrows | Press 'q' to exit.${C_0}\033[K"
+        OUT+=" ${C_D}Registry Index: $((SCROLL_OFFSET + 1))-${TOTAL_BANS} of ${TOTAL_BANS} | Interval: 60s | Navigate: Up/Down Arrows | Press 'q' to exit.${C_0}\033[K"
 
         # --- ATOMIC FLUSH TO SCREEN ---
         echo -ne "\033[H${OUT}"
@@ -368,7 +370,7 @@ while true; do
             if (( SCROLL_OFFSET < TOTAL_BANS - MAX_BANS )); then SCROLL_OFFSET=$(( SCROLL_OFFSET + 1 )); NEEDS_RENDER=1; fi
         fi
     elif [[ "$key" == "q" || "$key" == "Q" ]]; then
-        tput cnorm; echo -e "${C_0}"; clear; exit 0
+        tput cnorm; tput rmcup 2>/dev/null || true; echo -e "${C_0}"; clear; exit 0
     fi
 done
 EOF

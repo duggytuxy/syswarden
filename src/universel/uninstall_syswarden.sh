@@ -326,42 +326,7 @@ EOF
         systemctl restart fail2ban 2>/dev/null || true
     fi
 
-    # 5. Remove UI Dashboard (State Aware for Apache & Nginx)
-    # --- HOTFIX: CLEAN UNINSTALL ---
-    log "INFO" "Removing Web Server UI configurations..."
-
-    # Apache Cleanup
-    rm -f /etc/apache2/sites-available/syswarden-ui.conf
-    rm -f /etc/apache2/sites-enabled/syswarden-ui.conf
-    rm -f /etc/httpd/conf.d/syswarden-ui.conf
-
-    if systemctl is-active --quiet apache2; then
-        systemctl reload apache2 >/dev/null 2>&1 || true
-    elif systemctl is-active --quiet httpd; then
-        systemctl reload httpd >/dev/null 2>&1 || true
-    fi
-
-    # Nginx Cleanup
-    rm -f /etc/nginx/conf.d/syswarden-ui.conf
-    rm -f /etc/nginx/sites-available/syswarden-ui.conf
-    rm -f /etc/nginx/sites-enabled/syswarden-ui.conf
-
-    if systemctl is-active --quiet nginx; then
-        systemctl reload nginx >/dev/null 2>&1 || true
-    fi
-
-    if [[ "${NGINX_INSTALLED_BY_SYSWARDEN:-n}" == "y" ]]; then
-        log "INFO" "Purging Nginx (installed by SysWarden)..."
-        systemctl stop nginx 2>/dev/null || true
-        if [[ -f /etc/debian_version ]]; then
-            apt-get purge -y nginx 2>/dev/null || true
-        else
-            dnf remove -y nginx 2>/dev/null || true
-        fi
-    fi
-    # -----------------------------------------------------
-
-    # 6. Remove Wazuh Agent (With Auto-Mode CI/CD Protection)
+    # 5. Remove Wazuh Agent (With Auto-Mode CI/CD Protection)
     if command -v systemctl >/dev/null && systemctl list-unit-files | grep -q wazuh-agent; then
         # CI/CD SAFEGUARD: Don't hang on read prompt if running unattended
         if [[ "${MODE:-}" == "auto" ]]; then
