@@ -16,13 +16,13 @@
   <img src="https://img.shields.io/badge/Compliance-EU_CRA_Ready-003399?logo=shield&logoColor=white" alt="EU CRA Ready">
   <img src="https://img.shields.io/badge/Open%20Source-100%25-brightgreen?logo=opensourceinitiative" alt="Open Source">
   <img src="https://img.shields.io/badge/Status-Production_Ready-blue?logo=status" alt="Production Ready">
-  <img src="https://img.shields.io/badge/Security-Zero_Trust-darkred?logo=security" alt="Zero Trust">
+  <img src="https://img.shields.io/badge/Security-Default_Deny-darkred?logo=security" alt="Default-Deny">
   <img src="https://img.shields.io/badge/Platform-Linux_Universal-0052cc?logo=linux" alt="Linux Universal">
 </p>
 
 # SysWarden
 
-**SysWarden** is an enterprise Zero-Trust HIPS for Linux. It automates CIS Level 2 hardening, global threat intel, and dynamic defense with near-zero overhead.
+**SysWarden** is an enterprise Default-Deny HIPS for Linux. It automates CIS Level 2 hardening, global threat intel, and dynamic defense with near-zero overhead.
 
 It acts as a ruthless first line of defense. By fusing dynamic firewall orchestration (`nftables`/`iptables`), global Threat Intelligence ([Data-Shield IPv4](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a reactive HIPS (optimized Fail2ban), and SIEM alert routing, SysWarden filters out Internet "background noise" and neutralizes threats at the network (L2/L3/L4) and application (L7) levels. It perfectly complements modern EDR/XDR architectures by drastically reducing their analysis surface and the server's CPU load.
 
@@ -42,7 +42,7 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 * **Standalone ModSecurity:** Seamlessly integrates [OWASP ModSecurity (v3.0.15)](https://github.com/owasp-modsecurity/ModSecurity) via the `syswarden-waf.sh` component, providing deep HTTP traffic inspection.
 * **Automated Retaliation:** Natively interfaces with the AbuseIPDB network to proactively report attackers and share telemetry.
 
-**Zero-Trust & Compliance Architecture**
+**Default-Deny & Compliance Architecture**
 * **CIS Benchmark Level 2 (Defense-in-Depth):** Optional surgical hardening of the kernel (eBPF, ASLR, source routing), memory (core dumps limits), SSH, and filesystems. It strictly conforms to CIS Level 2 requirements without breaking modern containerized production stacks.
 * **Service Cloaking:** Hides your SSH port and administrative interfaces behind a stealthy WireGuard VPN tunnel, deployed seamlessly.
 * **Smart SIEM Routing:** Integrates with `rsyslog` to natively forward only high-value behavioral bans (Layer 7) to your SOC/SIEM (e.g., Wazuh). Intentionally filters out Layer 3 noise to prevent index saturation and control ingestion costs.
@@ -52,14 +52,14 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 * **Real-Time Telemetry:** Monitor active threats, blocked IPs, and system health via a secure, self-hosted Web Dashboard (sterilized against XSS attacks) and a dedicated CLI interface.
 * **"Scorched Earth" Surgical Rollback:** The uninstallation routine performs a deep cleanup. It safely reverts all CIS Level 2 configurations (sysctl, modprobe, cron permissions), eradicates custom `netdev` and `raw` tables, and instantly restores the OS to its pristine original state without requiring a reboot.
 
-## Hardware-Aware Zero-Trust Architecture
+## Hardware-Aware Default-Deny Architecture
 
 SysWarden doesn't just stack firewall rules; it orchestrates the Linux network stack to neutralize threats before they consume your resources:
 
 1. **L2/L3 Ingress Drop (Priority -500):** OSINT blocklists, hostile ASNs, and GeoIP filtering are applied at the lowest level (NIC hook). Packets are destroyed before state tracking (`conntrack`), preventing table exhaustion and CPU overhead.
 2. **Stateful Fast-Path (Priority 0):** Legitimate established connections and dynamic container traffic (e.g., `DOCKER-USER` chain) are prioritized. This stateful bypass guarantees zero latency for your production application traffic.
 3. **Behavioral L7 Defense (HIPS):** The active defense layer analyzes application logs (via `systemd` journald) in real time. Any behavioral anomaly (brute-force, SQLi, LFI) triggers a surgical "AllPorts" ban that dynamically synchronizes the IP with the hardware drop tables.
-4. **Zero-Trust "Catch-All":** The attack surface is hermetically sealed. Any incoming traffic not explicitly authorized by the administrator or the automatic service discovery engine is silently dropped, enforcing a strict Zero-Trust doctrine.
+4. **Default-Deny "Catch-All":** The attack surface is hermetically sealed. Any incoming traffic not explicitly authorized by the administrator or the automatic service discovery engine is silently dropped, enforcing a strict Default-Deny doctrine.
 
 ## Supported Environments
 
@@ -78,13 +78,13 @@ SysWarden provides dual-layer observability, ensuring total situational awarenes
 
 **Orchestration & Interactive CLI**
 * **Terminal Dashboard:** Manage your infrastructure directly from the shell via `syswarden-manager` (instant visibility into blocks, whitelists, and rule idempotency).
-* **Structured Installation Logs:** The deployment process provides precise, color-coded visual feedback on OS hardening, SIEM integration, and the successful application of Zero-Trust policies.
+* **Structured Installation Logs:** The deployment process provides precise, color-coded visual feedback on OS hardening, SIEM integration, and the successful application of Default-Deny policies.
 
 ## Installation Guide
 
 SysWarden is distributed as a pre-compiled, self-contained shell script. All complex modules are bundled into a single deployment artifact.
 
-Two installation methods are supported: a standard interactive mode, and an "Enterprise Zero-Trust" mode for environments requiring strict supply chain validation.
+Two installation methods are supported: a standard interactive mode, and an "Enterprise Default-Deny" mode for environments requiring strict supply chain validation.
 
 ### 1. Quick Installation (Standard)
 
@@ -105,7 +105,7 @@ cd dist/ || exit
 ./install-syswarden.sh
 ```
 
-### 2. Enterprise Installation (Zero-Trust / SLSA Level 3)
+### 2. Enterprise Installation (Default-Deny / SLSA Level 3)
 
 SysWarden releases are cryptographically signed using GitHub Artifact Attestations to guarantee supply chain integrity. For environments compliant with ISO 27001 or NIS2, it is imperative to verify the script's provenance before execution.
 
