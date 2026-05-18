@@ -36,6 +36,15 @@ elif [[ "$MODE" == "--auto" ]]; then
 fi
 # ==============================================================================
 
+if [[ "$MODE" == "tui" ]] || [[ "$MODE" == "dashboard" ]]; then
+    if [[ -x "/usr/local/bin/syswarden-tui" ]]; then
+        exec /usr/local/bin/syswarden-tui
+    else
+        echo -e "${RED}[!] TUI Engine not found. Please run the installation or update first.${NC}"
+        exit 1
+    fi
+fi
+
 if [[ "$MODE" == "whitelist" ]]; then
     check_root
     detect_os_backend
@@ -176,7 +185,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.35.5                  ${NC}"
+    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.35.6                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -215,7 +224,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.35.5 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.35.6 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
