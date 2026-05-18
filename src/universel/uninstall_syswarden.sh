@@ -431,7 +431,8 @@ EOF
     rm -rf "$SYSWARDEN_DIR" # This automatically removes /etc/syswarden/ssl (Self-signed certs)
     rm -f "$LOG_FILE"
     rm -f /etc/syswarden.conf
-    rm -f /usr/local/bin/syswarden*
+    # SAFEGUARD: Purge only installed files/binaries, strictly preserving user directories (like the Git clone)
+    find /usr/local/bin -maxdepth 1 -type f -name "syswarden*" -delete 2>/dev/null || true
     # ----------------------------------------------------------
 
     log "INFO" "Cleanup complete."
