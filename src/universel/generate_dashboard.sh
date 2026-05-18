@@ -37,7 +37,7 @@ generate_dashboard() {
         if command -v netfilter-persistent >/dev/null; then netfilter-persistent save >/dev/null 2>&1 || true; fi
     fi
 
-    # --- 3. GENERATE FULL-SCREEN EVENT-DRIVEN TUI ENGINE (0.1% CPU) ---
+    # --- 3. GENERATE FULL-SCREEN EVENT-DRIVEN TUI ENGINE (ULTRA OPTIMIZED) ---
     log "INFO" "Compiling the advanced Event-Driven TUI Engine (Zero-CPU)..."
     cat <<'EOF' >"$TUI_BIN"
 #!/bin/bash
@@ -66,10 +66,20 @@ LAST_GITHUB_TS=0
 COLS=0
 LINES=0
 NEEDS_RENDER=1
+C_LOAD=$C_G
 
 declare -a JAILS_LIST=()
 declare -a TOP_LIST=()
 declare -a BANNED_LIST=()
+
+# --- HELPER: DYNAMIC ALIGNMENT PADDING ---
+pad() {
+    local len=${#1}
+    local max=$2
+    local spaces=$(( max - len ))
+    [[ $spaces -lt 0 ]] && spaces=0
+    printf "%*s" "$spaces" ""
+}
 
 # --- SIGNAL HANDLING (Graceful Exit) ---
 trap 'tput cnorm; echo -e "${C_0}"; clear; exit 0' SIGINT SIGTERM
@@ -107,31 +117,50 @@ while true; do
                     LAST_GITHUB_TS=$CURRENT_TS
                 fi
 
-                # --- PARSING ---
-                SYS_HOST=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.hostname // "Node"')
-                SYS_OS=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.os // "Linux"')
-                SYS_CPU=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.cpu_model // "Unknown"')
-                SYS_CORES=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.cores // "1"')
-                SYS_ARCH=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.arch // "Unknown"')
-                SYS_LOAD=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.load_average // "0, 0, 0"')
-                SYS_UP=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.uptime // "Unknown"')
-                SYS_RAM_U=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ram_used_mb // 0')
-                SYS_RAM_T=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ram_total_mb // 0')
-                SYS_DISK_U=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.disk_used_mb // 0')
-                SYS_DISK_T=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.disk_total_mb // 0')
+                # --- SINGLE-PASS JQ PARSING (ULTRA CPU OPTIMIZATION) ---
+                mapfile -t METRICS < <(echo "$LAST_TELEMETRY_DATA" | jq -r '
+                    .system.hostname // "Node",
+                    .system.os // "Linux",
+                    .system.cpu_model // "Unknown",
+                    .system.cores // "1",
+                    .system.arch // "Unknown",
+                    .system.load_average // "0.00, 0.00, 0.00",
+                    .system.uptime // "Unknown",
+                    .system.ram_used_mb // 0,
+                    .system.ram_total_mb // 0,
+                    .system.disk_used_mb // 0,
+                    .system.disk_total_mb // 0,
+                    .layer3.global_blocked // 0,
+                    .layer3.geoip_blocked // 0,
+                    .layer3.asn_blocked // 0,
+                    .layer7.total_banned // 0,
+                    .layer7.active_jails // 0,
+                    .whitelist.active_ips // 0,
+                    .layer7.risk_radar[0] // 0,
+                    .layer7.risk_radar[1] // 0,
+                    .layer7.risk_radar[2] // 0,
+                    .layer7.risk_radar[3] // 0,
+                    .layer7.risk_radar[4] // 0
+                ' 2>/dev/null || true)
                 
-                L3_G=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer3.global_blocked // 0')
-                L3_GEO=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer3.geoip_blocked // 0')
-                L3_ASN=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer3.asn_blocked // 0')
-                L7_BAN=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.total_banned // 0')
-                L7_JAIL=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.active_jails // 0')
-                WL_ACT=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.whitelist.active_ips // 0')
-                
-                R_EXP=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[0] // 0')
-                R_BF=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[1] // 0')
-                R_REC=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[2] // 0')
-                R_DOS=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[3] // 0')
-                R_ABU=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.risk_radar[4] // 0')
+                if [[ ${#METRICS[@]} -ge 22 ]]; then
+                    SYS_HOST="${METRICS[0]}"; SYS_OS="${METRICS[1]}"; SYS_CPU="${METRICS[2]}"
+                    SYS_CORES="${METRICS[3]}"; SYS_ARCH="${METRICS[4]}"; SYS_LOAD="${METRICS[5]}"
+                    SYS_UP="${METRICS[6]}"; SYS_RAM_U="${METRICS[7]}"; SYS_RAM_T="${METRICS[8]}"
+                    SYS_DISK_U="${METRICS[9]}"; SYS_DISK_T="${METRICS[10]}"
+                    L3_G="${METRICS[11]}"; L3_GEO="${METRICS[12]}"; L3_ASN="${METRICS[13]}"
+                    L7_BAN="${METRICS[14]}"; L7_JAIL="${METRICS[15]}"; WL_ACT="${METRICS[16]}"
+                    R_EXP="${METRICS[17]}"; R_BF="${METRICS[18]}"; R_REC="${METRICS[19]}"
+                    R_DOS="${METRICS[20]}"; R_ABU="${METRICS[21]}"
+                fi
+
+                # --- DYNAMIC LOAD AVERAGE COLORIZATION ---
+                L1=$(echo "$SYS_LOAD" | cut -d',' -f1 | tr -d ' ')
+                C_LOAD=$(awk -v l1="$L1" -v cg="$C_G" -v cy="$C_Y" -v cr="$C_R" 'BEGIN {
+                    if (l1 < 0.50) print cg;
+                    else if (l1 < 0.75) print cy;
+                    else print cr;
+                }' 2>/dev/null || echo "$C_G")
 
                 # --- SIGNAL CALCULATION ---
                 TOTAL_THREATS=$(( L3_G + L7_BAN ))
@@ -159,11 +188,9 @@ while true; do
                 done
                 SERVICES_STR="${SERVICES_STR% |}"
 
-                # --- WHITELIST IP EXTRACTION ---
-                WL_IPS_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.whitelist.ips | join(", ")' 2>/dev/null || true)
-                [[ -z "$WL_IPS_STR" ]] && WL_IPS_STR="None"
-                WL_IPS_TRUNC="${WL_IPS_STR:0:45}"
-                [[ ${#WL_IPS_STR} -gt 45 ]] && WL_IPS_TRUNC+="..."
+                # --- WHITELIST 7 IPs EXACT MATCH ---
+                WL_IPS_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r 'if .whitelist.ips then .whitelist.ips[0:7] | join(", ") else "None" end' 2>/dev/null || true)
+                [[ -z "$WL_IPS_STR" || "$WL_IPS_STR" == "null" ]] && WL_IPS_STR="None"
 
                 PORTS_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ports[] | "\(.protocol):\(.port)"' | tr '\n' ' ' | sed 's/ / | /g' | sed 's/ | $//')
                 [[ -z "$PORTS_STR" ]] && PORTS_STR="No external ports exposed. Architecture is fully locked down."
@@ -191,22 +218,37 @@ while true; do
         
         # --- HARDWARE SPECS HEADER PANEL ---
         add_line " Cores: ${C_W}${SYS_CORES}${C_0} | Arch: ${C_W}${SYS_ARCH}${C_0} | OS: ${C_W}${SYS_OS}${C_0} | CPU: ${C_W}${SYS_CPU}${C_0} | Last sync: ${C_Y}$(date -d @$LAST_FETCH_TS +'%H:%M:%S')${C_0}"
-        add_line " Uptime: ${C_C}${SYS_UP}${C_0} | Load Avg: ${C_W}${SYS_LOAD}${C_0} | RAM: ${C_W}${SYS_RAM_U} / ${SYS_RAM_T} MB${C_0} | Storage: ${C_W}$(awk "BEGIN {printf \"%.1f\", $SYS_DISK_U/1024}") / $(awk "BEGIN {printf \"%.1f\", $SYS_DISK_T/1024}") GB${C_0}"
+        add_line " Uptime: ${C_C}${SYS_UP}${C_0} | Load Avg: ${C_LOAD}${SYS_LOAD}${C_0} | RAM: ${C_W}${SYS_RAM_U} / ${SYS_RAM_T} MB${C_0} | Storage: ${C_W}$(awk "BEGIN {printf \"%.1f\", $SYS_DISK_U/1024}") / $(awk "BEGIN {printf \"%.1f\", $SYS_DISK_T/1024}") GB${C_0}"
         add_line " Services: [${SERVICES_STR} ]"
         add_line " Ports: [ ${C_B}${PORTS_STR}${C_0} ]"
         add_line "${C_B}${SEP}${C_0}"
         add_line ""
         
-        # --- LAYER 3 & LAYER 7 METRICS BLOCKS ---
-        add_line " ${C_C}[ L3 KERNEL BLOCKS (GLOBAL) ]${C_0}          ${C_R}[ L7 ACTIVE BANS (FAIL2BAN) ]${C_0}          ${C_G}[ TRUSTED HOSTS (WHITELIST) ]${C_0}"
-        add_line " Value: ${C_W}${L3_G}${C_0}                             Value: ${C_W}${L7_BAN}${C_0}                             Active IPs: ${C_W}${WL_ACT}${C_0}"
-        add_line " GeoIP: ${L3_GEO} | ASN: ${L3_ASN}                 Active Guard Jails: ${L7_JAIL}                 IPs: ${C_G}${WL_IPS_TRUNC}${C_0}"
+        # --- LAYER 3 & LAYER 7 GEOMETRIC ALIGNED MATRICES ---
+        W3=$(( COLS / 3 ))
+        [[ $W3 -lt 30 ]] && W3=30
+
+        T1="[ L3 KERNEL BLOCKS (GLOBAL) ]"
+        T2="[ L7 ACTIVE BANS (FAIL2BAN) ]"
+        T3="[ TRUSTED HOSTS (WHITELIST) ]"
+        add_line " ${C_C}${T1}${C_0}$(pad "$T1" $((W3-1)))${C_R}${T2}${C_0}$(pad "$T2" $W3)${C_G}${T3}${C_0}"
+        
+        V1="Value: ${L3_G}"
+        V2="Value: ${L7_BAN}"
+        V3="Active IPs: ${WL_ACT}"
+        add_line " ${C_D}Value: ${C_W}${L3_G}${C_0}$(pad "$V1" $((W3-1)))${C_D}Value: ${C_W}${L7_BAN}${C_0}$(pad "$V2" $W3)${C_D}Active IPs: ${C_W}${WL_ACT}${C_0}"
+        
+        D1="GeoIP: ${L3_GEO} | ASN: ${L3_ASN}"
+        D2="Active Guard Jails: ${L7_JAIL}"
+        D3="IPs: ${WL_IPS_STR}"
+        add_line " ${C_D}GeoIP: ${C_W}${L3_GEO}${C_D} | ASN: ${C_W}${L3_ASN}${C_0}$(pad "$D1" $((W3-1)))${C_D}Active Guard Jails: ${C_W}${L7_JAIL}${C_0}$(pad "$D2" $W3)${C_D}IPs: ${C_G}${WL_IPS_STR}${C_0}"
+        
         add_line "${C_B}${SEP_D}${C_0}"
         add_line ""
         
         # --- GLOBAL RISK RADAR VECTOR MATRIX ---
         add_line " ${C_W}[ GLOBAL RISK VECTORS ]${C_0}"
-        add_line " Exploits: ${C_R}${R_EXP}${C_0} | Brute-Force: ${C_Y}${R_BF}${C_0} | Recon: ${C_B}${R_REC}${C_0} | DDoS: ${C_D}${R_DOS}${C_0} | Abuse/Spam: ${C_Y}${R_ABU}${C_0}"
+        add_line " ${C_R}Exploits:${C_0} ${R_EXP}   |   ${C_Y}Brute-Force:${C_0} ${R_BF}   |   ${C_B}Recon:${C_0} ${R_REC}   |   ${C_D}DDoS:${C_0} ${R_DOS}   |   ${C_Y}Abuse/Spam:${C_0} ${R_ABU}"
         add_line "${C_B}${SEP}${C_0}"
         add_line ""
 
@@ -216,11 +258,11 @@ while true; do
 
         TITLE_L=" [ JAILS LOAD DISTRIBUTION ]"
         TITLE_R=" [ TOP ATTACKERS (OSINT HISTORY) ]"
-        add_line "${C_W}${TITLE_L}$(printf '%*s' $(( HALF_WIDTH - ${#TITLE_L} + 4 )) '')${TITLE_R}${C_0}"
+        add_line "${C_W}${TITLE_L}$(pad "$TITLE_L" $HALF_WIDTH)${TITLE_R}${C_0}"
         
         HEAD_L=" TARGET JAIL      MITRE ATT&CK         LOAD"
         HEAD_R=" IP ADDRESS           PORT       HITS"
-        add_line "${C_D}${HEAD_L}$(printf '%*s' $(( HALF_WIDTH - ${#HEAD_L} + 4 )) '')${HEAD_R}${C_0}"
+        add_line "${C_D}${HEAD_L}$(pad "$HEAD_L" $HALF_WIDTH)${HEAD_R}${C_0}"
 
         for i in {0..4}; do
             J_LINE=""
@@ -234,10 +276,7 @@ while true; do
                 IFS='|' read -r t_ip t_port t_count <<< "${TOP_LIST[$i]}"
                 T_LINE=$(printf " %-20s %-10s %-8s" "${t_ip:0:19}" "${t_port:0:9}" "$t_count")
             fi
-            PADDING_LEN=$(( HALF_WIDTH - ${#J_LINE} + 4 ))
-            [[ $PADDING_LEN -lt 1 ]] && PADDING_LEN=1
-            PAD=$(printf '%*s' "$PADDING_LEN" '')
-            add_line "${C_C}${J_LINE}${C_0}${PAD}${C_R}${T_LINE}${C_0}"
+            add_line "${C_C}${J_LINE}${C_0}$(pad "$J_LINE" $HALF_WIDTH)${C_R}${T_LINE}${C_0}"
         done
         
         add_line "${C_B}${SEP}${C_0}"
