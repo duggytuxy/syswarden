@@ -1,0 +1,106 @@
+name: SysWarden Builder and Packager
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'src/**'
+      - 'build.sh'
+      - 'syswarden-auto.conf'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-and-package:
+    name: Compile and Build Packages
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Compile Universal Script
+        run: |
+          # Ensure script is executable and run the compiler
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Extract Version from Config
+        id: version
+        run: |
+          # Parse the version from syswarden-auto.conf securely
+          VERSION=$(grep -oP '^# Version=v\K[0-9\.]+' syswarden-auto.conf || echo "0.0.0")
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Set up Ruby for FPM
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      - name: Install FPM and RPM build tools
+        run: |
+          # Install Effing Package Management and RPM requirements without docs for speed
+          sudo apt-get update
+          sudo apt-get install -y rpm
+          gem install --no-document fpm
+
+      - name: Prepare Staging Environment
+        run: |
+          # Create standard Linux filesystem hierarchy for the deployment package
+          mkdir -p staging/opt/syswarden
+          mkdir -p staging/usr/local/bin
+
+          # Copy the compiled artifact and the unattended configuration
+          cp dist/install-syswarden.sh staging/opt/syswarden/
+          cp syswarden-auto.conf staging/opt/syswarden/
+
+          # Apply strict execution permissions (Root execution only)
+          chmod 750 staging/opt/syswarden/install-syswarden.sh
+          chmod 640 staging/opt/syswarden/syswarden-auto.conf
+
+          # Create a symlink for global execution from the terminal
+          ln -s /opt/syswarden/install-syswarden.sh staging/usr/local/bin/syswarden
+
+      - name: Build Debian Package (.deb)
+        run: |
+          fpm -s dir -t deb \
+            -n syswarden \
+            -v ${{ env.VERSION }} \
+            --vendor "SysWarden Security" \
+            --maintainer "SysWarden Engineering" \
+            --description "SysWarden Host-based Security Orchestrator for Linux" \
+            --url "https://github.com/${{ github.repository }}" \
+            --architecture all \
+            -C staging .
+
+      - name: Build RHEL Family Package (.rpm)
+        run: |
+          fpm -s dir -t rpm \
+            -n syswarden \
+            -v ${{ env.VERSION }} \
+            --vendor "SysWarden Security" \
+            --maintainer "SysWarden Engineering" \
+            --description "SysWarden Host-based Security Orchestrator for Linux" \
+            --url "https://github.com/${{ github.repository }}" \
+            --architecture noarch \
+            -C staging .
+
+      - name: Generate Checksums
+        run: |
+          # Generate SHA256 checksums for integrity verification (Supply Chain Security)
+          sha256sum *.deb *.rpm > SHA256SUMS.txt
+
+      - name: Upload Package Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: syswarden-packages-${{ env.VERSION }}
+          path: |
+            *.deb
+            *.rpm
+            SHA256SUMS.txt
+          retention-days: 7
