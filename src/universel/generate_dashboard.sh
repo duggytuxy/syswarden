@@ -45,7 +45,7 @@ generate_dashboard() {
 set -euo pipefail
 
 # --- VERSION CONFIGURATION ---
-SYSWARDEN_VERSION="v0.36.1"
+SYSWARDEN_VERSION="v0.36.2"
 
 DATA_FILE="/etc/syswarden/ui/data.json"
 
@@ -193,8 +193,8 @@ while true; do
                 done
                 SERVICES_STR="${SERVICES_STR% |}"
 
-                # --- WHITELIST 7 IPs EXACT MATCH ---
-                WL_IPS_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r 'if .whitelist.ips then .whitelist.ips[0:7] | join(", ") else "None" end' 2>/dev/null || true)
+                # --- WHITELIST 3 IPs EXACT MATCH ---
+                WL_IPS_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r 'if .whitelist.ips then if (.whitelist.ips | length) > 3 then (.whitelist.ips[0:3] | join(", ")) + ", ..." else .whitelist.ips | join(", ") end else "None" end' 2>/dev/null || true)
                 [[ -z "$WL_IPS_STR" || "$WL_IPS_STR" == "null" ]] && WL_IPS_STR="None"
 
                 PORTS_STR=$(echo "$LAST_TELEMETRY_DATA" | jq -r '.system.ports[] | "\(.protocol):\(.port)"' | tr '\n' ' ' | sed 's/ / | /g' | sed 's/ | $//')
@@ -322,22 +322,13 @@ while true; do
                     P_CLEAN=$(echo "$b_payload" | tr -d '\n\r' | cut -c 1-$W_PAYLOAD)
                     LINE_STR=$(printf " %-${W_IP}s %-${W_JAIL}s %-${W_MITRE}s %s" "${b_ip:0:$W_IP}" "${b_jail:0:$W_JAIL}" "${b_mitre_short:0:$W_MITRE}" "$P_CLEAN")
                     
-                    SCROLL_CHAR="│"
-                    if (( TOTAL_BANS > MAX_BANS )); then
-                        SLIDER_START=$(( SCROLL_OFFSET * MAX_BANS / TOTAL_BANS ))
-                        SLIDER_END=$(( (SCROLL_OFFSET + MAX_BANS) * MAX_BANS / TOTAL_BANS ))
-                        if (( i >= SLIDER_START && i <= SLIDER_END )); then SCROLL_CHAR="█"; fi
-                    fi
-                    
                     if [[ "$b_payload" =~ "kernel:" || "$b_payload" =~ "SysWarden" ]]; then
-                        add_line "${C_Y}${LINE_STR:0:$((COLS-2))}${C_0}${C_B}${SCROLL_CHAR}${C_0}"
+                        add_line "${C_Y}${LINE_STR:0:$((COLS-1))}${C_0}"
                     else
-                        add_line "${C_W}${LINE_STR:0:$((COLS-2))}${C_0}${C_B}${SCROLL_CHAR}${C_0}"
+                        add_line "${C_W}${LINE_STR:0:$((COLS-1))}${C_0}"
                     fi
                 else
-                    SCROLL_CHAR="│"
-                    if (( TOTAL_BANS <= MAX_BANS )); then SCROLL_CHAR=" "; fi
-                    add_line "$(printf '%*s' $((COLS-1)) '')${C_B}${SCROLL_CHAR}${C_0}"
+                    add_line ""
                 fi
             done
         fi

@@ -69,15 +69,22 @@ SRV_F2B=$(pgrep -f fail2ban-server >/dev/null && echo "active" || echo "offline"
 SRV_CRON=$(pgrep -f "cron|crond" >/dev/null && echo "active" || echo "offline")
 
 # --- Mutually Exclusive Web Server Tracking (XOR) ---
+# Check for Apache
 if command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; then
     WEB_NAME="apache (worker)"
     WEB_PATH="/usr/sbin/httpd"
     [[ -f /usr/sbin/apache2 ]] && WEB_PATH="/usr/sbin/apache2"
     WEB_STATUS=$(pgrep -f "apache2|httpd" >/dev/null && echo "active" || echo "offline")
-else
+# Check for Nginx
+elif command -v nginx >/dev/null 2>&1; then
     WEB_NAME="nginx (worker)"
     WEB_PATH="/usr/sbin/nginx"
     WEB_STATUS=$(pgrep -f "nginx" >/dev/null && echo "active" || echo "offline")
+# No web server installed
+else
+    WEB_NAME="web-server (none)"
+    WEB_PATH="none"
+    WEB_STATUS="skipped"
 fi
 
 # --- ModSecurity WAF Tracking (Module embedded in Web Server) ---
@@ -86,6 +93,8 @@ if [[ -f "/etc/fail2ban/filter.d/syswarden-modsec.conf" ]] || [[ -d "/etc/modsec
     # Since ModSecurity runs inside the web server, its state matches the web worker
     if [[ "$WEB_STATUS" == "active" ]]; then
         SRV_MODSEC="active"
+    elif [[ "$WEB_STATUS" == "skipped" ]]; then
+        SRV_MODSEC="skipped"
     else
         SRV_MODSEC="offline"
     fi
