@@ -45,7 +45,7 @@ generate_dashboard() {
 set -euo pipefail
 
 # --- VERSION CONFIGURATION ---
-SYSWARDEN_VERSION="v0.36.3"
+SYSWARDEN_VERSION="v0.36.4"
 
 DATA_FILE="/etc/syswarden/ui/data.json"
 
@@ -99,8 +99,8 @@ while true; do
     if [[ "$NEW_COLS" != "$COLS" || "$NEW_LINES" != "$LINES" ]]; then
         COLS=$NEW_COLS
         LINES=$NEW_LINES
-        SEP=$(printf '%*s' "$COLS" '' | sed 's/ /─/g')
-        SEP_D=$(printf '%*s' "$COLS" '' | sed 's/ /┈/g')
+        SEP_H=$(printf '%*s' "$((COLS-2))" '' | sed 's/ /─/g')
+        SEP_D_H=$(printf '%*s' "$((COLS-2))" '' | sed 's/ /┈/g')
         clear # Force screen wipe to prevent artifacts during window resizing
         NEEDS_RENDER=1
     fi
@@ -201,7 +201,7 @@ while true; do
                 [[ -z "$PORTS_STR" ]] && PORTS_STR="No external ports exposed. Architecture is fully locked down."
 
                 mapfile -t JAILS_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.jails_data | sort_by(.count) | reverse | .[] | "\(.name)|\(.mitre)|\(.count)"' | head -n 5)
-                mapfile -t TOP_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.top_attackers[] | "\(.ip)|\(.port)|\(.count)"' | head -n 5)
+                mapfile -t TOP_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.top_attackers[] | "\(.ip)|\(.port)|\(.country)|\(.asn)"' | head -n 5)
                 mapfile -t BANNED_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.banned_ips | reverse | .[] | "\(.ip)|\(.jail)|\(.mitre)|\(.payload)"')
                 TOTAL_BANS=${#BANNED_LIST[@]}
                 
@@ -214,23 +214,27 @@ while true; do
     # --- 3. EVENT-DRIVEN RENDERER (0.0% CPU IDLE) ---
     if (( NEEDS_RENDER == 1 )); then
         OUT=""
-        add_line() { OUT+="${1}\033[K\n"; }
+        add_line() { OUT+="${C_B}│${C_0}${1}\033[${COLS}G${C_B}│${C_0}\n"; }
+        add_sep()  { OUT+="${C_B}├${SEP_H}┤${C_0}\n"; }
+        add_sep_d(){ OUT+="${C_B}├${SEP_D_H}┤${C_0}\n"; }
+        add_top()  { OUT+="${C_B}┌${SEP_H}┐${C_0}\n"; }
+        add_bot()  { OUT+="${C_B}└${SEP_H}┘${C_0}\n"; }
 
         # --- TOP BRANDING NAVBAR ---
-        add_line "${C_B}${SEP}${C_0}"
+        add_top
         add_line "  ${C_W}SYSWARDEN ${SYSWARDEN_VERSION}${C_0}   │   Noise: ${C_G}${NOISE_PCT}${C_0}   │   Signal: ${C_R}${SIGNAL_PCT}${C_0}   │   Stars: ${C_Y}${GH_STARS}${C_0}   │   Release: ${C_C}${GH_RELEASE}${C_0}   │   Node: ${C_W}${SYS_HOST}${C_0}"
-        add_line "${C_B}${SEP_D}${C_0}"
+        add_sep_d
         
         # --- HARDWARE SPECS HEADER PANEL ---
         add_line "  Cores: ${C_W}${SYS_CORES}${C_0}   │   Arch: ${C_W}${SYS_ARCH}${C_0}   │   OS: ${C_W}${SYS_OS}${C_0}   │   CPU: ${C_W}${SYS_CPU}${C_0}   │   Last sync: ${C_Y}$(date -d @$LAST_FETCH_TS +'%H:%M:%S')${C_0}"
         add_line "  Uptime: ${C_C}${SYS_UP}${C_0}   │   Load Avg: ${C_LOAD}${SYS_LOAD}${C_0}   │   RAM: ${C_W}${SYS_RAM_U} / ${SYS_RAM_T} MB${C_0}   │   Storage: ${C_W}$(awk "BEGIN {printf \"%.1f\", $SYS_DISK_U/1024}") / $(awk "BEGIN {printf \"%.1f\", $SYS_DISK_T/1024}") GB${C_0}"
         add_line "  Services: ${SERVICES_STR}"
         add_line "  Ports:    ${C_B}${PORTS_STR}${C_0}"
-        add_line "${C_B}${SEP}${C_0}"
+        add_sep
         add_line ""
         
         # --- LAYER 3 & LAYER 7 GEOMETRIC ALIGNED MATRICES ---
-        W3=$(( COLS / 3 ))
+        W3=$(( (COLS - 4) / 3 ))
         [[ $W3 -lt 30 ]] && W3=30
 
         T1="❖ L3 KERNEL BLOCKS (GLOBAL)"
@@ -249,7 +253,7 @@ while true; do
         add_line "  ${C_D}GeoIP: ${C_W}${L3_GEO}${C_D} │ ASN: ${C_W}${L3_ASN}${C_0}$(pad "$D1" $((W3-2)))${C_D}Active Guard Jails: ${C_W}${L7_JAIL}${C_0}$(pad "$D2" $W3)${C_D}IPs: ${C_G}${WL_IPS_STR}${C_0}"
         
         add_line ""
-        add_line "${C_B}${SEP_D}${C_0}"
+        add_sep_d
         add_line ""
         
         # --- GLOBAL RISK RADAR VECTOR MATRIX ---
@@ -257,11 +261,11 @@ while true; do
         add_line "  ${C_R}Exploits:${C_0} ${R_EXP}   │   ${C_Y}Brute-Force:${C_0} ${R_BF}   │   ${C_B}Recon:${C_0} ${R_REC}   │   ${C_D}DDoS:${C_0} ${R_DOS}   │   ${C_Y}Abuse/Spam:${C_0} ${R_ABU}"
         
         add_line ""
-        add_line "${C_B}${SEP}${C_0}"
+        add_sep
         add_line ""
 
         # --- JAILS LOAD DISTRIBUTION & TOP ATTACKERS SPLIT MATRICES ---
-        HALF_WIDTH=$(( COLS / 2 - 2 ))
+        HALF_WIDTH=$(( (COLS - 4) / 2 - 2 ))
         [[ $HALF_WIDTH -lt 48 ]] && HALF_WIDTH=48
 
         TITLE_L="  ❖ JAILS LOAD DISTRIBUTION"
@@ -269,7 +273,7 @@ while true; do
         add_line "${C_W}${TITLE_L}$(pad "$TITLE_L" $HALF_WIDTH)${TITLE_R}${C_0}"
         
         HEAD_L="  TARGET JAIL             MITRE ATT&CK       LOAD"
-        HEAD_R="  IP ADDRESS            PORT       HITS"
+        HEAD_R="  IP ADDRESS          PORT      COUNTRY   ASN"
         add_line "${C_D}${HEAD_L}$(pad "$HEAD_L" $HALF_WIDTH)${HEAD_R}${C_0}"
 
         for i in {0..4}; do
@@ -281,13 +285,13 @@ while true; do
                 J_LINE=$(printf "  %-23s %-18s %-8s" "${j_name:0:22}" "${j_mitre_short:0:17}" "$j_count")
             fi
             if [[ ${#TOP_LIST[@]} -gt $i ]]; then
-                IFS='|' read -r t_ip t_port t_count <<< "${TOP_LIST[$i]}"
-                T_LINE=$(printf "  %-21s %-10s %-8s" "${t_ip:0:20}" "${t_port:0:9}" "$t_count")
+                IFS='|' read -r t_ip t_port t_country t_asn <<< "${TOP_LIST[$i]}"
+                T_LINE=$(printf "  %-19s %-9s %-9s %-8s" "${t_ip:0:18}" "${t_port:0:8}" "${t_country:0:8}" "${t_asn:0:8}")
             fi
             add_line "${C_C}${J_LINE}${C_0}$(pad "$J_LINE" $HALF_WIDTH)${C_R}${T_LINE}${C_0}"
         done
         
-        add_line "${C_B}${SEP}${C_0}"
+        add_sep
         add_line ""
 
         # --- L7 BANNED IP REGISTRY & RAW SYSTEM LOGS STREAM ENGINE ---
@@ -303,7 +307,7 @@ while true; do
         add_line "${C_D}${HEAD_REG}${C_0}"
 
         USED_LINES=$(echo -ne "$OUT" | wc -l)
-        MAX_BANS=$(( LINES - USED_LINES - 4 ))
+        MAX_BANS=$(( LINES - USED_LINES - 5 ))
         [[ $MAX_BANS -lt 4 ]] && MAX_BANS=4
 
         # Bounds alignment
@@ -319,14 +323,21 @@ while true; do
                     IFS='|' read -r b_ip b_jail b_mitre b_payload <<< "${BANNED_LIST[$IDX]}"
                     b_mitre_short=$(echo "$b_mitre" | cut -d':' -f1)
                     
+                    # Parsing is now handled persistently in the backend telemetry engine
                     P_CLEAN=$(echo "$b_payload" | tr -d '\n\r' | cut -c 1-$W_PAYLOAD)
-                    LINE_STR=$(printf "  %-*s %-*s %-*s %s" "$W_IP" "${b_ip:0:$W_IP}" "$W_JAIL" "${b_jail:0:$W_JAIL}" "$W_MITRE" "${b_mitre_short:0:$W_MITRE}" "$P_CLEAN")
                     
-                    if [[ "$b_payload" =~ "kernel:" || "$b_payload" =~ "SysWarden" ]]; then
-                        add_line "${C_Y}${LINE_STR:0:$((COLS-1))}${C_0}"
-                    else
-                        add_line "${C_W}${LINE_STR:0:$((COLS-1))}${C_0}"
-                    fi
+                    C_VEC=${C_W}
+                    if [[ "$b_jail" =~ (sqli|xss|lfi|revshell|webshell|ssti|ssrf|jndi|modsec|homoglyph) ]]; then C_VEC=${C_R}
+                    elif [[ "$b_jail" =~ (ssh|auth|privesc|prestashop) ]]; then C_VEC=${C_Y}
+                    elif [[ "$b_jail" =~ (scan|bot|mapper|enum|hunter|tls) ]]; then C_VEC=${C_B}
+                    elif [[ "$b_jail" =~ (flood) ]]; then C_VEC=${C_D}
+                    else C_VEC=${C_Y}; fi
+                    
+                    STR_1=$(printf "  %-*s " "$W_IP" "${b_ip:0:$W_IP}")
+                    STR_2=$(printf "%-*s " "$W_JAIL" "${b_jail:0:$W_JAIL}")
+                    STR_3=$(printf "%-*s " "$W_MITRE" "${b_mitre_short:0:$W_MITRE}")
+                    
+                    add_line "${C_W}${STR_1}${C_0}${C_VEC}${STR_2}${STR_3}${C_0}${C_W}${P_CLEAN}${C_0}"
                 else
                     add_line ""
                 fi
@@ -335,16 +346,17 @@ while true; do
 
         # Fill footer
         CURRENT_LINES=$(echo -ne "$OUT" | wc -l)
-        REMAIN=$(( LINES - CURRENT_LINES - 2 ))
+        REMAIN=$(( LINES - CURRENT_LINES - 3 ))
         if [[ $REMAIN -gt 0 ]]; then
             for ((i=0; i<$REMAIN; i++)); do add_line ""; done
         fi
 
-        add_line "${C_B}${SEP}${C_0}"
-        OUT+="  ${C_D}Registry Index: $((SCROLL_OFFSET + 1))-${TOTAL_BANS} of ${TOTAL_BANS} │ Interval: 60s │ Navigate: Up/Down Arrows │ Press 'q' to exit.${C_0}\033[K\033[J"
+        add_sep
+        add_line "  ${C_D}Registry Index: $((SCROLL_OFFSET + 1))-${TOTAL_BANS} of ${TOTAL_BANS} │ Interval: 60s │ Navigate: Up/Down Arrows │ Press 'q' to exit.${C_0}"
+        add_bot
 
         # --- ATOMIC FLUSH TO SCREEN ---
-        echo -ne "\033[H${OUT}"
+        echo -ne "\033[H\033[J${OUT}"
         NEEDS_RENDER=0
     fi
 
@@ -364,7 +376,7 @@ while true; do
             if (( SCROLL_OFFSET < TOTAL_BANS - MAX_BANS )); then SCROLL_OFFSET=$(( SCROLL_OFFSET + 1 )); NEEDS_RENDER=1; fi
         fi
         # Clear residual input buffer to prevent scroll artifacts
-        while read -s -n 1 -t 0.01 _discard; do :; done
+        while read -s -t 0.01; do :; done
     elif [[ "$key" == "q" || "$key" == "Q" ]]; then
         tput cnorm; tput rmcup 2>/dev/null || true; echo -e "${C_0}"; clear; exit 0
     fi

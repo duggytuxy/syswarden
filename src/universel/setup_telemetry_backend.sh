@@ -191,6 +191,7 @@ fi
 L7_TOTAL_BANNED=0; L7_ACTIVE_JAILS=0
 JAILS_JSON="[]"
 BANNED_IPS_JSON="[]"
+ACTIVE_BANNED_IPS=" "
 
 # --- Risk Radar Vectors ---
 R_EXP=0; R_BF=0; R_REC=0; R_DOS=0; R_ABU=0
@@ -256,7 +257,25 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                         # If no logs exist (log rotated or flushed), we do NOT inject the IP into the JSON registry.
                         # This prevents UI pollution and maintains a high Signal-to-Noise Ratio.
                         if [[ -n "$L7_PAYLOAD" ]]; then
-                            BANNED_IPS_JSON=$(echo "$BANNED_IPS_JSON" | jq --arg ip "$IP" --arg j "$JAIL" --arg p "$L7_PAYLOAD" --arg ttp "$MITRE_PAYLOAD" '. + [{"ip": $ip, "jail": $j, "payload": $p, "mitre": $ttp}]')
+                            # --- NATIVE BASH LOG PARSING INJECTION (0.0% CPU) ---
+                            # Parsing injecté directement à la source pour persistance dans le data.json
+                            P_CLEAN="$L7_PAYLOAD"
+                            if [[ "$P_CLEAN" == *"SysWarden-BLOCK"* || "$P_CLEAN" == *"SysWarden-ASN"* || "$P_CLEAN" == *"SysWarden-GEO"* ]]; then
+                                TS_PART="${P_CLEAN%% *}"
+                                TS_PART="${TS_PART%%.*}"
+                                TS_PART="${TS_PART%%+*}"
+                                TS_PART="${TS_PART/T/ }"
+                                SRC_PART="${P_CLEAN##*SRC=}"
+                                SRC_PART="${SRC_PART%% *}"
+                                SPT_PART="N/A"
+                                [[ "$P_CLEAN" == *"SPT="* ]] && { SPT_PART="${P_CLEAN##*SPT=}"; SPT_PART="${SPT_PART%% *}"; }
+                                DPT_PART="N/A"
+                                [[ "$P_CLEAN" == *"DPT="* ]] && { DPT_PART="${P_CLEAN##*DPT=}"; DPT_PART="${DPT_PART%% *}"; }
+                                P_CLEAN="${TS_PART} │ SRC: ${SRC_PART}:${SPT_PART} │ DPT: ${DPT_PART}"
+                            fi
+                            
+                            BANNED_IPS_JSON=$(echo "$BANNED_IPS_JSON" | jq --arg ip "$IP" --arg j "$JAIL" --arg p "$P_CLEAN" --arg ttp "$MITRE_PAYLOAD" '. + [{"ip": $ip, "jail": $j, "payload": $p, "mitre": $ttp}]')
+                            ACTIVE_BANNED_IPS+="${IP} "
                         fi
                     fi
                 done
@@ -272,13 +291,22 @@ TOP_STATS=""
 # FIX BUG: Suppress "Restore Ban" matches to prevent double counting on updates/reloads
 TOP_STATS=$( { 
     cat /var/log/fail2ban.log 2>/dev/null || true
-} | grep -E "\] Ban " | sed -E 's/.*\[([^]]+)\].*Ban ([0-9.]+)/\2 \1/' | sort | uniq -c | sort -nr | head -n 10 || true )
+} | grep -E "\] Ban " | sed -E 's/.*\[([^]]+)\].*Ban ([0-9.]+)/\2 \1/' | sort | uniq -c | sort -nr || true )
 
 if [[ -n "$TOP_STATS" ]]; then
+    TOP_COUNT=0
     while IFS=" " read -r count ip jail; do
         if [[ -n "$ip" && -n "$count" ]]; then
-            PORT="Unknown"
+            # --- REQUIREMENT 1: PURGE UNBANNED IPS FROM HISTORY ---
+            # Si l'IP n'est plus activement bannie dans le registre, on l'efface totalement du top
+            if [[ "$ACTIVE_BANNED_IPS" != *" $ip "* ]]; then
+                continue
+            fi
             
+            # Limite aux 5 attaques majeures pour optimiser les appels API OSINT
+            if (( TOP_COUNT >= 5 )); then break; fi
+
+            PORT="Unknown"
             EXACT_PORT=$(timeout 2 grep -h -F "$ip" /var/log/kern-firewall.log /var/log/kern.log /var/log/syslog /var/log/messages 2>/dev/null | grep -oE 'DPT=[0-9]+' | cut -d= -f2 | sort | uniq -c | sort -nr | awk 'NR==1 {print $2}' || true)
             
             if [[ -n "$EXACT_PORT" ]]; then
@@ -296,7 +324,14 @@ if [[ -n "$TOP_STATS" ]]; then
                 esac
             fi
             
-            TOP_ATTACKERS_JSON=$(echo "$TOP_ATTACKERS_JSON" | jq --arg ip "$ip" --arg p "$PORT" --argjson c "$count" '. + [{"ip": $ip, "port": $p, "count": $c}]')
+            # --- REQUIREMENT 2: SECURE HTTPS OSINT ENRICHMENT (COUNTRY & ASN) ---
+            IP_INFO=$(timeout 1.5 curl -s "https://ipinfo.io/${ip}/json" 2>/dev/null || true)
+            COUNTRY=$(echo "$IP_INFO" | jq -r '.country // "N/A"' 2>/dev/null || echo "N/A")
+            ORG=$(echo "$IP_INFO" | jq -r '.org // "N/A"' 2>/dev/null || echo "N/A")
+            ASN=$(echo "$ORG" | grep -oE '^AS[0-9]+' || echo "N/A")
+            
+            TOP_ATTACKERS_JSON=$(echo "$TOP_ATTACKERS_JSON" | jq --arg ip "$ip" --arg p "$PORT" --arg ctry "$COUNTRY" --arg asn "$ASN" '. + [{"ip": $ip, "port": $p, "country": $ctry, "asn": $asn}]')
+            TOP_COUNT=$((TOP_COUNT + 1))
         fi
     done <<< "$TOP_STATS"
 fi
