@@ -45,7 +45,7 @@ generate_dashboard() {
 set -euo pipefail
 
 # --- VERSION CONFIGURATION ---
-SYSWARDEN_VERSION="v0.36.4"
+SYSWARDEN_VERSION="v0.36.5"
 
 DATA_FILE="/etc/syswarden/ui/data.json"
 
@@ -218,7 +218,7 @@ while true; do
         add_sep()  { OUT+="${C_B}├${SEP_H}┤${C_0}\n"; }
         add_sep_d(){ OUT+="${C_B}├${SEP_D_H}┤${C_0}\n"; }
         add_top()  { OUT+="${C_B}┌${SEP_H}┐${C_0}\n"; }
-        add_bot()  { OUT+="${C_B}└${SEP_H}┘${C_0}\n"; }
+        add_bot()  { OUT+="${C_B}└${SEP_H}┘${C_0}"; } # Removed trailing newline to prevent terminal scrolling bug
 
         # --- TOP BRANDING NAVBAR ---
         add_top
@@ -363,20 +363,22 @@ while true; do
     # --- 4. NON-BLOCKING INPUT KERNEL (0% IDLE CPU) ---
     # `read` will block and idle the CPU for 0.1s natively. If no key, it fails and continues loop.
     if ! read -s -n 1 -t 0.1 key; then
-        sleep 0.1
         continue
     fi
     
     # If a key is pressed, process logic and set NEEDS_RENDER=1 to redraw exactly once.
     if [[ "$key" == $'\x1b' ]]; then
-        read -s -n 2 -t 0.05 next_keys || true
-        if [[ "$next_keys" == "[A" ]]; then
+        # Read the rest of the escape sequence quickly (catches long mouse scroll codes)
+        read -s -n 5 -t 0.05 next_keys || true
+        
+        if [[ "$next_keys" == "[A" || "$next_keys" == "OA" || "$next_keys" =~ "64" || "$next_keys" == "[M "* ]]; then
             if (( SCROLL_OFFSET > 0 )); then SCROLL_OFFSET=$(( SCROLL_OFFSET - 1 )); NEEDS_RENDER=1; fi
-        elif [[ "$next_keys" == "[B" ]]; then
+        elif [[ "$next_keys" == "[B" || "$next_keys" == "OB" || "$next_keys" =~ "65" || "$next_keys" == "[M!"* ]]; then
             if (( SCROLL_OFFSET < TOTAL_BANS - MAX_BANS )); then SCROLL_OFFSET=$(( SCROLL_OFFSET + 1 )); NEEDS_RENDER=1; fi
         fi
-        # Clear residual input buffer to prevent scroll artifacts
-        while read -s -t 0.01; do :; done
+        
+        # Aggressive flush of residual input buffer to prevent scroll artifacts
+        while read -s -n 1 -t 0.01; do :; done
     elif [[ "$key" == "q" || "$key" == "Q" ]]; then
         tput cnorm; tput rmcup 2>/dev/null || true; echo -e "${C_0}"; clear; exit 0
     fi

@@ -265,13 +265,18 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                 TS_PART="${TS_PART%%.*}"
                                 TS_PART="${TS_PART%%+*}"
                                 TS_PART="${TS_PART/T/ }"
+                                
+                                TRIGGER_TYPE="BLOCK"
+                                [[ "$P_CLEAN" == *"SysWarden-ASN"* ]] && TRIGGER_TYPE="ASN"
+                                [[ "$P_CLEAN" == *"SysWarden-GEO"* ]] && TRIGGER_TYPE="GEO"
+                                
                                 SRC_PART="${P_CLEAN##*SRC=}"
                                 SRC_PART="${SRC_PART%% *}"
                                 SPT_PART="N/A"
                                 [[ "$P_CLEAN" == *"SPT="* ]] && { SPT_PART="${P_CLEAN##*SPT=}"; SPT_PART="${SPT_PART%% *}"; }
                                 DPT_PART="N/A"
                                 [[ "$P_CLEAN" == *"DPT="* ]] && { DPT_PART="${P_CLEAN##*DPT=}"; DPT_PART="${DPT_PART%% *}"; }
-                                P_CLEAN="${TS_PART} │ SRC: ${SRC_PART}:${SPT_PART} │ DPT: ${DPT_PART}"
+                                P_CLEAN="${TS_PART} │ SysWarden-${TRIGGER_TYPE} │ SRC: ${SRC_PART}:${SPT_PART} │ DPT: ${DPT_PART}"
                             fi
                             
                             BANNED_IPS_JSON=$(echo "$BANNED_IPS_JSON" | jq --arg ip "$IP" --arg j "$JAIL" --arg p "$P_CLEAN" --arg ttp "$MITRE_PAYLOAD" '. + [{"ip": $ip, "jail": $j, "payload": $p, "mitre": $ttp}]')
