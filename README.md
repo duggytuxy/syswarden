@@ -22,7 +22,7 @@
 
 # SysWarden
 
-**SysWarden** is an enterprise Default-Deny HIPS for Linux. It automates CIS Level 2 hardening, global threat intel, and dynamic defense with near-zero overhead.
+**SysWarden** is an Enterprise-grade Default-Deny Host Intrusion Prevention System (HIPS) designed for critical Linux infrastructure. It enforces automated a part of CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with a near-zero performance overhead.
 
 It acts as a ruthless first line of defense. By fusing dynamic firewall orchestration (`nftables`/`iptables`), global Threat Intelligence ([Data-Shield IPv4](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a reactive HIPS (optimized Fail2ban), and SIEM alert routing, SysWarden filters out Internet "background noise" and neutralizes threats at the network (L2/L3/L4) and application (L7) levels. It perfectly complements modern EDR/XDR architectures by drastically reducing their analysis surface and the server's CPU load.
 
@@ -61,10 +61,20 @@ SysWarden doesn't just stack firewall rules; it orchestrates the Linux network s
 3. **Behavioral L7 Defense (HIPS):** The active defense layer analyzes application logs (via `systemd` journald) in real time. Any behavioral anomaly (brute-force, SQLi, LFI) triggers a surgical "AllPorts" ban that dynamically synchronizes the IP with the hardware drop tables.
 4. **Default-Deny "Catch-All":** The attack surface is hermetically sealed. Any incoming traffic not explicitly authorized by the administrator or the automatic service discovery engine is silently dropped, enforcing a strict Default-Deny doctrine.
 
-## Supported Environments
+## Supported Operating Systems & Firewall Backends
 
-SysWarden is built to run natively across modern Linux infrastructures:
-* **Universal (systemd):** Debian 13+, Ubuntu 24.04+, AlmaLinux, Rocky Linux, CentOS Stream, Fedora.
+SysWarden dynamically adapts to the native firewall orchestration engines of modern enterprise Linux distributions. The architecture relies on deep `systemd` integration and natively binds to the following ecosystems:
+
+| Operating System | Native Firewall Engine(s) Supported | Status |
+| :--- | :--- | :--- |
+| **Ubuntu 24.04+** | `iptables`, `nftables`, `ufw` | Enterprise Ready |
+| **Debian 12+** | `iptables`, `nftables` | Enterprise Ready |
+| **RHEL 9+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
+| **Rocky Linux 9+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
+| **AlmaLinux 9+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
+| **Oracle Linux 10+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
+| **CentOS Stream 9+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
+| **Fedora 40+** | `iptables`, `nftables`, `firewalld` | Production Ready |
 
 ## The "Fortress" Dashboard (TUI & CLI)
 
@@ -79,6 +89,16 @@ SysWarden provides unified terminal-based observability, ensuring total situatio
 **Orchestration & Interactive CLI**
 * **Terminal Management:** Manage your infrastructure directly from the shell via `syswarden-manager` (instant visibility into blocks, whitelists, and rule idempotency).
 * **Structured Installation Logs:** The deployment process provides precise, color-coded visual feedback on OS hardening, SIEM integration, and the successful application of Default-Deny policies.
+
+## Strategic Roadmap
+
+The development lifecycle of SysWarden follows a strict DevSecOps pipeline aimed at reinforcing the observability and interoperability of the Default-Deny architecture.
+
+| Version | Milestone Target | Status |
+| :---: | :--- | :---: |
+| **v0.36.0** | Attack Surface Reduction: Migration from Dashboard UI to isolated Terminal UI (TUI) via `install-syswarden tui`. | `[ Completed ]` |
+| **v0.37.0** | Enterprise SIEM Integration: Syslog output standardization for deterministic log ingestion. | `[ In Progress ]` |
+| **v0.38.0** | Automated Incident Response: Native Webhook integration for L7 threat notifications (Discord / Teams). | `[ Planned ]` |
 
 ## Installation Guide
 
@@ -155,7 +175,7 @@ To learn everything about the SysWarden ecosystem, explore detailed configuratio
 
 ## Target and support
 
-> Goal: €3,500/year to fund continuous DevSecOps improvements and infrastructure.
+> Goal: €5,000/year to fund continuous DevSecOps improvements and infrastructure.
 
 Developing **SysWarden** and maintaining the zero-false-positive **Data-Shield IPv4 blocklists** requires dedicated server infrastructure and non-stop threat monitoring.
 
