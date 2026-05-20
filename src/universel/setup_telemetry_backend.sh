@@ -257,27 +257,9 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                         # If no logs exist (log rotated or flushed), we do NOT inject the IP into the JSON registry.
                         # This prevents UI pollution and maintains a high Signal-to-Noise Ratio.
                         if [[ -n "$L7_PAYLOAD" ]]; then
-                            # --- NATIVE BASH LOG PARSING INJECTION (0.0% CPU) ---
-                            # Parsing injecté directement à la source pour persistance dans le data.json
+                            # --- REQUIREMENT 1: RAW LOGS RETENTION (0.0% CPU) ---
+                            # Le prompt demande explicitement de conserver le log brut complet sans altération.
                             P_CLEAN="$L7_PAYLOAD"
-                            if [[ "$P_CLEAN" == *"SysWarden-BLOCK"* || "$P_CLEAN" == *"SysWarden-ASN"* || "$P_CLEAN" == *"SysWarden-GEO"* ]]; then
-                                TS_PART="${P_CLEAN%% *}"
-                                TS_PART="${TS_PART%%.*}"
-                                TS_PART="${TS_PART%%+*}"
-                                TS_PART="${TS_PART/T/ }"
-                                
-                                TRIGGER_TYPE="BLOCK"
-                                [[ "$P_CLEAN" == *"SysWarden-ASN"* ]] && TRIGGER_TYPE="ASN"
-                                [[ "$P_CLEAN" == *"SysWarden-GEO"* ]] && TRIGGER_TYPE="GEO"
-                                
-                                SRC_PART="${P_CLEAN##*SRC=}"
-                                SRC_PART="${SRC_PART%% *}"
-                                SPT_PART="N/A"
-                                [[ "$P_CLEAN" == *"SPT="* ]] && { SPT_PART="${P_CLEAN##*SPT=}"; SPT_PART="${SPT_PART%% *}"; }
-                                DPT_PART="N/A"
-                                [[ "$P_CLEAN" == *"DPT="* ]] && { DPT_PART="${P_CLEAN##*DPT=}"; DPT_PART="${DPT_PART%% *}"; }
-                                P_CLEAN="${TS_PART} │ SysWarden-${TRIGGER_TYPE} │ SRC: ${SRC_PART}:${SPT_PART} │ DPT: ${DPT_PART}"
-                            fi
                             
                             BANNED_IPS_JSON=$(echo "$BANNED_IPS_JSON" | jq --arg ip "$IP" --arg j "$JAIL" --arg p "$P_CLEAN" --arg ttp "$MITRE_PAYLOAD" '. + [{"ip": $ip, "jail": $j, "payload": $p, "mitre": $ttp}]')
                             ACTIVE_BANNED_IPS+="${IP} "
@@ -292,6 +274,17 @@ fi
 # --- DEVSECOPS: Top 10 Historical Attacking IPs (Aggregated & Bulletproof) ---
 TOP_ATTACKERS_JSON="[]"
 TOP_STATS=""
+
+# Pre-load local OSINT cache from JSON to prevent API Rate-Limiting and track rotated IPs
+declare -A CACHE_COUNTRY
+declare -A CACHE_ASN
+if [[ -f "$DATA_FILE" ]]; then
+    while IFS='|' read -r c_ip c_ctry c_asn; do
+        [[ -z "$c_ip" || "$c_ip" == "null" ]] && continue
+        CACHE_COUNTRY["$c_ip"]="$c_ctry"
+        CACHE_ASN["$c_ip"]="$c_asn"
+    done < <(jq -r '.layer7.top_attackers[]? | "\(.ip)|\(.country)|\(.asn)"' "$DATA_FILE" 2>/dev/null || true)
+fi
 
 # FIX BUG: Suppress "Restore Ban" matches to prevent double counting on updates/reloads
 TOP_STATS=$( { 
@@ -329,11 +322,20 @@ if [[ -n "$TOP_STATS" ]]; then
                 esac
             fi
             
-            # --- REQUIREMENT 2: SECURE HTTPS OSINT ENRICHMENT (COUNTRY & ASN) ---
-            IP_INFO=$(timeout 1.5 curl -s "https://ipinfo.io/${ip}/json" 2>/dev/null || true)
-            COUNTRY=$(echo "$IP_INFO" | jq -r '.country // "N/A"' 2>/dev/null || echo "N/A")
-            ORG=$(echo "$IP_INFO" | jq -r '.org // "N/A"' 2>/dev/null || echo "N/A")
-            ASN=$(echo "$ORG" | grep -oE '^AS[0-9]+' || echo "N/A")
+            # --- REQUIREMENT 2: SECURE HTTPS OSINT ENRICHMENT WITH SMART CACHING ---
+            COUNTRY="${CACHE_COUNTRY["$ip"]:-N/A}"
+            ASN="${CACHE_ASN["$ip"]:-N/A}"
+            
+            if [[ "$COUNTRY" == "N/A" || "$COUNTRY" == "null" ]]; then
+                IP_INFO=$(timeout 1.5 curl -s "https://ipinfo.io/${ip}/json" 2>/dev/null || true)
+                COUNTRY=$(echo "$IP_INFO" | jq -r '.country // "N/A"' 2>/dev/null || echo "N/A")
+                ORG=$(echo "$IP_INFO" | jq -r '.org // "N/A"' 2>/dev/null || echo "N/A")
+                ASN=$(echo "$ORG" | grep -oE '^AS[0-9]+' || echo "N/A")
+                
+                # Save to memory to prevent re-querying in the same minute
+                CACHE_COUNTRY["$ip"]="$COUNTRY"
+                CACHE_ASN["$ip"]="$ASN"
+            fi
             
             TOP_ATTACKERS_JSON=$(echo "$TOP_ATTACKERS_JSON" | jq --arg ip "$ip" --arg p "$PORT" --arg ctry "$COUNTRY" --arg asn "$ASN" '. + [{"ip": $ip, "port": $p, "country": $ctry, "asn": $asn}]')
             TOP_COUNT=$((TOP_COUNT + 1))

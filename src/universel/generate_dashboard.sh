@@ -45,7 +45,7 @@ generate_dashboard() {
 set -euo pipefail
 
 # --- VERSION CONFIGURATION ---
-SYSWARDEN_VERSION="v0.36.5"
+SYSWARDEN_VERSION="v0.36.6"
 
 DATA_FILE="/etc/syswarden/ui/data.json"
 
@@ -85,9 +85,10 @@ pad() {
 }
 
 # --- SIGNAL HANDLING (Graceful Exit) ---
-trap 'tput cnorm; tput rmcup 2>/dev/null || true; echo -e "${C_0}"; clear; exit 0' SIGINT SIGTERM
+trap 'tput cnorm; tput rmcup 2>/dev/null || true; echo -ne "\033[?7h"; echo -e "${C_0}"; clear; exit 0' SIGINT SIGTERM
 tput smcup 2>/dev/null || true # Enter alternate screen buffer to prevent scrollback stacking
 tput civis # Hide cursor
+echo -ne "\033[?7l" # Disable auto-wrap immediately to prevent terminal shifting
 clear
 
 while true; do
@@ -356,7 +357,7 @@ while true; do
         add_bot
 
         # --- ATOMIC FLUSH TO SCREEN ---
-        echo -ne "\033[H\033[J${OUT}"
+        echo -ne "\033[?7l\033[H\033[J${OUT}\033[H"
         NEEDS_RENDER=0
     fi
 
@@ -380,7 +381,7 @@ while true; do
         # Aggressive flush of residual input buffer to prevent scroll artifacts
         while read -s -n 1 -t 0.01; do :; done
     elif [[ "$key" == "q" || "$key" == "Q" ]]; then
-        tput cnorm; tput rmcup 2>/dev/null || true; echo -e "${C_0}"; clear; exit 0
+        tput cnorm; tput rmcup 2>/dev/null || true; echo -ne "\033[?7h"; echo -e "${C_0}"; clear; exit 0
     fi
 done
 EOF
