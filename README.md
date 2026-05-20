@@ -26,7 +26,7 @@
 
 It acts as a ruthless first line of defense. By fusing dynamic firewall orchestration (`nftables`/`iptables`), global Threat Intelligence ([Data-Shield IPv4](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a reactive HIPS (optimized Fail2ban), and SIEM alert routing, SysWarden filters out Internet "background noise" and neutralizes threats at the network (L2/L3/L4) and application (L7) levels. It perfectly complements modern EDR/XDR architectures by drastically reducing their analysis surface and the server's CPU load.
 
-[! NOTE]
+> [!IMPORTANT]
 > Designed for critical infrastructures, SysWarden automates server hardening to accelerate your **ISO 27001, NIS2, and CIS Benchmark** compliance.
 
 ## Enterprise-Grade Features
