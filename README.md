@@ -31,6 +31,8 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 
 ## Enterprise-Grade Features
 
+## Enterprise-Grade Features
+
 **Core Network Defense (Hardware & Layer 2/3)**
 * **L2/L3 Ingress Acceleration:** Injects Threat Intelligence directly into the `netdev` table under `nftables` (or `raw PREROUTING` under `iptables`). Malicious packets are destroyed right at the Network Interface Card (NIC), entirely bypassing kernel routing and the `conntrack` module to guarantee zero CPU impact during volumetric DDoS attacks.
 * **Global Threat Intelligence:** Automatically blocks hostile countries (GeoIP), known cybercrime hosters, and rogue Autonomous System Numbers (ASN), instantly eliminating 97% of unwanted traffic.
@@ -47,12 +49,16 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 * **High Availability (HA) Cluster Sync:** Securely replicates Threat Intelligence states, whitelists, and configurations to passive nodes via an SSH-encrypted cron job.
 
 **Observability & Lifecycle Management**
-* **Real-Time Telemetry:** Monitor active threats, blocked IPs, and system health via a secure, self-hosted Web Dashboard (sterilized against XSS attacks) and a dedicated CLI interface.
+* **Real-Time Telemetry:** Monitor active threats, blocked IPs, and system health via a secure, Dashboard TUI and a dedicated CLI interface.
 * **"Scorched Earth" Surgical Rollback:** The uninstallation routine performs a deep cleanup. It safely reverts all CIS Level 2 configurations (sysctl, modprobe, cron permissions), eradicates custom `netdev` and `raw` tables, and instantly restores the OS to its pristine original state without requiring a reboot.
+
+> [!NOTE]
+> **For CISOs and CIOs (Strategic Impact):** This architecture translates zero-trust policies into strict technical controls. By offloading volumetric mitigation to the network edge (L2/L3) and forwarding only high-fidelity Layer 7 behavioral data, SysWarden drastically reduces SIEM ingestion costs, prevents kernel resource exhaustion, and guarantees operational continuity under hostile conditions.
 
 ## Hardware-Aware Default-Deny Architecture
 
-SysWarden doesn't just stack firewall rules; it orchestrates the Linux network stack to neutralize threats before they consume your resources:
+> [!IMPORTANT]
+> SysWarden doesn't just stack firewall rules; it orchestrates the Linux network stack to neutralize threats before they consume your resources:
 
 1. **L2/L3 Ingress Drop (Priority -500):** OSINT blocklists, hostile ASNs, and GeoIP filtering are applied at the lowest level (NIC hook). Packets are destroyed before state tracking (`conntrack`), preventing table exhaustion and CPU overhead.
 2. **Stateful Fast-Path (Priority 0):** Legitimate established connections and dynamic container traffic (e.g., `DOCKER-USER` chain) are prioritized. This stateful bypass guarantees zero latency for your production application traffic.
