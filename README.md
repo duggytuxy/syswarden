@@ -207,7 +207,7 @@ Properly uninstalls SysWarden while preserving your original, legitimate network
 
 ## Documentation
 
-To learn everything about the SysWarden ecosystem, explore detailed configurations, and read advanced usage guides, visit our [official documentation page](https://syswarden.io/docs/)
+To learn everything about the SysWarden ecosystem, explore detailed configurations, and read advanced usage guides, visit our [official documentation page]([https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial])
 
 ## Target and support
 
