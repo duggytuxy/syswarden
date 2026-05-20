@@ -90,13 +90,14 @@ SysWarden provides unified terminal-based observability, ensuring total situatio
 
 ## Strategic Roadmap
 
-The development lifecycle of SysWarden follows a strict DevSecOps pipeline aimed at reinforcing the observability and interoperability of the Default-Deny architecture.
+> [!NOTE]
+> The development lifecycle of SysWarden follows a strict DevSecOps pipeline aimed at reinforcing the observability and interoperability of the Default-Deny architecture.
 
 | Version | Milestone Target | Status |
 | :---: | :--- | :---: |
-| **v0.36.0** | Attack Surface Reduction: Migration from Dashboard UI to isolated Terminal UI (TUI) via `install-syswarden tui`. | `[ Done ]` |
-| **v0.37.0** | Enterprise SIEM Integration: Syslog output standardization for deterministic log ingestion. | `[ Planned ]` |
-| **v0.38.0** | Automated Incident Response: Native Webhook integration for L7 threat notifications (Discord / Teams). | `[ Planned ]` |
+| **v0.36.0** | Attack Surface Reduction: Migration from Dashboard UI to isolated Terminal UI (TUI) via `syswarden tui`. | ✅ |
+| **v0.37.0** | Enterprise SIEM Integration: Syslog output standardization for deterministic log ingestion. | 🚀 |
+| **v0.38.0** | Automated Incident Response: Native Webhook integration for L7 threat notifications (Discord / Teams). | 📆 |
 
 ## Installation Guide
 
