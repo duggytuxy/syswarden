@@ -125,7 +125,7 @@ cd dist/ || exit
 ./install-syswarden.sh
 ```
 
-### 2. Quick Installation (Packeage .deb & .rpm)
+### 2. Quick Installation (Package .deb & .rpm)
 
 ```bash
 # Download the appropriate package for your distribution and its associated checksum file from the assets below
