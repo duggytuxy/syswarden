@@ -45,7 +45,7 @@ generate_dashboard() {
 set -euo pipefail
 
 # --- VERSION CONFIGURATION ---
-SYSWARDEN_VERSION="v0.36.6"
+SYSWARDEN_VERSION="v0.36.7"
 
 DATA_FILE="/etc/syswarden/ui/data.json"
 
@@ -202,7 +202,7 @@ while true; do
                 [[ -z "$PORTS_STR" ]] && PORTS_STR="No external ports exposed. Architecture is fully locked down."
 
                 mapfile -t JAILS_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.jails_data | sort_by(.count) | reverse | .[] | "\(.name)|\(.mitre)|\(.count)"' | head -n 5)
-                mapfile -t TOP_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.top_attackers[] | "\(.ip)|\(.port)|\(.country)|\(.asn)"' | head -n 5)
+                mapfile -t TOP_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.top_attackers[]? | "\(.ip)|\(.port)|\(.country)|\(.asn)|\(.isp)"' | head -n 5)
                 mapfile -t BANNED_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.banned_ips | reverse | .[] | "\(.ip)|\(.jail)|\(.mitre)|\(.payload)"')
                 TOTAL_BANS=${#BANNED_LIST[@]}
                 
@@ -274,7 +274,7 @@ while true; do
         add_line "${C_W}${TITLE_L}$(pad "$TITLE_L" $HALF_WIDTH)${TITLE_R}${C_0}"
         
         HEAD_L="  TARGET JAIL             MITRE ATT&CK       LOAD"
-        HEAD_R="  IP ADDRESS          PORT      COUNTRY   ASN"
+        HEAD_R="  IP ADDRESS          PORT      COUNTRY   ASN       ISP"
         add_line "${C_D}${HEAD_L}$(pad "$HEAD_L" $HALF_WIDTH)${HEAD_R}${C_0}"
 
         for i in {0..4}; do
@@ -286,8 +286,8 @@ while true; do
                 J_LINE=$(printf "  %-23s %-18s %-8s" "${j_name:0:22}" "${j_mitre_short:0:17}" "$j_count")
             fi
             if [[ ${#TOP_LIST[@]} -gt $i ]]; then
-                IFS='|' read -r t_ip t_port t_country t_asn <<< "${TOP_LIST[$i]}"
-                T_LINE=$(printf "  %-19s %-9s %-9s %-8s" "${t_ip:0:18}" "${t_port:0:8}" "${t_country:0:8}" "${t_asn:0:8}")
+                IFS='|' read -r t_ip t_port t_country t_asn t_isp <<< "${TOP_LIST[$i]}"
+                T_LINE=$(printf "  %-19s %-9s %-9s %-9s %s" "${t_ip:0:18}" "${t_port:0:8}" "${t_country:0:8}" "${t_asn:0:8}" "${t_isp:0:14}")
             fi
             add_line "${C_C}${J_LINE}${C_0}$(pad "$J_LINE" $HALF_WIDTH)${C_R}${T_LINE}${C_0}"
         done

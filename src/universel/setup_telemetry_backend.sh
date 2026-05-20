@@ -275,16 +275,21 @@ fi
 TOP_ATTACKERS_JSON="[]"
 TOP_STATS=""
 
-# Pre-load local OSINT cache from JSON to prevent API Rate-Limiting and track rotated IPs
+# --- ENTERPRISE OSINT CACHE (PERMANENT & OFFLINE) ---
+# We maintain a persistent local file to guarantee we NEVER hit API rate limits.
+# An IP is queried exactly once in the server's lifetime.
+OSINT_CACHE="$UI_DIR/osint_cache.txt"
+[[ ! -f "$OSINT_CACHE" ]] && touch "$OSINT_CACHE"
+
 declare -A CACHE_COUNTRY
 declare -A CACHE_ASN
-if [[ -f "$DATA_FILE" ]]; then
-    while IFS='|' read -r c_ip c_ctry c_asn; do
-        [[ -z "$c_ip" || "$c_ip" == "null" ]] && continue
-        CACHE_COUNTRY["$c_ip"]="$c_ctry"
-        CACHE_ASN["$c_ip"]="$c_asn"
-    done < <(jq -r '.layer7.top_attackers[]? | "\(.ip)|\(.country)|\(.asn)"' "$DATA_FILE" 2>/dev/null || true)
-fi
+declare -A CACHE_ISP
+while IFS='|' read -r c_ip c_ctry c_asn c_isp; do
+    [[ -z "$c_ip" || "$c_ip" == "null" ]] && continue
+    CACHE_COUNTRY["$c_ip"]="$c_ctry"
+    CACHE_ASN["$c_ip"]="$c_asn"
+    CACHE_ISP["$c_ip"]="${c_isp:-N/A}"
+done < "$OSINT_CACHE"
 
 # FIX BUG: Suppress "Restore Ban" matches to prevent double counting on updates/reloads
 TOP_STATS=$( { 
@@ -325,19 +330,32 @@ if [[ -n "$TOP_STATS" ]]; then
             # --- REQUIREMENT 2: SECURE HTTPS OSINT ENRICHMENT WITH SMART CACHING ---
             COUNTRY="${CACHE_COUNTRY["$ip"]:-N/A}"
             ASN="${CACHE_ASN["$ip"]:-N/A}"
+            ISP="${CACHE_ISP["$ip"]:-N/A}"
             
             if [[ "$COUNTRY" == "N/A" || "$COUNTRY" == "null" ]]; then
-                IP_INFO=$(timeout 1.5 curl -s "https://ipinfo.io/${ip}/json" 2>/dev/null || true)
-                COUNTRY=$(echo "$IP_INFO" | jq -r '.country // "N/A"' 2>/dev/null || echo "N/A")
-                ORG=$(echo "$IP_INFO" | jq -r '.org // "N/A"' 2>/dev/null || echo "N/A")
-                ASN=$(echo "$ORG" | grep -oE '^AS[0-9]+' || echo "N/A")
+                # Switch to ipwho.is (No API key, Generous Quota) + Permanent caching
+                IP_INFO=$(timeout 1.5 curl -s "https://ipwho.is/${ip}" 2>/dev/null || true)
+                COUNTRY=$(echo "$IP_INFO" | jq -r '.country_code // "N/A"' 2>/dev/null || echo "N/A")
                 
-                # Save to memory to prevent re-querying in the same minute
-                CACHE_COUNTRY["$ip"]="$COUNTRY"
-                CACHE_ASN["$ip"]="$ASN"
+                ASN_NUM=$(echo "$IP_INFO" | jq -r '.connection.asn // "N/A"' 2>/dev/null || echo "N/A")
+                if [[ "$ASN_NUM" != "N/A" && "$ASN_NUM" != "null" ]]; then
+                    ASN="AS${ASN_NUM}"
+                else
+                    ASN="N/A"
+                fi
+                
+                ISP=$(echo "$IP_INFO" | jq -r '.connection.isp // "N/A"' 2>/dev/null || echo "N/A")
+                
+                # Permanent write-through cache: Never query this IP again across reboots/upgrades
+                if [[ "$COUNTRY" != "N/A" && "$COUNTRY" != "null" ]]; then
+                    CACHE_COUNTRY["$ip"]="$COUNTRY"
+                    CACHE_ASN["$ip"]="$ASN"
+                    CACHE_ISP["$ip"]="$ISP"
+                    echo "${ip}|${COUNTRY}|${ASN}|${ISP}" >> "$OSINT_CACHE"
+                fi
             fi
             
-            TOP_ATTACKERS_JSON=$(echo "$TOP_ATTACKERS_JSON" | jq --arg ip "$ip" --arg p "$PORT" --arg ctry "$COUNTRY" --arg asn "$ASN" '. + [{"ip": $ip, "port": $p, "country": $ctry, "asn": $asn}]')
+            TOP_ATTACKERS_JSON=$(echo "$TOP_ATTACKERS_JSON" | jq --arg ip "$ip" --arg p "$PORT" --arg ctry "$COUNTRY" --arg asn "$ASN" --arg isp "$ISP" '. + [{"ip": $ip, "port": $p, "country": $ctry, "asn": $asn, "isp": $isp}]')
             TOP_COUNT=$((TOP_COUNT + 1))
         fi
     done <<< "$TOP_STATS"
