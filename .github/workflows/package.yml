@@ -15,6 +15,9 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-package:
     name: Compile and Build Packages
