@@ -129,9 +129,12 @@ EOF
     # Serves as the Zero-Trust Catch-All, allowing legitimate traffic first.
     chain input_backend {
         type filter hook input priority filter + 10; policy drop;
-        # Silently drop invalid packets (late FIN/ACK, broken TCP states)
-        # Prevents log flooding and false-positive portscan detections in Catch-All
+        # 1. Silently drop invalid packets (broken TCP states)
         ct state invalid drop
+        # 2. Silently drop TCP connection noise (late FIN-ACK/RST on expired conntrack)
+        # Mimics UFW: Only genuine NEW SYN packets are permitted to reach the Catch-All
+        tcp flags & (fin,syn,rst,ack) != syn ct state new drop
+        # 3. Allow established flows
         ct state established,related accept
         iifname "lo" accept
         ip protocol icmp accept
@@ -641,7 +644,10 @@ EOF
         # --- ESSENTIAL CONNECTION TRACKING (ALWAYS ACTIVE AT TOP) ---
         while iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
         while iptables -D INPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null; do :; done
-        # Insert INVALID drop first so it resides below ESTABLISHED after both are inserted
+        while iptables -D INPUT -p tcp ! --syn -m conntrack --ctstate NEW -j DROP 2>/dev/null; do :; done
+
+        # Insert in reverse order so they stack correctly (ESTABLISHED at top, then INVALID, then NEW !SYN)
+        iptables -I INPUT 1 -p tcp ! --syn -m conntrack --ctstate NEW -j DROP
         iptables -I INPUT 1 -m conntrack --ctstate INVALID -j DROP
         iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
