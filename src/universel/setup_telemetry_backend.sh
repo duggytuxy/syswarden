@@ -248,10 +248,38 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                         if [[ "$JAIL" =~ (recidive) ]]; then
                             L7_PAYLOAD="Repeat Offender (Recidive Module)"
                         else
+                            # --- DEVSECOPS FIX: CONTEXT-AWARE LOG TARGETING ---
+                            # Prevents payload cross-contamination (e.g., an IP banned by a Web Jail showing an SSHd log payload)
+                            # by intelligently scoping the grep target files based on the Jail's application context.
+                            LOG_TARGETS="/var/log/kern-firewall.log /var/log/kern.log /var/log/messages /var/log/syslog /var/log/nginx/access.log /var/log/nginx/error.log /var/log/apache2/access.log /var/log/apache2/error.log /var/log/httpd/access_log /var/log/httpd/error_log /var/log/auth-syswarden.log /var/log/secure /var/log/auth.log /var/log/maillog /var/log/mail.log /var/log/daemon.log /var/log/audit/audit.log"
+                            
+                            case "${JAIL,,}" in
+                                *ssh*|*auth*|*telnet*|*cockpit*|*privesc*) LOG_TARGETS="/var/log/auth.log /var/log/secure /var/log/auth-syswarden.log /var/log/daemon.log /var/log/syslog /var/log/messages" ;;
+                                *portscan*|*flood*|*dos*|*wireguard*|*openvpn*) LOG_TARGETS="/var/log/kern-firewall.log /var/log/kern.log /var/log/syslog /var/log/messages /var/log/openvpn/openvpn.log /var/log/openvpn.log" ;;
+                                *nginx*|*apache*|*web*|*http*|*sqli*|*xss*|*lfi*|*ssti*|*jndi*|*modsec*|*hunter*|*proxy*|*scan*|*enum*|*bot*|*prestashop*|*atlassian*|*webshell*|*homoglyph*|*tls*|*dolibarr*|*phpmyadmin*|*apimapper*|*drupal*|*wordpress*) LOG_TARGETS="/var/log/nginx/access.log /var/log/nginx/error.log /var/log/apache2/access.log /var/log/apache2/error.log /var/log/httpd/access_log /var/log/httpd/error_log /var/log/syslog /var/log/messages" ;;
+                                *mail*|*postfix*|*dovecot*|*exim*|*sendmail*) LOG_TARGETS="/var/log/maillog /var/log/mail.log /var/log/syslog /var/log/messages" ;;
+                                *mysql*|*mariadb*|*redis*|*mongodb*|*rabbitmq*) LOG_TARGETS="/var/log/mysql/error.log /var/log/mariadb/mariadb.log /var/log/redis/redis-server.log /var/log/redis/redis.log /var/log/mongodb/mongod.log /var/log/rabbitmq/rabbit@*.log /var/log/rabbitmq/rabbitmq.log /var/log/syslog /var/log/messages /var/log/daemon.log" ;;
+                                *vsftpd*|*ftp*) LOG_TARGETS="/var/log/vsftpd.log /var/log/auth.log /var/log/secure /var/log/messages" ;;
+                                *auditd*) LOG_TARGETS="/var/log/audit/audit.log /var/log/auth.log /var/log/syslog" ;;
+                                *proxmox*) LOG_TARGETS="/var/log/daemon.log /var/log/syslog /var/log/auth.log" ;;
+                                *asterisk*) LOG_TARGETS="/var/log/asterisk/messages /var/log/asterisk/full /var/log/syslog" ;;
+                                *zabbix*) LOG_TARGETS="/var/log/zabbix/zabbix_server.log /var/log/syslog" ;;
+                                *haproxy*) LOG_TARGETS="/var/log/haproxy.log /var/log/syslog" ;;
+                                *squid*) LOG_TARGETS="/var/log/squid/access.log /var/log/syslog" ;;
+                                *gitea*|*forgejo*) LOG_TARGETS="/var/log/gitea/gitea.log /var/log/forgejo/forgejo.log" ;;
+                                *jenkins*) LOG_TARGETS="/var/log/jenkins/jenkins.log" ;;
+                                *gitlab*) LOG_TARGETS="/var/log/gitlab/gitlab-rails/application.log /var/log/gitlab/gitlab-rails/auth.log" ;;
+                                *vaultwarden*) LOG_TARGETS="/var/log/vaultwarden/vaultwarden.log /vw-data/vaultwarden.log /opt/vaultwarden/vaultwarden.log /var/log/syslog" ;;
+                                *sso*|*authelia*|*authentik*) LOG_TARGETS="/var/log/authelia/authelia.log /var/log/authentik/authentik.log /opt/authelia/authelia.log /opt/authentik/authentik.log" ;;
+                                *odoo*) LOG_TARGETS="/var/log/odoo/odoo-server.log /var/log/odoo/odoo.log" ;;
+                                *nextcloud*) LOG_TARGETS="/var/www/nextcloud/data/nextcloud.log /var/www/html/nextcloud/data/nextcloud.log /var/www/html/data/nextcloud.log" ;;
+                                *laravel*) LOG_TARGETS="/var/www/html/storage/logs/laravel.log /var/www/storage/logs/laravel.log" ;;
+                                *grafana*) LOG_TARGETS="/var/log/grafana/grafana.log /var/log/syslog" ;;
+                            esac
+
                             # HOTFIX: Filter out Hardware L2/L3 drops (GEO, ASN, and raw BLOCK without Catch-All).
-                            # This guarantees the telemetry extracts the true L7 application log or the explicit L4 Catch-All trigger,
-                            # preventing UI confusion where portscan bans seem associated with pure GEO/BLOCK drops.
-                            L7_PAYLOAD=$(timeout 1 grep -h -F "$IP" /var/log/kern-firewall.log /var/log/kern.log /var/log/messages /var/log/syslog /var/log/nginx/access.log /var/log/nginx/error.log /var/log/apache2/access.log /var/log/apache2/error.log /var/log/httpd/access_log /var/log/httpd/error_log /var/log/auth-syswarden.log /var/log/secure /var/log/auth.log /var/log/maillog /var/log/mail.log /var/log/daemon.log /var/log/audit/audit.log 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
+                            # This guarantees the telemetry extracts the true L7 application log or the explicit L4 Catch-All trigger.
+                            L7_PAYLOAD=$(timeout 1 grep -h -F "$IP" $LOG_TARGETS 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
                         fi
                         
                         L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
