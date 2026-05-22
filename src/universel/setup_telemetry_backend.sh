@@ -301,15 +301,22 @@ TOP_STATS=$( {
 
 if [[ -n "$TOP_STATS" ]]; then
     TOP_COUNT=0
+    SEEN_IPS=" "
     while IFS=" " read -r count ip jail; do
         if [[ -n "$ip" && -n "$count" ]]; then
             # --- REQUIREMENT 1: PURGE UNBANNED IPS FROM HISTORY ---
-            # Si l'IP n'est plus activement bannie dans le registre, on l'efface totalement du top
             if [[ "$ACTIVE_BANNED_IPS" != *" $ip "* ]]; then
                 continue
             fi
             
-            # Limite aux 5 attaques majeures pour optimiser les appels API OSINT
+            # --- REQUIREMENT 3: DEDUPLICATE IPS ACROSS MULTIPLE JAILS ---
+            # Prevents an IP banned by multiple distinct jails from appearing multiple times in the Top Attackers JSON
+            if [[ "$SEEN_IPS" == *" $ip "* ]]; then
+                continue
+            fi
+            SEEN_IPS+="$ip "
+            
+            # 5 attackers limit API OSINT
             if (( TOP_COUNT >= 5 )); then break; fi
 
             PORT="Unknown"

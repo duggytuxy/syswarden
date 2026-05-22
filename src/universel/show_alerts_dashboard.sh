@@ -123,12 +123,11 @@ show_alerts_dashboard() {
             act_color = ($0 ~ /Ban/) ? "\033[1;31m" : "\033[1;35m"
             
             ip = "Unknown"
-            # Universal IPv4/IPv6 Extraction bound to the Found/Ban keyword
+            # Universal IPv4/IPv6 Extraction strictly removing the prefix
             if (match($0, /(Found|Ban)[ \t]+[0-9a-fA-F:.]+/)) {
                 str = substr($0, RSTART, RLENGTH)
-                if (match(str, /[0-9a-fA-F:.]+/)) {
-                    ip = substr(str, RSTART, RLENGTH)
-                }
+                sub(/(Found|Ban)[ \t]+/, "", str)
+                ip = str
             }
             
             printf "\033[1;30m%-19s\033[0m | \033[1;35m%-16s\033[0m | %s%-10s\033[0m | \033[1;33m%-15s\033[0m | \033[1;36mJAIL: %s\033[0m\n", date, "FAIL2BAN WAF", act_color, act, ip, jail
