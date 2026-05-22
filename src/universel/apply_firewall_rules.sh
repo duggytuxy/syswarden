@@ -143,9 +143,13 @@ EOF
 
         # --- ZERO TRUST: DYNAMIC ALLOW & CATCH-ALL DROP ---
         if [[ -n "$ACTIVE_PORTS" ]] && [[ "$ACTIVE_PORTS" != "none" ]]; then
-            echo "        tcp dport { ${SSH_PORT:-22}, 9999, $ACTIVE_PORTS } accept" >>"$TMP_DIR/syswarden.nft"
+            echo "        tcp dport { ${SSH_PORT:-22}, $ACTIVE_PORTS } accept" >>"$TMP_DIR/syswarden.nft"
+            # QUIC / HTTP3 Support: Open UDP if port 443 is active
+            if [[ ",${ACTIVE_PORTS// /}," == *",443,"* ]]; then
+                echo "        udp dport 443 accept comment \"SysWarden: QUIC / HTTP3 Support\"" >>"$TMP_DIR/syswarden.nft"
+            fi
         else
-            echo "        tcp dport { ${SSH_PORT:-22}, 9999 } accept" >>"$TMP_DIR/syswarden.nft"
+            echo "        tcp dport { ${SSH_PORT:-22} } accept" >>"$TMP_DIR/syswarden.nft"
         fi
 
         # --- HOTFIX: WG BACKEND SURVIVAL ---
@@ -419,6 +423,10 @@ EOF
             for port in $(echo "$ACTIVE_PORTS" | tr ',' ' '); do
                 # HOTFIX: Use dynamic ACTIVE_ZONE instead of hardcoded public
                 firewall-cmd --permanent --zone="$ACTIVE_ZONE" --add-port="${port}/tcp" >/dev/null 2>&1 || true
+                # QUIC / HTTP3 Support: Open UDP if port 443 is active
+                if [[ "$port" == "443" ]]; then
+                    firewall-cmd --permanent --zone="$ACTIVE_ZONE" --add-port="443/udp" >/dev/null 2>&1 || true
+                fi
             done
         fi
 
@@ -531,6 +539,10 @@ EOF
         if [[ -n "$ACTIVE_PORTS" ]] && [[ "$ACTIVE_PORTS" != "none" ]]; then
             for port in $(echo "$ACTIVE_PORTS" | tr ',' ' '); do
                 ufw allow "${port}/tcp" >/dev/null 2>&1 || true
+                # QUIC / HTTP3 Support: Open UDP if port 443 is active
+                if [[ "$port" == "443" ]]; then
+                    ufw allow "443/udp" >/dev/null 2>&1 || true
+                fi
             done
         fi
 
@@ -618,6 +630,12 @@ EOF
         if [[ -n "$ACTIVE_PORTS" ]] && [[ "$ACTIVE_PORTS" != "none" ]]; then
             while iptables -D INPUT -p tcp -m multiport --dports "$ACTIVE_PORTS" -j ACCEPT 2>/dev/null; do :; done
             iptables -I INPUT 1 -p tcp -m multiport --dports "$ACTIVE_PORTS" -j ACCEPT
+
+            # QUIC / HTTP3 Support: Open UDP if port 443 is active
+            if [[ ",${ACTIVE_PORTS// /}," == *",443,"* ]]; then
+                while iptables -D INPUT -p udp --dport 443 -j ACCEPT 2>/dev/null; do :; done
+                iptables -I INPUT 1 -p udp --dport 443 -j ACCEPT
+            fi
         fi
         # -----------------------------------------------------------------------
 
