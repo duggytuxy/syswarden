@@ -110,7 +110,7 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 | Version | Milestone Target | Status |
 | :---: | :--- | :---: |
 | **v0.36.0** | Attack Surface Reduction: Migration from Dashboard UI to isolated Terminal UI (TUI) via `syswarden tui`. | ✅ |
-| **v0.37.0** | Enterprise SIEM Integration: Syslog output standardization for deterministic log ingestion. | ✅ |
+| **v0.37.1** | Enterprise SIEM Integration: Syslog output standardization for deterministic log ingestion. | ✅ |
 | **v0.38.0** | Automated Incident Response: Native Webhook integration for L7 threat notifications (Discord / Teams). | 📆 |
 
 ## Installation Guide

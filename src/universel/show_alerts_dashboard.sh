@@ -112,21 +112,21 @@ show_alerts_dashboard() {
             }
             
             jail = "Unknown"
-            if (match($0, /\[[-_A-Za-z0-9]+\] (Found|Ban) /)) {
+            if (match($0, /\[[A-Za-z0-9_.-]+\][ \t]+(Found|Ban)/)) {
                 str = substr($0, RSTART, RLENGTH)
-                if (match(str, /\[[-_A-Za-z0-9]+\]/)) {
+                if (match(str, /\[[A-Za-z0-9_.-]+\]/)) {
                     jail = substr(str, RSTART+1, RLENGTH-2)
                 }
             }
             
-            act = ($0 ~ /Ban /) ? "BANNED" : "DETECTED"
-            act_color = ($0 ~ /Ban /) ? "\033[1;31m" : "\033[1;35m"
+            act = ($0 ~ /Ban/) ? "BANNED" : "DETECTED"
+            act_color = ($0 ~ /Ban/) ? "\033[1;31m" : "\033[1;35m"
             
             ip = "Unknown"
-            # Strict IPv4 Extraction bound to the Found/Ban keyword
-            if (match($0, /(Found|Ban)[ \t]+[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+            # Universal IPv4/IPv6 Extraction bound to the Found/Ban keyword
+            if (match($0, /(Found|Ban)[ \t]+[0-9a-fA-F:.]+/)) {
                 str = substr($0, RSTART, RLENGTH)
-                if (match(str, /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) {
+                if (match(str, /[0-9a-fA-F:.]+/)) {
                     ip = substr(str, RSTART, RLENGTH)
                 }
             }
