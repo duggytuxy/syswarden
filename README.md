@@ -65,10 +65,11 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 > [!IMPORTANT]
 > SysWarden doesn't just stack firewall rules; it orchestrates the Linux network stack to neutralize threats before they consume your resources:
 
-1. **L2/L3 Ingress Drop (Priority -500):** OSINT blocklists, hostile ASNs, and GeoIP filtering are applied at the lowest level (NIC hook). Packets are destroyed before state tracking (`conntrack`), preventing table exhaustion and CPU overhead.
-2. **Stateful Fast-Path (Priority 0):** Legitimate established connections and dynamic container traffic (e.g., `DOCKER-USER` chain) are prioritized. This stateful bypass guarantees zero latency for your production application traffic.
-3. **Behavioral L7 Defense (HIPS):** The active defense layer analyzes application logs (via `systemd` journald) in real time. Any behavioral anomaly (brute-force, SQLi, LFI) triggers a surgical "AllPorts" ban that dynamically synchronizes the IP with the hardware drop tables.
-4. **Default-Deny "Catch-All":** The attack surface is hermetically sealed. Any incoming traffic not explicitly authorized by the administrator or the automatic service discovery engine is silently dropped, enforcing a strict Default-Deny doctrine.
+1. **L2/L3 Ingress Drop (Priority -500):** OSINT blocklists, hostile ASNs, and GeoIP filtering are applied at the lowest hardware level (NIC Ingress hook). Packets are destroyed before entering kernel routing or state tracking (`conntrack`), preventing memory exhaustion and guaranteeing zero CPU impact during volumetric attacks.
+2. **Stateful Purification (Priority -10):** Prevents log flooding and false-positive portscan detections in highly federated networks (CGNAT). Silently destroys late `FIN-ACK`/`RST` packets on expired `conntrack` sessions, and strictly drops invalid TCP connection noise (e.g., `NEW` packets lacking the `SYN` flag).
+3. **Stateful Fast-Path (Priority 0):** Legitimate established connections, dynamic container traffic (e.g., `DOCKER-USER` chain), and Web Protocol Datagrams (HTTP/3 QUIC mapped to UDP/443) are prioritized. This stateful bypass guarantees zero latency for your production application traffic.
+4. **Behavioral L7 Defense (HIPS):** The active defense layer analyzes application logs (via `systemd` journald) in real time. Any behavioral anomaly (brute-force, SQLi, LFI) triggers a surgical "AllPorts" ban that dynamically synchronizes the IP with the hardware drop tables.
+5. **Default-Deny "Catch-All":** The attack surface is hermetically sealed. Any incoming traffic not explicitly authorized by the administrator or the automatic service discovery engine is silently dropped, enforcing a strict Default-Deny doctrine.
 
 ## Supported Operating Systems & Firewall Backends
 
@@ -76,14 +77,15 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 
 | Operating System | Native Firewall Engine(s) Supported | Status |
 | :--- | :--- | :--- |
-| **Ubuntu 24.04+** | `iptables`, `nftables`, `ufw` | Enterprise Ready |
-| **Debian 12+** | `iptables`, `nftables` | Enterprise Ready |
-| **RHEL 9+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
-| **Rocky Linux 9+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
-| **AlmaLinux 9+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
-| **Oracle Linux 10+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
-| **CentOS Stream 9+** | `iptables`, `nftables`, `firewalld` | Enterprise Ready |
-| **Fedora 40+** | `iptables`, `nftables`, `firewalld` | Production Ready |
+| **Debian 13 (Trixie)** | `nftables`, `iptables` | Enterprise Ready |
+| **Debian 12 (Bookworm)** | `nftables`, `iptables` | Enterprise Ready |
+| **Ubuntu 24.04+** | `ufw`, `nftables`, `iptables` | Enterprise Ready |
+| **RHEL 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
+| **Rocky Linux 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
+| **AlmaLinux 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
+| **Oracle Linux 10+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
+| **CentOS Stream 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
+| **Fedora 40+** | `firewalld`, `nftables`, `iptables` | Production Ready |
 
 ## The "Fortress" Dashboard (TUI & CLI)
 
