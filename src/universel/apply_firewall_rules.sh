@@ -133,7 +133,7 @@ EOF
         ct state invalid drop
         # 2. Silently drop TCP connection noise (late FIN-ACK/RST on expired conntrack)
         # Mimics UFW: Only genuine NEW SYN packets are permitted to reach the Catch-All
-        tcp flags & (fin,syn,rst,ack) != syn ct state new drop
+        tcp flags & (fin|syn|rst|ack) != syn ct state new drop
         # 3. Allow established flows
         ct state established,related accept
         iifname "lo" accept
