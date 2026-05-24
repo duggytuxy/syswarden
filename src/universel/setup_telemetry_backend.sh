@@ -279,34 +279,45 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             esac
 
                             # --- DEVSECOPS FIX: HIGH-VOLUME DDOS LOG PARSING (O(1) OPTIMIZED) ---
-                            # A standard 'grep' scanning from top to bottom times out on massive files.
-                            # Previously, 'tail -n 10000' was used, but heavy web floods pushed the banned IP 
-                            # out of the 10k window before the cron executed.
-                            # Fix: Extract 500,000 lines (near instant via lseek) with a 2s timeout buffer, 
-                            # guaranteeing deep payload extraction without reading GBs of historical data.
-                            # HOTFIX: Added '-q' to prevent file header contamination when matching multiple Virtual Host globs.
-                            L7_PAYLOAD=$(timeout 2 tail -q -n 500000 $LOG_TARGETS 2>/dev/null | grep -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
+                            # Lowered tail buffer to 100,000 lines to prevent 'timeout' killing the process on slow I/O,
+                            # while increasing the timeout window to 4 seconds for safety.
+                            # Added '-q' to prevent file header contamination when matching multiple Virtual Host globs.
+                            L7_PAYLOAD=$(timeout 4 tail -q -n 100000 $LOG_TARGETS 2>/dev/null | grep -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
                             
-                            # Fallback to systemd-journald (fast reverse parsing) if flat files are missing or rotated
+                            # Fallback 1: systemd-journald (fast reverse parsing)
                             if [[ -z "$L7_PAYLOAD" ]] && command -v journalctl >/dev/null 2>&1; then
-                                L7_PAYLOAD=$(timeout 2 journalctl -q --no-pager -r -n 500000 2>/dev/null | grep -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                L7_PAYLOAD=$(timeout 3 journalctl -q --no-pager -r -n 100000 2>/dev/null | grep -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
                             fi
                         fi
                         
                         L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
 
-                        # --- DEVSECOPS FIX: STATEFUL PAYLOAD RETENTION (PREVENT ROTATION/UPGRADE LOSS) ---
+                        # --- DEVSECOPS FIX: CACHE POISONING PREVENTION & STATEFUL RETENTION ---
                         # If live log parsing failed (due to log rotation, system reboot, or update cycle),
                         # we attempt to recover the historically cached payload from the existing data.json.
                         if [[ -z "$L7_PAYLOAD" ]] && [[ -f "$DATA_FILE" ]]; then
-                            L7_PAYLOAD=$(jq -r --arg ip "$IP" --arg j "$JAIL" '.layer7.banned_ips[]? | select(.ip == $ip and .jail == $j) | .payload' "$DATA_FILE" 2>/dev/null | head -n 1 || true)
-                            [[ "$L7_PAYLOAD" == "null" ]] && L7_PAYLOAD=""
+                            CACHE_PAYLOAD=$(jq -r --arg ip "$IP" --arg j "$JAIL" '.layer7.banned_ips[]? | select(.ip == $ip and .jail == $j) | .payload' "$DATA_FILE" 2>/dev/null | head -n 1 || true)
+                            
+                            # Strict validation to prevent looping error messages into the cache
+                            if [[ "$CACHE_PAYLOAD" != "null" ]] && [[ -n "$CACHE_PAYLOAD" ]] && [[ "$CACHE_PAYLOAD" != *"Payload context unavailable"* ]] && [[ "$CACHE_PAYLOAD" != *"Manual ban"* ]]; then
+                                L7_PAYLOAD="$CACHE_PAYLOAD"
+                            fi
                         fi
                         
-                        # --- DEVSECOPS FIX: PREVENT ORPHANED IPS DESYNC ---
-                        # If logs are fully purged, rotated, or missing, we MUST STILL inject the IP to avoid UI desync.
+                        # --- DEVSECOPS FIX: DEEP FORENSIC EXTRACTION (LOG ROTATION SURVIVAL) ---
+                        # Triggered ONLY if live extraction and cache both failed (e.g., after an upgrade/logrotate combo).
+                        # Scans historically rotated logs via zgrep to guarantee payload recovery.
                         if [[ -z "$L7_PAYLOAD" ]]; then
-                            L7_PAYLOAD="Payload context unavailable (Log rotated, systemd-journald missing, or manual ban)"
+                            # Append wildcard to dynamically scan rotated/compressed files (e.g., access.log.1, access.log.2.gz)
+                            DEEP_TARGETS=$(echo "$LOG_TARGETS" | sed 's/\.log/.log*/g; s/_log/_log*/g; s/\/messages/\/messages*/g; s/\/secure/\/secure*/g')
+                            L7_PAYLOAD=$(timeout 6 zgrep -h -a -F "$IP" $DEEP_TARGETS 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
+                            L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
+                        fi
+                        
+                        # --- DEVSECOPS FIX: PREVENT ORPHANED IPS DESYNC (ULTIMATE FALLBACK) ---
+                        # If logs are fully purged, or it is a manual CLI ban without traffic.
+                        if [[ -z "$L7_PAYLOAD" ]]; then
+                            L7_PAYLOAD="Payload context unavailable (Manual ban via CLI or absolute log purge)"
                         fi
                         
                         # --- REQUIREMENT 1: RAW LOGS RETENTION (0.0% CPU) ---
