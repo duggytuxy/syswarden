@@ -24,6 +24,12 @@ if ! flock -n 9; then
 fi
 # ---------------------------------------------------------
 
+# --- DEVSECOPS FIX: CRON PATH ISOLATION ---
+# Cron executes with a highly restricted PATH (/usr/bin:/bin). System binaries like
+# nginx, apache2, and iptables reside in /usr/sbin. We must expand the PATH globally 
+# BEFORE any command or package manager is invoked.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 # --- Configuration Paths ---
 SYSWARDEN_DIR="/etc/syswarden"
 UI_DIR="/etc/syswarden/ui"
@@ -68,19 +74,26 @@ L3_GLOBAL=0; L3_GEOIP=0; L3_ASN=0
 SRV_F2B=$(pgrep -f fail2ban-server >/dev/null && echo "active" || echo "offline")
 SRV_CRON=$(pgrep -f "cron|crond" >/dev/null && echo "active" || echo "offline")
 
-# --- Mutually Exclusive Web Server Tracking (XOR) ---
-# Check for Apache
-if command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; then
+# --- DEVSECOPS FIX: SMART ACTIVE WEB SERVER TRACKING ---
+# Replaced static XOR 'command -v' which failed if dual binaries (e.g. Apache + Nginx) 
+# were installed. Now dynamically checks the running process state first to prioritize 
+# the genuinely active daemon.
+if pgrep "nginx" >/dev/null 2>&1; then
+    WEB_NAME="nginx (worker)"
+    WEB_PATH=$(command -v nginx || echo "/usr/sbin/nginx")
+    WEB_STATUS="active"
+elif pgrep "apache2|httpd" >/dev/null 2>&1; then
     WEB_NAME="apache (worker)"
-    WEB_PATH="/usr/sbin/httpd"
-    [[ -f /usr/sbin/apache2 ]] && WEB_PATH="/usr/sbin/apache2"
-    WEB_STATUS=$(pgrep -f "apache2|httpd" >/dev/null && echo "active" || echo "offline")
-# Check for Nginx
+    WEB_PATH=$(command -v apache2 || command -v httpd || echo "/usr/sbin/apache2")
+    WEB_STATUS="active"
 elif command -v nginx >/dev/null 2>&1; then
     WEB_NAME="nginx (worker)"
-    WEB_PATH="/usr/sbin/nginx"
-    WEB_STATUS=$(pgrep -f "nginx" >/dev/null && echo "active" || echo "offline")
-# No web server installed
+    WEB_PATH=$(command -v nginx)
+    WEB_STATUS="offline"
+elif command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; then
+    WEB_NAME="apache (worker)"
+    WEB_PATH=$(command -v apache2 || command -v httpd)
+    WEB_STATUS="offline"
 else
     WEB_NAME="web-server (none)"
     WEB_PATH="none"
@@ -117,8 +130,6 @@ fi
 FW_NAME="Unknown Firewall"
 FW_PATH="unknown"
 FW_STATUS="offline"
-
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"; then
     FW_NAME="ufw (Uncomplicated Firewall)"
@@ -363,10 +374,13 @@ while IFS='|' read -r c_ip c_ctry c_asn c_isp; do
     CACHE_ISP["$c_ip"]="${c_isp:-N/A}"
 done < "$OSINT_CACHE"
 
-# FIX BUG: Suppress "Restore Ban" matches to prevent double counting on updates/reloads
-TOP_STATS=$( { 
-    cat /var/log/fail2ban.log 2>/dev/null || true
-} | grep -E "\] Ban " | sed -E 's/.*\[([^]]+)\].*Ban ([0-9.]+)/\2 \1/' | sort | uniq -c | sort -nr || true )
+# --- DEVSECOPS FIX: PREVENT MIDNIGHT LOGROTATE WIPEOUT ---
+# The default logrotate moves fail2ban.log to fail2ban.log.1 at 00:00.
+# Reading only the active file causes the Top Attackers UI to reset to zero every night.
+# FIX: We dynamically read the 4 most recent archives (flat or compressed) using zcat, 
+# ensuring a stable rolling history across midnight boundaries. 
+# (Unbanned IPs are filtered out automatically by REQUIREMENT 1 below).
+TOP_STATS=$(zcat -f $(ls -1t /var/log/fail2ban.log* 2>/dev/null | head -n 4) 2>/dev/null | grep -aE "\] Ban " | sed -E 's/.*\[([^]]+)\].*Ban ([0-9.]+)/\2 \1/' | sort | uniq -c | sort -nr || true)
 
 if [[ -n "$TOP_STATS" ]]; then
     TOP_COUNT=0
