@@ -290,11 +290,19 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                         fi
                         
                         L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
+
+                        # --- DEVSECOPS FIX: STATEFUL PAYLOAD RETENTION (PREVENT ROTATION/UPGRADE LOSS) ---
+                        # If live log parsing failed (due to log rotation, system reboot, or update cycle),
+                        # we attempt to recover the historically cached payload from the existing data.json.
+                        if [[ -z "$L7_PAYLOAD" ]] && [[ -f "$DATA_FILE" ]]; then
+                            L7_PAYLOAD=$(jq -r --arg ip "$IP" --arg j "$JAIL" '.layer7.banned_ips[]? | select(.ip == $ip and .jail == $j) | .payload' "$DATA_FILE" 2>/dev/null | head -n 1 || true)
+                            [[ "$L7_PAYLOAD" == "null" ]] && L7_PAYLOAD=""
+                        fi
                         
                         # --- DEVSECOPS FIX: PREVENT ORPHANED IPS DESYNC ---
                         # If logs are fully purged, rotated, or missing, we MUST STILL inject the IP to avoid UI desync.
                         if [[ -z "$L7_PAYLOAD" ]]; then
-                            L7_PAYLOAD="Payload context unavailable (Log rotated, flushed, or manual ban)"
+                            L7_PAYLOAD="Payload context unavailable (Log rotated, systemd-journald missing, or manual ban)"
                         fi
                         
                         # --- REQUIREMENT 1: RAW LOGS RETENTION (0.0% CPU) ---

@@ -6,15 +6,26 @@ syswarden_jail_httpflood() {
 
     log "INFO" "Web access logs detected. Enabling Layer 7 Anti-DDoS Guard."
 
-    # Create Filter for HTTP Request Rate Limiting
-    if [[ ! -f "/etc/fail2ban/filter.d/syswarden-httpflood.conf" ]]; then
-        cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-httpflood.conf
+    # --- DEVSECOPS FIX: DYNAMIC WHITELIST INJECTION FOR L7 FLOOD ---
+    # Convert whitelist file to a regex pattern to prevent Fail2ban from evaluating
+    # whitelisted IPs. This eliminates "Found" log spam and UI 'DETECTED' false positives.
+    local WL_REGEX=""
+    if [[ -f "/etc/syswarden/whitelist.txt" ]]; then
+        WL_REGEX=$(grep -vE '^\s*#|^\s*$' /etc/syswarden/whitelist.txt | awk '{print $1}' | sed 's/\./\\./g' | tr '\n' '|' | sed 's/|$//')
+    fi
+
+    local IGNORE_LINE="ignoreregex ="
+    if [[ -n "$WL_REGEX" ]]; then
+        IGNORE_LINE="ignoreregex = ^($WL_REGEX) "
+    fi
+
+    # Always overwrite to ensure filter stays in sync with whitelist updates
+    cat <<EOF >/etc/fail2ban/filter.d/syswarden-httpflood.conf
 [Definition]
 # Generic request match for high-frequency counting
 failregex = ^<HOST> \S+ \S+ \[
-ignoreregex = 
+$IGNORE_LINE
 EOF
-    fi
 
     # Write directly to jail.d
     # High maxretry paired with very short findtime to catch flooding bursts

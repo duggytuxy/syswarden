@@ -123,9 +123,34 @@ check_upgrade() {
         cd /
         rm -rf "$UPGRADE_DIR"
 
-        echo -e "${GREEN}In-place upgrade sequence initiated. Handing over to the new version...${NC}"
+        # --- DEVSECOPS FIX: TELEMETRY STATE BACKUP ---
+        # Safeguards historical payloads and OSINT cache from being wiped during upgrade reinitialization
+        local STATE_BACKUP_DIR="/tmp/syswarden_state_backup"
+        rm -rf "$STATE_BACKUP_DIR"
+        mkdir -p "$STATE_BACKUP_DIR"
 
-        # --- EXECUTE NEW VERSION (PROCESS HANDOFF) ---
-        exec bash "$current_script" update
+        if [[ -f "/etc/syswarden/ui/data.json" ]]; then
+            cp -f "/etc/syswarden/ui/data.json" "$STATE_BACKUP_DIR/data.json.bak"
+        fi
+        if [[ -f "/etc/syswarden/ui/osint_cache.txt" ]]; then
+            cp -f "/etc/syswarden/ui/osint_cache.txt" "$STATE_BACKUP_DIR/osint_cache.txt.bak"
+        fi
+
+        echo -e "${GREEN}In-place upgrade sequence initiated. Executing the new version...${NC}"
+
+        # --- EXECUTE NEW VERSION (WAITING FOR COMPLETION) ---
+        # We remove 'exec' so the current script waits for the update to finish before restoring state.
+        bash "$current_script" update
+
+        # --- DEVSECOPS FIX: TELEMETRY STATE RESTORE ---
+        if [[ -d "$STATE_BACKUP_DIR" ]]; then
+            mkdir -p /etc/syswarden/ui
+            [[ -f "$STATE_BACKUP_DIR/data.json.bak" ]] && cp -f "$STATE_BACKUP_DIR/data.json.bak" /etc/syswarden/ui/data.json
+            [[ -f "$STATE_BACKUP_DIR/osint_cache.txt.bak" ]] && cp -f "$STATE_BACKUP_DIR/osint_cache.txt.bak" /etc/syswarden/ui/osint_cache.txt
+            rm -rf "$STATE_BACKUP_DIR"
+
+            chown www-data:www-data /etc/syswarden/ui/data.json 2>/dev/null || chown nginx:nginx /etc/syswarden/ui/data.json 2>/dev/null || true
+            chmod 640 /etc/syswarden/ui/data.json 2>/dev/null || true
+        fi
     fi
 }
