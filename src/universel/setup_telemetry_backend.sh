@@ -278,25 +278,28 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                 *grafana*) LOG_TARGETS="/var/log/grafana/grafana.log /var/log/syslog" ;;
                             esac
 
-                            # --- DEVSECOPS FIX: ULTIMATE DDOS & RACE CONDITION SURVIVAL ---
-                            # A severe web flood can generate hundreds of thousands of lines AFTER an IP is banned.
-                            # Because the banned IP's packets are dropped by the firewall, its logs stay at the TOP 
-                            # of the massive active file, pushing them out of small 'tail' buffers.
+                            # --- DEVSECOPS FIX: O(1) ATOMIC LOG EXTRACTION (PIPELINE BUFFER BYPASS) ---
+                            # Previous multiplexed tail commands hit libc pipe block-buffering traps. 
+                            # If timeout killed a hanging tail on a massive syslog, the buffer was destroyed 
+                            # before grep received the payload. FIX: Atomic per-file reverse streaming.
+                            L7_PAYLOAD=""
                             
-                            # Phase 1: Massive Buffer Extraction (O(1) bypass for >95% of cases)
-                            # We buffer the last 3,000,000 lines. This easily catches payloads deep in a DDoS log.
-                            L7_PAYLOAD=$(timeout 4 tail -q -n 3000000 $LOG_TARGETS 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
+                            for log_file in $LOG_TARGETS; do
+                                [[ ! -f "$log_file" ]] && continue
+                                
+                                # tac reads backwards. It guarantees finding recent payloads in milliseconds.
+                                # A short 1.5s timeout prevents hanging on huge unrelated files.
+                                MATCH=$(timeout 1.5 tac "$log_file" 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                
+                                if [[ -n "$MATCH" ]]; then
+                                    L7_PAYLOAD="$MATCH"
+                                    break # Absolute fastest exit: stops processing further files immediately
+                                fi
+                            done
                             
-                            # Phase 2: Reverse Streaming (SIGPIPE early-termination)
-                            # If the file exceeds 3M lines, we stream it backwards. 'head -n 1' instantly 
-                            # triggers SIGPIPE to terminate the stream the millisecond the payload is found, saving I/O.
-                            if [[ -z "$L7_PAYLOAD" ]]; then
-                                L7_PAYLOAD=$(timeout 3 tac $LOG_TARGETS 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
-                            fi
-                            
-                            # Phase 3: systemd-journald fallback
+                            # Phase 2: systemd-journald fallback (if native flat files are missing)
                             if [[ -z "$L7_PAYLOAD" ]] && command -v journalctl >/dev/null 2>&1; then
-                                L7_PAYLOAD=$(timeout 3 journalctl -q --no-pager -r -n 1000000 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                L7_PAYLOAD=$(timeout 2 journalctl -q --no-pager -r -n 500000 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
                             fi
                         fi
                         
