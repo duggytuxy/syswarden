@@ -58,6 +58,7 @@ uninstall_syswarden() {
     log "INFO" "Removing UI Dashboard Service & Audit Tools..."
     systemctl disable --now syswarden-ui 2>/dev/null || true
     rm -f /etc/systemd/system/syswarden-ui.service /usr/local/bin/syswarden-telemetry.sh /usr/local/bin/syswarden-ui-server.py /usr/local/bin/syswarden-ui-sync.sh
+    rm -f /usr/local/bin/syswarden-dashboard /usr/local/bin/syswarden-tui
     rm -rf /etc/syswarden/ui
     rm -f /var/log/syswarden-audit.log
 

@@ -277,15 +277,17 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                 *grafana*) LOG_TARGETS="/var/log/grafana/grafana.log /var/log/syslog" ;;
                             esac
 
-                            # --- DEVSECOPS FIX: LOG PARSING TIMEOUT RESOLUTION (O(1) COMPLEXITY) ---
-                            # On heavy instances with massive log files, a standard 'grep' scanning from
-                            # top to bottom gets killed by the 'timeout 1' safety trigger before it reaches the end of the file.
-                            # Using 'tail -q -n 10000' forces the pointer to read only the most recent entries, extracting the payload instantly.
-                            L7_PAYLOAD=$(timeout 1 tail -q -n 10000 $LOG_TARGETS 2>/dev/null | grep -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
+                            # --- DEVSECOPS FIX: HIGH-VOLUME DDOS LOG PARSING (O(1) OPTIMIZED) ---
+                            # A standard 'grep' scanning from top to bottom times out on massive files.
+                            # Previously, 'tail -n 10000' was used, but heavy web floods pushed the banned IP 
+                            # out of the 10k window before the cron executed.
+                            # Fix: Extract 500,000 lines (near instant via lseek) with a 2s timeout buffer, 
+                            # guaranteeing deep payload extraction without reading GBs of historical data.
+                            L7_PAYLOAD=$(timeout 2 tail -n 500000 $LOG_TARGETS 2>/dev/null | grep -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
                             
                             # Fallback to systemd-journald (fast reverse parsing) if flat files are missing or rotated
                             if [[ -z "$L7_PAYLOAD" ]] && command -v journalctl >/dev/null 2>&1; then
-                                L7_PAYLOAD=$(timeout 1 journalctl -q --no-pager -r -n 10000 2>/dev/null | grep -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                L7_PAYLOAD=$(timeout 2 journalctl -q --no-pager -r -n 500000 2>/dev/null | grep -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
                             fi
                         fi
                         
