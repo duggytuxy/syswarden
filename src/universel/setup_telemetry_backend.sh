@@ -313,26 +313,28 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                     LOG_TARGETS="/var/log/grafana/grafana.log /var/log/syslog /var/log/daemon.log" ;;
                             esac
 
-                            # --- DEVSECOPS FIX: O(1) ATOMIC LOG EXTRACTION (PIPELINE BUFFER BYPASS) ---
+                            # --- DEVSECOPS FIX: HIGH-PERFORMANCE FORWARD EXTRACTION ---
                             L7_PAYLOAD=""
                             
-                            # CRITICAL FIX: We must explicitly allow shell globbing to expand *.log into actual 
-                            # file paths before the loop processes them, otherwise -f checks fail silently.
-                            EXPANDED_TARGETS=$(ls -1 $LOG_TARGETS 2>/dev/null || true)
+                            # Globbing resolution: safely expand *.log into actual file paths natively
+                            EXPANDED_TARGETS=""
+                            for target in $LOG_TARGETS; do
+                                for file in $target; do
+                                    [[ -f "$file" ]] && EXPANDED_TARGETS="$EXPANDED_TARGETS $file"
+                                done
+                            done
                             
                             for log_file in $EXPANDED_TARGETS; do
-                                [[ ! -f "$log_file" ]] && continue
-                                
-                                # tac reads backwards. It guarantees finding recent payloads in milliseconds.
-                                MATCH=$(timeout 1.5 tac "$log_file" 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                # CRITICAL FIX: Removed 'tac'. Reading gigabytes backwards caused memory I/O chokes.
+                                # Native forward 'grep' piped to 'tail -n 1' is immensely faster in C memory mapping.
+                                MATCH=$(timeout 3 grep -a -F "$IP" "$log_file" 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
                                 
                                 if [[ -n "$MATCH" ]]; then
                                     L7_PAYLOAD="$MATCH"
-                                    break # Absolute fastest exit: stops processing further files immediately
+                                    break # Absolute fastest exit
                                 fi
                             done
                             
-                            # Re-assign EXPANDED_TARGETS to LOG_TARGETS so the archive loop below can use the resolved paths
                             LOG_TARGETS="$EXPANDED_TARGETS"
                             
                             # Phase 2: systemd-journald fallback (if native flat files are missing)
@@ -351,7 +353,7 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             fi
                         fi
                         
-                        # --- DEVSECOPS FIX: BUFFERED REVERSE ARCHIVE STREAMING (O(1) TIMEOUT BYPASS) ---
+                        # --- DEVSECOPS FIX: FORWARD DEEP ARCHIVE EXTRACTION ---
                         if [[ -z "$L7_PAYLOAD" ]]; then
                             for active_file in $LOG_TARGETS; do
                                 [[ "$active_file" == *"*"* ]] && continue
@@ -361,12 +363,12 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                 for arch_file in $RECENT_ARCHIVES; do
                                     [[ ! -f "$arch_file" ]] && continue
                                     
-                                    # Safe buffered reverse extraction (Max ~100MB RAM overhead, instant SIGPIPE exit)
-                                    MATCH=$(timeout 5 zcat -f "$arch_file" 2>/dev/null | tail -n 500000 | tac 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                    # Forward decompression stream. Removed 'tac' completely to prevent hanging.
+                                    MATCH=$(timeout 4 zgrep -a -F "$IP" "$arch_file" 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
                                     
                                     if [[ -n "$MATCH" ]]; then
                                         L7_PAYLOAD="$MATCH"
-                                        break 2
+                                        break 2 # Break out of both the archive and target loops
                                     fi
                                 done
                             done
