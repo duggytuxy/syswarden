@@ -259,47 +259,67 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                         if [[ "$JAIL" =~ (recidive) ]]; then
                             L7_PAYLOAD="Repeat Offender (Recidive Module)"
                         else
-                            # --- DEVSECOPS FIX: CONTEXT-AWARE LOG TARGETING & VHOST GLOBBING ---
-                            # Prevents payload cross-contamination (e.g., an IP banned by a Web Jail showing an SSHd log payload)
-                            # by intelligently scoping the grep target files based on the Jail's application context.
-                            # ADDED: '*' Wildcards for Web/Proxy Jails to automatically catch customized Virtual Host logs (e.g., syswarden.io-access.log)
-                            LOG_TARGETS="/var/log/kern-firewall.log /var/log/kern.log /var/log/messages /var/log/syslog /var/log/nginx/*access*.log /var/log/nginx/*error*.log /var/log/apache2/*access*.log /var/log/apache2/*error*.log /var/log/httpd/*access_log /var/log/httpd/*error_log /var/log/auth-syswarden.log /var/log/secure /var/log/auth.log /var/log/maillog /var/log/mail.log /var/log/daemon.log /var/log/audit/audit.log"
+                            # --- DEVSECOPS FIX: CONTEXT-AWARE LOG TARGETING & PRIORITY SORTING ---
+                            # Global fallback (used if no case matches)
+                            LOG_TARGETS="/var/log/nginx/*.log /var/log/apache2/*.log /var/log/httpd/*.log /var/log/auth.log /var/log/secure /var/log/auth-syswarden.log /var/log/kern-firewall.log /var/log/kern.log /var/log/daemon.log /var/log/syslog /var/log/messages /var/log/maillog /var/log/mail.log /var/log/audit/audit.log"
                             
+                            # PRIORITY SORTING: We place application-specific logs FIRST, 
+                            # then proxy/daemon logs, and kernel drops LAST. The atomic extraction 
+                            # will stop instantly at the first match, preventing cross-contamination.
                             case "${JAIL,,}" in
-                                *ssh*|*auth*|*telnet*|*cockpit*|*privesc*) LOG_TARGETS="/var/log/auth.log /var/log/secure /var/log/auth-syswarden.log /var/log/daemon.log /var/log/syslog /var/log/messages" ;;
-                                *portscan*|*flood*|*dos*|*wireguard*|*openvpn*) LOG_TARGETS="/var/log/kern-firewall.log /var/log/kern.log /var/log/syslog /var/log/messages /var/log/openvpn/openvpn.log /var/log/openvpn.log" ;;
-                                *nginx*|*apache*|*web*|*http*|*sqli*|*xss*|*lfi*|*ssti*|*jndi*|*modsec*|*hunter*|*proxy*|*scan*|*enum*|*bot*|*prestashop*|*atlassian*|*webshell*|*homoglyph*|*tls*|*dolibarr*|*phpmyadmin*|*apimapper*|*drupal*|*wordpress*) LOG_TARGETS="/var/log/nginx/*access*.log /var/log/nginx/*error*.log /var/log/apache2/*access*.log /var/log/apache2/*error*.log /var/log/httpd/*access_log /var/log/httpd/*error_log /var/log/syslog /var/log/messages" ;;
-                                *mail*|*postfix*|*dovecot*|*exim*|*sendmail*) LOG_TARGETS="/var/log/maillog /var/log/mail.log /var/log/syslog /var/log/messages" ;;
-                                *mysql*|*mariadb*|*redis*|*mongodb*|*rabbitmq*) LOG_TARGETS="/var/log/mysql/error.log /var/log/mariadb/mariadb.log /var/log/redis/redis-server.log /var/log/redis/redis.log /var/log/mongodb/mongod.log /var/log/rabbitmq/rabbit@*.log /var/log/rabbitmq/rabbitmq.log /var/log/syslog /var/log/messages /var/log/daemon.log" ;;
-                                *vsftpd*|*ftp*) LOG_TARGETS="/var/log/vsftpd.log /var/log/auth.log /var/log/secure /var/log/messages" ;;
-                                *auditd*) LOG_TARGETS="/var/log/audit/audit.log /var/log/auth.log /var/log/syslog" ;;
-                                *proxmox*) LOG_TARGETS="/var/log/daemon.log /var/log/syslog /var/log/auth.log" ;;
-                                *asterisk*) LOG_TARGETS="/var/log/asterisk/messages /var/log/asterisk/full /var/log/syslog" ;;
-                                *zabbix*) LOG_TARGETS="/var/log/zabbix/zabbix_server.log /var/log/syslog" ;;
-                                *haproxy*) LOG_TARGETS="/var/log/haproxy.log /var/log/syslog" ;;
-                                *squid*) LOG_TARGETS="/var/log/squid/*access*.log /var/log/syslog" ;;
-                                *gitea*|*forgejo*) LOG_TARGETS="/var/log/gitea/gitea.log /var/log/forgejo/forgejo.log" ;;
-                                *jenkins*) LOG_TARGETS="/var/log/jenkins/jenkins.log" ;;
-                                *gitlab*) LOG_TARGETS="/var/log/gitlab/gitlab-rails/application.log /var/log/gitlab/gitlab-rails/auth.log" ;;
-                                *vaultwarden*) LOG_TARGETS="/var/log/vaultwarden/vaultwarden.log /vw-data/vaultwarden.log /opt/vaultwarden/vaultwarden.log /var/log/syslog" ;;
-                                *sso*|*authelia*|*authentik*) LOG_TARGETS="/var/log/authelia/authelia.log /var/log/authentik/authentik.log /opt/authelia/authelia.log /opt/authentik/authentik.log" ;;
-                                *odoo*) LOG_TARGETS="/var/log/odoo/odoo-server.log /var/log/odoo/odoo.log" ;;
-                                *nextcloud*) LOG_TARGETS="/var/www/nextcloud/data/nextcloud.log /var/www/html/nextcloud/data/nextcloud.log /var/www/html/data/nextcloud.log" ;;
-                                *laravel*) LOG_TARGETS="/var/www/html/storage/logs/laravel.log /var/www/storage/logs/laravel.log" ;;
-                                *grafana*) LOG_TARGETS="/var/log/grafana/grafana.log /var/log/syslog" ;;
+                                *ssh*|*auth*|*telnet*|*cockpit*|*privesc*) 
+                                    LOG_TARGETS="/var/log/auth.log /var/log/secure /var/log/auth-syswarden.log /var/log/daemon.log /var/log/syslog /var/log/messages /var/log/kern.log" ;;
+                                *portscan*|*flood*|*dos*|*wireguard*|*openvpn*) 
+                                    LOG_TARGETS="/var/log/kern-firewall.log /var/log/kern.log /var/log/syslog /var/log/messages /var/log/openvpn/openvpn.log /var/log/openvpn.log /var/log/daemon.log" ;;
+                                *nginx*|*apache*|*web*|*http*|*sqli*|*xss*|*lfi*|*ssti*|*jndi*|*modsec*|*hunter*|*proxy*|*scan*|*enum*|*bot*|*prestashop*|*atlassian*|*webshell*|*homoglyph*|*tls*|*dolibarr*|*phpmyadmin*|*apimapper*|*drupal*|*wordpress*) 
+                                    # FIX: Removed restrictive *access* and *error* constraints. Used universal *.log 
+                                    # to catch custom vhost logs, TLS specific logs, and appended kernel logs for firewall drops.
+                                    LOG_TARGETS="/var/log/nginx/*.log /var/log/apache2/*.log /var/log/httpd/*.log /var/log/syslog /var/log/messages /var/log/daemon.log /var/log/kern-firewall.log /var/log/kern.log" ;;
+                                *mail*|*postfix*|*dovecot*|*exim*|*sendmail*) 
+                                    LOG_TARGETS="/var/log/maillog /var/log/mail.log /var/log/syslog /var/log/messages /var/log/daemon.log" ;;
+                                *mysql*|*mariadb*|*redis*|*mongodb*|*rabbitmq*) 
+                                    LOG_TARGETS="/var/log/mysql/*.log /var/log/mariadb/*.log /var/log/redis/*.log /var/log/mongodb/*.log /var/log/rabbitmq/*.log /var/log/syslog /var/log/messages /var/log/daemon.log" ;;
+                                *vsftpd*|*ftp*) 
+                                    LOG_TARGETS="/var/log/vsftpd.log /var/log/auth.log /var/log/secure /var/log/messages /var/log/syslog" ;;
+                                *auditd*) 
+                                    LOG_TARGETS="/var/log/audit/audit.log /var/log/auth.log /var/log/syslog /var/log/daemon.log" ;;
+                                *proxmox*) 
+                                    LOG_TARGETS="/var/log/daemon.log /var/log/syslog /var/log/auth.log /var/log/messages" ;;
+                                *asterisk*) 
+                                    LOG_TARGETS="/var/log/asterisk/messages /var/log/asterisk/full /var/log/syslog /var/log/messages" ;;
+                                *zabbix*) 
+                                    LOG_TARGETS="/var/log/zabbix/zabbix_server.log /var/log/syslog /var/log/messages" ;;
+                                *haproxy*) 
+                                    LOG_TARGETS="/var/log/haproxy.log /var/log/syslog /var/log/messages /var/log/daemon.log" ;;
+                                *squid*) 
+                                    LOG_TARGETS="/var/log/squid/*.log /var/log/syslog /var/log/messages" ;;
+                                *gitea*|*forgejo*) 
+                                    LOG_TARGETS="/var/log/gitea/gitea.log /var/log/forgejo/forgejo.log /var/log/syslog /var/log/daemon.log" ;;
+                                *jenkins*) 
+                                    LOG_TARGETS="/var/log/jenkins/jenkins.log /var/log/syslog /var/log/daemon.log" ;;
+                                *gitlab*) 
+                                    LOG_TARGETS="/var/log/gitlab/gitlab-rails/application.log /var/log/gitlab/gitlab-rails/auth.log /var/log/syslog /var/log/daemon.log" ;;
+                                *vaultwarden*) 
+                                    LOG_TARGETS="/var/log/vaultwarden/vaultwarden.log /vw-data/vaultwarden.log /opt/vaultwarden/vaultwarden.log /var/log/syslog /var/log/daemon.log" ;;
+                                *sso*|*authelia*|*authentik*) 
+                                    LOG_TARGETS="/var/log/authelia/authelia.log /var/log/authentik/authentik.log /opt/authelia/authelia.log /opt/authentik/authentik.log /var/log/syslog /var/log/daemon.log" ;;
+                                *odoo*) 
+                                    LOG_TARGETS="/var/log/odoo/odoo-server.log /var/log/odoo/odoo.log /var/log/syslog" ;;
+                                *nextcloud*) 
+                                    LOG_TARGETS="/var/www/nextcloud/data/nextcloud.log /var/www/html/nextcloud/data/nextcloud.log /var/www/html/data/nextcloud.log /var/log/syslog" ;;
+                                *laravel*) 
+                                    LOG_TARGETS="/var/www/html/storage/logs/laravel.log /var/www/storage/logs/laravel.log /var/log/syslog" ;;
+                                *grafana*) 
+                                    LOG_TARGETS="/var/log/grafana/grafana.log /var/log/syslog /var/log/daemon.log" ;;
                             esac
 
                             # --- DEVSECOPS FIX: O(1) ATOMIC LOG EXTRACTION (PIPELINE BUFFER BYPASS) ---
-                            # Previous multiplexed tail commands hit libc pipe block-buffering traps. 
-                            # If timeout killed a hanging tail on a massive syslog, the buffer was destroyed 
-                            # before grep received the payload. FIX: Atomic per-file reverse streaming.
                             L7_PAYLOAD=""
                             
                             for log_file in $LOG_TARGETS; do
                                 [[ ! -f "$log_file" ]] && continue
                                 
                                 # tac reads backwards. It guarantees finding recent payloads in milliseconds.
-                                # A short 1.5s timeout prevents hanging on huge unrelated files.
                                 MATCH=$(timeout 1.5 tac "$log_file" 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
                                 
                                 if [[ -n "$MATCH" ]]; then
@@ -324,17 +344,27 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             fi
                         fi
                         
-                        # --- DEVSECOPS FIX: DEEP ARCHIVE ROTATION SURVIVAL (SMART DECOMPRESSION) ---
-                        # If a logrotate occurred EXACTLY between the ban and the cron, we scan the 5 most recent archives.
-                        # We use zcat + tac + head for instant termination upon finding the match without massive timeouts.
+                        # --- DEVSECOPS FIX: ATOMIC DEEP ARCHIVE ROTATION SURVIVAL ---
+                        # Previous 'head -n 5' on grouped archives caused catastrophic "Archive Shadowing" 
+                        # where fast-rotating logs (like access.log) completely pushed out slower logs (like error.log).
+                        # FIX: We now iterate per-target to guarantee every application log category is deeply inspected.
                         if [[ -z "$L7_PAYLOAD" ]]; then
-                            DEEP_TARGETS=$(echo "$LOG_TARGETS" | sed 's/\.log/.log*/g; s/_log/_log*/g; s/\/messages/\/messages*/g; s/\/secure/\/secure*/g')
-                            RECENT_ARCHIVES=$(ls -1t $DEEP_TARGETS 2>/dev/null | head -n 5 || true)
-                            
-                            if [[ -n "$RECENT_ARCHIVES" ]]; then
-                                L7_PAYLOAD=$(timeout 5 zcat -f $RECENT_ARCHIVES 2>/dev/null | tac 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
-                                L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
-                            fi
+                            for active_file in $LOG_TARGETS; do
+                                # Generate rotation pattern and grab the 3 most recent archives per specific file
+                                RECENT_ARCHIVES=$(ls -1t ${active_file}* 2>/dev/null | head -n 3 || true)
+                                
+                                for arch_file in $RECENT_ARCHIVES; do
+                                    [[ ! -f "$arch_file" ]] && continue
+                                    
+                                    MATCH=$(timeout 1.5 zcat -f "$arch_file" 2>/dev/null | tac 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                    
+                                    if [[ -n "$MATCH" ]]; then
+                                        L7_PAYLOAD="$MATCH"
+                                        break 2 # Break out of both the archive and target loops
+                                    fi
+                                done
+                            done
+                            L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
                         fi
                         
                         # --- DEVSECOPS FIX: PREVENT ORPHANED IPS DESYNC (ULTIMATE FALLBACK) ---
