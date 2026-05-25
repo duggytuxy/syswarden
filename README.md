@@ -111,7 +111,7 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 | :---: | :--- | :---: |
 | **v0.36.0** | Attack Surface Reduction: Migration from Dashboard UI to isolated Terminal UI (TUI) via `syswarden tui`. | ✅ |
 | **v0.37.0** | Enterprise SIEM Integration: Syslog output standardization for deterministic log ingestion. | ✅ |
-| **v0.38.3** | In progress, bugs hunting | 📆 |
+| **v0.38.4** | In progress, bugs hunting | 📆 |
 
 ## Installation Guide
 

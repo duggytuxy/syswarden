@@ -316,7 +316,11 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             # --- DEVSECOPS FIX: O(1) ATOMIC LOG EXTRACTION (PIPELINE BUFFER BYPASS) ---
                             L7_PAYLOAD=""
                             
-                            for log_file in $LOG_TARGETS; do
+                            # CRITICAL FIX: We must explicitly allow shell globbing to expand *.log into actual 
+                            # file paths before the loop processes them, otherwise -f checks fail silently.
+                            EXPANDED_TARGETS=$(ls -1 $LOG_TARGETS 2>/dev/null || true)
+                            
+                            for log_file in $EXPANDED_TARGETS; do
                                 [[ ! -f "$log_file" ]] && continue
                                 
                                 # tac reads backwards. It guarantees finding recent payloads in milliseconds.
@@ -327,6 +331,9 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                     break # Absolute fastest exit: stops processing further files immediately
                                 fi
                             done
+                            
+                            # Re-assign EXPANDED_TARGETS to LOG_TARGETS so the archive loop below can use the resolved paths
+                            LOG_TARGETS="$EXPANDED_TARGETS"
                             
                             # Phase 2: systemd-journald fallback (if native flat files are missing)
                             if [[ -z "$L7_PAYLOAD" ]] && command -v journalctl >/dev/null 2>&1; then
@@ -344,23 +351,22 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             fi
                         fi
                         
-                        # --- DEVSECOPS FIX: ATOMIC DEEP ARCHIVE ROTATION SURVIVAL ---
-                        # Previous 'head -n 5' on grouped archives caused catastrophic "Archive Shadowing" 
-                        # where fast-rotating logs (like access.log) completely pushed out slower logs (like error.log).
-                        # FIX: We now iterate per-target to guarantee every application log category is deeply inspected.
+                        # --- DEVSECOPS FIX: BUFFERED REVERSE ARCHIVE STREAMING (O(1) TIMEOUT BYPASS) ---
                         if [[ -z "$L7_PAYLOAD" ]]; then
                             for active_file in $LOG_TARGETS; do
-                                # Generate rotation pattern and grab the 3 most recent archives per specific file
-                                RECENT_ARCHIVES=$(ls -1t ${active_file}* 2>/dev/null | head -n 3 || true)
+                                [[ "$active_file" == *"*"* ]] && continue
+                                
+                                RECENT_ARCHIVES=$(ls -1t ${active_file}.* ${active_file}-* 2>/dev/null | head -n 3 || true)
                                 
                                 for arch_file in $RECENT_ARCHIVES; do
                                     [[ ! -f "$arch_file" ]] && continue
                                     
-                                    MATCH=$(timeout 1.5 zcat -f "$arch_file" 2>/dev/null | tac 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                    # Safe buffered reverse extraction (Max ~100MB RAM overhead, instant SIGPIPE exit)
+                                    MATCH=$(timeout 5 zcat -f "$arch_file" 2>/dev/null | tail -n 500000 | tac 2>/dev/null | grep -a -F "$IP" | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
                                     
                                     if [[ -n "$MATCH" ]]; then
                                         L7_PAYLOAD="$MATCH"
-                                        break 2 # Break out of both the archive and target loops
+                                        break 2
                                     fi
                                 done
                             done
