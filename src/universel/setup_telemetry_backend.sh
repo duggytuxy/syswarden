@@ -261,24 +261,23 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                         else
                             # --- DEVSECOPS FIX: CONTEXT-AWARE LOG TARGETING & PRIORITY SORTING ---
                             # Global fallback (used if no case matches)
-                            LOG_TARGETS="/var/log/nginx/*.log /var/log/apache2/*.log /var/log/httpd/*.log /var/log/auth.log /var/log/secure /var/log/auth-syswarden.log /var/log/kern-firewall.log /var/log/kern.log /var/log/daemon.log /var/log/syslog /var/log/messages /var/log/maillog /var/log/mail.log /var/log/audit/audit.log"
+                            LOG_TARGETS="/var/log/nginx/*error*.log /var/log/apache2/*error*.log /var/log/httpd/*error*.log /var/log/nginx/*access*.log /var/log/apache2/*access*.log /var/log/httpd/*access*.log /var/log/auth.log /var/log/secure /var/log/auth-syswarden.log /var/log/kern-firewall.log /var/log/kern.log /var/log/daemon.log /var/log/syslog /var/log/messages /var/log/maillog /var/log/mail.log /var/log/audit/audit.log"
                             
-                            # PRIORITY SORTING: We place application-specific logs FIRST, 
-                            # then proxy/daemon logs, and kernel drops LAST. The atomic extraction 
-                            # will stop instantly at the first match, preventing cross-contamination.
+                            # PRIORITY SORTING: We place application-specific ERROR logs FIRST, 
+                            # then ACCESS logs, and kernel drops LAST. The atomic extraction 
+                            # will stop instantly at the first match, preventing normal HTTP traffic
+                            # from hiding critical TLS or WAF drops.
                             case "${JAIL,,}" in
                                 *ssh*|*auth*|*telnet*|*cockpit*|*privesc*) 
                                     LOG_TARGETS="/var/log/auth.log /var/log/secure /var/log/auth-syswarden.log /var/log/daemon.log /var/log/syslog /var/log/messages /var/log/kern.log" ;;
                                 *portscan*|*flood*|*dos*|*wireguard*|*openvpn*) 
                                     LOG_TARGETS="/var/log/kern-firewall.log /var/log/kern.log /var/log/syslog /var/log/messages /var/log/openvpn/openvpn.log /var/log/openvpn.log /var/log/daemon.log" ;;
                                 *nginx*|*apache*|*web*|*http*|*sqli*|*xss*|*lfi*|*ssti*|*jndi*|*modsec*|*hunter*|*proxy*|*scan*|*enum*|*bot*|*prestashop*|*atlassian*|*webshell*|*homoglyph*|*tls*|*dolibarr*|*phpmyadmin*|*apimapper*|*drupal*|*wordpress*) 
-                                    # FIX: Removed restrictive *access* and *error* constraints. Used universal *.log 
-                                    # to catch custom vhost logs, TLS specific logs, and appended kernel logs for firewall drops.
-                                    LOG_TARGETS="/var/log/nginx/*.log /var/log/apache2/*.log /var/log/httpd/*.log /var/log/syslog /var/log/messages /var/log/daemon.log /var/log/kern-firewall.log /var/log/kern.log" ;;
+                                    LOG_TARGETS="/var/log/nginx/*error*.log /var/log/apache2/*error*.log /var/log/httpd/*error*.log /var/log/nginx/*access*.log /var/log/apache2/*access*.log /var/log/httpd/*access*.log /var/log/syslog /var/log/messages /var/log/daemon.log /var/log/kern-firewall.log /var/log/kern.log" ;;
                                 *mail*|*postfix*|*dovecot*|*exim*|*sendmail*) 
                                     LOG_TARGETS="/var/log/maillog /var/log/mail.log /var/log/syslog /var/log/messages /var/log/daemon.log" ;;
                                 *mysql*|*mariadb*|*redis*|*mongodb*|*rabbitmq*) 
-                                    LOG_TARGETS="/var/log/mysql/*.log /var/log/mariadb/*.log /var/log/redis/*.log /var/log/mongodb/*.log /var/log/rabbitmq/*.log /var/log/syslog /var/log/messages /var/log/daemon.log" ;;
+                                    LOG_TARGETS="/var/log/mysql/*error*.log /var/log/mysql/*.log /var/log/mariadb/*.log /var/log/redis/*.log /var/log/mongodb/*.log /var/log/rabbitmq/*.log /var/log/syslog /var/log/messages /var/log/daemon.log" ;;
                                 *vsftpd*|*ftp*) 
                                     LOG_TARGETS="/var/log/vsftpd.log /var/log/auth.log /var/log/secure /var/log/messages /var/log/syslog" ;;
                                 *auditd*) 
@@ -292,7 +291,7 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                 *haproxy*) 
                                     LOG_TARGETS="/var/log/haproxy.log /var/log/syslog /var/log/messages /var/log/daemon.log" ;;
                                 *squid*) 
-                                    LOG_TARGETS="/var/log/squid/*.log /var/log/syslog /var/log/messages" ;;
+                                    LOG_TARGETS="/var/log/squid/*error*.log /var/log/squid/*access*.log /var/log/squid/*.log /var/log/syslog /var/log/messages" ;;
                                 *gitea*|*forgejo*) 
                                     LOG_TARGETS="/var/log/gitea/gitea.log /var/log/forgejo/forgejo.log /var/log/syslog /var/log/daemon.log" ;;
                                 *jenkins*) 
@@ -313,27 +312,27 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                     LOG_TARGETS="/var/log/grafana/grafana.log /var/log/syslog /var/log/daemon.log" ;;
                             esac
 
-                            # --- DEVSECOPS FIX: HIGH-PERFORMANCE FORWARD EXTRACTION ---
+                            # --- DEVSECOPS FIX: O(1) PRIORITIZED FORWARD EXTRACTION ---
                             L7_PAYLOAD=""
                             
-                            # Globbing resolution: safely expand *.log into actual file paths natively
-                            EXPANDED_TARGETS=""
+                            # Loop securely over defined targets (Error logs ALWAYS evaluated first)
                             for target in $LOG_TARGETS; do
-                                for file in $target; do
-                                    [[ -f "$file" ]] && EXPANDED_TARGETS="$EXPANDED_TARGETS $file"
-                                done
-                            done
-                            
-                            for log_file in $EXPANDED_TARGETS; do
-                                # CRITICAL FIX: Changed 'tail -n 1' to 'head -n 1'. 
-                                # tail forces a full file scan (timeout). head triggers an instant SIGPIPE 
-                                # termination the millisecond the first match is found, saving massive CPU/RAM.
-                                MATCH=$(timeout 2 grep -a -F "$IP" "$log_file" 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                # Skip unexpanded literal wildcards natively to prevent ls errors
+                                [[ "$target" == *"*"* ]] && continue
                                 
-                                if [[ -n "$MATCH" ]]; then
-                                    L7_PAYLOAD="$MATCH"
-                                    break # Absolute fastest exit
-                                fi
+                                # ls -1t guarantees the active log is searched BEFORE the .1 or .gz archives.
+                                for log_file in $(ls -1t ${target} ${target}.* ${target}-* 2>/dev/null); do
+                                    [[ ! -f "$log_file" ]] && continue
+                                    
+                                    # Native C-mapped forward zgrep. 'grep -m 1' STOPS INSTANTLY at the very first payload match.
+                                    # Zero memory exhaustion, zero timeout kills, catches the correct context.
+                                    MATCH=$(timeout 2 zgrep -a -m 1 -F "$IP" "$log_file" 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
+                                    
+                                    if [[ -n "$MATCH" ]]; then
+                                        L7_PAYLOAD="$MATCH"
+                                        break 2 # Exits BOTH loops instantly at the exact correct priority payload
+                                    fi
+                                done
                             done
                             
                             # Phase 2: systemd-journald fallback (if native flat files are missing)
@@ -350,27 +349,6 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             if [[ "$CACHE_PAYLOAD" != "null" ]] && [[ -n "$CACHE_PAYLOAD" ]] && [[ "$CACHE_PAYLOAD" != *"Payload context unavailable"* ]] && [[ "$CACHE_PAYLOAD" != *"Manual ban"* ]]; then
                                 L7_PAYLOAD="$CACHE_PAYLOAD"
                             fi
-                        fi
-                        
-                        # --- DEVSECOPS FIX: FORWARD DEEP ARCHIVE EXTRACTION ---
-                        if [[ -z "$L7_PAYLOAD" ]]; then
-                            # We iterate over original LOG_TARGETS to preserve wildcards (e.g. *.log) to correctly identify archives
-                            for target in $LOG_TARGETS; do
-                                RECENT_ARCHIVES=$(ls -1t ${target}.* ${target}-* 2>/dev/null | head -n 3 || true)
-                                
-                                for arch_file in $RECENT_ARCHIVES; do
-                                    [[ ! -f "$arch_file" ]] && continue
-                                    
-                                    # Forward decompression stream with instant exit (head -n 1)
-                                    MATCH=$(timeout 3 zgrep -a -F "$IP" "$arch_file" 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
-                                    
-                                    if [[ -n "$MATCH" ]]; then
-                                        L7_PAYLOAD="$MATCH"
-                                        break 2 # Break out of both the archive and target loops
-                                    fi
-                                done
-                            done
-                            L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
                         fi
                         
                         # --- DEVSECOPS FIX: PREVENT ORPHANED IPS DESYNC (ULTIMATE FALLBACK) ---
