@@ -317,11 +317,10 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             
                             # Loop securely over defined targets (Error logs ALWAYS evaluated first)
                             for target in $LOG_TARGETS; do
-                                # Skip unexpanded literal wildcards natively to prevent ls errors
-                                [[ "$target" == *"*"* ]] && continue
-                                
-                                # ls -1t guarantees the active log is searched BEFORE the .1 or .gz archives.
-                                for log_file in $(ls -1t ${target} ${target}.* ${target}-* 2>/dev/null); do
+                                # ls -1t expands the wildcards (like *error*.log) dynamically.
+                                # '|| true' prevents set -e from crashing if the glob matches no files.
+                                for log_file in $(ls -1t ${target} ${target}.* ${target}-* 2>/dev/null || true); do
+                                    # Double-check ensures we only read actual existing files
                                     [[ ! -f "$log_file" ]] && continue
                                     
                                     # Native C-mapped forward zgrep. 'grep -m 1' STOPS INSTANTLY at the very first payload match.
