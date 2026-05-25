@@ -325,17 +325,16 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             done
                             
                             for log_file in $EXPANDED_TARGETS; do
-                                # CRITICAL FIX: Removed 'tac'. Reading gigabytes backwards caused memory I/O chokes.
-                                # Native forward 'grep' piped to 'tail -n 1' is immensely faster in C memory mapping.
-                                MATCH=$(timeout 3 grep -a -F "$IP" "$log_file" 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
+                                # CRITICAL FIX: Changed 'tail -n 1' to 'head -n 1'. 
+                                # tail forces a full file scan (timeout). head triggers an instant SIGPIPE 
+                                # termination the millisecond the first match is found, saving massive CPU/RAM.
+                                MATCH=$(timeout 2 grep -a -F "$IP" "$log_file" 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
                                 
                                 if [[ -n "$MATCH" ]]; then
                                     L7_PAYLOAD="$MATCH"
                                     break # Absolute fastest exit
                                 fi
                             done
-                            
-                            LOG_TARGETS="$EXPANDED_TARGETS"
                             
                             # Phase 2: systemd-journald fallback (if native flat files are missing)
                             if [[ -z "$L7_PAYLOAD" ]] && command -v journalctl >/dev/null 2>&1; then
@@ -355,16 +354,15 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                         
                         # --- DEVSECOPS FIX: FORWARD DEEP ARCHIVE EXTRACTION ---
                         if [[ -z "$L7_PAYLOAD" ]]; then
-                            for active_file in $LOG_TARGETS; do
-                                [[ "$active_file" == *"*"* ]] && continue
-                                
-                                RECENT_ARCHIVES=$(ls -1t ${active_file}.* ${active_file}-* 2>/dev/null | head -n 3 || true)
+                            # We iterate over original LOG_TARGETS to preserve wildcards (e.g. *.log) to correctly identify archives
+                            for target in $LOG_TARGETS; do
+                                RECENT_ARCHIVES=$(ls -1t ${target}.* ${target}-* 2>/dev/null | head -n 3 || true)
                                 
                                 for arch_file in $RECENT_ARCHIVES; do
                                     [[ ! -f "$arch_file" ]] && continue
                                     
-                                    # Forward decompression stream. Removed 'tac' completely to prevent hanging.
-                                    MATCH=$(timeout 4 zgrep -a -F "$IP" "$arch_file" 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
+                                    # Forward decompression stream with instant exit (head -n 1)
+                                    MATCH=$(timeout 3 zgrep -a -F "$IP" "$arch_file" 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 || true)
                                     
                                     if [[ -n "$MATCH" ]]; then
                                         L7_PAYLOAD="$MATCH"
@@ -373,6 +371,11 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                 done
                             done
                             L7_PAYLOAD=$(echo "$L7_PAYLOAD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
+                        fi
+                        
+                        # --- DEVSECOPS FIX: PREVENT ORPHANED IPS DESYNC (ULTIMATE FALLBACK) ---
+                        if [[ -z "$L7_PAYLOAD" ]]; then
+                            L7_PAYLOAD="Payload context unavailable (Manual ban via CLI or absolute log purge)"
                         fi
                         
                         # --- REQUIREMENT 1: RAW LOGS RETENTION (0.0% CPU) ---
