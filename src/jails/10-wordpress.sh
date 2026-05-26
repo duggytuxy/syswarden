@@ -11,7 +11,7 @@ syswarden_jail_wordpress() {
     if [[ ! -f "/etc/fail2ban/filter.d/wordpress-auth.conf" ]]; then
         cat <<'EOF' >/etc/fail2ban/filter.d/wordpress-auth.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?(?:wp-login\.php|xmlrpc\.php)[^"]*?" 200
+failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "POST [^"]*?(?:wp-login\.php|xmlrpc\.php)[^"]*?" 200
 ignoreregex = 
 EOF
     fi

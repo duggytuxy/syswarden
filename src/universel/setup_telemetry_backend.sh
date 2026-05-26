@@ -286,14 +286,20 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                 *grafana*) LOG_TARGETS="/var/log/grafana/grafana.log* /var/log/syslog* /var/log/daemon.log*" ;;
                             esac
 
-                            # --- DEVSECOPS FIX: THE 0.37.2 IFS GHOST BUG REVEALED ---
-                            # In v0.37.2, the global IFS=$'\n\t' prevented $LOG_TARGETS from splitting on spaces.
-                            # Multi-file targets failed silently, returning an empty payload. The old UI simply 
-                            # HID these IPs entirely. We revert to the highly stable 0.37.2 pipeline, but we 
-                            # strictly restore the IFS space beforehand so zgrep can natively glob multiple paths.
+                            # --- DEVSECOPS FIX: THE CHRONOLOGICAL PARADOX ---
+                            # Native bash globbing sorts alphabetically, causing old archives (.2.gz) to be read 
+                            # AFTER active logs. 'tail -n 1' would then incorrectly capture outdated payloads.
+                            # FIX: We dynamically resolve and sort the files by modification time (Oldest -> Newest) 
+                            # using 'ls -1tr'. This guarantees that the active log is parsed LAST, 
+                            # providing absolute synchronization with the live ban time.
                             OIFS="$IFS"
                             IFS=$' \n\t'
-                            L7_PAYLOAD=$(timeout 3 zgrep -h -a -F "$IP" $LOG_TARGETS 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
+                            
+                            SORTED_TARGETS=$(ls -1tr $LOG_TARGETS 2>/dev/null)
+                            [[ -z "$SORTED_TARGETS" ]] && SORTED_TARGETS="$LOG_TARGETS" # Fallback if ls fails
+                            
+                            L7_PAYLOAD=$(timeout 3 zgrep -h -a -F "$IP" $SORTED_TARGETS 2>/dev/null | grep -vE '(syswarden_reporter|fail2ban-server)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 || true)
+                            
                             IFS="$OIFS"
                             
                             # Phase 2: systemd-journald fallback (if native flat files are missing)

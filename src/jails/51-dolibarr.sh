@@ -11,7 +11,7 @@ syswarden_jail_dolibarr() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-dolibarr.conf
 [Definition]
 # [DEVSECOPS FIX] Bounded the URI parsing to strictly prevent query string ReDoS.
-failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?(?:/htdocs/index\.php|/index\.php|/api/index\.php/login)[^"]*?" (?:200|401|403)
+failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "POST [^"]*?(?:/htdocs/index\.php|/index\.php|/api/index\.php/login)[^"]*?" (?:200|401|403)
 ignoreregex = 
 EOF
     fi

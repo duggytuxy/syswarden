@@ -11,7 +11,7 @@ syswarden_jail_drupal() {
     if [[ ! -f "/etc/fail2ban/filter.d/drupal-auth.conf" ]]; then
         cat <<'EOF' >/etc/fail2ban/filter.d/drupal-auth.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?(?:/user/login|\?q=user/login)[^"]*?" 200
+failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "POST [^"]*?(?:/user/login|\?q=user/login)[^"]*?" 200
 ignoreregex = 
 EOF
     fi

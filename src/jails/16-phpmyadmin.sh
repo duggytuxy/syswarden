@@ -11,7 +11,7 @@ syswarden_jail_phpmyadmin() {
     if [[ ! -f "/etc/fail2ban/filter.d/phpmyadmin-custom.conf" ]]; then
         cat <<'EOF' >/etc/fail2ban/filter.d/phpmyadmin-custom.conf
 [Definition]
-failregex = ^<HOST> \S+ \S+ \[[^\]]+\] "POST [^"]*?phpmyadmin[^"]*? HTTP[^"]*?" 200
+failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "POST [^"]*?phpmyadmin[^"]*? HTTP[^"]*?" 200
 ignoreregex = 
 EOF
     fi
