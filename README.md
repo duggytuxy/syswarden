@@ -2,25 +2,29 @@
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/package.yml">
     <img src="https://github.com/duggytuxy/syswarden/actions/workflows/package.yml/badge.svg" alt="SysWarden Builder and Packager">
   </a>
-  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml">
-    <img src="https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml/badge.svg" alt="SysWarden Security Audit">
+  <a href="https://github.com/duggytuxy/syswarden/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/duggytuxy/syswarden?logo=license" alt="GitHub License">
+  </a>
+  <img src="https://img.shields.io/badge/Platform-Linux_Universal-0052cc?logo=linux" alt="Linux Universal">
+  <img src="https://img.shields.io/badge/Open%20Source-100%25-brightgreen?logo=opensourceinitiative" alt="Open Source">
+  <img src="https://img.shields.io/badge/Status-Production_Ready-blue?logo=status" alt="Production Ready">
+
+  <br>
+
+  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/compliance.yml">
+    <img src="https://github.com/duggytuxy/syswarden/actions/workflows/compliance.yml/badge.svg" alt="Plumber Compliance">
   </a>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/scorecard.yml">
     <img src="https://github.com/duggytuxy/syswarden/actions/workflows/scorecard.yml/badge.svg" alt="OSSF Scorecard Supply Chain Security">
   </a>
+  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml">
+    <img src="https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml/badge.svg" alt="SysWarden Security Audit">
+  </a>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/dependabot/dependabot-updates">
     <img src="https://github.com/duggytuxy/syswarden/actions/workflows/dependabot/dependabot-updates/badge.svg" alt="Dependabot Updates">
   </a>
-
-  <a href="https://github.com/duggytuxy/syswarden/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/duggytuxy/syswarden?logo=license" alt="GitHub License">
-  </a>
-
-  <img src="https://img.shields.io/badge/Compliance-EU_CRA_Ready-003399?logo=shield&logoColor=white" alt="EU CRA Ready">
-  <img src="https://img.shields.io/badge/Open%20Source-100%25-brightgreen?logo=opensourceinitiative" alt="Open Source">
-  <img src="https://img.shields.io/badge/Status-Production_Ready-blue?logo=status" alt="Production Ready">
   <img src="https://img.shields.io/badge/Security-Default_Deny-darkred?logo=security" alt="Default-Deny">
-  <img src="https://img.shields.io/badge/Platform-Linux_Universal-0052cc?logo=linux" alt="Linux Universal">
+  <img src="https://img.shields.io/badge/Compliance-EU_CRA_Ready-003399?logo=shield&logoColor=white" alt="EU CRA Ready">
 </p>
 
 # SysWarden
