@@ -1,4 +1,4 @@
-name: Compliance
+name: Plumber Compliance
 on:
   push:
     branches: [main]   # scope to the default branch so a PR push isn't scanned twice
