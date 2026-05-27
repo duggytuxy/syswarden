@@ -1,3 +1,0 @@
-- name: Plumber Compliance Scanner
-  uses: getplumber/plumber@v0.3.27
-  
