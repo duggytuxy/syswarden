@@ -20,8 +20,8 @@ if [[ -f "${1:-}" ]]; then
 
         # --- SECURITY FIX: PARSER REGEX EXCEPTION ---
         # Match strict Variable="Value" syntax. ONLY allows SYSWARDEN_ prefix and APPLY_CIS_L2_HARDENING.
-        # Only allows safe characters in values (alphanumeric, spaces, dots, slashes, colons, hyphens, commas).
-        if [[ "$line" =~ ^(SYSWARDEN_[A-Z0-9_]+|APPLY_CIS_L2_HARDENING)=\"([a-zA-Z0-9_./: ,-]*)\"$ ]]; then
+        # Only allows safe characters in values, including Webhook specific characters (?, &, =, @, %).
+        if [[ "$line" =~ ^(SYSWARDEN_[A-Z0-9_]+|APPLY_CIS_L2_HARDENING)=\"([a-zA-Z0-9_./: ,-?&=@%]*)\"$ ]]; then
             export "${BASH_REMATCH[1]}"="${BASH_REMATCH[2]}"
         else
             echo -e "${RED}[!] ERROR: Configuration poisoning detected or invalid format at line: $line${NC}"
@@ -186,7 +186,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.39.3                  ${NC}"
+    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.40.0                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -225,7 +225,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.39.3 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.40.0 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
@@ -273,9 +273,11 @@ if [[ "$MODE" != "update" ]]; then
         echo -e "   Requires a valid API Key to automatically report Layer 7 attackers."
         echo -e "   Get one at: ${CYAN}https://www.abuseipdb.com/account/api${NC}"
 
-        echo -e "\n${BOLD}13. WAZUH SIEM AGENT${NC} ${YELLOW}(Optional)${NC}"
+        echo -e "\n${BOLD}13. WEBHOOK NOTIFICATIONS${NC} ${YELLOW}(Optional)${NC}"
+        echo -e "   Securely forwards Fail2ban L7 blocks (e.g., ModSecurity) to Discord or MS Teams."
+
+        echo -e "\n${BOLD}14. WAZUH SIEM AGENT${NC} ${YELLOW}(Optional)${NC}"
         echo -e "   Required: Manager IP, Enrollment Port (1515), Listen Port (1514)."
-        echo -e "   If unsure about your SIEM architecture, consult your Security Admin."
 
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         read -p "$(echo -e "${YELLOW}Press [ENTER] to begin the configuration, or [Ctrl+C] to abort... ${NC}")"
@@ -293,6 +295,7 @@ if [[ "$MODE" != "update" ]]; then
     define_geoblocking "$MODE"
     define_asnblocking "$MODE"
     define_ha_cluster "$MODE"
+    define_webhook "$MODE"
 
     # Run the interactive/setup phases for the SIEM early so questions are asked up front.
     # The actual OS modification happens inside this function.

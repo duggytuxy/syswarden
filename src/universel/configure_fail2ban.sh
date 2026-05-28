@@ -60,6 +60,110 @@ EOF
             if [[ -n "$dns_ips" ]]; then f2b_ignoreip="$f2b_ignoreip $dns_ips"; fi
         fi
 
+        # --- WEBHOOK ACTION SCRIPT DEPLOYMENT ---
+        if [[ "${SYSWARDEN_ENABLE_WEBHOOK:-n}" == "y" ]]; then
+            log "INFO" "Deploying secure Webhook dispatcher for Fail2ban..."
+
+            # Write the hardened payload dispatcher
+            cat <<'EOF_SCRIPT' >/etc/syswarden/syswarden-webhook.sh
+#!/usr/bin/env bash
+# ==============================================================================
+# SYSWARDEN SECURE WEBHOOK DISPATCHER
+# ==============================================================================
+set -euo pipefail
+
+JAIL_NAME="${1:-Unknown}"
+IP_ADDRESS="${2:-0.0.0.0}"
+FAILURES="${3:-0}"
+
+# Safely load configuration
+if [[ -f /etc/syswarden.conf ]]; then
+    # shellcheck source=/dev/null
+    source /etc/syswarden.conf
+else
+    exit 1
+fi
+
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+send_discord() {
+    local url="$1"
+    local payload
+    payload=$(cat <<JSON
+{
+  "content": null,
+  "embeds": [
+    {
+      "title": "SysWarden Alert: IP Blocked",
+      "description": "A malicious IP has been banned by Fail2ban Layer 7.",
+      "color": 16711680,
+      "fields": [
+        { "name": "Jail", "value": "\`${JAIL_NAME}\`", "inline": true },
+        { "name": "Target IP", "value": "\`${IP_ADDRESS}\`", "inline": true },
+        { "name": "Failures", "value": "\`${FAILURES}\`", "inline": true }
+      ],
+      "timestamp": "${TIMESTAMP}"
+    }
+  ]
+}
+JSON
+)
+    curl -s -X POST -H "Content-Type: application/json" -d "$payload" "$url" >/dev/null || true
+}
+
+send_teams() {
+    local url="$1"
+    local payload
+    payload=$(cat <<JSON
+{
+  "@type": "MessageCard",
+  "@context": "http://schema.org/extensions",
+  "themeColor": "FF0000",
+  "summary": "SysWarden Alert",
+  "sections": [{
+    "activityTitle": "SysWarden Alert: IP Blocked",
+    "activitySubtitle": "Layer 7 Application Firewall",
+    "facts": [
+      { "name": "Jail:", "value": "${JAIL_NAME}" },
+      { "name": "Target IP:", "value": "${IP_ADDRESS}" },
+      { "name": "Failures:", "value": "${FAILURES}" }
+    ],
+    "markdown": true
+  }]
+}
+JSON
+)
+    curl -s -H "Content-Type: application/json" -d "$payload" "$url" >/dev/null || true
+}
+
+if [[ -n "${SYSWARDEN_WEBHOOK_URL_DISCORD:-}" ]]; then
+    send_discord "$SYSWARDEN_WEBHOOK_URL_DISCORD"
+fi
+
+if [[ -n "${SYSWARDEN_WEBHOOK_URL_TEAMS:-}" ]]; then
+    send_teams "$SYSWARDEN_WEBHOOK_URL_TEAMS"
+fi
+
+exit 0
+EOF_SCRIPT
+            chmod 700 /etc/syswarden/syswarden-webhook.sh
+            chown root:root /etc/syswarden/syswarden-webhook.sh
+
+            # Define the Fail2ban action mapped to the dispatcher
+            cat <<'EOF_ACTION' >/etc/fail2ban/action.d/syswarden-webhook.conf
+[Definition]
+actionstart = 
+actionstop = 
+actioncheck = 
+actionban = /etc/syswarden/syswarden-webhook.sh <name> <ip> <failures>
+actionunban = 
+EOF_ACTION
+
+            SYSW_DEFAULT_ACTION="%(banaction)s\n          syswarden-webhook"
+        else
+            SYSW_DEFAULT_ACTION="%(banaction)s"
+        fi
+
         # 4. Generate Core jail.local (Defaults & SSH)
         cat <<EOF >/etc/fail2ban/jail.local
 [DEFAULT]
@@ -70,6 +174,7 @@ maxretry = 3
 ignoreip = $f2b_ignoreip
 backend = auto
 banaction = $SYSW_F2B_ACTION
+action = $SYSW_DEFAULT_ACTION
 
 [syswarden-recidive]
 enabled  = true
