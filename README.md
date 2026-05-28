@@ -94,7 +94,7 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 ## The "Fortress" Dashboard (TUI & CLI)
 
 > [!NOTE]
-> SysWarden provides unified terminal-based observability, ensuring total situational awareness without the bloat of a complex database (like ELK or InfluxDB) or exposing vulnerable web ports.
+> SysWarden provides unified terminal-based observability and alerting, ensuring total situational awareness without the bloat of a complex database (like ELK or InfluxDB) or exposing vulnerable web ports.
 
 **Interactive TUI Dashboard**
 * **Live Threat Telemetry:** Track L7 behavioral bans in real time directly from your console.
@@ -102,9 +102,10 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 * **Resource Monitoring:** Monitor the near-zero memory footprint of the underlying firewall engine.
 * *(Fully integrated within the terminal to maintain a strict zero-trust attack surface without exposing port 9999).*
 
-**Orchestration & Interactive CLI**
+**Orchestration, Alerting & Interactive CLI**
+* **Real-Time Webhook Notifications:** Securely dispatch Layer 7 IP ban events directly to **Discord** or **Microsoft Teams**. Engineered with strict transport security (HTTPS/TLS 1.2+ enforced) and payload sanitization to prevent SSRF or command injection attacks.
 * **Terminal Management:** Manage your infrastructure directly from the shell via `syswarden-manager` (instant visibility into blocks, whitelists, and rule idempotency).
-* **Structured Installation Logs:** The deployment process provides precise, color-coded visual feedback on OS hardening, SIEM integration, and the successful application of Default-Deny policies.
+* **Structured Installation Logs:** The deployment process provides precise, color-coded visual feedback on OS hardening, SIEM integration, Webhook provisioning, and the successful application of Default-Deny policies.
 
 ## Strategic Roadmap
 
@@ -117,7 +118,7 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 | **v0.37.0** | Enterprise SIEM Integration: Syslog output standardization for deterministic log ingestion. | ✅ |
 | **v0.38.0** | Bugs hunting for FW | ✅ |
 | **v0.39.0** | Bugs hunting for TUI | ✅ |
-| **v0.40.2** | WebHook integration | ♨️ |
+| **v0.40.0** | WebHook integration | ✅ |
 
 ## Installation Guide
 
