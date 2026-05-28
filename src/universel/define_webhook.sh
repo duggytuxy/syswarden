@@ -6,8 +6,15 @@
 define_webhook() {
     local mode="$1"
 
-    # Bypass if CI/CD mode
+    # Bypass interactive prompts if CI/CD mode, but strictly persist the auto-config memory
     if [[ "$mode" == "auto" ]]; then
+        echo -e "SYSWARDEN_ENABLE_WEBHOOK=\"${SYSWARDEN_ENABLE_WEBHOOK:-n}\"" >>"$CONF_FILE"
+        if [[ -n "${SYSWARDEN_WEBHOOK_URL_DISCORD:-}" ]]; then
+            echo -e "SYSWARDEN_WEBHOOK_URL_DISCORD=\"$SYSWARDEN_WEBHOOK_URL_DISCORD\"" >>"$CONF_FILE"
+        fi
+        if [[ -n "${SYSWARDEN_WEBHOOK_URL_TEAMS:-}" ]]; then
+            echo -e "SYSWARDEN_WEBHOOK_URL_TEAMS=\"$SYSWARDEN_WEBHOOK_URL_TEAMS\"" >>"$CONF_FILE"
+        fi
         return 0
     fi
 

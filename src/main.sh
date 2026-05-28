@@ -186,7 +186,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.40.4                  ${NC}"
+    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.40.5                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -208,6 +208,20 @@ chmod 640 "$LOG_FILE" 2>/dev/null || true
 if [[ "$MODE" == "update" ]] && [[ -f "$CONF_FILE" ]]; then
     # shellcheck source=/dev/null
     source "$CONF_FILE"
+
+    # --- DEVSECOPS FIX: STATEFUL CONFIGURATION MIGRATION ---
+    # Seamlessly injects new variables into legacy configuration files during an upgrade
+    # without disrupting existing user preferences.
+    if ! grep -q "SYSWARDEN_ENABLE_WEBHOOK" "$CONF_FILE"; then
+        log "INFO" "Migrating configuration: Injecting Webhook parameters into $CONF_FILE"
+        {
+            echo -e "\n# --- WebHook Notifications (Discord / Teams) ---"
+            echo -e "SYSWARDEN_ENABLE_WEBHOOK=\"n\""
+            echo -e "SYSWARDEN_WEBHOOK_URL_DISCORD=\"\""
+            echo -e "SYSWARDEN_WEBHOOK_URL_TEAMS=\"\""
+        } >>"$CONF_FILE"
+    fi
+    # -------------------------------------------------------
 fi
 
 if [[ "$MODE" != "update" ]]; then
@@ -225,7 +239,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.40.4 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.40.5 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
