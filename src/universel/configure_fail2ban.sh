@@ -85,6 +85,8 @@ else
 fi
 
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Capture local hostname for multi-server fleet identification
+SERVER_NAME=$(hostname)
 
 send_discord() {
     local url="$1"
@@ -98,6 +100,7 @@ send_discord() {
       "description": "A malicious IP has been banned by Fail2ban Layer 7.",
       "color": 16711680,
       "fields": [
+        { "name": "Server", "value": "\`${SERVER_NAME}\`", "inline": true },
         { "name": "Jail", "value": "\`${JAIL_NAME}\`", "inline": true },
         { "name": "Target IP", "value": "\`${IP_ADDRESS}\`", "inline": true },
         { "name": "Failures", "value": "\`${FAILURES}\`", "inline": true }
@@ -125,6 +128,7 @@ send_teams() {
     "activityTitle": "SysWarden Alert: IP Blocked",
     "activitySubtitle": "Layer 7 Application Firewall",
     "facts": [
+      { "name": "Server:", "value": "${SERVER_NAME}" },
       { "name": "Jail:", "value": "${JAIL_NAME}" },
       { "name": "Target IP:", "value": "${IP_ADDRESS}" },
       { "name": "Failures:", "value": "${FAILURES}" }

@@ -45,7 +45,7 @@ generate_dashboard() {
 set -euo pipefail
 
 # --- VERSION CONFIGURATION ---
-SYSWARDEN_VERSION="v0.40.3"
+SYSWARDEN_VERSION="v0.40.4"
 
 DATA_FILE="/etc/syswarden/ui/data.json"
 
