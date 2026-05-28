@@ -161,7 +161,10 @@ actionban = /etc/syswarden/syswarden-webhook.sh <name> <ip> <failures>
 actionunban = 
 EOF_ACTION
 
-            SYSW_DEFAULT_ACTION="%(banaction)s\n          syswarden-webhook"
+            # --- HOTFIX: FAIL2BAN PYTHON CONFIGPARSER MULTILINE INJECTION ---
+            # Using Bash ANSI C-quoted strings ($'') to force a physical newline.
+            # Python's ConfigParser requires subsequent action lines to be indented.
+            SYSW_DEFAULT_ACTION=$'%(banaction)s\n          syswarden-webhook'
         else
             SYSW_DEFAULT_ACTION="%(banaction)s"
         fi

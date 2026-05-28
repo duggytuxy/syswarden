@@ -117,7 +117,7 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 | **v0.37.0** | Enterprise SIEM Integration: Syslog output standardization for deterministic log ingestion. | ✅ |
 | **v0.38.0** | Bugs hunting for FW | ✅ |
 | **v0.39.0** | Bugs hunting for TUI | ✅ |
-| **v0.40.2** | WebHook integration | ♨️ |
+| **v0.40.3** | WebHook integration | ♨️ |
 
 ## Installation Guide
 
