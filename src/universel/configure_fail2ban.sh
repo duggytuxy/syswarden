@@ -108,7 +108,8 @@ send_discord() {
 }
 JSON
 )
-    curl -s -X POST -H "Content-Type: application/json" -d "$payload" "$url" >/dev/null || true
+    # Enforce strict HTTPS and minimum TLS 1.2 to prevent downgrade attacks and SSRF
+    curl -s --proto =https --tlsv1.2 -X POST -H "Content-Type: application/json" -d "$payload" "$url" >/dev/null || true
 }
 
 send_teams() {
@@ -133,7 +134,8 @@ send_teams() {
 }
 JSON
 )
-    curl -s -H "Content-Type: application/json" -d "$payload" "$url" >/dev/null || true
+    # Enforce strict HTTPS and minimum TLS 1.2 to prevent downgrade attacks and SSRF
+    curl -s --proto =https --tlsv1.2 -H "Content-Type: application/json" -d "$payload" "$url" >/dev/null || true
 }
 
 if [[ -n "${SYSWARDEN_WEBHOOK_URL_DISCORD:-}" ]]; then

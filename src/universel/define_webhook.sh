@@ -22,17 +22,31 @@ define_webhook() {
     if [[ "$enable_wh" == "y" ]]; then
         echo -e "SYSWARDEN_ENABLE_WEBHOOK=\"y\"" >>"$CONF_FILE"
 
-        echo -e "\nDiscord Webhook URL (Leave empty to skip):"
-        read -rp "> " wh_discord
-        if [[ -n "$wh_discord" ]]; then
-            echo -e "SYSWARDEN_WEBHOOK_URL_DISCORD=\"$wh_discord\"" >>"$CONF_FILE"
-        fi
+        echo -e "\nDiscord Webhook URL (Must be HTTPS - Leave empty to skip):"
+        while true; do
+            read -rp "> " wh_discord
+            if [[ -z "$wh_discord" ]]; then
+                break
+            elif [[ "$wh_discord" =~ ^https:// ]]; then
+                echo -e "SYSWARDEN_WEBHOOK_URL_DISCORD=\"$wh_discord\"" >>"$CONF_FILE"
+                break
+            else
+                echo -e "${RED}[!] ERROR: Insecure protocol or invalid URL. Only HTTPS is permitted.${NC}"
+            fi
+        done
 
-        echo -e "\nMS Teams Webhook URL (Leave empty to skip):"
-        read -rp "> " wh_teams
-        if [[ -n "$wh_teams" ]]; then
-            echo -e "SYSWARDEN_WEBHOOK_URL_TEAMS=\"$wh_teams\"" >>"$CONF_FILE"
-        fi
+        echo -e "\nMS Teams Webhook URL (Must be HTTPS - Leave empty to skip):"
+        while true; do
+            read -rp "> " wh_teams
+            if [[ -z "$wh_teams" ]]; then
+                break
+            elif [[ "$wh_teams" =~ ^https:// ]]; then
+                echo -e "SYSWARDEN_WEBHOOK_URL_TEAMS=\"$wh_teams\"" >>"$CONF_FILE"
+                break
+            else
+                echo -e "${RED}[!] ERROR: Insecure protocol or invalid URL. Only HTTPS is permitted.${NC}"
+            fi
+        done
     else
         echo -e "SYSWARDEN_ENABLE_WEBHOOK=\"n\"" >>"$CONF_FILE"
     fi
