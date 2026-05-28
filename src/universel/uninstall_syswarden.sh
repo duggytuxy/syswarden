@@ -300,6 +300,7 @@ uninstall_syswarden() {
         rm -f "/etc/fail2ban/filter.d/${filter}.conf"
     done
     rm -f /etc/fail2ban/action.d/syswarden-docker.conf
+    rm -f /etc/fail2ban/action.d/syswarden-webhook.conf
     rm -f /etc/fail2ban/jail.local
     rm -f /etc/fail2ban/fail2ban.local
 
