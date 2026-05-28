@@ -91,20 +91,16 @@ SERVER_NAME=$(hostname)
 send_discord() {
     local url="$1"
     local payload
+    # Formats the payload as a unified description block instead of separate JSON fields
+    # to render as clean, consecutive text lines in the Discord client.
     payload=$(cat <<JSON
 {
   "content": null,
   "embeds": [
     {
       "title": "SysWarden Alert: IP Blocked",
-      "description": "A malicious IP has been banned by Fail2ban Layer 7.",
+      "description": "A malicious IP has been banned by Fail2ban Layer 7.\nServer : ${SERVER_NAME}\nJail : ${JAIL_NAME}\nTarget IP : ${IP_ADDRESS}\nFailures : ${FAILURES}",
       "color": 16711680,
-      "fields": [
-        { "name": "Server", "value": "\`${SERVER_NAME}\`", "inline": true },
-        { "name": "Jail", "value": "\`${JAIL_NAME}\`", "inline": true },
-        { "name": "Target IP", "value": "\`${IP_ADDRESS}\`", "inline": true },
-        { "name": "Failures", "value": "\`${FAILURES}\`", "inline": true }
-      ],
       "timestamp": "${TIMESTAMP}"
     }
   ]
