@@ -225,6 +225,54 @@ secure_cron_permissions() {
 }
 
 # ==============================================================================
+# --- AUTOMATIC SECURITY UPDATES (Patch Management) ---
+# Ensures the system automatically installs security patches (Zero-Day defense).
+# Supported: Debian, Ubuntu, Alma, Rocky, Fedora, Oracle Linux, RHEL 9+
+# ==============================================================================
+enable_automatic_security_updates() {
+    log "INFO" "Configuring automatic security updates..."
+
+    if [[ -f /etc/debian_version ]]; then
+        # Debian / Ubuntu implementation
+        if ! dpkg -l | grep -q "^ii[[:space:]]*unattended-upgrades"; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades apt-listchanges >/dev/null 2>&1
+        fi
+
+        # Enforce daily update checks and unattended upgrades
+        cat <<'EOF' >/etc/apt/apt.conf.d/20auto-upgrades
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl enable unattended-upgrades >/dev/null 2>&1 || true
+            systemctl start unattended-upgrades >/dev/null 2>&1 || true
+        fi
+
+    elif [[ -f /etc/redhat-release ]]; then
+        # RHEL / Alma / Rocky / Oracle / Fedora implementation
+        if ! rpm -q dnf-automatic >/dev/null 2>&1; then
+            dnf install -y dnf-automatic >/dev/null 2>&1
+        fi
+
+        local DNF_AUTO_CONF="/etc/dnf/automatic.conf"
+        if [[ -f "$DNF_AUTO_CONF" ]]; then
+            # Restrict to security updates ONLY to prevent breaking production features
+            sed -i 's/^[[:space:]]*upgrade_type[[:space:]]*=.*/upgrade_type = security/' "$DNF_AUTO_CONF"
+            sed -i 's/^[[:space:]]*download_updates[[:space:]]*=.*/download_updates = yes/' "$DNF_AUTO_CONF"
+            sed -i 's/^[[:space:]]*apply_updates[[:space:]]*=.*/apply_updates = yes/' "$DNF_AUTO_CONF"
+        fi
+
+        if command -v systemctl >/dev/null 2>&1; then
+            # dnf-automatic relies on a systemd timer rather than a standard background daemon
+            systemctl enable dnf-automatic.timer >/dev/null 2>&1 || true
+            systemctl start dnf-automatic.timer >/dev/null 2>&1 || true
+        fi
+    else
+        log "WARN" "Automatic security updates skipped: Unsupported OS family."
+    fi
+}
+
+# ==============================================================================
 # --- MAIN EXECUTOR ---
 # ==============================================================================
 apply_cis_level2_hardening() {
@@ -242,6 +290,7 @@ apply_cis_level2_hardening() {
     restrict_core_dumps
     apply_cis_ssh_hardening
     secure_cron_permissions
+    enable_automatic_security_updates
 
     log "SUCCESS" "CIS Benchmark Level 2 Hardening successfully applied."
 }
