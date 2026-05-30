@@ -11,8 +11,9 @@ syswarden_jail_silent_scanner() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-silent-scanner.conf
 [Definition]
 # [DEVSECOPS FIX] Bounded the HTTP request parsing [^"]* to mathematically prevent ReDoS
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD|PUT|DELETE|OPTIONS|PROPFIND) [^"]*" (?:400|401|403|404|405|444)
-ignoreregex = 
+# [DEVSECOPS FIX] Added HTTP 30x redirects to capture topology discovery probes
+failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD|PUT|DELETE|OPTIONS|PROPFIND) [^"]*" (?:30[1278]|400|401|403|404|405|444)
+ignoreregex =
 EOF
     fi
 

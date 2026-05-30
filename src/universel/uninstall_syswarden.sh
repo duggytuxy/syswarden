@@ -289,7 +289,7 @@ uninstall_syswarden() {
 
     # --- Clean up all SysWarden Fail2ban filters ---
     for filter in nginx-scanner mariadb-auth mongodb-guard syswarden-privesc syswarden-portscan \
-        syswarden-revshell syswarden-aibots syswarden-badbots syswarden-httpflood syswarden-webshell \
+        syswarden-revshell syswarden-aibots syswarden-badbots syswarden-httpflood syswarden-slowloris syswarden-webshell \
         syswarden-sqli-xss syswarden-secretshunter syswarden-ssrf syswarden-jndi-ssti syswarden-apimapper \
         syswarden-modsec syswarden-tls-guard syswarden-apache-tls \
         syswarden-lfi-advanced syswarden-vaultwarden syswarden-sso syswarden-silent-scanner syswarden-cms-honeypot syswarden-recidive syswarden-generic-auth \

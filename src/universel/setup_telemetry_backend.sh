@@ -237,6 +237,7 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                     *portscan*) MITRE_ID="T1046"; MITRE_NAME="Network Service Discovery" ;;
                     *scanner*|*bot*|*mapper*|*enum*|*tls*|*honeypot*) MITRE_ID="T1595"; MITRE_NAME="Active Scanning / TLS Fuzzing" ;;
                     *flood*|*dos*) MITRE_ID="T1498.001"; MITRE_NAME="Direct Network Flood" ;;
+                    *slowloris*) MITRE_ID="T1498.002"; MITRE_NAME="Resource Exhaustion Flood" ;;
                     *wireguard*|*openvpn*) MITRE_ID="T1136"; MITRE_NAME="External Remote Services" ;;
                     *ssh*|*auth*|*telnet*|*ftp*|*mail*|*postfix*|*dovecot*|*mysql*|*mariadb*|*redis*|*rabbitmq*|*zabbix*|*grafana*|*vaultwarden*|*sso*|*odoo*|*prestashop*|*atlassian*|*jenkins*|*gitlab*|*proxmox*|*cockpit*|*nextcloud*) MITRE_ID="T1110"; MITRE_NAME="Brute Force / Password Guessing" ;;
                     *recidive*) MITRE_ID="T1133"; MITRE_NAME="External Remote Services / Repeat Offender" ;;
@@ -249,7 +250,7 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                 if [[ "$JAIL" =~ (sqli|xss|lfi|revshell|webshell|ssti|ssrf|jndi|modsec|homoglyph) ]]; then R_EXP=$((R_EXP + BANNED_COUNT))
                 elif [[ "$JAIL" =~ (ssh|auth|privesc|prestashop) ]]; then R_BF=$((R_BF + BANNED_COUNT))
                 elif [[ "$JAIL" =~ (scan|bot|mapper|enum|hunter|tls|honeypot) ]]; then R_REC=$((R_REC + BANNED_COUNT))
-                elif [[ "$JAIL" =~ (flood) ]]; then R_DOS=$((R_DOS + BANNED_COUNT))
+                elif [[ "$JAIL" =~ (flood|slowloris) ]]; then R_DOS=$((R_DOS + BANNED_COUNT))
                 else R_ABU=$((R_ABU + BANNED_COUNT)); fi
                 
                 BANNED_IPS=$(echo "$STATUS_OUT" | grep -i 'Banned IP list:' | head -n 1 | sed 's/.*Banned IP list://I' | tr -d ',' | tr -s ' \t' '\n' | grep -vE '^\s*$' | tail -n 50 || true)
@@ -265,7 +266,7 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             case "${JAIL,,}" in
                                 *ssh*|*auth*|*telnet*|*cockpit*|*privesc*) LOG_TARGETS="/var/log/auth.log* /var/log/secure* /var/log/auth-syswarden.log* /var/log/daemon.log* /var/log/syslog* /var/log/messages* /var/log/kern.log*" ;;
                                 *portscan*|*flood*|*dos*|*wireguard*|*openvpn*) LOG_TARGETS="/var/log/kern-firewall.log* /var/log/kern.log* /var/log/syslog* /var/log/messages* /var/log/openvpn/openvpn.log* /var/log/openvpn.log* /var/log/daemon.log*" ;;
-                                *nginx*|*apache*|*web*|*http*|*sqli*|*xss*|*lfi*|*ssti*|*jndi*|*modsec*|*hunter*|*proxy*|*scan*|*enum*|*bot*|*prestashop*|*atlassian*|*webshell*|*homoglyph*|*tls*|*dolibarr*|*phpmyadmin*|*apimapper*|*drupal*|*wordpress*|*honeypot*) LOG_TARGETS="/var/log/nginx/*.log* /var/log/apache2/*.log* /var/log/httpd/*log* /var/log/syslog* /var/log/messages* /var/log/daemon.log* /var/log/kern-firewall.log* /var/log/kern.log*" ;;
+                                *nginx*|*apache*|*web*|*http*|*sqli*|*xss*|*lfi*|*ssti*|*jndi*|*modsec*|*hunter*|*proxy*|*scan*|*enum*|*bot*|*prestashop*|*atlassian*|*webshell*|*homoglyph*|*tls*|*dolibarr*|*phpmyadmin*|*apimapper*|*drupal*|*wordpress*|*honeypot*|*slowloris*) LOG_TARGETS="/var/log/nginx/*.log* /var/log/apache2/*.log* /var/log/httpd/*log* /var/log/syslog* /var/log/messages* /var/log/daemon.log* /var/log/kern-firewall.log* /var/log/kern.log*" ;;
                                 *mail*|*postfix*|*dovecot*|*exim*|*sendmail*) LOG_TARGETS="/var/log/maillog* /var/log/mail.log* /var/log/syslog* /var/log/messages* /var/log/daemon.log*" ;;
                                 *mysql*|*mariadb*|*redis*|*mongodb*|*rabbitmq*) LOG_TARGETS="/var/log/mysql/*.log* /var/log/mariadb/*.log* /var/log/redis/*.log* /var/log/mongodb/*.log* /var/log/rabbitmq/*.log* /var/log/syslog* /var/log/messages* /var/log/daemon.log*" ;;
                                 *vsftpd*|*ftp*) LOG_TARGETS="/var/log/vsftpd.log* /var/log/auth.log* /var/log/secure* /var/log/messages* /var/log/syslog*" ;;
