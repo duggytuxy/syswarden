@@ -45,7 +45,7 @@ generate_dashboard() {
 set -euo pipefail
 
 # --- VERSION CONFIGURATION ---
-SYSWARDEN_VERSION="v0.40.8"
+SYSWARDEN_VERSION="v0.40.9"
 
 DATA_FILE="/etc/syswarden/ui/data.json"
 
@@ -330,7 +330,7 @@ while true; do
                     C_VEC=${C_W}
                     if [[ "$b_jail" =~ (sqli|xss|lfi|revshell|webshell|ssti|ssrf|jndi|modsec|homoglyph) ]]; then C_VEC=${C_R}
                     elif [[ "$b_jail" =~ (ssh|auth|privesc|prestashop) ]]; then C_VEC=${C_Y}
-                    elif [[ "$b_jail" =~ (scan|bot|mapper|enum|hunter|tls) ]]; then C_VEC=${C_B}
+                    elif [[ "$b_jail" =~ (scan|bot|mapper|enum|hunter|tls|honeypot) ]]; then C_VEC=${C_B}
                     elif [[ "$b_jail" =~ (flood) ]]; then C_VEC=${C_D}
                     else C_VEC=${C_Y}; fi
                     
