@@ -7,7 +7,7 @@
   </a>
   <img src="https://img.shields.io/badge/Platform-Linux_Universal-0052cc?logo=linux" alt="Linux Universal">
   <img src="https://img.shields.io/badge/Open%20Source-100%25-brightgreen?logo=opensourceinitiative" alt="Open Source">
-  <img src="https://img.shields.io/badge/Status-Production_Ready-blue?logo=status" alt="Production Ready">
+  <img src="https://img.shields.io/badge/Compliance-EU_CRA_Ready-003399?logo=shield&logoColor=white" alt="EU CRA Ready">
   <img src="https://img.shields.io/badge/Compliance-ISO27001_Ready-003399?logo=shield&logoColor=white" alt="ISO27001 Ready">
   <img src="https://img.shields.io/badge/Compliance-NIS2_Ready-3DD407?logo=shield&logoColor=white" alt="NIS2 Ready">
 
@@ -27,6 +27,7 @@
   </a>
   <img src="https://img.shields.io/badge/Security-Hardened-darkred?logo=security" alt="Hardened">
   <img src="https://img.shields.io/badge/Compliance-EU_CRA_Ready-003399?logo=shield&logoColor=white" alt="EU CRA Ready">
+  <img src="https://img.shields.io/badge/Status-Production_Ready-blue?logo=status" alt="Production Ready">
 </p>
 
 # SysWarden
