@@ -12,8 +12,13 @@ syswarden_jail_slowloris() {
         fi
     done
 
-    # 2. Fail-Fast: Abort if no error logs exist
+    # 2. Fail-Fast: Abort and cleanup if no error logs exist
     if [[ -z "$SLOW_LOGS" ]]; then
+        # [DEVSECOPS FIX] Dynamic teardown to prevent Fail2ban status=255 crash on missing logs
+        if [[ -f "/etc/fail2ban/jail.d/syswarden-slowloris.conf" ]]; then
+            rm -f "/etc/fail2ban/jail.d/syswarden-slowloris.conf"
+            log "WARN" "Web error logs not found. Auto-disabled Slowloris jail to prevent Fail2ban crash."
+        fi
         return 0
     fi
 

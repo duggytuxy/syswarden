@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SysWarden v0.41.1 - DevSecOps Audit & Compliance Tool
+# SysWarden v0.41.2 - DevSecOps Audit & Compliance Tool
 # Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify
@@ -522,8 +522,10 @@ if [[ "$RUN_ALL" -eq 1 || "$USER_PHASES" == *" 4 "* ]]; then
                 else
                     fail "Purple Team Integration FAILED: ModSecurity filter exists but jail is inactive."
                 fi
+            elif command -v docker >/dev/null 2>&1 && docker ps --format '{{.Image}}' 2>/dev/null | grep -iE "modsecurity|owasp/modsecurity-crs|coreruleset/modsecurity" >/dev/null; then
+                pass "Purple Team Integration VERIFIED: Containerized WAF (ModSecurity Sidecar) is active."
             else
-                info "Purple Team Integration N/A: ModSecurity WAF not detected."
+                info "Purple Team Integration N/A: ModSecurity WAF not detected natively or in Docker."
             fi
 
             IGNORE_IPS=$(fail2ban-client get sshd ignoreip 2>/dev/null || true)
@@ -555,31 +557,13 @@ fi
 if [[ "$RUN_ALL" -eq 1 || "$USER_PHASES" == *" 5 "* ]]; then
     log_header "Phase 5: DevSecOps Telemetry & Enterprise Dashboard"
 
-    if is_service_active "nginx"; then
-        pass "Nginx Enterprise Web Server daemon is active."
-    else
-        fail "Nginx Web Server is offline or not installed."
-    fi
-
-    if [[ -f "/etc/syswarden/ssl/syswarden.crt" ]] && [[ -f "/etc/syswarden/ssl/syswarden.key" ]]; then
-        check_file_perms "/etc/syswarden/ssl/syswarden.key" "600" "root"
-        pass "Self-Signed RSA 4096 TLS Certificate is securely deployed."
-    else
-        fail "Dashboard TLS Certificates are missing."
-    fi
+    # [DEVSECOPS FIX] TUI Architecture: Web Server and TLS certificate checks bypassed
+    info "Enterprise Dashboard (TUI) is active. Local Web Server and TLS checks are no longer required."
 
     if [[ -x "/usr/local/bin/syswarden-telemetry.sh" ]]; then
         pass "Telemetry Orchestrator script is deployed and executable."
     else
         fail "Telemetry Orchestrator script is missing."
-    fi
-
-    if is_service_active "apache2" || is_service_active "httpd"; then
-        pass "Apache Enterprise Web Server daemon is active."
-    elif is_service_active "nginx"; then
-        pass "Nginx Enterprise Web Server daemon is active."
-    else
-        fail "No Supported Web Server (Apache/Nginx) is offline or not installed."
     fi
 
     info "Initiating Deep-Scan for Telemetry Idempotence (60s cron overlap observation)..."
@@ -619,10 +603,11 @@ if [[ "$RUN_ALL" -eq 1 || "$USER_PHASES" == *" 5 "* ]]; then
         payload_perms=$(stat -c "%a" "/etc/syswarden/ui/data.json" 2>/dev/null || stat -f "%Op" "/etc/syswarden/ui/data.json" | cut -c4-6)
         payload_owner=$(stat -c "%U" "/etc/syswarden/ui/data.json" 2>/dev/null || stat -f "%Su" "/etc/syswarden/ui/data.json")
 
-        if [[ "$payload_perms" == *"640" ]] && [[ "$payload_owner" == "nginx" || "$payload_owner" == "www-data" || "$payload_owner" == "nobody" ]]; then
-            pass "Telemetry payload ownership & permissions are strictly isolated (640, Owner: $payload_owner)."
+        # [DEVSECOPS FIX] TUI Architecture: data.json no longer requires web server ownership
+        if [[ "$payload_perms" == *"640" || "$payload_perms" == *"600" ]] && [[ "$payload_owner" == "root" ]]; then
+            pass "Telemetry payload ownership & permissions are strictly isolated (TUI Mode: $payload_perms, Owner: $payload_owner)."
         else
-            fail "Telemetry payload has weak permissions/ownership (Got $payload_perms $payload_owner, Expected 640)."
+            fail "Telemetry payload has weak permissions/ownership (Got $payload_perms $payload_owner, Expected 600/640 root)."
         fi
     else
         warn "Telemetry payload (data.json) not found yet. Awaiting initial cron execution."
