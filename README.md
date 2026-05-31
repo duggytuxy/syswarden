@@ -23,13 +23,13 @@
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/dependabot/dependabot-updates">
     <img src="https://github.com/duggytuxy/syswarden/actions/workflows/dependabot/dependabot-updates/badge.svg" alt="Dependabot Updates">
   </a>
-  <img src="https://img.shields.io/badge/Security-Default_Deny-darkred?logo=security" alt="Default-Deny">
+  <img src="https://img.shields.io/badge/Security-Hardened-darkred?logo=security" alt="Hardened">
   <img src="https://img.shields.io/badge/Compliance-EU_CRA_Ready-003399?logo=shield&logoColor=white" alt="EU CRA Ready">
 </p>
 
 # SysWarden
 
-**SysWarden** is an Enterprise-grade Default-Deny Host Intrusion Prevention System (HIPS) designed for critical Linux infrastructure. It enforces automated a part of CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with a near-zero performance overhead.
+**SysWarden** is an Enterprise-grade Hardened Host Intrusion Prevention System (HIPS) designed for critical Linux infrastructure. It enforces automated a part of CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with a near-zero performance overhead.
 
 It acts as a ruthless first line of defense. By fusing dynamic firewall orchestration (`nftables`/`iptables`), global Threat Intelligence ([Data-Shield IPv4](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a reactive HIPS (optimized Fail2ban), and SIEM alert routing, SysWarden filters out Internet "background noise" and neutralizes threats at the network (L2/L3/L4) and application (L7) levels. It perfectly complements modern EDR/XDR architectures by drastically reducing their analysis surface and the server's CPU load.
 
@@ -51,7 +51,7 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 * Seamlessly integrates [OWASP ModSecurity (v3.0.15)](https://github.com/owasp-modsecurity/ModSecurity) via the `syswarden-waf.sh` component, providing deep HTTP traffic inspection.
 * Natively interfaces with the AbuseIPDB network to proactively report attackers and share telemetry.
 
-**Default-Deny & Compliance Architecture**
+**Hardened & Compliance Architecture**
 * Optional surgical hardening of the kernel (eBPF, ASLR, source routing), memory (core dumps limits), SSH, and filesystems. It strictly conforms to CIS Level 2 requirements without breaking modern containerized production stacks.
 * Hides your SSH port and administrative interfaces behind a stealthy WireGuard VPN tunnel, deployed seamlessly.
 * Integrates with `rsyslog` to natively forward only high-value behavioral bans (Layer 7) to your SOC/SIEM (e.g., Wazuh). Intentionally filters out Layer 3 noise to prevent index saturation and control ingestion costs.
@@ -64,7 +64,7 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 > [!NOTE]
 > **For CISOs and CIOs (Strategic Impact):** This architecture translates zero-trust policies into strict technical controls. By offloading volumetric mitigation to the network edge (L2/L3/L4) and forwarding only high-fidelity Layer 7 behavioral data, SysWarden drastically reduces SIEM ingestion costs, prevents kernel resource exhaustion, and guarantees operational continuity under hostile conditions.
 
-## Hardware-Aware Default-Deny Architecture
+## Hardware-Aware Hardened Architecture
 
 > [!IMPORTANT]
 > SysWarden doesn't just stack firewall rules; it orchestrates the Linux network stack to neutralize threats before they consume your resources:
@@ -73,7 +73,7 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 2. Prevents log flooding and false-positive portscan detections in highly federated networks (CGNAT). Silently destroys late `FIN-ACK`/`RST` packets on expired `conntrack` sessions, and strictly drops invalid TCP connection noise (e.g., `NEW` packets lacking the `SYN` flag).
 3. Legitimate established connections, dynamic container traffic (e.g., `DOCKER-USER` chain), and Web Protocol Datagrams (HTTP/3 QUIC mapped to UDP/443) are prioritized. This stateful bypass guarantees zero latency for your production application traffic.
 4. The active defense layer analyzes application logs (via `systemd` journald) in real time. Any behavioral anomaly (brute-force, SQLi, LFI) triggers a surgical "AllPorts" ban that dynamically synchronizes the IP with the hardware drop tables.
-5. The attack surface is hermetically sealed. Any incoming traffic not explicitly authorized by the administrator or the automatic service discovery engine is silently dropped, enforcing a strict Default-Deny doctrine.
+5. The attack surface is hermetically sealed. Any incoming traffic not explicitly authorized by the administrator or the automatic service discovery engine is silently dropped, enforcing a strict Hardened doctrine.
 
 ## Supported Operating Systems & Firewall Backends
 
@@ -105,12 +105,12 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 **Orchestration, Alerting & Interactive CLI**
 * Securely dispatch Layer 7 IP ban events directly to **Discord** or **Microsoft Teams**. Engineered with strict transport security (HTTPS/TLS 1.2+ enforced) and payload sanitization to prevent SSRF or command injection attacks.
 * Manage your infrastructure directly from the shell via `syswarden-manager` (instant visibility into blocks, whitelists, and rule idempotency).
-* The deployment process provides precise, color-coded visual feedback on OS hardening, SIEM integration, Webhook provisioning, and the successful application of Default-Deny policies.
+* The deployment process provides precise, color-coded visual feedback on OS hardening, SIEM integration, Webhook provisioning, and the successful application of Hardened policies.
 
 ## Strategic Roadmap
 
 > [!NOTE]
-> The development lifecycle of SysWarden follows a strict DevSecOps pipeline aimed at reinforcing the observability and interoperability of the Default-Deny architecture.
+> The development lifecycle of SysWarden follows a strict DevSecOps pipeline aimed at reinforcing the observability and interoperability of the Hardened architecture.
 
 | Version | Milestone Target | Status |
 | :---: | :--- | :---: |
@@ -124,7 +124,7 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 
 SysWarden is distributed as a pre-compiled, self-contained shell script. All complex modules are bundled into a single deployment artifact.
 
-Two installation methods are supported: a standard interactive mode, and an "Enterprise Default-Deny" mode for environments requiring strict supply chain validation.
+Two installation methods are supported: a standard interactive mode, and an "Enterprise Hardened" mode for environments requiring strict supply chain validation.
 
 ### 1. Quick Installation (Standard)
 
@@ -174,7 +174,7 @@ nano /opt/syswarden/syswarden-auto.conf
 syswarden /opt/syswarden/syswarden-auto.conf
 ```
 
-### 3. Enterprise Installation (Default-Deny / SLSA Level 3)
+### 3. Enterprise Installation (Hardened / SLSA Level 3)
 
 SysWarden releases are cryptographically signed using GitHub Artifact Attestations to guarantee supply chain integrity. For environments compliant with ISO 27001 or NIS2, it is imperative to verify the script's provenance before execution.
 
