@@ -39,27 +39,27 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 ## Enterprise-Grade Features
 
 **Core Network Defense (Hardware & Layer 2/3)**
-* **L2/L3 Ingress Acceleration:** Injects Threat Intelligence directly into the `netdev` table under `nftables` (or `raw PREROUTING` under `iptables`). Malicious packets are destroyed right at the Network Interface Card (NIC), entirely bypassing kernel routing and the `conntrack` module to guarantee zero CPU impact during volumetric DDoS attacks.
-* **Global Threat Intelligence:** Automatically blocks hostile countries (GeoIP), known cybercrime hosters, and rogue Autonomous System Numbers (ASN), instantly eliminating 97% of unwanted traffic.
+* Injects Threat Intelligence directly into the `netdev` table under `nftables` (or `raw PREROUTING` under `iptables`). Malicious packets are destroyed right at the Network Interface Card (NIC), entirely bypassing kernel routing and the `conntrack` module to guarantee zero CPU impact during volumetric DDoS attacks.
+* Automatically blocks hostile countries (GeoIP), known cybercrime hosters, and rogue Autonomous System Numbers (ASN), instantly eliminating 97% of unwanted traffic.
 
 **Stateful & Protocol Optimization (Layer 3/4)**
-* **CGNAT & TCP State Purification:** Implements UFW-grade stateful enforcement by silently destroying late `FIN-ACK`/`RST` packets on expired `conntrack` sessions, and strictly blocking `NEW` connections lacking the `SYN` flag. This absolutely eradicates log pollution and false-positive portscan detections on active service ports, crucial for highly federated and mobile-heavy environments.
-* **Dynamic QUIC / HTTP3 Provisioning:** Modern web protocols are natively supported. SysWarden automatically binds and provisions `UDP/443` whenever `TCP/443` is permitted, preventing aggressive QUIC handshake drops at the Zero-Trust Catch-All layer and ensuring seamless HTTP/3 operation behind the firewall.
+* Implements UFW-grade stateful enforcement by silently destroying late `FIN-ACK`/`RST` packets on expired `conntrack` sessions, and strictly blocking `NEW` connections lacking the `SYN` flag. This absolutely eradicates log pollution and false-positive portscan detections on active service ports, crucial for highly federated and mobile-heavy environments.
+* Modern web protocols are natively supported. SysWarden automatically binds and provisions `UDP/443` whenever `TCP/443` is permitted, preventing aggressive QUIC handshake drops at the Zero-Trust Catch-All layer and ensuring seamless HTTP/3 operation behind the firewall.
 
 **Application Security & Active Response (Layer 7)**
-* **Dynamic L7 HIPS / WAF:** Protects 50+ vital services (Docker, Nginx, Databases, CMS) using deeply restructured and hardened Fail2ban "jails", ensuring a near-zero memory footprint and deadly accuracy (payload escaping, bypass prevention).
-* **Standalone ModSecurity:** Seamlessly integrates [OWASP ModSecurity (v3.0.15)](https://github.com/owasp-modsecurity/ModSecurity) via the `syswarden-waf.sh` component, providing deep HTTP traffic inspection.
-* **Automated Retaliation:** Natively interfaces with the AbuseIPDB network to proactively report attackers and share telemetry.
+* Protects 56+ vital services (Docker, Nginx, Databases, CMS) using deeply restructured and hardened Fail2ban "jails", ensuring a near-zero memory footprint and deadly accuracy (payload escaping, bypass prevention).
+* Seamlessly integrates [OWASP ModSecurity (v3.0.15)](https://github.com/owasp-modsecurity/ModSecurity) via the `syswarden-waf.sh` component, providing deep HTTP traffic inspection.
+* Natively interfaces with the AbuseIPDB network to proactively report attackers and share telemetry.
 
 **Default-Deny & Compliance Architecture**
-* **CIS Benchmark Level 2 (Defense-in-Depth):** Optional surgical hardening of the kernel (eBPF, ASLR, source routing), memory (core dumps limits), SSH, and filesystems. It strictly conforms to CIS Level 2 requirements without breaking modern containerized production stacks.
-* **Service Cloaking:** Hides your SSH port and administrative interfaces behind a stealthy WireGuard VPN tunnel, deployed seamlessly.
-* **Smart SIEM Routing:** Integrates with `rsyslog` to natively forward only high-value behavioral bans (Layer 7) to your SOC/SIEM (e.g., Wazuh). Intentionally filters out Layer 3 noise to prevent index saturation and control ingestion costs.
-* **High Availability (HA) Cluster Sync:** Securely replicates Threat Intelligence states, whitelists, and configurations to passive nodes via an SSH-encrypted cron job.
+* Optional surgical hardening of the kernel (eBPF, ASLR, source routing), memory (core dumps limits), SSH, and filesystems. It strictly conforms to CIS Level 2 requirements without breaking modern containerized production stacks.
+* Hides your SSH port and administrative interfaces behind a stealthy WireGuard VPN tunnel, deployed seamlessly.
+* Integrates with `rsyslog` to natively forward only high-value behavioral bans (Layer 7) to your SOC/SIEM (e.g., Wazuh). Intentionally filters out Layer 3 noise to prevent index saturation and control ingestion costs.
+* Securely replicates Threat Intelligence states, whitelists, and configurations to passive nodes via an SSH-encrypted cron job.
 
 **Observability & Lifecycle Management**
-* **Real-Time Telemetry:** Monitor active threats, blocked IPs, and system health via a secure, Dashboard TUI and a dedicated CLI interface.
-* **"Scorched Earth" Surgical Rollback:** The uninstallation routine performs a deep cleanup. It safely reverts all CIS Level 2 configurations (sysctl, modprobe, cron permissions), eradicates custom `netdev` and `raw` tables, and instantly restores the OS to its pristine original state without requiring a reboot.
+* Monitor active threats, blocked IPs, and system health via a secure, Dashboard TUI and a dedicated CLI interface.
+* The uninstallation routine performs a deep cleanup. It safely reverts all CIS Level 2 configurations (sysctl, modprobe, cron permissions), eradicates custom `netdev` and `raw` tables, and instantly restores the OS to its pristine original state without requiring a reboot.
 
 > [!NOTE]
 > **For CISOs and CIOs (Strategic Impact):** This architecture translates zero-trust policies into strict technical controls. By offloading volumetric mitigation to the network edge (L2/L3/L4) and forwarding only high-fidelity Layer 7 behavioral data, SysWarden drastically reduces SIEM ingestion costs, prevents kernel resource exhaustion, and guarantees operational continuity under hostile conditions.
@@ -69,11 +69,11 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 > [!IMPORTANT]
 > SysWarden doesn't just stack firewall rules; it orchestrates the Linux network stack to neutralize threats before they consume your resources:
 
-1. **L2/L3 Ingress Drop (Priority -500):** OSINT blocklists, hostile ASNs, and GeoIP filtering are applied at the lowest hardware level (NIC Ingress hook). Packets are destroyed before entering kernel routing or state tracking (`conntrack`), preventing memory exhaustion and guaranteeing zero CPU impact during volumetric attacks.
-2. **Stateful Purification (Priority -10):** Prevents log flooding and false-positive portscan detections in highly federated networks (CGNAT). Silently destroys late `FIN-ACK`/`RST` packets on expired `conntrack` sessions, and strictly drops invalid TCP connection noise (e.g., `NEW` packets lacking the `SYN` flag).
-3. **Stateful Fast-Path (Priority 0):** Legitimate established connections, dynamic container traffic (e.g., `DOCKER-USER` chain), and Web Protocol Datagrams (HTTP/3 QUIC mapped to UDP/443) are prioritized. This stateful bypass guarantees zero latency for your production application traffic.
-4. **Behavioral L7 Defense (HIPS):** The active defense layer analyzes application logs (via `systemd` journald) in real time. Any behavioral anomaly (brute-force, SQLi, LFI) triggers a surgical "AllPorts" ban that dynamically synchronizes the IP with the hardware drop tables.
-5. **Default-Deny "Catch-All":** The attack surface is hermetically sealed. Any incoming traffic not explicitly authorized by the administrator or the automatic service discovery engine is silently dropped, enforcing a strict Default-Deny doctrine.
+1. OSINT blocklists, hostile ASNs, and GeoIP filtering are applied at the lowest hardware level (NIC Ingress hook). Packets are destroyed before entering kernel routing or state tracking (`conntrack`), preventing memory exhaustion and guaranteeing zero CPU impact during volumetric attacks.
+2. Prevents log flooding and false-positive portscan detections in highly federated networks (CGNAT). Silently destroys late `FIN-ACK`/`RST` packets on expired `conntrack` sessions, and strictly drops invalid TCP connection noise (e.g., `NEW` packets lacking the `SYN` flag).
+3. Legitimate established connections, dynamic container traffic (e.g., `DOCKER-USER` chain), and Web Protocol Datagrams (HTTP/3 QUIC mapped to UDP/443) are prioritized. This stateful bypass guarantees zero latency for your production application traffic.
+4. The active defense layer analyzes application logs (via `systemd` journald) in real time. Any behavioral anomaly (brute-force, SQLi, LFI) triggers a surgical "AllPorts" ban that dynamically synchronizes the IP with the hardware drop tables.
+5. The attack surface is hermetically sealed. Any incoming traffic not explicitly authorized by the administrator or the automatic service discovery engine is silently dropped, enforcing a strict Default-Deny doctrine.
 
 ## Supported Operating Systems & Firewall Backends
 
@@ -97,15 +97,15 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 > SysWarden provides unified terminal-based observability and alerting, ensuring total situational awareness without the bloat of a complex database (like ELK or InfluxDB) or exposing vulnerable web ports.
 
 **Interactive TUI Dashboard**
-* **Live Threat Telemetry:** Track L7 behavioral bans in real time directly from your console.
-* **Attacker Profiling:** Visualize top OSINT offenders, blocked ASNs, and GeoIP interception stats, leveraging a secure, localized `data.json` engine.
-* **Resource Monitoring:** Monitor the near-zero memory footprint of the underlying firewall engine.
+* Track L7 behavioral bans in real time directly from your console.
+* Visualize top OSINT offenders, blocked ASNs, and GeoIP interception stats, leveraging a secure, localized `data.json` engine.
+* Monitor the near-zero memory footprint of the underlying firewall engine.
 * *(Fully integrated within the terminal to maintain a strict zero-trust attack surface without exposing port 9999).*
 
 **Orchestration, Alerting & Interactive CLI**
-* **Real-Time Webhook Notifications:** Securely dispatch Layer 7 IP ban events directly to **Discord** or **Microsoft Teams**. Engineered with strict transport security (HTTPS/TLS 1.2+ enforced) and payload sanitization to prevent SSRF or command injection attacks.
-* **Terminal Management:** Manage your infrastructure directly from the shell via `syswarden-manager` (instant visibility into blocks, whitelists, and rule idempotency).
-* **Structured Installation Logs:** The deployment process provides precise, color-coded visual feedback on OS hardening, SIEM integration, Webhook provisioning, and the successful application of Default-Deny policies.
+* Securely dispatch Layer 7 IP ban events directly to **Discord** or **Microsoft Teams**. Engineered with strict transport security (HTTPS/TLS 1.2+ enforced) and payload sanitization to prevent SSRF or command injection attacks.
+* Manage your infrastructure directly from the shell via `syswarden-manager` (instant visibility into blocks, whitelists, and rule idempotency).
+* The deployment process provides precise, color-coded visual feedback on OS hardening, SIEM integration, Webhook provisioning, and the successful application of Default-Deny policies.
 
 ## Strategic Roadmap
 
