@@ -26,7 +26,6 @@
     <img src="https://github.com/duggytuxy/syswarden/actions/workflows/dependabot/dependabot-updates/badge.svg" alt="Dependabot Updates">
   </a>
   <img src="https://img.shields.io/badge/Security-Hardened-darkred?logo=security" alt="Hardened">
-  <img src="https://img.shields.io/badge/Compliance-EU_CRA_Ready-003399?logo=shield&logoColor=white" alt="EU CRA Ready">
   <img src="https://img.shields.io/badge/Status-Production_Ready-blue?logo=status" alt="Production Ready">
 </p>
 
