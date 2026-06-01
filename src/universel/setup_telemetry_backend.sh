@@ -338,7 +338,9 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                         fi
                         
                         # --- REQUIREMENT 1: RAW LOGS RETENTION (0.0% CPU) ---
-                        P_CLEAN="$L7_PAYLOAD"
+                        # [DEVSECOPS FIX] Ultimate Forensic Sanitization: Purifies BOTH new extracts and legacy cached payloads.
+                        # printf ensures literal handling. tr replaces all newlines, carriage returns, and binary fuzzing bytes with dots.
+                        P_CLEAN=$(printf '%s' "$L7_PAYLOAD" | LC_ALL=C tr -c '\40-\176' '.')
                         
                         BANNED_IPS_JSON=$(echo "$BANNED_IPS_JSON" | jq --arg ip "$IP" --arg j "$JAIL" --arg p "$P_CLEAN" --arg ttp "$MITRE_PAYLOAD" '. + [{"ip": $ip, "jail": $j, "payload": $p, "mitre": $ttp}]')
                         ACTIVE_BANNED_IPS+="${IP} "

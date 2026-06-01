@@ -45,7 +45,7 @@ generate_dashboard() {
 set -euo pipefail
 
 # --- VERSION CONFIGURATION ---
-SYSWARDEN_VERSION="v0.41.7"
+SYSWARDEN_VERSION="v0.41.8"
 
 DATA_FILE="/etc/syswarden/ui/data.json"
 
@@ -203,7 +203,8 @@ while true; do
 
                 mapfile -t JAILS_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.jails_data | sort_by(.count) | reverse | .[] | "\(.name)|\(.mitre)|\(.count)"' | head -n 5)
                 mapfile -t TOP_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.top_attackers[]? | "\(.ip)|\(.port)|\(.country)|\(.asn)|\(.isp)"' | head -n 5)
-                mapfile -t BANNED_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.banned_ips | reverse | .[] | "\(.ip)|\(.jail)|\(.mitre)|\(.payload)"')
+                # [DEVSECOPS FIX] Mathematical guarantee against layout-breaking newlines at the JSON extraction layer
+                mapfile -t BANNED_LIST < <(echo "$LAST_TELEMETRY_DATA" | jq -r '.layer7.banned_ips | reverse | .[] | "\(.ip)|\(.jail)|\(.mitre)|\(.payload | gsub("\\n|\\r"; "."))"')
                 TOTAL_BANS=${#BANNED_LIST[@]}
                 
                 NEEDS_RENDER=1
