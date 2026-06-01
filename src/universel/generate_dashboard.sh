@@ -45,7 +45,7 @@ generate_dashboard() {
 set -euo pipefail
 
 # --- VERSION CONFIGURATION ---
-SYSWARDEN_VERSION="v0.41.8"
+SYSWARDEN_VERSION="v0.41.9"
 
 DATA_FILE="/etc/syswarden/ui/data.json"
 
@@ -325,8 +325,9 @@ while true; do
                     IFS='|' read -r b_ip b_jail b_mitre b_payload <<< "${BANNED_LIST[$IDX]}"
                     b_mitre_short=$(echo "$b_mitre" | cut -d':' -f1)
                     
-                    # Parsing is now handled persistently in the backend telemetry engine
-                    P_CLEAN=$(echo "$b_payload" | tr -d '\n\r' | cut -c 1-$W_PAYLOAD)
+                    # [DEVSECOPS FIX] Terminal Escape Injection Prevention: Escape backslashes so 'echo -ne' doesn't execute Nginx \xHH hex strings as raw binary/ANSI sequences
+                    SAFE_PAYLOAD="${b_payload//\\/\\\\}"
+                    P_CLEAN=$(echo "$SAFE_PAYLOAD" | tr -d '\n\r' | cut -c 1-$W_PAYLOAD)
                     
                     C_VEC=${C_W}
                     if [[ "$b_jail" =~ (sqli|xss|lfi|revshell|webshell|ssti|ssrf|jndi|modsec|homoglyph) ]]; then C_VEC=${C_R}
