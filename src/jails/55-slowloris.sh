@@ -7,7 +7,8 @@ syswarden_jail_slowloris() {
             if [[ -z "$SLOW_LOGS" ]]; then
                 SLOW_LOGS="$log_file"
             else
-                SLOW_LOGS="$SLOW_LOGS\n           $log_file"
+                # [DEVSECOPS FIX] Use ANSI C quoting $'\n' to inject a real newline instead of a literal '\n' string
+                SLOW_LOGS="$SLOW_LOGS"$'\n'"           $log_file"
             fi
         fi
     done
