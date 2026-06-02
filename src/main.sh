@@ -186,7 +186,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.42.3                  ${NC}"
+    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.42.4                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -239,7 +239,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.42.3 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.42.4 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
@@ -256,7 +256,8 @@ if [[ "$MODE" != "update" ]]; then
         echo -e "   Decide if you need a stealth admin VPN. If unsure, consult your SysAdmin."
 
         echo -e "\n${BOLD}4. DOCKER INTEGRATION${NC} ${YELLOW}(Optional)${NC}"
-        echo -e "   Requires Layer 3 routing adjustments for containers. If unsure, consult your SysAdmin."
+        echo -e "   Requires Layer 3 routing adjustments for containers and multi-tenant WAF log paths."
+        echo -e "   (e.g., /var/log/modsec/*.log). If unsure, consult your SysAdmin."
 
         echo -e "\n${BOLD}5. OS HARDENING${NC} ${YELLOW}(Optional)${NC}"
         echo -e "   Strict restrictions for privileged groups (Sudo/Wheel) & Cron. Recommended for NEW servers only."
@@ -315,18 +316,18 @@ if [[ "$MODE" != "update" ]]; then
     # The actual OS modification happens inside this function.
     setup_siem_logging "$MODE"
 
+    # --- DEVSECOPS FIX: THE SOURCE GAP ---
+    # Force sourcing the config to ensure variables (DOCKER_JAILS, SYSWARDEN_MODSEC_LOGS, etc.)
+    # are loaded in RAM immediately before Fail2ban compiles the jails during a fresh install.
+    if [[ -f "$CONF_FILE" ]]; then
+        # shellcheck source=/dev/null
+        source "$CONF_FILE"
+    fi
+    # --------------------------------------------------------------------
+
     discover_web_apps
     configure_fail2ban
 fi
-
-# --- FIX 1: THE SOURCE GAP ---
-# Force sourcing the config to ensure variables (GEOIP_ENABLED, ASN_ENABLED, etc.)
-# are loaded in RAM even during a fresh install.
-if [[ -f "$CONF_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONF_FILE"
-fi
-# -----------------------------
 
 select_list_type "$MODE"
 select_mirror "$MODE"
@@ -361,6 +362,14 @@ log "INFO" "Applying Layer 7 Application Firewall Rules (Fail2ban)..."
 # Redundant execution of discover_web_apps is skipped here as it was just cached
 configure_fail2ban
 # -----------------------------------
+
+# --- DOCKER MULTI-TENANT JAIL ROUTING ---
+# Automatically applies Layer 3 kernel drops to all selected custom Docker Jails
+if [[ "${USE_DOCKER:-n}" == "y" ]] && [[ -n "${DOCKER_JAILS:-}" ]]; then
+    log "INFO" "Routing multi-tenant Docker Jails ($DOCKER_JAILS) to Layer 3..."
+    protect_docker_jail "auto"
+fi
+# ----------------------------------------
 
 detect_protected_services
 
