@@ -20,8 +20,8 @@ if [[ -f "${1:-}" ]]; then
 
         # --- SECURITY FIX: PARSER REGEX EXCEPTION ---
         # Match strict Variable="Value" syntax. ONLY allows SYSWARDEN_ prefix and APPLY_CIS_L2_HARDENING.
-        # Only allows safe characters in values, including Webhook specific characters (?, &, =, @, %).
-        if [[ "$line" =~ ^(SYSWARDEN_[A-Z0-9_]+|APPLY_CIS_L2_HARDENING)=\"([a-zA-Z0-9_./: ,-?&=@%]*)\"$ ]]; then
+        # Only allows safe characters in values, including Webhook specific characters (?, &, =, @, %) and wildcards (*).
+        if [[ "$line" =~ ^(SYSWARDEN_[A-Z0-9_]+|APPLY_CIS_L2_HARDENING)=\"([a-zA-Z0-9_./: ,-?&=@%*]*)\"$ ]]; then
             export "${BASH_REMATCH[1]}"="${BASH_REMATCH[2]}"
         else
             echo -e "${RED}[!] ERROR: Configuration poisoning detected or invalid format at line: $line${NC}"
@@ -186,7 +186,7 @@ if [[ "$MODE" != "update" ]] && [[ "$MODE" != "uninstall" ]]; then
     echo -e "${RED}███████║   ██║   ███████║╚███╔███╔╝██║  ██║██║  ██║██████╔╝███████╗██║ ╚████║${NC}"
     echo -e "${RED}╚══════╝   ╚═╝   ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝${NC}"
     echo -e "${BLUE}===================================================================================${NC}"
-    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.42.0                  ${NC}"
+    echo -e "${GREEN}               Host-based Security Orchestrator for Linux. | v0.42.1                  ${NC}"
     echo -e "${BLUE}===================================================================================${NC}\n"
 fi
 
@@ -239,7 +239,7 @@ if [[ "$MODE" != "update" ]]; then
         CYAN='\033[0;36m'
         clear
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
-        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.42.0 - PRE-FLIGHT CHECKLIST                     ${NC}"
+        echo -e "${GREEN}${BOLD}                   SYSWARDEN v0.42.1 - PRE-FLIGHT CHECKLIST                     ${NC}"
         echo -e "${BLUE}${BOLD}==============================================================================${NC}"
         echo -e "Before proceeding with the deployment, please ensure you have the following"
         echo -e "information ready. If you lack any required data, press [Ctrl+C] to abort,"
