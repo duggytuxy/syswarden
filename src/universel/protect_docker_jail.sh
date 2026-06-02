@@ -32,53 +32,70 @@ protect_docker_jail() {
         echo -e "Currently active Jails: ${YELLOW}${active_jails}${NC}"
     fi
 
-    read -p "Enter the exact name of your custom Docker Jail (e.g. 'nginx-docker'): " jail_name
+    # Load configuration from active state if no parameters provided
+    local input_jails="${1:-}"
 
-    # Trim whitespace and sanitize: allow only alphanumeric, dashes, and underscores
-    jail_name=$(echo "$jail_name" | xargs | tr -cd 'a-zA-Z0-9_-')
+    # Support CI/CD unattended mode via config file state
+    if [[ -z "$input_jails" ]] && [[ -n "${DOCKER_JAILS:-}" ]]; then
+        input_jails="$DOCKER_JAILS"
+        log "INFO" "Unattended Mode: Loaded Docker Jails from configuration ($input_jails)"
+    fi
 
-    if [[ -z "$jail_name" ]]; then
-        log "ERROR" "Jail name cannot be empty."
+    # Fallback to interactive prompt if still empty (Graceful degradation)
+    if [[ -z "$input_jails" ]]; then
+        read -p "Enter the exact name of your custom Docker Jails (comma-separated, e.g. 'syswarden-modsec,traefik-auth'): " input_jails
+    fi
+
+    if [[ -z "$input_jails" ]]; then
+        log "ERROR" "Jail names cannot be empty."
         exit 1
     fi
 
-    # Check if the jail block exists in the configuration file
-    if ! grep -q "^\[${jail_name}\]" "$jail_file"; then
-        log "ERROR" "Jail [${jail_name}] not found in $jail_file. Please create it first."
-        exit 1
-    fi
+    # Convert comma separated list to array for multi-tenant parsing
+    IFS=',' read -r -a jail_array <<<"$input_jails"
 
-    log "INFO" "Configuring jail [${jail_name}] to use Docker banaction..."
+    for raw_jail in "${jail_array[@]}"; do
+        jail_name=$(echo "$raw_jail" | xargs | tr -cd 'a-zA-Z0-9_-')
 
-    # Safely inject or update banaction exclusively within the specified jail block
-    local temp_file
-    temp_file=$(mktemp)
-    local in_target_jail=0
-
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ "$line" =~ ^\[.*\]$ ]]; then
-            if [[ "$line" == "[${jail_name}]" ]]; then
-                in_target_jail=1
-                echo "$line" >>"$temp_file"
-                echo "banaction = syswarden-docker" >>"$temp_file"
-                continue
-            else
-                in_target_jail=0
-            fi
-        fi
-
-        # If inside the target block, skip any pre-existing 'banaction' line to avoid duplicates
-        if [[ $in_target_jail -eq 1 ]] && [[ "$line" =~ ^banaction[[:space:]]*= ]]; then
+        if [[ -z "$jail_name" ]]; then
             continue
         fi
 
-        echo "$line" >>"$temp_file"
-    done <"$jail_file"
+        if ! grep -q "^\[${jail_name}\]" "$jail_file"; then
+            log "WARN" "Jail [${jail_name}] not found in $jail_file. Skipping."
+            continue
+        fi
 
-    mv "$temp_file" "$jail_file"
-    chmod 644 "$jail_file"
+        log "INFO" "Configuring jail [${jail_name}] to use Docker banaction..."
 
-    log "INFO" "Jail [${jail_name}] successfully configured to route bans to Docker (DOCKER-USER)."
+        local temp_file
+        temp_file=$(mktemp)
+        local in_target_jail=0
+
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" =~ ^\[.*\]$ ]]; then
+                if [[ "$line" == "[${jail_name}]" ]]; then
+                    in_target_jail=1
+                    echo "$line" >>"$temp_file"
+                    echo "banaction = syswarden-docker" >>"$temp_file"
+                    continue
+                else
+                    in_target_jail=0
+                fi
+            fi
+
+            # Prevent duplicate banaction entries in the same jail block
+            if [[ $in_target_jail -eq 1 ]] && [[ "$line" =~ ^banaction[[:space:]]*= ]]; then
+                continue
+            fi
+
+            echo "$line" >>"$temp_file"
+        done <"$jail_file"
+
+        mv "$temp_file" "$jail_file"
+        chmod 644 "$jail_file"
+        log "INFO" "Jail [${jail_name}] successfully configured to route bans to Docker (DOCKER-USER)."
+    done
 
     if command -v systemctl >/dev/null; then
         systemctl restart fail2ban
