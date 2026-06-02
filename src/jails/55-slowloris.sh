@@ -7,10 +7,9 @@ syswarden_jail_slowloris() {
             if [[ -z "$SLOW_LOGS" ]]; then
                 SLOW_LOGS="$log_file"
             else
-                # [DEVSECOPS FIX] Use a literal real newline to ensure Fail2ban parses logpath correctly,
-                # fully bypassing ANSI C quoting ($'\n') limitations in POSIX /bin/sh (Dash).
-                SLOW_LOGS="${SLOW_LOGS}
-           ${log_file}"
+                # [DEVSECOPS FIX] Use space separation. Fail2ban natively supports space-separated
+                # multiple log paths. This eliminates all POSIX multiline shell vulnerabilities.
+                SLOW_LOGS="$SLOW_LOGS $log_file"
             fi
         fi
     done
