@@ -49,9 +49,13 @@ EOF
     local input_jails="${1:-}"
 
     # Support CI/CD unattended mode via config file state
-    if [[ -z "$input_jails" ]] && [[ -n "${DOCKER_JAILS:-}" ]]; then
-        input_jails="$DOCKER_JAILS"
-        log "INFO" "Unattended Mode: Loaded Docker Jails from configuration ($input_jails)"
+    if [[ "$input_jails" == "auto" ]] || [[ -z "$input_jails" ]]; then
+        if [[ -n "${DOCKER_JAILS:-}" ]]; then
+            input_jails="$DOCKER_JAILS"
+            log "INFO" "Unattended Mode: Loaded Docker Jails from configuration ($input_jails)"
+        else
+            input_jails=""
+        fi
     fi
 
     # Fallback to interactive prompt if still empty (Graceful degradation)

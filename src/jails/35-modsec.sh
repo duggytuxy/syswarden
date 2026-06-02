@@ -26,11 +26,14 @@ ignoreregex =
 EOF
     fi
 
-    # Determine correct banaction if Docker is globally enabled for L3 isolation
+    # Determine correct backend and banaction for Docker isolation
     local banaction_config=""
+    local jail_backend="auto"
+
     if [[ "${USE_DOCKER:-n}" == "y" ]]; then
         banaction_config="banaction = syswarden-docker"
-        log "INFO" "ModSecurity Jail: Docker integration enabled. Forcing routing to DOCKER-USER chain."
+        jail_backend="polling"
+        log "INFO" "ModSecurity Jail: Docker integration enabled. Forcing DOCKER-USER routing and polling backend."
     fi
 
     # Support CI/CD override for multi-tenant log aggregation (Inherited from define_docker_integration.sh)
@@ -43,7 +46,7 @@ enabled  = true
 port     = http,https,8080,8443
 filter   = syswarden-modsec
 logpath  = $target_modsec_logs
-backend  = auto
+backend  = $jail_backend
 maxretry = 3
 findtime = 10m
 bantime  = 24h
