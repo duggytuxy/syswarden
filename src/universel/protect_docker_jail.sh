@@ -78,12 +78,16 @@ EOF
             continue
         fi
 
-        if ! grep -q "^\[${jail_name}\]" "$jail_file"; then
-            log "WARN" "Jail [${jail_name}] not found in $jail_file. Skipping."
+        # [DEVSECOPS FIX] Broaden scope to scan both monolithic jail.local and modular jail.d/ files
+        local target_jail_file="$jail_file"
+        if [[ -f "/etc/fail2ban/jail.d/${jail_name}.conf" ]]; then
+            target_jail_file="/etc/fail2ban/jail.d/${jail_name}.conf"
+        elif ! grep -q "^\[${jail_name}\]" "$jail_file"; then
+            log "WARN" "Jail [${jail_name}] not found in monolithic or modular config. Skipping."
             continue
         fi
 
-        log "INFO" "Configuring jail [${jail_name}] to use Docker banaction..."
+        log "INFO" "Configuring jail [${jail_name}] in $target_jail_file to use Docker banaction..."
 
         local temp_file
         temp_file=$(mktemp)
@@ -107,10 +111,10 @@ EOF
             fi
 
             echo "$line" >>"$temp_file"
-        done <"$jail_file"
+        done <"$target_jail_file"
 
-        mv "$temp_file" "$jail_file"
-        chmod 644 "$jail_file"
+        mv "$temp_file" "$target_jail_file"
+        chmod 644 "$target_jail_file"
         log "INFO" "Jail [${jail_name}] successfully configured to route bans to Docker (DOCKER-USER)."
     done
 
