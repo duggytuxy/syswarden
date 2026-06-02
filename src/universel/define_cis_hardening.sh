@@ -8,7 +8,8 @@ define_cis_hardening() {
     echo -e "\n${BLUE}=== Step: CIS Benchmark Level 2 Hardening ===${NC}"
 
     if [[ "${1:-}" == "auto" ]]; then
-        input_cis=${APPLY_CIS_L2_HARDENING:-n}
+        # DevSecOps Fix: Catching legacy and strictly named variables to prevent accidental overrides
+        input_cis=${SYSWARDEN_CIS_HARDENING:-${APPLY_CIS_L2_HARDENING:-n}}
         log "INFO" "Auto Mode: CIS Hardening choice loaded via env var [${input_cis}]"
     else
         echo -e "${YELLOW}WARNING: CIS Level 2 enforces strict Kernel, eBPF, and Network restrictions.${NC}"

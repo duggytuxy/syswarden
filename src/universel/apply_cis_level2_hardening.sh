@@ -277,8 +277,15 @@ EOF
 # --- MAIN EXECUTOR ---
 # ==============================================================================
 apply_cis_level2_hardening() {
-    # Check configuration flag from syswarden-auto.conf
-    if [[ "${APPLY_CIS_L2_HARDENING:-n}" != "y" ]]; then
+    # DevSecOps Fix: Load the absolute state from configuration file to prevent environment bleed
+    local state_cis="n"
+    if grep -q "^APPLY_CIS_L2_HARDENING='y'" "$CONF_FILE" 2>/dev/null || grep -q "^APPLY_CIS_L2_HARDENING=\"y\"" "$CONF_FILE" 2>/dev/null; then
+        state_cis="y"
+    elif [[ "${APPLY_CIS_L2_HARDENING:-n}" == "y" ]]; then
+        state_cis="y"
+    fi
+
+    if [[ "$state_cis" != "y" ]]; then
         return
     fi
 

@@ -26,14 +26,8 @@ EOF
         log "INFO" "ModSecurity Jail: Docker integration enabled. Forcing routing to DOCKER-USER chain."
     fi
 
-    # Support CI/CD override for multi-tenant log aggregation
+    # Support CI/CD override for multi-tenant log aggregation (Inherited from define_docker_integration.sh)
     local target_modsec_logs="${SYSWARDEN_MODSEC_LOGS:-$SYSW_MODSEC_LOGS}"
-
-    # Interactive prompt for multi-tenant WAF architecture logs
-    if [[ "${1:-}" != "auto" ]]; then
-        read -p "Enter ModSecurity log path (default: $target_modsec_logs, e.g. /var/log/modsec/*.log for multi-tenant): " user_modsec_logs
-        target_modsec_logs="${user_modsec_logs:-$target_modsec_logs}"
-    fi
 
     # Write directly to jail.d for clean segmentation
     cat <<EOF >/etc/fail2ban/jail.d/syswarden-modsec.conf

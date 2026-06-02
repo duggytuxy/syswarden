@@ -19,14 +19,22 @@ define_docker_integration() {
         USE_DOCKER="y"
         log "INFO" "Docker integration ENABLED."
 
-        # CI/CD Auto-load Docker Jails routing configuration
+        # CI/CD Auto-load Docker configuration
         local input_jails="${SYSWARDEN_DOCKER_JAILS:-syswarden-modsec}"
+        local target_modsec_logs="${SYSWARDEN_MODSEC_LOGS:-/var/log/modsec/*.log}"
+
         if [[ "${1:-}" != "auto" ]]; then
             read -p "Enter Fail2ban jails to route via Docker (comma-separated, default: $input_jails): " user_jails
             input_jails="${user_jails:-$input_jails}"
+
+            read -p "Enter ModSecurity log path (default: $target_modsec_logs, e.g. /var/log/modsec/*.log for multi-tenant): " user_modsec_logs
+            target_modsec_logs="${user_modsec_logs:-$target_modsec_logs}"
         fi
+
         DOCKER_JAILS="$input_jails"
+        SYSWARDEN_MODSEC_LOGS="$target_modsec_logs"
         echo "DOCKER_JAILS='$DOCKER_JAILS'" >>"$CONF_FILE"
+        echo "SYSWARDEN_MODSEC_LOGS='$SYSWARDEN_MODSEC_LOGS'" >>"$CONF_FILE"
         log "INFO" "Docker Jails routed: $DOCKER_JAILS"
     else
         USE_DOCKER="n"
