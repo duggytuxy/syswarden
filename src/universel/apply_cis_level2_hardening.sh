@@ -4,6 +4,7 @@ install_cis_dependencies() {
 
     secure_apt_cis() {
         DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o DPkg::Lock::Timeout=300 \
             -o Acquire::AllowInsecureRepositories=false \
             -o Acquire::AllowDowngradeToInsecureRepositories=false \
             -o APT::Get::AllowUnauthenticated=false "$@"
@@ -21,7 +22,7 @@ install_cis_dependencies() {
             # CIS 1.5.4: Ensure prelink is disabled and uninstalled (interferes with ASLR)
             log "INFO" "Removing prelink to enforce ASLR (CIS 1.5.4)..."
             prelink -ua 2>/dev/null || true
-            apt-get purge -y prelink >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive apt-get purge -y -o DPkg::Lock::Timeout=300 prelink >/dev/null 2>&1
         fi
         if [[ ${#missing_cis[@]} -gt 0 ]]; then
             secure_apt_cis "${missing_cis[@]}"
@@ -235,7 +236,7 @@ enable_automatic_security_updates() {
     if [[ -f /etc/debian_version ]]; then
         # Debian / Ubuntu implementation
         if ! dpkg -l | grep -q "^ii[[:space:]]*unattended-upgrades"; then
-            DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades apt-listchanges >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=300 unattended-upgrades apt-listchanges >/dev/null 2>&1
         fi
 
         # Enforce daily update checks and unattended upgrades
