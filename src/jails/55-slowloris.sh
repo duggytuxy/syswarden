@@ -27,11 +27,18 @@ syswarden_jail_slowloris() {
     if [[ ! -f "/etc/fail2ban/filter.d/syswarden-slowloris.conf" ]]; then
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-slowloris.conf
 [Definition]
-# Detects asynchronous timeouts and slow read/post operations (Slowloris/Slow-Read)
-# Nginx: client timed out (110: Connection timed out) while reading client request line/headers/body
-# Apache: AH01382: Request header/body read timeout
+# Detects asynchronous timeouts, slow read/post operations, and HTTP/2 Multiplexing Attacks (HTTP/2 Bomb / HPACK Stall)
+# Nginx: client timed out, HTTP/2 frame violations, stream processing limits
+# Apache: AH01382 (reqtimeout), AH03198 (HTTP/2 stream timeout), AH10400 (excessive WINDOW_UPDATE frames)
 failregex = ^.* \[(?:info|error)\] \d+#\d+: \*\d+ client timed out \(\d+: [^)]+\) while reading client request .*, client: <HOST>, .*
-            ^.* \[reqtimeout:(?:info|error)\] \[pid \d+(?::tid \d+)?\] \[client <HOST>:\d+\] AH\d+: Request .* read timeout
+            ^.* \[(?:info|error)\] \d+#\d+: \*\d+ client timed out \(\d+: [^)]+\) while processing HTTP/2 connection.*, client: <HOST>, .*
+            ^.* \[(?:info|error|warn)\] \d+#\d+: \*\d+ client sent invalid HTTP/2 frame.*, client: <HOST>, .*
+            ^.* \[(?:info|error|warn)\] \d+#\d+: \*\d+ client sent excessive HTTP/2 frames.*, client: <HOST>, .*
+            ^.* \[reqtimeout:(?:info|error)\] \[pid \d+(?::tid \d+)?\] \[client <HOST>:\d+\] AH01382: Request header read timeout
+            ^.* \[reqtimeout:(?:info|error)\] \[pid \d+(?::tid \d+)?\] \[client <HOST>:\d+\] AH01382: Request body read timeout
+            ^.* \[http2:(?:info|error|warn)\] \[pid \d+(?::tid \d+)?\] \[client <HOST>:\d+\] AH03198: .* timeout on stream
+            ^.* \[http2:(?:info|error|warn)\] \[pid \d+(?::tid \d+)?\] \[client <HOST>:\d+\] AH10400: .* excessive WINDOW_UPDATE frames
+            ^.* \[core:(?:info|error)\] \[pid \d+(?::tid \d+)?\] \[client <HOST>:\d+\] AH00524: Handler for .* returned invalid result code 70007
 ignoreregex = 
 EOF
     fi
