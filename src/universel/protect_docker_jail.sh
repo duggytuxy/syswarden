@@ -118,25 +118,38 @@ EOF
         log "INFO" "Jail [${jail_name}] successfully configured to route bans to Docker (DOCKER-USER)."
     done
 
-    if command -v systemctl >/dev/null; then
+    # 3. Apply changes and wait for socket initialization (Race Condition fix)
+    if command -v systemctl >/dev/null 2>&1; then
         systemctl restart fail2ban
         log "INFO" "Fail2ban service restarted to apply changes."
-
-        # --- HOTFIX: STATEFUL DOCKER BYPASS RE-ENFORCEMENT ---
-        # Fail2ban restarts will inject new chains at the top of DOCKER-USER.
-        # We MUST ensure the ESTABLISHED, RELATED rule remains at Absolute Priority 0.
-        if command -v iptables >/dev/null && iptables -n -L DOCKER-USER >/dev/null 2>&1; then
-            while iptables -D DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2>/dev/null; do :; done
-            iptables -I DOCKER-USER 1 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2>/dev/null || true
-            log "INFO" "Stateful Docker bypass successfully re-enforced at Priority 0."
-
-            # Persist state so the new order survives reboots
-            if command -v netfilter-persistent >/dev/null; then
-                netfilter-persistent save 2>/dev/null || true
-            elif command -v service >/dev/null && [ -f /etc/init.d/iptables ]; then
-                service iptables save 2>/dev/null || true
-            fi
-        fi
-        # ------------------------------------------------------------
+    elif command -v service >/dev/null 2>&1; then
+        service fail2ban restart
+        log "INFO" "Fail2ban service restarted to apply changes."
     fi
+
+    # Block execution until Fail2ban IPC socket is responsive
+    for _ in {1..15}; do
+        if fail2ban-client ping >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+
+    # --- HOTFIX: STATEFUL DOCKER BYPASS RE-ENFORCEMENT ---
+    # Fail2ban restarts will inject new chains at the top of DOCKER-USER.
+    # We MUST ensure the ESTABLISHED, RELATED rule remains at Absolute Priority 0.
+    # This must strictly execute AFTER the ping loop confirms daemon readiness.
+    if command -v iptables >/dev/null && iptables -n -L DOCKER-USER >/dev/null 2>&1; then
+        while iptables -D DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2>/dev/null; do :; done
+        iptables -I DOCKER-USER 1 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2>/dev/null || true
+        log "INFO" "Stateful Docker bypass successfully re-enforced at Priority 0."
+
+        # Persist state so the new order survives reboots
+        if command -v netfilter-persistent >/dev/null; then
+            netfilter-persistent save 2>/dev/null || true
+        elif command -v service >/dev/null && [ -f /etc/init.d/iptables ]; then
+            service iptables save 2>/dev/null || true
+        fi
+    fi
+    # ------------------------------------------------------------
 }
