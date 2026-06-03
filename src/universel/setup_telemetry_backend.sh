@@ -304,8 +304,9 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                                     [[ ! -f "$log_file" ]] && continue
                                     
                                     # Forward search restricted to ONE file at a time.
-                                    # Extract specifically HTTP methodologies to bypass post-ban TCP connection noise.
-                                    MATCH=$(timeout 2 zgrep -h -a -F "$IP" "$log_file" 2>/dev/null | grep -E '"(GET|POST|PUT|DELETE|HEAD|OPTIONS|CONNECT|TRACE|PROPFIND)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 | LC_ALL=C tr -c '\40-\176' '.' || true)
+                                    # tail -n 1 correctly grabs the absolute newest attack in this specific file.
+                                    # [DEVSECOPS FIX] Excluded benign daemon noise and sanitized binary fuzzing payloads for safe TUI rendering
+                                    MATCH=$(timeout 2 zgrep -h -a -F "$IP" "$log_file" 2>/dev/null | grep -vEi '(syswarden_reporter|fail2ban-server|closed keepalive connection|client closed connection|connection reset by peer|ssl_do_handshake|connection timed out)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | tail -n 1 | LC_ALL=C tr -c '\40-\176' '.' || true)
                                     
                                     if [[ -n "$MATCH" ]]; then
                                         L7_PAYLOAD="$MATCH"
@@ -316,7 +317,8 @@ if command -v fail2ban-client >/dev/null && timeout 2 fail2ban-client ping >/dev
                             
                             # Phase 2: systemd-journald fallback (if native flat files are missing)
                             if [[ -z "$L7_PAYLOAD" ]] && command -v journalctl >/dev/null 2>&1; then
-                                L7_PAYLOAD=$(timeout 2 journalctl -q --no-pager -n 500000 2>/dev/null | grep -a -F "$IP" | grep -E '"(GET|POST|PUT|DELETE|HEAD|OPTIONS|CONNECT|TRACE|PROPFIND)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 | LC_ALL=C tr -c '\40-\176' '.' || true)
+                                # [DEVSECOPS FIX] Synchronized exclusion of benign daemon noise and sanitized binary payloads
+                                L7_PAYLOAD=$(timeout 2 journalctl -q --no-pager -r -n 500000 2>/dev/null | grep -a -F "$IP" | grep -vEi '(syswarden_reporter|fail2ban-server|closed keepalive connection|client closed connection|connection reset by peer|ssl_do_handshake|connection timed out)' | awk '!/\[SysWarden-(GEO|ASN)\]/ && !(/\[SysWarden-BLOCK\]/ && !/\[Catch-All\]/)' | head -n 1 | LC_ALL=C tr -c '\40-\176' '.' || true)
                             fi
                         fi
                         
