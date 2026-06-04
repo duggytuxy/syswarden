@@ -33,7 +33,7 @@ jobs:
         run: find . -type f -name "*.sh" -exec shellcheck --shell=bash --exclude=SC2034,SC2154 --severity=warning {} +
 
       - name: Setup shfmt
-        uses: mfinelli/setup-shfmt@11b449519985436c5f8e43169c1272f74b50fa04 #v4
+        uses: mfinelli/setup-shfmt@a25fda4c1fe115aec0f85e04126610841bc3141d #v4
         
       - name: Check Bash formatting (shfmt)
         run: shfmt -d -i 4 -ci .
