@@ -6,6 +6,26 @@ apply_firewall_rules() {
     touch "$WHITELIST_FILE" "$BLOCKLIST_FILE" "$F2B_BLOCKLIST_FILE"
     chmod 600 "$F2B_BLOCKLIST_FILE"
 
+    # Automatically instantiate Layer 7 backend storage structures in kernel space on upgrade/update
+    case "${FIREWALL_BACKEND:-nftables}" in
+        nftables)
+            # Ensure the netdev architecture and blacklist set exist before Fail2ban restarts
+            nft add table netdev syswarden_hw_drop 2>/dev/null || true
+            nft add set netdev syswarden_hw_drop syswarden_blacklist '{ type ipv4_addr; flags interval; auto-merge; }' 2>/dev/null || true
+            ;;
+        firewalld)
+            # Ensure firewalld ipset framework structure is active in the current memory state
+            if ! firewall-cmd --get-ipsets 2>/dev/null | grep -q "syswarden_blacklist"; then
+                firewall-cmd --permanent --new-ipset=syswarden_blacklist --type=hash:ip >/dev/null 2>&1 || true
+                firewall-cmd --reload >/dev/null 2>&1 || true
+            fi
+            ;;
+        ufw | iptables)
+            # Ensure the standard ipset core set is allocated to avoid dynamic linkage failure
+            ipset create syswarden_blacklist hash:ip comment maxelem 65536 2>/dev/null || true
+            ;;
+    esac
+
     # 1. Inject local blocklist and Fail2ban persistent list into the global list
     cat "$BLOCKLIST_FILE" >>"$FINAL_LIST"
     if [[ -s "$F2B_BLOCKLIST_FILE" ]]; then
