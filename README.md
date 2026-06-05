@@ -116,7 +116,7 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 
 | Version | Milestone Target | Status |
 | :---: | :--- | :---: |
-| **v0.50.** | OSINT, Threat Intel and New Blocklist | 🧑‍🍳 |
+| **v0.50.** | L7 - IPv4 Blocked to New Blocklist L2/L3 | ✅ |
 | **v0.60.** | ... | ❓ |
 | **v0.70.** | ... | ❓ |
 | **v0.80.** | ... | ❓ |
