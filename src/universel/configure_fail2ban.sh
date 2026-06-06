@@ -301,6 +301,8 @@ port = ${SSH_PORT:-ssh}
 logpath = %(sshd_log)s
 backend = $SYSW_OS_BACKEND
 banaction = $SYSW_F2B_ACTION_ALLPORTS
+findtime = 24h
+maxretry = 2
 EOF
 
         # Recidive Filter
