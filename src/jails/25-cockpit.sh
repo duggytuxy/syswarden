@@ -27,15 +27,16 @@ syswarden_jail_cockpit() {
 
     log "INFO" "Cockpit Web Console detected. Enabling Cockpit Jail."
 
-    if [[ ! -f "/etc/fail2ban/filter.d/cockpit-custom.conf" ]]; then
-        cat <<'EOF' >/etc/fail2ban/filter.d/cockpit-custom.conf
+    # Force overwrite on deployment to ensure filter updates are applied during upgrades
+    cat <<'EOF' >/etc/fail2ban/filter.d/cockpit-custom.conf
 [Definition]
-# Universal deterministic patterns matching both raw syslog files and stripped systemd journal streams
-failregex = ^(?:.*?cockpit-ws.*?:\s)?(?:authentication failed|invalid user).*?from <HOST>.*$
-            ^(?:.*?cockpit-session.*?:\s)?pam_unix\(cockpit:auth\): authentication failure;.*?rhost=(?:::ffff:)?<HOST>.*$
+# Explicit high-performance patterns covering both syslog files and systemd journal streams
+failregex = ^\S+\s+cockpit-session(?:\[\d+\])?: pam_unix\(cockpit:auth\): authentication failure;.* rhost=<HOST>
+            ^\S+\s+cockpit-ws(?:\[\d+\])?: (?:authentication failed|invalid user).*?from <HOST>
+            ^pam_unix\(cockpit:auth\): authentication failure;.* rhost=<HOST>
+            ^(?:authentication failed|invalid user).*?from <HOST>
 ignoreregex = 
 EOF
-    fi
 
     # 4. Generate jail configuration depending on the selected backend engine
     if [[ "$JAIL_BACKEND" == "systemd" ]]; then
