@@ -5,17 +5,24 @@ syswarden_jail_cockpit() {
     fi
 
     local COCKPIT_LOG=""
+    local JAIL_BACKEND="${SYSW_OS_BACKEND:-auto}"
 
     # 2. Dynamic log path discovery based on OS distribution
     if [[ -f "/var/log/secure" ]]; then
-        COCKPIT_LOG="/var/log/secure" # RHEL/Alma/Rocky
+        COCKPIT_LOG="/var/log/secure" # RHEL/Alma/Rocky/CentOS with rsyslog active
     elif [[ -f "/var/log/auth.log" ]]; then
         COCKPIT_LOG="/var/log/auth.log" # Debian/Ubuntu
     fi
 
-    # 3. Fail-Fast: Ensure logs exist to prevent Fail2ban crash on startup
+    # 3. Hybrid Fallback: Handle modern systemd journal-only environments (e.g., default CentOS Stream 10)
     if [[ -z "$COCKPIT_LOG" ]]; then
-        return 0
+        if systemctl is-active --quiet systemd-journald 2>/dev/null; then
+            log "INFO" "No traditional log file found. Switching Cockpit Jail to systemd journal backend."
+            JAIL_BACKEND="systemd"
+        else
+            log "WARN" "Neither traditional log files nor systemd-journald found for Cockpit. Skipping jail."
+            return 0
+        fi
     fi
 
     log "INFO" "Cockpit Web Console detected. Enabling Cockpit Jail."
@@ -23,20 +30,34 @@ syswarden_jail_cockpit() {
     if [[ ! -f "/etc/fail2ban/filter.d/cockpit-custom.conf" ]]; then
         cat <<'EOF' >/etc/fail2ban/filter.d/cockpit-custom.conf
 [Definition]
+# Matches both standard console logs (cockpit-ws) and direct PAM authentication failures (cockpit-session)
 failregex = ^.*?cockpit-ws.*?(?:authentication failed|invalid user).*?from <HOST>.*$
+            ^.*?cockpit-session.*?pam_unix\(cockpit:auth\): authentication failure;.*?rhost=(?:::ffff:)?<HOST>.*$
 ignoreregex = 
 EOF
     fi
 
-    # Utilise la variable globale SYSW_OS_BACKEND propagée par le moteur principal
-    cat <<EOF >/etc/fail2ban/jail.d/cockpit.conf
+    # 4. Generate jail configuration depending on the selected backend engine
+    if [[ "$JAIL_BACKEND" == "systemd" ]]; then
+        cat <<EOF >/etc/fail2ban/jail.d/cockpit.conf
+[cockpit-custom]
+enabled  = true
+port     = 9090
+filter   = cockpit-custom
+backend  = systemd
+maxretry = 3
+bantime  = 24h
+EOF
+    else
+        cat <<EOF >/etc/fail2ban/jail.d/cockpit.conf
 [cockpit-custom]
 enabled  = true
 port     = 9090
 filter   = cockpit-custom
 logpath  = $COCKPIT_LOG
-backend  = ${SYSW_OS_BACKEND:-auto}
+backend  = $JAIL_BACKEND
 maxretry = 3
 bantime  = 24h
 EOF
+    fi
 }
