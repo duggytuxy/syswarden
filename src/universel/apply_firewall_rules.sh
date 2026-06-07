@@ -51,9 +51,9 @@ apply_firewall_rules() {
         log "INFO" "Configuring Nftables via Atomic Transaction (Zero-Downtime)..."
 
         # --- L2 HARDWARE ACCELERATION (eBPF/XDP Alternative) ---
-        # Dynamically detect the physical network interface facing the internet
+        # Dynamically detect the physical network interface facing the internet using strict token matching
         local ACTIVE_IF
-        ACTIVE_IF=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $5}' | head -n 1)
+        ACTIVE_IF=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1)
         [[ -z "$ACTIVE_IF" ]] && ACTIVE_IF="eth0"
 
         # 1. Start building the atomic configuration file
