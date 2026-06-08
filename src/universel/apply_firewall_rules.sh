@@ -71,6 +71,8 @@ delete table netdev syswarden_hw_drop
 # ==============================================================
 table netdev syswarden_hw_drop {
     set $SET_NAME { type ipv4_addr; flags interval; auto-merge; }
+    set syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }
+    set syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }
 EOF
 
         if [[ "${GEOBLOCK_COUNTRIES:-none}" != "none" ]] && [[ -s "$GEOIP_FILE" ]]; then
@@ -84,20 +86,16 @@ EOF
     chain ingress_frontline {
         type filter hook ingress device "$ACTIVE_IF" priority -500; policy accept;
         
-        # Absolute whitelist bypass at NIC level
-EOF
+        # Absolute whitelist bypass at NIC level (O(1) Radix Tree Lookup optimization)
+        ip saddr @syswarden_whitelist accept
+        ip6 saddr @syswarden_whitelist6 accept
 
-        if [[ -s "$WHITELIST_FILE" ]]; then
-            while IFS= read -r wl_ip; do
-                [[ -z "$wl_ip" ]] && continue
-                # Prevent syntax crash by determining IP family dynamically
-                if [[ "$wl_ip" =~ : ]]; then
-                    echo "        ip6 saddr $wl_ip accept" >>"$TMP_DIR/syswarden.nft"
-                else
-                    echo "        ip saddr $wl_ip accept" >>"$TMP_DIR/syswarden.nft"
-                fi
-            done <"$WHITELIST_FILE"
-        fi
+        # Stateless Layer 4 Structural Anomaly Mitigation (Bypasses Stateful Engine)
+        ip protocol tcp tcp flags & (fin|syn|rst|psh|ack|urg) == 0 drop
+        ip protocol tcp tcp flags & (fin|syn|rst|psh|ack|urg) == fin|syn|rst|psh|ack|urg drop
+        ip protocol tcp tcp flags & (fin|syn) == fin|syn drop
+        ip protocol tcp tcp flags & (syn|rst) == syn|rst drop
+EOF
 
         cat <<EOF >>"$TMP_DIR/syswarden.nft"
         # Hardware Drops with SIEM Logging (Rate-Limited to prevent CPU/IO exhaustion)
@@ -196,6 +194,29 @@ EOF
         log "INFO" "Populating Nftables sets atomically in chunks (Bypassing memory limits)..."
 
         # --- HOTFIX: AWK BATCH INJECTION (Anti-ARG_MAX & Anti-OOM) ---
+
+        if [[ -s "$WHITELIST_FILE" ]]; then
+            awk '
+            BEGIN { c4=0; c6=0 }
+            {
+                if ($1 == "") next;
+                if ($1 ~ /:/) {
+                    if (c6 == 0) printf "add element netdev syswarden_hw_drop syswarden_whitelist6 { %s", $1
+                    else printf ", %s", $1
+                    c6++
+                    if (c6 >= 500) { printf " }\n"; c6=0 }
+                } else {
+                    if (c4 == 0) printf "add element netdev syswarden_hw_drop syswarden_whitelist { %s", $1
+                    else printf ", %s", $1
+                    c4++
+                    if (c4 >= 500) { printf " }\n"; c4=0 }
+                }
+            }
+            END { 
+                if (c4 > 0) printf " }\n"
+                if (c6 > 0) printf " }\n"
+            }' "$WHITELIST_FILE" >>"$TMP_DIR/syswarden.nft"
+        fi
 
         if [[ -s "$FINAL_LIST" ]]; then
             awk -v set_name="$SET_NAME" '
