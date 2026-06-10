@@ -882,9 +882,11 @@ github:
     # How it works: one Advisory Database query per `owner/repo`
     # (`ecosystem=actions`), cached. When the pinned ref resolves to a
     # semver tag, Plumber filters advisories by `vulnerable_version_range`.
-    # When the ref is an unresolvable commit SHA, any advisory for that
-    # repo may match (conservative). Upgrade past the fixed-in version and
-    # re-pin the SHA to clear the finding.
+    # A ref that cannot be resolved to a release version — a commit SHA
+    # with no matching release tag, or a mutable non-numeric tag such as
+    # `rc` / `main` / `latest` — abstains and surfaces a "could not verify"
+    # warning rather than matching every advisory for that repo. Upgrade
+    # past the fixed-in version and re-pin the SHA to clear the finding.
     #
     # Does not see: org/repo Variables, runtime `$GITHUB_ENV` writes, or
     # actions nested inside composite actions you do not call directly.
