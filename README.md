@@ -227,7 +227,7 @@ To learn everything about the SysWarden ecosystem, explore detailed configuratio
 
 ## Target and support
 
-> Goal: €10,000/year to fund continuous DevSecOps improvements and infrastructure.
+> Goal: 38.5% reached/year (Goal) to fund continuous DevSecOps improvements and infrastructure.
 
 Developing **SysWarden** and maintaining the zero-false-positive **Data-Shield IPv4 blocklists** requires dedicated server infrastructure and non-stop threat monitoring.
 
