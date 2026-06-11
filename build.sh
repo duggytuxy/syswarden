@@ -4,6 +4,8 @@
 # Compiles individual function scripts into a single universal deployment artifact.
 
 set -euo pipefail
+# [DEVSECOPS FIX] Prevent literal string expansion if a target module directory is empty
+shopt -s nullglob
 
 DIST_DIR="dist"
 OUTPUT="${DIST_DIR}/install-syswarden.sh"
@@ -33,8 +35,10 @@ EOF
 echo "[*] Injecting core configurations..."
 for file in src/core/*.sh; do
     if [[ -f "$file" ]]; then
+        echo "# --- SOURCE: $(basename "$file") ---" >>"${OUTPUT}"
         cat "$file" >>"${OUTPUT}"
-        echo -e "\n" >>"${OUTPUT}"
+        # [DEVSECOPS FIX] Predictable POSIX formatting over echo -e to prevent unintended escapes
+        printf "\n\n" >>"${OUTPUT}"
     fi
 done
 
@@ -46,7 +50,8 @@ for file in src/universel/*.sh; do
     if [[ -f "$file" ]]; then
         echo "# --- SOURCE: $(basename "$file") ---" >>"${OUTPUT}"
         cat "$file" >>"${OUTPUT}"
-        echo -e "\n" >>"${OUTPUT}"
+        # [DEVSECOPS FIX] Predictable POSIX formatting over echo -e to prevent unintended escapes
+        printf "\n\n" >>"${OUTPUT}"
     fi
 done
 
@@ -57,9 +62,10 @@ echo "[*] Injecting modular Fail2ban jails..."
 if [[ -d "src/jails" ]]; then
     for file in src/jails/*.sh; do
         if [[ -f "$file" ]]; then
-            echo "# --- JAIL MODULE: $(basename "$file") ---" >>"${OUTPUT}"
+            echo "# --- SOURCE: $(basename "$file") ---" >>"${OUTPUT}"
             cat "$file" >>"${OUTPUT}"
-            echo -e "\n" >>"${OUTPUT}"
+            # [DEVSECOPS FIX] Predictable POSIX formatting over echo -e to prevent unintended escapes
+            printf "\n\n" >>"${OUTPUT}"
         fi
     done
 else

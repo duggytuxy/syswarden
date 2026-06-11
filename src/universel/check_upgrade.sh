@@ -60,7 +60,8 @@ check_upgrade() {
 
         # --- SURGICAL CLONE: SPECIFIC RELEASE TAG ---
         # We clone the exact tag to ensure stability, rather than the main branch
-        if ! git clone --branch "$latest_version" --depth 1 https://github.com/duggytuxy/syswarden.git "$UPGRADE_DIR" &>/dev/null; then
+        # [DEVSECOPS FIX] Enforce non-interactive mode to prevent terminal hangs if the repository status changes
+        if ! env GIT_TERMINAL_PROMPT=0 git clone -c core.askpass=true --branch "$latest_version" --depth 1 https://github.com/duggytuxy/syswarden.git "$UPGRADE_DIR" >/dev/null 2>&1; then
             echo -e "${RED}[ CRITICAL ALERT ] Failed to clone the repository. Update aborted.${NC}"
             rm -rf "$UPGRADE_DIR"
             exit 1
@@ -70,8 +71,8 @@ check_upgrade() {
 
         # --- COMPILATION STAGE ---
         log "INFO" "Executing SysWarden Universal Build..."
-        chmod +x build.sh 2>/dev/null || true
-        # [DEVSECOPS FIX] Explicit bash invocation bypasses 'noexec' mount restrictions on /tmp (CIS Benchmark compliance)
+        # [DEVSECOPS FIX] Explicit bash invocation physically bypasses 'noexec' mount restrictions on /tmp (CIS/ANSSI compliance).
+        # The previous 'chmod +x' was removed as it is logically redundant and generates unnecessary syscalls on locked partitions.
         bash ./build.sh >/dev/null 2>&1 || {
             echo -e "${RED}[ CRITICAL ALERT ] Compilation failed. Update aborted.${NC}"
             cd /
@@ -98,6 +99,10 @@ check_upgrade() {
         # We must kill background telemetry and UI processes to avoid zombie orphans
         # or file locking issues during the transition to the new script version.
         log "INFO" "Terminating existing SysWarden background processes safely..."
+        # [DEVSECOPS FIX] Graceful degradation: SIGTERM first to allow file descriptor sync, then SIGKILL to prevent DB corruption
+        pkill -15 -f syswarden-telemetry 2>/dev/null || true
+        pkill -15 -f syswarden_reporter 2>/dev/null || true
+        sleep 1
         pkill -9 -f syswarden-telemetry 2>/dev/null || true
         pkill -9 -f syswarden_reporter 2>/dev/null || true
 
