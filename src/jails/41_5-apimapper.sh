@@ -11,7 +11,7 @@ syswarden_jail_apimapper() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-apimapper.conf
 [Definition]
 # Detects reconnaissance on Swagger, OpenAPI, and GraphQL endpoints resulting in 403/404
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD) [^"]*(?:/swagger-ui[^ "]*|/openapi\.json|/swagger\.json|/v[1-3]/api-docs|/api-docs[^ "]*|/graphiql|/graphql/schema) HTTP/[^"]*" (403|404)
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"(?:GET|POST|HEAD) [^"]*(?:/swagger-ui[^ "]*|/openapi\.json|/swagger\.json|/v[1-3]/api-docs|/api-docs[^ "]*|/graphiql|/graphql/schema) HTTP/[^"]*" (403|404)
 ignoreregex = 
 EOF
     fi

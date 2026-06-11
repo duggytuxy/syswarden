@@ -12,7 +12,7 @@ syswarden_jail_cms_honeypot() {
 [Definition]
 # [DEVSECOPS FIX] Matches aggressive path traversals and double-slash bypasses (//wp/wp-includes/)
 # Instantly flags 4xx errors on standard CMS core directories/files.
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD) [^"]*?/(?:wp-includes|wp-admin|wp-content|wp-login\.php|xmlrpc\.php|wlwmanifest\.xml|joomla|administrator/index\.php|magento)[^"]*?" (?:404|403|400|405)
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"(?:GET|POST|HEAD) [^"]*?/(?:wp-includes|wp-admin|wp-content|wp-login\.php|xmlrpc\.php|wlwmanifest\.xml|joomla|administrator/index\.php|magento)[^"]*?" (?:404|403|400|405)
 ignoreregex = 
 EOF
     fi

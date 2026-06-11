@@ -12,8 +12,8 @@ syswarden_jail_jndi_ssti() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-jndi-ssti.conf
 [Definition]
 # Detects JNDI lookups (raw and encoded) and common SSTI/Spring boot exploits in URI and User-Agent
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD|PUT) .*?(?:\$\{jndi:|\x2524\x257Bjndi:|class\.module\.classLoader|\x2524\x257Bspring\.macro).* HTTP/.*" \d{3} .*$
-            ^<HOST> \S+ \S+ \[[^\]]*\] ".*?" \d{3} .*? "(?:\$\{jndi:|\x2524\x257Bjndi:).*?"$
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"(?:GET|POST|HEAD|PUT) .*?(?:\$\{jndi:|\x2524\x257Bjndi:|class\.module\.classLoader|\x2524\x257Bspring\.macro).* HTTP/.*" \d{3} .*$
+            ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?".*?" \d{3} .*? "(?:\$\{jndi:|\x2524\x257Bjndi:).*?"$
 ignoreregex = 
 EOF
     fi

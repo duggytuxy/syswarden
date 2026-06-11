@@ -11,7 +11,7 @@ syswarden_jail_idor_enum() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-idor-enum.conf
 [Definition]
 # Detects rapid sequential or random access to sensitive endpoints resulting in 401/403/404
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD|PUT|DELETE|PATCH) [^"]*(?:/api/v[0-9]+/|/users?/|/profile/|/invoices?/|/downloads?/|/docs?/|/id/|/view\?id=)[a-zA-Z0-9_-]+/?(?:[^"]*)? HTTP/[^"]*" (401|403|404)
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"(?:GET|POST|HEAD|PUT|DELETE|PATCH) [^"]*(?:/api/v[0-9]+/|/users?/|/profile/|/invoices?/|/downloads?/|/docs?/|/id/|/view\?id=)[a-zA-Z0-9_-]+/?(?:[^"]*)? HTTP/[^"]*" (401|403|404)
 ignoreregex = 
 EOF
     fi

@@ -12,7 +12,7 @@ syswarden_jail_webshell() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-webshell.conf
 [Definition]
 # Detects POST requests to upload/asset directories involving executable extensions
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "POST [^"]*(?:/upload|/media|/images|/assets|/files|/tmp|/wp-content/uploads)[^"]*\.(?:php\d?|phtml|phar|aspx?|ashx|jsp|cgi|pl|py|sh|exe)(?:\?[^"]*)? HTTP/[^"]*" \d{3}
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"POST [^"]*(?:/upload|/media|/images|/assets|/files|/tmp|/wp-content/uploads)[^"]*\.(?:php\d?|phtml|phar|aspx?|ashx|jsp|cgi|pl|py|sh|exe)(?:\?[^"]*)? HTTP/[^"]*" \d{3}
 ignoreregex = 
 EOF
     fi

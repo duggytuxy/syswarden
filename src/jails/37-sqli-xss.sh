@@ -14,7 +14,7 @@ syswarden_jail_sqli_xss() {
 # [DEVSECOPS FIX] Integrated advanced evasion patterns for Path Traversal (hybrid dots/url-encoding)
 # Added fallback pattern to extract malicious attempts logged into daemon error logs
 # [HOTFIX] Replaced literal '%' with '\x25' to prevent Python ConfigParser interpolation crash
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD|PUT|PATCH|DELETE) [^"]*(?:UNION(?:\s|\+|\x2520)SELECT|CONCAT(?:\s|\+|\x2520)?\(|WAITFOR(?:\s|\+|\x2520)DELAY|SLEEP(?:\s|\+|\x2520)?\(|\x253Cscript|\x253E|\x253C\x252Fscript|<script|alert\(|onerror=|onload=|document\.cookie|base64_decode\(|eval\(|\.\./\.\./|\x252E\x252E\x252F|\.(?:\.|\x252[eE]|\x25252[eE]|\x25\x2532\x2565)(?:/|\x252[fF]|\x25252[fF]|\x25\x2532\x2566))[^"]*" \d{3}
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"(?:GET|POST|HEAD|PUT|PATCH|DELETE) [^"]*(?:UNION(?:\s|\+|\x2520)SELECT|CONCAT(?:\s|\+|\x2520)?\(|WAITFOR(?:\s|\+|\x2520)DELAY|SLEEP(?:\s|\+|\x2520)?\(|\x253Cscript|\x253E|\x253C\x252Fscript|<script|alert\(|onerror=|onload=|document\.cookie|base64_decode\(|eval\(|\.\./\.\./|\x252E\x252E\x252F|\.(?:\.|\x252[eE]|\x25252[eE]|\x25\x2532\x2565)(?:/|\x252[fF]|\x25252[fF]|\x25\x2532\x2566))[^"]*" \d{3}
             ^.* \[error\] \d+#\d+: \*\d+ .* client: <HOST>, .* request: "(?:GET|POST|HEAD|PUT|PATCH|DELETE) [^"]*(?:\.\./\.\./|\x252E\x252E\x252F|\.(?:\.|\x252[eE]|\x25252[eE]|\x25\x2532\x2565)(?:/|\x252[fF]|\x25252[fF]|\x25\x2532\x2566))
 EOF
     fi

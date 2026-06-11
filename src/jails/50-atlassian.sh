@@ -11,7 +11,7 @@ syswarden_jail_atlassian() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-atlassian.conf
 [Definition]
 # RED TEAM FIX: Strict non-greedy bounds inside the HTTP method quotes to prevent ReDoS.
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "POST [^"]*?(?:/login\.jsp|/dologin\.action|/rest/auth/\d+/session)[^"]*?" (?:401|403|200)
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"POST [^"]*?(?:/login\.jsp|/dologin\.action|/rest/auth/\d+/session)[^"]*?" (?:401|403|200)
 ignoreregex = 
 EOF
     fi

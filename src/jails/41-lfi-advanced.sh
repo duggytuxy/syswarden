@@ -12,7 +12,7 @@ syswarden_jail_lfi_advanced() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-lfi-advanced.conf
 [Definition]
 # [DEVSECOPS FIX] Included Nginx/Apache error log monitoring and advanced obfuscation support
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD|PUT) [^"]*(?:php://(?:filter|input|expect)|php\x253A\x252F\x252F|file://|file\x253A\x252F\x252F|zip://|phar://|/etc/(?:passwd|shadow|hosts)|\x252Fetc\x252F(?:passwd|shadow)|/windows/(?:win\.ini|system32)|(?:\x2500|\x252500)[^ ]*\.(?:php|py|sh|pl|rb))[^"]*" \d{3}
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"(?:GET|POST|HEAD|PUT) [^"]*(?:php://(?:filter|input|expect)|php\x253A\x252F\x252F|file://|file\x253A\x252F\x252F|zip://|phar://|/etc/(?:passwd|shadow|hosts)|\x252Fetc\x252F(?:passwd|shadow)|/windows/(?:win\.ini|system32)|(?:\x2500|\x252500)[^ ]*\.(?:php|py|sh|pl|rb))[^"]*" \d{3}
             ^.* \[error\] \d+#\d+: \*\d+ .* client: <HOST>, .* request: "(?:GET|POST|HEAD|PUT) [^"]*(?:php://|file://|zip://|phar://|/etc/(?:passwd|shadow|hosts)|/windows/(?:win\.ini|system32))
 ignoreregex = 
 EOF

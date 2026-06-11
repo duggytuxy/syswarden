@@ -11,7 +11,8 @@ syswarden_jail_revshell() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-revshell.conf
 [Definition]
 # Detects common RCE patterns, shell invocations, and encoded payloads in URI/Requests
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS) [^"]*?(?:/bin/bash|\x252Fbin\x252Fbash|/bin/sh|\x252Fbin\x252Fsh|nc(?:\s+|\x2520|\x2509|\+)+(?:-e|-c)|(?:curl|wget)(?:\s+|\x2520|\x2509|\+)+(?:-q|-s|-O|http)|(?:python|perl|ruby|php|node|lua|awk)(?:\s+|\x2520|\x2509|\+)+-(?:c|e|r)|(?:\x253B|;|\x257C|\||`|\x2560|\$|\x2524)(?:\s+|\x2520|\x2509|\+)*(?:bash|sh|nc|curl|wget|chmod)).*?" .*$
+# [DEVSECOPS FIX: F-010 & F-004] Unified regex normalization: Optional dates, Case-insensitivity (?i), Double-URL encoding interception (\x25252f), and expanded LOLBins.
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"(?i)(?:GET|POST|HEAD|PUT|DELETE|PATCH|OPTIONS) [^"]*?(?:(?:/|\x252f|\x25252f)(?:bin|usr(?:/|\x252f|\x25252f)bin)(?:/|\x252f|\x25252f)(?:bash|sh|dash|zsh|ash)|(?:nc|ncat|socat)(?:\s+|\x2520|\x252520|\x2509|\+)+(?:-e|-c)|(?:curl|wget|fetch|tftp)(?:\s+|\x2520|\x252520|\x2509|\+)+(?:-q|-s|-O|http)|(?:python|perl|ruby|php|node|lua|awk)(?:\s+|\x2520|\x252520|\x2509|\+)+-(?:c|e|r)|(?:;|\x253b|\x25253b|\||\x257c|\x25257c|`|\x2560|\x252560|\$|\x2524|\x252524)(?:\s+|\x2520|\x252520|\x2509|\+)*(?:bash|sh|nc|ncat|socat|curl|wget|chmod|openssl)).*?" .*$
 ignoreregex = 
 EOF
     fi

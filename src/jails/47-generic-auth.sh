@@ -11,7 +11,7 @@ syswarden_jail_generic_auth() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-generic-auth.conf
 [Definition]
 # Detects excessive POST requests to common authentication paths to prevent credential stuffing
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "POST [^"]*?(?:/login|/sign-in|/signin|/log-in|/auth|/authenticate|/admin/login|/user/login|/member/login)[^"]*?(?:\.php|\.html|\.htm|\.jsp|\.aspx)?[^"]*?" (?:200|401|403)
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"POST [^"]*?(?:/login|/sign-in|/signin|/log-in|/auth|/authenticate|/admin/login|/user/login|/member/login)[^"]*?(?:\.php|\.html|\.htm|\.jsp|\.aspx)?[^"]*?" (?:200|401|403)
 ignoreregex = 
 EOF
     fi

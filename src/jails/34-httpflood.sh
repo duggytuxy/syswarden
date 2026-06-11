@@ -23,7 +23,8 @@ syswarden_jail_httpflood() {
     cat <<EOF >/etc/fail2ban/filter.d/syswarden-httpflood.conf
 [Definition]
 # Generic request match for high-frequency counting
-failregex = ^<HOST> \S+ \S+ \[
+# [DEVSECOPS FIX: F-004] Optional date brackets for universal log compatibility.
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?
 $IGNORE_LINE
 EOF
 

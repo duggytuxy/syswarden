@@ -70,8 +70,9 @@ check_upgrade() {
 
         # --- COMPILATION STAGE ---
         log "INFO" "Executing SysWarden Universal Build..."
-        chmod +x build.sh
-        ./build.sh >/dev/null 2>&1 || {
+        chmod +x build.sh 2>/dev/null || true
+        # [DEVSECOPS FIX] Explicit bash invocation bypasses 'noexec' mount restrictions on /tmp (CIS Benchmark compliance)
+        bash ./build.sh >/dev/null 2>&1 || {
             echo -e "${RED}[ CRITICAL ALERT ] Compilation failed. Update aborted.${NC}"
             cd /
             rm -rf "$UPGRADE_DIR"

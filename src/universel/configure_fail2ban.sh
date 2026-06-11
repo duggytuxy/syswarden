@@ -65,6 +65,18 @@ EOF
             if [[ -n "$dns_ips" ]]; then f2b_ignoreip="$f2b_ignoreip $dns_ips"; fi
         fi
 
+        # --- SECURITY FIX: F-012 (Fail2ban ignoreip overlaps global allowlist) ---
+        # Synchronize Fail2ban memory with the global Zero Trust whitelist to prevent rule shadowing
+        if [[ -f "$WHITELIST_FILE" ]]; then
+            local global_whitelisted_ips
+            global_whitelisted_ips=$(grep -vE '^\s*#|^\s*$' "$WHITELIST_FILE" | tr '\n' ' ' || true)
+            if [[ -n "$global_whitelisted_ips" ]]; then
+                f2b_ignoreip="$f2b_ignoreip $global_whitelisted_ips"
+                log "INFO" "Synchronized Fail2ban ignoreip with global whitelist."
+            fi
+        fi
+        # -------------------------------------------------------------------------
+
         # --- WEBHOOK ACTION SCRIPT DEPLOYMENT ---
         if [[ "${SYSWARDEN_ENABLE_WEBHOOK:-n}" == "y" ]]; then
             log "INFO" "Deploying secure Webhook dispatcher for Fail2ban..."

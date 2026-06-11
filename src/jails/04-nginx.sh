@@ -15,7 +15,7 @@ syswarden_jail_nginx() {
         cat <<'EOF' >/etc/fail2ban/filter.d/nginx-scanner.conf
 [Definition]
 # [DEVSECOPS FIX] Included HTTP 30x redirects and dynamic [A-Z]+ verbs to catch all evasive vulnerability scanners
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "[A-Z]+ [^"]*?" (?:30[1278]|400|401|403|404|405|444)
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"[A-Z]+ [^"]*?" (?:30[1278]|400|401|403|404|405|444)
 ignoreregex = 
 EOF
     fi

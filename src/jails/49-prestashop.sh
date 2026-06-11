@@ -11,7 +11,7 @@ syswarden_jail_prestashop() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-prestashop.conf
 [Definition]
 # RED TEAM FIX: Bounded the URI parsing to strictly prevent query string ReDoS.
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "POST [^"]*?index\.php\?[^"]*?controller=AdminLogin[^"]*?" 200
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"POST [^"]*?index\.php\?[^"]*?controller=AdminLogin[^"]*?" 200
 ignoreregex = 
 EOF
     fi

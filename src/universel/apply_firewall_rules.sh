@@ -6,6 +6,18 @@ apply_firewall_rules() {
     touch "$WHITELIST_FILE" "$BLOCKLIST_FILE" "$F2B_BLOCKLIST_FILE"
     chmod 600 "$F2B_BLOCKLIST_FILE"
 
+    # [DEVSECOPS FIX] HIDS / AIDE Exclusion (CIS Benchmark compliance)
+    # Prevent SOC alert fatigue by explicitly excluding SysWarden's high-frequency dynamic
+    # lists from the kernel-level AIDE file integrity checks.
+    if command -v aide >/dev/null 2>&1 && [[ -d /etc/aide/aide.conf.d ]]; then
+        cat <<EOF >/etc/aide/aide.conf.d/99_syswarden_exclusions
+!/etc/syswarden/active_global_blocklist.txt
+!/etc/syswarden/syswarden.nft
+!/etc/syswarden/whitelist.txt
+!/etc/syswarden/blocklist.txt
+EOF
+    fi
+
     # Automatically instantiate Layer 7 backend storage structures in kernel space on upgrade/update
     case "${FIREWALL_BACKEND:-nftables}" in
         nftables)
@@ -31,6 +43,11 @@ apply_firewall_rules() {
     if [[ -s "$F2B_BLOCKLIST_FILE" ]]; then
         cat "$F2B_BLOCKLIST_FILE" >>"$FINAL_LIST"
     fi
+
+    # [DEVSECOPS FIX] Strict Data Canonicalization
+    # Silently strips all malformed IPs, DNS names, and carriage returns (\r) to prevent nftables compilation crashes (Could not resolve hostname).
+    grep -oE '^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$' "$FINAL_LIST" >"$TMP_DIR/canonical_ips.txt" || true
+    mv -f "$TMP_DIR/canonical_ips.txt" "$FINAL_LIST"
 
     # 2. Clean duplicates to ensure firewall stability
     sort -u "$FINAL_LIST" -o "$FINAL_LIST"
@@ -265,6 +282,21 @@ EOF
         # --- FIX: KERNEL FORWARDING & OS-LEVEL BYPASS FOR WIREGUARD ---
         if [[ "${USE_WIREGUARD:-n}" == "y" ]]; then
             log "INFO" "Applying WireGuard routing bypass to native OS tables..."
+
+            # [DEVSECOPS FIX] CIS 3.2.1 Compliance Override
+            # Hardened OS explicitly disables IP forwarding. WireGuard requires it.
+            # We dynamically inject an override strictly for the VPN functionality.
+            if [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" == "0" ]]; then
+                log "INFO" "Overriding CIS benchmark net.ipv4.ip_forward=0 for WireGuard VPN routing..."
+                sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+                echo "net.ipv4.ip_forward = 1" >/etc/sysctl.d/99-syswarden-vpn.conf
+            fi
+            if [[ "$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)" == "0" ]]; then
+                sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
+                echo "net.ipv6.conf.all.forwarding = 1" >>/etc/sysctl.d/99-syswarden-vpn.conf
+            fi
+            if command -v sysctl >/dev/null 2>&1; then sysctl --system >/dev/null 2>&1 || true; fi
+
             if nft list table inet filter >/dev/null 2>&1; then
                 # 1. Open UDP port and allow wg0 interface in OS default input chain
                 if nft list chain inet filter input >/dev/null 2>&1; then
@@ -284,6 +316,18 @@ EOF
                     if ! nft list chain inet filter forward 2>/dev/null | grep -E "oifname[[:space:]]+[\"']?wg0[\"']?[[:space:]]+accept" >/dev/null; then
                         nft insert rule inet filter forward oifname "wg0" accept 2>/dev/null || true
                     fi
+                fi
+
+                # [DEVSECOPS FIX] Native NAT / Masquerading missing in Nftables backend
+                # Without Masquerade, packets leave the server with wg0's internal IP and are dropped by upstream routers.
+                if ! nft list table inet nat >/dev/null 2>&1; then
+                    nft add table inet nat 2>/dev/null || true
+                fi
+                if ! nft list chain inet nat postrouting >/dev/null 2>&1; then
+                    nft add chain inet nat postrouting '{ type nat hook postrouting priority 100; policy accept; }' 2>/dev/null || true
+                fi
+                if ! nft list chain inet nat postrouting 2>/dev/null | grep -E "saddr[[:space:]]+${WG_SUBNET:-10.66.66.0/24}[[:space:]]+oifname[[:space:]]+[\"']?${ACTIVE_IF:-eth0}[\"']?[[:space:]]+masquerade" >/dev/null; then
+                    nft add rule inet nat postrouting ip saddr "${WG_SUBNET:-10.66.66.0/24}" oifname "${ACTIVE_IF:-eth0}" masquerade 2>/dev/null || true
                 fi
 
                 # --- HOTFIX: SAFE OS PERSISTENCE (NO RAM DUMP) ---

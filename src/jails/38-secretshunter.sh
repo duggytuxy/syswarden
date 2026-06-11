@@ -11,7 +11,8 @@ syswarden_jail_secretshunter() {
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-secretshunter.conf
 [Definition]
 # Detects access attempts to critical configuration files, private keys, and DB backups
-failregex = ^<HOST> \S+ \S+ \[[^\]]*\] "(?:GET|POST|HEAD|PUT) .*(?:/(?:\.|\x252e)env[^ ]*|/(?:\.|\x252e)git/?.*|/(?:\.|\x252e)aws/?.*|/(?:\.|\x252e)ssh/?.*|/id_rsa[^ ]*|/id_ed25519[^ ]*|/[^ ]*\.(?:sql|bak|swp|db|sqlite3?)(?:\.gz|\.zip)?|/docker-compose\.ya?ml|/wp-config\.php\.(?:bak|save|old|txt|zip)) HTTP/.*" \d{3} .*$
+# [DEVSECOPS FIX: F-009 & F-004] Unified regex normalization: Optional dates, Case-insensitivity (?i), Double-URL encoding (\x25252e), and universal path prefixes.
+failregex = ^<HOST> \S+ \S+ (?:\[[^\]]*\]\s+)?"(?i)(?:GET|POST|HEAD|PUT) [^"]*?(?:(?:/|\x252f|\x25252f)(?:\.|\x252e|\x25252e)(?:env|git|aws|ssh)[^ ]*|(?:/|\x252f|\x25252f)id_(?:rsa|ed25519)[^ ]*|(?:/|\x252f|\x25252f)[^ ]*\.(?:sql|bak|swp|db|sqlite3?)(?:\.gz|\.zip)?|(?:/|\x252f|\x25252f)docker-compose\.ya?ml|(?:/|\x252f|\x25252f)wp-config\.php\.(?:bak|save|old|txt|zip)) HTTP/.*?" \d{3} .*$
 ignoreregex = 
 EOF
     fi
