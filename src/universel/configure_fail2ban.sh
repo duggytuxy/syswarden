@@ -23,6 +23,35 @@ logtarget = /var/log/fail2ban.log
 dbpurgeage = 691200
 EOF
 
+        # --- DEVSECOPS FIX: NATIVE EL10 NFTABLES ENGINE ---
+        # Deploys the POSIX-compliant multi-protocol (TCP/UDP/ICMP/QUIC) action.
+        # Bypasses CLI flag parsing errors on 'priority -1' using '--'.
+        log "INFO" "Deploying native syswarden-nft action for AlmaLinux 10+ compatibility..."
+        cat <<'EOF_ACTION_NFT' >/etc/fail2ban/action.d/syswarden-nft.conf
+[Definition]
+actionstart = nft add table inet syswarden_f2b
+              nft -- add chain inet syswarden_f2b <name> \{ type filter hook input priority -1 \; \}
+              nft add set inet syswarden_f2b <addr_set> \{ type <addr_type> \; \}
+              nft flush chain inet syswarden_f2b <name>
+              nft add rule inet syswarden_f2b <name> <addr_family> saddr @<addr_set> drop
+
+actionstop =  nft flush chain inet syswarden_f2b <name>
+              nft delete chain inet syswarden_f2b <name>
+              nft delete set inet syswarden_f2b <addr_set>
+
+actioncheck = nft list set inet syswarden_f2b <addr_set> >/dev/null
+
+actionban =   nft add element inet syswarden_f2b <addr_set> \{ <ip> \}
+
+actionunban = nft delete element inet syswarden_f2b <addr_set> \{ <ip> \}
+
+[Init]
+name = default
+addr_family = ip
+addr_type = ipv4_addr
+addr_set = f2b-<name>
+EOF_ACTION_NFT
+
         # 2. Firewall Backend & OS Optimization (Zero Trust AllPorts)
         export SYSW_F2B_ACTION="iptables-allports"
         export SYSW_F2B_ACTION_ALLPORTS="iptables-allports"
@@ -31,8 +60,8 @@ EOF
             export SYSW_F2B_ACTION="firewallcmd-ipset"
             export SYSW_F2B_ACTION_ALLPORTS="firewallcmd-ipset"
         elif [[ "$FIREWALL_BACKEND" == "nftables" ]]; then
-            export SYSW_F2B_ACTION="nftables-allports"
-            export SYSW_F2B_ACTION_ALLPORTS="nftables-allports"
+            export SYSW_F2B_ACTION="syswarden-nft"
+            export SYSW_F2B_ACTION_ALLPORTS="syswarden-nft"
         elif [[ "$FIREWALL_BACKEND" == "ufw" ]]; then
             export SYSW_F2B_ACTION="ufw"
             export SYSW_F2B_ACTION_ALLPORTS="ufw"

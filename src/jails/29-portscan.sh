@@ -48,9 +48,10 @@ EOF
     # [DEVSECOPS FIX] Dynamic Banaction to prevent dead-routing on backend swaps
     # Resolves the RHEL/Alma paradox where Fail2ban attempts to use firewalld
     # rich-rules while SysWarden has engaged pure native nftables offloading.
+    # Uses syswarden-nft native action to bypass EL10 CLI parsing errors.
     local f2b_banaction="iptables-allports"
     if [[ "${FIREWALL_BACKEND}" == "nftables" ]]; then
-        f2b_banaction="nftables-allports"
+        f2b_banaction="syswarden-nft"
     elif [[ "${FIREWALL_BACKEND}" == "firewalld" ]]; then
         f2b_banaction="firewallcmd-allports"
     elif [[ "${FIREWALL_BACKEND}" == "ufw" ]]; then
