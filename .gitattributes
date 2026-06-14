@@ -1,2 +1,20 @@
+# Set default behavior
+* text=auto
+
+# Force LF for all Linux/Unix scripts and configurations
 *.sh text eol=lf
 *.conf text eol=lf
+*.local text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Force LF for documentation (avoids diff clutter across OS)
+*.md text eol=lf
+
+# Windows specific files (if any)
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Binaries (Do not touch)
+*.exe binary
+*.dll binary
