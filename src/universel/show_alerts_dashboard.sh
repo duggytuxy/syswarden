@@ -69,9 +69,15 @@ show_alerts_dashboard() {
                 date = $1 " " $2 " " $3
             }
             
-            module = "SysWarden-CATCH"
-            if (match($0, /\[SysWarden-[A-Za-z]+\]/)) {
+            # --- DEVSECOPS FIX: Strict module classification for SOC Triage ---
+            # Prioritize specific sub-tags (like Catch-All) over the generic BLOCK prefix
+            # to maintain distinct L3 vs L4 visibility in the live dashboard.
+            if (match($0, /\[Catch-All\]/)) {
+                module = "SysWarden-CATCH"
+            } else if (match($0, /\[SysWarden-[A-Za-z]+\]/)) {
                 module = substr($0, RSTART+1, RLENGTH-2)
+            } else {
+                module = "SysWarden-DROP"
             }
             
             src = "N/A"
