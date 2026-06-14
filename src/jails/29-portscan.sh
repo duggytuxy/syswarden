@@ -45,16 +45,29 @@ EOF
         fi
     fi
 
+    # [DEVSECOPS FIX] Dynamic Banaction to prevent dead-routing on backend swaps
+    # Resolves the RHEL/Alma paradox where Fail2ban attempts to use firewalld
+    # rich-rules while SysWarden has engaged pure native nftables offloading.
+    local f2b_banaction="iptables-allports"
+    if [[ "${FIREWALL_BACKEND}" == "nftables" ]]; then
+        f2b_banaction="nftables-allports"
+    elif [[ "${FIREWALL_BACKEND}" == "firewalld" ]]; then
+        f2b_banaction="firewallcmd-allports"
+    elif [[ "${FIREWALL_BACKEND}" == "ufw" ]]; then
+        f2b_banaction="ufw"
+    fi
+
     # Write directly to jail.d for clean segmentation
     cat <<EOF >/etc/fail2ban/jail.d/syswarden-portscan.conf
 [syswarden-portscan]
-enabled  = true
-port     = 0:65535
-filter   = syswarden-portscan
-logpath  = $FIREWALL_LOG
-backend  = ${SYSW_OS_BACKEND:-auto}
-maxretry = 10
-findtime = 10m
-bantime  = 24h
+enabled   = true
+port      = 0:65535
+filter    = syswarden-portscan
+logpath   = $FIREWALL_LOG
+backend   = \${SYSW_OS_BACKEND:-auto}
+banaction = $f2b_banaction
+maxretry  = 10
+findtime  = 10m
+bantime   = 24h
 EOF
 }
