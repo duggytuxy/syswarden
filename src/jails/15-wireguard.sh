@@ -23,7 +23,7 @@ syswarden_jail_wireguard() {
     log "INFO" "WireGuard interface and kernel logs detected. Enabling UDP Jail."
 
     # Create Filter for Handshake Failures (Requires Kernel Logging)
-    if [[ ! -f "/etc/fail2ban/filter.d/wireguard.conf" ]]; then
+    if [[ ! -f "/etc/fail2ban/filter.d/syswarden-wireguard.conf" ]]; then
         cat <<'EOF' >/etc/fail2ban/filter.d/syswarden-wireguard.conf
 [Definition]
 failregex = ^.*?wireguard: .*? Handshake for peer .*? \(<HOST>:\d+\) did not complete.*$

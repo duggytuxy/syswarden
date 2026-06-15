@@ -2,7 +2,7 @@
 
 # SysWarden Manager - Blocklists and Whitelists Manager
 # Copyright (C) 2026 duggytuxy - Laurent M.
-# Version: v1.10.0
+# Version: v1.10.1
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
@@ -28,7 +28,7 @@ WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
 SSH_WHITELIST_FILE="$SYSWARDEN_DIR/ssh_whitelist.txt"
 SET_NAME="syswarden_blacklist"
-VERSION="v1.10.0"
+VERSION="v1.10.1"
 
 # --- ROOT ENFORCEMENT ---
 if [[ $EUID -ne 0 ]]; then
@@ -317,7 +317,7 @@ whitelist_ip() {
 
     case "$FW_BACKEND" in
         nftables)
-            # Aligning with SysWarden v1.10.0 O(1) set-based whitelist architecture
+            # Aligning with SysWarden v1.10.1 O(1) set-based whitelist architecture
             if [[ "$target_ip" =~ : ]]; then
                 nft add element netdev syswarden_hw_drop syswarden_whitelist6 "{ $target_ip }" 2>/dev/null || true
                 get_nft_chain

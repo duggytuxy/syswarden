@@ -8,10 +8,17 @@ configure_fail2ban() {
             mkdir -p /etc/fail2ban/jail.d
             chmod 755 /etc/fail2ban/jail.d
         else
-            # [DEVSECOPS FIX] Surgical cleanup to preserve third-party integrations (Traefik, Custom Jails, etc.)
-            # Instead of a scorched earth 'rm -rf' on the whole directory, we specifically target SysWarden files.
+            # 1. Surgical cleanup for the new strict namespace
             rm -f /etc/fail2ban/jail.d/syswarden-*.conf 2>/dev/null || true
             rm -f /etc/fail2ban/jail.d/syswarden-*.local 2>/dev/null || true
+
+            # 2. [DEVSECOPS FIX] Legacy Cleanup (The Transition from v1.00 to Namespace)
+            # We must explicitly destroy old SysWarden configurations that lacked the prefix
+            # so they do not cause Double-Jail instances (e.g. cockpit-custom AND syswarden-cockpit).
+            for legacy in nginx-scanner mariadb-auth mongodb-guard wordpress-auth drupal-auth nextcloud openvpn-custom gitea-custom cockpit-custom proxmox-custom haproxy-guard phpmyadmin-custom squid-custom dovecot-custom laravel-auth grafana-auth zabbix-auth wireguard nginx mariadb mongodb apache auditd slowloris homoglyph privesc portscan revshell aibots badbots httpflood webshell sqli-xss secretshunter ssrf jndi-ssti lfi-advanced apimapper vaultwarden idor-enum sso silent-scanner cms-honeypot proxy-abuse telnet generic-auth odoo prestashop atlassian dolibarr apache-tls nginx-tls apache-scanner; do
+                rm -f "/etc/fail2ban/jail.d/${legacy}.conf" 2>/dev/null || true
+                rm -f "/etc/fail2ban/filter.d/${legacy}.conf" 2>/dev/null || true
+            done
         fi
         rm -f /etc/fail2ban/filter.d/syswarden-*.conf 2>/dev/null || true
         log "INFO" "Purged legacy SysWarden rules while strictly preserving third-party administrator configurations."
