@@ -14,7 +14,7 @@ SET_NAME="syswarden_blacklist"
 TMP_DIR=$(mktemp -d -t syswarden-install-XXXXXX)
 chmod 0700 "$TMP_DIR"
 
-VERSION="v1.10.4"
+VERSION="v1.10.5"
 ACTIVE_PORTS=""
 SYSWARDEN_DIR="/etc/syswarden"
 WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"

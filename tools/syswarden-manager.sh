@@ -2,7 +2,7 @@
 
 # SysWarden Manager - Blocklists and Whitelists Manager
 # Copyright (C) 2026 duggytuxy - Laurent M.
-# Version: v1.10.4
+# Version: v1.10.5
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
@@ -28,7 +28,7 @@ WHITELIST_FILE="$SYSWARDEN_DIR/whitelist.txt"
 BLOCKLIST_FILE="$SYSWARDEN_DIR/blocklist.txt"
 SSH_WHITELIST_FILE="$SYSWARDEN_DIR/ssh_whitelist.txt"
 SET_NAME="syswarden_blacklist"
-VERSION="v1.10.4"
+VERSION="v1.10.5"
 
 # --- ROOT ENFORCEMENT ---
 if [[ $EUID -ne 0 ]]; then
@@ -293,11 +293,18 @@ unblock_ip() {
 # --- HOT WHITELIST (GLOBAL VIP ACCESS) ---
 whitelist_ip() {
     local target_ip="$1"
+    local target_port="${2:-}"
     # Whitelist supports both IPv4 and IPv6
     validate_ip "$target_ip" "any"
     detect_backend
 
-    echo -e "\n${BLUE}>> Whitelisting IP $target_ip globally...${NC}"
+    local entry="$target_ip"
+    if [[ -n "$target_port" ]]; then
+        entry="$target_ip:$target_port"
+        echo -e "\n${BLUE}>> Whitelisting IP $target_ip on port $target_port globally...${NC}"
+    else
+        echo -e "\n${BLUE}>> Whitelisting IP $target_ip globally...${NC}"
+    fi
 
     # Only unblock if it's IPv4 (since blacklist is IPv4-only)
     if [[ ! "$target_ip" =~ : ]]; then
@@ -308,24 +315,34 @@ whitelist_ip() {
     touch "$WHITELIST_FILE"
     chmod 600 "$WHITELIST_FILE"
 
-    if ! grep -q "^${target_ip}$" "$WHITELIST_FILE" 2>/dev/null; then
-        echo "$target_ip" >>"$WHITELIST_FILE"
+    if ! grep -q "^${entry}$" "$WHITELIST_FILE" 2>/dev/null; then
+        echo "$entry" >>"$WHITELIST_FILE"
         echo -e "${GREEN}[✔] Saved to persistent $WHITELIST_FILE${NC}"
     else
-        echo -e "${YELLOW}[i] IP is already in $WHITELIST_FILE${NC}"
+        echo -e "${YELLOW}[i] IP/Port is already in $WHITELIST_FILE${NC}"
     fi
 
     case "$FW_BACKEND" in
         nftables)
-            # Aligning with SysWarden v1.10.4 O(1) set-based whitelist architecture
-            if [[ "$target_ip" =~ : ]]; then
-                nft add element netdev syswarden_hw_drop syswarden_whitelist6 "{ $target_ip }" 2>/dev/null || true
+            # Aligning with SysWarden v1.10.5 O(1) set-based whitelist architecture
+            if [[ -n "$target_port" ]]; then
+                local family_rule="ip"
+                [[ "$target_ip" =~ : ]] && family_rule="ip6"
                 get_nft_chain
-                nft insert rule inet syswarden_table "$NFT_CHAIN" ip6 saddr "$target_ip" accept 2>/dev/null || true
+                nft insert rule netdev syswarden_hw_drop ingress_frontline "$family_rule" saddr "$target_ip" tcp dport "$target_port" accept 2>/dev/null || true
+                nft insert rule netdev syswarden_hw_drop ingress_frontline "$family_rule" saddr "$target_ip" udp dport "$target_port" accept 2>/dev/null || true
+                nft insert rule inet syswarden_table "$NFT_CHAIN" "$family_rule" saddr "$target_ip" tcp dport "$target_port" accept 2>/dev/null || true
+                nft insert rule inet syswarden_table "$NFT_CHAIN" "$family_rule" saddr "$target_ip" udp dport "$target_port" accept 2>/dev/null || true
             else
-                nft add element netdev syswarden_hw_drop syswarden_whitelist "{ $target_ip }" 2>/dev/null || true
-                get_nft_chain
-                nft insert rule inet syswarden_table "$NFT_CHAIN" ip saddr "$target_ip" accept 2>/dev/null || true
+                if [[ "$target_ip" =~ : ]]; then
+                    nft add element netdev syswarden_hw_drop syswarden_whitelist6 "{ $target_ip }" 2>/dev/null || true
+                    get_nft_chain
+                    nft insert rule inet syswarden_table "$NFT_CHAIN" ip6 saddr "$target_ip" accept 2>/dev/null || true
+                else
+                    nft add element netdev syswarden_hw_drop syswarden_whitelist "{ $target_ip }" 2>/dev/null || true
+                    get_nft_chain
+                    nft insert rule inet syswarden_table "$NFT_CHAIN" ip saddr "$target_ip" accept 2>/dev/null || true
+                fi
             fi
             {
                 nft list table netdev syswarden_hw_drop 2>/dev/null
@@ -337,24 +354,53 @@ whitelist_ip() {
             [[ "$target_ip" =~ : ]] && family="ipv6"
             local ACTIVE_ZONE
             ACTIVE_ZONE=$(firewall-cmd --get-default-zone 2>/dev/null || echo "public")
-            firewall-cmd --permanent --zone="$ACTIVE_ZONE" --add-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' accept" >/dev/null 2>&1 || true
-            firewall-cmd --zone="$ACTIVE_ZONE" --add-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' accept" >/dev/null 2>&1 || true
+            if [[ -n "$target_port" ]]; then
+                firewall-cmd --permanent --zone="$ACTIVE_ZONE" --add-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' port port='$target_port' protocol='tcp' accept" >/dev/null 2>&1 || true
+                firewall-cmd --permanent --zone="$ACTIVE_ZONE" --add-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' port port='$target_port' protocol='udp' accept" >/dev/null 2>&1 || true
+                firewall-cmd --zone="$ACTIVE_ZONE" --add-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' port port='$target_port' protocol='tcp' accept" >/dev/null 2>&1 || true
+                firewall-cmd --zone="$ACTIVE_ZONE" --add-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' port port='$target_port' protocol='udp' accept" >/dev/null 2>&1 || true
+            else
+                firewall-cmd --permanent --zone="$ACTIVE_ZONE" --add-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' accept" >/dev/null 2>&1 || true
+                firewall-cmd --zone="$ACTIVE_ZONE" --add-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' accept" >/dev/null 2>&1 || true
+            fi
             ;;
         ufw)
-            ufw insert 1 allow from "$target_ip" >/dev/null 2>&1 || true
+            if [[ -n "$target_port" ]]; then
+                ufw insert 1 allow from "$target_ip" to any port "$target_port" >/dev/null 2>&1 || true
+            else
+                ufw insert 1 allow from "$target_ip" >/dev/null 2>&1 || true
+            fi
             ;;
         ipset | iptables | unknown)
-            if [[ "$target_ip" =~ : ]]; then
-                ip6tables -I INPUT 1 -s "$target_ip" -j ACCEPT 2>/dev/null || true
-                if command -v netfilter-persistent >/dev/null; then
-                    netfilter-persistent save 2>/dev/null || true
+            if [[ -n "$target_port" ]]; then
+                if [[ "$target_ip" =~ : ]]; then
+                    ip6tables -I INPUT 1 -p tcp -s "$target_ip" --dport "$target_port" -j ACCEPT 2>/dev/null || true
+                    ip6tables -I INPUT 1 -p udp -s "$target_ip" --dport "$target_port" -j ACCEPT 2>/dev/null || true
+                    if command -v netfilter-persistent >/dev/null; then
+                        netfilter-persistent save 2>/dev/null || true
+                    fi
+                else
+                    iptables -I INPUT 1 -p tcp -s "$target_ip" --dport "$target_port" -j ACCEPT 2>/dev/null || true
+                    iptables -I INPUT 1 -p udp -s "$target_ip" --dport "$target_port" -j ACCEPT 2>/dev/null || true
+                    if command -v netfilter-persistent >/dev/null; then
+                        netfilter-persistent save 2>/dev/null || true
+                    elif command -v /etc/init.d/iptables >/dev/null; then
+                        /etc/init.d/iptables save 2>/dev/null || true
+                    fi
                 fi
             else
-                iptables -I INPUT 1 -s "$target_ip" -j ACCEPT 2>/dev/null || true
-                if command -v netfilter-persistent >/dev/null; then
-                    netfilter-persistent save 2>/dev/null || true
-                elif command -v /etc/init.d/iptables >/dev/null; then
-                    /etc/init.d/iptables save 2>/dev/null || true
+                if [[ "$target_ip" =~ : ]]; then
+                    ip6tables -I INPUT 1 -s "$target_ip" -j ACCEPT 2>/dev/null || true
+                    if command -v netfilter-persistent >/dev/null; then
+                        netfilter-persistent save 2>/dev/null || true
+                    fi
+                else
+                    iptables -I INPUT 1 -s "$target_ip" -j ACCEPT 2>/dev/null || true
+                    if command -v netfilter-persistent >/dev/null; then
+                        netfilter-persistent save 2>/dev/null || true
+                    elif command -v /etc/init.d/iptables >/dev/null; then
+                        /etc/init.d/iptables save 2>/dev/null || true
+                    fi
                 fi
             fi
             ;;
@@ -364,83 +410,85 @@ whitelist_ip() {
     # ==============================================================================
     # --- HOTFIX: DYNAMIC WEB ACL INJECTION (APACHE & NGINX) ---
     # ==============================================================================
-    local web_conf=""
-    local web_server=""
+    if [[ -z "$target_port" ]] || [[ "$target_port" == "80" ]] || [[ "$target_port" == "443" ]]; then
+        local web_conf=""
+        local web_server=""
 
-    # 1. Check for Apache configurations
-    if [[ -f "/etc/apache2/sites-available/syswarden-ui.conf" ]]; then
-        web_conf="/etc/apache2/sites-available/syswarden-ui.conf"
-        web_server="apache2"
-    elif [[ -f "/etc/httpd/conf.d/syswarden-ui.conf" ]]; then
-        web_conf="/etc/httpd/conf.d/syswarden-ui.conf"
-        web_server="httpd"
-    elif [[ -f "/etc/apache2/conf.d/syswarden-ui.conf" ]]; then
-        web_conf="/etc/apache2/conf.d/syswarden-ui.conf"
-        web_server="apache2"
-    # 2. Check for Nginx configurations
-    elif [[ -f "/etc/nginx/sites-available/syswarden-ui.conf" ]]; then
-        web_conf="/etc/nginx/sites-available/syswarden-ui.conf"
-        web_server="nginx"
-    elif [[ -f "/etc/nginx/conf.d/syswarden-ui.conf" ]]; then
-        web_conf="/etc/nginx/conf.d/syswarden-ui.conf"
-        web_server="nginx"
-    elif [[ -f "/etc/nginx/http.d/syswarden-ui.conf" ]]; then
-        web_conf="/etc/nginx/http.d/syswarden-ui.conf"
-        web_server="nginx"
-    fi
+        # 1. Check for Apache configurations
+        if [[ -f "/etc/apache2/sites-available/syswarden-ui.conf" ]]; then
+            web_conf="/etc/apache2/sites-available/syswarden-ui.conf"
+            web_server="apache2"
+        elif [[ -f "/etc/httpd/conf.d/syswarden-ui.conf" ]]; then
+            web_conf="/etc/httpd/conf.d/syswarden-ui.conf"
+            web_server="httpd"
+        elif [[ -f "/etc/apache2/conf.d/syswarden-ui.conf" ]]; then
+            web_conf="/etc/apache2/conf.d/syswarden-ui.conf"
+            web_server="apache2"
+        # 2. Check for Nginx configurations
+        elif [[ -f "/etc/nginx/sites-available/syswarden-ui.conf" ]]; then
+            web_conf="/etc/nginx/sites-available/syswarden-ui.conf"
+            web_server="nginx"
+        elif [[ -f "/etc/nginx/conf.d/syswarden-ui.conf" ]]; then
+            web_conf="/etc/nginx/conf.d/syswarden-ui.conf"
+            web_server="nginx"
+        elif [[ -f "/etc/nginx/http.d/syswarden-ui.conf" ]]; then
+            web_conf="/etc/nginx/http.d/syswarden-ui.conf"
+            web_server="nginx"
+        fi
 
-    if [[ -n "$web_conf" && -f "$web_conf" ]]; then
-        echo -e "${BLUE}>> Injecting $target_ip into Web UI Access Control List (ACL)...${NC}"
+        if [[ -n "$web_conf" && -f "$web_conf" ]]; then
+            echo -e "${BLUE}>> Injecting $target_ip into Web UI Access Control List (ACL)...${NC}"
 
-        # Secure temporary file creation (Purple Team / CWE-377 compliance)
-        local tmp_file
-        tmp_file=$(mktemp)
+            # Secure temporary file creation (Purple Team / CWE-377 compliance)
+            local tmp_file
+            tmp_file=$(mktemp)
 
-        if [[ "$web_server" == "nginx" ]]; then
-            if ! grep -q "allow $target_ip;" "$web_conf"; then
-                awk -v ip="$target_ip" '/^[[:space:]]*deny all;/ { print "    allow " ip ";" } { print }' "$web_conf" >"$tmp_file"
-                cat "$tmp_file" >"$web_conf"
-                rm -f "$tmp_file"
+            if [[ "$web_server" == "nginx" ]]; then
+                if ! grep -q "allow $target_ip;" "$web_conf"; then
+                    awk -v ip="$target_ip" '/^[[:space:]]*deny all;/ { print "    allow " ip ";" } { print }' "$web_conf" >"$tmp_file"
+                    cat "$tmp_file" >"$web_conf"
+                    rm -f "$tmp_file"
 
-                if command -v nginx >/dev/null && nginx -t >/dev/null 2>&1; then
-                    if command -v systemctl >/dev/null; then
-                        systemctl reload nginx >/dev/null 2>&1 || true
-                    elif command -v rc-service >/dev/null; then
-                        rc-service nginx reload >/dev/null 2>&1 || true
+                    if command -v nginx >/dev/null && nginx -t >/dev/null 2>&1; then
+                        if command -v systemctl >/dev/null; then
+                            systemctl reload nginx >/dev/null 2>&1 || true
+                        elif command -v rc-service >/dev/null; then
+                            rc-service nginx reload >/dev/null 2>&1 || true
+                        fi
+                        echo -e "${GREEN}[V] Dashboard UI access instantly granted to $target_ip via Nginx.${NC}"
+                    else
+                        echo -e "${RED}[!] Nginx configuration test failed. Reverting ACL injection.${NC}"
+                        sed -i "/allow $target_ip;/d" "$web_conf"
                     fi
-                    echo -e "${GREEN}[V] Dashboard UI access instantly granted to $target_ip via Nginx.${NC}"
                 else
-                    echo -e "${RED}[!] Nginx configuration test failed. Reverting ACL injection.${NC}"
-                    sed -i "/allow $target_ip;/d" "$web_conf"
+                    echo -e "${YELLOW}[i] IP $target_ip is already authorized in Nginx ACL.${NC}"
+                    rm -f "$tmp_file"
                 fi
             else
-                echo -e "${YELLOW}[i] IP $target_ip is already authorized in Nginx ACL.${NC}"
-                rm -f "$tmp_file"
-            fi
-        else
-            # Apache Injection Logic
-            if ! grep -q "Require ip $target_ip" "$web_conf"; then
-                awk -v ip="$target_ip" '/^[[:space:]]*<\/RequireAny>/ { print "        Require ip " ip } { print }' "$web_conf" >"$tmp_file"
-                cat "$tmp_file" >"$web_conf"
-                rm -f "$tmp_file"
+                # Apache Injection Logic
+                if ! grep -q "Require ip $target_ip" "$web_conf"; then
+                    awk -v ip="$target_ip" '/^[[:space:]]*<\/RequireAny>/ { print "        Require ip " ip } { print }' "$web_conf" >"$tmp_file"
+                    cat "$tmp_file" >"$web_conf"
+                    rm -f "$tmp_file"
 
-                if { command -v apache2ctl >/dev/null 2>&1 && apache2ctl configtest >/dev/null 2>&1; } ||
-                    { command -v apachectl >/dev/null 2>&1 && apachectl configtest >/dev/null 2>&1; } ||
-                    { command -v httpd >/dev/null 2>&1 && httpd -t >/dev/null 2>&1; }; then
+                    if { command -v apache2ctl >/dev/null 2>&1 && apache2ctl configtest >/dev/null 2>&1; } ||
+                        { command -v apachectl >/dev/null 2>&1 && apachectl configtest >/dev/null 2>&1; } ||
+                        { command -v httpd >/dev/null 2>&1 && httpd -t >/dev/null 2>&1; }; then
 
-                    if command -v systemctl >/dev/null; then
-                        systemctl reload "$web_server" >/dev/null 2>&1 || true
-                    elif command -v rc-service >/dev/null; then
-                        rc-service "$web_server" reload >/dev/null 2>&1 || true
+                        if command -v systemctl >/dev/null; then
+                            systemctl reload "$web_server" >/dev/null 2>&1 || true
+                        elif command -v rc-service >/dev/null; then
+                            rc-service "$web_server" reload >/dev/null 2>&1 || true
+                        fi
+                        echo -e "${GREEN}[V] Dashboard UI access instantly granted to $target_ip via Apache.${NC}"
+                    else
+                        echo -e "${RED}[!] Apache configuration test failed. Reverting ACL injection.${NC}"
+                        sed -i "/Require ip $target_ip/d" "$web_conf"
                     fi
-                    echo -e "${GREEN}[V] Dashboard UI access instantly granted to $target_ip via Apache.${NC}"
                 else
-                    echo -e "${RED}[!] Apache configuration test failed. Reverting ACL injection.${NC}"
-                    sed -i "/Require ip $target_ip/d" "$web_conf"
+                    echo -e "${YELLOW}[i] IP $target_ip is already authorized in Apache ACL.${NC}"
+                    rm -f "$tmp_file"
                 fi
-            else
-                echo -e "${YELLOW}[i] IP $target_ip is already authorized in Apache ACL.${NC}"
-                rm -f "$tmp_file"
             fi
         fi
     fi
@@ -452,33 +500,60 @@ whitelist_ip() {
 # --- SURGICAL UNWHITELIST ---
 unwhitelist_ip() {
     local target_ip="$1"
+    local target_port="${2:-}"
     validate_ip "$target_ip" "any"
     detect_backend
 
-    echo -e "\n${BLUE}>> Initiating Surgical Unwhitelist for $target_ip...${NC}"
+    local entry="$target_ip"
+    if [[ -n "$target_port" ]]; then
+        entry="$target_ip:$target_port"
+        echo -e "\n${BLUE}>> Initiating Surgical Unwhitelist for $target_ip on port $target_port...${NC}"
+    else
+        echo -e "\n${BLUE}>> Initiating Surgical Unwhitelist for $target_ip...${NC}"
+    fi
 
     if [[ -f "$WHITELIST_FILE" ]]; then
-        sed -i "\|^${target_ip}$|d" "$WHITELIST_FILE"
+        sed -i "\|^${entry}$|d" "$WHITELIST_FILE"
         sed -i '/^$/d' "$WHITELIST_FILE"
         echo -e "${GREEN}[✔] Removed from persistent $WHITELIST_FILE${NC}"
     fi
 
     case "$FW_BACKEND" in
         nftables)
-            if [[ "$target_ip" =~ : ]]; then
-                nft delete element netdev syswarden_hw_drop syswarden_whitelist6 "{ $target_ip }" 2>/dev/null || true
+            if [[ -n "$target_port" ]]; then
+                get_nft_chain
+                local family_rule="ip"
+                [[ "$target_ip" =~ : ]] && family_rule="ip6"
+
+                local handle_tcp
+                handle_tcp=$(nft -a list chain netdev syswarden_hw_drop ingress_frontline 2>/dev/null | grep -E "${family_rule} saddr $target_ip tcp dport $target_port accept" | grep -oP 'handle \K[0-9]+' | head -n 1 || true)
+                if [[ -n "$handle_tcp" ]]; then nft delete rule netdev syswarden_hw_drop ingress_frontline handle "$handle_tcp" 2>/dev/null || true; fi
+
+                local handle_udp
+                handle_udp=$(nft -a list chain netdev syswarden_hw_drop ingress_frontline 2>/dev/null | grep -E "${family_rule} saddr $target_ip udp dport $target_port accept" | grep -oP 'handle \K[0-9]+' | head -n 1 || true)
+                if [[ -n "$handle_udp" ]]; then nft delete rule netdev syswarden_hw_drop ingress_frontline handle "$handle_udp" 2>/dev/null || true; fi
+
+                handle_tcp=$(nft -a list chain inet syswarden_table "$NFT_CHAIN" 2>/dev/null | grep -E "${family_rule} saddr $target_ip tcp dport $target_port accept" | grep -oP 'handle \K[0-9]+' | head -n 1 || true)
+                if [[ -n "$handle_tcp" ]]; then nft delete rule inet syswarden_table "$NFT_CHAIN" handle "$handle_tcp" 2>/dev/null || true; fi
+
+                handle_udp=$(nft -a list chain inet syswarden_table "$NFT_CHAIN" 2>/dev/null | grep -E "${family_rule} saddr $target_ip udp dport $target_port accept" | grep -oP 'handle \K[0-9]+' | head -n 1 || true)
+                if [[ -n "$handle_udp" ]]; then nft delete rule inet syswarden_table "$NFT_CHAIN" handle "$handle_udp" 2>/dev/null || true; fi
             else
-                nft delete element netdev syswarden_hw_drop syswarden_whitelist "{ $target_ip }" 2>/dev/null || true
-            fi
+                if [[ "$target_ip" =~ : ]]; then
+                    nft delete element netdev syswarden_hw_drop syswarden_whitelist6 "{ $target_ip }" 2>/dev/null || true
+                else
+                    nft delete element netdev syswarden_hw_drop syswarden_whitelist "{ $target_ip }" 2>/dev/null || true
+                fi
 
-            get_nft_chain
-            local handle
-            local family_rule="ip"
-            [[ "$target_ip" =~ : ]] && family_rule="ip6"
+                get_nft_chain
+                local handle
+                local family_rule="ip"
+                [[ "$target_ip" =~ : ]] && family_rule="ip6"
 
-            handle=$(nft -a list chain inet syswarden_table "$NFT_CHAIN" 2>/dev/null | grep -E "${family_rule} saddr $target_ip accept" | grep -oP 'handle \K[0-9]+' | head -n 1 || true)
-            if [[ -n "$handle" ]]; then
-                nft delete rule inet syswarden_table "$NFT_CHAIN" handle "$handle" 2>/dev/null || true
+                handle=$(nft -a list chain inet syswarden_table "$NFT_CHAIN" 2>/dev/null | grep -E "${family_rule} saddr $target_ip accept" | grep -oP 'handle \K[0-9]+' | head -n 1 || true)
+                if [[ -n "$handle" ]]; then
+                    nft delete rule inet syswarden_table "$NFT_CHAIN" handle "$handle" 2>/dev/null || true
+                fi
             fi
 
             {
@@ -491,24 +566,53 @@ unwhitelist_ip() {
             [[ "$target_ip" =~ : ]] && family="ipv6"
             local ACTIVE_ZONE
             ACTIVE_ZONE=$(firewall-cmd --get-default-zone 2>/dev/null || echo "public")
-            firewall-cmd --permanent --zone="$ACTIVE_ZONE" --remove-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' accept" >/dev/null 2>&1 || true
-            firewall-cmd --zone="$ACTIVE_ZONE" --remove-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' accept" >/dev/null 2>&1 || true
+            if [[ -n "$target_port" ]]; then
+                firewall-cmd --permanent --zone="$ACTIVE_ZONE" --remove-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' port port='$target_port' protocol='tcp' accept" >/dev/null 2>&1 || true
+                firewall-cmd --permanent --zone="$ACTIVE_ZONE" --remove-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' port port='$target_port' protocol='udp' accept" >/dev/null 2>&1 || true
+                firewall-cmd --zone="$ACTIVE_ZONE" --remove-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' port port='$target_port' protocol='tcp' accept" >/dev/null 2>&1 || true
+                firewall-cmd --zone="$ACTIVE_ZONE" --remove-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' port port='$target_port' protocol='udp' accept" >/dev/null 2>&1 || true
+            else
+                firewall-cmd --permanent --zone="$ACTIVE_ZONE" --remove-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' accept" >/dev/null 2>&1 || true
+                firewall-cmd --zone="$ACTIVE_ZONE" --remove-rich-rule="rule priority='-32000' family='$family' source address='$target_ip' accept" >/dev/null 2>&1 || true
+            fi
             ;;
         ufw)
-            ufw delete allow from "$target_ip" >/dev/null 2>&1 || true
+            if [[ -n "$target_port" ]]; then
+                ufw delete allow from "$target_ip" to any port "$target_port" >/dev/null 2>&1 || true
+            else
+                ufw delete allow from "$target_ip" >/dev/null 2>&1 || true
+            fi
             ;;
         ipset | iptables | unknown)
-            if [[ "$target_ip" =~ : ]]; then
-                ip6tables -D INPUT -s "$target_ip" -j ACCEPT 2>/dev/null || true
-                if command -v netfilter-persistent >/dev/null; then
-                    netfilter-persistent save 2>/dev/null || true
+            if [[ -n "$target_port" ]]; then
+                if [[ "$target_ip" =~ : ]]; then
+                    ip6tables -D INPUT -p tcp -s "$target_ip" --dport "$target_port" -j ACCEPT 2>/dev/null || true
+                    ip6tables -D INPUT -p udp -s "$target_ip" --dport "$target_port" -j ACCEPT 2>/dev/null || true
+                    if command -v netfilter-persistent >/dev/null; then
+                        netfilter-persistent save 2>/dev/null || true
+                    fi
+                else
+                    iptables -D INPUT -p tcp -s "$target_ip" --dport "$target_port" -j ACCEPT 2>/dev/null || true
+                    iptables -D INPUT -p udp -s "$target_ip" --dport "$target_port" -j ACCEPT 2>/dev/null || true
+                    if command -v netfilter-persistent >/dev/null; then
+                        netfilter-persistent save 2>/dev/null || true
+                    elif command -v /etc/init.d/iptables >/dev/null; then
+                        /etc/init.d/iptables save 2>/dev/null || true
+                    fi
                 fi
             else
-                iptables -D INPUT -s "$target_ip" -j ACCEPT 2>/dev/null || true
-                if command -v netfilter-persistent >/dev/null; then
-                    netfilter-persistent save 2>/dev/null || true
-                elif command -v /etc/init.d/iptables >/dev/null; then
-                    /etc/init.d/iptables save 2>/dev/null || true
+                if [[ "$target_ip" =~ : ]]; then
+                    ip6tables -D INPUT -s "$target_ip" -j ACCEPT 2>/dev/null || true
+                    if command -v netfilter-persistent >/dev/null; then
+                        netfilter-persistent save 2>/dev/null || true
+                    fi
+                else
+                    iptables -D INPUT -s "$target_ip" -j ACCEPT 2>/dev/null || true
+                    if command -v netfilter-persistent >/dev/null; then
+                        netfilter-persistent save 2>/dev/null || true
+                    elif command -v /etc/init.d/iptables >/dev/null; then
+                        /etc/init.d/iptables save 2>/dev/null || true
+                    fi
                 fi
             fi
             ;;
@@ -516,54 +620,56 @@ unwhitelist_ip() {
     echo -e "${GREEN}[✔] Removed Whitelist rules from Active Kernel ($FW_BACKEND)${NC}"
 
     # --- REMOVE FROM WEB UI ACL ---
-    local web_conf=""
-    local web_server=""
-    if [[ -f "/etc/apache2/sites-available/syswarden-ui.conf" ]]; then
-        web_conf="/etc/apache2/sites-available/syswarden-ui.conf"
-        web_server="apache2"
-    elif [[ -f "/etc/httpd/conf.d/syswarden-ui.conf" ]]; then
-        web_conf="/etc/httpd/conf.d/syswarden-ui.conf"
-        web_server="httpd"
-    elif [[ -f "/etc/apache2/conf.d/syswarden-ui.conf" ]]; then
-        web_conf="/etc/apache2/conf.d/syswarden-ui.conf"
-        web_server="apache2"
-    elif [[ -f "/etc/nginx/sites-available/syswarden-ui.conf" ]]; then
-        web_conf="/etc/nginx/sites-available/syswarden-ui.conf"
-        web_server="nginx"
-    elif [[ -f "/etc/nginx/conf.d/syswarden-ui.conf" ]]; then
-        web_conf="/etc/nginx/conf.d/syswarden-ui.conf"
-        web_server="nginx"
-    elif [[ -f "/etc/nginx/http.d/syswarden-ui.conf" ]]; then
-        web_conf="/etc/nginx/http.d/syswarden-ui.conf"
-        web_server="nginx"
-    fi
+    if [[ -z "$target_port" ]] || [[ "$target_port" == "80" ]] || [[ "$target_port" == "443" ]]; then
+        local web_conf=""
+        local web_server=""
+        if [[ -f "/etc/apache2/sites-available/syswarden-ui.conf" ]]; then
+            web_conf="/etc/apache2/sites-available/syswarden-ui.conf"
+            web_server="apache2"
+        elif [[ -f "/etc/httpd/conf.d/syswarden-ui.conf" ]]; then
+            web_conf="/etc/httpd/conf.d/syswarden-ui.conf"
+            web_server="httpd"
+        elif [[ -f "/etc/apache2/conf.d/syswarden-ui.conf" ]]; then
+            web_conf="/etc/apache2/conf.d/syswarden-ui.conf"
+            web_server="apache2"
+        elif [[ -f "/etc/nginx/sites-available/syswarden-ui.conf" ]]; then
+            web_conf="/etc/nginx/sites-available/syswarden-ui.conf"
+            web_server="nginx"
+        elif [[ -f "/etc/nginx/conf.d/syswarden-ui.conf" ]]; then
+            web_conf="/etc/nginx/conf.d/syswarden-ui.conf"
+            web_server="nginx"
+        elif [[ -f "/etc/nginx/http.d/syswarden-ui.conf" ]]; then
+            web_conf="/etc/nginx/http.d/syswarden-ui.conf"
+            web_server="nginx"
+        fi
 
-    if [[ -n "$web_conf" && -f "$web_conf" ]]; then
-        echo -e "${BLUE}>> Removing $target_ip from Web UI Access Control List (ACL)...${NC}"
-        if [[ "$web_server" == "nginx" ]]; then
-            if grep -q "allow $target_ip;" "$web_conf"; then
-                sed -i "/allow $target_ip;/d" "$web_conf"
-                if command -v nginx >/dev/null && nginx -t >/dev/null 2>&1; then
-                    if command -v systemctl >/dev/null; then
-                        systemctl reload nginx >/dev/null 2>&1 || true
-                    elif command -v rc-service >/dev/null; then
-                        rc-service nginx reload >/dev/null 2>&1 || true
+        if [[ -n "$web_conf" && -f "$web_conf" ]]; then
+            echo -e "${BLUE}>> Removing $target_ip from Web UI Access Control List (ACL)...${NC}"
+            if [[ "$web_server" == "nginx" ]]; then
+                if grep -q "allow $target_ip;" "$web_conf"; then
+                    sed -i "/allow $target_ip;/d" "$web_conf"
+                    if command -v nginx >/dev/null && nginx -t >/dev/null 2>&1; then
+                        if command -v systemctl >/dev/null; then
+                            systemctl reload nginx >/dev/null 2>&1 || true
+                        elif command -v rc-service >/dev/null; then
+                            rc-service nginx reload >/dev/null 2>&1 || true
+                        fi
+                        echo -e "${GREEN}[V] Dashboard UI access revoked for $target_ip via Nginx.${NC}"
                     fi
-                    echo -e "${GREEN}[V] Dashboard UI access revoked for $target_ip via Nginx.${NC}"
                 fi
-            fi
-        else
-            if grep -q "Require ip $target_ip" "$web_conf"; then
-                sed -i "/Require ip $target_ip/d" "$web_conf"
-                if { command -v apache2ctl >/dev/null 2>&1 && apache2ctl configtest >/dev/null 2>&1; } ||
-                    { command -v apachectl >/dev/null 2>&1 && apachectl configtest >/dev/null 2>&1; } ||
-                    { command -v httpd >/dev/null 2>&1 && httpd -t >/dev/null 2>&1; }; then
-                    if command -v systemctl >/dev/null; then
-                        systemctl reload "$web_server" >/dev/null 2>&1 || true
-                    elif command -v rc-service >/dev/null; then
-                        rc-service "$web_server" reload >/dev/null 2>&1 || true
+            else
+                if grep -q "Require ip $target_ip" "$web_conf"; then
+                    sed -i "/Require ip $target_ip/d" "$web_conf"
+                    if { command -v apache2ctl >/dev/null 2>&1 && apache2ctl configtest >/dev/null 2>&1; } ||
+                        { command -v apachectl >/dev/null 2>&1 && apachectl configtest >/dev/null 2>&1; } ||
+                        { command -v httpd >/dev/null 2>&1 && httpd -t >/dev/null 2>&1; }; then
+                        if command -v systemctl >/dev/null; then
+                            systemctl reload "$web_server" >/dev/null 2>&1 || true
+                        elif command -v rc-service >/dev/null; then
+                            rc-service "$web_server" reload >/dev/null 2>&1 || true
+                        fi
+                        echo -e "${GREEN}[V] Dashboard UI access revoked for $target_ip via Apache.${NC}"
                     fi
-                    echo -e "${GREEN}[V] Dashboard UI access revoked for $target_ip via Apache.${NC}"
                 fi
             fi
         fi
@@ -918,8 +1024,8 @@ show_help() {
     echo -e "  ${CYAN}check${NC} <IP>             : Full XDR diagnostic of an IP (Files, F2B, Kernel)"
     echo -e "  ${CYAN}block${NC} <IP>             : Hot-adds IP to kernel drop set and blocklist file"
     echo -e "  ${CYAN}unblock${NC} <IP>           : Purges IP from blocklist, kernel, and Fail2ban"
-    echo -e "  ${CYAN}whitelist${NC} <IP>         : Grants absolute VIP access & bypasses firewall"
-    echo -e "  ${CYAN}unwhitelist${NC} <IP>       : Revokes absolute VIP access and web UI access"
+    echo -e "  ${CYAN}whitelist${NC} <IP> [PORT]  : Grants absolute VIP access & bypasses firewall"
+    echo -e "  ${CYAN}unwhitelist${NC} <IP> [PORT]: Revokes absolute VIP access and web UI access"
     echo -e "  ${CYAN}whitelist-infra${NC}        : Auto-detects and whitelists DNS, Gateway, DHCP, etc."
     echo -e "  ${CYAN}allow-ssh${NC} <IP> [PORT]  : Allows direct SSH access for this IP"
     echo -e "  ${CYAN}revoke-ssh${NC} <IP>        : Revokes direct SSH access for this IP"
@@ -968,14 +1074,14 @@ case "$COMMAND" in
             echo "Missing IP address."
             exit 1
         fi
-        whitelist_ip "$2"
+        whitelist_ip "$2" "${3:-}"
         ;;
     unwhitelist)
         if [[ -z "${2:-}" ]]; then
             echo "Missing IP address."
             exit 1
         fi
-        unwhitelist_ip "$2"
+        unwhitelist_ip "$2" "${3:-}"
         ;;
     whitelist-infra)
         auto_whitelist_infra
