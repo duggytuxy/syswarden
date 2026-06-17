@@ -589,6 +589,12 @@ github:
         - docker/build-push-action
         - ossf/scorecard-action
         - anchore/scan-action
+        # Added trusted SecOps & Build actions
+        - getplumber/plumber
+        - ruby/setup-ruby
+        - gitleaks/gitleaks-action
+        - mfinelli/setup-shfmt
+        - aquasecurity/trivy-action
 
     # ===========================================
     # Container images must not use forbidden tags
