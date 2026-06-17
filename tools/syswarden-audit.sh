@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# SysWarden v1.10.7 - DevSecOps Audit & Compliance Tool
+# SysWarden v1.10.8 - DevSecOps Audit & Compliance Tool
 # Copyright (C) 2026 duggytuxy - Laurent M.
 #
 # This program is free software: you can redistribute it and/or modify

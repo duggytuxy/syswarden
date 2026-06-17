@@ -108,10 +108,10 @@ EOF
         ip6 saddr @syswarden_whitelist6 accept
 
         # Stateless Layer 4 Structural Anomaly Mitigation (Bypasses Stateful Engine)
-        ip protocol tcp tcp flags & (fin|syn|rst|psh|ack|urg) == 0 drop
-        ip protocol tcp tcp flags & (fin|syn|rst|psh|ack|urg) == fin|syn|rst|psh|ack|urg drop
-        ip protocol tcp tcp flags & (fin|syn) == fin|syn drop
-        ip protocol tcp tcp flags & (syn|rst) == syn|rst drop
+        ip protocol tcp tcp flags & (fin|syn|rst|psh|ack|urg) == 0 counter drop
+        ip protocol tcp tcp flags & (fin|syn|rst|psh|ack|urg) == fin|syn|rst|psh|ack|urg counter drop
+        ip protocol tcp tcp flags & (fin|syn) == fin|syn counter drop
+        ip protocol tcp tcp flags & (syn|rst) == syn|rst counter drop
 EOF
 
         cat <<EOF >>"$TMP_DIR/syswarden.nft"
@@ -497,6 +497,28 @@ EOF
             firewall-cmd --permanent --add-rich-rule="rule source ipset='$ASN_SET_NAME' log prefix='[SysWarden-ASN] ' level='info' drop" >/dev/null 2>&1 || true
         fi
 
+        # --- SYSWARDEN: LAYER 3 STRUCTURAL ANOMALY MITIGATION (RAW TABLE) ---
+        # Direct rules apply at the PREROUTING raw level (bypassing conntrack)
+
+        # 1. Surgically remove existing SysWarden rules to guarantee idempotency without flushing admin rules
+        firewall-cmd --permanent --direct --remove-rule ipv4 raw PREROUTING 0 -i lo -j ACCEPT >/dev/null 2>&1 || true
+        firewall-cmd --permanent --direct --remove-rule ipv4 raw PREROUTING 0 -s 127.0.0.0/8 -j ACCEPT >/dev/null 2>&1 || true
+        firewall-cmd --permanent --direct --remove-rule ipv4 raw PREROUTING 1 -p tcp --tcp-flags FIN,SYN,RST,PSH,ACK,URG NONE -j DROP >/dev/null 2>&1 || true
+        firewall-cmd --permanent --direct --remove-rule ipv4 raw PREROUTING 1 -p tcp --tcp-flags FIN,SYN,RST,PSH,ACK,URG FIN,SYN,RST,PSH,ACK,URG -j DROP >/dev/null 2>&1 || true
+        firewall-cmd --permanent --direct --remove-rule ipv4 raw PREROUTING 1 -p tcp --tcp-flags FIN,SYN FIN,SYN -j DROP >/dev/null 2>&1 || true
+        firewall-cmd --permanent --direct --remove-rule ipv4 raw PREROUTING 1 -p tcp --tcp-flags SYN,RST SYN,RST -j DROP >/dev/null 2>&1 || true
+
+        # 2. Critical bypass for local loopback proxies (prevents internal routing self-DDoS)
+        firewall-cmd --permanent --direct --add-rule ipv4 raw PREROUTING 0 -i lo -j ACCEPT >/dev/null 2>&1 || true
+        firewall-cmd --permanent --direct --add-rule ipv4 raw PREROUTING 0 -s 127.0.0.0/8 -j ACCEPT >/dev/null 2>&1 || true
+
+        # 3. Drop forged TCP packets (RFC 793 Violations) natively
+        firewall-cmd --permanent --direct --add-rule ipv4 raw PREROUTING 1 -p tcp --tcp-flags FIN,SYN,RST,PSH,ACK,URG NONE -j DROP >/dev/null 2>&1 || true
+        firewall-cmd --permanent --direct --add-rule ipv4 raw PREROUTING 1 -p tcp --tcp-flags FIN,SYN,RST,PSH,ACK,URG FIN,SYN,RST,PSH,ACK,URG -j DROP >/dev/null 2>&1 || true
+        firewall-cmd --permanent --direct --add-rule ipv4 raw PREROUTING 1 -p tcp --tcp-flags FIN,SYN FIN,SYN -j DROP >/dev/null 2>&1 || true
+        firewall-cmd --permanent --direct --add-rule ipv4 raw PREROUTING 1 -p tcp --tcp-flags SYN,RST SYN,RST -j DROP >/dev/null 2>&1 || true
+        # --------------------------------------------------------------------
+
         # --- ZERO TRUST: DYNAMIC ALLOW & CATCH-ALL DROP ---
         # Firewalld uses Zones. We dynamically force the target of the active default zone to DROP.
         # This acts as our Catch-All (Priority Guillotine).
@@ -553,6 +575,13 @@ EOF
 
         # 2. Inject Rule into /etc/ufw/before.rules
         UFW_RULES="/etc/ufw/before.rules"
+
+        # --- SYSWARDEN: LAYER 3 STRUCTURAL ANOMALY MITIGATION (RAW TABLE) ---
+        # UFW doesn't expose the raw table by default. We dynamically inject it before the filter table.
+        if ! grep -q "\*raw" "$UFW_RULES"; then
+            sed -i '/^\*filter/i *raw\n:PREROUTING ACCEPT [0:0]\n-A PREROUTING -i lo -j ACCEPT\n-A PREROUTING -s 127.0.0.0/8 -j ACCEPT\n-A PREROUTING -p tcp --tcp-flags FIN,SYN,RST,PSH,ACK,URG NONE -j DROP\n-A PREROUTING -p tcp --tcp-flags FIN,SYN,RST,PSH,ACK,URG FIN,SYN,RST,PSH,ACK,URG -j DROP\n-A PREROUTING -p tcp --tcp-flags FIN,SYN FIN,SYN -j DROP\n-A PREROUTING -p tcp --tcp-flags SYN,RST SYN,RST -j DROP\nCOMMIT\n' "$UFW_RULES"
+        fi
+        # --------------------------------------------------------------------
 
         # Remove old rules if present to avoid duplicates
         sed -i "/$SET_NAME/d" "$UFW_RULES"
@@ -655,6 +684,17 @@ EOF
         if ! iptables -t raw -C PREROUTING -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
             iptables -t raw -I PREROUTING 1 -m set --match-set "$SET_NAME" src -j DROP
             iptables -t raw -I PREROUTING 1 -m set --match-set "$SET_NAME" src -j LOG --log-prefix "[SysWarden-BLOCK] "
+
+            # --- SYSWARDEN: LAYER 3 STRUCTURAL ANOMALY MITIGATION (RAW TABLE) ---
+            iptables -t raw -I PREROUTING 1 -p tcp --tcp-flags FIN,SYN,RST,PSH,ACK,URG NONE -j DROP
+            iptables -t raw -I PREROUTING 1 -p tcp --tcp-flags FIN,SYN,RST,PSH,ACK,URG FIN,SYN,RST,PSH,ACK,URG -j DROP
+            iptables -t raw -I PREROUTING 1 -p tcp --tcp-flags FIN,SYN FIN,SYN -j DROP
+            iptables -t raw -I PREROUTING 1 -p tcp --tcp-flags SYN,RST SYN,RST -j DROP
+
+            # Critical bypass for local loopback proxies (prevents internal routing self-DDoS)
+            iptables -t raw -I PREROUTING 1 -i lo -j ACCEPT
+            iptables -t raw -I PREROUTING 1 -s 127.0.0.0/8 -j ACCEPT
+            # --------------------------------------------------------------------
 
             if command -v netfilter-persistent >/dev/null; then
                 netfilter-persistent save
