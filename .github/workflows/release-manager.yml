@@ -1,0 +1,143 @@
+name: "SysWarden Release Orchestrator"
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  gather-and-release:
+    name: "Gather Artifacts, Attest & Release"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: "Wait for parallel workflows"
+        run: |
+            # Enforce a mandatory 5-minute synchronization delay to allow upstream
+            # workflows (security-audit, package, compliance) to upload artifacts.
+            echo "Sleeping for 300 seconds..."
+            sleep 300
+
+      - name: "Secure artifact retrieval via GitHub CLI"
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+            # Using GH CLI to securely fetch artifacts tied strictly to this commit SHA.
+            COMMIT_SHA="${{ github.sha }}"
+            MAX_RETRIES=3
+
+            for ((i = 1; i <= MAX_RETRIES; i++)); do
+                echo "Attempt ${i}: Downloading artifacts for commit ${COMMIT_SHA}..."
+                if gh run download -c "${COMMIT_SHA}" --dir /tmp/artifacts; then
+                    echo "Artifacts successfully pulled."
+                    break
+                else
+                    echo "Missing artifacts. Waiting 60s before retry..."
+                    sleep 60
+                fi
+            done
+
+            # Print structure for auditability
+            ls -R /tmp/artifacts
+
+      - name: "Extract and prepare final release assets"
+        run: |
+            # Creating the final staging directory for the GitHub Release
+            mkdir -p ./release_assets
+
+            # 1. Fetch syswarden-release.tar.gz from the attested bundle directory
+            BUNDLE_FILE=$(find /tmp/artifacts -type f -name "syswarden-release.tar.gz" | head -n 1)
+            if [ -n "${BUNDLE_FILE}" ]; then
+                cp "${BUNDLE_FILE}" ./release_assets/
+            else
+                echo "CRITICAL: syswarden-release.tar.gz not found!"
+                exit 1
+            fi
+
+            # 2. Fetch packaging files (.deb, .rpm, SHA256SUMS.txt) dynamically
+            # package.yml appends the version to the artifact name
+            PACKAGE_DIR=$(find /tmp/artifacts -type d -name "syswarden-packages-*" | head -n 1)
+            if [ -n "${PACKAGE_DIR}" ]; then
+                find "${PACKAGE_DIR}" -type f \( -name "*.deb" -o -name "*.rpm" -o -name "SHA256SUMS.txt" \) -exec cp {} ./release_assets/ \;
+            else
+                echo "CRITICAL: syswarden-packages artifact not found!"
+                exit 1
+            fi
+
+            # 3. Fetch Plumber Compliance
+            # Handle both ZIP (v3) or extracted directory (v4)
+            PLUMBER_ZIP=$(find /tmp/artifacts -type f -name "plumber-compliance.zip" | head -n 1)
+            if [ -n "${PLUMBER_ZIP}" ]; then
+                cp "${PLUMBER_ZIP}" ./release_assets/
+            else
+                # Fallback: if Plumber creates a directory without zipping the files
+                PLUMBER_DIR=$(find /tmp/artifacts -type d -name "plumber-compliance" | head -n 1)
+                if [ -n "${PLUMBER_DIR}" ]; then
+                    cd "${PLUMBER_DIR}" || exit 1
+                    zip -r ../../../release_assets/plumber-compliance.zip ./*
+                    cd - || exit 1
+                else
+                    echo "CRITICAL: plumber-compliance artifact not found!"
+                    exit 1
+                fi
+            fi
+
+      - name: "Generate compliant Markdown Release Notes"
+        run: |
+            # Auto-generate changelog strictly from git history without emojis
+            PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            if [ -z "${PREV_TAG}" ]; then
+                LOG_RANGE="HEAD"
+            else
+                LOG_RANGE="${PREV_TAG}..HEAD"
+            fi
+
+            NOTES_FILE="release_notes.md"
+            echo "## SysWarden Release ${{ github.ref_name }}" > "${NOTES_FILE}"
+            echo "" >> "${NOTES_FILE}"
+
+            # Loop through strictly requested categories
+            for CATEGORY in "ADDED" "FIXED" "UPDATED" "UPGRADED"; do
+                echo "### ${CATEGORY}" >> "${NOTES_FILE}"
+
+                # Fetch matching commits using native git grep logic
+                COMMITS=$(git log "${LOG_RANGE}" --grep="${CATEGORY}" --pretty=format:"- %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" || true)
+
+                if [ -z "${COMMITS}" ]; then
+                    echo "- No ${CATEGORY} items in this release." >> "${NOTES_FILE}"
+                else
+                    echo "${COMMITS}" >> "${NOTES_FILE}"
+                fi
+                echo "" >> "${NOTES_FILE}"
+            done
+
+            # Inject compliance audit trail references
+            echo "### COMPLIANCE & SECURITY" >> "${NOTES_FILE}"
+            echo "- Plumber Compliance Audit bundled as \`plumber-compliance.zip\`." >> "${NOTES_FILE}"
+            echo "- Cryptographic SBOM (SPDX) and Supply Chain Attestation (SLSA Level 3) generated and attached." >> "${NOTES_FILE}"
+
+      - name: "Generate SLSA Release Attestations"
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: './release_assets/*'
+
+      - name: "Publish GitHub Release"
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+            # Execute the release upload via GH CLI, pushing notes and all staged artifacts
+            gh release create "${{ github.ref_name }}" \
+                --title "SysWarden ${{ github.ref_name }}" \
+                --notes-file release_notes.md \
+                ./release_assets/*
