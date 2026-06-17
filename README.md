@@ -14,13 +14,13 @@
   <br>
 
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/compliance.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/compliance.yml?style=for-the-badge&logo=githubactions&logoColor=white" alt="Plumber Compliance">
+    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/compliance.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=Plumber%20Compliance" alt="Plumber Compliance">
   </a>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/scorecard.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/scorecard.yml?style=for-the-badge&logo=githubactions&logoColor=white" alt="OSSF Scorecard Supply Chain Security">
+    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/scorecard.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=OSSF%20Scorecard%20Supply%20Chain%20Security" alt="OSSF Scorecard Supply Chain Security">
   </a>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/security-audit.yml?style=for-the-badge&logo=githubactions&logoColor=white" alt="SysWarden Security Audit">
+    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/security-audit.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=SysWarden%20Security%20Audit" alt="SysWarden Security Audit">
   </a>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/dependabot/dependabot-updates">
     <img src="https://img.shields.io/badge/Dependabot-Active-025e8c?style=for-the-badge&logo=dependabot&logoColor=white" alt="Dependabot Updates">
