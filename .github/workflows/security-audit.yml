@@ -35,12 +35,12 @@ jobs:
 
       - name: Run gosec Security Scanner
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
           gosec ./...
 
       - name: Run govulncheck (Supply Chain Security)
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
           govulncheck ./...
 
   anti-leaks:
