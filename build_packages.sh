@@ -24,8 +24,8 @@ sudo gem install --no-document fpm
 
 echo "[*] Checking Golang..."
 if ! command -v go &> /dev/null; then
-    echo "[*] Golang not found. Downloading Go 1.24..."
-    wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz -O /tmp/go.tar.gz
+    echo "[*] Golang not found. Downloading Go 1.26..."
+    wget https://go.dev/dl/go1.26.4.linux-amd64.tar.gz -O /tmp/go.tar.gz
     sudo rm -rf /usr/local/go
     sudo tar -C /usr/local -xzf /tmp/go.tar.gz
     rm /tmp/go.tar.gz

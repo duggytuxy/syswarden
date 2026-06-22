@@ -1,6 +1,6 @@
 module syswarden-core
 
-go 1.24.0
+go 1.26.4
 
 require (
 	github.com/cloudflare/ahocorasick v0.0.0-20240916140611-054963ec9396
