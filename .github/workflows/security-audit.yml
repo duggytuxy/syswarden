@@ -32,17 +32,17 @@ jobs:
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
           version: latest
-          args: ./src/core/...
+          args: ./src/core/syswarden-cli/... ./src/core/syswarden-core/... ./src/core/syswarden-tui/...
 
       - name: Run gosec Security Scanner
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
-          gosec ./...
+          gosec ./src/core/syswarden-cli/... ./src/core/syswarden-core/... ./src/core/syswarden-tui/...
 
       - name: Run govulncheck (Supply Chain Security)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
-          govulncheck ./...
+          govulncheck ./src/core/syswarden-cli/... ./src/core/syswarden-core/... ./src/core/syswarden-tui/...
 
   anti-leaks:
     name: Secret Scanning
