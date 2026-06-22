@@ -20,7 +20,8 @@ func UpgradeSystem() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to GitHub API: %v", err)
 	}
-	defer resp.Body.Close()
+ defer func() { _ = resp.Body.Close()
+ }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -50,7 +51,7 @@ func UpgradeSystem() error {
 	// Check if installed via DEB/RPM package manager
 	if _, err := os.Stat("/etc/apt/sources.list.d/syswarden.list"); err == nil {
 		fmt.Println("[INFO] SysWarden is installed via APT repository. Upgrading via apt-get...")
-		exec.Command("apt-get", "update").Run()
+  _ = exec.Command("apt-get", "update").Run()
 		return exec.Command("apt-get", "install", "--only-upgrade", "-y", "syswarden").Run()
 	}
 

@@ -16,7 +16,7 @@ func SetupWazuh() error {
 
 	ip := config.GlobalConfig.WazuhIP
 	if ip == "" {
-		return fmt.Errorf("Wazuh IP is missing in configuration")
+		return fmt.Errorf("wazuh IP is missing in configuration")
 	}
 
 	// In a complete implementation, this would interact with the Wazuh API natively.

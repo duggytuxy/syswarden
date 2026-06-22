@@ -29,7 +29,7 @@ var reloadCmd = &cobra.Command{
 		// Restart Daemons gracefully
 		if !noRestart {
 			fmt.Println("[*] Restarting background engines...")
-			exec.Command("systemctl", "restart", "syswarden-core.service").Run()
+   _ = exec.Command("systemctl", "restart", "syswarden-core.service").Run()
 		}
 
 		fmt.Println("[SUCCESS] SysWarden configuration reloaded natively.")

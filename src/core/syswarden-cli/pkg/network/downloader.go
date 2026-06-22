@@ -53,7 +53,7 @@ func SecureDownloader(ctx context.Context, url string, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open destination file %s: %w", destPath, err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	// Use io.Copy to stream data safely
 	if _, err := io.Copy(out, resp.Body); err != nil {
@@ -194,12 +194,12 @@ func DownloadOSINT(ctx context.Context, destFile string) error {
 			time.Sleep(2 * time.Second)
 		}
 		if resp != nil && resp.StatusCode == http.StatusOK {
-			io.Copy(f, resp.Body)
-			f.WriteString("\n")
+			_, _ = io.Copy(f, resp.Body)
+			_, _ = f.WriteString("\n")
 			resp.Body.Close()
 		}
 	}
-	f.Close() // Close before cleaning
+	_ = f.Close() // Close before cleaning
 
 	// Clean and deduplicate the newly merged file
 	return CleanCIDRList(destFile)
@@ -245,8 +245,8 @@ func FetchASNWhois(asn, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("whois connection failed: %w", err)
 	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	query := fmt.Sprintf("-i origin %s\r\n", asn)
 	if _, err := conn.Write([]byte(query)); err != nil {

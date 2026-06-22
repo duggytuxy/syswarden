@@ -13,7 +13,7 @@ import (
 func AutoWhitelistAdminAndInfra() error {
 	fmt.Println("[INFO] Scanning and auto-whitelisting critical infrastructure & Admin IP...")
 
-	os.MkdirAll("/etc/syswarden/lists", 0755)
+ _ = os.MkdirAll("/etc/syswarden/lists", 0755)
 	whitelistFile := "/etc/syswarden/lists/syswarden_whitelist.ipv4"
 	
 	// Read existing
@@ -84,12 +84,12 @@ func AutoWhitelistAdminAndInfra() error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	addedCount := 0
 	for _, ip := range ipsToAdd {
 		if !strings.Contains(existing, ip) {
-			f.WriteString(ip + "\n")
+			_, _ = f.WriteString(ip + "\n")
 			existing += ip + "\n"
 			addedCount++
 			if ip != adminIP {

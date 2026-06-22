@@ -46,7 +46,8 @@ func loadConfig() Config {
 	if err != nil {
 		return c
 	}
-	defer file.Close()
+ defer func() { _ = file.Close()
+ }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -108,7 +109,8 @@ func SendBanAlert(ip, jail, action string) {
 		log.Printf("[Webhook] Failed to send alert: %v", err)
 		return
 	}
-	defer resp.Body.Close()
+ defer func() { _ = resp.Body.Close()
+ }()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		log.Printf("[Webhook] Successfully sent ban alert for IP %s", ip)

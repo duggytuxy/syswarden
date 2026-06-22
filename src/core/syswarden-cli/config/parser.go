@@ -13,7 +13,7 @@ func ParseConfig(filepath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open config file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	GlobalConfig = &Config{}
 	scanner := bufio.NewScanner(file)

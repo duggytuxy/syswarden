@@ -211,17 +211,17 @@ func main() {
 
 	if err := app.SetRoot(mainFlex, true).EnableMouse(true).Run(); err != nil {
 		cancel()
-		wg.Wait()
+  _ = wg.Wait()
 		panic(err)
 	}
-	wg.Wait()
+ _ = wg.Wait()
 }
 
 func readDataAndUpdate() {
 	bytes, err := os.ReadFile(DataFile)
 	mu.Lock()
 	if err != nil {
-		fetchError = fmt.Errorf("Data unreadable: %w", err)
+		fetchError = fmt.Errorf("data unreadable: %w", err)
 		mu.Unlock()
 		app.QueueUpdateDraw(func() { refreshUI() })
 		return
@@ -229,7 +229,7 @@ func readDataAndUpdate() {
 
 	var newData DashboardData
 	if err := json.Unmarshal(bytes, &newData); err != nil {
-		fetchError = fmt.Errorf("Invalid telemetry JSON: %w", err)
+		fetchError = fmt.Errorf("invalid telemetry JSON: %w", err)
 		mu.Unlock()
 		app.QueueUpdateDraw(func() { refreshUI() })
 		return
@@ -307,7 +307,12 @@ func refreshUI() {
 		n := strings.ToUpper(strings.Split(s.Name, " ")[0])
 		st := strings.ToUpper(s.Status)
 		cSt := "red"
-		if st == "ACTIVE" || st == "ONLINE" { cSt = "green" } else if st == "SKIPPED" { cSt = "yellow" }
+		switch st {
+		case "ACTIVE", "ONLINE":
+			cSt = "green"
+		case "SKIPPED":
+			cSt = "yellow"
+		}
 		servicesStr = append(servicesStr, fmt.Sprintf("[white]%s[-]:[%s]%s[-]", n, cSt, st))
 	}
 
@@ -419,7 +424,7 @@ func refreshUI() {
 			mitre := strings.Split(b.Mitre, ":")[0]
 			payload := strings.ReplaceAll(strings.ReplaceAll(b.Payload, "\n", ""), "\r", "")
 
-			cVec := tcell.ColorWhite
+			var cVec tcell.Color
 			j := strings.ToLower(b.Jail)
 			if strings.Contains(j, "sqli") || strings.Contains(j, "xss") || strings.Contains(j, "lfi") || strings.Contains(j, "revshell") || strings.Contains(j, "webshell") || strings.Contains(j, "ssti") || strings.Contains(j, "ssrf") || strings.Contains(j, "jndi") || strings.Contains(j, "modsec") { cVec = tcell.ColorRed } else
 			if strings.Contains(j, "ssh") || strings.Contains(j, "auth") || strings.Contains(j, "privesc") || strings.Contains(j, "prestashop") { cVec = tcell.ColorYellow } else

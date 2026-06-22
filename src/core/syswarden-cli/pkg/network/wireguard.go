@@ -24,13 +24,13 @@ func SetupWireguard() error {
 		return nil
 	}
 
-	os.MkdirAll("/etc/wireguard/clients", 0700)
-	os.Chmod("/etc/wireguard", 0700)
-
-	// IP Forwarding
-	fmt.Println(" -> Enabling Kernel IPv4 Forwarding")
-	os.WriteFile("/etc/sysctl.d/99-syswarden-wireguard.conf", []byte("net.ipv4.ip_forward = 1\n"), 0644)
-	exec.Command("sysctl", "-p", "/etc/sysctl.d/99-syswarden-wireguard.conf").Run()
+	_ = os.MkdirAll("/etc/wireguard/clients", 0700)
+	_ = os.Chmod("/etc/wireguard", 0700)
+	
+	// Create sysctl configuration for IP forwarding
+	_ = os.MkdirAll("/etc/sysctl.d", 0755)
+	_ = os.WriteFile("/etc/sysctl.d/99-syswarden-wireguard.conf", []byte("net.ipv4.ip_forward = 1\n"), 0644)
+ _ = exec.Command("sysctl", "-p", "/etc/sysctl.d/99-syswarden-wireguard.conf").Run()
 
 	// Keys
 	fmt.Println(" -> Generating cryptographic keys")
@@ -87,7 +87,7 @@ func SetupWireguard() error {
 	// Write configs safely
 	serverConf := fmt.Sprintf(`[Interface]
 Address = %s/24
-ListenPort = %d
+ListenPort = %s
 PrivateKey = %s
 PostUp = %s
 PostDown = %s
@@ -98,7 +98,7 @@ PresharedKey = %s
 AllowedIPs = %s/32
 `, serverVPNIP, config.GlobalConfig.WGPort, serverPrivStr, postUp, postDown, clientPubStr, presharedKeyStr, clientVPNIP)
 
-	os.WriteFile("/etc/wireguard/wg0.conf", []byte(serverConf), 0600)
+	_ = os.WriteFile("/etc/wireguard/wg0.conf", []byte(serverConf), 0600)
 
 	clientConf := fmt.Sprintf(`[Interface]
 PrivateKey = %s
@@ -109,18 +109,18 @@ DNS = 1.1.1.1, 1.0.0.1
 [Peer]
 PublicKey = %s
 PresharedKey = %s
-Endpoint = %s:%d
+Endpoint = %s:%s
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 `, clientPrivStr, clientVPNIP, serverPubStr, presharedKeyStr, serverIP, config.GlobalConfig.WGPort)
 
 	clientConfPath := "/etc/wireguard/clients/admin-pc.conf"
-	os.WriteFile(clientConfPath, []byte(clientConf), 0600)
+	_ = os.WriteFile(clientConfPath, []byte(clientConf), 0600)
 
 	// Start service
 	fmt.Println(" -> Starting WireGuard Interface")
-	exec.Command("systemctl", "daemon-reload").Run()
-	exec.Command("systemctl", "enable", "--now", "wg-quick@wg0").Run()
+ _ = exec.Command("systemctl", "daemon-reload").Run()
+ _ = exec.Command("systemctl", "enable", "--now", "wg-quick@wg0").Run()
 
 	fmt.Println("\n=======================================================")
 	fmt.Println("             WIREGUARD CLIENT CONFIGURATION            ")

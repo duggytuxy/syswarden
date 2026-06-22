@@ -75,7 +75,9 @@ func streamJournalctl(app *tview.Application, table *tview.Table) {
 	if err != nil {
 		return
 	}
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return
+	}
 
 	scanner := bufio.NewScanner(stdout)
 	ipRegex := regexp.MustCompile(`SRC=([0-9a-fA-F:.]+)`)
@@ -121,7 +123,9 @@ func streamWAF(app *tview.Application, table *tview.Table) {
 	if err != nil {
 		return
 	}
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return
+	}
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {

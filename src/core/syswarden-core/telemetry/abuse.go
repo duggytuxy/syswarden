@@ -93,7 +93,8 @@ func ReportAbuseAsync(ip string, jail string) {
 			log.Printf("[AbuseIPDB FAIL] Error: %v", err)
 			return
 		}
-		defer resp.Body.Close()
+  defer func() { _ = resp.Body.Close()
+ }()
 
 		if resp.StatusCode == 200 {
 			log.Printf("[SUCCESS] Reported %s to AbuseIPDB (Jail: %s)", ip, jail)

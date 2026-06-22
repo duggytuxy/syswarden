@@ -81,7 +81,7 @@ func SetupWebhooks() error {
 		if err != nil {
 			return fmt.Errorf("failed to reach Discord webhook: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			fmt.Println("[+] Discord Webhook is active.")
@@ -125,5 +125,5 @@ func SendBanAlert(ip string) {
 		},
 	}
 	data, _ := json.Marshal(payload)
-	http.Post(discordURL, "application/json", bytes.NewBuffer(data))
+	_, _ = http.Post(discordURL, "application/json", bytes.NewBuffer(data))
 }

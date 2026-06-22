@@ -22,80 +22,80 @@ func ApplyNftables() error {
 	activeIf := GetActiveInterface()
 
 	// 2. Destroy tables atomically if they exist
-	nftRules.WriteString("destroy table inet syswarden\n")
+ _ = nftRules.WriteString("destroy table inet syswarden\n")
 	nftRules.WriteString("destroy table inet syswarden_table\n") // Cleanup legacy table
-	nftRules.WriteString("destroy table netdev syswarden_hw_drop\n\n")
+ _ = nftRules.WriteString("destroy table netdev syswarden_hw_drop\n\n")
 
 	// 3. Hardware Drop Table (L2)
-	nftRules.WriteString("table netdev syswarden_hw_drop {\n")
-	nftRules.WriteString("\tset syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }\n")
-	nftRules.WriteString("\tset syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }\n")
-	nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags timeout; }\n")
-	nftRules.WriteString("\tset syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }\n")
+ _ = nftRules.WriteString("table netdev syswarden_hw_drop {\n")
+ _ = nftRules.WriteString("\tset syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }\n")
+ _ = nftRules.WriteString("\tset syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }\n")
+ _ = nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags timeout; }\n")
+ _ = nftRules.WriteString("\tset syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }\n")
 
 	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
-		nftRules.WriteString("\tset syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }\n")
+  _ = nftRules.WriteString("\tset syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }\n")
 	}
 	if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" {
-		nftRules.WriteString("\tset syswarden_asn { type ipv4_addr; flags interval; auto-merge; }\n")
+  _ = nftRules.WriteString("\tset syswarden_asn { type ipv4_addr; flags interval; auto-merge; }\n")
 	}
 
-	nftRules.WriteString(fmt.Sprintf("\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"%s\" priority -500; policy accept;\n", activeIf))
+	fmt.Fprintf(&nftRules, "\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"%s\" priority -500; policy accept;\n", activeIf)
 
 	// Allow Whitelist O(1) matching via set (Requested by User)
-	nftRules.WriteString("\t\tip saddr @syswarden_whitelist accept\n")
-	nftRules.WriteString("\t\tip6 saddr @syswarden_whitelist6 accept\n")
+ _ = nftRules.WriteString("\t\tip saddr @syswarden_whitelist accept\n")
+ _ = nftRules.WriteString("\t\tip6 saddr @syswarden_whitelist6 accept\n")
 
 	// Stateless Layer 4 Structural Anomaly Mitigation
-	nftRules.WriteString("\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter drop\n")
+ _ = nftRules.WriteString("\t\tip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter drop\n")
 	nftRules.WriteString("\t\tip protocol tcp tcp flags & (fin|syn|rst|psh|ack|urg) == fin|syn|rst|psh|ack|urg counter drop\n")
 	nftRules.WriteString("\t\tip protocol tcp tcp flags & (fin|syn) == fin|syn counter drop\n")
 	nftRules.WriteString("\t\tip protocol tcp tcp flags & (syn|rst) == syn|rst counter drop\n")
 
 	// Layer 7 WAF Dynamic Bans (Prioritized over static L3 lists)
-	nftRules.WriteString("\t\tip saddr @banned_ips limit rate 2/second burst 5 packets log prefix \"[SysWarden-WAF-BLOCK] \"\n")
-	nftRules.WriteString("\t\tip saddr @banned_ips drop\n")
+ _ = nftRules.WriteString("\t\tip saddr @banned_ips limit rate 2/second burst 5 packets log prefix \"[SysWarden-WAF-BLOCK] \"\n")
+ _ = nftRules.WriteString("\t\tip saddr @banned_ips drop\n")
 
 	// Layer 3 Static Global Intelligence Blocks
-	nftRules.WriteString("\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n")
-	nftRules.WriteString("\t\tip saddr @syswarden_blacklist drop\n")
+ _ = nftRules.WriteString("\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n")
+ _ = nftRules.WriteString("\t\tip saddr @syswarden_blacklist drop\n")
 	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
-		nftRules.WriteString("\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n")
-		nftRules.WriteString("\t\tip saddr @syswarden_geoip drop\n")
+  _ = nftRules.WriteString("\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n")
+  _ = nftRules.WriteString("\t\tip saddr @syswarden_geoip drop\n")
 	}
 	if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" {
-		nftRules.WriteString("\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n")
-		nftRules.WriteString("\t\tip saddr @syswarden_asn drop\n")
+  _ = nftRules.WriteString("\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n")
+  _ = nftRules.WriteString("\t\tip saddr @syswarden_asn drop\n")
 	}
-	nftRules.WriteString("\t}\n}\n\n")
+ _ = nftRules.WriteString("\t}\n}\n\n")
 
 	// 3.5. INET Table (L3/L4) for Docker & Internal Routing Protection
-	nftRules.WriteString("table inet syswarden {\n")
-	nftRules.WriteString("\tset syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }\n")
-	nftRules.WriteString("\tset syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }\n")
-	nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags timeout; }\n")
-	nftRules.WriteString("\tset syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }\n")
+ _ = nftRules.WriteString("table inet syswarden {\n")
+ _ = nftRules.WriteString("\tset syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }\n")
+ _ = nftRules.WriteString("\tset syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }\n")
+ _ = nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags timeout; }\n")
+ _ = nftRules.WriteString("\tset syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }\n")
 	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
-		nftRules.WriteString("\tset syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }\n")
+  _ = nftRules.WriteString("\tset syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }\n")
 	}
 	if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" {
-		nftRules.WriteString("\tset syswarden_asn { type ipv4_addr; flags interval; auto-merge; }\n")
+  _ = nftRules.WriteString("\tset syswarden_asn { type ipv4_addr; flags interval; auto-merge; }\n")
 	}
 
 	// Stateful L4 Protections (Host Input)
-	nftRules.WriteString("\tchain stateful_protect {\n\t\ttype filter hook input priority -10; policy drop;\n")
-	nftRules.WriteString("\t\tiifname \"lo\" accept\n")
-	nftRules.WriteString("\t\tct state established,related accept\n")
-	nftRules.WriteString("\t\tct state invalid counter drop\n")
+ _ = nftRules.WriteString("\tchain stateful_protect {\n\t\ttype filter hook input priority -10; policy drop;\n")
+ _ = nftRules.WriteString("\t\tiifname \"lo\" accept\n")
+ _ = nftRules.WriteString("\t\tct state established,related accept\n")
+ _ = nftRules.WriteString("\t\tct state invalid counter drop\n")
 	nftRules.WriteString("\t\ttcp flags & (fin|syn|rst|ack) != syn ct state new counter drop\n")
 	
 	// Dynamically allow explicitly opened ports
 	tcpPorts, udpPorts := GetOpenPorts()
 	if len(tcpPorts) > 0 {
-		nftRules.WriteString(fmt.Sprintf("\t\tct state new tcp dport { %s } accept\n", strings.Join(tcpPorts, ", ")))
+		fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } accept\n", strings.Join(tcpPorts, ", "))
 	}
 	if len(udpPorts) > 0 {
-		nftRules.WriteString(fmt.Sprintf("\t\tct state new udp dport { %s } accept\n", strings.Join(udpPorts, ", ")))
+		fmt.Fprintf(&nftRules, "\t\tct state new udp dport { %s } accept\n", strings.Join(udpPorts, ", "))
 	}
 
 	sshPort := config.GlobalConfig.SSHPort
@@ -124,29 +124,29 @@ func ApplyNftables() error {
 		// Drop from anywhere else
 		nftRules.WriteString(fmt.Sprintf("\t\ttcp dport %s counter drop\n", sshPort))
 	} else {
-		nftRules.WriteString("\t\t# Standard SSH Access\n")
+  _ = nftRules.WriteString("\t\t# Standard SSH Access\n")
 		nftRules.WriteString(fmt.Sprintf("\t\tct state new tcp dport %s accept\n", sshPort))
 	}
 	
 	// Catch-All Default Deny Logging
-	nftRules.WriteString("\t\tct state new log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n")
-	nftRules.WriteString("\t\tct state new counter drop\n")
-	nftRules.WriteString("\t}\n\n")
+ _ = nftRules.WriteString("\t\tct state new log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n")
+ _ = nftRules.WriteString("\t\tct state new counter drop\n")
+ _ = nftRules.WriteString("\t}\n\n")
 
 	// Protect Docker (Forward chain)
-	nftRules.WriteString("\tchain docker_protect {\n\t\ttype filter hook forward priority -10; policy accept;\n")
-	nftRules.WriteString("\t\tct state established,related accept\n")
-	nftRules.WriteString("\t\tip saddr @banned_ips counter drop\n")
-	nftRules.WriteString("\t\tip daddr @banned_ips counter drop\n")
-	nftRules.WriteString("\t\tip saddr @syswarden_blacklist counter drop\n")
-	nftRules.WriteString("\t\tip daddr @syswarden_blacklist counter drop\n")
+ _ = nftRules.WriteString("\tchain docker_protect {\n\t\ttype filter hook forward priority -10; policy accept;\n")
+ _ = nftRules.WriteString("\t\tct state established,related accept\n")
+ _ = nftRules.WriteString("\t\tip saddr @banned_ips counter drop\n")
+ _ = nftRules.WriteString("\t\tip daddr @banned_ips counter drop\n")
+ _ = nftRules.WriteString("\t\tip saddr @syswarden_blacklist counter drop\n")
+ _ = nftRules.WriteString("\t\tip daddr @syswarden_blacklist counter drop\n")
 	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
-		nftRules.WriteString("\t\tip saddr @syswarden_geoip counter drop\n")
+  _ = nftRules.WriteString("\t\tip saddr @syswarden_geoip counter drop\n")
 	}
 	if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" {
-		nftRules.WriteString("\t\tip saddr @syswarden_asn counter drop\n")
+  _ = nftRules.WriteString("\t\tip saddr @syswarden_asn counter drop\n")
 	}
-	nftRules.WriteString("\t}\n}\n\n")
+ _ = nftRules.WriteString("\t}\n}\n\n")
 
 	// 5. Write atomic base file securely (Empty Sets)
 	nftFile := "/etc/syswarden/syswarden.nft"
@@ -170,8 +170,8 @@ func ApplyNftables() error {
 	fmt.Println(" -> Streaming blocklists to kernel safely...")
 	
 	// Temporarily increase Netlink socket buffer to handle massive atomic loads (8MB)
-	exec.Command("sysctl", "-w", "net.core.wmem_max=8388608").Run()
-	exec.Command("sysctl", "-w", "net.core.rmem_max=8388608").Run()
+ _ = exec.Command("sysctl", "-w", "net.core.wmem_max=8388608").Run()
+ _ = exec.Command("sysctl", "-w", "net.core.rmem_max=8388608").Run()
 
 	populateSet(ctx, []string{"/etc/syswarden/lists/syswarden_whitelist.ipv4"}, "syswarden_whitelist")
 	populateSet(ctx, []string{"/etc/syswarden/lists/syswarden_whitelist.ipv6"}, "syswarden_whitelist6")
@@ -248,11 +248,12 @@ func GetOpenPorts() ([]string, []string) {
 				lastColon := strings.LastIndex(localAddr, ":")
 				if lastColon != -1 {
 					port := localAddr[lastColon+1:]
-					if proto == "tcp" || proto == "tcp6" {
+					switch proto {
+					case "tcp", "tcp6":
 						if !contains(tcpPorts, port) {
 							tcpPorts = append(tcpPorts, port)
 						}
-					} else if proto == "udp" || proto == "udp6" {
+					case "udp", "udp6":
 						if !contains(udpPorts, port) {
 							udpPorts = append(udpPorts, port)
 						}

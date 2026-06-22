@@ -119,7 +119,7 @@ net.ipv4.tcp_syncookies = 1
 
 func restrictCoreDumps() error {
 	fmt.Println(" -> Enforcing hard limits on core dumps (CIS 1.5.1)")
-	os.MkdirAll("/etc/security/limits.d", 0755)
+	_ = os.MkdirAll("/etc/security/limits.d", 0755)
 	
 	limitsContent := "# --- SysWarden: CIS Level 2 Limits ---\n* hard core 0\n"
 	if err := os.WriteFile("/etc/security/limits.d/99-syswarden-cis.conf", []byte(limitsContent), 0644); err != nil {

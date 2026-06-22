@@ -56,12 +56,13 @@ func NewEngine(configFile string) (*Engine, error) {
 	}
 
 	for _, rule := range config.Rules {
-		if rule.Type == "aho-corasick" {
+		switch rule.Type {
+		case "aho-corasick":
 			for _, pat := range rule.Patterns {
 				e.ahoDict = append(e.ahoDict, pat)
 				e.ahoRules[len(e.ahoDict)-1] = rule
 			}
-		} else if rule.Type == "regex" {
+		case "regex":
 			// Convert <HOST> to regex capture group for IP extraction
 			safePattern := strings.ReplaceAll(rule.Pattern, "<HOST>", `(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-fA-F0-9:]+)`)
 			re, err := regexp.Compile(safePattern)
@@ -119,7 +120,7 @@ var ipRegex = regexp.MustCompile(`(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})`)
 
 func ExtractIP(logLine string) string {
 	match := ipRegex.FindStringSubmatch(logLine)
-	if match != nil && len(match) > 1 {
+	if len(match) > 1 {
 		return match[1]
 	}
 	return ""

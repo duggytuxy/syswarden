@@ -198,7 +198,7 @@ func monitorAllowedEvents(ctx context.Context, logAllowed func(ip, service, payl
 			}
 		}
 	}
-	cmd.Wait()
+ _ = cmd.Wait()
 }
 
 func generateTelemetry() {
@@ -213,7 +213,7 @@ func generateTelemetry() {
 	}
 
 	uiDir := "/var/lib/syswarden/ui"
-	os.MkdirAll(uiDir, 0755)
+ _ = os.MkdirAll(uiDir, 0755)
 	dataFile := filepath.Join(uiDir, "data.json")
 
 	jsonData, err := json.Marshal(data)
@@ -289,9 +289,9 @@ func getSystemStats() SystemData {
 		var total, avail int
 		for _, line := range strings.Split(string(b), "\n") {
 			if strings.HasPrefix(line, "MemTotal:") {
-				fmt.Sscanf(line, "MemTotal: %d kB", &total)
+    _ = fmt.Sscanf(line, "MemTotal: %d kB", &total)
 			} else if strings.HasPrefix(line, "MemAvailable:") {
-				fmt.Sscanf(line, "MemAvailable: %d kB", &avail)
+    _ = fmt.Sscanf(line, "MemAvailable: %d kB", &avail)
 			}
 		}
 		if total > 0 {
@@ -378,7 +378,8 @@ func countLinesInFile(path string) int {
 	if err != nil {
 		return 0
 	}
-	defer file.Close()
+ defer func() { _ = file.Close()
+ }()
 	count := 0
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -442,7 +443,8 @@ func enrichOSINT(ip string) Attacker {
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get("https://ipwho.is/" + ip)
 	if err == nil {
-		defer resp.Body.Close()
+  defer func() { _ = resp.Body.Close()
+ }()
 		var res IPWhoIsResponse
 		if json.NewDecoder(resp.Body).Decode(&res) == nil {
 			if res.CountryCode != "" {
@@ -481,7 +483,8 @@ func getGithubStars() string {
 	
 	resp, err := client.Do(req)
 	if err == nil {
-		defer resp.Body.Close()
+  defer func() { _ = resp.Body.Close()
+ }()
 		if resp.StatusCode == 200 {
 			var res struct {
 				StargazersCount int `json:"stargazers_count"`
@@ -523,7 +526,8 @@ func getWAFStats() WAF {
 	if err != nil {
 		return waf
 	}
-	defer file.Close()
+ defer func() { _ = file.Close()
+ }()
 
 	jailCounts := make(map[string]int)
 	var allBans []BannedIP

@@ -18,7 +18,7 @@ import (
 
 func main() {
 	// Parity: Ensure syswarden-core standard logs go to /var/log/syswarden/core.log
-	os.MkdirAll("/var/log/syswarden", 0755)
+ _ = os.MkdirAll("/var/log/syswarden", 0755)
 	logFile, err := os.OpenFile("/var/log/syswarden/core.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
 	if err == nil {
 		mw := io.MultiWriter(os.Stdout, logFile)
@@ -28,7 +28,7 @@ func main() {
 	log.Println("[SysWarden-Core] Starting Next-Gen WAF Daemon...")
 
 	// Initialize Logger (Parity: Write to /opt/syswarden/data.json for TUI)
-	os.MkdirAll("/opt/syswarden", 0755)
+ _ = os.MkdirAll("/opt/syswarden", 0755)
 	telemetryLogger := logger.NewLogger("/var/log/syswarden/waf.json")
 	telemetryLogger.Info("SysWarden Core Daemon initialized")
 
@@ -65,6 +65,6 @@ func main() {
 	log.Println("[SysWarden-Core] Shutting down gracefully...")
 	cancel()
 	udsServer.Stop()
-	wg.Wait()
-	telemetryLogger.Close()
+ _ = wg.Wait()
+ _ = telemetryLogger.Close()
 }

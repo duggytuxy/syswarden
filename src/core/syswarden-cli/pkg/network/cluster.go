@@ -22,7 +22,7 @@ func SetupHACluster() error {
 		return nil
 	}
 
-	fmt.Printf("[INFO] Configuring HA Synchronization Engine to Peer %s:%d\n", peerIP, peerPort)
+	fmt.Printf("[INFO] Configuring HA Synchronization Engine to Peer %s:%s\n", peerIP, peerPort)
 
 	// In a full Go architecture, we register a cron job that calls the Go CLI to perform the sync natively
 	// instead of relying on a bash script containing python sockets.

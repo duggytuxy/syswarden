@@ -18,7 +18,7 @@ const (
 
 // ensureDir ensures the lists directory exists
 func ensureDir() {
-	os.MkdirAll("/etc/syswarden/lists", 0750)
+ _ = os.MkdirAll("/etc/syswarden/lists", 0750)
 }
 
 // IsValidIP checks if a string is a valid IPv4 or IPv6
@@ -45,7 +45,7 @@ func addToFile(filepath, line string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, err = f.WriteString(line + "\n")
 	return err
 }
@@ -79,7 +79,7 @@ func AddToWhitelist(ip string, port string) error {
 	}
 
 	// Remove from blocklist just in case
-	removeFromFile(BlocklistV4, ip)
+	_ = removeFromFile(BlocklistV4, ip)
 
 	file := WhitelistV6
 	if isIPv4 {
@@ -264,7 +264,7 @@ func WhitelistInfra() error {
 		if valid && isIPv4 {
 			content, _ := os.ReadFile(WhitelistV4)
 			if !strings.Contains(string(content), ip+"\n") {
-				addToFile(WhitelistV4, ip)
+				_ = addToFile(WhitelistV4, ip)
 				fmt.Printf("[+] Auto-whitelisted: %s\n", ip)
 				added = true
 			}
