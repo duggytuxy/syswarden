@@ -90,6 +90,7 @@ jobs:
 
             # 3. Fetch Plumber Compliance
             # Handle both ZIP (v3) or extracted directory (v4)
+            WORKSPACE_DIR=$PWD
             PLUMBER_ZIP=$(find /tmp/artifacts -type f -name "plumber-compliance.zip" | head -n 1)
             if [ -n "${PLUMBER_ZIP}" ]; then
                 cp "${PLUMBER_ZIP}" ./release_assets/
@@ -98,7 +99,7 @@ jobs:
                 PLUMBER_DIR=$(find /tmp/artifacts -type d -name "plumber-compliance" | head -n 1)
                 if [ -n "${PLUMBER_DIR}" ]; then
                     cd "${PLUMBER_DIR}" || exit 1
-                    zip -r ../../../release_assets/plumber-compliance.zip ./*
+                    zip -r "${WORKSPACE_DIR}/release_assets/plumber-compliance.zip" ./*
                     cd - || exit 1
                 else
                     echo "CRITICAL: plumber-compliance artifact not found!"
