@@ -1,0 +1,7 @@
+go 1.23.0
+
+use (
+	./src/core/syswarden-cli
+	./src/core/syswarden-core
+	./src/core/syswarden-tui
+)

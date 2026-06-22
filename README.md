@@ -30,7 +30,7 @@
   <img src="https://img.shields.io/badge/Status-Production_Ready-blue?style=for-the-badge&logo=status&logoColor=white" alt="Production Ready">
 </p>
 
-# SysWarden v2.00.0 (The Go Revolution)
+# SysWarden v2.00.0 🚀
 
 **SysWarden** is an Enterprise-grade Hardened Host Intrusion Detection & Prevention System (HIDS - HIPS) engineered in **100% Native Golang**. Designed for critical Linux infrastructures, it enforces automated CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with absolute zero-trust execution.
 
