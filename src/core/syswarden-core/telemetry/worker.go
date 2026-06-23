@@ -205,7 +205,7 @@ func generateTelemetry() {
 	data := DashboardData{
 		Timestamp:     time.Now().UTC().Format(time.RFC3339),
 		GithubStars:   getGithubStars(),
-		GithubRelease: "v1.10.8",
+		GithubRelease: getGithubRelease(),
 		System:        getSystemStats(),
 		Layer3:        getLayer3Stats(),
 		WAF:           getWAFStats(),
@@ -496,6 +496,37 @@ func getGithubStars() string {
 		}
 	}
 	return cachedStars
+}
+
+var cachedRelease string = "Unknown"
+var lastReleaseFetch time.Time
+
+func getGithubRelease() string {
+	if time.Since(lastReleaseFetch) < 1*time.Hour && cachedRelease != "Unknown" {
+		return cachedRelease
+	}
+	
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/duggytuxy/syswarden/releases/latest", nil)
+	if err != nil {
+		return cachedRelease
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	
+	resp, err := client.Do(req)
+	if err == nil {
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == 200 {
+			var res struct {
+				TagName string `json:"tag_name"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&res) == nil {
+				cachedRelease = res.TagName
+				lastReleaseFetch = time.Now()
+			}
+		}
+	}
+	return cachedRelease
 }
 
 var cachedWAF WAF

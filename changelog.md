@@ -1,3 +1,13 @@
+# Release v2.00.10
+
+## ADDED
+- The `syswarden-core` WAF Engine now dynamically fetches the latest available release directly from the GitHub API (`https://api.github.com/repos/duggytuxy/syswarden/releases/latest`) and streams it to the TUI.
+
+## FIXED
+- Resolved a critical desynchronization issue where several subcomponents (like `syswarden-tui`, internal `webhooks`, and the `install.go` routines) were displaying stale, hardcoded version strings (`v2.00.0`). The automated release script (`Release-SysWarden.ps1`) has been patched to aggressively sweep and identically bump all Go files containing version strings.
+
+---
+
 # Release v2.00.9
 
 ## ADDED
