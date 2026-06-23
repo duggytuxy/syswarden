@@ -1,4 +1,4 @@
-# Release v2.01.5
+# Release v2.01.6
 
 ## FIXED
 - **Config Parser Oversight**: Resolved a core engine issue where the `SYSWARDEN_WHITELIST_IPS` configuration parameter was successfully parsed from `syswarden-auto.conf` but skipped during the firewall compilation phase. Custom whitelists are now flawlessly injected into the Nftables `syswarden_whitelist` set upon startup and reload.
