@@ -1,3 +1,11 @@
+
+# Release v2.00.8
+
+## FIXED
+- Synchronized FPM lifecycle orchestration scripts (`postinst.sh`, `prerm.sh`, `postrm.sh`) within the official GitHub Actions CI/CD pipeline (`package.yml`). This ensures that natively compiled `.rpm` and `.deb` releases correctly inherit the In-Place Upgrade capabilities, preventing `syswarden-core` downtime during automated package manager upgrades.
+
+---
+
 # Release v2.00.7
 
 ## FIXED
