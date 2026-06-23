@@ -15,10 +15,10 @@ var whitelistCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		var ips []string
 		port := ""
+		portRegex := regexp.MustCompile(`^[0-9]+$`)
 		for _, arg := range args {
 			// If it's purely numerical, assume it's the port
-			matched, _ := regexp.MatchString(`^[0-9]+$`, arg)
-			if matched {
+			if portRegex.MatchString(arg) {
 				port = arg
 			} else {
 				ips = append(ips, arg)
