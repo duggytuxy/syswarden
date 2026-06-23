@@ -112,7 +112,7 @@ jobs:
             --description "SysWarden Host-based Security Orchestrator for Linux" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture amd64 \
-            -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" \
+            -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" \
             --before-remove prerm.sh \
             -C staging .
 
@@ -126,7 +126,7 @@ jobs:
             --description "SysWarden Host-based Security Orchestrator for Linux" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture x86_64 \
-            -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" \
+            -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" \
             --before-remove prerm.sh \
             -C staging .
 

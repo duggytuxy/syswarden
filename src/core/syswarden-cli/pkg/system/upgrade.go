@@ -9,7 +9,7 @@ import (
 	"os/exec"
 )
 
-var Version = "v2.00.2"
+var Version = "v2.00.3"
 
 // UpgradeSystem checks for updates natively via GitHub API and installs them
 func UpgradeSystem() error {

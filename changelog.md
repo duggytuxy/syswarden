@@ -1,3 +1,10 @@
+# Release v2.00.3
+
+## FIXED
+- Resolved a missing cron daemon dependency during automated unattended installations on minimal RHEL 9 and Debian environments. The `.rpm` and `.deb` deployment pipelines now strictly enforce `cronie` and `cron` dependencies natively.
+
+---
+
 # Release v2.00.2
 
 ## ADDED

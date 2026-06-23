@@ -29,14 +29,14 @@
   <img src="https://img.shields.io/badge/Status-Production_Ready-blue?style=for-the-badge&logo=status&logoColor=white" alt="Production Ready">
 </p>
 
-# SysWarden v2.00.2 🚀
+# SysWarden v2.00.3 🚀
 
 **SysWarden** is an Enterprise-grade Hardened Host Intrusion Detection & Prevention System (HIDS - HIPS) engineered in **100% Native Golang**. Designed for critical Linux infrastructures, it enforces automated CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with absolute zero-trust execution.
 
 It acts as a ruthless first line of defense. By fusing dynamic firewall orchestration (`nftables`/`iptables`), global Threat Intelligence ([Data-Shield IPv4](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a high-speed memory-safe WAF daemon (`syswarden-core`), and SIEM alert routing natively via Go, SysWarden neutralizes threats at the network (L2/L3/L4) and application (L7) levels without exposing your kernel to shell injection risks.
 
 > [!IMPORTANT]
-> **Zero CWE Mitigation:** Re-architected entirely in Go, SysWarden v2.00.2 strongly mitigates risks of OS Command Injection (CWE-78), Memory Corruption (CWE-119), and Resource Exhaustion (CWE-400), seamlessly accelerating your **ISO 27001, NIS2, and CIS Benchmark** compliance.
+> **Zero CWE Mitigation:** Re-architected entirely in Go, SysWarden v2.00.3 strongly mitigates risks of OS Command Injection (CWE-78), Memory Corruption (CWE-119), and Resource Exhaustion (CWE-400), seamlessly accelerating your **ISO 27001, NIS2, and CIS Benchmark** compliance.
 
 ## Architectural Capabilities (CNAPP / HIDS-HIPS)
 
@@ -166,7 +166,7 @@ sudo syswarden uninstall
 
 ### 6. Native Enterprise Management & Auditing
 
-SysWarden v2.00.2 includes a comprehensive, native Golang CLI to orchestrate all firewalls and system checks directly without bash scripts.
+SysWarden v2.00.3 includes a comprehensive, native Golang CLI to orchestrate all firewalls and system checks directly without bash scripts.
 
 **DevSecOps Full Audit:**
 Run a complete system compliance and integration check (Rsyslog bridges, Docker routing, WAF telemetry, Cron health):
