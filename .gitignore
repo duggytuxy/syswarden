@@ -10,6 +10,7 @@ src/core/syswarden-tui/syswarden-tui
 
 # SysWarden Build Artifacts (CI/CD & Local)
 dist/
+.agents/
 staging/
 *.tar.gz
 *.sig
