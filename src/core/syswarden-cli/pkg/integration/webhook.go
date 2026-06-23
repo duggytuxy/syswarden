@@ -63,7 +63,7 @@ func SetupWebhooks() error {
 					Description: "Native Go Webhook integration established.",
 					Color:       3066993, // Green
 					Fields: []EmbedField{
-						{Name: "Version", Value: "v2.00.10", Inline: true},
+						{Name: "Version", Value: "v2.01.0", Inline: true},
 						{Name: "Node", Value: hostname, Inline: true},
 						{Name: "Status", Value: "Active", Inline: true},
 					},

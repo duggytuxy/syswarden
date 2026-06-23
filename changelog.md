@@ -1,3 +1,11 @@
+# Release v2.01.0
+
+## ADDED
+- **L7 Brute-Force & Log Analytics Engine:** SysWarden now natively replaces Fail2ban. It autonomously parses application access logs (Traefik, Nginx, Apache) in real-time (`SYSWARDEN_BRUTEFORCE_LOGS`) via an asynchronous Goroutine and detects HTTP 401/403/404 abuse. It implements a sliding-window tracker and native Nftables blocking to counter L7 bruteforce attempts.
+- **Native CLI Auto-Completion:** Added full auto-completion support for `bash`, `zsh`, `fish`, and `powershell`. The script is automatically deployed to `/etc/bash_completion.d/syswarden` upon installation to provide immediate `<TAB>` suggestions for all SysWarden CLI commands.
+
+---
+
 # Release v2.00.10
 
 ## ADDED

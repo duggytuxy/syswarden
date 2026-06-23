@@ -29,14 +29,14 @@
   <img src="https://img.shields.io/badge/Status-Production_Ready-blue?style=for-the-badge&logo=status&logoColor=white" alt="Production Ready">
 </p>
 
-# SysWarden v2.00.6 🚀
+# SysWarden v2 (The Revolution Go) 🚀
 
 **SysWarden** is an Enterprise-grade Hardened Host Intrusion Detection & Prevention System (HIDS - HIPS) engineered in **100% Native Golang**. Designed for critical Linux infrastructures, it enforces automated CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with absolute zero-trust execution.
 
 It acts as a ruthless first line of defense. By fusing dynamic firewall orchestration (`nftables`/`iptables`), global Threat Intelligence ([Data-Shield IPv4](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a high-speed memory-safe WAF daemon (`syswarden-core`), and SIEM alert routing natively via Go, SysWarden neutralizes threats at the network (L2/L3/L4) and application (L7) levels without exposing your kernel to shell injection risks.
 
 > [!IMPORTANT]
-> **Zero CWE Mitigation:** Re-architected entirely in Go, SysWarden v2.00.6 strongly mitigates risks of OS Command Injection (CWE-78), Memory Corruption (CWE-119), and Resource Exhaustion (CWE-400), seamlessly accelerating your **ISO 27001, NIS2, and CIS Benchmark** compliance.
+> **Zero CWE Mitigation:** Re-architected entirely in Go, SysWarden v2 strongly mitigates risks of OS Command Injection (CWE-78), Memory Corruption (CWE-119), and Resource Exhaustion (CWE-400), seamlessly accelerating your **ISO 27001, NIS2, and CIS Benchmark** compliance.
 
 ## Architectural Capabilities (CNAPP / HIDS-HIPS)
 
@@ -71,7 +71,8 @@ SysWarden doesn't just block. It manages its own Threat Intelligence (ingesting 
 
 **Application Security & Active Response (Layer 7)**
 * Protects 56+ vital services (Docker, Nginx, Databases) using the ultra-fast `syswarden-core` WAF daemon.
-* **Multi-Tenant Docker WAF Bridge:** Transparently streams access logs from Traefik and isolated ModSecurity containers directly into the native Go engine using an asynchronous `rsyslog` (`imfile`/`omuxsock`) bridge, completely eradicating Fail2ban resource bottlenecks.
+* **Multi-Tenant Docker WAF Bridge:** Transparently streams access logs from Traefik and isolated ModSecurity containers directly into the native Go engine using an asynchronous `rsyslog` (`imfile`/`omuxsock`) bridge.
+* **Native L7 Brute-Force Analytics:** Replaces Fail2ban entirely. Asynchronously parses raw access logs (Traefik, Nginx, Apache) in real-time, enforcing native Nftables bans on abusive HTTP 401/403/404 attempts using memory-safe sliding-window tracking.
 * Native SIEM integration (`syswarden-cli` injects directly to `rsyslog` over TLS/UDP).
 * Sends critical bans securely to Discord/Teams webhooks natively, protected by `context.WithTimeout` against SSRF and deadlocks.
 

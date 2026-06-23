@@ -51,6 +51,12 @@ func ParseConfig(filepath string) error {
 			GlobalConfig.WGSubnet = val
 		case "SYSWARDEN_MODSEC_LOGS":
 			GlobalConfig.ModsecLogs = val
+		case "SYSWARDEN_BRUTEFORCE_LOGS":
+			GlobalConfig.BruteforceLogs = val
+		case "SYSWARDEN_BRUTEFORCE_THRESHOLD":
+			GlobalConfig.BruteforceThreshold = val
+		case "SYSWARDEN_BRUTEFORCE_WINDOW":
+			GlobalConfig.BruteforceWindow = val
 		case "SYSWARDEN_HARDENING":
 			GlobalConfig.Hardening = parseBool(val)
 		case "APPLY_CIS_L2_HARDENING":

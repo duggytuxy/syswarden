@@ -96,12 +96,17 @@ jobs:
           ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
           ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
 
+          # Install Bash Autocompletion
+          mkdir -p /etc/bash_completion.d
+          /opt/syswarden/bin/syswarden-cli completion bash > /etc/bash_completion.d/syswarden 2>/dev/null || true
+
           # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
           if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
               systemctl daemon-reload
               /opt/syswarden/bin/syswarden-cli reload
               systemctl enable syswarden-firewall || true
               systemctl restart syswarden-firewall || true
+              systemctl restart syswarden-core || true
           # RPM Install ($1 = 1) or DEB Install ($1 = configure && $2 == "")
           elif [ "$1" = "1" ] || [ "$1" = "configure" ]; then
               /opt/syswarden/bin/syswarden-cli install
