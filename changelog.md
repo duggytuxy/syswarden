@@ -1,3 +1,10 @@
+# Release v2.00.4
+
+## UPDATED
+- Completely rewrote the `syswarden update` orchestration engine in native Go (`pkg/system/upgrade.go`), entirely eradicating the legacy Bash script dependency (`install.sh`). The in-place upgrade mechanism now natively detects the OS architecture, securely downloads the `.rpm` or `.deb` packages via the GitHub API into memory, and natively executes `dnf install` or `apt-get install` without relying on insecure subshells.
+
+---
+
 # Release v2.00.3
 
 ## FIXED

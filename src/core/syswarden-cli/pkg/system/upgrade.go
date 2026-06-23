@@ -7,9 +7,41 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 )
 
-var Version = "v2.00.3"
+var Version = "v2.00.5"
+
+func isRHEL() bool {
+	_, errDnf := exec.LookPath("dnf")
+	_, errYum := exec.LookPath("yum")
+	return errDnf == nil || errYum == nil
+}
+
+// downloadFile securely downloads a file to the destination path
+func downloadFile(url, dest string) error {
+	out, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("failed to create destination file: %w", err)
+	}
+	defer out.Close()
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		return fmt.Errorf("failed to write file content: %w", err)
+	}
+
+	return nil
+}
 
 // UpgradeSystem checks for updates natively via GitHub API and installs them
 func UpgradeSystem() error {
@@ -18,19 +50,18 @@ func UpgradeSystem() error {
 	apiURL := "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
 	resp, err := http.Get(apiURL)
 	if err != nil {
-		return fmt.Errorf("failed to connect to GitHub API: %v", err)
+		return fmt.Errorf("failed to connect to GitHub API: %w", err)
 	}
- defer func() { _ = resp.Body.Close()
- }()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
 
 	latestVersion, ok := result["tag_name"].(string)
@@ -47,17 +78,74 @@ func UpgradeSystem() error {
 	}
 
 	fmt.Println("[+] A new Enterprise version is available!")
-	
-	// Check if installed via DEB/RPM package manager
+
+	// 1. Check if it's an APT repository deployment (highly unlikely now, but keeping for compatibility)
 	if _, err := os.Stat("/etc/apt/sources.list.d/syswarden.list"); err == nil {
 		fmt.Println("[INFO] SysWarden is installed via APT repository. Upgrading via apt-get...")
-  _ = exec.Command("apt-get", "update").Run()
-		return exec.Command("apt-get", "install", "--only-upgrade", "-y", "syswarden").Run()
+		_ = exec.Command("apt-get", "update").Run()
+		if err := exec.Command("apt-get", "install", "--only-upgrade", "-y", "syswarden").Run(); err != nil {
+			return fmt.Errorf("failed to upgrade via apt-get: %w", err)
+		}
+		fmt.Println("[+] Upgrade completed via APT.")
+		return nil
 	}
 
-	// Manual upgrade via direct script
-	fmt.Println("[INFO] Manual deployment detected. Initiating in-place upgrade...")
-	fmt.Println("Please run: curl -sSL https://raw.githubusercontent.com/duggytuxy/syswarden/main/install.sh | bash")
-	
+	// 2. Native In-Place Upgrade for offline/manual packages
+	fmt.Println("[INFO] In-place upgrade detected. Determining OS architecture...")
+
+	var pkgURL, pkgFile string
+	cleanVersion := strings.TrimPrefix(latestVersion, "v")
+
+	if _, err := exec.LookPath("apt-get"); err == nil {
+		// Debian / Ubuntu (.deb)
+		fmt.Println(" -> Detected Debian-based OS")
+		pkgFile = "/tmp/syswarden.deb"
+		pkgURL = fmt.Sprintf("https://github.com/duggytuxy/syswarden/releases/download/%s/syswarden_%s_amd64.deb", latestVersion, cleanVersion)
+
+		fmt.Printf("[INFO] Downloading %s...\n", pkgURL)
+		if err := downloadFile(pkgURL, pkgFile); err != nil {
+			return fmt.Errorf("failed to download DEB package: %w", err)
+		}
+
+		fmt.Println("[INFO] Installing new version via apt-get...")
+		cmd := exec.Command("apt-get", "install", "-y", pkgFile)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to install DEB package: %w", err)
+		}
+
+	} else if isRHEL() {
+		// RHEL / Alma / Fedora (.rpm)
+		fmt.Println(" -> Detected RHEL-based OS")
+		pkgFile = "/tmp/syswarden.rpm"
+		pkgURL = fmt.Sprintf("https://github.com/duggytuxy/syswarden/releases/download/%s/syswarden-%s-1.x86_64.rpm", latestVersion, cleanVersion)
+
+		fmt.Printf("[INFO] Downloading %s...\n", pkgURL)
+		if err := downloadFile(pkgURL, pkgFile); err != nil {
+			return fmt.Errorf("failed to download RPM package: %w", err)
+		}
+
+		fmt.Println("[INFO] Installing new version via DNF...")
+		installer := "dnf"
+		if _, err := exec.LookPath("dnf"); err != nil {
+			installer = "yum"
+		}
+
+		cmd := exec.Command(installer, "install", "-y", pkgFile)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to install RPM package: %w", err)
+		}
+	} else {
+		return fmt.Errorf("no supported package manager found (apt-get/dnf/yum)")
+	}
+
+	// Clean up
+	_ = os.Remove(pkgFile)
+
+	fmt.Println("[+] In-place upgrade completed successfully!")
+	fmt.Println("[INFO] Please restart your terminal session to use the new version.")
 	return nil
 }
