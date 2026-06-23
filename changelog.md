@@ -1,3 +1,10 @@
+# Release v2.00.7
+
+## FIXED
+- Completely restructured the internal packaging lifecycle scripts (`prerm`, `postinst`, `postrm`) within `build_packages.sh` to natively identify and manage *In-Place Upgrade* states across both `dnf/rpm` and `apt-get/dpkg` package managers. This entirely resolves a critical flaw where `syswarden-core` services and `nftables` firewall rules were being inappropriately purged or deadlocked by the package manager during an upgrade.
+
+---
+
 # Release v2.00.6
 
 ## FIXED

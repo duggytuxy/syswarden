@@ -79,13 +79,23 @@ cat << 'EOF' > postinst.sh
 export SYSWARDEN_PKG_INSTALL=1
 ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
 ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
-/opt/syswarden/bin/syswarden-cli install
-systemctl restart syswarden-core
+
+# RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
+if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
+    systemctl daemon-reload
+    systemctl restart syswarden-core || true
+    systemctl restart syswarden-firewall || true
+# RPM Install ($1 = 1) or DEB Install ($1 = configure && $2 == "")
+elif [ "$1" = "1" ] || [ "$1" = "configure" ]; then
+    /opt/syswarden/bin/syswarden-cli install
+    systemctl restart syswarden-core || true
+fi
 EOF
 
 cat << 'EOF' > postrm.sh
 #!/bin/sh
-if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+# RPM Uninstall ($1 = 0) or DEB Uninstall/Purge
+if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
   rm -f /usr/local/bin/syswarden
   rm -f /usr/local/bin/syswarden-tui
   rm -rf /opt/syswarden
@@ -95,15 +105,18 @@ EOF
 
 cat << 'EOF' > prerm.sh
 #!/bin/sh
-systemctl stop syswarden-core.service || true
-systemctl disable syswarden-core.service || true
-systemctl stop syswarden-firewall.service || true
-systemctl disable syswarden-firewall.service || true
-nft delete table netdev syswarden_hw_drop || true
-nft delete table inet syswarden || true
-crontab -l | grep -v 'syswarden-cli' | crontab - || true
-rm -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true
-systemctl restart rsyslog || true
+# RPM Uninstall ($1 = 0) or DEB Uninstall/Purge
+if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    systemctl stop syswarden-core.service || true
+    systemctl disable syswarden-core.service || true
+    systemctl stop syswarden-firewall.service || true
+    systemctl disable syswarden-firewall.service || true
+    nft delete table netdev syswarden_hw_drop || true
+    nft delete table inet syswarden || true
+    crontab -l | grep -v 'syswarden-cli' | crontab - || true
+    rm -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true
+    systemctl restart rsyslog || true
+fi
 EOF
 
 chmod +x postinst.sh postrm.sh prerm.sh
