@@ -1,3 +1,10 @@
+# Release v2.01.3
+
+## ADDED
+- **Native CIDR (Subnet) Support**: The SysWarden CLI `whitelist` and `block` commands now natively accept full CIDR notations (e.g., `10.0.0.0/24`, `192.168.0.0/16`). These subnets are dynamically parsed and injected into Nftables interval sets (`flags interval; auto-merge;`), enabling O(1) matching for massive IP ranges without any performance degradation.
+
+---
+
 # Release v2.01.2
 
 ## FIXED

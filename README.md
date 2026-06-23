@@ -175,15 +175,17 @@ Run a complete system compliance and integration check (Rsyslog bridges, Docker 
 sudo syswarden audit
 ```
 
-**IP Management & Zero-Trust Bypasses:**
-```bash
-# Block or unblock an IP instantly
-sudo syswarden block <IP>
-sudo syswarden unblock <IP>
+### 3. Dynamic Management
+SysWarden provides an instantaneous, zero-delay CLI for incident response.
 
-# Whitelist an IP globally (optional PORT)
-sudo syswarden whitelist <IP> [PORT]
-sudo syswarden unwhitelist <IP>
+```bash
+# Block or unblock an IP or CIDR Subnet instantly (e.g. 10.0.0.0/24)
+sudo syswarden block <IP/CIDR>
+sudo syswarden unblock <IP/CIDR>
+
+# Whitelist an IP or CIDR globally (optional PORT)
+sudo syswarden whitelist <IP/CIDR> [PORT]
+sudo syswarden unwhitelist <IP/CIDR>
 
 # Grant or revoke SSH-exclusive access
 sudo syswarden allow-ssh <IP> [PORT]

@@ -21,14 +21,21 @@ func ensureDir() {
  _ = os.MkdirAll("/etc/syswarden/lists", 0750)
 }
 
-// IsValidIP checks if a string is a valid IPv4 or IPv6
+// IsValidIP checks if a string is a valid IPv4 or IPv6 or a valid CIDR subnet
 func IsValidIP(ip string) (bool, bool) {
+	// 1. Check if it's a standard single IP
 	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
-		return false, false
+	if parsedIP != nil {
+		return true, parsedIP.To4() != nil
 	}
-	isIPv4 := parsedIP.To4() != nil
-	return true, isIPv4
+	
+	// 2. Check if it's a CIDR block (ex: 10.0.0.0/24)
+	parsedIP, _, err := net.ParseCIDR(ip)
+	if err == nil && parsedIP != nil {
+		return true, parsedIP.To4() != nil
+	}
+
+	return false, false
 }
 
 // addToFile safely appends a line to a file if it doesn't already exist
