@@ -1,3 +1,23 @@
+# Release v2.00.1
+
+## ADDED
+- Compliance & Security SBOM artifacts generated and attached to the release payload.
+
+## UPGRADED
+- All underlying Go dependencies across `syswarden-cli`, `syswarden-core`, and `syswarden-tui` modules to mitigate OSV and CVE vulnerabilities.
+
+## UPDATED
+- Removed binary artifacts from the source repository to enforce OSSF Scorecard best practices.
+- Expanded `.gitignore` controls to strictly prevent accidental binary artifact contamination.
+
+## FIXED
+- Remediated `golangci-lint` regressions, including `errcheck` and `staticcheck` issues via robust error handling and `switch` block refactoring.
+- Rectified `govulncheck` execution paths within `security-audit.yml` to support multi-module workspaces.
+- Corrected `gh run download` logic and pathing within `release-manager.yml` to reliably fetch release assets from parallel CI/CD jobs.
+- Fixed `push` event triggers in GitHub Action workflows (`package.yml`, `security-audit.yml`, `compliance.yml`) to correctly execute on version tags.
+
+---
+
 # Release v2.00.0
 
 ## ADDED
