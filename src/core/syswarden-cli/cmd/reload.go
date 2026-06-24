@@ -32,6 +32,15 @@ var reloadCmd = &cobra.Command{
 			fmt.Printf("[ERROR] WAF Log Bridge reload failed: %v\n", err)
 		}
 
+		// Re-apply Background Cron Orchestration (Repairs missing jobs)
+		fmt.Println("[*] Verifying background orchestration...")
+		if err := network.SetupFeedsCron(); err != nil {
+			fmt.Printf("[WARN] Threat feeds cron repair failed: %v\n", err)
+		}
+		if err := network.SetupHACluster(); err != nil {
+			fmt.Printf("[WARN] HA cluster cron repair failed: %v\n", err)
+		}
+
 		// Restart Daemons gracefully
 		if !noRestart {
 			fmt.Println("[*] Restarting background engines...")

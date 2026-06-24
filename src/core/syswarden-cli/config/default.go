@@ -1,7 +1,7 @@
 package config
 
 const DefaultConfig = `# ==============================================================================
-# Version=v2.01.10
+# Version=v2.01.11
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by

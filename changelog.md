@@ -1,6 +1,7 @@
-# Release v2.01.10
+# Release v2.01.11
 
 ## FIXED
+- **Missing Cron Jobs Persistent Warning**: Fixed an issue where nodes upgraded from a previously bugged version (v2.01.8) would continuously report missing background tasks during `syswarden audit`. The `syswarden reload` command, executed automatically during package upgrades, now proactively inspects and safely repairs any missing `update-feeds` and `ha-sync` cron orchestration routines.
 - **CI/CD Pipeline Failure (`syswarden-cli`)**: Resolved a fatal compilation error (`undefined: strings`) in `pkg/system/uninstall.go` caused by a missing library import during the native Go cron refactoring. The build pipeline and GitHub Actions now successfully compile the executable and generate the `.deb` and `.rpm` deployment artifacts.
 
 ---
