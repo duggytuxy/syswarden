@@ -60,7 +60,7 @@ func ReportAbuseAsync(ip string, jail string) {
 	go func() {
 		hostname, _ := os.Hostname()
 		comment := fmt.Sprintf("[%s] Banned by SysWarden Firewall (Jail: %s)", hostname, jail)
-		
+
 		// Map jails to categories
 		categories := "14,15,18,21"
 		jailLower := strings.ToLower(jail)
@@ -93,8 +93,9 @@ func ReportAbuseAsync(ip string, jail string) {
 			log.Printf("[AbuseIPDB FAIL] Error: %v", err)
 			return
 		}
-  defer func() { _ = resp.Body.Close()
- }()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 
 		if resp.StatusCode == 200 {
 			log.Printf("[SUCCESS] Reported %s to AbuseIPDB (Jail: %s)", ip, jail)

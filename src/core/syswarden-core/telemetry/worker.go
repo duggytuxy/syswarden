@@ -83,10 +83,10 @@ type Attacker struct {
 }
 
 type WAF struct {
-	TotalBanned      int        `json:"total_banned"`
-	ActiveSignatures int        `json:"active_signatures"`
-	SignaturesData   []JailData `json:"signatures_data"`
-	BannedIPs        []BannedIP `json:"banned_ips"`
+	TotalBanned      int            `json:"total_banned"`
+	ActiveSignatures int            `json:"active_signatures"`
+	SignaturesData   []JailData     `json:"signatures_data"`
+	BannedIPs        []BannedIP     `json:"banned_ips"`
 	TopAttackers     []Attacker     `json:"top_attackers"`
 	RiskRadar        []int          `json:"risk_radar"`
 	AllowedEvents    []AllowedEvent `json:"allowed_events"`
@@ -117,7 +117,7 @@ type TelemetryEvent struct {
 }
 
 // StartWorker launches the background telemetry generator replacing the cron bash script
-func StartWorker(ctx context.Context, wg *sync.WaitGroup, logAllowed func(ip, service, payload string)) {
+func StartWorker(ctx context.Context, wg *sync.WaitGroup, logAllowed func(ip, service, payload string), logBan func(ip, jail, payload string)) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -145,6 +145,13 @@ func StartWorker(ctx context.Context, wg *sync.WaitGroup, logAllowed func(ip, se
 	go func() {
 		defer wg.Done()
 		monitorAllowedEvents(ctx, logAllowed)
+	}()
+
+	// Start ARP Flood monitor
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		monitorARPFloods(ctx, logBan)
 	}()
 }
 
@@ -175,7 +182,7 @@ func monitorAllowedEvents(ctx context.Context, logAllowed func(ip, service, payl
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// Parse SSH (Debian/Ubuntu auth.log or RHEL secure)
 		if strings.Contains(line, "sshd") && (strings.Contains(line, "Accepted password for") || strings.Contains(line, "Accepted publickey for")) {
 			parts := strings.Fields(line)
@@ -198,7 +205,57 @@ func monitorAllowedEvents(ctx context.Context, logAllowed func(ip, service, payl
 			}
 		}
 	}
- _ = cmd.Wait()
+	_ = cmd.Wait()
+}
+
+func monitorARPFloods(ctx context.Context, logBan func(ip, jail, payload string)) {
+	if logBan == nil {
+		return
+	}
+
+	bashScript := `
+		if command -v journalctl &> /dev/null; then
+			journalctl -k -f -n 0 2>/dev/null
+		else
+			dmesg -w 2>/dev/null
+		fi
+	`
+	cmd := exec.CommandContext(ctx, "bash", "-c", bashScript)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("[Telemetry Worker] Failed to start tail for ARP events: %v", err)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		return
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "[SysWarden-ARP-FLOOD]") {
+			ip := extractField(line, "SRC=")
+			if ip == "" {
+				ip = extractField(line, "MAC=") // Fallback to MAC if SRC IP is missing
+			}
+			if ip == "" {
+				ip = "Unknown-ARP-Attacker"
+			}
+			logBan(ip, "L2-ARP-FLOOD", line)
+		}
+	}
+	_ = cmd.Wait()
+}
+
+func extractField(line, prefix string) string {
+	idx := strings.Index(line, prefix)
+	if idx != -1 {
+		parts := strings.Fields(line[idx:])
+		if len(parts) > 0 {
+			return strings.TrimPrefix(parts[0], prefix)
+		}
+	}
+	return ""
 }
 
 func generateTelemetry() {
@@ -213,7 +270,7 @@ func generateTelemetry() {
 	}
 
 	uiDir := "/var/lib/syswarden/ui"
- _ = os.MkdirAll(uiDir, 0755)
+	_ = os.MkdirAll(uiDir, 0755)
 	dataFile := filepath.Join(uiDir, "data.json")
 
 	jsonData, err := json.Marshal(data)
@@ -289,9 +346,9 @@ func getSystemStats() SystemData {
 		var total, avail int
 		for _, line := range strings.Split(string(b), "\n") {
 			if strings.HasPrefix(line, "MemTotal:") {
-		_, _ = fmt.Sscanf(line, "MemTotal: %d kB", &total)
+				_, _ = fmt.Sscanf(line, "MemTotal: %d kB", &total)
 			} else if strings.HasPrefix(line, "MemAvailable:") {
-		_, _ = fmt.Sscanf(line, "MemAvailable: %d kB", &avail)
+				_, _ = fmt.Sscanf(line, "MemAvailable: %d kB", &avail)
 			}
 		}
 		if total > 0 {
@@ -378,8 +435,9 @@ func countLinesInFile(path string) int {
 	if err != nil {
 		return 0
 	}
- defer func() { _ = file.Close()
- }()
+	defer func() {
+		_ = file.Close()
+	}()
 	count := 0
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -443,8 +501,9 @@ func enrichOSINT(ip string) Attacker {
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get("https://ipwho.is/" + ip)
 	if err == nil {
-  defer func() { _ = resp.Body.Close()
- }()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 		var res IPWhoIsResponse
 		if json.NewDecoder(resp.Body).Decode(&res) == nil {
 			if res.CountryCode != "" {
@@ -473,18 +532,19 @@ func getGithubStars() string {
 	if time.Since(lastStarFetch) < 1*time.Hour && cachedStars != "N/A" {
 		return cachedStars
 	}
-	
+
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("GET", "https://api.github.com/repos/duggytuxy/syswarden", nil)
 	if err != nil {
 		return cachedStars
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	
+
 	resp, err := client.Do(req)
 	if err == nil {
-  defer func() { _ = resp.Body.Close()
- }()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 		if resp.StatusCode == 200 {
 			var res struct {
 				StargazersCount int `json:"stargazers_count"`
@@ -505,14 +565,14 @@ func getGithubRelease() string {
 	if time.Since(lastReleaseFetch) < 1*time.Hour && cachedRelease != "Unknown" {
 		return cachedRelease
 	}
-	
+
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("GET", "https://api.github.com/repos/duggytuxy/syswarden/releases/latest", nil)
 	if err != nil {
 		return cachedRelease
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	
+
 	resp, err := client.Do(req)
 	if err == nil {
 		defer func() { _ = resp.Body.Close() }()
@@ -541,7 +601,7 @@ func getWAFStats() WAF {
 	waf.BannedIPs = []BannedIP{}
 	waf.TopAttackers = []Attacker{}
 	waf.SignaturesData = []JailData{}
-	
+
 	// Read signatures.json for active signatures count
 	if b, err := os.ReadFile("/opt/syswarden/signatures.json"); err == nil {
 		var sigs struct {
@@ -557,8 +617,9 @@ func getWAFStats() WAF {
 	if err != nil {
 		return waf
 	}
- defer func() { _ = file.Close()
- }()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	jailCounts := make(map[string]int)
 	var allBans []BannedIP
@@ -578,7 +639,7 @@ func getWAFStats() WAF {
 			} else {
 				waf.TotalBanned++
 				jailCounts[event.Jail]++
-				
+
 				allBans = append(allBans, BannedIP{
 					IP:      event.IP,
 					Jail:    event.Jail,
@@ -606,7 +667,7 @@ func getWAFStats() WAF {
 	// Reverse order for newest first
 	for i := len(allBans) - 1; i >= start; i-- {
 		waf.BannedIPs = append(waf.BannedIPs, allBans[i])
-		
+
 		// Quick TopAttacker populate with OSINT
 		waf.TopAttackers = append(waf.TopAttackers, enrichOSINT(allBans[i].IP))
 	}

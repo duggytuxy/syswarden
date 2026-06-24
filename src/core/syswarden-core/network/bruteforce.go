@@ -172,7 +172,7 @@ func (b *BruteforceEngine) recordFailure(ip, logLine string) {
 
 	if len(validTimestamps) >= b.config.Threshold {
 		log.Printf("[BruteForce Engine] Threshold exceeded for %s! Banning at L3.", ip)
-		
+
 		// Clear tracker to prevent spamming bans
 		b.tracker.Delete(ip)
 
@@ -181,7 +181,7 @@ func (b *BruteforceEngine) recordFailure(ip, logLine string) {
 			b.logger.Error(fmt.Sprintf("Failed to ban bruteforcer %s", ip), err)
 			return
 		}
-		
+
 		b.logger.LogBan(ip, "l7-bruteforce", logLine)
 	}
 }

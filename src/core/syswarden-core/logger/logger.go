@@ -77,7 +77,7 @@ func (l *Logger) LogBan(ip, jail, payload string) {
 	if _, err := l.file.Write([]byte("\n")); err != nil {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
-	
+
 	log.Printf("[SysWarden-BLOCK] IP=%s Jail=%s Payload=%s", ip, jail, payload)
 }
 
@@ -109,7 +109,7 @@ func (l *Logger) LogAllowed(ip, service, payload string) {
 	if _, err := l.file.Write([]byte("\n")); err != nil {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
-	
+
 	log.Printf("[SysWarden-ALLOWED] Legitimate access IP=%s Service=%s", ip, service)
 }
 

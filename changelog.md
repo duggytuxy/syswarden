@@ -1,3 +1,10 @@
+# Release v2.10.1
+
+## ADDED
+- ARP Spoofing Telemetry Integration: Natively integrated OSI Layer 2 ARP flood alerts directly into the Enterprise Dashboard (`syswarden tui`) and live alerts feed (`syswarden alerts`). The `syswarden-core` daemon now asynchronously monitors the kernel ring buffer for `[SysWarden-ARP-FLOOD]` events via `journalctl -k` and injects hardware-level attack traces seamlessly into the WAF telemetry pipeline.
+
+---
+
 # Release v2.10.0
 
 ## ADDED

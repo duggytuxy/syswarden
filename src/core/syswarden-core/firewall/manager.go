@@ -48,10 +48,10 @@ func (m *FallbackManager) Ban(ip string) error {
 
 // NftablesManager implements native Netlink API zero-shell blocking
 type NftablesManager struct {
-	conn        *nftables.Conn
-	inetSet     *nftables.Set
-	netdevSet   *nftables.Set
-	mu          sync.Mutex
+	conn      *nftables.Conn
+	inetSet   *nftables.Set
+	netdevSet *nftables.Set
+	mu        sync.Mutex
 }
 
 func (m *NftablesManager) Name() string {
@@ -123,7 +123,7 @@ func NewManager() (Manager, error) {
 	backend, path := detectBackend()
 	if backend == "nftables" {
 		conn := &nftables.Conn{}
-		
+
 		// Attempt to resolve the tables and sets immediately for O(1) injections later
 		var inetSet, netdevSet *nftables.Set
 

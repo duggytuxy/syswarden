@@ -40,7 +40,7 @@ func NewUDSServer(ctx context.Context, socketPath string, e *engine.Engine, fw f
 func (s *UDSServer) Start() error {
 	// Remove existing socket if it exists
 	if _, err := os.Stat(s.socketPath); err == nil {
-  _ = os.Remove(s.socketPath)
+		_ = os.Remove(s.socketPath)
 	}
 
 	conn, err := net.ListenPacket("unixgram", s.socketPath)
@@ -50,7 +50,7 @@ func (s *UDSServer) Start() error {
 	s.conn = conn
 
 	// Ensure the socket is writable by Rsyslog/Vector
- _ = os.Chmod(s.socketPath, 0666)
+	_ = os.Chmod(s.socketPath, 0666)
 
 	log.Printf("[UDS] Listening for unixgram zero-disk streams on %s", s.socketPath)
 
@@ -86,14 +86,14 @@ func (s *UDSServer) readLoop() {
 		}
 
 		line := string(buf[:n])
-		
+
 		match := s.engine.Scan(line)
 		if match != nil {
 			// Extract IP from the log line
 			ip := engine.ExtractIP(line)
 			if ip != "" {
 				s.logger.LogBan(ip, match.RuleID, line)
-				
+
 				err := s.fw.Ban(ip)
 				if err != nil {
 					s.logger.Error("Failed to ban IP", err)
@@ -113,4 +113,3 @@ func (s *UDSServer) Stop() {
 	}
 	s.wg.Wait()
 }
-

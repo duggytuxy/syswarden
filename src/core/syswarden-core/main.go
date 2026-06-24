@@ -55,7 +55,7 @@ func main() {
 
 	// Start Native Telemetry Worker
 	var wg sync.WaitGroup
-	telemetry.StartWorker(ctx, &wg, telemetryLogger.LogAllowed)
+	telemetry.StartWorker(ctx, &wg, telemetryLogger.LogAllowed, telemetryLogger.LogBan)
 
 	// Start L7 BruteForce Analytics Engine (Fail2ban Native Replacement)
 	bruteforceEngine := network.NewBruteforceEngine(fwManager, telemetryLogger)
