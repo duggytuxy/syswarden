@@ -1,3 +1,10 @@
+# Release v2.01.10
+
+## FIXED
+- **CI/CD Pipeline Failure (`syswarden-cli`)**: Resolved a fatal compilation error (`undefined: strings`) in `pkg/system/uninstall.go` caused by a missing library import during the native Go cron refactoring. The build pipeline and GitHub Actions now successfully compile the executable and generate the `.deb` and `.rpm` deployment artifacts.
+
+---
+
 # Release v2.01.9
 
 ## FIXED

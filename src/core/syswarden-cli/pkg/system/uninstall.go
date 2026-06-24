@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // UninstallSystem executes a scorched-earth removal of SysWarden and all its dependencies
