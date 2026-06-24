@@ -146,7 +146,10 @@ jobs:
               systemctl disable syswarden-firewall.service || true
               nft delete table netdev syswarden_hw_drop || true
               nft delete table inet syswarden || true
-              crontab -l | grep -v 'syswarden-cli' | crontab - || true
+              if crontab -l > /tmp/sw_cron.bak 2>/dev/null; then
+                  grep -v 'syswarden-cli' /tmp/sw_cron.bak | crontab - || true
+                  rm -f /tmp/sw_cron.bak
+              fi
               rm -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true
               systemctl restart rsyslog || true
           fi

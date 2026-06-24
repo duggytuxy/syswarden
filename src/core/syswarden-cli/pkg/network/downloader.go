@@ -214,27 +214,24 @@ func SetupFeedsCron() error {
 	
 	cronJob := fmt.Sprintf("%d * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1", randomMinute)
 
-	// Add to crontab securely
+	// Add to crontab natively
 	out, _ := exec.Command("crontab", "-l").Output()
-	currentCron := string(out)
-
-	// Remove old if exists
-	_ = exec.Command("sh", "-c", "crontab -l | grep -v 'syswarden-cli update-feeds' | crontab -").Run()
-
-	if !strings.Contains(currentCron, "syswarden-cli update-feeds") {
-		newCron := currentCron
-		if newCron != "" && !strings.HasSuffix(newCron, "\n") {
-			newCron += "\n"
+	lines := strings.Split(string(out), "\n")
+	var newLines []string
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" && !strings.Contains(line, "syswarden-cli update-feeds") {
+			newLines = append(newLines, line)
 		}
-		newCron += cronJob + "\n"
-		
-		cmd := exec.Command("crontab", "-")
-		cmd.Stdin = strings.NewReader(newCron)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to inject feeds cron job: %w", err)
-		}
-		fmt.Printf("[+] Background Threat Feeds updater injected successfully (Hourly at minute %d).\n", randomMinute)
 	}
+	newLines = append(newLines, cronJob)
+	
+	newCron := strings.Join(newLines, "\n") + "\n"
+	cmd := exec.Command("crontab", "-")
+	cmd.Stdin = strings.NewReader(newCron)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to inject feeds cron job: %w", err)
+	}
+	fmt.Printf("[+] Background Threat Feeds updater injected successfully (Hourly at minute %d).\n", randomMinute)
 
 	return nil
 }

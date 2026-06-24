@@ -1,3 +1,10 @@
+# Release v2.01.9
+
+## FIXED
+- **Cron Orchestration Idempotency Bug**: Resolved a critical logic flaw in `downloader.go` and `cluster.go` where updating SysWarden on minimalist/hardened Debian systems would permanently delete the background Threat Intelligence and HA synchronization cron jobs. The update routine now uses 100% native Go string parsing to guarantee clean, atomic modifications to the `crontab` without relying on fragile bash pipelines (`grep -v`), fully resolving the `No automated SysWarden background jobs found` warning during `syswarden audit`.
+
+---
+
 # Release v2.01.8
 
 ## FIXED
