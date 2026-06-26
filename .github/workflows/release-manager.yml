@@ -82,7 +82,7 @@ jobs:
             # package.yml appends the version to the artifact name
             PACKAGE_DIR=$(find /tmp/artifacts -type d -name "syswarden-packages-*" | head -n 1)
             if [ -n "${PACKAGE_DIR}" ]; then
-                find "${PACKAGE_DIR}" -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.pkg" -o -name "SHA256SUMS.txt" \) -exec cp {} ./release_assets/ \;
+                find "${PACKAGE_DIR}" -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.txz" -o -name "SHA256SUMS.txt" \) -exec cp {} ./release_assets/ \;
             else
                 echo "CRITICAL: syswarden-packages artifact not found!"
                 exit 1

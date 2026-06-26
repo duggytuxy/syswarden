@@ -1,3 +1,11 @@
+# Release v3.00.1
+
+## FIXED
+- **CI/CD Pipeline (FreeBSD Artifacts):** Resolved a failure in `package.yml` and `release-manager.yml` where `sha256sum` and GitHub Artifact uploads expected `.pkg` files, whereas FPM accurately generates `.txz` archives for FreeBSD. All pipeline references have been safely updated to `.txz`.
+- **Go Cache Dependency Resolution:** Fixed a caching crash during the `actions/setup-go` workflow step by explicitly mapping `cache-dependency-path` to `go.work.sum`, since SysWarden utilizes a root-level workspace architecture.
+
+---
+
 # Release v3.00.0
 
 ## ADDED

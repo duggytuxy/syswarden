@@ -112,7 +112,7 @@ The Go CLI and dependencies are automatically placed in `/opt/syswarden/bin/`, s
 
 ```bash
 # 1. Download the appropriate package and its checksum
-wget https://github.com/duggytuxy/syswarden/releases/download/<version>/*.deb or .rpm or .pkg
+wget https://github.com/duggytuxy/syswarden/releases/download/<version>/*.deb or .rpm or .txz
 wget https://github.com/duggytuxy/syswarden/releases/download/<version>/*.txt (SHA256SUMS)
 
 # 2. Verify Integrity
@@ -124,7 +124,7 @@ sudo apt-get install -y ./syswarden_<version>_all.deb
 # For RHEL/AlmaLinux/Rocky
 sudo dnf install -y ./syswarden-<version>-1.noarch.rpm
 # For FreeBSD 14+
-sudo pkg add ./syswarden-<version>-FreeBSD-amd64.pkg
+sudo pkg add ./syswarden-<version>-FreeBSD-amd64.txz
 
 # 4. Read the exhaustive SysAdmin manual to understand all Data-Shield lists and configuration parameters
 sudo syswarden manual
