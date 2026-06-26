@@ -1,3 +1,12 @@
+# Release v3.01.0
+
+## ADDED
+- **Native FreeBSD CIS Hardening:** Successfully ported the CIS Level 2 Kernel and OS-level hardening directly to FreeBSD 14+. The new architecture implements rigorous protection equivalent to Linux configurations via native sysctl overrides (`security.bsd.*` and `net.inet.tcp.blackhole=2`), without interfering with the PF engine.
+- **Zero-Trust FreeBSD Profiles:** Hardened standard FreeBSD profiles (`.cshrc`, `.profile`) with the `schg` immutable file flag, matching Linux `chattr` standards.
+- **FreeBSD Core Dump Restrictions:** Implemented strict memory limits (`kern.coredump=0`, `kern.sugid_coredump=0`) via `sysctl.conf` to block memory exploitation.
+
+---
+
 # Release v3.00.1
 
 ## FIXED

@@ -17,7 +17,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v3.00.1"
+const SysWardenVersion = "v3.01.0"
 
 // --- DATA MODELS ---
 type Service struct {
