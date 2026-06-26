@@ -36,7 +36,7 @@
 
 **SysWarden** is an Enterprise-grade Hardened Host Intrusion Detection & Prevention System (HIDS - HIPS) engineered in **100% Native Golang**. Designed for critical Linux infrastructures, it enforces automated CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with absolute zero-trust execution.
 
-It acts as a ruthless first line of defense. By fusing dynamic firewall orchestration (`nftables`/`iptables`), global Threat Intelligence ([Data-Shield IPv4](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a high-speed memory-safe WAF daemon (`syswarden-core`), and SIEM alert routing natively via Go, SysWarden neutralizes threats at the network (L2/L3/L4) and application (L7) levels without exposing your kernel to shell injection risks.
+It acts as a ruthless first line of defense. By fusing dynamic firewall orchestration (`nftables`/`iptables`/`pf`), global Threat Intelligence ([Data-Shield IPv4](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a high-speed memory-safe WAF daemon (`syswarden-core`), and SIEM alert routing natively via Go, SysWarden neutralizes threats at the network (L2/L3/L4) and application (L7) levels without exposing your kernel to shell injection risks.
 
 > [!IMPORTANT]
 > **Zero CWE Mitigation:** Re-architected entirely in Go, SysWarden v2 strongly mitigates risks of OS Command Injection (CWE-78), Memory Corruption (CWE-119), and Resource Exhaustion (CWE-400), seamlessly accelerating your **ISO 27001, NIS2, and CIS Benchmark** compliance.
@@ -45,7 +45,7 @@ It acts as a ruthless first line of defense. By fusing dynamic firewall orchestr
 
 **1. A "Next-Gen HIPS" (Host Intrusion Prevention System)**
 At its core, SysWarden is a formidable HIPS. Unlike a traditional IDS (Intrusion Detection System) that merely alerts, SysWarden actively prevents attacks across multiple concrete OSI layers:
-* **Layer 2 (Data Link)**: Native MAC address blacklisting via the `netdev` family and ARP Request Rate-Limiting to instantly kill ARP Flooding/Spoofing attacks without breaking VRRP HA setups.
+* **Layer 2 (Data Link)**: ARP Request Rate-Limiting to instantly kill ARP Flooding/Spoofing attacks without breaking VRRP HA setups.
 * **Layer 3 & 4 (Network & Transport)**: Stateful IP, CIDR, ASN, and GeoIP filtering via the `inet` family with explicit TCP Flag anomaly detection (e.g. killing invalid SYN/FIN/RST combinations). Includes a **Zero-Trust Strict ALLOW Mode** natively dropping any IP worldwide that isn't explicitly whitelisted via GeoIP or ASN.
 * **Layer 7 (Application)**: Advanced WAAP (Web Application Firewall) inspecting payloads via Zero-Overhead Substring Matching for zero-day exploits (SQLi, XSS, LFI, RCE) and HTTP 401/403/404 Brute-Force tracking via the native Go `WAAPEngine`.
 
@@ -68,7 +68,7 @@ SysWarden doesn't just block. It manages its own Threat Intelligence (ingesting 
 * **Layer 3/4 Catch-All Auditing:** Enforces total visibility by securely logging any packet hitting the hardware drop threshold before execution, populating the real-time observability console (`syswarden alerts`) with granular "Catch-All" traffic analytics.
 
 **Core Network Defense (Hardware & Layer 2/3)**
-* **OSI Layer 2 (MAC/ARP)**: Injects Threat Intelligence directly into the `netdev` table under `nftables`. Malicious MAC addresses are dropped right at the Network Interface Card (NIC) Ingress hook, bypassing kernel routing. Additionally, an isolated `arp` table limits ARP requests to strictly mitigate network saturation floods natively.
+* **OSI Layer 2 (ARP)**: An isolated `arp` table limits ARP requests to strictly mitigate network saturation floods natively.
 * **OSI Layer 3 (IP/Routing)**: Native Go `net/http` clients securely download and sync hostile countries (GeoIP), cybercrime hosters, and rogue ASNs.
 
 **Stateful & Protocol Optimization (Layer 3/4)**
