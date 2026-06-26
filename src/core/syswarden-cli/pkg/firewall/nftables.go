@@ -34,10 +34,7 @@ func ApplyNftables() error {
 	_, _ = nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags timeout; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }\n")
 
-	if config.GlobalConfig.EnableL2 && config.GlobalConfig.MacBlacklist != "" {
-		macs := strings.ReplaceAll(config.GlobalConfig.MacBlacklist, " ", ", ")
-		fmt.Fprintf(&nftRules, "\tset syswarden_mac_blacklist { type ether_addr; elements = { %s }; }\n", macs)
-	}
+
 
 	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
 		_, _ = nftRules.WriteString("\tset syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }\n")
@@ -48,9 +45,6 @@ func ApplyNftables() error {
 
 	fmt.Fprintf(&nftRules, "\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"%s\" priority -500; policy accept;\n", activeIf)
 
-	if config.GlobalConfig.EnableL2 && config.GlobalConfig.MacBlacklist != "" {
-		_, _ = nftRules.WriteString("\t\tether saddr @syswarden_mac_blacklist counter log prefix \"[SysWarden-MAC-BLOCK] \" drop\n")
-	}
 
 	// Allow Whitelist O(1) matching via set (Requested by User)
 	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_whitelist accept\n")

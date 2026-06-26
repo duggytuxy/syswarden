@@ -62,7 +62,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %sSYSWARDEN_HA_ENABLED%s     : Enables the High-Availability state sync between active firewall nodes.\n\n", ansiWhite, ansiReset)
 
 		fmt.Printf("%s[Layer 2 Protections]%s\n", ansiCyan, ansiReset)
-		fmt.Printf("  %sSYSWARDEN_L2_ENABLED%s     : Activates MAC-based filtering and ARP Spoofing prevention.\n\n", ansiWhite, ansiReset)
+		fmt.Printf("  %sSYSWARDEN_L2_ENABLED%s     : Activates Hardware Layer 2 ARP Spoofing prevention.\n\n", ansiWhite, ansiReset)
 
 		// 3. Data-Shield Lists
 		fmt.Printf("%s--- 3. DATA-SHIELD POSTURES (SYSWARDEN_LIST_CHOICE) ---%s\n", ansiYellow, ansiReset)
@@ -74,10 +74,6 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %scritical%s\n", ansiRed, ansiReset)
 		fmt.Printf("      - Adds %sFireHOL Level 1%s: Drops known cybercrime infrastructures and botnets.\n", ansiWhite, ansiReset)
 		fmt.Printf("      - Adds %sSpamhaus DROP%s  : Drops hijacked Autonomous Systems and BGP prefixes.\n\n", ansiWhite, ansiReset)
-
-		fmt.Printf("  %sla_totale%s\n", ansiCyan, ansiReset)
-		fmt.Printf("      - Aggressive mode. Combines all standard and critical feeds.\n")
-		fmt.Printf("      - Adds heuristic preemptive blocking against emerging threats without concession.\n\n")
 
 		fmt.Printf("%s================================================================================%s\n", ansiCyan, ansiReset)
 		fmt.Printf("%sNOTE: Before modifying the configuration, it is highly recommended to run this manual.%s\n", ansiWhite, ansiReset)

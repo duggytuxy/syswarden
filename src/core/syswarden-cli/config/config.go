@@ -48,7 +48,6 @@ type Config struct {
 	WazuhEnrollPort     string
 	SecureWipeConf      bool
 	EnableL2            bool
-	MacBlacklist        string
 	ArpProtect          bool
 	LANMode             bool
 }

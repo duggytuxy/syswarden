@@ -130,8 +130,7 @@ sudo syswarden manual
 sudo syswarden config
 
 # The interactive wizard (or syswarden-auto.conf) allows configuring advanced parameters, for example:
-# - SYSWARDEN_ENABLE_L2="y" (Enable OSI Layer 2 MAC Drop)
-# - SYSWARDEN_MAC_BLACKLIST="00:1A:2B:3C:4D:5E" (Blacklist specific infected hardwares)
+# - SYSWARDEN_ENABLE_L2="y" (Enable OSI Layer 2 ARP Spoofing Prevention)
 # - SYSWARDEN_ARP_PROTECT="y" (Enable 10req/sec ARP Flood limits)
 # - SYSWARDEN_LAN_MODE="y" (Enable Local LAN Mode to save RAM by skipping global OSINT downloads)
 # - SYSWARDEN_BRUTEFORCE_LOGS="/var/log/traefik/access.log" (Enable L7 WAF log parsing)

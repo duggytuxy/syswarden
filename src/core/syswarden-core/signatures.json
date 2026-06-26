@@ -54,6 +54,11 @@
     { "id": "apache-overflows", "type": "regex", "pattern": "\\[client <HOST>(?::\\d+)?\\] AH00565: request failed: (?:URI too long|error reading the headers)", "service": "apache" },
     { "id": "slowloris", "type": "regex", "pattern": "client timed out \\(\\d+: [^)]+\\) while reading client request .*, client: <HOST>", "service": "http" },
     { "id": "docker-api", "type": "aho-corasick", "patterns": ["/v1.24/containers/create", "/v1.41/containers/create", "/var/run/docker.sock"], "service": "docker" },
-    { "id": "docker-auth", "type": "regex", "pattern": "Failed to authenticate.*remote_ip=\"<HOST>\"", "service": "docker" }
+    { "id": "docker-auth", "type": "regex", "pattern": "Failed to authenticate.*remote_ip=\"<HOST>\"", "service": "docker" },
+    { "id": "cve-ivanti", "type": "aho-corasick", "patterns": ["/api/v1/totp", "/api/v1/cav/client/status"], "service": "http" },
+    { "id": "cve-confluence", "type": "aho-corasick", "patterns": ["/server-info.action", "/setup/setupadministrator.action"], "service": "http" },
+    { "id": "deserialization", "type": "aho-corasick", "patterns": ["O:8:\"stdClass\":", "rO0AB", "ysoserial"], "service": "http" },
+    { "id": "modern-crawlers", "type": "aho-corasick", "patterns": ["PerplexityBot", "OAI-SearchBot", "ClaudeBot", "Amazonbot"], "service": "http" },
+    { "id": "advanced-fuzzers", "type": "aho-corasick", "patterns": ["ffuf", "kiterunner", "dirb", "gobuster"], "service": "http" }
   ]
 }

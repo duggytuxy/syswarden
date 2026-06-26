@@ -165,11 +165,14 @@ func (w *WAAPEngine) tailFile(filepath string) {
 
 	// Signatures mappings (Zero-overhead substring matching)
 	// Keys are the substring to look for, values are the Jail Name
-	sigSQLi := []string{"union select", "select * from", "waitfor delay", "1=1--", "%27"}
-	sigXSS := []string{"<script", "javascript:", "onerror="}
-	sigLFI := []string{"../../../", "..%2f", "/etc/passwd", "c:\\windows"}
-	sigRCE := []string{"${jndi:", ";\\wget ", "|curl "}
-	sigScanners := []string{"nikto", "sqlmap", "zgrab", "nuclei", "masscan"}
+	sigSQLi := []string{"union select", "select * from", "waitfor delay", "1=1--", "%27", "pg_sleep", "xp_cmdshell"}
+	sigXSS := []string{"<script", "javascript:", "onerror=", "eval(", "onload="}
+	sigLFI := []string{"../../../", "..%2f", "/etc/passwd", "c:\\windows", "%c0%af", "php://filter", "php://input"}
+	sigRCE := []string{"${jndi:", ";\\wget ", "|curl ", "${lower:jndi}", "/bin/sh -c"}
+	sigSSRF := []string{"169.254.169.254", "metadata.google.internal", "/metadata/instance"}
+	sigNoSQL := []string{"$where", "$gt:", "$ne:"}
+	sigAPI := []string{"__schema", "/swagger-ui", "/openapi.json"}
+	sigScanners := []string{"nikto", "sqlmap", "zgrab", "nuclei", "masscan", "kiterunner", "ffuf"}
 
 	for line := range t.Lines {
 		text := line.Text
@@ -217,6 +220,30 @@ func (w *WAAPEngine) tailFile(filepath string) {
 			for _, sig := range sigScanners {
 				if strings.Contains(lowerText, sig) {
 					matchedJail = "l7-scanner"
+					break
+				}
+			}
+		}
+		if matchedJail == "" {
+			for _, sig := range sigSSRF {
+				if strings.Contains(lowerText, sig) {
+					matchedJail = "l7-ssrf"
+					break
+				}
+			}
+		}
+		if matchedJail == "" {
+			for _, sig := range sigNoSQL {
+				if strings.Contains(lowerText, sig) {
+					matchedJail = "l7-nosql"
+					break
+				}
+			}
+		}
+		if matchedJail == "" {
+			for _, sig := range sigAPI {
+				if strings.Contains(lowerText, sig) {
+					matchedJail = "l7-api"
 					break
 				}
 			}

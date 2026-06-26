@@ -1,7 +1,22 @@
+# Release v2.40.0
+
+## ADDED
+- [WAAP L7] Proactive Heuristics: Integrated three new zero-overhead detection jails natively into `waap.go` (`l7-ssrf`, `l7-nosql`, `l7-api`), successfully blocking Cloud metadata exfiltration, MongoDB/CouchDB injections, and generic API/GraphQL schema enumeration without impacting performance.
+- [Telemetry] SIEM & AbuseIPDB Mapping: Dynamically integrated the new WAAP L7 jails into the `telemetry/abuse.go` AbuseIPDB reporter, natively mapping them to the Web App Attack (Category 21) logic.
+- [Threat Intelligence] Modern CVEs & Scanners: Expanded `signatures.json` with highly critical Aho-Corasick patterns targeting Java/PHP Deserialization (`ysoserial`), Ivanti/Confluence CVE paths, and aggressively dropping advanced fuzzers (`ffuf`, `kiterunner`) and novel AI crawlers (PerplexityBot, ClaudeBot).
+
+## REMOVED
+- [Layer 2] MAC Address Filtering: Removed `SYSWARDEN_MAC_BLACKLIST` and associated filtering logic. MAC blocking is easily circumvented via spoofing and offers no real Zero-Trust boundary. Hardware Layer 2 ARP Spoofing prevention (`SYSWARDEN_ARP_PROTECT`) remains active and strictly enforced.
+
+## UPDATED
+- [WAAP L7] Legacy Substring Engine: Fortified existing SQLi, XSS, LFI, and RCE zero-overhead arrays with advanced bypass vectors (`pg_sleep`, `php://filter`, `${lower:jndi}`).
+
+---
+
 # Release v2.30.2
 
 ## ADDED
-- [SecOps] SysWarden Enterprise Manual: Introduced the exhaustive `syswarden manual` command. This interactive module provides comprehensive documentation on all CLI commands, `syswarden-auto.conf` configuration parameters (including Zero-Trust L3 and WAAP L7 variables), and the complete structure of the Data-Shield Threat Intelligence postures (`standard`, `critical`, `la_totale`).
+- [SecOps] SysWarden Enterprise Manual: Introduced the exhaustive `syswarden manual` command. This interactive module provides comprehensive documentation on all CLI commands, `syswarden-auto.conf` configuration parameters (including Zero-Trust L3 and WAAP L7 variables), and the complete structure of the Data-Shield Threat Intelligence postures (`standard`, `critical`).
 
 ---
 

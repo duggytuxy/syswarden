@@ -72,7 +72,7 @@ func ReportAbuseAsync(ip string, jail string) {
 			categories = "14,15"
 		} else if strings.Contains(jailLower, "l7-sqli") {
 			categories = "16,21"
-		} else if strings.Contains(jailLower, "l7-xss") || strings.Contains(jailLower, "l7-lfi") || strings.Contains(jailLower, "l7-rce") {
+		} else if strings.Contains(jailLower, "l7-xss") || strings.Contains(jailLower, "l7-lfi") || strings.Contains(jailLower, "l7-rce") || strings.Contains(jailLower, "l7-ssrf") || strings.Contains(jailLower, "l7-nosql") || strings.Contains(jailLower, "l7-api") {
 			categories = "21"
 		} else if strings.Contains(jailLower, "l7-scanner") {
 			categories = "19"
