@@ -82,9 +82,9 @@
   <g transform="translate(600, 150)">
     <text x="500" y="80" fill="#FFFFFF" font-size="85" font-weight="bold" class="code-font" text-anchor="end">SYSWARDEN</text>
     <!-- Container for Logos and Slogan Box -->
-    <g transform="translate(140, 110)">
+    <g transform="translate(60, 110)">
       <!-- Rounded Rectangle -->
-      <rect x="0" y="0" width="360" height="110" rx="12" fill="#161B22" stroke="#30363D" stroke-width="2" />
+      <rect x="0" y="0" width="440" height="110" rx="12" fill="#161B22" stroke="#30363D" stroke-width="2" />
       
       <!-- OS Logos Group -->
       <g transform="translate(45, 15)">
@@ -96,7 +96,7 @@
         </g>
 
         <!-- Ubuntu Logo (Approximation SVG) -->
-        <g transform="translate(80, 0) scale(0.6)">
+        <g transform="translate(70, 0) scale(0.6)">
           <circle cx="30" cy="30" r="30" fill="#E95420" />
           <circle cx="30" cy="30" r="16" fill="none" stroke="#FFFFFF" stroke-width="6" />
           <circle cx="30" cy="10" r="5" fill="#E95420" stroke="#FFFFFF" stroke-width="2" />
@@ -109,20 +109,31 @@
         </g>
 
         <!-- RHEL Logo (Approximation SVG) -->
-        <g transform="translate(160, 0) scale(0.6)">
+        <g transform="translate(140, 0) scale(0.6)">
           <path d="M5,40 Q30,50 55,40 C55,20 45,10 30,10 C15,10 5,20 5,40 Z" fill="#EE0000" />
           <path d="M0,40 Q30,60 60,40 Q50,45 30,45 Q10,45 0,40 Z" fill="#CC0000" />
         </g>
 
         <!-- Linux Penguin (Text fallback for generic Linux) -->
-        <g transform="translate(240, -2)">
+        <g transform="translate(210, -2)">
           <text x="0" y="30" fill="#FFFFFF" font-size="30">🐧</text>
+        </g>
+
+        <!-- FreeBSD Logo -->
+        <g transform="translate(280, 0) scale(0.6)">
+          <circle cx="30" cy="30" r="28" fill="#DA251D" />
+          <path d="M12,12 Q0,-10 20,2 Z" fill="#DA251D" />
+          <path d="M48,12 Q60,-10 40,2 Z" fill="#DA251D" />
+          <circle cx="20" cy="25" r="4" fill="#FFFFFF" />
+          <circle cx="40" cy="25" r="4" fill="#FFFFFF" />
+          <circle cx="20" cy="25" r="1.5" fill="#000000" />
+          <circle cx="40" cy="25" r="1.5" fill="#000000" />
         </g>
       </g>
 
       <!-- Subtitle / Tagline -->
-      <text x="180" y="75" fill="#8B949E" font-size="13" class="code-font" text-anchor="middle">Active Defense and HIDS/HIPS Orchestration</text>
-      <text x="180" y="95" fill="#8B949E" font-size="13" class="code-font" text-anchor="middle">for Critical Linux Infrastructure</text>
+      <text x="220" y="75" fill="#8B949E" font-size="13" class="code-font" text-anchor="middle">Active Defense and HIDS/HIPS Orchestration</text>
+      <text x="220" y="95" fill="#8B949E" font-size="13" class="code-font" text-anchor="middle">for Critical Linux &amp; FreeBSD Infrastructure</text>
     </g>
 
   </g>
