@@ -144,5 +144,3 @@ func parseBool(val string) bool {
 	v := strings.ToLower(val)
 	return v == "y" || v == "yes" || v == "true" || v == "1"
 }
-
-

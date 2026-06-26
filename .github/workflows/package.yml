@@ -188,10 +188,58 @@ jobs:
             --after-remove postrm.sh \
             -C staging .
 
+      - name: Build FreeBSD Package (.pkg)
+        run: |
+          mkdir -p staging_fbsd/usr/local/syswarden/bin
+          cp src/core/syswarden-core/signatures.json staging_fbsd/usr/local/syswarden/
+          cp dist/freebsd/bin/* staging_fbsd/usr/local/syswarden/bin/
+          chmod 750 staging_fbsd/usr/local/syswarden/bin/*
+          chmod 640 staging_fbsd/usr/local/syswarden/signatures.json
+
+          cat << 'EOF' > postinst_fbsd.sh
+          #!/bin/sh
+          export SYSWARDEN_PKG_INSTALL=1
+          ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
+          ln -sf /usr/local/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
+          /usr/local/bin/syswarden install
+          service syswarden restart || true
+          EOF
+
+          cat << 'EOF' > postrm_fbsd.sh
+          #!/bin/sh
+          rm -f /usr/local/bin/syswarden
+          rm -f /usr/local/bin/syswarden-tui
+          rm -rf /usr/local/syswarden
+          rm -rf /etc/syswarden
+          EOF
+
+          cat << 'EOF' > prerm_fbsd.sh
+          #!/bin/sh
+          service syswarden stop || true
+          sysrc -x syswarden_enable || true
+          pfctl -t syswarden_blacklist -T kill || true
+          pfctl -t syswarden_whitelist -T kill || true
+          pfctl -t banned_ips -T kill || true
+          EOF
+          chmod +x postinst_fbsd.sh postrm_fbsd.sh prerm_fbsd.sh
+
+          fpm -s dir -t freebsd \
+            -n syswarden \
+            -v ${{ env.VERSION }} \
+            --vendor "SysWarden Security" \
+            --maintainer "SysWarden Engineering" \
+            --description "SysWarden Host-based Security Orchestrator for FreeBSD" \
+            --url "https://github.com/${{ github.repository }}" \
+            --architecture amd64 \
+            --after-install postinst_fbsd.sh \
+            --before-remove prerm_fbsd.sh \
+            --after-remove postrm_fbsd.sh \
+            -C staging_fbsd .
+
       - name: Generate Checksums
         run: |
           # Generate SHA256 checksums for integrity verification (Supply Chain Security)
-          sha256sum *.deb *.rpm > SHA256SUMS.txt
+          sha256sum *.deb *.rpm *.pkg > SHA256SUMS.txt
 
       - name: Upload Package Artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -200,5 +248,6 @@ jobs:
           path: |
             *.deb
             *.rpm
+            *.pkg
             SHA256SUMS.txt
           retention-days: 7

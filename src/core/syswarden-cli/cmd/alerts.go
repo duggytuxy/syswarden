@@ -53,7 +53,7 @@ var alertsCmd = &cobra.Command{
 			SetTitleAlign(tview.AlignCenter)
 
 		// Start streams
-		go streamJournalctl(app, table)
+		go StreamKernelLogs(app, table)
 		go streamWAF(app, table)
 
 		// Run TUI app
@@ -77,8 +77,8 @@ func addRow(app *tview.Application, table *tview.Table, date, module, action, sr
 	})
 }
 
-func streamJournalctl(app *tview.Application, table *tview.Table) {
-	cmd := exec.Command("stdbuf", "-oL", "/usr/bin/journalctl", "-k", "-f", "-n", "10", "--no-pager")
+func StreamKernelLogs(app *tview.Application, table *tview.Table) {
+	cmd := getKernelLogCommand()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return
@@ -186,15 +186,15 @@ func runTextModeFallback() {
 	fmt.Println("=== SYSWARDEN TEXT MODE FALLBACK (Non-Interactive) ===")
 	fmt.Println("Streaming live telemetry to standard output...")
 
-	go streamJournalctlText()
+	go StreamKernelLogsText()
 	go streamWAFText()
 
 	// Block forever
 	select {}
 }
 
-func streamJournalctlText() {
-	cmd := exec.Command("stdbuf", "-oL", "/usr/bin/journalctl", "-k", "-f", "-n", "10", "--no-pager")
+func StreamKernelLogsText() {
+	cmd := getKernelLogCommand()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return

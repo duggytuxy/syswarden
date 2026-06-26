@@ -7,6 +7,8 @@
 src/core/syswarden-cli/syswarden-cli
 src/core/syswarden-core/syswarden-core
 src/core/syswarden-tui/syswarden-tui
+*_test
+syswarden_test
 
 # SysWarden Build Artifacts (CI/CD & Local)
 dist/

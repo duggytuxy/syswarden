@@ -58,8 +58,30 @@ cd src/core/syswarden-tui
 go mod tidy && go build -ldflags="-s -w" -o ../../../dist/bin/syswarden-tui .
 cd ../../../
 
-echo "[+] Compilation successful."
+echo "[+] Linux Compilation successful."
 
+echo "[*] Compiling SysWarden Native Go Modules for FreeBSD..."
+export GOOS=freebsd
+export GOARCH=amd64
+
+mkdir -p dist/freebsd/bin
+
+echo " -> Compiling syswarden-cli (FreeBSD)..."
+cd src/core/syswarden-cli
+go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-cli .
+cd ../../../
+
+echo " -> Compiling syswarden-core (FreeBSD)..."
+cd src/core/syswarden-core
+go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-core .
+cd ../../../
+
+echo " -> Compiling syswarden-tui (FreeBSD)..."
+cd src/core/syswarden-tui
+go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-tui .
+cd ../../../
+
+echo "[+] FreeBSD Compilation successful."
 # 3. Prepare Staging Environment
 echo "[*] Preparing File Hierarchy for Packaging..."
 rm -rf staging
@@ -150,8 +172,55 @@ fpm -f -s dir -t rpm \
     --after-remove postrm.sh \
     -C staging .
 
+# Generate FreeBSD PKG
+echo "[*] Preparing FreeBSD Staging..."
+rm -rf staging_fbsd
+mkdir -p staging_fbsd/usr/local/syswarden/bin
+cp src/core/syswarden-core/signatures.json staging_fbsd/usr/local/syswarden/
+cp dist/freebsd/bin/* staging_fbsd/usr/local/syswarden/bin/
+chmod 750 staging_fbsd/usr/local/syswarden/bin/*
+chmod 640 staging_fbsd/usr/local/syswarden/signatures.json
+
+cat << 'EOF' > postinst_fbsd.sh
+#!/bin/sh
+export SYSWARDEN_PKG_INSTALL=1
+ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
+ln -sf /usr/local/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
+/usr/local/bin/syswarden install
+service syswarden restart || true
+EOF
+
+cat << 'EOF' > postrm_fbsd.sh
+#!/bin/sh
+rm -f /usr/local/bin/syswarden
+rm -f /usr/local/bin/syswarden-tui
+rm -rf /usr/local/syswarden
+rm -rf /etc/syswarden
+EOF
+
+cat << 'EOF' > prerm_fbsd.sh
+#!/bin/sh
+service syswarden stop || true
+sysrc -x syswarden_enable || true
+pfctl -t syswarden_blacklist -T kill || true
+pfctl -t syswarden_whitelist -T kill || true
+pfctl -t banned_ips -T kill || true
+EOF
+chmod +x postinst_fbsd.sh postrm_fbsd.sh prerm_fbsd.sh
+
+fpm -f -s dir -t freebsd \
+    -n syswarden \
+    -v "${VERSION}" \
+    --vendor "SysWarden Security" \
+    --maintainer "SysWarden Engineering" \
+    --description "SysWarden Host-based Security Orchestrator for FreeBSD" \
+    --after-install postinst_fbsd.sh \
+    --before-remove prerm_fbsd.sh \
+    --after-remove postrm_fbsd.sh \
+    -C staging_fbsd .
+
 # Clean Staging
-rm -rf staging dist postinst.sh postrm.sh prerm.sh
+rm -rf staging staging_fbsd dist postinst*.sh postrm*.sh prerm*.sh
 
 echo "[SUCCESS] Packages have been successfully generated in your current directory!"
-ls -lh *.deb *.rpm
+ls -lh *.deb *.rpm *.pkg || true

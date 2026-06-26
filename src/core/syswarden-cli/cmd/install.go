@@ -59,7 +59,7 @@ var installCmd = &cobra.Command{
 			fmt.Printf("[ERROR] Auto-Whitelisting failed: %v\n", err)
 		}
 
-		if err := firewall.ApplyNftables(); err != nil {
+		if err := firewall.ApplyPolicies(); err != nil {
 			fmt.Printf("[ERROR] Failed to apply SysWarden Overlay rules: %v\n", err)
 			return
 		}
@@ -102,11 +102,11 @@ var installCmd = &cobra.Command{
 
 		// Phase 5: Deployment Orchestration
 		fmt.Println("[SysWarden] Starting Systemd Orchestration...")
-		if err := system.SetupSystemd(); err != nil {
+		if err := system.SetupService(); err != nil {
 			fmt.Printf("[ERROR] Systemd setup failed: %v\n", err)
 		}
 
-		fmt.Println("[SysWarden] v2.40.0 Native Installation Complete.")
+		fmt.Println("[SysWarden] v3.00.0 Native Installation Complete.")
 	},
 }
 

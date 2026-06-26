@@ -97,7 +97,7 @@ func AddToWhitelist(ip string, port string) error {
 		return err
 	}
 	fmt.Printf("[SUCCESS] IP %s safely whitelisted.\n", entry)
-	return ApplyNftables()
+	return ApplyPolicies()
 }
 
 // RemoveFromWhitelist removes an IP from the whitelist
@@ -131,7 +131,7 @@ func RemoveFromWhitelist(ip string) error {
 		if found {
 			_ = os.WriteFile(file, []byte(strings.Join(newLines, "\n")+"\n"), 0644)
 			fmt.Printf("[SUCCESS] IP %s removed from whitelist.\n", ip)
-			return ApplyNftables()
+			return ApplyPolicies()
 		}
 	}
 	fmt.Printf("[INFO] IP %s not found in whitelist.\n", ip)
@@ -149,7 +149,7 @@ func AddToBlocklist(ip string) error {
 		return err
 	}
 	fmt.Printf("[SUCCESS] IP %s safely blocklisted.\n", ip)
-	return ApplyNftables()
+	return ApplyPolicies()
 }
 
 // RemoveFromBlocklist removes an IP from the blocklist
@@ -162,7 +162,7 @@ func RemoveFromBlocklist(ip string) error {
 		return err
 	}
 	fmt.Printf("[SUCCESS] IP %s removed from blocklist.\n", ip)
-	return ApplyNftables()
+	return ApplyPolicies()
 }
 
 // AllowSSH adds an IP to the SSH bypass list
@@ -179,7 +179,7 @@ func AllowSSH(ip string, port string) error {
 		return err
 	}
 	fmt.Printf("[SUCCESS] SSH Bypass granted for %s.\n", entry)
-	return ApplyNftables()
+	return ApplyPolicies()
 }
 
 // RevokeSSH removes an IP from the SSH bypass list
@@ -207,7 +207,7 @@ func RevokeSSH(ip string) error {
 		if found {
 			_ = os.WriteFile(SSHBypass, []byte(strings.Join(newLines, "\n")+"\n"), 0644)
 			fmt.Printf("[SUCCESS] SSH Bypass revoked for %s.\n", ip)
-			return ApplyNftables()
+			return ApplyPolicies()
 		}
 	}
 	fmt.Printf("[INFO] IP %s not found in SSH bypass list.\n", ip)
@@ -279,7 +279,7 @@ func WhitelistInfra() error {
 	}
 
 	if added {
-		return ApplyNftables()
+		return ApplyPolicies()
 	}
 	fmt.Println("[SUCCESS] All critical IPs are already whitelisted.")
 	return nil

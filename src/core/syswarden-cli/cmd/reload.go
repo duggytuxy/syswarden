@@ -18,7 +18,7 @@ var reloadCmd = &cobra.Command{
 		fmt.Println("[*] Reloading SysWarden configuration from memory...")
 
 		// Re-apply Firewall and Whitelists based on new config
-		if err := firewall.ApplyNftables(); err != nil {
+		if err := firewall.ApplyPolicies(); err != nil {
 			fmt.Printf("[ERROR] Firewall reload failed: %v\n", err)
 		}
 

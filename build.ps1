@@ -112,6 +112,28 @@ if (Test-Path "src/core/syswarden-tui/main.go") {
     Write-Host "[-] WARNING: syswarden-tui not found. Skipping Go build." -ForegroundColor Yellow
 }
 
+Write-Host "[*] Compiling SysWarden Native Go Modules for FreeBSD..." -ForegroundColor Cyan
+if (!(Test-Path "$DistDir/freebsd/bin")) {
+    New-Item -ItemType Directory -Force -Path "$DistDir/freebsd/bin" | Out-Null
+}
+
+$env:GOOS="freebsd"
+$env:GOARCH="amd64"
+
+Set-Location "src/core/syswarden-cli"
+go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-cli .
+Set-Location ../../../
+
+Set-Location "src/core/syswarden-core"
+go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-core .
+Set-Location ../../../
+
+Set-Location "src/core/syswarden-tui"
+go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-tui .
+Set-Location ../../../
+
+Write-Host "[+] FreeBSD Compilation successful." -ForegroundColor Green
+
 # Create dist directory if it doesn't exist
 if (!(Test-Path $DistDir)) {
     New-Item -ItemType Directory -Force -Path $DistDir | Out-Null

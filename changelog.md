@@ -1,3 +1,25 @@
+# Release v3.00.0
+
+## ADDED
+- FreeBSD 14+ Native Support via abstraction layer (`//go:build freebsd`).
+- Full PF (Packet Filter) support for L3/L4 and L7 WAAP integration.
+- Native Kernel Layer 2 ARP Spoofing Protection for FreeBSD via `sysctl` hardening (`log_arp_movements`).
+- Native `rc.d` FreeBSD service orchestration integration.
+- Abstracted WireGuard VPN integration using PF NAT anchor (`syswarden_wg`) and `sysrc` for FreeBSD.
+- Abstracted SIEM (Wazuh/Rsyslog) bridge telemetry integration for FreeBSD paths and daemons (`/usr/local/etc/rsyslog.d`).
+- Abstracted Real-Time Telemetry (Core & CLI) from Linux `journalctl` to native FreeBSD `syslog` (`/var/log/messages`).
+- Package generation for `.pkg` explicitly utilizing FPM inside the GitHub CI/CD Actions pipeline.
+
+## UPGRADED
+- Refactored `pkg/system`, `pkg/network` and `pkg/integration` to securely support FreeBSD without breaking the Linux ecosystem.
+- Cross-platform dependency check mechanisms adapted for `pkg` versus `apt`/`dnf`.
+- Web Showcase and Wiki fully updated to reflect multi-OS integration (Linux & FreeBSD Jails/bhyve capabilities).
+
+## FIXED
+- **OSSF Scorecard (Supply Chain Security):** Addressed the High-Severity `Binary-Artifacts #91` alert by aggressively purging the local compiled test binary (`syswarden_test`) from the repository's git index and enforcing strict `.gitignore` boundaries for all Go test artifacts. This guarantees absolute compliance with SLSA and OSSF source-review guidelines.
+
+---
+
 # Release v2.40.0
 
 ## ADDED

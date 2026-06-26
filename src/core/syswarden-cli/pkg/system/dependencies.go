@@ -43,6 +43,12 @@ func InstallDependencies() error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("YUM installation failed: %w", err)
 		}
+	} else if _, err := exec.LookPath("pkg"); err == nil {
+		fmt.Println(" -> Detected FreeBSD (pkg)")
+		cmd := exec.CommandContext(ctx, "pkg", "install", "-y", "pf", "wireguard-tools", "libqrencode", "curl", "jq")
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("PKG installation failed: %w", err)
+		}
 	} else {
 		fmt.Println("[WARN] No supported package manager found. Please install dependencies manually.")
 	}

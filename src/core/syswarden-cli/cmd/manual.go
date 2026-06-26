@@ -29,7 +29,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %sinstall%s       : Compiles, hardens, and deploys the firewall and WAAP engine.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %suninstall%s     : Safely removes SysWarden and reverts the OS to its previous state.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %saudit%s         : Validates Zero-Trust L3 boundaries and L7 WAAP independence.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %sconfig%s        : Opens the interactive configuration editor (/opt/syswarden/syswarden-auto.conf).\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sconfig%s        : Opens the interactive configuration editor (e.g., /opt/syswarden/syswarden-auto.conf or /usr/local/etc/syswarden-auto.conf).\n", ansiGreen, ansiReset)
 		fmt.Printf("  %stui%s           : Launches the real-time Terminal User Interface (TUI) dashboard.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %salerts%s        : Streams live WAAP/L7 JSON telemetry and block events.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sreload%s        : Applies configuration changes to the kernel atomically without dropping active connections.\n", ansiGreen, ansiReset)

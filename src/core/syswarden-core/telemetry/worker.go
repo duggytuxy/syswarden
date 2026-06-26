@@ -220,6 +220,9 @@ func monitorARPFloods(ctx context.Context, logBan func(ip, jail, payload string)
 			dmesg -w 2>/dev/null
 		fi
 	`
+	if runtime.GOOS == "freebsd" {
+		bashScript = "tail -F /var/log/messages 2>/dev/null"
+	}
 	cmd := exec.CommandContext(ctx, "bash", "-c", bashScript)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -242,6 +245,17 @@ func monitorARPFloods(ctx context.Context, logBan func(ip, jail, payload string)
 				ip = "Unknown-ARP-Attacker"
 			}
 			logBan(ip, "L2-ARP-FLOOD", line)
+		} else if runtime.GOOS == "freebsd" && strings.Contains(line, "arp: ") && (strings.Contains(line, "moved from") || strings.Contains(line, "wrong iface")) {
+			// Parse FreeBSD native arp warning: "arp: 192.168.1.50 moved from xx:xx to yy:yy"
+			parts := strings.Fields(line)
+			ip := "Unknown-ARP-Attacker"
+			for i, p := range parts {
+				if p == "arp:" && i+1 < len(parts) {
+					ip = parts[i+1]
+					break
+				}
+			}
+			logBan(ip, "L2-ARP-FLOOD", "[SysWarden-ARP-FLOOD] "+line)
 		}
 	}
 	_ = cmd.Wait()

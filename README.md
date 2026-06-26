@@ -100,6 +100,7 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 | **Rocky Linux / AlmaLinux 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
 | **Oracle Linux 10+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
 | **Fedora 40+** | `firewalld`, `nftables`, `iptables` | Production Ready |
+| **FreeBSD 14+** | `pf` (Packet Filter) | Enterprise Ready |
 
 ## Installation Guide (v2.0 Native Deployment)
 
@@ -111,7 +112,7 @@ The Go CLI and dependencies are automatically placed in `/opt/syswarden/bin/`, s
 
 ```bash
 # 1. Download the appropriate package and its checksum
-wget https://github.com/duggytuxy/syswarden/releases/download/<version>/*.deb or .rpm
+wget https://github.com/duggytuxy/syswarden/releases/download/<version>/*.deb or .rpm or .pkg
 wget https://github.com/duggytuxy/syswarden/releases/download/<version>/*.txt (SHA256SUMS)
 
 # 2. Verify Integrity
@@ -122,6 +123,8 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 sudo apt-get install -y ./syswarden_<version>_all.deb
 # For RHEL/AlmaLinux/Rocky
 sudo dnf install -y ./syswarden-<version>-1.noarch.rpm
+# For FreeBSD 14+
+sudo pkg add ./syswarden-<version>-FreeBSD-amd64.pkg
 
 # 4. Read the exhaustive SysAdmin manual to understand all Data-Shield lists and configuration parameters
 sudo syswarden manual
