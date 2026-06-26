@@ -1,7 +1,14 @@
+# Release v2.30.2
+
+## ADDED
+- [SecOps] SysWarden Enterprise Manual: Introduced the exhaustive `syswarden manual` command. This interactive module provides comprehensive documentation on all CLI commands, `syswarden-auto.conf` configuration parameters (including Zero-Trust L3 and WAAP L7 variables), and the complete structure of the Data-Shield Threat Intelligence postures (`standard`, `critical`, `la_totale`).
+
+---
+
 # Release v2.30.1
 
 ## UPDATED
-- [SecOps] SysWarden Audit Engine: The `syswarden audit` CLI command has been completely overhauled to natively recognize and validate the new Zero-Trust Strict ALLOW architecture (GeoIP and ASN). It now also actively audits the WAAP L7 Engine status, confirming Auto-Discovery mechanisms and L7 Sovereignty capabilities.
+- [SecOps] SysWarden Audit Engine: The `syswarden audit` CLI command has been completely overhauled to natively recognize and validate the new Zero-Trust Strict ALLOW architecture (GeoIP and ASN). It now also actively audits the WAAP L7 Engine status, confirming Auto-Discovery mechanisms and L7 Independence capabilities.
 
 ---
 
@@ -9,7 +16,7 @@
 
 ## ADDED
 - [Governance] Zero-Trust Strict ALLOW Mode for GeoIP and ASN. Introduces `SYSWARDEN_GEO_ALLOWED` and `SYSWARDEN_ASN_ALLOWED`. If configured, the engine operates in a default-deny state, blocking all inbound traffic except for the explicitly whitelisted countries or ASNs, natively merging with the hardware `syswarden_whitelist` set for O(1) processing.
-- [SecOps] WAAP L7 Sovereignty: Even if an IP is allowed via the new Zero-Trust L3 whitelist, the WAAP engine retains absolute priority. If a whitelisted IP initiates a malicious attack (SQLi, XSS, etc.), it is immediately banned, dropped, and reported to the SIEM.
+- [SecOps] WAAP L7 Independence: Even if an IP is allowed via the new Zero-Trust L3 whitelist, the WAAP engine retains absolute priority. If a whitelisted IP initiates a malicious attack (SQLi, XSS, etc.), it is immediately banned, dropped, and reported to the SIEM.
 ---
 
 # Release v2.20.1

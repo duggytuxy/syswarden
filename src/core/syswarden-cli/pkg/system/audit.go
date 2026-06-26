@@ -171,7 +171,7 @@ func RunAudit() {
 		}
 
 		if config.GlobalConfig.GeoAllowed != "" || config.GlobalConfig.ASNAllowed != "" {
-			pass("WAAP Sovereignty VERIFIED: L7 Engine dynamically overrides L3 Zero-Trust Whitelists.")
+			pass("WAAP Independence VERIFIED: L7 Engine dynamically overrides L3 Zero-Trust Whitelists.")
 		}
 
 		if _, err := os.Stat("/var/run/syswarden.sock"); err == nil {

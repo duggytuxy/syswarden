@@ -18,7 +18,7 @@ var rootCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		// Default behavior when no subcommand is given
 		fmt.Printf("SysWarden %s CLI\n", system.Version)
-		fmt.Println("Use 'syswarden --help' for a list of commands.")
+		fmt.Println("Use 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.")
 	},
 }
 

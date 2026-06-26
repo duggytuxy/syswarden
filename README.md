@@ -1,4 +1,6 @@
 <p align="center">
+  <img src="assets/syswarden_hero.svg" alt="SysWarden">
+  <br><br>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/package.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/package.yml?style=for-the-badge&logo=githubactions&logoColor=white" alt="SysWarden Builder and Packager">
   </a>
@@ -121,7 +123,10 @@ sudo apt-get install -y ./syswarden_<version>_all.deb
 # For RHEL/AlmaLinux/Rocky
 sudo dnf install -y ./syswarden-<version>-1.noarch.rpm
 
-# 4. Review and tailor the embedded configuration to your infrastructure
+# 4. Read the exhaustive SysAdmin manual to understand all Data-Shield lists and configuration parameters
+sudo syswarden manual
+
+# 5. Review and tailor the embedded configuration to your infrastructure
 sudo syswarden config
 
 # The interactive wizard (or syswarden-auto.conf) allows configuring advanced parameters, for example:
