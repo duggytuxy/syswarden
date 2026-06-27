@@ -112,20 +112,31 @@ SysWarden is exclusively distributed via standard package managers (`.deb` / `.r
 The Go CLI and dependencies are automatically placed in `/opt/syswarden/bin/`, securely embedding the default configuration.
 
 ```bash
-# 1. Download the appropriate package and its checksum
-wget https://github.com/duggytuxy/syswarden/releases/download/<version>/*.deb or .rpm or .txz
-wget https://github.com/duggytuxy/syswarden/releases/download/<version>/*.txt (SHA256SUMS)
+# 1. Fetch the latest release version automatically
+VERSION=$(curl -s https://api.github.com/repos/duggytuxy/syswarden/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+V_NUM=${VERSION#v}
 
-# 2. Verify Integrity
+# 2. Download the appropriate package and its checksum
+# For Debian/Ubuntu (amd64)
+wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_amd64.deb
+# For RHEL/AlmaLinux/Rocky (x86_64)
+wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}-1.x86_64.rpm
+# For FreeBSD 14+ (amd64)
+wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}.txz
+
+# Also download the checksums
+wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/SHA256SUMS.txt
+
+# 3. Verify Integrity
 sha256sum -c SHA256SUMS.txt --ignore-missing
 
-# 3. Install the package
+# 4. Install the package
 # For Debian/Ubuntu
-sudo apt-get install -y ./syswarden_<version>_all.deb
+sudo apt-get install -y ./syswarden_${V_NUM}_amd64.deb
 # For RHEL/AlmaLinux/Rocky
-sudo dnf install -y ./syswarden-<version>-1.noarch.rpm
+sudo dnf install -y ./syswarden-${V_NUM}-1.x86_64.rpm
 # For FreeBSD 14+
-sudo pkg add ./syswarden-<version>-FreeBSD-amd64.txz
+sudo pkg add ./syswarden-${V_NUM}.txz
 
 # 4. Read the exhaustive SysAdmin manual to understand all Data-Shield lists and configuration parameters
 sudo syswarden manual
