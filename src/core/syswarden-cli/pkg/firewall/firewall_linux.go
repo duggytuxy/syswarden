@@ -23,11 +23,12 @@ func ApplyPolicies() error {
 	// 1. Interface Detection (Like old bash: ip route get 8.8.8.8)
 	activeIf := GetActiveInterface()
 
-	// 2. Destroy tables atomically if they exist
-	_, _ = nftRules.WriteString("destroy table inet syswarden\n")
-	_, _ = nftRules.WriteString("destroy table inet syswarden_table\n") // Cleanup legacy table
-	_, _ = nftRules.WriteString("destroy table netdev syswarden_hw_drop\n")
-	_, _ = nftRules.WriteString("destroy table arp syswarden_arp\n\n")
+	// 2. Safely wipe existing tables (Universal backward compatibility)
+	// We run these natively and ignore errors if they don't exist, avoiding the 'destroy' syntax error on old nftables.
+	_ = exec.Command("nft", "delete", "table", "inet", "syswarden").Run()
+	_ = exec.Command("nft", "delete", "table", "inet", "syswarden_table").Run()
+	_ = exec.Command("nft", "delete", "table", "netdev", "syswarden_hw_drop").Run()
+	_ = exec.Command("nft", "delete", "table", "arp", "syswarden_arp").Run()
 
 	// 3. Hardware Drop Table (L2)
 	_, _ = nftRules.WriteString("table netdev syswarden_hw_drop {\n")

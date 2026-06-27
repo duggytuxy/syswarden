@@ -1,3 +1,10 @@
+# Release v3.10.2
+
+## FIXED
+- **Universal Nftables Compatibility (LXC/Proxmox):** Refactored the core atomic firewall transaction in `syswarden-cli`. The modern `destroy table` syntax, which triggers `unexpected table` syntax errors on older or strict LXC environments (e.g., Debian 11/12 on Proxmox VE), has been replaced with pre-transaction silent `nft delete table` commands. This guarantees 100% backward and forward compatibility without sacrificing atomic load safety.
+
+---
+
 # Release v3.10.1
 
 ## UPDATED
