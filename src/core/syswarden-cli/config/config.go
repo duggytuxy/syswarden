@@ -14,6 +14,7 @@ type Config struct {
 	BruteforceLogs      string
 	BruteforceThreshold string
 	BruteforceWindow    string
+	HoneyPorts          string
 	Hardening           bool
 	CISL2Hardening      bool
 	ListChoice          string
@@ -40,6 +41,7 @@ type Config struct {
 	EnableWebhook       bool
 	WebhookURLDiscord   string
 	WebhookURLTeams     string
+	WebhookURLSlack     string
 	EnableWazuh         bool
 	WazuhIP             string
 	WazuhName           string

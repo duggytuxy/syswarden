@@ -55,7 +55,7 @@ func main() {
 
 	// Start Native Telemetry Worker
 	var wg sync.WaitGroup
-	telemetry.StartWorker(ctx, &wg, fwManager, telemetryLogger.LogAllowed, telemetryLogger.LogBan)
+	telemetry.StartWorker(ctx, &wg, fwManager, telemetryLogger.LogAllowed, telemetryLogger.LogBan, telemetryLogger.LogShadowAlert)
 
 	// Start L7 WAAP Analytics Engine (Heuristic & Bruteforce)
 	waapEngine := network.NewWAAPEngine(fwManager, telemetryLogger)

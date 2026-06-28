@@ -142,6 +142,13 @@ func ApplyPolicies() error {
 		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport %s accept\n", sshPort)
 	}
 
+	// Honeyports (Insider Threat Detection)
+	if config.GlobalConfig.LANMode && config.GlobalConfig.HoneyPorts != "" {
+		ports := strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")
+		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } limit rate 5/second burst 10 packets log prefix \"[SysWarden-HONEYPORT] \"\n", ports)
+		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } counter drop\n", ports)
+	}
+
 	// Catch-All Default Deny Logging
 	_, _ = nftRules.WriteString("\t\tct state new limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n")
 	_, _ = nftRules.WriteString("\t\tct state new counter drop\n")

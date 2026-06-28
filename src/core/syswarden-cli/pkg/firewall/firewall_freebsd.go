@@ -98,8 +98,14 @@ func ApplyPolicies() error {
 		_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick on %s proto tcp to any port %s keep state\n", activeIf, sshPort))
 	}
 
+	// Honeyports (Insider Threat Detection)
+	if config.GlobalConfig.LANMode && config.GlobalConfig.HoneyPorts != "" {
+		ports := strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")
+		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in log quick on %s proto tcp to any port { %s }\n", activeIf, ports))
+	}
+
 	// Default drop catch-all for incoming
-	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in on %s all\n", activeIf))
+	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in log on %s all\n", activeIf))
 	_, _ = pfRules.WriteString(fmt.Sprintf("pass out on %s all keep state\n", activeIf))
 
 	// Write pf configuration to temporary file

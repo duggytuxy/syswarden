@@ -77,6 +77,7 @@ type BannedIP struct {
 	Jail    string `json:"jail"`
 	Payload string `json:"payload"`
 	Mitre   string `json:"mitre"`
+	Action  string `json:"action"`
 }
 
 type Attacker struct {
@@ -122,7 +123,7 @@ type TelemetryEvent struct {
 }
 
 // StartWorker launches the background telemetry generator replacing the cron bash script
-func StartWorker(ctx context.Context, wg *sync.WaitGroup, fwManager FirewallManager, logAllowed func(ip, service, payload string), logBan func(ip, jail, payload string)) {
+func StartWorker(ctx context.Context, wg *sync.WaitGroup, fwManager FirewallManager, logAllowed func(ip, service, payload string), logBan func(ip, jail, payload string), logShadowAlert func(ip, jail, payload string)) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -156,7 +157,7 @@ func StartWorker(ctx context.Context, wg *sync.WaitGroup, fwManager FirewallMana
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		monitorKernelDrops(ctx, fwManager, logBan)
+		monitorKernelDrops(ctx, fwManager, logBan, logShadowAlert)
 	}()
 }
 
@@ -213,7 +214,7 @@ func monitorAllowedEvents(ctx context.Context, logAllowed func(ip, service, payl
 	_ = cmd.Wait()
 }
 
-func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan func(ip, jail, payload string)) {
+func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan func(ip, jail, payload string), logShadowAlert func(ip, jail, payload string)) {
 	if logBan == nil {
 		return
 	}
@@ -264,6 +265,29 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 						_ = fwManager.Ban(ip)
 					}
 					logBan(ip, "L3-PORTSCAN", line)
+				}
+			}
+		} else if strings.Contains(line, "[SysWarden-HONEYPORT]") {
+			ip := extractField(line, "SRC=")
+			if ip != "" {
+				if utils.IsWhitelisted(ip) {
+					if logShadowAlert != nil {
+						logShadowAlert(ip, "L3-HONEYPORT-SCAN", line)
+					}
+					continue
+				}
+
+				strikeMu.Lock()
+				strikeMap[ip]++
+				hits := strikeMap[ip]
+				strikeMu.Unlock()
+
+				if hits == 1 {
+					// 1 strike is enough for Honeyport
+					if fwManager != nil {
+						_ = fwManager.Ban(ip)
+					}
+					logBan(ip, "L3-HONEYPORT-SCAN", line)
 				}
 			}
 		} else if strings.Contains(line, "[SysWarden-ARP-FLOOD]") {
@@ -694,6 +718,15 @@ func getWAFStats() WAF {
 					Service:   event.Jail,
 					Payload:   event.Payload,
 				})
+			} else if event.Action == "SHADOW-ALERT" {
+				jailCounts[event.Jail]++
+				allBans = append(allBans, BannedIP{
+					IP:      event.IP,
+					Jail:    event.Jail,
+					Payload: event.Payload,
+					Mitre:   getMitreTag(event.Jail),
+					Action:  "SHADOW-ALERT",
+				})
 			} else {
 				waf.TotalBanned++
 				jailCounts[event.Jail]++
@@ -703,6 +736,7 @@ func getWAFStats() WAF {
 					Jail:    event.Jail,
 					Payload: event.Payload,
 					Mitre:   getMitreTag(event.Jail),
+					Action:  "BANNED",
 				})
 			}
 		}

@@ -61,9 +61,17 @@ SysWarden doesn't just block. It manages its own Threat Intelligence (ingesting 
 ## Enterprise-Grade Features
 
 **100% Go Native Orchestration (Zero-Shell Execution)**
-* **Absolute Security:** Deprecated all legacy Bash scripts. Firewall generation, Systemd provisioning, and Telemetry operations are executed entirely in Go memory, utilizing native `os/exec` wrappers to eliminate `bash -c` vulnerabilities.
-* **Strict CIDR Validation:** Threat feeds are parsed mathematically using `net.ParseCIDR()`, instantly destroying malformed payloads or metadata injections (CWE-20 mitigation).
-* **Asynchronous Telemetry Worker:** Replaced brittle system crons with native Go `sync.WaitGroup` goroutines. Telemetry and HA syncing run flawlessly in the background with strict memory leak prevention.
+* **Absolute Security:** Deprecated all legacy Bash scripts. Firewall generation, Systemd provisioning, 
+and Telemetry operations are executed entirely in Go memory, utilizing native `os/exec` wrappers to eliminate `bash 
+-c` vulnerabilities.
+* **Strict CIDR Validation:** Threat feeds are parsed mathematically using `net.ParseCIDR()`, instantly 
+destroying malformed payloads or metadata injections (CWE-20 mitigation).
+* **Asynchronous Telemetry Worker:** Replaced brittle system crons with native Go `sync.WaitGroup` 
+goroutines. Telemetry and HA syncing run flawlessly in the background with strict memory leak prevention.
+
+**Insider Threat Detection & Honeyports (Zero-Trust)**
+* **Shadow Mode:** Prevents legitimate administrative lockouts. When malicious Web Application attacks (e.g. PrivEsc, RCE attempts) originate from whitelisted administrative IPs, SysWarden silently tags the event as a `SHADOW-ALERT`. Legitimate admins are not banned, preventing disruption of service, while the SOC receives immediate notifications.
+* **Native L3 Honeyports:** Trap internal network scanners using `SYSWARDEN_HONEYPORTS`. Expose decoy ports (e.g. `6379`, `3306`) seamlessly integrated into the kernel firewall. Whitelisted IPs attempting access trigger shadow alerts, while external malicious IPs are instantly banned.
 * **Adaptive Hybrid Telemetry Engine:** Natively bridges L7 WAF Logs using high-speed `rsyslog` UDS sockets (Ubuntu/Debian) or seamlessly falls back to a native `systemd-journald` + Direct File Tailing hybrid engine (Fedora/RHEL) ensuring zero blind spots across disparate enterprise OS architectures.
 * **Layer 3/4 Catch-All Auditing:** Enforces total visibility by securely logging any packet hitting the hardware drop threshold before execution, populating the real-time observability console (`syswarden alerts`) with granular "Catch-All" traffic analytics.
 

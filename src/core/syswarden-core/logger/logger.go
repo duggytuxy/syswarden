@@ -116,6 +116,39 @@ func (l *Logger) LogAllowed(ip, service, payload string) {
 	log.Printf("[SysWarden-ALLOWED] Legitimate access IP=%s Service=%s", ip, service)
 }
 
+// LogShadowAlert writes a JSON telemetry event when an internal threat is detected but not banned
+func (l *Logger) LogShadowAlert(ip, jail, payload string) {
+	go webhook.SendShadowAlert(ip, jail)
+	if l.file == nil {
+		return
+	}
+
+	event := TelemetryEvent{
+		Action:    "SHADOW-ALERT",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		IP:        ip,
+		Jail:      jail,
+		Payload:   payload,
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		l.Error("Failed to marshal telemetry event", err)
+		return
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, err := l.file.Write(data); err != nil {
+		log.Printf("[Logger] Error writing telemetry data: %v", err)
+	}
+	if _, err := l.file.Write([]byte("\n")); err != nil {
+		log.Printf("[Logger] Error writing newline: %v", err)
+	}
+
+	log.Printf("[SOC-ALERT] INSIDER THREAT DETECTED FROM WHITELISTED IP: %s (Vector: %s)", ip, jail)
+}
+
 func (l *Logger) Close() {
 	if l.file != nil {
 		_ = l.file.Close()

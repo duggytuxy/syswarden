@@ -168,6 +168,12 @@ func streamWAF(app *tview.Application, table *tview.Table) {
 				}
 			}
 			addRow(app, table, date, "SYSWARDEN WAF", "ALLOWED", wafEvent.IP, info, tcell.ColorGreen, tcell.ColorGreen)
+		} else if wafEvent.Action == "SHADOW-ALERT" {
+			info := "JAIL: " + wafEvent.Jail
+			if wafEvent.Payload != "" {
+				info += " | " + wafEvent.Payload
+			}
+			addRow(app, table, date, "INSIDER THREAT", "SHADOW-ALERT", wafEvent.IP, info, tcell.ColorOrange, tcell.ColorOrange)
 		} else {
 			info := "JAIL: " + wafEvent.Jail
 			if wafEvent.Payload != "" {
@@ -293,6 +299,12 @@ func streamWAFText() {
 				}
 			}
 			fmt.Printf("[%s] [SYSWARDEN WAF] [ALLOWED] %s -> %s\n", date, wafEvent.IP, info)
+		} else if wafEvent.Action == "SHADOW-ALERT" {
+			info := "JAIL: " + wafEvent.Jail
+			if wafEvent.Payload != "" {
+				info += " | " + wafEvent.Payload
+			}
+			fmt.Printf("[%s] [INSIDER THREAT] [SHADOW-ALERT] %s -> %s\n", date, wafEvent.IP, info)
 		} else {
 			info := "JAIL: " + wafEvent.Jail
 			if wafEvent.Payload != "" {

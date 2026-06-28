@@ -17,7 +17,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v3.10.3"
+const SysWardenVersion = "v3.20.0"
 
 // --- DATA MODELS ---
 type Service struct {
@@ -73,6 +73,7 @@ type BannedIP struct {
 	Jail    string `json:"jail"`
 	Payload string `json:"payload"`
 	Mitre   string `json:"mitre"`
+	Action  string `json:"action"`
 }
 
 type Attacker struct {
@@ -450,7 +451,7 @@ func refreshUI() {
 				cVec = tcell.ColorRed
 			} else if strings.Contains(j, "ssh") || strings.Contains(j, "auth") || strings.Contains(j, "privesc") || strings.Contains(j, "prestashop") {
 				cVec = tcell.ColorYellow
-			} else if strings.Contains(j, "scan") || strings.Contains(j, "bot") || strings.Contains(j, "mapper") || strings.Contains(j, "enum") || strings.Contains(j, "hunter") || strings.Contains(j, "tls") || strings.Contains(j, "honeypot") {
+			} else if strings.Contains(j, "scan") || strings.Contains(j, "bot") || strings.Contains(j, "mapper") || strings.Contains(j, "enum") || strings.Contains(j, "hunter") || strings.Contains(j, "tls") || strings.Contains(j, "honeypot") || strings.Contains(j, "honeyport") {
 				cVec = tcell.ColorBlue
 			} else if strings.Contains(j, "flood") || strings.Contains(j, "slowloris") || strings.Contains(j, "dos") {
 				cVec = tcell.ColorDarkGray
@@ -458,10 +459,17 @@ func refreshUI() {
 				cVec = tcell.ColorYellow
 			}
 
-			bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorWhite))
-			bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(cVec))
-			bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorWhite))
-			bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorWhite))
+			if b.Action == "SHADOW-ALERT" {
+				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorOrange))
+				bannedTable.SetCell(row, 1, tview.NewTableCell("SHADOW-ALERT: "+b.Jail).SetTextColor(tcell.ColorOrange))
+				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorOrange))
+				bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorYellow))
+			} else {
+				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorWhite))
+				bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(cVec))
+				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorWhite))
+				bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorWhite))
+			}
 			row++
 		}
 	}

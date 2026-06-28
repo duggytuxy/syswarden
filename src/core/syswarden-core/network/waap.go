@@ -264,6 +264,7 @@ func (w *WAAPEngine) tailFile(filepath string) {
 
 func (w *WAAPEngine) enforceImmediateBan(ip, jail, logLine string) {
 	if utils.IsWhitelisted(ip) {
+		w.logger.LogShadowAlert(ip, jail, logLine)
 		return // Immunity for Admin IPs and Local Loop
 	}
 
@@ -279,9 +280,6 @@ func (w *WAAPEngine) enforceImmediateBan(ip, jail, logLine string) {
 }
 
 func (w *WAAPEngine) recordFailure(ip, logLine string) {
-	if utils.IsWhitelisted(ip) {
-		return // Immunity for Admin IPs and Local Loop
-	}
 
 	now := time.Now()
 
@@ -302,10 +300,14 @@ func (w *WAAPEngine) recordFailure(ip, logLine string) {
 	w.tracker.Store(ip, validTimestamps)
 
 	if len(validTimestamps) >= w.config.Threshold {
-		log.Printf("[WAAP Engine] Threshold exceeded for %s! Banning at L3.", ip)
-
-		// Clear tracker to prevent spamming bans
 		w.tracker.Delete(ip)
+
+		if utils.IsWhitelisted(ip) {
+			w.logger.LogShadowAlert(ip, "L7-BRUTEFORCE", logLine)
+			return
+		}
+
+		log.Printf("[WAAP Engine] Threshold exceeded for %s! Banning at L3.", ip)
 
 		// Enforce Ban
 		if err := w.fw.Ban(ip); err != nil {
@@ -313,7 +315,7 @@ func (w *WAAPEngine) recordFailure(ip, logLine string) {
 			return
 		}
 
-		w.logger.LogBan(ip, "l7-bruteforce", logLine)
+		w.logger.LogBan(ip, "L7-BRUTEFORCE", logLine)
 	}
 }
 

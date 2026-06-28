@@ -36,8 +36,10 @@ type DiscordPayload struct {
 }
 
 type Config struct {
-	Enabled bool
-	URL     string
+	Enabled    bool
+	DiscordURL string
+	TeamsURL   string
+	SlackURL   string
 }
 
 func loadConfig() Config {
@@ -60,7 +62,13 @@ func loadConfig() Config {
 			}
 		}
 		if strings.HasPrefix(line, "SYSWARDEN_WEBHOOK_URL_DISCORD=") {
-			c.URL = strings.Trim(strings.SplitN(line, "=", 2)[1], "\"'")
+			c.DiscordURL = strings.Trim(strings.SplitN(line, "=", 2)[1], "\"'")
+		}
+		if strings.HasPrefix(line, "SYSWARDEN_WEBHOOK_URL_TEAMS=") {
+			c.TeamsURL = strings.Trim(strings.SplitN(line, "=", 2)[1], "\"'")
+		}
+		if strings.HasPrefix(line, "SYSWARDEN_WEBHOOK_URL_SLACK=") {
+			c.SlackURL = strings.Trim(strings.SplitN(line, "=", 2)[1], "\"'")
 		}
 	}
 	return c
@@ -68,7 +76,7 @@ func loadConfig() Config {
 
 func SendBanAlert(ip, jail, action string) {
 	cfg := loadConfig()
-	if !cfg.Enabled || cfg.URL == "" {
+	if !cfg.Enabled {
 		return
 	}
 
@@ -91,7 +99,7 @@ func SendBanAlert(ip, jail, action string) {
 					{Name: "Node", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SysWarden v3.10.3 - Advanced Agentic Defense",
+					Text: "SysWarden v3.20.0 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
@@ -104,26 +112,39 @@ func SendBanAlert(ip, jail, action string) {
 		return
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(cfg.URL, "application/json", bytes.NewBuffer(data))
-	if err != nil {
-		log.Printf("[Webhook] Failed to send alert: %v", err)
-		return
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
 
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		log.Printf("[Webhook] Successfully sent ban alert for IP %s", ip)
-	} else {
-		log.Printf("[Webhook] Failed to send alert, HTTP status: %d", resp.StatusCode)
+		// For Slack, we send a simple text payload to be universally compatible
+		var finalData []byte = data
+		if strings.Contains(u, "hooks.slack.com") {
+			slackPayload := map[string]string{
+				"text": "🚨 **SysWarden Security Alert**\nAttacker IP: " + ip + "\nThreat Vector: " + jail + "\nNode: " + hostname,
+			}
+			finalData, _ = json.Marshal(slackPayload)
+		} else if strings.Contains(u, "webhook.office.com") {
+			teamsPayload := map[string]string{
+				"text": "🚨 SysWarden Security Alert\nAttacker IP: " + ip + "\nThreat Vector: " + jail + "\nNode: " + hostname,
+			}
+			finalData, _ = json.Marshal(teamsPayload)
+		}
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
+		if err != nil {
+			log.Printf("[Webhook] Failed to send alert: %v", err)
+			continue
+		}
+		_ = resp.Body.Close()
 	}
 }
 
 func SendAllowAlert(ip, service string) {
 	cfg := loadConfig()
-	if !cfg.Enabled || cfg.URL == "" {
+	if !cfg.Enabled {
 		return
 	}
 
@@ -159,19 +180,95 @@ func SendAllowAlert(ip, service string) {
 		return
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(cfg.URL, "application/json", bytes.NewBuffer(data))
-	if err != nil {
-		log.Printf("[Webhook] Failed to send alert: %v", err)
+	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+
+		var finalData []byte = data
+		if strings.Contains(u, "hooks.slack.com") {
+			slackPayload := map[string]string{
+				"text": "✅ **SysWarden Access Granted**\nAllowed IP: " + ip + "\nService: " + service + "\nNode: " + hostname,
+			}
+			finalData, _ = json.Marshal(slackPayload)
+		} else if strings.Contains(u, "webhook.office.com") {
+			teamsPayload := map[string]string{
+				"text": "✅ SysWarden Access Granted\nAllowed IP: " + ip + "\nService: " + service + "\nNode: " + hostname,
+			}
+			finalData, _ = json.Marshal(teamsPayload)
+		}
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
+		if err != nil {
+			log.Printf("[Webhook] Failed to send alert: %v", err)
+			continue
+		}
+		_ = resp.Body.Close()
+	}
+}
+
+func SendShadowAlert(ip, jail string) {
+	cfg := loadConfig()
+	if !cfg.Enabled {
 		return
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
 
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		log.Printf("[Webhook] Successfully sent allow alert for IP %s", ip)
-	} else {
-		log.Printf("[Webhook] Failed to send allow alert, HTTP status: %d", resp.StatusCode)
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "SysWarden-Node"
+	}
+
+	payload := DiscordPayload{
+		Content: nil,
+		Embeds: []DiscordEmbed{
+			{
+				Title:       "⚠️ SysWarden INSIDER THREAT ALERT",
+				Description: "A Whitelisted IP triggered a malicious signature (Shadow Mode).",
+				Color:       16753920, // Orange color
+				Fields: []EmbedField{
+					{Name: "Insider IP", Value: ip, Inline: true},
+					{Name: "Threat Vector", Value: jail, Inline: true},
+					{Name: "Action Taken", Value: "SHADOW-ALERT (Not Banned)", Inline: true},
+					{Name: "Node", Value: hostname, Inline: true},
+				},
+				Footer: EmbedFooter{
+					Text: "SysWarden - Zero-Trust Telemetry",
+				},
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+
+		var finalData []byte = data
+		if strings.Contains(u, "hooks.slack.com") {
+			slackPayload := map[string]string{
+				"text": "⚠️ **SysWarden INSIDER THREAT ALERT**\nInsider IP: " + ip + "\nThreat Vector: " + jail + "\nAction: SHADOW-ALERT (Not Banned)\nNode: " + hostname,
+			}
+			finalData, _ = json.Marshal(slackPayload)
+		} else if strings.Contains(u, "webhook.office.com") {
+			teamsPayload := map[string]string{
+				"text": "⚠️ SysWarden INSIDER THREAT ALERT\nInsider IP: " + ip + "\nThreat Vector: " + jail + "\nAction: SHADOW-ALERT (Not Banned)\nNode: " + hostname,
+			}
+			finalData, _ = json.Marshal(teamsPayload)
+		}
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
+		if err == nil {
+			_ = resp.Body.Close()
+		}
 	}
 }

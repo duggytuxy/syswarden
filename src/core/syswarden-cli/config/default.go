@@ -1,7 +1,7 @@
 package config
 
 const DefaultConfig = `# ==============================================================================
-# Version=v3.10.3
+# Version=v3.20.0
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -63,6 +63,11 @@ SYSWARDEN_BRUTEFORCE_LOGS="auto"
 SYSWARDEN_BRUTEFORCE_THRESHOLD="5"
 # Sliding window in seconds for the threshold
 SYSWARDEN_BRUTEFORCE_WINDOW="60"
+
+# --- Honeyports (Insider Threat / PrivEsc Detection) ---
+# Active ONLY if SYSWARDEN_LAN_MODE="y" or manually verified.
+# SysWarden natively blocks and traces any connection attempt to these ports as a malicious Lateral Movement.
+SYSWARDEN_HONEYPORTS="6379,23"
 
 # --- OS Hardening ---
 # y = Enable, n = Disable (Strict restrictions for privileged groups & Cron. Recommended for NEW servers only)
@@ -127,11 +132,12 @@ SYSWARDEN_SIEM_TLS_CA="/etc/ssl/certs/ca-certificates.crt"
 SYSWARDEN_ENABLE_ABUSE="n"
 SYSWARDEN_ABUSE_API_KEY=""
 
-# --- WebHook Notifications (Discord / Teams) ---
+# --- WebHook Notifications (Discord / Teams / Slack) ---
 # y = Enable, n = Disable (Sends L7/WAF ban events to a Webhook)
 SYSWARDEN_ENABLE_WEBHOOK="n"
 SYSWARDEN_WEBHOOK_URL_DISCORD=""
 SYSWARDEN_WEBHOOK_URL_TEAMS=""
+SYSWARDEN_WEBHOOK_URL_SLACK=""
 
 # --- Wazuh Agent ---
 # y = Enable, n = Disable

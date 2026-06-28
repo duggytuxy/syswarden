@@ -1,3 +1,17 @@
+# Release v3.20.0
+
+## ADDED
+- **Insider Threat Detection (Shadow Mode)**: Implemented a robust 'Shadow Mode' framework designed specifically for zero-trust environments. When malicious L7/WAF behaviors (e.g., PrivEsc, RCE attempts, unauthorized enumeration) originate from whitelisted administrative IPs, SysWarden now silently tags the event as a `SHADOW-ALERT` instead of enforcing a ban. This prevents service disruption for legitimate admins while ensuring immediate SOC visibility into compromised credentials.
+- **Honeyports (L3 Lures)**: Introduced `SYSWARDEN_HONEYPORTS`, allowing SysAdmins to seamlessly expose fake open ports natively protected by Nftables and PF. Any internal connection attempts to these decoys immediately trigger silent SOC alerts if originating from a whitelisted IP, or result in an instant ban for unauthorized IPs.
+- **Unified Multi-Webhook Dispatcher**: Rewrote the webhook telemetry engine to natively support Slack, alongside Discord and MS Teams. Security Operations Centers now receive rich, color-coded, real-time threat intelligence feeds directly to their platform of choice, including explicit differentiation for `SHADOW-ALERT` events.
+- **SysWarden Dashboard (TUI) Enhancements**: Expanded the terminal user interface (`syswarden tui`) and live telemetry stream (`syswarden alerts`) to natively parse and distinctly colorize `SHADOW-ALERT` and `ALLOWED` events, improving visibility for SOC analysts.
+
+## UPDATED
+- **Wazuh HIDS Integration**: Upgraded the automated Wazuh agent integration engine. SysWarden now natively injects explicit `<localfile>` blocks into `/var/ossec/etc/ossec.conf` to guarantee `waf.json` telemetry and `core.log` tracing are immediately ingested by Wazuh, maintaining 100% SIEM compliance.
+- **FreeBSD Compatibility**: Ensured full compatibility for FreeBSD 14.4+ architectures, translating native Honeyport traps into compliant Packet Filter (`pf`) drop rules, guaranteeing identical enterprise-grade protection across Linux and BSD deployments.
+
+---
+
 # Release v3.10.3
 
 ## ADDED

@@ -57,6 +57,8 @@ func ParseConfig(filepath string) error {
 			GlobalConfig.BruteforceThreshold = val
 		case "SYSWARDEN_BRUTEFORCE_WINDOW":
 			GlobalConfig.BruteforceWindow = val
+		case "SYSWARDEN_HONEYPORTS":
+			GlobalConfig.HoneyPorts = val
 		case "SYSWARDEN_HARDENING":
 			GlobalConfig.Hardening = parseBool(val)
 		case "APPLY_CIS_L2_HARDENING":
@@ -109,6 +111,8 @@ func ParseConfig(filepath string) error {
 			GlobalConfig.WebhookURLDiscord = val
 		case "SYSWARDEN_WEBHOOK_URL_TEAMS":
 			GlobalConfig.WebhookURLTeams = val
+		case "SYSWARDEN_WEBHOOK_URL_SLACK":
+			GlobalConfig.WebhookURLSlack = val
 		case "SYSWARDEN_ENABLE_WAZUH":
 			GlobalConfig.EnableWazuh = parseBool(val)
 		case "SYSWARDEN_WAZUH_IP":
