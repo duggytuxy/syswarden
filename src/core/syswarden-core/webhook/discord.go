@@ -99,7 +99,7 @@ func SendBanAlert(ip, jail, action string) {
 					{Name: "Node", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SysWarden v3.20.0 - Advanced Agentic Defense",
+					Text: "SysWarden v3.20.1 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
@@ -119,7 +119,7 @@ func SendBanAlert(ip, jail, action string) {
 		}
 
 		// For Slack, we send a simple text payload to be universally compatible
-		var finalData []byte = data
+		finalData := data
 		if strings.Contains(u, "hooks.slack.com") {
 			slackPayload := map[string]string{
 				"text": "🚨 **SysWarden Security Alert**\nAttacker IP: " + ip + "\nThreat Vector: " + jail + "\nNode: " + hostname,
@@ -186,7 +186,7 @@ func SendAllowAlert(ip, service string) {
 			continue
 		}
 
-		var finalData []byte = data
+		finalData := data
 		if strings.Contains(u, "hooks.slack.com") {
 			slackPayload := map[string]string{
 				"text": "✅ **SysWarden Access Granted**\nAllowed IP: " + ip + "\nService: " + service + "\nNode: " + hostname,
@@ -252,7 +252,7 @@ func SendShadowAlert(ip, jail string) {
 			continue
 		}
 
-		var finalData []byte = data
+		finalData := data
 		if strings.Contains(u, "hooks.slack.com") {
 			slackPayload := map[string]string{
 				"text": "⚠️ **SysWarden INSIDER THREAT ALERT**\nInsider IP: " + ip + "\nThreat Vector: " + jail + "\nAction: SHADOW-ALERT (Not Banned)\nNode: " + hostname,

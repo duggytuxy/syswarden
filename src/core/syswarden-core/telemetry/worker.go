@@ -711,14 +711,15 @@ func getWAFStats() WAF {
 	for scanner.Scan() {
 		var event TelemetryEvent
 		if err := json.Unmarshal(scanner.Bytes(), &event); err == nil {
-			if event.Action == "ALLOWED" {
+			switch event.Action {
+			case "ALLOWED":
 				allAllowed = append(allAllowed, AllowedEvent{
 					Timestamp: event.Timestamp,
 					IP:        event.IP,
 					Service:   event.Jail,
 					Payload:   event.Payload,
 				})
-			} else if event.Action == "SHADOW-ALERT" {
+			case "SHADOW-ALERT":
 				jailCounts[event.Jail]++
 				allBans = append(allBans, BannedIP{
 					IP:      event.IP,
@@ -727,7 +728,7 @@ func getWAFStats() WAF {
 					Mitre:   getMitreTag(event.Jail),
 					Action:  "SHADOW-ALERT",
 				})
-			} else {
+			default:
 				waf.TotalBanned++
 				jailCounts[event.Jail]++
 

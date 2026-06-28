@@ -63,8 +63,8 @@ var manualCmd = &cobra.Command{
 
 		fmt.Printf("%s[Insider Threat & Honeyports]%s\n", ansiCyan, ansiReset)
 		fmt.Printf("  %sSYSWARDEN_HONEYPORTS%s     : Comma-separated list of fake open ports (e.g., \"6379, 27017, 3306\").\n", ansiWhite, ansiReset)
-		fmt.Printf("                               Traps internal actors scanning the network. Whitelisted IPs trigger SOC Alerts (Shadow Mode),\n", ansiWhite, ansiReset)
-		fmt.Printf("                               while external IPs are immediately banned.\n\n", ansiWhite, ansiReset)
+		fmt.Printf("%s                               Traps internal actors scanning the network. Whitelisted IPs trigger SOC Alerts (Shadow Mode),%s\n", ansiWhite, ansiReset)
+		fmt.Printf("%s                               while external IPs are immediately banned.%s\n\n", ansiWhite, ansiReset)
 
 		fmt.Printf("%s[Alerting & Webhooks]%s\n", ansiCyan, ansiReset)
 		fmt.Printf("  %sSYSWARDEN_WEBHOOK_URL_DISCORD%s: Webhook URL for Discord SOC alerts.\n", ansiWhite, ansiReset)

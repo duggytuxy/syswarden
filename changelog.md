@@ -1,3 +1,12 @@
+# Release v3.20.1
+
+## FIXED
+- **Code Hygiene (golangci-lint)**: Addressed multiple CI pipeline errors flagged by `govet` and `staticcheck`. Fixed missing `%s` formatting directives in `manual.go` ANSI color output blocks.
+- **Code Hygiene (golangci-lint)**: Refactored redundant `if-else` action chains into optimized `switch` statements across `alerts.go` and `worker.go` to satisfy `QF1003` staticcheck constraints.
+- **Code Hygiene (golangci-lint)**: Eliminated explicit slice type declarations (`var finalData []byte = data`) in `discord.go` in favor of idiomatic type inference (`finalData := data`), resolving `ST1023` linting warnings and ensuring a flawless CI/CD green build.
+
+---
+
 # Release v3.20.0
 
 ## ADDED

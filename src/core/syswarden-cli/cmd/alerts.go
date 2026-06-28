@@ -155,7 +155,8 @@ func streamWAF(app *tview.Application, table *tview.Table) {
 			date = t.Format("2006-01-02 15:04:05")
 		}
 
-		if wafEvent.Action == "ALLOWED" {
+		switch wafEvent.Action {
+		case "ALLOWED":
 			info := "SERVICE: " + wafEvent.Jail
 			if wafEvent.Payload != "" {
 				if wafEvent.Jail == "sshd" {
@@ -168,13 +169,13 @@ func streamWAF(app *tview.Application, table *tview.Table) {
 				}
 			}
 			addRow(app, table, date, "SYSWARDEN WAF", "ALLOWED", wafEvent.IP, info, tcell.ColorGreen, tcell.ColorGreen)
-		} else if wafEvent.Action == "SHADOW-ALERT" {
+		case "SHADOW-ALERT":
 			info := "JAIL: " + wafEvent.Jail
 			if wafEvent.Payload != "" {
 				info += " | " + wafEvent.Payload
 			}
 			addRow(app, table, date, "INSIDER THREAT", "SHADOW-ALERT", wafEvent.IP, info, tcell.ColorOrange, tcell.ColorOrange)
-		} else {
+		default:
 			info := "JAIL: " + wafEvent.Jail
 			if wafEvent.Payload != "" {
 				if wafEvent.Jail == "L3-PORTSCAN" || wafEvent.Jail == "L2-ARP-FLOOD" {
@@ -286,7 +287,8 @@ func streamWAFText() {
 			date = t.Format("2006-01-02 15:04:05")
 		}
 
-		if wafEvent.Action == "ALLOWED" {
+		switch wafEvent.Action {
+		case "ALLOWED":
 			info := "SERVICE: " + wafEvent.Jail
 			if wafEvent.Payload != "" {
 				if wafEvent.Jail == "sshd" {
@@ -298,14 +300,14 @@ func streamWAFText() {
 					info += " | " + wafEvent.Payload
 				}
 			}
-			fmt.Printf("[%s] [SYSWARDEN WAF] [ALLOWED] %s -> %s\n", date, wafEvent.IP, info)
-		} else if wafEvent.Action == "SHADOW-ALERT" {
+			fmt.Printf("[%s] [SYSWARDEN L7] [ALLOWED] %s -> %s\n", date, wafEvent.IP, info)
+		case "SHADOW-ALERT":
 			info := "JAIL: " + wafEvent.Jail
 			if wafEvent.Payload != "" {
 				info += " | " + wafEvent.Payload
 			}
 			fmt.Printf("[%s] [INSIDER THREAT] [SHADOW-ALERT] %s -> %s\n", date, wafEvent.IP, info)
-		} else {
+		default:
 			info := "JAIL: " + wafEvent.Jail
 			if wafEvent.Payload != "" {
 				if wafEvent.Jail == "L3-PORTSCAN" || wafEvent.Jail == "L2-ARP-FLOOD" {
@@ -318,10 +320,10 @@ func streamWAFText() {
 						info += " | PROTO: " + m[1]
 					}
 				} else {
-					info += " | PAYLOAD: " + wafEvent.Payload
+					info += " | " + wafEvent.Payload
 				}
 			}
-			fmt.Printf("[%s] [SYSWARDEN WAF] [BANNED] %s -> %s\n", date, wafEvent.IP, info)
+			fmt.Printf("[%s] [SYSWARDEN L7] [BANNED] %s -> %s\n", date, wafEvent.IP, info)
 		}
 	}
 }
