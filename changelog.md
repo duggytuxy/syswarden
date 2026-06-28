@@ -1,3 +1,10 @@
+# Release v3.20.2
+
+## FIXED
+- **OSINT Enrichment**: Fixed an inconsistency in the `syswarden tui` dashboard where the "Top Attackers" table displayed a hardcoded port (`80/443`) regardless of the actual attack vector. The `enrichOSINT` telemetry engine now dynamically extracts the exact targeted port (`DPT`) directly from the firewall drop payload using robust regular expressions, ensuring perfect alignment with the "Trigger Payload" data.
+
+---
+
 # Release v3.20.1
 
 ## FIXED

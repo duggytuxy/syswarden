@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -550,45 +551,51 @@ type IPWhoIsResponse struct {
 var osintCache = make(map[string]Attacker)
 var osintMu sync.Mutex
 
-func enrichOSINT(ip string) Attacker {
+func enrichOSINT(ip string, payload string) Attacker {
+	var att Attacker
 	osintMu.Lock()
 	if cached, ok := osintCache[ip]; ok {
-		osintMu.Unlock()
-		return cached
-	}
-	osintMu.Unlock()
+		att = cached
+	} else {
+		att = Attacker{
+			IP:      ip,
+			Country: "N/A",
+			ASN:     "N/A",
+			ISP:     "N/A",
+		}
 
-	att := Attacker{
-		IP:      ip,
-		Port:    "80/443",
-		Country: "N/A",
-		ASN:     "N/A",
-		ISP:     "N/A",
-	}
-
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("https://ipwho.is/" + ip)
-	if err == nil {
-		defer func() {
-			_ = resp.Body.Close()
-		}()
-		var res IPWhoIsResponse
-		if json.NewDecoder(resp.Body).Decode(&res) == nil {
-			if res.CountryCode != "" {
-				att.Country = res.CountryCode
-			}
-			if res.Connection.Asn != 0 {
-				att.ASN = fmt.Sprintf("AS%d", res.Connection.Asn)
-			}
-			if res.Connection.Isp != "" {
-				att.ISP = res.Connection.Isp
+		client := &http.Client{Timeout: 2 * time.Second}
+		resp, err := client.Get("https://ipwho.is/" + ip)
+		if err == nil {
+			defer func() {
+				_ = resp.Body.Close()
+			}()
+			var res IPWhoIsResponse
+			if json.NewDecoder(resp.Body).Decode(&res) == nil {
+				if res.CountryCode != "" {
+					att.Country = res.CountryCode
+				}
+				if res.Connection.Asn != 0 {
+					att.ASN = fmt.Sprintf("AS%d", res.Connection.Asn)
+				}
+				if res.Connection.Isp != "" {
+					att.ISP = res.Connection.Isp
+				}
 			}
 		}
-	}
 
-	osintMu.Lock()
-	osintCache[ip] = att
+		osintCache[ip] = att
+	}
 	osintMu.Unlock()
+
+	// Extract port from payload dynamically
+	port := "80/443"
+	if payload != "" {
+		if m := regexp.MustCompile(`DPT=([0-9]+)`).FindStringSubmatch(payload); len(m) > 1 {
+			port = m[1]
+		}
+	}
+	att.Port = port
 
 	return att
 }
@@ -762,7 +769,7 @@ func getWAFStats() WAF {
 		waf.BannedIPs = append(waf.BannedIPs, allBans[i])
 
 		// Quick TopAttacker populate with OSINT
-		waf.TopAttackers = append(waf.TopAttackers, enrichOSINT(allBans[i].IP))
+		waf.TopAttackers = append(waf.TopAttackers, enrichOSINT(allBans[i].IP, allBans[i].Payload))
 	}
 
 	for jail, count := range jailCounts {
