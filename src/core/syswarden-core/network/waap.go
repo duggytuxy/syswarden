@@ -16,6 +16,7 @@ import (
 	"github.com/nxadm/tail"
 	"syswarden-core/firewall"
 	"syswarden-core/logger"
+	"syswarden-core/utils"
 )
 
 type WAAPConfig struct {
@@ -262,6 +263,10 @@ func (w *WAAPEngine) tailFile(filepath string) {
 }
 
 func (w *WAAPEngine) enforceImmediateBan(ip, jail, logLine string) {
+	if utils.IsWhitelisted(ip) {
+		return // Immunity for Admin IPs and Local Loop
+	}
+
 	log.Printf("[WAAP Engine] Critical L7 Signature detected (%s) for %s! Enforcing immediate ban.", jail, ip)
 
 	// Enforce Ban
@@ -274,6 +279,10 @@ func (w *WAAPEngine) enforceImmediateBan(ip, jail, logLine string) {
 }
 
 func (w *WAAPEngine) recordFailure(ip, logLine string) {
+	if utils.IsWhitelisted(ip) {
+		return // Immunity for Admin IPs and Local Loop
+	}
+
 	now := time.Now()
 
 	var timestamps []time.Time

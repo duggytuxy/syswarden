@@ -20,6 +20,7 @@ func ApplyPolicies() error {
 
 	// Setup Tables for IP Sets
 	_, _ = pfRules.WriteString("table <syswarden_whitelist> persist\n")
+	_, _ = pfRules.WriteString("table <syswarden_zt_allowed> persist\n")
 	_, _ = pfRules.WriteString("table <syswarden_blacklist> persist\n")
 	_, _ = pfRules.WriteString("table <banned_ips> persist\n")
 
@@ -36,11 +37,11 @@ func ApplyPolicies() error {
 	// Layer 4 Structural Anomaly Mitigation (Scrubbing normalizes packets and drops invalid flags)
 	_, _ = pfRules.WriteString("scrub in all\n\n")
 
-	// Layer 7 WAF Dynamic Bans (Prioritized over everything - WAAP L7 Independence)
-	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from <banned_ips> to any\n", activeIf))
-
-	// Allow Whitelist O(1) matching via set
+	// 1. Infra Whitelist (Absolute Priority - Bypasses everything)
 	_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick on %s from <syswarden_whitelist> to any\n", activeIf))
+
+	// 2. Layer 7 WAF Dynamic Bans
+	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from <banned_ips> to any\n", activeIf))
 
 	// Layer 3 Static Global Intelligence Blocks
 	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from <syswarden_blacklist> to any\n", activeIf))
@@ -52,9 +53,9 @@ func ApplyPolicies() error {
 		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from <syswarden_asn> to any\n", activeIf))
 	}
 
-	// ZERO-TRUST MODE: Drop everything that is not in the unified whitelist
+	// ZERO-TRUST MODE: Drop everything that is not in the Zero-Trust allowed GEO/ASN list
 	if config.GlobalConfig.GeoAllowed != "" || config.GlobalConfig.ASNAllowed != "" {
-		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from ! <syswarden_whitelist> to any\n", activeIf))
+		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from ! <syswarden_zt_allowed> to any\n", activeIf))
 	}
 
 	// Stateful L4 Protections (Host Input)

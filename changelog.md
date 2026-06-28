@@ -1,3 +1,16 @@
+# Release v3.10.3
+
+## ADDED
+- **L7 WAAP Programmatic Immunity:** Developed a native, high-performance, in-memory cache module (`utils.IsWhitelisted()`) that dynamically parses and caches infrastructure IPs (`syswarden_whitelist.ipv4`, `syswarden_whitelist.ipv6`) and local loopbacks (`127.0.0.1`, `::1`). This explicitly grants absolute L7 WAAP and L3 Catch-All immunity to administrative IPs, drastically reducing CPU overhead and disk I/O bottlenecks without relying on external packages.
+
+## FIXED
+- **WordPress Administrator Self-Lockouts:** Resolved a critical bug where the asynchronous L7 WAAP daemon (`waap.go`) blindly banned authenticated administrators and legitimate local server cron jobs (e.g., `wp-cron.php` HTTP POST requests) that tripped rate-limits or payload heuristics. The WAAP engine now natively validates all requests against the programmatic immunity cache before enforcing drops or logging.
+
+## UPDATED
+- **Zero-Trust Architectural Separation:** Completely refactored the kernel firewall architectures (`firewall_linux.go` and `firewall_freebsd.go`) to physically decouple the **Infra Whitelist** (`syswarden_whitelist`) from the **Zero-Trust Allowed** countries/ASNs (`syswarden_zt_allowed`). This seals a critical logic flaw where Zero-Trust permitted countries inadvertently bypassed ThreatIntel blocklists. Infra IPs are now processed with ultimate `pass in quick` priority, while Zero-Trust ranges remain strictly subjected to all WAF and Intelligence evaluation phases.
+
+---
+
 # Release v3.10.2
 
 ## FIXED

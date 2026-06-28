@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"syswarden-core/utils"
 )
 
 type FirewallManager interface {
@@ -247,6 +249,10 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 		if strings.Contains(line, "[Catch-All]") {
 			ip := extractField(line, "SRC=")
 			if ip != "" {
+				if utils.IsWhitelisted(ip) {
+					continue // Absolute immunity for Infra IPs
+				}
+
 				strikeMu.Lock()
 				strikeMap[ip]++
 				hits := strikeMap[ip]
