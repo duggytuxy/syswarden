@@ -540,10 +540,11 @@ func getLayer3Stats() Layer3 {
 	return l3
 }
 
-type FreeIPAPIResponse struct {
-	CountryCode     string `json:"countryCode"`
-	Asn             string `json:"asn"`
-	AsnOrganization string `json:"asnOrganization"`
+type IPAPIResponse struct {
+	Status      string `json:"status"`
+	CountryCode string `json:"countryCode"`
+	As          string `json:"as"`
+	Isp         string `json:"isp"`
 }
 
 var osintCache = make(map[string]Attacker)
@@ -563,26 +564,27 @@ func enrichOSINT(ip string, payload string) Attacker {
 		}
 
 		client := &http.Client{Timeout: 2 * time.Second}
-		resp, err := client.Get("https://de.freeipapi.com/api/json/" + ip)
+		resp, err := client.Get("http://ip-api.com/json/" + ip + "?fields=status,countryCode,isp,as")
 		if err == nil {
 			defer func() {
 				_ = resp.Body.Close()
 			}()
-			var res FreeIPAPIResponse
+			var res IPAPIResponse
 			if json.NewDecoder(resp.Body).Decode(&res) == nil {
-				if res.CountryCode != "" {
-					att.Country = res.CountryCode
-				}
-				if res.Asn != "" {
-					// Ensure ASN prefix matches TUI UI standard (e.g., "AS13335")
-					if !strings.HasPrefix(res.Asn, "AS") {
-						att.ASN = "AS" + res.Asn
-					} else {
-						att.ASN = res.Asn
+				if res.Status == "success" {
+					if res.CountryCode != "" {
+						att.Country = res.CountryCode
 					}
-				}
-				if res.AsnOrganization != "" {
-					att.ISP = res.AsnOrganization
+					if res.As != "" {
+						// Extract AS number (e.g., "AS5769 Videotron Ltee" -> "AS5769")
+						parts := strings.Split(res.As, " ")
+						if len(parts) > 0 {
+							att.ASN = parts[0]
+						}
+					}
+					if res.Isp != "" {
+						att.ISP = res.Isp
+					}
 				}
 			}
 		}

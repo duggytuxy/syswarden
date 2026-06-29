@@ -1,3 +1,10 @@
+# Release v3.31.1
+
+## FIXED
+- **OSINT Enrichment (Datacenter IP Ban)**: Switched the telemetry OSINT provider from `FreeIPAPI` to `ip-api.com`. `FreeIPAPI` was found to natively block HTTP requests originating from Cloud/Datacenter ASNs (like OVH) with a `403 Forbidden` error, resulting in empty data in the TUI. `ip-api.com` natively handles 45 req/min (64,800/day) and cleanly resolves IP geolocation and ASN data regardless of the hosting provider.
+
+---
+
 # Release v3.31.0
 
 ## ADDED
