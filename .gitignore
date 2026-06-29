@@ -4,9 +4,9 @@
 !build.ps1
 
 # Golang Local Compilation Artifacts
-src/core/syswarden-cli/syswarden-cli
-src/core/syswarden-core/syswarden-core
-src/core/syswarden-tui/syswarden-tui
+src/core/syswarden-cli/syswarden-cli*
+src/core/syswarden-core/syswarden-core*
+src/core/syswarden-tui/syswarden-tui*
 *_test
 syswarden_test
 
