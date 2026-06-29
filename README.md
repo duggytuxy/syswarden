@@ -9,6 +9,7 @@
   </a>
   <img src="https://img.shields.io/badge/Platform-Linux_Universal-0052cc?style=for-the-badge&logo=linux&logoColor=white" alt="Linux Universal">
   <img src="https://img.shields.io/badge/Platform-FreeBSD_14.4+-ab2b28?style=for-the-badge&logo=freebsd&logoColor=white" alt="FreeBSD 14.4+">
+  <img src="https://img.shields.io/badge/Platform-Alpine_Linux_3.21+-0D597F?style=for-the-badge&logo=alpinelinux&logoColor=white" alt="Alpine Linux 3.21+">
   <img src="https://img.shields.io/badge/Language-100%25_Go_Native-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="100% Go Native">
   <img src="https://img.shields.io/badge/Compliance-EU_CRA_Ready-003399?style=for-the-badge&logo=shield&logoColor=white" alt="EU CRA Ready">
   <img src="https://img.shields.io/badge/Compliance-ISO27001_Ready-003399?style=for-the-badge&logo=shield&logoColor=white" alt="ISO27001 Ready">
@@ -109,6 +110,7 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 | **Rocky Linux / AlmaLinux 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
 | **Oracle Linux 10+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
 | **Fedora 40+** | `firewalld`, `nftables`, `iptables` | Production Ready |
+| **Alpine Linux 3.21+** | `nftables` | Enterprise Ready |
 | **FreeBSD 14+** | `pf` (Packet Filter) | Enterprise Ready |
 
 ## Installation Guide (v2.0 Native Deployment)
@@ -129,6 +131,8 @@ V_NUM=${VERSION#v}
 wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_amd64.deb
 # For RHEL/AlmaLinux/Rocky (x86_64)
 wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}-1.x86_64.rpm
+# For Alpine Linux (x86_64)
+wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_amd64.apk
 # For FreeBSD 14+ (amd64)
 wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}.txz
 
@@ -143,6 +147,8 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 sudo apt-get install -y ./syswarden_${V_NUM}_amd64.deb
 # For RHEL/AlmaLinux/Rocky
 sudo dnf install -y ./syswarden-${V_NUM}-1.x86_64.rpm
+# For Alpine Linux
+sudo apk add --allow-untrusted ./syswarden_${V_NUM}_amd64.apk
 # For FreeBSD 14+
 sudo pkg add ./syswarden-${V_NUM}.txz
 

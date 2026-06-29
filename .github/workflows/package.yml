@@ -189,6 +189,22 @@ jobs:
             --after-remove postrm.sh \
             -C staging .
 
+      - name: Build Alpine Package (.apk)
+        run: |
+          fpm -s dir -t apk \
+            -n syswarden \
+            -v ${{ env.VERSION }} \
+            --vendor "SysWarden Security" \
+            --maintainer "SysWarden Engineering" \
+            --description "SysWarden Host-based Security Orchestrator for Alpine Linux" \
+            --url "https://github.com/${{ github.repository }}" \
+            --architecture x86_64 \
+            -d "nftables" -d "curl" -d "wget" -d "rsyslog" -d "bash-completion" \
+            --after-install postinst.sh \
+            --before-remove prerm.sh \
+            --after-remove postrm.sh \
+            -C staging .
+
       - name: Build FreeBSD Package (.pkg)
         run: |
           mkdir -p staging_fbsd/usr/local/syswarden/bin
@@ -240,7 +256,7 @@ jobs:
       - name: Generate Checksums
         run: |
           # Generate SHA256 checksums for integrity verification (Supply Chain Security)
-          sha256sum *.deb *.rpm *.txz > SHA256SUMS.txt
+          sha256sum *.deb *.rpm *.txz *.apk > SHA256SUMS.txt
 
       - name: Upload Package Artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -250,5 +266,6 @@ jobs:
             *.deb
             *.rpm
             *.txz
+            *.apk
             SHA256SUMS.txt
           retention-days: 7

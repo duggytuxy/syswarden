@@ -8,13 +8,18 @@ import (
 	"os/exec"
 	"strings"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/system"
 )
 
 func SetupWireguard() error {
 	if !config.GlobalConfig.EnableWG {
 		fmt.Println("[INFO] WireGuard is disabled in configuration. Ensuring it is stopped.")
 		_ = exec.Command("wg-quick", "down", "wg0").Run()
-		_ = exec.Command("systemctl", "disable", "--now", "wg-quick@wg0").Run()
+		if system.IsAlpine() {
+			_ = exec.Command("rc-update", "del", "wg-quick.wg0", "default").Run()
+		} else {
+			_ = exec.Command("systemctl", "disable", "--now", "wg-quick@wg0").Run()
+		}
 		_ = os.Remove("/etc/wireguard/wg0.conf")
 		return nil
 	}
@@ -121,8 +126,14 @@ PersistentKeepalive = 25
 
 	// Start service
 	fmt.Println(" -> Starting WireGuard Interface")
-	_ = exec.Command("systemctl", "daemon-reload").Run()
-	_ = exec.Command("systemctl", "enable", "--now", "wg-quick@wg0").Run()
+	if system.IsAlpine() {
+		_ = exec.Command("ln", "-s", "/etc/init.d/wg-quick", "/etc/init.d/wg-quick.wg0").Run()
+		_ = exec.Command("rc-update", "add", "wg-quick.wg0", "default").Run()
+		_ = exec.Command("rc-service", "wg-quick.wg0", "start").Run()
+	} else {
+		_ = exec.Command("systemctl", "daemon-reload").Run()
+		_ = exec.Command("systemctl", "enable", "--now", "wg-quick@wg0").Run()
+	}
 
 	fmt.Println("\n=======================================================")
 	fmt.Println("             WIREGUARD CLIENT CONFIGURATION            ")

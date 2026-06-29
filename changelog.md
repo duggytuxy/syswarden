@@ -1,3 +1,10 @@
+# Release v3.30.0
+
+## ADDED
+- **Alpine Linux Support**: Full native support for Alpine Linux (3.21+). The Go WAF and CLI orchestrator automatically detect Alpine at runtime and natively configure `apk` dependencies, `rc-update/rc-service` (OpenRC) system services, and route WAF/kernel logging via `/var/log/messages` (`tail -F`) instead of `journalctl`, providing a seamless and highly optimized security deployment on lightweight alpine architectures.
+
+---
+
 # Release v3.20.2
 
 ## FIXED

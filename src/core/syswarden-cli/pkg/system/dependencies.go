@@ -49,6 +49,12 @@ func InstallDependencies() error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("PKG installation failed: %w", err)
 		}
+	} else if _, err := exec.LookPath("apk"); err == nil {
+		fmt.Println(" -> Detected Alpine Linux (APK)")
+		cmd := exec.CommandContext(ctx, "apk", "add", "--no-cache", "nftables", "wireguard-tools", "qrencode", "curl", "jq", "rsyslog")
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("APK installation failed: %w", err)
+		}
 	} else {
 		fmt.Println("[WARN] No supported package manager found. Please install dependencies manually.")
 	}

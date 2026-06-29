@@ -19,24 +19,34 @@ func UninstallSystem() error {
 
 	// 1. Terminate Daemons
 	fmt.Println(" -> Stopping and removing SysWarden Core Services...")
-	_ = exec.Command("systemctl", "stop", "syswarden-core.service").Run()
-	_ = exec.Command("systemctl", "disable", "syswarden-core.service").Run()
-	_ = os.Remove("/etc/systemd/system/syswarden-core.service")
+	if IsAlpine() {
+		_ = exec.Command("rc-service", "syswarden-core", "stop").Run()
+		_ = exec.Command("rc-update", "del", "syswarden-core", "default").Run()
+		_ = os.Remove("/etc/init.d/syswarden-core")
 
-	_ = exec.Command("systemctl", "stop", "syswarden-firewall.service").Run()
-	_ = exec.Command("systemctl", "disable", "syswarden-firewall.service").Run()
-	_ = os.Remove("/etc/systemd/system/syswarden-firewall.service")
+		_ = exec.Command("rc-service", "syswarden-firewall", "stop").Run()
+		_ = exec.Command("rc-update", "del", "syswarden-firewall", "default").Run()
+		_ = os.Remove("/etc/init.d/syswarden-firewall")
+	} else {
+		_ = exec.Command("systemctl", "stop", "syswarden-core.service").Run()
+		_ = exec.Command("systemctl", "disable", "syswarden-core.service").Run()
+		_ = os.Remove("/etc/systemd/system/syswarden-core.service")
 
-	// Legacy cleanups
-	_ = exec.Command("systemctl", "stop", "syswarden.service").Run()
-	_ = exec.Command("systemctl", "disable", "syswarden.service").Run()
-	_ = os.Remove("/etc/systemd/system/syswarden.service")
+		_ = exec.Command("systemctl", "stop", "syswarden-firewall.service").Run()
+		_ = exec.Command("systemctl", "disable", "syswarden-firewall.service").Run()
+		_ = os.Remove("/etc/systemd/system/syswarden-firewall.service")
 
-	_ = exec.Command("systemctl", "stop", "syswarden-reporter").Run()
-	_ = exec.Command("systemctl", "disable", "syswarden-reporter").Run()
-	_ = os.Remove("/etc/systemd/system/syswarden-reporter.service")
+		// Legacy cleanups
+		_ = exec.Command("systemctl", "stop", "syswarden.service").Run()
+		_ = exec.Command("systemctl", "disable", "syswarden.service").Run()
+		_ = os.Remove("/etc/systemd/system/syswarden.service")
 
-	_ = exec.Command("systemctl", "daemon-reload").Run()
+		_ = exec.Command("systemctl", "stop", "syswarden-reporter").Run()
+		_ = exec.Command("systemctl", "disable", "syswarden-reporter").Run()
+		_ = os.Remove("/etc/systemd/system/syswarden-reporter.service")
+
+		_ = exec.Command("systemctl", "daemon-reload").Run()
+	}
 
 	// 2. Kill orphan processes
 	_ = exec.Command("pkill", "-9", "-f", "syswarden-core").Run()

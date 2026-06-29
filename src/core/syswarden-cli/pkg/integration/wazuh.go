@@ -5,8 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/system"
 )
 
 // SetupWazuh registers the node with Wazuh natively and injects SysWarden log parsing
@@ -74,10 +74,14 @@ func SetupWazuh() error {
 
 		// Restart Wazuh Agent
 		fmt.Println("[INFO] Restarting wazuh-agent service...")
-		cmd := exec.Command("systemctl", "restart", "wazuh-agent")
-		if err := cmd.Run(); err != nil {
-			// Fallback for FreeBSD or non-systemd
-			_ = exec.Command("service", "wazuh-agent", "restart").Run()
+		if system.IsAlpine() {
+			_ = exec.Command("rc-service", "wazuh-agent", "restart").Run()
+		} else {
+			cmd := exec.Command("systemctl", "restart", "wazuh-agent")
+			if err := cmd.Run(); err != nil {
+				// Fallback for FreeBSD or non-systemd
+				_ = exec.Command("service", "wazuh-agent", "restart").Run()
+			}
 		}
 	}
 

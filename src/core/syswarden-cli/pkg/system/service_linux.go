@@ -10,6 +10,71 @@ import (
 
 // SetupService generates and enables the syswarden-core systemd service natively
 func SetupService() error {
+	if IsAlpine() {
+		fmt.Println("[INFO] Configuring OpenRC Services (Alpine Linux)...")
+
+		if err := os.MkdirAll("/var/lib/syswarden/ui", 0755); err != nil {
+			fmt.Printf("[WARN] Failed to create /var/lib/syswarden/ui: %v\n", err)
+		}
+		if err := os.MkdirAll("/var/log/syswarden", 0755); err != nil {
+			fmt.Printf("[WARN] Failed to create /var/log/syswarden: %v\n", err)
+		}
+
+		coreScript := `#!/sbin/openrc-run
+
+name="syswarden-core"
+description="SysWarden WAF and Core Engine"
+command="/opt/syswarden/bin/syswarden-core"
+command_background=true
+pidfile="/run/syswarden-core.pid"
+
+depend() {
+	need net rsyslog
+}
+`
+		if err := os.WriteFile("/etc/init.d/syswarden-core", []byte(coreScript), 0755); err != nil {
+			return fmt.Errorf("failed to write openrc service file: %w", err)
+		}
+
+		fmt.Println("[INFO] Enabling and starting SysWarden Core service...")
+		if err := exec.Command("rc-update", "add", "syswarden-core", "default").Run(); err != nil {
+			fmt.Printf("[WARN] Failed to enable syswarden-core: %v\n", err)
+		}
+		if err := exec.Command("rc-service", "syswarden-core", "restart").Run(); err != nil {
+			fmt.Printf("[WARN] Failed to start syswarden-core: %v\n", err)
+		}
+
+		firewallScript := `#!/sbin/openrc-run
+
+name="syswarden-firewall"
+description="SysWarden Firewall Persistence & Engine Loader"
+
+depend() {
+	before syswarden-core
+}
+
+start() {
+	ebegin "Loading SysWarden Firewall Persistence"
+	/opt/syswarden/bin/syswarden-cli reload --no-restart
+	eend $?
+}
+`
+		if err := os.WriteFile("/etc/init.d/syswarden-firewall", []byte(firewallScript), 0755); err != nil {
+			return fmt.Errorf("failed to write openrc firewall file: %w", err)
+		}
+
+		fmt.Println("[INFO] Enabling SysWarden Firewall Persistence...")
+		if err := exec.Command("rc-update", "add", "syswarden-firewall", "default").Run(); err != nil {
+			fmt.Printf("[WARN] Failed to enable syswarden-firewall: %v\n", err)
+		}
+		if err := exec.Command("rc-service", "syswarden-firewall", "start").Run(); err != nil {
+			fmt.Printf("[WARN] Failed to start syswarden-firewall: %v\n", err)
+		}
+
+		fmt.Println("[+] OpenRC orchestration complete.")
+		return nil
+	}
+
 	fmt.Println("[INFO] Configuring Systemd Services...")
 
 	// Create required directories before systemd sandboxing to prevent NAMESPACE crashes

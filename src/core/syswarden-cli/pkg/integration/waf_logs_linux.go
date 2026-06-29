@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/system"
 )
 
 // SetupWAFLogForwarder configures Rsyslog to bridge local Web/Docker logs into the Go WAF Socket
@@ -44,8 +45,14 @@ ruleset(name="waf_bridge") {
 	}
 
 	// Restart Rsyslog safely
-	if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil {
-		fmt.Printf("[WARN] Failed to restart rsyslog for WAF bridge: %v\n", err)
+	if system.IsAlpine() {
+		if err := exec.Command("rc-service", "rsyslog", "restart").Run(); err != nil {
+			fmt.Printf("[WARN] Failed to restart rsyslog for WAF bridge (rc-service): %v\n", err)
+		}
+	} else {
+		if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil {
+			fmt.Printf("[WARN] Failed to restart rsyslog for WAF bridge: %v\n", err)
+		}
 	}
 
 	fmt.Println("[+] WAF Log Bridge successfully configured.")

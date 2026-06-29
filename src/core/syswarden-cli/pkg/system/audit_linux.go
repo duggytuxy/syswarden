@@ -33,6 +33,14 @@ func info(msg string) {
 }
 
 func isServiceActive(service string) bool {
+	if IsAlpine() {
+		out, err := exec.Command("rc-service", service, "status").Output()
+		if err == nil && strings.Contains(string(out), "started") {
+			return true
+		}
+		return false
+	}
+
 	out, err := exec.Command("systemctl", "is-active", service).Output()
 	if err == nil && strings.TrimSpace(string(out)) == "active" {
 		return true

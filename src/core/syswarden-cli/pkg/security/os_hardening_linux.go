@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/system"
 )
 
 // ApplyOSHardening enforces OS-level access and logging restrictions natively
@@ -110,7 +111,11 @@ $DropTrailingLFOnReception on
 		err := os.WriteFile("/etc/rsyslog.d/99-syswarden-antiforging.conf", []byte(content), 0644)
 		if err == nil {
 			if exec.Command("rsyslogd", "-N1").Run() == nil {
-				_ = exec.Command("systemctl", "restart", "rsyslog").Run()
+				if system.IsAlpine() {
+					_ = exec.Command("rc-service", "rsyslog", "restart").Run()
+				} else {
+					_ = exec.Command("systemctl", "restart", "rsyslog").Run()
+				}
 			}
 		}
 	}

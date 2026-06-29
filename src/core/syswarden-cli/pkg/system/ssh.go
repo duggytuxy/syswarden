@@ -34,7 +34,11 @@ func ConfigureSSH() error {
 		_ = exec.Command("sed", "-i", "s/^#AllowTcpForwarding.*/AllowTcpForwarding no/", sshConf).Run()
 		_ = exec.Command("sed", "-i", "s/^[[:space:]]*AllowTcpForwarding[[:space:]]*yes/AllowTcpForwarding no/", sshConf).Run()
 
-		_ = exec.Command("systemctl", "restart", "ssh").Run()
+		if IsAlpine() {
+			_ = exec.Command("rc-service", "sshd", "restart").Run()
+		} else {
+			_ = exec.Command("systemctl", "restart", "ssh").Run()
+		}
 	}
 
 	// Persist the detected port to memory so Nftables overlay can use it for SSH Cloaking

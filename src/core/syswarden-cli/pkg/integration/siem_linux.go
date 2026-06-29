@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/system"
 )
 
 // SetupSIEM configures Syslog forwarding natively
@@ -63,8 +64,14 @@ func SetupSIEM() error {
 	}
 
 	// 2. Restart Rsyslog safely
-	if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil {
-		fmt.Printf("[WARN] Failed to restart rsyslog: %v\n", err)
+	if system.IsAlpine() {
+		if err := exec.Command("rc-service", "rsyslog", "restart").Run(); err != nil {
+			fmt.Printf("[WARN] Failed to restart rsyslog (rc-service): %v\n", err)
+		}
+	} else {
+		if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil {
+			fmt.Printf("[WARN] Failed to restart rsyslog: %v\n", err)
+		}
 	}
 
 	fmt.Printf("[+] SIEM Forwarder successfully configured (%s:%s/%s)\n", ip, port, proto)
