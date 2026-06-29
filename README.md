@@ -123,7 +123,7 @@ The Go CLI and dependencies are automatically placed in `/opt/syswarden/bin/`, s
 
 ```bash
 # 1. Fetch the latest release version automatically
-VERSION=$(curl -s https://api.github.com/repos/duggytuxy/syswarden/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+VERSION=$(curl -s https://api.github.com/repos/duggytuxy/syswarden/releases/latest | grep '"tag_name":' | cut -d '"' -f 4)
 V_NUM=${VERSION#v}
 
 # 2. Download the appropriate package and its checksum
@@ -134,7 +134,7 @@ wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/sysward
 wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}-1.x86_64.rpm
 wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}-1.aarch64.rpm
 # For Alpine Linux (x86_64 & aarch64)
-wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_amd64.apk
+wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_x86_64.apk
 wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_aarch64.apk
 # For FreeBSD 14+ (amd64)
 wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}.txz
