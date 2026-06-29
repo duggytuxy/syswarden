@@ -46,6 +46,7 @@ if (Test-Path "src/core/syswarden-cli/main.go") {
     
     $env:GOOS="linux"
     $env:GOARCH="amd64"
+    $env:CGO_ENABLED="0"
     go build -ldflags="-s -w" -o syswarden-cli .
     
     Set-Location $OriginalLocation
@@ -73,6 +74,7 @@ if (Test-Path "src/core/syswarden-core/main.go") {
     # Build for Linux (Cross-Compilation)
     $env:GOOS="linux"
     $env:GOARCH="amd64"
+    $env:CGO_ENABLED="0"
     go build -ldflags="-s -w" -o syswarden-core .
     
     Set-Location $OriginalLocation
@@ -102,6 +104,7 @@ if (Test-Path "src/core/syswarden-tui/main.go") {
     # Build for Linux (Cross-Compilation)
     $env:GOOS="linux"
     $env:GOARCH="amd64"
+    $env:CGO_ENABLED="0"
     go build -ldflags="-s -w" -o syswarden-tui .
     
     Set-Location $OriginalLocation
@@ -119,6 +122,7 @@ if (!(Test-Path "$DistDir/freebsd/bin")) {
 
 $env:GOOS="freebsd"
 $env:GOARCH="amd64"
+$env:CGO_ENABLED="0"
 
 Set-Location "src/core/syswarden-cli"
 go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-cli .
@@ -131,6 +135,7 @@ if (!(Test-Path "$DistDir/linux-arm64/bin")) {
 
 $env:GOOS="linux"
 $env:GOARCH="arm64"
+$env:CGO_ENABLED="0"
 
 Set-Location "src/core/syswarden-cli"
 go build -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-cli .
