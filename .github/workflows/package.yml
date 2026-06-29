@@ -245,7 +245,7 @@ jobs:
 
       - name: Build Alpine Package (.apk)
         run: |
-          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           
           cat << EOF > nfpm_alpine_x86_64.yaml
           name: "syswarden"
