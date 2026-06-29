@@ -245,33 +245,62 @@ jobs:
 
       - name: Build Alpine Package (.apk)
         run: |
-          fpm -s dir -t apk \
-            -n syswarden \
-            -v ${{ env.VERSION }} \
-            --vendor "SysWarden Security" \
-            --maintainer "SysWarden Engineering" \
-            --description "SysWarden Host-based Security Orchestrator for Alpine Linux" \
-            --url "https://github.com/${{ github.repository }}" \
-            --architecture x86_64 \
-            -d "nftables" -d "curl" -d "wget" -d "rsyslog" -d "bash-completion" \
-            --after-install postinst.sh \
-            --before-remove prerm.sh \
-            --after-remove postrm.sh \
-            -C staging .
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          
+          cat << EOF > nfpm_alpine_x86_64.yaml
+          name: "syswarden"
+          arch: "amd64"
+          platform: "linux"
+          version: "${{ env.VERSION }}"
+          maintainer: "SysWarden Engineering"
+          description: "SysWarden Host-based Security Orchestrator for Alpine Linux"
+          vendor: "SysWarden Security"
+          homepage: "https://github.com/${{ github.repository }}"
+          depends:
+            - nftables
+            - curl
+            - wget
+            - rsyslog
+            - bash-completion
+          contents:
+            - src: "./staging/opt"
+              dst: "/opt"
+            - src: "./staging/usr"
+              dst: "/usr"
+          scripts:
+            postinstall: "./postinst.sh"
+            preremove: "./prerm.sh"
+            postremove: "./postrm.sh"
+          EOF
 
-          fpm -s dir -t apk \
-            -n syswarden \
-            -v ${{ env.VERSION }} \
-            --vendor "SysWarden Security" \
-            --maintainer "SysWarden Engineering" \
-            --description "SysWarden Host-based Security Orchestrator for Alpine Linux (ARM64)" \
-            --url "https://github.com/${{ github.repository }}" \
-            --architecture aarch64 \
-            -d "nftables" -d "curl" -d "wget" -d "rsyslog" -d "bash-completion" \
-            --after-install postinst.sh \
-            --before-remove prerm.sh \
-            --after-remove postrm.sh \
-            -C staging_arm64 .
+          cat << EOF > nfpm_alpine_aarch64.yaml
+          name: "syswarden"
+          arch: "arm64"
+          platform: "linux"
+          version: "${{ env.VERSION }}"
+          maintainer: "SysWarden Engineering"
+          description: "SysWarden Host-based Security Orchestrator for Alpine Linux (ARM64)"
+          vendor: "SysWarden Security"
+          homepage: "https://github.com/${{ github.repository }}"
+          depends:
+            - nftables
+            - curl
+            - wget
+            - rsyslog
+            - bash-completion
+          contents:
+            - src: "./staging_arm64/opt"
+              dst: "/opt"
+            - src: "./staging_arm64/usr"
+              dst: "/usr"
+          scripts:
+            postinstall: "./postinst.sh"
+            preremove: "./prerm.sh"
+            postremove: "./postrm.sh"
+          EOF
+
+          ~/go/bin/nfpm pkg --config nfpm_alpine_x86_64.yaml --packager apk --target syswarden_${{ env.VERSION }}_x86_64.apk
+          ~/go/bin/nfpm pkg --config nfpm_alpine_aarch64.yaml --packager apk --target syswarden_${{ env.VERSION }}_aarch64.apk
 
       - name: Build FreeBSD Package (.pkg)
         run: |
