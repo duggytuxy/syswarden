@@ -1,3 +1,10 @@
+# Release v3.40.3
+
+## FIXED
+- **Alpine Linux Support (In-Place Upgrade)**: Fixed a critical issue where running `syswarden update` on Alpine Linux 3.23+ would fail with a missing package manager error. The `upgrade.go` engine has been updated to nativey detect and use `apk` to securely download and install `.apk` updates via `apk add --allow-untrusted`.
+
+---
+
 # Release v3.40.2
 
 ### FIXED

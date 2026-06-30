@@ -10,12 +10,17 @@ import (
 	"strings"
 )
 
-var Version = "v3.40.2"
+var Version = "v3.40.3"
 
 func isRHEL() bool {
 	_, errDnf := exec.LookPath("dnf")
 	_, errYum := exec.LookPath("yum")
 	return errDnf == nil || errYum == nil
+}
+
+func isAlpine() bool {
+	_, errApk := exec.LookPath("apk")
+	return errApk == nil
 }
 
 // downloadFile securely downloads a file to the destination path
@@ -143,8 +148,26 @@ func UpgradeSystem() error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to install RPM package: %w", err)
 		}
+	} else if isAlpine() {
+		// Alpine Linux (.apk)
+		fmt.Println(" -> Detected Alpine-based OS")
+		pkgFile = "/tmp/syswarden.apk"
+		pkgURL = fmt.Sprintf("https://github.com/duggytuxy/syswarden/releases/download/%s/syswarden-%s-r0.apk", latestVersion, cleanVersion)
+
+		fmt.Printf("[INFO] Downloading %s...\n", pkgURL)
+		if err := downloadFile(pkgURL, pkgFile); err != nil {
+			return fmt.Errorf("failed to download APK package: %w", err)
+		}
+
+		fmt.Println("[INFO] Installing new version via apk...")
+		cmd := exec.Command("apk", "add", "--allow-untrusted", pkgFile)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to install APK package: %w", err)
+		}
 	} else {
-		return fmt.Errorf("no supported package manager found (apt-get/dnf/yum)")
+		return fmt.Errorf("no supported package manager found (apt-get/dnf/yum/apk)")
 	}
 
 	// Clean up
