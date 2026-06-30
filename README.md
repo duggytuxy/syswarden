@@ -21,6 +21,9 @@
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/compliance.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/compliance.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=Plumber%20Compliance" alt="Plumber Compliance">
   </a>
+  <a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
+    <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
+  </a>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/scorecard.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/scorecard.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=OSSF%20Scorecard%20Supply%20Chain%20Security" alt="OSSF Scorecard Supply Chain Security">
   </a>
