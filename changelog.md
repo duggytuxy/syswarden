@@ -1,3 +1,10 @@
+# Release v3.40.1
+
+## FIXED
+- **Code Hygiene (golangci-lint)**: Addressed a `staticcheck` error (`QF1003: could use tagged switch on b.Action`) in the TUI (`syswarden-tui/main.go`). The `if-else if` block for parsing telemetry actions has been optimized into a clean `switch` statement to satisfy strict continuous integration compliance and eliminate pipeline failures.
+
+---
+
 # Release v3.40.0
 
 ## ADDED

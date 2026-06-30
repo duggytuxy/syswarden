@@ -460,17 +460,18 @@ func refreshUI() {
 				cVec = tcell.ColorYellow
 			}
 
-			if b.Action == "SHADOW-ALERT" {
+			switch b.Action {
+			case "SHADOW-ALERT":
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("SHADOW-ALERT: "+b.Jail).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorYellow))
-			} else if b.Action == "DETECTED" {
+			case "DETECTED":
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("DETECTED: "+b.Jail).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorYellow))
-			} else {
+			default:
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorWhite))
 				bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(cVec))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorWhite))
