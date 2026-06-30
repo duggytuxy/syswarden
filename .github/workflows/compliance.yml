@@ -12,10 +12,11 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      id-token: write          # required to securely push Plumber Score via OIDC
       security-events: write   # required to upload SARIF to Code Scanning
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: getplumber/plumber@fec66e6efa296d4e09b0399c6bff981a90d2bb74 # v0.3.73
+      - uses: getplumber/plumber@5302ddc7d9f1c9edb3f617bff04a09be452bcfe2 # v0.3.79
         with:
           score-push: true
           threshold: 80
