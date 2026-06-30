@@ -18,9 +18,6 @@
   <br>
   <br>
 
-  <a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
-    <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
-  </a>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/scorecard.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/scorecard.yml?style=flat&logo=githubactions&logoColor=white&label=OSSF%20Scorecard%20Supply%20Chain%20Security" alt="OSSF Scorecard Supply Chain Security">
   </a>
@@ -31,6 +28,13 @@
     <img src="https://img.shields.io/badge/Dependabot-Active-025e8c?style=flat&logo=dependabot&logoColor=white" alt="Dependabot Updates">
   </a>
   <img src="https://img.shields.io/badge/Status-Production_Ready-blue?style=flat&logo=status&logoColor=white" alt="Production Ready">
+
+  <br>
+  <br>
+
+  <a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
+    <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
+  </a>
 </p>
 
 # SysWarden v3 🌟
