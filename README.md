@@ -28,16 +28,13 @@
     <img src="https://img.shields.io/badge/Dependabot-Active-025e8c?style=flat&logo=dependabot&logoColor=white" alt="Dependabot Updates">
   </a>
   <img src="https://img.shields.io/badge/Status-Production_Ready-blue?style=flat&logo=status&logoColor=white" alt="Production Ready">
-
-  <br>
-  <br>
-
-  <a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
-    <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
-  </a>
 </p>
 
 # SysWarden v3 🌟
+
+<a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
+    <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
+  </a>
 
 **SysWarden** is an Enterprise-grade Hardened Host Intrusion Detection & Prevention System (HIDS - HIPS) engineered in **100% Native Golang**. Designed for critical Linux infrastructures, it enforces automated CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with absolute zero-trust execution.
 
