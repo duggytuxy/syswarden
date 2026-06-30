@@ -99,7 +99,7 @@ func SendBanAlert(ip, jail, action string) {
 					{Name: "Node", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SysWarden v3.31.1 - Advanced Agentic Defense",
+					Text: "SysWarden v3.40.0 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
@@ -136,6 +136,73 @@ func SendBanAlert(ip, jail, action string) {
 		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
 		if err != nil {
 			log.Printf("[Webhook] Failed to send alert: %v", err)
+			continue
+		}
+		_ = resp.Body.Close()
+	}
+}
+
+func SendDetectedAlert(ip, jail, action string) {
+	cfg := loadConfig()
+	if !cfg.Enabled {
+		return
+	}
+
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "SysWarden-Node"
+	}
+
+	payload := DiscordPayload{
+		Content: nil,
+		Embeds: []DiscordEmbed{
+			{
+				Title:       "⚠️ SysWarden Threat Detected",
+				Description: "An intrusion attempt was detected but NOT blocked (Alert-Only mode or firewall failure).",
+				Color:       16753920, // Orange
+				Fields: []EmbedField{
+					{Name: "Attacker IP", Value: ip, Inline: true},
+					{Name: "Threat Vector", Value: jail, Inline: true},
+					{Name: "Action Taken", Value: action, Inline: true},
+					{Name: "Node", Value: hostname, Inline: true},
+				},
+				Footer: EmbedFooter{
+					Text: "SysWarden v3.40.0 - Advanced Agentic Defense",
+				},
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[Webhook] Failed to marshal payload: %v", err)
+		return
+	}
+
+	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+
+		finalData := data
+		if strings.Contains(u, "hooks.slack.com") {
+			slackPayload := map[string]string{
+				"text": "⚠️ **SysWarden Threat Detected**\nAttacker IP: " + ip + "\nThreat Vector: " + jail + "\nNode: " + hostname,
+			}
+			finalData, _ = json.Marshal(slackPayload)
+		} else if strings.Contains(u, "webhook.office.com") {
+			teamsPayload := map[string]string{
+				"text": "⚠️ SysWarden Threat Detected\nAttacker IP: " + ip + "\nThreat Vector: " + jail + "\nNode: " + hostname,
+			}
+			finalData, _ = json.Marshal(teamsPayload)
+		}
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
+		if err != nil {
+			log.Printf("[Webhook] Failed to send detected alert: %v", err)
 			continue
 		}
 		_ = resp.Body.Close()

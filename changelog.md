@@ -1,3 +1,19 @@
+# Release v3.40.0
+
+## ADDED
+- **Insider Threat Detection (DETECTED Mode)**: Implemented the `DETECTED` action mode for WAAP signatures. Rules tagged with `"action": "detect"` are logged natively as `DETECTED` severity without executing an L7 ban, ensuring zero-regression observability.
+- **SIEM Telemetry Parsing**: Enhanced the WAF/Telemetry JSON parser and `syswarden-core/logger` to dynamically append `Severity` mapping: `BANNED=10`, `SHADOW-ALERT=8`, `DETECTED=7`, `ALLOWED=3`. This natively guarantees accurate severity routing across SIEM integrations (Wazuh, Splunk).
+
+## UPDATED
+- **TUI & Live Alerts Real-Time Display**: Overhauled `syswarden alerts` and `syswarden tui` (Dashboards) to distinctly colorize and trace `DETECTED` heuristics (Yellow) in real-time, matching SOC visibility standards.
+- **Webhook Dispatcher (Discord/Slack)**: Updated the webhook integration core to uniquely style and map `DETECTED` alert vectors with a dedicated Orange/Yellow visual indicator to distinguish from active blocking.
+
+## FIXED
+- **WireGuard Persistence (#43)**: Remedied a devastating oversight where installing `syswarden v3.31.1` abruptly terminated the active WireGuard `wg0` tunnel. SysWarden now rigorously preserves pre-existing encrypted tunnels during setup.
+
+---
+
+
 # Release v3.31.1
 
 ## FIXED

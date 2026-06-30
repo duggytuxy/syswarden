@@ -59,6 +59,11 @@
     { "id": "cve-confluence", "type": "aho-corasick", "patterns": ["/server-info.action", "/setup/setupadministrator.action"], "service": "http" },
     { "id": "deserialization", "type": "aho-corasick", "patterns": ["O:8:\"stdClass\":", "rO0AB", "ysoserial"], "service": "http" },
     { "id": "modern-crawlers", "type": "aho-corasick", "patterns": ["PerplexityBot", "OAI-SearchBot", "ClaudeBot", "Amazonbot"], "service": "http" },
-    { "id": "advanced-fuzzers", "type": "aho-corasick", "patterns": ["ffuf", "kiterunner", "dirb", "gobuster"], "service": "http" }
+    { "id": "advanced-fuzzers", "type": "aho-corasick", "patterns": ["ffuf", "kiterunner", "dirb", "gobuster"], "service": "http" },
+    { "id": "mitre-t1595-active-scan", "type": "regex", "pattern": "(?:Nmap|ZGrab|Masscan|CensysInspect|Shodan)", "service": "http", "action": "detect" },
+    { "id": "mitre-t1059-cmd-exec", "type": "aho-corasick", "patterns": ["powershell -enc", "cmd.exe /c", "WScript.Shell", "Invoke-Expression"], "service": "http", "action": "detect" },
+    { "id": "mitre-t1190-exploit-public", "type": "aho-corasick", "patterns": ["/cgi-bin/", "jndi:ldap", "log4j"], "service": "http", "action": "detect" },
+    { "id": "owasp-a03-injection", "type": "aho-corasick", "patterns": ["1=1--", "' OR '1'='1", "DROP TABLE", "UNION ALL SELECT"], "service": "http", "action": "detect" },
+    { "id": "owasp-a03-xss", "type": "aho-corasick", "patterns": ["<script>alert", "javascript:alert", "onerror=alert", "onmouseover="], "service": "http", "action": "detect" }
   ]
 }

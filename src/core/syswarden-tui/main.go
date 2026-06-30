@@ -17,7 +17,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v3.31.1"
+const SysWardenVersion = "v3.40.0"
 
 // --- DATA MODELS ---
 type Service struct {
@@ -86,6 +86,7 @@ type Attacker struct {
 
 type WAF struct {
 	TotalBanned      int            `json:"total_banned"`
+	TotalDetected    int            `json:"total_detected"`
 	ActiveSignatures int            `json:"active_signatures"`
 	SignaturesData   []JailData     `json:"signatures_data"`
 	BannedIPs        []BannedIP     `json:"banned_ips"`
@@ -376,8 +377,8 @@ func refreshUI() {
 	if len(d.WAF.RiskRadar) >= 5 {
 		re, rb, rr, rd, ra = d.WAF.RiskRadar[0], d.WAF.RiskRadar[1], d.WAF.RiskRadar[2], d.WAF.RiskRadar[3], d.WAF.RiskRadar[4]
 	}
-	vecLines := fmt.Sprintf("\n [gray]Value:[-] [white]%d[-]\n [gray]Active Signatures:[-] [white]%d[-]\n\n [red]Exploits:[-] %d │ [yellow]Brute-Force:[-] %d │ [blue]Recon:[-] %d │ [gray]DDoS:[-] %d │ [yellow]Abuse/Spam:[-] %d",
-		d.WAF.TotalBanned, d.WAF.ActiveSignatures, re, rb, rr, rd, ra)
+	vecLines := fmt.Sprintf("\n [gray]Value:[-] [white]%d[-] │ [gray]Detected:[-] [yellow]%d[-]\n [gray]Active Signatures:[-] [white]%d[-]\n\n [red]Exploits:[-] %d │ [yellow]Brute-Force:[-] %d │ [blue]Recon:[-] %d │ [gray]DDoS:[-] %d │ [yellow]Abuse/Spam:[-] %d",
+		d.WAF.TotalBanned, d.WAF.TotalDetected, d.WAF.ActiveSignatures, re, rb, rr, rd, ra)
 	vectorsText.SetText(vecLines)
 
 	// --- Trusted ---
@@ -463,6 +464,11 @@ func refreshUI() {
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("SHADOW-ALERT: "+b.Jail).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorOrange))
+				bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorYellow))
+			} else if b.Action == "DETECTED" {
+				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorYellow))
+				bannedTable.SetCell(row, 1, tview.NewTableCell("DETECTED: "+b.Jail).SetTextColor(tcell.ColorYellow))
+				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorYellow))
 			} else {
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorWhite))

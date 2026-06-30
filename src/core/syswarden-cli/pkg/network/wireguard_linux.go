@@ -13,14 +13,7 @@ import (
 
 func SetupWireguard() error {
 	if !config.GlobalConfig.EnableWG {
-		fmt.Println("[INFO] WireGuard is disabled in configuration. Ensuring it is stopped.")
-		_ = exec.Command("wg-quick", "down", "wg0").Run()
-		if system.IsAlpine() {
-			_ = exec.Command("rc-update", "del", "wg-quick.wg0", "default").Run()
-		} else {
-			_ = exec.Command("systemctl", "disable", "--now", "wg-quick@wg0").Run()
-		}
-		_ = os.Remove("/etc/wireguard/wg0.conf")
+		fmt.Println("[INFO] WireGuard is disabled in SysWarden configuration. Skipping WireGuard setup.")
 		return nil
 	}
 

@@ -11,7 +11,6 @@ import (
 	"syswarden-core/engine"
 	"syswarden-core/firewall"
 	"syswarden-core/logger"
-	"syswarden-core/webhook"
 )
 
 type UDSServer struct {
@@ -92,14 +91,20 @@ func (s *UDSServer) readLoop() {
 			// Extract IP from the log line
 			ip := engine.ExtractIP(line)
 			if ip != "" {
-				s.logger.LogBan(ip, match.RuleID, line)
-
-				err := s.fw.Ban(ip)
-				if err != nil {
-					s.logger.Error("Failed to ban IP", err)
+				if match.Action == "detect" {
+					// Alert-Only mode
+					s.logger.LogDetected(ip, match.RuleID, line)
 				} else {
-					// Trigger Discord/Teams Webhook asynchronously
-					go webhook.SendBanAlert(ip, match.RuleID, "Kernel Drop (L3)")
+					// HIPS Mode: Try to ban first
+					err := s.fw.Ban(ip)
+					if err != nil {
+						// Fallback to DETECTED if firewall fails (or IP is whitelisted)
+						s.logger.Error("Failed to ban IP, logging as DETECTED", err)
+						s.logger.LogDetected(ip, match.RuleID, line)
+					} else {
+						// Success! Log the BAN (this will also trigger the webhook internally)
+						s.logger.LogBan(ip, match.RuleID, line)
+					}
 				}
 			}
 		}

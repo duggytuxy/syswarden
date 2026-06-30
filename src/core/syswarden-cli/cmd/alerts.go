@@ -180,6 +180,12 @@ func streamWAF(app *tview.Application, table *tview.Table) {
 				info += " | " + wafEvent.Payload
 			}
 			addRow(app, table, date, "INSIDER THREAT", "SHADOW-ALERT", wafEvent.IP, info, tcell.ColorOrange, tcell.ColorOrange)
+		case "DETECTED":
+			info := "JAIL: " + wafEvent.Jail
+			if wafEvent.Payload != "" {
+				info += " | " + wafEvent.Payload
+			}
+			addRow(app, table, date, "SYSWARDEN WAF", "DETECTED", wafEvent.IP, info, tcell.ColorYellow, tcell.ColorYellow)
 		default:
 			info := "JAIL: " + wafEvent.Jail
 			if wafEvent.Payload != "" {

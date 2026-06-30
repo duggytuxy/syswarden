@@ -16,6 +16,7 @@ type RuleDef struct {
 	Pattern  string   `json:"pattern,omitempty"`
 	Patterns []string `json:"patterns,omitempty"`
 	Service  string   `json:"service"`
+	Action   string   `json:"action,omitempty"` // "ban" (default) or "detect"
 }
 
 type Config struct {
@@ -38,6 +39,7 @@ type Match struct {
 	RuleID  string
 	Payload string
 	Service string
+	Action  string
 }
 
 func NewEngine(configFile string) (*Engine, error) {
@@ -93,6 +95,7 @@ func (e *Engine) Scan(logLine string) *Match {
 				RuleID:  rr.def.ID,
 				Payload: logLine,
 				Service: rr.def.Service,
+				Action:  rr.def.Action,
 			}
 		}
 	}
@@ -108,6 +111,7 @@ func (e *Engine) Scan(logLine string) *Match {
 				RuleID:  rule.ID,
 				Payload: logLine,
 				Service: rule.Service,
+				Action:  rule.Action,
 			}
 		}
 	}

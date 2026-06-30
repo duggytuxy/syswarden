@@ -91,6 +91,7 @@ type Attacker struct {
 
 type WAF struct {
 	TotalBanned      int            `json:"total_banned"`
+	TotalDetected    int            `json:"total_detected"`
 	ActiveSignatures int            `json:"active_signatures"`
 	SignaturesData   []JailData     `json:"signatures_data"`
 	BannedIPs        []BannedIP     `json:"banned_ips"`
@@ -121,6 +122,7 @@ type TelemetryEvent struct {
 	IP        string `json:"ip"`
 	Jail      string `json:"jail"`
 	Payload   string `json:"payload"`
+	Severity  int    `json:"severity,omitempty"`
 }
 
 // StartWorker launches the background telemetry generator replacing the cron bash script
@@ -759,6 +761,16 @@ func getWAFStats() WAF {
 					Payload: event.Payload,
 					Mitre:   getMitreTag(event.Jail),
 					Action:  "SHADOW-ALERT",
+				})
+			case "DETECTED":
+				waf.TotalDetected++
+				jailCounts[event.Jail]++
+				allBans = append(allBans, BannedIP{
+					IP:      event.IP,
+					Jail:    event.Jail,
+					Payload: event.Payload,
+					Mitre:   getMitreTag(event.Jail),
+					Action:  "DETECTED",
 				})
 			default:
 				waf.TotalBanned++
