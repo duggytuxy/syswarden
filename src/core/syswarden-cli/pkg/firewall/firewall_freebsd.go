@@ -35,7 +35,12 @@ func ApplyPolicies() error {
 	activeIf := GetActiveInterface()
 
 	// Layer 4 Structural Anomaly Mitigation (Scrubbing normalizes packets and drops invalid flags)
-	_, _ = pfRules.WriteString("scrub in all\n\n")
+	_, _ = pfRules.WriteString("scrub in all fragment reassemble\n\n")
+
+	// Threat Intel L3/L4 (Fragments, XMAS, NULL Scans)
+	_, _ = pfRules.WriteString("block drop in quick all fragments\n")
+	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s proto tcp all flags FUP/WEUAPRSF\n", activeIf))
+	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s proto tcp all flags NONE/WEUAPRSF\n", activeIf))
 
 	// 1. Infra Whitelist (Absolute Priority - Bypasses everything)
 	_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick on %s from <syswarden_whitelist> to any\n", activeIf))
@@ -106,6 +111,10 @@ func ApplyPolicies() error {
 
 	// Default drop catch-all for incoming
 	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in log on %s all\n", activeIf))
+
+	// DNS Exfiltration Protection (L3/L4)
+	_, _ = pfRules.WriteString(fmt.Sprintf("block drop out log quick on %s proto udp to any port 53 length > 512\n", activeIf))
+
 	_, _ = pfRules.WriteString(fmt.Sprintf("pass out on %s all keep state\n", activeIf))
 
 	// Write pf configuration to temporary file

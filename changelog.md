@@ -1,3 +1,10 @@
+# Release v3.40.5
+
+## ADDED
+- **Advanced Threat Intel WAAP Signatures (L7)**: Integrated new zero-day/CVE signatures (JetBrains TeamCity, Citrix Bleed, MOVEit, F5 BIG-IP) with immediate BAN enforcement. Added advanced generic payloads targeting Cloud SSRF (AWS/Azure/GCP Metadata), Java SSTI/RCE (freemarker, getRuntime), and malicious AI crawlers in DETECT mode for precise triage and low false-positive rates.
+- **Deep Packet Inspection & Network Threat Intel (L3/L4)**: Drastically hardened native firewalls (Nftables for Linux/Alpine, PF for FreeBSD) by introducing kernel-level mitigation against NULL and XMAS port scans, dropping invalid IP fragments (Nmap evasion), and implementing strict UDP payload limits (dropping UDP/53 > 512 bytes) to proactively neutralize DNS exfiltration attempts.
+---
+
 # Release v3.40.4
 
 ## ADDED

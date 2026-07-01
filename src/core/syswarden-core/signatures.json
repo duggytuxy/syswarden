@@ -64,6 +64,13 @@
     { "id": "mitre-t1059-cmd-exec", "type": "aho-corasick", "patterns": ["powershell -enc", "cmd.exe /c", "WScript.Shell", "Invoke-Expression"], "service": "http", "action": "detect" },
     { "id": "mitre-t1190-exploit-public", "type": "aho-corasick", "patterns": ["/cgi-bin/", "jndi:ldap", "log4j"], "service": "http", "action": "detect" },
     { "id": "owasp-a03-injection", "type": "aho-corasick", "patterns": ["1=1--", "' OR '1'='1", "DROP TABLE", "UNION ALL SELECT"], "service": "http", "action": "detect" },
-    { "id": "owasp-a03-xss", "type": "aho-corasick", "patterns": ["<script>alert", "javascript:alert", "onerror=alert", "onmouseover="], "service": "http", "action": "detect" }
+    { "id": "owasp-a03-xss", "type": "aho-corasick", "patterns": ["<script>alert", "javascript:alert", "onerror=alert", "onmouseover="], "service": "http", "action": "detect" },
+    { "id": "cve-teamcity", "type": "aho-corasick", "patterns": ["/app/rest/server", "?jsp="], "service": "http" },
+    { "id": "cve-citrix-bleed", "type": "aho-corasick", "patterns": ["/oauth/idp/.well-known/openid-configuration"], "service": "http" },
+    { "id": "cve-moveit", "type": "aho-corasick", "patterns": ["guestaccess.aspx", "moveitisapi"], "service": "http" },
+    { "id": "cve-f5-bigip", "type": "aho-corasick", "patterns": ["Connection: X-F5-Auth-Token", "X-F5-Auth-Token"], "service": "http" },
+    { "id": "cloud-ssrf-metadata", "type": "aho-corasick", "patterns": ["Metadata-Flavor: Google", "169.254.169.254/latest/meta-data/", "169.254.169.254/metadata/v1/"], "service": "http" },
+    { "id": "java-ssti-rce", "type": "aho-corasick", "patterns": ["getRuntime().exec", "freemarker.template", "ProcessBuilder", "java.lang.Runtime"], "service": "http", "action": "detect" },
+    { "id": "php-rce-generic", "type": "aho-corasick", "patterns": ["system(", "passthru(", "shell_exec(", "base64_decode(", "phpinfo()"], "service": "http", "action": "detect" }
   ]
 }

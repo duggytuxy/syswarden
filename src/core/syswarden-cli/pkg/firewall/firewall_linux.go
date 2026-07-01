@@ -101,6 +101,11 @@ func ApplyPolicies() error {
 	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_whitelist6 accept\n")
 	_, _ = nftRules.WriteString("\t\tct state established,related accept\n")
 	_, _ = nftRules.WriteString("\t\tct state invalid counter drop\n")
+
+	// L3/L4 Threat Intel (Fragments, XMAS, NULL Scans)
+	_, _ = nftRules.WriteString("\t\tip frag-off & 0x3fff != 0 counter drop\n")
+	_, _ = nftRules.WriteString("\t\ttcp flags & (fin|syn|rst|psh|ack|urg) == 0 counter drop\n")
+	_, _ = nftRules.WriteString("\t\ttcp flags & (fin|syn|rst|psh|ack|urg) == fin|psh|urg counter drop\n")
 	_, _ = nftRules.WriteString("\t\ttcp flags & (fin|syn|rst|ack) != syn ct state new counter drop\n")
 
 	// Dynamically allow explicitly opened ports
@@ -152,6 +157,11 @@ func ApplyPolicies() error {
 	// Catch-All Default Deny Logging
 	_, _ = nftRules.WriteString("\t\tct state new limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n")
 	_, _ = nftRules.WriteString("\t\tct state new counter drop\n")
+	_, _ = nftRules.WriteString("\t}\n\n")
+
+	// DNS Exfiltration Protection (L3/L4)
+	_, _ = nftRules.WriteString("\tchain data_leak_protect {\n\t\ttype filter hook output priority 0; policy accept;\n")
+	_, _ = nftRules.WriteString("\t\tudp dport 53 udp length > 512 counter log prefix \"[SysWarden-DNS-EXFIL] \" drop\n")
 	_, _ = nftRules.WriteString("\t}\n\n")
 
 	// Protect Docker (Forward chain)
