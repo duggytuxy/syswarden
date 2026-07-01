@@ -1,3 +1,10 @@
+# Release v3.40.8
+
+## FIXED
+- **Engine / Regex False Positives**: Fixed a highly specific false-positive in the `ahocorasick` matching engine where the generic `<HOST>` replacement regex for IPv6 (`[a-fA-F0-9:]+`) was overly greedy and could mistakenly match log timestamps (e.g., `12:50:59`) and random port combinations, triggering incorrect L7 WAAP jails (like `haproxy-abuse`) for standard SSH blocks. The `<HOST>` placeholder now uses a strict, boundary-enforced regex to exclusively match valid IPv4 and IPv6 structures, ensuring flawless threat qualification.
+
+---
+
 # Release v3.40.7
 
 ## FIXED

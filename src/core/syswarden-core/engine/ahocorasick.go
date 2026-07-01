@@ -65,8 +65,9 @@ func NewEngine(configFile string) (*Engine, error) {
 				e.ahoRules[len(e.ahoDict)-1] = rule
 			}
 		case "regex":
-			// Convert <HOST> to regex capture group for IP extraction
-			safePattern := strings.ReplaceAll(rule.Pattern, "<HOST>", `(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-fA-F0-9:]+)`)
+			// Convert <HOST> to regex capture group for IP extraction (Strict matching to prevent timestamp False Positives)
+			strictHostRegex := `(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|(?:[0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7})`
+			safePattern := strings.ReplaceAll(rule.Pattern, "<HOST>", strictHostRegex)
 			re, err := regexp.Compile(safePattern)
 			if err != nil {
 				return nil, fmt.Errorf("invalid regex for rule %s: %w", rule.ID, err)
