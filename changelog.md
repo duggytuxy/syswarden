@@ -1,3 +1,10 @@
+# Release v3.40.7
+
+## FIXED
+- **Telemetry Formatting & Syslog Recursion Loop**: Resolved a critical defect where SysWarden logging its own block events into Syslog caused an infinite recursive feedback loop through the Rsyslog `waf_bridge`, inflating the `payload` field uncontrollably in the UI. Implemented a strict drop-rule for `syswarden-core` messages at the bridge layer and introduced a native `SysWardenRaw` template to strip Syslog framing (`<PRI>`, timestamp, hostname) before routing to the UDS socket. As a result, SIEM, Wazuh, and local TUI logs are now perfectly formatted with exact raw string payloads for both Web and SSH components.
+
+---
+
 # Release v3.40.6
 
 ## FIXED

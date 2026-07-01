@@ -40,8 +40,15 @@ input(type="imfile" File="/var/log/messages" Tag="syswarden-waf" ruleset="waf_br
 
 	// Ruleset to forward everything tagged syswarden-waf to the UDS
 	rsyslogConf += `
+template(name="SysWardenRaw" type="string" string="%msg%\n")
+
 ruleset(name="waf_bridge") {
-    *.* :omuxsock:
+    # Prevent infinite loops from SysWarden logging its own blocks
+    if $programname == "syswarden-core" then stop
+    if $msg contains "SysWarden-BLOCK" then stop
+    if $msg contains "SysWarden-ALLOWED" then stop
+
+    *.* :omuxsock:;SysWardenRaw
 }
 `
 
