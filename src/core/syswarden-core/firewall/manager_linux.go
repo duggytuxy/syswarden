@@ -160,9 +160,10 @@ func NewManager() (Manager, error) {
 					sets, err := conn.GetSets(t)
 					if err == nil {
 						for _, s := range sets {
-							if s.Name == "banned_ips" {
+							switch s.Name {
+							case "banned_ips":
 								inetSet = s
-							} else if s.Name == "banned_ips6" {
+							case "banned_ips6":
 								inetSet6 = s
 							}
 						}
@@ -172,9 +173,10 @@ func NewManager() (Manager, error) {
 					sets, err := conn.GetSets(t)
 					if err == nil {
 						for _, s := range sets {
-							if s.Name == "banned_ips" {
+							switch s.Name {
+							case "banned_ips":
 								netdevSet = s
-							} else if s.Name == "banned_ips6" {
+							case "banned_ips6":
 								netdevSet6 = s
 							}
 						}
