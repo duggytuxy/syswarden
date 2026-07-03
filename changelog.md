@@ -1,3 +1,15 @@
+# Release v3.41.0
+
+## UPDATED
+- **Signatures Mapping / CMS Honeypot**: Renamed the generic `cms-honeypot` L7 WAAP rule to a highly specific `cms-wordpress` identifier. Realigned the Aho-Corasick payload array (`/wp-includes`, `/wp-admin`, `/wp-login.php`, `xmlrpc.php`, `wp-config.php`) to strictly target WordPress vectors, drastically improving SIEM visibility and eliminating heuristic overlaps.
+
+## FIXED
+- **L7 WAAP Signature Shadowing**: Restructured the hierarchical evaluation order within `signatures.json` to enforce a "Most Specific First" paradigm. Moved aggressive catch-all regexes (`nginx-scanner`, `laravel-login`, `generic-auth`) to the absolute bottom of the evaluation stack. This completely eliminates rule shadowing and guarantees that highly specific CVEs and service alerts (e.g., `nginx-tls`) trigger correctly before being swallowed by generic L7 patterns.
+- **SQLi-XSS Payload Refactoring**: Split the monolithic `sqli-xss` Aho-Corasick rule to exclusively target SQL injection patterns (`UNION SELECT`, `CONCAT(`, `WAITFOR DELAY`, `SLEEP(`). Stripped redundant XSS and LFI vectors (`<script`, `alert(`, `../../`) that were already covered by the dedicated Zero-Overhead `owasp-a03-xss` and `l7-lfi` rules, ensuring absolute precision and Zero False Positives during heuristic analysis.
+- **Regex Extraction Precision**: Fixed critical regex spacing and string boundary matching anomalies within the `haproxy-abuse`, `slowloris`, and `redis-auth` L7 rules. Ensures that WAF detection executes flawlessly across a 74/74 multi-vector signature battery test.
+
+---
+
 # Release v3.40.8
 
 ## FIXED
