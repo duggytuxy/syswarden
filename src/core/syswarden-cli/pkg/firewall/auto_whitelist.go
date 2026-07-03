@@ -81,16 +81,26 @@ func AutoWhitelistAdminAndInfra() error {
 	}
 
 	// 3. User-Defined Config IPs
+	whitelistFileV6 := "/etc/syswarden/lists/syswarden_whitelist.ipv6"
+	contentV6, _ := os.ReadFile(whitelistFileV6)
+	existingV6 := string(contentV6)
+
+	var ipsToAddV6 []string
+
 	if config.GlobalConfig.WhitelistIPs != "" {
 		customIPs := strings.Fields(config.GlobalConfig.WhitelistIPs)
 		for _, ip := range customIPs {
-			if valid, isIPv4 := IsValidIP(ip); valid && isIPv4 {
-				ipsToAdd = append(ipsToAdd, ip)
+			if valid, isIPv4 := IsValidIP(ip); valid {
+				if isIPv4 {
+					ipsToAdd = append(ipsToAdd, ip)
+				} else {
+					ipsToAddV6 = append(ipsToAddV6, ip)
+				}
 			}
 		}
 	}
 
-	// Append to file safely
+	// Append to IPv4 file safely
 	f, err := os.OpenFile(whitelistFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -104,8 +114,24 @@ func AutoWhitelistAdminAndInfra() error {
 			existing += ip + "\n"
 			addedCount++
 			if ip != adminIP {
-				fmt.Printf(" -> Auto-whitelisting Infra IP: %s\n", ip)
+				fmt.Printf(" -> Auto-whitelisting Infra IPv4: %s\n", ip)
 			}
+		}
+	}
+
+	// Append to IPv6 file safely
+	f6, err6 := os.OpenFile(whitelistFileV6, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err6 != nil {
+		return err6
+	}
+	defer func() { _ = f6.Close() }()
+
+	for _, ip := range ipsToAddV6 {
+		if !strings.Contains(existingV6, ip) {
+			_, _ = f6.WriteString(ip + "\n")
+			existingV6 += ip + "\n"
+			addedCount++
+			fmt.Printf(" -> Auto-whitelisting Infra IPv6: %s\n", ip)
 		}
 	}
 

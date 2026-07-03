@@ -101,8 +101,42 @@ func CleanCIDRList(filepath string) error {
 	return os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0640)
 }
 
+// CleanCIDRListV6 ensures CWE-20 compliance for IPv6 lists
+func CleanCIDRListV6(filepath string) error {
+	content, err := os.ReadFile(filepath)
+	if err != nil {
+		return err // file might not exist if no IPv6 routes were found, that's okay
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var validCIDRs []string
+	seen := make(map[string]bool)
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.Contains(line, "/") {
+			line = line + "/128"
+		}
+
+		ip, _, err := net.ParseCIDR(line)
+		if err == nil {
+			if ip.To4() == nil && ip.To16() != nil {
+				if !seen[line] {
+					seen[line] = true
+					validCIDRs = append(validCIDRs, line)
+				}
+			}
+		}
+	}
+
+	return os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0640)
+}
+
 // DownloadFeeds manages the download of GeoIP, ASN, and OSINT feeds
-func DownloadFeeds(mirrorURL, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
+func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
 	fmt.Println("[INFO] Initializing Network Intelligence Feeds...")
 
 	if lanMode {
@@ -171,7 +205,7 @@ func DownloadFeeds(mirrorURL, geoCodes, asnList, geoAllowed, asnAllowed string, 
 	}
 
 	for i, asn := range asnsToDrop {
-		dest := fmt.Sprintf("/etc/syswarden/lists/%s.ipv4", asn)
+		dest := fmt.Sprintf("/etc/syswarden/lists/%s", asn)
 		fmt.Printf("Downloading ASN [%s]... ", asn)
 		if err := FetchASNWhois(asn, dest); err != nil {
 			fmt.Printf("FAILED (%v)\n", err)
@@ -214,7 +248,7 @@ func DownloadFeeds(mirrorURL, geoCodes, asnList, geoAllowed, asnAllowed string, 
 			if !strings.HasPrefix(asn, "AS") {
 				asn = "AS" + asn
 			}
-			dest := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv4", strings.ToUpper(asn))
+			dest := fmt.Sprintf("/etc/syswarden/lists/allowed_%s", strings.ToUpper(asn))
 			fmt.Printf("Downloading ASN ALLOW [%s]... ", asn)
 			if err := FetchASNWhois(asn, dest); err != nil {
 				fmt.Printf("FAILED (%v)\n", err)
@@ -225,9 +259,22 @@ func DownloadFeeds(mirrorURL, geoCodes, asnList, geoAllowed, asnAllowed string, 
 		}
 	}
 
+	// Download IPv6 Custom Blocklist if configured
+	if listChoice == "3" && customURL6 != "" {
+		fmt.Printf("Downloading Custom IPv6 Blocklist... ")
+		if err := SecureDownloader(ctx, customURL6, "/etc/syswarden/lists/syswarden_threatintel.ipv6"); err != nil {
+			fmt.Printf("FAILED (%v)\n", err)
+		} else {
+			fmt.Println("OK")
+		}
+	}
+
 	// Download Data-Shield
 	dataShieldUrl := fmt.Sprintf("%s/duggytuxy21/Data-Shield_IPv4_Blocklist/raw/branch/main/prod_data-shield_ipv4_blocklist.txt", strings.TrimRight(mirrorURL, "/"))
-	fmt.Printf("Downloading Data-Shield IPv4 Blocklist... ")
+	if listChoice == "3" {
+		dataShieldUrl = strings.TrimRight(mirrorURL, "/")
+	}
+	fmt.Printf("Downloading Threat Intel IPv4 Blocklist... ")
 	if err := SecureDownloader(ctx, dataShieldUrl, "/etc/syswarden/lists/syswarden_threatintel.ipv4"); err != nil {
 		fmt.Printf("FAILED (%v)\n", err)
 	} else {
@@ -317,8 +364,8 @@ func SetupFeedsCron() error {
 	return nil
 }
 
-// FetchASNWhois retrieves IPv4 prefixes for an ASN natively via TCP WHOIS
-func FetchASNWhois(asn, destPath string) error {
+// FetchASNWhois retrieves IPv4 and IPv6 prefixes for an ASN natively via TCP WHOIS
+func FetchASNWhois(asn, destBase string) error {
 	conn, err := net.DialTimeout("tcp", "whois.radb.net:43", 5*time.Second)
 	if err != nil {
 		return fmt.Errorf("whois connection failed: %w", err)
@@ -336,26 +383,47 @@ func FetchASNWhois(asn, destPath string) error {
 		return fmt.Errorf("whois read failed: %w", err)
 	}
 
-	re := regexp.MustCompile(`(?m)^route:\s+([0-9]{1,3}\.([0-9]{1,3}\.){2}[0-9]{1,3}/[0-9]{1,2})`)
-	matches := re.FindAllStringSubmatch(string(data), -1)
+	// Extract IPv4 and IPv6 routes
+	reV4 := regexp.MustCompile(`(?m)^route:\s+([0-9]{1,3}\.([0-9]{1,3}\.){2}[0-9]{1,3}/[0-9]{1,2})`)
+	reV6 := regexp.MustCompile(`(?m)^route6:\s+([0-9a-fA-F:]+/[0-9]{1,3})`)
+	
+	matchesV4 := reV4.FindAllStringSubmatch(string(data), -1)
+	matchesV6 := reV6.FindAllStringSubmatch(string(data), -1)
 
-	if err := os.MkdirAll(filepath.Dir(destPath), 0750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destBase), 0750); err != nil {
 		return err
 	}
 
-	var cidrs []string
-	for _, m := range matches {
+	var cidrsV4 []string
+	for _, m := range matchesV4 {
 		if len(m) > 1 {
-			cidrs = append(cidrs, m[1])
+			cidrsV4 = append(cidrsV4, m[1])
+		}
+	}
+	
+	var cidrsV6 []string
+	for _, m := range matchesV6 {
+		if len(m) > 1 {
+			cidrsV6 = append(cidrsV6, m[1])
 		}
 	}
 
-	out := strings.Join(cidrs, "\n") + "\n"
-	if err := os.WriteFile(destPath, []byte(out), 0640); err != nil {
+	outV4 := strings.Join(cidrsV4, "\n") + "\n"
+	if err := os.WriteFile(destBase+".ipv4", []byte(outV4), 0640); err != nil {
 		return err
 	}
+	
+	if len(cidrsV6) > 0 {
+		outV6 := strings.Join(cidrsV6, "\n") + "\n"
+		if err := os.WriteFile(destBase+".ipv6", []byte(outV6), 0640); err != nil {
+			return err
+		}
+	}
 
-	return CleanCIDRList(destPath)
+	_ = CleanCIDRList(destBase + ".ipv4")
+	_ = CleanCIDRListV6(destBase + ".ipv6")
+	
+	return nil
 }
 
 // FetchSpamhausASNs retrieves the latest ASNs from the Spamhaus DROP JSON list

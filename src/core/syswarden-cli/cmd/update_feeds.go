@@ -20,7 +20,7 @@ var updateFeedsCmd = &cobra.Command{
 			mirrorURL = "https://codeberg.org/"
 		}
 
-		if err := network.DownloadFeeds(mirrorURL, config.GlobalConfig.GeoCodes, config.GlobalConfig.ASNList, config.GlobalConfig.GeoAllowed, config.GlobalConfig.ASNAllowed, config.GlobalConfig.LANMode, config.GlobalConfig.UseSpamhaus); err != nil {
+		if err := network.DownloadFeeds(mirrorURL, config.GlobalConfig.CustomURL6, config.GlobalConfig.ListChoice, config.GlobalConfig.GeoCodes, config.GlobalConfig.ASNList, config.GlobalConfig.GeoAllowed, config.GlobalConfig.ASNAllowed, config.GlobalConfig.LANMode, config.GlobalConfig.UseSpamhaus); err != nil {
 			fmt.Printf("[ERROR] Failed to download threat intelligence feeds: %v\n", err)
 			return
 		}

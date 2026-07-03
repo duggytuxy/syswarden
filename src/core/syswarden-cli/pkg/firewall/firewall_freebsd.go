@@ -11,6 +11,14 @@ import (
 	"syswarden-cli/config"
 )
 
+func fileExists(filename string) bool {
+	info, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return !info.IsDir()
+}
+
 // ApplyPolicies triggers the main FreeBSD firewall injection using native Packet Filter (pf)
 func ApplyPolicies() error {
 	fmt.Println("[INFO] Applying Firewall Rules (FreeBSD PF transaction)...")
@@ -18,17 +26,82 @@ func ApplyPolicies() error {
 	// Create configuration dynamically for PF
 	var pfRules strings.Builder
 
-	// Setup Tables for IP Sets
-	_, _ = pfRules.WriteString("table <syswarden_whitelist> persist\n")
-	_, _ = pfRules.WriteString("table <syswarden_zt_allowed> persist\n")
-	_, _ = pfRules.WriteString("table <syswarden_blacklist> persist\n")
+	// Setup Tables for IP Sets (Loading files directly)
+	_, _ = pfRules.WriteString("table <syswarden_whitelist> persist file \"/etc/syswarden/lists/syswarden_whitelist.ipv4\" file \"/etc/syswarden/lists/syswarden_whitelist.ipv6\"\n")
+	
+	var ztFilesStr strings.Builder
+	if config.GlobalConfig.GeoAllowed != "" {
+		codes := strings.Split(config.GlobalConfig.GeoAllowed, " ")
+		for _, code := range codes {
+			code = strings.TrimSpace(code)
+			if code != "" && code != "none" {
+				path := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv4", strings.ToLower(code))
+				if fileExists(path) {
+					ztFilesStr.WriteString(fmt.Sprintf(" file \"%s\"", path))
+				}
+			}
+		}
+	}
+	if config.GlobalConfig.ASNAllowed != "" {
+		asns := strings.Split(config.GlobalConfig.ASNAllowed, " ")
+		for _, asn := range asns {
+			asn = strings.TrimSpace(asn)
+			if asn != "" && asn != "none" && asn != "auto" {
+				if !strings.HasPrefix(asn, "AS") {
+					asn = "AS" + asn
+				}
+				pathV4 := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv4", strings.ToUpper(asn))
+				pathV6 := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv6", strings.ToUpper(asn))
+				if fileExists(pathV4) {
+					ztFilesStr.WriteString(fmt.Sprintf(" file \"%s\"", pathV4))
+				}
+				if fileExists(pathV6) {
+					ztFilesStr.WriteString(fmt.Sprintf(" file \"%s\"", pathV6))
+				}
+			}
+		}
+	}
+	_, _ = pfRules.WriteString(fmt.Sprintf("table <syswarden_zt_allowed> persist%s\n", ztFilesStr.String()))
+	
+	_, _ = pfRules.WriteString("table <syswarden_blacklist> persist file \"/etc/syswarden/lists/syswarden_blacklist.ipv4\" file \"/etc/syswarden/lists/syswarden_threatintel.ipv4\"\n")
+	_, _ = pfRules.WriteString("table <syswarden_blacklist6> persist file \"/etc/syswarden/lists/syswarden_blacklist.ipv6\" file \"/etc/syswarden/lists/syswarden_threatintel.ipv6\"\n")
 	_, _ = pfRules.WriteString("table <banned_ips> persist\n")
 
 	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
-		_, _ = pfRules.WriteString("table <syswarden_geoip> persist\n")
+		var geoFilesStr strings.Builder
+		codes := strings.Split(config.GlobalConfig.GeoCodes, " ")
+		for _, code := range codes {
+			code = strings.TrimSpace(code)
+			if code != "" && code != "none" {
+				path := fmt.Sprintf("/etc/syswarden/lists/%s.ipv4", strings.ToLower(code))
+				if fileExists(path) {
+					geoFilesStr.WriteString(fmt.Sprintf(" file \"%s\"", path))
+				}
+			}
+		}
+		_, _ = pfRules.WriteString(fmt.Sprintf("table <syswarden_geoip> persist%s\n", geoFilesStr.String()))
 	}
 	if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" {
-		_, _ = pfRules.WriteString("table <syswarden_asn> persist\n")
+		var asnV4Str, asnV6Str strings.Builder
+		asns := strings.Split(config.GlobalConfig.ASNList, " ")
+		for _, asn := range asns {
+			asn = strings.TrimSpace(asn)
+			if asn != "" && asn != "none" && asn != "auto" {
+				if !strings.HasPrefix(asn, "AS") {
+					asn = "AS" + asn
+				}
+				pathV4 := fmt.Sprintf("/etc/syswarden/lists/%s.ipv4", strings.ToUpper(asn))
+				pathV6 := fmt.Sprintf("/etc/syswarden/lists/%s.ipv6", strings.ToUpper(asn))
+				if fileExists(pathV4) {
+					asnV4Str.WriteString(fmt.Sprintf(" file \"%s\"", pathV4))
+				}
+				if fileExists(pathV6) {
+					asnV6Str.WriteString(fmt.Sprintf(" file \"%s\"", pathV6))
+				}
+			}
+		}
+		_, _ = pfRules.WriteString(fmt.Sprintf("table <syswarden_asn> persist%s\n", asnV4Str.String()))
+		_, _ = pfRules.WriteString(fmt.Sprintf("table <syswarden_asn6> persist%s\n", asnV6Str.String()))
 	}
 
 	// Active interface
@@ -50,12 +123,14 @@ func ApplyPolicies() error {
 
 	// Layer 3 Static Global Intelligence Blocks
 	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from <syswarden_blacklist> to any\n", activeIf))
+	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from <syswarden_blacklist6> to any\n", activeIf))
 
 	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
 		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from <syswarden_geoip> to any\n", activeIf))
 	}
 	if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" {
 		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from <syswarden_asn> to any\n", activeIf))
+		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from <syswarden_asn6> to any\n", activeIf))
 	}
 
 	// ZERO-TRUST MODE: Drop everything that is not in the Zero-Trust allowed GEO/ASN list

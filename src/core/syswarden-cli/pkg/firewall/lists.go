@@ -13,6 +13,7 @@ const (
 	WhitelistV4 = "/etc/syswarden/lists/syswarden_whitelist.ipv4"
 	WhitelistV6 = "/etc/syswarden/lists/syswarden_whitelist.ipv6"
 	BlocklistV4 = "/etc/syswarden/lists/syswarden_blacklist.ipv4"
+	BlocklistV6 = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
 	SSHBypass   = "/etc/syswarden/ssh_whitelist.txt"
 )
 
@@ -141,11 +142,16 @@ func RemoveFromWhitelist(ip string) error {
 // AddToBlocklist appends an IP securely to the blocklist and reloads
 func AddToBlocklist(ip string) error {
 	valid, isIPv4 := IsValidIP(ip)
-	if !valid || !isIPv4 {
-		return fmt.Errorf("invalid IPv4 address: %s (Blocklist only supports IPv4)", ip)
+	if !valid {
+		return fmt.Errorf("invalid IP address: %s", ip)
 	}
 
-	if err := addToFile(BlocklistV4, ip); err != nil {
+	file := BlocklistV6
+	if isIPv4 {
+		file = BlocklistV4
+	}
+
+	if err := addToFile(file, ip); err != nil {
 		return err
 	}
 	fmt.Printf("[SUCCESS] IP %s safely blocklisted.\n", ip)
@@ -155,10 +161,16 @@ func AddToBlocklist(ip string) error {
 // RemoveFromBlocklist removes an IP from the blocklist
 func RemoveFromBlocklist(ip string) error {
 	valid, isIPv4 := IsValidIP(ip)
-	if !valid || !isIPv4 {
-		return fmt.Errorf("invalid IPv4 address: %s", ip)
+	if !valid {
+		return fmt.Errorf("invalid IP address: %s", ip)
 	}
-	if err := removeFromFile(BlocklistV4, ip); err != nil {
+
+	file := BlocklistV6
+	if isIPv4 {
+		file = BlocklistV4
+	}
+
+	if err := removeFromFile(file, ip); err != nil {
 		return err
 	}
 	fmt.Printf("[SUCCESS] IP %s removed from blocklist.\n", ip)
@@ -308,7 +320,8 @@ func CheckIP(ip string) {
 	checkFile(WhitelistV4, "Global Whitelist (v4)")
 	checkFile(WhitelistV6, "Global Whitelist (v6)")
 	checkFile(SSHBypass, "SSH Bypass")
-	checkFile(BlocklistV4, "Global Blocklist")
+	checkFile(BlocklistV4, "Global Blocklist (v4)")
+	checkFile(BlocklistV6, "Global Blocklist (v6)")
 
 	fmt.Printf("[Kernel]  Active Nftables      : ")
 	out, err := exec.Command("nft", "list", "ruleset").Output()
@@ -343,5 +356,6 @@ func ListIPs() {
 	printFile(WhitelistV6, "Global Whitelisted IPv6")
 	printFile(SSHBypass, "SSH-Only Bypass")
 	printFile(BlocklistV4, "Manually Blocked IPv4")
+	printFile(BlocklistV6, "Manually Blocked IPv6")
 	fmt.Println()
 }

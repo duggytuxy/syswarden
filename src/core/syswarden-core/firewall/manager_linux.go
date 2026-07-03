@@ -50,10 +50,12 @@ func (m *FallbackManager) Ban(ip string) error {
 
 // NftablesManager implements native Netlink API zero-shell blocking
 type NftablesManager struct {
-	conn      *nftables.Conn
-	inetSet   *nftables.Set
-	netdevSet *nftables.Set
-	mu        sync.Mutex
+	conn       *nftables.Conn
+	inetSet    *nftables.Set
+	netdevSet  *nftables.Set
+	inetSet6   *nftables.Set
+	netdevSet6 *nftables.Set
+	mu         sync.Mutex
 }
 
 func (m *NftablesManager) Name() string {
@@ -65,31 +67,52 @@ func (m *NftablesManager) Ban(ip string) error {
 	defer m.mu.Unlock()
 
 	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil || parsedIP.To4() == nil {
-		return fmt.Errorf("invalid IPv4 address: %s", ip)
+	if parsedIP == nil {
+		return fmt.Errorf("invalid IP address: %s", ip)
 	}
 
 	timeout := 30 * 24 * time.Hour
 
 	var errs []string
 
-	// Inject into inet table (L3/L4)
-	if m.inetSet != nil {
-		err := m.conn.SetAddElements(m.inetSet, []nftables.SetElement{
-			{Key: parsedIP.To4(), Timeout: timeout},
-		})
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("inet: %v", err))
+	if parsedIP.To4() != nil {
+		// Inject into inet table (L3/L4)
+		if m.inetSet != nil {
+			err := m.conn.SetAddElements(m.inetSet, []nftables.SetElement{
+				{Key: parsedIP.To4(), Timeout: timeout},
+			})
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("inet: %v", err))
+			}
 		}
-	}
 
-	// Inject into netdev table (L2 Hardware Drop)
-	if m.netdevSet != nil {
-		err := m.conn.SetAddElements(m.netdevSet, []nftables.SetElement{
-			{Key: parsedIP.To4(), Timeout: timeout},
-		})
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("netdev: %v", err))
+		// Inject into netdev table (L2 Hardware Drop)
+		if m.netdevSet != nil {
+			err := m.conn.SetAddElements(m.netdevSet, []nftables.SetElement{
+				{Key: parsedIP.To4(), Timeout: timeout},
+			})
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("netdev: %v", err))
+			}
+		}
+	} else {
+		// Inject IPv6
+		if m.inetSet6 != nil {
+			err := m.conn.SetAddElements(m.inetSet6, []nftables.SetElement{
+				{Key: parsedIP.To16(), Timeout: timeout},
+			})
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("inet6: %v", err))
+			}
+		}
+
+		if m.netdevSet6 != nil {
+			err := m.conn.SetAddElements(m.netdevSet6, []nftables.SetElement{
+				{Key: parsedIP.To16(), Timeout: timeout},
+			})
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("netdev6: %v", err))
+			}
 		}
 	}
 
@@ -127,7 +150,7 @@ func NewManager() (Manager, error) {
 		conn := &nftables.Conn{}
 
 		// Attempt to resolve the tables and sets immediately for O(1) injections later
-		var inetSet, netdevSet *nftables.Set
+		var inetSet, netdevSet, inetSet6, netdevSet6 *nftables.Set
 
 		tables, err := conn.ListTables()
 		if err == nil {
@@ -139,7 +162,8 @@ func NewManager() (Manager, error) {
 						for _, s := range sets {
 							if s.Name == "banned_ips" {
 								inetSet = s
-								break
+							} else if s.Name == "banned_ips6" {
+								inetSet6 = s
 							}
 						}
 					}
@@ -150,7 +174,8 @@ func NewManager() (Manager, error) {
 						for _, s := range sets {
 							if s.Name == "banned_ips" {
 								netdevSet = s
-								break
+							} else if s.Name == "banned_ips6" {
+								netdevSet6 = s
 							}
 						}
 					}
@@ -159,9 +184,11 @@ func NewManager() (Manager, error) {
 		}
 
 		return &NftablesManager{
-			conn:      conn,
-			inetSet:   inetSet,
-			netdevSet: netdevSet,
+			conn:       conn,
+			inetSet:    inetSet,
+			netdevSet:  netdevSet,
+			inetSet6:   inetSet6,
+			netdevSet6: netdevSet6,
 		}, nil
 	}
 

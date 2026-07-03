@@ -1,3 +1,23 @@
+# Release v3.50.0
+
+## ADDED
+- **Native IPv6 Support (WAF & L3/L4)**: SysWarden now natively supports full IPv6 mitigation. The Linux Nftables backend autonomously provisions the `banned_ips6` Set and corresponding drop rules, while the FreeBSD (`pf`) backend handles IPv6 blocks seamlessly, closing all potential IPv6 WAF bypass vectors.
+- **Custom IPv6 Threat Intelligence Feeds**: Added native support for downloading and parsing custom IPv6 blocklists via `SYSWARDEN_CUSTOM_URL6` (when `SYSWARDEN_LIST_CHOICE=3`). The `downloader` orchestration engine now automatically syncs and injects these into `syswarden_blacklist6` ensuring custom enterprise defense coverage.
+- **Zero-Trust Native IPv6 Whitelist**: Completely overhauled the `SYSWARDEN_WHITELIST_IPS` parsing engine (`auto_whitelist.go`). SysAdmins can now pass space-separated arrays containing both absolute IPv4 and IPv6 addresses. The engine intelligently parses and routes them to their respective backend firewall tables without breaking the legacy configuration footprint.
+
+## UPGRADED
+- **High Availability (HA) IPv6 Sync**: Expanded the `syswarden-cli ha-sync` engine to automatically synchronize the IPv6 manual blocklist (`syswarden_blacklist.ipv6`) alongside the legacy IPv4 blocklist. The HA module utilizes purely native Go SSH automation to atomically stream cross-node IPv6 threat state without bash dependencies.
+- **CLI IPv6 Enforcement**: Upgraded the `syswarden block`, `syswarden unblock`, `syswarden check`, and `syswarden list` commands to natively accept, parse, and enforce full IPv6 arrays, injecting them dynamically into the kernel L3 firewall.
+- **UDS Socket Hardening (LPE Prevention)**: Strictly hardened the UNIX Domain Socket permissions for `/var/run/syswarden.sock` from `0666` to `0660`. This aggressively isolates the daemon communication bridge, preventing any non-privileged user from interacting with the socket and nullifying Local Privilege Escalation (LPE) risks.
+- **Code Hygiene**: Enforced strict `gofmt` formatting and standard library `net` imports across the Core engine to guarantee 100% CI/CD pipeline compliance and robust cross-platform compilation.
+
+## FIXED
+- **IPv6 Regex Precision (Aho-Corasick)**: Completely rewrote the `ExtractIP` regular expression engine to surgically capture abbreviated IPv6 formats (e.g., `fe80::1`) while strictly preventing greedy matches against standard log timestamps (e.g., `12:00:00`), ensuring Zero False Positives during IPv6 threat qualification.
+- **FreeBSD Threat Intelligence Persistence (PF)**: Resolved a critical regression where the FreeBSD Packet Filter (`pf`) backend silently failed to load massive threat intelligence sets (Global Blocklist, GeoIP, ASN). SysWarden now orchestrates the `persist file` directive to force native filesystem loading for all PF tables, securely mapping up to 400,000 dual-stack CIDRs into kernel memory without overflowing the CLI execution buffer.
+- **Dual-Stack ASN WHOIS Routing**: Corrected the `syswarden update-feeds` engine to natively intercept both `route:` and `route6:` objects when querying RADB (`whois.radb.net`). The ASN threat vectors are now flawlessly segmented into `.ipv4` and `.ipv6` lists and injected directly into `syswarden_asn` and `syswarden_asn6` kernel sets, guaranteeing absolute IPv6 infrastructure defense.
+
+---
+
 # Release v3.41.0
 
 ## UPDATED

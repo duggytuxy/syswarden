@@ -67,6 +67,8 @@ func ParseConfig(filepath string) error {
 			GlobalConfig.ListChoice = val
 		case "SYSWARDEN_CUSTOM_URL":
 			GlobalConfig.CustomURL = val
+		case "SYSWARDEN_CUSTOM_URL6":
+			GlobalConfig.CustomURL6 = val
 		case "SYSWARDEN_CUSTOM_HASH":
 			GlobalConfig.CustomHash = val
 		case "SYSWARDEN_ENABLE_GEO":

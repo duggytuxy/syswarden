@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-func getLocalBlocklist() ([]string, error) {
-	content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4")
+func getLocalBlocklist(file string) ([]string, error) {
+	content, err := os.ReadFile(file)
 	if err != nil {
 		return []string{}, nil
 	}
@@ -48,70 +48,74 @@ func SyncHAPeer() error {
 		sshOpts = append(sshOpts, "-o", "StrictHostKeyChecking=accept-new", "-c", "aes256-gcm@openssh.com")
 	}
 
-	// 1. Get remote blocklist
-	remoteCmdArgs := append(sshOpts, "root@"+peerIP, "cat", "/etc/syswarden/lists/syswarden_blacklist.ipv4")
-	remoteOut, err := exec.Command("ssh", remoteCmdArgs...).Output()
+	// Generic function to sync a specific IP version blocklist
+	syncList := func(listFile string, setName string) error {
+		// 1. Get remote blocklist
+		remoteCmdArgs := append(sshOpts, "root@"+peerIP, "cat", listFile)
+		remoteOut, err := exec.Command("ssh", remoteCmdArgs...).Output()
 
-	remoteIPs := make(map[string]bool)
-	if err == nil {
-		lines := strings.Split(strings.TrimSpace(string(remoteOut)), "\n")
-		for _, l := range lines {
-			l = strings.TrimSpace(l)
-			if l != "" {
-				remoteIPs[l] = true
+		remoteIPs := make(map[string]bool)
+		if err == nil {
+			lines := strings.Split(strings.TrimSpace(string(remoteOut)), "\n")
+			for _, l := range lines {
+				l = strings.TrimSpace(l)
+				if l != "" {
+					remoteIPs[l] = true
+				}
 			}
 		}
-	}
 
-	// 2. Get local blocklist
-	localIPs, err := getLocalBlocklist()
-	if err != nil {
-		return err
-	}
-
-	// 3. Find IPs to push
-	var toPush []string
-	for _, ip := range localIPs {
-		if !remoteIPs[ip] {
-			toPush = append(toPush, ip)
+		// 2. Get local blocklist
+		localIPs, err := getLocalBlocklist(listFile)
+		if err != nil {
+			return err
 		}
-	}
 
-	if len(toPush) == 0 {
-		fmt.Println("[+] Peer is already synchronized. No new IPs to push.")
+		// 3. Find IPs to push
+		var toPush []string
+		for _, ip := range localIPs {
+			if !remoteIPs[ip] {
+				toPush = append(toPush, ip)
+			}
+		}
+
+		if len(toPush) == 0 {
+			return nil
+		}
+
+		fmt.Printf("[INFO] Found %d new IPs for %s to push to peer. Synchronizing...\n", len(toPush), setName)
+
+		// 4. Push in batches
+		batchSize := 100
+		for i := 0; i < len(toPush); i += batchSize {
+			end := i + batchSize
+			if end > len(toPush) {
+				end = len(toPush)
+			}
+			batch := toPush[i:end]
+
+			remoteScript := fmt.Sprintf(`
+for ip in %s; do
+  if ! grep -q "^$ip$" %s; then
+    echo "$ip" >> %s
+  fi
+done
+nft add element inet syswarden %s { %s } 2>/dev/null || true
+`, strings.Join(batch, " "), listFile, listFile, setName, strings.Join(batch, ", "))
+
+			pushArgs := append(sshOpts, "root@"+peerIP, "bash", "-c", "'"+remoteScript+"'")
+			if err := exec.Command("ssh", pushArgs...).Run(); err != nil {
+				fmt.Printf("[WARN] Failed to push batch starting at index %d for %s: %v\n", i, setName, err)
+			} else {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+
+		fmt.Printf("[+] Successfully synchronized %d IPs for %s to Peer %s.\n", len(toPush), setName, peerIP)
 		return nil
 	}
 
-	fmt.Printf("[INFO] Found %d new IPs to push to peer. Synchronizing...\n", len(toPush))
-
-	// 4. Push in batches to avoid command line limits
-	batchSize := 100
-	for i := 0; i < len(toPush); i += batchSize {
-		end := i + batchSize
-		if end > len(toPush) {
-			end = len(toPush)
-		}
-
-		batch := toPush[i:end]
-
-		// Create a script to run on remote to append and apply dynamically without full reload
-		remoteScript := fmt.Sprintf(`
-for ip in %s; do
-  if ! grep -q "^$ip$" /etc/syswarden/lists/syswarden_blacklist.ipv4; then
-    echo "$ip" >> /etc/syswarden/lists/syswarden_blacklist.ipv4
-  fi
-done
-nft add element inet syswarden syswarden_blacklist { %s } 2>/dev/null || true
-`, strings.Join(batch, " "), strings.Join(batch, ", "))
-
-		pushArgs := append(sshOpts, "root@"+peerIP, "bash", "-c", "'"+remoteScript+"'")
-		if err := exec.Command("ssh", pushArgs...).Run(); err != nil {
-			fmt.Printf("[WARN] Failed to push batch starting at index %d: %v\n", i, err)
-		} else {
-			time.Sleep(100 * time.Millisecond) // small delay to prevent overwhelming SSH
-		}
-	}
-
-	fmt.Printf("[+] Successfully synchronized %d IPs to Peer %s.\n", len(toPush), peerIP)
+	_ = syncList("/etc/syswarden/lists/syswarden_blacklist.ipv4", "syswarden_blacklist")
+	_ = syncList("/etc/syswarden/lists/syswarden_blacklist.ipv6", "syswarden_blacklist6")
 	return nil
 }

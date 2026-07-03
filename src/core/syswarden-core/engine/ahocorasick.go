@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -121,12 +122,16 @@ func (e *Engine) Scan(logLine string) *Match {
 }
 
 // ExtractIP acts as a fast fallback to extract IP if Aho-Corasick matches but the IP isn't explicitly known.
-var ipRegex = regexp.MustCompile(`(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})`)
+var ipRegex = regexp.MustCompile(`(?i)(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-f0-9:]+:[a-f0-9:]+)`)
 
 func ExtractIP(logLine string) string {
-	match := ipRegex.FindStringSubmatch(logLine)
-	if len(match) > 1 {
-		return match[1]
+	matches := ipRegex.FindAllStringSubmatch(logLine, -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			if net.ParseIP(match[1]) != nil {
+				return match[1]
+			}
+		}
 	}
 	return ""
 }

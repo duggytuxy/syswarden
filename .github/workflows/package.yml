@@ -332,6 +332,7 @@ jobs:
           service syswarden stop || true
           sysrc -x syswarden_enable || true
           pfctl -t syswarden_blacklist -T kill || true
+          pfctl -t syswarden_blacklist6 -T kill || true
           pfctl -t syswarden_whitelist -T kill || true
           pfctl -t banned_ips -T kill || true
           EOF

@@ -48,10 +48,10 @@ func (s *UDSServer) Start() error {
 	}
 	s.conn = conn
 
-	// Ensure the socket is writable by Rsyslog/Vector
-	_ = os.Chmod(s.socketPath, 0666)
+	// Ensure the socket is writable by authorized groups (0660)
+	_ = os.Chmod(s.socketPath, 0660)
 
-	log.Printf("[UDS] Listening for unixgram zero-disk streams on %s", s.socketPath)
+	log.Printf("[UDS] Listening for unixgram zero-disk streams on %s (0660)", s.socketPath)
 
 	s.wg.Add(1)
 	go s.readLoop()

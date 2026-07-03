@@ -24,8 +24,8 @@ func (m *PFManager) Name() string {
 
 func (m *PFManager) Ban(ip string) error {
 	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil || parsedIP.To4() == nil {
-		return fmt.Errorf("invalid IPv4 address: %s", ip)
+	if parsedIP == nil {
+		return fmt.Errorf("invalid IP address: %s", ip)
 	}
 
 	// Add IP to the banned_ips table dynamically

@@ -54,7 +54,12 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %sSYSWARDEN_BRUTEFORCE_THRESHOLD%s: Number of failed requests before an L3 ban is triggered.\n\n", ansiWhite, ansiReset)
 
 		fmt.Printf("%s[Threat Intelligence & Data-Shield]%s\n", ansiCyan, ansiReset)
-		fmt.Printf("  %sSYSWARDEN_LIST_CHOICE%s    : Defines the posture of the Threat Intelligence engine (see Section 3).\n\n", ansiWhite, ansiReset)
+		fmt.Printf("  %sSYSWARDEN_LIST_CHOICE%s    : Defines the posture of the Threat Intelligence engine (see Section 3).\n", ansiWhite, ansiReset)
+		fmt.Printf("  %sSYSWARDEN_CUSTOM_URL%s     : URL for a custom IPv4 blocklist (if SYSWARDEN_LIST_CHOICE=3).\n", ansiWhite, ansiReset)
+		fmt.Printf("  %sSYSWARDEN_CUSTOM_URL6%s    : URL for a custom IPv6 blocklist (if SYSWARDEN_LIST_CHOICE=3).\n\n", ansiWhite, ansiReset)
+		fmt.Printf("%s[Zero-Trust Global Whitelist]%s\n", ansiCyan, ansiReset)
+		fmt.Printf("  %sSYSWARDEN_WHITELIST_INFRA%s: Auto-detects and whitelists Admin IP, Gateways, DNS (IPv4/IPv6).\n", ansiWhite, ansiReset)
+		fmt.Printf("  %sSYSWARDEN_WHITELIST_IPS%s  : Space-separated absolute bypass IPs (Natively supports IPv4 and IPv6).\n\n", ansiWhite, ansiReset)
 
 		fmt.Printf("%s[SIEM & Integrations]%s\n", ansiCyan, ansiReset)
 		fmt.Printf("  %sSYSWARDEN_SIEM_ENABLED%s   : Forwards native WAAP JSON telemetry via Rsyslog to a central SIEM.\n", ansiWhite, ansiReset)
