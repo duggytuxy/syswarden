@@ -1,3 +1,9 @@
+# Release v3.50.4
+
+## FIXED
+- **OSINT Telemetry Rate-Limiting & Cache Loss**: Resolved a critical issue in `syswarden-core` where OSINT data (Country, ASN, ISP) disappeared in the TUI after executing `syswarden reload`. The in-memory telemetry cache (`osintCache`) is now securely persisted to `/var/lib/syswarden/ui/osint_cache.json` across daemon restarts. Additionally, the HTTP request execution flow to the external OSINT API has been decoupled from the primary Mutex (`osintMu`), completely preventing sequential rate-limiting (HTTP 429) and telemetry lockups (timeout) during mass ingestion of new attacking IPs.
+---
+
 # Release v3.50.3
 
 ## ADDED

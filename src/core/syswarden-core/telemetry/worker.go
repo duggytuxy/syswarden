@@ -571,13 +571,37 @@ type IPAPIResponse struct {
 
 var osintCache = make(map[string]Attacker)
 var osintMu sync.Mutex
+var osintCacheOnce sync.Once
+
+func loadOSINTCache() {
+	b, err := os.ReadFile("/var/lib/syswarden/ui/osint_cache.json")
+	if err == nil {
+		_ = json.Unmarshal(b, &osintCache)
+	}
+}
+
+func saveOSINTCache() {
+	b, err := json.Marshal(osintCache)
+	if err == nil {
+		_ = os.MkdirAll("/var/lib/syswarden/ui", 0750)
+		_ = os.WriteFile("/var/lib/syswarden/ui/osint_cache.json", b, 0640)
+	}
+}
 
 func enrichOSINT(ip string, payload string) Attacker {
+	osintCacheOnce.Do(func() {
+		osintMu.Lock()
+		loadOSINTCache()
+		osintMu.Unlock()
+	})
+
 	var att Attacker
 	osintMu.Lock()
 	if cached, ok := osintCache[ip]; ok {
 		att = cached
+		osintMu.Unlock()
 	} else {
+		osintMu.Unlock()
 		att = Attacker{
 			IP:      ip,
 			Country: "N/A",
@@ -585,6 +609,7 @@ func enrichOSINT(ip string, payload string) Attacker {
 			ISP:     "N/A",
 		}
 
+		success := false
 		client := &http.Client{Timeout: 2 * time.Second}
 		resp, err := client.Get("http://ip-api.com/json/" + ip + "?fields=status,countryCode,isp,as")
 		if err == nil {
@@ -611,9 +636,18 @@ func enrichOSINT(ip string, payload string) Attacker {
 			}
 		}
 
-		osintCache[ip] = att
+		if success {
+			osintMu.Lock()
+			osintCache[ip] = att
+			saveOSINTCache()
+			osintMu.Unlock()
+		} else {
+			// Save N/A in memory temporarily so we don't spam the API every 5 seconds for failed/rate-limited IPs
+			osintMu.Lock()
+			osintCache[ip] = att
+			osintMu.Unlock()
+		}
 	}
-	osintMu.Unlock()
 
 	// Extract port from payload dynamically
 	port := "80/443"
