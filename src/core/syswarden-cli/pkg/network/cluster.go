@@ -59,7 +59,7 @@ func SetupHACluster() error {
 						f, err := os.OpenFile(knownHosts, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 						if err == nil {
 							_, _ = f.Write(keyOut)
-							f.Close()
+							_ = f.Close()
 							fmt.Printf("[+] Peer %s host key securely added to known_hosts.\n", ip)
 						}
 					} else {
