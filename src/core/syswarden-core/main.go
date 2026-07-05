@@ -61,6 +61,9 @@ func main() {
 	waapEngine := network.NewWAAPEngine(fwManager, telemetryLogger)
 	waapEngine.Start()
 
+	// Start HA P2P Server (Zero-Touch TLS)
+	network.StartHAServer(fwManager)
+
 	// Handle Graceful Shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

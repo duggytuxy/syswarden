@@ -1,3 +1,10 @@
+# Release v3.51.0
+
+## UPGRADED
+- **High Availability (HA) Zero-Touch TLS P2P Clustering**: The HA synchronization architecture has been completely rewritten in native Go. It abandons the legacy SSH-based sync (and its requirement for manual key exchanges) in favor of a highly scalable, "Zero-Touch" TLS P2P API. `syswarden-core` now integrates a micro-server (`ha_api.go`) that dynamically generates self-signed certificates and strictly enforces Zero-Trust TCP IP validation against `SYSWARDEN_HA_PEER_IP` to instantly and securely broadcast banned IPs across 500+ node clusters without any user intervention.
+
+---
+
 # Release v3.50.5
 
 ## ADDED
