@@ -37,7 +37,7 @@ func loadHAConfig() HAConfig {
 	if err != nil {
 		return cfg
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -176,13 +176,13 @@ func StartHAServer(fwManager firewall.Manager) {
 					f, _ := os.OpenFile("/etc/syswarden/lists/syswarden_blacklist.ipv4", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
 					if f != nil {
 						_, _ = f.WriteString(ip + "\n")
-						f.Close()
+						_ = f.Close()
 					}
 				} else {
 					f, _ := os.OpenFile("/etc/syswarden/lists/syswarden_blacklist.ipv6", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
 					if f != nil {
 						_, _ = f.WriteString(ip + "\n")
-						f.Close()
+						_ = f.Close()
 					}
 				}
 			}

@@ -65,17 +65,17 @@ func SyncHAPeer() error {
 		
 		if resp.StatusCode != http.StatusOK {
 			fmt.Printf("[ERROR] HA Peer rejected the connection. HTTP Status: %d\n", resp.StatusCode)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			continue
 		}
 
 		var remoteData HASyncPayload
 		if err := json.NewDecoder(resp.Body).Decode(&remoteData); err != nil {
 			fmt.Printf("[ERROR] Failed to decode remote HA list: %v\n", err)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		remoteIPs := make(map[string]bool)
 		for _, ip := range remoteData.IPs {
@@ -120,10 +120,10 @@ func SyncHAPeer() error {
 
 		if postResp.StatusCode != http.StatusOK {
 			fmt.Printf("[ERROR] HA Peer %s rejected the push. HTTP Status: %d\n", peerIP, postResp.StatusCode)
-			postResp.Body.Close()
+			_ = postResp.Body.Close()
 			continue
 		}
-		postResp.Body.Close()
+		_ = postResp.Body.Close()
 
 		fmt.Printf("[+] Successfully synchronized %d IPs to Peer %s.\n", len(toPush), peerIP)
 	}
