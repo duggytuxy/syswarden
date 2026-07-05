@@ -1,3 +1,10 @@
+# Release v3.51.1
+
+## ADDED
+- **Zero-Touch Auto-Whitelist (HA Cluster)**: The HA clustering engine now natively and autonomously whitelists all configured `SYSWARDEN_HA_PEER_IP` nodes upon installation or reload. This eliminates the need for manual firewall interventions, ensuring the native TLS P2P API seamlessly bypasses the default-deny ruleset during cluster bootstrapping.
+
+---
+
 # Release v3.51.0
 
 ## UPGRADED

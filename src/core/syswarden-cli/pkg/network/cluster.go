@@ -41,6 +41,13 @@ func SetupHACluster() error {
 
 	fmt.Printf("[INFO] Configuring HA Synchronization Engine to Peers: %v on port %s\n", peerIPs, peerPort)
 
+	// Auto-whitelist Peer IPs to allow HA traffic through the firewall
+	for _, ip := range peerIPs {
+		// Just call the binary to avoid cyclical imports or complex logic
+		fmt.Printf("[INFO] Auto-whitelisting HA Peer IP: %s\n", ip)
+		_ = exec.Command("/opt/syswarden/bin/syswarden-cli", "whitelist", ip).Run()
+	}
+
 	// Trust On First Use (TOFU): Automatically fetch and store the peer's host key
 	if config.GlobalConfig.HAStrictHostKey {
 		homeDir, err := os.UserHomeDir()
