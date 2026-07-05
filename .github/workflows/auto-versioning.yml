@@ -5,8 +5,13 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   version-bump:
+    permissions:
+      contents: write  # for Git to git push
     name: "SysWarden Version Bumper"
     runs-on: ubuntu-latest
     timeout-minutes: 10
