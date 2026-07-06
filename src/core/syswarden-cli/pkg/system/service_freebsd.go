@@ -47,17 +47,17 @@ start_cmd="syswarden_start"
 stop_cmd="syswarden_stop"
 
 syswarden_start() {
-    echo "Starting SysWarden..."
+    echo "Starting SYSWARDEN..."
     /usr/sbin/daemon -p ${pidfile} ${command}
 }
 
 syswarden_stop() {
     if [ -f ${pidfile} ]; then
-        echo "Stopping SysWarden..."
+        echo "Stopping SYSWARDEN..."
         kill $(cat ${pidfile})
         rm -f ${pidfile}
     else
-        echo "SysWarden is not running."
+        echo "SYSWARDEN is not running."
     fi
 }
 
@@ -80,6 +80,6 @@ run_rc_command "$1"
 		fmt.Printf("[WARN] Failed to start syswarden service: %v\n", err)
 	}
 
-	fmt.Println("[SUCCESS] SysWarden rc.d service configured and enabled.")
+	fmt.Println("[SUCCESS] SYSWARDEN rc.d service configured and enabled.")
 	return nil
 }

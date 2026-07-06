@@ -51,7 +51,7 @@ func ApplyCISHardening() error {
 
 func disableObscureFilesystems() error {
 	fmt.Println(" -> Disabling obscure filesystems (CIS 1.1.1.1 - 1.1.1.8)")
-	content := `# --- SysWarden: CIS Level 2 Filesystem Hardening ---
+	content := `# --- SYSWARDEN: CIS Level 2 Filesystem Hardening ---
 install cramfs /bin/true
 install freevxfs /bin/true
 install jffs2 /bin/true
@@ -73,7 +73,7 @@ install udf /bin/true
 
 func disableUncommonProtocols() error {
 	fmt.Println(" -> Disabling uncommon network protocols (CIS 3.3.1 - 3.3.4)")
-	content := `# --- SysWarden: CIS Level 2 Network Protocol Hardening ---
+	content := `# --- SYSWARDEN: CIS Level 2 Network Protocol Hardening ---
 install dccp /bin/true
 install sctp /bin/true
 install rds /bin/true
@@ -92,7 +92,7 @@ install tipc /bin/true
 
 func applySysctl() error {
 	fmt.Println(" -> Applying strict kernel parameters (CIS 1.5, 3.2)")
-	content := `# --- SysWarden: CIS Level 2 Kernel Hardening ---
+	content := `# --- SYSWARDEN: CIS Level 2 Kernel Hardening ---
 fs.suid_dumpable = 0
 kernel.randomize_va_space = 2
 kernel.unprivileged_bpf_disabled = 1
@@ -123,7 +123,7 @@ func restrictCoreDumps() error {
 	fmt.Println(" -> Enforcing hard limits on core dumps (CIS 1.5.1)")
 	_ = os.MkdirAll("/etc/security/limits.d", 0755)
 
-	limitsContent := "# --- SysWarden: CIS Level 2 Limits ---\n* hard core 0\n"
+	limitsContent := "# --- SYSWARDEN: CIS Level 2 Limits ---\n* hard core 0\n"
 	if err := os.WriteFile("/etc/security/limits.d/99-syswarden-cis.conf", []byte(limitsContent), 0644); err != nil {
 		return err
 	}

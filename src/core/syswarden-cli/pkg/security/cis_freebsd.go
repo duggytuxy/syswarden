@@ -51,7 +51,7 @@ func ApplyCISHardening() error {
 
 func disableObscureFilesystems() error {
 	fmt.Println(" -> Disabling obscure filesystems and USB storage auto-mount")
-	content := `# --- SysWarden: CIS Level 2 Hardware/FS Hardening ---
+	content := `# --- SYSWARDEN: CIS Level 2 Hardware/FS Hardening ---
 hw.usb.no_umass="1"
 `
 	if _, err := os.Stat("/boot/loader.conf.local"); os.IsNotExist(err) {
@@ -75,7 +75,7 @@ func disableUncommonProtocols() error {
 
 func applySysctl() error {
 	fmt.Println(" -> Applying strict FreeBSD kernel parameters (CIS / Zero-Trust)")
-	content := `# --- SysWarden: CIS Level 2 Kernel Hardening (FreeBSD) ---
+	content := `# --- SYSWARDEN: CIS Level 2 Kernel Hardening (FreeBSD) ---
 security.bsd.see_other_uids=0
 security.bsd.see_other_gids=0
 security.bsd.unprivileged_read_msgbuf=0
@@ -92,7 +92,7 @@ net.inet.udp.checksum=1
 `
 	sysctlPath := "/etc/sysctl.conf"
 	existing, _ := os.ReadFile(sysctlPath)
-	if !strings.Contains(string(existing), "SysWarden: CIS") {
+	if !strings.Contains(string(existing), "SYSWARDEN: CIS") {
 		f, _ := os.OpenFile(sysctlPath, os.O_APPEND|os.O_WRONLY, 0644)
 		_, _ = f.WriteString("\n" + content)
 		f.Close()
@@ -201,7 +201,7 @@ func enableAutomaticSecurityUpdates() error {
 	if err == nil {
 		if !strings.Contains(string(content), "freebsd-update") {
 			f, _ := os.OpenFile(crontabPath, os.O_APPEND|os.O_WRONLY, 0644)
-			_, _ = f.WriteString("\n# SysWarden: Automatic Security Updates\n0 3 * * * root /usr/sbin/freebsd-update cron\n")
+			_, _ = f.WriteString("\n# SYSWARDEN: Automatic Security Updates\n0 3 * * * root /usr/sbin/freebsd-update cron\n")
 			f.Close()
 		}
 	}

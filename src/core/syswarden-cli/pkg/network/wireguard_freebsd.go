@@ -12,7 +12,7 @@ import (
 
 func SetupWireguard() error {
 	if !config.GlobalConfig.EnableWG {
-		fmt.Println("[INFO] WireGuard is disabled in SysWarden configuration. Skipping WireGuard setup.")
+		fmt.Println("[INFO] WireGuard is disabled in SYSWARDEN configuration. Skipping WireGuard setup.")
 		return nil
 	}
 

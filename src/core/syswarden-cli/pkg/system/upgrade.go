@@ -50,7 +50,7 @@ func downloadFile(url, dest string) error {
 
 // UpgradeSystem checks for updates natively via GitHub API and installs them
 func UpgradeSystem() error {
-	fmt.Println("[INFO] Checking for SysWarden updates via GitHub API...")
+	fmt.Println("[INFO] Checking for SYSWARDEN updates via GitHub API...")
 
 	apiURL := "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
 	resp, err := http.Get(apiURL)
@@ -78,7 +78,7 @@ func UpgradeSystem() error {
 	fmt.Printf("Latest Version  : %s\n", latestVersion)
 
 	if Version == latestVersion {
-		fmt.Println("[SUCCESS] You are already using the latest version of SysWarden!")
+		fmt.Println("[SUCCESS] You are already using the latest version of SYSWARDEN!")
 		return nil
 	}
 
@@ -86,7 +86,7 @@ func UpgradeSystem() error {
 
 	// 1. Check if it's an APT repository deployment (highly unlikely now, but keeping for compatibility)
 	if _, err := os.Stat("/etc/apt/sources.list.d/syswarden.list"); err == nil {
-		fmt.Println("[INFO] SysWarden is installed via APT repository. Upgrading via apt-get...")
+		fmt.Println("[INFO] SYSWARDEN is installed via APT repository. Upgrading via apt-get...")
 		_ = exec.Command("apt-get", "update").Run()
 		if err := exec.Command("apt-get", "install", "--only-upgrade", "-y", "syswarden").Run(); err != nil {
 			return fmt.Errorf("failed to upgrade via apt-get: %w", err)

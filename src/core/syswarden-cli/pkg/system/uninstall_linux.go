@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// UninstallSystem executes a scorched-earth removal of SysWarden and all its dependencies
+// UninstallSystem executes a scorched-earth removal of SYSWARDEN and all its dependencies
 func UninstallSystem() error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("uninstall must be executed as root")
@@ -18,7 +18,7 @@ func UninstallSystem() error {
 	fmt.Println("[WARN] Starting Deep Clean Uninstallation (Scorched Earth)...")
 
 	// 1. Terminate Daemons
-	fmt.Println(" -> Stopping and removing SysWarden Core Services...")
+	fmt.Println(" -> Stopping and removing SYSWARDEN Core Services...")
 	if IsAlpine() {
 		_ = exec.Command("rc-service", "syswarden-core", "stop").Run()
 		_ = exec.Command("rc-update", "del", "syswarden-core", "default").Run()
@@ -72,7 +72,7 @@ func UninstallSystem() error {
 	_ = os.Remove("/etc/syswarden/syswarden.nft")
 
 	// Legacy iptables purge (DOCKER-USER etc)
-	_ = exec.Command("sh", "-c", "iptables-save | grep -v SysWarden | iptables-restore").Run()
+	_ = exec.Command("sh", "-c", "iptables-save | grep -v SYSWARDEN | iptables-restore").Run()
 
 	// 5. Revert Hardening
 	fmt.Println(" -> Reverting CIS Hardening...")

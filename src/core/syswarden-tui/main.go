@@ -324,7 +324,7 @@ func refreshUI() {
 
 	var servicesStr []string
 	for _, s := range d.System.Services {
-		n := strings.ToUpper(strings.Split(s.Name, " ")[0])
+		n := strings.ToUpper(s.Name)
 		st := strings.ToUpper(s.Status)
 		cSt := "red"
 		switch st {
@@ -332,6 +332,11 @@ func refreshUI() {
 			cSt = "green"
 		case "SKIPPED":
 			cSt = "yellow"
+		case "INACTIVE":
+			cSt = "red"
+		}
+		if strings.Contains(st, ":") {
+			cSt = "cyan"
 		}
 		servicesStr = append(servicesStr, fmt.Sprintf("[white]%s[-]:[%s]%s[-]", n, cSt, st))
 	}
@@ -354,7 +359,7 @@ func refreshUI() {
 	}
 
 	headerLines := fmt.Sprintf(
-		" [gray]Noise:[-] [green]%s[-] │ [gray]Signal:[-] [red]%s[-] │ [gray]Stars:[-] [yellow]%s[-] │ [gray]Release:[-] [cyan]%s[-] │ [gray]Node:[-] [white]%s[-]%s\n\n"+
+		" [gray]Noise:[-] [green]%s[-] │ [gray]Signal:[-] [red]%s[-] │ [gray]Stars:[-] [yellow]%s[-] │ [gray]Release:[-] [cyan]%s[-] │ [gray]NODE:[-] [white]%s[-]%s\n\n"+
 			" [gray]Cores:[-] [white]%s[-] │ [gray]Arch:[-] [white]%s[-] │ [gray]OS:[-] [white]%s[-] │ [gray]CPU:[-] [white]%s[-]\n"+
 			" [gray]Uptime:[-] [cyan]%s[-] │ [gray]Load:[-] [%s]%s[-] │ %s │ %s\n"+
 			" [gray]Services:[-] %s\n"+
@@ -502,7 +507,7 @@ func printDashboardText() {
 	}
 
 	fmt.Println("=== SYSWARDEN ENTERPRISE DASHBOARD (SNAPSHOT) ===")
-	fmt.Printf("[SYSTEM] Node: %s | Uptime: %s | Load: %s\n", d.System.Hostname, d.System.Uptime, load1Str)
+	fmt.Printf("[SYSTEM] NODE: %s | Uptime: %s | Load: %s\n", d.System.Hostname, d.System.Uptime, load1Str)
 	fmt.Printf("[L3 FIREWALL] Global Blocks: %d (GeoIP: %d | ASN: %d)\n", d.Layer3.GlobalBlocked, d.Layer3.GeoIPBlocked, d.Layer3.ASNBlocked)
 	fmt.Printf("[WAAP L7] Active Bans: %d\n", d.WAF.TotalBanned)
 

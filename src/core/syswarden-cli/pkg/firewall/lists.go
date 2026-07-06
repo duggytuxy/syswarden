@@ -227,7 +227,7 @@ func RevokeSSH(ip string) error {
 }
 
 func WhitelistInfra() error {
-	fmt.Println("[INFO] SysWarden Auto-Whitelist Infrastructure")
+	fmt.Println("[INFO] SYSWARDEN Auto-Whitelist Infrastructure")
 	ips := []string{}
 
 	// 1. Admin IP Detection
@@ -305,7 +305,7 @@ func CheckIP(ip string) {
 		return
 	}
 
-	fmt.Printf("\n=== SysWarden Global Search: %s ===\n", ip)
+	fmt.Printf("\n=== SYSWARDEN Global Search: %s ===\n", ip)
 
 	checkFile := func(filepath, name string) {
 		fmt.Printf("[Storage] %-20s : ", name)
@@ -335,7 +335,7 @@ func CheckIP(ip string) {
 
 // ListIPs prints out all custom IP lists
 func ListIPs() {
-	fmt.Printf("\n=== SysWarden Custom IP Registry (%s) ===\n", system.Version)
+	fmt.Printf("\n=== SYSWARDEN Custom IP Registry (%s) ===\n", system.Version)
 
 	printFile := func(filepath, title string) {
 		fmt.Printf("\n[ %s ]\n", title)

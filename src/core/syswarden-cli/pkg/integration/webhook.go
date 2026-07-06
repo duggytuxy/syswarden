@@ -52,22 +52,22 @@ func SetupWebhooks() error {
 
 		hostname, _ := os.Hostname()
 		if hostname == "" {
-			hostname = "SysWarden-Node"
+			hostname = "SYSWARDEN-NODE"
 		}
 
 		payload := DiscordPayload{
 			Content: nil,
 			Embeds: []DiscordEmbed{
 				{
-					Title:       "🟢 SysWarden Integration Successful",
+					Title:       "🟢 SYSWARDEN Integration Successful",
 					Description: "Native Go Webhook integration established.",
 					Color:       3066993, // Green
 					Fields: []EmbedField{
 						{Name: "Version", Value: "v3.51.6", Inline: true},
-						{Name: "Node", Value: hostname, Inline: true},
+						{Name: "NODE", Value: hostname, Inline: true},
 						{Name: "Status", Value: "Active", Inline: true},
 					},
-					Footer:    EmbedFooter{Text: "SysWarden Advanced Agentic Defense"},
+					Footer:    EmbedFooter{Text: "SYSWARDEN Advanced Agentic Defense"},
 					Timestamp: time.Now().UTC().Format(time.RFC3339),
 				},
 			},
@@ -104,22 +104,22 @@ func SendBanAlert(ip string) {
 
 	hostname, _ := os.Hostname()
 	if hostname == "" {
-		hostname = "SysWarden-Node"
+		hostname = "SYSWARDEN-NODE"
 	}
 
 	payload := DiscordPayload{
 		Content: nil,
 		Embeds: []DiscordEmbed{
 			{
-				Title:       "🚨 SysWarden Manual Block",
+				Title:       "🚨 SYSWARDEN Manual Block",
 				Description: "An IP was manually blocked by an Administrator via CLI.",
 				Color:       16753920, // Orange
 				Fields: []EmbedField{
 					{Name: "Target IP", Value: ip, Inline: true},
 					{Name: "Action", Value: "Manual Kernel Drop", Inline: true},
-					{Name: "Node", Value: hostname, Inline: true},
+					{Name: "NODE", Value: hostname, Inline: true},
 				},
-				Footer:    EmbedFooter{Text: "SysWarden Advanced Agentic Defense"},
+				Footer:    EmbedFooter{Text: "SYSWARDEN Advanced Agentic Defense"},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
 		},

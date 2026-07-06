@@ -91,19 +91,19 @@ func StreamKernelLogs(app *tview.Application, table *tview.Table) {
 	ipRegex := regexp.MustCompile(`SRC=([0-9a-fA-F:.]+)`)
 	portRegex := regexp.MustCompile(`DPT=([0-9]+)`)
 	protoRegex := regexp.MustCompile(`PROTO=([A-Za-z0-9]+)`)
-	modRegex := regexp.MustCompile(`\[(SysWarden-[A-Za-z]+|Catch-All)\]`)
+	modRegex := regexp.MustCompile(`\[(SYSWARDEN-[A-Za-z]+|CATCH-ALL)\]`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.Contains(line, "SysWarden-") && !strings.Contains(line, "Catch-All") {
+		if !strings.Contains(line, "SYSWARDEN-") && !strings.Contains(line, "CATCH-ALL") {
 			continue
 		}
 
 		date := time.Now().Format("2006-01-02 15:04:05")
-		module := "SysWarden-DROP"
+		module := "SYSWARDEN-DROP"
 		modColor := tcell.ColorBlue
-		if strings.Contains(line, "[Catch-All]") {
-			module = "SysWarden-CATCH"
+		if strings.Contains(line, "[CATCH-ALL]") {
+			module = "SYSWARDEN-CATCH"
 			modColor = tcell.ColorDarkCyan
 		} else if m := modRegex.FindStringSubmatch(line); len(m) > 1 {
 			module = m[1]
@@ -224,18 +224,18 @@ func StreamKernelLogsText() {
 	ipRegex := regexp.MustCompile(`SRC=([0-9a-fA-F:.]+)`)
 	portRegex := regexp.MustCompile(`DPT=([0-9]+)`)
 	protoRegex := regexp.MustCompile(`PROTO=([A-Za-z0-9]+)`)
-	modRegex := regexp.MustCompile(`\[(SysWarden-[A-Za-z]+|Catch-All)\]`)
+	modRegex := regexp.MustCompile(`\[(SYSWARDEN-[A-Za-z]+|CATCH-ALL)\]`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.Contains(line, "SysWarden-") && !strings.Contains(line, "Catch-All") {
+		if !strings.Contains(line, "SYSWARDEN-") && !strings.Contains(line, "CATCH-ALL") {
 			continue
 		}
 
 		date := time.Now().Format("2006-01-02 15:04:05")
-		module := "SysWarden-DROP"
-		if strings.Contains(line, "[Catch-All]") {
-			module = "SysWarden-CATCH"
+		module := "SYSWARDEN-DROP"
+		if strings.Contains(line, "[CATCH-ALL]") {
+			module = "SYSWARDEN-CATCH"
 		} else if m := modRegex.FindStringSubmatch(line); len(m) > 1 {
 			module = m[1]
 		}

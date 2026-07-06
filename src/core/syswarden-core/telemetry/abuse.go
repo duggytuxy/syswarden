@@ -59,7 +59,7 @@ func ReportAbuseAsync(ip string, jail string) {
 
 	go func() {
 		hostname, _ := os.Hostname()
-		comment := fmt.Sprintf("[%s] Banned by SysWarden Firewall (Jail: %s)", hostname, jail)
+		comment := fmt.Sprintf("[%s] Banned by SYSWARDEN Firewall (Jail: %s)", hostname, jail)
 
 		// Map jails to categories
 		categories := "14,15,18,21"

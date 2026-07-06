@@ -77,7 +77,7 @@ func checkFilePerms(filepath string, validPerms []string, expectedOwner string) 
 }
 
 func RunAudit() {
-	fmt.Printf("\033[1;36m=== SysWarden %s Enterprise Full Audit (Go Engine) ===\033[0m\n", Version)
+	fmt.Printf("\033[1;36m=== SYSWARDEN %s Enterprise Full Audit (Go Engine) ===\033[0m\n", Version)
 
 	// Phase 1
 	logHeader("Phase 1: Cron Orchestration")
@@ -86,9 +86,9 @@ func RunAudit() {
 	if cronCount == 1 {
 		pass("Cron Orchestration VERIFIED: 'syswarden-cli update-feeds' is actively scheduled.")
 	} else if cronCount > 1 {
-		fail(fmt.Sprintf("Cron Duplication FAILED: %d SysWarden cron jobs detected! Idempotency violated.", cronCount))
+		fail(fmt.Sprintf("Cron Duplication FAILED: %d SYSWARDEN cron jobs detected! Idempotency violated.", cronCount))
 	} else {
-		warn("Cron Orchestration: No automated SysWarden background jobs found.")
+		warn("Cron Orchestration: No automated SYSWARDEN background jobs found.")
 	}
 
 	// Phase 2
@@ -168,9 +168,9 @@ func RunAudit() {
 	}
 
 	// Phase 4
-	logHeader("Phase 4: Layer 7 Active Defense (SysWarden WAF)")
+	logHeader("Phase 4: Layer 7 Active Defense (SYSWARDEN WAF)")
 	if isServiceActive("syswarden-core") {
-		pass("SysWarden WAF service (syswarden-core) is running.")
+		pass("SYSWARDEN WAF service (syswarden-core) is running.")
 
 		if config.GlobalConfig.BruteforceLogs != "" {
 			if strings.ToLower(config.GlobalConfig.BruteforceLogs) == "auto" {
@@ -185,9 +185,9 @@ func RunAudit() {
 		}
 
 		if _, err := os.Stat("/var/run/syswarden.sock"); err == nil {
-			pass("SysWarden UDS socket is active and listening for telemetry.")
+			pass("SYSWARDEN UDS socket is active and listening for telemetry.")
 		} else {
-			fail("SysWarden UDS socket (/var/run/syswarden.sock) is MISSING. Vector logs will be dropped!")
+			fail("SYSWARDEN UDS socket (/var/run/syswarden.sock) is MISSING. Vector logs will be dropped!")
 		}
 		if _, err := os.Stat("/var/log/syswarden/waf.json"); err == nil {
 			pass("WAF JSON telemetry backend is functioning.")
@@ -195,7 +195,7 @@ func RunAudit() {
 			fail("WAF JSON telemetry backend is inactive (No waf.json).")
 		}
 	} else {
-		fail("SysWarden WAF service is completely offline.")
+		fail("SYSWARDEN WAF service is completely offline.")
 	}
 
 	// Phase 5
@@ -231,5 +231,5 @@ func RunAudit() {
 		}
 	}
 
-	fmt.Printf("\n\033[1;32m[✔] SysWarden Audit Sequence Completed.\033[0m\n")
+	fmt.Printf("\n\033[1;32m[✔] SYSWARDEN Audit Sequence Completed.\033[0m\n")
 }

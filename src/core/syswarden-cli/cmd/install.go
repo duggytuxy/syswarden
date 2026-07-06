@@ -14,10 +14,10 @@ import (
 
 var installCmd = &cobra.Command{
 	Use:   "install",
-	Short: "Install SysWarden and configure security modules",
-	Long:  `Executes the fully automated SysWarden installation pipeline.`,
+	Short: "Install SYSWARDEN and configure security modules",
+	Long:  `Executes the fully automated SYSWARDEN installation pipeline.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("[SysWarden] Starting %s Installation Pipeline...\n", system.Version)
+		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
 
 		if err := system.InstallDependencies(); err != nil {
 			fmt.Printf("[ERROR] Dependency installation failed: %v\n", err)
@@ -35,7 +35,7 @@ var installCmd = &cobra.Command{
 		}
 
 		// Phase 2: Network Intelligence
-		fmt.Println("[SysWarden] Starting Network Intelligence Downloader...")
+		fmt.Println("[SYSWARDEN] Starting Network Intelligence Downloader...")
 		mirrorURL := config.GlobalConfig.CustomURL
 		if mirrorURL == "" {
 			mirrorURL = "https://codeberg.org/"
@@ -50,7 +50,7 @@ var installCmd = &cobra.Command{
 		}
 
 		// Phase 2: Firewall Orchestration
-		fmt.Println("[SysWarden] Starting Firewall Engine...")
+		fmt.Println("[SYSWARDEN] Starting Firewall Engine...")
 
 		if err := system.OptimizeHostFirewall(); err != nil {
 			fmt.Printf("[ERROR] Host firewall optimization failed: %v\n", err)
@@ -61,12 +61,12 @@ var installCmd = &cobra.Command{
 		}
 
 		if err := firewall.ApplyPolicies(); err != nil {
-			fmt.Printf("[ERROR] Failed to apply SysWarden Overlay rules: %v\n", err)
+			fmt.Printf("[ERROR] Failed to apply SYSWARDEN Overlay rules: %v\n", err)
 			return
 		}
 
 		// Phase 3: External Integrations & Log Bridges
-		fmt.Println("[SysWarden] Starting Integrations & Log Bridges...")
+		fmt.Println("[SYSWARDEN] Starting Integrations & Log Bridges...")
 		if err := integration.SetupWAFLogForwarder(); err != nil {
 			fmt.Printf("[ERROR] WAF Log Bridge failed: %v\n", err)
 		}
@@ -84,7 +84,7 @@ var installCmd = &cobra.Command{
 		}
 
 		// Phase 4: Security Hardening (Wave 1 of Grand Purge)
-		fmt.Println("[SysWarden] Starting OS & CIS Hardening...")
+		fmt.Println("[SYSWARDEN] Starting OS & CIS Hardening...")
 		if err := security.ApplyCISHardening(); err != nil {
 			fmt.Printf("[ERROR] CIS Hardening failed: %v\n", err)
 		}
@@ -93,7 +93,7 @@ var installCmd = &cobra.Command{
 		}
 
 		// Phase 2.5: Private Network & HA (Wave 2 of Grand Purge)
-		fmt.Println("[SysWarden] Starting Private Network & HA Cluster...")
+		fmt.Println("[SYSWARDEN] Starting Private Network & HA Cluster...")
 		if err := network.SetupWireguard(); err != nil {
 			fmt.Printf("[ERROR] WireGuard setup failed: %v\n", err)
 		}
@@ -102,12 +102,12 @@ var installCmd = &cobra.Command{
 		}
 
 		// Phase 5: Deployment Orchestration
-		fmt.Println("[SysWarden] Starting Systemd Orchestration...")
+		fmt.Println("[SYSWARDEN] Starting Systemd Orchestration...")
 		if err := system.SetupService(); err != nil {
 			fmt.Printf("[ERROR] Systemd setup failed: %v\n", err)
 		}
 
-		fmt.Println("[SysWarden] v3.51.6 Native Installation Complete.")
+		fmt.Println("[SYSWARDEN] v3.51.6 Native Installation Complete.")
 	},
 }
 

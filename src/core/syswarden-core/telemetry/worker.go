@@ -251,8 +251,8 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// 1. Parse Catch-All Drops for L3 Portscanners (Fail2ban Parity)
-		if strings.Contains(line, "[Catch-All]") {
+		// 1. Parse CATCH-ALL Drops for L3 Portscanners (Fail2ban Parity)
+		if strings.Contains(line, "[CATCH-ALL]") {
 			ip := extractField(line, "SRC=")
 			if ip != "" {
 				if utils.IsWhitelisted(ip) {
@@ -272,7 +272,7 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 					logBan(ip, "L3-PORTSCAN", line)
 				}
 			}
-		} else if strings.Contains(line, "[SysWarden-HONEYPORT]") {
+		} else if strings.Contains(line, "[SYSWARDEN-HONEYPORT]") {
 			ip := extractField(line, "SRC=")
 			if ip != "" {
 				if utils.IsWhitelisted(ip) {
@@ -295,7 +295,7 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 					logBan(ip, "L3-HONEYPORT-SCAN", line)
 				}
 			}
-		} else if strings.Contains(line, "[SysWarden-ARP-FLOOD]") {
+		} else if strings.Contains(line, "[SYSWARDEN-ARP-FLOOD]") {
 			ip := extractField(line, "SRC=")
 			if ip == "" {
 				ip = extractField(line, "MAC=") // Fallback to MAC if SRC IP is missing
@@ -314,7 +314,7 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 					break
 				}
 			}
-			logBan(ip, "L2-ARP-FLOOD", "[SysWarden-ARP-FLOOD] "+line)
+			logBan(ip, "L2-ARP-FLOOD", "[SYSWARDEN-ARP-FLOOD] "+line)
 		}
 	}
 	_ = cmd.Wait()
@@ -512,6 +512,65 @@ func getSystemStats() SystemData {
 	if sys.Ports == nil {
 		sys.Ports = make([]Port, 0)
 	}
+
+	// --- Virtual Service: SYSWARDEN-HA-CLUSTER ---
+	haStatus := "SKIPPED"
+	haEnabled := false
+	haPort := "62026"
+	if b, err := os.ReadFile("/etc/syswarden/syswarden.conf"); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, "SYSWARDEN_HA_ENABLED=") {
+				haEnabled = strings.TrimSpace(strings.Split(line, "=")[1]) == "true"
+			}
+			if strings.HasPrefix(line, "SYSWARDEN_HA_PEER_PORT=") {
+				haPort = strings.TrimSpace(strings.Split(line, "=")[1])
+			}
+		}
+	}
+	if haEnabled {
+		haStatus = "INACTIVE"
+		for _, p := range sys.Ports {
+			if p.Port == haPort && p.State == "LISTEN" {
+				haStatus = "ACTIVE"
+				break
+			}
+		}
+	}
+	sys.Services = append(sys.Services, Service{
+		Name:   "SYSWARDEN-HA-CLUSTER",
+		Status: haStatus,
+	})
+
+	// --- Virtual Service: SYSWARDEN-UPDATE-FEEDS ---
+	feedsTimer := "SKIPPED"
+	outFeeds, errFeeds := exec.Command("crontab", "-l").Output()
+	if errFeeds == nil {
+		lines := strings.Split(string(outFeeds), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "syswarden-cli update-feeds") {
+				parts := strings.Fields(line)
+				if len(parts) > 0 {
+					minute, errMin := strconv.Atoi(parts[0])
+					if errMin == nil {
+						now := time.Now()
+						nextRun := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), minute, 0, 0, now.Location())
+						if now.After(nextRun) {
+							nextRun = nextRun.Add(time.Hour)
+						}
+						diff := nextRun.Sub(now)
+						h := int(diff.Hours())
+						m := int(diff.Minutes()) % 60
+						s := int(diff.Seconds()) % 60
+						feedsTimer = fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+					}
+				}
+			}
+		}
+	}
+	sys.Services = append(sys.Services, Service{
+		Name:   "SYSWARDEN-UPDATE-FEEDS",
+		Status: feedsTimer,
+	})
 
 	cachedSys = sys
 	lastSysFetch = time.Now()

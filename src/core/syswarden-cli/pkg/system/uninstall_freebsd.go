@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// UninstallSystem executes a scorched-earth removal of SysWarden and all its dependencies on FreeBSD
+// UninstallSystem executes a scorched-earth removal of SYSWARDEN and all its dependencies on FreeBSD
 func UninstallSystem() error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("uninstall must be executed as root")
@@ -18,7 +18,7 @@ func UninstallSystem() error {
 	fmt.Println("[WARN] Starting Deep Clean Uninstallation (Scorched Earth) on FreeBSD...")
 
 	// 1. Terminate Daemons
-	fmt.Println(" -> Stopping and removing SysWarden Core Services...")
+	fmt.Println(" -> Stopping and removing SYSWARDEN Core Services...")
 	_ = exec.Command("service", "syswarden", "stop").Run()
 	_ = exec.Command("sysrc", "-x", "syswarden_enable").Run()
 	_ = os.Remove("/usr/local/etc/rc.d/syswarden")

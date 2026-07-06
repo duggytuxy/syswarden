@@ -8,7 +8,7 @@ import (
 
 var auditCmd = &cobra.Command{
 	Use:   "audit",
-	Short: "Performs a full Enterprise SysWarden Audit",
+	Short: "Performs a full Enterprise SYSWARDEN Audit",
 	Run: func(cmd *cobra.Command, args []string) {
 		system.RunAudit()
 	},

@@ -79,7 +79,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			Organization: []string{"SysWarden HA Cluster"},
+			Organization: []string{"SYSWARDEN HA Cluster"},
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),

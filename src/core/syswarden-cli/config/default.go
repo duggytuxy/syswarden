@@ -25,7 +25,7 @@ SYSWARDEN_ENTERPRISE_MODE="n"
 SYSWARDEN_SSH_PORT=""
 
 # --- Firewall Engine Optimization (RHEL/Alma/Fedora) ---
-# If firewalld is detected, SysWarden can replace it for extreme performance.
+# If firewalld is detected, SYSWARDEN can replace it for extreme performance.
 # "nftables" = Replace with pure Nftables (Recommended for massive blocklists)
 # "iptables" = Replace with classic Iptables (Via iptables-services)
 # "keep"     = Do not modify Firewalld (Warning: Reloads will be very slow)
@@ -54,7 +54,7 @@ SYSWARDEN_MODSEC_LOGS="/var/log/modsec/*.log"
 
 # --- WAAP (L7) Engine & Advanced Signatures ---
 # Space-separated list of application access logs to tail (e.g., Traefik, Nginx, Apache)
-# SysWarden will natively parse these files in real-time to detect advanced exploits (SQLi, XSS, RCE, LFI)
+# SYSWARDEN will natively parse these files in real-time to detect advanced exploits (SQLi, XSS, RCE, LFI)
 # and automatically track HTTP 401/403/404 bruteforce thresholds.
 # Use "auto" to automatically discover Nginx, Apache, Caddy, Traefik, or HTTPD logs.
 # Leave empty ("") to completely disable the L7 WAAP Engine.
@@ -66,7 +66,7 @@ SYSWARDEN_BRUTEFORCE_WINDOW="60"
 
 # --- Honeyports (Insider Threat / PrivEsc Detection) ---
 # Active ONLY if SYSWARDEN_LAN_MODE="y" or manually verified.
-# SysWarden natively blocks and traces any connection attempt to these ports as a malicious Lateral Movement.
+# SYSWARDEN natively blocks and traces any connection attempt to these ports as a malicious Lateral Movement.
 SYSWARDEN_HONEYPORTS="6379,23"
 
 # --- OS Hardening ---
@@ -110,9 +110,9 @@ SYSWARDEN_USE_SPAMHAUS="n"
 # --- HA Cluster Sync ---
 # y = Enable, n = Disable (Replicates state to a standby node over encrypted channels)
 SYSWARDEN_HA_ENABLED="y"
-# Standby Node IP (Automatically whitelisted for TLS P2P API)
+# Standby NODE IP (Automatically whitelisted for TLS P2P API)
 SYSWARDEN_HA_PEER_IP=""
-# Standby Node TLS Port
+# Standby NODE TLS Port
 SYSWARDEN_HA_PEER_PORT="62026"
 
 # --- SIEM Log Forwarding (ISO 27001 / NIS2 COMPLIANT) ---

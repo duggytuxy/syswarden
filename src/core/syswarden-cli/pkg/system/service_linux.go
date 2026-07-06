@@ -23,7 +23,7 @@ func SetupService() error {
 		coreScript := `#!/sbin/openrc-run
 
 name="syswarden-core"
-description="SysWarden WAF and Core Engine"
+description="SYSWARDEN WAF and Core Engine"
 command="/opt/syswarden/bin/syswarden-core"
 command_background=true
 pidfile="/run/syswarden-core.pid"
@@ -36,7 +36,7 @@ depend() {
 			return fmt.Errorf("failed to write openrc service file: %w", err)
 		}
 
-		fmt.Println("[INFO] Enabling and starting SysWarden Core service...")
+		fmt.Println("[INFO] Enabling and starting SYSWARDEN Core service...")
 		if err := exec.Command("rc-update", "add", "syswarden-core", "default").Run(); err != nil {
 			fmt.Printf("[WARN] Failed to enable syswarden-core: %v\n", err)
 		}
@@ -47,14 +47,14 @@ depend() {
 		firewallScript := `#!/sbin/openrc-run
 
 name="syswarden-firewall"
-description="SysWarden Firewall Persistence & Engine Loader"
+description="SYSWARDEN Firewall Persistence & Engine Loader"
 
 depend() {
 	before syswarden-core
 }
 
 start() {
-	ebegin "Loading SysWarden Firewall Persistence"
+	ebegin "Loading SYSWARDEN Firewall Persistence"
 	/opt/syswarden/bin/syswarden-cli reload --no-restart
 	eend $?
 }
@@ -63,7 +63,7 @@ start() {
 			return fmt.Errorf("failed to write openrc firewall file: %w", err)
 		}
 
-		fmt.Println("[INFO] Enabling SysWarden Firewall Persistence...")
+		fmt.Println("[INFO] Enabling SYSWARDEN Firewall Persistence...")
 		if err := exec.Command("rc-update", "add", "syswarden-firewall", "default").Run(); err != nil {
 			fmt.Printf("[WARN] Failed to enable syswarden-firewall: %v\n", err)
 		}
@@ -88,7 +88,7 @@ start() {
 	servicePath := "/etc/systemd/system/syswarden-core.service"
 
 	serviceContent := `[Unit]
-Description=SysWarden WAF and Core Engine
+Description=SYSWARDEN WAF and Core Engine
 After=network.target rsyslog.service
 Wants=network-online.target
 
@@ -120,14 +120,14 @@ WantedBy=multi-user.target
 		fmt.Printf("[WARN] Failed to daemon-reload: %v\n", err)
 	}
 
-	fmt.Println("[INFO] Enabling and starting SysWarden Core service...")
+	fmt.Println("[INFO] Enabling and starting SYSWARDEN Core service...")
 	if err := exec.Command("systemctl", "enable", "--now", "syswarden-core.service").Run(); err != nil {
 		fmt.Printf("[WARN] Failed to enable/start syswarden-core.service: %v\n", err)
 	}
 
 	firewallServicePath := "/etc/systemd/system/syswarden-firewall.service"
 	firewallServiceContent := `[Unit]
-Description=SysWarden Firewall Persistence & Engine Loader
+Description=SYSWARDEN Firewall Persistence & Engine Loader
 After=network-online.target
 Wants=network-online.target
 Before=syswarden-core.service
@@ -146,7 +146,7 @@ WantedBy=multi-user.target
 	}
 
 	_ = exec.Command("systemctl", "daemon-reload").Run()
-	fmt.Println("[INFO] Enabling SysWarden Firewall Persistence...")
+	fmt.Println("[INFO] Enabling SYSWARDEN Firewall Persistence...")
 	if err := exec.Command("systemctl", "enable", "--now", "syswarden-firewall.service").Run(); err != nil {
 		fmt.Printf("[WARN] Failed to enable/start syswarden-firewall.service: %v\n", err)
 	}

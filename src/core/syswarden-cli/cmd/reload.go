@@ -16,7 +16,7 @@ var reloadCmd = &cobra.Command{
 	Use:   "reload",
 	Short: "Reload configuration and restart security engines",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("[*] Reloading SysWarden configuration from memory...")
+		fmt.Println("[*] Reloading SYSWARDEN configuration from memory...")
 
 		// Re-apply Firewall and Whitelists based on new config
 		if err := firewall.ApplyPolicies(); err != nil {
@@ -53,7 +53,7 @@ var reloadCmd = &cobra.Command{
 			_ = exec.Command("systemctl", "restart", "syswarden-core.service").Run()
 		}
 
-		fmt.Println("[SUCCESS] SysWarden configuration reloaded natively.")
+		fmt.Println("[SUCCESS] SYSWARDEN configuration reloaded natively.")
 	},
 }
 

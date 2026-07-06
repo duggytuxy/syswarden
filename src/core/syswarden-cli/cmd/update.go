@@ -9,7 +9,7 @@ import (
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Check and install SysWarden updates",
+	Short: "Check and install SYSWARDEN updates",
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := system.UpgradeSystem(); err != nil {
 			fmt.Printf("[ERROR] %v\n", err)

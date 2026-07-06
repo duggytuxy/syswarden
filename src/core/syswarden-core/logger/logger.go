@@ -82,7 +82,7 @@ func (l *Logger) LogBan(ip, jail, payload string) {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
 
-	log.Printf("[SysWarden-BLOCK] IP=%s Jail=%s Payload=%s", ip, jail, payload)
+	log.Printf("[SYSWARDEN-BLOCK] IP=%s Jail=%s Payload=%s", ip, jail, payload)
 }
 
 // LogAllowed writes a JSON telemetry event when an IP is successfully allowed (e.g. login)
@@ -116,7 +116,7 @@ func (l *Logger) LogAllowed(ip, service, payload string) {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
 
-	log.Printf("[SysWarden-ALLOWED] Legitimate access IP=%s Service=%s", ip, service)
+	log.Printf("[SYSWARDEN-ALLOWED] Legitimate access IP=%s Service=%s", ip, service)
 }
 
 // LogDetected writes a JSON telemetry event when an IP is detected but not banned
@@ -150,7 +150,7 @@ func (l *Logger) LogDetected(ip, jail, payload string) {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
 
-	log.Printf("[SysWarden-DETECTED] Threat detected without ban IP=%s Jail=%s Payload=%s", ip, jail, payload)
+	log.Printf("[SYSWARDEN-DETECTED] Threat detected without ban IP=%s Jail=%s Payload=%s", ip, jail, payload)
 }
 
 // LogShadowAlert writes a JSON telemetry event when an internal threat is detected but not banned

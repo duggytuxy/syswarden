@@ -1,3 +1,13 @@
+# Release v3.52.0
+
+## ADDED
+- **TUI Dashboard Enhancements**: Added real-time tracking for `SYSWARDEN-HA-CLUSTER` (ACTIVE, INACTIVE, SKIPPED) and `SYSWARDEN-UPDATE-FEEDS` (featuring a live countdown timer until the next execution) directly within the `syswarden tui` dashboard. The UI now dynamically highlights active countdowns in cyan for immediate visibility.
+
+## UPDATED
+- **Naming Convention Harmonization**: Executed a comprehensive global rename across the codebase and user interfaces, standardizing `SysWarden` to `SYSWARDEN`, `Node` to `NODE`, and `Catch-All` to `CATCH-ALL` for consistent enterprise typography.
+
+---
+
 # Release v3.51.6
 
 ## FIXED

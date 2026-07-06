@@ -104,7 +104,7 @@ func applyLogAntiForging() {
 
 	// Rsyslog
 	if _, err := os.Stat("/etc/rsyslog.d"); err == nil {
-		content := `# --- SysWarden: Anti Log Forging & CRLF Mitigation ---
+		content := `# --- SYSWARDEN: Anti Log Forging & CRLF Mitigation ---
 $EscapeControlCharactersOnReceive on
 $DropTrailingLFOnReception on
 `

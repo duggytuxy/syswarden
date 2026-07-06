@@ -25,32 +25,32 @@ func main() {
 		log.SetOutput(mw)
 	}
 
-	log.Println("[SysWarden-Core] Starting Next-Gen WAF Daemon...")
+	log.Println("[SYSWARDEN-Core] Starting Next-Gen WAF Daemon...")
 
 	// Initialize Logger (Parity: Write to /opt/syswarden/data.json for TUI)
 	_ = os.MkdirAll("/opt/syswarden", 0755)
 	telemetryLogger := logger.NewLogger("/var/log/syswarden/waf.json")
-	telemetryLogger.Info("SysWarden Core Daemon initialized")
+	telemetryLogger.Info("SYSWARDEN Core Daemon initialized")
 
 	// Initialize Firewall Manager
 	fwManager, err := firewall.NewManager()
 	if err != nil {
-		log.Fatalf("[SysWarden-Core] Failed to initialize firewall: %v", err)
+		log.Fatalf("[SYSWARDEN-Core] Failed to initialize firewall: %v", err)
 	}
-	log.Printf("[SysWarden-Core] Firewall backend initialized: %s", fwManager.Name())
+	log.Printf("[SYSWARDEN-Core] Firewall backend initialized: %s", fwManager.Name())
 
 	// Initialize Threat Engine
 	threatEngine, err := engine.NewEngine("/opt/syswarden/signatures.json")
 	if err != nil {
-		log.Fatalf("[SysWarden-Core] Failed to initialize threat engine: %v", err)
+		log.Fatalf("[SYSWARDEN-Core] Failed to initialize threat engine: %v", err)
 	}
-	log.Printf("[SysWarden-Core] Loaded %d threat signatures", threatEngine.RuleCount())
+	log.Printf("[SYSWARDEN-Core] Loaded %d threat signatures", threatEngine.RuleCount())
 
 	// Initialize Unix Domain Socket
 	ctx, cancel := context.WithCancel(context.Background())
 	udsServer := network.NewUDSServer(ctx, "/var/run/syswarden.sock", threatEngine, fwManager, telemetryLogger)
 	if err := udsServer.Start(); err != nil {
-		log.Fatalf("[SysWarden-Core] Failed to start UDS server: %v", err)
+		log.Fatalf("[SYSWARDEN-Core] Failed to start UDS server: %v", err)
 	}
 
 	// Start Native Telemetry Worker
@@ -69,7 +69,7 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	log.Println("[SysWarden-Core] Shutting down gracefully...")
+	log.Println("[SYSWARDEN-Core] Shutting down gracefully...")
 	cancel()
 	udsServer.Stop()
 	wg.Wait()

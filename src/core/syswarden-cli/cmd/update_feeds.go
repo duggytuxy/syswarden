@@ -25,7 +25,7 @@ var updateFeedsCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Println("[*] Feeds downloaded successfully. Reloading SysWarden firewall engine in memory...")
+		fmt.Println("[*] Feeds downloaded successfully. Reloading SYSWARDEN firewall engine in memory...")
 		if err := firewall.ApplyPolicies(); err != nil {
 			fmt.Printf("[ERROR] Firewall reload failed: %v\n", err)
 		} else {

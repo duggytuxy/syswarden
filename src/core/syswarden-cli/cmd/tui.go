@@ -10,7 +10,7 @@ import (
 
 var tuiCmd = &cobra.Command{
 	Use:   "tui",
-	Short: "Launch the SysWarden Enterprise Dashboard (TUI)",
+	Short: "Launch the SYSWARDEN Enterprise Dashboard (TUI)",
 	Run: func(cmd *cobra.Command, args []string) {
 		tuiCmd := exec.Command("/opt/syswarden/bin/syswarden-tui")
 		tuiCmd.Stdin = os.Stdin

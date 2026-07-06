@@ -51,7 +51,7 @@ func SetupSIEM() error {
 	}
 
 	// Add native JSON WAAP telemetry forwarding via imfile
-	rsyslogConf += "\n# SysWarden WAAP Native JSON Telemetry\n"
+	rsyslogConf += "\n# SYSWARDEN WAAP Native JSON Telemetry\n"
 	rsyslogConf += "module(load=\"imfile\" PollingInterval=\"10\")\n"
 	rsyslogConf += "input(type=\"imfile\"\n"
 	rsyslogConf += "      File=\"/var/log/syswarden/waf.json\"\n"

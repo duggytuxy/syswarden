@@ -9,7 +9,7 @@ import (
 	"syswarden-cli/pkg/system"
 )
 
-// SetupWazuh registers the node with Wazuh natively and injects SysWarden log parsing
+// SetupWazuh registers the node with Wazuh natively and injects SYSWARDEN log parsing
 func SetupWazuh() error {
 	fmt.Println("[INFO] Configuring Wazuh Agent Integration...")
 
@@ -70,7 +70,7 @@ func SetupWazuh() error {
 		if err := os.WriteFile(wazuhConf, []byte(confStr), 0640); err != nil {
 			return fmt.Errorf("failed to write wazuh config: %w", err)
 		}
-		fmt.Println("[INFO] SysWarden logs successfully injected into Wazuh agent.")
+		fmt.Println("[INFO] SYSWARDEN logs successfully injected into Wazuh agent.")
 
 		// Restart Wazuh Agent
 		fmt.Println("[INFO] Restarting wazuh-agent service...")

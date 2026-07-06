@@ -18,7 +18,7 @@ const (
 var manualCmd = &cobra.Command{
 	Use:   "manual",
 	Short: "Comprehensive SysAdmin Manual and Documentation",
-	Long:  "Displays the exhaustive SysWarden administration manual, including CLI commands, configuration parameters, and threat intelligence options.",
+	Long:  "Displays the exhaustive SYSWARDEN administration manual, including CLI commands, configuration parameters, and threat intelligence options.",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("%s================================================================================%s\n", ansiCyan, ansiReset)
 		fmt.Printf("%s                     SYSWARDEN ENTERPRISE MANUAL                               %s\n", ansiCyan, ansiReset)
@@ -28,7 +28,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("%s--- 1. CLI COMMANDS REFERENCE ---%s\n", ansiYellow, ansiReset)
 
 		fmt.Printf("  %sinstall%s       : Compiles, hardens, and deploys the firewall and WAAP engine.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %suninstall%s     : Safely removes SysWarden and reverts the OS to its previous state.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %suninstall%s     : Safely removes SYSWARDEN and reverts the OS to its previous state.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %saudit%s         : Validates Zero-Trust L3 boundaries and L7 WAAP independence.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sconfig%s        : Opens the interactive configuration editor (e.g., /opt/syswarden/syswarden-auto.conf or /usr/local/etc/syswarden-auto.conf).\n", ansiGreen, ansiReset)
 		fmt.Printf("  %stui%s           : Launches the real-time Terminal User Interface (TUI) dashboard.\n", ansiGreen, ansiReset)
@@ -39,7 +39,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %swhitelist%s     : Adds an IP to the absolute hardware bypass list (ignores all checks).\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sunwhitelist%s   : Removes an IP from the hardware whitelist.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %scheck%s         : Checks if an IP is currently banned or whitelisted.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %supdate%s        : Automatically updates the SysWarden core binary and daemon.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %supdate%s        : Automatically updates the SYSWARDEN core binary and daemon.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %supdate-feeds%s  : Forces an immediate refresh of the Data-Shield Threat Intelligence feeds.\n\n", ansiGreen, ansiReset)
 
 		// 2. Configuration Options
@@ -50,7 +50,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %sSYSWARDEN_ASN_ALLOWED%s    : Comma-separated ASNs. Only traffic from these Autonomous Systems is allowed.\n\n", ansiWhite, ansiReset)
 
 		fmt.Printf("%s[WAAP L7 Independence]%s\n", ansiCyan, ansiReset)
-		fmt.Printf("  %sSYSWARDEN_BRUTEFORCE_LOGS%s: Set to \"auto\" to let SysWarden natively discover web server logs (Nginx/Apache), or provide an absolute path.\n", ansiWhite, ansiReset)
+		fmt.Printf("  %sSYSWARDEN_BRUTEFORCE_LOGS%s: Set to \"auto\" to let SYSWARDEN natively discover web server logs (Nginx/Apache), or provide an absolute path.\n", ansiWhite, ansiReset)
 		fmt.Printf("  %sSYSWARDEN_BRUTEFORCE_THRESHOLD%s: Number of failed requests before an L3 ban is triggered.\n\n", ansiWhite, ansiReset)
 
 		fmt.Printf("%s[Threat Intelligence & Data-Shield]%s\n", ansiCyan, ansiReset)

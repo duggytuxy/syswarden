@@ -56,9 +56,9 @@ func ApplyPolicies() error {
 	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_whitelist6 accept\n")
 
 	// 2. Layer 7 WAF Dynamic Bans
-	_, _ = nftRules.WriteString("\t\tip saddr @banned_ips limit rate 2/second burst 5 packets log prefix \"[SysWarden-WAF-BLOCK] \"\n")
+	_, _ = nftRules.WriteString("\t\tip saddr @banned_ips limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-WAF-BLOCK] \"\n")
 	_, _ = nftRules.WriteString("\t\tip saddr @banned_ips drop\n")
-	_, _ = nftRules.WriteString("\t\tip6 saddr @banned_ips6 limit rate 2/second burst 5 packets log prefix \"[SysWarden-WAF-BLOCK] \"\n")
+	_, _ = nftRules.WriteString("\t\tip6 saddr @banned_ips6 limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-WAF-BLOCK] \"\n")
 	_, _ = nftRules.WriteString("\t\tip6 saddr @banned_ips6 drop\n")
 
 	// Stateless Layer 4 Structural Anomaly Mitigation
@@ -68,26 +68,26 @@ func ApplyPolicies() error {
 	_, _ = nftRules.WriteString("\t\tip protocol tcp tcp flags & (syn|rst) == syn|rst counter drop\n")
 
 	// Layer 3 Static Global Intelligence Blocks
-	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n")
+	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-BLOCK] \"\n")
 	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_blacklist drop\n")
-	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_blacklist6 limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] \"\n")
+	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_blacklist6 limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-BLOCK] \"\n")
 	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_blacklist6 drop\n")
 	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
-		_, _ = nftRules.WriteString("\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SysWarden-GEO] \"\n")
+		_, _ = nftRules.WriteString("\t\tip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-GEO] \"\n")
 		_, _ = nftRules.WriteString("\t\tip saddr @syswarden_geoip drop\n")
 	}
 	if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" {
-		_, _ = nftRules.WriteString("\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n")
+		_, _ = nftRules.WriteString("\t\tip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ASN] \"\n")
 		_, _ = nftRules.WriteString("\t\tip saddr @syswarden_asn drop\n")
-		_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_asn6 limit rate 2/second burst 5 packets log prefix \"[SysWarden-ASN] \"\n")
+		_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_asn6 limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ASN] \"\n")
 		_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_asn6 drop\n")
 	}
 
 	// ZERO-TRUST MODE: Drop everything that is not in the Zero-Trust allowed GEO/ASN list
 	if config.GlobalConfig.GeoAllowed != "" || config.GlobalConfig.ASNAllowed != "" {
-		_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed limit rate 2/second burst 5 packets log prefix \"[SysWarden-ZERO-TRUST] \"\n")
+		_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ZERO-TRUST] \"\n")
 		_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed drop\n")
-		_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 limit rate 2/second burst 5 packets log prefix \"[SysWarden-ZERO-TRUST] \"\n")
+		_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ZERO-TRUST] \"\n")
 		_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 drop\n")
 	}
 	_, _ = nftRules.WriteString("\t}\n}\n\n")
@@ -166,18 +166,18 @@ func ApplyPolicies() error {
 	// Honeyports (Insider Threat Detection)
 	if config.GlobalConfig.LANMode && config.GlobalConfig.HoneyPorts != "" {
 		ports := strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")
-		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } limit rate 5/second burst 10 packets log prefix \"[SysWarden-HONEYPORT] \"\n", ports)
+		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } limit rate 5/second burst 10 packets log prefix \"[SYSWARDEN-HONEYPORT] \"\n", ports)
 		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } counter drop\n", ports)
 	}
 
-	// Catch-All Default Deny Logging
-	_, _ = nftRules.WriteString("\t\tct state new limit rate 2/second burst 5 packets log prefix \"[SysWarden-BLOCK] [Catch-All] \"\n")
+	// CATCH-ALL Default Deny Logging
+	_, _ = nftRules.WriteString("\t\tct state new limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-BLOCK] [CATCH-ALL] \"\n")
 	_, _ = nftRules.WriteString("\t\tct state new counter drop\n")
 	_, _ = nftRules.WriteString("\t}\n\n")
 
 	// DNS Exfiltration Protection (L3/L4)
 	_, _ = nftRules.WriteString("\tchain data_leak_protect {\n\t\ttype filter hook output priority 0; policy accept;\n")
-	_, _ = nftRules.WriteString("\t\tudp dport 53 udp length > 512 counter log prefix \"[SysWarden-DNS-EXFIL] \" drop\n")
+	_, _ = nftRules.WriteString("\t\tudp dport 53 udp length > 512 counter log prefix \"[SYSWARDEN-DNS-EXFIL] \" drop\n")
 	_, _ = nftRules.WriteString("\t}\n\n")
 
 	// Protect Docker (Forward chain)
@@ -211,7 +211,7 @@ func ApplyPolicies() error {
 	if config.GlobalConfig.ArpProtect {
 		_, _ = nftRules.WriteString("table arp syswarden_arp {\n")
 		_, _ = nftRules.WriteString("\tchain input {\n\t\ttype filter hook input priority filter; policy accept;\n")
-		_, _ = nftRules.WriteString("\t\tarp operation request limit rate over 10/second counter log prefix \"[SysWarden-ARP-FLOOD] \" drop\n")
+		_, _ = nftRules.WriteString("\t\tarp operation request limit rate over 10/second counter log prefix \"[SYSWARDEN-ARP-FLOOD] \" drop\n")
 		_, _ = nftRules.WriteString("\t}\n}\n\n")
 	}
 
