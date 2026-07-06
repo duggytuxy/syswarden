@@ -273,9 +273,10 @@ func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllo
 	}
 
 	// Download Threat Intel Blocklist
-	if listChoice == "4" {
+	switch listChoice {
+	case "4":
 		fmt.Println("Downloading Threat Intel IPv4 Blocklist... SKIPPED (Option 4 'none')")
-	} else if listChoice == "3" {
+	case "3":
 		fmt.Printf("Downloading Custom Threat Intel IPv4 Blocklist... ")
 		dataShieldUrl := strings.TrimRight(mirrorURL, "/")
 		if err := SecureDownloader(ctx, dataShieldUrl, "/etc/syswarden/lists/syswarden_threatintel.ipv4"); err != nil {
@@ -283,7 +284,7 @@ func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllo
 		} else {
 			fmt.Println("OK")
 		}
-	} else {
+	default:
 		fmt.Printf("Downloading Threat Intel IPv4 Blocklist... ")
 		var success bool
 		mirrors := system.SelectFastestThreatIntelMirror(listChoice)
@@ -304,9 +305,10 @@ func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllo
 	}
 
 	// Download OSINT Feeds (CINS Army & Blocklist.de)
-	if listChoice == "4" || listChoice == "3" {
+	switch listChoice {
+	case "4", "3":
 		fmt.Println("Downloading Free OSINT Feeds (CINS & Blocklist.de)... SKIPPED")
-	} else {
+	default:
 		fmt.Printf("Downloading Free OSINT Feeds (CINS & Blocklist.de)... ")
 		if err := DownloadOSINT(ctx, "/etc/syswarden/lists/syswarden_threatintel.ipv4"); err != nil {
 			fmt.Printf("FAILED (%v)\n", err)
