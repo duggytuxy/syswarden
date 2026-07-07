@@ -53,6 +53,7 @@ type Layer3 struct {
 	GlobalBlocked int `json:"global_blocked"`
 	GeoIPBlocked  int `json:"geoip_blocked"`
 	ASNBlocked    int `json:"asn_blocked"`
+	L7Banned      int `json:"l7_banned"`
 }
 
 type JailData struct {
@@ -373,8 +374,8 @@ func refreshUI() {
 	headerText.SetText(headerLines)
 
 	// --- L3 Metrics ---
-	l3Lines := fmt.Sprintf("\n [gray]Value:[-] [white]%d[-]\n [gray]GeoIP:[-] [white]%d[-] │ [gray]ASN:[-] [white]%d[-]",
-		d.Layer3.GlobalBlocked, d.Layer3.GeoIPBlocked, d.Layer3.ASNBlocked)
+	l3Lines := fmt.Sprintf("\n [gray]Value:[-] [white]%d[-] [gray](L7/HA: %d)[-]\n [gray]GeoIP:[-] [white]%d[-] │ [gray]ASN:[-] [white]%d[-]",
+		d.Layer3.GlobalBlocked, d.Layer3.L7Banned, d.Layer3.GeoIPBlocked, d.Layer3.ASNBlocked)
 	l3Text.SetText(l3Lines)
 
 	// --- Risk Vectors ---

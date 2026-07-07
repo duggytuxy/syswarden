@@ -58,6 +58,7 @@ type Layer3 struct {
 	GlobalBlocked int `json:"global_blocked"`
 	GeoIPBlocked  int `json:"geoip_blocked"`
 	ASNBlocked    int `json:"asn_blocked"`
+	L7Banned      int `json:"l7_banned"`
 }
 
 type JailData struct {
@@ -613,7 +614,8 @@ func getLayer3Stats() Layer3 {
 	}
 
 	var l3 Layer3
-	l3.GlobalBlocked = countLinesInFile("/etc/syswarden/lists/syswarden_blacklist.ipv4") + countLinesInFile("/etc/syswarden/lists/syswarden_threatintel.ipv4")
+	l3.L7Banned = countLinesInFile("/etc/syswarden/lists/syswarden_blacklist.ipv4")
+	l3.GlobalBlocked = l3.L7Banned + countLinesInFile("/etc/syswarden/lists/syswarden_threatintel.ipv4")
 
 	if matches, err := filepath.Glob("/etc/syswarden/lists/AS*.ipv4"); err == nil {
 		for _, m := range matches {

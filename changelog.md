@@ -1,3 +1,10 @@
+# Release v3.52.5
+
+## UPDATED
+- **Telemetry UI & Whitelisting Metrics**: Enhanced the SysWarden Enterprise Dashboard (TUI) to explicitly display the number of L7/HA synchronized banned IPs within the L3 Kernel Blocks global value. This correctly contextualizes the Noise/Signal ratio during Zero-Trust Strict Allow postures (Whitelisting), clearly showing that previously L7 banned IPs are being systematically dropped at L3 as expected (Noise) while new WAF/Catch-All detections register as actionable threats (Signal).
+
+---
+
 # Release v3.52.4
 
 ## FIXED
