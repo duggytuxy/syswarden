@@ -11,9 +11,8 @@ version: "2.0"
 # (or pass --score-push / PLUMBER_ANALYZE_SCORE_PUSH). Publishing happens ONLY
 # in CI (it needs a CI-native OIDC id-token, so a local run never publishes and
 # can't spoof another repo's badge). Docs: https://getplumber.io/docs/plumber-score
-# To target a self-hosted score service, uncomment and set the endpoint:
-# score:
-#   endpoint: https://score.example.com
+# To target a self-hosted score service, set --score-endpoint /
+# PLUMBER_ANALYZE_SCORE_ENDPOINT (the `score-endpoint` CI integration input).
 
 gitlab:
   controls:
@@ -518,7 +517,7 @@ gitlab:
     # on PATH (or configured via gitleaksPath).
     pipelineMustNotLeakSecretsInConfig:
       # Set to true to enable this control (requires gitleaks)
-      enabled: false
+      enabled: true
       # Path to the gitleaks binary. Defaults to "gitleaks" (PATH lookup).
       # gitleaksPath: /usr/local/bin/gitleaks
       # Optional path to a custom gitleaks configuration file.
@@ -558,7 +557,7 @@ github:
     # gitleaks is an external dependency.
     pipelineMustNotLeakSecretsInConfig:
       # Set to true to enable this control (requires gitleaks)
-      enabled: false
+      enabled: true
       # Path to the gitleaks binary. Defaults to "gitleaks" (PATH lookup).
       # gitleaksPath: /usr/local/bin/gitleaks
       # Optional path to a custom gitleaks configuration file.
