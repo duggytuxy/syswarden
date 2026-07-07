@@ -1,3 +1,11 @@
+# Release v3.52.8
+
+## FIXED
+- **SystemD ProtectSystem Override**: Fixed a severe orchestration issue where systemd's `ProtectSystem=full` directive silently blocked `syswarden-core` from persisting bans to `/etc/syswarden/lists/`. The daemon installer now properly whitelists the directory in `ReadWritePaths`, unlocking full High-Availability synchronization and instantaneous L7 telemetry feedback.
+- **CI/CD RPM Upgrade Cycle**: Fixed an edge-case in the RPM/DEB packaging pipeline (`build_packages.sh` and `package.yml`) where seamless upgrades via `syswarden update` bypassed the execution of systemd service generation. The package installer now proactively hot-patches existing systemd configurations to unlock the L7 persistence write-paths natively without requiring a full reinstall.
+
+---
+
 # Release v3.52.7
 
 ## FIXED

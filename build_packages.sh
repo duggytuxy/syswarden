@@ -109,6 +109,7 @@ fi
 
 # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
 if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
+    sed -i 's|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden$|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists|g' /etc/systemd/system/syswarden-core.service || true
     systemctl daemon-reload
     systemctl restart syswarden-core || true
     systemctl restart syswarden-firewall || true
