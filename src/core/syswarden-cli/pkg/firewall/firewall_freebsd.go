@@ -154,6 +154,21 @@ func ApplyPolicies() error {
 
 	// Dynamically allow explicitly opened ports
 	tcpPorts, udpPorts := GetOpenPorts()
+
+	// Ensure HA Peer Port is always explicitly opened if HA is enabled
+	if config.GlobalConfig.HAEnabled && config.GlobalConfig.HAPeerPort != "" {
+		found := false
+		for _, p := range tcpPorts {
+			if p == config.GlobalConfig.HAPeerPort {
+				found = true
+				break
+			}
+		}
+		if !found {
+			tcpPorts = append(tcpPorts, config.GlobalConfig.HAPeerPort)
+		}
+	}
+
 	if len(tcpPorts) > 0 {
 		for _, p := range tcpPorts {
 			if p != sshPort {

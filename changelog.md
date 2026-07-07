@@ -1,3 +1,10 @@
+# Release v3.52.4
+
+## FIXED
+- **HA Cluster Network Binding**: Resolved a critical conflict during `syswarden install` where the High Availability peer synchronization port (`SYSWARDEN_HA_PEER_PORT`) was not automatically opened by the local firewall engine if the HA daemon was not yet running. The firewall orchestrator now dynamically injects the HA port into the Nftables atomic transaction (Linux) and Packet Filter configuration (FreeBSD). It also silently executes fallback overrides (`ufw allow`, `firewall-cmd --add-port`, `iptables -I`) to guarantee the port is opened regardless of the underlying OS wrapper firewall.
+
+---
+
 # Release v3.52.3
 
 ## FIXED

@@ -127,6 +127,26 @@ func ApplyPolicies() error {
 
 	// Dynamically allow explicitly opened ports
 	tcpPorts, udpPorts := GetOpenPorts()
+
+	// Ensure HA Peer Port is always explicitly opened if HA is enabled
+	if config.GlobalConfig.HAEnabled && config.GlobalConfig.HAPeerPort != "" {
+		if !contains(tcpPorts, config.GlobalConfig.HAPeerPort) {
+			tcpPorts = append(tcpPorts, config.GlobalConfig.HAPeerPort)
+		}
+
+		// Safely force open in OS wrapper firewalls if they exist (avoid conflicts)
+		if _, err := exec.LookPath("ufw"); err == nil {
+			_ = exec.Command("ufw", "allow", fmt.Sprintf("%s/tcp", config.GlobalConfig.HAPeerPort)).Run()
+		}
+		if _, err := exec.LookPath("firewall-cmd"); err == nil {
+			_ = exec.Command("firewall-cmd", "--add-port="+config.GlobalConfig.HAPeerPort+"/tcp", "--permanent").Run()
+			_ = exec.Command("firewall-cmd", "--reload").Run()
+		}
+		if _, err := exec.LookPath("iptables"); err == nil {
+			_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", config.GlobalConfig.HAPeerPort, "-j", "ACCEPT").Run()
+		}
+	}
+
 	if len(tcpPorts) > 0 {
 		fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } accept\n", strings.Join(tcpPorts, ", "))
 	}
