@@ -31,7 +31,7 @@ func SetupWireguard() error {
 	_ = exec.Command("sysctl", "net.inet.ip.forwarding=1").Run()
 
 	// Keys
-	fmt.Println(" -> Generating cryptographic keys")
+	fmt.Println(" -> Generating cryptographic keys (incl. Post-Quantum PSK)")
 	serverPriv, _ := exec.Command("wg", "genkey").Output()
 	serverPrivStr := strings.TrimSpace(string(serverPriv))
 	cmd := exec.Command("wg", "pubkey")
@@ -48,6 +48,7 @@ func SetupWireguard() error {
 
 	presharedKey, _ := exec.Command("wg", "genpsk").Output()
 	presharedKeyStr := strings.TrimSpace(string(presharedKey))
+	fmt.Println(" -> Injecting Quantum-Resistant PresharedKey (PSK)")
 
 	// Network Calculations
 	activeIfOut, _ := exec.Command("route", "-n", "get", "default").Output()

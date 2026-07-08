@@ -1,3 +1,10 @@
+# Release v3.53.0
+
+## ADDED
+- **WireGuard Post-Quantum Encryption (PSK)**: Native integration of Post-Quantum resistant symmetric cryptography (`PresharedKey`) is now explicitly logged during VPN generation. The `syswarden audit` engine (Linux & FreeBSD) now formally validates and certifies the presence of this active Post-Quantum defense layer to satisfy stringent NIS2 and ISO 27001 compliance requirements.
+
+---
+
 # Release v3.52.11
 
 ## UPDATED

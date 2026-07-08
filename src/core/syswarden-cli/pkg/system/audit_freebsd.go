@@ -192,6 +192,12 @@ func RunAudit() {
 		pass("WireGuard Cloaking is ENABLED in config.")
 		if _, err := os.Stat("/usr/local/etc/wireguard/wg-syswarden.conf"); err == nil {
 			pass("WireGuard Configuration VERIFIED.")
+			content, err := os.ReadFile("/usr/local/etc/wireguard/wg-syswarden.conf")
+			if err == nil && strings.Contains(string(content), "PresharedKey = ") {
+				pass("WireGuard Post-Quantum PSK Encryption is ACTIVE.")
+			} else {
+				fail("WireGuard Post-Quantum PSK is MISSING.")
+			}
 		} else {
 			fail("WireGuard Configuration FAILED: /usr/local/etc/wireguard/wg-syswarden.conf missing.")
 		}
