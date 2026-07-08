@@ -1,10 +1,14 @@
+# Release v3.53.1
+
+## FIXED
+- **Security / Code Hygiene**: Patched GO-2026-5856 (Encrypted Client Hello privacy leak in `crypto/tls`) by strictly upgrading the compiler build toolchain to Go `1.26.5` across all modules and GitHub Actions CI pipelines.
+
+---
+
 # Release v3.53.0
 
 ## ADDED
 - **WireGuard Post-Quantum Encryption (PSK)**: Native integration of Post-Quantum resistant symmetric cryptography (`PresharedKey`) is now explicitly logged during VPN generation. The `syswarden audit` engine (Linux & FreeBSD) now formally validates and certifies the presence of this active Post-Quantum defense layer to satisfy stringent NIS2 and ISO 27001 compliance requirements.
-
-## FIXED
-- **Security / Code Hygiene**: Patched GO-2026-5856 (Encrypted Client Hello privacy leak in `crypto/tls`) by strictly upgrading the compiler build toolchain to Go `1.26.5` across all modules and GitHub Actions CI pipelines.
 
 ---
 
