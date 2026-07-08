@@ -1,4 +1,4 @@
-# Release v3.54.0
+# Release v3.55.0
 
 ## ADDED
 - **SaaS Monitors Dynamic Whitelisting**: Added a native integration to safely auto-whitelist verified uptime monitoring providers (e.g., BetterStack) to prevent 30-day bans during high-frequency health checks. Can be controlled via `SYSWARDEN_ALLOW_SAAS_MONITORS="y"`.
