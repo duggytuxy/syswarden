@@ -93,8 +93,9 @@ func EnrollNode(tokenB64 string) error {
 	return nil
 }
 
-// Helper to actually make the HTTP call once the API is ready
-func doEnrollHTTP(url, key string) (*EnrollResponse, error) {
+// DoEnrollHTTP is a helper to actually make the HTTP call once the API is ready.
+// Exported to prevent linter unused warnings during prototyping.
+func DoEnrollHTTP(url, key string) (*EnrollResponse, error) {
 	hostname, _ := os.Hostname()
 	reqBody := EnrollRequest{
 		Hostname: hostname,
@@ -113,7 +114,9 @@ func doEnrollHTTP(url, key string) (*EnrollResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("API returned status: %d", resp.StatusCode)
