@@ -1,9 +1,9 @@
 # Release v3.60.1
 
 ## ADDED
-- **SysWarden Nexus Zero-Trust Télémétrie (mTLS & JWT)**: Finalisation complète de la boucle de télémétrie entre l'Agent (`syswarden-core`) et le Serveur (`syswarden-nexus`). L'Agent authentifie désormais ses requêtes POST (`/api/v1/telemetry`) vers le Nexus en utilisant rigoureusement un certificat mTLS (`CertPEM`/`KeyPEM`) délivré dynamiquement lors de la phase d'enrôlement HTTPS sécurisée.
-- **SysWarden Nexus SecOps UI**: Intégration d'un Front-End SPA complet en Vue.js / Nuxt 3 (Dark Mode Premium Glassmorphism) embarqué nativement (`go:embed`) dans le binaire serveur. Protection intégrale des routes API via génération et validation de JWT (JSON Web Tokens) très haute sécurité pour empêcher les accès non autorisés au Dashboard.
-- **SysWarden Nexus CI/CD Pipelines**: Refonte du CI/CD OSSF Scorecard et intégration des pipelines de packaging Linux (`.deb`, `.rpm`) pour le projet `syswarden-nexus` assurant le déploiement de service `syswarden-nexus.service`.
+- **SysWarden Nexus Zero-Trust Telemetry (mTLS & JWT)**: Complete finalization of the telemetry loop between the Agent (`syswarden-core`) and the Server (`syswarden-nexus`). The Agent now rigorously authenticates its POST requests (`/api/v1/telemetry`) to the Nexus using an mTLS certificate (`CertPEM`/`KeyPEM`) dynamically issued during the secure HTTPS enrollment phase.
+- **SysWarden Nexus SecOps UI**: Integration of a complete SPA Front-End in Vue.js / Nuxt 3 (Premium Dark Mode Glassmorphism) natively embedded (`go:embed`) into the server binary. Comprehensive protection of API routes via highly secure JWT (JSON Web Tokens) generation and validation to prevent unauthorized access to the Dashboard.
+- **SysWarden Nexus CI/CD Pipelines**: Refactoring of the OSSF Scorecard CI/CD and integration of Linux packaging pipelines (`.deb`, `.rpm`) for the `syswarden-nexus` project, ensuring the deployment of the `syswarden-nexus.service`.
 
 ---
 
