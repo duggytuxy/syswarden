@@ -1,3 +1,10 @@
+# Release v3.60.0
+
+## ADDED
+- **SysWarden Nexus Central Management Integration**: The SysWarden agent now natively integrates a "Sleepy Agent" module to securely enroll and synchronize telemetry with the centralized SysWarden Nexus console via Zero-Trust mTLS (`syswarden enroll <token>`).
+
+---
+
 # Release v3.55.1
 
 ## FIXED

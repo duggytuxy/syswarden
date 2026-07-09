@@ -65,6 +65,9 @@ func main() {
 	waapEngine := network.NewWAAPEngine(fwManager, telemetryLogger)
 	waapEngine.Start()
 
+	// Start Nexus Central Management (Sleepy Agent)
+	network.StartNexusSleepyAgent(ctx)
+
 	// Start HA P2P Server (Zero-Touch TLS)
 	network.StartHAServer(fwManager)
 
