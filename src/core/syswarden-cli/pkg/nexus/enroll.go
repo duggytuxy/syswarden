@@ -3,6 +3,7 @@ package nexus
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,37 +40,33 @@ type EnrollResponse struct {
 const configPath = "/opt/syswarden/nexus.conf"
 
 func EnrollNode(tokenB64 string) error {
-	// For prototyping, the token could be a simple base64 JSON
-	// echo -n '{"url":"https://nexus.syswarden.io", "key":"secret-key"}' | base64
-	// Decode token
-	/*
-		decoded, err := base64.StdEncoding.DecodeString(tokenB64)
-		if err != nil {
-			return fmt.Errorf("invalid token format: %v", err)
-		}
-		var tokenPayload TokenPayload
-		if err := json.Unmarshal(decoded, &tokenPayload); err != nil {
-			return fmt.Errorf("invalid token payload: %v", err)
-		}
-	*/
-
-	// Prototyping mock: In reality, we'd do an HTTP POST to tokenPayload.URL + "/api/v1/enroll"
-	// with the tokenPayload.Key to retrieve the mTLS certs.
-	// For now, since the API doesn't exist yet, we will generate a dummy config.
-	fmt.Println(" -> Connecting to Nexus API (Prototyping Mode)...")
-	time.Sleep(1 * time.Second)
-
-	fmt.Println(" -> Exchanging bootstrap key for mTLS certificates...")
-	time.Sleep(1 * time.Second)
-
-	dummyConfig := Config{
-		NexusURL: "https://nexus.syswarden.io",
-		NodeID:   "node-mock-1234",
-		CertPEM:  "-----BEGIN CERTIFICATE-----\nMOCK_CERT...\n-----END CERTIFICATE-----",
-		KeyPEM:   "-----BEGIN PRIVATE KEY-----\nMOCK_KEY...\n-----END PRIVATE KEY-----",
+	decoded, err := base64.StdEncoding.DecodeString(tokenB64)
+	if err != nil {
+		return fmt.Errorf("invalid token format: %v", err)
+	}
+	
+	var tokenPayload TokenPayload
+	if err := json.Unmarshal(decoded, &tokenPayload); err != nil {
+		return fmt.Errorf("invalid token payload: %v", err)
 	}
 
-	configBytes, err := json.MarshalIndent(dummyConfig, "", "  ")
+	fmt.Println(" -> Connecting to Nexus API securely...")
+	
+	resp, err := DoEnrollHTTP(tokenPayload.URL, tokenPayload.Key)
+	if err != nil {
+		return fmt.Errorf("enrollment failed: %v", err)
+	}
+
+	fmt.Println(" -> Enrollment successful! Provisioning configuration...")
+
+	config := Config{
+		NexusURL: tokenPayload.URL,
+		NodeID:   resp.NodeID,
+		CertPEM:  resp.CertPEM, // Could be empty if Nexus doesn't generate it yet
+		KeyPEM:   resp.KeyPEM,
+	}
+
+	configBytes, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %v", err)
 	}
@@ -84,10 +81,8 @@ func EnrollNode(tokenB64 string) error {
 		return fmt.Errorf("failed to write nexus.conf: %v", err)
 	}
 
-	fmt.Printf(" -> Successfully provisioned %s\n", configPath)
+	fmt.Printf(" -> Successfully provisioned %s (NodeID: %s)\n", configPath, resp.NodeID)
 
-	// Trigger core reload to wake up the Sleepy Agent
-	fmt.Println(" -> Reloading SysWarden core daemon...")
 	// system.ReloadDaemon() // Assuming we use pkg/system later
 
 	return nil

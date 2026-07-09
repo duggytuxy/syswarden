@@ -1,9 +1,12 @@
 package network
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"log"
+	"net/http"
 	"os"
 	"time"
 )
@@ -70,7 +73,29 @@ func runNexusClientLoop(ctx context.Context) error {
 	log.Printf("[NEXUS] Successfully loaded configuration for Node ID: %s", conf.NodeID)
 	log.Printf("[NEXUS] Connecting to Nexus API at %s via mTLS...", conf.NexusURL)
 
-	// Mock Telemetry Loop
+	// Configure mTLS Client
+	var client *http.Client
+	if conf.CertPEM != "" && conf.KeyPEM != "" {
+		cert, err := tls.X509KeyPair([]byte(conf.CertPEM), []byte(conf.KeyPEM))
+		if err != nil {
+			log.Printf("[NEXUS] Warning: Could not load mTLS keypair: %v. Falling back to TLS without client auth.", err)
+			client = &http.Client{Timeout: 10 * time.Second}
+		} else {
+			tlsConfig := &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				// Note: In strict prod, InsecureSkipVerify must be false and RootCAs properly populated
+				InsecureSkipVerify: true,
+			}
+			client = &http.Client{
+				Transport: &http.Transport{TLSClientConfig: tlsConfig},
+				Timeout:   10 * time.Second,
+			}
+		}
+	} else {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+
+	// Telemetry Loop
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -80,9 +105,28 @@ func runNexusClientLoop(ctx context.Context) error {
 			return context.Canceled
 		case <-ticker.C:
 			// 1. Gather RiskRadar telemetry
-			// 2. Send via mTLS POST request to NexusURL/api/v1/telemetry
-			// 3. Pull global policies from NexusURL/api/v1/policies
-			log.Println("[NEXUS-SYNC] Heartbeat and telemetry sent to Nexus API (Mock)")
+			// Here we simulate an alert payload to push
+			payload := map[string]interface{}{
+				"node_id":    conf.NodeID,
+				"source_ip":  "192.168.x.x",
+				"alert_type": "L7_WAF_BLOCK",
+				"reason":     "Simulated Agent Alert",
+				"payload":    "GET /?id=1' OR '1'='1",
+			}
+			
+			body, _ := json.Marshal(payload)
+			resp, err := client.Post(conf.NexusURL+"/api/v1/telemetry", "application/json", bytes.NewBuffer(body))
+			if err != nil {
+				log.Printf("[NEXUS-SYNC] Failed to send telemetry: %v", err)
+				continue
+			}
+			resp.Body.Close()
+			
+			if resp.StatusCode == 200 {
+				log.Println("[NEXUS-SYNC] Telemetry successfully pushed to Nexus API.")
+			} else {
+				log.Printf("[NEXUS-SYNC] Nexus API rejected telemetry (Status: %d)", resp.StatusCode)
+			}
 		}
 	}
 }
