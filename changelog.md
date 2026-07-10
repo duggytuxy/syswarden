@@ -1,3 +1,10 @@
+# Release v3.60.3
+
+## FIXED
+- **Code Hygiene (golangci-lint)**: Addressed a compilation failure caused by an unused `"encoding/base64"` import in `syswarden-cli/pkg/nexus/enroll.go`, ensuring a clean build in the CI/CD pipeline.
+
+---
+
 # Release v3.60.2
 
 ## ADDED
