@@ -1,3 +1,16 @@
+# Release v3.60.5
+
+## UPDATED
+- **Configuration & UX**: Completely reorganized the `syswarden-auto.conf` structure into professional categories to improve SysAdmin experience.
+- **Manual**: Enriched `syswarden manual` with explicit argument formats (`<IP>`) and global flag details.
+- **L2 Intrusion Detection**: Adapted the ARP Flood protection `nftables` limit rule to support massive internal infrastructures (>1000 hosts) with frequent DHCP/Broadcast queries without triggering false-positive alerts.
+
+## FIXED
+- **Auto-Completion**: Explicitly forced `DisableDescriptions = true` on the Cobra completion engine to ensure 100% `bash-completion` compatibility on RHEL 8.10+ environments.
+- **L2 Anti-Spoofing**: Enforced a strict Zero-Trust ARP Spoofing detection rule that instantly drops and logs any inbound ARP requests where an attacker attempts to claim the server's own local IPs.
+
+---
+
 # Release v3.60.4
 
 ## FIXED

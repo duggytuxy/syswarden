@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -233,7 +234,16 @@ func ApplyPolicies() error {
 	if config.GlobalConfig.ArpProtect {
 		_, _ = nftRules.WriteString("table arp syswarden_arp {\n")
 		_, _ = nftRules.WriteString("\tchain input {\n\t\ttype filter hook input priority filter; policy accept;\n")
-		_, _ = nftRules.WriteString("\t\tarp operation request limit rate over 10/second counter log prefix \"[SYSWARDEN-ARP-FLOOD] \" drop\n")
+
+		// Anti-ARP Spoofing: Drop if attacker claims to be US
+		localIPs := getLocalIPs()
+		if len(localIPs) > 0 {
+			ipList := strings.Join(localIPs, ", ")
+			_, _ = nftRules.WriteString(fmt.Sprintf("\t\tarp saddr ip { %s } counter log prefix \"[SYSWARDEN-ARP-SPOOF] \" drop\n", ipList))
+		}
+
+		// ARP Flood limits adapted for Enterprise LAN (500/s burst 1000)
+		_, _ = nftRules.WriteString("\t\tarp operation request limit rate over 500/second burst 1000 packets counter log prefix \"[SYSWARDEN-ARP-FLOOD] \" drop\n")
 		_, _ = nftRules.WriteString("\t}\n}\n\n")
 	}
 
@@ -346,6 +356,22 @@ func ApplyPolicies() error {
 
 	fmt.Println("[INFO] Nftables applied successfully.")
 	return nil
+}
+
+// getLocalIPs fetches all local IPv4 addresses (excluding loopback) for ARP spoofing protection
+func getLocalIPs() []string {
+	var ips []string
+	addrs, err := net.InterfaceAddrs()
+	if err == nil {
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if ipnet.IP.To4() != nil {
+					ips = append(ips, ipnet.IP.String())
+				}
+			}
+		}
+	}
+	return ips
 }
 
 func GetActiveInterface() string {

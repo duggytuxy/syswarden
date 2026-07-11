@@ -1,28 +1,22 @@
 package config
 
 const DefaultConfig = `# ==============================================================================
-# Version=v3.60.4
+# Version=v3.60.5
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
 # Usage: syswarden config
 # ==============================================================================
 
+# ==========================================
+# [1] SYSTEM & CORE
+# ==========================================
 # --- Enterprise Compliance Mode ---
 # y = Strictly disables third-party telemetry/reporting (e.g., AbuseIPDB) to comply with corporate policies.
 SYSWARDEN_ENTERPRISE_MODE="n"
-
-# --- SSH Configuration ---
-# Leave empty to auto-detect current active port
-SYSWARDEN_SSH_PORT=""
 
 # --- Firewall Engine Optimization (RHEL/Alma/Fedora) ---
 # If firewalld is detected, SYSWARDEN can replace it for extreme performance.
@@ -31,12 +25,32 @@ SYSWARDEN_SSH_PORT=""
 # "keep"     = Do not modify Firewalld (Warning: Reloads will be very slow)
 SYSWARDEN_FIREWALL_BACKEND="nftables"
 
+# --- OS Hardening ---
+# y = Enable, n = Disable (Strict restrictions for privileged groups & Cron. Recommended for NEW servers only)
+SYSWARDEN_HARDENING="y"
+
+# Enable advanced CIS Benchmark Level 2 hardening (Defense-in-Depth)
+# Recommended for exposed production servers, may restrict certain specific modules.
+APPLY_CIS_L2_HARDENING="y"
+
+# --- SSH Configuration ---
+# Leave empty to auto-detect current active port
+SYSWARDEN_SSH_PORT=""
+
+# --- Security & Lifecycle Management ---
+# y = Securely wipe this configuration file (shred) from disk after successful installation.
+# MANDATORY for ISO 27001 compliance to prevent API keys from lingering in plaintext.
+SYSWARDEN_SECURE_WIPE_CONF="n"
+
+
+# ==========================================
+# [2] ZERO-TRUST NETWORK CONTROLS
+# ==========================================
 # Auto-whitelist critical infrastructure (DNS, Gateway, DHCP, Cloud Metadata)
-# Highly recommended to prevent server lockout (e.g., OVH, AWS, GCP) when using aggressive ASN/GEO blocklists.
-# y = Enable, n = Disable (Defaults to 'y' if omitted for safety)
+# Highly recommended to prevent server lockout when using aggressive ASN/GEO blocklists.
 SYSWARDEN_WHITELIST_INFRA="y"
 
-# Space-separated list of IPv4 addresses to automatically whitelist (e.g., "192.***.*.*** 203.*.***.***")
+# Space-separated list of IPv4/IPv6 addresses to automatically whitelist (e.g., "192.***.*.*** 203.*.***.***")
 # Extremely useful for CI/CD, Ansible, or Cloud-init deployments to prevent admin lock-out.
 SYSWARDEN_WHITELIST_IPS=""
 
@@ -45,19 +59,41 @@ SYSWARDEN_WHITELIST_IPS=""
 # Highly recommended to prevent false positive bans triggered by frequent health checks.
 SYSWARDEN_ALLOW_SAAS_MONITORS="y"
 
-# --- WireGuard Management VPN ---
+# --- Geo-Blocking ---
 # y = Enable, n = Disable
-SYSWARDEN_ENABLE_WG="n"
-SYSWARDEN_WG_PORT="51820"
-SYSWARDEN_WG_SUBNET="10.66.66.0/24"
+SYSWARDEN_ENABLE_GEO="y"
+# Space-separated country codes to DROP (e.g., "ru cn kp ir")
+SYSWARDEN_GEO_CODES="ru cn kp ir br vn in by ng bd pe mx ua my ph lt id af al bd by bo cl hr ec hk il kz lb my md pk ph qa sa sd tm uz zm zw ye ao ar am bz bj ba bw bg bi cm cg cy dj do eg ee fi ge gh gi hn iq ie jp ke kr lv ly me nc nz no ps pa pt pr sc ug tz tj"
+# ZERO-TRUST MODE: Space-separated country codes to ALLOW. If defined, ALL OTHER COUNTRIES WILL BE DROPPED.
+SYSWARDEN_GEO_ALLOWED=""
 
-# --- Docker Multi-Tenant WAF Integration ---
-# Wildcard path to aggregate logs from all external WAF containers (Self-DoS prevention & Multi-tenant)
-# Crucial for multi-tenant architectures (e.g., Traefik + Multiple ModSecurity WAFs)
-# Leave empty for standard single-node installations
-SYSWARDEN_MODSEC_LOGS="/var/log/modsec/*.log"
+# --- ASN Blocking ---
+# Enable the ASN blocking module
+SYSWARDEN_ENABLE_ASN="y"
+# Master List (VPNs, Proxies, Linode, Tor Exit Nodes/Bulletproof Hosters) to DROP
+SYSWARDEN_ASN_LIST="AS30823 AS210644 AS200593 AS202425 AS215540 AS9009 AS201069 AS20473 AS60068 AS51396 AS212238 AS209334 AS198953 AS201814 AS16276 AS62282 AS14061 AS202662 AS24940 AS398324 AS31173 AS23969 AS11878 AS32097 AS43948 AS62240 AS16265 AS3223 AS53667 AS200651 AS58224 AS57821 AS199524 AS51852 AS197540 AS209334 AS329415 AS204106 AS57371 AS47139"
+# ZERO-TRUST MODE: Space-separated ASN codes to ALLOW. If defined, ALL OTHER ASNs WILL BE DROPPED.
+SYSWARDEN_ASN_ALLOWED=""
 
-# --- WAAP (L7) Engine & Advanced Signatures ---
+
+# ==========================================
+# [3] THREAT INTELLIGENCE & LISTS
+# ==========================================
+# 1 = Standard, 2 = Critical, 3 = Custom, 4 = None
+SYSWARDEN_LIST_CHOICE="1"
+
+# Include Spamhaus ASN-DROP list for known cybercriminal infrastructures
+SYSWARDEN_USE_SPAMHAUS="n"
+
+# If choice is 3, provide the URL below. MUST be HTTPS. HTTP schemes will be rejected.
+SYSWARDEN_CUSTOM_URL=""
+# Prevent supply chain poisoning: Provide the expected SHA256 hash of the custom list (Optional but recommended for NIS2)
+SYSWARDEN_CUSTOM_HASH=""
+
+
+# ==========================================
+# [4] WAAP L7 ENGINE & LOGS
+# ==========================================
 # Space-separated list of application access logs to tail (e.g., Traefik, Nginx, Apache)
 # SYSWARDEN will natively parse these files in real-time to detect advanced exploits (SQLi, XSS, RCE, LFI)
 # and automatically track HTTP 401/403/404 bruteforce thresholds.
@@ -69,6 +105,16 @@ SYSWARDEN_BRUTEFORCE_THRESHOLD="5"
 # Sliding window in seconds for the threshold
 SYSWARDEN_BRUTEFORCE_WINDOW="60"
 
+# --- Docker Multi-Tenant WAF Integration ---
+# Wildcard path to aggregate logs from all external WAF containers (Self-DoS prevention & Multi-tenant)
+# Crucial for multi-tenant architectures (e.g., Traefik + Multiple ModSecurity WAFs)
+# Leave empty for standard single-node installations
+SYSWARDEN_MODSEC_LOGS="/var/log/modsec/*.log"
+
+
+# ==========================================
+# [5] INTRUSION DETECTION & L2
+# ==========================================
 # --- Honeyports (Insider Threat / PrivEsc Detection) ---
 # Active ONLY if SYSWARDEN_LAN_MODE="y" or manually verified.
 # SYSWARDEN natively blocks and traces any connection attempt to these ports as a malicious Lateral Movement.
@@ -77,49 +123,15 @@ SYSWARDEN_HONEYPORTS="6379,23"
 # --- Local Network & L2 Protection ---
 # Enable OSI Layer 2 ARP Spoofing Prevention
 SYSWARDEN_ENABLE_L2="y"
-# Enable 10req/sec ARP Flood limits
+# Enable 500req/sec ARP Flood limits (Enterprise LAN adjusted)
 SYSWARDEN_ARP_PROTECT="y"
 # Enable Local LAN Mode to save RAM by skipping global OSINT downloads
 SYSWARDEN_LAN_MODE="n"
 
-# --- OS Hardening ---
-# y = Enable, n = Disable (Strict restrictions for privileged groups & Cron. Recommended for NEW servers only)
-SYSWARDEN_HARDENING="y"
 
-# Enable advanced CIS Benchmark Level 2 hardening (Defense-in-Depth)
-# Recommended for exposed production servers, may restrict certain specific modules.
-APPLY_CIS_L2_HARDENING="y"
-
-# --- Blocklist Selection ---
-# 1 = Standard, 2 = Critical, 3 = Custom, 4 = None
-SYSWARDEN_LIST_CHOICE="1"
-# If choice is 3, provide the URL below. MUST be HTTPS. HTTP schemes will be rejected.
-SYSWARDEN_CUSTOM_URL=""
-# Prevent supply chain poisoning: Provide the expected SHA256 hash of the custom list (Optional but recommended for NIS2)
-SYSWARDEN_CUSTOM_HASH=""
-
-# --- Geo-Blocking ---
-# y = Enable, n = Disable
-SYSWARDEN_ENABLE_GEO="y"
-# Space-separated country codes to DROP (e.g., "ru cn kp ir")
-SYSWARDEN_GEO_CODES="ru cn kp ir br vn in by ng bd pe mx ua my ph lt id af al bd by bo cl hr ec hk il kz lb my md pk ph qa sa sd tm uz zm zw ye ao ar am bz bj ba bw bg bi cm cg cy dj do eg ee fi ge gh gi hn iq ie jp ke kr lv ly me nc nz no ps pa pt pr sc ug tz tj"
-# ZERO-TRUST MODE: Space-separated country codes to ALLOW. If defined, ALL OTHER COUNTRIES WILL BE DROPPED.
-SYSWARDEN_GEO_ALLOWED=""
-
-
-# --- ASN Blocking ---
-# Enable the ASN blocking module
-SYSWARDEN_ENABLE_ASN="y"
-
-# Master List (VPNs, Proxies, Linode, Tor Exit Nodes/Bulletproof Hosters) to DROP
-SYSWARDEN_ASN_LIST="AS30823 AS210644 AS200593 AS202425 AS215540 AS9009 AS201069 AS20473 AS60068 AS51396 AS212238 AS209334 AS198953 AS201814 AS16276 AS62282 AS14061 AS202662 AS24940 AS398324 AS31173 AS23969 AS11878 AS32097 AS43948 AS62240 AS16265 AS3223 AS53667 AS200651 AS58224 AS57821 AS199524 AS51852 AS197540 AS209334 AS329415 AS204106 AS57371 AS47139"
-
-# ZERO-TRUST MODE: Space-separated ASN codes to ALLOW. If defined, ALL OTHER ASNs WILL BE DROPPED.
-SYSWARDEN_ASN_ALLOWED=""
-
-# Include Spamhaus ASN-DROP list for known cybercriminal infrastructures
-SYSWARDEN_USE_SPAMHAUS="n"
-
+# ==========================================
+# [6] HIGH AVAILABILITY & VPN
+# ==========================================
 # --- HA Cluster Sync ---
 # y = Enable, n = Disable (Replicates state to a standby node over encrypted channels)
 SYSWARDEN_HA_ENABLED="y"
@@ -128,6 +140,16 @@ SYSWARDEN_HA_PEER_IP=""
 # Standby NODE TLS Port
 SYSWARDEN_HA_PEER_PORT="62026"
 
+# --- WireGuard Management VPN ---
+# y = Enable, n = Disable
+SYSWARDEN_ENABLE_WG="n"
+SYSWARDEN_WG_PORT="51820"
+SYSWARDEN_WG_SUBNET="10.66.66.0/24"
+
+
+# ==========================================
+# [7] SIEM & EXTERNAL INTEGRATIONS
+# ==========================================
 # --- SIEM Log Forwarding (ISO 27001 / NIS2 COMPLIANT) ---
 # y = Enable, n = Disable (Forwards attack logs to an external SIEM via Rsyslog)
 SYSWARDEN_SIEM_ENABLED="n"
@@ -158,9 +180,4 @@ SYSWARDEN_WAZUH_NAME=""
 SYSWARDEN_WAZUH_GROUP="default"
 SYSWARDEN_WAZUH_COMM_PORT="1514"
 SYSWARDEN_WAZUH_ENROLL_PORT="1515"
-
-# --- Security & Lifecycle Management ---
-# y = Securely wipe this configuration file (shred) from disk after successful installation.
-# MANDATORY for ISO 27001 compliance to prevent API keys (AbuseIPDB) from lingering in plaintext.
-SYSWARDEN_SECURE_WIPE_CONF="n"
 `

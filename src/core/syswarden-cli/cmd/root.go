@@ -21,6 +21,10 @@ var rootCmd = &cobra.Command{
 		fmt.Printf("SYSWARDEN %s CLI\n", system.Version)
 		fmt.Println("Use 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.")
 	},
+	CompletionOptions: cobra.CompletionOptions{
+		DisableDefaultCmd:   false,
+		DisableDescriptions: true,
+	},
 }
 
 func Execute() {

@@ -27,24 +27,29 @@ var manualCmd = &cobra.Command{
 		// 1. CLI Commands
 		fmt.Printf("%s--- 1. CLI COMMANDS REFERENCE ---%s\n", ansiYellow, ansiReset)
 
-		fmt.Printf("  %sinstall%s       : Compiles, hardens, and deploys the firewall and WAAP engine.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %suninstall%s     : Safely removes SYSWARDEN and reverts the OS to its previous state.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %saudit%s         : Validates Zero-Trust L3 boundaries and L7 WAAP independence.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %sconfig%s        : Opens the interactive configuration editor (e.g., /opt/syswarden/syswarden-auto.conf or /usr/local/etc/syswarden-auto.conf).\n", ansiGreen, ansiReset)
-		fmt.Printf("  %stui%s           : Launches the real-time Terminal User Interface (TUI) dashboard.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %salerts%s        : Streams live WAAP/L7 JSON telemetry and block events.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %sreload%s        : Applies configuration changes to the kernel atomically without dropping active connections.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %sblock%s         : Manually bans an IPv4/IPv6 address via L3 Netfilter.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %sunblock%s       : Removes an IP address from the banned set.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %swhitelist%s     : Adds an IP to the absolute hardware bypass list (ignores all checks).\n", ansiGreen, ansiReset)
-		fmt.Printf("  %sunwhitelist%s   : Removes an IP from the hardware whitelist.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %scheck%s         : Checks if an IP is currently banned or whitelisted.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %supdate%s        : Automatically updates the SYSWARDEN core binary and daemon.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %supdate-feeds%s  : Forces an immediate refresh of the Data-Shield Threat Intelligence feeds.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %senroll%s        : Securely attaches this node to a centralized SysWarden Nexus console.\n\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sinstall%s         : Compiles, hardens, and deploys the firewall and WAAP engine.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %suninstall%s       : Safely removes SYSWARDEN and reverts the OS to its previous state.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %saudit%s           : Validates Zero-Trust L3 boundaries and L7 WAAP independence.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sconfig%s          : Opens the interactive configuration editor (e.g., /opt/syswarden/syswarden-auto.conf).\n", ansiGreen, ansiReset)
+		fmt.Printf("  %stui%s             : Launches the real-time Terminal User Interface (TUI) dashboard.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %salerts%s          : Streams live WAAP/L7 JSON telemetry and block events.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sreload%s          : Applies configuration changes to the kernel atomically without dropping connections.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sblock <IP>%s      : Manually bans an IPv4/IPv6 address via L3 Netfilter (Immediately applied).\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sunblock <IP>%s    : Removes an IPv4/IPv6 address from the banned set.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %swhitelist <IP>%s  : Adds an IPv4/IPv6 to the absolute hardware bypass list (ignores all checks).\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sunwhitelist <IP>%s: Removes an IPv4/IPv6 from the hardware whitelist.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %scheck <IP>%s      : Checks if an IPv4/IPv6 is currently banned or whitelisted.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %supdate%s          : Automatically updates the SYSWARDEN core binary and daemon.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %supdate-feeds%s    : Forces an immediate refresh of the Data-Shield Threat Intelligence feeds.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %senroll%s          : Securely attaches this node to a centralized SysWarden Nexus console.\n\n", ansiGreen, ansiReset)
+
+		// 1.5 Global Flags
+		fmt.Printf("%s--- 2. GLOBAL FLAGS ---%s\n", ansiYellow, ansiReset)
+		fmt.Printf("  %s--config <path>%s : Overrides the default configuration file path (Default: /opt/syswarden/syswarden-auto.conf).\n", ansiGreen, ansiReset)
+		fmt.Printf("  %s--help%s          : Displays standard CLI help for a specific command.\n\n", ansiGreen, ansiReset)
 
 		// 2. Configuration Options
-		fmt.Printf("%s--- 2. CONFIGURATION FILE (syswarden-auto.conf) ---%s\n", ansiYellow, ansiReset)
+		fmt.Printf("%s--- 3. CONFIGURATION FILE (syswarden-auto.conf) ---%s\n", ansiYellow, ansiReset)
 
 		fmt.Printf("%s[Zero-Trust Governance]%s\n", ansiCyan, ansiReset)
 		fmt.Printf("  %sSYSWARDEN_GEO_ALLOWED%s    : Comma-separated ISO Country Codes (e.g., \"FR,DE\"). Implements Default-Deny L3.\n", ansiWhite, ansiReset)
@@ -81,8 +86,8 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("%s[Layer 2 Protections]%s\n", ansiCyan, ansiReset)
 		fmt.Printf("  %sSYSWARDEN_L2_ENABLED%s     : Activates Hardware Layer 2 ARP Spoofing prevention.\n\n", ansiWhite, ansiReset)
 
-		// 3. Data-Shield Lists
-		fmt.Printf("%s--- 3. DATA-SHIELD POSTURES (SYSWARDEN_LIST_CHOICE) ---%s\n", ansiYellow, ansiReset)
+		// 4. Data-Shield Lists
+		fmt.Printf("%s--- 4. DATA-SHIELD POSTURES (SYSWARDEN_LIST_CHOICE) ---%s\n", ansiYellow, ansiReset)
 
 		fmt.Printf("  %sstandard%s\n", ansiGreen, ansiReset)
 		fmt.Printf("      - %sBlocklist.de%s: Aggregates real-time SSH, Mail, and Web application attackers.\n", ansiWhite, ansiReset)

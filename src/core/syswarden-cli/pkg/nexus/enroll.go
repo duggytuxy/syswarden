@@ -40,7 +40,7 @@ const configPath = "/opt/syswarden/nexus.conf"
 
 func EnrollNode(url, token string) error {
 	fmt.Printf("[*] Initiating Zero-Trust TOFU enrollment with SysWarden Nexus at %s...\n", url)
-	
+
 	resp, err := DoEnrollHTTP(url, token)
 	if err != nil {
 		return fmt.Errorf("enrollment failed: %v", err)
