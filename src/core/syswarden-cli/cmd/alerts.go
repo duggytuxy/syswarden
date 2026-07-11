@@ -91,7 +91,7 @@ func StreamKernelLogs(app *tview.Application, table *tview.Table) {
 	ipRegex := regexp.MustCompile(`SRC=([0-9a-fA-F:.]+)`)
 	portRegex := regexp.MustCompile(`DPT=([0-9]+)`)
 	protoRegex := regexp.MustCompile(`PROTO=([A-Za-z0-9]+)`)
-	modRegex := regexp.MustCompile(`\[(SYSWARDEN-[A-Za-z]+|CATCH-ALL)\]`)
+	modRegex := regexp.MustCompile(`\[(SYSWARDEN-[A-Za-z-]+|CATCH-ALL)\]`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -224,7 +224,7 @@ func StreamKernelLogsText() {
 	ipRegex := regexp.MustCompile(`SRC=([0-9a-fA-F:.]+)`)
 	portRegex := regexp.MustCompile(`DPT=([0-9]+)`)
 	protoRegex := regexp.MustCompile(`PROTO=([A-Za-z0-9]+)`)
-	modRegex := regexp.MustCompile(`\[(SYSWARDEN-[A-Za-z]+|CATCH-ALL)\]`)
+	modRegex := regexp.MustCompile(`\[(SYSWARDEN-[A-Za-z-]+|CATCH-ALL)\]`)
 
 	for scanner.Scan() {
 		line := scanner.Text()

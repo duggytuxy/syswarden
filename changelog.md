@@ -1,3 +1,10 @@
+# Release v3.61.1
+
+## FIXED
+- Fixed a regex parsing bug in the `syswarden alerts` (TUI) console where `[SYSWARDEN-ZERO-TRUST]` drops were incorrectly displayed as a generic `SYSWARDEN-DROP` due to a missing hyphen match.
+
+---
+
 # Release v3.61.0
 
 ## UPDATED
