@@ -239,7 +239,7 @@ func ApplyPolicies() error {
 		localIPs := getLocalIPs()
 		if len(localIPs) > 0 {
 			ipList := strings.Join(localIPs, ", ")
-			_, _ = nftRules.WriteString(fmt.Sprintf("\t\tarp saddr ip { %s } counter log prefix \"[SYSWARDEN-ARP-SPOOF] \" drop\n", ipList))
+			_, _ = fmt.Fprintf(&nftRules, "\t\tarp saddr ip { %s } counter log prefix \"[SYSWARDEN-ARP-SPOOF] \" drop\n", ipList)
 		}
 
 		// ARP Flood limits adapted for Enterprise LAN (500/s burst 1000)

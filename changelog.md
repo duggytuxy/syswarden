@@ -1,3 +1,10 @@
+# Release v3.60.6
+
+## FIXED
+- **Code Hygiene**: Patched `staticcheck` (QF1012) violation regarding `WriteString(fmt.Sprintf(...))` by replacing it with `fmt.Fprintf(...)`.
+
+---
+
 # Release v3.60.5
 
 ## UPDATED
