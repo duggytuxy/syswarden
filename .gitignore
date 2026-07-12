@@ -12,6 +12,8 @@ src/core/syswarden-core/syswarden-core*
 src/core/syswarden-tui/syswarden-tui*
 *_test
 syswarden_test
+syswarden
+syswarden.exe
 
 # SysWarden Build Artifacts (CI/CD & Local)
 dist/

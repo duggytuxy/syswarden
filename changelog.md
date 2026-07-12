@@ -1,3 +1,10 @@
+# Release v3.61.4
+
+## FIXED
+- **OSSF Scorecard (Supply Chain Security)**: Addressed a High-Severity `Binary-Artifacts #103` alert by removing the stray compiled `syswarden` binary from the git index and adding strict exclusions to `.gitignore`. This enforces SLSA compliance by ensuring no executable artifacts are tracked in the source repository.
+
+---
+
 # Release v3.61.3
 
 ## FIXED
