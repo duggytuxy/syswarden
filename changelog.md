@@ -1,3 +1,10 @@
+# Release v3.61.2
+
+## ADDED
+- **Full Telemetry Synchronization**: The agent now natively synchronizes its comprehensive `data.json` state directly with the Nexus server over an mTLS-secured connection.
+
+---
+
 # Release v3.61.1
 
 ## FIXED

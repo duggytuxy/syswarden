@@ -104,27 +104,32 @@ func runNexusClientLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Canceled
 		case <-ticker.C:
-			// 1. Gather RiskRadar telemetry
-			// Here we simulate an alert payload to push
-			payload := map[string]interface{}{
-				"node_id":    conf.NodeID,
-				"source_ip":  "192.168.x.x",
-				"alert_type": "L7_WAF_BLOCK",
-				"reason":     "Simulated Agent Alert",
-				"payload":    "GET /?id=1' OR '1'='1",
+			// Read the real telemetry data.json
+			dataJSON, err := os.ReadFile("/var/lib/syswarden/ui/data.json")
+			if err != nil {
+				log.Printf("[NEXUS-SYNC] Warning: Could not read data.json: %v", err)
+				continue
 			}
 
-			body, _ := json.Marshal(payload)
-			resp, err := client.Post(conf.NexusURL+"/api/v1/telemetry", "application/json", bytes.NewBuffer(body))
+			req, err := http.NewRequest("POST", conf.NexusURL+"/api/v1/telemetry/full", bytes.NewBuffer(dataJSON))
 			if err != nil {
-				log.Printf("[NEXUS-SYNC] Failed to send telemetry: %v", err)
+				log.Printf("[NEXUS-SYNC] Failed to create telemetry request: %v", err)
+				continue
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Node-ID", conf.NodeID)
+
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[NEXUS-SYNC] Failed to send full telemetry: %v", err)
 				continue
 			}
 			_ = resp.Body.Close()
+
 			if resp.StatusCode == 200 {
-				log.Println("[NEXUS-SYNC] Telemetry successfully pushed to Nexus API.")
+				log.Println("[NEXUS-SYNC] Full telemetry successfully pushed to Nexus API.")
 			} else {
-				log.Printf("[NEXUS-SYNC] Nexus API rejected telemetry (Status: %d)", resp.StatusCode)
+				log.Printf("[NEXUS-SYNC] Nexus API rejected full telemetry (Status: %d)", resp.StatusCode)
 			}
 		}
 	}
