@@ -152,7 +152,7 @@ func runNexusClientLoop(ctx context.Context) error {
 
 func executeNexusCommand(ctx context.Context, conf NexusConfig, client *http.Client, cmdID uint, action string) {
 	var result string
-	var status string = "completed"
+	status := "completed"
 
 	switch action {
 	case "read_config":
@@ -200,7 +200,7 @@ func executeNexusCommand(ctx context.Context, conf NexusConfig, client *http.Cli
 
 	resp, err := client.Do(req)
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	} else {
 		log.Printf("[NEXUS-SYNC] Failed to send command response: %v", err)
 	}

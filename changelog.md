@@ -1,3 +1,10 @@
+# Release v3.61.6
+
+## FIXED
+- **Code Hygiene (golangci-lint)**: Fixed strict staticcheck (`ST1023`) and errcheck warnings in the C2 `nexus_client.go` to ensure OSSF Scorecard pipeline completion and SLSA compliance.
+
+---
+
 # Release v3.61.5
 
 ## ADDED
