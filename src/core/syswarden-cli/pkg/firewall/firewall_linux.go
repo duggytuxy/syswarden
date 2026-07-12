@@ -104,6 +104,18 @@ func ApplyPolicies() error {
 		_, _ = nftRules.WriteString("\tset syswarden_asn6 { type ipv6_addr; flags interval; auto-merge; }\n")
 	}
 
+	// Trust LAN Subnets (RFC1918 by default + Custom config)
+	validLANSubnets := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
+	if config.GlobalConfig.LANSubnets != "" {
+		cleaned := strings.ReplaceAll(config.GlobalConfig.LANSubnets, ",", " ")
+		subnets := strings.Fields(cleaned)
+		for _, s := range subnets {
+			if s != "" {
+				validLANSubnets = append(validLANSubnets, s)
+			}
+		}
+	}
+
 	// Stateful L4 Protections (Host Input)
 	_, _ = nftRules.WriteString("\tchain stateful_protect {\n\t\ttype filter hook input priority -10; policy drop;\n")
 	_, _ = nftRules.WriteString("\t\tiifname \"lo\" accept\n")
@@ -120,8 +132,10 @@ func ApplyPolicies() error {
 
 	// ZERO-TRUST MODE: Drop everything that is not in the Zero-Trust allowed GEO/ASN list
 	if config.GlobalConfig.GeoAllowed != "" || config.GlobalConfig.ASNAllowed != "" {
-		// LAN Bypass: Explicitly allow internal RFC1918 subnets to bypass Zero-Trust
-		_, _ = nftRules.WriteString("\t\tip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8 } accept\n")
+		// LAN Bypass: Explicitly allow internal enterprise subnets to bypass Zero-Trust
+		if len(validLANSubnets) > 0 {
+			_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr { %s } accept\n", strings.Join(validLANSubnets, ", "))
+		}
 
 		_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ZERO-TRUST] \"\n")
 		_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed drop\n")
@@ -148,18 +162,6 @@ func ApplyPolicies() error {
 		}
 		if _, err := exec.LookPath("iptables"); err == nil {
 			_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", config.GlobalConfig.HAPeerPort, "-j", "ACCEPT").Run()
-		}
-	}
-
-	// Trust LAN Subnets in OS wrappers (RFC1918 by default + Custom)
-	validLANSubnets := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
-	if config.GlobalConfig.LANSubnets != "" {
-		subnets := strings.Split(config.GlobalConfig.LANSubnets, " ")
-		for _, s := range subnets {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				validLANSubnets = append(validLANSubnets, s)
-			}
 		}
 	}
 
@@ -222,9 +224,8 @@ func ApplyPolicies() error {
 	}
 
 	// Explicitly trust internal enterprise subnets (Bypass Catch-All)
-	_, _ = nftRules.WriteString("\t\t# Explicitly trust internal enterprise subnets (Bypass Catch-All)\n")
-	_, _ = nftRules.WriteString("\t\tip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8 } accept\n")
 	if len(validLANSubnets) > 0 {
+		_, _ = nftRules.WriteString("\t\t# Explicitly trust internal enterprise subnets (Bypass Catch-All)\n")
 		_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr { %s } accept\n", strings.Join(validLANSubnets, ", "))
 	}
 
@@ -312,6 +313,7 @@ func ApplyPolicies() error {
 		"/etc/syswarden/lists/syswarden_whitelist.ipv4",
 		"/etc/syswarden/lists/syswarden_saas_monitors.ipv4",
 	}
+
 	var ztFiles []string
 	var ztFiles6 []string
 

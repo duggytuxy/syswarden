@@ -130,6 +130,18 @@ func ApplyPolicies() error {
 	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s proto tcp all flags FUP/WEUAPRSF\n", activeIf))
 	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s proto tcp all flags NONE/WEUAPRSF\n", activeIf))
 
+	// Trust LAN Subnets (RFC1918 by default + Custom config)
+	validLANSubnets := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
+	if config.GlobalConfig.LANSubnets != "" {
+		cleaned := strings.ReplaceAll(config.GlobalConfig.LANSubnets, ",", " ")
+		subnets := strings.Fields(cleaned)
+		for _, s := range subnets {
+			if s != "" {
+				validLANSubnets = append(validLANSubnets, s)
+			}
+		}
+	}
+
 	// 1. Infra Whitelist (Absolute Priority - Bypasses everything)
 	_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick on %s from <syswarden_whitelist> to any\n", activeIf))
 
@@ -150,8 +162,10 @@ func ApplyPolicies() error {
 
 	// ZERO-TRUST MODE: Drop everything that is not in the Zero-Trust allowed GEO/ASN list
 	if config.GlobalConfig.GeoAllowed != "" || config.GlobalConfig.ASNAllowed != "" {
-		// LAN Bypass: Always allow internal subnets (RFC1918) to bypass Zero-Trust Catch-All
-		_, _ = pfRules.WriteString("pass in quick from { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8 } to any\n")
+		// LAN Bypass: Explicitly allow internal enterprise subnets to bypass Zero-Trust
+		if len(validLANSubnets) > 0 {
+			_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick from { %s } to any\n", strings.Join(validLANSubnets, ", ")))
+		}
 		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s from ! <syswarden_zt_allowed> to any\n", activeIf))
 	}
 
@@ -217,19 +231,9 @@ func ApplyPolicies() error {
 	}
 
 	// Explicitly trust internal enterprise subnets (Bypass Catch-All)
-	if config.GlobalConfig.LANSubnets != "" {
-		subnets := strings.Split(config.GlobalConfig.LANSubnets, " ")
-		var validLANSubnets []string
-		for _, s := range subnets {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				validLANSubnets = append(validLANSubnets, s)
-			}
-		}
-		if len(validLANSubnets) > 0 {
-			_, _ = pfRules.WriteString("# Explicitly trust internal enterprise subnets (Bypass Catch-All)\n")
-			_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick on %s from { %s } to any keep state\n", activeIf, strings.Join(validLANSubnets, ", ")))
-		}
+	if len(validLANSubnets) > 0 {
+		_, _ = pfRules.WriteString("# Explicitly trust internal enterprise subnets (Bypass Catch-All)\n")
+		_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick on %s from { %s } to any keep state\n", activeIf, strings.Join(validLANSubnets, ", ")))
 	}
 
 	// Default drop catch-all for incoming

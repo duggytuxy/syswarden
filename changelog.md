@@ -1,3 +1,11 @@
+# Release v3.61.3
+
+## FIXED
+- Fixed a syntax error during firewall ruleset generation (`nftables` and `pf`) where comma-separated custom LAN subnets in the configuration caused malformed sets (e.g., `unexpected comma` or missing `}`). The configuration parser is now robust against spaces and trailing commas.
+- Optimized the Internal Enterprise Subnets (RFC1918) logic to be unified across both `Catch-All` and `Zero-Trust` bypass modes without generating duplicate bypass rules.
+
+---
+
 # Release v3.61.2
 
 ## ADDED
