@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
 )
 
@@ -124,13 +126,82 @@ func runNexusClientLoop(ctx context.Context) error {
 				log.Printf("[NEXUS-SYNC] Failed to send full telemetry: %v", err)
 				continue
 			}
-			_ = resp.Body.Close()
-
 			if resp.StatusCode == 200 {
 				log.Println("[NEXUS-SYNC] Full telemetry successfully pushed to Nexus API.")
+				bodyBytes, _ := io.ReadAll(resp.Body)
+
+				var nexusResp struct {
+					Status  string `json:"status"`
+					Command struct {
+						ID     uint   `json:"id"`
+						Action string `json:"action"`
+					} `json:"command"`
+				}
+
+				if err := json.Unmarshal(bodyBytes, &nexusResp); err == nil && nexusResp.Command.ID > 0 {
+					log.Printf("[NEXUS-SYNC] Received C2 Command: %s (ID: %d)", nexusResp.Command.Action, nexusResp.Command.ID)
+					go executeNexusCommand(ctx, conf, client, nexusResp.Command.ID, nexusResp.Command.Action)
+				}
 			} else {
 				log.Printf("[NEXUS-SYNC] Nexus API rejected full telemetry (Status: %d)", resp.StatusCode)
 			}
+			_ = resp.Body.Close()
 		}
+	}
+}
+
+func executeNexusCommand(ctx context.Context, conf NexusConfig, client *http.Client, cmdID uint, action string) {
+	var result string
+	var status string = "completed"
+
+	switch action {
+	case "read_config":
+		data, err := os.ReadFile("/opt/syswarden/syswarden-auto.conf")
+		if err != nil {
+			status = "failed"
+			result = "Error reading config: " + err.Error()
+		} else {
+			result = string(data)
+		}
+	case "update_package":
+		if os.Getuid() == 0 {
+			cmd := exec.CommandContext(ctx, "syswarden", "update")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				status = "failed"
+				result = "Update failed: " + err.Error() + "\n" + string(out)
+			} else {
+				result = "Update successful.\n" + string(out)
+			}
+		} else {
+			cmd := exec.CommandContext(ctx, "sudo", "syswarden", "update")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				status = "failed"
+				result = "Update failed: " + err.Error() + "\n" + string(out)
+			} else {
+				result = "Update successful.\n" + string(out)
+			}
+		}
+	default:
+		status = "failed"
+		result = "Unknown command action"
+	}
+
+	payload := map[string]interface{}{
+		"command_id": cmdID,
+		"status":     status,
+		"result":     result,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", conf.NexusURL+"/api/v1/telemetry/response", bytes.NewBuffer(payloadBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Node-ID", conf.NodeID)
+
+	resp, err := client.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	} else {
+		log.Printf("[NEXUS-SYNC] Failed to send command response: %v", err)
 	}
 }

@@ -1,3 +1,10 @@
+# Release v3.61.5
+
+## ADDED
+- **C2 Beaconing (mTLS)**: SysWarden agents now natively support Command and Control (C2) beaconing through the existing mTLS telemetry channel (`nexus_client.go`).
+- **Remote Configuration Read**: Administrators can now remotely read the `/opt/syswarden/syswarden-auto.conf` file directly from the Nexus Dashboard via secure C2 polling.
+- **Remote Auto-Update Orchestration**: Agents can dynamically trigger self-updates via the C2 channel. The agent intelligently detects its execution context (`root` vs unprivileged) and executes `syswarden update` (or `sudo syswarden update`) accordingly, streaming the output back to the Nexus Dashboard.
+
 # Release v3.61.4
 
 ## FIXED
