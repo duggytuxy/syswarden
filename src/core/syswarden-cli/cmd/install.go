@@ -107,7 +107,7 @@ var installCmd = &cobra.Command{
 			fmt.Printf("[ERROR] Systemd setup failed: %v\n", err)
 		}
 
-		fmt.Println("[SYSWARDEN] v3.62.0 Native Installation Complete.")
+		fmt.Println("[SYSWARDEN] v3.62.1 Native Installation Complete.")
 	},
 }
 
