@@ -139,6 +139,9 @@ var (
 	attackersTable *tview.Table
 	bannedTable    *tview.Table
 
+	recentlyUnbanned   = make(map[string]time.Time)
+	recentlyUnbannedMu sync.Mutex
+
 	fetchError error
 )
 
@@ -218,10 +221,19 @@ func main() {
 							AddButtons([]string{"y", "n"}).
 							SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 								if buttonLabel == "y" {
-									_ = exec.Command("syswarden", "unblock", ip).Run()
-									go readDataAndUpdate()
+									recentlyUnbannedMu.Lock()
+									recentlyUnbanned[ip] = time.Now()
+									recentlyUnbannedMu.Unlock()
+
+									go func(targetIP string) {
+										_ = exec.Command("syswarden", "unblock", targetIP).Run()
+										readDataAndUpdate()
+									}(ip)
 								}
 								app.SetRoot(mainFlex, true)
+								if buttonLabel == "y" {
+									go readDataAndUpdate()
+								}
 							})
 						app.SetRoot(modal, false)
 					}
@@ -648,6 +660,22 @@ func refreshUI() {
 	bannedTable.SetCell(0, 1, tview.NewTableCell("TARGET (PORT/JAIL/SERVICES)").SetTextColor(tcell.ColorGray).SetSelectable(false))
 	bannedTable.SetCell(0, 2, tview.NewTableCell("MITRE ATT&CK / TYPE").SetTextColor(tcell.ColorGray).SetSelectable(false))
 	bannedTable.SetCell(0, 3, tview.NewTableCell("TRIGGER PAYLOAD").SetTextColor(tcell.ColorGray).SetSelectable(false))
+
+	recentlyUnbannedMu.Lock()
+	now := time.Now()
+	var filteredBanned []BannedIP
+	for _, b := range d.WAF.BannedIPs {
+		if unbanTime, exists := recentlyUnbanned[b.IP]; exists {
+			if now.Sub(unbanTime) < 15*time.Second {
+				continue
+			} else {
+				delete(recentlyUnbanned, b.IP)
+			}
+		}
+		filteredBanned = append(filteredBanned, b)
+	}
+	recentlyUnbannedMu.Unlock()
+	d.WAF.BannedIPs = filteredBanned
 
 	if len(d.WAF.BannedIPs) == 0 && len(d.WAF.AllowedEvents) == 0 {
 		bannedTable.SetCell(1, 0, tview.NewTableCell("Registry is empty. Architecture is secure.").SetTextColor(tcell.ColorGreen).SetSelectable(false))

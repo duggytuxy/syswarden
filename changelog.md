@@ -1,3 +1,9 @@
+# Release v3.70.3
+
+- **TUI Optimistic UI Updates**: Fixed an issue where unbanning an IP from the TUI caused the interface to block for 2 seconds and the IP to temporarily remain visible due to telemetry synchronization delays. Unban actions are now completely non-blocking, and the IP is immediately filtered out of the visual registry to provide instantaneous user feedback while background processes propagate the deletion across the HA mesh and local Netlink backend.
+
+---
+
 # Release v3.70.2
 
 ## FIXED
@@ -8,6 +14,7 @@
 # Release v3.70.1
 
 ## FIXED
+- **TUI Responsiveness**: Fixed a critical thread lockup in `syswarden-tui` that caused the dashboard to freeze entirely when context-switching to an unreachable P2P HA-Cluster node. Network operations (fetching telemetry) are now fully asynchronous and no longer block the main `tview` UI drawing thread.
 - **Code Hygiene (golangci-lint)**: Fixed `errcheck` linter errors in the P2P TUI codebase by properly explicitly discarding unhandled `file.Close()` and `resp.Body.Close()` return values inside deferred operations.
 ---
 
