@@ -1,3 +1,10 @@
+# Release v3.70.8
+
+## FIXED
+- **Go Module Corruption**: Fixed a critical pipeline CI/CD failure where standard Go modules (`golang.org/x/net`, `x/text`, etc.) had corrupted version numbers causing `gosec` and `golangci-lint` to fail during dependency resolution. The `go.mod` and `go.sum` files for all three core components (`syswarden-cli`, `syswarden-core`, `syswarden-tui`) were fully rebuilt and synchronized to stable versions.
+
+---
+
 # Release v3.70.7
 
 ## FIXED
