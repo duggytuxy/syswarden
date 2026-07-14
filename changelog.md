@@ -1,5 +1,13 @@
+# Release v3.70.4
+
+## FIXED
+- **TUI Optimistic UI Updates**: Fixed an issue where unbanning an IP from the TUI caused the interface to block for 2 seconds and the IP to temporarily remain visible due to telemetry synchronization delays. Unban actions are now completely non-blocking, and the IP is immediately filtered out of the visual registry to provide instantaneous user feedback while background processes propagate the deletion across the HA mesh and local Netlink backend. Telemetry worker returning historical unbanned IPs.
+
+---
+
 # Release v3.70.3
 
+## FIXED
 - **TUI Optimistic UI Updates**: Fixed an issue where unbanning an IP from the TUI caused the interface to block for 2 seconds and the IP to temporarily remain visible due to telemetry synchronization delays. Unban actions are now completely non-blocking, and the IP is immediately filtered out of the visual registry to provide instantaneous user feedback while background processes propagate the deletion across the HA mesh and local Netlink backend.
 
 ---

@@ -847,6 +847,23 @@ func getWAFStats() WAF {
 	var allBans []BannedIP
 	var allAllowed []AllowedEvent
 
+	activeBans := make(map[string]bool)
+	if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4"); err == nil {
+		for _, line := range strings.Split(string(content), "\n") {
+			if ip := strings.TrimSpace(line); ip != "" {
+				activeBans[ip] = true
+			}
+		}
+	}
+	if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv6"); err == nil {
+		for _, line := range strings.Split(string(content), "\n") {
+			if ip := strings.TrimSpace(line); ip != "" {
+				activeBans[ip] = true
+			}
+		}
+	}
+	waf.TotalBanned = len(activeBans)
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		var event TelemetryEvent
@@ -879,7 +896,9 @@ func getWAFStats() WAF {
 					Action:  "DETECTED",
 				})
 			default:
-				waf.TotalBanned++
+				if !activeBans[event.IP] {
+					continue
+				}
 				jailCounts[event.Jail]++
 
 				allBans = append(allBans, BannedIP{
