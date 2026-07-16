@@ -1,3 +1,10 @@
+# Release v3.71.4
+
+## FIXED
+- **Code Hygiene**: Resolved a pipeline failure (`golangci-lint`) caused by an unused `"regexp"` import in `syswarden-core/telemetry/worker.go` that was left behind after optimizing the payload parser.
+
+---
+
 # Release v3.71.3
 
 ## FIXED
