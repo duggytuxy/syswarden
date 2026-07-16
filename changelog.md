@@ -1,3 +1,10 @@
+# Release v3.71.2
+
+## FIXED
+- **Installation Orchestration**: Addressed an oversight where running `syswarden install` (after generating a new configuration via `syswarden config`) would not forcefully restart the active `syswarden-core` daemon on Systemd distributions (`enable --now` only starts if inactive). `syswarden install` now explicitly executes `systemctl restart` to guarantee that new architectural changes (such as binding the HA-Cluster port 62026) are immediately hot-loaded without requiring a manual `syswarden reload` or a server reboot.
+
+---
+
 # Release v3.71.1
 
 ## FIXED

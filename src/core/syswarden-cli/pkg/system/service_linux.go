@@ -120,10 +120,11 @@ WantedBy=multi-user.target
 		fmt.Printf("[WARN] Failed to daemon-reload: %v\n", err)
 	}
 
-	fmt.Println("[INFO] Enabling and starting SYSWARDEN Core service...")
+	fmt.Println("[INFO] Enabling and restarting SYSWARDEN Core service...")
 	if err := exec.Command("systemctl", "enable", "--now", "syswarden-core.service").Run(); err != nil {
-		fmt.Printf("[WARN] Failed to enable/start syswarden-core.service: %v\n", err)
+		fmt.Printf("[WARN] Failed to enable syswarden-core.service: %v\n", err)
 	}
+	_ = exec.Command("systemctl", "restart", "syswarden-core.service").Run()
 
 	firewallServicePath := "/etc/systemd/system/syswarden-firewall.service"
 	firewallServiceContent := `[Unit]
