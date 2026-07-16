@@ -45,7 +45,10 @@ func OptimizeHostFirewall() error {
 		_ = exec.Command("systemctl", "enable", "--now", "iptables").Run()
 
 	default:
-		fmt.Println("[INFO] Auto-Deploy: Keeping Firewalld active.")
+		fmt.Println("[INFO] Auto-Deploy: Keeping Firewalld active (Disabling conflicting systemd fw services).")
+		_ = exec.Command("systemctl", "disable", "--now", "nftables").Run()
+		_ = exec.Command("systemctl", "disable", "--now", "iptables").Run()
+		_ = exec.Command("systemctl", "enable", "--now", "firewalld").Run()
 	}
 
 	return nil

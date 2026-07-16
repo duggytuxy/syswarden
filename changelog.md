@@ -1,3 +1,10 @@
+# Release v3.71.1
+
+## FIXED
+- **Firewall Optimizer**: Fixed an issue where selecting `keep` (Firewalld) in `syswarden-auto.conf` would leave the native `nftables` systemd service active on distributions that had it pre-enabled. The CLI will now explicitly disable `nftables.service` and `iptables.service` when `keep` is selected, ensuring absolute control is returned to Firewalld while SysWarden continues to use the native netlink API internally.
+
+---
+
 # Release v3.71.0
 
 ## UPGRADED
