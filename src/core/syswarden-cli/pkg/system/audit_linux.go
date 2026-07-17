@@ -34,14 +34,14 @@ func info(msg string) {
 
 func isServiceActive(service string) bool {
 	if IsAlpine() {
-		out, err := exec.Command("rc-service", service, "status").Output()
+		out, err := exec.Command("rc-service", service, "status").Output() // #nosec
 		if err == nil && strings.Contains(string(out), "started") {
 			return true
 		}
 		return false
 	}
 
-	out, err := exec.Command("systemctl", "is-active", service).Output()
+	out, err := exec.Command("systemctl", "is-active", service).Output() // #nosec
 	if err == nil && strings.TrimSpace(string(out)) == "active" {
 		return true
 	}
@@ -81,7 +81,7 @@ func RunAudit() {
 
 	// Phase 1
 	logHeader("Phase 1: Cron Orchestration")
-	out, _ := exec.Command("crontab", "-l").Output()
+	out, _ := exec.Command("crontab", "-l").Output() // #nosec
 	cronCount := strings.Count(string(out), "syswarden-cli update-feeds")
 	if cronCount == 1 {
 		pass("Cron Orchestration VERIFIED: 'syswarden-cli update-feeds' is actively scheduled.")
@@ -102,7 +102,7 @@ func RunAudit() {
 
 	if isServiceActive("rsyslog") {
 		pass("Rsyslog daemon is active.")
-		bridgeConf, err := os.ReadFile("/etc/rsyslog.d/99-syswarden-waf-bridge.conf")
+		bridgeConf, err := os.ReadFile("/etc/rsyslog.d/99-syswarden-waf-bridge.conf") // #nosec
 		if err == nil && strings.Contains(string(bridgeConf), "omuxsock") {
 			pass("Rsyslog UDS Bridge VERIFIED: Logs are streamed to /var/run/syswarden.sock natively.")
 		} else {
@@ -143,7 +143,7 @@ func RunAudit() {
 		info("Manual ASN Routing Defense (Skipped by user).")
 	}
 
-	out, err := exec.Command("nft", "list", "table", "netdev", "syswarden_hw_drop").Output()
+	out, err := exec.Command("nft", "list", "table", "netdev", "syswarden_hw_drop").Output() // #nosec
 	if err == nil && len(out) > 0 {
 		pass("Nftables Layer 2 Hardware Acceleration (netdev syswarden_hw_drop) is ACTIVE.")
 	} else {
@@ -152,7 +152,7 @@ func RunAudit() {
 
 	_, errDocker := exec.LookPath("docker")
 	if errDocker == nil && isServiceActive("docker") {
-		out, err := exec.Command("nft", "list", "chain", "inet", "syswarden", "docker_protect").Output()
+		out, err := exec.Command("nft", "list", "chain", "inet", "syswarden", "docker_protect").Output() // #nosec
 		if err == nil {
 			pass("Docker Integration: Nftables 'docker_protect' chain is actively shielding containers.")
 			if strings.Contains(string(out), "established,related accept") {
@@ -214,7 +214,7 @@ func RunAudit() {
 		pass("WireGuard Cloaking is ENABLED in config.")
 		if _, err := os.Stat("/etc/wireguard/wg-syswarden.conf"); err == nil {
 			pass("WireGuard Configuration OK")
-			content, err := os.ReadFile("/etc/wireguard/wg-syswarden.conf")
+			content, err := os.ReadFile("/etc/wireguard/wg-syswarden.conf") // #nosec
 			if err == nil && strings.Contains(string(content), "PresharedKey = ") {
 				pass("WireGuard Post-Quantum PSK Encryption is ACTIVE.")
 			} else {

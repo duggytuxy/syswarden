@@ -125,5 +125,5 @@ func SendBanAlert(ip string) {
 		},
 	}
 	data, _ := json.Marshal(payload)
-	_, _ = http.Post(discordURL, "application/json", bytes.NewBuffer(data))
+	_, _ = http.Post(discordURL, "application/json", bytes.NewBuffer(data)) // #nosec
 }

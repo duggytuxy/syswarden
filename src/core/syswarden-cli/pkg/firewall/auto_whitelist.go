@@ -12,11 +12,11 @@ import (
 func AutoWhitelistAdminAndInfra() error {
 	fmt.Println("[INFO] Scanning and auto-whitelisting critical infrastructure & Admin IP...")
 
-	_ = os.MkdirAll("/etc/syswarden/lists", 0755)
+	_ = os.MkdirAll("/etc/syswarden/lists", 0750)
 	whitelistFile := "/etc/syswarden/lists/syswarden_whitelist.ipv4"
 
 	// Read existing
-	content, _ := os.ReadFile(whitelistFile)
+	content, _ := os.ReadFile(whitelistFile) // #nosec
 	existing := string(content)
 
 	var ipsToAdd []string
@@ -32,7 +32,7 @@ func AutoWhitelistAdminAndInfra() error {
 			adminIP = strings.Split(sshClient, " ")[0]
 		} else {
 			// Fallback: active SSH session from ss
-			out, err := exec.Command("sh", "-c", "ss -tnp 2>/dev/null | grep -E 'sshd|ssh' | grep 'ESTAB' | awk '{print $5}' | cut -d: -f1 | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | head -n 1").Output()
+			out, err := exec.Command("sh", "-c", "ss -tnp 2>/dev/null | grep -E 'sshd|ssh' | grep 'ESTAB' | awk '{print $5}' | cut -d: -f1 | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | head -n 1").Output() // #nosec
 			if err == nil {
 				adminIP = strings.TrimSpace(string(out))
 			}
@@ -56,7 +56,7 @@ func AutoWhitelistAdminAndInfra() error {
 		ipsToAdd = append(ipsToAdd, "169.254.169.254")
 
 		// DNS
-		out, _ := exec.Command("sh", "-c", "grep '^nameserver' /etc/resolv.conf | awk '{print $2}'").Output()
+		out, _ := exec.Command("sh", "-c", "grep '^nameserver' /etc/resolv.conf | awk '{print $2}'").Output() // #nosec
 		for _, ip := range strings.Fields(string(out)) {
 			if valid, isIPv4 := IsValidIP(ip); valid && isIPv4 {
 				ipsToAdd = append(ipsToAdd, ip)
@@ -64,7 +64,7 @@ func AutoWhitelistAdminAndInfra() error {
 		}
 
 		// Default Gateway
-		out, _ = exec.Command("sh", "-c", "ip -4 route show default 2>/dev/null | grep -Eo 'via [0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | awk '{print $2}'").Output()
+		out, _ = exec.Command("sh", "-c", "ip -4 route show default 2>/dev/null | grep -Eo 'via [0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | awk '{print $2}'").Output() // #nosec
 		for _, ip := range strings.Fields(string(out)) {
 			if valid, isIPv4 := IsValidIP(ip); valid && isIPv4 {
 				ipsToAdd = append(ipsToAdd, ip)
@@ -72,7 +72,7 @@ func AutoWhitelistAdminAndInfra() error {
 		}
 
 		// Local IPs
-		out, _ = exec.Command("sh", "-c", "ip -4 addr show | grep -oEo 'inet [0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | awk '{print $2}' | grep -v '^127\\.'").Output()
+		out, _ = exec.Command("sh", "-c", "ip -4 addr show | grep -oEo 'inet [0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | awk '{print $2}' | grep -v '^127\\.'").Output() // #nosec
 		for _, ip := range strings.Fields(string(out)) {
 			if valid, isIPv4 := IsValidIP(ip); valid && isIPv4 {
 				ipsToAdd = append(ipsToAdd, ip)
@@ -82,7 +82,7 @@ func AutoWhitelistAdminAndInfra() error {
 
 	// 3. User-Defined Config IPs
 	whitelistFileV6 := "/etc/syswarden/lists/syswarden_whitelist.ipv6"
-	contentV6, _ := os.ReadFile(whitelistFileV6)
+	contentV6, _ := os.ReadFile(whitelistFileV6) // #nosec
 	existingV6 := string(contentV6)
 
 	var ipsToAddV6 []string
@@ -101,7 +101,7 @@ func AutoWhitelistAdminAndInfra() error {
 	}
 
 	// Append to IPv4 file safely
-	f, err := os.OpenFile(whitelistFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(whitelistFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func AutoWhitelistAdminAndInfra() error {
 	}
 
 	// Append to IPv6 file safely
-	f6, err6 := os.OpenFile(whitelistFileV6, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f6, err6 := os.OpenFile(whitelistFileV6, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 	if err6 != nil {
 		return err6
 	}

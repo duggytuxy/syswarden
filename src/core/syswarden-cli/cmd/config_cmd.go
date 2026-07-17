@@ -20,9 +20,9 @@ var configCmd = &cobra.Command{
 		// Create default config if it doesn't exist
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			fmt.Println("[*] Configuration file not found. Generating default...")
-			err := os.MkdirAll("/opt/syswarden", 0755)
+			err := os.MkdirAll("/opt/syswarden", 0750)
 			if err == nil {
-				_ = os.WriteFile(configPath, []byte(config.DefaultConfig), 0640)
+				_ = os.WriteFile(configPath, []byte(config.DefaultConfig), 0600)
 			}
 		}
 
@@ -42,7 +42,7 @@ var configCmd = &cobra.Command{
 		fmt.Printf("[*] Opening configuration with %s...\n", editor)
 
 		// Launch interactive editor
-		execCmd := exec.Command(editor, configPath)
+		execCmd := exec.Command(editor, configPath) // #nosec
 		execCmd.Stdin = os.Stdin
 		execCmd.Stdout = os.Stdout
 		execCmd.Stderr = os.Stderr

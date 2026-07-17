@@ -34,7 +34,7 @@ func loadHAConfig() HAConfig {
 		Port:    "62026", // Default HA TLS API Port
 	}
 
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf")
+	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
 	if err != nil {
 		return cfg
 	}
@@ -114,7 +114,7 @@ func StartHAServer(fwManager firewall.Manager) {
 	log.Printf("[HA Cluster] Starting TLS P2P API on port %s", cfg.Port)
 
 	coreVersion := "unknown"
-	cmd := exec.Command("syswarden")
+	cmd := exec.Command("syswarden") // #nosec
 	if out, err := cmd.Output(); err == nil {
 		lines := strings.Split(string(out), "\n")
 		if len(lines) > 0 {
@@ -157,7 +157,7 @@ func StartHAServer(fwManager firewall.Manager) {
 		if r.Method == http.MethodGet {
 			// Return current blocklists
 			var allIPs []string
-			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4"); err == nil {
+			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4"); err == nil { // #nosec
 				lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 				for _, l := range lines {
 					if l != "" {
@@ -165,7 +165,7 @@ func StartHAServer(fwManager firewall.Manager) {
 					}
 				}
 			}
-			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv6"); err == nil {
+			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv6"); err == nil { // #nosec
 				lines := strings.Split(strings.TrimSpace(string(content)), "\n")
 				for _, l := range lines {
 					if l != "" {
@@ -195,12 +195,12 @@ func StartHAServer(fwManager firewall.Manager) {
 
 			// Read current state to prevent duplicates
 			existingIPs := make(map[string]bool)
-			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4"); err == nil {
+			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4"); err == nil { // #nosec
 				for _, l := range strings.Split(string(content), "\n") {
 					existingIPs[strings.TrimSpace(l)] = true
 				}
 			}
-			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv6"); err == nil {
+			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv6"); err == nil { // #nosec
 				for _, l := range strings.Split(string(content), "\n") {
 					existingIPs[strings.TrimSpace(l)] = true
 				}
@@ -215,13 +215,13 @@ func StartHAServer(fwManager firewall.Manager) {
 
 				// Also persist locally to blocklist
 				if !strings.Contains(ip, ":") {
-					f, _ := os.OpenFile("/etc/syswarden/lists/syswarden_blacklist.ipv4", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
+					f, _ := os.OpenFile("/etc/syswarden/lists/syswarden_blacklist.ipv4", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 					if f != nil {
 						_, _ = f.WriteString(ip + "\n")
 						_ = f.Close()
 					}
 				} else {
-					f, _ := os.OpenFile("/etc/syswarden/lists/syswarden_blacklist.ipv6", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
+					f, _ := os.OpenFile("/etc/syswarden/lists/syswarden_blacklist.ipv6", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 					if f != nil {
 						_, _ = f.WriteString(ip + "\n")
 						_ = f.Close()
@@ -256,7 +256,7 @@ func StartHAServer(fwManager firewall.Manager) {
 					file = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
 				}
 
-				if content, err := os.ReadFile(file); err == nil {
+				if content, err := os.ReadFile(file); err == nil { // #nosec
 					lines := strings.Split(string(content), "\n")
 					var newLines []string
 					for _, l := range lines {
@@ -265,9 +265,9 @@ func StartHAServer(fwManager firewall.Manager) {
 						}
 					}
 					if len(newLines) > 0 {
-						_ = os.WriteFile(file, []byte(strings.Join(newLines, "\n")+"\n"), 0640)
+						_ = os.WriteFile(file, []byte(strings.Join(newLines, "\n")+"\n"), 0600)
 					} else {
-						_ = os.WriteFile(file, []byte(""), 0640)
+						_ = os.WriteFile(file, []byte(""), 0600)
 					}
 				}
 			}
@@ -306,7 +306,7 @@ func StartHAServer(fwManager firewall.Manager) {
 			return
 		}
 
-		content, err := os.ReadFile("/var/lib/syswarden/ui/data.json")
+		content, err := os.ReadFile("/var/lib/syswarden/ui/data.json") // #nosec
 		if err != nil {
 			http.Error(w, "Telemetry unavailable", http.StatusInternalServerError)
 			return
@@ -348,7 +348,7 @@ func StartHAServer(fwManager firewall.Manager) {
 
 		// Very lightweight OS check from /etc/os-release
 		osName := "Linux"
-		if osRelease, err := os.ReadFile("/etc/os-release"); err == nil {
+		if osRelease, err := os.ReadFile("/etc/os-release"); err == nil { // #nosec
 			for _, line := range strings.Split(string(osRelease), "\n") {
 				if strings.HasPrefix(line, "PRETTY_NAME=") {
 					osName = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")

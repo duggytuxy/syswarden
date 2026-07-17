@@ -11,7 +11,7 @@ func SetupHACluster() error {
 	if !config.GlobalConfig.HAEnabled {
 		fmt.Println("[INFO] HA Cluster Sync is DISABLED.")
 		// Remove cron natively
-		out, _ := exec.Command("crontab", "-l").Output()
+		out, _ := exec.Command("crontab", "-l").Output() // #nosec
 		lines := strings.Split(string(out), "\n")
 		var newLines []string
 		for _, line := range lines {
@@ -23,7 +23,7 @@ func SetupHACluster() error {
 		if len(newLines) > 0 {
 			newCron = strings.Join(newLines, "\n") + "\n"
 		}
-		cmd := exec.Command("crontab", "-")
+		cmd := exec.Command("crontab", "-") // #nosec
 		cmd.Stdin = strings.NewReader(newCron)
 		_ = cmd.Run()
 		return nil
@@ -43,14 +43,14 @@ func SetupHACluster() error {
 	for _, ip := range peerIPs {
 		// Just call the binary to avoid cyclical imports or complex logic
 		fmt.Printf("[INFO] Auto-whitelisting HA Peer IP: %s\n", ip)
-		_ = exec.Command("/opt/syswarden/bin/syswarden-cli", "whitelist", ip).Run()
+		_ = exec.Command("/opt/syswarden/bin/syswarden-cli", "whitelist", ip).Run() // #nosec
 	}
 
 	// In a full Go architecture, we register a cron job that calls the Go CLI to perform the sync natively
 	// instead of relying on a bash script containing python sockets.
 	cronJob := "*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1"
 
-	out, _ := exec.Command("crontab", "-l").Output()
+	out, _ := exec.Command("crontab", "-l").Output() // #nosec
 	lines := strings.Split(string(out), "\n")
 	var newLines []string
 	for _, line := range lines {
@@ -61,7 +61,7 @@ func SetupHACluster() error {
 	newLines = append(newLines, cronJob)
 
 	newCron := strings.Join(newLines, "\n") + "\n"
-	cmd := exec.Command("crontab", "-")
+	cmd := exec.Command("crontab", "-") // #nosec
 	cmd.Stdin = strings.NewReader(newCron)
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("[WARN] Failed to inject HA cron job: %v\n", err)

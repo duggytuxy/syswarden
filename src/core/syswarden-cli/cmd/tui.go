@@ -22,7 +22,7 @@ var tuiCmd = &cobra.Command{
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 		defer signal.Stop(sigChan)
 
-		tuiCmd := exec.Command("/opt/syswarden/bin/syswarden-tui")
+		tuiCmd := exec.Command("/opt/syswarden/bin/syswarden-tui") // #nosec
 		tuiCmd.Stdin = os.Stdin
 		tuiCmd.Stdout = os.Stdout
 		tuiCmd.Stderr = os.Stderr

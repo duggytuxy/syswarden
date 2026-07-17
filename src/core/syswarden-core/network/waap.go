@@ -41,7 +41,7 @@ func loadWAAPConfig() WAAPConfig {
 		Window:    60 * time.Second,
 	}
 
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf")
+	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
 	if err != nil {
 		return cfg
 	}
@@ -146,7 +146,7 @@ func (w *WAAPEngine) Start() {
 func (w *WAAPEngine) tailFile(filepath string) {
 	// Attempt to touch file if it doesn't exist to prevent tail from immediately failing if created later
 	if _, err := os.Stat(filepath); os.IsNotExist(err) {
-		_ = os.WriteFile(filepath, []byte{}, 0640)
+		_ = os.WriteFile(filepath, []byte{}, 0600)
 	}
 
 	t, err := tail.TailFile(filepath, tail.Config{

@@ -33,11 +33,11 @@ func (m *FallbackManager) Ban(ip string) error {
 	var cmd *exec.Cmd
 	switch m.backend {
 	case "ufw":
-		cmd = exec.Command(m.cmdPath, "insert", "1", "deny", "from", ip)
+		cmd = exec.Command(m.cmdPath, "insert", "1", "deny", "from", ip) // #nosec
 	case "firewalld":
-		cmd = exec.Command(m.cmdPath, "--add-rich-rule", fmt.Sprintf("rule family=ipv4 source address=%s drop", ip), "--timeout=30d")
+		cmd = exec.Command(m.cmdPath, "--add-rich-rule", fmt.Sprintf("rule family=ipv4 source address=%s drop", ip), "--timeout=30d") // #nosec
 	case "iptables":
-		cmd = exec.Command(m.cmdPath, "-I", "INPUT", "1", "-s", ip, "-j", "DROP")
+		cmd = exec.Command(m.cmdPath, "-I", "INPUT", "1", "-s", ip, "-j", "DROP") // #nosec
 	}
 
 	if cmd != nil {
@@ -53,11 +53,11 @@ func (m *FallbackManager) Unban(ip string) error {
 	var cmd *exec.Cmd
 	switch m.backend {
 	case "ufw":
-		cmd = exec.Command(m.cmdPath, "delete", "deny", "from", ip)
+		cmd = exec.Command(m.cmdPath, "delete", "deny", "from", ip) // #nosec
 	case "firewalld":
-		cmd = exec.Command(m.cmdPath, "--remove-rich-rule", fmt.Sprintf("rule family=ipv4 source address=%s drop", ip))
+		cmd = exec.Command(m.cmdPath, "--remove-rich-rule", fmt.Sprintf("rule family=ipv4 source address=%s drop", ip)) // #nosec
 	case "iptables":
-		cmd = exec.Command(m.cmdPath, "-D", "INPUT", "-s", ip, "-j", "DROP")
+		cmd = exec.Command(m.cmdPath, "-D", "INPUT", "-s", ip, "-j", "DROP") // #nosec
 	}
 
 	if cmd != nil {

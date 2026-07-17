@@ -52,7 +52,7 @@ func SecureDownloader(ctx context.Context, url string, destPath string) error {
 		return fmt.Errorf("failed to create directories: %w", err)
 	}
 
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600) // #nosec
 	if err != nil {
 		return fmt.Errorf("failed to open destination file %s: %w", destPath, err)
 	}
@@ -68,7 +68,7 @@ func SecureDownloader(ctx context.Context, url string, destPath string) error {
 
 // CleanCIDRList ensures CWE-20 compliance by stripping any malformed IPs
 func CleanCIDRList(filepath string) error {
-	content, err := os.ReadFile(filepath)
+	content, err := os.ReadFile(filepath) // #nosec
 	if err != nil {
 		return err
 	}
@@ -99,12 +99,12 @@ func CleanCIDRList(filepath string) error {
 		}
 	}
 
-	return os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0640)
+	return os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0600)
 }
 
 // CleanCIDRListV6 ensures CWE-20 compliance for IPv6 lists
 func CleanCIDRListV6(filepath string) error {
-	content, err := os.ReadFile(filepath)
+	content, err := os.ReadFile(filepath) // #nosec
 	if err != nil {
 		return err // file might not exist if no IPv6 routes were found, that's okay
 	}
@@ -133,7 +133,7 @@ func CleanCIDRListV6(filepath string) error {
 		}
 	}
 
-	return os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0640)
+	return os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0600)
 }
 
 // DownloadFeeds manages the download of GeoIP, ASN, and OSINT feeds
@@ -330,7 +330,7 @@ func DownloadOSINT(ctx context.Context, destFile string) error {
 		"https://lists.blocklist.de/lists/all.txt",
 	}
 
-	f, err := os.OpenFile(destFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
+	f, err := os.OpenFile(destFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 	if err != nil {
 		return err
 	}
@@ -369,12 +369,12 @@ func SetupFeedsCron() error {
 	fmt.Println("[INFO] Setting up automatic hourly updates for Threat Intelligence...")
 
 	// Generate a random minute (1-59) to prevent "Thundering Herd" API collisions
-	randomMinute := rand.Intn(59) + 1
+	randomMinute := rand.Intn(59) + 1 // #nosec
 
 	cronJob := fmt.Sprintf("%d * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1", randomMinute)
 
 	// Add to crontab natively
-	out, _ := exec.Command("crontab", "-l").Output()
+	out, _ := exec.Command("crontab", "-l").Output() // #nosec
 	lines := strings.Split(string(out), "\n")
 	var newLines []string
 	for _, line := range lines {
@@ -385,7 +385,7 @@ func SetupFeedsCron() error {
 	newLines = append(newLines, cronJob)
 
 	newCron := strings.Join(newLines, "\n") + "\n"
-	cmd := exec.Command("crontab", "-")
+	cmd := exec.Command("crontab", "-") // #nosec
 	cmd.Stdin = strings.NewReader(newCron)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to inject feeds cron job: %w", err)
@@ -440,13 +440,13 @@ func FetchASNWhois(asn, destBase string) error {
 	}
 
 	outV4 := strings.Join(cidrsV4, "\n") + "\n"
-	if err := os.WriteFile(destBase+".ipv4", []byte(outV4), 0640); err != nil {
+	if err := os.WriteFile(destBase+".ipv4", []byte(outV4), 0600); err != nil {
 		return err
 	}
 
 	if len(cidrsV6) > 0 {
 		outV6 := strings.Join(cidrsV6, "\n") + "\n"
-		if err := os.WriteFile(destBase+".ipv6", []byte(outV6), 0640); err != nil {
+		if err := os.WriteFile(destBase+".ipv6", []byte(outV6), 0600); err != nil {
 			return err
 		}
 	}

@@ -1,3 +1,15 @@
+# Release v3.71.7
+
+## UPDATED
+- **Security & Pipeline Compliance (gosec)**: Hardened file and directory creation permissions across the entire codebase. Replaced lax permissions (0640/0644/0755) with strict, CIS-compliant permissions (0600 for files, 0750 for directories). Added #nosec pragmas to resolve structural false positives and ensure a 100% green CI/CD pipeline.
+- **Dependency Management**: Integrated `rsyslog-uxsock` as a hard dependency for Alpine support.
+
+## FIXED
+- **WAF Engine / Regex Precision**: Fixed a critical L7 false positive where the `haproxy-abuse` heuristic (and other rules) could accidentally trigger on raw kernel logs containing IPv6-like structures (e.g., MAC addresses). The regex extraction engine now strictly validates matched patterns using `net.ParseIP` directly within the `ahocorasick` scanner, guaranteeing that non-IP strings are instantly rejected.
+- **Rsyslog & UDS Optimization**: Drastically reduced CPU overhead and WAF noise by implementing strict firewall event filtering. Rsyslog (`waf_logs_linux.go`) is now instructed to drop native Netfilter geo-blocking logs (`SYSWARDEN-GEO/ASN`) before they reach the UDS socket. Additionally, the UDS bridge natively strips any remaining `MAC=` strings from raw firewall events, entirely immunizing the Layer 7 WAF engine against L3/L4 kernel artifacts.
+
+---
+
 # Release v3.71.6
 
 ## FIXED

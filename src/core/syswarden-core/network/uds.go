@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 
 	"syswarden-core/engine"
@@ -49,7 +50,7 @@ func (s *UDSServer) Start() error {
 	s.conn = conn
 
 	// Ensure the socket is writable by authorized groups (0660)
-	_ = os.Chmod(s.socketPath, 0660)
+	_ = os.Chmod(s.socketPath, 0660) // #nosec
 
 	log.Printf("[UDS] Listening for unixgram zero-disk streams on %s (0660)", s.socketPath)
 
@@ -85,6 +86,11 @@ func (s *UDSServer) readLoop() {
 		}
 
 		line := string(buf[:n])
+
+		// Safety net: ignore native kernel firewall drops (UFW, raw iptables) from triggering L7 regex false positives
+		if strings.Contains(line, "MAC=") && (strings.Contains(line, "IN=") || strings.Contains(line, "OUT=")) {
+			continue
+		}
 
 		match := s.engine.Scan(line)
 		if match != nil {

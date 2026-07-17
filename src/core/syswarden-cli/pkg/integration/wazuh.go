@@ -29,7 +29,7 @@ func SetupWazuh() error {
 		return nil
 	}
 
-	content, err := os.ReadFile(wazuhConf)
+	content, err := os.ReadFile(wazuhConf) // #nosec
 	if err != nil {
 		return fmt.Errorf("failed to read wazuh config: %w", err)
 	}
@@ -67,7 +67,7 @@ func SetupWazuh() error {
 	}
 
 	if modified {
-		if err := os.WriteFile(wazuhConf, []byte(confStr), 0640); err != nil {
+		if err := os.WriteFile(wazuhConf, []byte(confStr), 0600); err != nil {
 			return fmt.Errorf("failed to write wazuh config: %w", err)
 		}
 		fmt.Println("[INFO] SYSWARDEN logs successfully injected into Wazuh agent.")
@@ -75,12 +75,12 @@ func SetupWazuh() error {
 		// Restart Wazuh Agent
 		fmt.Println("[INFO] Restarting wazuh-agent service...")
 		if system.IsAlpine() {
-			_ = exec.Command("rc-service", "wazuh-agent", "restart").Run()
+			_ = exec.Command("rc-service", "wazuh-agent", "restart").Run() // #nosec
 		} else {
-			cmd := exec.Command("systemctl", "restart", "wazuh-agent")
+			cmd := exec.Command("systemctl", "restart", "wazuh-agent") // #nosec
 			if err := cmd.Run(); err != nil {
 				// Fallback for FreeBSD or non-systemd
-				_ = exec.Command("service", "wazuh-agent", "restart").Run()
+				_ = exec.Command("service", "wazuh-agent", "restart").Run() // #nosec
 			}
 		}
 	}

@@ -60,13 +60,13 @@ install hfsplus /bin/true
 install squashfs /bin/true
 install udf /bin/true
 `
-	if err := os.WriteFile("/etc/modprobe.d/syswarden-cis-fs.conf", []byte(content), 0644); err != nil {
+	if err := os.WriteFile("/etc/modprobe.d/syswarden-cis-fs.conf", []byte(content), 0600); err != nil {
 		return err
 	}
 
 	fsList := []string{"cramfs", "freevxfs", "jffs2", "hfs", "hfsplus", "squashfs", "udf"}
 	for _, fs := range fsList {
-		_ = exec.Command("rmmod", fs).Run()
+		_ = exec.Command("rmmod", fs).Run() // #nosec
 	}
 	return nil
 }
@@ -79,13 +79,13 @@ install sctp /bin/true
 install rds /bin/true
 install tipc /bin/true
 `
-	if err := os.WriteFile("/etc/modprobe.d/syswarden-cis-net.conf", []byte(content), 0644); err != nil {
+	if err := os.WriteFile("/etc/modprobe.d/syswarden-cis-net.conf", []byte(content), 0600); err != nil {
 		return err
 	}
 
 	protoList := []string{"dccp", "sctp", "rds", "tipc"}
 	for _, proto := range protoList {
-		_ = exec.Command("rmmod", proto).Run()
+		_ = exec.Command("rmmod", proto).Run() // #nosec
 	}
 	return nil
 }
@@ -112,27 +112,27 @@ net.ipv4.conf.all.rp_filter = 1
 net.ipv4.conf.default.rp_filter = 1
 net.ipv4.tcp_syncookies = 1
 `
-	if err := os.WriteFile("/etc/sysctl.d/99-syswarden-cis-level2.conf", []byte(content), 0644); err != nil {
+	if err := os.WriteFile("/etc/sysctl.d/99-syswarden-cis-level2.conf", []byte(content), 0600); err != nil {
 		return err
 	}
-	_ = exec.Command("sysctl", "-p", "/etc/sysctl.d/99-syswarden-cis-level2.conf").Run()
+	_ = exec.Command("sysctl", "-p", "/etc/sysctl.d/99-syswarden-cis-level2.conf").Run() // #nosec
 	return nil
 }
 
 func restrictCoreDumps() error {
 	fmt.Println(" -> Enforcing hard limits on core dumps (CIS 1.5.1)")
-	_ = os.MkdirAll("/etc/security/limits.d", 0755)
+	_ = os.MkdirAll("/etc/security/limits.d", 0750)
 
 	limitsContent := "# --- SYSWARDEN: CIS Level 2 Limits ---\n* hard core 0\n"
-	if err := os.WriteFile("/etc/security/limits.d/99-syswarden-cis.conf", []byte(limitsContent), 0644); err != nil {
+	if err := os.WriteFile("/etc/security/limits.d/99-syswarden-cis.conf", []byte(limitsContent), 0600); err != nil {
 		return err
 	}
 
 	// systemd override
 	if _, err := os.Stat("/etc/systemd/coredump.conf"); err == nil {
-		_ = exec.Command("sed", "-i", "s/.*Storage=.*/Storage=none/", "/etc/systemd/coredump.conf").Run()
-		_ = exec.Command("sed", "-i", "s/.*ProcessSizeMax=.*/ProcessSizeMax=0/", "/etc/systemd/coredump.conf").Run()
-		_ = exec.Command("systemctl", "daemon-reload").Run()
+		_ = exec.Command("sed", "-i", "s/.*Storage=.*/Storage=none/", "/etc/systemd/coredump.conf").Run() // #nosec
+		_ = exec.Command("sed", "-i", "s/.*ProcessSizeMax=.*/ProcessSizeMax=0/", "/etc/systemd/coredump.conf").Run() // #nosec
+		_ = exec.Command("systemctl", "daemon-reload").Run() // #nosec
 	}
 	return nil
 }
@@ -144,7 +144,7 @@ func applySSHHardening() error {
 		return nil
 	}
 
-	content, err := os.ReadFile(sshConf)
+	content, err := os.ReadFile(sshConf) // #nosec
 	if err != nil {
 		return err
 	}
@@ -176,9 +176,9 @@ func applySSHHardening() error {
 		newLines = append(newLines, fmt.Sprintf("%s %s", k, v))
 	}
 
-	err = os.WriteFile(sshConf, []byte(strings.Join(newLines, "\n")), 0644)
+	err = os.WriteFile(sshConf, []byte(strings.Join(newLines, "\n")), 0600)
 	if err == nil {
-		_ = exec.Command("systemctl", "restart", "sshd").Run()
+		_ = exec.Command("systemctl", "restart", "sshd").Run() // #nosec
 	}
 	return err
 }
@@ -202,21 +202,21 @@ func secureCronPermissions() error {
 func enableAutomaticSecurityUpdates() error {
 	fmt.Println(" -> Configuring automatic security updates (Zero-Day defense)")
 	if _, err := os.Stat("/etc/debian_version"); err == nil {
-		_ = exec.Command("apt-get", "install", "-y", "-q", "unattended-upgrades", "apt-listchanges").Run()
+		_ = exec.Command("apt-get", "install", "-y", "-q", "unattended-upgrades", "apt-listchanges").Run() // #nosec
 		aptConf := "APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n"
-		_ = os.WriteFile("/etc/apt/apt.conf.d/20auto-upgrades", []byte(aptConf), 0644)
-		_ = exec.Command("systemctl", "enable", "unattended-upgrades").Run()
-		_ = exec.Command("systemctl", "start", "unattended-upgrades").Run()
+		_ = os.WriteFile("/etc/apt/apt.conf.d/20auto-upgrades", []byte(aptConf), 0600)
+		_ = exec.Command("systemctl", "enable", "unattended-upgrades").Run() // #nosec
+		_ = exec.Command("systemctl", "start", "unattended-upgrades").Run() // #nosec
 	} else if _, err := os.Stat("/etc/redhat-release"); err == nil {
-		_ = exec.Command("dnf", "install", "-y", "-q", "dnf-automatic").Run()
+		_ = exec.Command("dnf", "install", "-y", "-q", "dnf-automatic").Run() // #nosec
 		conf := "/etc/dnf/automatic.conf"
 		if _, err := os.Stat(conf); err == nil {
-			_ = exec.Command("sed", "-i", "s/^[[:space:]]*upgrade_type[[:space:]]*=.*/upgrade_type = security/", conf).Run()
-			_ = exec.Command("sed", "-i", "s/^[[:space:]]*download_updates[[:space:]]*=.*/download_updates = yes/", conf).Run()
-			_ = exec.Command("sed", "-i", "s/^[[:space:]]*apply_updates[[:space:]]*=.*/apply_updates = yes/", conf).Run()
+			_ = exec.Command("sed", "-i", "s/^[[:space:]]*upgrade_type[[:space:]]*=.*/upgrade_type = security/", conf).Run() // #nosec
+			_ = exec.Command("sed", "-i", "s/^[[:space:]]*download_updates[[:space:]]*=.*/download_updates = yes/", conf).Run() // #nosec
+			_ = exec.Command("sed", "-i", "s/^[[:space:]]*apply_updates[[:space:]]*=.*/apply_updates = yes/", conf).Run() // #nosec
 		}
-		_ = exec.Command("systemctl", "enable", "dnf-automatic.timer").Run()
-		_ = exec.Command("systemctl", "start", "dnf-automatic.timer").Run()
+		_ = exec.Command("systemctl", "enable", "dnf-automatic.timer").Run() // #nosec
+		_ = exec.Command("systemctl", "start", "dnf-automatic.timer").Run() // #nosec
 	}
 	return nil
 }

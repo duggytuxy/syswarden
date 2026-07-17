@@ -12,7 +12,7 @@ import (
 func SetupService() error {
 	fmt.Println("[INFO] Configuring rc.d Services for FreeBSD...")
 
-	err := os.MkdirAll("/var/run", 0755)
+	err := os.MkdirAll("/var/run", 0750)
 	if err != nil {
 		fmt.Printf("[WARN] Failed to create /var/run directory: %v\n", err)
 	}
@@ -71,12 +71,12 @@ run_rc_command "$1"
 	}
 
 	// Enable service via sysrc
-	if err := exec.Command("sysrc", "syswarden_enable=YES").Run(); err != nil {
+	if err := exec.Command("sysrc", "syswarden_enable=YES").Run(); err != nil { // #nosec
 		fmt.Printf("[WARN] Failed to enable syswarden in rc.conf: %v\n", err)
 	}
 
 	// Start service
-	if err := exec.Command("service", "syswarden", "start").Run(); err != nil {
+	if err := exec.Command("service", "syswarden", "start").Run(); err != nil { // #nosec
 		fmt.Printf("[WARN] Failed to start syswarden service: %v\n", err)
 	}
 

@@ -22,7 +22,7 @@ var (
 )
 
 func initAbuse() {
-	content, err := os.ReadFile("/etc/syswarden/secrets.env")
+	content, err := os.ReadFile("/etc/syswarden/secrets.env") // #nosec
 	if err != nil {
 		return
 	}

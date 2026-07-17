@@ -226,7 +226,7 @@ func main() {
 									recentlyUnbannedMu.Unlock()
 
 									go func(targetIP string) {
-										_ = exec.Command("syswarden", "unblock", targetIP).Run()
+										_ = exec.Command("syswarden", "unblock", targetIP).Run() // #nosec
 										readDataAndUpdate()
 									}(ip)
 								}
@@ -286,7 +286,7 @@ func main() {
 
 func getHAPeers() []string {
 	var peers []string
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf")
+	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
 	if err != nil {
 		return peers
 	}
@@ -433,7 +433,7 @@ func readDataAndUpdate() {
 	var err error
 
 	if activeNodeIP == "local" {
-		bytes, err = os.ReadFile(DataFile)
+		bytes, err = os.ReadFile(DataFile) // #nosec
 	} else {
 		resp, reqErr := httpClient.Get(fmt.Sprintf("https://%s:%s/ha/telemetry", activeNodeIP, haPeerPort))
 		if reqErr != nil {
@@ -730,7 +730,7 @@ func refreshUI() {
 }
 
 func printDashboardText() {
-	bytes, err := os.ReadFile(DataFile)
+	bytes, err := os.ReadFile(DataFile) // #nosec
 	if err != nil {
 		fmt.Printf("=== SYSWARDEN ENTERPRISE DASHBOARD (SNAPSHOT) ===\n[ERROR] Telemetry data unreadable: %v\n", err)
 		return

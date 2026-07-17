@@ -28,7 +28,7 @@ func SetupSIEM() error {
 	}
 
 	// 1. We write the rsyslog configuration natively
-	_ = os.MkdirAll("/usr/local/etc/rsyslog.d", 0755)
+	_ = os.MkdirAll("/usr/local/etc/rsyslog.d", 0750)
 	confPath := "/usr/local/etc/rsyslog.d/99-syswarden-siem.conf"
 
 	// Secure formatting (CWE-117)
@@ -59,12 +59,12 @@ func SetupSIEM() error {
 	rsyslogConf += "      Severity=\"alert\"\n"
 	rsyslogConf += "      Facility=\"local7\")\n"
 
-	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0640); err != nil {
+	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0600); err != nil {
 		return fmt.Errorf("failed to write rsyslog SIEM config: %w", err)
 	}
 
 	// 2. Restart Rsyslog safely
-	if err := exec.Command("service", "rsyslogd", "restart").Run(); err != nil {
+	if err := exec.Command("service", "rsyslogd", "restart").Run(); err != nil { // #nosec
 		fmt.Printf("[WARN] Failed to restart rsyslogd: %v\n", err)
 	}
 

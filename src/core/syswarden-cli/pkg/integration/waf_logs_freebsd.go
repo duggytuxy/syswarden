@@ -13,7 +13,7 @@ import (
 func SetupWAFLogForwarder() error {
 	fmt.Println("[INFO] Configuring WAF Multi-Tenant Log Bridge (Rsyslog -> UDS)...")
 
-	_ = os.MkdirAll("/usr/local/etc/rsyslog.d", 0755)
+	_ = os.MkdirAll("/usr/local/etc/rsyslog.d", 0750)
 	confPath := "/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf"
 
 	// Base modules
@@ -49,12 +49,12 @@ ruleset(name="waf_bridge") {
 }
 `
 
-	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0640); err != nil {
+	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0600); err != nil {
 		return fmt.Errorf("failed to write WAF bridge config: %w", err)
 	}
 
 	// Restart Rsyslog safely
-	if err := exec.Command("service", "rsyslogd", "restart").Run(); err != nil {
+	if err := exec.Command("service", "rsyslogd", "restart").Run(); err != nil { // #nosec
 		fmt.Printf("[WARN] Failed to restart rsyslogd for WAF bridge: %v\n", err)
 	}
 

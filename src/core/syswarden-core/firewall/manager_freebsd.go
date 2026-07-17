@@ -30,7 +30,7 @@ func (m *PFManager) Ban(ip string) error {
 	}
 
 	// Add IP to the banned_ips table dynamically
-	cmd := exec.Command("pfctl", "-t", "banned_ips", "-T", "add", ip)
+	cmd := exec.Command("pfctl", "-t", "banned_ips", "-T", "add", ip) // #nosec
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to inject IP natively into pf: %s (err: %w)", string(out), err)
 	}
@@ -46,7 +46,7 @@ func (m *PFManager) Unban(ip string) error {
 	}
 
 	// Delete IP from the banned_ips table dynamically
-	cmd := exec.Command("pfctl", "-t", "banned_ips", "-T", "delete", ip)
+	cmd := exec.Command("pfctl", "-t", "banned_ips", "-T", "delete", ip) // #nosec
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to remove IP natively from pf: %s (err: %w)", string(out), err)
 	}

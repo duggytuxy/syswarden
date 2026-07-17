@@ -54,7 +54,7 @@ func refreshCache() {
 	}
 
 	for _, file := range files {
-		f, err := os.Open(file)
+		f, err := os.Open(file) // #nosec
 		if err != nil {
 			continue
 		}

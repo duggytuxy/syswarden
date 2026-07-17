@@ -48,21 +48,28 @@ ruleset(name="waf_bridge") {
     if $msg contains "SYSWARDEN-BLOCK" then stop
     if $msg contains "SYSWARDEN-ALLOWED" then stop
 
+    # Do not forward native firewall kernel drops to WAF regex engine to avoid false positives and reduce CPU overhead
+    if $msg contains "SYSWARDEN-GEO" then stop
+    if $msg contains "SYSWARDEN-ASN" then stop
+    if $msg contains "SYSWARDEN-L3" then stop
+    if $msg contains "SYSWARDEN-TOR" then stop
+    if $msg contains "SYSWARDEN-PROXY" then stop
+
     *.* :omuxsock:;SYSWARDENRaw
 }
 `
 
-	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0640); err != nil {
+	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0600); err != nil {
 		return fmt.Errorf("failed to write WAF bridge config: %w", err)
 	}
 
 	// Restart Rsyslog safely
 	if system.IsAlpine() {
-		if err := exec.Command("rc-service", "rsyslog", "restart").Run(); err != nil {
+		if err := exec.Command("rc-service", "rsyslog", "restart").Run(); err != nil { // #nosec
 			fmt.Printf("[WARN] Failed to restart rsyslog for WAF bridge (rc-service): %v\n", err)
 		}
 	} else {
-		if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil {
+		if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil { // #nosec
 			fmt.Printf("[WARN] Failed to restart rsyslog for WAF bridge: %v\n", err)
 		}
 	}

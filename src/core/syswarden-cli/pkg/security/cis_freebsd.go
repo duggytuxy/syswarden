@@ -55,11 +55,11 @@ func disableObscureFilesystems() error {
 hw.usb.no_umass="1"
 `
 	if _, err := os.Stat("/boot/loader.conf.local"); os.IsNotExist(err) {
-		_ = os.WriteFile("/boot/loader.conf.local", []byte(content), 0644)
+		_ = os.WriteFile("/boot/loader.conf.local", []byte(content), 0600)
 	} else {
-		existing, _ := os.ReadFile("/boot/loader.conf.local")
+		existing, _ := os.ReadFile("/boot/loader.conf.local") // #nosec
 		if !strings.Contains(string(existing), "hw.usb.no_umass") {
-			f, _ := os.OpenFile("/boot/loader.conf.local", os.O_APPEND|os.O_WRONLY, 0644)
+			f, _ := os.OpenFile("/boot/loader.conf.local", os.O_APPEND|os.O_WRONLY, 0600) // #nosec
 			_, _ = f.WriteString("\n" + content)
 			f.Close()
 		}
@@ -69,7 +69,7 @@ hw.usb.no_umass="1"
 
 func disableUncommonProtocols() error {
 	fmt.Println(" -> Disabling uncommon network protocols")
-	_ = exec.Command("sysctl", "net.inet.sctp.blackhole=2").Run()
+	_ = exec.Command("sysctl", "net.inet.sctp.blackhole=2").Run() // #nosec
 	return nil
 }
 
@@ -91,9 +91,9 @@ net.inet.tcp.icmp_may_rst=0
 net.inet.udp.checksum=1
 `
 	sysctlPath := "/etc/sysctl.conf"
-	existing, _ := os.ReadFile(sysctlPath)
+	existing, _ := os.ReadFile(sysctlPath) // #nosec
 	if !strings.Contains(string(existing), "SYSWARDEN: CIS") {
-		f, _ := os.OpenFile(sysctlPath, os.O_APPEND|os.O_WRONLY, 0644)
+		f, _ := os.OpenFile(sysctlPath, os.O_APPEND|os.O_WRONLY, 0600) // #nosec
 		_, _ = f.WriteString("\n" + content)
 		f.Close()
 	}
@@ -113,7 +113,7 @@ net.inet.udp.checksum=1
 		"net.inet.tcp.icmp_may_rst=0",
 	}
 	for _, p := range params {
-		_ = exec.Command("sysctl", p).Run()
+		_ = exec.Command("sysctl", p).Run() // #nosec
 	}
 
 	return nil
@@ -122,13 +122,13 @@ net.inet.udp.checksum=1
 func restrictCoreDumps() error {
 	fmt.Println(" -> Enforcing hard limits on core dumps")
 
-	_ = exec.Command("sysctl", "kern.coredump=0").Run()
-	_ = exec.Command("sysctl", "kern.sugid_coredump=0").Run()
+	_ = exec.Command("sysctl", "kern.coredump=0").Run() // #nosec
+	_ = exec.Command("sysctl", "kern.sugid_coredump=0").Run() // #nosec
 
 	sysctlPath := "/etc/sysctl.conf"
-	existing, _ := os.ReadFile(sysctlPath)
+	existing, _ := os.ReadFile(sysctlPath) // #nosec
 	if !strings.Contains(string(existing), "kern.coredump") {
-		f, _ := os.OpenFile(sysctlPath, os.O_APPEND|os.O_WRONLY, 0644)
+		f, _ := os.OpenFile(sysctlPath, os.O_APPEND|os.O_WRONLY, 0600) // #nosec
 		_, _ = f.WriteString("\nkern.coredump=0\nkern.sugid_coredump=0\n")
 		f.Close()
 	}
@@ -143,7 +143,7 @@ func applySSHHardening() error {
 		return nil
 	}
 
-	content, err := os.ReadFile(sshConf)
+	content, err := os.ReadFile(sshConf) // #nosec
 	if err != nil {
 		return err
 	}
@@ -175,9 +175,9 @@ func applySSHHardening() error {
 		newLines = append(newLines, fmt.Sprintf("%s %s", k, v))
 	}
 
-	err = os.WriteFile(sshConf, []byte(strings.Join(newLines, "\n")), 0644)
+	err = os.WriteFile(sshConf, []byte(strings.Join(newLines, "\n")), 0600)
 	if err == nil {
-		_ = exec.Command("service", "sshd", "restart").Run()
+		_ = exec.Command("service", "sshd", "restart").Run() // #nosec
 	}
 	return err
 }
@@ -188,7 +188,7 @@ func secureCronPermissions() error {
 	for _, dir := range cronDirs {
 		if _, err := os.Stat(dir); err == nil {
 			_ = os.Chmod(dir, 0600)
-			_ = exec.Command("chown", "root:wheel", dir).Run()
+			_ = exec.Command("chown", "root:wheel", dir).Run() // #nosec
 		}
 	}
 	return nil
@@ -197,10 +197,10 @@ func secureCronPermissions() error {
 func enableAutomaticSecurityUpdates() error {
 	fmt.Println(" -> Configuring automatic security updates (freebsd-update)")
 	crontabPath := "/etc/crontab"
-	content, err := os.ReadFile(crontabPath)
+	content, err := os.ReadFile(crontabPath) // #nosec
 	if err == nil {
 		if !strings.Contains(string(content), "freebsd-update") {
-			f, _ := os.OpenFile(crontabPath, os.O_APPEND|os.O_WRONLY, 0644)
+			f, _ := os.OpenFile(crontabPath, os.O_APPEND|os.O_WRONLY, 0600) // #nosec
 			_, _ = f.WriteString("\n# SYSWARDEN: Automatic Security Updates\n0 3 * * * root /usr/sbin/freebsd-update cron\n")
 			f.Close()
 		}

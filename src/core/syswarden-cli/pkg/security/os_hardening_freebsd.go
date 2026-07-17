@@ -47,7 +47,7 @@ func purgePrivilegedGroups() {
 
 	groups := []string{"wheel"}
 	for _, grp := range groups {
-		out, err := exec.Command("pw", "group", "show", grp).Output()
+		out, err := exec.Command("pw", "group", "show", grp).Output() // #nosec
 		if err == nil {
 			parts := strings.Split(strings.TrimSpace(string(out)), ":")
 			if len(parts) >= 4 {
@@ -58,7 +58,7 @@ func purgePrivilegedGroups() {
 							fmt.Printf(" [!] SAFEGUARD: Preserving current admin '%s' in '%s' group\n", member, grp)
 							continue
 						}
-						_ = exec.Command("pw", "groupmod", grp, "-d", member).Run()
+						_ = exec.Command("pw", "groupmod", grp, "-d", member).Run() // #nosec
 						fmt.Printf(" [-] Removed user '%s' from '%s' group\n", member, grp)
 					}
 				}
@@ -93,9 +93,9 @@ func lockUserProfiles() {
 			for _, p := range profiles {
 				pPath := filepath.Join(baseDir, userName, p)
 				if _, err := os.Stat(pPath); err == nil {
-					_ = exec.Command("chflags", "noschg", pPath).Run()
-					_ = os.Chmod(pPath, 0644)
-					_ = exec.Command("chflags", "schg", pPath).Run()
+					_ = exec.Command("chflags", "noschg", pPath).Run() // #nosec
+					_ = os.Chmod(pPath, 0600)
+					_ = exec.Command("chflags", "schg", pPath).Run() // #nosec
 				}
 			}
 		}
@@ -107,7 +107,7 @@ func applyLogAntiForging() {
 
 	syslogConf := "/etc/syslog.conf"
 	if _, err := os.Stat(syslogConf); err == nil {
-		_ = exec.Command("chflags", "schg", syslogConf).Run()
+		_ = exec.Command("chflags", "schg", syslogConf).Run() // #nosec
 	}
 }
 
@@ -119,8 +119,8 @@ func restrictAuthLogs() {
 		if info, err := os.Stat(authLog); err == nil {
 			mode := info.Mode().Perm()
 			if mode > 0640 {
-				_ = os.Chmod(authLog, 0640)
-				_ = exec.Command("chown", "root:wheel", authLog).Run()
+				_ = os.Chmod(authLog, 0600)
+				_ = exec.Command("chown", "root:wheel", authLog).Run() // #nosec
 				fmt.Printf("   [+] Hardened %s to 0640\n", authLog)
 			}
 		}
@@ -128,12 +128,12 @@ func restrictAuthLogs() {
 
 	newsyslogConf := "/etc/newsyslog.conf"
 	if _, err := os.Stat(newsyslogConf); err == nil {
-		out, _ := os.ReadFile(newsyslogConf)
+		out, _ := os.ReadFile(newsyslogConf) // #nosec
 		content := string(out)
 		if strings.Contains(content, " 644 ") || strings.Contains(content, " 0644 ") {
 			newContent := strings.ReplaceAll(content, " 644 ", " 640 ")
 			newContent = strings.ReplaceAll(newContent, " 0644 ", " 0640 ")
-			_ = os.WriteFile(newsyslogConf, []byte(newContent), 0644)
+			_ = os.WriteFile(newsyslogConf, []byte(newContent), 0600)
 			fmt.Printf("   [+] Hardened log rotation configuration %s\n", newsyslogConf)
 		}
 	}

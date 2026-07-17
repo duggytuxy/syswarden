@@ -59,17 +59,17 @@ func SetupSIEM() error {
 	rsyslogConf += "      Severity=\"alert\"\n"
 	rsyslogConf += "      Facility=\"local7\")\n"
 
-	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0640); err != nil {
+	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0600); err != nil {
 		return fmt.Errorf("failed to write rsyslog SIEM config: %w", err)
 	}
 
 	// 2. Restart Rsyslog safely
 	if system.IsAlpine() {
-		if err := exec.Command("rc-service", "rsyslog", "restart").Run(); err != nil {
+		if err := exec.Command("rc-service", "rsyslog", "restart").Run(); err != nil { // #nosec
 			fmt.Printf("[WARN] Failed to restart rsyslog (rc-service): %v\n", err)
 		}
 	} else {
-		if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil {
+		if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil { // #nosec
 			fmt.Printf("[WARN] Failed to restart rsyslog: %v\n", err)
 		}
 	}

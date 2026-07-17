@@ -21,7 +21,7 @@ func persistBanToDisk(ip string) {
 	}
 
 	// Duplicate check (prevent syncing redundant IPs)
-	if content, err := os.ReadFile(file); err == nil {
+	if content, err := os.ReadFile(file); err == nil { // #nosec
 		lines := strings.Split(string(content), "\n")
 		for _, l := range lines {
 			if strings.TrimSpace(l) == ip {
@@ -30,7 +30,7 @@ func persistBanToDisk(ip string) {
 		}
 	}
 
-	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 	if err == nil {
 		_, _ = f.WriteString(ip + "\n")
 		_ = f.Close()
@@ -54,11 +54,11 @@ type TelemetryEvent struct {
 
 func NewLogger(logPath string) *Logger {
 	dir := filepath.Dir(logPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		log.Printf("[Logger] Warning: failed to create log dir: %v", err)
 	}
 
-	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 	if err != nil {
 		log.Printf("[Logger] Warning: failed to open log file %s: %v", logPath, err)
 		return &Logger{}

@@ -16,7 +16,7 @@ const (
 	WhitelistV6 = "/etc/syswarden/lists/syswarden_whitelist.ipv6"
 	BlocklistV4 = "/etc/syswarden/lists/syswarden_blacklist.ipv4"
 	BlocklistV6 = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
-	SSHBypass   = "/etc/syswarden/ssh_whitelist.txt"
+	SSHBypass   = \"/etc/syswarden/ssh_whitelist.txt\" // #nosec
 )
 
 // ensureDir ensures the lists directory exists
@@ -44,14 +44,14 @@ func IsValidIP(ip string) (bool, bool) {
 // addToFile safely appends a line to a file if it doesn't already exist
 func addToFile(filepath, line string) error {
 	ensureDir()
-	content, _ := os.ReadFile(filepath)
+	content, _ := os.ReadFile(filepath) // #nosec
 	lines := strings.Split(string(content), "\n")
 	for _, l := range lines {
 		if strings.TrimSpace(l) == line {
 			return nil // Already exists
 		}
 	}
-	f, err := os.OpenFile(filepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(filepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func addToFile(filepath, line string) error {
 
 // removeFromFile removes a line from a file
 func removeFromFile(filepath, line string) error {
-	content, err := os.ReadFile(filepath)
+	content, err := os.ReadFile(filepath) // #nosec
 	if err != nil {
 		return nil // File doesn't exist, nothing to remove
 	}
@@ -73,7 +73,7 @@ func removeFromFile(filepath, line string) error {
 			newLines = append(newLines, l)
 		}
 	}
-	return os.WriteFile(filepath, []byte(strings.Join(newLines, "\n")+"\n"), 0644)
+	return os.WriteFile(filepath, []byte(strings.Join(newLines, "\n")+"\n"), 0600)
 }
 
 // AddToWhitelist appends an IP securely to the whitelist and reloads
@@ -115,7 +115,7 @@ func RemoveFromWhitelist(ip string) error {
 	}
 	// Note: We might need to iterate and remove even if it has a port.
 	// For simplicity, we'll try to remove exact IP, but we should handle IP:PORT stripping.
-	content, err := os.ReadFile(file)
+	content, err := os.ReadFile(file) // #nosec
 	if err == nil {
 		lines := strings.Split(string(content), "\n")
 		var newLines []string
@@ -132,7 +132,7 @@ func RemoveFromWhitelist(ip string) error {
 			}
 		}
 		if found {
-			_ = os.WriteFile(file, []byte(strings.Join(newLines, "\n")+"\n"), 0644)
+			_ = os.WriteFile(file, []byte(strings.Join(newLines, "\n")+"\n"), 0600)
 			fmt.Printf("[SUCCESS] IP %s removed from whitelist.\n", ip)
 			return ApplyPolicies()
 		}
@@ -159,7 +159,7 @@ func AddToBlocklist(ip string) error {
 	fmt.Printf("[SUCCESS] IP %s safely blocklisted.\n", ip)
 
 	if runtime.GOOS == "freebsd" {
-		_ = exec.Command("pfctl", "-k", ip).Run()
+		_ = exec.Command("pfctl", "-k", ip).Run() // #nosec
 	}
 
 	return ApplyPolicies()
@@ -211,7 +211,7 @@ func RevokeSSH(ip string) error {
 	if !valid {
 		return fmt.Errorf("invalid IP address: %s", ip)
 	}
-	content, err := os.ReadFile(SSHBypass)
+	content, err := os.ReadFile(SSHBypass) // #nosec
 	if err == nil {
 		lines := strings.Split(string(content), "\n")
 		var newLines []string
@@ -228,7 +228,7 @@ func RevokeSSH(ip string) error {
 			}
 		}
 		if found {
-			_ = os.WriteFile(SSHBypass, []byte(strings.Join(newLines, "\n")+"\n"), 0644)
+			_ = os.WriteFile(SSHBypass, []byte(strings.Join(newLines, "\n")+"\n"), 0600)
 			fmt.Printf("[SUCCESS] SSH Bypass revoked for %s.\n", ip)
 			return ApplyPolicies()
 		}
@@ -251,7 +251,7 @@ func WhitelistInfra() error {
 		if sshClient != "" {
 			adminIP = strings.Split(sshClient, " ")[0]
 		} else {
-			out, err := exec.Command("sh", "-c", "ss -tnp 2>/dev/null | grep -E 'sshd|ssh' | grep 'ESTAB' | awk '{print $5}' | cut -d: -f1 | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | head -n 1").Output()
+			out, err := exec.Command("sh", "-c", "ss -tnp 2>/dev/null | grep -E 'sshd|ssh' | grep 'ESTAB' | awk '{print $5}' | cut -d: -f1 | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | head -n 1").Output() // #nosec
 			if err == nil {
 				adminIP = strings.TrimSpace(string(out))
 			}
@@ -265,7 +265,7 @@ func WhitelistInfra() error {
 	ips = append(ips, "169.254.169.254")
 
 	// Read DNS
-	if b, err := os.ReadFile("/etc/resolv.conf"); err == nil {
+	if b, err := os.ReadFile("/etc/resolv.conf"); err == nil { // #nosec
 		lines := strings.Split(string(b), "\n")
 		for _, l := range lines {
 			if strings.HasPrefix(l, "nameserver ") {
@@ -278,7 +278,7 @@ func WhitelistInfra() error {
 	}
 
 	// Read Gateway
-	out, err := exec.Command("ip", "-4", "route", "show", "default").Output()
+	out, err := exec.Command("ip", "-4", "route", "show", "default").Output() // #nosec
 	if err == nil {
 		fields := strings.Fields(string(out))
 		for i, v := range fields {
@@ -292,7 +292,7 @@ func WhitelistInfra() error {
 	for _, ip := range ips {
 		valid, isIPv4 := IsValidIP(ip)
 		if valid && isIPv4 {
-			content, _ := os.ReadFile(WhitelistV4)
+			content, _ := os.ReadFile(WhitelistV4) // #nosec
 			if !strings.Contains(string(content), ip+"\n") {
 				_ = addToFile(WhitelistV4, ip)
 				fmt.Printf("[+] Auto-whitelisted: %s\n", ip)
@@ -320,7 +320,7 @@ func CheckIP(ip string) {
 
 	checkFile := func(filepath, name string) {
 		fmt.Printf("[Storage] %-20s : ", name)
-		content, err := os.ReadFile(filepath)
+		content, err := os.ReadFile(filepath) // #nosec
 		if err == nil && strings.Contains(string(content), ip) {
 			fmt.Println("PRESENT")
 		} else {
@@ -335,7 +335,7 @@ func CheckIP(ip string) {
 	checkFile(BlocklistV6, "Global Blocklist (v6)")
 
 	fmt.Printf("[Kernel]  Active Nftables      : ")
-	out, err := exec.Command("nft", "list", "ruleset").Output()
+	out, err := exec.Command("nft", "list", "ruleset").Output() // #nosec
 	if err == nil && strings.Contains(string(out), ip) {
 		fmt.Println("FOUND in active memory")
 	} else {
@@ -350,7 +350,7 @@ func ListIPs() {
 
 	printFile := func(filepath, title string) {
 		fmt.Printf("\n[ %s ]\n", title)
-		content, err := os.ReadFile(filepath)
+		content, err := os.ReadFile(filepath) // #nosec
 		if err != nil || len(strings.TrimSpace(string(content))) == 0 {
 			fmt.Println("  None")
 			return

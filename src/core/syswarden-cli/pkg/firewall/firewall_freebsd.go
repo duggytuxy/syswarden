@@ -172,7 +172,7 @@ func ApplyPolicies() error {
 	// Stateful L4 Protections (Host Input)
 	sshPort := config.GlobalConfig.SSHPort
 	if sshPort == "" {
-		if out, err := exec.Command("sh", "-c", "sshd -T 2>/dev/null | grep -i '^port '").Output(); err == nil && len(out) > 0 {
+		if out, err := exec.Command("sh", "-c", "sshd -T 2>/dev/null | grep -i '^port '").Output(); err == nil && len(out) > 0 { // #nosec
 			fields := strings.Fields(string(out))
 			if len(fields) >= 2 {
 				sshPort = fields[1]
@@ -254,18 +254,18 @@ func ApplyPolicies() error {
 	defer os.Remove(tempPfFile)
 
 	// Apply configuration natively via pfctl
-	execCmd := exec.Command("pfctl", "-f", tempPfFile)
+	execCmd := exec.Command("pfctl", "-f", tempPfFile) // #nosec
 	if out, err := execCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("pfctl execution failed: %s (err: %w)", string(out), err)
 	}
 
 	// Enable pf if not already enabled
-	_ = exec.Command("pfctl", "-e").Run()
+	_ = exec.Command("pfctl", "-e").Run() // #nosec
 
 	// Native Kernel Layer 2 Hardening (ARP Spoofing Protection)
 	if config.GlobalConfig.EnableL2 {
-		_ = exec.Command("sysctl", "net.link.ether.inet.log_arp_wrong_iface=1").Run()
-		_ = exec.Command("sysctl", "net.link.ether.inet.log_arp_movements=1").Run()
+		_ = exec.Command("sysctl", "net.link.ether.inet.log_arp_wrong_iface=1").Run() // #nosec
+		_ = exec.Command("sysctl", "net.link.ether.inet.log_arp_movements=1").Run() // #nosec
 		fmt.Println("[INFO] Layer 2 Kernel ARP Hardening active.")
 	}
 
@@ -275,7 +275,7 @@ func ApplyPolicies() error {
 
 // GetActiveInterface identifies the primary network interface natively on FreeBSD
 func GetActiveInterface() string {
-	out, err := exec.Command("route", "-n", "get", "default").Output()
+	out, err := exec.Command("route", "-n", "get", "default").Output() // #nosec
 	if err != nil {
 		return "vtnet0" // Common fallback on FreeBSD VMs
 	}

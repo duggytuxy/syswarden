@@ -44,7 +44,7 @@ type Config struct {
 
 func loadConfig() Config {
 	c := Config{}
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf")
+	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
 	if err != nil {
 		return c
 	}

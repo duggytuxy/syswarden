@@ -28,38 +28,38 @@ func SetupWireguard() error {
 	_ = os.Chmod("/etc/wireguard", 0700)
 
 	// Create sysctl configuration for IP forwarding
-	_ = os.MkdirAll("/etc/sysctl.d", 0755)
-	_ = os.WriteFile("/etc/sysctl.d/99-syswarden-wireguard.conf", []byte("net.ipv4.ip_forward = 1\n"), 0644)
-	_ = exec.Command("sysctl", "-p", "/etc/sysctl.d/99-syswarden-wireguard.conf").Run()
+	_ = os.MkdirAll("/etc/sysctl.d", 0750)
+	_ = os.WriteFile("/etc/sysctl.d/99-syswarden-wireguard.conf", []byte("net.ipv4.ip_forward = 1\n"), 0600)
+	_ = exec.Command("sysctl", "-p", "/etc/sysctl.d/99-syswarden-wireguard.conf").Run() // #nosec
 
 	// Keys
 	fmt.Println(" -> Generating cryptographic keys (incl. Post-Quantum PSK)")
-	serverPriv, _ := exec.Command("wg", "genkey").Output()
+	serverPriv, _ := exec.Command("wg", "genkey").Output() // #nosec
 	serverPrivStr := strings.TrimSpace(string(serverPriv))
-	cmd := exec.Command("wg", "pubkey")
+	cmd := exec.Command("wg", "pubkey") // #nosec
 	cmd.Stdin = strings.NewReader(serverPrivStr)
 	serverPub, _ := cmd.Output()
 	serverPubStr := strings.TrimSpace(string(serverPub))
 
-	clientPriv, _ := exec.Command("wg", "genkey").Output()
+	clientPriv, _ := exec.Command("wg", "genkey").Output() // #nosec
 	clientPrivStr := strings.TrimSpace(string(clientPriv))
-	cmd2 := exec.Command("wg", "pubkey")
+	cmd2 := exec.Command("wg", "pubkey") // #nosec
 	cmd2.Stdin = strings.NewReader(clientPrivStr)
 	clientPub, _ := cmd2.Output()
 	clientPubStr := strings.TrimSpace(string(clientPub))
 
-	presharedKey, _ := exec.Command("wg", "genpsk").Output()
+	presharedKey, _ := exec.Command("wg", "genpsk").Output() // #nosec
 	presharedKeyStr := strings.TrimSpace(string(presharedKey))
 	fmt.Println(" -> Injecting Quantum-Resistant PresharedKey (PSK)")
 
 	// Network Calculations
-	activeIfOut, _ := exec.Command("sh", "-c", "ip route get 8.8.8.8 | grep -oP 'dev \\K\\S+' | head -n 1").Output()
+	activeIfOut, _ := exec.Command("sh", "-c", "ip route get 8.8.8.8 | grep -oP 'dev \\K\\S+' | head -n 1").Output() // #nosec
 	activeIf := strings.TrimSpace(string(activeIfOut))
 	if activeIf == "" {
 		activeIf = "eth0"
 	}
 
-	serverIPOut, _ := exec.Command("curl", "-4", "-s", "--connect-timeout", "3", "api.ipify.org").Output()
+	serverIPOut, _ := exec.Command("curl", "-4", "-s", "--connect-timeout", "3", "api.ipify.org").Output() // #nosec
 	serverIP := strings.TrimSpace(string(serverIPOut))
 
 	subnetParts := strings.Split(config.GlobalConfig.WGSubnet, ".")
@@ -121,12 +121,12 @@ PersistentKeepalive = 25
 	// Start service
 	fmt.Println(" -> Starting WireGuard Interface")
 	if system.IsAlpine() {
-		_ = exec.Command("ln", "-s", "/etc/init.d/wg-quick", "/etc/init.d/wg-quick.wg-syswarden").Run()
-		_ = exec.Command("rc-update", "add", "wg-quick.wg-syswarden", "default").Run()
-		_ = exec.Command("rc-service", "wg-quick.wg-syswarden", "start").Run()
+		_ = exec.Command("ln", "-s", "/etc/init.d/wg-quick", "/etc/init.d/wg-quick.wg-syswarden").Run() // #nosec
+		_ = exec.Command("rc-update", "add", "wg-quick.wg-syswarden", "default").Run() // #nosec
+		_ = exec.Command("rc-service", "wg-quick.wg-syswarden", "start").Run() // #nosec
 	} else {
-		_ = exec.Command("systemctl", "daemon-reload").Run()
-		_ = exec.Command("systemctl", "enable", "--now", "wg-quick@wg-syswarden").Run()
+		_ = exec.Command("systemctl", "daemon-reload").Run() // #nosec
+		_ = exec.Command("systemctl", "enable", "--now", "wg-quick@wg-syswarden").Run() // #nosec
 	}
 
 	fmt.Println("\n=======================================================")
@@ -134,7 +134,7 @@ PersistentKeepalive = 25
 	fmt.Println("=======================================================")
 	fmt.Println("Scan the QR Code below with your WireGuard mobile app:")
 
-	qrCmd := exec.Command("qrencode", "-t", "ansiutf8")
+	qrCmd := exec.Command("qrencode", "-t", "ansiutf8") // #nosec
 	qrCmd.Stdin = strings.NewReader(clientConf)
 	qrCmd.Stdout = os.Stdout
 	_ = qrCmd.Run()

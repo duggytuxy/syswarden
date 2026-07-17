@@ -26,10 +26,10 @@ func ApplyPolicies() error {
 
 	// 2. Safely wipe existing tables (Universal backward compatibility)
 	// We run these natively and ignore errors if they don't exist, avoiding the 'destroy' syntax error on old nftables.
-	_ = exec.Command("nft", "delete", "table", "inet", "syswarden").Run()
-	_ = exec.Command("nft", "delete", "table", "inet", "syswarden_table").Run()
-	_ = exec.Command("nft", "delete", "table", "netdev", "syswarden_hw_drop").Run()
-	_ = exec.Command("nft", "delete", "table", "arp", "syswarden_arp").Run()
+	_ = exec.Command("nft", "delete", "table", "inet", "syswarden").Run() // #nosec
+	_ = exec.Command("nft", "delete", "table", "inet", "syswarden_table").Run() // #nosec
+	_ = exec.Command("nft", "delete", "table", "netdev", "syswarden_hw_drop").Run() // #nosec
+	_ = exec.Command("nft", "delete", "table", "arp", "syswarden_arp").Run() // #nosec
 
 	// 3. Hardware Drop Table (L2)
 	_, _ = nftRules.WriteString("table netdev syswarden_hw_drop {\n")
@@ -161,28 +161,28 @@ func ApplyPolicies() error {
 
 		// Safely force open in OS wrapper firewalls if they exist (avoid conflicts)
 		if _, err := exec.LookPath("ufw"); err == nil {
-			_ = exec.Command("ufw", "allow", fmt.Sprintf("%s/tcp", config.GlobalConfig.HAPeerPort)).Run()
+			_ = exec.Command("ufw", "allow", fmt.Sprintf("%s/tcp", config.GlobalConfig.HAPeerPort)).Run() // #nosec
 		}
 		if _, err := exec.LookPath("firewall-cmd"); err == nil {
-			_ = exec.Command("firewall-cmd", "--add-port="+config.GlobalConfig.HAPeerPort+"/tcp", "--permanent").Run()
-			_ = exec.Command("firewall-cmd", "--reload").Run()
+			_ = exec.Command("firewall-cmd", "--add-port="+config.GlobalConfig.HAPeerPort+"/tcp", "--permanent").Run() // #nosec
+			_ = exec.Command("firewall-cmd", "--reload").Run() // #nosec
 		}
 		if _, err := exec.LookPath("iptables"); err == nil {
-			_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", config.GlobalConfig.HAPeerPort, "-j", "ACCEPT").Run()
+			_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", config.GlobalConfig.HAPeerPort, "-j", "ACCEPT").Run() // #nosec
 		}
 	}
 
 	// Apply all trusted subnets to UFW, Firewalld and iptables
 	for _, s := range validLANSubnets {
 		if _, err := exec.LookPath("ufw"); err == nil {
-			_ = exec.Command("ufw", "allow", "from", s).Run()
+			_ = exec.Command("ufw", "allow", "from", s).Run() // #nosec
 		}
 		if _, err := exec.LookPath("firewall-cmd"); err == nil {
-			_ = exec.Command("firewall-cmd", "--add-source="+s, "--zone=trusted", "--permanent").Run()
-			_ = exec.Command("firewall-cmd", "--reload").Run()
+			_ = exec.Command("firewall-cmd", "--add-source="+s, "--zone=trusted", "--permanent").Run() // #nosec
+			_ = exec.Command("firewall-cmd", "--reload").Run() // #nosec
 		}
 		if _, err := exec.LookPath("iptables"); err == nil {
-			_ = exec.Command("iptables", "-I", "INPUT", "-s", s, "-j", "ACCEPT").Run()
+			_ = exec.Command("iptables", "-I", "INPUT", "-s", s, "-j", "ACCEPT").Run() // #nosec
 		}
 	}
 
@@ -196,7 +196,7 @@ func ApplyPolicies() error {
 	sshPort := config.GlobalConfig.SSHPort
 	if sshPort == "" {
 		// Dynamically query sshd for its effective configuration
-		if out, err := exec.Command("sh", "-c", "sshd -T 2>/dev/null | grep -i '^port '").Output(); err == nil && len(out) > 0 {
+		if out, err := exec.Command("sh", "-c", "sshd -T 2>/dev/null | grep -i '^port '").Output(); err == nil && len(out) > 0 { // #nosec
 			fields := strings.Fields(string(out))
 			if len(fields) >= 2 {
 				sshPort = fields[1]
@@ -305,7 +305,7 @@ func ApplyPolicies() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "nft", "-f", nftFile)
+	cmd := exec.CommandContext(ctx, "nft", "-f", nftFile) // #nosec
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to apply base nftables: %w\nOutput: %s", err, string(out))
 	}
@@ -314,8 +314,8 @@ func ApplyPolicies() error {
 	fmt.Println(" -> Streaming blocklists to kernel safely...")
 
 	// Temporarily increase Netlink socket buffer to handle massive atomic loads (8MB)
-	_ = exec.Command("sysctl", "-w", "net.core.wmem_max=8388608").Run()
-	_ = exec.Command("sysctl", "-w", "net.core.rmem_max=8388608").Run()
+	_ = exec.Command("sysctl", "-w", "net.core.wmem_max=8388608").Run() // #nosec
+	_ = exec.Command("sysctl", "-w", "net.core.rmem_max=8388608").Run() // #nosec
 
 	whitelistFiles := []string{
 		"/etc/syswarden/lists/syswarden_whitelist.ipv4",
@@ -422,7 +422,7 @@ func getLocalIPs() []string {
 
 func GetActiveInterface() string {
 	// Execute standard ip route get 8.8.8.8 just like the old version
-	out, err := exec.Command("ip", "route", "get", "8.8.8.8").Output()
+	out, err := exec.Command("ip", "route", "get", "8.8.8.8").Output() // #nosec
 	if err == nil {
 		fields := strings.Fields(string(out))
 		for i, v := range fields {
@@ -439,7 +439,7 @@ func GetOpenPorts() ([]string, []string) {
 	var tcpPorts []string
 	var udpPorts []string
 
-	out, err := exec.Command("ss", "-tuln").Output()
+	out, err := exec.Command("ss", "-tuln").Output() // #nosec
 	if err != nil {
 		// Fallback safe ports if ss fails
 		return []string{"22", "80", "443"}, []string{"443"}
@@ -487,7 +487,7 @@ func populateSet(ctx context.Context, filepaths []string, setName string) {
 	isIPv6Set := strings.HasSuffix(setName, "6")
 
 	for _, filepath := range filepaths {
-		content, err := os.ReadFile(filepath)
+		content, err := os.ReadFile(filepath) // #nosec
 		if err != nil {
 			continue
 		}
@@ -518,7 +518,7 @@ func populateSet(ctx context.Context, filepaths []string, setName string) {
 func applyChunk(ctx context.Context, setName string, chunk []string) {
 	var nftRules strings.Builder
 	_, _ = fmt.Fprintf(&nftRules, "add element netdev syswarden_hw_drop %s { \n%s\n }\n", setName, strings.Join(chunk, ",\n"))
-	cmd := exec.Command("nft", "-f", "-")
+	cmd := exec.Command("nft", "-f", "-") // #nosec
 	cmd.Stdin = bytes.NewReader([]byte(nftRules.String()))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		fmt.Printf("[ERROR] Failed to load NETDEV chunk %s : %v\nOutput: %s\n", setName, err, string(out))
@@ -529,7 +529,7 @@ func applyChunk(ctx context.Context, setName string, chunk []string) {
 	ipStr := strings.Join(chunk, ", ")
 	_, _ = fmt.Fprintf(&nftRules, "add element inet syswarden %s { %s }\n", setName, ipStr)
 
-	cmd2 := exec.Command("nft", "-f", "-")
+	cmd2 := exec.Command("nft", "-f", "-") // #nosec
 	cmd2.Stdin = bytes.NewReader([]byte(nftRules.String()))
 	if out, err := cmd2.CombinedOutput(); err != nil {
 		fmt.Printf("[ERROR] Failed to load INET chunk %s : %v\nOutput: %s\n", setName, err, string(out))

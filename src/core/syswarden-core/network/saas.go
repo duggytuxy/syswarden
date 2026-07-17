@@ -41,7 +41,7 @@ func (s *SaasMonitorDownloader) Start() {
 }
 
 func (s *SaasMonitorDownloader) isSaasAllowed() bool {
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf")
+	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
 	if err != nil {
 		return true // Default to true for safety
 	}
@@ -95,7 +95,7 @@ func (s *SaasMonitorDownloader) fetchMonitors() {
 
 	// Write IPv4
 	targetFileV4 := "/etc/syswarden/lists/syswarden_saas_monitors.ipv4"
-	err := os.WriteFile(targetFileV4, []byte(strings.Join(ipv4List, "\n")), 0644)
+	err := os.WriteFile(targetFileV4, []byte(strings.Join(ipv4List, "\n")), 0600)
 	if err != nil {
 		s.logger.Error("Failed to write SaaS monitors IPv4 list", err)
 	}
@@ -103,7 +103,7 @@ func (s *SaasMonitorDownloader) fetchMonitors() {
 	// Write IPv6
 	if len(ipv6List) > 0 {
 		targetFileV6 := "/etc/syswarden/lists/syswarden_saas_monitors.ipv6"
-		err = os.WriteFile(targetFileV6, []byte(strings.Join(ipv6List, "\n")), 0644)
+		err = os.WriteFile(targetFileV6, []byte(strings.Join(ipv6List, "\n")), 0600)
 		if err != nil {
 			s.logger.Error("Failed to write SaaS monitors IPv6 list", err)
 		}

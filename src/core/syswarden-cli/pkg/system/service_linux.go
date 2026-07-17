@@ -13,10 +13,10 @@ func SetupService() error {
 	if IsAlpine() {
 		fmt.Println("[INFO] Configuring OpenRC Services (Alpine Linux)...")
 
-		if err := os.MkdirAll("/var/lib/syswarden/ui", 0755); err != nil {
+		if err := os.MkdirAll("/var/lib/syswarden/ui", 0750); err != nil {
 			fmt.Printf("[WARN] Failed to create /var/lib/syswarden/ui: %v\n", err)
 		}
-		if err := os.MkdirAll("/var/log/syswarden", 0755); err != nil {
+		if err := os.MkdirAll("/var/log/syswarden", 0750); err != nil {
 			fmt.Printf("[WARN] Failed to create /var/log/syswarden: %v\n", err)
 		}
 
@@ -37,10 +37,10 @@ depend() {
 		}
 
 		fmt.Println("[INFO] Enabling and starting SYSWARDEN Core service...")
-		if err := exec.Command("rc-update", "add", "syswarden-core", "default").Run(); err != nil {
+		if err := exec.Command("rc-update", "add", "syswarden-core", "default").Run(); err != nil { // #nosec
 			fmt.Printf("[WARN] Failed to enable syswarden-core: %v\n", err)
 		}
-		if err := exec.Command("rc-service", "syswarden-core", "restart").Run(); err != nil {
+		if err := exec.Command("rc-service", "syswarden-core", "restart").Run(); err != nil { // #nosec
 			fmt.Printf("[WARN] Failed to start syswarden-core: %v\n", err)
 		}
 
@@ -64,10 +64,10 @@ start() {
 		}
 
 		fmt.Println("[INFO] Enabling SYSWARDEN Firewall Persistence...")
-		if err := exec.Command("rc-update", "add", "syswarden-firewall", "default").Run(); err != nil {
+		if err := exec.Command("rc-update", "add", "syswarden-firewall", "default").Run(); err != nil { // #nosec
 			fmt.Printf("[WARN] Failed to enable syswarden-firewall: %v\n", err)
 		}
-		if err := exec.Command("rc-service", "syswarden-firewall", "start").Run(); err != nil {
+		if err := exec.Command("rc-service", "syswarden-firewall", "start").Run(); err != nil { // #nosec
 			fmt.Printf("[WARN] Failed to start syswarden-firewall: %v\n", err)
 		}
 
@@ -78,10 +78,10 @@ start() {
 	fmt.Println("[INFO] Configuring Systemd Services...")
 
 	// Create required directories before systemd sandboxing to prevent NAMESPACE crashes
-	if err := os.MkdirAll("/var/lib/syswarden/ui", 0755); err != nil {
+	if err := os.MkdirAll("/var/lib/syswarden/ui", 0750); err != nil {
 		fmt.Printf("[WARN] Failed to create /var/lib/syswarden/ui: %v\n", err)
 	}
-	if err := os.MkdirAll("/var/log/syswarden", 0755); err != nil {
+	if err := os.MkdirAll("/var/log/syswarden", 0750); err != nil {
 		fmt.Printf("[WARN] Failed to create /var/log/syswarden: %v\n", err)
 	}
 
@@ -111,20 +111,20 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_FOWNER
 WantedBy=multi-user.target
 `
 
-	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+	if err := os.WriteFile(servicePath, []byte(serviceContent), 0600); err != nil {
 		return fmt.Errorf("failed to write systemd service file: %w", err)
 	}
 
 	fmt.Println("[INFO] Reloading systemd daemon...")
-	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil { // #nosec
 		fmt.Printf("[WARN] Failed to daemon-reload: %v\n", err)
 	}
 
 	fmt.Println("[INFO] Enabling and restarting SYSWARDEN Core service...")
-	if err := exec.Command("systemctl", "enable", "--now", "syswarden-core.service").Run(); err != nil {
+	if err := exec.Command("systemctl", "enable", "--now", "syswarden-core.service").Run(); err != nil { // #nosec
 		fmt.Printf("[WARN] Failed to enable syswarden-core.service: %v\n", err)
 	}
-	_ = exec.Command("systemctl", "restart", "syswarden-core.service").Run()
+	_ = exec.Command("systemctl", "restart", "syswarden-core.service").Run() // #nosec
 
 	firewallServicePath := "/etc/systemd/system/syswarden-firewall.service"
 	firewallServiceContent := `[Unit]
@@ -142,13 +142,13 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 `
-	if err := os.WriteFile(firewallServicePath, []byte(firewallServiceContent), 0644); err != nil {
+	if err := os.WriteFile(firewallServicePath, []byte(firewallServiceContent), 0600); err != nil {
 		return fmt.Errorf("failed to write syswarden-firewall.service: %w", err)
 	}
 
-	_ = exec.Command("systemctl", "daemon-reload").Run()
+	_ = exec.Command("systemctl", "daemon-reload").Run() // #nosec
 	fmt.Println("[INFO] Enabling SYSWARDEN Firewall Persistence...")
-	if err := exec.Command("systemctl", "enable", "--now", "syswarden-firewall.service").Run(); err != nil {
+	if err := exec.Command("systemctl", "enable", "--now", "syswarden-firewall.service").Run(); err != nil { // #nosec
 		fmt.Printf("[WARN] Failed to enable/start syswarden-firewall.service: %v\n", err)
 	}
 

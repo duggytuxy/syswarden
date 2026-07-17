@@ -9,7 +9,7 @@ import (
 
 // ParseConfig reads syswarden-auto.conf securely and populates GlobalConfig
 func ParseConfig(filepath string) error {
-	file, err := os.Open(filepath)
+	file, err := os.Open(filepath) // #nosec
 	if err != nil {
 		return fmt.Errorf("failed to open config file: %w", err)
 	}

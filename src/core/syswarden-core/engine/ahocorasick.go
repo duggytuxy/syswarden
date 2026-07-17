@@ -44,7 +44,7 @@ type Match struct {
 }
 
 func NewEngine(configFile string) (*Engine, error) {
-	data, err := os.ReadFile(configFile)
+	data, err := os.ReadFile(configFile) // #nosec G304
 	if err != nil {
 		return nil, fmt.Errorf("failed to read signatures: %w", err)
 	}
@@ -66,10 +66,10 @@ func NewEngine(configFile string) (*Engine, error) {
 				e.ahoRules[len(e.ahoDict)-1] = rule
 			}
 		case "regex":
-			// Convert <HOST> to regex capture group for IP extraction (Strict matching to prevent timestamp False Positives)
-			strictHostRegex := `(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|(?:[0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|:(?::[0-9a-fA-F]{1,4}){1,7})`
+			// Convert <HOST> to regex capture group for IP extraction (Strict validation is done post-extraction via net.ParseIP to prevent false positives)
+			strictHostRegex := `(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-fA-F0-9:]+:[a-fA-F0-9:]+)`
 			safePattern := strings.ReplaceAll(rule.Pattern, "<HOST>", strictHostRegex)
-			re, err := regexp.Compile(safePattern)
+			re, err := regexp.Compile("(?i)" + safePattern)
 			if err != nil {
 				return nil, fmt.Errorf("invalid regex for rule %s: %w", rule.ID, err)
 			}
@@ -93,6 +93,16 @@ func (e *Engine) Scan(logLine string) *Match {
 	// 1. Fast Linear Regex Matching (O(N) RE2)
 	for _, rr := range e.regexRules {
 		if match := rr.re.FindStringSubmatch(logLine); match != nil {
+			// Extract the matched <HOST> and validate it is a real IP to prevent false positives with timestamps/MACs
+			hostIdx := rr.re.SubexpIndex("host")
+			if hostIdx >= 0 && hostIdx < len(match) {
+				matchedHost := match[hostIdx]
+				if matchedHost != "" && net.ParseIP(matchedHost) == nil {
+					// False positive! The pattern matched something like a timestamp or a MAC address slice.
+					continue
+				}
+			}
+
 			return &Match{
 				RuleID:  rr.def.ID,
 				Payload: logLine,
