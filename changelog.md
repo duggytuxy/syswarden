@@ -1,3 +1,10 @@
+# Release v3.71.8
+
+## FIXED
+Fix syntax error in sync.go caused by nosec pragma.
+
+---
+
 # Release v3.71.7
 
 ## UPDATED

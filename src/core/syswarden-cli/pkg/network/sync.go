@@ -47,7 +47,7 @@ func SyncHAPeer() error {
 
 	// InsecureSkipVerify is required because HA API uses auto-generated self-signed certs
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true, // #nosec},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec
 	}
 	client := &http.Client{Transport: tr}
 
@@ -147,7 +147,7 @@ func SyncHAUnban(ips []string) error {
 	}
 
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true, // #nosec},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec
 	}
 	client := &http.Client{Transport: tr}
 
