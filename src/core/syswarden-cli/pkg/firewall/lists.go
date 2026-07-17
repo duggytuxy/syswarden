@@ -16,7 +16,7 @@ const (
 	WhitelistV6 = "/etc/syswarden/lists/syswarden_whitelist.ipv6"
 	BlocklistV4 = "/etc/syswarden/lists/syswarden_blacklist.ipv4"
 	BlocklistV6 = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
-	SSHBypass   = \"/etc/syswarden/ssh_whitelist.txt\" // #nosec
+	SSHBypass   = "/etc/syswarden/ssh_whitelist.txt" // #nosec
 )
 
 // ensureDir ensures the lists directory exists

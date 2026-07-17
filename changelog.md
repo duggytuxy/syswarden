@@ -1,3 +1,10 @@
+# Release v3.71.9
+
+## FIXED
+Fix string literal escaping syntax error in lists.go.
+
+---
+
 # Release v3.71.8
 
 ## FIXED
