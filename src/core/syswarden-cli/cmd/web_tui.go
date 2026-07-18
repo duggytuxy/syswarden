@@ -1,14 +1,24 @@
 package cmd
 
 import (
+
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"io/fs"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
@@ -22,8 +32,42 @@ var (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Rely on token for security, not CORS
+		return true // Rely on token/cookie for security, not CORS
 	},
+}
+
+func generateSelfSignedCert() (tls.Certificate, error) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"SysWarden Web-TUI"},
+		},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+
+	privBytes, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes})
+
+	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
 type WsMsg struct {
@@ -64,16 +108,39 @@ var webTuiCmd = &cobra.Command{
 
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			token := r.URL.Query().Get("token")
-			if token != webToken {
-				http.Error(w, "Forbidden", http.StatusForbidden)
+
+			if cookie, err := r.Cookie("syswarden_token"); err == nil && cookie.Value == webToken {
+				http.FileServer(http.FS(subFS)).ServeHTTP(w, r)
 				return
 			}
-			http.FileServer(http.FS(subFS)).ServeHTTP(w, r)
+
+			if token == webToken {
+				http.SetCookie(w, &http.Cookie{
+					Name:     "syswarden_token",
+					Value:    webToken,
+					Path:     "/",
+					HttpOnly: true,
+					Secure:   true,
+					SameSite: http.SameSiteStrictMode,
+				})
+				http.FileServer(http.FS(subFS)).ServeHTTP(w, r)
+				return
+			}
+
+			http.Error(w, "Forbidden", http.StatusForbidden)
 		})
 
 		mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 			token := r.URL.Query().Get("token")
-			if token != webToken {
+			isValid := false
+
+			if cookie, err := r.Cookie("syswarden_token"); err == nil && cookie.Value == webToken {
+				isValid = true
+			} else if token == webToken {
+				isValid = true
+			}
+
+			if !isValid {
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}
@@ -98,6 +165,7 @@ var webTuiCmd = &cobra.Command{
 
 			// Secure zero-shell execution
 			tuiCmd := exec.Command(tuiPath) // #nosec G204
+			tuiCmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 			ptmx, err := pty.Start(tuiCmd)
 			if err != nil {
@@ -139,15 +207,29 @@ var webTuiCmd = &cobra.Command{
 					}
 					break
 				}
-				if err := conn.WriteMessage(websocket.TextMessage, buf[:n]); err != nil {
+				if err := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
 					break
 				}
 			}
 			_ = tuiCmd.Wait()
 		})
 
-		log.Printf("[SYSWARDEN] Web-TUI listening on http://%s/?token=%s", bindAddr, webToken)
-		if err := http.ListenAndServe(bindAddr, mux); err != nil { // #nosec G114
+		cert, err := generateSelfSignedCert()
+		if err != nil {
+			log.Fatalf("[ERROR] Failed to generate TLS certificate: %v", err)
+		}
+
+		server := &http.Server{
+			Addr:    bindAddr,
+			Handler: mux,
+			TLSConfig: &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			},
+		}
+
+		log.Printf("[SYSWARDEN] Web-TUI listening securely on https://%s/?token=%s", bindAddr, webToken)
+		if err := server.ListenAndServeTLS("", ""); err != nil { // #nosec G114
 			log.Fatalf("[ERROR] Web-TUI server failed: %v", err)
 		}
 	},

@@ -65,20 +65,20 @@
             const ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
-                // Send initial size
-                const size = { cols: term.cols, rows: term.rows };
-                ws.send(JSON.stringify({ type: 'resize', ...size }));
+                // Ensure layout is settled before fitting
+                requestAnimationFrame(() => {
+                    fitAddon.fit();
+                    const size = { cols: term.cols, rows: term.rows };
+                    ws.send(JSON.stringify({ type: 'resize', ...size }));
+                });
             };
 
+            ws.binaryType = 'arraybuffer';
             ws.onmessage = (event) => {
                 if (typeof event.data === 'string') {
                     term.write(event.data);
-                } else if (event.data instanceof Blob) {
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        term.write(new Uint8Array(reader.result));
-                    };
-                    reader.readAsArrayBuffer(event.data);
+                } else {
+                    term.write(new Uint8Array(event.data));
                 }
             };
 

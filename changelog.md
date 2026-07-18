@@ -1,7 +1,18 @@
+# Release v3.72.2
+
+# FIXED
+- [Security] Auto-generate in-memory self-signed TLS certificates for Native HTTPS support (`syswarden web-tui`).
+- [Web-TUI] Fixed static asset loading (xterm.js/css) by issuing a secure session cookie after initial token validation.
+- [Web-TUI] Fixed terminal crash ("term not set") by injecting `TERM=xterm-256color` into the PTY environment.
+- [Web-TUI] Fixed WebSocket crashes by switching from TextMessage (UTF-8) to BinaryMessage to support raw VT100/ANSI payloads.
+- [Web-TUI] Fixed initial terminal rendering size by synchronizing `fitAddon.fit()` with the browser layout cycle.
+
+---
+
 # Release v3.72.1
 
 ## FIXED
-- **Code Hygiene**: Fixed unchecked error return value of `conn.Close()` in `web_tui.go` (golangci-lint).
+- [Code Hygiene] Fixed unchecked error return value of `conn.Close()` in `web_tui.go` (golangci-lint).
 
 ---
 
