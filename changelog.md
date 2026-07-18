@@ -1,3 +1,10 @@
+# Release v3.72.1
+
+## FIXED
+- **Code Hygiene**: Fixed unchecked error return value of `conn.Close()` in `web_tui.go` (golangci-lint).
+
+---
+
 # Release v3.72.0
 
 ## ADDED

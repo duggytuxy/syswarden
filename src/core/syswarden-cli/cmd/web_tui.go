@@ -83,7 +83,11 @@ var webTuiCmd = &cobra.Command{
 				log.Printf("[ERROR] WebSocket upgrade failed: %v", err)
 				return
 			}
-			defer conn.Close()
+			defer func() {
+				if cerr := conn.Close(); cerr != nil {
+					log.Printf("[WARN] WebSocket close error: %v", cerr)
+				}
+			}()
 
 			tuiPath := "/opt/syswarden/bin/syswarden-tui"
 			// Check if we are running in dev mode
