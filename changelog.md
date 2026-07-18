@@ -1,3 +1,10 @@
+# Release v3.72.3
+
+# FIXED
+- [Syswarden-auto.config] rebuild the configuration auto.conf by default.
+
+---
+
 # Release v3.72.2
 
 # FIXED

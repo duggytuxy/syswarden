@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"syswarden-cli/config"
+
 	"github.com/spf13/cobra"
 )
 
@@ -44,10 +46,11 @@ func getPublicIP() string {
 func updateConfigToken(newToken string) error {
 	confPath := "/opt/syswarden/syswarden-auto.conf"
 	content, err := os.ReadFile(confPath) // #nosec
-	var lines []string
-	if err == nil {
-		lines = strings.Split(string(content), "\n")
+	if err != nil || len(strings.TrimSpace(string(content))) == 0 {
+		content = []byte(config.DefaultConfig)
 	}
+	
+	lines := strings.Split(string(content), "\n")
 
 	found := false
 	var newLines []string
@@ -57,9 +60,7 @@ func updateConfigToken(newToken string) error {
 			newLines = append(newLines, fmt.Sprintf("SYSWARDEN_WEB_TOKEN=\"%s\"", newToken))
 			found = true
 		} else {
-			if line != "" || !found { // keep empty lines but avoid trailing if not needed
-				newLines = append(newLines, line)
-			}
+			newLines = append(newLines, line)
 		}
 	}
 	if !found {
