@@ -516,6 +516,47 @@ func buildProgressBar(used, total int, label string, color string) string {
 	return fmt.Sprintf("[%s]%s %.1f%% %s[-]", c, label, pct*100, barStr)
 }
 
+func TranslateAllowedPayload(service, payload, ip string) string {
+	ts := time.Now().Format("2006-01-02 15:04:05")
+	if service == "sshd" {
+		user := "unknown"
+		var authMethod string
+		keyInfo := ""
+
+		if strings.Contains(payload, "Accepted publickey for ") {
+			authMethod = "public key"
+			parts := strings.Split(payload, "Accepted publickey for ")
+			if len(parts) > 1 {
+				subParts := strings.Split(parts[1], " from ")
+				if len(subParts) > 0 {
+					user = subParts[0]
+				}
+			}
+			if idx := strings.Index(payload, "ssh2: "); idx != -1 {
+				keyInfo = strings.TrimSpace(payload[idx+6:])
+			}
+		} else if strings.Contains(payload, "Accepted password for ") {
+			authMethod = "password"
+			parts := strings.Split(payload, "Accepted password for ")
+			if len(parts) > 1 {
+				subParts := strings.Split(parts[1], " from ")
+				if len(subParts) > 0 {
+					user = subParts[0]
+				}
+			}
+		} else {
+			return fmt.Sprintf("[%s] Access granted for IP %s", ts, ip)
+		}
+
+		if keyInfo != "" {
+			return fmt.Sprintf("[%s] Access granted for user '%s' via %s (%s) from IP %s", ts, user, authMethod, keyInfo, ip)
+		}
+		return fmt.Sprintf("[%s] Access granted for user '%s' via %s from IP %s", ts, user, authMethod, ip)
+	}
+
+	return fmt.Sprintf("[%s] Access granted for IP %s", ts, ip)
+}
+
 func TranslatePayload(jail, payload, ip string) string {
 	ts := time.Now().Format("2006-01-02 15:04:05")
 	j := strings.ToLower(jail)
@@ -738,7 +779,7 @@ func refreshUI() {
 			bannedTable.SetCell(row, 0, tview.NewTableCell(a.IP).SetTextColor(tcell.ColorWhite))
 			bannedTable.SetCell(row, 1, tview.NewTableCell(a.Service).SetTextColor(tcell.ColorYellow))
 			bannedTable.SetCell(row, 2, tview.NewTableCell("ALLOWED").SetTextColor(tcell.ColorGreen))
-			bannedTable.SetCell(row, 3, tview.NewTableCell(a.Payload).SetTextColor(tcell.ColorGray))
+			bannedTable.SetCell(row, 3, tview.NewTableCell(TranslateAllowedPayload(a.Service, a.Payload, a.IP)).SetTextColor(tcell.ColorGray))
 			row++
 		}
 		for _, b := range d.WAF.BannedIPs {

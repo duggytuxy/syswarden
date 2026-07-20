@@ -1,3 +1,10 @@
+# Release v3.74.2
+
+## UPDATED ♻️
+- **Syswarden-TUI**: Enhanced the `WAF ALLOWED/BANNED IP REGISTRY` to format "ALLOWED SSH" events natively into readable contextual reasons (e.g. `[Timestamp] Access granted for user 'root' via public key (ED25519 SHA256:...) from IP X`).
+
+---
+
 # Release v3.74.1
 
 ## FIXED 🐛
