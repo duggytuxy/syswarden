@@ -1,3 +1,10 @@
+# Release v3.74.1
+
+## FIXED 🐛
+- **Code Hygiene**: Fixed unchecked error return value of `conn.Close()` in `worker.go` (golangci-lint/errcheck).
+
+---
+
 # Release v3.74.0
 
 ## ADDED ➕
