@@ -1,3 +1,17 @@
+# Release v3.74.0
+
+## ADDED ➕
+- **Syswarden-TUI**: Added a `TranslatePayload` dictionary engine that converts raw kernel and web payloads into highly readable contextual reasons (e.g. `[Timestamp] Attempted port scan on port 22 by IP X`), including a direct OSINT link to AbuseIPDB (`https://www.abuseipdb.com/check/IP`) appended explicitly.
+- **Syswarden-Core**: Implemented `GetOutboundIP` in telemetry worker to dynamically identify the server's primary IP (public or internal 10.x/192.x) and supply it to the UI.
+
+## UPDATED ♻️
+- **Syswarden-TUI**: Completely removed the legacy `Noise` and `Signal` displays from the UI header in both ALLOW/BLOCK modes. They are now replaced by `IP: [ServerIP]` while maintaining the existing grid structure.
+- **Syswarden-TUI**: Renamed the `TARGET (PORT/JAIL/SERVICES)` column to `TRIGGERING` for precision.
+- **Syswarden-TUI**: Renamed the `TRIGGER PAYLOAD` column to `REASON (ATTEMPTED ATTACK)`.
+- **Syswarden-Core**: Re-engineered the `SEVERITY` metric logic for the Top Attackers block. Instead of a percentage, the engine now calculates a rigid score (`0-100`) based on recidivism (`hits * 10`) and adds a static `+20` multiplier when highly aggressive L7 exploits (SQLi, RCE, XSS) or brute-force behavior is detected.
+
+---
+
 # Release v3.73.1
 
 ## FIXED 🐛

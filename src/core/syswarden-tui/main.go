@@ -61,6 +61,7 @@ type SystemData struct {
 	Arch        string    `json:"arch"`
 	Os          string    `json:"os"`
 	CpuModel    string    `json:"cpu_model"`
+	ServerIP    string    `json:"server_ip"`
 	Services    []Service `json:"services"`
 	Ports       []Port    `json:"ports"`
 }
@@ -515,6 +516,57 @@ func buildProgressBar(used, total int, label string, color string) string {
 	return fmt.Sprintf("[%s]%s %.1f%% %s[-]", c, label, pct*100, barStr)
 }
 
+func TranslatePayload(jail, payload, ip string) string {
+	ts := time.Now().Format("2006-01-02 15:04:05")
+	j := strings.ToLower(jail)
+	url := fmt.Sprintf("(https://www.abuseipdb.com/check/%s)", ip)
+
+	if strings.Contains(j, "ssh") || strings.Contains(j, "bruteforce") || strings.Contains(j, "auth") {
+		port := "22"
+		if idx := strings.Index(payload, "port "); idx != -1 {
+			parts := strings.Split(payload[idx+5:], " ")
+			if len(parts) > 0 {
+				port = strings.Trim(parts[0], ":")
+			}
+		} else if idx := strings.Index(payload, "DPT="); idx != -1 {
+			pStr := payload[idx+4:]
+			if spaceIdx := strings.Index(pStr, " "); spaceIdx != -1 {
+				port = pStr[:spaceIdx]
+			}
+		}
+		return fmt.Sprintf("[%s] Attempted SSH brute-force on port %s by IP %s %s", ts, port, ip, url)
+	}
+
+	if strings.Contains(j, "scan") || strings.Contains(j, "zero-trust") || strings.Contains(j, "catch-all") {
+		port := "unknown"
+		if dptIdx := strings.Index(payload, "DPT="); dptIdx != -1 {
+			pStr := payload[dptIdx+4:]
+			if spaceIdx := strings.Index(pStr, " "); spaceIdx != -1 {
+				port = pStr[:spaceIdx]
+			}
+		}
+		return fmt.Sprintf("[%s] Attempted port scan on port %s by IP %s %s", ts, port, ip, url)
+	}
+
+	if strings.Contains(j, "sqli") || strings.Contains(j, "xss") || strings.Contains(j, "lfi") || strings.Contains(j, "rce") {
+		uri := "/"
+		if idx := strings.Index(payload, "GET "); idx != -1 {
+			parts := strings.Split(payload[idx+4:], " ")
+			if len(parts) > 0 {
+				uri = parts[0]
+			}
+		} else if idx := strings.Index(payload, "POST "); idx != -1 {
+			parts := strings.Split(payload[idx+5:], " ")
+			if len(parts) > 0 {
+				uri = parts[0]
+			}
+		}
+		return fmt.Sprintf("[%s] Attempted Web exploit (%s) on URI '%s' by IP %s %s", ts, strings.ToUpper(jail), uri, ip, url)
+	}
+
+	return fmt.Sprintf("[%s] Attempted attack (%s) by IP %s %s", ts, strings.ToUpper(jail), ip, url)
+}
+
 func refreshUI() {
 	mu.Lock()
 	d := data
@@ -522,16 +574,6 @@ func refreshUI() {
 	mu.Unlock()
 
 	// --- Header Calculation ---
-	totalThreats := d.Layer3.GlobalBlocked + d.WAF.TotalBanned
-	noisePct, signalPct := "0.00%", "0.00%"
-	if d.Layer3.ZeroTrustMode {
-		noisePct = ">99.99% (Zero-Trust)"
-		signalPct = "<0.01%"
-	} else if totalThreats > 0 {
-		noisePct = fmt.Sprintf("%.2f%%", float64(d.Layer3.GlobalBlocked)/float64(totalThreats)*100)
-		signalPct = fmt.Sprintf("%.2f%%", float64(d.WAF.TotalBanned)/float64(totalThreats)*100)
-	}
-
 	ghStars, ghRelease := d.GithubStars, d.GithubRelease
 	if ghStars == "" {
 		ghStars = "--"
@@ -589,12 +631,12 @@ func refreshUI() {
 	}
 
 	headerLines := fmt.Sprintf(
-		" [gray]Noise:[-] [green]%s[-] │ [gray]Signal:[-] [red]%s[-] │ [gray]Stars:[-] [yellow]%s[-] │ [gray]Release:[-] [cyan]%s[-] │ [gray]NODE:[-] [white]%s[-]%s\n\n"+
+		" [gray]IP:[-] [green]%s[-] │ [gray]Stars:[-] [yellow]%s[-] │ [gray]Release:[-] [cyan]%s[-] │ [gray]NODE:[-] [white]%s[-]%s\n\n"+
 			" [gray]Cores:[-] [white]%s[-] │ [gray]Arch:[-] [white]%s[-] │ [gray]OS:[-] [white]%s[-] │ [gray]CPU:[-] [white]%s[-]\n"+
 			" [gray]Uptime:[-] [cyan]%s[-] │ [gray]Load:[-] [%s]%s[-] │ %s │ %s\n"+
 			" [gray]Services:[-] %s\n"+
 			" [gray]Ports:[-] [blue]%s[-]",
-		noisePct, signalPct, ghStars, ghRelease, d.System.Hostname, errState,
+		d.System.ServerIP, ghStars, ghRelease, d.System.Hostname, errState,
 		d.System.Cores, d.System.Arch, d.System.Os, d.System.CpuModel,
 		d.System.Uptime, cLoad, d.System.LoadAverage, ramBar, diskBar,
 		strings.Join(servicesStr, " │ "),
@@ -668,9 +710,9 @@ func refreshUI() {
 	r, c := bannedTable.GetSelection()
 	bannedTable.Clear()
 	bannedTable.SetCell(0, 0, tview.NewTableCell("IP ADDRESS").SetTextColor(tcell.ColorGray).SetSelectable(false))
-	bannedTable.SetCell(0, 1, tview.NewTableCell("TARGET (PORT/JAIL/SERVICES)").SetTextColor(tcell.ColorGray).SetSelectable(false))
+	bannedTable.SetCell(0, 1, tview.NewTableCell("TRIGGERING").SetTextColor(tcell.ColorGray).SetSelectable(false))
 	bannedTable.SetCell(0, 2, tview.NewTableCell("MITRE ATT&CK / TYPE").SetTextColor(tcell.ColorGray).SetSelectable(false))
-	bannedTable.SetCell(0, 3, tview.NewTableCell("TRIGGER PAYLOAD").SetTextColor(tcell.ColorGray).SetSelectable(false))
+	bannedTable.SetCell(0, 3, tview.NewTableCell("REASON (ATTEMPTED ATTACK)").SetTextColor(tcell.ColorGray).SetSelectable(false))
 
 	recentlyUnbannedMu.Lock()
 	now := time.Now()
@@ -722,17 +764,17 @@ func refreshUI() {
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("SHADOW-ALERT: "+b.Jail).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorOrange))
-				bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorYellow))
+				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP)).SetTextColor(tcell.ColorYellow))
 			case "DETECTED":
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("DETECTED: "+b.Jail).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorYellow))
-				bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorYellow))
+				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP)).SetTextColor(tcell.ColorYellow))
 			default:
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorWhite))
 				bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(cVec))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorWhite))
-				bannedTable.SetCell(row, 3, tview.NewTableCell(payload).SetTextColor(tcell.ColorWhite))
+				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP)).SetTextColor(tcell.ColorWhite))
 			}
 			row++
 		}

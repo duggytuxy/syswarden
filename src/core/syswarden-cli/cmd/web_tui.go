@@ -220,8 +220,9 @@ var webTuiCmd = &cobra.Command{
 		}
 
 		server := &http.Server{
-			Addr:    bindAddr,
-			Handler: mux,
+			Addr:              bindAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
 			TLSConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},
 				MinVersion:   tls.VersionTLS12,

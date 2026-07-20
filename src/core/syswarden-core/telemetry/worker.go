@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -49,6 +50,7 @@ type SystemData struct {
 	Arch        string    `json:"arch"`
 	Os          string    `json:"os"`
 	CpuModel    string    `json:"cpu_model"`
+	ServerIP    string    `json:"server_ip"`
 	Services    []Service `json:"services"`
 	Ports       []Port    `json:"ports"`
 }
@@ -369,6 +371,16 @@ func generateTelemetry() {
 var cachedSys SystemData
 var lastSysFetch time.Time
 
+func GetOutboundIP() string {
+	conn, err := net.Dial("udp", "1.1.1.1:80")
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
+}
+
 func getSystemStats() SystemData {
 	if time.Since(lastSysFetch) < 60*time.Second && cachedSys.Hostname != "" {
 		return cachedSys
@@ -383,6 +395,7 @@ func getSystemStats() SystemData {
 	if h, err := os.Hostname(); err == nil {
 		sys.Hostname = h
 	}
+	sys.ServerIP = GetOutboundIP()
 
 	// Uptime
 	if b, err := os.ReadFile("/proc/uptime"); err == nil { // #nosec
@@ -615,7 +628,7 @@ func getLayer3Stats() Layer3 {
 	}
 
 	var l3 Layer3
-	
+
 	// Detect Zero-Trust Mode
 	if conf, err := os.ReadFile("/opt/syswarden/syswarden-auto.conf"); err == nil {
 		for _, line := range strings.Split(string(conf), "\n") {
@@ -963,8 +976,6 @@ func getWAFStats() WAF {
 	for _, b := range allBans {
 		hitCounts[b.IP]++
 	}
-	totalBans := len(allBans)
-
 	for i := len(allBans) - 1; i >= 0; i-- {
 		if len(waf.BannedIPs) >= 50 {
 			break
@@ -978,11 +989,21 @@ func getWAFStats() WAF {
 		// Quick TopAttacker populate with OSINT and Severity
 		att := enrichOSINT(allBans[i].IP, allBans[i].Payload)
 		hits := hitCounts[allBans[i].IP]
-		pct := 0.0
-		if totalBans > 0 {
-			pct = (float64(hits) / float64(totalBans)) * 100
+		score := hits * 10
+		j := strings.ToLower(allBans[i].Jail)
+		if strings.Contains(j, "sqli") || strings.Contains(j, "rce") || strings.Contains(j, "xss") || strings.Contains(j, "lfi") || strings.Contains(j, "bruteforce") || strings.Contains(j, "ssh") || strings.Contains(j, "auth") {
+			score += 20
 		}
-		att.Severity = fmt.Sprintf("%.1f%% (%d hits)", pct, hits)
+		if score > 100 {
+			score = 100
+		}
+		level := "Suspicious"
+		if score >= 80 {
+			level = "Critical"
+		} else if score >= 50 {
+			level = "High Risk"
+		}
+		att.Severity = fmt.Sprintf("%d/100 (%s)", score, level)
 		waf.TopAttackers = append(waf.TopAttackers, att)
 	}
 
