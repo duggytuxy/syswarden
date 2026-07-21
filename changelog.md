@@ -1,6 +1,14 @@
+# Release v3.74.5
+
+## ADDED ⚡
+- **Smart Dual-Stack Parser**: The CIDR validation engine (`CleanCIDRList`) is now intelligent. If you mix IPv4 and IPv6 addresses inside a single Custom Threat Intel file (e.g. `SYSWARDEN_CUSTOM_URL`), the parser will automatically extract the IPv6 addresses and route them directly into the dedicated `.ipv6` lists to be processed natively by the firewall, without breaking the IPv4 tables.
+
+---
+
 # Release v3.74.4
 
 ## FIXED 🐛
+- **Threat Intel Engine**: Fixed a hidden bug where the `SecureDownloader` would wrongly apply IPv4-only scrubbing to `.ipv6` blocklist files, inadvertently erasing downloaded IPv6 addresses.
 - **Code Hygiene**: Fixed unchecked error return values (`errcheck`) when closing OSINT `ipv4` and `ipv6` file descriptors (`f4.Close()` / `f6.Close()`) in the CLI downloader.
 
 ---

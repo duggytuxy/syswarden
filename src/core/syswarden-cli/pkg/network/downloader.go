@@ -63,10 +63,14 @@ func SecureDownloader(ctx context.Context, url string, destPath string) error {
 		return fmt.Errorf("failed to write data: %w", err)
 	}
 
+	if strings.HasSuffix(destPath, ".ipv6") {
+		return CleanCIDRListV6(destPath)
+	}
 	return CleanCIDRList(destPath)
 }
 
-// CleanCIDRList ensures CWE-20 compliance by stripping any malformed IPs
+// CleanCIDRList ensures CWE-20 compliance by stripping any malformed IPs.
+// Smart Parser: If IPv6 addresses are detected in an IPv4 list, they are automatically routed to the .ipv6 file.
 func CleanCIDRList(filepath string) error {
 	content, err := os.ReadFile(filepath) // #nosec
 	if err != nil {
@@ -75,34 +79,61 @@ func CleanCIDRList(filepath string) error {
 
 	lines := strings.Split(string(content), "\n")
 	var validCIDRs []string
+	var validCIDRsV6 []string
 	seen := make(map[string]bool)
+	seenV6 := make(map[string]bool)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// Validate CIDR format
+
+		isV6 := strings.Contains(line, ":")
 		if !strings.Contains(line, "/") {
-			line = line + "/32"
+			if isV6 {
+				line = line + "/128"
+			} else {
+				line = line + "/32"
+			}
 		}
 
 		ip, _, err := net.ParseCIDR(line)
 		if err == nil {
-			// Strictly enforce IPv4 to prevent Nftables chunk crash
 			if ip.To4() != nil {
 				if !seen[line] {
 					seen[line] = true
 					validCIDRs = append(validCIDRs, line)
 				}
+			} else if ip.To16() != nil {
+				if !seenV6[line] {
+					seenV6[line] = true
+					validCIDRsV6 = append(validCIDRsV6, line)
+				}
 			}
 		}
 	}
 
-	return os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0600)
+	// Write IPv4 back to the original file
+	err = os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0600)
+	if err != nil {
+		return err
+	}
+
+	// Smart Routing: Route extracted IPv6 to the corresponding .ipv6 file
+	if len(validCIDRsV6) > 0 && strings.HasSuffix(filepath, ".ipv4") {
+		fileV6 := strings.TrimSuffix(filepath, ".ipv4") + ".ipv6"
+		f6, err := os.OpenFile(fileV6, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
+		if err == nil {
+			defer func() { _ = f6.Close() }()
+			_, _ = f6.WriteString(strings.Join(validCIDRsV6, "\n") + "\n")
+		}
+	}
+	return nil
 }
 
-// CleanCIDRListV6 ensures CWE-20 compliance for IPv6 lists
+// CleanCIDRListV6 ensures CWE-20 compliance for IPv6 lists.
+// Smart Parser: If IPv4 addresses are detected in an IPv6 list, they are automatically routed to the .ipv4 file.
 func CleanCIDRListV6(filepath string) error {
 	content, err := os.ReadFile(filepath) // #nosec
 	if err != nil {
@@ -110,30 +141,58 @@ func CleanCIDRListV6(filepath string) error {
 	}
 
 	lines := strings.Split(string(content), "\n")
-	var validCIDRs []string
-	seen := make(map[string]bool)
+	var validCIDRsV6 []string
+	var validCIDRsV4 []string
+	seenV6 := make(map[string]bool)
+	seenV4 := make(map[string]bool)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
+
+		isV6 := strings.Contains(line, ":")
 		if !strings.Contains(line, "/") {
-			line = line + "/128"
+			if isV6 {
+				line = line + "/128"
+			} else {
+				line = line + "/32"
+			}
 		}
 
 		ip, _, err := net.ParseCIDR(line)
 		if err == nil {
 			if ip.To4() == nil && ip.To16() != nil {
-				if !seen[line] {
-					seen[line] = true
-					validCIDRs = append(validCIDRs, line)
+				if !seenV6[line] {
+					seenV6[line] = true
+					validCIDRsV6 = append(validCIDRsV6, line)
+				}
+			} else if ip.To4() != nil {
+				if !seenV4[line] {
+					seenV4[line] = true
+					validCIDRsV4 = append(validCIDRsV4, line)
 				}
 			}
 		}
 	}
 
-	return os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0600)
+	// Write IPv6 back to the original file
+	err = os.WriteFile(filepath, []byte(strings.Join(validCIDRsV6, "\n")+"\n"), 0600)
+	if err != nil {
+		return err
+	}
+
+	// Smart Routing: Route extracted IPv4 to the corresponding .ipv4 file
+	if len(validCIDRsV4) > 0 && strings.HasSuffix(filepath, ".ipv6") {
+		fileV4 := strings.TrimSuffix(filepath, ".ipv6") + ".ipv4"
+		f4, err := os.OpenFile(fileV4, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
+		if err == nil {
+			defer func() { _ = f4.Close() }()
+			_, _ = f4.WriteString(strings.Join(validCIDRsV4, "\n") + "\n")
+		}
+	}
+	return nil
 }
 
 // DownloadFeeds manages the download of GeoIP, ASN, and OSINT feeds
