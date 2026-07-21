@@ -1,3 +1,10 @@
+# Release v3.74.7
+
+## FIXED 🐛
+- **Threat Intel Feeds**: Fixed the IPv6 GeoIP blocklist URL mapping for `ipdeny.com`. The path incorrectly included `/countries/` which led to 404 Not Found errors when fetching IPv6 zones. It has been corrected to the proper `/blocks/` endpoint.
+
+---
+
 # Release v3.74.6
 
 ## FIXED 🐛

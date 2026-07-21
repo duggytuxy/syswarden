@@ -227,7 +227,7 @@ func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoA
 			}
 
 			// Download IPv6
-			urlV6 := fmt.Sprintf("https://www.ipdeny.com/ipv6/ipaddresses/blocks/countries/%s.zone", strings.ToLower(code))
+			urlV6 := fmt.Sprintf("https://www.ipdeny.com/ipv6/ipaddresses/blocks/%s.zone", strings.ToLower(code))
 			destV6 := fmt.Sprintf("/etc/syswarden/lists/%s.ipv6", strings.ToLower(code))
 			fmt.Printf("Downloading GeoIP [%s] (IPv6)... ", code)
 			if err := SecureDownloader(ctx, urlV6, destV6); err != nil {
@@ -310,7 +310,7 @@ func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoA
 			}
 
 			// Download IPv6
-			urlV6 := fmt.Sprintf("https://www.ipdeny.com/ipv6/ipaddresses/blocks/countries/%s.zone", strings.ToLower(code))
+			urlV6 := fmt.Sprintf("https://www.ipdeny.com/ipv6/ipaddresses/blocks/%s.zone", strings.ToLower(code))
 			destV6 := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv6", strings.ToLower(code))
 			fmt.Printf("Downloading GeoIP ALLOW [%s] (IPv6)... ", code)
 			if err := SecureDownloader(ctx, urlV6, destV6); err != nil {
