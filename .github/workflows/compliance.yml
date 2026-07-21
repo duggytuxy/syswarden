@@ -16,7 +16,7 @@ jobs:
       id-token: write          # required to securely push Plumber Score via OIDC
       security-events: write   # required to upload SARIF to Code Scanning
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: getplumber/plumber@fdd2a2d0555bb3b33cbb2efff3b955dea5a6bbf0 # v0.4.3
         with:
           score-push: true
