@@ -1,3 +1,10 @@
+# Release v3.74.6
+
+## FIXED 🐛
+- **Debian Packaging Orchestration**: Fixed a logical flaw in the Debian `postinst.sh` packaging script where the `syswarden-webtui.service` systemd daemon was exclusively provisioned during package upgrades. The logic has been decoupled so the Web-TUI service is now correctly generated and enabled on all deployment paths, including fresh `.deb` installations.
+
+---
+
 # Release v3.74.5
 
 ## ADDED ⚡

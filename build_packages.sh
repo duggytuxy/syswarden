@@ -116,8 +116,18 @@ if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
         systemctl daemon-reload
         systemctl restart syswarden-core || true
         systemctl restart syswarden-firewall || true
-        if [ ! -f /etc/systemd/system/syswarden-webtui.service ]; then
-            cat << 'SVC' > /etc/systemd/system/syswarden-webtui.service
+        systemctl restart syswarden-webtui || true
+    elif command -v rc-service >/dev/null 2>&1; then
+        rc-service syswarden-core restart || true
+        rc-service syswarden-firewall restart || true
+        rc-service syswarden-webtui restart || true
+    fi
+fi
+
+# Ensure Web-TUI service exists regardless of Upgrade or Fresh Install
+if command -v systemctl >/dev/null 2>&1; then
+    if [ ! -f /etc/systemd/system/syswarden-webtui.service ]; then
+        cat << 'SVC' > /etc/systemd/system/syswarden-webtui.service
 [Unit]
 Description=SYSWARDEN Web-TUI (WebTTY)
 After=network-online.target
@@ -139,15 +149,13 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 SVC
-            systemctl daemon-reload
-            systemctl enable --now syswarden-webtui.service || true
-        fi
-        systemctl restart syswarden-webtui || true
-    elif command -v rc-service >/dev/null 2>&1; then
-        rc-service syswarden-core restart || true
-        rc-service syswarden-firewall restart || true
-        if [ ! -f /etc/init.d/syswarden-webtui ]; then
-            cat << 'SVC' > /etc/init.d/syswarden-webtui
+        systemctl daemon-reload
+        systemctl enable --now syswarden-webtui.service || true
+    fi
+elif command -v rc-service >/dev/null 2>&1; then
+    if [ ! -f /etc/init.d/syswarden-webtui ]; then
+        cat << 'SVC' > /etc/init.d/syswarden-webtui
+
 #!/sbin/openrc-run
 
 name="syswarden-webtui"
