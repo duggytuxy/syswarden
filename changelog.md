@@ -1,3 +1,10 @@
+# Release v3.74.4
+
+## FIXED 🐛
+- **Code Hygiene**: Fixed unchecked error return values (`errcheck`) when closing OSINT `ipv4` and `ipv6` file descriptors (`f4.Close()` / `f6.Close()`) in the CLI downloader.
+
+---
+
 # Release v3.74.3
 
 ## ADDED ✨

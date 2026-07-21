@@ -373,13 +373,13 @@ func DownloadOSINT(ctx context.Context, destBase string) error {
 	if err != nil {
 		return err
 	}
-	defer f4.Close()
+	defer func() { _ = f4.Close() }()
 
 	f6, err := os.OpenFile(destBase+".ipv6", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 	if err != nil {
 		return err
 	}
-	defer f6.Close()
+	defer func() { _ = f6.Close() }()
 
 	for _, url := range urls {
 		client := &http.Client{Timeout: 30 * time.Second}
