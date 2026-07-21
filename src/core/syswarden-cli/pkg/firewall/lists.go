@@ -89,7 +89,11 @@ func AddToWhitelist(ip string, port string) error {
 	}
 
 	// Remove from blocklist just in case
-	_ = removeFromFile(BlocklistV4, ip)
+	fileToRemove := BlocklistV6
+	if isIPv4 {
+		fileToRemove = BlocklistV4
+	}
+	_ = removeFromFile(fileToRemove, ip)
 
 	file := WhitelistV6
 	if isIPv4 {

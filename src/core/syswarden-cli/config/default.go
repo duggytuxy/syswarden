@@ -94,6 +94,11 @@ SYSWARDEN_CUSTOM_URL=""
 # Prevent supply chain poisoning: Provide the expected SHA256 hash of the custom list (Optional but recommended for NIS2)
 SYSWARDEN_CUSTOM_HASH=""
 
+# If choice is 3, provide the IPv6 URL below.
+SYSWARDEN_CUSTOM_URL_IPV6=""
+# Prevent supply chain poisoning: Provide the expected SHA256 hash of the custom IPv6 list
+SYSWARDEN_CUSTOM_HASH_IPV6=""
+
 
 # ==========================================
 # [4] WAAP L7 ENGINE & LOGS

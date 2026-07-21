@@ -690,7 +690,39 @@ func saveOSINTCache() {
 	}
 }
 
-func enrichOSINT(ip string, payload string) Attacker {
+var customSSHPort string
+var sshPortMu sync.Mutex
+
+func getConfiguredSSHPort() string {
+	sshPortMu.Lock()
+	defer sshPortMu.Unlock()
+	if customSSHPort != "" {
+		return customSSHPort
+	}
+
+	configPath := "/opt/syswarden/syswarden-auto.conf"
+	if runtime.GOOS == "freebsd" {
+		configPath = "/usr/local/etc/syswarden-auto.conf"
+	}
+	customSSHPort = "22"
+	if b, err := os.ReadFile(configPath); err == nil { // #nosec
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, "SYSWARDEN_SSH_PORT=") {
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) == 2 {
+					val := strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
+					if val != "" {
+						customSSHPort = val
+					}
+				}
+				break
+			}
+		}
+	}
+	return customSSHPort
+}
+
+func enrichOSINT(ip string, payload string, jail string) Attacker {
 	osintCacheOnce.Do(func() {
 		osintMu.Lock()
 		loadOSINTCache()
@@ -779,6 +811,14 @@ func enrichOSINT(ip string, payload string) Attacker {
 			port = dptStr
 		}
 	}
+
+	if port == "80/443" {
+		j := strings.ToLower(jail)
+		if strings.Contains(j, "ssh") || strings.Contains(j, "bruteforce") {
+			port = getConfiguredSSHPort()
+		}
+	}
+
 	att.Port = port
 
 	return att
@@ -989,7 +1029,7 @@ func getWAFStats() WAF {
 		waf.BannedIPs = append(waf.BannedIPs, allBans[i])
 
 		// Quick TopAttacker populate with OSINT and Severity
-		att := enrichOSINT(allBans[i].IP, allBans[i].Payload)
+		att := enrichOSINT(allBans[i].IP, allBans[i].Payload, allBans[i].Jail)
 		hits := hitCounts[allBans[i].IP]
 		score := hits * 10
 		j := strings.ToLower(allBans[i].Jail)

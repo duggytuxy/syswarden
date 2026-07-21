@@ -19,8 +19,9 @@ type Config struct {
 	CISL2Hardening      bool
 	ListChoice          string
 	CustomURL           string
-	CustomURL6          string
+	CustomURLIPv6       string
 	CustomHash          string
+	CustomHashIPv6      string
 	EnableGeo           bool
 	GeoCodes            string
 	GeoAllowed          string

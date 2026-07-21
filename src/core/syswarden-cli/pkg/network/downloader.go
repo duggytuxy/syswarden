@@ -137,7 +137,7 @@ func CleanCIDRListV6(filepath string) error {
 }
 
 // DownloadFeeds manages the download of GeoIP, ASN, and OSINT feeds
-func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
+func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
 	fmt.Println("[INFO] Initializing Network Intelligence Feeds...")
 
 	if lanMode {
@@ -157,10 +157,21 @@ func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllo
 			if code == "" || code == "none" {
 				continue
 			}
+			// Download IPv4
 			url := fmt.Sprintf("https://www.ipdeny.com/ipblocks/data/countries/%s.zone", strings.ToLower(code))
 			dest := fmt.Sprintf("/etc/syswarden/lists/%s.ipv4", strings.ToLower(code))
-			fmt.Printf("Downloading GeoIP [%s]... ", code)
+			fmt.Printf("Downloading GeoIP [%s] (IPv4)... ", code)
 			if err := SecureDownloader(ctx, url, dest); err != nil {
+				fmt.Printf("FAILED (%v)\n", err)
+			} else {
+				fmt.Println("OK")
+			}
+
+			// Download IPv6
+			urlV6 := fmt.Sprintf("https://www.ipdeny.com/ipv6/ipaddresses/blocks/countries/%s.zone", strings.ToLower(code))
+			destV6 := fmt.Sprintf("/etc/syswarden/lists/%s.ipv6", strings.ToLower(code))
+			fmt.Printf("Downloading GeoIP [%s] (IPv6)... ", code)
+			if err := SecureDownloader(ctx, urlV6, destV6); err != nil {
 				fmt.Printf("FAILED (%v)\n", err)
 			} else {
 				fmt.Println("OK")
@@ -229,10 +240,21 @@ func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllo
 			if code == "" || code == "none" {
 				continue
 			}
+			// Download IPv4
 			url := fmt.Sprintf("https://www.ipdeny.com/ipblocks/data/countries/%s.zone", strings.ToLower(code))
 			dest := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv4", strings.ToLower(code))
-			fmt.Printf("Downloading GeoIP ALLOW [%s]... ", code)
+			fmt.Printf("Downloading GeoIP ALLOW [%s] (IPv4)... ", code)
 			if err := SecureDownloader(ctx, url, dest); err != nil {
+				fmt.Printf("FAILED (%v)\n", err)
+			} else {
+				fmt.Println("OK")
+			}
+
+			// Download IPv6
+			urlV6 := fmt.Sprintf("https://www.ipdeny.com/ipv6/ipaddresses/blocks/countries/%s.zone", strings.ToLower(code))
+			destV6 := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv6", strings.ToLower(code))
+			fmt.Printf("Downloading GeoIP ALLOW [%s] (IPv6)... ", code)
+			if err := SecureDownloader(ctx, urlV6, destV6); err != nil {
 				fmt.Printf("FAILED (%v)\n", err)
 			} else {
 				fmt.Println("OK")
@@ -263,9 +285,9 @@ func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllo
 	}
 
 	// Download IPv6 Custom Blocklist if configured
-	if listChoice == "3" && customURL6 != "" {
+	if listChoice == "3" && customURLIPv6 != "" {
 		fmt.Printf("Downloading Custom IPv6 Blocklist... ")
-		if err := SecureDownloader(ctx, customURL6, "/etc/syswarden/lists/syswarden_threatintel.ipv6"); err != nil {
+		if err := SecureDownloader(ctx, customURLIPv6, "/etc/syswarden/lists/syswarden_threatintel.ipv6"); err != nil {
 			fmt.Printf("FAILED (%v)\n", err)
 		} else {
 			fmt.Println("OK")
@@ -305,6 +327,23 @@ func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllo
 		if !success {
 			fmt.Printf("FAILED (%v)\n", lastErr)
 		}
+
+		fmt.Printf("Downloading Threat Intel IPv6 Blocklist... ")
+		success = false
+		mirrorsV6 := system.SelectFastestThreatIntelMirrorV6(listChoice)
+
+		for _, url := range mirrorsV6 {
+			if err := SecureDownloader(ctx, url, "/etc/syswarden/lists/syswarden_threatintel.ipv6"); err == nil {
+				fmt.Println("OK")
+				success = true
+				break
+			} else {
+				lastErr = err
+			}
+		}
+		if !success {
+			fmt.Printf("FAILED (%v)\n", lastErr)
+		}
 	}
 
 	// Download OSINT Feeds (CINS Army & Blocklist.de)
@@ -313,7 +352,7 @@ func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllo
 		fmt.Println("Downloading Free OSINT Feeds (CINS & Blocklist.de)... SKIPPED")
 	default:
 		fmt.Printf("Downloading Free OSINT Feeds (CINS & Blocklist.de)... ")
-		if err := DownloadOSINT(ctx, "/etc/syswarden/lists/syswarden_threatintel.ipv4"); err != nil {
+		if err := DownloadOSINT(ctx, "/etc/syswarden/lists/syswarden_threatintel"); err != nil {
 			fmt.Printf("FAILED (%v)\n", err)
 		} else {
 			fmt.Println("OK")
@@ -323,17 +362,24 @@ func DownloadFeeds(mirrorURL, customURL6, listChoice, geoCodes, asnList, geoAllo
 	return nil
 }
 
-// DownloadOSINT downloads free OSINT threat feeds and appends them to the destination file
-func DownloadOSINT(ctx context.Context, destFile string) error {
+// DownloadOSINT downloads free OSINT threat feeds and appends them to the destination files
+func DownloadOSINT(ctx context.Context, destBase string) error {
 	urls := []string{
 		"https://cinsscore.com/list/ci-badguys.txt",
 		"https://lists.blocklist.de/lists/all.txt",
 	}
 
-	f, err := os.OpenFile(destFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
+	f4, err := os.OpenFile(destBase+".ipv4", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
 	if err != nil {
 		return err
 	}
+	defer f4.Close()
+
+	f6, err := os.OpenFile(destBase+".ipv6", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
+	if err != nil {
+		return err
+	}
+	defer f6.Close()
 
 	for _, url := range urls {
 		client := &http.Client{Timeout: 30 * time.Second}
@@ -353,15 +399,27 @@ func DownloadOSINT(ctx context.Context, destFile string) error {
 			time.Sleep(2 * time.Second)
 		}
 		if resp != nil && resp.StatusCode == http.StatusOK {
-			_, _ = io.Copy(f, resp.Body)
-			_, _ = f.WriteString("\n")
+			scanner := bufio.NewScanner(resp.Body)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				if strings.Contains(line, ":") {
+					_, _ = f6.WriteString(line + "\n")
+				} else {
+					_, _ = f4.WriteString(line + "\n")
+				}
+			}
 			_ = resp.Body.Close()
 		}
 	}
-	_ = f.Close() // Close before cleaning
 
-	// Clean and deduplicate the newly merged file
-	return CleanCIDRList(destFile)
+	_ = f4.Close() // Close before cleaning
+	_ = f6.Close() // Close before cleaning
+
+	_ = CleanCIDRListV6(destBase + ".ipv6")
+	return CleanCIDRList(destBase + ".ipv4")
 }
 
 // SetupFeedsCron configures a root cron job to update feeds hourly at a random minute

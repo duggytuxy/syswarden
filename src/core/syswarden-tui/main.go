@@ -193,7 +193,7 @@ func main() {
 
 	midFlex := tview.NewFlex().
 		AddItem(jailsTable, 0, 1, false).
-		AddItem(attackersTable, 0, 1, false)
+		AddItem(attackersTable, 0, 2, false)
 
 	// 7. Banned IPs Table
 	bannedTable = tview.NewTable().

@@ -1,3 +1,17 @@
+# Release v3.74.3
+
+## ADDED ✨
+- **IPv6 Native Support**: Full implementation of IPv6 compatibility across the entire Syswarden architecture (CLI, Core Firewall, and TUI). 
+  - Dynamic `ip6tables` and `firewalld` family switching for Fallback Managers natively detecting IPv6 payloads.
+  - Complete integration of Custom Blocklist IPv6 (`SYSWARDEN_CUSTOM_URL_IPV6`, `SYSWARDEN_CUSTOM_HASH_IPV6`).
+  - Native dual-stack processing (IPv4 and IPv6 streams) for OSINT feeds (CINS, Blocklist.de) and GeoIP lists (ipdeny.com) with dedicated `CleanCIDRListV6` scrubbing logic to prevent CWE-20 vulnerabilities.
+  - TUI "Top Attackers" flex ratio expanded to ensure IPv6 visibility without layout artifacts.
+
+## FIXED 🐛
+- **Syswarden-Core**: Fixed incorrect port display (`80/443`) for SSH L7-BRUTEFORCE attacks in the TOP ATTACKERS (OSINT HISTORY) table. The telemetry worker now dynamically extracts the custom `SYSWARDEN_SSH_PORT` from the `syswarden-auto.conf` configuration.
+
+---
+
 # Release v3.74.2
 
 ## UPDATED ♻️

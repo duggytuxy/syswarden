@@ -49,7 +49,7 @@ func updateConfigToken(newToken string) error {
 	if err != nil || len(strings.TrimSpace(string(content))) == 0 {
 		content = []byte(config.DefaultConfig)
 	}
-	
+
 	lines := strings.Split(string(content), "\n")
 
 	found := false

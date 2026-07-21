@@ -3,8 +3,8 @@
 package cmd
 
 import (
-	"os"
 	"golang.org/x/sys/unix"
+	"os"
 )
 
 func flushStdin() {
