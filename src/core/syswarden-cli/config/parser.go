@@ -39,6 +39,8 @@ func ParseConfig(filepath string) error {
 			GlobalConfig.SSHPort = val
 		case "SYSWARDEN_FIREWALL_BACKEND":
 			GlobalConfig.FirewallBackend = val
+		case "SYSWARDEN_INTERFACES":
+			GlobalConfig.Interfaces = val
 		case "SYSWARDEN_WHITELIST_INFRA":
 			GlobalConfig.WhitelistInfra = parseBool(val)
 		case "SYSWARDEN_WHITELIST_IPS":

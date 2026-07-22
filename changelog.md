@@ -1,3 +1,14 @@
+# Release v3.74.8
+
+## ADDED ⚡
+- **Multi-Interface Ingress Protection (L2)**: Added the `SYSWARDEN_INTERFACES` directive in `syswarden-auto.conf` to bind the ultra-fast L2 hardware drop table (`syswarden_hw_drop`) to multiple network interfaces simultaneously (e.g., `eth0,eth1,eth2`). This ensures that administrative and development channels benefit from the same anti-DDoS acceleration as the primary public interface. If unset, SysWarden safely falls back to auto-detecting the primary active interface.
+- **Web-TUI Clickable URLs**: Integrated the `xterm-addon-web-links` extension into the Web-TUI frontend. Threat Intelligence URLs (like AbuseIPDB) and other links displayed in the terminal interface are now fully clickable and open seamlessly in a new browser tab with strict no-tracking policies (`noopener`, `noreferrer`).
+
+## FIXED 🐛
+- **Web-TUI Unban Execution**: Fixed a path resolution bug in the Web-TUI where the `u` (unban) shortcut failed silently. The execution environment for the systemd service lacked the `/opt/syswarden/bin` `$PATH`. The `syswarden-tui` binary now uses an absolute path to invoke `syswarden unblock`, ensuring reliable execution regardless of the parent shell's path context.
+
+---
+
 # Release v3.74.7
 
 ## FIXED 🐛

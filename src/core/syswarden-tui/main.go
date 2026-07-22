@@ -229,7 +229,11 @@ func main() {
 									recentlyUnbannedMu.Unlock()
 
 									go func(targetIP string) {
-										_ = exec.Command("syswarden", "unblock", targetIP).Run() // #nosec
+										syswardenPath := "/opt/syswarden/bin/syswarden"
+										if _, err := os.Stat(syswardenPath); os.IsNotExist(err) {
+											syswardenPath = "syswarden"
+										}
+										_ = exec.Command(syswardenPath, "unblock", targetIP).Run() // #nosec
 										readDataAndUpdate()
 									}(ip)
 								}

@@ -21,8 +21,18 @@ func ApplyPolicies() error {
 	// Create configuration dynamically (Secure string building)
 	var nftRules strings.Builder
 
-	// 1. Interface Detection (Like old bash: ip route get 8.8.8.8)
-	activeIf := GetActiveInterface()
+	// 1. Interfaces Detection (Multi-interface support or fallback)
+	var interfaces []string
+	if config.GlobalConfig.Interfaces != "" {
+		for _, iface := range strings.Split(config.GlobalConfig.Interfaces, ",") {
+			trimmed := strings.TrimSpace(iface)
+			if trimmed != "" {
+				interfaces = append(interfaces, trimmed)
+			}
+		}
+	} else {
+		interfaces = append(interfaces, GetActiveInterface()) // Fallback to primary if empty
+	}
 
 	// 2. Safely wipe existing tables (Universal backward compatibility)
 	// We run these natively and ignore errors if they don't exist, avoiding the 'destroy' syntax error on old nftables.
@@ -50,7 +60,17 @@ func ApplyPolicies() error {
 		_, _ = nftRules.WriteString("\tset syswarden_asn6 { type ipv6_addr; flags interval; auto-merge; }\n")
 	}
 
-	fmt.Fprintf(&nftRules, "\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"%s\" priority -500; policy accept;\n", activeIf)
+	// Modern NFTables ingress array syntax for multiple devices
+	var devicesStr []string
+	for _, iface := range interfaces {
+		devicesStr = append(devicesStr, fmt.Sprintf("%q", iface)) // format as "eth0"
+	}
+	
+	if len(interfaces) > 1 {
+		fmt.Fprintf(&nftRules, "\tchain ingress_frontline {\n\t\ttype filter hook ingress devices = { %s } priority -500; policy accept;\n", strings.Join(devicesStr, ", "))
+	} else {
+		fmt.Fprintf(&nftRules, "\tchain ingress_frontline {\n\t\ttype filter hook ingress device \"%s\" priority -500; policy accept;\n", interfaces[0])
+	}
 
 	// 1. Infra Whitelist (Absolute Priority - Bypasses everything)
 	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_whitelist accept\n")

@@ -5,6 +5,7 @@ type Config struct {
 	EnterpriseMode      bool
 	SSHPort             string
 	FirewallBackend     string
+	Interfaces          string
 	WhitelistInfra      bool
 	WhitelistIPs        string
 	EnableWG            bool
