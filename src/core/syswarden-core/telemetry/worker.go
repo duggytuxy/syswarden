@@ -77,11 +77,12 @@ type AllowedEvent struct {
 }
 
 type BannedIP struct {
-	IP      string `json:"ip"`
-	Jail    string `json:"jail"`
-	Payload string `json:"payload"`
-	Mitre   string `json:"mitre"`
-	Action  string `json:"action"`
+	Timestamp string `json:"timestamp"`
+	IP        string `json:"ip"`
+	Jail      string `json:"jail"`
+	Payload   string `json:"payload"`
+	Mitre     string `json:"mitre"`
+	Action    string `json:"action"`
 }
 
 type Attacker struct {
@@ -970,21 +971,23 @@ func getWAFStats() WAF {
 			case "SHADOW-ALERT":
 				jailCounts[event.Jail]++
 				allBans = append(allBans, BannedIP{
-					IP:      event.IP,
-					Jail:    event.Jail,
-					Payload: event.Payload,
-					Mitre:   getMitreTag(event.Jail),
-					Action:  "SHADOW-ALERT",
+					Timestamp: event.Timestamp,
+					IP:        event.IP,
+					Jail:      event.Jail,
+					Payload:   event.Payload,
+					Mitre:     getMitreTag(event.Jail),
+					Action:    "SHADOW-ALERT",
 				})
 			case "DETECTED":
 				waf.TotalDetected++
 				jailCounts[event.Jail]++
 				allBans = append(allBans, BannedIP{
-					IP:      event.IP,
-					Jail:    event.Jail,
-					Payload: event.Payload,
-					Mitre:   getMitreTag(event.Jail),
-					Action:  "DETECTED",
+					Timestamp: event.Timestamp,
+					IP:        event.IP,
+					Jail:      event.Jail,
+					Payload:   event.Payload,
+					Mitre:     getMitreTag(event.Jail),
+					Action:    "DETECTED",
 				})
 			default:
 				if !activeBans[event.IP] {
@@ -993,11 +996,12 @@ func getWAFStats() WAF {
 				jailCounts[event.Jail]++
 
 				allBans = append(allBans, BannedIP{
-					IP:      event.IP,
-					Jail:    event.Jail,
-					Payload: event.Payload,
-					Mitre:   getMitreTag(event.Jail),
-					Action:  "BANNED",
+					Timestamp: event.Timestamp,
+					IP:        event.IP,
+					Jail:      event.Jail,
+					Payload:   event.Payload,
+					Mitre:     getMitreTag(event.Jail),
+					Action:    "BANNED",
 				})
 			}
 		}

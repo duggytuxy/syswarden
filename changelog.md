@@ -1,3 +1,10 @@
+# Release v3.75.3
+
+## FIXED
+- TUI Timestamps: Fixed a critical bug in `syswarden-tui` where all block/ban events incorrectly displayed the current system time instead of the actual event time. The `BannedIP` payload now accurately transmits and renders the original timestamp.
+- Alpine Upgrades: Fixed a bug where `syswarden update` failed to restart daemon services on Alpine Linux due to incorrect service names (`syswarden` instead of `syswarden-core`) in the `upgrade.go` routine, and added proper OpenRC fallback logic to the `.apk` `postinst.sh` packaging scripts.
+---
+
 # Release v3.75.2
 
 ## FIXED 🐛

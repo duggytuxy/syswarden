@@ -88,11 +88,12 @@ type AllowedEvent struct {
 }
 
 type BannedIP struct {
-	IP      string `json:"ip"`
-	Jail    string `json:"jail"`
-	Payload string `json:"payload"`
-	Mitre   string `json:"mitre"`
-	Action  string `json:"action"`
+	Timestamp string `json:"timestamp"`
+	IP        string `json:"ip"`
+	Jail      string `json:"jail"`
+	Payload   string `json:"payload"`
+	Mitre     string `json:"mitre"`
+	Action    string `json:"action"`
 }
 
 type Attacker struct {
@@ -520,8 +521,11 @@ func buildProgressBar(used, total int, label string, color string) string {
 	return fmt.Sprintf("[%s]%s %.1f%% %s[-]", c, label, pct*100, barStr)
 }
 
-func TranslateAllowedPayload(service, payload, ip string) string {
-	ts := time.Now().Format("2006-01-02 15:04:05")
+func TranslateAllowedPayload(service, payload, ip, timestamp string) string {
+	ts := timestamp
+	if ts == "" {
+		ts = time.Now().Format("2006-01-02 15:04:05")
+	}
 	if service == "sshd" {
 		user := "unknown"
 		var authMethod string
@@ -561,8 +565,11 @@ func TranslateAllowedPayload(service, payload, ip string) string {
 	return fmt.Sprintf("[%s] Access granted for IP %s", ts, ip)
 }
 
-func TranslatePayload(jail, payload, ip string) string {
-	ts := time.Now().Format("2006-01-02 15:04:05")
+func TranslatePayload(jail, payload, ip, timestamp string) string {
+	ts := timestamp
+	if ts == "" {
+		ts = time.Now().Format("2006-01-02 15:04:05")
+	}
 	j := strings.ToLower(jail)
 	url := fmt.Sprintf("(https://www.abuseipdb.com/check/%s)", ip)
 
@@ -783,7 +790,7 @@ func refreshUI() {
 			bannedTable.SetCell(row, 0, tview.NewTableCell(a.IP).SetTextColor(tcell.ColorWhite))
 			bannedTable.SetCell(row, 1, tview.NewTableCell(a.Service).SetTextColor(tcell.ColorYellow))
 			bannedTable.SetCell(row, 2, tview.NewTableCell("ALLOWED").SetTextColor(tcell.ColorGreen))
-			bannedTable.SetCell(row, 3, tview.NewTableCell(TranslateAllowedPayload(a.Service, a.Payload, a.IP)).SetTextColor(tcell.ColorGray))
+			bannedTable.SetCell(row, 3, tview.NewTableCell(TranslateAllowedPayload(a.Service, a.Payload, a.IP, a.Timestamp)).SetTextColor(tcell.ColorGray))
 			row++
 		}
 		for _, b := range d.WAF.BannedIPs {
@@ -809,17 +816,17 @@ func refreshUI() {
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("SHADOW-ALERT: "+b.Jail).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorOrange))
-				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP)).SetTextColor(tcell.ColorYellow))
+				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorYellow))
 			case "DETECTED":
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("DETECTED: "+b.Jail).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorYellow))
-				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP)).SetTextColor(tcell.ColorYellow))
+				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorYellow))
 			default:
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorWhite))
 				bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(cVec))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorWhite))
-				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP)).SetTextColor(tcell.ColorWhite))
+				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorWhite))
 			}
 			row++
 		}

@@ -206,12 +206,12 @@ func UpgradeSystem() error {
 	
 	fmt.Println("[INFO] Restarting services to apply the new version...")
 	if isAlpine() {
-		_ = exec.Command("rc-service", "syswarden", "restart").Run()
-		_ = exec.Command("rc-service", "syswarden-tui", "restart").Run()
+		_ = exec.Command("rc-service", "syswarden-core", "restart").Run()
+		_ = exec.Command("rc-service", "syswarden-webtui", "restart").Run()
 	} else {
 		_ = exec.Command("systemctl", "daemon-reload").Run()
-		_ = exec.Command("systemctl", "restart", "syswarden").Run()
-		_ = exec.Command("systemctl", "restart", "syswarden-tui").Run()
+		_ = exec.Command("systemctl", "restart", "syswarden-core").Run()
+		_ = exec.Command("systemctl", "restart", "syswarden-webtui").Run()
 	}
 
 	fmt.Println("[INFO] Please restart your terminal session to use the new version.")

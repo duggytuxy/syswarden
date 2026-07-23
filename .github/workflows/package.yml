@@ -141,15 +141,25 @@ jobs:
           # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
           if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
               sed -i 's|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden$|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists|g' /etc/systemd/system/syswarden-core.service || true
-              systemctl daemon-reload
-              /opt/syswarden/bin/syswarden-cli reload
-              systemctl enable syswarden-firewall || true
-              systemctl restart syswarden-firewall || true
-              systemctl restart syswarden-core || true
+              if command -v systemctl >/dev/null 2>&1; then
+                  systemctl daemon-reload
+                  /opt/syswarden/bin/syswarden-cli reload
+                  systemctl enable syswarden-firewall || true
+                  systemctl restart syswarden-firewall || true
+                  systemctl restart syswarden-core || true
+              elif command -v rc-service >/dev/null 2>&1; then
+                  /opt/syswarden/bin/syswarden-cli reload || true
+                  rc-service syswarden-firewall restart || true
+                  rc-service syswarden-core restart || true
+              fi
           # RPM Install ($1 = 1) or DEB Install ($1 = configure && $2 == "")
           elif [ "$1" = "1" ] || [ "$1" = "configure" ]; then
               /opt/syswarden/bin/syswarden-cli install
-              systemctl restart syswarden-core || true
+              if command -v systemctl >/dev/null 2>&1; then
+                  systemctl restart syswarden-core || true
+              elif command -v rc-service >/dev/null 2>&1; then
+                  rc-service syswarden-core restart || true
+              fi
           fi
           EOF
 
@@ -168,10 +178,19 @@ jobs:
           #!/bin/sh
           # RPM Uninstall ($1 = 0) or DEB Uninstall/Purge
           if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-              systemctl stop syswarden-core.service || true
-              systemctl disable syswarden-core.service || true
-              systemctl stop syswarden-firewall.service || true
-              systemctl disable syswarden-firewall.service || true
+              if command -v systemctl >/dev/null 2>&1; then
+                  systemctl stop syswarden-core.service || true
+                  systemctl disable syswarden-core.service || true
+                  systemctl stop syswarden-firewall.service || true
+                  systemctl disable syswarden-firewall.service || true
+                  systemctl restart rsyslog || true
+              elif command -v rc-service >/dev/null 2>&1; then
+                  rc-service syswarden-core stop || true
+                  rc-update del syswarden-core default || true
+                  rc-service syswarden-firewall stop || true
+                  rc-update del syswarden-firewall default || true
+                  rc-service rsyslog restart || true
+              fi
               nft delete table netdev syswarden_hw_drop || true
               nft delete table arp syswarden_arp || true
               nft delete table inet syswarden || true
@@ -180,7 +199,6 @@ jobs:
                   rm -f /tmp/sw_cron.bak
               fi
               rm -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true
-              systemctl restart rsyslog || true
           fi
           EOF
 
