@@ -1,3 +1,10 @@
+# Release v3.74.10
+
+## FIXED 🐛
+- Silenced expected IP family compatibility warnings during hybrid parsing to prevent console spam and log flooding during kernel set instantiation.
+
+---
+
 # Release v3.74.9
 
 ## ADDED ➕

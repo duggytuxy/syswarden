@@ -552,7 +552,7 @@ func populateSet(ctx context.Context, filepaths []string, setName string) {
 					} else if !isIPv6Set && isIPv4 {
 						chunk = append(chunk, line)
 					} else {
-						fmt.Printf("[WARNING] Ignored incompatible IP family %s for set %s\n", line, setName)
+						// Ignored incompatible IP family silently for hybrid sets
 					}
 				}
 			}
