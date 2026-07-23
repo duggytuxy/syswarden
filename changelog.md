@@ -1,3 +1,10 @@
+# Release v3.74.11
+
+## FIXED 🐛
+- Code Hygiene (SAST): Removed empty branch resulting from previous hotfix to resolve `staticcheck SA9003: empty branch` error in CI pipeline.
+
+---
+
 # Release v3.74.10
 
 ## FIXED 🐛
