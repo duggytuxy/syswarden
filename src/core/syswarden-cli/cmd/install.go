@@ -101,13 +101,7 @@ var installCmd = &cobra.Command{
 			fmt.Printf("[ERROR] HA Cluster setup failed: %v\n", err)
 		}
 
-		// Phase 5: Deployment Orchestration
-		fmt.Println("[SYSWARDEN] Starting Systemd Orchestration...")
-		if err := system.SetupService(); err != nil {
-			fmt.Printf("[ERROR] Systemd setup failed: %v\n", err)
-		}
-
-		// Web-TUI Initialization
+		// Web-TUI Initialization (Must run before Phase 5 to prevent Web-TUI crashes on minimal OS)
 		token := readConfigToken()
 		if token == "" {
 			token = generateSecureToken(32)
@@ -115,6 +109,13 @@ var installCmd = &cobra.Command{
 				fmt.Printf("[ERROR] Failed to save Web-TUI token: %v\n", err)
 			}
 		}
+
+		// Phase 5: Deployment Orchestration
+		fmt.Println("[SYSWARDEN] Starting Systemd Orchestration...")
+		if err := system.SetupService(); err != nil {
+			fmt.Printf("[ERROR] Systemd setup failed: %v\n", err)
+		}
+
 		ip := getPublicIP()
 		fmt.Printf("\n======================================================\n")
 		fmt.Printf("[+] Web-TUI Client Access URL: https://%s:%s/?token=%s\n", ip, webtuiPort, token)

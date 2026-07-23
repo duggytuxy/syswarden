@@ -1,3 +1,10 @@
+# Release v3.75.1
+
+## FIXED 🐛
+- Native Installation: Fixed Web-TUI port not opening natively on Alpine Linux/OpenRC environments. The Web Token generation sequence is now executed prior to daemon enablement, preventing immediate process crash and preventing subsequent silent daemon failures without `Restart=on-failure` capabilities.
+
+---
+
 # Release v3.75.0
 
 ## FIXED 🐛
