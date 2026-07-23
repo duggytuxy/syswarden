@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -158,7 +159,12 @@ func UpgradeSystem() error {
 		// Alpine Linux (.apk)
 		fmt.Println(" -> Detected Alpine-based OS")
 		pkgFile = "/tmp/syswarden.apk"
-		pkgURL = fmt.Sprintf("https://github.com/duggytuxy/syswarden/releases/download/%s/syswarden-%s-r0.apk", latestVersion, cleanVersion)
+
+		arch := "x86_64"
+		if runtime.GOARCH == "arm64" {
+			arch = "aarch64"
+		}
+		pkgURL = fmt.Sprintf("https://github.com/duggytuxy/syswarden/releases/download/%s/syswarden_%s_%s.apk", latestVersion, cleanVersion, arch)
 
 		fmt.Printf("[INFO] Downloading %s...\n", pkgURL)
 		if err := downloadFile(pkgURL, pkgFile); err != nil {
@@ -197,6 +203,17 @@ func UpgradeSystem() error {
 	}
 
 	fmt.Println("\n[+] In-place upgrade completed successfully!")
+	
+	fmt.Println("[INFO] Restarting services to apply the new version...")
+	if isAlpine() {
+		_ = exec.Command("rc-service", "syswarden", "restart").Run()
+		_ = exec.Command("rc-service", "syswarden-tui", "restart").Run()
+	} else {
+		_ = exec.Command("systemctl", "daemon-reload").Run()
+		_ = exec.Command("systemctl", "restart", "syswarden").Run()
+		_ = exec.Command("systemctl", "restart", "syswarden-tui").Run()
+	}
+
 	fmt.Println("[INFO] Please restart your terminal session to use the new version.")
 	return nil
 }

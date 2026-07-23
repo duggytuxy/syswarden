@@ -1,3 +1,11 @@
+# Release v3.75.0
+
+## FIXED 🐛
+- In-place Upgrade (`syswarden update`): Added automatic background service restarts (`syswarden`, `syswarden-tui`) at the end of the update process to ensure the newly installed binary and embedded Web-TUI assets are immediately loaded into memory.
+- Alpine Linux Upgrade: Fixed 404 download error by aligning the requested APK filename pattern (`syswarden_%s_%s.apk`) and dynamic CPU architecture mapping with the CI/CD pipeline outputs.
+
+---
+
 # Release v3.74.12
 
 ## FIXED 🐛
