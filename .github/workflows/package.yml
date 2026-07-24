@@ -285,6 +285,7 @@ jobs:
             - curl
             - wget
             - rsyslog
+            - rsyslog-uxsock
             - bash-completion
           contents:
             - src: "./staging/opt"
@@ -311,6 +312,7 @@ jobs:
             - curl
             - wget
             - rsyslog
+            - rsyslog-uxsock
             - bash-completion
           contents:
             - src: "./staging_arm64/opt"

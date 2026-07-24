@@ -63,6 +63,33 @@ ruleset(name="waf_bridge") {
 	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0600); err != nil {
 		return fmt.Errorf("failed to write WAF bridge config: %w", err)
 	}
+	// SELinux Hardening (RHEL/Alma) - Compile and install policy to allow rsyslog -> UDS communication
+	if _, err := exec.LookPath("checkmodule"); err == nil {
+		fmt.Println("[INFO] Compiling and injecting SELinux policy for Rsyslog UDS bridge...")
+		selinuxTE := `module syswarden_rsyslog 1.0;
+require {
+	type syslogd_t;
+	type unconfined_service_t;
+	type init_t;
+	type var_run_t;
+	class sock_file write;
+	class unix_dgram_socket sendto;
+}
+allow syslogd_t unconfined_service_t:unix_dgram_socket sendto;
+allow syslogd_t init_t:unix_dgram_socket sendto;
+allow syslogd_t var_run_t:sock_file write;
+`
+		_ = os.WriteFile("/tmp/syswarden_rsyslog.te", []byte(selinuxTE), 0644)
+		if err := exec.Command("checkmodule", "-M", "-m", "-o", "/tmp/syswarden_rsyslog.mod", "/tmp/syswarden_rsyslog.te").Run(); err == nil {
+			if err := exec.Command("semodule_package", "-o", "/tmp/syswarden_rsyslog.pp", "-m", "/tmp/syswarden_rsyslog.mod").Run(); err == nil {
+				_ = exec.Command("semodule", "-i", "/tmp/syswarden_rsyslog.pp").Run()
+			}
+		}
+		// Clean up
+		_ = os.Remove("/tmp/syswarden_rsyslog.te")
+		_ = os.Remove("/tmp/syswarden_rsyslog.mod")
+		_ = os.Remove("/tmp/syswarden_rsyslog.pp")
+	}
 
 	// Restart Rsyslog safely
 	if system.IsAlpine() {

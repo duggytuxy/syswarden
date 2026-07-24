@@ -1,3 +1,10 @@
+# Release v3.75.6
+
+## FIXED 🐛
+- Alpine Compatibility: Added `rsyslog-uxsock` to the required APK dependencies and package manifests. The default Alpine `rsyslog` package omits the Unix Socket module (`omuxsock.so`), which prevented SSH/System logs from being forwarded to the Syswarden UDS WAF engine.
+- RHEL/SELinux Hardening: Automatically compiles and injects a custom SELinux policy module (`syswarden_rsyslog`) during `syswarden-cli install` on RedHat-family systems (Alma, Rocky, Fedora). This permanently resolves the `unix_dgram_socket sendto` SELinux AVC denial that blocked `rsyslogd` from streaming logs to the `syswarden-core` unconfined daemon.
+---
+
 # Release v3.75.5
 
 ## FIXED 🐛
