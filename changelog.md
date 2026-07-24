@@ -1,13 +1,20 @@
+# Release v3.75.5
+
+## FIXED 🐛
+- Alpine Upgrades: Fixed a critical packaging issue where OpenRC init scripts were not regenerated during `.apk` upgrades. The GitHub Actions CI workflow now correctly invokes `syswarden-cli install` within the Alpine `post-install` script phase, ensuring that all `syswarden-core` and `syswarden-webtui` service definitions (including `retry="TERM/5/KILL/5"`) are reliably overwritten and applied prior to service restarts.
+
+---
+
 # Release v3.75.4
 
-## FIXED
+## FIXED 🐛
 - Network Intelligence (ASN WHOIS): Fixed a critical DNS resolution timeout on networks dropping IPv6 AAAA queries. `syswarden-cli` now strictly sequentially attempts IPv4 WHOIS resolution before falling back to IPv6, preventing `lookup whois.radb.net: i/o timeout` and allowing successful threat intelligence downloads in misconfigured dual-stack environments.
 
 ---
 
 # Release v3.75.3
 
-## FIXED
+## FIXED 🐛
 - TUI Timestamps: Fixed a critical bug in `syswarden-tui` where all block/ban events incorrectly displayed the current system time instead of the actual event time. The `BannedIP` payload now accurately transmits and renders the original timestamp.
 - Alpine Upgrades: Fixed a bug where `syswarden update` failed to restart daemon services on Alpine Linux due to incorrect service names (`syswarden` instead of `syswarden-core`) in the `upgrade.go` routine, and added proper OpenRC fallback logic to the `.apk` `postinst.sh` packaging scripts.
 ---

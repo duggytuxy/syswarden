@@ -160,6 +160,11 @@ jobs:
               elif command -v rc-service >/dev/null 2>&1; then
                   rc-service syswarden-core restart || true
               fi
+          # Alpine APK Install/Upgrade (APK passes version string in $1)
+          elif [ -f /etc/alpine-release ]; then
+              /opt/syswarden/bin/syswarden-cli install
+              # syswarden update handles the daemon restart in Alpine, so we just reload.
+              /opt/syswarden/bin/syswarden-cli reload || true
           fi
           EOF
 
