@@ -31,6 +31,7 @@
 </p>
 
 # SysWarden v3 🌟
+> **Active Defense and HIDS/HIPS/WAAP Out-of-Band Orchestration for Critical Linux Infrastructure**
 
 <a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
     <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
@@ -38,7 +39,7 @@
 
 **SysWarden** is an Enterprise-grade Hardened Host Intrusion Detection & Prevention System (HIDS - HIPS) engineered in **100% Native Golang**. Designed for critical Linux infrastructures, it enforces automated CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with absolute zero-trust execution.
 
-It acts as a ruthless first line of defense. By fusing dynamic firewall orchestration (`nftables`/`iptables`/`pf`), global Threat Intelligence ([Data-Shield IPv4/IPv6 Blocklists](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a high-speed memory-safe WAF daemon (`syswarden-core`), and SIEM alert routing natively via Go, SysWarden neutralizes threats at the network (L2/L3/L4) and application (L7) levels without exposing your kernel to shell injection risks.
+It acts as the definitive first line of defense for critical GNU/Linux infrastructures. By fusing dynamic firewall orchestration (`nftables`/`iptables`/`pf`), global Threat Intelligence ([Data-Shield IPv4/IPv6 Blocklists](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a high-speed memory-safe WAF daemon (`syswarden-core`), and SIEM alert routing natively via Go, SysWarden neutralizes threats at the network (L2/L3/L4) and application (L7) levels without exposing your kernel to shell injection risks.
 
 > [!IMPORTANT]
 > **Zero CWE Mitigation:** Re-architected entirely in Go, SysWarden v2 strongly mitigates risks of OS Command Injection (CWE-78), Memory Corruption (CWE-119), and Resource Exhaustion (CWE-400), seamlessly accelerating your **ISO 27001, NIS2, and CIS Benchmark** compliance.
@@ -57,8 +58,11 @@ By natively integrating Docker protection (Layer 3 via the `docker_protect` chai
 **3. An Embedded WAAP (Web Application and API Protection)**
 The legacy term "WAF" is increasingly replaced by "WAAP" as attacks aggressively target APIs. By specifically targeting Docker API abuse, authentication endpoints (Nextcloud, Proxmox, Gitlab), and application payloads (SQLi, RCE, LFI) via its `syswarden-core` Go engine, SysWarden acts as an embedded WAAP. It guarantees "Zero-Trust" even if the traffic is encrypted, by reading the access logs decrypted by your reverse proxy.
 
-**4. A Mini-SOAR (Security Orchestration, Automation, and Response)**
-SysWarden doesn't just block. It manages its own Threat Intelligence (ingesting Data-Shield, ASN, GeoIP feeds), synchronizes bans across different enterprise servers via its HA (High Availability) clustering module, and natively forwards telemetry. It autonomously orchestrates the entire incident response lifecycle.
+**4. Out-of-Band Orchestration (Active Defense)**
+SysWarden doesn't just block. It actively manages its own Threat Intelligence (ingesting Data-Shield, ASN, GeoIP feeds), synchronizes bans across different enterprise servers via its HA (High Availability) clustering module, and natively forwards telemetry out-of-band. It autonomously orchestrates the entire active defense lifecycle.
+
+### Ecosystem Synergy: The Ultimate Defense
+While SysWarden excels as an Out-of-Band orchestrator and first line of defense at the kernel edge, a truly impenetrable architecture often requires deep, inline traffic inspection. For a complete, enterprise-grade In-Band WAF/WAAP solution, we highly recommend pairing SysWarden with [BunkerWeb](https://github.com/bunkerity/bunkerweb) by Bunkerity. Together, they form a robust, multi-layered security posture: BunkerWeb intercepts and sanitizes hostile payloads in real-time (In-Band), while SysWarden orchestrates behavioral threat intelligence, kernel-level network blocks, and system-wide Active Defense (Out-of-Band).
 
 ## Enterprise-Grade Features
 
