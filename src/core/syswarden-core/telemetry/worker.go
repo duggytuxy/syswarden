@@ -645,16 +645,16 @@ func getLayer3Stats() Layer3 {
 		}
 	}
 
-	l3.L7Banned = countLinesInFile("/etc/syswarden/lists/syswarden_blacklist.ipv4")
-	l3.GlobalBlocked = l3.L7Banned + countLinesInFile("/etc/syswarden/lists/syswarden_threatintel.ipv4")
+	l3.L7Banned = countLinesInFile("/etc/syswarden/lists/syswarden_blacklist.ipv4") + countLinesInFile("/etc/syswarden/lists/syswarden_blacklist.ipv6")
+	l3.GlobalBlocked = l3.L7Banned + countLinesInFile("/etc/syswarden/lists/syswarden_threatintel.ipv4") + countLinesInFile("/etc/syswarden/lists/syswarden_threatintel.ipv6")
 
-	if matches, err := filepath.Glob("/etc/syswarden/lists/AS*.ipv4"); err == nil {
+	if matches, err := filepath.Glob("/etc/syswarden/lists/AS*.ipv*"); err == nil {
 		for _, m := range matches {
 			l3.ASNBlocked += countLinesInFile(m)
 		}
 	}
 
-	if matches, err := filepath.Glob("/etc/syswarden/lists/??.ipv4"); err == nil {
+	if matches, err := filepath.Glob("/etc/syswarden/lists/??.ipv*"); err == nil {
 		for _, m := range matches {
 			l3.GeoIPBlocked += countLinesInFile(m)
 		}
@@ -1087,12 +1087,15 @@ func getWhitelistStats() Whitelist {
 	var wl Whitelist
 	wl.IPs = []string{}
 
-	if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_whitelist.ipv4"); err == nil { // #nosec
-		lines := strings.Split(string(content), "\n")
-		for _, line := range lines {
-			ip := strings.TrimSpace(line)
-			if ip != "" && !strings.HasPrefix(ip, "#") {
-				wl.IPs = append(wl.IPs, ip)
+	files := []string{"/etc/syswarden/lists/syswarden_whitelist.ipv4", "/etc/syswarden/lists/syswarden_whitelist.ipv6"}
+	for _, file := range files {
+		if content, err := os.ReadFile(file); err == nil { // #nosec
+			lines := strings.Split(string(content), "\n")
+			for _, line := range lines {
+				ip := strings.TrimSpace(line)
+				if ip != "" && !strings.HasPrefix(ip, "#") {
+					wl.IPs = append(wl.IPs, ip)
+				}
 			}
 		}
 	}

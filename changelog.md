@@ -1,3 +1,10 @@
+# Release v3.75.7
+
+## FIXED 🐛
+- TUI Telemetry: Fixed a display issue where IPv6 telemetry files (`.ipv6`) were ignored in the TUI/Web-TUI statistics count for Blocklists, ThreatIntel, ASN, GeoIP, and Whitelists. The JSON telemetry payload now accurately reflects combined IPv4 and IPv6 totals.
+
+---
+
 # Release v3.75.6
 
 ## FIXED 🐛
