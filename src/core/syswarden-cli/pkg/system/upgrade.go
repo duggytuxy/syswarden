@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-var Version = "v3.75.8"
+var Version = "v3.75.9"
 
 func isRHEL() bool {
 	_, errDnf := exec.LookPath("dnf")
