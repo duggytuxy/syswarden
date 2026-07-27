@@ -1,4 +1,7 @@
-# Release v3.75.8
+# Release v3.75.9
+
+## FIXED 🐛
+- WAF Jails: Fixed a false positive in the `nginx-scanner` signature that incorrectly matched SSH connection drop logs (`sshd-session`) and triggered bans due to dynamic source ports (e.g., source port `40584` matching HTTP status `405`). The regex pattern has been hardened by explicitly requiring HTTP verbs and using strict word boundaries for status codes.
 
 ---
 

@@ -73,7 +73,7 @@
     { "id": "php-rce-generic", "type": "aho-corasick", "patterns": ["system(", "passthru(", "shell_exec(", "base64_decode(", "phpinfo()"], "service": "http", "action": "detect" },
     { "id": "generic-auth", "type": "regex", "pattern": "POST .*?(?:/login|/sign-in|/auth).*?(?:200|401|403)", "service": "http" },
     { "id": "laravel-login", "type": "regex", "pattern": "(?:Failed login|Authentication failed|Login failed).*<HOST>", "service": "laravel" },
-    { "id": "nginx-scanner", "type": "regex", "pattern": "^[A-Z]+ .*? (?:30[1278]|400|401|403|404|405|444)", "service": "nginx" },
+    { "id": "nginx-scanner", "type": "regex", "pattern": "^(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|CONNECT|TRACE) .*? (?:30[1278]|400|401|403|404|405|444)\\b", "service": "nginx" },
     { "id": "nexus-api-protect", "type": "aho-corasick", "patterns": ["/api/v1/enroll'", "/api/v1/telemetry\"", "../api/v1/"], "service": "http", "action": "detect" }
   ]
 }
