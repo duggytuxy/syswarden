@@ -1,5 +1,11 @@
 # Release v3.76.0
 
+## ADDED ➕
+- **Engine**: Stateful threshold tracking for L7 WAAP engine, replacing hardcoded heuristics. The UDS engine now tracks authentication failures (SSH, web logins) via thresholds configurable in signatures.json.
+
+## UPDATED ♻️
+- **WAAP Engine**: Unified L7 log forwarding. waap.go now acts as a high-performance log collector that feeds directly into the primary Aho-Corasick engine for unified threat detection.
+
 ---
 
 # Release v3.75.9

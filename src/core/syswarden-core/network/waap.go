@@ -2,17 +2,15 @@ package network
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"syswarden-core/engine"
 	"syswarden-core/firewall"
 	"syswarden-core/logger"
 	"syswarden-core/utils"
@@ -30,9 +28,7 @@ type WAAPEngine struct {
 	config WAAPConfig
 	fw     firewall.Manager
 	logger *logger.Logger
-
-	// Track IPs: map[IP][]timestamps
-	tracker sync.Map
+	engine *engine.Engine
 }
 
 func loadWAAPConfig() WAAPConfig {
@@ -61,14 +57,13 @@ func loadWAAPConfig() WAAPConfig {
 		key := strings.TrimSpace(parts[0])
 		val := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
 
-		// Keeping the BRUTEFORCE variable names to prevent breaking existing confs
 		switch key {
-		case "SYSWARDEN_BRUTEFORCE_LOGS":
+		case "SYSWARDEN_BRUTEFORCE_LOGS", "SYSWARDEN_MODSEC_LOGS":
 			if val != "" {
 				if strings.ToLower(val) == "auto" {
-					cfg.Logs = discoverLogs()
+					cfg.Logs = append(cfg.Logs, discoverLogs()...)
 				} else {
-					cfg.Logs = strings.Fields(val)
+					cfg.Logs = append(cfg.Logs, strings.Fields(val)...)
 				}
 			}
 		case "SYSWARDEN_BRUTEFORCE_THRESHOLD":
@@ -86,8 +81,6 @@ func loadWAAPConfig() WAAPConfig {
 
 func discoverLogs() []string {
 	var discovered []string
-
-	// Map of parent directories to log patterns
 	autoPaths := map[string][]string{
 		"/var/log/nginx":    {"/var/log/nginx/access.log", "/var/log/nginx/*.log"},
 		"/var/log/apache2":  {"/var/log/apache2/access.log", "/var/log/apache2/*.log"},
@@ -106,12 +99,13 @@ func discoverLogs() []string {
 	return discovered
 }
 
-func NewWAAPEngine(fw firewall.Manager, l *logger.Logger) *WAAPEngine {
+func NewWAAPEngine(fw firewall.Manager, l *logger.Logger, e *engine.Engine) *WAAPEngine {
 	cfg := loadWAAPConfig()
 	return &WAAPEngine{
 		config: cfg,
 		fw:     fw,
 		logger: l,
+		engine: e,
 	}
 }
 
@@ -121,30 +115,34 @@ func (w *WAAPEngine) Start() {
 		return
 	}
 
-	log.Printf("[WAAP Engine] Initializing L7 Analysis. Monitoring %d patterns (Threshold: %d, Window: %v)", len(w.config.Logs), w.config.Threshold, w.config.Window)
+	log.Printf("[WAAP Engine] Initializing Log Collector forwarding to Engine. Monitoring %d patterns", len(w.config.Logs))
 
-	// Expand wildcards
 	var filesToTail []string
 	for _, pattern := range w.config.Logs {
 		matches, err := filepath.Glob(pattern)
 		if err == nil && len(matches) > 0 {
 			filesToTail = append(filesToTail, matches...)
 		} else {
-			// fallback in case it's an exact file that doesn't exist yet
 			filesToTail = append(filesToTail, pattern)
 		}
 	}
 
-	for _, file := range filesToTail {
-		go w.tailFile(file)
+	// Deduplicate
+	dedup := make(map[string]bool)
+	var uniqueFiles []string
+	for _, f := range filesToTail {
+		if !dedup[f] {
+			dedup[f] = true
+			uniqueFiles = append(uniqueFiles, f)
+		}
 	}
 
-	// Start Garbage Collector
-	go w.garbageCollector()
+	for _, file := range uniqueFiles {
+		go w.tailFile(file)
+	}
 }
 
 func (w *WAAPEngine) tailFile(filepath string) {
-	// Attempt to touch file if it doesn't exist to prevent tail from immediately failing if created later
 	if _, err := os.Stat(filepath); os.IsNotExist(err) {
 		_ = os.WriteFile(filepath, []byte{}, 0600)
 	}
@@ -163,187 +161,44 @@ func (w *WAAPEngine) tailFile(filepath string) {
 
 	log.Printf("[WAAP Engine] Actively tailing %s", filepath)
 
-	// A simple but fast regex for IPv4 extraction (No anchor so it can match SSH logs)
-	ipRegex := regexp.MustCompile(`([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})`)
-
-	// Signatures mappings (Zero-overhead substring matching)
-	// Keys are the substring to look for, values are the Jail Name
-	sigSQLi := []string{"union select", "union+select", "union%20select", "select * from", "waitfor delay", "1=1--", "%27", "pg_sleep", "xp_cmdshell"}
-	sigXSS := []string{"<script", "%3cscript", "javascript:", "onerror=", "eval(", "onload="}
-	sigLFI := []string{"../../../", "..%2f", "/etc/passwd", "c:\\windows", "%c0%af", "php://filter", "php://input"}
-	sigRCE := []string{"${jndi:", ";\\wget ", "|curl ", "${lower:jndi}", "/bin/sh -c"}
-	sigSSRF := []string{"169.254.169.254", "metadata.google.internal", "/metadata/instance"}
-	sigNoSQL := []string{"$where", "$gt:", "$ne:"}
-	sigAPI := []string{"__schema", "/swagger-ui", "/openapi.json"}
-	sigScanners := []string{"nikto", "sqlmap", "zgrab", "nuclei", "masscan", "kiterunner", "ffuf"}
-
 	for line := range t.Lines {
 		text := line.Text
-		match := ipRegex.FindStringSubmatch(text)
-		if len(match) < 2 {
-			continue // No IP found, skip
-		}
-		ip := match[1]
 
-		lowerText := strings.ToLower(text)
-		matchedJail := ""
+		match := w.engine.Scan(text)
+		if match != nil {
+			ip := engine.ExtractIP(text)
+			if ip != "" {
+				if match.Action == "detect" {
+					w.logger.LogDetected(ip, match.RuleID, text)
+				} else {
+					shouldBan := true
+					if match.Action == "track" {
+						shouldBan = w.engine.EvaluateThreshold(ip, match.RuleID, match.Threshold, match.Window)
+						if !shouldBan {
+							w.logger.LogShadowAlert(ip, match.RuleID, text)
+						}
+					}
 
-		// 1. Analyze high-severity signatures (Deterministic -> Immediate Ban)
-		for _, sig := range sigSQLi {
-			if strings.Contains(lowerText, sig) {
-				matchedJail = "l7-sqli"
-				break
-			}
-		}
-		if matchedJail == "" {
-			for _, sig := range sigXSS {
-				if strings.Contains(lowerText, sig) {
-					matchedJail = "l7-xss"
-					break
+					if shouldBan {
+						if utils.IsWhitelisted(ip) {
+							w.logger.LogShadowAlert(ip, match.RuleID, text)
+							continue
+						}
+						err := w.fw.Ban(ip)
+						if err != nil {
+							w.logger.Error("Failed to ban IP, logging as DETECTED", err)
+							w.logger.LogDetected(ip, match.RuleID, text)
+						} else {
+							w.logger.LogBan(ip, match.RuleID, text)
+						}
+					}
 				}
 			}
-		}
-		if matchedJail == "" {
-			for _, sig := range sigLFI {
-				if strings.Contains(lowerText, sig) {
-					matchedJail = "l7-lfi"
-					break
-				}
-			}
-		}
-		if matchedJail == "" {
-			for _, sig := range sigRCE {
-				if strings.Contains(lowerText, sig) {
-					matchedJail = "l7-rce"
-					break
-				}
-			}
-		}
-		if matchedJail == "" {
-			for _, sig := range sigScanners {
-				if strings.Contains(lowerText, sig) {
-					matchedJail = "l7-scanner"
-					break
-				}
-			}
-		}
-		if matchedJail == "" {
-			for _, sig := range sigSSRF {
-				if strings.Contains(lowerText, sig) {
-					matchedJail = "l7-ssrf"
-					break
-				}
-			}
-		}
-		if matchedJail == "" {
-			for _, sig := range sigNoSQL {
-				if strings.Contains(lowerText, sig) {
-					matchedJail = "l7-nosql"
-					break
-				}
-			}
-		}
-		if matchedJail == "" {
-			for _, sig := range sigAPI {
-				if strings.Contains(lowerText, sig) {
-					matchedJail = "l7-api"
-					break
-				}
-			}
-		}
-
-		if matchedJail != "" {
-			w.enforceImmediateBan(ip, matchedJail, text)
-			continue
-		}
-
-		// 2. Fallback to heuristic analysis (401, 403, 404 thresholds and SSH bruteforce)
-		if strings.Contains(text, "\" 401 ") || strings.Contains(text, "\" 403 ") || strings.Contains(text, "\" 404 ") ||
-			strings.Contains(lowerText, "failed password") || strings.Contains(lowerText, "invalid user") ||
-			strings.Contains(lowerText, "connection closed by authenticating user") || strings.Contains(lowerText, "preauth") {
-			w.recordFailure(ip, text)
 		}
 	}
 }
 
-func (w *WAAPEngine) enforceImmediateBan(ip, jail, logLine string) {
-	if utils.IsWhitelisted(ip) {
-		w.logger.LogShadowAlert(ip, jail, logLine)
-		return // Immunity for Admin IPs and Local Loop
-	}
-
-	log.Printf("[WAAP Engine] Critical L7 Signature detected (%s) for %s! Enforcing immediate ban.", jail, ip)
-
-	// Enforce Ban
-	if err := w.fw.Ban(ip); err != nil {
-		w.logger.Error(fmt.Sprintf("Failed to ban L7 attacker %s", ip), err)
-		return
-	}
-
-	w.logger.LogBan(ip, jail, logLine)
-}
-
-func (w *WAAPEngine) recordFailure(ip, logLine string) {
-
-	now := time.Now()
-
-	var timestamps []time.Time
-	if val, ok := w.tracker.Load(ip); ok {
-		timestamps = val.([]time.Time)
-	}
-
-	// Clean old timestamps for this specific IP
-	var validTimestamps []time.Time
-	for _, t := range timestamps {
-		if now.Sub(t) <= w.config.Window {
-			validTimestamps = append(validTimestamps, t)
-		}
-	}
-
-	validTimestamps = append(validTimestamps, now)
-	w.tracker.Store(ip, validTimestamps)
-
-	if len(validTimestamps) >= w.config.Threshold {
-		w.tracker.Delete(ip)
-
-		if utils.IsWhitelisted(ip) {
-			w.logger.LogShadowAlert(ip, "L7-BRUTEFORCE", logLine)
-			return
-		}
-
-		log.Printf("[WAAP Engine] Threshold exceeded for %s! Banning at L3.", ip)
-
-		// Enforce Ban
-		if err := w.fw.Ban(ip); err != nil {
-			w.logger.Error(fmt.Sprintf("Failed to ban bruteforcer %s", ip), err)
-			return
-		}
-
-		w.logger.LogBan(ip, "L7-BRUTEFORCE", logLine)
-	}
-}
-
-func (w *WAAPEngine) garbageCollector() {
-	ticker := time.NewTicker(w.config.Window)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		now := time.Now()
-		w.tracker.Range(func(key, value interface{}) bool {
-			timestamps := value.([]time.Time)
-			var valid []time.Time
-			for _, t := range timestamps {
-				if now.Sub(t) <= w.config.Window {
-					valid = append(valid, t)
-				}
-			}
-
-			if len(valid) == 0 {
-				w.tracker.Delete(key) // Memory freed
-			} else {
-				w.tracker.Store(key, valid)
-			}
-			return true
-		})
-	}
+// LoadWAAPConfig is exported to allow retrieving the default thresholds
+func LoadWAAPConfig() WAAPConfig {
+	return loadWAAPConfig()
 }

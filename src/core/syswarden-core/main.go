@@ -39,8 +39,11 @@ func main() {
 	}
 	log.Printf("[SYSWARDEN-Core] Firewall backend initialized: %s", fwManager.Name())
 
+	// Load WAAP Config to get global threshold defaults
+	waapConfig := network.LoadWAAPConfig()
+
 	// Initialize Threat Engine
-	threatEngine, err := engine.NewEngine("/opt/syswarden/signatures.json")
+	threatEngine, err := engine.NewEngine("/opt/syswarden/signatures.json", waapConfig.Threshold, int(waapConfig.Window.Seconds()))
 	if err != nil {
 		log.Fatalf("[SYSWARDEN-Core] Failed to initialize threat engine: %v", err)
 	}
@@ -61,8 +64,8 @@ func main() {
 	saasDownloader := network.NewSaasMonitorDownloader(telemetryLogger)
 	saasDownloader.Start()
 
-	// Start L7 WAAP Analytics Engine (Heuristic & Bruteforce)
-	waapEngine := network.NewWAAPEngine(fwManager, telemetryLogger)
+	// Start L7 WAAP Analytics Engine (Log Forwarder)
+	waapEngine := network.NewWAAPEngine(fwManager, telemetryLogger, threatEngine)
 	waapEngine.Start()
 
 	// Start HA P2P Server (Zero-Touch TLS)

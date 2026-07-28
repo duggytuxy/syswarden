@@ -1,79 +1,658 @@
 {
   "rules": [
-    { "id": "ssh-auth", "type": "regex", "pattern": "(?:Failed password for|Invalid user|POSSIBLE BREAK-IN).*?from <HOST>", "service": "sshd" },
-    { "id": "drupal-login", "type": "aho-corasick", "patterns": ["POST /user/login", "?q=user/login"], "service": "http" },
-    { "id": "nextcloud-login", "type": "regex", "pattern": "Login failed: .*? \\(Remote IP: '<HOST>'\\)", "service": "nextcloud" },
-    { "id": "zabbix-login", "type": "regex", "pattern": "failed login of user .*? from <HOST>", "service": "zabbix" },
-    { "id": "haproxy-abuse", "type": "regex", "pattern": "<HOST>:\\d+ .*?(?:400|403|404|429)", "service": "haproxy" },
-    { "id": "wireguard-handshake", "type": "regex", "pattern": "wireguard: .*? Handshake for peer .*? \\(<HOST>:\\d+\\) did not complete", "service": "wireguard" },
-    { "id": "phpmyadmin", "type": "aho-corasick", "patterns": ["phpmyadmin"], "service": "http" },
-    { "id": "grafana-login", "type": "regex", "pattern": "(?:msg=\"Invalid username or password\"|status=401).*remote_addr=<HOST>", "service": "grafana" },
-    { "id": "squid-denied", "type": "regex", "pattern": "<HOST> .*(?:TCP_DENIED|ERR_ACCESS_DENIED)", "service": "squid" },
-    { "id": "dovecot-auth", "type": "regex", "pattern": "dovecot: .*(?:Authentication failure|Aborted login|auth failed).*rip=<HOST>", "service": "dovecot" },
-    { "id": "proxmox-auth", "type": "regex", "pattern": "pvedaemon\\[\\d+\\]: authentication failure; rhost=<HOST>", "service": "proxmox" },
-    { "id": "openvpn-tls", "type": "regex", "pattern": "<HOST>:[0-9]+ (?:TLS Error: TLS handshake failed|VERIFY ERROR:|TLS Auth Error:)", "service": "openvpn" },
-    { "id": "gitea-auth", "type": "regex", "pattern": "Failed authentication attempt for .*? from <HOST>", "service": "gitea" },
-    { "id": "cockpit-auth", "type": "regex", "pattern": "cockpit:auth\\): authentication failure;.* rhost=(?:::ffff:)?<HOST>", "service": "cockpit" },
-    { "id": "privesc", "type": "regex", "pattern": "pam_unix\\((?:su|sudo):auth\\): authentication failure;.*rhost=<HOST>", "service": "auth" },
-    { "id": "jenkins-auth", "type": "regex", "pattern": "(?:unsuccessfulAuthentication|Login attempt failed).* from <HOST>", "service": "jenkins" },
-    { "id": "gitlab-auth", "type": "regex", "pattern": "(?:Failed Login|Authentication failed).* (?:ip|IP)=<HOST>", "service": "gitlab" },
-    { "id": "redis-auth", "type": "regex", "pattern": "<HOST>:\\d+ .*?[Aa]uthentication failed", "service": "redis" },
-    { "id": "rabbitmq-auth", "type": "regex", "pattern": "HTTP access denied: .*? from <HOST>", "service": "rabbitmq" },
-    { "id": "portscan", "type": "regex", "pattern": "\\[SysWarden-BLOCK\\] \\[Catch-All\\].*?SRC=<HOST>", "service": "kernel" },
-    { "id": "ha-cluster", "type": "regex", "pattern": "\\[SysWarden-BLOCK\\] \\[HA-Cluster\\] SRC=<HOST>", "service": "kernel" },
-    { "id": "auditd", "type": "regex", "pattern": "type=(?:USER_LOGIN|USER_AUTH|USER_ERR|USER_CMD).*addr=(?:::f{4}:)?<HOST>.*res=(?:failed|0)", "service": "auditd" },
-    { "id": "revshell", "type": "aho-corasick", "patterns": ["/bin/bash", "/bin/sh", "nc -e", "socat", "wget -q", "curl -s"], "service": "http" },
-    { "id": "aibots", "type": "aho-corasick", "patterns": ["GPTBot", "ChatGPT-User", "ClaudeBot", "Anthropic-ai"], "service": "http" },
-    { "id": "badbots", "type": "aho-corasick", "patterns": ["Nuclei", "sqlmap", "Nikto", "ZmEu", "OpenVAS", "wpscan", "masscan", "zgrab"], "service": "http" },
-    { "id": "modsec", "type": "regex", "pattern": "ModSecurity: Access denied with code [45]\\d\\d.*?\\[client <HOST>", "service": "modsec" },
-    { "id": "webshell", "type": "aho-corasick", "patterns": ["wso.php", "c99.php", "r57.php", "b374k.php", "shell.php", "cmd.jsp", "cmd.exe"], "service": "http" },
-    { "id": "sqli", "type": "aho-corasick", "patterns": ["UNION SELECT", "CONCAT(", "WAITFOR DELAY", "SLEEP(", "eval(", "base64_decode("], "service": "http" },
-    { "id": "secretshunter", "type": "aho-corasick", "patterns": [".env", ".git", "id_rsa", "id_ed25519", "docker-compose.yml", "wp-config.php.bak"], "service": "http" },
-    { "id": "ssrf", "type": "aho-corasick", "patterns": ["169.254.169.254", "metadata/instance", "metadata.google.internal", "100.100.100.200"], "service": "http" },
-    { "id": "jndi-ssti", "type": "aho-corasick", "patterns": ["${jndi:", "class.module.classLoader", "${spring.macro"], "service": "http" },
-    { "id": "lfi-advanced", "type": "aho-corasick", "patterns": ["php://filter", "php://input", "file://", "zip://", "phar://", "/etc/passwd", "/etc/shadow", "/windows/win.ini", "/windows/system32"], "service": "http" },
-    { "id": "apimapper", "type": "aho-corasick", "patterns": ["/swagger-ui", "/openapi.json", "/swagger.json", "/api-docs", "/graphiql"], "service": "http" },
-    { "id": "vaultwarden", "type": "regex", "pattern": "Invalid password.*from <HOST>", "service": "vaultwarden" },
-    { "id": "idor-enum", "type": "aho-corasick", "patterns": ["/api/v1/users/", "/api/v1/profile/"], "service": "http" },
-    { "id": "sso", "type": "regex", "pattern": "msg=\"Authentication failed\".*remote_ip=\"<HOST>\"", "service": "sso" },
-    { "id": "cms-wordpress", "type": "aho-corasick", "patterns": ["/wp-includes", "/wp-admin", "/wp-login.php", "xmlrpc.php", "wp-config.php", "/wp-json/batch/v1", "rest_route=/batch/v1"], "service": "http" },
-    { "id": "cms-joomla", "type": "aho-corasick", "patterns": ["/joomla", "/administrator/index.php", "Joomla!"], "service": "http" },
-    { "id": "cms-magento", "type": "aho-corasick", "patterns": ["/magento", "/downloader/index.php"], "service": "http" },
-    { "id": "proxy-abuse", "type": "aho-corasick", "patterns": ["CONNECT ", "TRACE ", "TRACK "], "service": "http" },
-    { "id": "telnet", "type": "regex", "pattern": "telnetd(?:\\[\\d+\\])?: connect from (?:::f{4}:)?<HOST>", "service": "telnet" },
-    { "id": "odoo", "type": "regex", "pattern": "Login failed for db:.*? login:.*? from <HOST>", "service": "odoo" },
-    { "id": "prestashop", "type": "regex", "pattern": "controller=AdminLogin.*?200", "service": "http" },
-    { "id": "atlassian", "type": "regex", "pattern": "POST .*?(?:/login\\.jsp|/dologin\\.action|/rest/auth).*?(?:401|403|200)", "service": "http" },
-    { "id": "dolibarr", "type": "regex", "pattern": "POST .*?(?:/htdocs/index\\.php|/api/index\\.php/login).*?(?:401|403|200)", "service": "http" },
-    { "id": "nginx-tls", "type": "regex", "pattern": "SSL_do_handshake\\(\\) failed.*?client: <HOST>", "service": "nginx" },
-    { "id": "apache-tls", "type": "regex", "pattern": "\\[client <HOST>(?::\\d+)?\\] AH\\d+: .*?(?:certificate verify failed|SSL Library Error|handshake failed)", "service": "apache" },
-    { "id": "apache-scanner", "type": "regex", "pattern": "\\[client <HOST>(?::\\d+)?\\] (?:AH00128: File does not exist|AH01264: script not found or unable to stat|AH02033: script not found|AH01071: Got error)", "service": "apache" },
-    { "id": "apache-auth", "type": "regex", "pattern": "\\[client <HOST>(?::\\d+)?\\] (?:AH01617: user .*? authentication failure|AH01618: user .*? not found|AH01796: AuthType .*? password mismatch|AH01807: user .*? authorization failure)", "service": "apache" },
-    { "id": "apache-nohome", "type": "regex", "pattern": "\\[client <HOST>(?::\\d+)?\\] AH01630: client denied by server configuration", "service": "apache" },
-    { "id": "apache-overflows", "type": "regex", "pattern": "\\[client <HOST>(?::\\d+)?\\] AH00565: request failed: (?:URI too long|error reading the headers)", "service": "apache" },
-    { "id": "slowloris", "type": "regex", "pattern": "client timed out \\(\\d+: [^)]+\\) while reading client request.*, client: <HOST>", "service": "http" },
-    { "id": "docker-api", "type": "aho-corasick", "patterns": ["/v1.24/containers/create", "/v1.41/containers/create", "/var/run/docker.sock"], "service": "docker" },
-    { "id": "docker-auth", "type": "regex", "pattern": "Failed to authenticate.*remote_ip=\"<HOST>\"", "service": "docker" },
-    { "id": "cve-ivanti", "type": "aho-corasick", "patterns": ["/api/v1/totp", "/api/v1/cav/client/status"], "service": "http" },
-    { "id": "cve-confluence", "type": "aho-corasick", "patterns": ["/server-info.action", "/setup/setupadministrator.action"], "service": "http" },
-    { "id": "deserialization", "type": "aho-corasick", "patterns": ["O:8:\"stdClass\":", "rO0AB", "ysoserial"], "service": "http" },
-    { "id": "modern-crawlers", "type": "aho-corasick", "patterns": ["PerplexityBot", "OAI-SearchBot", "ClaudeBot", "Amazonbot"], "service": "http" },
-    { "id": "advanced-fuzzers", "type": "aho-corasick", "patterns": ["ffuf", "kiterunner", "dirb", "gobuster"], "service": "http" },
-    { "id": "mitre-t1595-active-scan", "type": "regex", "pattern": "(?:Nmap|ZGrab|Masscan|CensysInspect|Shodan)", "service": "http", "action": "detect" },
-    { "id": "mitre-t1059-cmd-exec", "type": "aho-corasick", "patterns": ["powershell -enc", "cmd.exe /c", "WScript.Shell", "Invoke-Expression"], "service": "http", "action": "detect" },
-    { "id": "mitre-t1190-exploit-public", "type": "aho-corasick", "patterns": ["/cgi-bin/", "jndi:ldap", "log4j"], "service": "http", "action": "detect" },
-    { "id": "owasp-a03-injection", "type": "aho-corasick", "patterns": ["1=1--", "' OR '1'='1", "DROP TABLE", "UNION ALL SELECT"], "service": "http", "action": "detect" },
-    { "id": "owasp-a03-xss", "type": "aho-corasick", "patterns": ["<script>alert", "javascript:alert", "onerror=alert", "onmouseover="], "service": "http", "action": "detect" },
-    { "id": "cve-teamcity", "type": "aho-corasick", "patterns": ["/app/rest/server", "?jsp="], "service": "http" },
-    { "id": "cve-citrix-bleed", "type": "aho-corasick", "patterns": ["/oauth/idp/.well-known/openid-configuration"], "service": "http" },
-    { "id": "cve-moveit", "type": "aho-corasick", "patterns": ["guestaccess.aspx", "moveitisapi"], "service": "http" },
-    { "id": "cve-f5-bigip", "type": "aho-corasick", "patterns": ["Connection: X-F5-Auth-Token", "X-F5-Auth-Token"], "service": "http" },
-    { "id": "cloud-ssrf-metadata", "type": "aho-corasick", "patterns": ["Metadata-Flavor: Google", "169.254.169.254/latest/meta-data/", "169.254.169.254/metadata/v1/"], "service": "http" },
-    { "id": "java-ssti-rce", "type": "aho-corasick", "patterns": ["getRuntime().exec", "freemarker.template", "ProcessBuilder", "java.lang.Runtime"], "service": "http", "action": "detect" },
-    { "id": "php-rce-generic", "type": "aho-corasick", "patterns": ["system(", "passthru(", "shell_exec(", "base64_decode(", "phpinfo()"], "service": "http", "action": "detect" },
-    { "id": "generic-auth", "type": "regex", "pattern": "POST .*?(?:/login|/sign-in|/auth).*?(?:200|401|403)", "service": "http" },
-    { "id": "laravel-login", "type": "regex", "pattern": "(?:Failed login|Authentication failed|Login failed).*<HOST>", "service": "laravel" },
-    { "id": "nginx-scanner", "type": "regex", "pattern": "^(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|CONNECT|TRACE) .*? (?:30[1278]|400|401|403|404|405|444)\\b", "service": "nginx" },
-    { "id": "nexus-api-protect", "type": "aho-corasick", "patterns": ["/api/v1/enroll'", "/api/v1/telemetry\"", "../api/v1/"], "service": "http", "action": "detect" }
+    {
+      "id": "ssh-auth",
+      "type": "regex",
+      "pattern": "(?:Failed password for|Invalid user|POSSIBLE BREAK-IN).*?from <HOST>",
+      "service": "sshd",
+      "action": "track"
+    },
+    {
+      "id": "drupal-login",
+      "type": "aho-corasick",
+      "patterns": [
+        "POST /user/login",
+        "?q=user/login"
+      ],
+      "service": "http",
+      "action": "track"
+    },
+    {
+      "id": "nextcloud-login",
+      "type": "regex",
+      "pattern": "Login failed: .*? \\(Remote IP: '<HOST>'\\)",
+      "service": "nextcloud",
+      "action": "track"
+    },
+    {
+      "id": "zabbix-login",
+      "type": "regex",
+      "pattern": "failed login of user .*? from <HOST>",
+      "service": "zabbix",
+      "action": "track"
+    },
+    {
+      "id": "haproxy-abuse",
+      "type": "regex",
+      "pattern": "<HOST>:\\d+ .*?(?:400|403|404|429)",
+      "service": "haproxy",
+      "action": "track"
+    },
+    {
+      "id": "wireguard-handshake",
+      "type": "regex",
+      "pattern": "wireguard: .*? Handshake for peer .*? \\(<HOST>:\\d+\\) did not complete",
+      "service": "wireguard"
+    },
+    {
+      "id": "phpmyadmin",
+      "type": "aho-corasick",
+      "patterns": [
+        "phpmyadmin"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "grafana-login",
+      "type": "regex",
+      "pattern": "(?:msg=\"Invalid username or password\"|status=401).*remote_addr=<HOST>",
+      "service": "grafana",
+      "action": "track"
+    },
+    {
+      "id": "squid-denied",
+      "type": "regex",
+      "pattern": "<HOST> .*(?:TCP_DENIED|ERR_ACCESS_DENIED)",
+      "service": "squid",
+      "action": "track"
+    },
+    {
+      "id": "dovecot-auth",
+      "type": "regex",
+      "pattern": "dovecot: .*(?:Authentication failure|Aborted login|auth failed).*rip=<HOST>",
+      "service": "dovecot",
+      "action": "track"
+    },
+    {
+      "id": "proxmox-auth",
+      "type": "regex",
+      "pattern": "pvedaemon\\[\\d+\\]: authentication failure; rhost=<HOST>",
+      "service": "proxmox",
+      "action": "track"
+    },
+    {
+      "id": "openvpn-tls",
+      "type": "regex",
+      "pattern": "<HOST>:[0-9]+ (?:TLS Error: TLS handshake failed|VERIFY ERROR:|TLS Auth Error:)",
+      "service": "openvpn"
+    },
+    {
+      "id": "gitea-auth",
+      "type": "regex",
+      "pattern": "Failed authentication attempt for .*? from <HOST>",
+      "service": "gitea",
+      "action": "track"
+    },
+    {
+      "id": "cockpit-auth",
+      "type": "regex",
+      "pattern": "cockpit:auth\\): authentication failure;.* rhost=(?:::ffff:)?<HOST>",
+      "service": "cockpit",
+      "action": "track"
+    },
+    {
+      "id": "privesc",
+      "type": "regex",
+      "pattern": "pam_unix\\((?:su|sudo):auth\\): authentication failure;.*rhost=<HOST>",
+      "service": "auth",
+      "action": "track"
+    },
+    {
+      "id": "jenkins-auth",
+      "type": "regex",
+      "pattern": "(?:unsuccessfulAuthentication|Login attempt failed).* from <HOST>",
+      "service": "jenkins",
+      "action": "track"
+    },
+    {
+      "id": "gitlab-auth",
+      "type": "regex",
+      "pattern": "(?:Failed Login|Authentication failed).* (?:ip|IP)=<HOST>",
+      "service": "gitlab",
+      "action": "track"
+    },
+    {
+      "id": "redis-auth",
+      "type": "regex",
+      "pattern": "<HOST>:\\d+ .*?[Aa]uthentication failed",
+      "service": "redis",
+      "action": "track"
+    },
+    {
+      "id": "rabbitmq-auth",
+      "type": "regex",
+      "pattern": "HTTP access denied: .*? from <HOST>",
+      "service": "rabbitmq",
+      "action": "track"
+    },
+    {
+      "id": "portscan",
+      "type": "regex",
+      "pattern": "\\[SysWarden-BLOCK\\] \\[Catch-All\\].*?SRC=<HOST>",
+      "service": "kernel"
+    },
+    {
+      "id": "ha-cluster",
+      "type": "regex",
+      "pattern": "\\[SysWarden-BLOCK\\] \\[HA-Cluster\\] SRC=<HOST>",
+      "service": "kernel"
+    },
+    {
+      "id": "auditd",
+      "type": "regex",
+      "pattern": "type=(?:USER_LOGIN|USER_AUTH|USER_ERR|USER_CMD).*addr=(?:::f{4}:)?<HOST>.*res=(?:failed|0)",
+      "service": "auditd"
+    },
+    {
+      "id": "revshell",
+      "type": "aho-corasick",
+      "patterns": [
+        "/bin/bash",
+        "/bin/sh",
+        "nc -e",
+        "socat",
+        "wget -q",
+        "curl -s"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "aibots",
+      "type": "aho-corasick",
+      "patterns": [
+        "GPTBot",
+        "ChatGPT-User",
+        "ClaudeBot",
+        "Anthropic-ai"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "badbots",
+      "type": "aho-corasick",
+      "patterns": [
+        "Nuclei",
+        "sqlmap",
+        "Nikto",
+        "ZmEu",
+        "OpenVAS",
+        "wpscan",
+        "masscan",
+        "zgrab"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "modsec",
+      "type": "regex",
+      "pattern": "ModSecurity: Access denied with code [45]\\d\\d.*?\\[client <HOST>",
+      "service": "modsec"
+    },
+    {
+      "id": "webshell",
+      "type": "aho-corasick",
+      "patterns": [
+        "wso.php",
+        "c99.php",
+        "r57.php",
+        "b374k.php",
+        "shell.php",
+        "cmd.jsp",
+        "cmd.exe"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "sqli",
+      "type": "aho-corasick",
+      "patterns": [
+        "UNION SELECT",
+        "CONCAT(",
+        "WAITFOR DELAY",
+        "SLEEP(",
+        "eval(",
+        "base64_decode("
+      ],
+      "service": "http"
+    },
+    {
+      "id": "secretshunter",
+      "type": "aho-corasick",
+      "patterns": [
+        ".env",
+        ".git",
+        "id_rsa",
+        "id_ed25519",
+        "docker-compose.yml",
+        "wp-config.php.bak"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "ssrf",
+      "type": "aho-corasick",
+      "patterns": [
+        "169.254.169.254",
+        "metadata/instance",
+        "metadata.google.internal",
+        "100.100.100.200"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "jndi-ssti",
+      "type": "aho-corasick",
+      "patterns": [
+        "${jndi:",
+        "class.module.classLoader",
+        "${spring.macro"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "lfi-advanced",
+      "type": "aho-corasick",
+      "patterns": [
+        "php://filter",
+        "php://input",
+        "file://",
+        "zip://",
+        "phar://",
+        "/etc/passwd",
+        "/etc/shadow",
+        "/windows/win.ini",
+        "/windows/system32"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "apimapper",
+      "type": "aho-corasick",
+      "patterns": [
+        "/swagger-ui",
+        "/openapi.json",
+        "/swagger.json",
+        "/api-docs",
+        "/graphiql"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "vaultwarden",
+      "type": "regex",
+      "pattern": "Invalid password.*from <HOST>",
+      "service": "vaultwarden",
+      "action": "track"
+    },
+    {
+      "id": "idor-enum",
+      "type": "aho-corasick",
+      "patterns": [
+        "/api/v1/users/",
+        "/api/v1/profile/"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "sso",
+      "type": "regex",
+      "pattern": "msg=\"Authentication failed\".*remote_ip=\"<HOST>\"",
+      "service": "sso",
+      "action": "track"
+    },
+    {
+      "id": "cms-wordpress",
+      "type": "aho-corasick",
+      "patterns": [
+        "/wp-includes",
+        "/wp-admin",
+        "/wp-login.php",
+        "xmlrpc.php",
+        "wp-config.php",
+        "/wp-json/batch/v1",
+        "rest_route=/batch/v1"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "cms-joomla",
+      "type": "aho-corasick",
+      "patterns": [
+        "/joomla",
+        "/administrator/index.php",
+        "Joomla!"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "cms-magento",
+      "type": "aho-corasick",
+      "patterns": [
+        "/magento",
+        "/downloader/index.php"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "proxy-abuse",
+      "type": "aho-corasick",
+      "patterns": [
+        "CONNECT ",
+        "TRACE ",
+        "TRACK "
+      ],
+      "service": "http"
+    },
+    {
+      "id": "telnet",
+      "type": "regex",
+      "pattern": "telnetd(?:\\[\\d+\\])?: connect from (?:::f{4}:)?<HOST>",
+      "service": "telnet"
+    },
+    {
+      "id": "odoo",
+      "type": "regex",
+      "pattern": "Login failed for db:.*? login:.*? from <HOST>",
+      "service": "odoo",
+      "action": "track"
+    },
+    {
+      "id": "prestashop",
+      "type": "regex",
+      "pattern": "controller=AdminLogin.*?200",
+      "service": "http",
+      "action": "track"
+    },
+    {
+      "id": "atlassian",
+      "type": "regex",
+      "pattern": "POST .*?(?:/login\\.jsp|/dologin\\.action|/rest/auth).*?(?:401|403|200)",
+      "service": "http",
+      "action": "track"
+    },
+    {
+      "id": "dolibarr",
+      "type": "regex",
+      "pattern": "POST .*?(?:/htdocs/index\\.php|/api/index\\.php/login).*?(?:401|403|200)",
+      "service": "http",
+      "action": "track"
+    },
+    {
+      "id": "nginx-tls",
+      "type": "regex",
+      "pattern": "SSL_do_handshake\\(\\) failed.*?client: <HOST>",
+      "service": "nginx"
+    },
+    {
+      "id": "apache-tls",
+      "type": "regex",
+      "pattern": "\\[client <HOST>(?::\\d+)?\\] AH\\d+: .*?(?:certificate verify failed|SSL Library Error|handshake failed)",
+      "service": "apache"
+    },
+    {
+      "id": "apache-scanner",
+      "type": "regex",
+      "pattern": "\\[client <HOST>(?::\\d+)?\\] (?:AH00128: File does not exist|AH01264: script not found or unable to stat|AH02033: script not found|AH01071: Got error)",
+      "service": "apache",
+      "action": "track"
+    },
+    {
+      "id": "apache-auth",
+      "type": "regex",
+      "pattern": "\\[client <HOST>(?::\\d+)?\\] (?:AH01617: user .*? authentication failure|AH01618: user .*? not found|AH01796: AuthType .*? password mismatch|AH01807: user .*? authorization failure)",
+      "service": "apache",
+      "action": "track"
+    },
+    {
+      "id": "apache-nohome",
+      "type": "regex",
+      "pattern": "\\[client <HOST>(?::\\d+)?\\] AH01630: client denied by server configuration",
+      "service": "apache"
+    },
+    {
+      "id": "apache-overflows",
+      "type": "regex",
+      "pattern": "\\[client <HOST>(?::\\d+)?\\] AH00565: request failed: (?:URI too long|error reading the headers)",
+      "service": "apache"
+    },
+    {
+      "id": "slowloris",
+      "type": "regex",
+      "pattern": "client timed out \\(\\d+: [^)]+\\) while reading client request.*, client: <HOST>",
+      "service": "http"
+    },
+    {
+      "id": "docker-api",
+      "type": "aho-corasick",
+      "patterns": [
+        "/v1.24/containers/create",
+        "/v1.41/containers/create",
+        "/var/run/docker.sock"
+      ],
+      "service": "docker"
+    },
+    {
+      "id": "docker-auth",
+      "type": "regex",
+      "pattern": "Failed to authenticate.*remote_ip=\"<HOST>\"",
+      "service": "docker",
+      "action": "track"
+    },
+    {
+      "id": "cve-ivanti",
+      "type": "aho-corasick",
+      "patterns": [
+        "/api/v1/totp",
+        "/api/v1/cav/client/status"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "cve-confluence",
+      "type": "aho-corasick",
+      "patterns": [
+        "/server-info.action",
+        "/setup/setupadministrator.action"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "deserialization",
+      "type": "aho-corasick",
+      "patterns": [
+        "O:8:\"stdClass\":",
+        "rO0AB",
+        "ysoserial"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "modern-crawlers",
+      "type": "aho-corasick",
+      "patterns": [
+        "PerplexityBot",
+        "OAI-SearchBot",
+        "ClaudeBot",
+        "Amazonbot"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "advanced-fuzzers",
+      "type": "aho-corasick",
+      "patterns": [
+        "ffuf",
+        "kiterunner",
+        "dirb",
+        "gobuster"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "mitre-t1595-active-scan",
+      "type": "regex",
+      "pattern": "(?:Nmap|ZGrab|Masscan|CensysInspect|Shodan)",
+      "service": "http",
+      "action": "detect"
+    },
+    {
+      "id": "mitre-t1059-cmd-exec",
+      "type": "aho-corasick",
+      "patterns": [
+        "powershell -enc",
+        "cmd.exe /c",
+        "WScript.Shell",
+        "Invoke-Expression"
+      ],
+      "service": "http",
+      "action": "detect"
+    },
+    {
+      "id": "mitre-t1190-exploit-public",
+      "type": "aho-corasick",
+      "patterns": [
+        "/cgi-bin/",
+        "jndi:ldap",
+        "log4j"
+      ],
+      "service": "http",
+      "action": "detect"
+    },
+    {
+      "id": "owasp-a03-injection",
+      "type": "aho-corasick",
+      "patterns": [
+        "1=1--",
+        "' OR '1'='1",
+        "DROP TABLE",
+        "UNION ALL SELECT"
+      ],
+      "service": "http",
+      "action": "detect"
+    },
+    {
+      "id": "owasp-a03-xss",
+      "type": "aho-corasick",
+      "patterns": [
+        "<script>alert",
+        "javascript:alert",
+        "onerror=alert",
+        "onmouseover="
+      ],
+      "service": "http",
+      "action": "detect"
+    },
+    {
+      "id": "cve-teamcity",
+      "type": "aho-corasick",
+      "patterns": [
+        "/app/rest/server",
+        "?jsp="
+      ],
+      "service": "http"
+    },
+    {
+      "id": "cve-citrix-bleed",
+      "type": "aho-corasick",
+      "patterns": [
+        "/oauth/idp/.well-known/openid-configuration"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "cve-moveit",
+      "type": "aho-corasick",
+      "patterns": [
+        "guestaccess.aspx",
+        "moveitisapi"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "cve-f5-bigip",
+      "type": "aho-corasick",
+      "patterns": [
+        "Connection: X-F5-Auth-Token",
+        "X-F5-Auth-Token"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "cloud-ssrf-metadata",
+      "type": "aho-corasick",
+      "patterns": [
+        "Metadata-Flavor: Google",
+        "169.254.169.254/latest/meta-data/",
+        "169.254.169.254/metadata/v1/"
+      ],
+      "service": "http"
+    },
+    {
+      "id": "java-ssti-rce",
+      "type": "aho-corasick",
+      "patterns": [
+        "getRuntime().exec",
+        "freemarker.template",
+        "ProcessBuilder",
+        "java.lang.Runtime"
+      ],
+      "service": "http",
+      "action": "detect"
+    },
+    {
+      "id": "php-rce-generic",
+      "type": "aho-corasick",
+      "patterns": [
+        "system(",
+        "passthru(",
+        "shell_exec(",
+        "base64_decode(",
+        "phpinfo()"
+      ],
+      "service": "http",
+      "action": "detect"
+    },
+    {
+      "id": "generic-auth",
+      "type": "regex",
+      "pattern": "POST .*?(?:/login|/sign-in|/auth).*?(?:200|401|403)",
+      "service": "http",
+      "action": "track"
+    },
+    {
+      "id": "laravel-login",
+      "type": "regex",
+      "pattern": "(?:Failed login|Authentication failed|Login failed).*<HOST>",
+      "service": "laravel",
+      "action": "track"
+    },
+    {
+      "id": "nginx-scanner",
+      "type": "regex",
+      "pattern": "^(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|CONNECT|TRACE) .*? (?:30[1278]|400|401|403|404|405|444)\\b",
+      "service": "nginx",
+      "action": "track"
+    },
+    {
+      "id": "nexus-api-protect",
+      "type": "aho-corasick",
+      "patterns": [
+        "/api/v1/enroll'",
+        "/api/v1/telemetry\"",
+        "../api/v1/"
+      ],
+      "service": "http",
+      "action": "detect"
+    }
   ]
 }

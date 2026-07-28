@@ -101,15 +101,26 @@ func (s *UDSServer) readLoop() {
 					// Alert-Only mode
 					s.logger.LogDetected(ip, match.RuleID, line)
 				} else {
-					// HIPS Mode: Try to ban first
-					err := s.fw.Ban(ip)
-					if err != nil {
-						// Fallback to DETECTED if firewall fails (or IP is whitelisted)
-						s.logger.Error("Failed to ban IP, logging as DETECTED", err)
-						s.logger.LogDetected(ip, match.RuleID, line)
-					} else {
-						// Success! Log the BAN (this will also trigger the webhook internally)
-						s.logger.LogBan(ip, match.RuleID, line)
+					shouldBan := true
+					if match.Action == "track" {
+						shouldBan = s.engine.EvaluateThreshold(ip, match.RuleID, match.Threshold, match.Window)
+						if !shouldBan {
+							// Log as tracked (shadow alert)
+							s.logger.LogShadowAlert(ip, match.RuleID, line)
+						}
+					}
+
+					if shouldBan {
+						// HIPS Mode: Try to ban first
+						err := s.fw.Ban(ip)
+						if err != nil {
+							// Fallback to DETECTED if firewall fails (or IP is whitelisted)
+							s.logger.Error("Failed to ban IP, logging as DETECTED", err)
+							s.logger.LogDetected(ip, match.RuleID, line)
+						} else {
+							// Success! Log the BAN (this will also trigger the webhook internally)
+							s.logger.LogBan(ip, match.RuleID, line)
+						}
 					}
 				}
 			}

@@ -7,17 +7,21 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/cloudflare/ahocorasick"
 )
 
 type RuleDef struct {
-	ID       string   `json:"id"`
-	Type     string   `json:"type"`
-	Pattern  string   `json:"pattern,omitempty"`
-	Patterns []string `json:"patterns,omitempty"`
-	Service  string   `json:"service"`
-	Action   string   `json:"action,omitempty"` // "ban" (default) or "detect"
+	ID        string   `json:"id"`
+	Type      string   `json:"type"`
+	Pattern   string   `json:"pattern,omitempty"`
+	Patterns  []string `json:"patterns,omitempty"`
+	Service   string   `json:"service"`
+	Action    string   `json:"action,omitempty"` // "ban" (default), "detect", or "track"
+	Threshold int      `json:"threshold,omitempty"`
+	Window    int      `json:"window,omitempty"`
 }
 
 type Config struct {
@@ -29,6 +33,10 @@ type Engine struct {
 	ahoDict    []string
 	ahoRules   map[int]RuleDef
 	regexRules []compiledRegex
+
+	defaultThreshold int
+	defaultWindow    int
+	tracker          sync.Map
 }
 
 type compiledRegex struct {
@@ -37,13 +45,15 @@ type compiledRegex struct {
 }
 
 type Match struct {
-	RuleID  string
-	Payload string
-	Service string
-	Action  string
+	RuleID    string
+	Payload   string
+	Service   string
+	Action    string
+	Threshold int
+	Window    int
 }
 
-func NewEngine(configFile string) (*Engine, error) {
+func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine, error) {
 	data, err := os.ReadFile(configFile) // #nosec G304
 	if err != nil {
 		return nil, fmt.Errorf("failed to read signatures: %w", err)
@@ -55,7 +65,9 @@ func NewEngine(configFile string) (*Engine, error) {
 	}
 
 	e := &Engine{
-		ahoRules: make(map[int]RuleDef),
+		ahoRules:         make(map[int]RuleDef),
+		defaultThreshold: defaultThreshold,
+		defaultWindow:    defaultWindow,
 	}
 
 	for _, rule := range config.Rules {
@@ -66,7 +78,6 @@ func NewEngine(configFile string) (*Engine, error) {
 				e.ahoRules[len(e.ahoDict)-1] = rule
 			}
 		case "regex":
-			// Convert <HOST> to regex capture group for IP extraction (Strict validation is done post-extraction via net.ParseIP to prevent false positives)
 			strictHostRegex := `(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-fA-F0-9:]+:[a-fA-F0-9:]+)`
 			safePattern := strings.ReplaceAll(rule.Pattern, "<HOST>", strictHostRegex)
 			re, err := regexp.Compile("(?i)" + safePattern)
@@ -81,6 +92,9 @@ func NewEngine(configFile string) (*Engine, error) {
 		e.ahoMatcher = ahocorasick.NewStringMatcher(e.ahoDict)
 	}
 
+	// Start garbage collector for tracker
+	go e.GarbageCollector()
+
 	return e, nil
 }
 
@@ -88,42 +102,40 @@ func (e *Engine) RuleCount() int {
 	return len(e.ahoDict) + len(e.regexRules)
 }
 
-// Scan processes a log line. It first attempts RE2 regex extraction, then Aho-Corasick.
 func (e *Engine) Scan(logLine string) *Match {
-	// 1. Fast Linear Regex Matching (O(N) RE2)
 	for _, rr := range e.regexRules {
 		if match := rr.re.FindStringSubmatch(logLine); match != nil {
-			// Extract the matched <HOST> and validate it is a real IP to prevent false positives with timestamps/MACs
 			hostIdx := rr.re.SubexpIndex("host")
 			if hostIdx >= 0 && hostIdx < len(match) {
 				matchedHost := match[hostIdx]
 				if matchedHost != "" && net.ParseIP(matchedHost) == nil {
-					// False positive! The pattern matched something like a timestamp or a MAC address slice.
 					continue
 				}
 			}
 
 			return &Match{
-				RuleID:  rr.def.ID,
-				Payload: logLine,
-				Service: rr.def.Service,
-				Action:  rr.def.Action,
+				RuleID:    rr.def.ID,
+				Payload:   logLine,
+				Service:   rr.def.Service,
+				Action:    rr.def.Action,
+				Threshold: rr.def.Threshold,
+				Window:    rr.def.Window,
 			}
 		}
 	}
 
-	// 2. Aho-Corasick O(N) Substring Match
 	if e.ahoMatcher != nil {
 		matches := e.ahoMatcher.Match([]byte(logLine))
 		if len(matches) > 0 {
-			// First match is sufficient
 			idx := matches[0]
 			rule := e.ahoRules[idx]
 			return &Match{
-				RuleID:  rule.ID,
-				Payload: logLine,
-				Service: rule.Service,
-				Action:  rule.Action,
+				RuleID:    rule.ID,
+				Payload:   logLine,
+				Service:   rule.Service,
+				Action:    rule.Action,
+				Threshold: rule.Threshold,
+				Window:    rule.Window,
 			}
 		}
 	}
@@ -131,7 +143,76 @@ func (e *Engine) Scan(logLine string) *Match {
 	return nil
 }
 
-// ExtractIP acts as a fast fallback to extract IP if Aho-Corasick matches but the IP isn't explicitly known.
+// EvaluateThreshold returns true if the IP has reached the limit and should be banned
+func (e *Engine) EvaluateThreshold(ip string, ruleID string, customThreshold, customWindow int) bool {
+	threshold := customThreshold
+	window := customWindow
+
+	if threshold <= 0 {
+		threshold = e.defaultThreshold
+	}
+	if window <= 0 {
+		window = e.defaultWindow
+	}
+	if threshold <= 1 {
+		return true // Instant ban if threshold is 1 or less
+	}
+
+	key := ip + ":" + ruleID
+	now := time.Now().Unix()
+
+	var timestamps []int64
+	if val, ok := e.tracker.Load(key); ok {
+		timestamps = val.([]int64)
+	}
+
+	// Filter valid timestamps within window
+	var valid []int64
+	windowStart := now - int64(window)
+	for _, t := range timestamps {
+		if t >= windowStart {
+			valid = append(valid, t)
+		}
+	}
+
+	valid = append(valid, now)
+
+	if len(valid) >= threshold {
+		e.tracker.Delete(key)
+		return true
+	}
+
+	e.tracker.Store(key, valid)
+	return false
+}
+
+func (e *Engine) GarbageCollector() {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		now := time.Now().Unix()
+		e.tracker.Range(func(key, value interface{}) bool {
+			timestamps := value.([]int64)
+			var valid []int64
+			// Get window safely from default, exact GC for specific custom windows is complex so we do a general cleanup
+			// Using 1 hour as max TTL for cleanup to ensure memory safety
+			windowStart := now - 3600
+			for _, t := range timestamps {
+				if t >= windowStart {
+					valid = append(valid, t)
+				}
+			}
+			if len(valid) == 0 {
+				e.tracker.Delete(key)
+			} else {
+				e.tracker.Store(key, valid)
+			}
+			return true
+		})
+	}
+}
+
 var ipRegex = regexp.MustCompile(`(?i)(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-f0-9:]+:[a-f0-9:]+)`)
 
 func ExtractIP(logLine string) string {
