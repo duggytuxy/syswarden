@@ -1,3 +1,7 @@
+# Release v3.76.0
+
+---
+
 # Release v3.75.9
 
 ## FIXED 🐛
