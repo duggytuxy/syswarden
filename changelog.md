@@ -1,3 +1,7 @@
+# Release v3.76.2
+
+---
+
 # Release v3.76.1
 
 ## UPGRADED 🚀
