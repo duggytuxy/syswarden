@@ -10,11 +10,12 @@ import (
 	"time"
 
 	"syswarden-core/telemetry"
+	"syswarden-core/utils"
 	"syswarden-core/webhook"
 )
 
 // persistBanToDisk safely appends an IP to the persistent blocklist avoiding duplicates.
-// IMPORTANT NOTE: The filename is 'syswarden_blacklist.ipv4', but this file specifically 
+// IMPORTANT NOTE: The filename is 'syswarden_blacklist.ipv4', but this file specifically
 // stores the WAF L7 Dynamic Bans. In nftables, this file feeds the `@banned_ips` set.
 // It is NOT the same as the CTI Threat Intelligence set (`@syswarden_blacklist`).
 func persistBanToDisk(ip string) {
@@ -214,7 +215,11 @@ func (l *Logger) LogShadowAlert(ip, jail, payload string) {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
 
-	log.Printf("[SOC-ALERT] INSIDER THREAT DETECTED FROM WHITELISTED IP: %s (Vector: %s)", ip, jail)
+	if utils.IsWhitelisted(ip) {
+		log.Printf("[SOC-ALERT] INSIDER THREAT DETECTED FROM WHITELISTED IP: %s (Vector: %s)", ip, jail)
+	} else {
+		log.Printf("[SOC-ALERT] HIGH RISK THREAT TRACKING (PRE-BAN): %s (Vector: %s)", ip, jail)
+	}
 }
 
 func (l *Logger) Close() {

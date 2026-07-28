@@ -1,3 +1,10 @@
+# Release v3.76.4
+
+## UPDATED ♻️
+- **Telemetry & Webhooks**: Improved semantics for Shadow-Alert tracking logs. The engine now dynamically evaluates if the tracked IP belongs to the local Whitelist. Internal IPs will correctly trigger "INSIDER THREAT" alerts, while public external IPs undergoing tracking will accurately report as "HIGH RISK THREAT TRACKING", eliminating false semantic labeling on Discord and internal logs.
+
+---
+
 # Release v3.76.3
 
 ## FIXED 🐛
@@ -7,7 +14,6 @@
 ---
 
 # Release v3.76.2
-
 ## UPDATED ♻️
 - **TUI & Telemetry**: Clarified the TUI "Risk Vectors" labels. Renamed the "Value" counter to "WAF L7 Bans" to eliminate ambiguity between L3 Threat Intelligence blocks (CTI) and dynamic Layer 7 WAAP engine bans.
 - **Documentation**: Added strict in-code documentation to `logger.go` and `ha_api.go` detailing the high-performance architectural interaction between L7 bans and L3 nftables injection (via `@banned_ips` and `syswarden_blacklist.ipv4`).

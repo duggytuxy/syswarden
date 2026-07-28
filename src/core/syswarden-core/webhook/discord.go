@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"syswarden-core/utils"
 )
 
 type EmbedField struct {
@@ -99,7 +101,7 @@ func SendBanAlert(ip, jail, action string) {
 					{Name: "NODE", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v3.76.3 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v3.75.9 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
@@ -167,7 +169,7 @@ func SendDetectedAlert(ip, jail, action string) {
 					{Name: "NODE", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v3.76.3 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v3.75.9 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
@@ -287,15 +289,29 @@ func SendShadowAlert(ip, jail string) {
 		hostname = "SYSWARDEN-NODE"
 	}
 
+	isInsider := utils.IsWhitelisted(ip)
+
+	title := "⚠️ SYSWARDEN HIGH RISK THREAT TRACKING"
+	desc := "An external IP triggered a tracked security rule."
+	ipLabel := "Attacker IP"
+	color := 16753920 // Orange
+
+	if isInsider {
+		title = "⚠️ SYSWARDEN INSIDER THREAT ALERT"
+		desc = "A Whitelisted IP triggered a malicious signature (Shadow Mode)."
+		ipLabel = "Insider IP"
+		color = 16711680 // Red
+	}
+
 	payload := DiscordPayload{
 		Content: nil,
 		Embeds: []DiscordEmbed{
 			{
-				Title:       "⚠️ SYSWARDEN INSIDER THREAT ALERT",
-				Description: "A Whitelisted IP triggered a malicious signature (Shadow Mode).",
-				Color:       16753920, // Orange color
+				Title:       title,
+				Description: desc,
+				Color:       color,
 				Fields: []EmbedField{
-					{Name: "Insider IP", Value: ip, Inline: true},
+					{Name: ipLabel, Value: ip, Inline: true},
 					{Name: "Threat Vector", Value: jail, Inline: true},
 					{Name: "Action Taken", Value: "SHADOW-ALERT (Not Banned)", Inline: true},
 					{Name: "NODE", Value: hostname, Inline: true},
@@ -322,12 +338,12 @@ func SendShadowAlert(ip, jail string) {
 		finalData := data
 		if strings.Contains(u, "hooks.slack.com") {
 			slackPayload := map[string]string{
-				"text": "⚠️ **SYSWARDEN INSIDER THREAT ALERT**\nInsider IP: " + ip + "\nThreat Vector: " + jail + "\nAction: SHADOW-ALERT (Not Banned)\nNODE: " + hostname,
+				"text": title + "\n" + ipLabel + ": " + ip + "\nThreat Vector: " + jail + "\nAction: SHADOW-ALERT (Not Banned)\nNODE: " + hostname,
 			}
 			finalData, _ = json.Marshal(slackPayload)
 		} else if strings.Contains(u, "webhook.office.com") {
 			teamsPayload := map[string]string{
-				"text": "⚠️ SYSWARDEN INSIDER THREAT ALERT\nInsider IP: " + ip + "\nThreat Vector: " + jail + "\nAction: SHADOW-ALERT (Not Banned)\nNODE: " + hostname,
+				"text": title + "\n" + ipLabel + ": " + ip + "\nThreat Vector: " + jail + "\nAction: SHADOW-ALERT (Not Banned)\nNODE: " + hostname,
 			}
 			finalData, _ = json.Marshal(teamsPayload)
 		}
