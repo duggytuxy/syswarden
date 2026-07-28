@@ -156,6 +156,8 @@ func StartHAServer(fwManager firewall.Manager) {
 
 		if r.Method == http.MethodGet {
 			// Return current blocklists
+			// IMPORTANT: syswarden_blacklist.ipv4/.ipv6 contain the WAF L7 Dynamic Bans
+			// They are synchronized across the HA cluster so that all nodes can inject them into L3 (nftables @banned_ips)
 			var allIPs []string
 			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4"); err == nil { // #nosec
 				lines := strings.Split(strings.TrimSpace(string(content)), "\n")

@@ -1,5 +1,9 @@
 # Release v3.76.2
 
+## UPDATED ♻️
+- **TUI & Telemetry**: Clarified the TUI "Risk Vectors" labels. Renamed the "Value" counter to "WAF L7 Bans" to eliminate ambiguity between L3 Threat Intelligence blocks (CTI) and dynamic Layer 7 WAAP engine bans.
+- **Documentation**: Added strict in-code documentation to `logger.go` and `ha_api.go` detailing the high-performance architectural interaction between L7 bans and L3 nftables injection (via `@banned_ips` and `syswarden_blacklist.ipv4`).
+
 ---
 
 # Release v3.76.1

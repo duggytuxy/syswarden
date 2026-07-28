@@ -13,7 +13,10 @@ import (
 	"syswarden-core/webhook"
 )
 
-// persistBanToDisk safely appends an IP to the persistent blocklist avoiding duplicates
+// persistBanToDisk safely appends an IP to the persistent blocklist avoiding duplicates.
+// IMPORTANT NOTE: The filename is 'syswarden_blacklist.ipv4', but this file specifically 
+// stores the WAF L7 Dynamic Bans. In nftables, this file feeds the `@banned_ips` set.
+// It is NOT the same as the CTI Threat Intelligence set (`@syswarden_blacklist`).
 func persistBanToDisk(ip string) {
 	file := "/etc/syswarden/lists/syswarden_blacklist.ipv4"
 	if strings.Contains(ip, ":") {
