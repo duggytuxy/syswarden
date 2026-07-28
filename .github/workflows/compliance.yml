@@ -17,7 +17,7 @@ jobs:
       security-events: write   # required to upload SARIF to Code Scanning
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: getplumber/plumber@ef9864df81f444647d95889d98695434f6fa9732 # v0.4.12
+      - uses: getplumber/plumber@87ca135cc4566ba8e9065ea95b5d897232cdb208 # v0.4.16
         with:
           score-push: true
           threshold: 80
