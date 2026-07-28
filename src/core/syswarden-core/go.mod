@@ -3,12 +3,13 @@ module syswarden-core
 go 1.26.5
 
 require (
-	github.com/cloudflare/ahocorasick v0.0.0-20240916140611-054963ec9396
+	github.com/anknown/ahocorasick v0.0.0-20190904063843-d75dbd5169c0
 	github.com/google/nftables v0.3.0
 	github.com/nxadm/tail v1.4.11
 )
 
 require (
+	github.com/anknown/darts v0.0.0-20151216065714-83ff685239e6 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect

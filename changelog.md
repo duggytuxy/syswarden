@@ -1,3 +1,17 @@
+# Release v3.76.1
+
+## UPGRADED 🚀
+- **WAAP Engine**: Migrated the core string matching engine from `cloudflare/ahocorasick` to `anknown/ahocorasick`. This introduces a high-performance Double-Array Trie architecture that drastically reduces memory footprint and accelerates real-time L7 scanning by up to 10x.
+- **WAAP Engine**: Implemented native `t:urlDecode` transformation in the scanning pipeline. The engine now performs a dual-pass scan (raw + decoded) to catch obfuscated and URL-encoded payloads (e.g., `%27%20OR%201%3D1`), aligning with enterprise standards like ModSecurity CRS.
+
+## UPDATED ♻️
+- **Signatures (OWASP & ANSSI)**: Expanded SQLi, XSS, and LFI rulesets with modern vectors now that URL decoding is active. Added new rules for ANSSI recommendations (`anssi-methods`, `anssi-path-traversal`, `anssi-sensitive-files`).
+- **Signatures**: Hardened IDOR protection (`idor-enum`) by enforcing strict thresholding on sensitive API endpoints.
+- **Signatures**: Removed obsolete `nexus-api-protect` heuristic.
+- **Signatures**: Added `syswarden-l4-protect` (TCP 62026/62027) and `syswarden-l7-protect` to protect HA API and WebTUI endpoints against network scanners and L7 fuzzing.
+
+---
+
 # Release v3.76.0
 
 ## ADDED ➕

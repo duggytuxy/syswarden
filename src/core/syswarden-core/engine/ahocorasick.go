@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/cloudflare/ahocorasick"
+	goahocorasick "github.com/anknown/ahocorasick"
 )
 
 type RuleDef struct {
@@ -29,10 +30,10 @@ type Config struct {
 }
 
 type Engine struct {
-	ahoMatcher *ahocorasick.Matcher
-	ahoDict    []string
-	ahoRules   map[int]RuleDef
-	regexRules []compiledRegex
+	ahoMachine       *goahocorasick.Machine
+	ahoDict          [][]rune
+	patternToRule    map[string]RuleDef
+	regexRules       []compiledRegex
 
 	defaultThreshold int
 	defaultWindow    int
@@ -65,7 +66,7 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 	}
 
 	e := &Engine{
-		ahoRules:         make(map[int]RuleDef),
+		patternToRule:    make(map[string]RuleDef),
 		defaultThreshold: defaultThreshold,
 		defaultWindow:    defaultWindow,
 	}
@@ -74,8 +75,8 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 		switch rule.Type {
 		case "aho-corasick":
 			for _, pat := range rule.Patterns {
-				e.ahoDict = append(e.ahoDict, pat)
-				e.ahoRules[len(e.ahoDict)-1] = rule
+				e.ahoDict = append(e.ahoDict, []rune(pat))
+				e.patternToRule[pat] = rule
 			}
 		case "regex":
 			strictHostRegex := `(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-fA-F0-9:]+:[a-fA-F0-9:]+)`
@@ -89,7 +90,10 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 	}
 
 	if len(e.ahoDict) > 0 {
-		e.ahoMatcher = ahocorasick.NewStringMatcher(e.ahoDict)
+		e.ahoMachine = new(goahocorasick.Machine)
+		if err := e.ahoMachine.Build(e.ahoDict); err != nil {
+			return nil, fmt.Errorf("failed to build aho-corasick machine: %w", err)
+		}
 	}
 
 	// Start garbage collector for tracker
@@ -124,18 +128,39 @@ func (e *Engine) Scan(logLine string) *Match {
 		}
 	}
 
-	if e.ahoMatcher != nil {
-		matches := e.ahoMatcher.Match([]byte(logLine))
-		if len(matches) > 0 {
-			idx := matches[0]
-			rule := e.ahoRules[idx]
-			return &Match{
-				RuleID:    rule.ID,
-				Payload:   logLine,
-				Service:   rule.Service,
-				Action:    rule.Action,
-				Threshold: rule.Threshold,
-				Window:    rule.Window,
+	if e.ahoMachine != nil {
+		// Scan raw line
+		hits := e.ahoMachine.MultiPatternSearch([]rune(logLine), false)
+		if len(hits) > 0 {
+			pat := string(hits[0].Word)
+			if rule, ok := e.patternToRule[pat]; ok {
+				return &Match{
+					RuleID:    rule.ID,
+					Payload:   logLine,
+					Service:   rule.Service,
+					Action:    rule.Action,
+					Threshold: rule.Threshold,
+					Window:    rule.Window,
+				}
+			}
+		}
+
+		// Decode URL if possible to catch obfuscated payloads
+		decodedLine, err := url.QueryUnescape(logLine)
+		if err == nil && decodedLine != logLine {
+			hits = e.ahoMachine.MultiPatternSearch([]rune(decodedLine), false)
+			if len(hits) > 0 {
+				pat := string(hits[0].Word)
+				if rule, ok := e.patternToRule[pat]; ok {
+					return &Match{
+						RuleID:    rule.ID,
+						Payload:   logLine,
+						Service:   rule.Service,
+						Action:    rule.Action,
+						Threshold: rule.Threshold,
+						Window:    rule.Window,
+					}
+				}
 			}
 		}
 	}

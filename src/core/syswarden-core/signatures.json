@@ -217,11 +217,15 @@
       "type": "aho-corasick",
       "patterns": [
         "UNION SELECT",
+        "UNION ALL SELECT",
         "CONCAT(",
         "WAITFOR DELAY",
+        "pg_sleep(",
         "SLEEP(",
         "eval(",
-        "base64_decode("
+        "base64_decode(",
+        "DROP TABLE",
+        "SELECT * FROM"
       ],
       "service": "http"
     },
@@ -299,9 +303,13 @@
       "type": "aho-corasick",
       "patterns": [
         "/api/v1/users/",
-        "/api/v1/profile/"
+        "/api/v1/profile/",
+        "/api/v1/orders/"
       ],
-      "service": "http"
+      "service": "http",
+      "action": "track",
+      "threshold": 15,
+      "window": 60
     },
     {
       "id": "sso",
@@ -546,7 +554,10 @@
       "patterns": [
         "<script>alert",
         "javascript:alert",
-        "onerror=alert",
+        "javascript:",
+        "onerror=",
+        "onload=",
+        "svg/onload",
         "onmouseover="
       ],
       "service": "http",
@@ -644,12 +655,60 @@
       "action": "track"
     },
     {
-      "id": "nexus-api-protect",
+      "id": "syswarden-l4-protect",
+      "type": "regex",
+      "pattern": "SRC=<HOST> .*? PROTO=TCP .*? DPT=(?:62026|62027)\\b",
+      "service": "kernel",
+      "action": "track",
+      "threshold": 3,
+      "window": 60
+    },
+    {
+      "id": "syswarden-l7-protect",
       "type": "aho-corasick",
       "patterns": [
-        "/api/v1/enroll'",
-        "/api/v1/telemetry\"",
-        "../api/v1/"
+        "/ha/sync",
+        "/ha/telemetry",
+        "/ha/status",
+        "/?token="
+      ],
+      "service": "http",
+      "action": "track",
+      "threshold": 3,
+      "window": 60
+    },
+    {
+      "id": "anssi-methods",
+      "type": "regex",
+      "pattern": "^(?:TRACE|TRACK|CONNECT) .*? (?:30[1278]|400|401|403|404|405|444)\\b",
+      "service": "http",
+      "action": "track",
+      "threshold": 2,
+      "window": 60
+    },
+    {
+      "id": "anssi-path-traversal",
+      "type": "aho-corasick",
+      "patterns": [
+        "../",
+        "..\\",
+        "/etc/passwd",
+        "boot.ini",
+        "windows/win.ini",
+        "etc/shadow"
+      ],
+      "service": "http",
+      "action": "detect"
+    },
+    {
+      "id": "anssi-sensitive-files",
+      "type": "aho-corasick",
+      "patterns": [
+        ".env",
+        ".git/config",
+        "wp-config.php.bak",
+        "phpinfo.php",
+        "docker-compose.yml"
       ],
       "service": "http",
       "action": "detect"
