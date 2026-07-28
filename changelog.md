@@ -1,3 +1,11 @@
+# Release v3.76.3
+
+## FIXED 🐛
+- **WAAP Engine**: Fixed a false-positive self-banning issue (Shadow-Alerts) on RHEL-family OS (AlmaLinux, Rocky, Fedora). The `syswarden-webtui` systemd startup logs in `/var/log/messages` were inadvertently triggering the `syswarden-l7-protect` signature.
+- **Engine Core**: Updated `ExtractIP` in `ahocorasick.go` to systematically drop unroutable loopback and generic bind addresses (`0.0.0.0`, `127.0.0.1`, `::1`, `::`) from log extraction.
+
+---
+
 # Release v3.76.2
 
 ## UPDATED ♻️

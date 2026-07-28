@@ -244,8 +244,13 @@ func ExtractIP(logLine string) string {
 	matches := ipRegex.FindAllStringSubmatch(logLine, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
-			if net.ParseIP(match[1]) != nil {
-				return match[1]
+			ipStr := match[1]
+			// Ignore unroutable loopback and generic bind addresses from internal logs
+			if ipStr == "0.0.0.0" || ipStr == "127.0.0.1" || ipStr == "::1" || ipStr == "::" {
+				continue
+			}
+			if net.ParseIP(ipStr) != nil {
+				return ipStr
 			}
 		}
 	}
