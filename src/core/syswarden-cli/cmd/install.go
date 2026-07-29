@@ -121,7 +121,7 @@ var installCmd = &cobra.Command{
 		fmt.Printf("[+] Web-TUI Client Access URL: https://%s:%s/?token=%s\n", ip, webtuiPort, token)
 		fmt.Printf("======================================================\n\n")
 
-		fmt.Println("[SYSWARDEN] v3.76.5 Native Installation Complete.")
+		fmt.Println("[SYSWARDEN] v3.76.6 Native Installation Complete.")
 	},
 }
 
