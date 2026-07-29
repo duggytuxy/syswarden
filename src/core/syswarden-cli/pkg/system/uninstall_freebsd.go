@@ -23,8 +23,13 @@ func UninstallSystem() error {
 	_ = exec.Command("sysrc", "-x", "syswarden_enable").Run() // #nosec
 	_ = os.Remove("/usr/local/etc/rc.d/syswarden")
 
+	_ = exec.Command("service", "syswarden-webtui", "stop").Run()    // #nosec
+	_ = exec.Command("sysrc", "-x", "syswarden_webtui_enable").Run() // #nosec
+	_ = os.Remove("/usr/local/etc/rc.d/syswarden-webtui")
+
 	// 2. Kill orphan processes
-	_ = exec.Command("pkill", "-9", "-f", "syswarden-core").Run() // #nosec
+	_ = exec.Command("pkill", "-9", "-f", "syswarden-core").Run()   // #nosec
+	_ = exec.Command("pkill", "-9", "-f", "syswarden-webtui").Run() // #nosec
 
 	// 3. Remove WireGuard
 	if _, err := os.Stat("/usr/local/etc/wireguard/wg-syswarden.conf"); err == nil {
@@ -49,6 +54,25 @@ func UninstallSystem() error {
 	_ = os.Remove("/usr/local/etc/rsyslog.d/99-syswarden-siem.conf")
 	_ = os.Remove("/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf")
 	_ = exec.Command("service", "rsyslogd", "restart").Run() // #nosec
+
+	// Revert Hardening
+	fmt.Println(" -> Reverting OS Hardening...")
+	_ = os.Remove("/var/cron/allow")
+
+	// Unlock user profiles
+	if dirs, err := os.ReadDir("/home"); err == nil {
+		for _, d := range dirs {
+			if d.IsDir() {
+				profiles := []string{".profile", ".bashrc", ".bash_profile"}
+				for _, p := range profiles {
+					pPath := "/home/" + d.Name() + "/" + p
+					if _, err := os.Stat(pPath); err == nil {
+						_ = exec.Command("chflags", "noschg", pPath).Run() // #nosec
+					}
+				}
+			}
+		}
+	}
 
 	// Remove cron natively
 	out, _ := exec.Command("crontab", "-l").Output() // #nosec

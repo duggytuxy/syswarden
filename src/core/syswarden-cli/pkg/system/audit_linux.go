@@ -206,7 +206,7 @@ func RunAudit() {
 	} else {
 		fail("Telemetry Generator: syswarden-core is inactive.")
 	}
-	checkFilePerms("/var/lib/syswarden/ui/data.json", []string{"644"}, "root")
+	checkFilePerms("/var/lib/syswarden/ui/data.json", []string{"600"}, "root")
 
 	// Phase 6
 	logHeader("Phase 6: Zero Trust Remote Access (VPN & SSH Cloaking)")

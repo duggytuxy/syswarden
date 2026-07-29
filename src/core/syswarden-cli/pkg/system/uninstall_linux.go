@@ -45,11 +45,16 @@ func UninstallSystem() error {
 		_ = exec.Command("systemctl", "disable", "syswarden-reporter").Run() // #nosec
 		_ = os.Remove("/etc/systemd/system/syswarden-reporter.service")
 
+		_ = exec.Command("systemctl", "stop", "syswarden-webtui.service").Run()    // #nosec
+		_ = exec.Command("systemctl", "disable", "syswarden-webtui.service").Run() // #nosec
+		_ = os.Remove("/etc/systemd/system/syswarden-webtui.service")
+
 		_ = exec.Command("systemctl", "daemon-reload").Run() // #nosec
 	}
 
 	// 2. Kill orphan processes
-	_ = exec.Command("pkill", "-9", "-f", "syswarden-core").Run() // #nosec
+	_ = exec.Command("pkill", "-9", "-f", "syswarden-core").Run()   // #nosec
+	_ = exec.Command("pkill", "-9", "-f", "syswarden-webtui").Run() // #nosec
 
 	// 3. Remove WireGuard
 	if _, err := os.Stat("/etc/wireguard/wg-syswarden.conf"); err == nil {
@@ -80,7 +85,23 @@ func UninstallSystem() error {
 	_ = os.Remove("/etc/modprobe.d/syswarden-cis-net.conf")
 	_ = os.Remove("/etc/sysctl.d/99-syswarden-cis-level2.conf")
 	_ = os.Remove("/etc/security/limits.d/99-syswarden-cis.conf")
+	_ = os.Remove("/etc/cron.allow")
 	_ = exec.Command("sysctl", "--system").Run() // #nosec
+
+	// Unlock user profiles
+	if dirs, err := os.ReadDir("/home"); err == nil {
+		for _, d := range dirs {
+			if d.IsDir() {
+				profiles := []string{".profile", ".bashrc", ".bash_profile"}
+				for _, p := range profiles {
+					pPath := "/home/" + d.Name() + "/" + p
+					if _, err := os.Stat(pPath); err == nil {
+						_ = exec.Command("chattr", "-i", pPath).Run() // #nosec
+					}
+				}
+			}
+		}
+	}
 
 	// 5.5 Clean up Cron and Rsyslog
 	fmt.Println(" -> Cleaning up background jobs and log bridges...")

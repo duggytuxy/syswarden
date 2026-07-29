@@ -131,15 +131,7 @@ jobs:
           if (git status --porcelain) {
               git commit -m "$CommitMsg"
               git tag "$NewVersionString"
-              
-              Write-Host "        [*] Purging legacy tags to maintain a clean Git history..." -ForegroundColor Cyan
-              $AllTags = git tag
-              foreach ($LocalTag in $AllTags) {
-                  if ($LocalTag -ne $NewVersionString) {
-                      git tag -d $LocalTag 2>&1 | Out-Null
-                      git push origin --delete $LocalTag 2>&1 | Out-Null
-                  }
-              }
+
               
               Write-Host "        [>] Pushing to GitHub..." -ForegroundColor DarkCyan
               git push origin main

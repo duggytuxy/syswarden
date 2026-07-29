@@ -1,5 +1,13 @@
-# Release v3.76.7
+# Release v3.76.8
 
+## FIXED 🐛
+- **CI/CD Orchestration**: Reworked the release workflows (`auto-versioning.yml` and `release-manager.yml`). Legacy tags are no longer purged to maintain release history, ensure reproducibility, and allow rollbacks. The final package is now explicitly marked as `latest` in the GitHub Releases API to resolve `404 Not Found` errors during `curl/wget` installations.
+- **Security Audit**: Fixed a false-positive failure in `syswarden audit`. The TUI daemon natively strictly secures `/var/lib/syswarden/ui/data.json` with `0600` permissions; the auditor now expects `0600` instead of `0644`.
+- **Uninstallation (Scorched Earth)**: Enhanced the `syswarden uninstall` command. It now cleanly terminates and removes the `syswarden-webtui` service (freeing port 62027), natively unlocks user profiles (`chattr -i`), and purges the `cron.allow` hardening, leaving zero trace behind.
+
+---
+
+# Release v3.76.7
 ## ADDED ➕
 - **TUI & Telemetry**: Added a new keyboard shortcut (`b`) to the `WAF ALLOWED/BANNED IP REGISTRY` dashboard. Users can now select an IP in `DETECT` state and press `b` to instantly apply a full Layer 7 (WAAP) ban, which automatically propagates to Layer 3 (nftables). 
 - **Telemetry**: Enforced strict telemetry accuracy. Banning an IP that was previously tracked (Shadow-Alert/Detected) now dynamically overrides its state to `BAN` and correctly subtracts it from the `Detected` counter in the `GLOBAL RISK VECTORS`, ensuring the metrics reflect the absolute truth. The unban (`u`) shortcut also correctly removes the IP from both L7 and L3.
