@@ -960,6 +960,9 @@ func getWAFStats() WAF {
 	for scanner.Scan() {
 		var event TelemetryEvent
 		if err := json.Unmarshal(scanner.Bytes(), &event); err == nil {
+			if event.Action != "ALLOWED" && activeBans[event.IP] {
+				event.Action = "BANNED"
+			}
 			switch event.Action {
 			case "ALLOWED":
 				allAllowed = append(allAllowed, AllowedEvent{

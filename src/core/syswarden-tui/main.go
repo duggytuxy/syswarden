@@ -22,7 +22,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v3.76.6"
+const SysWardenVersion = "v3.75.9"
 
 var (
 	activeNodeIP = "local"
@@ -235,6 +235,38 @@ func main() {
 											syswardenPath = "syswarden"
 										}
 										_ = exec.Command(syswardenPath, "unblock", targetIP).Run() // #nosec
+										readDataAndUpdate()
+									}(ip)
+								}
+								app.SetRoot(mainFlex, true)
+								if buttonLabel == "y" {
+									go readDataAndUpdate()
+								}
+							})
+						app.SetRoot(modal, false)
+					}
+				}
+			}
+		} else if event.Rune() == 'b' || event.Rune() == 'B' {
+			row, _ := bannedTable.GetSelection()
+			if row > 0 {
+				cell := bannedTable.GetCell(row, 0)
+				stateCell := bannedTable.GetCell(row, 3)
+				if cell != nil && stateCell != nil {
+					ip := cell.Text
+					state := stateCell.Text
+					if ip != "" && state == "DETECT" {
+						modal := tview.NewModal().
+							SetText(fmt.Sprintf("[white]Do you want to permanently BAN IP %s?[-]", ip)).
+							AddButtons([]string{"y", "n"}).
+							SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+								if buttonLabel == "y" {
+									go func(targetIP string) {
+										syswardenPath := "/opt/syswarden/bin/syswarden"
+										if _, err := os.Stat(syswardenPath); os.IsNotExist(err) {
+											syswardenPath = "syswarden"
+										}
+										_ = exec.Command(syswardenPath, "block", targetIP).Run() // #nosec
 										readDataAndUpdate()
 									}(ip)
 								}

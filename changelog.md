@@ -1,5 +1,12 @@
-# Release v3.76.6
+# Release v3.76.7
 
+## ADDED ➕
+- **TUI & Telemetry**: Added a new keyboard shortcut (`b`) to the `WAF ALLOWED/BANNED IP REGISTRY` dashboard. Users can now select an IP in `DETECT` state and press `b` to instantly apply a full Layer 7 (WAAP) ban, which automatically propagates to Layer 3 (nftables). 
+- **Telemetry**: Enforced strict telemetry accuracy. Banning an IP that was previously tracked (Shadow-Alert/Detected) now dynamically overrides its state to `BAN` and correctly subtracts it from the `Detected` counter in the `GLOBAL RISK VECTORS`, ensuring the metrics reflect the absolute truth. The unban (`u`) shortcut also correctly removes the IP from both L7 and L3.
+
+---
+
+# Release v3.76.6
 ## FIXED 🐛
 - **Telemetry**: Fixed a bug where the `GLOBAL RISK VECTORS` dashboard failed to increment the `Detected` counter for `SHADOW-ALERT` tracking events. The telemetry engine now accurately syncs the global detection count with the WAF Registry logs.
 
