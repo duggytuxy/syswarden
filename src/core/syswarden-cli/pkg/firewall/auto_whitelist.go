@@ -30,12 +30,6 @@ func AutoWhitelistAdminAndInfra() error {
 		sshClient := os.Getenv("SSH_CLIENT")
 		if sshClient != "" {
 			adminIP = strings.Split(sshClient, " ")[0]
-		} else {
-			// Fallback: active SSH session from ss
-			out, err := exec.Command("sh", "-c", "ss -tnp 2>/dev/null | grep -E 'sshd|ssh' | grep 'ESTAB' | awk '{print $5}' | cut -d: -f1 | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | head -n 1").Output() // #nosec
-			if err == nil {
-				adminIP = strings.TrimSpace(string(out))
-			}
 		}
 	}
 

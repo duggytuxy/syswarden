@@ -1,5 +1,11 @@
-# Release v3.76.8
+# Release v3.76.9
 
+## FIXED 🐛
+- **Security Vulnerability (CVE-Like / CWE-362 Race Condition)**: Fixed a critical logic flaw in the Auto-Whitelisting installer routine (`auto_whitelist.go` and `lists.go`). Previously, if the environment variables (`SSH_CLIENT` / `SSH_CONNECTION`) were missing (e.g. via cloud-init or deep sudo execution), the system fell back to blindly trusting the first established SSH connection (`ss -tnp`) as the Administrator IP. On freshly exposed VPS instances, this race condition could mistakenly whitelist an attacker botnet actively brute-forcing the server. The fallback has been entirely removed; Syswarden now strictly requires explicit environment variables to auto-whitelist the Admin IP.
+
+---
+
+# Release v3.76.8
 ## FIXED 🐛
 - **CI/CD Orchestration**: Reworked the release workflows (`auto-versioning.yml` and `release-manager.yml`). Legacy tags are no longer purged to maintain release history, ensure reproducibility, and allow rollbacks. The final package is now explicitly marked as `latest` in the GitHub Releases API to resolve `404 Not Found` errors during `curl/wget` installations.
 - **Security Audit**: Fixed a false-positive failure in `syswarden audit`. The TUI daemon natively strictly secures `/var/lib/syswarden/ui/data.json` with `0600` permissions; the auditor now expects `0600` instead of `0644`.
