@@ -22,7 +22,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v3.76.4"
+const SysWardenVersion = "v3.75.9"
 
 var (
 	activeNodeIP = "local"
@@ -764,7 +764,8 @@ func refreshUI() {
 	bannedTable.SetCell(0, 0, tview.NewTableCell("IP ADDRESS").SetTextColor(tcell.ColorGray).SetSelectable(false))
 	bannedTable.SetCell(0, 1, tview.NewTableCell("TRIGGERING").SetTextColor(tcell.ColorGray).SetSelectable(false))
 	bannedTable.SetCell(0, 2, tview.NewTableCell("MITRE ATT&CK / TYPE").SetTextColor(tcell.ColorGray).SetSelectable(false))
-	bannedTable.SetCell(0, 3, tview.NewTableCell("REASON (ATTEMPTED ATTACK)").SetTextColor(tcell.ColorGray).SetSelectable(false))
+	bannedTable.SetCell(0, 3, tview.NewTableCell("STATE").SetTextColor(tcell.ColorGray).SetSelectable(false))
+	bannedTable.SetCell(0, 4, tview.NewTableCell("REASON (ATTEMPTED ATTACK)").SetTextColor(tcell.ColorGray).SetSelectable(false))
 
 	recentlyUnbannedMu.Lock()
 	now := time.Now()
@@ -789,8 +790,9 @@ func refreshUI() {
 		for _, a := range d.WAF.AllowedEvents {
 			bannedTable.SetCell(row, 0, tview.NewTableCell(a.IP).SetTextColor(tcell.ColorWhite))
 			bannedTable.SetCell(row, 1, tview.NewTableCell(a.Service).SetTextColor(tcell.ColorYellow))
-			bannedTable.SetCell(row, 2, tview.NewTableCell("ALLOWED").SetTextColor(tcell.ColorGreen))
-			bannedTable.SetCell(row, 3, tview.NewTableCell(TranslateAllowedPayload(a.Service, a.Payload, a.IP, a.Timestamp)).SetTextColor(tcell.ColorGray))
+			bannedTable.SetCell(row, 2, tview.NewTableCell("-").SetTextColor(tcell.ColorGray))
+			bannedTable.SetCell(row, 3, tview.NewTableCell("ALLOW").SetTextColor(tcell.ColorGreen))
+			bannedTable.SetCell(row, 4, tview.NewTableCell(TranslateAllowedPayload(a.Service, a.Payload, a.IP, a.Timestamp)).SetTextColor(tcell.ColorGray))
 			row++
 		}
 		for _, b := range d.WAF.BannedIPs {
@@ -816,17 +818,20 @@ func refreshUI() {
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("SHADOW-ALERT: "+b.Jail).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorOrange))
-				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorYellow))
+				bannedTable.SetCell(row, 3, tview.NewTableCell("DETECT").SetTextColor(tcell.ColorOrange))
+				bannedTable.SetCell(row, 4, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorYellow))
 			case "DETECTED":
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("DETECTED: "+b.Jail).SetTextColor(tcell.ColorYellow))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorYellow))
-				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorYellow))
+				bannedTable.SetCell(row, 3, tview.NewTableCell("DETECT").SetTextColor(tcell.ColorYellow))
+				bannedTable.SetCell(row, 4, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorYellow))
 			default:
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorWhite))
 				bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(cVec))
 				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorWhite))
-				bannedTable.SetCell(row, 3, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorWhite))
+				bannedTable.SetCell(row, 3, tview.NewTableCell("BAN").SetTextColor(tcell.ColorRed))
+				bannedTable.SetCell(row, 4, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorWhite))
 			}
 			row++
 		}

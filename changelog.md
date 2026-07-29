@@ -1,5 +1,11 @@
-# Release v3.76.4
+# Release v3.76.5
 
+## ADDED ➕
+- **TUI & Telemetry**: Added a new `STATE` column in the "WAF ALLOWED/BANNED IP REGISTRY (L4/L7)" block. This column explicitly labels tracked IPs as `DETECT` (Shadow-Alerts) and blocked IPs as `BAN`, providing clearer situational awareness.
+
+---
+
+# Release v3.76.4
 ## UPDATED ♻️
 - **Telemetry & Webhooks**: Improved semantics for Shadow-Alert tracking logs. The engine now dynamically evaluates if the tracked IP belongs to the local Whitelist. Internal IPs will correctly trigger "INSIDER THREAT" alerts, while public external IPs undergoing tracking will accurately report as "HIGH RISK THREAT TRACKING", eliminating false semantic labeling on Discord and internal logs.
 
