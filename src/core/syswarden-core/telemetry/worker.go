@@ -969,6 +969,7 @@ func getWAFStats() WAF {
 					Payload:   event.Payload,
 				})
 			case "SHADOW-ALERT":
+				waf.TotalDetected++
 				jailCounts[event.Jail]++
 				allBans = append(allBans, BannedIP{
 					Timestamp: event.Timestamp,

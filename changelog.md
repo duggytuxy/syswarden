@@ -1,5 +1,11 @@
-# Release v3.76.5
+# Release v3.76.6
 
+## FIXED 🐛
+- **Telemetry**: Fixed a bug where the `GLOBAL RISK VECTORS` dashboard failed to increment the `Detected` counter for `SHADOW-ALERT` tracking events. The telemetry engine now accurately syncs the global detection count with the WAF Registry logs.
+
+---
+
+# Release v3.76.5
 ## ADDED ➕
 - **TUI & Telemetry**: Added a new `STATE` column in the "WAF ALLOWED/BANNED IP REGISTRY (L4/L7)" block. This column explicitly labels tracked IPs as `DETECT` (Shadow-Alerts) and blocked IPs as `BAN`, providing clearer situational awareness.
 
