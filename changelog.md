@@ -1,5 +1,14 @@
-# Release v3.77.1
+# Release v3.78.0
 
+## UPGRADED 🚀
+- **Performance Boost (L7 WAF Engine)**: Integrated a highly optimized, Zero-Allocation (BCE) fork of the Aho-Corasick algorithm (`github.com/duggytuxy/ahocorasick`) to drastically accelerate multi-pattern signature scanning.
+  - **Zero Allocations & Pure Bytes**: The engine now operates directly on the raw UTF-8 `[]byte` log lines using a flattened Deterministic Finite Automaton (DFA) with dense transitions. This completely eliminates the slow O(N) memory allocation previously caused by casting every log string to a `[]rune` slice.
+  - **SIMD Prefiltering**: Incorporates `bytes.IndexByte` skip-ahead prefiltering, massively boosting throughput on modern processors while maintaining graceful fallback and 100% cross-platform compatibility (Linux, FreeBSD, etc.).
+  - **Efficiency**: Lower CPU overhead and virtually zero garbage collection pressure during heavy volumetric log floods. No adjustments to existing signatures are required.
+
+---
+
+# Release v3.77.1
 ## FIXED 🐛
 - **WebTUI Frontend (Basic Auth Compatibility)**: Fixed a bug where the WebTUI frontend JavaScript (`index.html`) aggressively refused to load the terminal if the `?token=` parameter was omitted from the URL. The frontend now correctly respects the new Basic Authentication architecture (v3.77.0) and initializes the WebSocket seamlessly via the secure session cookie, while maintaining backward compatibility for users employing legacy bookmarked URLs.
 

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	goahocorasick "github.com/anknown/ahocorasick"
+	goahocorasick "github.com/duggytuxy/ahocorasick"
 )
 
 type RuleDef struct {
@@ -30,11 +30,11 @@ type Config struct {
 }
 
 type Engine struct {
-	ahoMachine       *goahocorasick.Machine
-	ahoDict          [][]rune
-	patternToRule    map[string]RuleDef
-	regexRules       []compiledRegex
+	ahoMachine    *goahocorasick.Automaton
+	patternToRule map[string]RuleDef
+	regexRules    []compiledRegex
 
+	ahoCount         int
 	defaultThreshold int
 	defaultWindow    int
 	tracker          sync.Map
@@ -71,12 +71,15 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 		defaultWindow:    defaultWindow,
 	}
 
+	ahoBuilder := goahocorasick.NewBuilder()
+
 	for _, rule := range config.Rules {
 		switch rule.Type {
 		case "aho-corasick":
 			for _, pat := range rule.Patterns {
-				e.ahoDict = append(e.ahoDict, []rune(pat))
+				ahoBuilder.AddPattern([]byte(pat))
 				e.patternToRule[pat] = rule
+				e.ahoCount++
 			}
 		case "regex":
 			strictHostRegex := `(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-fA-F0-9:]+:[a-fA-F0-9:]+)`
@@ -89,11 +92,12 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 		}
 	}
 
-	if len(e.ahoDict) > 0 {
-		e.ahoMachine = new(goahocorasick.Machine)
-		if err := e.ahoMachine.Build(e.ahoDict); err != nil {
+	if e.ahoCount > 0 {
+		machine, err := ahoBuilder.Build()
+		if err != nil {
 			return nil, fmt.Errorf("failed to build aho-corasick machine: %w", err)
 		}
+		e.ahoMachine = machine
 	}
 
 	// Start garbage collector for tracker
@@ -103,7 +107,7 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 }
 
 func (e *Engine) RuleCount() int {
-	return len(e.ahoDict) + len(e.regexRules)
+	return e.ahoCount + len(e.regexRules)
 }
 
 func (e *Engine) Scan(logLine string) *Match {
@@ -130,9 +134,8 @@ func (e *Engine) Scan(logLine string) *Match {
 
 	if e.ahoMachine != nil {
 		// Scan raw line
-		hits := e.ahoMachine.MultiPatternSearch([]rune(logLine), false)
-		if len(hits) > 0 {
-			pat := string(hits[0].Word)
+		if match, found := e.ahoMachine.Find([]byte(logLine), 0); found {
+			pat := string(e.ahoMachine.Pattern(match.PatternID))
 			if rule, ok := e.patternToRule[pat]; ok {
 				return &Match{
 					RuleID:    rule.ID,
@@ -148,9 +151,8 @@ func (e *Engine) Scan(logLine string) *Match {
 		// Decode URL if possible to catch obfuscated payloads
 		decodedLine, err := url.QueryUnescape(logLine)
 		if err == nil && decodedLine != logLine {
-			hits = e.ahoMachine.MultiPatternSearch([]rune(decodedLine), false)
-			if len(hits) > 0 {
-				pat := string(hits[0].Word)
+			if match, found := e.ahoMachine.Find([]byte(decodedLine), 0); found {
+				pat := string(e.ahoMachine.Pattern(match.PatternID))
 				if rule, ok := e.patternToRule[pat]; ok {
 					return &Match{
 						RuleID:    rule.ID,
