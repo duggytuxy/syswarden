@@ -135,8 +135,7 @@ func (e *Engine) Scan(logLine string) *Match {
 	if e.ahoMachine != nil {
 		// Scan raw line
 		if match, found := e.ahoMachine.Find([]byte(logLine), 0); found {
-			pat := string(e.ahoMachine.Pattern(match.PatternID))
-			if rule, ok := e.patternToRule[pat]; ok {
+			if rule, ok := e.patternToRule[string(e.ahoMachine.Pattern(match.PatternID))]; ok {
 				return &Match{
 					RuleID:    rule.ID,
 					Payload:   logLine,
@@ -152,8 +151,7 @@ func (e *Engine) Scan(logLine string) *Match {
 		decodedLine, err := url.QueryUnescape(logLine)
 		if err == nil && decodedLine != logLine {
 			if match, found := e.ahoMachine.Find([]byte(decodedLine), 0); found {
-				pat := string(e.ahoMachine.Pattern(match.PatternID))
-				if rule, ok := e.patternToRule[pat]; ok {
+				if rule, ok := e.patternToRule[string(e.ahoMachine.Pattern(match.PatternID))]; ok {
 					return &Match{
 						RuleID:    rule.ID,
 						Payload:   logLine,

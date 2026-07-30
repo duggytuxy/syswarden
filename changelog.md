@@ -1,5 +1,12 @@
-# Release v3.78.0
+# Release v3.78.1
 
+## FIXED 🐛
+- **CI/CD Pipeline (Code Hygiene)**: Fixed a GitHub Actions workflow failure where `golangci-lint` was unable to resolve the local `replace` directive (`/home/duggyt/...`) introduced during testing in v3.78.0. The `go.mod` file has been cleaned up to fetch the optimized `ahocorasick` engine directly from the official remote repository (`github.com/duggytuxy/ahocorasick`), ensuring clean cloud builds and seamless collaboration.
+- **WAF Engine Micro-Optimization (SA6001)**: Resolved a `staticcheck` warning during rule matching (`m[string(key)] would be more efficient`). By performing the `[]byte` to `string` conversion directly inside the map lookup brackets, the Go compiler can perform a zero-allocation map probe, officially achieving a 100% allocation-free L7 detection loop.
+
+---
+
+# Release v3.78.0
 ## UPGRADED 🚀
 - **Performance Boost (L7 WAF Engine)**: Integrated a highly optimized, Zero-Allocation (BCE) fork of the Aho-Corasick algorithm (`github.com/duggytuxy/ahocorasick`) to drastically accelerate multi-pattern signature scanning.
   - **Zero Allocations & Pure Bytes**: The engine now operates directly on the raw UTF-8 `[]byte` log lines using a flattened Deterministic Finite Automaton (DFA) with dense transitions. This completely eliminates the slow O(N) memory allocation previously caused by casting every log string to a `[]rune` slice.

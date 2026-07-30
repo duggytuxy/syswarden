@@ -1,3 +1,5 @@
+github.com/duggytuxy/ahocorasick v0.0.0-20260730090121-324ac534d992 h1:zjP5Lg8ogNE83biShILUyuLIi66/xCodjgeyyHCadi4=
+github.com/duggytuxy/ahocorasick v0.0.0-20260730090121-324ac534d992/go.mod h1:c+A2GfBC+OIyr3k+9dNxGYWSupJGhNC4TQ78L0KLGFw=
 github.com/fsnotify/fsnotify v1.6.0 h1:n+5WquG0fcWoWp6xPWfHdbskMCQaFnG6PfBrh1Ky4HY=
 github.com/fsnotify/fsnotify v1.6.0/go.mod h1:sl3t1tCWJFWoRz9R8WJCbQihKKwmorjAbSClcnxKAGw=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=

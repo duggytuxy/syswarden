@@ -3,7 +3,7 @@ module syswarden-core
 go 1.26.5
 
 require (
-	github.com/duggytuxy/ahocorasick v0.0.0-00010101000000-000000000000
+	github.com/duggytuxy/ahocorasick v0.0.0-20260730090121-324ac534d992
 	github.com/google/nftables v0.3.0
 	github.com/nxadm/tail v1.4.11
 )
@@ -18,5 +18,3 @@ require (
 	golang.org/x/sys v0.46.0 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 )
-
-replace github.com/duggytuxy/ahocorasick => /home/duggyt/Documents/dev_prod/ahocorasick
