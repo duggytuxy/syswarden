@@ -64,17 +64,16 @@
             term.open(container);
             fitAddon.fit();
 
-            // Extract token from URL
+            // Extract token from URL (Legacy support)
             const urlParams = new URLSearchParams(window.location.search);
             const token = urlParams.get('token');
-            if (!token) {
-                term.write('\x1b[31m[ERROR] No token provided in URL.\x1b[0m\r\n');
-                return;
-            }
 
             // Establish WebSocket
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws?token=${token}`;
+            let wsUrl = `${protocol}//${window.location.host}/ws`;
+            if (token) {
+                wsUrl += `?token=${token}`;
+            }
             const ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {

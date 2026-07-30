@@ -1,5 +1,11 @@
-# Release v3.77.0
+# Release v3.77.1
 
+## FIXED 🐛
+- **WebTUI Frontend (Basic Auth Compatibility)**: Fixed a bug where the WebTUI frontend JavaScript (`index.html`) aggressively refused to load the terminal if the `?token=` parameter was omitted from the URL. The frontend now correctly respects the new Basic Authentication architecture (v3.77.0) and initializes the WebSocket seamlessly via the secure session cookie, while maintaining backward compatibility for users employing legacy bookmarked URLs.
+
+---
+
+# Release v3.77.0
 ## UPGRADED 🚀
 - **WebTUI Security Architecture (Basic Authentication & Active Defense)**: Completely revamped the WebTUI authentication flow to eliminate URL-based token leaks without forcing constraints on administrators. The persistent token is no longer passed in the URL; instead, the WebTUI now utilizes native HTTP Basic Authentication. Administrators log in with the username `admin` and their secure 64-character token as the password, which the browser can now safely manage and save. 
 - **Anti-Bruteforce Defense**: Added rigorous logging for unauthorized access attempts (`[WebTUI] Unauthorized access attempt`). This empowers the SysWarden threat engine and external Fail2Ban instances to instantly ban attacking IPs attempting to brute-force the WebTUI.
