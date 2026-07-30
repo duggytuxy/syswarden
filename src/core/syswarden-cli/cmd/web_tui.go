@@ -113,7 +113,9 @@ var webTuiCmd = &cobra.Command{
 				return
 			}
 
-			if token == webToken {
+			// Support for both Basic Auth and Legacy URL token
+			user, pass, ok := r.BasicAuth()
+			if ok && user == "admin" && pass == webToken {
 				http.SetCookie(w, &http.Cookie{
 					Name:     "syswarden_token",
 					Value:    webToken,
@@ -126,7 +128,24 @@ var webTuiCmd = &cobra.Command{
 				return
 			}
 
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			// Legacy URL token support (silent login)
+			if token == webToken {
+				http.SetCookie(w, &http.Cookie{
+					Name:     "syswarden_token",
+					Value:    webToken,
+					Path:     "/",
+					HttpOnly: true,
+					Secure:   true,
+					SameSite: http.SameSiteStrictMode,
+				})
+				// Redirect to strip the token from the URL in the browser bar
+				http.Redirect(w, r, "/", http.StatusFound)
+				return
+			}
+
+			w.Header().Set("WWW-Authenticate", `Basic realm="SysWarden Web-TUI"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			log.Printf("[WebTUI] Unauthorized access attempt from IP: %s", r.RemoteAddr)
 		})
 
 		mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {

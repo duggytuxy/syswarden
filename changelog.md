@@ -1,5 +1,12 @@
-# Release v3.76.9
+# Release v3.77.0
 
+## UPGRADED 🚀
+- **WebTUI Security Architecture (Basic Authentication & Active Defense)**: Completely revamped the WebTUI authentication flow to eliminate URL-based token leaks without forcing constraints on administrators. The persistent token is no longer passed in the URL; instead, the WebTUI now utilizes native HTTP Basic Authentication. Administrators log in with the username `admin` and their secure 64-character token as the password, which the browser can now safely manage and save. 
+- **Anti-Bruteforce Defense**: Added rigorous logging for unauthorized access attempts (`[WebTUI] Unauthorized access attempt`). This empowers the SysWarden threat engine and external Fail2Ban instances to instantly ban attacking IPs attempting to brute-force the WebTUI.
+
+---
+
+# Release v3.76.9
 ## FIXED 🐛
 - **Security Vulnerability (CVE-Like / CWE-362 Race Condition)**: Fixed a critical logic flaw in the Auto-Whitelisting installer routine (`auto_whitelist.go` and `lists.go`). Previously, if the environment variables (`SSH_CLIENT` / `SSH_CONNECTION`) were missing (e.g. via cloud-init or deep sudo execution), the system fell back to blindly trusting the first established SSH connection (`ss -tnp`) as the Administrator IP. On freshly exposed VPS instances, this race condition could mistakenly whitelist an attacker botnet actively brute-forcing the server. The fallback has been entirely removed; Syswarden now strictly requires explicit environment variables to auto-whitelist the Admin IP.
 
