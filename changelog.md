@@ -1,5 +1,14 @@
-# Release v3.78.2
+# Release v3.78.3
 
+## UPDATED 🔄
+- **Terminal UI (WebTUI OSINT)**: Migrated the OSINT investigative link in the "ATTEMPTED ATTACK" Reason column. It now points to `https://prowl.lupovis.io/?ip=` instead of `AbuseIPDB`, offering a more specialized view of attacker behavioral intelligence.
+
+## FIXED 🐛
+- **L4 Engine (Log Collision/Overlap)**: Fixed a logic bug where the `syswarden-l4-protect` internal WAF rule would greedily match any kernel log targeting ports 62026/62027, including packets that were already dropped by the L3 Global Blocklist (`[SYSWARDEN-BLOCK]`). The regex has been refined to explicitly require the `[CATCH-ALL]` tag. This ensures that L3 drops remain invisible to L4 as intended, and L4 only alerts on genuine packets that bypassed L3 but hit the default firewall drop policy.
+
+---
+
+# Release v3.78.2
 ## UPDATED 🔄
 - **OSINT Telemetry (Top Attackers)**: Changed the default fallback port in OSINT reporting from `80/443` to `MULTI`. This ensures that when a non-Netfilter WAF ban occurs (e.g. L7 `badbots` matching without an explicit destination port in the payload), the OSINT history correctly reflects a multi-port/unknown port threat vector rather than making an inaccurate assumption of web traffic.
 

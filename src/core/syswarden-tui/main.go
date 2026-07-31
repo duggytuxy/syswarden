@@ -22,7 +22,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v3.78.2"
+const SysWardenVersion = "v3.75.9"
 
 var (
 	activeNodeIP = "local"
@@ -603,7 +603,7 @@ func TranslatePayload(jail, payload, ip, timestamp string) string {
 		ts = time.Now().Format("2006-01-02 15:04:05")
 	}
 	j := strings.ToLower(jail)
-	url := fmt.Sprintf("(https://www.abuseipdb.com/check/%s)", ip)
+	url := fmt.Sprintf("(https://prowl.lupovis.io/?ip=%s)", ip)
 
 	if strings.Contains(j, "ssh") || strings.Contains(j, "bruteforce") || strings.Contains(j, "auth") {
 		port := "22"
