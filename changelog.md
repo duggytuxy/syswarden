@@ -1,5 +1,11 @@
-# Release v3.78.1
+# Release v3.78.2
 
+## UPDATED 🔄
+- **OSINT Telemetry (Top Attackers)**: Changed the default fallback port in OSINT reporting from `80/443` to `MULTI`. This ensures that when a non-Netfilter WAF ban occurs (e.g. L7 `badbots` matching without an explicit destination port in the payload), the OSINT history correctly reflects a multi-port/unknown port threat vector rather than making an inaccurate assumption of web traffic.
+
+---
+
+# Release v3.78.1
 ## FIXED 🐛
 - **CI/CD Pipeline (Code Hygiene)**: Fixed a GitHub Actions workflow failure where `golangci-lint` was unable to resolve the local `replace` directive (`/home/duggyt/...`) introduced during testing in v3.78.0. The `go.mod` file has been cleaned up to fetch the optimized `ahocorasick` engine directly from the official remote repository (`github.com/duggytuxy/ahocorasick`), ensuring clean cloud builds and seamless collaboration.
 - **WAF Engine Micro-Optimization (SA6001)**: Resolved a `staticcheck` warning during rule matching (`m[string(key)] would be more efficient`). By performing the `[]byte` to `string` conversion directly inside the map lookup brackets, the Go compiler can perform a zero-allocation map probe, officially achieving a 100% allocation-free L7 detection loop.

@@ -785,7 +785,7 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 	}
 
 	// Extract port or protocol from payload dynamically
-	port := "80/443"
+	port := "MULTI"
 	if payload != "" {
 		if protoIdx := strings.Index(payload, "PROTO="); protoIdx != -1 {
 			protoStr := payload[protoIdx+6:]
@@ -813,7 +813,7 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 		}
 	}
 
-	if port == "80/443" {
+	if port == "MULTI" {
 		j := strings.ToLower(jail)
 		if strings.Contains(j, "ssh") || strings.Contains(j, "bruteforce") {
 			port = getConfiguredSSHPort()
