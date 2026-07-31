@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -41,8 +42,34 @@ func initAbuse() {
 	}
 }
 
+// isKnownIP checks if the IP is already in our threat intel or blacklist files.
+func isKnownIP(ip string) bool {
+	files := []string{
+		"/etc/syswarden/lists/syswarden_blacklist.ipv4",
+		"/etc/syswarden/lists/syswarden_blacklist.ipv6",
+		"/etc/syswarden/lists/syswarden_threatintel.ipv4",
+		"/etc/syswarden/lists/syswarden_threatintel.ipv6",
+	}
+
+	for _, path := range files {
+		f, err := os.Open(path) // #nosec
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			if strings.TrimSpace(scanner.Text()) == ip {
+				_ = f.Close()
+				return true
+			}
+		}
+		_ = f.Close()
+	}
+	return false
+}
+
 // ReportAbuseAsync asynchronously reports a banned IP to AbuseIPDB
-func ReportAbuseAsync(ip string, jail string) {
+func ReportAbuseAsync(ip, jail, payload string) {
 	abuseOnce.Do(initAbuse)
 	if !abuseEnabled || abuseAPIKey == "" {
 		return
@@ -57,9 +84,55 @@ func ReportAbuseAsync(ip string, jail string) {
 	abuseCache[ip] = time.Now()
 	abuseCacheLock.Unlock()
 
+	if isKnownIP(ip) {
+		return
+	}
+
 	go func() {
-		hostname, _ := os.Hostname()
-		comment := fmt.Sprintf("[%s] Banned by SYSWARDEN Firewall (Jail: %s)", hostname, jail)
+		ts := time.Now().Format("2006-01-02 15:04:05")
+		j := strings.ToLower(jail)
+		var comment string
+
+		if strings.Contains(j, "ssh") || strings.Contains(j, "bruteforce") || strings.Contains(j, "auth") {
+			port := "22"
+			if idx := strings.Index(payload, "port "); idx != -1 {
+				parts := strings.Split(payload[idx+5:], " ")
+				if len(parts) > 0 {
+					port = strings.Trim(parts[0], ":")
+				}
+			} else if idx := strings.Index(payload, "DPT="); idx != -1 {
+				pStr := payload[idx+4:]
+				if spaceIdx := strings.Index(pStr, " "); spaceIdx != -1 {
+					port = pStr[:spaceIdx]
+				}
+			}
+			comment = fmt.Sprintf("[%s] Attempted SSH brute-force on port %s by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, port, ip)
+		} else if strings.Contains(j, "scan") || strings.Contains(j, "zero-trust") || strings.Contains(j, "catch-all") {
+			port := "unknown"
+			if dptIdx := strings.Index(payload, "DPT="); dptIdx != -1 {
+				pStr := payload[dptIdx+4:]
+				if spaceIdx := strings.Index(pStr, " "); spaceIdx != -1 {
+					port = pStr[:spaceIdx]
+				}
+			}
+			comment = fmt.Sprintf("[%s] Attempted port scan on port %s by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, port, ip)
+		} else if strings.Contains(j, "sqli") || strings.Contains(j, "xss") || strings.Contains(j, "lfi") || strings.Contains(j, "rce") {
+			uri := "/"
+			if idx := strings.Index(payload, "GET "); idx != -1 {
+				parts := strings.Split(payload[idx+4:], " ")
+				if len(parts) > 0 {
+					uri = parts[0]
+				}
+			} else if idx := strings.Index(payload, "POST "); idx != -1 {
+				parts := strings.Split(payload[idx+5:], " ")
+				if len(parts) > 0 {
+					uri = parts[0]
+				}
+			}
+			comment = fmt.Sprintf("[%s] Attempted Web exploit (%s) on URI '%s' by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, strings.ToUpper(jail), uri, ip)
+		} else {
+			comment = fmt.Sprintf("[%s] Attempted attack (%s) by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, strings.ToUpper(jail), ip)
+		}
 
 		// Map jails to categories
 		categories := "14,15,18,21"

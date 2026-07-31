@@ -81,7 +81,7 @@ func (l *Logger) Error(msg string, err error) {
 
 // LogBan writes a JSON telemetry event when an IP is banned
 func (l *Logger) LogBan(ip, jail, payload string) {
-	telemetry.ReportAbuseAsync(ip, jail)
+	telemetry.ReportAbuseAsync(ip, jail, payload)
 	go webhook.SendBanAlert(ip, jail, "WAF Drop (L7)")
 	go persistBanToDisk(ip)
 

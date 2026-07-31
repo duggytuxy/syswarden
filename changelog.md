@@ -1,5 +1,12 @@
-# Release v3.78.3
+# Release v3.78.4
 
+## UPDATED 🔄
+- **Terminal UI (WebTUI OSINT)**: Rolled back the OSINT investigative link in the "ATTEMPTED ATTACK" Reason column from `Lupovis Prowl` back to `AbuseIPDB` (https://www.abuseipdb.com/check/). This ensures continuity of threat intelligence lookups following the deprecation of the Lupovis Prowl service.
+- **Telemetry (AbuseIPDB Reporting)**: Enhanced the native AbuseIPDB reporting logic. The system now fully ignores IPs that are already present in local blocklists (`syswarden_blacklist` and `syswarden_threatintel`), preventing redundant reports. Furthermore, reported incidents now include a detailed formatted comment (e.g., extracted payloads, URIs, or ports) identical to the WebTUI reasons, automatically signed with `(Reported by SysWarden https://github.com/duggytuxy/syswarden)`.
+
+---
+
+# Release v3.78.3
 ## UPDATED 🔄
 - **Terminal UI (WebTUI OSINT)**: Migrated the OSINT investigative link in the "ATTEMPTED ATTACK" Reason column. It now points to `https://prowl.lupovis.io/?ip=` instead of `AbuseIPDB`, offering a more specialized view of attacker behavioral intelligence.
 
