@@ -1,3 +1,10 @@
+# Release v3.78.7
+
+## FIXED 🐛
+- **SysWarden Installer (Web-TUI URL)**: Updated the post-installation output message. The installer no longer displays the deprecated URL format containing `?token=...`. It now correctly prompts the user to access the base URL and authenticate using Basic Auth with the default username (`admin`) and the auto-generated secure token as the password.
+
+---
+
 # Release v3.78.6
 
 ## FIXED 🐛
