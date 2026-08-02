@@ -13,6 +13,7 @@ import (
 	"syswarden-core/firewall"
 	"syswarden-core/logger"
 	"syswarden-core/network"
+	"syswarden-core/security"
 	"syswarden-core/telemetry"
 )
 
@@ -70,6 +71,9 @@ func main() {
 
 	// Start HA P2P Server (Zero-Touch TLS)
 	network.StartHAServer(fwManager)
+
+	// Start Continuous Compliance Watchdog (NIS2/ISO27001)
+	security.StartComplianceWatchdog(telemetryLogger)
 
 	// Handle Graceful Shutdown
 	sigChan := make(chan os.Signal, 1)

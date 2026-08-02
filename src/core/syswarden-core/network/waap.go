@@ -22,6 +22,7 @@ type WAAPConfig struct {
 	Logs      []string
 	Threshold int
 	Window    time.Duration
+	Mode      string
 }
 
 type WAAPEngine struct {
@@ -35,6 +36,7 @@ func loadWAAPConfig() WAAPConfig {
 	cfg := WAAPConfig{
 		Threshold: 5,
 		Window:    60 * time.Second,
+		Mode:      "enforcing",
 	}
 
 	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
@@ -58,6 +60,10 @@ func loadWAAPConfig() WAAPConfig {
 		val := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
 
 		switch key {
+		case "SYSWARDEN_ENFORCEMENT_MODE":
+			if val != "" {
+				cfg.Mode = val
+			}
 		case "SYSWARDEN_BRUTEFORCE_LOGS", "SYSWARDEN_MODSEC_LOGS":
 			if val != "" {
 				if strings.ToLower(val) == "auto" {
@@ -191,6 +197,12 @@ func (w *WAAPEngine) tailFile(filepath string) {
 							w.logger.LogShadowAlert(ip, match.RuleID, text)
 							continue
 						}
+						
+						if w.config.Mode == "audit" {
+							w.logger.LogSimulatedBan(ip, match.RuleID, text)
+							continue
+						}
+
 						err := w.fw.Ban(ip)
 						if err != nil {
 							w.logger.Error("Failed to ban IP, logging as DETECTED", err)

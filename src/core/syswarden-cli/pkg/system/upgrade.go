@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-var Version = "v3.78.7"
+var Version = "v3.75.9"
 
 func isRHEL() bool {
 	_, errDnf := exec.LookPath("dnf")
@@ -185,9 +185,32 @@ func UpgradeSystem() error {
 	// Clean up
 	_ = os.Remove(pkgFile)
 
-	// Ensure Web-TUI is initialized and display URL if upgrading to a version supporting it
 	configPath := "/opt/syswarden/syswarden-auto.conf"
 	out, err := os.ReadFile(configPath) // #nosec G304
+
+	// Ensure Shadow Mode configuration exists for older installations
+	if err == nil && !strings.Contains(string(out), "SYSWARDEN_ENFORCEMENT_MODE=") {
+		fmt.Println("[INFO] Upgrading SysWarden: Injecting Shadow Mode configuration (enforcing)...")
+		
+		lines := strings.Split(string(out), "\n")
+		var newLines []string
+		for _, line := range lines {
+			if strings.HasPrefix(line, "SYSWARDEN_ENTERPRISE_MODE=") {
+				newLines = append(newLines, "# --- WAAP Enforcement Mode ---")
+				newLines = append(newLines, "# \"enforcing\" = Actively bans malicious IPs via Nftables/Iptables.")
+				newLines = append(newLines, "# \"audit\"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.")
+				newLines = append(newLines, "SYSWARDEN_ENFORCEMENT_MODE=\"enforcing\"\n")
+			}
+			newLines = append(newLines, line)
+		}
+		
+		_ = os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0600)
+		
+		// Reload the config into memory for the next steps
+		out, err = os.ReadFile(configPath) // #nosec G304
+	}
+
+	// Ensure Web-TUI is initialized and display URL if upgrading to a version supporting it
 	if err == nil && !strings.Contains(string(out), "SYSWARDEN_WEB_TOKEN=") {
 		fmt.Println("\n[INFO] Upgrading SysWarden: Initializing Web-TUI...")
 		cmdWT := exec.Command("/opt/syswarden/bin/syswarden-cli", "web-token", "--rotate") // #nosec
@@ -203,7 +226,7 @@ func UpgradeSystem() error {
 	}
 
 	fmt.Println("\n[+] In-place upgrade completed successfully!")
-	
+
 	fmt.Println("[INFO] Restarting services to apply the new version...")
 	if isAlpine() {
 		_ = exec.Command("rc-service", "syswarden-core", "restart").Run()

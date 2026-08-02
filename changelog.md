@@ -1,3 +1,12 @@
+# Release v3.80.0
+
+## ADDED 🚀
+- **Shadow Mode (Dry-Run)**: Introduced a powerful Audit/Dry-Run mode via `SYSWARDEN_ENFORCEMENT_MODE=audit`. In this mode, SysWarden acts as a transparent observer, processing logs, fetching threat intelligence, and triggering visual alerts (`[SIMULATED-BAN]`) in the Web-TUI without executing blocking rules at the firewall layer. Essential for validating deployment integrity in zero-trust environments prior to full enforcement.
+- **Continuous Compliance Drift Detection**: Deployed a zero-overhead background watchdog to satisfy continuous compliance requirements (NIS2 & ISO 27001). The engine performs automated, daily validation checks against critical kernel security parameters (`tcp_syncookies`, `rp_filter`) and secure file permissions (`syswarden-auto.conf`). Deviations trigger a high-priority `[COMPLIANCE-DRIFT]` event in the Web-TUI, while a pristine state reports `[COMPLIANCE-OK]`.
+- **TUI & Web-TUI Fast Whitelisting**: Added the `w` (or `W`) hotkey within the interactive terminal interface. Security operators can now seamlessly add trusted IP addresses to the permanent Whitelist directly from the live monitoring view, significantly streamlining false positive remediation.
+
+---
+
 # Release v3.78.7
 
 ## FIXED 🐛

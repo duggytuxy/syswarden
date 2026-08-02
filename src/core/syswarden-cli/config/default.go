@@ -1,7 +1,7 @@
 package config
 
 const DefaultConfig = `# ==============================================================================
-# Version=v3.78.7
+# Version=v3.75.9
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -14,6 +14,11 @@ const DefaultConfig = `# =======================================================
 # ==========================================
 # [1] SYSTEM & CORE
 # ==========================================
+# --- WAAP Enforcement Mode ---
+# "enforcing" = Actively bans malicious IPs via Nftables/Iptables.
+# "audit"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.
+SYSWARDEN_ENFORCEMENT_MODE="enforcing"
+
 # --- Enterprise Compliance Mode ---
 # y = Strictly disables third-party telemetry/reporting (e.g., AbuseIPDB) to comply with corporate policies.
 SYSWARDEN_ENTERPRISE_MODE="n"

@@ -22,7 +22,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v3.78.7"
+const SysWardenVersion = "v3.75.9"
 
 var (
 	activeNodeIP = "local"
@@ -235,6 +235,36 @@ func main() {
 											syswardenPath = "syswarden"
 										}
 										_ = exec.Command(syswardenPath, "unblock", targetIP).Run() // #nosec
+										readDataAndUpdate()
+									}(ip)
+								}
+								app.SetRoot(mainFlex, true)
+								if buttonLabel == "y" {
+									go readDataAndUpdate()
+								}
+							})
+						app.SetRoot(modal, false)
+					}
+				}
+			}
+		} else if event.Rune() == 'w' || event.Rune() == 'W' {
+			row, _ := bannedTable.GetSelection()
+			if row > 0 {
+				cell := bannedTable.GetCell(row, 0)
+				if cell != nil {
+					ip := cell.Text
+					if ip != "" {
+						modal := tview.NewModal().
+							SetText(fmt.Sprintf("[white]Do you want to permanently WHITELIST IP %s?[-]", ip)).
+							AddButtons([]string{"y", "n"}).
+							SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+								if buttonLabel == "y" {
+									go func(targetIP string) {
+										syswardenPath := "/opt/syswarden/bin/syswarden"
+										if _, err := os.Stat(syswardenPath); os.IsNotExist(err) {
+											syswardenPath = "syswarden"
+										}
+										_ = exec.Command(syswardenPath, "whitelist", "add", targetIP).Run() // #nosec
 										readDataAndUpdate()
 									}(ip)
 								}
@@ -860,6 +890,24 @@ func refreshUI() {
 			}
 
 			switch b.Action {
+			case "SIMULATED-BAN":
+				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorOrange))
+				bannedTable.SetCell(row, 1, tview.NewTableCell("DRY-RUN: "+b.Jail).SetTextColor(tcell.ColorOrange))
+				bannedTable.SetCell(row, 2, tview.NewTableCell(mitre).SetTextColor(tcell.ColorOrange))
+				bannedTable.SetCell(row, 3, tview.NewTableCell("AUDIT").SetTextColor(tcell.ColorOrange))
+				bannedTable.SetCell(row, 4, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorYellow))
+			case "COMPLIANCE-DRIFT":
+				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorRed))
+				bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(tcell.ColorRed))
+				bannedTable.SetCell(row, 2, tview.NewTableCell("TA0005").SetTextColor(tcell.ColorRed)) // Defense Evasion
+				bannedTable.SetCell(row, 3, tview.NewTableCell("DRIFT").SetTextColor(tcell.ColorRed))
+				bannedTable.SetCell(row, 4, tview.NewTableCell(b.Payload).SetTextColor(tcell.ColorWhite))
+			case "COMPLIANCE-OK":
+				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorGreen))
+				bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(tcell.ColorGreen))
+				bannedTable.SetCell(row, 2, tview.NewTableCell("-").SetTextColor(tcell.ColorGreen))
+				bannedTable.SetCell(row, 3, tview.NewTableCell("OK").SetTextColor(tcell.ColorGreen))
+				bannedTable.SetCell(row, 4, tview.NewTableCell(b.Payload).SetTextColor(tcell.ColorGray))
 			case "SHADOW-ALERT":
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("SHADOW-ALERT: "+b.Jail).SetTextColor(tcell.ColorOrange))

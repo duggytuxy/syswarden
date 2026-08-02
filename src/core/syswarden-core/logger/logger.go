@@ -222,6 +222,74 @@ func (l *Logger) LogShadowAlert(ip, jail, payload string) {
 	}
 }
 
+// LogSimulatedBan logs an IP that would have been banned but was bypassed due to Audit mode.
+func (l *Logger) LogSimulatedBan(ip, jail, payload string) {
+	if payload == "" {
+		payload = "No payload"
+	}
+
+	event := TelemetryEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		IP:        ip,
+		Action:    "SHADOW-ALERT", // Use SHADOW-ALERT but we will change TUI to parse SIMULATED-BAN, wait, I can just use SIMULATED-BAN
+		Jail:      jail,
+		Payload:   payload,
+	}
+	event.Action = "SIMULATED-BAN"
+
+	data, err := json.Marshal(event)
+	if err == nil && l.file != nil {
+		l.mu.Lock()
+		_, _ = l.file.Write(data)
+		_, _ = l.file.Write([]byte("\n"))
+		l.mu.Unlock()
+	}
+
+	log.Printf("[SYSWARDEN-SIMULATED-BAN] IP=%s JAIL=%s PAYLOAD=%s\n", ip, jail, payload)
+}
+
+// LogComplianceDrift logs a compliance deviation.
+func (l *Logger) LogComplianceDrift(msg string) {
+	event := TelemetryEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		IP:        "127.0.0.1",
+		Action:    "COMPLIANCE-DRIFT",
+		Jail:      "NIS2-AUDIT",
+		Payload:   msg,
+	}
+
+	data, err := json.Marshal(event)
+	if err == nil && l.file != nil {
+		l.mu.Lock()
+		_, _ = l.file.Write(data)
+		_, _ = l.file.Write([]byte("\n"))
+		l.mu.Unlock()
+	}
+
+	log.Printf("[SYSWARDEN-COMPLIANCE-DRIFT] MSG=%s\n", msg)
+}
+
+// LogComplianceOK logs a successful compliance check.
+func (l *Logger) LogComplianceOK(msg string) {
+	event := TelemetryEvent{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		IP:        "127.0.0.1",
+		Action:    "COMPLIANCE-OK",
+		Jail:      "NIS2-AUDIT",
+		Payload:   msg,
+	}
+
+	data, err := json.Marshal(event)
+	if err == nil && l.file != nil {
+		l.mu.Lock()
+		_, _ = l.file.Write(data)
+		_, _ = l.file.Write([]byte("\n"))
+		l.mu.Unlock()
+	}
+
+	log.Printf("[SYSWARDEN-COMPLIANCE-OK] MSG=%s\n", msg)
+}
+
 func (l *Logger) Close() {
 	if l.file != nil {
 		_ = l.file.Close()
