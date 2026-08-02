@@ -1,3 +1,10 @@
+# Release v3.80.1
+
+## FIXED 🐛
+- **Package Configuration Migration**: Fixed an edge case where upgrading SysWarden via native package managers (`apt-get upgrade` or `dnf upgrade`) bypassed the `syswarden update` CLI migration routines. The RPM/DEB post-install scripts (`postinst`) now gracefully inject the missing `SYSWARDEN_ENFORCEMENT_MODE` block into `syswarden-auto.conf` automatically during package-level upgrades without overwriting user settings.
+
+---
+
 # Release v3.80.0
 
 ## ADDED 🚀

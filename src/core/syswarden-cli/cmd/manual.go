@@ -31,7 +31,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %suninstall%s       : Safely removes SYSWARDEN and reverts the OS to its previous state.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %saudit%s           : Validates Zero-Trust L3 boundaries and L7 WAAP independence.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sconfig%s          : Opens the interactive configuration editor (e.g., /opt/syswarden/syswarden-auto.conf).\n", ansiGreen, ansiReset)
-		fmt.Printf("  %stui%s             : Launches the real-time Terminal User Interface (TUI) dashboard.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %stui%s             : Launches the real-time Terminal User Interface (TUI) dashboard. (Hotkeys: 'b' ban, 'u' unban, 'w' whitelist)\n", ansiGreen, ansiReset)
 		fmt.Printf("  %salerts%s          : Streams live WAAP/L7 JSON telemetry and block events.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sreload%s          : Applies configuration changes to the kernel atomically without dropping connections.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sblock <IP>%s      : Manually bans an IPv4/IPv6 address via L3 Netfilter (Immediately applied).\n", ansiGreen, ansiReset)
@@ -50,6 +50,10 @@ var manualCmd = &cobra.Command{
 
 		// 2. Configuration Options
 		fmt.Printf("%s--- 3. CONFIGURATION FILE (syswarden-auto.conf) ---%s\n", ansiYellow, ansiReset)
+
+		fmt.Printf("%s[WAAP Enforcement Mode & Compliance]%s\n", ansiCyan, ansiReset)
+		fmt.Printf("  %sSYSWARDEN_ENFORCEMENT_MODE%s: \"enforcing\" (Default) drops malicious IPs via Nftables. \"audit\" enables Shadow Mode (logs [SIMULATED-BAN] without dropping).\n", ansiWhite, ansiReset)
+		fmt.Printf("  %sCOMPLIANCE WATCHDOG%s       : SysWarden inherently verifies tcp_syncookies, rp_filter, and file permissions every 24h (2 AM). Alerts appear as [COMPLIANCE-DRIFT].\n\n", ansiWhite, ansiReset)
 
 		fmt.Printf("%s[Zero-Trust Governance]%s\n", ansiCyan, ansiReset)
 		fmt.Printf("  %sSYSWARDEN_GEO_ALLOWED%s    : Comma-separated ISO Country Codes (e.g., \"FR,DE\"). Implements Default-Deny L3.\n", ansiWhite, ansiReset)
