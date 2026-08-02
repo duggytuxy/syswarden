@@ -166,7 +166,17 @@ jobs:
           # Alpine APK Install/Upgrade (APK passes version string in $1)
           elif [ -f /etc/alpine-release ]; then
               if ! grep -q "SYSWARDEN_ENFORCEMENT_MODE" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-                  sed -i '/SYSWARDEN_ENTERPRISE_MODE=/i # --- WAAP Enforcement Mode ---\n# "enforcing" = Actively bans malicious IPs via Nftables/Iptables.\n# "audit"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE="enforcing"\n' /opt/syswarden/syswarden-auto.conf || true
+                  if awk '/SYSWARDEN_ENTERPRISE_MODE=/ {
+                      print "# --- WAAP Enforcement Mode ---"
+                      print "# \"enforcing\" = Actively bans malicious IPs via Nftables/Iptables."
+                      print "# \"audit\"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking."
+                      print "SYSWARDEN_ENFORCEMENT_MODE=\"enforcing\""
+                      print ""
+                  }
+                  { print }' /opt/syswarden/syswarden-auto.conf > /tmp/sw_conf.tmp; then
+                      cat /tmp/sw_conf.tmp > /opt/syswarden/syswarden-auto.conf
+                      rm -f /tmp/sw_conf.tmp
+                  fi
               fi
               /opt/syswarden/bin/syswarden-cli install
               # syswarden update handles the daemon restart in Alpine, so we just reload.

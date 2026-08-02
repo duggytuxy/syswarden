@@ -1,3 +1,10 @@
+# Release v3.80.2
+
+## FIXED 🐛
+- **Alpine Package Migration**: Fixed an issue where the `syswarden-auto.conf` configuration file was not being updated correctly during `.apk` upgrades. Replaced the `sed` GNU commands with an `awk` processing script in the Alpine post-install hook to ensure full compatibility with the `busybox` environment while safely preserving existing administrator configurations and permissions.
+
+---
+
 # Release v3.80.1
 
 ## FIXED 🐛
