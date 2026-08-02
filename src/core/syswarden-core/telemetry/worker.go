@@ -780,6 +780,7 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 			// Save N/A in memory temporarily so we don't spam the API every 5 seconds for failed/rate-limited IPs
 			osintMu.Lock()
 			osintCache[ip] = att
+			saveOSINTCache()
 			osintMu.Unlock()
 		}
 	}
@@ -793,7 +794,7 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 				protoStr = protoStr[:spaceIdx]
 			}
 
-			if protoStr == "ICMP" || protoStr == "ICMPv6" {
+			if protoStr == "ICMP" || protoStr == "ICMPv6" || protoStr == "IGMP" || protoStr == "GRE" || protoStr == "IPSEC" || protoStr == "IPIP" {
 				port = protoStr
 			} else if dptIdx := strings.Index(payload, "DPT="); dptIdx != -1 {
 				dptStr := payload[dptIdx+4:]

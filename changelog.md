@@ -1,3 +1,13 @@
+# Release v3.78.6
+
+## FIXED 🐛
+- **OSINT Telemetry Cache Loss**: Fixed a severe rate-limiting flaw in `syswarden-core`. Previously, failed or rate-limited API calls (HTTP 429) to `ip-api.com` stored the `N/A` responses only in RAM, bypassing disk serialization. Upon `syswarden reload`, the daemon would indiscriminately re-query all uncached attacks simultaneously, instantly exhausting the strict 45-request/minute API limit and returning blank telemetry. Unresolved fetches are now reliably committed to `osint_cache.json`, preventing destructive cascading rate-limit locks during system restarts.
+
+## UPDATED 🔄
+- **WebTUI & OSINT History**: Enhanced the protocol parsing logic to completely eliminate the `unknown` port display for L3 network attacks (e.g., ICMP, IGMP, GRE). The system now dynamically extracts and formats the underlying protocol (e.g., `Attempted network sweep (Protocol: ICMP)` in the `REASON` column, and displays `ICMP` directly in the `PORT` column of the `TOP ATTACKERS` view), providing much cleaner and professional threat intel for security analysts.
+
+---
+
 # Release v3.78.5
 
 ## FIXED 🐛

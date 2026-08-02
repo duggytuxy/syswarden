@@ -22,7 +22,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v3.78.5"
+const SysWardenVersion = "v3.75.9"
 
 var (
 	activeNodeIP = "local"
@@ -622,13 +622,27 @@ func TranslatePayload(jail, payload, ip, timestamp string) string {
 	}
 
 	if strings.Contains(j, "scan") || strings.Contains(j, "zero-trust") || strings.Contains(j, "catch-all") {
-		port := "unknown"
+		port := ""
 		if dptIdx := strings.Index(payload, "DPT="); dptIdx != -1 {
 			pStr := payload[dptIdx+4:]
 			if spaceIdx := strings.Index(pStr, " "); spaceIdx != -1 {
 				port = pStr[:spaceIdx]
 			}
+		} else if protoIdx := strings.Index(payload, "PROTO="); protoIdx != -1 {
+			pStr := payload[protoIdx+6:]
+			if spaceIdx := strings.Index(pStr, " "); spaceIdx != -1 {
+				port = pStr[:spaceIdx]
+			}
 		}
+
+		if port == "" {
+			return fmt.Sprintf("[%s] Attempted network scan by IP %s %s", ts, ip, url)
+		}
+
+		if port == "ICMP" || port == "ICMPv6" || port == "IGMP" || port == "GRE" || port == "IPSEC" || port == "IPIP" {
+			return fmt.Sprintf("[%s] Attempted network sweep (Protocol: %s) by IP %s %s", ts, port, ip, url)
+		}
+
 		return fmt.Sprintf("[%s] Attempted port scan on port %s by IP %s %s", ts, port, ip, url)
 	}
 
