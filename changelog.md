@@ -1,3 +1,11 @@
+# Release v3.78.5
+
+## FIXED 🐛
+- **WAAP Engine (Log Recursion)**: Fixed a critical logic flaw causing infinite recursion in WAF parsing on systems where both kernel firewall logs and SysWarden application logs are consolidated into the same file (e.g., `/var/log/messages` on Rocky Linux). The WAAP engine now automatically ignores self-generated SysWarden log lines, permanently preventing feedback loops and resolving the issue where ports were inconsistently displayed as `unknown` due to nested payload truncation.
+- **WAF Engine (Signatures)**: Removed the redundant L7 `portscan` regex signature, as native L3 portscan detection (with a 3-strike threshold) is already handled uniformly and asynchronously across all environments.
+
+---
+
 # Release v3.78.4
 
 ## UPDATED 🔄

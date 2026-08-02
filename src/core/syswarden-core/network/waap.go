@@ -164,6 +164,13 @@ func (w *WAAPEngine) tailFile(filepath string) {
 	for line := range t.Lines {
 		text := line.Text
 
+		// Prevent recursive scanning of our own logs (infinite loops on Rocky Linux /var/log/messages)
+		if strings.Contains(text, "[SYSWARDEN-BLOCK] IP=") ||
+			strings.Contains(text, "[SYSWARDEN-DETECT] IP=") ||
+			strings.Contains(text, "[SYSWARDEN-SHADOW-ALERT] IP=") {
+			continue
+		}
+
 		match := w.engine.Scan(text)
 		if match != nil {
 			ip := engine.ExtractIP(text)

@@ -136,12 +136,6 @@
       "action": "track"
     },
     {
-      "id": "portscan",
-      "type": "regex",
-      "pattern": "\\[SysWarden-BLOCK\\] \\[Catch-All\\].*?SRC=<HOST>",
-      "service": "kernel"
-    },
-    {
       "id": "ha-cluster",
       "type": "regex",
       "pattern": "\\[SysWarden-BLOCK\\] \\[HA-Cluster\\] SRC=<HOST>",
