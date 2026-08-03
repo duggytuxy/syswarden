@@ -683,8 +683,6 @@ func loadOSINTCache() {
 }
 
 func saveOSINTCache() {
-	osintMu.Lock()
-	defer osintMu.Unlock()
 	b, err := json.Marshal(osintCache)
 	if err == nil {
 		_ = os.WriteFile("/var/lib/syswarden/ui/osint_cache.json", b, 0600) // #nosec

@@ -30,6 +30,7 @@ staging/
 
 # Local Execution Traces (If you test the script locally)
 *.log
+*.out
 tmp/
 
 # OS & Editor configurations (Prevents pushing personal settings)

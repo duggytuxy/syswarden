@@ -1,3 +1,10 @@
+# Release v3.80.7
+
+## FIXED 🐛
+- **Telemetry Worker Deadlock (Web-TUI Freeze)**: Fixed a critical double-lock deadlock vulnerability in the OSINT cache persistence routine (`saveOSINTCache`). A recent patch inadvertently introduced a non-reentrant mutex re-acquisition which permanently froze the `generateTelemetry` background worker upon encountering a new attacking IP. The deadlock is now resolved, restoring real-time visibility of L7 WAAP and L3 Network bans within the Web-TUI and HA Dashboard across all operating systems.
+
+---
+
 # Release v3.80.6
 
 ## UPGRADED ⚡
