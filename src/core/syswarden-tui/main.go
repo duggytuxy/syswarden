@@ -897,17 +897,25 @@ func refreshUI() {
 				bannedTable.SetCell(row, 3, tview.NewTableCell("AUDIT").SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 4, tview.NewTableCell(TranslatePayload(b.Jail, payload, b.IP, b.Timestamp)).SetTextColor(tcell.ColorYellow))
 			case "COMPLIANCE-DRIFT":
+				ts := b.Timestamp
+				if ts == "" {
+					ts = time.Now().Format("2006-01-02 15:04:05")
+				}
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorRed))
 				bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(tcell.ColorRed))
 				bannedTable.SetCell(row, 2, tview.NewTableCell("TA0005").SetTextColor(tcell.ColorRed)) // Defense Evasion
 				bannedTable.SetCell(row, 3, tview.NewTableCell("DRIFT").SetTextColor(tcell.ColorRed))
-				bannedTable.SetCell(row, 4, tview.NewTableCell(b.Payload).SetTextColor(tcell.ColorWhite))
+				bannedTable.SetCell(row, 4, tview.NewTableCell(fmt.Sprintf("[%s] %s", ts, b.Payload)).SetTextColor(tcell.ColorWhite))
 			case "COMPLIANCE-OK":
+				ts := b.Timestamp
+				if ts == "" {
+					ts = time.Now().Format("2006-01-02 15:04:05")
+				}
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorGreen))
 				bannedTable.SetCell(row, 1, tview.NewTableCell(b.Jail).SetTextColor(tcell.ColorGreen))
 				bannedTable.SetCell(row, 2, tview.NewTableCell("-").SetTextColor(tcell.ColorGreen))
 				bannedTable.SetCell(row, 3, tview.NewTableCell("OK").SetTextColor(tcell.ColorGreen))
-				bannedTable.SetCell(row, 4, tview.NewTableCell(b.Payload).SetTextColor(tcell.ColorGray))
+				bannedTable.SetCell(row, 4, tview.NewTableCell(fmt.Sprintf("[%s] %s", ts, b.Payload)).SetTextColor(tcell.ColorGray))
 			case "SHADOW-ALERT":
 				bannedTable.SetCell(row, 0, tview.NewTableCell(b.IP).SetTextColor(tcell.ColorOrange))
 				bannedTable.SetCell(row, 1, tview.NewTableCell("SHADOW-ALERT: "+b.Jail).SetTextColor(tcell.ColorOrange))

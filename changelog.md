@@ -1,3 +1,10 @@
+# Release v3.80.9
+
+## ADDED 🚀
+- **Continuous Compliance TUI Formatting**: Standardized the display payload for `COMPLIANCE-OK` and `COMPLIANCE-DRIFT` events by prepending the exact telemetry timestamp, aligning the visual format with other access logs in the Web-TUI dashboard.
+
+---
+
 # Release v3.80.8
 
 ## ADDED 🚀
