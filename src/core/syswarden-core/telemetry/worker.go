@@ -991,6 +991,15 @@ func getWAFStats() WAF {
 					Mitre:     getMitreTag(event.Jail),
 					Action:    "DETECTED",
 				})
+			case "COMPLIANCE-OK", "COMPLIANCE-DRIFT", "SIMULATED-BAN":
+				allBans = append(allBans, BannedIP{
+					Timestamp: event.Timestamp,
+					IP:        event.IP,
+					Jail:      event.Jail,
+					Payload:   event.Payload,
+					Mitre:     getMitreTag(event.Jail),
+					Action:    event.Action,
+				})
 			default:
 				if !activeBans[event.IP] {
 					continue
@@ -1034,25 +1043,27 @@ func getWAFStats() WAF {
 		seenIPs[allBans[i].IP] = true
 		waf.BannedIPs = append(waf.BannedIPs, allBans[i])
 
-		// Quick TopAttacker populate with OSINT and Severity
-		att := enrichOSINT(allBans[i].IP, allBans[i].Payload, allBans[i].Jail)
-		hits := hitCounts[allBans[i].IP]
-		score := hits * 10
-		j := strings.ToLower(allBans[i].Jail)
-		if strings.Contains(j, "sqli") || strings.Contains(j, "rce") || strings.Contains(j, "xss") || strings.Contains(j, "lfi") || strings.Contains(j, "bruteforce") || strings.Contains(j, "ssh") || strings.Contains(j, "auth") {
-			score += 20
+		if allBans[i].Action != "COMPLIANCE-OK" && allBans[i].Action != "COMPLIANCE-DRIFT" {
+			// Quick TopAttacker populate with OSINT and Severity
+			att := enrichOSINT(allBans[i].IP, allBans[i].Payload, allBans[i].Jail)
+			hits := hitCounts[allBans[i].IP]
+			score := hits * 10
+			j := strings.ToLower(allBans[i].Jail)
+			if strings.Contains(j, "sqli") || strings.Contains(j, "rce") || strings.Contains(j, "xss") || strings.Contains(j, "lfi") || strings.Contains(j, "bruteforce") || strings.Contains(j, "ssh") || strings.Contains(j, "auth") {
+				score += 20
+			}
+			if score > 100 {
+				score = 100
+			}
+			level := "Suspicious"
+			if score >= 80 {
+				level = "Critical"
+			} else if score >= 50 {
+				level = "High Risk"
+			}
+			att.Severity = fmt.Sprintf("%d/100 (%s)", score, level)
+			waf.TopAttackers = append(waf.TopAttackers, att)
 		}
-		if score > 100 {
-			score = 100
-		}
-		level := "Suspicious"
-		if score >= 80 {
-			level = "Critical"
-		} else if score >= 50 {
-			level = "High Risk"
-		}
-		att.Severity = fmt.Sprintf("%d/100 (%s)", score, level)
-		waf.TopAttackers = append(waf.TopAttackers, att)
 	}
 
 	for jail, count := range jailCounts {

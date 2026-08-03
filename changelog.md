@@ -1,3 +1,11 @@
+# Release v3.80.8
+
+## ADDED 🚀
+- **Continuous Compliance TUI Integration**: Successfully exposed NIS2 & ISO 27001 continuous compliance checks (`COMPLIANCE-OK` / `COMPLIANCE-DRIFT`) directly within the Web-TUI "WAF ALLOWED / BANNED IP REGISTRY" dashboard.
+- **Shadow Mode (Dry-Run) TUI Integration**: Added native support for `SIMULATED-BAN` events within the Web-TUI dashboard. Dry-Run alerts are now fully visible and visually distinct (orange `AUDIT` state) without requiring active firewall blocking, enabling zero-trust deployment validation with real-time observability.
+
+---
+
 # Release v3.80.7
 
 ## FIXED 🐛
