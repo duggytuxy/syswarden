@@ -1,3 +1,10 @@
+# Release v3.80.5
+
+## FIXED 🐛
+- **Code Hygiene (golangci-lint)**: Fixed a compilation and typecheck error in `worker.go` where an orphaned `success` variable check remained after the telemetry migration to `freeipapi.com`. Streamlined the OSINT caching logic to unconditionally process both valid lookups and "N/A" states, preventing unnecessary API spam while satisfying strict static analysis checks.
+
+---
+
 # Release v3.80.3
 
 ## FIXED 🐛

@@ -701,7 +701,7 @@ func getActiveSSHPort() string {
 			}
 		}
 	}
-	return customSSHPort
+	return getConfiguredSSHPort()
 }
 
 var customSSHPort string
@@ -777,18 +777,11 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 			}
 		}
 
-		if success {
-			osintMu.Lock()
-			osintCache[ip] = att
-			saveOSINTCache()
-			osintMu.Unlock()
-		} else {
-			// Save N/A in memory temporarily so we don't spam the API every 5 seconds for failed/rate-limited IPs
-			osintMu.Lock()
-			osintCache[ip] = att
-			saveOSINTCache()
-			osintMu.Unlock()
-		}
+		// Save to memory and cache (whether N/A or actual data to avoid spamming the API)
+		osintMu.Lock()
+		osintCache[ip] = att
+		saveOSINTCache()
+		osintMu.Unlock()
 	}
 
 	// Extract port or protocol from payload dynamically
@@ -823,7 +816,7 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 	if port == "MULTI" {
 		j := strings.ToLower(jail)
 		if strings.Contains(j, "ssh") || strings.Contains(j, "bruteforce") {
-			port = getConfiguredSSHPort()
+			port = getActiveSSHPort()
 		}
 	}
 
