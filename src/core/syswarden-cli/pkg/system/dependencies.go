@@ -31,14 +31,14 @@ func InstallDependencies() error {
 		}
 	} else if _, err := exec.LookPath("dnf"); err == nil {
 		fmt.Println(" -> Detected RHEL/Alma/Rocky/Oracle (DNF)")
-		_ = exec.CommandContext(ctx, "dnf", "install", "-y", "epel-release").Run()                                                                                                 // #nosec
+		_ = exec.CommandContext(ctx, "dnf", "install", "-y", "epel-release").Run()                                                  // #nosec
 		cmd := exec.CommandContext(ctx, "dnf", "install", "-y", "nftables", "wireguard-tools", "qrencode", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("DNF installation failed: %w", err)
 		}
 	} else if _, err := exec.LookPath("yum"); err == nil {
 		fmt.Println(" -> Detected CentOS/Legacy RHEL (YUM)")
-		_ = exec.CommandContext(ctx, "yum", "install", "-y", "epel-release").Run()                                                                                                 // #nosec
+		_ = exec.CommandContext(ctx, "yum", "install", "-y", "epel-release").Run()                                                  // #nosec
 		cmd := exec.CommandContext(ctx, "yum", "install", "-y", "nftables", "wireguard-tools", "qrencode", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("YUM installation failed: %w", err)

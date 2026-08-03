@@ -61,8 +61,9 @@ The legacy term "WAF" is increasingly replaced by "WAAP" as attacks aggressively
 **4. Out-of-Band Orchestration (Active Defense)**
 SysWarden doesn't just block. It actively manages its own Threat Intelligence (ingesting Data-Shield, ASN, GeoIP feeds), synchronizes bans across different enterprise servers via its HA (High Availability) clustering module, and natively forwards telemetry out-of-band. It autonomously orchestrates the entire active defense lifecycle.
 
-### Ecosystem Synergy: The Ultimate Defense
-While SysWarden excels as an Out-of-Band orchestrator and first line of defense at the kernel edge, a truly impenetrable architecture often requires deep, inline traffic inspection. For a complete, enterprise-grade In-Band WAF/WAAP solution, we highly recommend pairing SysWarden with [BunkerWeb](https://github.com/bunkerity/bunkerweb) by Bunkerity. Together, they form a robust, multi-layered security posture: BunkerWeb intercepts and sanitizes hostile payloads in real-time (In-Band), while SysWarden orchestrates behavioral threat intelligence, kernel-level network blocks, and system-wide Active Defense (Out-of-Band).
+> [!TIP]
+> ### Ecosystem Synergy: The Ultimate Defense
+> While SysWarden excels as an Out-of-Band orchestrator and first line of defense at the kernel edge, a truly impenetrable architecture often requires deep, inline traffic inspection. For a complete, enterprise-grade In-Band WAF/WAAP solution, we highly recommend pairing SysWarden with [BunkerWeb](https://github.com/bunkerity/bunkerweb) by Bunkerity. Together, they form a robust, multi-layered security posture: BunkerWeb intercepts and sanitizes hostile payloads in real-time (In-Band), while SysWarden orchestrates behavioral threat intelligence, kernel-level network blocks, and system-wide Active Defense (Out-of-Band).
 
 ## Enterprise-Grade Features
 
@@ -298,7 +299,7 @@ To learn everything about the SysWarden ecosystem, explore detailed configuratio
 
 > Goal: 36% reached/year (Goal) to fund continuous DevSecOps improvements and infrastructure.
 
-Developing **SysWarden** and maintaining the zero-false-positive **Data-Shield IPv4/IPv6 blocklists** requires dedicated server infrastructure and non-stop threat monitoring.
+Developing **SysWarden** and maintaining the zero-false-positive **Data-Shield IPv4 blocklists** requires dedicated server infrastructure and non-stop threat monitoring.
 
 Reaching this annual goal guarantees my 100% independence, funding a continuous development cycle without corporate constraints. Your support directly pays for the servers and keeps these enterprise-grade cybersecurity tools free, updated, and accessible to everyone.
 
