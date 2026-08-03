@@ -1,3 +1,12 @@
+# Release v3.80.6
+
+## UPGRADED ⚡
+- **Universal Zero-Downtime Fallback**: Completely overhauled the HA and Web-TUI configuration upgrade logic. The Fallback logic is now deeply integrated directly inside the native Go binary, ensuring absolute robustness across all operating systems and architectures (including Alpine `.apk` and FreeBSD `.txz`). 
+  - **HA Cluster**: Automatically falls back to Legacy IP-validation mode if a peer connects without a configured `SYSWARDEN_HA_TOKEN`, preventing "Split-Brain" outages post-upgrade. Emits a clear log warning instead of outright dropping the cluster sync.
+  - **Web-TUI**: The daemon automatically provisions, securely generates (32-bytes entropy), and injects a new `SYSWARDEN_WEB_TOKEN` into `syswarden-auto.conf` if none is found during startup, guaranteeing zero crashes upon service restart.
+
+---
+
 # Release v3.80.5
 
 ## FIXED 🐛

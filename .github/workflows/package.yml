@@ -150,18 +150,22 @@ jobs:
                   systemctl enable syswarden-firewall || true
                   systemctl restart syswarden-firewall || true
                   systemctl restart syswarden-core || true
+                  systemctl restart syswarden-webtui || true
               elif command -v rc-service >/dev/null 2>&1; then
                   /opt/syswarden/bin/syswarden-cli reload || true
                   rc-service syswarden-firewall restart || true
                   rc-service syswarden-core restart || true
+                  rc-service syswarden-webtui restart || true
               fi
           # RPM Install ($1 = 1) or DEB Install ($1 = configure && $2 == "")
           elif [ "$1" = "1" ] || [ "$1" = "configure" ]; then
               /opt/syswarden/bin/syswarden-cli install
               if command -v systemctl >/dev/null 2>&1; then
                   systemctl restart syswarden-core || true
+                  systemctl restart syswarden-webtui || true
               elif command -v rc-service >/dev/null 2>&1; then
                   rc-service syswarden-core restart || true
+                  rc-service syswarden-webtui restart || true
               fi
           # Alpine APK Install/Upgrade (APK passes version string in $1)
           elif [ -f /etc/alpine-release ]; then
@@ -204,12 +208,16 @@ jobs:
                   systemctl disable syswarden-core.service || true
                   systemctl stop syswarden-firewall.service || true
                   systemctl disable syswarden-firewall.service || true
+                  systemctl stop syswarden-webtui.service || true
+                  systemctl disable syswarden-webtui.service || true
                   systemctl restart rsyslog || true
               elif command -v rc-service >/dev/null 2>&1; then
                   rc-service syswarden-core stop || true
                   rc-update del syswarden-core default || true
                   rc-service syswarden-firewall stop || true
                   rc-update del syswarden-firewall default || true
+                  rc-service syswarden-webtui stop || true
+                  rc-update del syswarden-webtui default || true
                   rc-service rsyslog restart || true
               fi
               nft delete table netdev syswarden_hw_drop || true

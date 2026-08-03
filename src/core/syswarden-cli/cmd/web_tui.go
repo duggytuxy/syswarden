@@ -93,7 +93,13 @@ var webTuiCmd = &cobra.Command{
 				}
 			}
 			if webToken == "" {
-				log.Fatal("[ERROR] A --token must be provided to secure the Web-TUI.")
+				// Zero Downtime Fallback: Auto-generate token if missing after upgrade
+				webToken = generateSecureToken(32)
+				if err := updateConfigToken(webToken); err != nil {
+					log.Printf("[WARN] Failed to save auto-generated Web-TUI token: %v", err)
+				} else {
+					log.Printf("[Web-TUI] Generated new secure token and saved to config for backward compatibility.")
+				}
 			}
 		}
 

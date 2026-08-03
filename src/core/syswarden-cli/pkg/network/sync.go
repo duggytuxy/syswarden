@@ -62,7 +62,9 @@ func SyncHAPeer() error {
 			fmt.Printf("[ERROR] Failed to create HA request: %v\n", err)
 			continue
 		}
-		req.Header.Set("Authorization", "Bearer "+config.GlobalConfig.HAToken)
+		if config.GlobalConfig.HAToken != "" {
+			req.Header.Set("Authorization", "Bearer "+config.GlobalConfig.HAToken)
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -125,7 +127,9 @@ func SyncHAPeer() error {
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+config.GlobalConfig.HAToken)
+		if config.GlobalConfig.HAToken != "" {
+			req.Header.Set("Authorization", "Bearer "+config.GlobalConfig.HAToken)
+		}
 
 		postResp, err := client.Do(req)
 		if err != nil {
