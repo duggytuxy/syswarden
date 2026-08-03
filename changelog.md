@@ -1,3 +1,21 @@
+# Release v3.80.3
+
+## FIXED 🐛
+- **WAF Log Spoofing (Regex Anchors)**: Fixed a vulnerability in `ahocorasick.go` where IP extraction lacked strict regex boundaries, allowing spoofed JSON payloads containing arbitrary IP addresses to bypass blocking. Enforced strict extraction exclusively from the `.ip` JSON key.
+- **Whitelist CIDR Parsing**: Fixed whitelist logic where CIDR blocks (e.g. `/32`, `/128`) and embedded ports were improperly parsed, resulting in legitimate traffic being unexpectedly dropped. Added strict port stripping and canonical CIDR formatting.
+- **HA Authentication**: Fixed High-Availability (HA) synchronization endpoints (`/sync`, `/batch`) which previously relied on a zero-authentication insecure configuration. Enforced strict Zero-Trust Bearer Token Authentication for all inter-node HA communications.
+- **Supply Chain Hash Validation**: Fixed an issue where the threat intelligence feeds downloaded via the custom downloader lacked cryptographically secure validation, enabling potential MiTM supply chain attacks. Implemented rigorous SHA256 checksum validation for custom threat intel lists (IPv4/IPv6).
+- **Firewall Localhost Port Exposure**: Fixed a critical bug in the dynamic port detection logic where services explicitly bound to localhost (127.0.0.1, [::1]) were inadvertently exposed publicly in the firewall configuration. The firewall now strictly filters out loopback-bound services to ensure internal databases (Redis, Postgres) remain inaccessible from the outside.
+- **Destructive SSH Hardening**: Fixed the CIS SSH hardening routines (`cis_linux.go`, `cis_freebsd.go`) which destructively stripped comments from `/etc/ssh/sshd_config` and lacked safety checks. The new routines safely append configurations, preserve original formatting via `SYSWARDEN OVERRIDE` comments, back up the configuration, and strictly enforce an `sshd -t` validation check prior to restarting the service.
+- **Firewall Leak on Uninstall**: Fixed a major security oversight where uninstallation (`syswarden uninstall`) executed an indiscriminate and destructive `iptables-save | grep -v SYSWARDEN | iptables-restore` pipe. The uninstall logic now gracefully and surgically deletes targeted `SYSWARDEN` rules directly via `iptables -S` and `iptables -D` to preserve external configurations such as Docker networks.
+- **Web-TUI Token Leak in JournalD**: Fixed a privilege escalation vulnerability where the secure Web-TUI Basic Auth token was leaked in plaintext within `journald` logs during daemon initialization. Removed the token from standard output logs to prevent local users with journald access from obtaining unauthorized administrative access.
+
+## UPDATED 🔄
+- **Secure Telemetry**: Updated the telemetry OSINT provider to utilize `freeipapi.com` over HTTPS. This enhances privacy and guarantees encrypted intelligence lookups, correcting previous usage of unencrypted HTTP providers.
+- **Default Configurations**: Set `SYSWARDEN_GEO_CODES` and `SYSWARDEN_ASN_LIST` defaults to completely empty to ensure true Opt-In functionality rather than unexpected blocklist behavior. Added the `SYSWARDEN_HA_TOKEN` field for High Availability security.
+
+---
+
 # Release v3.80.2
 
 ## FIXED 🐛

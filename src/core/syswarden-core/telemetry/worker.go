@@ -666,10 +666,9 @@ func getLayer3Stats() Layer3 {
 }
 
 type IPAPIResponse struct {
-	Status      string `json:"status"`
-	CountryCode string `json:"countryCode"`
-	As          string `json:"as"`
-	Isp         string `json:"isp"`
+	CountryCode     string `json:"countryCode"`
+	Asn             string `json:"asn"`
+	AsnOrganization string `json:"asnOrganization"`
 }
 
 var osintCache = make(map[string]Attacker)
@@ -684,11 +683,25 @@ func loadOSINTCache() {
 }
 
 func saveOSINTCache() {
+	osintMu.Lock()
+	defer osintMu.Unlock()
 	b, err := json.Marshal(osintCache)
 	if err == nil {
-		_ = os.MkdirAll("/var/lib/syswarden/ui", 0750)
-		_ = os.WriteFile("/var/lib/syswarden/ui/osint_cache.json", b, 0600)
+		_ = os.WriteFile("/var/lib/syswarden/ui/osint_cache.json", b, 0600) // #nosec
 	}
+}
+
+func getActiveSSHPort() string {
+	// Dynamically query sshd for its effective configuration
+	if out, err := exec.Command("sh", "-c", "sshd -T 2>/dev/null | grep -i '^port '").Output(); err == nil && len(out) > 0 { // #nosec
+		fields := strings.Fields(string(out))
+		if len(fields) >= 2 {
+			if parsed, err := strconv.Atoi(fields[1]); err == nil && parsed > 0 && parsed <= 65535 {
+				return strconv.Itoa(parsed)
+			}
+		}
+	}
+	return customSSHPort
 }
 
 var customSSHPort string
@@ -744,29 +757,22 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 			ISP:     "N/A",
 		}
 
-		success := false
 		client := &http.Client{Timeout: 2 * time.Second}
-		resp, err := client.Get("http://ip-api.com/json/" + ip + "?fields=status,countryCode,isp,as")
+		resp, err := client.Get("https://freeipapi.com/api/json/" + ip)
 		if err == nil {
 			defer func() {
 				_ = resp.Body.Close()
 			}()
 			var res IPAPIResponse
 			if json.NewDecoder(resp.Body).Decode(&res) == nil {
-				if res.Status == "success" {
-					if res.CountryCode != "" {
-						att.Country = res.CountryCode
-					}
-					if res.As != "" {
-						// Extract AS number (e.g., "AS5769 Videotron Ltee" -> "AS5769")
-						parts := strings.Split(res.As, " ")
-						if len(parts) > 0 {
-							att.ASN = parts[0]
-						}
-					}
-					if res.Isp != "" {
-						att.ISP = res.Isp
-					}
+				if res.CountryCode != "" {
+					att.Country = res.CountryCode
+				}
+				if res.Asn != "" {
+					att.ASN = "AS" + res.Asn
+				}
+				if res.AsnOrganization != "" {
+					att.ISP = res.AsnOrganization
 				}
 			}
 		}

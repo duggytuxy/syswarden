@@ -76,9 +76,20 @@ func UninstallSystem() error {
 	}
 	_ = os.Remove("/etc/syswarden/syswarden.nft")
 
-	// Legacy iptables purge (DOCKER-USER etc)
-	_ = exec.Command("sh", "-c", "iptables-save | grep -v SYSWARDEN | iptables-restore").Run() // #nosec
-
+	// Safe targeted iptables purge
+	if _, err := exec.LookPath("iptables"); err == nil {
+		out, _ := exec.Command("iptables", "-S").Output() // #nosec
+		lines := strings.Split(string(out), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "SYSWARDEN") {
+				parts := strings.Fields(line)
+				if len(parts) > 2 && (parts[0] == "-A" || parts[0] == "-I") {
+					parts[0] = "-D"
+					_ = exec.Command("iptables", parts...).Run() // #nosec
+				}
+			}
+		}
+	}
 	// 5. Revert Hardening
 	fmt.Println(" -> Reverting CIS Hardening...")
 	_ = os.Remove("/etc/modprobe.d/syswarden-cis-fs.conf")

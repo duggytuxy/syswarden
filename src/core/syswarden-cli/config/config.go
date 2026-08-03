@@ -31,6 +31,7 @@ type Config struct {
 	ASNAllowed          string
 	UseSpamhaus         bool
 	HAEnabled           bool
+	HAToken             string
 	HAPeerIP            string
 	HAPeerPort          string
 	SiemEnabled         bool

@@ -57,7 +57,14 @@ func SyncHAPeer() error {
 		apiUrl := fmt.Sprintf("https://%s:%s/ha/sync", peerIP, peerPort)
 
 		// 1. Get remote blocklist
-		resp, err := client.Get(apiUrl)
+		req, err := http.NewRequest("GET", apiUrl, nil)
+		if err != nil {
+			fmt.Printf("[ERROR] Failed to create HA request: %v\n", err)
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+config.GlobalConfig.HAToken)
+
+		resp, err := client.Do(req)
 		if err != nil {
 			fmt.Printf("[ERROR] HA Peer unreachable at %s:%s: %v\n", peerIP, peerPort, err)
 			continue
@@ -112,7 +119,15 @@ func SyncHAPeer() error {
 			continue
 		}
 
-		postResp, err := client.Post(apiUrl, "application/json", bytes.NewBuffer(jsonData))
+		req, err = http.NewRequest("POST", apiUrl, bytes.NewBuffer(jsonData))
+		if err != nil {
+			fmt.Printf("[ERROR] Failed to create HA POST request: %v\n", err)
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+config.GlobalConfig.HAToken)
+
+		postResp, err := client.Do(req)
 		if err != nil {
 			fmt.Printf("[ERROR] Failed to push to HA Peer %s: %v\n", peerIP, err)
 			continue

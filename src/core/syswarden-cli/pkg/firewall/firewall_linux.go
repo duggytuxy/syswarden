@@ -192,7 +192,7 @@ func ApplyPolicies() error {
 		_ = exec.Command("firewall-cmd", "--reload").Run()                                     // #nosec
 	}
 	if _, err := exec.LookPath("iptables"); err == nil {
-		_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", webTuiPort, "-j", "ACCEPT").Run() // #nosec
+		_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", webTuiPort, "-m", "comment", "--comment", "SYSWARDEN_CORE", "-j", "ACCEPT").Run() // #nosec
 	}
 
 	// Ensure HA Peer Port is always explicitly opened if HA is enabled
@@ -210,7 +210,7 @@ func ApplyPolicies() error {
 			_ = exec.Command("firewall-cmd", "--reload").Run()                                                         // #nosec
 		}
 		if _, err := exec.LookPath("iptables"); err == nil {
-			_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", config.GlobalConfig.HAPeerPort, "-j", "ACCEPT").Run() // #nosec
+			_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", config.GlobalConfig.HAPeerPort, "-m", "comment", "--comment", "SYSWARDEN_CORE", "-j", "ACCEPT").Run() // #nosec
 		}
 	}
 
@@ -503,7 +503,14 @@ func GetOpenPorts() ([]string, []string) {
 
 				lastColon := strings.LastIndex(localAddr, ":")
 				if lastColon != -1 {
+					ipPart := localAddr[:lastColon]
 					port := localAddr[lastColon+1:]
+
+					// Ignore localhost bound services (Do not expose internal DBs like Redis/Postgres)
+					if ipPart == "127.0.0.1" || ipPart == "[::1]" || ipPart == "::1" || ipPart == "127.0.0.53" {
+						continue
+					}
+
 					switch proto {
 					case "tcp", "tcp6":
 						if !contains(tcpPorts, port) {

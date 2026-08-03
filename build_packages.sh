@@ -111,9 +111,6 @@ fi
 
 # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
 if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
-    if ! grep -q "SYSWARDEN_ENFORCEMENT_MODE" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-        sed -i '/SYSWARDEN_ENTERPRISE_MODE=/i # --- WAAP Enforcement Mode ---\n# "enforcing" = Actively bans malicious IPs via Nftables/Iptables.\n# "audit"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE="enforcing"\n' /opt/syswarden/syswarden-auto.conf || true
-    fi
     sed -i 's|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden$|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists|g' /etc/systemd/system/syswarden-core.service || true
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload
@@ -278,10 +275,6 @@ cat << 'EOF' > postinst_fbsd.sh
 export SYSWARDEN_PKG_INSTALL=1
 ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
 ln -sf /usr/local/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
-if ! grep -q "SYSWARDEN_ENFORCEMENT_MODE" /usr/local/syswarden/syswarden-auto.conf 2>/dev/null; then
-    sed -i .bak -e 's/SYSWARDEN_ENTERPRISE_MODE=/# --- WAAP Enforcement Mode ---\n# "enforcing" = Actively bans malicious IPs via Nftables\/Iptables.\n# "audit"     = Dry-Run\/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE="enforcing"\n\nSYSWARDEN_ENTERPRISE_MODE=/g' /usr/local/syswarden/syswarden-auto.conf || true
-    rm -f /usr/local/syswarden/syswarden-auto.conf.bak || true
-fi
 /usr/local/bin/syswarden install
 service syswarden restart || true
 EOF

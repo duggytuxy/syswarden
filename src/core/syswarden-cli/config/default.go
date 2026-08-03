@@ -1,7 +1,7 @@
 package config
 
 const DefaultConfig = `# ==============================================================================
-# Version=v3.80.2
+# Version=v3.75.9
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -14,11 +14,6 @@ const DefaultConfig = `# =======================================================
 # ==========================================
 # [1] SYSTEM & CORE
 # ==========================================
-# --- WAAP Enforcement Mode ---
-# "enforcing" = Actively bans malicious IPs via Nftables/Iptables.
-# "audit"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.
-SYSWARDEN_ENFORCEMENT_MODE="enforcing"
-
 # --- Enterprise Compliance Mode ---
 # y = Strictly disables third-party telemetry/reporting (e.g., AbuseIPDB) to comply with corporate policies.
 SYSWARDEN_ENTERPRISE_MODE="n"
@@ -72,7 +67,7 @@ SYSWARDEN_ALLOW_SAAS_MONITORS="y"
 # y = Enable, n = Disable
 SYSWARDEN_ENABLE_GEO="y"
 # Space-separated country codes to DROP (e.g., "ru cn kp ir")
-SYSWARDEN_GEO_CODES="ru cn kp ir br vn in by ng bd pe mx ua my ph lt id af al bd by bo cl hr ec hk il kz lb my md pk ph qa sa sd tm uz zm zw ye ao ar am bz bj ba bw bg bi cm cg cy dj do eg ee fi ge gh gi hn iq ie jp ke kr lv ly me nc nz no ps pa pt pr sc ug tz tj"
+SYSWARDEN_GEO_CODES=""
 # ZERO-TRUST MODE: Space-separated country codes to ALLOW. If defined, ALL OTHER COUNTRIES WILL BE DROPPED.
 SYSWARDEN_GEO_ALLOWED=""
 
@@ -80,7 +75,7 @@ SYSWARDEN_GEO_ALLOWED=""
 # Enable the ASN blocking module
 SYSWARDEN_ENABLE_ASN="y"
 # Master List (VPNs, Proxies, Linode, Tor Exit Nodes/Bulletproof Hosters) to DROP
-SYSWARDEN_ASN_LIST="AS30823 AS210644 AS200593 AS202425 AS215540 AS9009 AS201069 AS20473 AS60068 AS51396 AS212238 AS209334 AS198953 AS201814 AS16276 AS62282 AS14061 AS202662 AS24940 AS398324 AS31173 AS23969 AS11878 AS32097 AS43948 AS62240 AS16265 AS3223 AS53667 AS200651 AS58224 AS57821 AS199524 AS51852 AS197540 AS209334 AS329415 AS204106 AS57371 AS47139"
+SYSWARDEN_ASN_LIST=""
 # ZERO-TRUST MODE: Space-separated ASN codes to ALLOW. If defined, ALL OTHER ASNs WILL BE DROPPED.
 SYSWARDEN_ASN_ALLOWED=""
 
@@ -149,6 +144,8 @@ SYSWARDEN_LAN_MODE="n"
 # --- HA Cluster Sync ---
 # y = Enable, n = Disable (Replicates state to a standby node over encrypted channels)
 SYSWARDEN_HA_ENABLED="y"
+# HA Shared Secret Token for API Authentication (Must be identical on all nodes)
+SYSWARDEN_HA_TOKEN=""
 # Standby NODE IP (Automatically whitelisted for TLS P2P API)
 SYSWARDEN_HA_PEER_IP=""
 # Standby NODE TLS Port

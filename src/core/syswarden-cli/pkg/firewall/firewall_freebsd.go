@@ -318,9 +318,48 @@ func GetOpenPorts() ([]string, []string) {
 	var tcpPorts []string
 	var udpPorts []string
 
-	// On FreeBSD, sockstat -46l can be used, but since we just need basic open ports,
-	// returning standard ports for now to avoid breaking the signature pipeline.
-	tcpPorts = append(tcpPorts, "80", "443", "22")
-	udpPorts = append(udpPorts, "443") // HTTP/3 QUIC Support
+	out, err := exec.Command("sockstat", "-46l").Output() // #nosec
+	if err != nil {
+		// Fallback safe ports if sockstat fails
+		return []string{"22", "80", "443"}, []string{"443"}
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for i, line := range lines {
+		if i == 0 {
+			continue // Skip header
+		}
+		parts := strings.Fields(line)
+		if len(parts) >= 6 {
+			proto := parts[4]
+			localAddr := parts[5]
+
+			lastColon := strings.LastIndex(localAddr, ":")
+			if lastColon != -1 {
+				ipPart := localAddr[:lastColon]
+				port := localAddr[lastColon+1:]
+
+				if port == "*" {
+					continue
+				}
+
+				// Ignore localhost bound services
+				if ipPart == "127.0.0.1" || ipPart == "[::1]" || ipPart == "::1" || ipPart == "127.0.0.53" {
+					continue
+				}
+
+				switch proto {
+				case "tcp4", "tcp6", "tcp46":
+					if !contains(tcpPorts, port) {
+						tcpPorts = append(tcpPorts, port)
+					}
+				case "udp4", "udp6", "udp46":
+					if !contains(udpPorts, port) {
+						udpPorts = append(udpPorts, port)
+					}
+				}
+			}
+		}
+	}
 	return tcpPorts, udpPorts
 }

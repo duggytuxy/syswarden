@@ -247,7 +247,7 @@ var webTuiCmd = &cobra.Command{
 			},
 		}
 
-		log.Printf("[SYSWARDEN] Web-TUI listening securely on https://%s/?token=%s", bindAddr, webToken)
+		log.Printf("[SYSWARDEN] Web-TUI listening securely on https://%s/ (Token required)", bindAddr)
 		if err := server.ListenAndServeTLS("", ""); err != nil { // #nosec G114
 			log.Fatalf("[ERROR] Web-TUI server failed: %v", err)
 		}

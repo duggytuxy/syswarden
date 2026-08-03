@@ -3,6 +3,8 @@ package network
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,7 +21,7 @@ import (
 )
 
 // SecureDownloader downloads files with strict timeouts and resource limits
-func SecureDownloader(ctx context.Context, url string, destPath string) error {
+func SecureDownloader(ctx context.Context, url string, destPath string, expectedHash string) error {
 	var resp *http.Response
 	var err error
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -47,6 +49,20 @@ func SecureDownloader(ctx context.Context, url string, destPath string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bad status code %d for %s after 3 retries", resp.StatusCode, url)
 	}
+	defer func() { _ = resp.Body.Close() }()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read body: %w", err)
+	}
+
+	if expectedHash != "" {
+		hash := sha256.Sum256(bodyBytes)
+		hashStr := hex.EncodeToString(hash[:])
+		if !strings.EqualFold(hashStr, expectedHash) {
+			return fmt.Errorf("SHA256 mismatch for %s: expected %s, got %s", url, expectedHash, hashStr)
+		}
+	}
 
 	if err := os.MkdirAll(filepath.Dir(destPath), 0750); err != nil {
 		return fmt.Errorf("failed to create directories: %w", err)
@@ -58,8 +74,7 @@ func SecureDownloader(ctx context.Context, url string, destPath string) error {
 	}
 	defer func() { _ = out.Close() }()
 
-	// Use io.Copy to stream data safely
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	if _, err := out.Write(bodyBytes); err != nil {
 		return fmt.Errorf("failed to write data: %w", err)
 	}
 
@@ -196,7 +211,7 @@ func CleanCIDRListV6(filepath string) error {
 }
 
 // DownloadFeeds manages the download of GeoIP, ASN, and OSINT feeds
-func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
+func DownloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
 	fmt.Println("[INFO] Initializing Network Intelligence Feeds...")
 
 	if lanMode {
@@ -220,7 +235,7 @@ func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoA
 			url := fmt.Sprintf("https://www.ipdeny.com/ipblocks/data/countries/%s.zone", strings.ToLower(code))
 			dest := fmt.Sprintf("/etc/syswarden/lists/%s.ipv4", strings.ToLower(code))
 			fmt.Printf("Downloading GeoIP [%s] (IPv4)... ", code)
-			if err := SecureDownloader(ctx, url, dest); err != nil {
+			if err := SecureDownloader(ctx, url, dest, ""); err != nil {
 				fmt.Printf("FAILED (%v)\n", err)
 			} else {
 				fmt.Println("OK")
@@ -230,7 +245,7 @@ func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoA
 			urlV6 := fmt.Sprintf("https://www.ipdeny.com/ipv6/ipaddresses/blocks/%s.zone", strings.ToLower(code))
 			destV6 := fmt.Sprintf("/etc/syswarden/lists/%s.ipv6", strings.ToLower(code))
 			fmt.Printf("Downloading GeoIP [%s] (IPv6)... ", code)
-			if err := SecureDownloader(ctx, urlV6, destV6); err != nil {
+			if err := SecureDownloader(ctx, urlV6, destV6, ""); err != nil {
 				fmt.Printf("FAILED (%v)\n", err)
 			} else {
 				fmt.Println("OK")
@@ -303,7 +318,7 @@ func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoA
 			url := fmt.Sprintf("https://www.ipdeny.com/ipblocks/data/countries/%s.zone", strings.ToLower(code))
 			dest := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv4", strings.ToLower(code))
 			fmt.Printf("Downloading GeoIP ALLOW [%s] (IPv4)... ", code)
-			if err := SecureDownloader(ctx, url, dest); err != nil {
+			if err := SecureDownloader(ctx, url, dest, ""); err != nil {
 				fmt.Printf("FAILED (%v)\n", err)
 			} else {
 				fmt.Println("OK")
@@ -313,7 +328,7 @@ func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoA
 			urlV6 := fmt.Sprintf("https://www.ipdeny.com/ipv6/ipaddresses/blocks/%s.zone", strings.ToLower(code))
 			destV6 := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv6", strings.ToLower(code))
 			fmt.Printf("Downloading GeoIP ALLOW [%s] (IPv6)... ", code)
-			if err := SecureDownloader(ctx, urlV6, destV6); err != nil {
+			if err := SecureDownloader(ctx, urlV6, destV6, ""); err != nil {
 				fmt.Printf("FAILED (%v)\n", err)
 			} else {
 				fmt.Println("OK")
@@ -346,7 +361,7 @@ func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoA
 	// Download IPv6 Custom Blocklist if configured
 	if listChoice == "3" && customURLIPv6 != "" {
 		fmt.Printf("Downloading Custom IPv6 Blocklist... ")
-		if err := SecureDownloader(ctx, customURLIPv6, "/etc/syswarden/lists/syswarden_threatintel.ipv6"); err != nil {
+		if err := SecureDownloader(ctx, customURLIPv6, "/etc/syswarden/lists/syswarden_threatintel.ipv6", customHashIPv6); err != nil {
 			fmt.Printf("FAILED (%v)\n", err)
 		} else {
 			fmt.Println("OK")
@@ -363,7 +378,7 @@ func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoA
 	case "3":
 		fmt.Printf("Downloading Custom Threat Intel IPv4 Blocklist... ")
 		dataShieldUrl := strings.TrimRight(mirrorURL, "/")
-		if err := SecureDownloader(ctx, dataShieldUrl, "/etc/syswarden/lists/syswarden_threatintel.ipv4"); err != nil {
+		if err := SecureDownloader(ctx, dataShieldUrl, "/etc/syswarden/lists/syswarden_threatintel.ipv4", customHash); err != nil {
 			fmt.Printf("FAILED (%v)\n", err)
 		} else {
 			fmt.Println("OK")
@@ -375,7 +390,7 @@ func DownloadFeeds(mirrorURL, customURLIPv6, listChoice, geoCodes, asnList, geoA
 
 		var lastErr error
 		for _, url := range mirrors {
-			if err := SecureDownloader(ctx, url, "/etc/syswarden/lists/syswarden_threatintel.ipv4"); err == nil {
+			if err := SecureDownloader(ctx, url, "/etc/syswarden/lists/syswarden_threatintel.ipv4", ""); err == nil {
 				fmt.Println("OK")
 				success = true
 				break

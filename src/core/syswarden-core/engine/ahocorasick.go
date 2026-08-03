@@ -238,21 +238,36 @@ func (e *Engine) GarbageCollector() {
 	}
 }
 
-var ipRegex = regexp.MustCompile(`(?i)(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-f0-9:]+:[a-f0-9:]+)`)
+var standardIpRegex = regexp.MustCompile(`^(?i)(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-f0-9:]+:[a-f0-9:]+)`)
+var jsonIpRegex = regexp.MustCompile(`\"(?:ClientHost|remote_ip|client_ip|ClientAddr)\"\s*:\s*\"(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-f0-9:]+:[a-f0-9:]+)\"`)
 
 func ExtractIP(logLine string) string {
-	matches := ipRegex.FindAllStringSubmatch(logLine, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			ipStr := match[1]
-			// Ignore unroutable loopback and generic bind addresses from internal logs
-			if ipStr == "0.0.0.0" || ipStr == "127.0.0.1" || ipStr == "::1" || ipStr == "::" {
-				continue
-			}
-			if net.ParseIP(ipStr) != nil {
-				return ipStr
-			}
+	logLine = strings.TrimSpace(logLine)
+	
+	// 1. Try standard JSON log format matching Traefik/Caddy
+	if strings.Contains(logLine, "{") && strings.Contains(logLine, "}") {
+		matches := jsonIpRegex.FindStringSubmatch(logLine)
+		if len(matches) > 1 {
+			return validateIPStr(matches[1])
 		}
+	}
+
+	// 2. Try standard Apache/Nginx format (IP at the very beginning of the line)
+	matches := standardIpRegex.FindStringSubmatch(logLine)
+	if len(matches) > 1 {
+		return validateIPStr(matches[1])
+	}
+
+	return ""
+}
+
+func validateIPStr(ipStr string) string {
+	// Ignore unroutable loopback and generic bind addresses from internal logs
+	if ipStr == "0.0.0.0" || ipStr == "127.0.0.1" || ipStr == "::1" || ipStr == "::" {
+		return ""
+	}
+	if net.ParseIP(ipStr) != nil {
+		return ipStr
 	}
 	return ""
 }

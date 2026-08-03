@@ -23,6 +23,7 @@ import (
 
 type HAConfig struct {
 	Enabled string
+	Token   string
 	PeerIPs []string
 	Port    string
 }
@@ -30,6 +31,7 @@ type HAConfig struct {
 func loadHAConfig() HAConfig {
 	cfg := HAConfig{
 		Enabled: "n",
+		Token:   "",
 		PeerIPs: []string{},
 		Port:    "62026", // Default HA TLS API Port
 	}
@@ -47,6 +49,12 @@ func loadHAConfig() HAConfig {
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {
 				cfg.Enabled = strings.ToLower(strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'")))
+			}
+		}
+		if strings.HasPrefix(line, "SYSWARDEN_HA_TOKEN=") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				cfg.Token = strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
 			}
 		}
 		if strings.HasPrefix(line, "SYSWARDEN_HA_PEER_IP=") {
@@ -151,6 +159,20 @@ func StartHAServer(fwManager firewall.Manager) {
 		if !allowed {
 			log.Printf("[HA Cluster] Unauthorized sync attempt dropped from %s", remoteIP) // #nosec G706
 			http.Error(w, "Forbidden: IP not in cluster", http.StatusForbidden)
+			return
+		}
+
+		// Zero-Trust: Cryptographic Token Validation
+		if cfg.Token == "" {
+			log.Printf("[HA Cluster] CRITICAL: SYSWARDEN_HA_TOKEN is not configured! Rejecting all traffic.")
+			http.Error(w, "Internal Server Error: HA Token not configured", http.StatusInternalServerError)
+			return
+		}
+
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "Bearer "+cfg.Token {
+			log.Printf("[HA Cluster] Unauthorized sync attempt dropped from %s (Invalid Token)", remoteIP)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 

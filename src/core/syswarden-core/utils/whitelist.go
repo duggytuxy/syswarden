@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bufio"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -9,9 +10,10 @@ import (
 )
 
 var (
-	whitelistCache map[string]bool
-	cacheMutex     sync.RWMutex
-	lastLoad       time.Time
+	whitelistCache     map[string]bool
+	whitelistCIDRCache []*net.IPNet
+	cacheMutex         sync.RWMutex
+	lastLoad           time.Time
 )
 
 // IsWhitelisted checks if an IP belongs to the Infra Whitelist or Local Loop.
@@ -21,6 +23,13 @@ func IsWhitelisted(ip string) bool {
 	// Hardcoded Immunity for Local Loopback
 	if ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
 		return true
+	}
+
+	// Strip port from incoming IP if present
+	if net.ParseIP(ip) == nil {
+		if host, _, err := net.SplitHostPort(ip); err == nil {
+			ip = host
+		}
 	}
 
 	cacheMutex.RLock()
@@ -33,7 +42,21 @@ func IsWhitelisted(ip string) bool {
 
 	cacheMutex.RLock()
 	defer cacheMutex.RUnlock()
-	return whitelistCache[ip]
+
+	if whitelistCache[ip] {
+		return true
+	}
+
+	parsedIP := net.ParseIP(ip)
+	if parsedIP != nil {
+		for _, cidrnet := range whitelistCIDRCache {
+			if cidrnet.Contains(parsedIP) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func refreshCache() {
@@ -45,6 +68,7 @@ func refreshCache() {
 	}
 
 	newCache := make(map[string]bool)
+	var newCIDRCache []*net.IPNet
 
 	files := []string{
 		"/etc/syswarden/lists/syswarden_whitelist.ipv4",
@@ -63,12 +87,29 @@ func refreshCache() {
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line != "" && !strings.HasPrefix(line, "#") {
-				newCache[line] = true
+				ipPart := line
+				if !strings.Contains(ipPart, "/") {
+					if net.ParseIP(ipPart) == nil {
+						if host, _, err := net.SplitHostPort(ipPart); err == nil {
+							ipPart = host
+						}
+					}
+				}
+
+				if strings.Contains(ipPart, "/") {
+					_, cidrnet, err := net.ParseCIDR(ipPart)
+					if err == nil {
+						newCIDRCache = append(newCIDRCache, cidrnet)
+					}
+				} else {
+					newCache[ipPart] = true
+				}
 			}
 		}
 		_ = f.Close()
 	}
 
 	whitelistCache = newCache
+	whitelistCIDRCache = newCIDRCache
 	lastLoad = time.Now()
 }

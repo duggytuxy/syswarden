@@ -91,6 +91,8 @@ func ParseConfig(filepath string) error {
 			GlobalConfig.UseSpamhaus = parseBool(val)
 		case "SYSWARDEN_HA_ENABLED":
 			GlobalConfig.HAEnabled = parseBool(val)
+		case "SYSWARDEN_HA_TOKEN":
+			GlobalConfig.HAToken = val
 		case "SYSWARDEN_HA_PEER_IP":
 			GlobalConfig.HAPeerIP = val
 		case "SYSWARDEN_HA_PEER_PORT":

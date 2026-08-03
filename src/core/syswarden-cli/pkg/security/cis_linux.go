@@ -144,6 +144,12 @@ func applySSHHardening() error {
 		return nil
 	}
 
+	// Create a backup before any modification
+	backupConf := sshConf + ".syswarden.bak"
+	if err := exec.Command("cp", sshConf, backupConf).Run(); err != nil { // #nosec
+		return fmt.Errorf("failed to backup sshd_config: %w", err)
+	}
+
 	content, err := os.ReadFile(sshConf) // #nosec
 	if err != nil {
 		return err
@@ -160,27 +166,38 @@ func applySSHHardening() error {
 	var newLines []string
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		skip := false
-		for k := range configMap {
-			if strings.HasPrefix(trimmed, k) {
-				skip = true
-				break
+
+		if !strings.HasPrefix(trimmed, "#") {
+			parts := strings.Fields(trimmed)
+			if len(parts) > 0 {
+				if _, exists := configMap[parts[0]]; exists {
+					newLines = append(newLines, "# SYSWARDEN OVERRIDE: "+line)
+					continue
+				}
 			}
 		}
-		if !skip {
-			newLines = append(newLines, line)
-		}
+		newLines = append(newLines, line)
 	}
 
+	newLines = append(newLines, "\n# --- SYSWARDEN CIS HARDENING ---")
 	for k, v := range configMap {
 		newLines = append(newLines, fmt.Sprintf("%s %s", k, v))
 	}
+	newLines = append(newLines, "# -------------------------------\n")
 
-	err = os.WriteFile(sshConf, []byte(strings.Join(newLines, "\n")), 0600)
-	if err == nil {
-		_ = exec.Command("systemctl", "restart", "sshd").Run() // #nosec
+	if err := os.WriteFile(sshConf, []byte(strings.Join(newLines, "\n")), 0600); err != nil {
+		return fmt.Errorf("failed to write sshd_config: %w", err)
 	}
-	return err
+
+	// Verify before restarting
+	if err := exec.Command("sshd", "-t").Run(); err != nil { // #nosec
+		// Rollback
+		_ = exec.Command("cp", backupConf, sshConf).Run() // #nosec
+		return fmt.Errorf("sshd -t failed, rolling back changes: %w", err)
+	}
+
+	_ = exec.Command("systemctl", "restart", "sshd").Run() // #nosec
+	return nil
 }
 
 func secureCronPermissions() error {
