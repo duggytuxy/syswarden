@@ -170,6 +170,13 @@ func streamWAF(app *tview.Application, table *tview.Table) {
 				}
 			}
 			addRow(app, table, date, "SYSWARDEN WAF", "ALLOWED", wafEvent.IP, info, tcell.ColorGreen, tcell.ColorGreen)
+		case "COMPLIANCE-OK":
+			addRow(app, table, date, "SYSWARDEN WAF", "COMPLIANCE-OK", wafEvent.IP, wafEvent.Payload, tcell.ColorGreen, tcell.ColorGreen)
+		case "COMPLIANCE-DRIFT":
+			addRow(app, table, date, "SYSWARDEN WAF", "COMPLIANCE-DRIFT", wafEvent.IP, wafEvent.Payload, tcell.ColorRed, tcell.ColorRed)
+		case "SIMULATED-BAN":
+			info := "JAIL: " + wafEvent.Jail
+			addRow(app, table, date, "SYSWARDEN WAF", "SIMULATED-BAN", wafEvent.IP, info, tcell.ColorOrange, tcell.ColorOrange)
 		case "SHADOW-ALERT":
 			info := "JAIL: " + wafEvent.Jail
 			addRow(app, table, date, "INSIDER THREAT", "SHADOW-ALERT", wafEvent.IP, info, tcell.ColorOrange, tcell.ColorOrange)

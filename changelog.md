@@ -1,3 +1,10 @@
+# Release v3.81.0
+
+## FIXED 🐛
+- **CLI Alerts Classification**: Fixed an issue where `syswarden alerts` incorrectly parsed `COMPLIANCE-OK`, `COMPLIANCE-DRIFT`, and `SIMULATED-BAN` telemetry events as active `BANNED` drops. These events are now correctly mapped with distinct labels and color formatting matching the Web-TUI specifications.
+
+---
+
 # Release v3.80.9
 
 ## ADDED 🚀
