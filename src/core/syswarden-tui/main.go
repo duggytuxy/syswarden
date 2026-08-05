@@ -22,7 +22,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v3.80.9"
+const SysWardenVersion = "v3.81.0"
 
 var (
 	activeNodeIP = "local"
