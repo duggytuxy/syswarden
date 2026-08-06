@@ -1,3 +1,10 @@
+# Release v3.81.2
+
+## FIXED 🐛
+Following a GitHub Actions malfunction, I am releasing a new version.
+
+---
+
 # Release v3.81.1
 
 ## FIXED 🐛
