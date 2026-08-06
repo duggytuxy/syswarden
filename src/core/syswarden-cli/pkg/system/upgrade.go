@@ -188,26 +188,46 @@ func UpgradeSystem() error {
 	configPath := "/opt/syswarden/syswarden-auto.conf"
 	out, err := os.ReadFile(configPath) // #nosec G304
 
-	// Ensure Shadow Mode configuration exists for older installations
+	// ===============================================
+	// 5. MIGRATION OF NEW CONFIGURATION KEYS
+	// ===============================================
+
+	// Check if SYSWARDEN_ENFORCEMENT_MODE exists, inject if missing
 	if err == nil && !strings.Contains(string(out), "SYSWARDEN_ENFORCEMENT_MODE=") {
-		fmt.Println("[INFO] Upgrading SysWarden: Injecting Shadow Mode configuration (enforcing)...")
+		fmt.Println(" -> Migrating config: Injecting missing SYSWARDEN_ENFORCEMENT_MODE...")
+		enforceBlock := "\n# --- WAAP Enforcement Mode ---\n# \"enforcing\" = Actively bans malicious IPs via Nftables/Iptables.\n# \"audit\"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE=\"enforcing\"\n"
 		
-		lines := strings.Split(string(out), "\n")
-		var newLines []string
-		for _, line := range lines {
-			if strings.HasPrefix(line, "SYSWARDEN_ENTERPRISE_MODE=") {
-				newLines = append(newLines, "# --- WAAP Enforcement Mode ---")
-				newLines = append(newLines, "# \"enforcing\" = Actively bans malicious IPs via Nftables/Iptables.")
-				newLines = append(newLines, "# \"audit\"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.")
-				newLines = append(newLines, "SYSWARDEN_ENFORCEMENT_MODE=\"enforcing\"\n")
-			}
-			newLines = append(newLines, line)
+		// Insert it right before SYSWARDEN_ENTERPRISE_MODE
+		newConfig := strings.Replace(string(out), "SYSWARDEN_ENTERPRISE_MODE=", enforceBlock+"\nSYSWARDEN_ENTERPRISE_MODE=", 1)
+		
+		// If replacement failed (key not found), append it
+		if newConfig == string(out) {
+			newConfig += enforceBlock
 		}
 		
-		_ = os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0600)
-		
-		// Reload the config into memory for the next steps
-		out, err = os.ReadFile(configPath) // #nosec G304
+		// Ensure file is updated in memory for subsequent checks
+		out = []byte(newConfig)
+		_ = os.WriteFile(configPath, out, 0600)
+	}
+
+	// Check if SYSWARDEN_WEB_TOKEN exists, inject if missing
+	if err == nil && !strings.Contains(string(out), "SYSWARDEN_WEB_TOKEN=") {
+		fmt.Println(" -> Migrating config: Injecting missing SYSWARDEN_WEB_TOKEN...")
+		webTokenBlock := "\n# ==========================================\n# [7] WEB-TUI DASHBOARD\n# ==========================================\n# Secure token for Web-TUI authentication. Generated automatically by 'syswarden web-token' if empty.\nSYSWARDEN_WEB_TOKEN=\"\"\n"
+		out = append(out, []byte(webTokenBlock)...)
+		_ = os.WriteFile(configPath, out, 0600)
+	}
+
+	// Check if SYSWARDEN_HA_TOKEN exists, inject if missing
+	if err == nil && !strings.Contains(string(out), "SYSWARDEN_HA_TOKEN=") {
+		fmt.Println(" -> Migrating config: Injecting missing SYSWARDEN_HA_TOKEN...")
+		haTokenBlock := "\n# HA Shared Secret Token for API Authentication (Must be identical on all nodes)\nSYSWARDEN_HA_TOKEN=\"\"\n"
+		newConfig := strings.Replace(string(out), "SYSWARDEN_HA_PEER_IP=", haTokenBlock+"\nSYSWARDEN_HA_PEER_IP=", 1)
+		if newConfig == string(out) {
+			newConfig += haTokenBlock
+		}
+		out = []byte(newConfig)
+		_ = os.WriteFile(configPath, out, 0600)
 	}
 
 	// Ensure Web-TUI is initialized and display URL if upgrading to a version supporting it

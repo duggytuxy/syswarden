@@ -53,10 +53,14 @@ func SetupWireguard() error {
 	fmt.Println(" -> Injecting Quantum-Resistant PresharedKey (PSK)")
 
 	// Network Calculations
-	activeIfOut, _ := exec.Command("sh", "-c", "ip route get 8.8.8.8 | grep -oP 'dev \\K\\S+' | head -n 1").Output() // #nosec
-	activeIf := strings.TrimSpace(string(activeIfOut))
-	if activeIf == "" {
-		activeIf = "eth0"
+	activeIfOut, _ := exec.Command("ip", "route", "get", "8.8.8.8").Output() // #nosec
+	activeIf := "eth0"
+	fields := strings.Fields(string(activeIfOut))
+	for i, v := range fields {
+		if v == "dev" && i+1 < len(fields) {
+			activeIf = fields[i+1]
+			break
+		}
 	}
 
 	serverIPOut, _ := exec.Command("curl", "-4", "-s", "--connect-timeout", "3", "api.ipify.org").Output() // #nosec
@@ -75,7 +79,7 @@ func SetupWireguard() error {
 	postDown := ""
 	switch config.GlobalConfig.FirewallBackend {
 	case "nftables":
-		postUp = fmt.Sprintf(`nft 'add table inet syswarden_wg'; nft 'add chain inet syswarden_wg prerouting { type nat hook prerouting priority dstnat; }'; nft 'add chain inet syswarden_wg postrouting { type nat hook postrouting priority srcnat; }'; nft 'add rule inet syswarden_wg postrouting oifname "%s" masquerade'; nft 'add chain inet filter forward { type filter hook forward priority 0; }' 2>/dev/null || true; nft 'insert rule inet filter forward iifname "wg-syswarden" accept'; nft 'insert rule inet filter forward oifname "wg-syswarden" accept'`, activeIf)
+		postUp = fmt.Sprintf(`nft 'add table inet syswarden_wg'; nft 'add chain inet syswarden_wg prerouting { type nat hook prerouting priority dstnat; }'; nft 'add chain inet syswarden_wg postrouting { type nat hook postrouting priority srcnat; }'; nft 'add rule inet syswarden_wg postrouting oifname "%s" masquerade'; nft 'add table inet filter' 2>/dev/null || true; nft 'add chain inet filter forward { type filter hook forward priority 0; }' 2>/dev/null || true; nft 'insert rule inet filter forward iifname "wg-syswarden" accept'; nft 'insert rule inet filter forward oifname "wg-syswarden" accept'`, activeIf)
 		postDown = `nft delete table inet syswarden_wg 2>/dev/null || true; nft delete rule inet filter forward iifname "wg-syswarden" accept 2>/dev/null || true; nft delete rule inet filter forward oifname "wg-syswarden" accept 2>/dev/null || true`
 	case "firewalld":
 		postUp = ""

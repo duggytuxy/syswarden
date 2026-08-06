@@ -14,6 +14,11 @@ const DefaultConfig = `# =======================================================
 # ==========================================
 # [1] SYSTEM & CORE
 # ==========================================
+# --- WAAP Enforcement Mode ---
+# "enforcing" = Actively bans malicious IPs via Nftables/Iptables.
+# "audit"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.
+SYSWARDEN_ENFORCEMENT_MODE="enforcing"
+
 # --- Enterprise Compliance Mode ---
 # y = Strictly disables third-party telemetry/reporting (e.g., AbuseIPDB) to comply with corporate policies.
 SYSWARDEN_ENTERPRISE_MODE="n"
@@ -159,7 +164,13 @@ SYSWARDEN_WG_SUBNET="10.66.66.0/24"
 
 
 # ==========================================
-# [7] SIEM & EXTERNAL INTEGRATIONS
+# [7] WEB-TUI DASHBOARD
+# ==========================================
+# Secure token for Web-TUI authentication. Generated automatically by 'syswarden web-token' if empty.
+SYSWARDEN_WEB_TOKEN=""
+
+# ==========================================
+# [8] SIEM & EXTERNAL INTEGRATIONS
 # ==========================================
 # --- SIEM Log Forwarding (ISO 27001 / NIS2 COMPLIANT) ---
 # y = Enable, n = Disable (Forwards attack logs to an external SIEM via Rsyslog)

@@ -1,3 +1,13 @@
+# Release v3.81.1
+
+## FIXED 🐛
+- **Fresh Install Configuration**: Fixed a critical omission where the `SYSWARDEN_ENFORCEMENT_MODE` configuration directive was entirely missing from the master default template (`config/default.go`). This caused all fresh installations across Alpine, Debian, RHEL, and FreeBSD to silently generate a `syswarden-auto.conf` file lacking this field, preventing users from seeing or toggling the Shadow/Audit mode. The engine now explicitly writes the default `enforcing` directive on any new install.
+- **VPN / Busybox Compatibility**: Fixed an issue on Alpine Linux where the `syswarden-cli` VPN setup would fail to identify the active network interface because of busybox `grep` limitations (`-P` flag missing). Replaced the shell execution with a 100% native Go routing parser for absolute compatibility across all distributions.
+- **Nftables Filter Table Missing**: Fixed an edge case where the VPN setup silently failed to configure IP forwarding rules on minimal OS installs (like Alpine) because the `inet filter` table is not strictly guaranteed to exist by default.
+- **Config Migration Lifecycle**: Addressed a UX issue where upgrading Syswarden preserved the old `syswarden-auto.conf` without exposing the newly added `SYSWARDEN_HA_TOKEN` and `SYSWARDEN_WEB_TOKEN` fields. The RPM, DEB, APK, and TXZ packages (as well as `syswarden update`) now gracefully inject these missing fields into existing configurations without overwriting any user settings.
+
+---
+
 # Release v3.81.0
 
 ## FIXED 🐛
