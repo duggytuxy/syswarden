@@ -9,18 +9,14 @@ echo "[*] Initializing SysWarden Local Package Builder..."
 # 1. Detect OS and Install FPM / Go Dependencies
 if [ -f /etc/debian_version ]; then
     echo "[*] Debian/Ubuntu detected. Installing requirements..."
-    sudo apt-get update
-    sudo apt-get install -y ruby ruby-dev rubygems build-essential rpm wget curl git
-elif [ -f /etc/redhat-release ]; then
-    echo "[*] RHEL/CentOS/AlmaLinux detected. Installing requirements..."
-    sudo dnf install -y ruby ruby-devel rubygems gcc make rpm-build wget curl git
+elif [ -f /etc/redhat-release ] || [ -f /etc/fedora-release ]; then
+    echo "[*] RHEL/CentOS/Fedora/AlmaLinux detected. Installing requirements..."
 else
     echo "[-] Unsupported OS for local package building."
     exit 1
 fi
 
 echo "[*] Installing FPM (Effing Package Management)..."
-sudo gem install --no-document fpm
 
 echo "[*] Checking Golang..."
 if ! command -v go &> /dev/null; then
@@ -111,85 +107,43 @@ fi
 
 # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
 if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
-    if ! grep -q "SYSWARDEN_ENFORCEMENT_MODE" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-        sed -i '/SYSWARDEN_ENTERPRISE_MODE=/i # --- WAAP Enforcement Mode ---\n# "enforcing" = Actively bans malicious IPs via Nftables/Iptables.\n# "audit"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE="enforcing"\n' /opt/syswarden/syswarden-auto.conf || true
+    if [ -f /opt/syswarden/syswarden-auto.conf ]; then
+        /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf --output /etc/syswarden/config || true
+        mv /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.bak || true
     fi
     sed -i 's|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden$|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists|g' /etc/systemd/system/syswarden-core.service || true
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload
-        systemctl restart syswarden-core || true
+        /opt/syswarden/bin/syswarden-cli reload
+        systemctl enable syswarden-firewall || true
         systemctl restart syswarden-firewall || true
+        systemctl restart syswarden-core || true
         systemctl restart syswarden-webtui || true
     elif command -v rc-service >/dev/null 2>&1; then
-        rc-service syswarden-core restart || true
+        /opt/syswarden/bin/syswarden-cli reload || true
         rc-service syswarden-firewall restart || true
+        rc-service syswarden-core restart || true
         rc-service syswarden-webtui restart || true
-    fi
-fi
-
-# Ensure Web-TUI service exists regardless of Upgrade or Fresh Install
-if command -v systemctl >/dev/null 2>&1; then
-    if [ ! -f /etc/systemd/system/syswarden-webtui.service ]; then
-        cat << 'SVC' > /etc/systemd/system/syswarden-webtui.service
-[Unit]
-Description=SYSWARDEN Web-TUI (WebTTY)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-ExecStart=/opt/syswarden/bin/syswarden-cli web-tui
-Restart=on-failure
-RestartSec=5s
-
-# Security Hardening
-ProtectSystem=full
-ProtectHome=yes
-NoNewPrivileges=true
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-SVC
-        systemctl daemon-reload
-        systemctl enable --now syswarden-webtui.service || true
-    fi
-elif command -v rc-service >/dev/null 2>&1; then
-    if [ ! -f /etc/init.d/syswarden-webtui ]; then
-        cat << 'SVC' > /etc/init.d/syswarden-webtui
-
-#!/sbin/openrc-run
-
-name="syswarden-webtui"
-description="SYSWARDEN Web-TUI (WebTTY)"
-command="/opt/syswarden/bin/syswarden-cli"
-command_args="web-tui"
-command_background=true
-pidfile="/run/syswarden-webtui.pid"
-
-depend() {
-	need net
-}
-SVC
-            chmod +x /etc/init.d/syswarden-webtui
-            rc-update add syswarden-webtui default || true
-            rc-service syswarden-webtui start || true
-        fi
-        rc-service syswarden-webtui restart || true
-    fi
-
-    if ! grep -q "SYSWARDEN_WEB_TOKEN" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-        echo "[INFO] Upgrading SysWarden: Initializing Web-TUI..."
-        /usr/local/bin/syswarden web-token --rotate
     fi
 # RPM Install ($1 = 1) or DEB Install ($1 = configure && $2 == "")
+elif [ "$1" = "1" ] || [ "$1" = "configure" ]; then
     /opt/syswarden/bin/syswarden-cli install
     if command -v systemctl >/dev/null 2>&1; then
         systemctl restart syswarden-core || true
+        systemctl restart syswarden-webtui || true
     elif command -v rc-service >/dev/null 2>&1; then
         rc-service syswarden-core restart || true
+        rc-service syswarden-webtui restart || true
     fi
+# Alpine APK Install/Upgrade (APK passes version string in $1)
+elif [ -f /etc/alpine-release ]; then
+    if [ -f /opt/syswarden/syswarden-auto.conf ]; then
+        /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf --output /etc/syswarden/config || true
+        mv /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.bak || true
+    fi
+    /opt/syswarden/bin/syswarden-cli install
+    # syswarden update handles the daemon restart in Alpine, so we just reload.
+    /opt/syswarden/bin/syswarden-cli reload || true
 fi
 EOF
 
@@ -264,6 +218,38 @@ fpm -f -s dir -t rpm \
     --after-remove postrm.sh \
     -C staging .
 
+# Generate Alpine APK via nfpm
+echo "[*] Generating .apk package via nfpm..."
+go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+cat << EOF > nfpm_alpine_amd64.yaml
+name: "syswarden"
+arch: "amd64"
+platform: "linux"
+version: "${VERSION}"
+maintainer: "SysWarden Engineering"
+description: "SysWarden Host-based Security Orchestrator for Alpine Linux"
+vendor: "SysWarden Security"
+homepage: "https://github.com/duggytuxy/syswarden"
+depends:
+  - nftables
+  - curl
+  - wget
+  - rsyslog
+  - rsyslog-uxsock
+  - bash-completion
+contents:
+  - src: "./staging/opt"
+    dst: "/opt"
+  - src: "./staging/usr"
+    dst: "/usr"
+scripts:
+  postinstall: "./postinst.sh"
+  preremove: "./prerm.sh"
+  postremove: "./postrm.sh"
+EOF
+$(go env GOPATH)/bin/nfpm pkg --config nfpm_alpine_amd64.yaml --packager apk --target .
+rm -f nfpm_alpine_amd64.yaml
+
 # Generate FreeBSD PKG
 echo "[*] Preparing FreeBSD Staging..."
 rm -rf staging_fbsd
@@ -278,9 +264,9 @@ cat << 'EOF' > postinst_fbsd.sh
 export SYSWARDEN_PKG_INSTALL=1
 ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
 ln -sf /usr/local/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
-if ! grep -q "SYSWARDEN_ENFORCEMENT_MODE" /usr/local/syswarden/syswarden-auto.conf 2>/dev/null; then
-    sed -i .bak -e 's/SYSWARDEN_ENTERPRISE_MODE=/# --- WAAP Enforcement Mode ---\n# "enforcing" = Actively bans malicious IPs via Nftables\/Iptables.\n# "audit"     = Dry-Run\/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE="enforcing"\n\nSYSWARDEN_ENTERPRISE_MODE=/g' /usr/local/syswarden/syswarden-auto.conf || true
-    rm -f /usr/local/syswarden/syswarden-auto.conf.bak || true
+if [ -f /usr/local/syswarden/syswarden-auto.conf ]; then
+    /usr/local/syswarden/bin/syswarden-cli migrate-config --source /usr/local/syswarden/syswarden-auto.conf --output /etc/syswarden/config || true
+    mv /usr/local/syswarden/syswarden-auto.conf /usr/local/syswarden/syswarden-auto.conf.bak || true
 fi
 /usr/local/bin/syswarden install
 service syswarden restart || true

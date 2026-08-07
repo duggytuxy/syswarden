@@ -23,7 +23,7 @@ func StartComplianceWatchdog(l *logger.Logger) {
 			if next.Before(now) || next.Equal(now) {
 				next = next.Add(24 * time.Hour)
 			}
-			
+
 			time.Sleep(time.Until(next))
 			runComplianceAudit(l)
 		}

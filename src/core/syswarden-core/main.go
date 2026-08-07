@@ -9,6 +9,7 @@ import (
 	"sync"
 	"syscall"
 
+	"syswarden-core/config"
 	"syswarden-core/engine"
 	"syswarden-core/firewall"
 	"syswarden-core/logger"
@@ -24,6 +25,10 @@ func main() {
 	if err == nil {
 		mw := io.MultiWriter(os.Stdout, logFile)
 		log.SetOutput(mw)
+	}
+
+	if err := config.LoadConfig(); err != nil {
+		log.Printf("[WARNING] Failed to load modular config: %v", err)
 	}
 
 	log.Println("[SYSWARDEN-Core] Starting Next-Gen WAF Daemon...")

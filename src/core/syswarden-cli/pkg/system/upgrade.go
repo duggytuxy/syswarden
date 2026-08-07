@@ -196,15 +196,15 @@ func UpgradeSystem() error {
 	if err == nil && !strings.Contains(string(out), "SYSWARDEN_ENFORCEMENT_MODE=") {
 		fmt.Println(" -> Migrating config: Injecting missing SYSWARDEN_ENFORCEMENT_MODE...")
 		enforceBlock := "\n# --- WAAP Enforcement Mode ---\n# \"enforcing\" = Actively bans malicious IPs via Nftables/Iptables.\n# \"audit\"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE=\"enforcing\"\n"
-		
+
 		// Insert it right before SYSWARDEN_ENTERPRISE_MODE
 		newConfig := strings.Replace(string(out), "SYSWARDEN_ENTERPRISE_MODE=", enforceBlock+"\nSYSWARDEN_ENTERPRISE_MODE=", 1)
-		
+
 		// If replacement failed (key not found), append it
 		if newConfig == string(out) {
 			newConfig += enforceBlock
 		}
-		
+
 		// Ensure file is updated in memory for subsequent checks
 		out = []byte(newConfig)
 		_ = os.WriteFile(configPath, out, 0600)

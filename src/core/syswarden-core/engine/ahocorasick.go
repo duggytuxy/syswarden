@@ -243,7 +243,7 @@ var jsonIpRegex = regexp.MustCompile(`\"(?:ClientHost|remote_ip|client_ip|Client
 
 func ExtractIP(logLine string) string {
 	logLine = strings.TrimSpace(logLine)
-	
+
 	// 1. Try standard JSON log format matching Traefik/Caddy
 	if strings.Contains(logLine, "{") && strings.Contains(logLine, "}") {
 		matches := jsonIpRegex.FindStringSubmatch(logLine)

@@ -140,14 +140,9 @@ jobs:
 
           # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
           if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
-              if ! grep -q "SYSWARDEN_ENFORCEMENT_MODE" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-                  sed -i '/SYSWARDEN_ENTERPRISE_MODE=/i # --- WAAP Enforcement Mode ---\n# "enforcing" = Actively bans malicious IPs via Nftables/Iptables.\n# "audit"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE="enforcing"\n' /opt/syswarden/syswarden-auto.conf || true
-              fi
-              if ! grep -q "SYSWARDEN_HA_TOKEN" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-                  sed -i '/SYSWARDEN_HA_PEER_IP=/i # HA Shared Secret Token for API Authentication (Must be identical on all nodes)\nSYSWARDEN_HA_TOKEN=""\n' /opt/syswarden/syswarden-auto.conf || true
-              fi
-              if ! grep -q "SYSWARDEN_WEB_TOKEN" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-                  echo -e '\n# ==========================================\n# [7] WEB-TUI DASHBOARD\n# ==========================================\n# Secure token for Web-TUI authentication. Generated automatically by syswarden web-token if empty.\nSYSWARDEN_WEB_TOKEN=""' >> /opt/syswarden/syswarden-auto.conf || true
+              if [ -f /opt/syswarden/syswarden-auto.conf ]; then
+                  /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf --output /etc/syswarden/config || true
+                  mv /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.bak || true
               fi
               sed -i 's|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden$|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists|g' /etc/systemd/system/syswarden-core.service || true
               if command -v systemctl >/dev/null 2>&1; then
@@ -175,31 +170,9 @@ jobs:
               fi
           # Alpine APK Install/Upgrade (APK passes version string in $1)
           elif [ -f /etc/alpine-release ]; then
-              if ! grep -q "SYSWARDEN_ENFORCEMENT_MODE" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-                  if awk '/SYSWARDEN_ENTERPRISE_MODE=/ {
-                      print "# --- WAAP Enforcement Mode ---"
-                      print "# \"enforcing\" = Actively bans malicious IPs via Nftables/Iptables."
-                      print "# \"audit\"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking."
-                      print "SYSWARDEN_ENFORCEMENT_MODE=\"enforcing\""
-                      print ""
-                  }
-                  { print }' /opt/syswarden/syswarden-auto.conf > /tmp/sw_conf.tmp; then
-                      cat /tmp/sw_conf.tmp > /opt/syswarden/syswarden-auto.conf
-                      rm -f /tmp/sw_conf.tmp
-                  fi
-              fi
-              if ! grep -q "SYSWARDEN_HA_TOKEN" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-                  if awk '/SYSWARDEN_HA_PEER_IP=/ {
-                      print "# HA Shared Secret Token for API Authentication (Must be identical on all nodes)"
-                      print "SYSWARDEN_HA_TOKEN=\"\""
-                  }
-                  { print }' /opt/syswarden/syswarden-auto.conf > /tmp/sw_conf.tmp; then
-                      cat /tmp/sw_conf.tmp > /opt/syswarden/syswarden-auto.conf
-                      rm -f /tmp/sw_conf.tmp
-                  fi
-              fi
-              if ! grep -q "SYSWARDEN_WEB_TOKEN" /opt/syswarden/syswarden-auto.conf 2>/dev/null; then
-                  echo -e '\n# ==========================================\n# [7] WEB-TUI DASHBOARD\n# ==========================================\n# Secure token for Web-TUI authentication. Generated automatically by syswarden web-token if empty.\nSYSWARDEN_WEB_TOKEN=""' >> /opt/syswarden/syswarden-auto.conf || true
+              if [ -f /opt/syswarden/syswarden-auto.conf ]; then
+                  /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf --output /etc/syswarden/config || true
+                  mv /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.bak || true
               fi
               /opt/syswarden/bin/syswarden-cli install
               # syswarden update handles the daemon restart in Alpine, so we just reload.
@@ -384,20 +357,9 @@ jobs:
           export SYSWARDEN_PKG_INSTALL=1
           ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
           ln -sf /usr/local/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
-          if ! grep -q "SYSWARDEN_ENFORCEMENT_MODE" /usr/local/syswarden/syswarden-auto.conf 2>/dev/null; then
-              sed -i .bak -e 's/SYSWARDEN_ENTERPRISE_MODE=/# --- WAAP Enforcement Mode ---\n# "enforcing" = Actively bans malicious IPs via Nftables\/Iptables.\n# "audit"     = Dry-Run\/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE="enforcing"\n\nSYSWARDEN_ENTERPRISE_MODE=/g' /usr/local/syswarden/syswarden-auto.conf || true
-              rm -f /usr/local/syswarden/syswarden-auto.conf.bak || true
-          fi
-          if ! grep -q "SYSWARDEN_HA_TOKEN" /usr/local/syswarden/syswarden-auto.conf 2>/dev/null; then
-              sed -i .bak -e 's/SYSWARDEN_HA_PEER_IP=/# HA Shared Secret Token for API Authentication (Must be identical on all nodes)\nSYSWARDEN_HA_TOKEN=""\nSYSWARDEN_HA_PEER_IP=/g' /usr/local/syswarden/syswarden-auto.conf || true
-              rm -f /usr/local/syswarden/syswarden-auto.conf.bak || true
-          fi
-          if ! grep -q "SYSWARDEN_WEB_TOKEN" /usr/local/syswarden/syswarden-auto.conf 2>/dev/null; then
-              echo '# ==========================================' >> /usr/local/syswarden/syswarden-auto.conf
-              echo '# [7] WEB-TUI DASHBOARD' >> /usr/local/syswarden/syswarden-auto.conf
-              echo '# ==========================================' >> /usr/local/syswarden/syswarden-auto.conf
-              echo '# Secure token for Web-TUI authentication. Generated automatically by syswarden web-token if empty.' >> /usr/local/syswarden/syswarden-auto.conf
-              echo 'SYSWARDEN_WEB_TOKEN=""' >> /usr/local/syswarden/syswarden-auto.conf
+          if [ -f /usr/local/syswarden/syswarden-auto.conf ]; then
+              /usr/local/syswarden/bin/syswarden-cli migrate-config --source /usr/local/syswarden/syswarden-auto.conf --output /etc/syswarden/config || true
+              mv /usr/local/syswarden/syswarden-auto.conf /usr/local/syswarden/syswarden-auto.conf.bak || true
           fi
           /usr/local/bin/syswarden install
           service syswarden restart || true

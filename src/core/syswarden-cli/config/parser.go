@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// ParseConfig reads syswarden-auto.conf securely and populates GlobalConfig
-func ParseConfig(filepath string) error {
+// loadOldConfig reads syswarden-auto.conf securely and populates GlobalConfig
+func loadOldConfig(filepath string) error {
 	file, err := os.Open(filepath) // #nosec
 	if err != nil {
 		return fmt.Errorf("failed to open config file: %w", err)

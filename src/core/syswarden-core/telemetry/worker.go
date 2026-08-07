@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"syswarden-core/utils"
+
+	"github.com/spf13/viper"
 )
 
 type FirewallManager interface {
@@ -539,7 +541,13 @@ func getSystemStats() SystemData {
 	if runtime.GOOS == "freebsd" {
 		configPath = "/usr/local/etc/syswarden-auto.conf"
 	}
-	if b, err := os.ReadFile(configPath); err == nil { // #nosec
+
+	if viper.IsSet("integrations.ha.enabled") {
+		haEnabled = viper.GetBool("integrations.ha.enabled")
+		if p := viper.GetInt("integrations.ha.peer_port"); p > 0 {
+			haPort = strconv.Itoa(p)
+		}
+	} else if b, err := os.ReadFile(configPath); err == nil { // #nosec
 		for _, line := range strings.Split(string(b), "\n") {
 			if strings.HasPrefix(line, "SYSWARDEN_HA_ENABLED=") {
 				parts := strings.SplitN(line, "=", 2)
@@ -633,14 +641,27 @@ func getLayer3Stats() Layer3 {
 	var l3 Layer3
 
 	// Detect Zero-Trust Mode
-	if conf, err := os.ReadFile("/opt/syswarden/syswarden-auto.conf"); err == nil {
-		for _, line := range strings.Split(string(conf), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "SYSWARDEN_GEO_ALLOWED=\"") && len(line) > 23 && !strings.HasSuffix(line, "\"\"") {
-				l3.ZeroTrustMode = true
-			}
-			if strings.HasPrefix(line, "SYSWARDEN_ASN_ALLOWED=\"") && len(line) > 23 && !strings.HasSuffix(line, "\"\"") {
-				l3.ZeroTrustMode = true
+	if viper.IsSet("network.geo.allowed_countries") {
+		if len(viper.GetStringSlice("network.geo.allowed_countries")) > 0 {
+			l3.ZeroTrustMode = true
+		}
+	}
+	if viper.IsSet("network.asn.allowed_asns") {
+		if len(viper.GetStringSlice("network.asn.allowed_asns")) > 0 {
+			l3.ZeroTrustMode = true
+		}
+	}
+
+	if !l3.ZeroTrustMode {
+		if conf, err := os.ReadFile("/opt/syswarden/syswarden-auto.conf"); err == nil {
+			for _, line := range strings.Split(string(conf), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "SYSWARDEN_GEO_ALLOWED=\"") && len(line) > 23 && !strings.HasSuffix(line, "\"\"") {
+					l3.ZeroTrustMode = true
+				}
+				if strings.HasPrefix(line, "SYSWARDEN_ASN_ALLOWED=\"") && len(line) > 23 && !strings.HasSuffix(line, "\"\"") {
+					l3.ZeroTrustMode = true
+				}
 			}
 		}
 	}
@@ -710,6 +731,13 @@ func getConfiguredSSHPort() string {
 	defer sshPortMu.Unlock()
 	if customSSHPort != "" {
 		return customSSHPort
+	}
+
+	if viper.IsSet("core.ssh_port") {
+		if p := viper.GetString("core.ssh_port"); p != "" {
+			customSSHPort = p
+			return customSSHPort
+		}
 	}
 
 	configPath := "/opt/syswarden/syswarden-auto.conf"

@@ -1,17 +1,29 @@
-# Release v3.81.3
+# Release v3.90.0
 
-## FIXED 🐛
-- **Fresh Install Configuration**: Fixed a critical omission where the `SYSWARDEN_ENFORCEMENT_MODE` configuration directive was entirely missing from the master default template (`config/default.go`). This caused all fresh installations across Alpine, Debian, RHEL, and FreeBSD to silently generate a `syswarden-auto.conf` file lacking this field, preventing users from seeing or toggling the Shadow/Audit mode. The engine now explicitly writes the default `enforcing` directive on any new install.
-- **VPN / Busybox Compatibility**: Fixed an issue on Alpine Linux where the `syswarden-cli` VPN setup would fail to identify the active network interface because of busybox `grep` limitations (`-P` flag missing). Replaced the shell execution with a 100% native Go routing parser for absolute compatibility across all distributions.
-- **Nftables Filter Table Missing**: Fixed an edge case where the VPN setup silently failed to configure IP forwarding rules on minimal OS installs (like Alpine) because the `inet filter` table is not strictly guaranteed to exist by default.
-- **Config Migration Lifecycle**: Addressed a UX issue where upgrading Syswarden preserved the old `syswarden-auto.conf` without exposing the newly added `SYSWARDEN_HA_TOKEN` and `SYSWARDEN_WEB_TOKEN` fields. The RPM, DEB, APK, and TXZ packages (as well as `syswarden update`) now gracefully inject these missing fields into existing configurations without overwriting any user settings.
+## UPGRADED 🚀
+- **Modular Configuration Architecture (Major)**: Transitioned Syswarden's core configuration system from a flat `syswarden-auto.conf` file to a hierarchical, structured set of `.toml` configuration modules under `/etc/syswarden/config/`. This enables precise scoping of variables by domain (Core, Network, Security, WAAP, Integrations) and introduces strict schema validation.
+- **Interactive Configuration Manager**: Introduced the `syswarden config` interactive TUI menu to visually manage all configuration parameters dynamically, categorized by module.
 
----
+## ADDED ✨
+- **Configuration Migrator**: Implemented a fully automated, backward-compatible migration layer `syswarden migrate-config`. Upon package upgrade (RPM, DEB, APK, TXZ), the migrator silently maps legacy `syswarden-auto.conf` directives to the new TOML schemas without any manual user intervention.
+- **CLI Config Helper**: Added `syswarden config-get <key>` to programmatically extract nested configuration values securely (e.g. `syswarden config-get core.api_port`).
 
-# Release v3.81.2
+### UPDATED 🔄
+- **Config**: The `99-user.toml` generated during migration now contains explicit inline documentation to guide administrators on how to inject custom overrides with absolute priority.
+- **Manual**: Updated `syswarden manual` to reflect the new TOML modular layout (`/etc/syswarden/config/modules/`), removing all legacy references to `/opt/syswarden/syswarden-auto.conf`.
+- **Config**: Enhanced the generated `99-user.toml` with explicit instructions on how to uncomment and format array inputs.
+- **Config**: Added descriptive comments for the High Availability API Token (`integrations.ha.token`) inside the generated `40-integrations.toml` to guide administrators on secure generation.
+- **Config**: Relocated the Threat Intel Data-Shield configuration (blocklists, `list_choice`, `custom_url`) from the `[integrations]` module to its logical home in the `[network.blocklists]` module.
+- **Config**: Saturated the TOML migration templates with comprehensive, inline formatting examples above all variables to prevent human syntax errors (e.g., explicit examples of `["value"]` string arrays vs booleans).
 
-## FIXED 🐛
-Following a GitHub Actions malfunction, I am releasing a new version.
+### FIXED 🐛
+- **UX**: Restored continuous interactive loop in `syswarden config` so users no longer have to repeatedly invoke the command after modifying a single module.
+- **Config**: Fixed an issue in `migrator.go` where `[]string` fields (e.g. `lan_subnets`, `blocked_countries`) were improperly populated with `["false"]`, `["none"]`, or `[""]` instead of cleanly producing empty arrays `[]`.
+- **Config**: Removed incorrect `validate:"dive"` tags on nested structs in the Viper configuration loader, which was causing a panic when attempting to validate the new TOML modular structure.
+- **Packaging**: Removed a stray `fi` token in the generated `postinst.sh` RPM scriptlet during compilation in `build_packages.sh`.
+- **Config**: Fixed an issue in `migrator.go` where comma-separated lists (e.g., `honeyports = "6379, 23"`) were improperly split, resulting in concatenated array elements. Arrays now properly extract distinct values.
+- **UX**: Added an ANSI clear-screen sequence in the `syswarden config` TUI loop to prevent the menu from infinitely duplicating and polluting the terminal output after module edits.
+- **Config Loader**: Removed the aggressive `os.Exit(1)` inside `root.go` during TOML syntax failures. The CLI will now gracefully log a warning and continue, allowing the administrator to launch `syswarden config` and fix the syntax error directly via the TUI, instead of locking them out.
 
 ---
 

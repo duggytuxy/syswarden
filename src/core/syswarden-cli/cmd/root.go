@@ -43,8 +43,8 @@ func initConfig() {
 	// Only parse config if the file exists
 	if _, err := os.Stat(cfgFile); err == nil {
 		if err := config.ParseConfig(cfgFile); err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] Failed to load config: %v\n", err)
-			os.Exit(1)
+			fmt.Fprintf(os.Stderr, "[WARNING] Failed to load config: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[WARNING] Continuing in degraded mode. Please fix using 'syswarden config'\n")
 		}
 	} else {
 		// Ensure config is not nil and vital defaults are maintained even if file is missing (e.g. during fresh install)

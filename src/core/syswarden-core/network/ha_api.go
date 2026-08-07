@@ -19,6 +19,8 @@ import (
 	"strings"
 	"syswarden-core/firewall"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 type HAConfig struct {
@@ -34,6 +36,28 @@ func loadHAConfig() HAConfig {
 		Token:   "",
 		PeerIPs: []string{},
 		Port:    "62026", // Default HA TLS API Port
+	}
+
+	importViper := func() {
+		if viper.GetBool("integrations.ha.enabled") {
+			cfg.Enabled = "y"
+		} else {
+			cfg.Enabled = "n"
+		}
+		if token := viper.GetString("integrations.ha.token"); token != "" {
+			cfg.Token = token
+		}
+		if ips := viper.GetStringSlice("integrations.ha.peer_ips"); len(ips) > 0 {
+			cfg.PeerIPs = ips
+		}
+		if port := viper.GetInt("integrations.ha.peer_port"); port > 0 {
+			cfg.Port = fmt.Sprintf("%d", port)
+		}
+	}
+
+	if viper.IsSet("integrations.ha.enabled") {
+		importViper()
+		return cfg
 	}
 
 	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
@@ -60,18 +84,13 @@ func loadHAConfig() HAConfig {
 		if strings.HasPrefix(line, "SYSWARDEN_HA_PEER_IP=") {
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {
-				ips := strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
-				ips = strings.ReplaceAll(ips, ",", " ")
-				cfg.PeerIPs = append(cfg.PeerIPs, strings.Fields(ips)...)
+				cfg.PeerIPs = strings.Fields(strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'")))
 			}
 		}
 		if strings.HasPrefix(line, "SYSWARDEN_HA_PEER_PORT=") {
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {
-				portVal := strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
-				if portVal != "" {
-					cfg.Port = portVal
-				}
+				cfg.Port = strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
 			}
 		}
 	}

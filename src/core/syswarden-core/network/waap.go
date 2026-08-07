@@ -16,6 +16,7 @@ import (
 	"syswarden-core/utils"
 
 	"github.com/nxadm/tail"
+	"github.com/spf13/viper"
 )
 
 type WAAPConfig struct {
@@ -39,6 +40,47 @@ func loadWAAPConfig() WAAPConfig {
 		Mode:      "enforcing",
 	}
 
+	importViper := func() {
+		mode := viper.GetString("waap.enforcement_mode")
+		if mode != "" {
+			cfg.Mode = mode
+		}
+
+		threshold := viper.GetInt("waap.bruteforce_threshold")
+		if threshold > 0 {
+			cfg.Threshold = threshold
+		}
+
+		window := viper.GetInt("waap.bruteforce_window_seconds")
+		if window > 0 {
+			cfg.Window = time.Duration(window) * time.Second
+		}
+
+		bfLogs := viper.GetString("waap.bruteforce_logs")
+		modLogs := viper.GetString("waap.modsec_logs")
+
+		if bfLogs != "" {
+			if strings.ToLower(bfLogs) == "auto" {
+				cfg.Logs = append(cfg.Logs, discoverLogs()...)
+			} else {
+				cfg.Logs = append(cfg.Logs, strings.Fields(bfLogs)...)
+			}
+		}
+		if modLogs != "" {
+			if strings.ToLower(modLogs) == "auto" {
+				cfg.Logs = append(cfg.Logs, discoverLogs()...)
+			} else {
+				cfg.Logs = append(cfg.Logs, strings.Fields(modLogs)...)
+			}
+		}
+	}
+
+	if viper.IsSet("waap.enforcement_mode") {
+		importViper()
+		return cfg
+	}
+
+	// Fallback to legacy config
 	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
 	if err != nil {
 		return cfg
@@ -197,7 +239,7 @@ func (w *WAAPEngine) tailFile(filepath string) {
 							w.logger.LogShadowAlert(ip, match.RuleID, text)
 							continue
 						}
-						
+
 						if w.config.Mode == "audit" {
 							w.logger.LogSimulatedBan(ip, match.RuleID, text)
 							continue
