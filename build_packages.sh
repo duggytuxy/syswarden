@@ -220,7 +220,7 @@ fpm -f -s dir -t rpm \
 
 # Generate Alpine APK via nfpm
 echo "[*] Generating .apk package via nfpm..."
-go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.43.0
 cat << EOF > nfpm_alpine_amd64.yaml
 name: "syswarden"
 arch: "amd64"

@@ -1,3 +1,10 @@
+# Release v3.90.1
+
+### FIXED 🔐
+- **Supply Chain Security**: Pinned the `nfpm` dependency in `build_packages.sh` to a strict semantic version (`v2.43.0`) instead of `@latest` to resolve OSSF Scorecard (Pinned-Dependencies) and OSV vulnerabilities (e.g., GO-2026-5932). This hardens the build pipeline against dependency confusion attacks.
+
+---
+
 # Release v3.90.0
 
 ## UPGRADED 🚀
