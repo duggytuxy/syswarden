@@ -1,3 +1,9 @@
+# Release v3.90.2
+
+### FIXED 🔐
+- **Supply Chain Security**: Upgraded the internal `golang.org/x/crypto` dependencies across all Go modules to eliminate the known cryptographic vulnerability OSV `GO-2026-5932` flagged by OSSF Scorecard and `govulncheck`.
+---
+
 # Release v3.90.1
 
 ### FIXED 🔐
