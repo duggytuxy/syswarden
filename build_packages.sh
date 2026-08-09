@@ -93,6 +93,14 @@ cp dist/bin/* staging/opt/syswarden/bin/
 chmod 750 staging/opt/syswarden/bin/*
 chmod 640 staging/opt/syswarden/signatures.json
 
+# Pre-Install / Pre-Upgrade script
+cat << 'EOF' > preinst.sh
+#!/bin/sh
+if [ -f /opt/syswarden/syswarden-auto.conf ]; then
+    cp -p /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.migration_backup
+fi
+EOF
+
 # Global Execution Symlink handled via postinst script
 cat << 'EOF' > postinst.sh
 #!/bin/sh
@@ -107,9 +115,9 @@ fi
 
 # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
 if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
-    if [ -f /opt/syswarden/syswarden-auto.conf ]; then
-        /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf --output /etc/syswarden/config || true
-        mv /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.bak || true
+    if [ -f /opt/syswarden/syswarden-auto.conf.migration_backup ]; then
+        /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+        mv /opt/syswarden/syswarden-auto.conf.migration_backup /opt/syswarden/syswarden-auto.conf.bak || true
     fi
     sed -i 's|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden$|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists|g' /etc/systemd/system/syswarden-core.service || true
     if command -v systemctl >/dev/null 2>&1; then
@@ -137,9 +145,9 @@ elif [ "$1" = "1" ] || [ "$1" = "configure" ]; then
     fi
 # Alpine APK Install/Upgrade (APK passes version string in $1)
 elif [ -f /etc/alpine-release ]; then
-    if [ -f /opt/syswarden/syswarden-auto.conf ]; then
-        /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf --output /etc/syswarden/config || true
-        mv /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.bak || true
+    if [ -f /opt/syswarden/syswarden-auto.conf.migration_backup ]; then
+        /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+        mv /opt/syswarden/syswarden-auto.conf.migration_backup /opt/syswarden/syswarden-auto.conf.bak || true
     fi
     /opt/syswarden/bin/syswarden-cli install
     # syswarden update handles the daemon restart in Alpine, so we just reload.
@@ -187,7 +195,7 @@ if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
 fi
 EOF
 
-chmod +x postinst.sh postrm.sh prerm.sh
+chmod +x preinst.sh postinst.sh postrm.sh prerm.sh
 
 # 4. Generate Packages
 echo "[*] Generating .deb and .rpm packages via FPM..."
@@ -200,6 +208,7 @@ fpm -f -s dir -t deb \
     --maintainer "SysWarden Engineering" \
     --description "SysWarden Host-based Security Orchestrator for Linux" \
     -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "bash-completion" \
+    --before-install preinst.sh \
     --after-install postinst.sh \
     --before-remove prerm.sh \
     --after-remove postrm.sh \
@@ -213,6 +222,7 @@ fpm -f -s dir -t rpm \
     --maintainer "SysWarden Engineering" \
     --description "SysWarden Host-based Security Orchestrator for Linux" \
     -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "bash-completion" \
+    --before-install preinst.sh \
     --after-install postinst.sh \
     --before-remove prerm.sh \
     --after-remove postrm.sh \
@@ -243,6 +253,7 @@ contents:
   - src: "./staging/usr"
     dst: "/usr"
 scripts:
+  preinstall: "./preinst.sh"
   postinstall: "./postinst.sh"
   preremove: "./prerm.sh"
   postremove: "./postrm.sh"
@@ -259,14 +270,21 @@ cp dist/freebsd/bin/* staging_fbsd/usr/local/syswarden/bin/
 chmod 750 staging_fbsd/usr/local/syswarden/bin/*
 chmod 640 staging_fbsd/usr/local/syswarden/signatures.json
 
+cat << 'EOF' > preinst_fbsd.sh
+#!/bin/sh
+if [ -f /usr/local/syswarden/syswarden-auto.conf ]; then
+    cp -p /usr/local/syswarden/syswarden-auto.conf /usr/local/syswarden/syswarden-auto.conf.migration_backup
+fi
+EOF
+
 cat << 'EOF' > postinst_fbsd.sh
 #!/bin/sh
 export SYSWARDEN_PKG_INSTALL=1
 ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
 ln -sf /usr/local/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
-if [ -f /usr/local/syswarden/syswarden-auto.conf ]; then
-    /usr/local/syswarden/bin/syswarden-cli migrate-config --source /usr/local/syswarden/syswarden-auto.conf --output /etc/syswarden/config || true
-    mv /usr/local/syswarden/syswarden-auto.conf /usr/local/syswarden/syswarden-auto.conf.bak || true
+if [ -f /usr/local/syswarden/syswarden-auto.conf.migration_backup ]; then
+    /usr/local/syswarden/bin/syswarden-cli migrate-config --source /usr/local/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+    mv /usr/local/syswarden/syswarden-auto.conf.migration_backup /usr/local/syswarden/syswarden-auto.conf.bak || true
 fi
 /usr/local/bin/syswarden install
 service syswarden restart || true
@@ -288,7 +306,7 @@ pfctl -t syswarden_blacklist -T kill || true
 pfctl -t syswarden_whitelist -T kill || true
 pfctl -t banned_ips -T kill || true
 EOF
-chmod +x postinst_fbsd.sh postrm_fbsd.sh prerm_fbsd.sh
+chmod +x preinst_fbsd.sh postinst_fbsd.sh postrm_fbsd.sh prerm_fbsd.sh
 
 fpm -f -s dir -t freebsd \
     -n syswarden \
@@ -296,13 +314,14 @@ fpm -f -s dir -t freebsd \
     --vendor "SysWarden Security" \
     --maintainer "SysWarden Engineering" \
     --description "SysWarden Host-based Security Orchestrator for FreeBSD" \
+    --before-install preinst_fbsd.sh \
     --after-install postinst_fbsd.sh \
     --before-remove prerm_fbsd.sh \
     --after-remove postrm_fbsd.sh \
     -C staging_fbsd .
 
 # Clean Staging
-rm -rf staging staging_fbsd dist postinst*.sh postrm*.sh prerm*.sh
+rm -rf staging staging_fbsd dist preinst*.sh postinst*.sh postrm*.sh prerm*.sh
 
 echo "[SUCCESS] Packages have been successfully generated in your current directory!"
 ls -lh *.deb *.rpm *.pkg || true

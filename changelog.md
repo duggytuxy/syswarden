@@ -1,3 +1,10 @@
+# Release v3.90.3
+
+### FIXED 🐛
+- **Packaging / Configuration Migration**: Fixed a critical and silent bug occurring during package upgrades (RPM, DEB, APK, TXZ) from v3.81.1 to v3.90.x. Package managers would aggressively delete the legacy `/opt/syswarden/syswarden-auto.conf` file during the unpack phase because it was removed from the new v3.90.x package manifest. This destroyed the configuration before the `postinst` migration script could read it. Fixed by injecting a robust `preinst` script via FPM and NFPM that securely backups the legacy configuration to `.migration_backup` immediately before the package manager unpacks the new version, guaranteeing flawless, zero-loss TOML migrations across all operating systems.
+
+---
+
 # Release v3.90.2
 
 ### FIXED 🔐
