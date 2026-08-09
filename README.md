@@ -44,11 +44,11 @@ It acts as the definitive first line of defense for critical GNU/Linux infrastru
 > [!IMPORTANT]
 > **Zero CWE Mitigation:** Re-architected entirely in Go, SysWarden v2 strongly mitigates risks of OS Command Injection (CWE-78), Memory Corruption (CWE-119), and Resource Exhaustion (CWE-400), seamlessly accelerating your **ISO 27001, NIS2, and CIS Benchmark** compliance.
 
-## Architectural Capabilities (CNAPP / HIDS-HIPS)
+## Architectural Capabilities (HIDS-HIPS-WAAP)
 
 **1. A "Next-Gen HIPS" (Host Intrusion Prevention System)**
 At its core, SysWarden is a formidable HIPS. Unlike a traditional IDS (Intrusion Detection System) that merely alerts, SysWarden actively prevents attacks across multiple concrete OSI layers:
-* **Layer 2 (Data Link)**: ARP Request Rate-Limiting to instantly kill ARP Flooding/Spoofing attacks without breaking VRRP HA setups.
+* **Layer 2 (Data Link)**: ARP Request Rate-Limiting to instantly kill ARP Flooding/Spoofing attacks without breaking VRRP HA setups. *(Note: Layer 2 protection is strictly designed for internal LAN/VLAN environments and is not applicable to publicly exposed edge servers).*
 * **Layer 3 & 4 (Network & Transport)**: Stateful IP, CIDR, ASN, and GeoIP filtering via the `inet` family with explicit TCP Flag anomaly detection (e.g. killing invalid SYN/FIN/RST combinations). Includes a **Zero-Trust Strict ALLOW Mode** natively dropping any IP worldwide that isn't explicitly whitelisted via GeoIP or ASN.
 * **Layer 7 (Application)**: Advanced WAAP (Web Application Firewall) inspecting payloads via Zero-Overhead Substring Matching for zero-day exploits (SQLi, XSS, LFI, RCE) and HTTP 401/403/404 Brute-Force tracking via the native Go `WAAPEngine`.
 
@@ -61,6 +61,51 @@ The legacy term "WAF" is increasingly replaced by "WAAP" as attacks aggressively
 **4. Out-of-Band Orchestration (Active Defense)**
 SysWarden doesn't just block. It actively manages its own Threat Intelligence (ingesting Data-Shield, ASN, GeoIP feeds), synchronizes bans across different enterprise servers via its HA (High Availability) clustering module, and natively forwards telemetry out-of-band. It autonomously orchestrates the entire active defense lifecycle.
 
+### Complete Architecture Pipeline
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor': '#0d1117', 'primaryTextColor': '#c9d1d9', 'primaryBorderColor': '#30363d', 'lineColor': '#58a6ff', 'secondaryColor': '#161b22', 'tertiaryColor': '#21262d'}}}%%
+graph TD
+    classDef external fill:#b31d28,stroke:#ff7b72,stroke-width:2px,color:#ffffff
+    classDef hardware fill:#238636,stroke:#2ea043,stroke-width:2px,color:#ffffff
+    classDef kernel fill:#1f6feb,stroke:#58a6ff,stroke-width:2px,color:#ffffff
+    classDef waap fill:#8957e5,stroke:#d2a8ff,stroke-width:2px,color:#ffffff
+    classDef orch fill:#9e6a03,stroke:#e3b341,stroke-width:2px,color:#ffffff
+    classDef lan fill:#0969da,stroke:#58a6ff,stroke-width:2px,stroke-dasharray: 5 5,color:#ffffff
+
+    A([External Threat / Botnet]):::external -->|Hostile Traffic| B[Physical/Virtual NIC Interface]:::hardware
+    LAN([Internal LAN / VLAN]):::lan -.->|Internal Traffic| B
+    
+    subgraph KERNEL [Layer 2-4: Kernel Defense Edge]
+        C[Layer 2: ARP Anti-Spoofing & Flooding<br/>*LAN/VLAN Environments Only*]:::kernel
+        D[Layer 3: GeoIP, ASN, CIDR Strict Allow/Drop]:::kernel
+        E[Layer 4: Stateful TCP Flag Anomalies<br/>Syn-Flood / Invalid RST Mitigation]:::kernel
+        C --> D --> E
+    end
+    B --> KERNEL
+    
+    subgraph WAAP_ENGINE [Layer 7: SysWarden-Core WAAP 100% Go]
+        F[Log Stream Engine: Traefik, Nginx, Apache<br/>*Decrypted Payloads via Rsyslog UDS*]:::waap
+        G[Zero-Overhead Substring Matcher<br/>*Aho-Corasick Algorithm*]:::waap
+        H[Payload Inspection: SQLi, XSS, LFI, RCE, 401/403]:::waap
+        F --> G --> H
+    end
+    E -->|Authorized L4 HTTP/S Traffic| WAAP_ENGINE
+    
+    subgraph ORCHESTRATION [Out-of-Band Active Defense & Orchestration]
+        I[High Availability HA Cluster Sync<br/>*Zero-Trust Bearer Tokens*]:::orch
+        J[Threat Intel Ingestion<br/>*Data-Shield, Spamhaus, GeoIP*]:::orch
+        K[SIEM / Discord / Teams Webhooks<br/>*Native TLS Forwarding*]:::orch
+        L[TUI Dashboard & CLI<br/>*Real-Time Telemetry*]:::orch
+    end
+    
+    H -->|Threat Detected Ban Triggered| ORCHESTRATION
+    ORCHESTRATION -->|Dynamic Rule Injection| KERNEL
+    ORCHESTRATION --> K
+    ORCHESTRATION <--> I
+    ORCHESTRATION --> L
+```
+
 > [!TIP]
 > ### Ecosystem Synergy: The Ultimate Defense
 > While SysWarden excels as an Out-of-Band orchestrator and first line of defense at the kernel edge, a truly impenetrable architecture often requires deep, inline traffic inspection. For a complete, enterprise-grade In-Band WAF/WAAP solution, we highly recommend pairing SysWarden with [BunkerWeb](https://github.com/bunkerity/bunkerweb) by Bunkerity. Together, they form a robust, multi-layered security posture: BunkerWeb intercepts and sanitizes hostile payloads in real-time (In-Band), while SysWarden orchestrates behavioral threat intelligence, kernel-level network blocks, and system-wide Active Defense (Out-of-Band).
@@ -68,13 +113,9 @@ SysWarden doesn't just block. It actively manages its own Threat Intelligence (i
 ## Enterprise-Grade Features
 
 **100% Go Native Orchestration (Zero-Shell Execution)**
-* **Absolute Security:** Deprecated all legacy Bash scripts. Firewall generation, Systemd provisioning, 
-and Telemetry operations are executed entirely in Go memory, utilizing native `os/exec` wrappers to eliminate `bash 
--c` vulnerabilities.
-* **Strict CIDR Validation:** Threat feeds are parsed mathematically using `net.ParseCIDR()`, instantly 
-destroying malformed payloads or metadata injections (CWE-20 mitigation).
-* **Asynchronous Telemetry Worker:** Replaced brittle system crons with native Go `sync.WaitGroup` 
-goroutines. Telemetry and HA syncing run flawlessly in the background with strict memory leak prevention.
+* **Absolute Security:** Deprecated all legacy Bash scripts. Firewall generation, Systemd provisioning, and Telemetry operations are executed entirely in Go memory, utilizing native `os/exec` wrappers to eliminate `bash -c` vulnerabilities.
+* **Strict CIDR Validation:** Threat feeds are parsed mathematically using `net.ParseCIDR()`, instantly destroying malformed payloads or metadata injections (CWE-20 mitigation).
+* **Asynchronous Telemetry Worker:** Replaced brittle system crons with native Go `sync.WaitGroup` goroutines. Telemetry and HA syncing run flawlessly in the background with strict memory leak prevention.
 
 **Insider Threat Detection & Honeyports (Zero-Trust)**
 * **Shadow Mode:** Prevents legitimate administrative lockouts. When malicious Web Application attacks (e.g. PrivEsc, RCE attempts) originate from whitelisted administrative IPs, SysWarden silently tags the event as a `SHADOW-ALERT`. Legitimate admins are not banned, preventing disruption of service, while the SOC receives immediate notifications.
@@ -99,7 +140,7 @@ goroutines. Telemetry and HA syncing run flawlessly in the background with stric
 
 **Observability & Lifecycle Management**
 * Monitor active threats via the Go-compiled **SysWarden TUI** (`syswarden-tui`), a localized, high-speed interface requiring zero open web ports.
-* Manage your infrastructure via the unified `syswarden-cli` orchestrator (e.g., `syswarden install`, `syswarden update`, `syswarden uninstall`).
+* Manage your infrastructure via the unified `syswarden-cli` orchestrator (e.g., `syswarden install`, `syswarden update`, `syswarden migrate-config`).
 
 > [!NOTE]
 > **For CISOs and CIOs (Strategic Impact):** By offloading volumetric mitigation to the network edge and forwarding only high-fidelity behavioral data natively through Go, SysWarden drastically reduces SIEM ingestion costs and guarantees unbreachable operational continuity.
@@ -164,14 +205,15 @@ sudo pkg add ./syswarden-${V_NUM}.txz
 # 4. Read the exhaustive SysAdmin manual to understand all Data-Shield lists and configuration parameters
 sudo syswarden manual
 
-# 5. Review and tailor the embedded configuration to your infrastructure
+# 5. Review and tailor the embedded TOML configuration to your infrastructure
+# SysWarden v3 completely deprecates syswarden-auto.conf in favor of a strictly structured TOML schema.
 sudo syswarden config
 
-# The interactive wizard (or syswarden-auto.conf) allows configuring advanced parameters, for example:
-# - SYSWARDEN_ENABLE_L2="y" (Enable OSI Layer 2 ARP Spoofing Prevention)
-# - SYSWARDEN_ARP_PROTECT="y" (Enable 10req/sec ARP Flood limits)
-# - SYSWARDEN_LAN_MODE="y" (Enable Local LAN Mode to save RAM by skipping global OSINT downloads)
-# - SYSWARDEN_BRUTEFORCE_LOGS="/var/log/traefik/access.log" (Enable L7 WAF log parsing)
+# The interactive wizard dynamically manages parameters across /etc/syswarden/config/modules/, for example:
+# - core.enforcement_mode = "enforcing" (Actively bans malicious IPs)
+# - network.arp_protect = true (Enable 10req/sec ARP Flood limits on LAN)
+# - network.lan_mode = true (Enable Local LAN Mode to save RAM by skipping global OSINT downloads)
+# - waap.bruteforce_logs = "/var/log/traefik/access.log" (Enable L7 WAF log parsing)
 
 # 5. Execute the Go Orchestrator to apply policies instantly
 sudo syswarden install
@@ -276,9 +318,10 @@ sudo syswarden config
 ```
 2. Enable HA, add your peer IP(s) (can be comma or space-separated), and set the custom TLS port:
 ```conf
-SYSWARDEN_HA_ENABLE="true"
-SYSWARDEN_HA_PEER_IP="172.16.0.1, 10.0.0.2 10.0.0.3"
-SYSWARDEN_HA_PORT="62026"
+# Within the Interactive Wizard (syswarden config -> HA/Integrations):
+integrations.ha.enable = true
+integrations.ha.peer_ip = ["172.16.0.1", "10.0.0.2", "10.0.0.3"]
+integrations.ha.port = "62026"
 ```
 3. Reload the configuration instantly:
 ```bash
