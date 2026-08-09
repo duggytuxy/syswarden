@@ -52,6 +52,90 @@ At its core, SysWarden is a formidable HIPS. Unlike a traditional IDS (Intrusion
 * **Layer 3 & 4 (Network & Transport)**: Stateful IP, CIDR, ASN, and GeoIP filtering via the `inet` family with explicit TCP Flag anomaly detection (e.g. killing invalid SYN/FIN/RST combinations). Includes a **Zero-Trust Strict ALLOW Mode** natively dropping any IP worldwide that isn't explicitly whitelisted via GeoIP or ASN.
 * **Layer 7 (Application)**: Advanced WAAP (Web Application Firewall) inspecting payloads via Zero-Overhead Substring Matching for zero-day exploits (SQLi, XSS, LFI, RCE) and HTTP 401/403/404 Brute-Force tracking via the native Go `WAAPEngine`.
 
+### Complete Architecture Pipeline
+
+```text
+    [ INTERNET / EXTERNAL THREATS ]
+                  |
+                  v
+  ======================================================
+  [ EDGE / PUBLICLY EXPOSED SERVER ]
+    (SysWarden: L3/L4 & L7 Defenses Active)
+    
+    +------------------------------------------------+
+    | [+] L3/L4: GeoIP, ASN, TCP Anomaly Mitigation  |
+    | [+] L7: WAAP Engine (Nginx/Traefik Access Logs)|
+    | [+] Orchestration: Threat Intel Sync & HA      |
+    +------------------------------------------------+
+                  |
+                  v (Sanitized Traffic)
+         [ Web Apps / Public APIs ]
+  ======================================================
+                  |
+         (Internal Corporate Network)
+                  |
+                  v
+  ======================================================
+  [ INTERNAL LAN/VLAN SERVER ]
+    (SysWarden: L2, L3/L4 & L7 Defenses Active)
+    
+    +------------------------------------------------+
+    | [+] L2: ARP Spoofing/Flooding Prevention       | <-- LAN/VLAN Exclusive
+    | [+] L3/L4: CIDR Whitelisting & Strict Allow    |
+    | [+] L7: WAAP Engine (Database/Auth Payloads)   |
+    | [+] Orchestration: Internal HA Sync            |
+    +------------------------------------------------+
+                  |
+                  v (Sanitized Traffic)
+        [ Critical Internal Services ]
+  ======================================================
+```
+
+### System Footprint & Ecosystem
+
+SysWarden operates with absolute transparency. Below is the complete mapping of its orchestration files, modules, and kernel hooks:
+
+```text
+[ SYSWARDEN ECOSYSTEM & SYSTEM FOOTPRINT ]
+
+/opt/syswarden/
+ ├── bin/
+ │    ├── syswarden                (Unified Orchestrator CLI)
+ │    ├── syswarden-core           (L7 WAAP & Telemetry Daemon)
+ │    └── syswarden-tui            (Real-Time Observability Dashboard)
+ └── (Binaries are statically compiled, 100% Native Go)
+
+/etc/syswarden/
+ ├── config/
+ │    └── modules/
+ │         ├── 10-core.toml        (Engine & Daemon Core Params)
+ │         ├── 20-network.toml     (L2/L3 Firewalls & Honeyports)
+ │         ├── 30-security.toml    (WAAP & L7 Engine Rules)
+ │         ├── 40-integrations.toml(SIEM, HA, Webhooks)
+ │         └── 99-user.toml        (Admin Custom Overrides)
+ └── state/
+      └── .migration_backup        (Failsafe pre-upgrade configuration backup)
+
+/var/lib/syswarden/
+ ├── feeds/
+ │    ├── datashield.ipv4          (Dynamic IPv4 Intelligence Blocklist)
+ │    ├── asn.txt                  (Banned ASNs Registry)
+ │    └── geoip.txt                (Blocked Countries Registry)
+ └── db/
+      └── telemetry.cache          (Stateful WAF Ban Tracking & Rate Limiting)
+
+[ SYSTEMD SERVICES ]
+ ├── syswarden.service             (Core Go WAAP Background Daemon)
+ └── syswarden-nftables.service    (Kernel Firewall Boot Orchestration)
+
+[ KERNEL NETFILTER CHAIN (nftables / pf) ]
+ ├── table inet syswarden
+ │    ├── chain arp_protect        (L2 MAC/IP ARP Rate-Limiting - LAN Only)
+ │    ├── chain prerouting         (L3/L4 GeoIP, ASN, TCP anomalies drop)
+ │    ├── chain input              (L7 Auto-Bans, Strict ALLOW modes)
+ │    └── chain docker_protect     (CWPP routing protection & isolation)
+```
+
 **2. A CWPP (Cloud Workload Protection Platform)**
 By natively integrating Docker protection (Layer 3 via the `docker_protect` chain and Layer 7 via the Aho-Corasick WAF), SysWarden secures modern workloads. Whether the server hosts a Traefik cluster, databases, or containerized APIs, SysWarden wraps the containers in a shield without ever breaking their internal routing. This perfectly mirrors the behavior of enterprise agents like CrowdStrike or Palo Alto Prisma Cloud on Linux servers.
 
@@ -60,51 +144,6 @@ The legacy term "WAF" is increasingly replaced by "WAAP" as attacks aggressively
 
 **4. Out-of-Band Orchestration (Active Defense)**
 SysWarden doesn't just block. It actively manages its own Threat Intelligence (ingesting Data-Shield, ASN, GeoIP feeds), synchronizes bans across different enterprise servers via its HA (High Availability) clustering module, and natively forwards telemetry out-of-band. It autonomously orchestrates the entire active defense lifecycle.
-
-### Complete Architecture Pipeline
-
-```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor': '#0d1117', 'primaryTextColor': '#c9d1d9', 'primaryBorderColor': '#30363d', 'lineColor': '#58a6ff', 'secondaryColor': '#161b22', 'tertiaryColor': '#21262d'}}}%%
-graph TD
-    classDef external fill:#b31d28,stroke:#ff7b72,stroke-width:2px,color:#ffffff
-    classDef hardware fill:#238636,stroke:#2ea043,stroke-width:2px,color:#ffffff
-    classDef kernel fill:#1f6feb,stroke:#58a6ff,stroke-width:2px,color:#ffffff
-    classDef waap fill:#8957e5,stroke:#d2a8ff,stroke-width:2px,color:#ffffff
-    classDef orch fill:#9e6a03,stroke:#e3b341,stroke-width:2px,color:#ffffff
-    classDef lan fill:#0969da,stroke:#58a6ff,stroke-width:2px,stroke-dasharray: 5 5,color:#ffffff
-
-    A([External Threat / Botnet]):::external -->|Hostile Traffic| B[Physical/Virtual NIC Interface]:::hardware
-    LAN([Internal LAN / VLAN]):::lan -.->|Internal Traffic| B
-    
-    subgraph KERNEL [Layer 2-4: Kernel Defense Edge]
-        C[Layer 2: ARP Anti-Spoofing & Flooding<br/>*LAN/VLAN Environments Only*]:::kernel
-        D[Layer 3: GeoIP, ASN, CIDR Strict Allow/Drop]:::kernel
-        E[Layer 4: Stateful TCP Flag Anomalies<br/>Syn-Flood / Invalid RST Mitigation]:::kernel
-        C --> D --> E
-    end
-    B --> KERNEL
-    
-    subgraph WAAP_ENGINE [Layer 7: SysWarden-Core WAAP 100% Go]
-        F[Log Stream Engine: Traefik, Nginx, Apache<br/>*Decrypted Payloads via Rsyslog UDS*]:::waap
-        G[Zero-Overhead Substring Matcher<br/>*Aho-Corasick Algorithm*]:::waap
-        H[Payload Inspection: SQLi, XSS, LFI, RCE, 401/403]:::waap
-        F --> G --> H
-    end
-    E -->|Authorized L4 HTTP/S Traffic| WAAP_ENGINE
-    
-    subgraph ORCHESTRATION [Out-of-Band Active Defense & Orchestration]
-        I[High Availability HA Cluster Sync<br/>*Zero-Trust Bearer Tokens*]:::orch
-        J[Threat Intel Ingestion<br/>*Data-Shield, Spamhaus, GeoIP*]:::orch
-        K[SIEM / Discord / Teams Webhooks<br/>*Native TLS Forwarding*]:::orch
-        L[TUI Dashboard & CLI<br/>*Real-Time Telemetry*]:::orch
-    end
-    
-    H -->|Threat Detected Ban Triggered| ORCHESTRATION
-    ORCHESTRATION -->|Dynamic Rule Injection| KERNEL
-    ORCHESTRATION --> K
-    ORCHESTRATION <--> I
-    ORCHESTRATION --> L
-```
 
 > [!TIP]
 > ### Ecosystem Synergy: The Ultimate Defense
