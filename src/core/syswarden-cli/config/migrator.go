@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -34,6 +35,21 @@ func (m *Migrator) Run() error {
 
 	if err := m.generateMasterConfig(oldConfig); err != nil {
 		return err
+	}
+
+	// [FIX] ISO 27001 Compliance: Securely wipe the source config if requested.
+	// Otherwise, rename it to .migrated to prevent future upgrade loops wiping the new TOML.
+	if wipe, ok := oldConfig["SYSWARDEN_SECURE_WIPE_CONF"]; ok && wipe == "y" {
+		if !m.DryRun {
+			// Wipe the source file (.migration_backup)
+			_ = exec.Command("shred", "-u", "-z", "-n", "3", m.SourcePath).Run() // #nosec
+			// Attempt to wipe the original file if it's still lingering
+			_ = exec.Command("shred", "-u", "-z", "-n", "3", "/opt/syswarden/syswarden-auto.conf").Run() // #nosec
+		}
+	} else {
+		if !m.DryRun {
+			_ = os.Rename(m.SourcePath, m.SourcePath+".migrated")
+		}
 	}
 
 	return nil

@@ -1,3 +1,17 @@
+# Release v3.90.7
+
+### FIXED 🐛
+- **Core Engine:** Prevent TOML configuration overwrite and initialization loss by removing redundant `migrate-config` call from `syswarden update` CLI logic.
+- **Packaging (Debian/RPM/Alpine):** Fixed `preinst.sh` to properly move (rather than copy) the backup config file to prevent endless migration loops during OS package upgrades.
+- **Packaging (Debian/RPM):** Standardized `postrm.sh` script to ensure `/etc/syswarden` configuration folder is only purged on full uninstalls (`purge`), preventing data loss during package updates.
+- **Packaging (FreeBSD):** Removed unconditional configuration wipe `rm -rf /etc/syswarden` inside `postrm_fbsd.sh` to safeguard FreeBSD users during `pkg upgrade`.
+
+### ADDED ✨
+- **Security & ISO 27001:** Enabled `SYSWARDEN_SECURE_WIPE_CONF="y"` support in `migrator.go`. Upon a successful migration, sensitive legacy configuration files are definitively shredded using `shred -u -z -n 3` to prevent recovery of API keys.
+- **CLI Configuration:** Added `Master Configuration (config.toml)` selection directly to the `syswarden config` CLI wizard, giving users immediate access to adjust `enterprise_mode` settings.
+
+---
+
 # Release v3.90.6
 
 ## ADDED ✨

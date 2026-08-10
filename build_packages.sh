@@ -97,7 +97,7 @@ chmod 640 staging/opt/syswarden/signatures.json
 cat << 'EOF' > preinst.sh
 #!/bin/sh
 if [ -f /opt/syswarden/syswarden-auto.conf ]; then
-    cp -p /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.migration_backup
+    mv /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.migration_backup
 fi
 EOF
 
@@ -158,7 +158,7 @@ EOF
 cat << 'EOF' > postrm.sh
 #!/bin/sh
 # RPM Uninstall ($1 = 0) or DEB Uninstall/Purge
-if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+if [ "$1" = "0" ] || [ "$1" = "purge" ]; then
   rm -f /usr/local/bin/syswarden
   rm -f /usr/local/bin/syswarden-tui
   rm -f /etc/bash_completion.d/syswarden
@@ -273,7 +273,7 @@ chmod 640 staging_fbsd/usr/local/syswarden/signatures.json
 cat << 'EOF' > preinst_fbsd.sh
 #!/bin/sh
 if [ -f /usr/local/syswarden/syswarden-auto.conf ]; then
-    cp -p /usr/local/syswarden/syswarden-auto.conf /usr/local/syswarden/syswarden-auto.conf.migration_backup
+    mv /usr/local/syswarden/syswarden-auto.conf /usr/local/syswarden/syswarden-auto.conf.migration_backup
 fi
 EOF
 
@@ -295,7 +295,6 @@ cat << 'EOF' > postrm_fbsd.sh
 rm -f /usr/local/bin/syswarden
 rm -f /usr/local/bin/syswarden-tui
 rm -rf /usr/local/syswarden
-rm -rf /etc/syswarden
 EOF
 
 cat << 'EOF' > prerm_fbsd.sh

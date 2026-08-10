@@ -34,8 +34,9 @@ var configCmd = &cobra.Command{
 			fmt.Println("4) WAAP Engine             (30-waap.toml)")
 			fmt.Println("5) Integrations & HA       (40-integrations.toml)")
 			fmt.Println("6) Custom User Overrides   (99-user.toml)")
+			fmt.Println("7) Master Configuration    (config.toml)")
 			fmt.Println("0) Save & Exit")
-			fmt.Print("\nSelect [0-6]: ")
+			fmt.Print("\nSelect [0-7]: ")
 
 			var choice int
 			_, err := fmt.Scanf("%d", &choice)
@@ -54,7 +55,7 @@ var configCmd = &cobra.Command{
 				break
 			}
 
-			if choice < 1 || choice > 6 {
+			if choice < 1 || choice > 7 {
 				fmt.Println("[ERROR] Invalid choice. Please try again.")
 				continue
 			}
@@ -73,6 +74,8 @@ var configCmd = &cobra.Command{
 				targetFile = "40-integrations.toml"
 			case 6:
 				targetFile = "99-user.toml"
+			case 7:
+				targetFile = "../config.toml"
 			}
 
 			targetPath := filepath.Join(configDir, targetFile)

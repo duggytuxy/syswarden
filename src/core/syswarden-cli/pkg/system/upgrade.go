@@ -186,14 +186,12 @@ func UpgradeSystem() error {
 	_ = os.Remove(pkgFile)
 
 	// ===============================================
-	// 5. MIGRATION OF NEW CONFIGURATION KEYS
+	// 5. WEB-TUI INITIALIZATION
 	// ===============================================
-	// With the new TOML architecture, the CLI handles migration natively.
+	// With the new TOML architecture, the package manager (postinst) handles migration natively.
 	// We just ensure the Web-TUI token is initialized and print the URL.
 
-	fmt.Println("\n[INFO] Upgrading SysWarden: Initializing configuration & Web-TUI...")
-	cmdMigrate := exec.Command("/opt/syswarden/bin/syswarden-cli", "migrate-config") // #nosec
-	_ = cmdMigrate.Run()                                                             // Best effort
+	fmt.Println("\n[INFO] Upgrading SysWarden: Initializing Web-TUI...")
 
 	fmt.Println("\n[INFO] Web-TUI is available at:")
 	cmdWT := exec.Command("/opt/syswarden/bin/syswarden-cli", "web-token") // #nosec
