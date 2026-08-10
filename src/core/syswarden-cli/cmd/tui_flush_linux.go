@@ -3,8 +3,9 @@
 package cmd
 
 import (
-	"golang.org/x/sys/unix"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
 //nolint:unused // Used in tui.go, but linter struggles with OS-specific files

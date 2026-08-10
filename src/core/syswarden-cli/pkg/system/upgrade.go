@@ -185,65 +185,21 @@ func UpgradeSystem() error {
 	// Clean up
 	_ = os.Remove(pkgFile)
 
-	configPath := "/opt/syswarden/syswarden-auto.conf"
-	out, err := os.ReadFile(configPath) // #nosec G304
-
 	// ===============================================
 	// 5. MIGRATION OF NEW CONFIGURATION KEYS
 	// ===============================================
+	// With the new TOML architecture, the CLI handles migration natively.
+	// We just ensure the Web-TUI token is initialized and print the URL.
 
-	// Check if SYSWARDEN_ENFORCEMENT_MODE exists, inject if missing
-	if err == nil && !strings.Contains(string(out), "SYSWARDEN_ENFORCEMENT_MODE=") {
-		fmt.Println(" -> Migrating config: Injecting missing SYSWARDEN_ENFORCEMENT_MODE...")
-		enforceBlock := "\n# --- WAAP Enforcement Mode ---\n# \"enforcing\" = Actively bans malicious IPs via Nftables/Iptables.\n# \"audit\"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.\nSYSWARDEN_ENFORCEMENT_MODE=\"enforcing\"\n"
+	fmt.Println("\n[INFO] Upgrading SysWarden: Initializing configuration & Web-TUI...")
+	cmdMigrate := exec.Command("/opt/syswarden/bin/syswarden-cli", "migrate-config") // #nosec
+	_ = cmdMigrate.Run()                                                             // Best effort
 
-		// Insert it right before SYSWARDEN_ENTERPRISE_MODE
-		newConfig := strings.Replace(string(out), "SYSWARDEN_ENTERPRISE_MODE=", enforceBlock+"\nSYSWARDEN_ENTERPRISE_MODE=", 1)
-
-		// If replacement failed (key not found), append it
-		if newConfig == string(out) {
-			newConfig += enforceBlock
-		}
-
-		// Ensure file is updated in memory for subsequent checks
-		out = []byte(newConfig)
-		_ = os.WriteFile(configPath, out, 0600)
-	}
-
-	// Check if SYSWARDEN_WEB_TOKEN exists, inject if missing
-	if err == nil && !strings.Contains(string(out), "SYSWARDEN_WEB_TOKEN=") {
-		fmt.Println(" -> Migrating config: Injecting missing SYSWARDEN_WEB_TOKEN...")
-		webTokenBlock := "\n# ==========================================\n# [7] WEB-TUI DASHBOARD\n# ==========================================\n# Secure token for Web-TUI authentication. Generated automatically by 'syswarden web-token' if empty.\nSYSWARDEN_WEB_TOKEN=\"\"\n"
-		out = append(out, []byte(webTokenBlock)...)
-		_ = os.WriteFile(configPath, out, 0600)
-	}
-
-	// Check if SYSWARDEN_HA_TOKEN exists, inject if missing
-	if err == nil && !strings.Contains(string(out), "SYSWARDEN_HA_TOKEN=") {
-		fmt.Println(" -> Migrating config: Injecting missing SYSWARDEN_HA_TOKEN...")
-		haTokenBlock := "\n# HA Shared Secret Token for API Authentication (Must be identical on all nodes)\nSYSWARDEN_HA_TOKEN=\"\"\n"
-		newConfig := strings.Replace(string(out), "SYSWARDEN_HA_PEER_IP=", haTokenBlock+"\nSYSWARDEN_HA_PEER_IP=", 1)
-		if newConfig == string(out) {
-			newConfig += haTokenBlock
-		}
-		out = []byte(newConfig)
-		_ = os.WriteFile(configPath, out, 0600)
-	}
-
-	// Ensure Web-TUI is initialized and display URL if upgrading to a version supporting it
-	if err == nil && !strings.Contains(string(out), "SYSWARDEN_WEB_TOKEN=") {
-		fmt.Println("\n[INFO] Upgrading SysWarden: Initializing Web-TUI...")
-		cmdWT := exec.Command("/opt/syswarden/bin/syswarden-cli", "web-token", "--rotate") // #nosec
-		cmdWT.Stdout = os.Stdout
-		cmdWT.Stderr = os.Stderr
-		_ = cmdWT.Run()
-	} else if err == nil && strings.Contains(string(out), "SYSWARDEN_WEB_TOKEN=") {
-		fmt.Println("\n[INFO] Web-TUI is available at:")
-		cmdWT := exec.Command("/opt/syswarden/bin/syswarden-cli", "web-token") // #nosec
-		cmdWT.Stdout = os.Stdout
-		cmdWT.Stderr = os.Stderr
-		_ = cmdWT.Run()
-	}
+	fmt.Println("\n[INFO] Web-TUI is available at:")
+	cmdWT := exec.Command("/opt/syswarden/bin/syswarden-cli", "web-token") // #nosec
+	cmdWT.Stdout = os.Stdout
+	cmdWT.Stderr = os.Stderr
+	_ = cmdWT.Run()
 
 	fmt.Println("\n[+] In-place upgrade completed successfully!")
 

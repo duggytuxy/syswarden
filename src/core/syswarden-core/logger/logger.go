@@ -266,6 +266,8 @@ func (l *Logger) LogComplianceDrift(msg string) {
 		l.mu.Unlock()
 	}
 
+	go webhook.SendComplianceAlert(msg, "DRIFT")
+
 	log.Printf("[SYSWARDEN-COMPLIANCE-DRIFT] MSG=%s\n", msg)
 }
 
@@ -286,6 +288,8 @@ func (l *Logger) LogComplianceOK(msg string) {
 		_, _ = l.file.Write([]byte("\n"))
 		l.mu.Unlock()
 	}
+
+	go webhook.SendComplianceAlert(msg, "OK")
 
 	log.Printf("[SYSWARDEN-COMPLIANCE-OK] MSG=%s\n", msg)
 }

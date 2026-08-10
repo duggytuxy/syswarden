@@ -537,31 +537,13 @@ func getSystemStats() SystemData {
 	haStatus := "SKIPPED"
 	haEnabled := false
 	haPort := "62026"
-	configPath := "/opt/syswarden/syswarden-auto.conf"
-	if runtime.GOOS == "freebsd" {
-		configPath = "/usr/local/etc/syswarden-auto.conf"
-	}
 
-	if viper.IsSet("integrations.ha.enabled") {
-		haEnabled = viper.GetBool("integrations.ha.enabled")
+	if viper.GetBool("integrations.ha.enabled") {
+		haEnabled = true
 		if p := viper.GetInt("integrations.ha.peer_port"); p > 0 {
 			haPort = strconv.Itoa(p)
-		}
-	} else if b, err := os.ReadFile(configPath); err == nil { // #nosec
-		for _, line := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(line, "SYSWARDEN_HA_ENABLED=") {
-				parts := strings.SplitN(line, "=", 2)
-				if len(parts) == 2 {
-					val := strings.ToLower(strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'")))
-					haEnabled = val == "y"
-				}
-			}
-			if strings.HasPrefix(line, "SYSWARDEN_HA_PEER_PORT=") {
-				parts := strings.SplitN(line, "=", 2)
-				if len(parts) == 2 {
-					haPort = strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
-				}
-			}
+		} else if ps := viper.GetString("integrations.ha.peer_port"); ps != "" {
+			haPort = ps
 		}
 	}
 	if haEnabled {
@@ -640,30 +622,11 @@ func getLayer3Stats() Layer3 {
 
 	var l3 Layer3
 
-	// Detect Zero-Trust Mode
-	if viper.IsSet("network.geo.allowed_countries") {
-		if len(viper.GetStringSlice("network.geo.allowed_countries")) > 0 {
-			l3.ZeroTrustMode = true
-		}
+	if len(viper.GetStringSlice("network.geo.allowed_countries")) > 0 {
+		l3.ZeroTrustMode = true
 	}
-	if viper.IsSet("network.asn.allowed_asns") {
-		if len(viper.GetStringSlice("network.asn.allowed_asns")) > 0 {
-			l3.ZeroTrustMode = true
-		}
-	}
-
-	if !l3.ZeroTrustMode {
-		if conf, err := os.ReadFile("/opt/syswarden/syswarden-auto.conf"); err == nil {
-			for _, line := range strings.Split(string(conf), "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "SYSWARDEN_GEO_ALLOWED=\"") && len(line) > 23 && !strings.HasSuffix(line, "\"\"") {
-					l3.ZeroTrustMode = true
-				}
-				if strings.HasPrefix(line, "SYSWARDEN_ASN_ALLOWED=\"") && len(line) > 23 && !strings.HasSuffix(line, "\"\"") {
-					l3.ZeroTrustMode = true
-				}
-			}
-		}
+	if len(viper.GetStringSlice("network.asn.allowed_asns")) > 0 {
+		l3.ZeroTrustMode = true
 	}
 
 	l3.L7Banned = countLinesInFile("/etc/syswarden/lists/syswarden_blacklist.ipv4") + countLinesInFile("/etc/syswarden/lists/syswarden_blacklist.ipv6")
@@ -733,32 +696,11 @@ func getConfiguredSSHPort() string {
 		return customSSHPort
 	}
 
-	if viper.IsSet("core.ssh_port") {
-		if p := viper.GetString("core.ssh_port"); p != "" {
-			customSSHPort = p
-			return customSSHPort
-		}
-	}
-
-	configPath := "/opt/syswarden/syswarden-auto.conf"
-	if runtime.GOOS == "freebsd" {
-		configPath = "/usr/local/etc/syswarden-auto.conf"
+	if p := viper.GetString("core.ssh_port"); p != "" {
+		customSSHPort = p
+		return customSSHPort
 	}
 	customSSHPort = "22"
-	if b, err := os.ReadFile(configPath); err == nil { // #nosec
-		for _, line := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(line, "SYSWARDEN_SSH_PORT=") {
-				parts := strings.SplitN(line, "=", 2)
-				if len(parts) == 2 {
-					val := strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
-					if val != "" {
-						customSSHPort = val
-					}
-				}
-				break
-			}
-		}
-	}
 	return customSSHPort
 }
 

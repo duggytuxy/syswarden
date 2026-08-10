@@ -1,3 +1,17 @@
+# Release v3.90.6
+
+## ADDED ✨
+- **Compliance Webhooks**: Added native support for forwarding `COMPLIANCE-DRIFT` and `COMPLIANCE-OK` alerts to configured Webhooks (Discord, Teams, Slack).
+
+## UPGRADED 🚀
+- **Modular Configuration Refactoring**: Successfully migrated all internal core components (`syswarden-core/telemetry`, `syswarden-core/webhook`, `syswarden-core/network`) and the CLI configuration loader to strictly leverage the new `Viper`-based modular TOML configuration system. The components completely abandon reading the legacy `/opt/syswarden/syswarden-auto.conf` file, eliminating silent logic failures and ensuring seamless runtime behavior across all modules (SIEM, Webhooks, AbuseIPDB, HA API, WAAP Engine, SaaS Monitoring) post-upgrade.
+
+## FIXED 🐛
+- **CLI Configuration Loader**: Fixed a logic flaw where the new modular `config_loader.go` successfully loaded TOML files but failed to map integrations (SIEM, Webhooks, AbuseIPDB) to the legacy `GlobalConfig` struct, preventing CLI commands (`syswarden update`, etc.) from acknowledging enterprise features.
+- **In-Place Upgrade Pipeline**: Overhauled the legacy `.conf` string replacements in `upgrade.go` replacing them with an autonomous invocation of `syswarden-cli migrate-config` and `syswarden-cli web-token`, stabilizing the upgrade flow and ensuring the Web-TUI URL is correctly displayed after updates.---
+
+---
+
 # Release v3.90.5
 
 ### FIXED 🐛

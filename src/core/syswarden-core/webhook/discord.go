@@ -1,7 +1,6 @@
 package webhook
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"log"
@@ -11,6 +10,8 @@ import (
 	"time"
 
 	"syswarden-core/utils"
+
+	"github.com/spf13/viper"
 )
 
 type EmbedField struct {
@@ -45,35 +46,12 @@ type Config struct {
 }
 
 func loadConfig() Config {
-	c := Config{}
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
-	if err != nil {
-		return c
+	return Config{
+		Enabled:    viper.GetBool("integrations.webhooks.enabled"),
+		DiscordURL: viper.GetString("integrations.webhooks.discord_url"),
+		TeamsURL:   viper.GetString("integrations.webhooks.teams_url"),
+		SlackURL:   viper.GetString("integrations.webhooks.slack_url"),
 	}
-	defer func() {
-		_ = file.Close()
-	}()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "SYSWARDEN_ENABLE_WEBHOOK=") {
-			val := strings.Trim(strings.SplitN(line, "=", 2)[1], "\"'")
-			if strings.ToLower(val) == "y" {
-				c.Enabled = true
-			}
-		}
-		if strings.HasPrefix(line, "SYSWARDEN_WEBHOOK_URL_DISCORD=") {
-			c.DiscordURL = strings.Trim(strings.SplitN(line, "=", 2)[1], "\"'")
-		}
-		if strings.HasPrefix(line, "SYSWARDEN_WEBHOOK_URL_TEAMS=") {
-			c.TeamsURL = strings.Trim(strings.SplitN(line, "=", 2)[1], "\"'")
-		}
-		if strings.HasPrefix(line, "SYSWARDEN_WEBHOOK_URL_SLACK=") {
-			c.SlackURL = strings.Trim(strings.SplitN(line, "=", 2)[1], "\"'")
-		}
-	}
-	return c
 }
 
 func SendBanAlert(ip, jail, action string) {
@@ -353,5 +331,77 @@ func SendShadowAlert(ip, jail string) {
 		if err == nil {
 			_ = resp.Body.Close()
 		}
+	}
+}
+
+func SendComplianceAlert(msg, status string) {
+	cfg := loadConfig()
+	if !cfg.Enabled {
+		return
+	}
+
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "SYSWARDEN-NODE"
+	}
+
+	title := "✅ SYSWARDEN Compliance OK"
+	color := 3066993 // Green
+	if status != "OK" {
+		title = "❌ SYSWARDEN Compliance Drift"
+		color = 15158332 // Red
+	}
+
+	payload := DiscordPayload{
+		Content: nil,
+		Embeds: []DiscordEmbed{
+			{
+				Title:       title,
+				Description: msg,
+				Color:       color,
+				Fields: []EmbedField{
+					{Name: "Node", Value: hostname, Inline: true},
+					{Name: "Status", Value: status, Inline: true},
+				},
+				Footer: EmbedFooter{
+					Text: "SYSWARDEN v3.90.6 - Advanced Agentic Defense",
+				},
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[Webhook] Failed to marshal compliance payload: %v", err)
+		return
+	}
+
+	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+
+		finalData := data
+		if strings.Contains(u, "hooks.slack.com") {
+			slackPayload := map[string]string{
+				"text": title + "\nMessage: " + msg + "\nNODE: " + hostname,
+			}
+			finalData, _ = json.Marshal(slackPayload)
+		} else if strings.Contains(u, "webhook.office.com") {
+			teamsPayload := map[string]string{
+				"text": title + "\nMessage: " + msg + "\nNODE: " + hostname,
+			}
+			finalData, _ = json.Marshal(teamsPayload)
+		}
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
+		if err != nil {
+			log.Printf("[Webhook] Failed to send compliance alert: %v", err)
+			continue
+		}
+		_ = resp.Body.Close()
 	}
 }

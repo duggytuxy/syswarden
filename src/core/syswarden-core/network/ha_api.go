@@ -1,7 +1,6 @@
 package network
 
 import (
-	"bufio"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -38,62 +37,24 @@ func loadHAConfig() HAConfig {
 		Port:    "62026", // Default HA TLS API Port
 	}
 
-	importViper := func() {
-		if viper.GetBool("integrations.ha.enabled") {
-			cfg.Enabled = "y"
-		} else {
-			cfg.Enabled = "n"
-		}
-		if token := viper.GetString("integrations.ha.token"); token != "" {
-			cfg.Token = token
-		}
-		if ips := viper.GetStringSlice("integrations.ha.peer_ips"); len(ips) > 0 {
-			cfg.PeerIPs = ips
-		}
-		if port := viper.GetInt("integrations.ha.peer_port"); port > 0 {
-			cfg.Port = fmt.Sprintf("%d", port)
-		}
+	if viper.GetBool("integrations.ha.enabled") {
+		cfg.Enabled = "y"
 	}
 
-	if viper.IsSet("integrations.ha.enabled") {
-		importViper()
-		return cfg
+	if token := viper.GetString("integrations.ha.token"); token != "" {
+		cfg.Token = token
+	}
+	if ips := viper.GetStringSlice("integrations.ha.peer_ips"); len(ips) > 0 {
+		cfg.PeerIPs = ips
 	}
 
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
-	if err != nil {
-		return cfg
+	port := viper.GetInt("integrations.ha.peer_port")
+	if port > 0 {
+		cfg.Port = fmt.Sprintf("%d", port)
+	} else if portStr := viper.GetString("integrations.ha.peer_port"); portStr != "" {
+		cfg.Port = portStr
 	}
-	defer func() { _ = file.Close() }()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "SYSWARDEN_HA_ENABLED=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				cfg.Enabled = strings.ToLower(strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'")))
-			}
-		}
-		if strings.HasPrefix(line, "SYSWARDEN_HA_TOKEN=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				cfg.Token = strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
-			}
-		}
-		if strings.HasPrefix(line, "SYSWARDEN_HA_PEER_IP=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				cfg.PeerIPs = strings.Fields(strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'")))
-			}
-		}
-		if strings.HasPrefix(line, "SYSWARDEN_HA_PEER_PORT=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				cfg.Port = strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
-			}
-		}
-	}
 	return cfg
 }
 

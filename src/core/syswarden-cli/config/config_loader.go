@@ -120,11 +120,27 @@ func mapToGlobalConfig(m *ModularConfig) {
 	GlobalConfig.EnableASN = m.Network.ASN.Enabled
 	GlobalConfig.ASNList = strings.Join(m.Network.ASN.BlockedASNs, " ")
 	GlobalConfig.ASNAllowed = strings.Join(m.Network.ASN.AllowedASNs, " ")
-	// Note: Spamhaus, SIEM, Webhooks, Wazuh omitted in ModularConfig PoC to keep it simple, but we should map what we have
+
+	// Map Integrations
 	GlobalConfig.HAEnabled = m.Integrations.HA.Enabled
 	GlobalConfig.HAToken = m.Integrations.HA.Token
 	GlobalConfig.HAPeerIP = strings.Join(m.Integrations.HA.PeerIPs, " ")
 	GlobalConfig.HAPeerPort = strconv.Itoa(m.Integrations.HA.PeerPort)
+
+	GlobalConfig.SiemEnabled = m.Integrations.SIEM.Enabled
+	GlobalConfig.SiemIP = m.Integrations.SIEM.IP
+	GlobalConfig.SiemPort = m.Integrations.SIEM.Port
+	GlobalConfig.SiemProto = m.Integrations.SIEM.Protocol
+	GlobalConfig.SiemTLSCA = m.Integrations.SIEM.TLSCA
+
+	GlobalConfig.EnableAbuse = m.Integrations.AbuseIPDB.Enabled
+	GlobalConfig.AbuseAPIKey = m.Integrations.AbuseIPDB.APIKey
+
+	GlobalConfig.EnableWebhook = m.Integrations.Webhooks.Enabled
+	GlobalConfig.WebhookURLDiscord = m.Integrations.Webhooks.DiscordURL
+	GlobalConfig.WebhookURLSlack = m.Integrations.Webhooks.SlackURL
+	GlobalConfig.WebhookURLTeams = m.Integrations.Webhooks.TeamsURL
+
 	GlobalConfig.SecureWipeConf = m.Core.SecureWipeConf
 	GlobalConfig.EnableL2 = m.Security.L2.EnableL2
 	GlobalConfig.ArpProtect = m.Security.L2.ARPProtect

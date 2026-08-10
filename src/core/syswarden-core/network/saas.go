@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/viper"
 	"syswarden-core/logger"
+
+	"github.com/spf13/viper"
 )
 
 // SaasMonitorDownloader runs in the background and periodically downloads SaaS monitor IPs
@@ -42,30 +43,10 @@ func (s *SaasMonitorDownloader) Start() {
 }
 
 func (s *SaasMonitorDownloader) isSaasAllowed() bool {
-	if viper.IsSet("network.saas.allow_monitors") {
-		return viper.GetBool("network.saas.allow_monitors")
-	}
-
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
-	if err != nil {
+	if !viper.IsSet("integrations.saas.enabled") {
 		return true // Default to true for safety
 	}
-	defer func() { _ = file.Close() }()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "SYSWARDEN_ALLOW_SAAS_MONITORS=") || strings.HasPrefix(line, "SYSWARDEN_ALLOW_MONITORS=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				val := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
-				if strings.ToLower(val) == "n" || strings.ToLower(val) == "false" {
-					return false
-				}
-			}
-		}
-	}
-	return true
+	return viper.GetBool("integrations.saas.enabled")
 }
 
 func (s *SaasMonitorDownloader) fetchMonitors() {

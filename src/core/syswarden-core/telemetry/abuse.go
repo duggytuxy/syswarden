@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 var (
@@ -23,23 +25,8 @@ var (
 )
 
 func initAbuse() {
-	content, err := os.ReadFile("/etc/syswarden/secrets.env") // #nosec
-	if err != nil {
-		return
-	}
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "SYSWARDEN_ENABLE_ABUSE=") {
-			val := strings.Trim(strings.TrimPrefix(line, "SYSWARDEN_ENABLE_ABUSE="), `"'`)
-			if val == "y" || val == "Y" {
-				abuseEnabled = true
-			}
-		}
-		if strings.HasPrefix(line, "SYSWARDEN_ABUSE_API_KEY=") {
-			abuseAPIKey = strings.Trim(strings.TrimPrefix(line, "SYSWARDEN_ABUSE_API_KEY="), `"'`)
-		}
-	}
+	abuseEnabled = viper.GetBool("integrations.abuseipdb.enabled")
+	abuseAPIKey = viper.GetString("integrations.abuseipdb.api_key")
 }
 
 // isKnownIP checks if the IP is already in our threat intel or blacklist files.

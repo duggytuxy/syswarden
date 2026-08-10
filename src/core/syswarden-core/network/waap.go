@@ -1,12 +1,10 @@
 package network
 
 import (
-	"bufio"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -40,88 +38,36 @@ func loadWAAPConfig() WAAPConfig {
 		Mode:      "enforcing",
 	}
 
-	importViper := func() {
-		mode := viper.GetString("waap.enforcement_mode")
-		if mode != "" {
-			cfg.Mode = mode
-		}
-
-		threshold := viper.GetInt("waap.bruteforce_threshold")
-		if threshold > 0 {
-			cfg.Threshold = threshold
-		}
-
-		window := viper.GetInt("waap.bruteforce_window_seconds")
-		if window > 0 {
-			cfg.Window = time.Duration(window) * time.Second
-		}
-
-		bfLogs := viper.GetString("waap.bruteforce_logs")
-		modLogs := viper.GetString("waap.modsec_logs")
-
-		if bfLogs != "" {
-			if strings.ToLower(bfLogs) == "auto" {
-				cfg.Logs = append(cfg.Logs, discoverLogs()...)
-			} else {
-				cfg.Logs = append(cfg.Logs, strings.Fields(bfLogs)...)
-			}
-		}
-		if modLogs != "" {
-			if strings.ToLower(modLogs) == "auto" {
-				cfg.Logs = append(cfg.Logs, discoverLogs()...)
-			} else {
-				cfg.Logs = append(cfg.Logs, strings.Fields(modLogs)...)
-			}
-		}
+	mode := viper.GetString("waap.enforcement_mode")
+	if mode != "" {
+		cfg.Mode = mode
 	}
 
-	if viper.IsSet("waap.enforcement_mode") {
-		importViper()
-		return cfg
+	threshold := viper.GetInt("waap.bruteforce_threshold")
+	if threshold > 0 {
+		cfg.Threshold = threshold
 	}
 
-	// Fallback to legacy config
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
-	if err != nil {
-		return cfg
+	window := viper.GetInt("waap.bruteforce_window_seconds")
+	if window > 0 {
+		cfg.Window = time.Duration(window) * time.Second
 	}
-	defer func() { _ = file.Close() }()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	bfLogs := viper.GetString("waap.bruteforce_logs")
+	modLogs := viper.GetString("waap.modsec_logs")
+
+	if bfLogs != "" {
+		if strings.ToLower(bfLogs) == "auto" {
+			cfg.Logs = append(cfg.Logs, discoverLogs()...)
+		} else {
+			cfg.Logs = append(cfg.Logs, strings.Fields(bfLogs)...)
 		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		key := strings.TrimSpace(parts[0])
-		val := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
-
-		switch key {
-		case "SYSWARDEN_ENFORCEMENT_MODE":
-			if val != "" {
-				cfg.Mode = val
-			}
-		case "SYSWARDEN_BRUTEFORCE_LOGS", "SYSWARDEN_MODSEC_LOGS":
-			if val != "" {
-				if strings.ToLower(val) == "auto" {
-					cfg.Logs = append(cfg.Logs, discoverLogs()...)
-				} else {
-					cfg.Logs = append(cfg.Logs, strings.Fields(val)...)
-				}
-			}
-		case "SYSWARDEN_BRUTEFORCE_THRESHOLD":
-			if t, err := strconv.Atoi(val); err == nil && t > 0 {
-				cfg.Threshold = t
-			}
-		case "SYSWARDEN_BRUTEFORCE_WINDOW":
-			if w, err := strconv.Atoi(val); err == nil && w > 0 {
-				cfg.Window = time.Duration(w) * time.Second
-			}
+	}
+	if modLogs != "" {
+		if strings.ToLower(modLogs) == "auto" {
+			cfg.Logs = append(cfg.Logs, discoverLogs()...)
+		} else {
+			cfg.Logs = append(cfg.Logs, strings.Fields(modLogs)...)
 		}
 	}
 	return cfg
