@@ -266,6 +266,8 @@ func (m *Migrator) generateNetwork(oldConfig map[string]string) string {
 
 	geoListStr := parseSlice(get("SYSWARDEN_GEO_CODES", ""))
 	asnListStr := parseSlice(get("SYSWARDEN_ASN_LIST", ""))
+	geoAllowedStr := parseSlice(get("SYSWARDEN_GEO_ALLOWED", ""))
+	asnAllowedStr := parseSlice(get("SYSWARDEN_ASN_ALLOWED", ""))
 	lanListStr := parseSlice(get("SYSWARDEN_LAN_SUBNETS", ""))
 	whitelistIPsStr := parseSlice(get("SYSWARDEN_WHITELIST_IPS", ""))
 
@@ -288,13 +290,13 @@ interfaces = "` + get("SYSWARDEN_INTERFACES", "") + `"
 enabled = ` + getBool("SYSWARDEN_ENABLE_GEO", "true") + `
 # Format requires quotes (ISO 3166-1 alpha-2): ["ru", "cn", "fr"]
 blocked_countries = [` + geoListStr + `]
-allowed_countries = []
+allowed_countries = [` + geoAllowedStr + `]
 
 [network.asn]
 enabled = ` + getBool("SYSWARDEN_ENABLE_ASN", "true") + `
 # Format requires quotes: ["AS1234", "AS5678"]
 blocked_asns = [` + asnListStr + `]
-allowed_asns = []
+allowed_asns = [` + asnAllowedStr + `]
 
 [network.saas]
 allow_monitors = ` + getBool("SYSWARDEN_ALLOW_MONITORS", "false") + `

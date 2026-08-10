@@ -1,3 +1,10 @@
+# Release v3.90.8
+
+### FIXED 🐛
+- **Core Engine (Migration):** Fixed a critical omission in the `migrator.go` configuration converter where `SYSWARDEN_GEO_ALLOWED` and `SYSWARDEN_ASN_ALLOWED` arrays were incorrectly hardcoded to empty arrays `[]`, leading to the loss of Geo-IP and ASN Zero-Trust whitelists during the upgrade process. The values are now correctly extracted and transposed into the `10-network.toml` module.
+
+---
+
 # Release v3.90.7
 
 ### FIXED 🐛

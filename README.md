@@ -18,6 +18,9 @@
   <br>
   <br>
 
+  <a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
+    <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
+  </a>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/scorecard.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/scorecard.yml?style=flat&logo=githubactions&logoColor=white&label=OSSF%20Scorecard%20Supply%20Chain%20Security" alt="OSSF Scorecard Supply Chain Security">
   </a>
@@ -32,10 +35,6 @@
 
 # SysWarden v3 🌟
 > **Active Defense and HIDS/HIPS/WAAP Out-of-Band Orchestration for Critical Linux Infrastructure**
-
-<a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
-    <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
-  </a>
 
 **SysWarden** is an Enterprise-grade Hardened Host Intrusion Detection & Prevention System (HIDS - HIPS) engineered in **100% Native Golang**. Designed for critical Linux infrastructures, it enforces automated part of CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with absolute zero-trust execution.
 
