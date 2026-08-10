@@ -1,3 +1,10 @@
+# Release v3.90.4
+
+### FIXED 🐛
+- Resolved a critical bug on fresh installations where default modular TOML configurations were not automatically initialized during the installation pipeline, preventing the `syswarden-core` daemon from starting. `syswarden install` now autonomously bootstraps the `/etc/syswarden/config/modules` directory.
+
+---
+
 # Release v3.90.3
 
 ### FIXED 🐛

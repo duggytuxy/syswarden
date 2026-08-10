@@ -39,6 +39,32 @@ func (m *Migrator) Run() error {
 	return nil
 }
 
+// InitializeDefaults initializes the default modular configuration from the hardcoded DefaultConfig memory string.
+func InitializeDefaults(outputDir string) error {
+	if err := os.MkdirAll(filepath.Join(outputDir, "modules"), 0750); err != nil {
+		return err
+	}
+	m := &Migrator{
+		OutputDir: outputDir,
+		DryRun:    false,
+	}
+
+	configData, err := m.ParseFromMemory(DefaultConfig)
+	if err != nil {
+		return err
+	}
+
+	if err := m.generateAllModules(configData); err != nil {
+		return err
+	}
+
+	if err := m.generateMasterConfig(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (m *Migrator) parseOldConfig() (map[string]string, error) {
 	config := make(map[string]string)
 	file, err := os.Open(m.SourcePath)
@@ -61,6 +87,31 @@ func (m *Migrator) parseOldConfig() (map[string]string, error) {
 		}
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(strings.Trim(parts[1], `"'`))
+		if idx := strings.Index(value, "#"); idx != -1 {
+			value = strings.TrimSpace(value[:idx])
+		}
+		config[key] = value
+	}
+	return config, scanner.Err()
+}
+
+// ParseFromMemory parses the legacy flat configuration format directly from a string in memory
+func (m *Migrator) ParseFromMemory(content string) (map[string]string, error) {
+	config := make(map[string]string)
+
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "=") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(strings.Trim(parts[1], `"'`))
+		// Remove inline comments
 		if idx := strings.Index(value, "#"); idx != -1 {
 			value = strings.TrimSpace(value[:idx])
 		}

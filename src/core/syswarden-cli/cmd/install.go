@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
@@ -18,6 +19,32 @@ var installCmd = &cobra.Command{
 	Long:  `Executes the fully automated SYSWARDEN installation pipeline.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
+
+		// --- Fresh Install Bootstrapping ---
+		configDir := "/etc/syswarden/config/modules"
+		isFreshInstall := false
+		if _, err := os.Stat(configDir); os.IsNotExist(err) {
+			isFreshInstall = true
+		} else {
+			entries, err := os.ReadDir(configDir)
+			if err == nil && len(entries) == 0 {
+				isFreshInstall = true
+			}
+		}
+
+		if isFreshInstall {
+			fmt.Println("[INFO] Fresh installation detected. Initializing default modular configuration...")
+			if err := config.InitializeDefaults("/etc/syswarden/config"); err != nil {
+				fmt.Printf("[ERROR] Failed to initialize default configuration: %v\n", err)
+			} else {
+				fmt.Println("[SUCCESS] Modular configuration initialized at /etc/syswarden/config/modules")
+				// Re-hydrate the GlobalConfig in memory so the rest of the install uses the correct settings
+				if err := config.ParseConfig("/etc/syswarden/config"); err != nil {
+					fmt.Printf("[WARNING] Failed to reload generated configuration: %v\n", err)
+				}
+			}
+		}
+		// -----------------------------------
 
 		if err := system.InstallDependencies(); err != nil {
 			fmt.Printf("[ERROR] Dependency installation failed: %v\n", err)
