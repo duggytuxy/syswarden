@@ -79,7 +79,7 @@ func SendBanAlert(ip, jail, action string) {
 					{Name: "NODE", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v3.90.5 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v3.90.6 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
@@ -147,7 +147,7 @@ func SendDetectedAlert(ip, jail, action string) {
 					{Name: "NODE", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v3.90.5 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v3.90.6 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
