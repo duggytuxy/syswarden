@@ -1,3 +1,10 @@
+# Release v3.90.9
+
+### FIXED 🐛
+- **Packaging (Debian/RPM):** Resolved an edge case where native uninstallation via `syswarden uninstall` followed by a `.deb`/`.rpm` reinstallation would fail to start Systemd services. The post-installation script now properly enforces `syswarden-cli install` during package upgrades to guarantee Systemd `.service` files are regenerated even if they were manually purged.
+
+---
+
 # Release v3.90.8
 
 ### FIXED 🐛

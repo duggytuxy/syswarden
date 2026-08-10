@@ -119,7 +119,7 @@ if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
         /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
         mv /opt/syswarden/syswarden-auto.conf.migration_backup /opt/syswarden/syswarden-auto.conf.bak || true
     fi
-    sed -i 's|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden$|ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists|g' /etc/systemd/system/syswarden-core.service || true
+    /opt/syswarden/bin/syswarden-cli install
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload
         /opt/syswarden/bin/syswarden-cli reload
