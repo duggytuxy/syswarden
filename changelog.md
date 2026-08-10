@@ -1,3 +1,10 @@
+# Release v3.90.5
+
+### FIXED 🐛
+- Restored missing legacy configurations in TOML generation: Enterprise Mode, Secure Wipe, SIEM mTLS Forwarding, AbuseIPDB Reporting, and Webhook Notifications (Discord, Slack, Teams) are now correctly migrated and mapped to their respective TOML modules (`00-core.toml` and `40-integrations.toml`).
+
+---
+
 # Release v3.90.4
 
 ### FIXED 🐛

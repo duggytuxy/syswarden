@@ -32,7 +32,7 @@ func (m *Migrator) Run() error {
 		return err
 	}
 
-	if err := m.generateMasterConfig(); err != nil {
+	if err := m.generateMasterConfig(oldConfig); err != nil {
 		return err
 	}
 
@@ -58,7 +58,7 @@ func InitializeDefaults(outputDir string) error {
 		return err
 	}
 
-	if err := m.generateMasterConfig(); err != nil {
+	if err := m.generateMasterConfig(configData); err != nil {
 		return err
 	}
 
@@ -148,14 +148,25 @@ func (m *Migrator) generateAllModules(oldConfig map[string]string) error {
 	return nil
 }
 
-func (m *Migrator) generateMasterConfig() error {
+func (m *Migrator) generateMasterConfig(oldConfig map[string]string) error {
+	getBool := func(key, defaultValue string) string {
+		val, ok := oldConfig[key]
+		if !ok || val == "" {
+			return defaultValue
+		}
+		if val == "y" || val == "yes" || val == "true" || val == "1" {
+			return "true"
+		}
+		return "false"
+	}
+
 	content := `# SYSWARDEN MODULAR CONFIGURATION
 # Load order: 00-*.toml -> 99-*.toml
 # Environment variables override: SYSWARDEN_<SECTION>_<KEY>
 
 [core]
 config_dir = "` + filepath.Join(m.OutputDir, "modules") + `"
-enterprise_mode = true
+enterprise_mode = ` + getBool("SYSWARDEN_ENTERPRISE_MODE", "false") + `
 log_level = "INFO"
 `
 	outputPath := filepath.Join(m.OutputDir, "config.toml")
@@ -197,7 +208,7 @@ firewall_backend = "` + get("SYSWARDEN_FIREWALL_BACKEND", "keep") + `"
 # Boolean values: true or false (no quotes)
 hardening_enabled = ` + getBool("SYSWARDEN_HARDENING", "false") + `
 cis_l2_hardening = ` + getBool("SYSWARDEN_CIS_L2", "false") + `
-secure_wipe_conf = ` + getBool("SYSWARDEN_SECURE_WIPE", "false") + `
+secure_wipe_conf = ` + getBool("SYSWARDEN_SECURE_WIPE_CONF", "false") + `
 
 # SSH Port string (e.g. "2222")
 ssh_port = "` + get("SYSWARDEN_SSH_PORT", "") + `"
@@ -410,6 +421,23 @@ peer_port = ` + get("SYSWARDEN_HA_PEER_PORT", "62026") + `
 # HA Shared Secret Token for API Authentication (Must be identical on all nodes)
 # Generate a secure token using: openssl rand -hex 32
 token = "` + get("SYSWARDEN_HA_TOKEN", "") + `"
+
+[integrations.siem]
+enabled = ` + getBool("SYSWARDEN_SIEM_ENABLED", "false") + `
+ip = "` + get("SYSWARDEN_SIEM_IP", "") + `"
+port = "` + get("SYSWARDEN_SIEM_PORT", "6514") + `"
+protocol = "` + get("SYSWARDEN_SIEM_PROTO", "tls") + `"
+tls_ca = "` + get("SYSWARDEN_SIEM_TLS_CA", "/etc/ssl/certs/ca-certificates.crt") + `"
+
+[integrations.abuseipdb]
+enabled = ` + getBool("SYSWARDEN_ENABLE_ABUSE", "false") + `
+api_key = "` + get("SYSWARDEN_ABUSE_API_KEY", "") + `"
+
+[integrations.webhooks]
+enabled = ` + getBool("SYSWARDEN_ENABLE_WEBHOOK", "false") + `
+discord_url = "` + get("SYSWARDEN_WEBHOOK_URL_DISCORD", "") + `"
+teams_url = "` + get("SYSWARDEN_WEBHOOK_URL_TEAMS", "") + `"
+slack_url = "` + get("SYSWARDEN_WEBHOOK_URL_SLACK", "") + `"
 `
 }
 
