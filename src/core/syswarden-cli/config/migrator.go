@@ -218,7 +218,7 @@ func (m *Migrator) generateCore(oldConfig map[string]string) string {
 # Priority: 00 (loaded first, lowest precedence)
 
 [core]
-# Supported backends: "nftables"
+# Supported backends (RHEL/Alma/Fedora ONLY): "nftables", "iptables", "keep"
 firewall_backend = "` + get("SYSWARDEN_FIREWALL_BACKEND", "keep") + `"
 
 # Boolean values: true or false (no quotes)

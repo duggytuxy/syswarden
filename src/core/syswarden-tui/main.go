@@ -777,7 +777,7 @@ func refreshUI() {
 	if d.Layer3.ZeroTrustMode {
 		globalBlockedStr = fmt.Sprintf("%d (Zero-Trust)", d.Layer3.GlobalBlocked)
 	}
-	l3Lines := fmt.Sprintf("\n [gray]Value:[-] [white]%s[-] [gray](L7/HA: %d)[-]\n [gray]GeoIP:[-] [white]%d[-] │ [gray]ASN:[-] [white]%d[-]",
+	l3Lines := fmt.Sprintf(" [gray]Value:[-] [white]%s[-] [gray](L7/HA: %d)[-]\n [gray]GeoIP:[-] [white]%d[-] │ [gray]ASN:[-] [white]%d[-]",
 		globalBlockedStr, d.Layer3.L7Banned, d.Layer3.GeoIPBlocked, d.Layer3.ASNBlocked)
 	l3Text.SetText(l3Lines)
 
@@ -786,7 +786,7 @@ func refreshUI() {
 	if len(d.WAF.RiskRadar) >= 5 {
 		re, rb, rr, rd, ra = d.WAF.RiskRadar[0], d.WAF.RiskRadar[1], d.WAF.RiskRadar[2], d.WAF.RiskRadar[3], d.WAF.RiskRadar[4]
 	}
-	vecLines := fmt.Sprintf("\n [gray]WAF L7 Bans:[-] [white]%d[-] │ [gray]Detected:[-] [yellow]%d[-]\n [gray]Active Signatures:[-] [white]%d[-]\n\n [red]Exploits:[-] %d │ [yellow]Brute-Force:[-] %d │ [blue]Recon:[-] %d │ [gray]DDoS:[-] %d │ [yellow]Abuse/Spam:[-] %d",
+	vecLines := fmt.Sprintf(" [gray]WAF L7 Bans:[-] [white]%d[-] │ [gray]Detected:[-] [yellow]%d[-]\n [gray]Active Signatures:[-] [white]%d[-]\n\n [red]Exploits:[-] %d │ [yellow]Brute-Force:[-] %d │ [blue]Recon:[-] %d │ [gray]DDoS:[-] %d │ [yellow]Abuse/Spam:[-] %d",
 		d.WAF.TotalBanned, d.WAF.TotalDetected, d.WAF.ActiveSignatures, re, rb, rr, rd, ra)
 	vectorsText.SetText(vecLines)
 
@@ -799,7 +799,7 @@ func refreshUI() {
 			wlIps = strings.Join(d.Whitelist.IPs, ", ")
 		}
 	}
-	truLines := fmt.Sprintf("\n [gray]Active IPs:[-] [white]%d[-]\n [gray]IPs:[-] [green]%s[-]", d.Whitelist.ActiveIPs, wlIps)
+	truLines := fmt.Sprintf(" [gray]Active IPs:[-] [white]%d[-]\n [gray]IPs:[-] [green]%s[-]", d.Whitelist.ActiveIPs, wlIps)
 	trustedText.SetText(truLines)
 
 	// --- Jails Table ---

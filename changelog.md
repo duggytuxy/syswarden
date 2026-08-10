@@ -1,3 +1,13 @@
+# Release v3.91.0
+
+### UPDATED 🔄
+- **Configuration (Core):** Added explicit in-line documentation within the generated `00-core.toml` to clarify that the `firewall_backend` optimization option is strictly reserved for RHEL/Alma/Fedora families and only accepts `nftables`, `iptables`, or `keep`.
+
+### FIXED 🐛
+- **TUI (Dashboard):** Resolved an unwanted vertical scrollbar issue in the `GLOBAL RISK VECTORS`, `L3 KERNEL BLOCKS`, and `TRUSTED HOSTS` panels. Removed leading newlines to ensure the risk vector metrics align horizontally on a single line and fit perfectly within the UI borders.
+
+---
+
 # Release v3.90.9
 
 ### FIXED 🐛
