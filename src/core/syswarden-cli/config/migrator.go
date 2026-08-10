@@ -460,7 +460,13 @@ slack_url = "` + get("SYSWARDEN_WEBHOOK_URL_SLACK", "") + `"
 }
 
 func (m *Migrator) generateUser(oldConfig map[string]string) string {
-	return `# [99] USER CUSTOM OVERRIDES
+	webToken := oldConfig["SYSWARDEN_WEB_TOKEN"]
+	if webToken == "" {
+		// Just a placeholder if it didn't exist
+		webToken = ""
+	}
+
+	return fmt.Sprintf(`# [99] USER CUSTOM OVERRIDES
 # Priority: 99 (highest - overrides all other modules)
 # 
 # This configuration file (99-user.toml) has absolute priority.
@@ -477,5 +483,8 @@ func (m *Migrator) generateUser(oldConfig map[string]string) string {
 #
 # [waap]
 # bruteforce_threshold = 3
-`
+
+[user]
+webtui_password = "%s"
+`, webToken)
 }

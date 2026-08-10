@@ -7,4 +7,5 @@ type ModularConfig struct {
 	Security     SecurityConfig     `mapstructure:"security"`
 	WAAP         WAAPConfig         `mapstructure:"waap"`
 	Integrations IntegrationsConfig `mapstructure:"integrations"`
+	User         UserConfig         `mapstructure:"user"`
 }

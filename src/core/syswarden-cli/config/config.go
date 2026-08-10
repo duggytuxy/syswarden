@@ -29,6 +29,7 @@ type Config struct {
 	EnableASN           bool
 	ASNList             string
 	ASNAllowed          string
+	WebTUIPassword      string
 	UseSpamhaus         bool
 	HAEnabled           bool
 	HAToken             string

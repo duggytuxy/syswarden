@@ -145,5 +145,6 @@ func mapToGlobalConfig(m *ModularConfig) {
 	GlobalConfig.EnableL2 = m.Security.L2.EnableL2
 	GlobalConfig.ArpProtect = m.Security.L2.ARPProtect
 	GlobalConfig.LANMode = m.Security.L2.LanMode
+	GlobalConfig.WebTUIPassword = m.User.WebTUIPassword
 	GlobalConfig.LANSubnets = strings.Join(m.Network.LanSubnets, " ")
 }

@@ -40,8 +40,18 @@ func init() {
 }
 
 func initConfig() {
-	// Only parse config if the file exists
-	if _, err := os.Stat(cfgFile); err == nil {
+	// Parse config if TOML directory exists, or if legacy conf file exists
+	tomlExists := false
+	if _, err := os.Stat("/etc/syswarden/config/modules"); err == nil {
+		tomlExists = true
+	}
+
+	if tomlExists {
+		if err := config.ParseConfig("/etc/syswarden/config"); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] Failed to load modular config: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[WARNING] Continuing in degraded mode. Please fix using 'syswarden config'\n")
+		}
+	} else if _, err := os.Stat(cfgFile); err == nil {
 		if err := config.ParseConfig(cfgFile); err != nil {
 			fmt.Fprintf(os.Stderr, "[WARNING] Failed to load config: %v\n", err)
 			fmt.Fprintf(os.Stderr, "[WARNING] Continuing in degraded mode. Please fix using 'syswarden config'\n")

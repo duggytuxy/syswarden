@@ -116,7 +116,9 @@ fi
 # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
 if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
     if [ -f /opt/syswarden/syswarden-auto.conf.migration_backup ]; then
-        /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+        if [ ! -d /etc/syswarden/config/modules ] || [ -z "$(ls -A /etc/syswarden/config/modules 2>/dev/null)" ]; then
+            /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+        fi
         mv /opt/syswarden/syswarden-auto.conf.migration_backup /opt/syswarden/syswarden-auto.conf.bak || true
     fi
     /opt/syswarden/bin/syswarden-cli install
@@ -146,7 +148,9 @@ elif [ "$1" = "1" ] || [ "$1" = "configure" ]; then
 # Alpine APK Install/Upgrade (APK passes version string in $1)
 elif [ -f /etc/alpine-release ]; then
     if [ -f /opt/syswarden/syswarden-auto.conf.migration_backup ]; then
-        /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+        if [ ! -d /etc/syswarden/config/modules ] || [ -z "$(ls -A /etc/syswarden/config/modules 2>/dev/null)" ]; then
+            /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+        fi
         mv /opt/syswarden/syswarden-auto.conf.migration_backup /opt/syswarden/syswarden-auto.conf.bak || true
     fi
     /opt/syswarden/bin/syswarden-cli install
@@ -283,7 +287,9 @@ export SYSWARDEN_PKG_INSTALL=1
 ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
 ln -sf /usr/local/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
 if [ -f /usr/local/syswarden/syswarden-auto.conf.migration_backup ]; then
-    /usr/local/syswarden/bin/syswarden-cli migrate-config --source /usr/local/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+    if [ ! -d /etc/syswarden/config/modules ] || [ -z "$(ls -A /etc/syswarden/config/modules 2>/dev/null)" ]; then
+        /usr/local/syswarden/bin/syswarden-cli migrate-config --source /usr/local/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+    fi
     mv /usr/local/syswarden/syswarden-auto.conf.migration_backup /usr/local/syswarden/syswarden-auto.conf.bak || true
 fi
 /usr/local/bin/syswarden install

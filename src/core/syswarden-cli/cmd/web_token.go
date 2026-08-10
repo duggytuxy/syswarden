@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -44,49 +43,54 @@ func getPublicIP() string {
 }
 
 func updateConfigToken(newToken string) error {
-	confPath := "/opt/syswarden/syswarden-auto.conf"
-	content, err := os.ReadFile(confPath) // #nosec
-	if err != nil || len(strings.TrimSpace(string(content))) == 0 {
-		content = []byte(config.DefaultConfig)
+	tomlPath := "/etc/syswarden/config/modules/99-user.toml"
+
+	// Legacy fallback if TOML doesn't exist at all (though unlikely here)
+	if _, err := os.Stat(tomlPath); os.IsNotExist(err) {
+		// Just ensure directory exists
+		_ = os.MkdirAll("/etc/syswarden/config/modules", 0750)
+	}
+
+	content, err := os.ReadFile(tomlPath) // #nosec
+	if err != nil {
+		content = []byte("# [99] USER CUSTOM OVERRIDES\n\n[user]\n")
 	}
 
 	lines := strings.Split(string(content), "\n")
-
-	found := false
+	foundUserBlock := false
+	foundToken := false
 	var newLines []string
-	for _, line := range lines {
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "SYSWARDEN_WEB_TOKEN=") {
-			newLines = append(newLines, fmt.Sprintf("SYSWARDEN_WEB_TOKEN=\"%s\"", newToken))
-			found = true
-		} else {
-			newLines = append(newLines, line)
+
+		if strings.HasPrefix(trimmed, "[user]") {
+			foundUserBlock = true
 		}
-	}
-	if !found {
-		newLines = append(newLines, fmt.Sprintf("SYSWARDEN_WEB_TOKEN=\"%s\"", newToken))
+
+		if foundUserBlock && strings.HasPrefix(trimmed, "webtui_password") {
+			newLines = append(newLines, fmt.Sprintf(`webtui_password = "%s"`, newToken))
+			foundToken = true
+			continue
+		}
+
+		newLines = append(newLines, line)
 	}
 
-	return os.WriteFile(confPath, []byte(strings.Join(newLines, "\n")), 0600) // #nosec G703
+	if !foundToken {
+		if !foundUserBlock {
+			newLines = append(newLines, "\n[user]")
+		}
+		newLines = append(newLines, fmt.Sprintf(`webtui_password = "%s"`, newToken))
+	}
+
+	return os.WriteFile(tomlPath, []byte(strings.Join(newLines, "\n")), 0640) // #nosec G703
 }
 
 func readConfigToken() string {
-	confPath := "/opt/syswarden/syswarden-auto.conf"
-	file, err := os.Open(confPath) // #nosec
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = file.Close() }()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "SYSWARDEN_WEB_TOKEN=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				return strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
-			}
-		}
+	if config.GlobalConfig != nil && config.GlobalConfig.WebTUIPassword != "" {
+		return config.GlobalConfig.WebTUIPassword
 	}
 	return ""
 }

@@ -16,8 +16,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
+
+	"syswarden-cli/config"
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
@@ -81,16 +82,8 @@ var webTuiCmd = &cobra.Command{
 	Short: "Start the Web-TUI server (WebTTY)",
 	Run: func(cmd *cobra.Command, args []string) {
 		if webToken == "" {
-			// Fallback to reading from auto.conf
-			content, err := os.ReadFile("/opt/syswarden/syswarden-auto.conf")
-			if err == nil {
-				for _, line := range strings.Split(string(content), "\n") {
-					if strings.HasPrefix(line, "SYSWARDEN_WEB_TOKEN=") {
-						webToken = strings.TrimPrefix(line, "SYSWARDEN_WEB_TOKEN=")
-						webToken = strings.Trim(webToken, "\"'")
-						break
-					}
-				}
+			if config.GlobalConfig != nil && config.GlobalConfig.WebTUIPassword != "" {
+				webToken = config.GlobalConfig.WebTUIPassword
 			}
 			if webToken == "" {
 				// Zero Downtime Fallback: Auto-generate token if missing after upgrade

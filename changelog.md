@@ -1,3 +1,10 @@
+# Release v3.91.1
+
+### FIXED 🐛
+- **Packaging (Migration):** Fixed a critical race condition where `syswarden update` could overwrite the modular TOML configuration on Debian and RPM systems during package upgrade. The `syswarden-cli web-token` initialization now strictly interacts with the `99-user.toml` configuration module instead of regenerating the deprecated `syswarden-auto.conf` file, ensuring user overrides and customized modules are strictly preserved.
+
+---
+
 # Release v3.91.0
 
 ### UPDATED 🔄
