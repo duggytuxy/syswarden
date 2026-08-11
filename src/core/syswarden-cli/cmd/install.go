@@ -150,7 +150,7 @@ var installCmd = &cobra.Command{
 		fmt.Printf("    Password: %s\n", token)
 		fmt.Printf("======================================================\n\n")
 
-		fmt.Println("[SYSWARDEN] v3.91.2 Native Installation Complete.")
+		fmt.Println("[SYSWARDEN] v3.91.3 Native Installation Complete.")
 	},
 }
 
