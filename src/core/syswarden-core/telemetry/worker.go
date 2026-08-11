@@ -94,7 +94,7 @@ type Attacker struct {
 	Country  string `json:"country"`
 	ASN      string `json:"asn"`
 	Threat   string `json:"threat"`
-	ISP      string `json:"isp"`
+	Org      string `json:"org"`
 }
 
 type WAF struct {
@@ -653,7 +653,7 @@ func getLayer3Stats() Layer3 {
 type IPAPIResponse struct {
 	CountryCode string `json:"country_code"`
 	Asn         string `json:"asn"`
-	Provider    string `json:"provider"`
+	Org         string `json:"org"`
 	Threat      string `json:"threat"`
 }
 
@@ -724,7 +724,7 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 			IP:      ip,
 			Country: "N/A",
 			ASN:     "N/A",
-			ISP:     "N/A",
+			Org:     "N/A",
 		}
 
 		client := &http.Client{Timeout: 2 * time.Second}
@@ -741,8 +741,8 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 				if res.Asn != "" {
 					att.ASN = res.Asn
 				}
-				if res.Provider != "" {
-					att.ISP = res.Provider
+				if res.Org != "" {
+					att.Org = res.Org
 				}
 				if res.Threat != "" {
 					att.Threat = res.Threat

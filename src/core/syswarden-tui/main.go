@@ -103,7 +103,7 @@ type Attacker struct {
 	Country  string `json:"country"`
 	ASN      string `json:"asn"`
 	Threat   string `json:"threat"`
-	ISP      string `json:"isp"`
+	Org      string `json:"org"`
 }
 
 type WAF struct {
@@ -824,7 +824,7 @@ func refreshUI() {
 	attackersTable.SetCell(0, 3, tview.NewTableCell("COUNTRY").SetTextColor(tcell.ColorGray))
 	attackersTable.SetCell(0, 4, tview.NewTableCell("ASN").SetTextColor(tcell.ColorGray))
 	attackersTable.SetCell(0, 5, tview.NewTableCell("THREAT").SetTextColor(tcell.ColorGray))
-	attackersTable.SetCell(0, 6, tview.NewTableCell("ISP").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 6, tview.NewTableCell("ORG").SetTextColor(tcell.ColorGray))
 	for i := 0; i < 5 && i < len(d.WAF.TopAttackers); i++ {
 		t := d.WAF.TopAttackers[i]
 		attackersTable.SetCell(i+1, 0, tview.NewTableCell(t.IP).SetTextColor(tcell.ColorRed))
@@ -833,7 +833,7 @@ func refreshUI() {
 		attackersTable.SetCell(i+1, 3, tview.NewTableCell(t.Country).SetTextColor(tcell.ColorWhite))
 		attackersTable.SetCell(i+1, 4, tview.NewTableCell(t.ASN).SetTextColor(tcell.ColorAqua))
 		attackersTable.SetCell(i+1, 5, tview.NewTableCell(t.Threat).SetTextColor(tcell.ColorOrange))
-		attackersTable.SetCell(i+1, 6, tview.NewTableCell(t.ISP).SetTextColor(tcell.ColorWhite))
+		attackersTable.SetCell(i+1, 6, tview.NewTableCell(t.Org).SetTextColor(tcell.ColorWhite))
 	}
 
 	// --- Banned Table ---
@@ -984,7 +984,7 @@ func printDashboardText() {
 	} else {
 		for i := 0; i < len(d.WAF.TopAttackers); i++ {
 			a := d.WAF.TopAttackers[i]
-			fmt.Printf(" - %s (%s / %s / %s)\n", a.IP, a.Country, a.ASN, a.ISP)
+			fmt.Printf(" - %s (%s / %s / %s)\n", a.IP, a.Country, a.ASN, a.Org)
 		}
 	}
 }
