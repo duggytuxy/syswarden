@@ -1,3 +1,10 @@
+# Release v3.91.2
+
+### UPDATED 🔄
+- **TUI & Web-TUI (OSINT History):** Upgraded the Threat Intelligence OSINT provider from `freeipapi` to `ip.wiredalter.com` to fetch richer telemetry data on Top Attackers. Added a new `THREAT` column dynamically displaying the classification (e.g., Datacenter, VPN Hosting) directly in the global dashboard interface.
+
+---
+
 # Release v3.91.1
 
 ### FIXED 🐛

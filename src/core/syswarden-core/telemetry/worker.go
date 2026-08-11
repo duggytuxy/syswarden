@@ -93,6 +93,7 @@ type Attacker struct {
 	Port     string `json:"port"`
 	Country  string `json:"country"`
 	ASN      string `json:"asn"`
+	Threat   string `json:"threat"`
 	ISP      string `json:"isp"`
 }
 
@@ -650,9 +651,10 @@ func getLayer3Stats() Layer3 {
 }
 
 type IPAPIResponse struct {
-	CountryCode     string `json:"countryCode"`
-	Asn             string `json:"asn"`
-	AsnOrganization string `json:"asnOrganization"`
+	CountryCode string `json:"country_code"`
+	Asn         string `json:"asn"`
+	Provider    string `json:"provider"`
+	Threat      string `json:"threat"`
 }
 
 var osintCache = make(map[string]Attacker)
@@ -726,7 +728,7 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 		}
 
 		client := &http.Client{Timeout: 2 * time.Second}
-		resp, err := client.Get("https://freeipapi.com/api/json/" + ip)
+		resp, err := client.Get("https://ip.wiredalter.com/json?ip=" + ip)
 		if err == nil {
 			defer func() {
 				_ = resp.Body.Close()
@@ -737,10 +739,13 @@ func enrichOSINT(ip string, payload string, jail string) Attacker {
 					att.Country = res.CountryCode
 				}
 				if res.Asn != "" {
-					att.ASN = "AS" + res.Asn
+					att.ASN = res.Asn
 				}
-				if res.AsnOrganization != "" {
-					att.ISP = res.AsnOrganization
+				if res.Provider != "" {
+					att.ISP = res.Provider
+				}
+				if res.Threat != "" {
+					att.Threat = res.Threat
 				}
 			}
 		}
