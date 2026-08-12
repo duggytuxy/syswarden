@@ -1,3 +1,11 @@
+# Release v4.02.6
+
+### FIXED
+- **UI/UX (TUI):** Fixed a visual overflow issue in the WAF L7 BANS timeline where X-axis markers were being partially hidden by the scrollbar; increased the flex layout block height from 8 to 10 rows.
+- **UI/UX (TUI):** Synchronized the timeline's X-axis markers (`00h ... 24h`) dynamically with the system's local time (`time.Now()`). This perfectly eliminates the previous time offset confusion, ensuring that the 24-hour rolling window visualization aligns exactly with the timestamps of the underlying attack payloads.
+
+---
+
 # Release v4.02.5
 
 ### UPDATED

@@ -228,7 +228,7 @@ func main() {
 		AddItem(headerText, 8, 1, false).
 		AddItem(metricsFlex, 6, 1, false).
 		AddItem(midFlex, 8, 1, false).
-		AddItem(sparklineText, 8, 1, false).
+		AddItem(sparklineText, 10, 1, false).
 		AddItem(bannedTable, 0, 3, true)
 
 	bannedTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -898,16 +898,18 @@ func refreshUI() {
 		}
 	}
 
-	xAxis := "    └─"
+	xAxis := "     └─"
 	for i := 0; i < 24; i++ {
 		seg := strings.Repeat("─", wPerPoint/2) + "┴" + strings.Repeat("─", wPerPoint-(wPerPoint/2)-1)
 		xAxis += seg
 	}
 	xAxis += strings.Repeat("─", wPerPoint/2) + "┴─┐"
 
-	xLabels := strings.Repeat(" ", 5+(wPerPoint/2))
+	nowTime := time.Now()
+	xLabels := strings.Repeat(" ", 6+(wPerPoint/2))
 	for i := 0; i <= 24; i += 3 {
-		xLabels += fmt.Sprintf("%02dh", i)
+		tickTime := nowTime.Add(time.Duration(i-23) * time.Hour)
+		xLabels += fmt.Sprintf("%sh", tickTime.Format("15"))
 		if i < 24 {
 			spaceCount := (3 * wPerPoint) - 3
 			if spaceCount > 0 {
@@ -916,10 +918,10 @@ func refreshUI() {
 		}
 	}
 
-	graph := fmt.Sprintf(" [gray]%3d ┤[-] [white]%s[-]\n", maxBans, line0.String())
-	graph += fmt.Sprintf(" [gray]    ┤[-] [white]%s[-]\n", line1.String())
-	graph += fmt.Sprintf(" [gray]%3d ┤[-] [white]%s[-]\n", halfMax, line2.String())
-	graph += fmt.Sprintf(" [gray]  0 ┤[-] [white]%s[-]\n", line3.String())
+	graph := fmt.Sprintf(" [gray]%4d ┤[-] [white]%s[-]\n", maxBans, line0.String())
+	graph += fmt.Sprintf(" [gray]     ┤[-] [white]%s[-]\n", line1.String())
+	graph += fmt.Sprintf(" [gray]%4d ┤[-] [white]%s[-]\n", halfMax, line2.String())
+	graph += fmt.Sprintf(" [gray]   0 ┤[-] [white]%s[-]\n", line3.String())
 	graph += fmt.Sprintf(" [gray]%s[-]\n", xAxis)
 	graph += fmt.Sprintf(" [gray]%s[-]\n", xLabels)
 
