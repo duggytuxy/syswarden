@@ -1,3 +1,10 @@
+# Release v4.02.2
+
+### FIXED
+- **UI/UX (TUI & Web-TUI):** Fixed a staticcheck code hygiene issue (`S1039`) related to an unnecessary `fmt.Sprintf` usage in the newly designed WAF L7 BANS timeline layout rendering.
+
+---
+
 # Release v4.02.1
 
 ### UPDATED

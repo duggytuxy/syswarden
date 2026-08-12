@@ -895,7 +895,7 @@ func refreshUI() {
 	graph += fmt.Sprintf(" [gray]%3d ┤[-] [white]%s[-]\n", halfMax, line2.String())
 	graph += fmt.Sprintf(" [gray]  0 ┤[-] [white]%s[-]\n", line3.String())
 	graph += fmt.Sprintf(" [gray]%s[-]\n", xAxis)
-	graph += fmt.Sprintf(" [gray]       00h      03h      06h      09h      12h      15h      18h      21h      24h[-]")
+	graph += " [gray]       00h      03h      06h      09h      12h      15h      18h      21h      24h[-]\n"
 
 	sparklineText.SetText("\n" + graph)
 
