@@ -1,4 +1,13 @@
-# Release v4.01.0
+# Release v4.02.1
+
+### UPDATED
+- **UI/UX (TUI & Web-TUI):** Complete visual overhaul of the 24-hour WAF bans timeline. Replaced the basic sparkline with a full-width, multi-line ASCII graph featuring explicit vertical (ban counts) and horizontal (00h-24h) axes. Removed aggressive red colors in favor of a clean, unified white chart matching the ORG column palette.
+- **UI/UX (TUI & Web-TUI):** Reordered the `TOP ATTACKERS (OSINT HISTORY)` module. The `HITS` and `LAST SEEN` tracking metrics are now prioritized visually right after the `IP ADDRESS`, directly before `SEVERITY`.
+- **Engine/Telemetry:** Refined the `HITS` metric calculation in the WAF telemetry worker to strictly represent the exact number of consecutive strikes (detected attacks) committed by an IP leading up to its ban.
+
+---
+
+# Release v4.02.0
 
 ### ADDED
 - **UI/UX (TUI & Web-TUI):** Implemented a new 24-hour Sparkline graph (`WAF L7 BANS (24H)`) to visually track WAF bans volume over time. The metric is persistently cached to `/var/lib/syswarden/ui/metrics_24h.json` to survive daemon reloads and log rotations, maintaining an accurate 24-hour visual history.

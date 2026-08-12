@@ -840,47 +840,91 @@ func refreshUI() {
 		portsTable.SetCell(i+1, 3, tview.NewTableCell(fmt.Sprintf("%d", p.UniqueIPs)).SetTextColor(tcell.ColorBlue))
 	}
 
-	// --- Sparkline ---
+	// --- Sparkline (ASCII Multi-line Graph) ---
 	maxBans := 1
 	for _, v := range d.WAF.Sparkline24h {
 		if v > maxBans {
 			maxBans = v
 		}
 	}
-	blocks := []rune{' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
-	spark := ""
-	for _, v := range d.WAF.Sparkline24h {
-		idx := (v * 7) / maxBans
-		spark += string(blocks[idx])
+	halfMax := maxBans / 2
+	if halfMax == 0 {
+		halfMax = 1
 	}
-	sparklineText.SetText(fmt.Sprintf("\n [gray]00h[-]  [red]%s[-]  [gray]24h[-]\n\n [gray]Max/Hr:[-] [white]%d[-]", spark, maxBans))
+
+	var line3, line2, line1, line0 strings.Builder
+	for _, v := range d.WAF.Sparkline24h {
+		if v == 0 {
+			line0.WriteString("   ")
+			line1.WriteString("   ")
+			line2.WriteString("   ")
+			line3.WriteString("   ")
+		} else {
+			pct := float64(v) / float64(maxBans)
+			if pct >= 0.75 {
+				line0.WriteString("██ ")
+				line1.WriteString("██ ")
+				line2.WriteString("██ ")
+				line3.WriteString("██ ")
+			} else if pct >= 0.50 {
+				line0.WriteString("   ")
+				line1.WriteString("██ ")
+				line2.WriteString("██ ")
+				line3.WriteString("██ ")
+			} else if pct >= 0.25 {
+				line0.WriteString("   ")
+				line1.WriteString("   ")
+				line2.WriteString("██ ")
+				line3.WriteString("██ ")
+			} else {
+				line0.WriteString("   ")
+				line1.WriteString("   ")
+				line2.WriteString("   ")
+				line3.WriteString("██ ")
+			}
+		}
+	}
+	xAxis := "      └"
+	for i := 0; i < 24; i++ {
+		xAxis += "┴──"
+	}
+	xAxis += "┐"
+
+	graph := fmt.Sprintf(" [gray]%3d ┤[-] [white]%s[-]\n", maxBans, line0.String())
+	graph += fmt.Sprintf(" [gray]    ┤[-] [white]%s[-]\n", line1.String())
+	graph += fmt.Sprintf(" [gray]%3d ┤[-] [white]%s[-]\n", halfMax, line2.String())
+	graph += fmt.Sprintf(" [gray]  0 ┤[-] [white]%s[-]\n", line3.String())
+	graph += fmt.Sprintf(" [gray]%s[-]\n", xAxis)
+	graph += fmt.Sprintf(" [gray]       00h      03h      06h      09h      12h      15h      18h      21h      24h[-]")
+
+	sparklineText.SetText("\n" + graph)
 
 	// --- Top Attackers ---
 	attackersTable.Clear()
 	attackersTable.SetCell(0, 0, tview.NewTableCell("IP ADDRESS").SetTextColor(tcell.ColorGray))
-	attackersTable.SetCell(0, 1, tview.NewTableCell("SEVERITY").SetTextColor(tcell.ColorGray))
-	attackersTable.SetCell(0, 2, tview.NewTableCell("PORT").SetTextColor(tcell.ColorGray))
-	attackersTable.SetCell(0, 3, tview.NewTableCell("COUNTRY").SetTextColor(tcell.ColorGray))
-	attackersTable.SetCell(0, 4, tview.NewTableCell("ASN").SetTextColor(tcell.ColorGray))
-	attackersTable.SetCell(0, 5, tview.NewTableCell("THREAT").SetTextColor(tcell.ColorGray))
-	attackersTable.SetCell(0, 6, tview.NewTableCell("ORG").SetTextColor(tcell.ColorGray))
-	attackersTable.SetCell(0, 7, tview.NewTableCell("HITS").SetTextColor(tcell.ColorGray))
-	attackersTable.SetCell(0, 8, tview.NewTableCell("LAST SEEN").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 1, tview.NewTableCell("HITS").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 2, tview.NewTableCell("LAST SEEN").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 3, tview.NewTableCell("SEVERITY").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 4, tview.NewTableCell("PORT").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 5, tview.NewTableCell("COUNTRY").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 6, tview.NewTableCell("ASN").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 7, tview.NewTableCell("THREAT").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 8, tview.NewTableCell("ORG").SetTextColor(tcell.ColorGray))
 	for i := 0; i < 5 && i < len(d.WAF.TopAttackers); i++ {
 		t := d.WAF.TopAttackers[i]
 		attackersTable.SetCell(i+1, 0, tview.NewTableCell(t.IP).SetTextColor(tcell.ColorRed))
-		attackersTable.SetCell(i+1, 1, tview.NewTableCell(t.Severity).SetTextColor(tcell.ColorFuchsia))
-		attackersTable.SetCell(i+1, 2, tview.NewTableCell(t.Port).SetTextColor(tcell.ColorYellow))
-		attackersTable.SetCell(i+1, 3, tview.NewTableCell(t.Country).SetTextColor(tcell.ColorWhite))
-		attackersTable.SetCell(i+1, 4, tview.NewTableCell(t.ASN).SetTextColor(tcell.ColorAqua))
-		attackersTable.SetCell(i+1, 5, tview.NewTableCell(t.Threat).SetTextColor(tcell.ColorOrange))
-		attackersTable.SetCell(i+1, 6, tview.NewTableCell(t.Org).SetTextColor(tcell.ColorWhite))
-		attackersTable.SetCell(i+1, 7, tview.NewTableCell(fmt.Sprintf("%d", t.Hits)).SetTextColor(tcell.ColorYellow))
+		attackersTable.SetCell(i+1, 1, tview.NewTableCell(fmt.Sprintf("%d", t.Hits)).SetTextColor(tcell.ColorYellow))
 		ls := t.LastSeen
 		if len(ls) >= 19 {
 			ls = ls[11:19]
 		}
-		attackersTable.SetCell(i+1, 8, tview.NewTableCell(ls).SetTextColor(tcell.ColorGray))
+		attackersTable.SetCell(i+1, 2, tview.NewTableCell(ls).SetTextColor(tcell.ColorGray))
+		attackersTable.SetCell(i+1, 3, tview.NewTableCell(t.Severity).SetTextColor(tcell.ColorFuchsia))
+		attackersTable.SetCell(i+1, 4, tview.NewTableCell(t.Port).SetTextColor(tcell.ColorYellow))
+		attackersTable.SetCell(i+1, 5, tview.NewTableCell(t.Country).SetTextColor(tcell.ColorWhite))
+		attackersTable.SetCell(i+1, 6, tview.NewTableCell(t.ASN).SetTextColor(tcell.ColorAqua))
+		attackersTable.SetCell(i+1, 7, tview.NewTableCell(t.Threat).SetTextColor(tcell.ColorOrange))
+		attackersTable.SetCell(i+1, 8, tview.NewTableCell(t.Org).SetTextColor(tcell.ColorWhite))
 	}
 
 	// --- Banned Table ---

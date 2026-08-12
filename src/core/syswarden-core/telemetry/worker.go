@@ -1070,8 +1070,22 @@ func getWAFStats() WAF {
 	// Get last 50 unique banned/detected IPs for display (newest first)
 	seenIPs := make(map[string]bool)
 	hitCounts := make(map[string]int)
+	currentStrikes := make(map[string]int)
 	for _, b := range allBans {
-		hitCounts[b.IP]++
+		if b.Action == "COMPLIANCE-OK" || b.Action == "COMPLIANCE-DRIFT" {
+			continue
+		}
+		currentStrikes[b.IP]++
+		if b.Action == "BANNED" {
+			hitCounts[b.IP] = currentStrikes[b.IP]
+			currentStrikes[b.IP] = 0 // Reset after a ban
+		}
+	}
+	// Fallback for attackers not yet banned
+	for ip, strikes := range currentStrikes {
+		if strikes > 0 && hitCounts[ip] == 0 {
+			hitCounts[ip] = strikes
+		}
 	}
 	for i := len(allBans) - 1; i >= 0; i-- {
 		if len(waf.BannedIPs) >= 50 {
