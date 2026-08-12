@@ -33,7 +33,7 @@
   <img src="https://img.shields.io/badge/Status-Production_Ready-blue?style=flat&logo=status&logoColor=white" alt="Production Ready">
 </p>
 
-# SysWarden v3 🌟
+# SysWarden v4 🇧🇪🇫🇷
 > **Active Defense and HIDS/HIPS/WAAP Out-of-Band Orchestration for Critical Linux Infrastructure**
 
 **SysWarden** is an Enterprise-grade Hardened Host Intrusion Detection & Prevention System (HIDS - HIPS) engineered in **100% Native Golang**. Designed for critical Linux infrastructures, it enforces automated part of CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with absolute zero-trust execution.
