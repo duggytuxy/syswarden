@@ -189,14 +189,14 @@ SysWarden dynamically adapts to the native firewall orchestration engines of mod
 
 | Operating System | Native Firewall Engine(s) Supported | Status |
 | :--- | :--- | :--- |
-| **Debian 13 / 12** | `nftables`, `iptables` | Enterprise Ready |
+| **Debian 13+** | `nftables`, `iptables` | Enterprise Ready |
 | **Ubuntu 24.04+** | `ufw`, `nftables`, `iptables` | Enterprise Ready |
 | **RHEL 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
-| **Rocky Linux / AlmaLinux 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
-| **Oracle Linux 10+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
-| **Fedora 40+** | `firewalld`, `nftables`, `iptables` | Production Ready |
+| **Alma Linux 10+ / Rocky Linux 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
+| **CentOS Stream 10+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
+| **Fedora 43+** | `firewalld`, `nftables`, `iptables` | Production Ready |
 | **Alpine Linux 3.21+** | `nftables` | Enterprise Ready |
-| **FreeBSD 14+** | `pf` (Packet Filter) | Enterprise Ready |
+| **FreeBSD 14.4+** | `pf` (Packet Filter) | Enterprise Ready |
 
 ## Installation Guide (v2.0 Native Deployment)
 

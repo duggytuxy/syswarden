@@ -1,3 +1,14 @@
+# Release v4.00.0
+
+### UPGRADED 🚀
+- **ANSSI & MinDef Compliance (OOB Hardening):** Elevated the Syswarden architecture to meet strict government and military requirements for Out-Of-Band (OOB) defense solutions.
+  - **Cryptography (SecNumCloud):** Enforced `TLS 1.3` as the strict minimum for both the HA API and Web-TUI communication channels. Upgraded the HA cluster authentication mechanism to use `crypto/subtle` Constant-Time comparisons, completely neutralizing cryptographic timing attacks on cluster synchronization tokens.
+  - **Memory Safety & ASLR:** Linux binaries are now strictly compiled as Position Independent Executables (`-buildmode=pie`), unlocking full Address Space Layout Randomization (ASLR) at the OS level to mitigate memory corruption and buffer overflow exploits against the daemon.
+  - **Systemd Hardening:** Aggressively hardened the `syswarden-core.service` daemon. Implemented `ProtectSystem=strict`, `ProtectKernelModules=yes`, `ProtectKernelTunables=yes`, `ProtectControlGroups=yes`, `MemoryDenyWriteExecute=yes` (W^X), `RestrictRealtime=yes`, and `RestrictAddressFamilies`. The core engine is now fundamentally isolated from the underlying OS, preventing any potential daemon escape even if the WAF is theoretically breached.
+- **Universal OS Matrix Integration:** Officially validated and structured the deployment, upgrade, and execution pipelines for native compatibility across the following Next-Gen matrix: Debian 13+, Ubuntu 24.04+, Alma Linux 10+, Rocky Linux 9+, RHEL 9+, CentOS Stream 10+, Fedora 43+, Alpine Linux 3.21+, and FreeBSD 14.4+.
+
+---
+
 # Release v3.91.3
 
 ### UPDATED 🔄

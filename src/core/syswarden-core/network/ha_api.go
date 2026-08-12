@@ -3,6 +3,7 @@ package network
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -147,7 +148,8 @@ func StartHAServer(fwManager firewall.Manager) {
 			log.Printf("[HA Cluster] WARNING: SYSWARDEN_HA_TOKEN is missing. Running in Legacy Mode (IP validation only). Please configure a token for maximum security.")
 		} else {
 			authHeader := r.Header.Get("Authorization")
-			if authHeader != "Bearer "+cfg.Token {
+			expectedHeader := "Bearer " + cfg.Token
+			if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expectedHeader)) != 1 {
 				log.Printf("[HA Cluster] Unauthorized sync attempt dropped from %s (Invalid Token)", remoteIP)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
@@ -375,6 +377,7 @@ func StartHAServer(fwManager firewall.Manager) {
 		Handler: mux,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
 		},
 		ReadHeaderTimeout: 3 * time.Second,
 	}

@@ -47,7 +47,7 @@ if (Test-Path "src/core/syswarden-cli/main.go") {
     $env:GOOS="linux"
     $env:GOARCH="amd64"
     $env:CGO_ENABLED="0"
-    go build -ldflags="-s -w" -o syswarden-cli .
+    go build -buildmode=pie -ldflags="-s -w" -o syswarden-cli .
     
     Set-Location $OriginalLocation
     
@@ -75,7 +75,7 @@ if (Test-Path "src/core/syswarden-core/main.go") {
     $env:GOOS="linux"
     $env:GOARCH="amd64"
     $env:CGO_ENABLED="0"
-    go build -ldflags="-s -w" -o syswarden-core .
+    go build -buildmode=pie -ldflags="-s -w" -o syswarden-core .
     
     Set-Location $OriginalLocation
     
@@ -105,7 +105,7 @@ if (Test-Path "src/core/syswarden-tui/main.go") {
     $env:GOOS="linux"
     $env:GOARCH="amd64"
     $env:CGO_ENABLED="0"
-    go build -ldflags="-s -w" -o syswarden-tui .
+    go build -buildmode=pie -ldflags="-s -w" -o syswarden-tui .
     
     Set-Location $OriginalLocation
     
@@ -138,16 +138,16 @@ $env:GOARCH="arm64"
 $env:CGO_ENABLED="0"
 
 Set-Location "src/core/syswarden-cli"
-go build -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-cli .
+go build -buildmode=pie -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-cli .
 Set-Location ../../../
 
 Set-Location "src/core/syswarden-core"
-go build -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-core .
+go build -buildmode=pie -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-core .
 Set-Location ../../../
 Copy-Item -Path "src/core/syswarden-core/signatures.json" -Destination "$DistDir/linux-arm64/signatures.json" -Force
 
 Set-Location "src/core/syswarden-tui"
-go build -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-tui .
+go build -buildmode=pie -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-tui .
 Set-Location ../../../
 
 Write-Host "[+] Linux ARM64 Compilation successful." -ForegroundColor Green

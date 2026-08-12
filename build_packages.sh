@@ -42,17 +42,17 @@ mkdir -p dist/bin
 
 echo " -> Compiling syswarden-cli..."
 cd src/core/syswarden-cli
-go mod tidy && go build -ldflags="-s -w" -o ../../../dist/bin/syswarden-cli .
+go mod tidy && go build -buildmode=pie -ldflags="-s -w" -o ../../../dist/bin/syswarden-cli .
 cd ../../../
 
 echo " -> Compiling syswarden-core..."
 cd src/core/syswarden-core
-go mod tidy && go build -ldflags="-s -w" -o ../../../dist/bin/syswarden-core .
+go mod tidy && go build -buildmode=pie -ldflags="-s -w" -o ../../../dist/bin/syswarden-core .
 cd ../../../
 
 echo " -> Compiling syswarden-tui..."
 cd src/core/syswarden-tui
-go mod tidy && go build -ldflags="-s -w" -o ../../../dist/bin/syswarden-tui .
+go mod tidy && go build -buildmode=pie -ldflags="-s -w" -o ../../../dist/bin/syswarden-tui .
 cd ../../../
 
 echo "[+] Linux Compilation successful."

@@ -242,7 +242,7 @@ var webTuiCmd = &cobra.Command{
 			ReadHeaderTimeout: 5 * time.Second,
 			TLSConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},
-				MinVersion:   tls.VersionTLS12,
+				MinVersion:   tls.VersionTLS13,
 			},
 		}
 
