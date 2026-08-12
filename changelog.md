@@ -1,3 +1,17 @@
+# Release v4.02.4
+
+### FIXED
+- **CI/CD:** Retriggered build pipeline due to a temporary GitHub Actions infrastructure failure (`socket hang up`) while downloading `golangci-lint`. Codebase remains fully verified and healthy.
+
+---
+
+# Release v4.02.3
+
+### FIXED
+- **CI/CD:** Retriggered build pipeline due to GitHub Actions skipped sequence.
+
+---
+
 # Release v4.02.2
 
 ### FIXED
