@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +96,15 @@ type Attacker struct {
 	ASN      string `json:"asn"`
 	Threat   string `json:"threat"`
 	Org      string `json:"org"`
+	Hits     int    `json:"hits"`
+	LastSeen string `json:"last_seen"`
+}
+
+type TargetedPort struct {
+	Port      string `json:"port"`
+	Service   string `json:"service"`
+	Hits      int    `json:"hits"`
+	UniqueIPs int    `json:"unique_ips"`
 }
 
 type WAF struct {
@@ -102,9 +112,11 @@ type WAF struct {
 	TotalDetected    int            `json:"total_detected"`
 	ActiveSignatures int            `json:"active_signatures"`
 	SignaturesData   []JailData     `json:"signatures_data"`
+	TargetedPorts    []TargetedPort `json:"targeted_ports"`
 	BannedIPs        []BannedIP     `json:"banned_ips"`
 	TopAttackers     []Attacker     `json:"top_attackers"`
 	RiskRadar        []int          `json:"risk_radar"`
+	Sparkline24h     [24]int        `json:"sparkline_24h"`
 	AllowedEvents    []AllowedEvent `json:"allowed_events"`
 }
 
@@ -117,6 +129,7 @@ type DashboardData struct {
 	Timestamp     string     `json:"timestamp"`
 	GithubStars   string     `json:"github_stars"`
 	GithubRelease string     `json:"github_release"`
+	ProfileName   string     `json:"profile_name"`
 	System        SystemData `json:"system"`
 	Layer3        Layer3     `json:"layer3"`
 	WAF           WAF        `json:"waf"`
@@ -344,6 +357,7 @@ func generateTelemetry() {
 		Timestamp:     time.Now().UTC().Format(time.RFC3339),
 		GithubStars:   getGithubStars(),
 		GithubRelease: getGithubRelease(),
+		ProfileName:   viper.GetString("user.profile_name"),
 		System:        getSystemStats(),
 		Layer3:        getLayer3Stats(),
 		WAF:           getWAFStats(),
@@ -706,6 +720,57 @@ func getConfiguredSSHPort() string {
 	return customSSHPort
 }
 
+func getServiceName(port string) string {
+	services := map[string]string{
+		"21": "FTP", "22": "SSH", "23": "Telnet", "25": "SMTP", "53": "DNS",
+		"80": "HTTP", "110": "POP3", "143": "IMAP", "443": "HTTPS", "445": "SMB",
+		"3306": "MySQL", "3389": "RDP", "5432": "PostgreSQL", "6379": "Redis",
+		"8080": "HTTP-Alt", "8443": "HTTPS-Alt",
+	}
+	if s, ok := services[port]; ok {
+		return s
+	}
+	return "Port " + port
+}
+
+func extractPort(payload string) string {
+	port := "MULTI"
+	if payload != "" {
+		if protoIdx := strings.Index(payload, "PROTO="); protoIdx != -1 {
+			protoStr := payload[protoIdx+6:]
+			if spaceIdx := strings.Index(protoStr, " "); spaceIdx != -1 {
+				protoStr = protoStr[:spaceIdx]
+			}
+
+			if protoStr == "ICMP" || protoStr == "ICMPv6" || protoStr == "IGMP" || protoStr == "GRE" || protoStr == "IPSEC" || protoStr == "IPIP" {
+				port = protoStr
+			} else if dptIdx := strings.Index(payload, "DPT="); dptIdx != -1 {
+				dptStr := payload[dptIdx+4:]
+				if spaceIdx := strings.Index(dptStr, " "); spaceIdx != -1 {
+					dptStr = dptStr[:spaceIdx]
+				}
+				port = dptStr
+			} else {
+				port = protoStr
+			}
+		} else if dptIdx := strings.Index(payload, "DPT="); dptIdx != -1 {
+			dptStr := payload[dptIdx+4:]
+			if spaceIdx := strings.Index(dptStr, " "); spaceIdx != -1 {
+				dptStr = dptStr[:spaceIdx]
+			}
+			port = dptStr
+		} else if idx := strings.Index(payload, "port "); idx != -1 {
+			parts := strings.Split(payload[idx+5:], " ")
+			if len(parts) > 0 {
+				port = parts[0]
+			}
+		} else if strings.Contains(strings.ToLower(payload), "http") || strings.Contains(strings.ToLower(payload), "nginx") || strings.Contains(strings.ToLower(payload), "apache") {
+			port = "80/443"
+		}
+	}
+	return port
+}
+
 func enrichOSINT(ip string, payload string, jail string) Attacker {
 	osintCacheOnce.Do(func() {
 		osintMu.Lock()
@@ -1022,6 +1087,8 @@ func getWAFStats() WAF {
 			// Quick TopAttacker populate with OSINT and Severity
 			att := enrichOSINT(allBans[i].IP, allBans[i].Payload, allBans[i].Jail)
 			hits := hitCounts[allBans[i].IP]
+			att.Hits = hits
+			att.LastSeen = allBans[i].Timestamp
 			score := hits * 10
 			j := strings.ToLower(allBans[i].Jail)
 			if strings.Contains(j, "sqli") || strings.Contains(j, "rce") || strings.Contains(j, "xss") || strings.Contains(j, "lfi") || strings.Contains(j, "bruteforce") || strings.Contains(j, "ssh") || strings.Contains(j, "auth") {
@@ -1048,6 +1115,77 @@ func getWAFStats() WAF {
 			Mitre: getMitreTag(jail),
 		})
 	}
+
+	// Targeted Ports
+	portCounts := make(map[string]int)
+	portIPs := make(map[string]map[string]bool)
+	for _, b := range allBans {
+		if b.Action == "BANNED" || b.Action == "DETECTED" || b.Action == "SHADOW-ALERT" {
+			p := extractPort(b.Payload)
+			portCounts[p]++
+			if portIPs[p] == nil {
+				portIPs[p] = make(map[string]bool)
+			}
+			portIPs[p][b.IP] = true
+		}
+	}
+	for p, count := range portCounts {
+		waf.TargetedPorts = append(waf.TargetedPorts, TargetedPort{
+			Port:      p,
+			Service:   getServiceName(p),
+			Hits:      count,
+			UniqueIPs: len(portIPs[p]),
+		})
+	}
+	sort.Slice(waf.TargetedPorts, func(i, j int) bool {
+		return waf.TargetedPorts[i].Hits > waf.TargetedPorts[j].Hits
+	})
+	if len(waf.TargetedPorts) > 5 {
+		waf.TargetedPorts = waf.TargetedPorts[:5]
+	}
+
+	// Sparkline 24h
+	sparkCache := make(map[string]int)
+	metricsFile := "/var/lib/syswarden/ui/metrics_24h.json"
+	if b, err := os.ReadFile(metricsFile); err == nil { // #nosec
+		_ = json.Unmarshal(b, &sparkCache)
+	}
+
+	currentHourCounts := make(map[string]int)
+	for _, b := range allBans {
+		if b.Action == "BANNED" || b.Action == "DETECTED" {
+			if t, err := time.Parse(time.RFC3339, b.Timestamp); err == nil {
+				key := t.UTC().Format("2006-01-02-15")
+				currentHourCounts[key]++
+			}
+		}
+	}
+
+	for k, v := range currentHourCounts {
+		if v > sparkCache[k] {
+			sparkCache[k] = v
+		}
+	}
+
+	now := time.Now().UTC()
+	var spark [24]int
+	for i := 0; i < 24; i++ {
+		t := now.Add(time.Duration(-i) * time.Hour)
+		key := t.Format("2006-01-02-15")
+		spark[23-i] = sparkCache[key]
+	}
+
+	for k := range sparkCache {
+		if t, err := time.Parse("2006-01-02-15", k); err == nil && now.Sub(t) > 25*time.Hour {
+			delete(sparkCache, k)
+		}
+	}
+
+	if b, err := json.Marshal(sparkCache); err == nil {
+		_ = os.WriteFile(metricsFile, b, 0600) // #nosec
+	}
+
+	waf.Sparkline24h = spark
 
 	var cExploit, cBrute, cRecon, cDdos, cAbuse int
 	for jail, count := range jailCounts {

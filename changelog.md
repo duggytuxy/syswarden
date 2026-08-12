@@ -1,3 +1,17 @@
+# Release v4.01.0
+
+### ADDED
+- **UI/UX (TUI & Web-TUI):** Implemented a new 24-hour Sparkline graph (`WAF L7 BANS (24H)`) to visually track WAF bans volume over time. The metric is persistently cached to `/var/lib/syswarden/ui/metrics_24h.json` to survive daemon reloads and log rotations, maintaining an accurate 24-hour visual history.
+- **UI/UX (TUI & Web-TUI):** Added a new `TOP TARGETED PORTS` module (replacing the generic Signatures Load Distribution). It dynamically extracts the targeted ports and protocols from attack payloads (e.g., FTP, SSH, HTTP), tallying the total hits and unique attacker IPs for precise service-level threat tracking.
+- **UI/UX (TUI & Web-TUI):** The terminal header now dynamically displays the configured `ProfileName` loaded from the TOML configuration block.
+- **Core/CLI:** Added a new profile management system in `syswarden config`. Users can now assign a strict 15-character Profile Name to their instances and directly import TOML configuration files from the CLI.
+
+### UPDATED
+- **UI/UX (TUI & Web-TUI):** Upgraded the `TOP ATTACKERS (OSINT HISTORY)` module by incorporating `HITS` and `LAST SEEN` columns. The OSINT threat intelligence engine now correlates the chronological frequency and freshness of attacks directly mapped to each individual malicious IP.
+- **UI/UX (TUI & Web-TUI):** Redesigned the TUI layout. The 24-hour Sparkline graph now occupies the full terminal width above the WAF Registry, significantly improving visual clarity and threat analysis immersion.
+
+---
+
 # Release v4.00.0
 
 ### UPGRADED 🚀

@@ -262,7 +262,7 @@ scripts:
   preremove: "./prerm.sh"
   postremove: "./postrm.sh"
 EOF
-$(go env GOPATH)/bin/nfpm pkg --config nfpm_alpine_amd64.yaml --packager apk --target .
+"$(go env GOPATH)/bin/nfpm" pkg --config nfpm_alpine_amd64.yaml --packager apk --target .
 rm -f nfpm_alpine_amd64.yaml
 
 # Generate FreeBSD PKG
@@ -329,4 +329,4 @@ fpm -f -s dir -t freebsd \
 rm -rf staging staging_fbsd dist preinst*.sh postinst*.sh postrm*.sh prerm*.sh
 
 echo "[SUCCESS] Packages have been successfully generated in your current directory!"
-ls -lh *.deb *.rpm *.pkg || true
+ls -lh ./*.deb ./*.rpm ./*.pkg || true

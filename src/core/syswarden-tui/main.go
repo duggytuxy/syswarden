@@ -104,6 +104,15 @@ type Attacker struct {
 	ASN      string `json:"asn"`
 	Threat   string `json:"threat"`
 	Org      string `json:"org"`
+	Hits     int    `json:"hits"`
+	LastSeen string `json:"last_seen"`
+}
+
+type TargetedPort struct {
+	Port      string `json:"port"`
+	Service   string `json:"service"`
+	Hits      int    `json:"hits"`
+	UniqueIPs int    `json:"unique_ips"`
 }
 
 type WAF struct {
@@ -111,9 +120,11 @@ type WAF struct {
 	TotalDetected    int            `json:"total_detected"`
 	ActiveSignatures int            `json:"active_signatures"`
 	SignaturesData   []JailData     `json:"signatures_data"`
+	TargetedPorts    []TargetedPort `json:"targeted_ports"`
 	BannedIPs        []BannedIP     `json:"banned_ips"`
 	TopAttackers     []Attacker     `json:"top_attackers"`
 	RiskRadar        []int          `json:"risk_radar"`
+	Sparkline24h     [24]int        `json:"sparkline_24h"`
 	AllowedEvents    []AllowedEvent `json:"allowed_events"`
 }
 
@@ -126,6 +137,7 @@ type DashboardData struct {
 	Timestamp     string     `json:"timestamp"`
 	GithubStars   string     `json:"github_stars"`
 	GithubRelease string     `json:"github_release"`
+	ProfileName   string     `json:"profile_name"`
 	System        SystemData `json:"system"`
 	Layer3        Layer3     `json:"layer3"`
 	WAF           WAF        `json:"waf"`
@@ -140,7 +152,8 @@ var (
 	l3Text         *tview.TextView
 	vectorsText    *tview.TextView
 	trustedText    *tview.TextView
-	jailsTable     *tview.Table
+	portsTable     *tview.Table
+	sparklineText  *tview.TextView
 	attackersTable *tview.Table
 	bannedTable    *tview.Table
 
@@ -185,17 +198,21 @@ func main() {
 		AddItem(vectorsText, 0, 2, false).
 		AddItem(trustedText, 0, 1, false)
 
-	// 5. Signatures Table
-	jailsTable = tview.NewTable().SetBorders(false).SetSelectable(false, false)
-	jailsTable.SetBorder(true).SetTitle(" [white]❖ SIGNATURES LOAD DISTRIBUTION[-] ").SetBorderColor(tcell.ColorDarkGray)
+	// 5. Ports Table
+	portsTable = tview.NewTable().SetBorders(false).SetSelectable(false, false)
+	portsTable.SetBorder(true).SetTitle(" [white]❖ TOP TARGETED PORTS[-] ").SetBorderColor(tcell.ColorDarkGray)
+
+	// 5b. Sparkline
+	sparklineText = tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetTextAlign(tview.AlignCenter)
+	sparklineText.SetBorder(true).SetTitle(" [white]❖ WAF L7 BANS (24H)[-] ").SetBorderColor(tcell.ColorDarkGray)
 
 	// 6. Top Attackers Table
 	attackersTable = tview.NewTable().SetBorders(false).SetSelectable(false, false)
 	attackersTable.SetBorder(true).SetTitle(" [white]❖ TOP ATTACKERS (OSINT HISTORY)[-] ").SetBorderColor(tcell.ColorDarkGray)
 
 	midFlex := tview.NewFlex().
-		AddItem(jailsTable, 0, 1, false).
-		AddItem(attackersTable, 0, 2, false)
+		AddItem(portsTable, 0, 3, false).
+		AddItem(attackersTable, 0, 5, false)
 
 	// 7. Banned IPs Table
 	bannedTable = tview.NewTable().
@@ -211,6 +228,7 @@ func main() {
 		AddItem(headerText, 8, 1, false).
 		AddItem(metricsFlex, 6, 1, false).
 		AddItem(midFlex, 8, 1, false).
+		AddItem(sparklineText, 8, 1, false).
 		AddItem(bannedTable, 0, 3, true)
 
 	bannedTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -759,13 +777,18 @@ func refreshUI() {
 		errState = " [red]OFFLINE (Telemetry Error)[-]"
 	}
 
+	profileStr := ""
+	if d.ProfileName != "" {
+		profileStr = fmt.Sprintf(" │ [gray]Profile:[-] [yellow]%s[-]", d.ProfileName)
+	}
+
 	headerLines := fmt.Sprintf(
-		" [gray]IP:[-] [green]%s[-] │ [gray]Stars:[-] [yellow]%s[-] │ [gray]Release:[-] [cyan]%s[-] │ [gray]NODE:[-] [white]%s[-]%s\n\n"+
+		" [gray]IP:[-] [green]%s[-] │ [gray]Stars:[-] [yellow]%s[-] │ [gray]Release:[-] [cyan]%s[-]%s │ [gray]NODE:[-] [white]%s[-]%s\n\n"+
 			" [gray]Cores:[-] [white]%s[-] │ [gray]Arch:[-] [white]%s[-] │ [gray]OS:[-] [white]%s[-] │ [gray]CPU:[-] [white]%s[-]\n"+
 			" [gray]Uptime:[-] [cyan]%s[-] │ [gray]Load:[-] [%s]%s[-] │ %s │ %s\n"+
 			" [gray]Services:[-] %s\n"+
 			" [gray]Ports:[-] [blue]%s[-]",
-		d.System.ServerIP, ghStars, ghRelease, d.System.Hostname, errState,
+		d.System.ServerIP, ghStars, ghRelease, profileStr, d.System.Hostname, errState,
 		d.System.Cores, d.System.Arch, d.System.Os, d.System.CpuModel,
 		d.System.Uptime, cLoad, d.System.LoadAverage, ramBar, diskBar,
 		strings.Join(servicesStr, " │ "),
@@ -803,18 +826,34 @@ func refreshUI() {
 	truLines := fmt.Sprintf(" [gray]Active IPs:[-] [white]%d[-]\n [gray]IPs:[-] [green]%s[-]", d.Whitelist.ActiveIPs, wlIps)
 	trustedText.SetText(truLines)
 
-	// --- Jails Table ---
-	jailsTable.Clear()
-	jailsTable.SetCell(0, 0, tview.NewTableCell("SIGNATURE / VECTOR").SetTextColor(tcell.ColorGray))
-	jailsTable.SetCell(0, 1, tview.NewTableCell("MITRE ATT&CK").SetTextColor(tcell.ColorGray))
-	jailsTable.SetCell(0, 2, tview.NewTableCell("LOAD").SetTextColor(tcell.ColorGray))
-	for i := 0; i < 5 && i < len(d.WAF.SignaturesData); i++ {
-		j := d.WAF.SignaturesData[i]
-		mitre := strings.Split(j.Mitre, ":")[0]
-		jailsTable.SetCell(i+1, 0, tview.NewTableCell(j.Name).SetTextColor(tcell.ColorAqua))
-		jailsTable.SetCell(i+1, 1, tview.NewTableCell(mitre).SetTextColor(tcell.ColorWhite))
-		jailsTable.SetCell(i+1, 2, tview.NewTableCell(fmt.Sprintf("%d", j.Count)).SetTextColor(tcell.ColorYellow))
+	// --- Ports Table ---
+	portsTable.Clear()
+	portsTable.SetCell(0, 0, tview.NewTableCell("PORT").SetTextColor(tcell.ColorGray))
+	portsTable.SetCell(0, 1, tview.NewTableCell("SERVICE").SetTextColor(tcell.ColorGray))
+	portsTable.SetCell(0, 2, tview.NewTableCell("HITS").SetTextColor(tcell.ColorGray))
+	portsTable.SetCell(0, 3, tview.NewTableCell("UNIQUE IPS").SetTextColor(tcell.ColorGray))
+	for i := 0; i < 5 && i < len(d.WAF.TargetedPorts); i++ {
+		p := d.WAF.TargetedPorts[i]
+		portsTable.SetCell(i+1, 0, tview.NewTableCell(p.Port).SetTextColor(tcell.ColorAqua))
+		portsTable.SetCell(i+1, 1, tview.NewTableCell(p.Service).SetTextColor(tcell.ColorWhite))
+		portsTable.SetCell(i+1, 2, tview.NewTableCell(fmt.Sprintf("%d", p.Hits)).SetTextColor(tcell.ColorYellow))
+		portsTable.SetCell(i+1, 3, tview.NewTableCell(fmt.Sprintf("%d", p.UniqueIPs)).SetTextColor(tcell.ColorBlue))
 	}
+
+	// --- Sparkline ---
+	maxBans := 1
+	for _, v := range d.WAF.Sparkline24h {
+		if v > maxBans {
+			maxBans = v
+		}
+	}
+	blocks := []rune{' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+	spark := ""
+	for _, v := range d.WAF.Sparkline24h {
+		idx := (v * 7) / maxBans
+		spark += string(blocks[idx])
+	}
+	sparklineText.SetText(fmt.Sprintf("\n [gray]00h[-]  [red]%s[-]  [gray]24h[-]\n\n [gray]Max/Hr:[-] [white]%d[-]", spark, maxBans))
 
 	// --- Top Attackers ---
 	attackersTable.Clear()
@@ -825,6 +864,8 @@ func refreshUI() {
 	attackersTable.SetCell(0, 4, tview.NewTableCell("ASN").SetTextColor(tcell.ColorGray))
 	attackersTable.SetCell(0, 5, tview.NewTableCell("THREAT").SetTextColor(tcell.ColorGray))
 	attackersTable.SetCell(0, 6, tview.NewTableCell("ORG").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 7, tview.NewTableCell("HITS").SetTextColor(tcell.ColorGray))
+	attackersTable.SetCell(0, 8, tview.NewTableCell("LAST SEEN").SetTextColor(tcell.ColorGray))
 	for i := 0; i < 5 && i < len(d.WAF.TopAttackers); i++ {
 		t := d.WAF.TopAttackers[i]
 		attackersTable.SetCell(i+1, 0, tview.NewTableCell(t.IP).SetTextColor(tcell.ColorRed))
@@ -834,6 +875,12 @@ func refreshUI() {
 		attackersTable.SetCell(i+1, 4, tview.NewTableCell(t.ASN).SetTextColor(tcell.ColorAqua))
 		attackersTable.SetCell(i+1, 5, tview.NewTableCell(t.Threat).SetTextColor(tcell.ColorOrange))
 		attackersTable.SetCell(i+1, 6, tview.NewTableCell(t.Org).SetTextColor(tcell.ColorWhite))
+		attackersTable.SetCell(i+1, 7, tview.NewTableCell(fmt.Sprintf("%d", t.Hits)).SetTextColor(tcell.ColorYellow))
+		ls := t.LastSeen
+		if len(ls) >= 19 {
+			ls = ls[11:19]
+		}
+		attackersTable.SetCell(i+1, 8, tview.NewTableCell(ls).SetTextColor(tcell.ColorGray))
 	}
 
 	// --- Banned Table ---

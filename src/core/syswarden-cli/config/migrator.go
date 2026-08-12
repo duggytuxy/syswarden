@@ -155,6 +155,12 @@ func (m *Migrator) generateAllModules(oldConfig map[string]string) error {
 		if m.DryRun {
 			fmt.Printf("[DRY RUN] Would create: %s\n", outputPath)
 		} else {
+			if gen.name == "99-user.toml" {
+				if _, err := os.Stat(outputPath); err == nil {
+					fmt.Printf("Skipped: %s (Already exists)\n", outputPath)
+					continue
+				}
+			}
 			if err := os.WriteFile(outputPath, []byte(content), 0640); err != nil {
 				return err
 			}
