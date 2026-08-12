@@ -841,6 +841,11 @@ func refreshUI() {
 	}
 
 	// --- Sparkline (ASCII Multi-line Graph) ---
+	_, _, graphWidth, _ := sparklineText.GetInnerRect()
+	if graphWidth < 50 {
+		graphWidth = 72 // fallback minimum
+	}
+
 	maxBans := 1
 	for _, v := range d.WAF.Sparkline24h {
 		if v > maxBans {
@@ -852,50 +857,71 @@ func refreshUI() {
 		halfMax = 1
 	}
 
+	wPerPoint := (graphWidth - 12) / 24
+	if wPerPoint < 1 {
+		wPerPoint = 1
+	}
+
 	var line3, line2, line1, line0 strings.Builder
 	for _, v := range d.WAF.Sparkline24h {
+		blockStr := strings.Repeat("█", wPerPoint-1) + " "
+		emptyStr := strings.Repeat(" ", wPerPoint)
+
 		if v == 0 {
-			line0.WriteString("   ")
-			line1.WriteString("   ")
-			line2.WriteString("   ")
-			line3.WriteString("   ")
+			line0.WriteString(emptyStr)
+			line1.WriteString(emptyStr)
+			line2.WriteString(emptyStr)
+			line3.WriteString(emptyStr)
 		} else {
 			pct := float64(v) / float64(maxBans)
 			if pct >= 0.75 {
-				line0.WriteString("██ ")
-				line1.WriteString("██ ")
-				line2.WriteString("██ ")
-				line3.WriteString("██ ")
+				line0.WriteString(blockStr)
+				line1.WriteString(blockStr)
+				line2.WriteString(blockStr)
+				line3.WriteString(blockStr)
 			} else if pct >= 0.50 {
-				line0.WriteString("   ")
-				line1.WriteString("██ ")
-				line2.WriteString("██ ")
-				line3.WriteString("██ ")
+				line0.WriteString(emptyStr)
+				line1.WriteString(blockStr)
+				line2.WriteString(blockStr)
+				line3.WriteString(blockStr)
 			} else if pct >= 0.25 {
-				line0.WriteString("   ")
-				line1.WriteString("   ")
-				line2.WriteString("██ ")
-				line3.WriteString("██ ")
+				line0.WriteString(emptyStr)
+				line1.WriteString(emptyStr)
+				line2.WriteString(blockStr)
+				line3.WriteString(blockStr)
 			} else {
-				line0.WriteString("   ")
-				line1.WriteString("   ")
-				line2.WriteString("   ")
-				line3.WriteString("██ ")
+				line0.WriteString(emptyStr)
+				line1.WriteString(emptyStr)
+				line2.WriteString(emptyStr)
+				line3.WriteString(blockStr)
 			}
 		}
 	}
-	xAxis := "      └"
+
+	xAxis := "    └─"
 	for i := 0; i < 24; i++ {
-		xAxis += "┴──"
+		seg := strings.Repeat("─", wPerPoint/2) + "┴" + strings.Repeat("─", wPerPoint-(wPerPoint/2)-1)
+		xAxis += seg
 	}
-	xAxis += "┐"
+	xAxis += strings.Repeat("─", wPerPoint/2) + "┴─┐"
+
+	xLabels := strings.Repeat(" ", 5+(wPerPoint/2))
+	for i := 0; i <= 24; i += 3 {
+		xLabels += fmt.Sprintf("%02dh", i)
+		if i < 24 {
+			spaceCount := (3 * wPerPoint) - 3
+			if spaceCount > 0 {
+				xLabels += strings.Repeat(" ", spaceCount)
+			}
+		}
+	}
 
 	graph := fmt.Sprintf(" [gray]%3d ┤[-] [white]%s[-]\n", maxBans, line0.String())
 	graph += fmt.Sprintf(" [gray]    ┤[-] [white]%s[-]\n", line1.String())
 	graph += fmt.Sprintf(" [gray]%3d ┤[-] [white]%s[-]\n", halfMax, line2.String())
 	graph += fmt.Sprintf(" [gray]  0 ┤[-] [white]%s[-]\n", line3.String())
 	graph += fmt.Sprintf(" [gray]%s[-]\n", xAxis)
-	graph += " [gray]       00h      03h      06h      09h      12h      15h      18h      21h      24h[-]\n"
+	graph += fmt.Sprintf(" [gray]%s[-]\n", xLabels)
 
 	sparklineText.SetText("\n" + graph)
 

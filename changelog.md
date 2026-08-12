@@ -1,3 +1,10 @@
+# Release v4.02.5
+
+### UPDATED
+- **UI/UX (TUI):** Upgraded the 24H WAF Bans timeline to be fully responsive. The ASCII graph now dynamically adapts its layout width to the user's terminal size. The time axis markers (`00h` to `24h`) and their corresponding ticks (`┴`) are now algorithmically centered under the attack data blocks, ensuring a flawless visual alignment across all screen resolutions.
+
+---
+
 # Release v4.02.4
 
 ### FIXED
