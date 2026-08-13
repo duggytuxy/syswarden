@@ -1,3 +1,10 @@
+# Release v4.02.8
+
+### FIXED 🐛
+- **UI/UX (TUI):** Fixed a severe ASCII art distortion in the WAF L7 BANS timeline layout caused by `tview`'s dynamic centering logic across strings of varying character lengths. The graph rendering engine has been explicitly set to `AlignLeft`, structurally guaranteeing absolute columnar precision and perfectly seamless geometric junctions (`│` over `└`) regardless of terminal dimensions.
+
+---
+
 # Release v4.02.7
 
 ### FIXED 🐛

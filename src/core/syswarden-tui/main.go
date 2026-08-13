@@ -203,7 +203,7 @@ func main() {
 	portsTable.SetBorder(true).SetTitle(" [white]❖ TOP TARGETED PORTS[-] ").SetBorderColor(tcell.ColorDarkGray)
 
 	// 5b. Sparkline
-	sparklineText = tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetTextAlign(tview.AlignCenter)
+	sparklineText = tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetTextAlign(tview.AlignLeft)
 	sparklineText.SetBorder(true).SetTitle(" [white]❖ WAF L7 BANS (24H)[-] ").SetBorderColor(tcell.ColorDarkGray)
 
 	// 6. Top Attackers Table
