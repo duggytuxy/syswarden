@@ -1,6 +1,13 @@
+# Release v4.02.7
+
+### FIXED 🐛
+- **UI/UX (TUI):** Fixed a visual alignment defect in the WAF L7 BANS timeline where the Y-axis (`┤`) and the X-axis origin (`└`) were offset by one space. The axes now connect seamlessly to form a perfect right angle. Replaced the unnecessary tick on the empty row with a straight vertical line (`│`) for a cleaner look.
+
+---
+
 # Release v4.02.6
 
-### FIXED
+### FIXED 🐛
 - **UI/UX (TUI):** Fixed a visual overflow issue in the WAF L7 BANS timeline where X-axis markers were being partially hidden by the scrollbar; increased the flex layout block height from 8 to 10 rows.
 - **UI/UX (TUI):** Synchronized the timeline's X-axis markers (`00h ... 24h`) dynamically with the system's local time (`time.Now()`). This perfectly eliminates the previous time offset confusion, ensuring that the 24-hour rolling window visualization aligns exactly with the timestamps of the underlying attack payloads.
 
@@ -8,35 +15,35 @@
 
 # Release v4.02.5
 
-### UPDATED
+### UPDATED 🔄
 - **UI/UX (TUI):** Upgraded the 24H WAF Bans timeline to be fully responsive. The ASCII graph now dynamically adapts its layout width to the user's terminal size. The time axis markers (`00h` to `24h`) and their corresponding ticks (`┴`) are now algorithmically centered under the attack data blocks, ensuring a flawless visual alignment across all screen resolutions.
 
 ---
 
 # Release v4.02.4
 
-### FIXED
+### FIXED 🐛
 - **CI/CD:** Retriggered build pipeline due to a temporary GitHub Actions infrastructure failure (`socket hang up`) while downloading `golangci-lint`. Codebase remains fully verified and healthy.
 
 ---
 
 # Release v4.02.3
 
-### FIXED
+### FIXED 🐛
 - **CI/CD:** Retriggered build pipeline due to GitHub Actions skipped sequence.
 
 ---
 
 # Release v4.02.2
 
-### FIXED
+### FIXED 🐛
 - **UI/UX (TUI & Web-TUI):** Fixed a staticcheck code hygiene issue (`S1039`) related to an unnecessary `fmt.Sprintf` usage in the newly designed WAF L7 BANS timeline layout rendering.
 
 ---
 
 # Release v4.02.1
 
-### UPDATED
+### UPDATED 🔄
 - **UI/UX (TUI & Web-TUI):** Complete visual overhaul of the 24-hour WAF bans timeline. Replaced the basic sparkline with a full-width, multi-line ASCII graph featuring explicit vertical (ban counts) and horizontal (00h-24h) axes. Removed aggressive red colors in favor of a clean, unified white chart matching the ORG column palette.
 - **UI/UX (TUI & Web-TUI):** Reordered the `TOP ATTACKERS (OSINT HISTORY)` module. The `HITS` and `LAST SEEN` tracking metrics are now prioritized visually right after the `IP ADDRESS`, directly before `SEVERITY`.
 - **Engine/Telemetry:** Refined the `HITS` metric calculation in the WAF telemetry worker to strictly represent the exact number of consecutive strikes (detected attacks) committed by an IP leading up to its ban.
@@ -45,13 +52,13 @@
 
 # Release v4.02.0
 
-### ADDED
+### ADDED ✨
 - **UI/UX (TUI & Web-TUI):** Implemented a new 24-hour Sparkline graph (`WAF L7 BANS (24H)`) to visually track WAF bans volume over time. The metric is persistently cached to `/var/lib/syswarden/ui/metrics_24h.json` to survive daemon reloads and log rotations, maintaining an accurate 24-hour visual history.
 - **UI/UX (TUI & Web-TUI):** Added a new `TOP TARGETED PORTS` module (replacing the generic Signatures Load Distribution). It dynamically extracts the targeted ports and protocols from attack payloads (e.g., FTP, SSH, HTTP), tallying the total hits and unique attacker IPs for precise service-level threat tracking.
 - **UI/UX (TUI & Web-TUI):** The terminal header now dynamically displays the configured `ProfileName` loaded from the TOML configuration block.
 - **Core/CLI:** Added a new profile management system in `syswarden config`. Users can now assign a strict 15-character Profile Name to their instances and directly import TOML configuration files from the CLI.
 
-### UPDATED
+### UPDATED 🔄
 - **UI/UX (TUI & Web-TUI):** Upgraded the `TOP ATTACKERS (OSINT HISTORY)` module by incorporating `HITS` and `LAST SEEN` columns. The OSINT threat intelligence engine now correlates the chronological frequency and freshness of attacks directly mapped to each individual malicious IP.
 - **UI/UX (TUI & Web-TUI):** Redesigned the TUI layout. The 24-hour Sparkline graph now occupies the full terminal width above the WAF Registry, significantly improving visual clarity and threat analysis immersion.
 

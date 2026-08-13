@@ -919,7 +919,7 @@ func refreshUI() {
 	}
 
 	graph := fmt.Sprintf(" [gray]%4d ┤[-] [white]%s[-]\n", maxBans, line0.String())
-	graph += fmt.Sprintf(" [gray]     ┤[-] [white]%s[-]\n", line1.String())
+	graph += fmt.Sprintf(" [gray]     │[-] [white]%s[-]\n", line1.String())
 	graph += fmt.Sprintf(" [gray]%4d ┤[-] [white]%s[-]\n", halfMax, line2.String())
 	graph += fmt.Sprintf(" [gray]   0 ┤[-] [white]%s[-]\n", line3.String())
 	graph += fmt.Sprintf(" [gray]%s[-]\n", xAxis)
