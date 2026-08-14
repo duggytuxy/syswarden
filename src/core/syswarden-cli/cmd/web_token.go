@@ -60,11 +60,10 @@ func updateConfigTokenInDirectory(directory, newToken string) error {
 
 	content := []byte("# [99] USER CUSTOM OVERRIDES\n\n[user]\n")
 	pathInfo, err := root.Lstat("99-user.toml")
-	if errors.Is(err, os.ErrNotExist) {
-		content = []byte("# [99] USER CUSTOM OVERRIDES\n\n[user]\n")
-	} else if err != nil {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect Web-TUI token file: %w", err)
-	} else {
+	}
+	if err == nil {
 		if !pathInfo.Mode().IsRegular() {
 			return fmt.Errorf("Web-TUI token file must be a regular file")
 		}

@@ -438,22 +438,6 @@ func appendListFileInDirectory(directory *os.Root, target approvedListFile, cont
 	return nil
 }
 
-func readListFile(path string) ([]byte, error) {
-	target, err := approvedListFileForPath(path)
-	if err != nil {
-		return nil, err
-	}
-	return readListFileAt(target)
-}
-
-func writeListFile(path string, content []byte) error {
-	target, err := approvedListFileForPath(path)
-	if err != nil {
-		return err
-	}
-	return writeListFileAt(target, content)
-}
-
 func removeFromListFileAt(target approvedListFile, line string) error {
 	directory, err := openListDirectory(target, false)
 	if errors.Is(err, fs.ErrNotExist) {

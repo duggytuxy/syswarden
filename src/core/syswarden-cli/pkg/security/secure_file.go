@@ -75,14 +75,6 @@ func openSecurityDirectory(target securityFileTarget) (*os.Root, error) {
 	return currentRoot, nil
 }
 
-func rewriteSecurityFile(path string, content []byte) (resultErr error) {
-	target, err := securityFileTargetForPath(path)
-	if err != nil {
-		return err
-	}
-	return rewriteSecurityTarget(target, content)
-}
-
 func rewriteSecurityFileFromSnapshot(path string, content, snapshot []byte) error {
 	target, err := securityFileTargetForPath(path)
 	if err != nil {

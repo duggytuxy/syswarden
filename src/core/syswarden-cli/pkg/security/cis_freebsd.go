@@ -55,7 +55,11 @@ func disableObscureFilesystems() error {
 hw.usb.no_umass="1"
 `
 	if _, err := os.Stat("/boot/loader.conf.local"); os.IsNotExist(err) {
-		if err := rewriteSecurityFile("/boot/loader.conf.local", []byte(content)); err != nil {
+		target, err := securityFileTargetForPath("/boot/loader.conf.local")
+		if err != nil {
+			return err
+		}
+		if err := rewriteSecurityTarget(target, []byte(content)); err != nil {
 			return err
 		}
 	} else {
