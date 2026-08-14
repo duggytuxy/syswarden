@@ -604,6 +604,7 @@ class ActFixtureTests(unittest.TestCase):
         workflow = (
             self.repository / ".github" / "workflows" / "security-audit.yml"
         ).read_text(encoding="utf-8")
+        plumber = (self.repository / ".plumber.yaml").read_text(encoding="utf-8")
         self.assertIn(
             "DavidAnson/markdownlint-cli2-action@"
             "fa0cd0f1a052f54da593c83860f2292982f5d142 # v23.2.0",
@@ -611,6 +612,18 @@ class ActFixtureTests(unittest.TestCase):
         )
         self.assertIn("config: .markdownlint.json", workflow)
         self.assertIn("globs: README.md", workflow)
+        trusted_actions = plumber.split("trustedGithubActions:", 1)[1].split(
+            "\n\n", 1
+        )[0]
+        trusted_entries = [
+            line.strip()[2:].split(" #", 1)[0].strip()
+            for line in trusted_actions.splitlines()
+            if line.strip().startswith("- ")
+        ]
+        self.assertEqual(
+            trusted_entries.count("DavidAnson/markdownlint-cli2-action"), 1
+        )
+        self.assertNotIn("DavidAnson/*", trusted_entries)
 
     def test_github_bubblewrap_policy_is_pinned_and_fail_closed(self) -> None:
         workflow = (

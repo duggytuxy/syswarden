@@ -616,6 +616,7 @@ github:
         - docker/build-push-action
         - ossf/scorecard-action
         - anchore/scan-action
+        - DavidAnson/markdownlint-cli2-action # Markdownlint action pinned by commit SHA in workflows
         # Added trusted SecOps & Build actions
         - getplumber/plumber
         - ruby/setup-ruby
@@ -1143,4 +1144,3 @@ github:
       forbiddenVariables:
         - ACTIONS_STEP_DEBUG
         - ACTIONS_RUNNER_DEBUG
-
