@@ -122,10 +122,10 @@ func startHAServerProcess(t *testing.T, peer, token string) haTestServer {
 		haServerHelperEnvironment+"=1",
 		"SYSWARDEN_HA_TEST_PEER="+peer,
 		"SYSWARDEN_HA_TEST_PORT="+stringPort(port),
-		"SYSWARDEN_HA_TEST_TOKEN="+token,
 		"SYSWARDEN_HA_TEST_TLS_DIR="+filepath.Join(t.TempDir(), "ha-tls"),
 		"PATH="+toolDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
+	command.Env = append(command.Env, "SYSWARDEN_HA_TEST_TOKEN="+token)
 	command.Stdout = io.Discard
 	command.Stderr = io.Discard
 	if err := command.Start(); err != nil {
