@@ -1,7 +1,11 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +13,88 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestHAHTTPClientFailsClosedAndVerifiesTrustedTLS13Peer(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	server.TLS = &tls.Config{MinVersion: tls.VersionTLS13}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	untrustedClient, err := newHAHTTPClient(filepath.Join(t.TempDir(), "missing-ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := untrustedClient.Get(server.URL); err == nil {
+		t.Fatal("HA client accepted an untrusted self-signed peer certificate")
+	}
+
+	invalidBundle := filepath.Join(t.TempDir(), "invalid-ha-ca.pem")
+	if err := os.WriteFile(invalidBundle, []byte("not a certificate\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	invalidClient, invalidErr := newHAHTTPClient(invalidBundle)
+	if invalidErr == nil {
+		t.Fatal("HA client accepted an invalid configured CA bundle")
+	}
+	if _, err := invalidClient.Get(server.URL); err == nil {
+		t.Fatal("HA client with an invalid CA bundle did not fail closed")
+	}
+
+	caBundle := filepath.Join(t.TempDir(), "ha-ca.pem")
+	if err := os.WriteFile(caBundle, pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: server.Certificate().Raw,
+	}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	trustedClient, err := newHAHTTPClient(caBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := trustedClient.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil {
+		t.Fatal("HA client has no explicit TLS configuration")
+	}
+	if transport.TLSClientConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("HA client minimum TLS version = %x", transport.TLSClientConfig.MinVersion)
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("HA client disabled peer certificate verification")
+	}
+	response, err := trustedClient.Get(server.URL)
+	if err != nil {
+		t.Fatalf("HA client rejected an explicitly trusted TLS peer: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("trusted HA response status = %d", response.StatusCode)
+	}
+	if response.TLS == nil || response.TLS.Version != tls.VersionTLS13 {
+		t.Fatalf("trusted HA response TLS state = %#v, want TLS 1.3", response.TLS)
+	}
+}
+
+func TestHAPeerURLSupportsIPv4DNSAndIPv6(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		peer string
+		want string
+	}{
+		{peer: "192.0.2.10", want: "https://192.0.2.10:62026/ha/status"},
+		{peer: "node.example", want: "https://node.example:62026/ha/status"},
+		{peer: "2001:db8::10", want: "https://[2001:db8::10]:62026/ha/status"},
+		{peer: "[2001:db8::10]", want: "https://[2001:db8::10]:62026/ha/status"},
+	} {
+		if got := haPeerURL(test.peer, "/ha/status"); got != test.want {
+			t.Fatalf("haPeerURL(%q) = %q, want %q", test.peer, got, test.want)
+		}
+	}
+}
 
 func TestDashboardDataSchemaCompatibility(t *testing.T) {
 	t.Parallel()

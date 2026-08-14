@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syswarden-core/firewall"
 	"time"
@@ -59,19 +61,41 @@ func loadHAConfig() HAConfig {
 	return cfg
 }
 
-// Generate self-signed TLS cert in memory
-func generateSelfSignedCert() (tls.Certificate, error) {
+func generateSelfSignedCertPEM() ([]byte, []byte, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return tls.Certificate{}, err
+		return nil, nil, err
+	}
+
+	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialLimit)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	hostname, _ := os.Hostname()
+	dnsNames := []string{"localhost"}
+	if hostname != "" && hostname != "localhost" {
+		dnsNames = append(dnsNames, hostname)
+	}
+	ipAddresses := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	if addresses, err := net.InterfaceAddrs(); err == nil {
+		for _, address := range addresses {
+			ip, _, parseErr := net.ParseCIDR(address.String())
+			if parseErr == nil && ip != nil {
+				ipAddresses = append(ipAddresses, ip)
+			}
+		}
 	}
 
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{"SYSWARDEN HA Cluster"},
 		},
-		NotBefore:             time.Now(),
+		DNSNames:              dnsNames,
+		IPAddresses:           ipAddresses,
+		NotBefore:             time.Now().Add(-5 * time.Minute),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
@@ -80,18 +104,255 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {
-		return tls.Certificate{}, err
+		return nil, nil, err
 	}
 
-	cert := tls.Certificate{
-		Certificate: [][]byte{derBytes},
-		PrivateKey:  priv,
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+	if len(certPEM) == 0 || len(keyPEM) == 0 {
+		return nil, nil, fmt.Errorf("failed to encode HA TLS certificate")
 	}
-	return cert, nil
+	return certPEM, keyPEM, nil
 }
 
 type HASyncPayload struct {
 	IPs []string `json:"ips"`
+}
+
+const (
+	haBlacklistIPv4File  = "/etc/syswarden/lists/syswarden_blacklist.ipv4"
+	haBlacklistIPv6File  = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
+	defaultHATLSDir      = "/var/lib/syswarden/ha"
+	haTLSCertificateName = "server.crt"
+	haTLSPrivateKeyName  = "server.key"
+)
+
+var haTLSDir = defaultHATLSDir
+
+type haBlacklistFamily uint8
+
+const (
+	haBlacklistIPv4 haBlacklistFamily = iota
+	haBlacklistIPv6
+)
+
+func blacklistFamilyForIP(ip string) haBlacklistFamily {
+	if strings.Contains(ip, ":") {
+		return haBlacklistIPv6
+	}
+	return haBlacklistIPv4
+}
+
+func readBlacklistFileForIP(ip string) ([]byte, error) {
+	if blacklistFamilyForIP(ip) == haBlacklistIPv6 {
+		return os.ReadFile(haBlacklistIPv6File)
+	}
+	return os.ReadFile(haBlacklistIPv4File)
+}
+
+func writeBlacklistFileForIP(ip string, content []byte) error {
+	if blacklistFamilyForIP(ip) == haBlacklistIPv6 {
+		return os.WriteFile(haBlacklistIPv6File, content, 0600)
+	}
+	return os.WriteFile(haBlacklistIPv4File, content, 0600)
+}
+
+func loadOrCreateHATLSCertificate(directory string) (tls.Certificate, error) {
+	directory = filepath.Clean(directory)
+	directoryInfo, directoryErr := os.Lstat(directory)
+	if directoryErr == nil {
+		return loadPersistedHATLSCertificate(directory, directoryInfo)
+	}
+	if !os.IsNotExist(directoryErr) {
+		return tls.Certificate{}, fmt.Errorf("inspect HA TLS directory: %w", directoryErr)
+	}
+
+	parentDirectory := filepath.Clean(filepath.Dir(directory))
+	if err := os.MkdirAll(parentDirectory, 0700); err != nil {
+		return tls.Certificate{}, fmt.Errorf("create HA TLS parent directory: %w", err)
+	}
+	parentInfo, err := os.Lstat(parentDirectory)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("inspect HA TLS parent directory: %w", err)
+	}
+	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+		return tls.Certificate{}, fmt.Errorf("HA TLS parent must be a real directory, not a symbolic link")
+	}
+
+	certPEM, keyPEM, err := generateSelfSignedCertPEM()
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	certificate, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("load generated HA TLS identity: %w", err)
+	}
+	if err := validateHATLSCertificate(&certificate, time.Now()); err != nil {
+		return tls.Certificate{}, fmt.Errorf("validate generated HA TLS identity: %w", err)
+	}
+	if err := persistNewHATLSIdentity(directory, certPEM, keyPEM, writePrivateTLSFile); err != nil {
+		return tls.Certificate{}, err
+	}
+	return certificate, nil
+}
+
+func loadPersistedHATLSCertificate(directory string, directoryInfo os.FileInfo) (tls.Certificate, error) {
+	if directoryInfo.Mode()&os.ModeSymlink != 0 || !directoryInfo.IsDir() {
+		return tls.Certificate{}, fmt.Errorf("HA TLS identity path must be a real directory, not a symbolic link")
+	}
+	if directoryInfo.Mode().Perm() != 0700 {
+		return tls.Certificate{}, fmt.Errorf("HA TLS identity directory permissions must be 0700, got %04o", directoryInfo.Mode().Perm())
+	}
+
+	certificateFile := filepath.Clean(filepath.Join(directory, haTLSCertificateName))
+	privateKeyFile := filepath.Clean(filepath.Join(directory, haTLSPrivateKeyName))
+	certificateInfo, certificateErr := os.Lstat(certificateFile)
+	privateKeyInfo, privateKeyErr := os.Lstat(privateKeyFile)
+	if certificateErr != nil || privateKeyErr != nil {
+		return tls.Certificate{}, fmt.Errorf("incomplete HA TLS identity; certificate and key must both exist")
+	}
+	if !certificateInfo.Mode().IsRegular() || !privateKeyInfo.Mode().IsRegular() {
+		return tls.Certificate{}, fmt.Errorf("HA TLS identity files must be regular files")
+	}
+	if certificateInfo.Mode().Perm()&0077 != 0 || privateKeyInfo.Mode().Perm()&0077 != 0 {
+		return tls.Certificate{}, fmt.Errorf("HA TLS identity files must not be accessible by group or other users")
+	}
+	certificate, err := tls.LoadX509KeyPair(certificateFile, privateKeyFile)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("load persisted HA TLS identity: %w", err)
+	}
+	if err := validateHATLSCertificate(&certificate, time.Now()); err != nil {
+		return tls.Certificate{}, fmt.Errorf("validate persisted HA TLS identity: %w", err)
+	}
+	return certificate, nil
+}
+
+func validateHATLSCertificate(certificate *tls.Certificate, now time.Time) error {
+	if certificate == nil || len(certificate.Certificate) == 0 {
+		return fmt.Errorf("HA TLS identity has no leaf certificate")
+	}
+	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("parse HA TLS leaf certificate: %w", err)
+	}
+	if err := validateHATLSLeaf(leaf, now); err != nil {
+		return err
+	}
+	certificate.Leaf = leaf
+	return nil
+}
+
+func validateHATLSLeaf(leaf *x509.Certificate, now time.Time) error {
+	if leaf == nil {
+		return fmt.Errorf("HA TLS identity has no parsed leaf certificate")
+	}
+	if now.Before(leaf.NotBefore) {
+		return fmt.Errorf("HA TLS certificate is not valid before %s", leaf.NotBefore.UTC().Format(time.RFC3339))
+	}
+	if !now.Before(leaf.NotAfter) {
+		return fmt.Errorf("HA TLS certificate expired at %s; replace the identity and redistribute server.crt", leaf.NotAfter.UTC().Format(time.RFC3339))
+	}
+	if err := leaf.CheckSignature(leaf.SignatureAlgorithm, leaf.RawTBSCertificate, leaf.Signature); err != nil {
+		return fmt.Errorf("verify self-signed HA TLS certificate: %w", err)
+	}
+	if len(leaf.DNSNames) == 0 && len(leaf.IPAddresses) == 0 {
+		return fmt.Errorf("HA TLS certificate has no DNS or IP subject alternative name")
+	}
+	if len(leaf.UnhandledCriticalExtensions) != 0 {
+		return fmt.Errorf("HA TLS certificate contains unhandled critical extensions")
+	}
+	serverAuth := false
+	for _, usage := range leaf.ExtKeyUsage {
+		if usage == x509.ExtKeyUsageServerAuth {
+			serverAuth = true
+			break
+		}
+	}
+	if !serverAuth {
+		return fmt.Errorf("HA TLS certificate is not valid for server authentication")
+	}
+	return nil
+}
+
+type haTLSFileWriter func(path string, content []byte) error
+
+func persistNewHATLSIdentity(directory string, certPEM, keyPEM []byte, writer haTLSFileWriter) error {
+	parentDirectory := filepath.Clean(filepath.Dir(directory))
+	stagingDirectory, err := os.MkdirTemp(parentDirectory, "."+filepath.Base(directory)+".tmp-")
+	if err != nil {
+		return fmt.Errorf("create HA TLS staging directory: %w", err)
+	}
+	stagingDirectory = filepath.Clean(stagingDirectory)
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(stagingDirectory)
+		}
+	}()
+
+	certificateFile := filepath.Clean(filepath.Join(stagingDirectory, haTLSCertificateName))
+	privateKeyFile := filepath.Clean(filepath.Join(stagingDirectory, haTLSPrivateKeyName))
+	if err := writer(certificateFile, certPEM); err != nil {
+		return fmt.Errorf("persist HA TLS certificate: %w", err)
+	}
+	if err := writer(privateKeyFile, keyPEM); err != nil {
+		return fmt.Errorf("persist HA TLS private key: %w", err)
+	}
+	stagingInfo, err := os.Lstat(stagingDirectory)
+	if err != nil {
+		return fmt.Errorf("inspect HA TLS staging directory: %w", err)
+	}
+	if _, err := loadPersistedHATLSCertificate(stagingDirectory, stagingInfo); err != nil {
+		return fmt.Errorf("validate staged HA TLS identity: %w", err)
+	}
+	if err := syncDirectory(stagingDirectory); err != nil {
+		return fmt.Errorf("sync staged HA TLS identity: %w", err)
+	}
+	if _, err := os.Lstat(directory); !os.IsNotExist(err) {
+		if err == nil {
+			return fmt.Errorf("HA TLS identity path appeared while publishing")
+		}
+		return fmt.Errorf("inspect HA TLS identity path before publishing: %w", err)
+	}
+	if err := os.Rename(stagingDirectory, directory); err != nil {
+		return fmt.Errorf("publish HA TLS identity atomically: %w", err)
+	}
+	published = true
+	if err := syncDirectory(parentDirectory); err != nil {
+		return fmt.Errorf("sync HA TLS parent directory: %w", err)
+	}
+	return nil
+}
+
+func writePrivateTLSFile(path string, content []byte) (resultErr error) {
+	path = filepath.Clean(path)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := file.Close(); resultErr == nil {
+			resultErr = closeErr
+		}
+	}()
+	if _, err := file.Write(content); err != nil {
+		return err
+	}
+	return file.Sync()
+}
+
+func syncDirectory(directory string) (resultErr error) {
+	directory = filepath.Clean(directory)
+	handle, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := handle.Close(); resultErr == nil {
+			resultErr = closeErr
+		}
+	}()
+	return handle.Sync()
 }
 
 func StartHAServer(fwManager firewall.Manager) {
@@ -114,9 +375,9 @@ func StartHAServer(fwManager firewall.Manager) {
 		}
 	}
 
-	cert, err := generateSelfSignedCert()
+	cert, err := loadOrCreateHATLSCertificate(haTLSDir)
 	if err != nil {
-		log.Printf("[HA Cluster] Failed to generate TLS cert: %v", err)
+		log.Printf("[HA Cluster] Failed to load persistent TLS identity: %v", err)
 		return
 	}
 
@@ -150,7 +411,7 @@ func StartHAServer(fwManager firewall.Manager) {
 			authHeader := r.Header.Get("Authorization")
 			expectedHeader := "Bearer " + cfg.Token
 			if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expectedHeader)) != 1 {
-				log.Printf("[HA Cluster] Unauthorized sync attempt dropped from %s (Invalid Token)", remoteIP)
+				log.Printf("[HA Cluster] Unauthorized sync attempt dropped (invalid token)")
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -255,12 +516,7 @@ func StartHAServer(fwManager firewall.Manager) {
 			for _, ip := range payload.IPs {
 				_ = fwManager.Unban(ip)
 
-				file := "/etc/syswarden/lists/syswarden_blacklist.ipv4"
-				if strings.Contains(ip, ":") {
-					file = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
-				}
-
-				if content, err := os.ReadFile(file); err == nil { // #nosec
+				if content, err := readBlacklistFileForIP(ip); err == nil {
 					lines := strings.Split(string(content), "\n")
 					var newLines []string
 					for _, l := range lines {
@@ -269,9 +525,9 @@ func StartHAServer(fwManager firewall.Manager) {
 						}
 					}
 					if len(newLines) > 0 {
-						_ = os.WriteFile(file, []byte(strings.Join(newLines, "\n")+"\n"), 0600)
+						_ = writeBlacklistFileForIP(ip, []byte(strings.Join(newLines, "\n")+"\n"))
 					} else {
-						_ = os.WriteFile(file, []byte(""), 0600)
+						_ = writeBlacklistFileForIP(ip, []byte(""))
 					}
 				}
 			}

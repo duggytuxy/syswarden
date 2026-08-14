@@ -3,11 +3,14 @@ package network
 import (
 	"bufio"
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/rand"
 	"net"
 	"net/http"
@@ -16,14 +19,448 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"syswarden-cli/pkg/system"
 	"time"
 )
 
+const approvedFeedDirectory = "/etc/syswarden/lists"
+
+var (
+	approvedFeedBasename = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*\.ipv[46]$`)
+	approvedASN          = regexp.MustCompile(`^AS[0-9]{1,10}$`)
+)
+
+type feedFileTarget struct {
+	directory string
+	name      string
+}
+
+func approvedFeedFileForPath(path, suffix string) (feedFileTarget, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return feedFileTarget{}, fmt.Errorf("feed path must be absolute and canonical: %q", path)
+	}
+	if filepath.Dir(path) != approvedFeedDirectory {
+		return feedFileTarget{}, fmt.Errorf("feed path must remain inside %s: %q", approvedFeedDirectory, path)
+	}
+	target := feedFileTarget{directory: approvedFeedDirectory, name: filepath.Base(path)}
+	if err := validateFeedFileTarget(target, suffix); err != nil {
+		return feedFileTarget{}, err
+	}
+	return target, nil
+}
+
+func validateFeedFileTarget(target feedFileTarget, suffix string) error {
+	if suffix != ".ipv4" && suffix != ".ipv6" {
+		return fmt.Errorf("unsupported feed suffix: %q", suffix)
+	}
+	if !filepath.IsAbs(target.directory) || filepath.Clean(target.directory) != target.directory {
+		return fmt.Errorf("feed directory must be absolute and canonical: %q", target.directory)
+	}
+	for _, component := range strings.Split(filepath.ToSlash(target.directory), "/") {
+		if component == "." || component == ".." {
+			return fmt.Errorf("feed directory contains traversal: %q", target.directory)
+		}
+	}
+	if filepath.Base(target.name) != target.name || strings.ContainsAny(target.name, `/\\`) ||
+		!approvedFeedBasename.MatchString(target.name) || !strings.HasSuffix(target.name, suffix) {
+		return fmt.Errorf("feed name is not an approved %s basename: %q", suffix, target.name)
+	}
+	return nil
+}
+
+func openFeedDirectory(target feedFileTarget, suffix string, create bool) (*os.Root, error) {
+	if err := validateFeedFileTarget(target, suffix); err != nil {
+		return nil, err
+	}
+	currentRoot, err := os.OpenRoot("/")
+	if err != nil {
+		return nil, fmt.Errorf("open filesystem root: %w", err)
+	}
+	for _, component := range strings.Split(strings.TrimPrefix(target.directory, "/"), "/") {
+		if component == "" {
+			continue
+		}
+		info, statErr := currentRoot.Lstat(component)
+		if errors.Is(statErr, fs.ErrNotExist) && create {
+			if mkdirErr := currentRoot.Mkdir(component, 0750); mkdirErr != nil && !errors.Is(mkdirErr, fs.ErrExist) {
+				_ = currentRoot.Close()
+				return nil, fmt.Errorf("create feed directory %s: %w", target.directory, mkdirErr)
+			}
+			info, statErr = currentRoot.Lstat(component)
+		}
+		if statErr != nil {
+			_ = currentRoot.Close()
+			return nil, fmt.Errorf("inspect feed directory %s: %w", target.directory, statErr)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			_ = currentRoot.Close()
+			return nil, fmt.Errorf("feed directory component is not a real directory: %s", component)
+		}
+		nextRoot, err := currentRoot.OpenRoot(component)
+		if err != nil {
+			_ = currentRoot.Close()
+			return nil, fmt.Errorf("open feed directory component %s: %w", component, err)
+		}
+		openedInfo, err := nextRoot.Stat(".")
+		if err != nil || !os.SameFile(info, openedInfo) {
+			_ = nextRoot.Close()
+			_ = currentRoot.Close()
+			return nil, fmt.Errorf("feed directory component changed while opening: %s", component)
+		}
+		_ = currentRoot.Close()
+		currentRoot = nextRoot
+	}
+	return currentRoot, nil
+}
+
+func readFeedFileAt(target feedFileTarget, suffix string) ([]byte, error) {
+	directory, err := openFeedDirectory(target, suffix, false)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = directory.Close() }()
+	return readFeedFileInDirectory(directory, target)
+}
+
+func readFeedFileInDirectory(directory *os.Root, target feedFileTarget) ([]byte, error) {
+	file, _, err := openFeedFileInRoot(directory, target, os.O_RDONLY, false)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return io.ReadAll(file)
+}
+
+func lockFeedDirectory(directory *os.Root) (*os.File, error) {
+	lockFile, err := directory.Open(".")
+	if err != nil {
+		return nil, fmt.Errorf("open feed directory lock: %w", err)
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		_ = lockFile.Close()
+		return nil, fmt.Errorf("lock feed directory: %w", err)
+	}
+	return lockFile, nil
+}
+
+func unlockFeedDirectory(lockFile *os.File) {
+	_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	_ = lockFile.Close()
+}
+
+func openFeedFileInRoot(directory *os.Root, target feedFileTarget, flags int, create bool) (*os.File, bool, error) {
+	pathInfo, statErr := directory.Lstat(target.name)
+	created := false
+	mode := fs.FileMode(0)
+	if errors.Is(statErr, fs.ErrNotExist) && create {
+		flags |= os.O_CREATE | os.O_EXCL
+		mode = 0600
+		created = true
+	} else if statErr != nil {
+		return nil, false, statErr
+	} else if !pathInfo.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("feed target is not a regular file: %s", target.name)
+	}
+	file, err := directory.OpenFile(target.name, flags, mode)
+	if err != nil {
+		return nil, false, err
+	}
+	openedInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, false, err
+	}
+	if !openedInfo.Mode().IsRegular() || (!created && !os.SameFile(pathInfo, openedInfo)) {
+		_ = file.Close()
+		return nil, false, fmt.Errorf("feed target changed while opening: %s", target.name)
+	}
+	return file, created, nil
+}
+
+type feedFileIdentity struct {
+	info       fs.FileInfo
+	digest     [sha256.Size]byte
+	uid        int
+	gid        int
+	ownerKnown bool
+}
+
+func snapshotFeedFile(file *os.File) (fs.FileInfo, [sha256.Size]byte, error) {
+	var digest [sha256.Size]byte
+	before, err := file.Stat()
+	if err != nil {
+		return nil, digest, err
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return nil, digest, err
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return nil, digest, err
+	}
+	if !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		return nil, digest, fmt.Errorf("feed target changed while snapshotting")
+	}
+	copy(digest[:], hash.Sum(nil))
+	return after, digest, nil
+}
+
+func sameFeedFileState(expected feedFileIdentity, actualInfo fs.FileInfo, actualDigest [sha256.Size]byte) bool {
+	if !os.SameFile(expected.info, actualInfo) || expected.info.Size() != actualInfo.Size() ||
+		!expected.info.ModTime().Equal(actualInfo.ModTime()) || expected.info.Mode() != actualInfo.Mode() ||
+		expected.digest != actualDigest {
+		return false
+	}
+	if expected.ownerKnown {
+		stat, ok := actualInfo.Sys().(*syscall.Stat_t)
+		return ok && int(stat.Uid) == expected.uid && int(stat.Gid) == expected.gid
+	}
+	return true
+}
+
+func inspectFeedDestination(directory *os.Root, target feedFileTarget) (feedFileIdentity, bool, error) {
+	pathInfo, err := directory.Lstat(target.name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return feedFileIdentity{}, false, nil
+	}
+	if err != nil {
+		return feedFileIdentity{}, false, err
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return feedFileIdentity{}, false, fmt.Errorf("feed target is not a regular file: %s", target.name)
+	}
+	file, _, err := openFeedFileInRoot(directory, target, os.O_RDONLY, false)
+	if err != nil {
+		return feedFileIdentity{}, false, err
+	}
+	openedInfo, digest, statErr := snapshotFeedFile(file)
+	closeErr := file.Close()
+	if statErr != nil {
+		return feedFileIdentity{}, false, statErr
+	}
+	if closeErr != nil {
+		return feedFileIdentity{}, false, closeErr
+	}
+	identity := feedFileIdentity{info: openedInfo, digest: digest}
+	if stat, ok := openedInfo.Sys().(*syscall.Stat_t); ok {
+		identity.uid = int(stat.Uid)
+		identity.gid = int(stat.Gid)
+		identity.ownerKnown = true
+	}
+	return identity, true, nil
+}
+
+func createFeedStagingFile(directory *os.Root, target feedFileTarget) (*os.File, string, error) {
+	for range 128 {
+		var random [16]byte
+		if _, err := cryptorand.Read(random[:]); err != nil {
+			return nil, "", fmt.Errorf("generate feed staging name: %w", err)
+		}
+		name := "." + target.name + ".syswarden-" + hex.EncodeToString(random[:]) + ".tmp"
+		file, err := directory.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("create feed staging file: %w", err)
+		}
+		return file, name, nil
+	}
+	return nil, "", fmt.Errorf("create feed staging file: too many name collisions")
+}
+
+func verifyFeedDestination(directory *os.Root, target feedFileTarget, identity feedFileIdentity, existed bool) error {
+	current, err := directory.Lstat(target.name)
+	if !existed {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("feed target appeared before publication: %s", target.name)
+	}
+	if err != nil {
+		return fmt.Errorf("reinspect feed target %s: %w", target.name, err)
+	}
+	if !current.Mode().IsRegular() || !os.SameFile(identity.info, current) {
+		return fmt.Errorf("feed target changed before publication: %s", target.name)
+	}
+	file, _, err := openFeedFileInRoot(directory, target, os.O_RDONLY, false)
+	if err != nil {
+		return fmt.Errorf("reopen feed target %s before publication: %w", target.name, err)
+	}
+	actualInfo, actualDigest, snapshotErr := snapshotFeedFile(file)
+	closeErr := file.Close()
+	if snapshotErr != nil {
+		return fmt.Errorf("resnapshot feed target %s: %w", target.name, snapshotErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close feed target %s after resnapshot: %w", target.name, closeErr)
+	}
+	if !sameFeedFileState(identity, actualInfo, actualDigest) {
+		return fmt.Errorf("feed target content or metadata changed before publication: %s", target.name)
+	}
+	return nil
+}
+
+func syncFeedDirectory(directory *os.Root) error {
+	directoryFile, err := directory.Open(".")
+	if err != nil {
+		return fmt.Errorf("open feed directory for sync: %w", err)
+	}
+	if err := directoryFile.Sync(); err != nil {
+		_ = directoryFile.Close()
+		return fmt.Errorf("sync feed directory: %w", err)
+	}
+	if err := directoryFile.Close(); err != nil {
+		return fmt.Errorf("close feed directory: %w", err)
+	}
+	return nil
+}
+
+func writeFeedFileAt(target feedFileTarget, suffix string, content []byte) error {
+	return writeFeedFileAtBeforeRename(target, suffix, content, nil)
+}
+
+func writeFeedFileAtBeforeRename(target feedFileTarget, suffix string, content []byte, beforeRename func() error) error {
+	directory, err := openFeedDirectory(target, suffix, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockFeedDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer unlockFeedDirectory(lockFile)
+	return writeFeedFileInDirectoryBeforeRename(directory, target, content, beforeRename)
+}
+
+func writeFeedFileInDirectoryBeforeRename(directory *os.Root, target feedFileTarget, content []byte, beforeRename func() error) error {
+	return writeFeedFileInDirectoryExpected(directory, target, content, nil, beforeRename)
+}
+
+func writeFeedFileInDirectoryFromSnapshot(directory *os.Root, target feedFileTarget, content, snapshot []byte) error {
+	digest := sha256.Sum256(snapshot)
+	return writeFeedFileInDirectoryExpected(directory, target, content, &digest, nil)
+}
+
+func writeFeedFileInDirectoryExpected(directory *os.Root, target feedFileTarget, content []byte, expectedDigest *[sha256.Size]byte, beforeRename func() error) error {
+	identity, existed, err := inspectFeedDestination(directory, target)
+	if err != nil {
+		return fmt.Errorf("inspect feed target %s: %w", target.name, err)
+	}
+	if expectedDigest != nil && (!existed || identity.digest != *expectedDigest) {
+		return fmt.Errorf("feed target changed after it was read: %s", target.name)
+	}
+	file, stagingName, err := createFeedStagingFile(directory, target)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+		if stagingName != "" {
+			_ = directory.Remove(stagingName)
+		}
+	}()
+	if identity.ownerKnown {
+		if err := file.Chown(identity.uid, identity.gid); err != nil {
+			return fmt.Errorf("preserve feed target owner %s: %w", target.name, err)
+		}
+	}
+	if err := file.Chmod(0600); err != nil {
+		return fmt.Errorf("restrict feed staging file for %s: %w", target.name, err)
+	}
+	if written, err := file.Write(content); err != nil {
+		return fmt.Errorf("write feed staging file for %s: %w", target.name, err)
+	} else if written != len(content) {
+		return fmt.Errorf("write feed staging file for %s: %w", target.name, io.ErrShortWrite)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync feed staging file for %s: %w", target.name, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close feed staging file for %s: %w", target.name, err)
+	}
+	file = nil
+	if beforeRename != nil {
+		if err := beforeRename(); err != nil {
+			return err
+		}
+	}
+	if err := verifyFeedDestination(directory, target, identity, existed); err != nil {
+		return err
+	}
+	if err := directory.Rename(stagingName, target.name); err != nil {
+		return fmt.Errorf("publish feed target %s: %w", target.name, err)
+	}
+	stagingName = ""
+	return syncFeedDirectory(directory)
+}
+
+func appendFeedFileAt(target feedFileTarget, suffix string, content []byte) (resultErr error) {
+	directory, err := openFeedDirectory(target, suffix, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockFeedDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer unlockFeedDirectory(lockFile)
+	return appendFeedFileInDirectory(directory, target, content)
+}
+
+func appendFeedFileInDirectory(directory *os.Root, target feedFileTarget, content []byte) (resultErr error) {
+	file, created, err := openFeedFileInRoot(directory, target, os.O_WRONLY|os.O_APPEND, true)
+	if err != nil {
+		return fmt.Errorf("open feed target %s for append: %w", target.name, err)
+	}
+	defer func() {
+		if closeErr := file.Close(); resultErr == nil {
+			resultErr = closeErr
+		}
+	}()
+	if err := file.Chmod(0600); err != nil {
+		return fmt.Errorf("restrict feed target %s: %w", target.name, err)
+	}
+	if _, err := file.Write(content); err != nil {
+		return fmt.Errorf("append feed target %s: %w", target.name, err)
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if created {
+		directoryFile, err := directory.Open(".")
+		if err != nil {
+			return err
+		}
+		if err := directoryFile.Sync(); err != nil {
+			_ = directoryFile.Close()
+			return err
+		}
+		return directoryFile.Close()
+	}
+	return nil
+}
+
 // SecureDownloader downloads files with strict timeouts and resource limits
 func SecureDownloader(ctx context.Context, url string, destPath string, expectedHash string) error {
+	suffix := ".ipv4"
+	if strings.HasSuffix(destPath, ".ipv6") {
+		suffix = ".ipv6"
+	}
+	target, err := approvedFeedFileForPath(destPath, suffix)
+	if err != nil {
+		return err
+	}
 	var resp *http.Response
-	var err error
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	for retries := 0; retries < 3; retries++ {
@@ -64,18 +501,8 @@ func SecureDownloader(ctx context.Context, url string, destPath string, expected
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(destPath), 0750); err != nil {
-		return fmt.Errorf("failed to create directories: %w", err)
-	}
-
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600) // #nosec
-	if err != nil {
-		return fmt.Errorf("failed to open destination file %s: %w", destPath, err)
-	}
-	defer func() { _ = out.Close() }()
-
-	if _, err := out.Write(bodyBytes); err != nil {
-		return fmt.Errorf("failed to write data: %w", err)
+	if err := writeFeedFileAt(target, suffix, bodyBytes); err != nil {
+		return fmt.Errorf("failed to write destination file %s: %w", destPath, err)
 	}
 
 	if strings.HasSuffix(destPath, ".ipv6") {
@@ -87,7 +514,25 @@ func SecureDownloader(ctx context.Context, url string, destPath string, expected
 // CleanCIDRList ensures CWE-20 compliance by stripping any malformed IPs.
 // Smart Parser: If IPv6 addresses are detected in an IPv4 list, they are automatically routed to the .ipv6 file.
 func CleanCIDRList(filepath string) error {
-	content, err := os.ReadFile(filepath) // #nosec
+	target, err := approvedFeedFileForPath(filepath, ".ipv4")
+	if err != nil {
+		return err
+	}
+	return cleanCIDRListAt(target)
+}
+
+func cleanCIDRListAt(target feedFileTarget) error {
+	directory, err := openFeedDirectory(target, ".ipv4", false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockFeedDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer unlockFeedDirectory(lockFile)
+	content, err := readFeedFileInDirectory(directory, target)
 	if err != nil {
 		return err
 	}
@@ -129,19 +574,29 @@ func CleanCIDRList(filepath string) error {
 		}
 	}
 
+	var v6Target feedFileTarget
+	if len(validCIDRsV6) > 0 {
+		v6Target = feedFileTarget{
+			directory: target.directory,
+			name:      strings.TrimSuffix(target.name, ".ipv4") + ".ipv6",
+		}
+		if err := validateFeedFileTarget(v6Target, ".ipv6"); err != nil {
+			return err
+		}
+		if _, _, err := inspectFeedDestination(directory, v6Target); err != nil {
+			return fmt.Errorf("inspect routed IPv6 feed: %w", err)
+		}
+	}
+
 	// Write IPv4 back to the original file
-	err = os.WriteFile(filepath, []byte(strings.Join(validCIDRs, "\n")+"\n"), 0600)
-	if err != nil {
+	if err := writeFeedFileInDirectoryFromSnapshot(directory, target, []byte(strings.Join(validCIDRs, "\n")+"\n"), content); err != nil {
 		return err
 	}
 
 	// Smart Routing: Route extracted IPv6 to the corresponding .ipv6 file
-	if len(validCIDRsV6) > 0 && strings.HasSuffix(filepath, ".ipv4") {
-		fileV6 := strings.TrimSuffix(filepath, ".ipv4") + ".ipv6"
-		f6, err := os.OpenFile(fileV6, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
-		if err == nil {
-			defer func() { _ = f6.Close() }()
-			_, _ = f6.WriteString(strings.Join(validCIDRsV6, "\n") + "\n")
+	if len(validCIDRsV6) > 0 {
+		if err := appendFeedFileInDirectory(directory, v6Target, []byte(strings.Join(validCIDRsV6, "\n")+"\n")); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -150,7 +605,25 @@ func CleanCIDRList(filepath string) error {
 // CleanCIDRListV6 ensures CWE-20 compliance for IPv6 lists.
 // Smart Parser: If IPv4 addresses are detected in an IPv6 list, they are automatically routed to the .ipv4 file.
 func CleanCIDRListV6(filepath string) error {
-	content, err := os.ReadFile(filepath) // #nosec
+	target, err := approvedFeedFileForPath(filepath, ".ipv6")
+	if err != nil {
+		return err
+	}
+	return cleanCIDRListV6At(target)
+}
+
+func cleanCIDRListV6At(target feedFileTarget) error {
+	directory, err := openFeedDirectory(target, ".ipv6", false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockFeedDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer unlockFeedDirectory(lockFile)
+	content, err := readFeedFileInDirectory(directory, target)
 	if err != nil {
 		return err // file might not exist if no IPv6 routes were found, that's okay
 	}
@@ -192,19 +665,29 @@ func CleanCIDRListV6(filepath string) error {
 		}
 	}
 
+	var v4Target feedFileTarget
+	if len(validCIDRsV4) > 0 {
+		v4Target = feedFileTarget{
+			directory: target.directory,
+			name:      strings.TrimSuffix(target.name, ".ipv6") + ".ipv4",
+		}
+		if err := validateFeedFileTarget(v4Target, ".ipv4"); err != nil {
+			return err
+		}
+		if _, _, err := inspectFeedDestination(directory, v4Target); err != nil {
+			return fmt.Errorf("inspect routed IPv4 feed: %w", err)
+		}
+	}
+
 	// Write IPv6 back to the original file
-	err = os.WriteFile(filepath, []byte(strings.Join(validCIDRsV6, "\n")+"\n"), 0600)
-	if err != nil {
+	if err := writeFeedFileInDirectoryFromSnapshot(directory, target, []byte(strings.Join(validCIDRsV6, "\n")+"\n"), content); err != nil {
 		return err
 	}
 
 	// Smart Routing: Route extracted IPv4 to the corresponding .ipv4 file
-	if len(validCIDRsV4) > 0 && strings.HasSuffix(filepath, ".ipv6") {
-		fileV4 := strings.TrimSuffix(filepath, ".ipv6") + ".ipv4"
-		f4, err := os.OpenFile(fileV4, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
-		if err == nil {
-			defer func() { _ = f4.Close() }()
-			_, _ = f4.WriteString(strings.Join(validCIDRsV4, "\n") + "\n")
+	if len(validCIDRsV4) > 0 {
+		if err := appendFeedFileInDirectory(directory, v4Target, []byte(strings.Join(validCIDRsV4, "\n")+"\n")); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -421,22 +904,21 @@ func DownloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listCho
 
 // DownloadOSINT downloads free OSINT threat feeds and appends them to the destination files
 func DownloadOSINT(ctx context.Context, destBase string) error {
+	v4Target, err := approvedFeedFileForPath(destBase+".ipv4", ".ipv4")
+	if err != nil {
+		return err
+	}
+	v6Target, err := approvedFeedFileForPath(destBase+".ipv6", ".ipv6")
+	if err != nil {
+		return err
+	}
 	urls := []string{
 		"https://cinsscore.com/list/ci-badguys.txt",
 		"https://lists.blocklist.de/lists/all.txt",
 	}
 
-	f4, err := os.OpenFile(destBase+".ipv4", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f4.Close() }()
-
-	f6, err := os.OpenFile(destBase+".ipv6", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f6.Close() }()
+	var ipv4Lines []string
+	var ipv6Lines []string
 
 	for _, url := range urls {
 		client := &http.Client{Timeout: 30 * time.Second}
@@ -455,28 +937,60 @@ func DownloadOSINT(ctx context.Context, destBase string) error {
 			}
 			time.Sleep(2 * time.Second)
 		}
-		if resp != nil && resp.StatusCode == http.StatusOK {
-			scanner := bufio.NewScanner(resp.Body)
-			for scanner.Scan() {
-				line := strings.TrimSpace(scanner.Text())
-				if line == "" || strings.HasPrefix(line, "#") {
-					continue
-				}
-				if strings.Contains(line, ":") {
-					_, _ = f6.WriteString(line + "\n")
-				} else {
-					_, _ = f4.WriteString(line + "\n")
-				}
+		if err != nil {
+			return fmt.Errorf("download OSINT feed %s: %w", url, err)
+		}
+		if resp == nil {
+			return fmt.Errorf("download OSINT feed %s returned no response", url)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("download OSINT feed %s returned status %d", url, resp.StatusCode)
+		}
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
 			}
-			_ = resp.Body.Close()
+			if strings.Contains(line, ":") {
+				ipv6Lines = append(ipv6Lines, line)
+			} else {
+				ipv4Lines = append(ipv4Lines, line)
+			}
+		}
+		scanErr := scanner.Err()
+		closeErr := resp.Body.Close()
+		if scanErr != nil {
+			return fmt.Errorf("scan OSINT response: %w", scanErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close OSINT response: %w", closeErr)
 		}
 	}
 
-	_ = f4.Close() // Close before cleaning
-	_ = f6.Close() // Close before cleaning
-
-	_ = CleanCIDRListV6(destBase + ".ipv6")
-	return CleanCIDRList(destBase + ".ipv4")
+	if len(ipv4Lines) > 0 {
+		if err := appendFeedFileAt(v4Target, ".ipv4", []byte(strings.Join(ipv4Lines, "\n")+"\n")); err != nil {
+			return err
+		}
+	}
+	if len(ipv6Lines) > 0 {
+		if err := appendFeedFileAt(v6Target, ".ipv6", []byte(strings.Join(ipv6Lines, "\n")+"\n")); err != nil {
+			return err
+		}
+	}
+	if _, err := readFeedFileAt(v6Target, ".ipv6"); err == nil {
+		if err := cleanCIDRListV6At(v6Target); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if _, err := readFeedFileAt(v4Target, ".ipv4"); err == nil {
+		return cleanCIDRListAt(v4Target)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // SetupFeedsCron configures a root cron job to update feeds hourly at a random minute
@@ -512,6 +1026,18 @@ func SetupFeedsCron() error {
 
 // FetchASNWhois retrieves IPv4 and IPv6 prefixes for an ASN natively via TCP WHOIS
 func FetchASNWhois(asn, destBase string) error {
+	asn = strings.ToUpper(strings.TrimSpace(asn))
+	if !approvedASN.MatchString(asn) {
+		return fmt.Errorf("invalid ASN %q", asn)
+	}
+	v4Target, err := approvedFeedFileForPath(destBase+".ipv4", ".ipv4")
+	if err != nil {
+		return err
+	}
+	v6Target, err := approvedFeedFileForPath(destBase+".ipv6", ".ipv6")
+	if err != nil {
+		return err
+	}
 	conn, err := net.DialTimeout("tcp4", "whois.radb.net:43", 5*time.Second)
 	if err != nil {
 		conn, err = net.DialTimeout("tcp6", "whois.radb.net:43", 5*time.Second)
@@ -539,10 +1065,6 @@ func FetchASNWhois(asn, destBase string) error {
 	matchesV4 := reV4.FindAllStringSubmatch(string(data), -1)
 	matchesV6 := reV6.FindAllStringSubmatch(string(data), -1)
 
-	if err := os.MkdirAll(filepath.Dir(destBase), 0750); err != nil {
-		return err
-	}
-
 	var cidrsV4 []string
 	for _, m := range matchesV4 {
 		if len(m) > 1 {
@@ -558,21 +1080,21 @@ func FetchASNWhois(asn, destBase string) error {
 	}
 
 	outV4 := strings.Join(cidrsV4, "\n") + "\n"
-	if err := os.WriteFile(destBase+".ipv4", []byte(outV4), 0600); err != nil {
+	if err := writeFeedFileAt(v4Target, ".ipv4", []byte(outV4)); err != nil {
 		return err
 	}
 
 	if len(cidrsV6) > 0 {
 		outV6 := strings.Join(cidrsV6, "\n") + "\n"
-		if err := os.WriteFile(destBase+".ipv6", []byte(outV6), 0600); err != nil {
+		if err := writeFeedFileAt(v6Target, ".ipv6", []byte(outV6)); err != nil {
+			return err
+		}
+		if err := cleanCIDRListV6At(v6Target); err != nil {
 			return err
 		}
 	}
 
-	_ = CleanCIDRList(destBase + ".ipv4")
-	_ = CleanCIDRListV6(destBase + ".ipv6")
-
-	return nil
+	return cleanCIDRListAt(v4Target)
 }
 
 // FetchSpamhausASNs retrieves the latest ASNs from the Spamhaus DROP JSON list

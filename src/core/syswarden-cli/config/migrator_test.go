@@ -220,6 +220,74 @@ func TestLegacyMigrationToGlobalConfigContract_SW_CFG_002(t *testing.T) {
 	}
 }
 
+func TestWriteSecureFileAtomicallyReplacesSymlinkWithoutFollowingIt(t *testing.T) {
+	directory := t.TempDir()
+	victimPath := filepath.Join(directory, "operator-owned.toml")
+	if err := os.WriteFile(victimPath, []byte("preserve\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	targetPath := filepath.Join(directory, "config.toml")
+	if err := os.Symlink(filepath.Base(victimPath), targetPath); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+
+	if err := writeSecureFileAtomically(directory, filepath.Base(targetPath), []byte("replacement\n")); err != nil {
+		t.Fatalf("writeSecureFileAtomically() error = %v", err)
+	}
+	victim, err := root.ReadFile("operator-owned.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(victim) != "preserve\n" {
+		t.Fatalf("atomic replacement followed destination symlink: %q", victim)
+	}
+	target, err := root.ReadFile("config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(target) != "replacement\n" {
+		t.Fatalf("replacement content = %q", target)
+	}
+	info, err := root.Lstat("config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		t.Fatalf("replacement mode = %v, want regular 0600", info.Mode())
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".config.toml.tmp-") {
+			t.Fatalf("temporary file was not removed: %s", entry.Name())
+		}
+	}
+}
+
+func TestWriteSecureFileAtomicallyCleansTemporaryFileAfterRenameFailure(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Mkdir(filepath.Join(directory, "config.toml"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSecureFileAtomically(directory, "config.toml", []byte("replacement\n")); err == nil {
+		t.Fatal("writeSecureFileAtomically() accepted a directory destination")
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "config.toml" || !entries[0].IsDir() {
+		t.Fatalf("failed atomic replacement left artifacts: %#v", entries)
+	}
+}
+
 func directoryDigest(t *testing.T, root string) map[string]string {
 	t.Helper()
 	return directoryDigestExcluding(t, root, "")

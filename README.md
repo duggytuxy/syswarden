@@ -111,18 +111,37 @@ network control, and do not place tokens in URLs or logs.
 ### High availability
 
 When enabled, the HA API listens on configurable TCP port `62026` by default.
-It uses TLS 1.3 with a newly generated self-signed certificate. The current CLI
-client sets `InsecureSkipVerify`, so it encrypts traffic but does not verify the
-peer certificate. A bearer token is optional and an empty token enables a
-legacy IP-only mode. Use a strong shared token and an isolated trusted network.
+It uses TLS 1.3 with a persistent self-signed identity. On first use, the server
+creates `/var/lib/syswarden/ha/server.crt` and
+`/var/lib/syswarden/ha/server.key`, then reuses that identity across restarts.
+The directory is private to the service and both identity files are created
+with owner-only permissions. The generated certificate is valid for one year.
+The server rejects a persisted identity outside its validity window. Replace
+the certificate and key during a controlled maintenance window before expiry,
+then redistribute only the new `server.crt` to TUI clients.
+
+The native TUI verifies HA peer certificates. It uses
+`/etc/syswarden/ha-ca.pem` when that bundle exists and otherwise uses the system
+trust roots. For the default self-signed deployment, transfer each peer's public
+`server.crt` certificate through a trusted out-of-band channel, verify its
+fingerprint, and add it to the TUI host's CA bundle. Never copy `server.key` to
+a client. Restart the native TUI after creating, replacing or removing the trust
+bundle because trust roots are loaded when the process starts. The peer address
+must match a DNS name or IP address in the certificate.
+
+This TUI trust configuration does not change the synchronization client. The
+separate `syswarden ha-sync` client still sets `InsecureSkipVerify`, so that
+one-way synchronization traffic is encrypted but the peer certificate is not
+verified. A bearer token is optional and an empty token enables a legacy
+IP-only mode. Use a strong shared token and an isolated trusted network.
 
 `syswarden ha-sync` compares the local blocklist with each configured peer and
 pushes locally recorded entries that the peer does not report. The installer
 also adds a one-way HA push cron entry every 30 minutes. This is not
-bidirectional reconciliation or instantaneous event replication. Current HA
-HTTP clients lack bounded request timeouts, and the unban request does not
-attach the bearer token; treat mixed-version and failure recovery as
-unvalidated.
+bidirectional reconciliation or instantaneous event replication. The separate
+`ha-sync` and unban HTTP clients lack bounded request timeouts, and the unban
+request does not attach the bearer token; treat mixed-version and failure
+recovery as unvalidated.
 
 ### SIEM and webhooks
 
@@ -140,7 +159,7 @@ default HTTP client without an explicit timeout.
 | :--- | :--- | :--- | :--- |
 | Native TUI | No listener | Launched with `syswarden tui` | Local terminal process |
 | Web-TUI | `0.0.0.0:62027` | Service or `syswarden web-tui` is running | Self-signed TLS and bearer-style token; restrict the bind address |
-| HA API | all interfaces on TCP `62026` | HA is enabled with at least one peer | Self-signed TLS; CLI certificate verification is disabled |
+| HA API | all interfaces on TCP `62026` | HA is enabled with at least one peer | Persistent self-signed TLS 1.3 identity; native TUI verification uses its HA CA bundle or system roots, while `ha-sync` verification remains disabled |
 | WireGuard | Configurable; legacy default `51820` | WireGuard is enabled | Verify the configured port and firewall rules on the host |
 
 ## Files and services on Linux
@@ -152,6 +171,9 @@ default HTTP client without an explicit timeout.
 | Master configuration | `/etc/syswarden/config/config.toml` |
 | Ordered modules | `/etc/syswarden/config/modules/00-core.toml` through `99-user.toml` |
 | Firewall and intelligence lists | `/etc/syswarden/lists` |
+| HA API public certificate | `/var/lib/syswarden/ha/server.crt` |
+| HA API private key | `/var/lib/syswarden/ha/server.key`; never copy it to a client |
+| Native TUI HA trust bundle | `/etc/syswarden/ha-ca.pem`, with system roots used only when this file is absent |
 | Telemetry | `/var/lib/syswarden/ui/data.json` |
 | Logs | `/var/log/syswarden` |
 | systemd services | `syswarden-core.service`, `syswarden-firewall.service`, `syswarden-webtui.service` |
@@ -294,9 +316,9 @@ access recovery.
   kernel state in every failure mode.
 - WAAP is based on previously written logs and cannot stop a request before it
   reaches the logging application.
-- HA certificate identity is not verified by the CLI client, legacy tokenless
-  mode exists, unban authentication is incomplete, and request sizes and
-  timeouts are not fully bounded.
+- The native TUI verifies HA certificates, but the separate `syswarden ha-sync`
+  client does not. Legacy tokenless mode exists, unban authentication is
+  incomplete, and request sizes and timeouts are not fully bounded.
 - Web-TUI listens on all interfaces by default and uses a self-signed
   certificate plus a shared token.
 - SIEM TLS currently uses anonymous authentication.

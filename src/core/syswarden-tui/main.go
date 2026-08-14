@@ -4,12 +4,16 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,17 +27,62 @@ import (
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
 const SysWardenVersion = "v4.02.8"
+const haPeerCABundleFile = "/etc/syswarden/ha-ca.pem"
 
 var (
-	activeNodeIP = "local"
-	haPeerPort   = "62026"
-	httpClient   = &http.Client{
+	activeNodeIP        = "local"
+	haPeerPort          = "62026"
+	httpClient, haCAErr = newHAHTTPClient(haPeerCABundleFile)
+)
+
+func newHAHTTPClient(caBundleFile string) (*http.Client, error) {
+	rootCAs, err := loadHATrustRoots(caBundleFile)
+	client := &http.Client{
 		Timeout: 2 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS13,
+				RootCAs:    rootCAs,
+			},
 		},
 	}
-)
+	return client, err
+}
+
+func loadHATrustRoots(caBundleFile string) (*x509.CertPool, error) {
+	caBundleFile = filepath.Clean(caBundleFile)
+	bundle, err := os.ReadFile(caBundleFile)
+	if err == nil {
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(bundle) {
+			return x509.NewCertPool(), fmt.Errorf("HA CA bundle %s contains no certificates", caBundleFile)
+		}
+		return roots, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return x509.NewCertPool(), fmt.Errorf("read HA CA bundle %s: %w", caBundleFile, err)
+	}
+	roots, systemErr := x509.SystemCertPool()
+	if systemErr != nil {
+		return x509.NewCertPool(), fmt.Errorf("load system certificate pool: %w", systemErr)
+	}
+	return roots, nil
+}
+
+func haPeerURL(peer, path string) string {
+	peer = strings.TrimSpace(peer)
+	if strings.HasPrefix(peer, "[") && strings.HasSuffix(peer, "]") {
+		peer = strings.TrimSuffix(strings.TrimPrefix(peer, "["), "]")
+	}
+	return "https://" + net.JoinHostPort(peer, haPeerPort) + path
+}
+
+func haGet(url string) (*http.Response, error) {
+	if haCAErr != nil {
+		return nil, fmt.Errorf("HA TLS trust configuration: %w", haCAErr)
+	}
+	return httpClient.Get(url)
+}
 
 // --- DATA MODELS ---
 type Service struct {
@@ -462,7 +511,7 @@ func showNodesList(mainFlex *tview.Flex) {
 			table.SetCell(row, 4, tview.NewTableCell("...").SetTextColor(tcell.ColorGray))
 
 			go func(ip string, r int) {
-				resp, err := httpClient.Get(fmt.Sprintf("https://%s:%s/ha/status", ip, haPeerPort))
+				resp, err := haGet(haPeerURL(ip, "/ha/status"))
 
 				app.QueueUpdateDraw(func() {
 					if err != nil {
@@ -524,7 +573,7 @@ func readDataAndUpdate() {
 	if activeNodeIP == "local" {
 		bytes, err = os.ReadFile(DataFile) // #nosec
 	} else {
-		resp, reqErr := httpClient.Get(fmt.Sprintf("https://%s:%s/ha/telemetry", activeNodeIP, haPeerPort))
+		resp, reqErr := haGet(haPeerURL(activeNodeIP, "/ha/telemetry"))
 		if reqErr != nil {
 			err = reqErr
 		} else {

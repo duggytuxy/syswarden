@@ -126,15 +126,17 @@ func restrictAuthLogs() {
 		}
 	}
 
-	newsyslogConf := "/etc/newsyslog.conf"
-	if _, err := os.Stat(newsyslogConf); err == nil {
-		out, _ := os.ReadFile(newsyslogConf) // #nosec
+	if _, err := os.Stat("/etc/newsyslog.conf"); err == nil {
+		out, _ := os.ReadFile("/etc/newsyslog.conf")
 		content := string(out)
 		if strings.Contains(content, " 644 ") || strings.Contains(content, " 0644 ") {
 			newContent := strings.ReplaceAll(content, " 644 ", " 640 ")
 			newContent = strings.ReplaceAll(newContent, " 0644 ", " 0640 ")
-			_ = os.WriteFile(newsyslogConf, []byte(newContent), 0600)
-			fmt.Printf("   [+] Hardened log rotation configuration %s\n", newsyslogConf)
+			if err := rewriteSecurityFileFromSnapshot("/etc/newsyslog.conf", []byte(newContent), out); err != nil {
+				fmt.Printf("   [WARN] Failed to harden log rotation configuration /etc/newsyslog.conf: %v\n", err)
+				return
+			}
+			fmt.Println("   [+] Hardened log rotation configuration /etc/newsyslog.conf")
 		}
 	}
 }

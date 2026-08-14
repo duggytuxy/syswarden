@@ -55,13 +55,21 @@ func disableObscureFilesystems() error {
 hw.usb.no_umass="1"
 `
 	if _, err := os.Stat("/boot/loader.conf.local"); os.IsNotExist(err) {
-		_ = os.WriteFile("/boot/loader.conf.local", []byte(content), 0600)
+		target, err := securityFileTargetForPath("/boot/loader.conf.local")
+		if err != nil {
+			return err
+		}
+		if err := rewriteSecurityTarget(target, []byte(content)); err != nil {
+			return err
+		}
 	} else {
-		existing, _ := os.ReadFile("/boot/loader.conf.local") // #nosec
+		existing, _ := os.ReadFile("/boot/loader.conf.local")
 		if !strings.Contains(string(existing), "hw.usb.no_umass") {
-			f, _ := os.OpenFile("/boot/loader.conf.local", os.O_APPEND|os.O_WRONLY, 0600) // #nosec
-			_, _ = f.WriteString("\n" + content)
-			f.Close()
+			file, err := os.OpenFile("/boot/loader.conf.local", os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				return err
+			}
+			return appendAndClose(file, "\n"+content)
 		}
 	}
 	return nil
@@ -90,12 +98,15 @@ net.inet.tcp.drop_synfin=1
 net.inet.tcp.icmp_may_rst=0
 net.inet.udp.checksum=1
 `
-	sysctlPath := "/etc/sysctl.conf"
-	existing, _ := os.ReadFile(sysctlPath) // #nosec
+	existing, _ := os.ReadFile("/etc/sysctl.conf")
 	if !strings.Contains(string(existing), "SYSWARDEN: CIS") {
-		f, _ := os.OpenFile(sysctlPath, os.O_APPEND|os.O_WRONLY, 0600) // #nosec
-		_, _ = f.WriteString("\n" + content)
-		f.Close()
+		file, err := os.OpenFile("/etc/sysctl.conf", os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		if err := appendAndClose(file, "\n"+content); err != nil {
+			return err
+		}
 	}
 
 	params := []string{
@@ -125,12 +136,15 @@ func restrictCoreDumps() error {
 	_ = exec.Command("sysctl", "kern.coredump=0").Run()       // #nosec
 	_ = exec.Command("sysctl", "kern.sugid_coredump=0").Run() // #nosec
 
-	sysctlPath := "/etc/sysctl.conf"
-	existing, _ := os.ReadFile(sysctlPath) // #nosec
+	existing, _ := os.ReadFile("/etc/sysctl.conf")
 	if !strings.Contains(string(existing), "kern.coredump") {
-		f, _ := os.OpenFile(sysctlPath, os.O_APPEND|os.O_WRONLY, 0600) // #nosec
-		_, _ = f.WriteString("\nkern.coredump=0\nkern.sugid_coredump=0\n")
-		f.Close()
+		file, err := os.OpenFile("/etc/sysctl.conf", os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		if err := appendAndClose(file, "\nkern.coredump=0\nkern.sugid_coredump=0\n"); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -184,7 +198,7 @@ func applySSHHardening() error {
 	}
 	newLines = append(newLines, "# -------------------------------\n")
 
-	if err := os.WriteFile(sshConf, []byte(strings.Join(newLines, "\n")), 0600); err != nil {
+	if err := rewriteSecurityFileFromSnapshot("/etc/ssh/sshd_config", []byte(strings.Join(newLines, "\n")), content); err != nil {
 		return fmt.Errorf("failed to write sshd_config: %w", err)
 	}
 
@@ -213,14 +227,29 @@ func secureCronPermissions() error {
 
 func enableAutomaticSecurityUpdates() error {
 	fmt.Println(" -> Configuring automatic security updates (freebsd-update)")
-	crontabPath := "/etc/crontab"
-	content, err := os.ReadFile(crontabPath) // #nosec
+	content, err := os.ReadFile("/etc/crontab")
 	if err == nil {
 		if !strings.Contains(string(content), "freebsd-update") {
-			f, _ := os.OpenFile(crontabPath, os.O_APPEND|os.O_WRONLY, 0600) // #nosec
-			_, _ = f.WriteString("\n# SYSWARDEN: Automatic Security Updates\n0 3 * * * root /usr/sbin/freebsd-update cron\n")
-			f.Close()
+			file, err := os.OpenFile("/etc/crontab", os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				return err
+			}
+			if err := appendAndClose(file, "\n# SYSWARDEN: Automatic Security Updates\n0 3 * * * root /usr/sbin/freebsd-update cron\n"); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func appendAndClose(file *os.File, content string) (resultErr error) {
+	defer func() {
+		if closeErr := file.Close(); resultErr == nil {
+			resultErr = closeErr
+		}
+	}()
+	if _, err := file.WriteString(content); err != nil {
+		return err
+	}
+	return file.Sync()
 }
