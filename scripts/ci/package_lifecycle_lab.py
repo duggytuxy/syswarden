@@ -1,0 +1,3630 @@
+#!/usr/bin/env python3
+"""Run fail-closed SysWarden package lifecycle tests in rootless Podman.
+
+The lab prepares disposable Debian, Ubuntu, Fedora, AlmaLinux, and Alpine images
+from immutable official-image references for amd64 and arm64. Package operations
+then run without network access. Package directories are mounted read-only. No
+host service, firewall, device, container-engine socket, or non-lab writable path
+is exposed to a test container.
+
+FreeBSD is deliberately outside this container lab: a real FreeBSD VM is
+required for its package, rc.d, PF, and runtime-path contract.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import platform
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import uuid
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Sequence
+
+
+SCHEMA_VERSION = 3
+LOG_TAIL_LIMIT = 12_000
+MAX_VERSION_COMPONENT = 2_147_483_647
+VERSION_SCHEME = "canonical_syswarden_numeric_v1"
+VERSION_RELATION = "previous < candidate"
+ARM64_BINFMT_REGISTRATION = Path("/proc/sys/fs/binfmt_misc/qemu-aarch64")
+IMAGE_PATTERN = re.compile(
+    r"^[a-z0-9][a-z0-9./_-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$"
+)
+SYSWARDEN_VERSION_PATTERN = re.compile(
+    r"^(0|[1-9][0-9]*)\.([0-9]{2})\.(0|[1-9][0-9]*)$"
+)
+ARTIFACT_VERSION_PATTERNS = (
+    re.compile(
+        r"^syswarden_(?P<version>[0-9][0-9.]*)_(?:amd64|arm64)\.deb$"
+    ),
+    re.compile(
+        r"^syswarden-(?P<version>[0-9][0-9.]*)-1\.(?:x86_64|aarch64)\.rpm$"
+    ),
+    re.compile(
+        r"^syswarden_(?P<version>[0-9][0-9.]*)_(?:x86_64|aarch64)\.apk$"
+    ),
+)
+
+
+class LifecycleLabError(RuntimeError):
+    """Raised when the lifecycle lab cannot produce trustworthy evidence."""
+
+
+@dataclass(frozen=True)
+class PlatformSpec:
+    name: str
+    distribution: str
+    family: str
+    architecture: str
+    package_architecture: str
+    podman_platform: str
+    uname_architecture: str
+    official_repository: str
+    image: str
+    package_pattern: str
+    bootstrap_command: str
+    scenarios: tuple[str, ...]
+    purge_semantics: str
+
+
+ARCHITECTURE_LABELS = {
+    "amd64": "amd64/x86_64",
+    "arm64": "arm64/aarch64",
+}
+
+EXPECTED_PACKAGE_ARCHITECTURES = {
+    ("deb", "amd64"): "amd64",
+    ("deb", "arm64"): "arm64",
+    ("rpm", "amd64"): "x86_64",
+    ("rpm", "arm64"): "aarch64",
+    ("apk", "amd64"): "x86_64",
+    ("apk", "arm64"): "aarch64",
+}
+
+EXPECTED_PACKAGE_PATTERNS = {
+    ("deb", "amd64"): r"^syswarden_[0-9][0-9.]*_amd64\.deb$",
+    ("deb", "arm64"): r"^syswarden_[0-9][0-9.]*_arm64\.deb$",
+    ("rpm", "amd64"): r"^syswarden-[0-9][0-9.]*-1\.x86_64\.rpm$",
+    ("rpm", "arm64"): r"^syswarden-[0-9][0-9.]*-1\.aarch64\.rpm$",
+    ("apk", "amd64"): r"^syswarden_[0-9][0-9.]*_x86_64\.apk$",
+    ("apk", "arm64"): r"^syswarden_[0-9][0-9.]*_aarch64\.apk$",
+}
+
+EXPECTED_SCENARIOS = {
+    "deb": ("upgrade-rollback", "remove", "purge"),
+    "rpm": ("upgrade-rollback", "remove"),
+    "apk": ("upgrade-rollback", "remove", "purge"),
+}
+
+OFFICIAL_REPOSITORIES = {
+    "debian": "docker.io/library/debian",
+    "ubuntu": "docker.io/library/ubuntu",
+    "fedora": "docker.io/library/fedora",
+    "almalinux": "docker.io/library/almalinux",
+    "alpine": "docker.io/library/alpine",
+}
+
+DEB_BOOTSTRAP = (
+    "apt-get update && "
+    "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+    "--no-install-recommends nftables ipset curl wget rsyslog cron "
+    "bash-completion && "
+    "if [ -f /etc/dpkg/dpkg.cfg.d/docker ]; then "
+    "sed -i '\\|^path-exclude /usr/share/doc/\\*$|d' "
+    "/etc/dpkg/dpkg.cfg.d/docker; fi && "
+    "rm -rf /var/lib/apt/lists/*"
+)
+RPM_BOOTSTRAP = (
+    "dnf -y install nftables ipset curl-minimal wget rsyslog cronie "
+    "bash-completion cpio diffutils && dnf clean all"
+)
+APK_BOOTSTRAP = (
+    "apk add --no-cache nftables curl wget rsyslog rsyslog-uxsock "
+    "bash-completion"
+)
+DEB_PURGE_SEMANTICS = (
+    "remove preserves generated /etc and /var state; purge removes generated "
+    "/etc state while the current package leaves /var data"
+)
+RPM_PURGE_SEMANTICS = (
+    "RPM has no distinct purge operation; erase runs the package's destructive "
+    "final-removal script"
+)
+APK_PURGE_SEMANTICS = (
+    "apk --purge only purges package-managed configuration; the current package "
+    "does not own generated /etc or /var state"
+)
+
+
+DEFAULT_PLATFORMS = (
+    PlatformSpec(
+        name="Debian",
+        distribution="debian",
+        family="deb",
+        architecture="amd64",
+        package_architecture="amd64",
+        podman_platform="linux/amd64",
+        uname_architecture="x86_64",
+        official_repository=OFFICIAL_REPOSITORIES["debian"],
+        image=(
+            "docker.io/library/debian:stable-slim@sha256:"
+            "0ef0f77425e6677ead26f893cb61707f7fc44467a480625d8974feb7ab2085fe"
+        ),
+        package_pattern=r"^syswarden_[0-9][0-9.]*_amd64\.deb$",
+        bootstrap_command=DEB_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove", "purge"),
+        purge_semantics=DEB_PURGE_SEMANTICS,
+    ),
+    PlatformSpec(
+        name="Debian",
+        distribution="debian",
+        family="deb",
+        architecture="arm64",
+        package_architecture="arm64",
+        podman_platform="linux/arm64",
+        uname_architecture="aarch64",
+        official_repository=OFFICIAL_REPOSITORIES["debian"],
+        image=(
+            "docker.io/library/debian:stable-slim@sha256:"
+            "9d047d46b340f5f97430c9a8ea63de328bf6223fb5dacdd5d24be2eadf54a0cf"
+        ),
+        package_pattern=r"^syswarden_[0-9][0-9.]*_arm64\.deb$",
+        bootstrap_command=DEB_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove", "purge"),
+        purge_semantics=DEB_PURGE_SEMANTICS,
+    ),
+    PlatformSpec(
+        name="Ubuntu",
+        distribution="ubuntu",
+        family="deb",
+        architecture="amd64",
+        package_architecture="amd64",
+        podman_platform="linux/amd64",
+        uname_architecture="x86_64",
+        official_repository=OFFICIAL_REPOSITORIES["ubuntu"],
+        image=(
+            "docker.io/library/ubuntu:24.04@sha256:"
+            "019e8eb29a85e74d64925745884f2ec79aa27e3feab36353d24656f4d6b89467"
+        ),
+        package_pattern=r"^syswarden_[0-9][0-9.]*_amd64\.deb$",
+        bootstrap_command=DEB_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove", "purge"),
+        purge_semantics=DEB_PURGE_SEMANTICS,
+    ),
+    PlatformSpec(
+        name="Ubuntu",
+        distribution="ubuntu",
+        family="deb",
+        architecture="arm64",
+        package_architecture="arm64",
+        podman_platform="linux/arm64",
+        uname_architecture="aarch64",
+        official_repository=OFFICIAL_REPOSITORIES["ubuntu"],
+        image=(
+            "docker.io/library/ubuntu:24.04@sha256:"
+            "b17516cd982bf06bdd5d5600253d12a8de017b9eb831cc052b532a0363d294f9"
+        ),
+        package_pattern=r"^syswarden_[0-9][0-9.]*_arm64\.deb$",
+        bootstrap_command=DEB_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove", "purge"),
+        purge_semantics=DEB_PURGE_SEMANTICS,
+    ),
+    PlatformSpec(
+        name="Fedora",
+        distribution="fedora",
+        family="rpm",
+        architecture="amd64",
+        package_architecture="x86_64",
+        podman_platform="linux/amd64",
+        uname_architecture="x86_64",
+        official_repository=OFFICIAL_REPOSITORIES["fedora"],
+        image=(
+            "docker.io/library/fedora:44@sha256:"
+            "89f61a124414261868224666aa7fb8df1b78397a53623774bdfb105d1612b48b"
+        ),
+        package_pattern=r"^syswarden-[0-9][0-9.]*-1\.x86_64\.rpm$",
+        bootstrap_command=RPM_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove"),
+        purge_semantics=RPM_PURGE_SEMANTICS,
+    ),
+    PlatformSpec(
+        name="Fedora",
+        distribution="fedora",
+        family="rpm",
+        architecture="arm64",
+        package_architecture="aarch64",
+        podman_platform="linux/arm64",
+        uname_architecture="aarch64",
+        official_repository=OFFICIAL_REPOSITORIES["fedora"],
+        image=(
+            "docker.io/library/fedora:44@sha256:"
+            "a471bd8bf8e7e99812fd2f29fc950685d860b3d528b9f090443dbc1a0d2bad62"
+        ),
+        package_pattern=r"^syswarden-[0-9][0-9.]*-1\.aarch64\.rpm$",
+        bootstrap_command=RPM_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove"),
+        purge_semantics=RPM_PURGE_SEMANTICS,
+    ),
+    PlatformSpec(
+        name="AlmaLinux",
+        distribution="almalinux",
+        family="rpm",
+        architecture="amd64",
+        package_architecture="x86_64",
+        podman_platform="linux/amd64",
+        uname_architecture="x86_64",
+        official_repository=OFFICIAL_REPOSITORIES["almalinux"],
+        image=(
+            "docker.io/library/almalinux:9@sha256:"
+            "28db580abb508f7ccbc0ac6d53e1d8da9d42a26c77fa3dcc26ac2726673fbe3e"
+        ),
+        package_pattern=r"^syswarden-[0-9][0-9.]*-1\.x86_64\.rpm$",
+        bootstrap_command=RPM_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove"),
+        purge_semantics=RPM_PURGE_SEMANTICS,
+    ),
+    PlatformSpec(
+        name="AlmaLinux",
+        distribution="almalinux",
+        family="rpm",
+        architecture="arm64",
+        package_architecture="aarch64",
+        podman_platform="linux/arm64",
+        uname_architecture="aarch64",
+        official_repository=OFFICIAL_REPOSITORIES["almalinux"],
+        image=(
+            "docker.io/library/almalinux:9@sha256:"
+            "2c999b3bd705fad8b115741d9036ae2499148ba162752f09f2f4ab62b0c07320"
+        ),
+        package_pattern=r"^syswarden-[0-9][0-9.]*-1\.aarch64\.rpm$",
+        bootstrap_command=RPM_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove"),
+        purge_semantics=RPM_PURGE_SEMANTICS,
+    ),
+    PlatformSpec(
+        name="Alpine",
+        distribution="alpine",
+        family="apk",
+        architecture="amd64",
+        package_architecture="x86_64",
+        podman_platform="linux/amd64",
+        uname_architecture="x86_64",
+        official_repository=OFFICIAL_REPOSITORIES["alpine"],
+        image=(
+            "docker.io/library/alpine:3.22@sha256:"
+            "7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6"
+        ),
+        package_pattern=r"^syswarden_[0-9][0-9.]*_x86_64\.apk$",
+        bootstrap_command=APK_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove", "purge"),
+        purge_semantics=APK_PURGE_SEMANTICS,
+    ),
+    PlatformSpec(
+        name="Alpine",
+        distribution="alpine",
+        family="apk",
+        architecture="arm64",
+        package_architecture="aarch64",
+        podman_platform="linux/arm64",
+        uname_architecture="aarch64",
+        official_repository=OFFICIAL_REPOSITORIES["alpine"],
+        image=(
+            "docker.io/library/alpine:3.22@sha256:"
+            "2c9d26f410d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37"
+        ),
+        package_pattern=r"^syswarden_[0-9][0-9.]*_aarch64\.apk$",
+        bootstrap_command=APK_BOOTSTRAP,
+        scenarios=("upgrade-rollback", "remove", "purge"),
+        purge_semantics=APK_PURGE_SEMANTICS,
+    ),
+)
+
+REQUIRED_PLATFORM_COORDINATES = frozenset(
+    (spec.distribution, spec.architecture) for spec in DEFAULT_PLATFORMS
+)
+REQUIRED_PACKAGE_COORDINATES = frozenset(
+    f"{spec.family}:{spec.package_architecture}" for spec in DEFAULT_PLATFORMS
+)
+PACKAGE_COORDINATE_PATTERNS = {
+    f"{spec.family}:{spec.package_architecture}": spec.package_pattern
+    for spec in DEFAULT_PLATFORMS
+}
+REQUIRED_FAMILIES = ("deb", "rpm", "apk")
+
+OPERATOR_STATE_KEYS = (
+    "config",
+    "token",
+    "list",
+    "data",
+    "certificate",
+)
+
+PACKAGE_PAYLOAD_PATHS = (
+    "/opt/syswarden/bin/syswarden-cli",
+    "/opt/syswarden/bin/syswarden-core",
+    "/opt/syswarden/bin/syswarden-tui",
+    "/opt/syswarden/signatures.json",
+    "/usr/local/bin/syswarden",
+    "/usr/local/bin/syswarden-tui",
+)
+DEB_PACKAGE_PATHS = frozenset(
+    (*PACKAGE_PAYLOAD_PATHS,)
+    + (
+        "/opt",
+        "/opt/syswarden",
+        "/opt/syswarden/bin",
+        "/usr",
+        "/usr/local",
+        "/usr/local/bin",
+        "/usr/share",
+        "/usr/share/doc",
+        "/usr/share/doc/syswarden",
+        "/usr/share/doc/syswarden/changelog.gz",
+    )
+)
+APK_PACKAGE_PATHS = frozenset(PACKAGE_PAYLOAD_PATHS)
+RPM_BUILD_ID_DIRECTORY_PATTERN = re.compile(r"^/usr/lib/\.build-id/[0-9a-f]{2}$")
+RPM_BUILD_ID_LINK_PATTERN = re.compile(
+    r"^/usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38}$"
+)
+
+
+def _state_event_checks(scenario: str, label: str) -> tuple[str, ...]:
+    return tuple(
+        f"{scenario}.{label}.state.{key}.{attribute}"
+        for key in OPERATOR_STATE_KEYS
+        for attribute in ("type", "hash", "mode", "owner")
+    )
+
+
+def _installed_phase_event_checks(scenario: str, label: str) -> tuple[str, ...]:
+    return (
+        f"{scenario}.{label}.version",
+        f"{scenario}.{label}.inventory.manager",
+        f"{scenario}.{label}.inventory.filesystem",
+        f"{scenario}.{label}.executable",
+    )
+
+
+def expected_inventory_phase_labels(scenario: str) -> tuple[str, ...]:
+    if scenario == "upgrade-rollback":
+        return (
+            "previous",
+            "candidate",
+            "reinstall",
+            "restart-one",
+            "restart-two",
+            "rollback",
+        )
+    if scenario in {"remove", "purge"}:
+        return ("fresh",)
+    raise LifecycleLabError(f"unsupported inventory scenario: {scenario!r}")
+
+
+def _preparation_event_checks(scenario: str) -> tuple[str, ...]:
+    return (
+        f"{scenario}.platform.uname",
+        f"{scenario}.extract.previous",
+        f"{scenario}.extract.candidate",
+        f"{scenario}.metadata.previous.version",
+        f"{scenario}.metadata.candidate.version",
+        f"{scenario}.metadata.previous.architecture",
+        f"{scenario}.metadata.candidate.architecture",
+        f"{scenario}.metadata.previous.manager_manifest",
+        f"{scenario}.metadata.previous.payload_inventory",
+        f"{scenario}.metadata.candidate.manager_manifest",
+        f"{scenario}.metadata.candidate.payload_inventory",
+    )
+
+
+def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
+    """Return the exact ordered evidence contract for one lifecycle scenario."""
+
+    if family not in EXPECTED_SCENARIOS or scenario not in EXPECTED_SCENARIOS[family]:
+        raise LifecycleLabError(
+            f"unsupported lifecycle evidence coordinate: {family}/{scenario}"
+        )
+
+    checks = list(_preparation_event_checks(scenario))
+
+    def installed(command: str, label: str) -> None:
+        checks.append(f"{scenario}.{command}")
+        checks.append(f"{scenario}.{command}.maintainer_script")
+        checks.extend(_installed_phase_event_checks(scenario, label))
+        checks.extend(_state_event_checks(scenario, label))
+
+    if scenario == "upgrade-rollback":
+        installed("install.previous", "previous")
+        installed("upgrade.candidate", "candidate")
+        installed("reinstall.candidate", "reinstall")
+        checks.extend(_installed_phase_event_checks(scenario, "restart-one"))
+        checks.extend(_state_event_checks(scenario, "restart-one"))
+        checks.extend(_installed_phase_event_checks(scenario, "restart-two"))
+        checks.extend(_state_event_checks(scenario, "restart-two"))
+        installed("rollback.previous", "rollback")
+        return tuple(checks)
+
+    installed("install.candidate", "fresh")
+    removal_label = "final-removal" if family == "rpm" else scenario
+    checks.extend(
+        (
+            f"{scenario}.{removal_label}",
+            f"{scenario}.{removal_label}.database",
+            f"{scenario}.{removal_label}.payload_inventory",
+        )
+    )
+    if family in {"apk"} or (family == "deb" and scenario == "remove"):
+        checks.extend(_state_event_checks(scenario, removal_label))
+    elif family == "deb":
+        checks.extend(
+            f"{scenario}.{removal_label}.state.{key}"
+            for key in ("config", "token", "list", "certificate")
+        )
+        for key in ("data",):
+            checks.extend(
+                f"{scenario}.{removal_label}.state.{key}.{attribute}"
+                for attribute in ("type", "hash", "mode", "owner")
+            )
+    elif family == "rpm":
+        checks.extend(
+            f"{scenario}.{removal_label}.state.{key}"
+            for key in ("config", "token", "list", "certificate")
+        )
+        for key in ("data",):
+            checks.extend(
+                f"{scenario}.{removal_label}.state.{key}.{attribute}"
+                for attribute in ("type", "hash", "mode", "owner")
+            )
+        checks.append(f"{scenario}.{removal_label}.purge-equivalent")
+    return tuple(checks)
+
+
+@dataclass(frozen=True)
+class PackageArtifact:
+    path: Path
+    version: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class PackagePair:
+    candidate: PackageArtifact
+    previous: PackageArtifact
+
+
+@dataclass(frozen=True)
+class EmulatorArtifact:
+    path: Path
+    sha256: str
+
+
+@dataclass(frozen=True)
+class BinfmtRegistration:
+    path: Path
+    sha256: str
+    interpreter: str
+    flags: str
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    args: tuple[str, ...]
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+class CommandRunner:
+    """Execute commands without a shell and capture bounded evidence."""
+
+    def run(
+        self,
+        args: Sequence[str],
+        *,
+        timeout: int,
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        try:
+            completed = subprocess.run(
+                list(args),
+                cwd=cwd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else exc.stdout
+            stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
+            raise LifecycleLabError(
+                f"command timed out after {timeout}s: {args[0]}"
+            ) from exc
+        return CommandResult(
+            args=tuple(args),
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def parse_syswarden_version(version: str) -> tuple[int, int, int]:
+    """Parse the canonical package form of a SysWarden source version."""
+
+    match = SYSWARDEN_VERSION_PATTERN.fullmatch(version)
+    if match is None:
+        raise LifecycleLabError(
+            f"invalid SysWarden package version {version!r}; expected canonical "
+            "MAJOR.MINOR.PATCH with a two-digit minor"
+        )
+    numeric = tuple(int(part) for part in match.groups())
+    if numeric[0] > MAX_VERSION_COMPONENT or numeric[2] > MAX_VERSION_COMPONENT:
+        raise LifecycleLabError(
+            f"SysWarden package version component exceeds {MAX_VERSION_COMPONENT}: "
+            f"{version!r}"
+        )
+    canonical = f"{numeric[0]}.{numeric[1]:02d}.{numeric[2]}"
+    if canonical != version:
+        raise LifecycleLabError(
+            f"non-canonical SysWarden package version {version!r}; expected "
+            f"{canonical!r}"
+        )
+    return numeric
+
+
+def artifact_version(package_name: str) -> str:
+    matches = [
+        match
+        for pattern in ARTIFACT_VERSION_PATTERNS
+        if (match := pattern.fullmatch(package_name)) is not None
+    ]
+    if len(matches) != 1:
+        raise LifecycleLabError(
+            f"cannot extract an unambiguous SysWarden version from {package_name!r}"
+        )
+    version = matches[0].group("version")
+    parse_syswarden_version(version)
+    return version
+
+
+def require_real_directory(path: Path, label: str) -> Path:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot inspect {label} {absolute}: {exc}") from exc
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise LifecycleLabError(f"{label} must be a real directory: {absolute}")
+    return absolute
+
+
+def validate_arm64_emulator(path: Path | None) -> EmulatorArtifact | None:
+    """Validate the exact interpreter expected by the host binfmt registration."""
+
+    if path is None:
+        return None
+    absolute = path.expanduser().absolute()
+    if ":" in str(absolute) or "\n" in str(absolute):
+        raise LifecycleLabError(
+            f"arm64 emulator path is unsafe for a read-only bind mount: {absolute}"
+        )
+    try:
+        metadata = absolute.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(
+            f"cannot inspect arm64 emulator {absolute}: {exc}"
+        ) from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise LifecycleLabError(
+            f"arm64 emulator must be a regular non-symlink file: {absolute}"
+        )
+    if metadata.st_size == 0:
+        raise LifecycleLabError(f"arm64 emulator is empty: {absolute}")
+    if metadata.st_mode & 0o111 == 0 or not os.access(absolute, os.X_OK):
+        raise LifecycleLabError(f"arm64 emulator is not executable: {absolute}")
+    return EmulatorArtifact(path=absolute, sha256=sha256_file(absolute))
+
+
+def validate_arm64_binfmt(
+    emulator: EmulatorArtifact,
+    registration_path: Path = ARM64_BINFMT_REGISTRATION,
+) -> BinfmtRegistration:
+    """Require an enabled, persistent binfmt registration for the exact emulator."""
+
+    absolute = registration_path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+        content = absolute.read_bytes()
+    except OSError as exc:
+        raise LifecycleLabError(
+            f"cannot inspect arm64 binfmt registration {absolute}: {exc}"
+        ) from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise LifecycleLabError(
+            f"arm64 binfmt registration must be a regular non-symlink file: {absolute}"
+        )
+    try:
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise LifecycleLabError(
+            f"arm64 binfmt registration is not UTF-8: {absolute}"
+        ) from exc
+    if not lines or lines[0] != "enabled":
+        raise LifecycleLabError("arm64 binfmt registration is not enabled")
+    interpreter_lines = [
+        line.removeprefix("interpreter ")
+        for line in lines
+        if line.startswith("interpreter ")
+    ]
+    flags_lines = [
+        line.removeprefix("flags: ")
+        for line in lines
+        if line.startswith("flags: ")
+    ]
+    if interpreter_lines != [str(emulator.path)]:
+        raise LifecycleLabError(
+            "arm64 binfmt interpreter does not exactly match --arm64-emulator"
+        )
+    if len(flags_lines) != 1 or re.fullmatch(r"[A-Z]+", flags_lines[0]) is None:
+        raise LifecycleLabError("arm64 binfmt flags are absent or malformed")
+    if "F" not in flags_lines[0]:
+        raise LifecycleLabError(
+            "arm64 binfmt registration lacks the persistent interpreter flag F"
+        )
+    return BinfmtRegistration(
+        path=absolute,
+        sha256=hashlib.sha256(content).hexdigest(),
+        interpreter=interpreter_lines[0],
+        flags=flags_lines[0],
+    )
+
+
+def read_checksum(checksum_file: Path, package_name: str) -> str:
+    try:
+        metadata = checksum_file.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(
+            f"missing checksum manifest {checksum_file}: {exc}"
+        ) from exc
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise LifecycleLabError(
+            f"checksum manifest must be a regular file: {checksum_file}"
+        )
+
+    matches: list[str] = []
+    for line_number, raw_line in enumerate(
+        checksum_file.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.fullmatch(r"([0-9a-f]{64})\s+\*?([^/\s]+)", line)
+        if match is None:
+            raise LifecycleLabError(
+                f"invalid SHA256SUMS entry at {checksum_file}:{line_number}"
+            )
+        if match.group(2) == package_name:
+            matches.append(match.group(1))
+    if len(matches) != 1:
+        raise LifecycleLabError(
+            f"expected exactly one checksum for {package_name}, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def discover_artifact(directory: Path, pattern: str) -> PackageArtifact:
+    matcher = re.compile(pattern)
+    candidates: list[Path] = []
+    try:
+        children = sorted(directory.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot enumerate package directory {directory}: {exc}") from exc
+    for child in children:
+        if matcher.fullmatch(child.name):
+            metadata = child.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                raise LifecycleLabError(
+                    f"package artifact must be a regular file: {child}"
+                )
+            if metadata.st_size == 0:
+                raise LifecycleLabError(f"package artifact is empty: {child}")
+            candidates.append(child)
+    if len(candidates) != 1:
+        raise LifecycleLabError(
+            f"expected exactly one package matching {pattern!r} in {directory}, "
+            f"found {len(candidates)}"
+        )
+    package = candidates[0]
+    expected = read_checksum(directory / "SHA256SUMS.txt", package.name)
+    actual = sha256_file(package)
+    if actual != expected:
+        raise LifecycleLabError(
+            f"checksum mismatch for {package}: expected {expected}, found {actual}"
+        )
+    return PackageArtifact(package, artifact_version(package.name), actual)
+
+
+def validate_image_reference(image: str) -> None:
+    if IMAGE_PATTERN.fullmatch(image) is None:
+        raise LifecycleLabError(
+            "container image references must include an immutable sha256 digest: "
+            f"{image!r}"
+        )
+
+
+def image_repository(image: str) -> str:
+    """Return the repository portion of a validated tag-and-digest reference."""
+
+    validate_image_reference(image)
+    tagged = image.rsplit("@", 1)[0]
+    return tagged.rsplit(":", 1)[0]
+
+
+def package_coordinate(spec: PlatformSpec) -> str:
+    return f"{spec.family}:{spec.package_architecture}"
+
+
+def platform_coordinate(spec: PlatformSpec) -> tuple[str, str]:
+    return spec.distribution, spec.architecture
+
+
+def platform_slug(spec: PlatformSpec) -> str:
+    slug = f"{spec.distribution}-{spec.architecture}"
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug) is None:
+        raise LifecycleLabError(f"unsafe platform coordinate: {slug!r}")
+    return slug
+
+
+def validate_platforms(platforms: Sequence[PlatformSpec]) -> None:
+    if not platforms:
+        raise LifecycleLabError("package lifecycle platform matrix is empty")
+    seen: set[tuple[str, str]] = set()
+    for spec in platforms:
+        coordinate = platform_coordinate(spec)
+        if coordinate in seen:
+            raise LifecycleLabError(f"duplicate package lifecycle platform: {coordinate}")
+        seen.add(coordinate)
+        if spec.distribution not in OFFICIAL_REPOSITORIES:
+            raise LifecycleLabError(
+                f"unsupported package lifecycle distribution: {spec.distribution!r}"
+            )
+        if spec.name.casefold() != (
+            "almalinux" if spec.distribution == "almalinux" else spec.distribution
+        ).casefold():
+            raise LifecycleLabError(
+                f"platform name/distribution mismatch: {spec.name!r}/{spec.distribution!r}"
+            )
+        if spec.architecture not in ARCHITECTURE_LABELS:
+            raise LifecycleLabError(
+                f"unsupported package lifecycle architecture: {spec.architecture!r}"
+            )
+        expected_platform = f"linux/{spec.architecture}"
+        if spec.podman_platform != expected_platform:
+            raise LifecycleLabError(
+                f"Podman platform mismatch for {coordinate}: expected {expected_platform!r}, "
+                f"found {spec.podman_platform!r}"
+            )
+        expected_uname = "x86_64" if spec.architecture == "amd64" else "aarch64"
+        if spec.uname_architecture != expected_uname:
+            raise LifecycleLabError(
+                f"uname architecture mismatch for {coordinate}: expected {expected_uname!r}"
+            )
+        expected_package_architecture = EXPECTED_PACKAGE_ARCHITECTURES.get(
+            (spec.family, spec.architecture)
+        )
+        if expected_package_architecture is None:
+            raise LifecycleLabError(
+                f"unsupported family/architecture coordinate: {spec.family}/{spec.architecture}"
+            )
+        if spec.package_architecture != expected_package_architecture:
+            raise LifecycleLabError(
+                f"package architecture mismatch for {coordinate}: expected "
+                f"{expected_package_architecture!r}, found {spec.package_architecture!r}"
+            )
+        expected_pattern = EXPECTED_PACKAGE_PATTERNS[(spec.family, spec.architecture)]
+        if spec.package_pattern != expected_pattern:
+            raise LifecycleLabError(
+                f"package filename contract mismatch for {coordinate}: expected "
+                f"{expected_pattern!r}, found {spec.package_pattern!r}"
+            )
+        if spec.scenarios != EXPECTED_SCENARIOS[spec.family]:
+            raise LifecycleLabError(
+                f"lifecycle scenario contract mismatch for {coordinate}: expected "
+                f"{EXPECTED_SCENARIOS[spec.family]!r}, found {spec.scenarios!r}"
+            )
+        expected_repository = OFFICIAL_REPOSITORIES[spec.distribution]
+        if spec.official_repository != expected_repository:
+            raise LifecycleLabError(
+                f"official repository declaration mismatch for {coordinate}: "
+                f"expected {expected_repository!r}"
+            )
+        if image_repository(spec.image) != expected_repository:
+            raise LifecycleLabError(
+                f"platform {coordinate} must use official image repository "
+                f"{expected_repository!r}"
+            )
+        if not spec.bootstrap_command.strip() or "\n" in spec.bootstrap_command:
+            raise LifecycleLabError(f"invalid bootstrap command for {coordinate}")
+        if not spec.purge_semantics.strip():
+            raise LifecycleLabError(f"missing purge semantics for {coordinate}")
+        platform_slug(spec)
+
+
+def build_package_version_contract(
+    pairs: dict[str, PackagePair],
+) -> dict[str, object]:
+    if not pairs:
+        raise LifecycleLabError("package version coordinate set is empty")
+
+    coordinates: list[dict[str, object]] = []
+    candidate_versions: set[str] = set()
+    previous_versions: set[str] = set()
+    for coordinate, pair in sorted(pairs.items()):
+        if coordinate not in REQUIRED_PACKAGE_COORDINATES:
+            raise LifecycleLabError(
+                f"unsupported package version coordinate {coordinate!r}"
+            )
+        coordinate_pattern = PACKAGE_COORDINATE_PATTERNS[coordinate]
+        if (
+            re.fullmatch(coordinate_pattern, pair.candidate.path.name) is None
+            or re.fullmatch(coordinate_pattern, pair.previous.path.name) is None
+        ):
+            raise LifecycleLabError(
+                f"package filenames do not match version coordinate {coordinate}"
+            )
+        try:
+            family, package_architecture = coordinate.split(":", 1)
+        except ValueError as exc:
+            raise LifecycleLabError(
+                f"invalid package coordinate {coordinate!r}"
+            ) from exc
+        candidate_numeric = parse_syswarden_version(pair.candidate.version)
+        previous_numeric = parse_syswarden_version(pair.previous.version)
+        candidate_versions.add(pair.candidate.version)
+        previous_versions.add(pair.previous.version)
+        coordinates.append(
+            {
+                "coordinate": coordinate,
+                "family": family,
+                "package_architecture": package_architecture,
+                "previous_version": pair.previous.version,
+                "candidate_version": pair.candidate.version,
+                "previous_numeric": list(previous_numeric),
+                "candidate_numeric": list(candidate_numeric),
+            }
+        )
+
+    if len(previous_versions) != 1:
+        raise LifecycleLabError(
+            "previous package versions are inconsistent across artifacts: "
+            + ", ".join(sorted(previous_versions))
+        )
+    if len(candidate_versions) != 1:
+        raise LifecycleLabError(
+            "candidate package versions are inconsistent across artifacts: "
+            + ", ".join(sorted(candidate_versions))
+        )
+
+    previous_version = next(iter(previous_versions))
+    candidate_version = next(iter(candidate_versions))
+    previous_numeric = parse_syswarden_version(previous_version)
+    candidate_numeric = parse_syswarden_version(candidate_version)
+    if previous_version == candidate_version:
+        raise LifecycleLabError(
+            "previous and candidate package versions must be distinct; two builds "
+            f"of {candidate_version} cannot prove upgrade or rollback behavior"
+        )
+    if previous_numeric >= candidate_numeric:
+        raise LifecycleLabError(
+            "previous package version must be numerically older than the candidate: "
+            f"{previous_version} is not older than {candidate_version}"
+        )
+
+    return {
+        "scheme": VERSION_SCHEME,
+        "relation": VERSION_RELATION,
+        "previous_version": previous_version,
+        "candidate_version": candidate_version,
+        "previous_numeric": list(previous_numeric),
+        "candidate_numeric": list(candidate_numeric),
+        "coordinates": coordinates,
+    }
+
+
+def validate_inputs(
+    packages_dir: Path,
+    previous_packages_dir: Path,
+    platforms: Sequence[PlatformSpec],
+) -> tuple[Path, Path, dict[str, PackagePair]]:
+    validate_platforms(platforms)
+    candidate_root = require_real_directory(packages_dir, "candidate package directory")
+    previous_root = require_real_directory(
+        previous_packages_dir, "previous package directory"
+    )
+    if candidate_root == previous_root:
+        raise LifecycleLabError(
+            "candidate and previous package directories must be distinct"
+        )
+
+    pairs: dict[str, PackagePair] = {}
+    for spec in platforms:
+        coordinate = package_coordinate(spec)
+        if coordinate not in pairs:
+            pair = PackagePair(
+                candidate=discover_artifact(candidate_root, spec.package_pattern),
+                previous=discover_artifact(previous_root, spec.package_pattern),
+            )
+            if pair.candidate.sha256 == pair.previous.sha256:
+                raise LifecycleLabError(
+                    f"candidate and previous package bytes are identical for {coordinate}"
+                )
+            pairs[coordinate] = pair
+    build_package_version_contract(pairs)
+    return candidate_root, previous_root, pairs
+
+
+def build_containerfile(spec: PlatformSpec) -> str:
+    validate_image_reference(spec.image)
+    return (
+        f"FROM {spec.image}\n"
+        "ENV LANG=C.UTF-8 LC_ALL=C.UTF-8\n"
+        f"RUN {spec.bootstrap_command}\n"
+    )
+
+
+LIFECYCLE_SCRIPT = r'''#!/bin/sh
+# ShellCheck cannot infer function calls passed through run_step.
+# shellcheck disable=SC2317
+set -u
+
+RESULT_FILE="/results/events.tsv"
+COMMAND_LOG="/results/commands.log"
+RESTART_STATE_FILE="/results/restart-state"
+OPERATOR_STATE_FILE="/results/operator-state"
+FAILURES=0
+PREFIX="${SCENARIO}"
+INVOCATION="initial"
+
+if [ "${SCENARIO}" = "upgrade-rollback" ] && [ -f "${RESTART_STATE_FILE}" ]; then
+    INVOCATION="$(sed -n '1p' "${RESTART_STATE_FILE}")"
+    printf 'CONTAINER RESTART %s\n' "${INVOCATION}" >> "${COMMAND_LOG}"
+else
+    : > "${RESULT_FILE}"
+    : > "${COMMAND_LOG}"
+    rm -f "${RESTART_STATE_FILE}" "${OPERATOR_STATE_FILE}"
+fi
+
+record() {
+    record_status="$1"
+    record_check="$2"
+    record_detail="$3"
+    printf '%s\t%s\t%s\n' "${record_status}" "${record_check}" "${record_detail}" >> "${RESULT_FILE}"
+    if [ "${record_status}" = "fail" ]; then
+        FAILURES=$((FAILURES + 1))
+    fi
+}
+
+if [ "${INVOCATION}" != "initial" ]; then
+    FAILURES="$(awk -F '\t' '$1 == "fail" { count++ } END { print count + 0 }' "${RESULT_FILE}")"
+fi
+
+run_step() {
+    check="$1"
+    shift
+    printf 'COMMAND %s\n' "${check}" >> "${COMMAND_LOG}"
+    if "$@" >> "${COMMAND_LOG}" 2>&1; then
+        record pass "${PREFIX}.${check}" "command completed"
+        return 0
+    else
+        rc=$?
+        record fail "${PREFIX}.${check}" "command failed with exit code ${rc}"
+        return "${rc}"
+    fi
+}
+
+run_install_step() {
+    check="$1"
+    package="$2"
+    diagnostic="/tmp/syswarden-maintainer-${check}"
+    printf 'COMMAND %s\n' "${check}" >> "${COMMAND_LOG}"
+    if install_package "${package}" > "${diagnostic}" 2>&1; then
+        command_rc=0
+        record pass "${PREFIX}.${check}" "command completed"
+    else
+        command_rc=$?
+        record fail "${PREFIX}.${check}" "command failed with exit code ${command_rc}"
+    fi
+    cat "${diagnostic}" >> "${COMMAND_LOG}"
+    if grep -Eq '(^|[[:space:]])panic:|fatal error:|SIGSEGV|segmentation violation' "${diagnostic}"; then
+        if [ "${command_rc}" -eq 0 ]; then
+            record fail "${PREFIX}.${check}.maintainer_script" "package manager returned success after maintainer script emitted a Go panic"
+        else
+            record fail "${PREFIX}.${check}.maintainer_script" "maintainer script emitted a Go panic and package manager returned exit code ${command_rc}"
+        fi
+    else
+        record pass "${PREFIX}.${check}.maintainer_script" "maintainer script emitted no Go panic or fatal runtime diagnostic"
+    fi
+    rm -f "${diagnostic}"
+    return "${command_rc}"
+}
+
+check_equal() {
+    check="$1"
+    expected="$2"
+    actual="$3"
+    if [ "${actual}" = "${expected}" ]; then
+        record pass "${PREFIX}.${check}" "matched expected value ${expected}"
+    else
+        record fail "${PREFIX}.${check}" "expected ${expected}; found ${actual}"
+    fi
+}
+
+check_absent() {
+    check="$1"
+    path="$2"
+    if [ ! -e "${path}" ] && [ ! -L "${path}" ]; then
+        record pass "${PREFIX}.${check}" "path is absent"
+    else
+        record fail "${PREFIX}.${check}" "path remains: ${path}"
+    fi
+}
+
+extract_package() {
+    package="$1"
+    destination="$2"
+    rm -rf "${destination}"
+    mkdir -p "${destination}"
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            dpkg-deb --extract "${package}" "${destination}"
+            ;;
+        rpm)
+            archive="${destination}/payload.cpio"
+            rpm2cpio "${package}" > "${archive}" || return 1
+            (cd "${destination}" && cpio -idm --quiet < payload.cpio) || return 1
+            rm -f "${archive}"
+            ;;
+        apk)
+            tar -xf "${package}" -C "${destination}"
+            ;;
+        *)
+            return 2
+            ;;
+    esac
+    return 0
+}
+
+normalize_apk_version() {
+    raw="$1"
+    case "${raw}" in
+        *-r*)
+            release="${raw##*-r}"
+            case "${release}" in
+                ''|*[!0-9]*) return 1 ;;
+            esac
+            raw="${raw%-r*}"
+            ;;
+    esac
+    printf '%s\n' "${raw}" | awk -F. '
+        NF != 3 { exit 1 }
+        $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ { exit 1 }
+        ($2 + 0) > 99 { exit 1 }
+        { printf "%d.%02d.%d\n", $1 + 0, $2 + 0, $3 + 0 }
+    '
+}
+
+package_version() {
+    package="$1"
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            dpkg-deb --field "${package}" Version
+            ;;
+        rpm)
+            rpm -qp --queryformat '%{VERSION}' "${package}"
+            ;;
+        apk)
+            metadata="$(mktemp -d /tmp/syswarden-apk-metadata.XXXXXX)"
+            if ! tar -xf "${package}" -C "${metadata}" .PKGINFO; then
+                rm -rf "${metadata}"
+                return 1
+            fi
+            raw_version="$(sed -n 's/^pkgver = //p' "${metadata}/.PKGINFO")"
+            rm -rf "${metadata}"
+            normalize_apk_version "${raw_version}"
+            ;;
+    esac
+}
+
+package_architecture() {
+    package="$1"
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            dpkg-deb --field "${package}" Architecture
+            ;;
+        rpm)
+            rpm -qp --queryformat '%{ARCH}' "${package}"
+            ;;
+        apk)
+            metadata="$(mktemp -d /tmp/syswarden-apk-architecture.XXXXXX)"
+            if ! tar -xf "${package}" -C "${metadata}" .PKGINFO; then
+                rm -rf "${metadata}"
+                return 1
+            fi
+            sed -n 's/^arch = //p' "${metadata}/.PKGINFO"
+            rm -rf "${metadata}"
+            ;;
+    esac
+}
+
+installed_version() {
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            status="$(dpkg-query --show --showformat='${Status}' syswarden 2>/dev/null)" || return 1
+            [ "${status}" = "install ok installed" ] || return 1
+            dpkg-query --show --showformat='${Version}' syswarden
+            ;;
+        rpm)
+            rpm -q --queryformat '%{VERSION}' syswarden
+            ;;
+        apk)
+            apk info --installed syswarden > /dev/null 2>&1 || return 1
+            raw_version="$(apk --no-network list --installed syswarden 2>/dev/null \
+                | awk 'NR == 1 { sub(/^syswarden-/, "", $1); print $1 }')"
+            normalize_apk_version "${raw_version}"
+            ;;
+    esac
+}
+
+install_package() {
+    package="$1"
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            DEBIAN_FRONTEND=noninteractive dpkg --install "${package}"
+            ;;
+        rpm)
+            rpm -Uvh --replacepkgs --oldpackage "${package}"
+            ;;
+        apk)
+            apk add --allow-untrusted --no-network --force-overwrite "${package}"
+            ;;
+    esac
+}
+
+remove_package() {
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            dpkg --remove syswarden
+            ;;
+        rpm)
+            rpm -e syswarden
+            ;;
+        apk)
+            apk del syswarden
+            ;;
+    esac
+}
+
+purge_package() {
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            dpkg --purge syswarden
+            ;;
+        apk)
+            apk del --purge syswarden
+            ;;
+        *)
+            return 2
+            ;;
+    esac
+}
+
+hash_file() {
+    sha256sum "$1" | awk '{print $1}'
+}
+
+file_mode() {
+    stat -c '%a' "$1"
+}
+
+normalize_manifest() {
+    source_file="$1"
+    destination="$2"
+    unsorted="${destination}.unsorted"
+    : > "${unsorted}"
+    while IFS= read -r raw_path || [ -n "${raw_path}" ]; do
+        case "${raw_path}" in
+            ''|*' contains:') continue ;;
+        esac
+        if [ "${PACKAGE_FAMILY}" = "apk" ]; then
+            case "${raw_path}" in
+                */|.PKGINFO|.INSTALL|.SIGN.*|.pre-*|.post-*|.trigger) continue ;;
+            esac
+        fi
+        path="${raw_path#./}"
+        path="${path%/}"
+        case "${path}" in
+            ''|'.'|'/'|'/.') continue ;;
+        esac
+        case "${path}" in
+            /*) ;;
+            *) path="/${path}" ;;
+        esac
+        case "${path}" in
+            *'/../'*|'/..'|*'/..'|*'/./'*)
+                rm -f "${unsorted}"
+                return 1
+                ;;
+        esac
+        if printf '%s' "${path}" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+            rm -f "${unsorted}"
+            return 1
+        fi
+        printf '%s\n' "${path}" >> "${unsorted}"
+    done < "${source_file}"
+    LC_ALL=C sort "${unsorted}" > "${destination}"
+    rm -f "${unsorted}"
+    [ -s "${destination}" ] || return 1
+    if uniq -d "${destination}" | grep -q .; then
+        return 1
+    fi
+}
+
+package_manager_manifest() {
+    package="$1"
+    destination="$2"
+    raw="${destination}.raw"
+    archive="${destination}.archive"
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            dpkg-deb --fsys-tarfile "${package}" > "${archive}" || return 1
+            tar -tf "${archive}" > "${raw}" || return 1
+            rm -f "${archive}"
+            ;;
+        rpm)
+            rpm -qpl "${package}" > "${raw}" || return 1
+            ;;
+        apk)
+            tar -tf "${package}" > "${raw}" || return 1
+            ;;
+        *)
+            return 2
+            ;;
+    esac
+    normalize_manifest "${raw}" "${destination}"
+    rc=$?
+    rm -f "${raw}" "${archive}"
+    return "${rc}"
+}
+
+installed_manager_manifest() {
+    destination="$1"
+    raw="${destination}.raw"
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            dpkg-query --listfiles syswarden > "${raw}" || return 1
+            ;;
+        rpm)
+            rpm -ql syswarden > "${raw}" || return 1
+            ;;
+        apk)
+            apk info --contents syswarden > "${raw}" || return 1
+            ;;
+        *)
+            return 2
+            ;;
+    esac
+    normalize_manifest "${raw}" "${destination}"
+    rc=$?
+    rm -f "${raw}"
+    return "${rc}"
+}
+
+read_inventory_metadata() {
+    metadata="$(stat -c '%a %u %g' "$1" 2>/dev/null || true)"
+    INVENTORY_MODE="${metadata%% *}"
+    metadata_tail="${metadata#* }"
+    if [ "${metadata_tail}" = "${metadata}" ]; then
+        INVENTORY_UID=''
+        INVENTORY_GID=''
+        return 1
+    fi
+    INVENTORY_UID="${metadata_tail%% *}"
+    INVENTORY_GID="${metadata_tail#* }"
+    [ -n "${INVENTORY_MODE}" ] && [ -n "${INVENTORY_UID}" ] && [ -n "${INVENTORY_GID}" ]
+}
+
+inventory_entry() {
+    path="$1"
+    root="$2"
+    relative="${path#/}"
+    entry="${root%/}/${relative}"
+    if [ -L "${entry}" ]; then
+        read_inventory_metadata "${entry}" || true
+        printf '%s\tsymlink\t%s\t%s\t%s\t%s\n' "${path}" "${INVENTORY_MODE}" "${INVENTORY_UID}" "${INVENTORY_GID}" "$(readlink "${entry}" 2>/dev/null || true)"
+    elif [ -f "${entry}" ]; then
+        read_inventory_metadata "${entry}" || true
+        printf '%s\tfile\t%s\t%s\t%s\t%s\n' "${path}" "${INVENTORY_MODE}" "${INVENTORY_UID}" "${INVENTORY_GID}" "$(hash_file "${entry}" 2>/dev/null || true)"
+    elif [ -d "${entry}" ]; then
+        read_inventory_metadata "${entry}" || true
+        printf '%s\tdirectory\t%s\t%s\t%s\t-\n' "${path}" "${INVENTORY_MODE}" "${INVENTORY_UID}" "${INVENTORY_GID}"
+    elif [ -e "${entry}" ]; then
+        read_inventory_metadata "${entry}" || true
+        printf '%s\tunsupported\t%s\t%s\t%s\t-\n' "${path}" "${INVENTORY_MODE}" "${INVENTORY_UID}" "${INVENTORY_GID}"
+        return 1
+    else
+        printf '%s\tmissing\t-\t-\t-\t-\n' "${path}"
+        return 1
+    fi
+}
+
+build_filesystem_inventory() {
+    manifest="$1"
+    root="$2"
+    destination="$3"
+    inventory_status=0
+    : > "${destination}"
+    while IFS= read -r path; do
+        if ! inventory_entry "${path}" "${root}" >> "${destination}"; then
+            inventory_status=1
+        fi
+    done < "${manifest}"
+    return "${inventory_status}"
+}
+
+required_manifest_path() {
+    manifest="$1"
+    path="$2"
+    [ "$(grep -Fxc "${path}" "${manifest}" 2>/dev/null || true)" = "1" ]
+}
+
+validate_manifest_contract() {
+    manifest="$1"
+    for required in \
+        /opt/syswarden/bin/syswarden-cli \
+        /opt/syswarden/bin/syswarden-core \
+        /opt/syswarden/bin/syswarden-tui \
+        /opt/syswarden/signatures.json \
+        /usr/local/bin/syswarden \
+        /usr/local/bin/syswarden-tui
+    do
+        required_manifest_path "${manifest}" "${required}" || return 1
+    done
+
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
+            [ "$(wc -l < "${manifest}" | tr -d ' ')" = "16" ] || return 1
+            grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
+            ;;
+        apk)
+            allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
+            [ "$(wc -l < "${manifest}" | tr -d ' ')" = "6" ] || return 1
+            grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
+            ;;
+        rpm)
+            allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+            grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
+            [ "$(grep -Ec '^/usr/lib/\.build-id/[0-9a-f]{2}$' "${manifest}" || true)" = "3" ] || return 1
+            [ "$(grep -Ec '^/usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38}$' "${manifest}" || true)" = "3" ] || return 1
+            required_manifest_path "${manifest}" /usr/lib/.build-id || return 1
+            [ "$(wc -l < "${manifest}" | tr -d ' ')" = "13" ] || return 1
+            ;;
+    esac
+    return 0
+}
+
+inventory_has_exact_entry() {
+    inventory="$1"
+    path="$2"
+    kind="$3"
+    mode="$4"
+    value="$5"
+    awk -F '\t' -v path="${path}" -v kind="${kind}" -v mode="${mode}" -v value="${value}" '
+        $1 == path && $2 == kind && $3 == mode && $4 == "0" && $5 == "0" && $6 == value { count++ }
+        END { exit count == 1 ? 0 : 1 }
+    ' "${inventory}"
+}
+
+validate_inventory_contract() {
+    inventory="$1"
+    inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-cli file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-cli" { print $6 }' "${inventory}")" || return 1
+    inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-core file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-core" { print $6 }' "${inventory}")" || return 1
+    inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-tui file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-tui" { print $6 }' "${inventory}")" || return 1
+    inventory_has_exact_entry "${inventory}" /opt/syswarden/signatures.json file 640 "$(awk -F '\t' '$1 == "/opt/syswarden/signatures.json" { print $6 }' "${inventory}")" || return 1
+    inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden symlink 777 /opt/syswarden/bin/syswarden-cli || return 1
+    inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden-tui symlink 777 /opt/syswarden/bin/syswarden-tui || return 1
+    if awk -F '\t' '$2 == "missing" || $2 == "unsupported" { found = 1 } END { exit found ? 0 : 1 }' "${inventory}"; then
+        return 1
+    fi
+    if awk -F '\t' '$2 == "file" && (length($6) != 64 || $6 ~ /[^0-9a-f]/) { exit 1 }' "${inventory}"; then
+        :
+    else
+        return 1
+    fi
+    if [ "${PACKAGE_FAMILY}" = "deb" ]; then
+        for directory in /opt /opt/syswarden /opt/syswarden/bin /usr /usr/local /usr/local/bin /usr/share /usr/share/doc /usr/share/doc/syswarden; do
+            inventory_has_exact_entry "${inventory}" "${directory}" directory 755 - || return 1
+        done
+        changelog_hash="$(awk -F '\t' '$1 == "/usr/share/doc/syswarden/changelog.gz" { print $6 }' "${inventory}")"
+        inventory_has_exact_entry "${inventory}" /usr/share/doc/syswarden/changelog.gz file 644 "${changelog_hash}" || return 1
+    fi
+    if [ "${PACKAGE_FAMILY}" = "rpm" ]; then
+        awk -F '\t' '
+            $1 == "/usr/lib/.build-id" && ($2 != "directory" || $3 != "755" || $4 != "0" || $5 != "0") { exit 1 }
+            $1 ~ /^\/usr\/lib\/\.build-id\/[0-9a-f]{2}$/ && ($2 != "directory" || $3 != "755" || $4 != "0" || $5 != "0") { exit 1 }
+            $1 ~ /^\/usr\/lib\/\.build-id\/[0-9a-f]{2}\/[0-9a-f]{38}$/ && ($2 != "symlink" || $3 != "777" || $4 != "0" || $5 != "0" || $6 !~ /^\.\.\/\.\.\/\.\.\/\.\.\/opt\/syswarden\/bin\/syswarden-(cli|core|tui)$/) { exit 1 }
+        ' "${inventory}" || return 1
+    fi
+    return 0
+}
+
+verify_package_artifact() {
+    label="$1"
+    package="$2"
+    expected_root="$3"
+    manifest="/tmp/manifest-${label}"
+    inventory="/tmp/inventory-${label}"
+    if package_manager_manifest "${package}" "${manifest}" && validate_manifest_contract "${manifest}"; then
+        record pass "${PREFIX}.metadata.${label}.manager_manifest" "exact native package manifest sha256=$(hash_file "${manifest}")"
+    else
+        record fail "${PREFIX}.metadata.${label}.manager_manifest" "native package manifest violates its exact family contract"
+    fi
+    if build_filesystem_inventory "${manifest}" "${expected_root}" "${inventory}" && validate_inventory_contract "${inventory}"; then
+        record pass "${PREFIX}.metadata.${label}.payload_inventory" "complete payload inventory sha256=$(hash_file "${inventory}")"
+    else
+        record fail "${PREFIX}.metadata.${label}.payload_inventory" "payload type, mode, owner, link, or content inventory mismatch"
+    fi
+}
+
+verify_installed_inventory() {
+    label="$1"
+    expected_label="$2"
+    expected_manifest="/tmp/manifest-${expected_label}"
+    expected_inventory="/tmp/inventory-${expected_label}"
+    actual_manifest="/tmp/manifest-installed-${label}"
+    actual_inventory="/tmp/inventory-installed-${label}"
+    mkdir -p /results/inventories
+    if installed_manager_manifest "${actual_manifest}" && cmp -s "${expected_manifest}" "${actual_manifest}"; then
+        cp "${actual_manifest}" "/results/inventories/${PREFIX}-${label}-manager.tsv"
+        record pass "${PREFIX}.${label}.inventory.manager" "exact native installed manifest sha256=$(hash_file "${actual_manifest}")"
+    else
+        diff -u "${expected_manifest}" "${actual_manifest}" >> "${COMMAND_LOG}" 2>&1 || true
+        record fail "${PREFIX}.${label}.inventory.manager" "installed native manifest differs from the package manifest"
+    fi
+    if build_filesystem_inventory "${expected_manifest}" / "${actual_inventory}" && validate_inventory_contract "${actual_inventory}" && cmp -s "${expected_inventory}" "${actual_inventory}"; then
+        cp "${actual_inventory}" "/results/inventories/${PREFIX}-${label}-filesystem.tsv"
+        record pass "${PREFIX}.${label}.inventory.filesystem" "exact type/mode/owner/link/content inventory sha256=$(hash_file "${actual_inventory}")"
+    else
+        diff -u "${expected_inventory}" "${actual_inventory}" >> "${COMMAND_LOG}" 2>&1 || true
+        record fail "${PREFIX}.${label}.inventory.filesystem" "installed type, mode, owner, link, or content inventory differs"
+    fi
+}
+
+probe_payload() {
+    label="$1"
+    expected_label="$2"
+    expected_version="$3"
+
+    actual_version="$(installed_version 2>/dev/null || true)"
+    check_equal "${label}.version" "${expected_version}" "${actual_version}"
+    verify_installed_inventory "${label}" "${expected_label}"
+
+    if /opt/syswarden/bin/syswarden-cli --help > /tmp/syswarden-help.out 2>&1; then
+        if grep -q '^Usage:' /tmp/syswarden-help.out; then
+            record pass "${PREFIX}.${label}.executable" "CLI executed and emitted help"
+        else
+            record fail "${PREFIX}.${label}.executable" "CLI exited zero without its help contract"
+        fi
+    else
+        rc=$?
+        record fail "${PREFIX}.${label}.executable" "CLI execution failed with exit code ${rc}"
+    fi
+}
+
+seed_state() {
+    mkdir -p /etc/syswarden/config/modules /etc/syswarden/lists /etc/syswarden/tls
+    mkdir -p /var/lib/syswarden/ui
+    printf '%s\n' 'operator-setting=preserve-exactly' > /etc/syswarden/config/lifecycle-operator.conf
+    printf '%s\n' '[user]' 'webtui_password = "lot0-lifecycle-token"' > /etc/syswarden/config/modules/99-user.toml
+    printf '%s\n' '198.51.100.42' '2001:db8::42' > /etc/syswarden/lists/syswarden_blacklist.ipv4
+    printf '%s\n' '{"schema":1,"sentinel":"preserve-exactly"}' > /var/lib/syswarden/ui/data.json
+    printf '%s\n' '-----BEGIN CERTIFICATE-----' 'lot0-lifecycle-certificate' '-----END CERTIFICATE-----' > /etc/syswarden/tls/operator.pem
+    chmod 0640 /etc/syswarden/config/lifecycle-operator.conf
+    chmod 0640 /etc/syswarden/config/modules/99-user.toml
+    chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv4
+    chmod 0600 /var/lib/syswarden/ui/data.json
+    chmod 0600 /etc/syswarden/tls/operator.pem
+
+    STATE_CONFIG_HASH="$(hash_file /etc/syswarden/config/lifecycle-operator.conf)"
+    STATE_TOKEN_HASH="$(hash_file /etc/syswarden/config/modules/99-user.toml)"
+    STATE_LIST_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv4)"
+    STATE_DATA_HASH="$(hash_file /var/lib/syswarden/ui/data.json)"
+    STATE_CERT_HASH="$(hash_file /etc/syswarden/tls/operator.pem)"
+    {
+        printf 'STATE_CONFIG_HASH=%s\n' "${STATE_CONFIG_HASH}"
+        printf 'STATE_TOKEN_HASH=%s\n' "${STATE_TOKEN_HASH}"
+        printf 'STATE_LIST_HASH=%s\n' "${STATE_LIST_HASH}"
+        printf 'STATE_DATA_HASH=%s\n' "${STATE_DATA_HASH}"
+        printf 'STATE_CERT_HASH=%s\n' "${STATE_CERT_HASH}"
+    } > "${OPERATOR_STATE_FILE}"
+    chmod 0600 "${OPERATOR_STATE_FILE}"
+}
+
+load_state_contract() {
+    [ -f "${OPERATOR_STATE_FILE}" ] || return 1
+    STATE_CONFIG_HASH="$(sed -n 's/^STATE_CONFIG_HASH=//p' "${OPERATOR_STATE_FILE}")"
+    STATE_TOKEN_HASH="$(sed -n 's/^STATE_TOKEN_HASH=//p' "${OPERATOR_STATE_FILE}")"
+    STATE_LIST_HASH="$(sed -n 's/^STATE_LIST_HASH=//p' "${OPERATOR_STATE_FILE}")"
+    STATE_DATA_HASH="$(sed -n 's/^STATE_DATA_HASH=//p' "${OPERATOR_STATE_FILE}")"
+    STATE_CERT_HASH="$(sed -n 's/^STATE_CERT_HASH=//p' "${OPERATOR_STATE_FILE}")"
+    for expected_hash in \
+        "${STATE_CONFIG_HASH}" "${STATE_TOKEN_HASH}" "${STATE_LIST_HASH}" \
+        "${STATE_DATA_HASH}" "${STATE_CERT_HASH}"
+    do
+        case "${expected_hash}" in
+            *[!0-9a-f]*|'') return 1 ;;
+        esac
+        [ "${#expected_hash}" = "64" ] || return 1
+    done
+}
+
+assert_preserved() {
+    label="$1"
+    key="$2"
+    path="$3"
+    expected_hash="$4"
+    expected_mode="$5"
+    if [ -f "${path}" ] && [ ! -L "${path}" ]; then
+        actual_type=regular
+        actual_hash="$(hash_file "${path}" 2>/dev/null || true)"
+        actual_mode="$(file_mode "${path}" 2>/dev/null || true)"
+        actual_owner="$(stat -c '%u:%g' "${path}" 2>/dev/null || true)"
+    elif [ -L "${path}" ]; then
+        actual_type=symlink
+        actual_hash='-'
+        actual_mode="$(file_mode "${path}" 2>/dev/null || true)"
+        actual_owner="$(stat -c '%u:%g' "${path}" 2>/dev/null || true)"
+    elif [ -e "${path}" ]; then
+        actual_type=unsupported
+        actual_hash='-'
+        actual_mode="$(file_mode "${path}" 2>/dev/null || true)"
+        actual_owner="$(stat -c '%u:%g' "${path}" 2>/dev/null || true)"
+    else
+        actual_type=missing
+        actual_hash='-'
+        actual_mode='-'
+        actual_owner='-'
+    fi
+    check_equal "${label}.state.${key}.type" regular "${actual_type}"
+    check_equal "${label}.state.${key}.hash" "${expected_hash}" "${actual_hash}"
+    check_equal "${label}.state.${key}.mode" "${expected_mode}" "${actual_mode}"
+    check_equal "${label}.state.${key}.owner" 0:0 "${actual_owner}"
+}
+
+assert_all_state_preserved() {
+    label="$1"
+    assert_preserved "${label}" config /etc/syswarden/config/lifecycle-operator.conf "${STATE_CONFIG_HASH}" 640
+    assert_preserved "${label}" token /etc/syswarden/config/modules/99-user.toml "${STATE_TOKEN_HASH}" 640
+    assert_preserved "${label}" list /etc/syswarden/lists/syswarden_blacklist.ipv4 "${STATE_LIST_HASH}" 600
+    assert_preserved "${label}" data /var/lib/syswarden/ui/data.json "${STATE_DATA_HASH}" 600
+    assert_preserved "${label}" certificate /etc/syswarden/tls/operator.pem "${STATE_CERT_HASH}" 600
+}
+
+assert_package_absent() {
+    label="$1"
+    expected_label="$2"
+    if installed_version > /dev/null 2>&1; then
+        record fail "${PREFIX}.${label}.database" "package remains installed"
+    else
+        record pass "${PREFIX}.${label}.database" "package is absent from package database"
+    fi
+    remaining="/tmp/remaining-${label}"
+    : > "${remaining}"
+    while IFS="$(printf '\t')" read -r path kind _rest; do
+        if [ "${kind}" != "directory" ] && { [ -e "${path}" ] || [ -L "${path}" ]; }; then
+            printf '%s\n' "${path}" >> "${remaining}"
+        fi
+    done < "/tmp/inventory-${expected_label}"
+    if [ -s "${remaining}" ]; then
+        record fail "${PREFIX}.${label}.payload_inventory" "package-owned files or links remain: $(tr '\n' ' ' < "${remaining}")"
+    else
+        record pass "${PREFIX}.${label}.payload_inventory" "all package-owned files and links are absent"
+    fi
+}
+
+prepare_expected_payloads() {
+    if ! run_step extract.previous extract_package "${PREVIOUS_PACKAGE}" /tmp/expected-previous; then
+        return 1
+    fi
+    if ! run_step extract.candidate extract_package "${CANDIDATE_PACKAGE}" /tmp/expected-candidate; then
+        return 1
+    fi
+    PREVIOUS_VERSION="$(package_version "${PREVIOUS_PACKAGE}" 2>/dev/null || true)"
+    CANDIDATE_VERSION="$(package_version "${CANDIDATE_PACKAGE}" 2>/dev/null || true)"
+    if [ -z "${PREVIOUS_VERSION}" ]; then
+        record fail "${PREFIX}.metadata.previous.version" "version is empty"
+        return 1
+    fi
+    if [ -z "${CANDIDATE_VERSION}" ]; then
+        record fail "${PREFIX}.metadata.candidate.version" "version is empty"
+        return 1
+    fi
+    check_equal metadata.previous.version "${EXPECTED_PREVIOUS_VERSION}" "${PREVIOUS_VERSION}"
+    check_equal metadata.candidate.version "${EXPECTED_CANDIDATE_VERSION}" "${CANDIDATE_VERSION}"
+    if [ "${PREVIOUS_VERSION}" != "${EXPECTED_PREVIOUS_VERSION}" ] || \
+       [ "${CANDIDATE_VERSION}" != "${EXPECTED_CANDIDATE_VERSION}" ]; then
+        return 1
+    fi
+    PREVIOUS_ARCHITECTURE="$(package_architecture "${PREVIOUS_PACKAGE}" 2>/dev/null || true)"
+    CANDIDATE_ARCHITECTURE="$(package_architecture "${CANDIDATE_PACKAGE}" 2>/dev/null || true)"
+    check_equal metadata.previous.architecture "${EXPECTED_PACKAGE_ARCHITECTURE}" "${PREVIOUS_ARCHITECTURE}"
+    check_equal metadata.candidate.architecture "${EXPECTED_PACKAGE_ARCHITECTURE}" "${CANDIDATE_ARCHITECTURE}"
+    if [ "${PREVIOUS_ARCHITECTURE}" != "${EXPECTED_PACKAGE_ARCHITECTURE}" ] || \
+       [ "${CANDIDATE_ARCHITECTURE}" != "${EXPECTED_PACKAGE_ARCHITECTURE}" ]; then
+        return 1
+    fi
+    verify_package_artifact previous "${PREVIOUS_PACKAGE}" /tmp/expected-previous
+    verify_package_artifact candidate "${CANDIDATE_PACKAGE}" /tmp/expected-candidate
+    return 0
+}
+
+probe_execution_architecture() {
+    actual="$(uname -m 2>/dev/null || true)"
+    check_equal platform.uname "${EXPECTED_UNAME_ARCHITECTURE}" "${actual}"
+    [ "${actual}" = "${EXPECTED_UNAME_ARCHITECTURE}" ]
+}
+
+scenario_upgrade_rollback_initial() {
+    prepare_expected_payloads || return
+    seed_state
+    run_install_step install.previous "${PREVIOUS_PACKAGE}" || return
+    probe_payload previous previous "${PREVIOUS_VERSION}"
+    assert_all_state_preserved previous
+
+    run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}" || return
+    probe_payload candidate candidate "${CANDIDATE_VERSION}"
+    assert_all_state_preserved candidate
+
+    run_install_step reinstall.candidate "${CANDIDATE_PACKAGE}" || return
+    probe_payload reinstall candidate "${CANDIDATE_VERSION}"
+    assert_all_state_preserved reinstall
+
+    printf '%s\n' restart-one > "${RESTART_STATE_FILE}"
+}
+
+scenario_upgrade_rollback_restart_one() {
+    load_state_contract || return
+    probe_payload restart-one candidate "${EXPECTED_CANDIDATE_VERSION}"
+    assert_all_state_preserved restart-one
+    printf '%s\n' restart-two > "${RESTART_STATE_FILE}"
+}
+
+scenario_upgrade_rollback_restart_two() {
+    load_state_contract || return
+    probe_payload restart-two candidate "${EXPECTED_CANDIDATE_VERSION}"
+    assert_all_state_preserved restart-two
+    run_install_step rollback.previous "${PREVIOUS_PACKAGE}" || return
+    probe_payload rollback previous "${EXPECTED_PREVIOUS_VERSION}"
+    assert_all_state_preserved rollback
+    printf '%s\n' complete > "${RESTART_STATE_FILE}"
+}
+
+scenario_remove() {
+    prepare_expected_payloads || return
+    seed_state
+    run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
+    probe_payload fresh candidate "${CANDIDATE_VERSION}"
+    assert_all_state_preserved fresh
+    case "${PACKAGE_FAMILY}" in
+        deb|apk)
+            run_step remove remove_package || return
+            assert_package_absent remove candidate
+            assert_all_state_preserved remove
+            ;;
+        rpm)
+            run_step final-removal remove_package || return
+            assert_package_absent final-removal candidate
+            check_absent final-removal.state.config /etc/syswarden/config/lifecycle-operator.conf
+            check_absent final-removal.state.token /etc/syswarden/config/modules/99-user.toml
+            check_absent final-removal.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
+            check_absent final-removal.state.certificate /etc/syswarden/tls/operator.pem
+            assert_preserved final-removal data /var/lib/syswarden/ui/data.json "${STATE_DATA_HASH}" 600
+            if ! installed_version >/dev/null 2>&1 && [ ! -s /tmp/remaining-final-removal ]; then
+                record pass "${PREFIX}.final-removal.purge-equivalent" "RPM final erase completed its verified purge-equivalent semantics"
+            else
+                record fail "${PREFIX}.final-removal.purge-equivalent" "RPM final erase did not complete its purge-equivalent semantics"
+            fi
+            ;;
+    esac
+}
+
+scenario_purge() {
+    prepare_expected_payloads || return
+    seed_state
+    run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
+    probe_payload fresh candidate "${CANDIDATE_VERSION}"
+    assert_all_state_preserved fresh
+    run_step purge purge_package || return
+    assert_package_absent purge candidate
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            check_absent purge.state.config /etc/syswarden/config/lifecycle-operator.conf
+            check_absent purge.state.token /etc/syswarden/config/modules/99-user.toml
+            check_absent purge.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
+            check_absent purge.state.certificate /etc/syswarden/tls/operator.pem
+            assert_preserved purge data /var/lib/syswarden/ui/data.json "${STATE_DATA_HASH}" 600
+            ;;
+        apk)
+            assert_all_state_preserved purge
+            ;;
+    esac
+}
+
+if [ "${INVOCATION}" = "initial" ]; then
+    if ! probe_execution_architecture; then
+        exit 1
+    fi
+fi
+
+case "${SCENARIO}" in
+    upgrade-rollback)
+        case "${INVOCATION}" in
+            initial) scenario_upgrade_rollback_initial ;;
+            restart-one) scenario_upgrade_rollback_restart_one ;;
+            restart-two) scenario_upgrade_rollback_restart_two ;;
+            *) exit 1 ;;
+        esac
+        ;;
+    remove)
+        scenario_remove
+        ;;
+    purge)
+        scenario_purge
+        ;;
+    *)
+        record fail "scenario" "unsupported scenario ${SCENARIO}"
+        ;;
+esac
+
+if [ "${FAILURES}" -ne 0 ]; then
+    exit 1
+fi
+exit 0
+'''
+
+
+def parse_events(path: Path) -> list[dict[str, str]]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot read lifecycle event file {path}: {exc}") from exc
+    events: list[dict[str, str]] = []
+    for line_number, line in enumerate(lines, start=1):
+        fields = line.split("\t")
+        if len(fields) != 3 or fields[0] not in {"pass", "fail", "info"}:
+            raise LifecycleLabError(
+                f"invalid lifecycle event at {path}:{line_number}"
+            )
+        events.append(
+            {"status": fields[0], "check": fields[1], "detail": fields[2]}
+        )
+    if not events:
+        raise LifecycleLabError(f"lifecycle event file is empty: {path}")
+    return events
+
+
+def validate_event_contract(
+    events: Sequence[dict[str, str]], family: str, scenario: str
+) -> None:
+    """Reject missing, duplicated, reordered, synthetic, or informational evidence."""
+
+    expected = expected_event_checks(family, scenario)
+    observed: list[str] = []
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            raise LifecycleLabError(
+                f"lifecycle event {index} for {family}/{scenario} is not an object"
+            )
+        status = event.get("status")
+        check = event.get("check")
+        detail = event.get("detail")
+        if status not in {"pass", "fail"}:
+            raise LifecycleLabError(
+                f"lifecycle event {index} for {family}/{scenario} has a non-verdict status"
+            )
+        if not isinstance(check, str) or not isinstance(detail, str) or not detail:
+            raise LifecycleLabError(
+                f"lifecycle event {index} for {family}/{scenario} is incomplete"
+            )
+        observed.append(check)
+    if tuple(observed) != expected:
+        expected_set = set(expected)
+        observed_set = set(observed)
+        missing = [check for check in expected if check not in observed_set]
+        unexpected = [check for check in observed if check not in expected_set]
+        duplicated = sorted(
+            check for check in observed_set if observed.count(check) > 1
+        )
+        raise LifecycleLabError(
+            f"lifecycle event contract mismatch for {family}/{scenario}; "
+            f"missing={missing!r}, unexpected={unexpected!r}, "
+            f"duplicated={duplicated!r}, ordered_match=False"
+        )
+
+
+def _validate_manager_paths(family: str, paths: list[str]) -> None:
+    if paths != sorted(paths) or len(paths) != len(set(paths)):
+        raise LifecycleLabError(
+            "native package-manager inventory must be sorted and duplicate-free"
+        )
+    if any(
+        not path.startswith("/")
+        or path in {"/", "/."}
+        or ".." in Path(path).parts
+        or any(ord(character) < 32 for character in path)
+        for path in paths
+    ):
+        raise LifecycleLabError(
+            "native package-manager inventory contains an unsafe path"
+        )
+    observed = set(paths)
+    if family == "deb":
+        if observed != DEB_PACKAGE_PATHS:
+            raise LifecycleLabError("DEB native package inventory is not exact")
+        return
+    if family == "apk":
+        if observed != APK_PACKAGE_PATHS:
+            raise LifecycleLabError("APK native package inventory is not exact")
+        return
+    if family != "rpm":
+        raise LifecycleLabError(f"unsupported inventory family: {family!r}")
+    build_directories = {
+        path for path in paths if RPM_BUILD_ID_DIRECTORY_PATTERN.fullmatch(path)
+    }
+    build_links = {
+        path for path in paths if RPM_BUILD_ID_LINK_PATTERN.fullmatch(path)
+    }
+    expected = (
+        set(PACKAGE_PAYLOAD_PATHS)
+        | {"/usr/lib/.build-id"}
+        | build_directories
+        | build_links
+    )
+    if (
+        observed != expected
+        or len(build_directories) != 3
+        or len(build_links) != 3
+        or len(observed) != 13
+    ):
+        raise LifecycleLabError("RPM native package inventory is not exact")
+
+
+def validate_inventory_snapshot(
+    family: str,
+    manager_paths: list[str],
+    filesystem: list[dict[str, object]],
+) -> None:
+    """Validate the full native path list and every filesystem metadata entry."""
+
+    _validate_manager_paths(family, manager_paths)
+    if len(filesystem) != len(manager_paths):
+        raise LifecycleLabError(
+            "filesystem inventory does not cover every native package path"
+        )
+    observed_paths: list[str] = []
+    entries: dict[str, dict[str, object]] = {}
+    for entry in filesystem:
+        if not isinstance(entry, dict) or set(entry) != {
+            "path",
+            "type",
+            "mode",
+            "uid",
+            "gid",
+            "value",
+        }:
+            raise LifecycleLabError("filesystem inventory entry has invalid fields")
+        path = entry.get("path")
+        if not isinstance(path, str) or path in entries:
+            raise LifecycleLabError(
+                "filesystem inventory contains an invalid or duplicate path"
+            )
+        if (
+            not isinstance(entry.get("type"), str)
+            or not isinstance(entry.get("mode"), str)
+            or type(entry.get("uid")) is not int
+            or type(entry.get("gid")) is not int
+            or not isinstance(entry.get("value"), str)
+        ):
+            raise LifecycleLabError(
+                "filesystem inventory metadata has invalid scalar types"
+            )
+        if entry["uid"] != 0 or entry["gid"] != 0:
+            raise LifecycleLabError(
+                f"package inventory owner is not root:root at {path}"
+            )
+        observed_paths.append(path)
+        entries[path] = entry
+    if observed_paths != manager_paths:
+        raise LifecycleLabError(
+            "filesystem inventory order differs from the native package inventory"
+        )
+
+    file_modes = {
+        "/opt/syswarden/bin/syswarden-cli": "750",
+        "/opt/syswarden/bin/syswarden-core": "750",
+        "/opt/syswarden/bin/syswarden-tui": "750",
+        "/opt/syswarden/signatures.json": "640",
+    }
+    for path, mode in file_modes.items():
+        entry = entries[path]
+        if (
+            entry["type"] != "file"
+            or entry["mode"] != mode
+            or re.fullmatch(r"[0-9a-f]{64}", str(entry["value"])) is None
+        ):
+            raise LifecycleLabError(
+                f"package file type/mode/digest contract failed at {path}"
+            )
+    link_targets = {
+        "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
+        "/usr/local/bin/syswarden-tui": "/opt/syswarden/bin/syswarden-tui",
+    }
+    for path, target in link_targets.items():
+        entry = entries[path]
+        if (
+            entry["type"] != "symlink"
+            or entry["mode"] != "777"
+            or entry["value"] != target
+        ):
+            raise LifecycleLabError(
+                f"package public-link contract failed at {path}"
+            )
+    if family == "deb":
+        for path in DEB_PACKAGE_PATHS - set(PACKAGE_PAYLOAD_PATHS) - {
+            "/usr/share/doc/syswarden/changelog.gz"
+        }:
+            entry = entries[path]
+            if (
+                entry["type"] != "directory"
+                or entry["mode"] != "755"
+                or entry["value"] != "-"
+            ):
+                raise LifecycleLabError(
+                    f"DEB directory metadata contract failed at {path}"
+                )
+        changelog = entries["/usr/share/doc/syswarden/changelog.gz"]
+        if (
+            changelog["type"] != "file"
+            or changelog["mode"] != "644"
+            or re.fullmatch(r"[0-9a-f]{64}", str(changelog["value"])) is None
+        ):
+            raise LifecycleLabError("DEB generated changelog inventory is invalid")
+    if family == "rpm":
+        build_id_targets: set[str] = set()
+        for path, entry in entries.items():
+            if path == "/usr/lib/.build-id" or RPM_BUILD_ID_DIRECTORY_PATTERN.fullmatch(
+                path
+            ):
+                if (
+                    entry["type"] != "directory"
+                    or entry["mode"] != "755"
+                    or entry["value"] != "-"
+                ):
+                    raise LifecycleLabError(
+                        f"RPM build-id directory metadata failed at {path}"
+                    )
+            elif RPM_BUILD_ID_LINK_PATTERN.fullmatch(path):
+                if entry["type"] != "symlink" or entry["mode"] != "777":
+                    raise LifecycleLabError(
+                        f"RPM build-id link metadata failed at {path}"
+                    )
+                build_id_targets.add(str(entry["value"]))
+        if build_id_targets != {
+            "../../../../opt/syswarden/bin/syswarden-cli",
+            "../../../../opt/syswarden/bin/syswarden-core",
+            "../../../../opt/syswarden/bin/syswarden-tui",
+        }:
+            raise LifecycleLabError("RPM build-id link targets are not exact")
+
+
+def parse_scenario_inventory_evidence(
+    result_root: Path, family: str, scenario: str
+) -> dict[str, object]:
+    inventory_root = result_root / "inventories"
+    try:
+        root_metadata = inventory_root.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(
+            f"missing scenario inventory evidence at {inventory_root}: {exc}"
+        ) from exc
+    if not stat.S_ISDIR(root_metadata.st_mode) or stat.S_ISLNK(root_metadata.st_mode):
+        raise LifecycleLabError(
+            f"scenario inventory evidence must be a real directory: {inventory_root}"
+        )
+    labels = expected_inventory_phase_labels(scenario)
+    expected_names = {
+        f"{scenario}-{label}-{kind}.tsv"
+        for label in labels
+        for kind in ("manager", "filesystem")
+    }
+    actual_names = {path.name for path in inventory_root.iterdir()}
+    if actual_names != expected_names:
+        raise LifecycleLabError(
+            f"scenario inventory evidence file set is not exact for {family}/{scenario}"
+        )
+
+    evidence: dict[str, object] = {}
+    for label in labels:
+        manager_file = inventory_root / f"{scenario}-{label}-manager.tsv"
+        filesystem_file = inventory_root / f"{scenario}-{label}-filesystem.tsv"
+        for path in (manager_file, filesystem_file):
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                raise LifecycleLabError(
+                    f"scenario inventory evidence must be a regular file: {path}"
+                )
+        manager_paths = manager_file.read_text(encoding="utf-8").splitlines()
+        filesystem: list[dict[str, object]] = []
+        for line_number, line in enumerate(
+            filesystem_file.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            fields = line.split("\t")
+            if len(fields) != 6:
+                raise LifecycleLabError(
+                    f"invalid filesystem inventory at {filesystem_file}:{line_number}"
+                )
+            path, kind, mode, uid, gid, value = fields
+            if not uid.isdecimal() or not gid.isdecimal():
+                raise LifecycleLabError(
+                    f"invalid inventory owner at {filesystem_file}:{line_number}"
+                )
+            filesystem.append(
+                {
+                    "path": path,
+                    "type": kind,
+                    "mode": mode,
+                    "uid": int(uid),
+                    "gid": int(gid),
+                    "value": value,
+                }
+            )
+        validate_inventory_snapshot(family, manager_paths, filesystem)
+        evidence[label] = {
+            "manager_paths": manager_paths,
+            "filesystem": filesystem,
+        }
+    return evidence
+
+
+def validate_scenario_inventory_evidence(
+    evidence: object, family: str, scenario: str
+) -> None:
+    labels = expected_inventory_phase_labels(scenario)
+    if not isinstance(evidence, dict) or set(evidence) != set(labels):
+        raise LifecycleLabError(
+            f"scenario inventory phase set is not exact for {family}/{scenario}"
+        )
+    for label in labels:
+        phase = evidence.get(label)
+        if not isinstance(phase, dict) or set(phase) != {
+            "manager_paths",
+            "filesystem",
+        }:
+            raise LifecycleLabError(
+                f"scenario inventory phase is invalid for {family}/{scenario}/{label}"
+            )
+        manager_paths = phase.get("manager_paths")
+        filesystem = phase.get("filesystem")
+        if (
+            not isinstance(manager_paths, list)
+            or any(not isinstance(path, str) for path in manager_paths)
+            or not isinstance(filesystem, list)
+            or any(not isinstance(entry, dict) for entry in filesystem)
+        ):
+            raise LifecycleLabError(
+                f"scenario inventory phase values are invalid for {family}/{scenario}/{label}"
+            )
+        validate_inventory_snapshot(family, manager_paths, filesystem)
+
+
+def command_log_tail(result: CommandResult, command_log: Path | None = None) -> str:
+    sections = []
+    if command_log is not None and command_log.is_file():
+        sections.append(command_log.read_text(encoding="utf-8", errors="replace"))
+    if result.stdout:
+        sections.append("PODMAN STDOUT\n" + result.stdout)
+    if result.stderr:
+        sections.append("PODMAN STDERR\n" + result.stderr)
+    return "\n".join(sections)[-LOG_TAIL_LIMIT:]
+
+
+def require_success(result: CommandResult, description: str) -> None:
+    if result.returncode != 0:
+        detail = command_log_tail(result)
+        raise LifecycleLabError(
+            f"{description} failed with exit code {result.returncode}: {detail}"
+        )
+
+
+def ensure_rootless_podman(runner: CommandRunner, podman: str) -> str:
+    version = runner.run(
+        (podman, "version", "--format", "{{.Client.Version}}"), timeout=30
+    )
+    require_success(version, "Podman version probe")
+    rootless = runner.run(
+        (podman, "info", "--format", "{{.Host.Security.Rootless}}"), timeout=30
+    )
+    require_success(rootless, "Podman rootless probe")
+    if rootless.stdout.strip().lower() != "true":
+        raise LifecycleLabError("package lifecycle lab requires rootless Podman")
+    return version.stdout.strip()
+
+
+def ensure_image(
+    runner: CommandRunner,
+    podman: str,
+    spec: PlatformSpec,
+    pull_policy: str,
+) -> None:
+    image = spec.image
+    validate_image_reference(image)
+    exists = runner.run((podman, "image", "exists", image), timeout=30)
+    should_pull = pull_policy == "always" or (
+        pull_policy == "missing" and exists.returncode != 0
+    )
+    if pull_policy == "never" and exists.returncode != 0:
+        raise LifecycleLabError(f"required pinned image is not local: {image}")
+    if should_pull:
+        pulled = runner.run(
+            (podman, "pull", "--platform", spec.podman_platform, image),
+            timeout=600,
+        )
+        require_success(pulled, f"pull pinned image {image}")
+
+    inspected = runner.run(
+        (
+            podman,
+            "image",
+            "inspect",
+            "--format",
+            "{{.Digest}}\t{{.Os}}/{{.Architecture}}",
+            image,
+        ),
+        timeout=30,
+    )
+    require_success(inspected, f"inspect pinned image {image}")
+    expected_digest = image.rsplit("@", 1)[1]
+    fields = inspected.stdout.strip().split("\t")
+    if len(fields) != 2:
+        raise LifecycleLabError(
+            f"invalid image inspection evidence for {image}: {inspected.stdout!r}"
+        )
+    actual_digest, actual_platform = fields
+    if actual_digest != expected_digest:
+        raise LifecycleLabError(
+            f"image digest mismatch for {image}: found {actual_digest}"
+        )
+    if actual_platform != spec.podman_platform:
+        raise LifecycleLabError(
+            f"image architecture mismatch for {image}: expected "
+            f"{spec.podman_platform}, found {actual_platform}"
+        )
+
+
+def architecture_probe_arguments(
+    podman: str,
+    spec: PlatformSpec,
+) -> tuple[str, ...]:
+    """Build a networkless, read-only execution probe for native/binfmt support."""
+
+    arguments = [
+        podman,
+        "run",
+        "--rm",
+        "--network=none",
+        "--platform",
+        spec.podman_platform,
+        "--read-only",
+        "--cap-drop=all",
+        "--security-opt=no-new-privileges",
+        "--security-opt=label=disable",
+        "--pids-limit=64",
+        "--memory=128m",
+        "--tmpfs=/tmp:rw,nodev,nosuid,size=16m",
+    ]
+    arguments.extend((spec.image, "/bin/uname", "-m"))
+    return tuple(arguments)
+
+
+def normalize_host_architecture(value: str) -> str | None:
+    normalized = value.strip().casefold()
+    if normalized in {"amd64", "x86_64"}:
+        return "amd64"
+    if normalized in {"arm64", "aarch64"}:
+        return "arm64"
+    return None
+
+
+def probe_platform_execution(
+    runner: CommandRunner,
+    podman: str,
+    spec: PlatformSpec,
+    host_architecture: str,
+    emulator: EmulatorArtifact | None = None,
+    binfmt: BinfmtRegistration | None = None,
+    binfmt_error: str | None = None,
+) -> dict[str, object]:
+    """Prove that the requested architecture can execute, including emulation."""
+
+    normalized_host = normalize_host_architecture(host_architecture)
+    cross_arm64 = spec.architecture == "arm64" and normalized_host != "arm64"
+    if cross_arm64 and emulator is None:
+        return {
+            "status": "unavailable",
+            "execution_mode": "explicit_emulator_required",
+            "podman_platform": spec.podman_platform,
+            "expected_uname": spec.uname_architecture,
+            "reason": (
+                "cross-architecture arm64 execution requires an explicit, "
+                "validated --arm64-emulator and its exact persistent binfmt "
+                "registration; implicit emulation is forbidden"
+            ),
+        }
+    if cross_arm64 and binfmt is None:
+        return {
+            "status": "unavailable",
+            "execution_mode": "host_binfmt_required",
+            "podman_platform": spec.podman_platform,
+            "expected_uname": spec.uname_architecture,
+            "reason": binfmt_error or "validated arm64 binfmt registration is absent",
+        }
+    active_emulator = emulator if cross_arm64 else None
+    active_binfmt = binfmt if cross_arm64 else None
+    execution_mode = "host_binfmt_qemu_aarch64" if active_binfmt else "native"
+    emulator_evidence = (
+        {
+            "path": str(active_emulator.path),
+            "sha256": active_emulator.sha256,
+            "role": "host binfmt interpreter",
+        }
+        if active_emulator is not None
+        else None
+    )
+    binfmt_evidence = (
+        {
+            "path": str(active_binfmt.path),
+            "sha256": active_binfmt.sha256,
+            "interpreter": active_binfmt.interpreter,
+            "flags": active_binfmt.flags,
+        }
+        if active_binfmt is not None
+        else None
+    )
+    args = architecture_probe_arguments(podman, spec)
+    try:
+        result = runner.run(args, timeout=60)
+    except LifecycleLabError as exc:
+        return {
+            "status": "unavailable",
+            "execution_mode": execution_mode,
+            "podman_platform": spec.podman_platform,
+            "expected_uname": spec.uname_architecture,
+            "reason": str(exc),
+            "emulator": emulator_evidence,
+            "binfmt": binfmt_evidence,
+        }
+    actual_uname = result.stdout.strip()
+    if result.returncode != 0 or actual_uname != spec.uname_architecture:
+        return {
+            "status": "unavailable",
+            "execution_mode": execution_mode,
+            "podman_platform": spec.podman_platform,
+            "expected_uname": spec.uname_architecture,
+            "actual_uname": actual_uname,
+            "container_exit_code": result.returncode,
+            "reason": (
+                "the pinned image did not execute with the requested architecture; "
+                "native execution or explicitly configured binfmt/emulation is required"
+            ),
+            "log_tail": command_log_tail(result),
+            "emulator": emulator_evidence,
+            "binfmt": binfmt_evidence,
+        }
+    return {
+        "status": "available",
+        "execution_mode": execution_mode,
+        "podman_platform": spec.podman_platform,
+        "expected_uname": spec.uname_architecture,
+        "actual_uname": actual_uname,
+        "container_exit_code": result.returncode,
+        "network": "disabled",
+        "filesystem": "read-only with bounded /tmp tmpfs",
+        "emulator": emulator_evidence,
+        "binfmt": binfmt_evidence,
+    }
+
+
+def container_run_arguments(
+    podman: str,
+    image: str,
+    name: str,
+    candidate_root: Path,
+    previous_root: Path,
+    script_path: Path,
+    result_root: Path,
+    spec: PlatformSpec,
+    scenario: str,
+    pair: PackagePair,
+) -> tuple[str, ...]:
+    arguments = [
+        podman,
+        "create",
+        "--name",
+        name,
+        "--network=none",
+        "--platform",
+        spec.podman_platform,
+        "--security-opt=no-new-privileges",
+        "--security-opt=label=disable",
+        "--pids-limit=512",
+        "--memory=1g",
+        "--tmpfs=/run:rw,nodev,nosuid,size=64m",
+        "--volume",
+        f"{candidate_root}:/candidate:ro",
+        "--volume",
+        f"{previous_root}:/previous:ro",
+        "--volume",
+        f"{script_path}:/lab/package-lifecycle.sh:ro",
+        "--volume",
+        f"{result_root}:/results:rw",
+        "--env",
+        f"PACKAGE_FAMILY={spec.family}",
+        "--env",
+        f"EXPECTED_PACKAGE_ARCHITECTURE={spec.package_architecture}",
+        "--env",
+        f"EXPECTED_UNAME_ARCHITECTURE={spec.uname_architecture}",
+        "--env",
+        f"EXPECTED_CANDIDATE_VERSION={pair.candidate.version}",
+        "--env",
+        f"EXPECTED_PREVIOUS_VERSION={pair.previous.version}",
+        "--env",
+        f"SCENARIO={scenario}",
+        "--env",
+        f"CANDIDATE_PACKAGE=/candidate/{pair.candidate.path.name}",
+        "--env",
+        f"PREVIOUS_PACKAGE=/previous/{pair.previous.path.name}",
+    ]
+    arguments.extend((image, "/bin/sh", "/lab/package-lifecycle.sh"))
+    return tuple(arguments)
+
+
+def run_platform(
+    runner: CommandRunner,
+    podman: str,
+    spec: PlatformSpec,
+    pair: PackagePair,
+    candidate_root: Path,
+    previous_root: Path,
+    workspace: Path,
+    pull_policy: str,
+    timeout: int,
+    host_architecture: str,
+    arm64_emulator: EmulatorArtifact | None = None,
+    arm64_binfmt: BinfmtRegistration | None = None,
+    arm64_binfmt_error: str | None = None,
+) -> dict[str, object]:
+    slug = platform_slug(spec)
+    use_emulator = (
+        spec.architecture == "arm64"
+        and normalize_host_architecture(host_architecture) != "arm64"
+        and arm64_emulator is not None
+        and arm64_binfmt is not None
+    )
+    active_emulator = arm64_emulator if use_emulator else None
+    platform_result: dict[str, object] = {
+        "name": spec.name,
+        "distribution": spec.distribution,
+        "family": spec.family,
+        "architecture": ARCHITECTURE_LABELS[spec.architecture],
+        "architecture_id": spec.architecture,
+        "package_architecture": spec.package_architecture,
+        "podman_platform": spec.podman_platform,
+        "image": spec.image,
+        "purge_semantics": spec.purge_semantics,
+        "candidate_version": pair.candidate.version,
+        "previous_version": pair.previous.version,
+        "candidate": {
+            "filename": pair.candidate.path.name,
+            "version": pair.candidate.version,
+            "sha256": pair.candidate.sha256,
+        },
+        "previous": {
+            "filename": pair.previous.path.name,
+            "version": pair.previous.version,
+            "sha256": pair.previous.sha256,
+        },
+        "package_bytes_differ": pair.candidate.sha256 != pair.previous.sha256,
+        "bootstrap_execution": (
+            "podman_platform_with_validated_host_binfmt"
+            if active_emulator is not None
+            else "native_container_build"
+        ),
+        "lifecycle_network": "disabled",
+        "restart_contract": (
+            "upgrade-rollback performs two consecutive container restarts and "
+            "revalidates native and filesystem inventories plus operator state"
+        ),
+        "scenarios": [],
+    }
+    image_tag = f"localhost/syswarden-lifecycle-{slug}-{uuid.uuid4().hex}"
+    context = workspace / f"build-{slug}"
+    context.mkdir(mode=0o700)
+    containerfile = context / "Containerfile"
+    containerfile.write_text(build_containerfile(spec), encoding="utf-8")
+    containerfile.chmod(0o600)
+
+    try:
+        ensure_image(runner, podman, spec, pull_policy)
+        architecture_probe = probe_platform_execution(
+            runner,
+            podman,
+            spec,
+            host_architecture,
+            arm64_emulator,
+            arm64_binfmt,
+            arm64_binfmt_error,
+        )
+        platform_result["architecture_probe"] = architecture_probe
+        if architecture_probe["status"] != "available":
+            platform_result["status"] = "incomplete"
+            platform_result["error"] = architecture_probe["reason"]
+            return platform_result
+        build = runner.run(
+            (
+                podman,
+                "build",
+                "--pull=never",
+                "--layers=false",
+                "--platform",
+                spec.podman_platform,
+                "--tag",
+                image_tag,
+                "--file",
+                str(containerfile),
+                str(context),
+            ),
+            timeout=900,
+        )
+        require_success(build, f"bootstrap {spec.name} lifecycle image")
+
+        script_path = workspace / "package-lifecycle.sh"
+        for scenario in spec.scenarios:
+            result_root = workspace / f"result-{slug}-{scenario}"
+            result_root.mkdir(mode=0o700)
+            container_name = (
+                f"syswarden-lifecycle-{slug}-{uuid.uuid4().hex[:12]}"
+            )
+            run_args = container_run_arguments(
+                podman,
+                image_tag,
+                container_name,
+                candidate_root,
+                previous_root,
+                script_path,
+                result_root,
+                spec,
+                scenario,
+                pair,
+            )
+            try:
+                created = runner.run(run_args, timeout=60)
+                require_success(created, f"create {spec.name} {scenario} container")
+                required_starts = 3 if scenario == "upgrade-rollback" else 1
+                starts: list[CommandResult] = []
+                for _invocation in range(required_starts):
+                    started = runner.run(
+                        (podman, "start", "--attach", container_name),
+                        timeout=timeout,
+                    )
+                    starts.append(started)
+                    if started.returncode != 0:
+                        restart_state = result_root / "restart-state"
+                        may_continue_complete_failure_evidence = (
+                            scenario == "upgrade-rollback"
+                            and restart_state.is_file()
+                            and restart_state.read_text(encoding="utf-8").strip()
+                            in {"restart-one", "restart-two"}
+                        )
+                        if not may_continue_complete_failure_evidence:
+                            break
+            finally:
+                runner.run((podman, "rm", "--force", container_name), timeout=30)
+
+            event_file = result_root / "events.tsv"
+            command_log = result_root / "commands.log"
+            try:
+                events = parse_events(event_file)
+                validate_event_contract(events, spec.family, scenario)
+                inventory_evidence = parse_scenario_inventory_evidence(
+                    result_root, spec.family, scenario
+                )
+            except LifecycleLabError as exc:
+                inventory_evidence = {}
+                events = [
+                    {
+                        "status": "fail",
+                        "check": f"{scenario}.evidence",
+                        "detail": str(exc),
+                    }
+                ]
+            failed = [event for event in events if event["status"] == "fail"]
+            start_exit_codes = [item.returncode for item in starts]
+            scenario_status = (
+                "pass"
+                if len(starts) == required_starts
+                and all(code == 0 for code in start_exit_codes)
+                and not failed
+                else "fail"
+            )
+            last_start = starts[-1] if starts else created
+            platform_result["scenarios"].append(
+                {
+                    "name": scenario,
+                    "status": scenario_status,
+                    "container_exit_code": last_start.returncode,
+                    "container_start_exit_codes": start_exit_codes,
+                    "container_restart_count": max(0, len(starts) - 1),
+                    "events": events,
+                    "inventory_evidence": inventory_evidence,
+                    "log_tail": command_log_tail(last_start, command_log),
+                }
+            )
+    except LifecycleLabError as exc:
+        platform_result["status"] = "fail"
+        platform_result["error"] = str(exc)
+        return platform_result
+    finally:
+        runner.run((podman, "image", "rm", "--force", image_tag), timeout=120)
+
+    scenarios = platform_result["scenarios"]
+    platform_result["status"] = (
+        "pass"
+        if scenarios and all(item["status"] == "pass" for item in scenarios)
+        else "fail"
+    )
+    return platform_result
+
+
+def coverage_status(
+    results: Sequence[dict[str, object]], expected_count: int
+) -> str:
+    if any(result.get("status") == "fail" for result in results):
+        return "fail"
+    if len(results) != expected_count or any(
+        result.get("status") == "incomplete" for result in results
+    ):
+        return "incomplete"
+    if results and all(result.get("status") == "pass" for result in results):
+        return "pass"
+    return "incomplete"
+
+
+def classify_lifecycle_evidence(
+    results: Sequence[dict[str, object]],
+) -> dict[str, object]:
+    """Separate harness completeness from release readiness and known blockers."""
+
+    structural_failures: list[str] = []
+    results_by_coordinate = {
+        (str(result.get("distribution")), str(result.get("architecture_id"))): result
+        for result in results
+    }
+    if len(results_by_coordinate) != len(results):
+        structural_failures.append("matrix:duplicate-platform-coordinate")
+    for distribution, architecture in sorted(
+        set(results_by_coordinate) - REQUIRED_PLATFORM_COORDINATES
+    ):
+        structural_failures.append(
+            f"matrix:unexpected-platform-coordinate:{distribution}/{architecture}"
+        )
+    observed_failures: dict[str, str] = {}
+    coordinate_classification: list[dict[str, object]] = []
+    candidate_blockers: set[str] = set()
+    coordinate_statuses: dict[tuple[str, str], str] = {}
+    coordinate_has_failures: dict[tuple[str, str], bool] = {}
+
+    expected_alpine_failures = {
+        f"alpine/{architecture}:{check}": "CLI execution failed with exit code 127"
+        for architecture in ARCHITECTURE_LABELS
+        for scenario in EXPECTED_SCENARIOS["apk"]
+        for check in expected_event_checks("apk", scenario)
+        if check.endswith(".executable")
+    }
+    expected_config_failures = {
+        f"{distribution}/{architecture}:{check}": (
+            "package manager returned success after maintainer script emitted a Go panic"
+        )
+        for distribution, architecture in REQUIRED_PLATFORM_COORDINATES
+        if distribution != "alpine"
+        for family in (
+            next(
+                spec.family
+                for spec in DEFAULT_PLATFORMS
+                if platform_coordinate(spec) == (distribution, architecture)
+            ),
+        )
+        for scenario in EXPECTED_SCENARIOS[family]
+        for check in expected_event_checks(family, scenario)
+        if check.endswith(".maintainer_script")
+    }
+    known_failure_sets = {
+        "SW-CFG-001": expected_config_failures,
+        "SW-PKG-001": expected_alpine_failures,
+    }
+    canonical_failures_by_blocker: dict[str, dict[str, str]] = {
+        blocker_id: {} for blocker_id in known_failure_sets
+    }
+
+    for distribution, architecture in sorted(REQUIRED_PLATFORM_COORDINATES):
+        coordinate_name = f"{distribution}/{architecture}"
+        platform_result = results_by_coordinate.get((distribution, architecture))
+        coordinate_structural: list[str] = []
+        coordinate_failures: dict[str, str] = {}
+        if platform_result is None:
+            coordinate_structural.append(f"{coordinate_name}:platform-result-missing")
+            family = next(
+                spec.family
+                for spec in DEFAULT_PLATFORMS
+                if platform_coordinate(spec) == (distribution, architecture)
+            )
+        else:
+            family = str(platform_result.get("family"))
+            scenarios = platform_result.get("scenarios")
+            if not isinstance(scenarios, list) or [
+                item.get("name") if isinstance(item, dict) else None
+                for item in scenarios
+            ] != list(EXPECTED_SCENARIOS.get(family, ())):
+                coordinate_structural.append(
+                    f"{coordinate_name}:scenario-contract-incomplete"
+                )
+                scenarios = [] if not isinstance(scenarios, list) else scenarios
+            for scenario_result in scenarios:
+                if not isinstance(scenario_result, dict):
+                    coordinate_structural.append(
+                        f"{coordinate_name}:scenario-result-invalid"
+                    )
+                    continue
+                scenario_name = scenario_result.get("name")
+                if not isinstance(scenario_name, str):
+                    coordinate_structural.append(
+                        f"{coordinate_name}:scenario-name-invalid"
+                    )
+                    continue
+                required_starts = 3 if scenario_name == "upgrade-rollback" else 1
+                start_codes = scenario_result.get("container_start_exit_codes")
+                if (
+                    not isinstance(start_codes, list)
+                    or len(start_codes) != required_starts
+                    or any(type(code) is not int for code in start_codes)
+                    or scenario_result.get("container_restart_count")
+                    != required_starts - 1
+                ):
+                    coordinate_structural.append(
+                        f"{coordinate_name}:{scenario_name}:restart-evidence-incomplete"
+                    )
+                events = scenario_result.get("events")
+                try:
+                    if not isinstance(events, list):
+                        raise LifecycleLabError("scenario event list is absent")
+                    validate_event_contract(events, family, scenario_name)
+                except LifecycleLabError:
+                    coordinate_structural.append(
+                        f"{coordinate_name}:{scenario_name}:event-contract-invalid"
+                    )
+                    continue
+                try:
+                    validate_scenario_inventory_evidence(
+                        scenario_result.get("inventory_evidence"),
+                        family,
+                        scenario_name,
+                    )
+                except LifecycleLabError:
+                    coordinate_structural.append(
+                        f"{coordinate_name}:{scenario_name}:inventory-evidence-invalid"
+                    )
+                scenario_failed_events = [
+                    event for event in events if event["status"] == "fail"
+                ]
+                if isinstance(start_codes, list) and len(start_codes) == required_starts:
+                    if scenario_result.get("container_exit_code") != start_codes[-1]:
+                        coordinate_structural.append(
+                            f"{coordinate_name}:{scenario_name}:container-exit-inconsistent"
+                        )
+                    if not scenario_failed_events and any(
+                        code != 0 for code in start_codes
+                    ):
+                        coordinate_structural.append(
+                            f"{coordinate_name}:{scenario_name}:unexpected-container-exit"
+                        )
+                    if scenario_failed_events and start_codes[-1] == 0:
+                        coordinate_structural.append(
+                            f"{coordinate_name}:{scenario_name}:failure-exit-inconsistent"
+                        )
+                    expected_rc127_events = (
+                        distribution == "alpine"
+                        and scenario_failed_events
+                        and all(
+                            event["check"].endswith(".executable")
+                            and event["detail"]
+                            == "CLI execution failed with exit code 127"
+                            for event in scenario_failed_events
+                        )
+                    )
+                    if expected_rc127_events and start_codes != [1] * required_starts:
+                        coordinate_structural.append(
+                            f"{coordinate_name}:{scenario_name}:blocker-exit-inconsistent"
+                        )
+                    derived_scenario_status = (
+                        "pass"
+                        if not scenario_failed_events
+                        and all(code == 0 for code in start_codes)
+                        else "fail"
+                    )
+                    if scenario_result.get("status") != derived_scenario_status:
+                        coordinate_structural.append(
+                            f"{coordinate_name}:{scenario_name}:scenario-status-inconsistent"
+                        )
+                for event in events:
+                    if event["status"] == "fail":
+                        identifier = f"{coordinate_name}:{event['check']}"
+                        coordinate_failures[identifier] = event["detail"]
+            if isinstance(scenarios, list) and scenarios:
+                derived_platform_status = (
+                    "pass"
+                    if all(
+                        isinstance(item, dict) and item.get("status") == "pass"
+                        for item in scenarios
+                    )
+                    else "fail"
+                )
+                if platform_result.get("status") != derived_platform_status:
+                    coordinate_structural.append(
+                        f"{coordinate_name}:platform-status-inconsistent"
+                    )
+
+        structural_failures.extend(coordinate_structural)
+        observed_failures.update(coordinate_failures)
+        expected_by_blocker_for_coordinate = {
+            blocker_id: {
+                identifier: detail
+                for identifier, detail in expected_failures.items()
+                if identifier.startswith(coordinate_name + ":")
+            }
+            for blocker_id, expected_failures in known_failure_sets.items()
+        }
+        active_coordinate_blockers = [
+            blocker_id
+            for blocker_id, expected_failures in expected_by_blocker_for_coordinate.items()
+            if expected_failures
+            and any(identifier in coordinate_failures for identifier in expected_failures)
+            and {
+                identifier: coordinate_failures.get(identifier)
+                for identifier in expected_failures
+            }
+            == expected_failures
+        ]
+        expected_for_coordinate = {
+            identifier: detail
+            for blocker_id in active_coordinate_blockers
+            for identifier, detail in expected_by_blocker_for_coordinate[
+                blocker_id
+            ].items()
+        }
+        if not coordinate_structural and not coordinate_failures:
+            coordinate_status = "pass"
+            coordinate_blockers: list[str] = []
+        elif (
+            not coordinate_structural
+            and active_coordinate_blockers
+            and coordinate_failures == expected_for_coordinate
+        ):
+            coordinate_status = "blocker"
+            coordinate_blockers = sorted(active_coordinate_blockers)
+        else:
+            coordinate_status = "incomplete"
+            coordinate_blockers = []
+        coordinate_statuses[(distribution, architecture)] = coordinate_status
+        coordinate_has_failures[(distribution, architecture)] = bool(
+            coordinate_failures
+        )
+        if coordinate_status == "blocker":
+            candidate_blockers.update(coordinate_blockers)
+            for blocker_id in coordinate_blockers:
+                canonical_failures_by_blocker[blocker_id].update(
+                    coordinate_failures
+                )
+        coordinate_classification.append(
+            {
+                "distribution": distribution,
+                "architecture_id": architecture,
+                "family": family,
+                "status": coordinate_status,
+                "blocker_ids": coordinate_blockers,
+            }
+        )
+
+    # A coordinate is canonical only when its complete, exact failure set and
+    # details match one registered blocker.  Preserve that characterization
+    # even when another coordinate is structurally incomplete, but never let
+    # the unrelated incompleteness turn the known failures into "unexpected".
+    # Conversely, a partial set, changed detail, or additional failure never
+    # enters canonical_failures and therefore remains fail-closed below.
+    canonical_blockers: set[str] = set()
+    for blocker_id in sorted(candidate_blockers):
+        applicable_coordinates = {
+            identifier.split(":", 1)[0]
+            for identifier in known_failure_sets[blocker_id]
+        }
+        inconsistent_coordinates = sorted(
+            coordinate
+            for coordinate in applicable_coordinates
+            if (
+                coordinate_statuses.get(tuple(coordinate.split("/", 1)))
+                == "pass"
+                or (
+                    coordinate_statuses.get(tuple(coordinate.split("/", 1)))
+                    == "incomplete"
+                    and coordinate_has_failures.get(
+                        tuple(coordinate.split("/", 1)), False
+                    )
+                )
+            )
+        )
+        if inconsistent_coordinates:
+            structural_failures.append(
+                f"{blocker_id}:blocker-coverage-inconsistent:"
+                + ",".join(inconsistent_coordinates)
+            )
+        else:
+            canonical_blockers.add(blocker_id)
+
+    canonical_failures = {
+        identifier: detail
+        for blocker_id in canonical_blockers
+        for identifier, detail in canonical_failures_by_blocker[
+            blocker_id
+        ].items()
+    }
+    # A real, non-canonical failed check anywhere makes the product outcome
+    # ambiguous and invalidates every global blocker claim.  Structurally
+    # unavailable coordinates may coexist with exact evidence from completed
+    # coordinates, but an observed behavioral drift may not.
+    if set(observed_failures) - set(canonical_failures):
+        canonical_blockers.clear()
+        canonical_failures = {}
+
+    unexpected_failed_checks = sorted(
+        set(structural_failures)
+        | (set(observed_failures) - set(canonical_failures))
+    )
+    blocker_ids = sorted(canonical_blockers)
+    exact_known_blocker = bool(blocker_ids) and not unexpected_failed_checks
+    every_check_passed = not unexpected_failed_checks and not observed_failures
+    harness_complete = (
+        not unexpected_failed_checks
+        and (every_check_passed or exact_known_blocker)
+        and len(results_by_coordinate) == len(REQUIRED_PLATFORM_COORDINATES)
+    )
+    release_ready = harness_complete and every_check_passed
+    return {
+        "harness_complete": harness_complete,
+        "release_ready": release_ready,
+        "blocker_ids": blocker_ids,
+        "unexpected_failed_checks": unexpected_failed_checks,
+        "coordinate_classification": coordinate_classification,
+    }
+
+
+def validate_report_version_contract(report: dict[str, object]) -> None:
+    """Reject a report whose artifact-version evidence is incomplete or mutable."""
+
+    schema_version = report.get("schema_version")
+    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
+        raise LifecycleLabError(
+            f"package lifecycle report schema must be {SCHEMA_VERSION}"
+        )
+    contract = report.get("package_version_contract")
+    if not isinstance(contract, dict):
+        raise LifecycleLabError("package lifecycle report lacks a version contract")
+    if contract.get("scheme") != VERSION_SCHEME:
+        raise LifecycleLabError("package lifecycle report has an invalid version scheme")
+    if contract.get("relation") != VERSION_RELATION:
+        raise LifecycleLabError("package lifecycle report has an invalid version relation")
+
+    previous_version = contract.get("previous_version")
+    candidate_version = contract.get("candidate_version")
+    if not isinstance(previous_version, str) or not isinstance(candidate_version, str):
+        raise LifecycleLabError("package lifecycle report versions must be strings")
+    previous_numeric = parse_syswarden_version(previous_version)
+    candidate_numeric = parse_syswarden_version(candidate_version)
+    if previous_version == candidate_version or previous_numeric >= candidate_numeric:
+        raise LifecycleLabError(
+            "package lifecycle report does not prove previous < candidate"
+        )
+    reported_previous_numeric = contract.get("previous_numeric")
+    if (
+        not isinstance(reported_previous_numeric, list)
+        or any(type(part) is not int for part in reported_previous_numeric)
+        or reported_previous_numeric != list(previous_numeric)
+    ):
+        raise LifecycleLabError(
+            "package lifecycle report previous numeric version is inconsistent"
+        )
+    reported_candidate_numeric = contract.get("candidate_numeric")
+    if (
+        not isinstance(reported_candidate_numeric, list)
+        or any(type(part) is not int for part in reported_candidate_numeric)
+        or reported_candidate_numeric != list(candidate_numeric)
+    ):
+        raise LifecycleLabError(
+            "package lifecycle report candidate numeric version is inconsistent"
+        )
+
+    platforms = report.get("platforms")
+    if not isinstance(platforms, list) or not platforms:
+        raise LifecycleLabError("package lifecycle report has no platform results")
+    expected_coordinates: set[str] = set()
+    for platform_result in platforms:
+        if not isinstance(platform_result, dict):
+            raise LifecycleLabError("package lifecycle platform result must be an object")
+        family = platform_result.get("family")
+        package_architecture = platform_result.get("package_architecture")
+        if not isinstance(family, str) or not isinstance(package_architecture, str):
+            raise LifecycleLabError(
+                "package lifecycle platform result lacks its package coordinate"
+            )
+        if family not in EXPECTED_SCENARIOS:
+            raise LifecycleLabError(
+                "package lifecycle platform result has an unsupported family"
+            )
+        scenarios = platform_result.get("scenarios")
+        if platform_result.get("status") == "pass":
+            if not isinstance(scenarios, list) or [
+                item.get("name") if isinstance(item, dict) else None
+                for item in scenarios
+            ] != list(EXPECTED_SCENARIOS[family]):
+                raise LifecycleLabError(
+                    "passing package lifecycle platform has an incomplete or "
+                    "reordered scenario contract"
+                )
+            for scenario_result in scenarios:
+                if not isinstance(scenario_result, dict):
+                    raise LifecycleLabError(
+                        "package lifecycle scenario result must be an object"
+                    )
+                scenario_name = scenario_result["name"]
+                required_starts = 3 if scenario_name == "upgrade-rollback" else 1
+                if (
+                    scenario_result.get("status") != "pass"
+                    or scenario_result.get("container_start_exit_codes")
+                    != [0] * required_starts
+                    or scenario_result.get("container_restart_count")
+                    != required_starts - 1
+                    or scenario_result.get("container_exit_code") != 0
+                ):
+                    raise LifecycleLabError(
+                        "passing package lifecycle scenario lacks its exact "
+                        "container restart evidence"
+                    )
+                scenario_events = scenario_result.get("events")
+                if not isinstance(scenario_events, list):
+                    raise LifecycleLabError(
+                        "package lifecycle scenario lacks event evidence"
+                    )
+                validate_event_contract(scenario_events, family, scenario_name)
+        expected_coordinates.add(f"{family}:{package_architecture}")
+        candidate = platform_result.get("candidate")
+        previous = platform_result.get("previous")
+        if not isinstance(candidate, dict) or not isinstance(previous, dict):
+            raise LifecycleLabError(
+                "package lifecycle platform result lacks artifact evidence"
+            )
+        candidate_filename = candidate.get("filename")
+        previous_filename = previous.get("filename")
+        coordinate = f"{family}:{package_architecture}"
+        coordinate_pattern = PACKAGE_COORDINATE_PATTERNS.get(coordinate)
+        if (
+            coordinate_pattern is None
+            or not isinstance(candidate_filename, str)
+            or re.fullmatch(coordinate_pattern, candidate_filename) is None
+            or artifact_version(candidate_filename) != candidate_version
+            or not isinstance(previous_filename, str)
+            or re.fullmatch(coordinate_pattern, previous_filename) is None
+            or artifact_version(previous_filename) != previous_version
+        ):
+            raise LifecycleLabError(
+                "package lifecycle platform filename/version evidence is inconsistent"
+            )
+        if (
+            platform_result.get("candidate_version") != candidate_version
+            or candidate.get("version") != candidate_version
+        ):
+            raise LifecycleLabError(
+                "package lifecycle platform candidate version is inconsistent"
+            )
+        if (
+            platform_result.get("previous_version") != previous_version
+            or previous.get("version") != previous_version
+        ):
+            raise LifecycleLabError(
+                "package lifecycle platform previous version is inconsistent"
+            )
+    engine = report.get("engine")
+    if not isinstance(engine, dict):
+        raise LifecycleLabError("package lifecycle report lacks engine evidence")
+    emulator_report = engine.get("arm64_emulator")
+    if emulator_report is not None:
+        if (
+            not isinstance(emulator_report, dict)
+            or not isinstance(emulator_report.get("path"), str)
+            or not re.fullmatch(
+                r"[0-9a-f]{64}", str(emulator_report.get("sha256"))
+            )
+            or emulator_report.get("regular_file") is not True
+            or emulator_report.get("executable") is not True
+            or emulator_report.get("symlink") is not False
+            or emulator_report.get("role") != "host binfmt interpreter"
+        ):
+            raise LifecycleLabError(
+                "package lifecycle report has invalid arm64 emulator evidence"
+            )
+    binfmt_report = engine.get("arm64_binfmt")
+    if binfmt_report is not None:
+        if (
+            not isinstance(binfmt_report, dict)
+            or not isinstance(binfmt_report.get("path"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", str(binfmt_report.get("sha256")))
+            or not isinstance(binfmt_report.get("interpreter"), str)
+            or not isinstance(binfmt_report.get("flags"), str)
+            or "F" not in str(binfmt_report.get("flags"))
+            or not isinstance(emulator_report, dict)
+            or binfmt_report.get("interpreter") != emulator_report.get("path")
+        ):
+            raise LifecycleLabError(
+                "package lifecycle report has invalid arm64 binfmt evidence"
+            )
+    for platform_result in platforms:
+        architecture_probe = platform_result.get("architecture_probe")
+        if not isinstance(architecture_probe, dict):
+            continue
+        if architecture_probe.get("execution_mode") != "host_binfmt_qemu_aarch64":
+            continue
+        probe_emulator = architecture_probe.get("emulator")
+        probe_binfmt = architecture_probe.get("binfmt")
+        if (
+            not isinstance(emulator_report, dict)
+            or not isinstance(probe_emulator, dict)
+            or not isinstance(binfmt_report, dict)
+            or not isinstance(probe_binfmt, dict)
+            or probe_emulator.get("path") != emulator_report.get("path")
+            or probe_emulator.get("sha256") != emulator_report.get("sha256")
+            or probe_emulator.get("role") != "host binfmt interpreter"
+            or probe_binfmt != binfmt_report
+        ):
+            raise LifecycleLabError(
+                "package lifecycle arm64 probe/binfmt evidence is inconsistent"
+            )
+    if not expected_coordinates.issubset(REQUIRED_PACKAGE_COORDINATES):
+        raise LifecycleLabError(
+            "package lifecycle report contains an unsupported package coordinate"
+        )
+
+    coordinates = contract.get("coordinates")
+    if not isinstance(coordinates, list) or not coordinates:
+        raise LifecycleLabError(
+            "package lifecycle report version coordinates are empty"
+        )
+    observed_coordinates: set[str] = set()
+    for coordinate_result in coordinates:
+        if not isinstance(coordinate_result, dict):
+            raise LifecycleLabError(
+                "package lifecycle report version coordinate must be an object"
+            )
+        coordinate = coordinate_result.get("coordinate")
+        family = coordinate_result.get("family")
+        package_architecture = coordinate_result.get("package_architecture")
+        if (
+            not isinstance(coordinate, str)
+            or not isinstance(family, str)
+            or not isinstance(package_architecture, str)
+            or coordinate != f"{family}:{package_architecture}"
+            or coordinate in observed_coordinates
+        ):
+            raise LifecycleLabError(
+                "package lifecycle report contains an invalid or duplicate version coordinate"
+            )
+        observed_coordinates.add(coordinate)
+        coordinate_previous_numeric = coordinate_result.get("previous_numeric")
+        coordinate_candidate_numeric = coordinate_result.get("candidate_numeric")
+        if (
+            coordinate_result.get("previous_version") != previous_version
+            or coordinate_result.get("candidate_version") != candidate_version
+            or not isinstance(coordinate_previous_numeric, list)
+            or any(type(part) is not int for part in coordinate_previous_numeric)
+            or coordinate_previous_numeric != list(previous_numeric)
+            or not isinstance(coordinate_candidate_numeric, list)
+            or any(type(part) is not int for part in coordinate_candidate_numeric)
+            or coordinate_candidate_numeric != list(candidate_numeric)
+        ):
+            raise LifecycleLabError(
+                f"package lifecycle report version mismatch at {coordinate}"
+            )
+    if observed_coordinates != expected_coordinates:
+        raise LifecycleLabError(
+            "package lifecycle report version coordinates do not cover its platforms"
+        )
+    classification = classify_lifecycle_evidence(platforms)
+    for key in (
+        "harness_complete",
+        "release_ready",
+        "blocker_ids",
+        "unexpected_failed_checks",
+    ):
+        if report.get(key) != classification[key]:
+            raise LifecycleLabError(
+                f"package lifecycle report {key} classification is inconsistent"
+            )
+    scope = report.get("scope")
+    if (
+        not isinstance(scope, dict)
+        or scope.get("coordinate_classification")
+        != classification["coordinate_classification"]
+        or scope.get("container_lab_complete")
+        != (report.get("status") == "pass")
+    ):
+        raise LifecycleLabError(
+            "package lifecycle report coordinate classification is inconsistent"
+        )
+    if (report.get("status") == "pass") != classification["release_ready"]:
+        raise LifecycleLabError(
+            "package lifecycle report status/release classification is inconsistent"
+        )
+
+
+def run_lab(
+    args: argparse.Namespace,
+    *,
+    runner: CommandRunner | None = None,
+    platforms: Sequence[PlatformSpec] = DEFAULT_PLATFORMS,
+    host_architecture: str | None = None,
+) -> dict[str, object]:
+    active_runner = runner or CommandRunner()
+    candidate_root, previous_root, pairs = validate_inputs(
+        args.packages_dir, args.previous_packages_dir, platforms
+    )
+    actual_host_architecture = host_architecture or platform.machine()
+    arm64_emulator = validate_arm64_emulator(
+        getattr(args, "arm64_emulator", None)
+    )
+    arm64_binfmt: BinfmtRegistration | None = None
+    arm64_binfmt_error: str | None = None
+    if (
+        normalize_host_architecture(actual_host_architecture) != "arm64"
+        and arm64_emulator is not None
+    ):
+        registration_path = getattr(
+            args, "_arm64_binfmt_registration", ARM64_BINFMT_REGISTRATION
+        )
+        try:
+            arm64_binfmt = validate_arm64_binfmt(
+                arm64_emulator, registration_path
+            )
+        except LifecycleLabError as exc:
+            arm64_binfmt_error = str(exc)
+    podman_version = ensure_rootless_podman(active_runner, args.podman)
+
+    with tempfile.TemporaryDirectory(prefix="syswarden-package-lifecycle-") as raw:
+        workspace = Path(raw)
+        script_path = workspace / "package-lifecycle.sh"
+        script_path.write_text(LIFECYCLE_SCRIPT, encoding="utf-8")
+        script_path.chmod(0o500)
+
+        platform_results = [
+            run_platform(
+                active_runner,
+                args.podman,
+                spec,
+                pairs[package_coordinate(spec)],
+                candidate_root,
+                previous_root,
+                workspace,
+                args.pull_policy,
+                args.scenario_timeout,
+                actual_host_architecture,
+                arm64_emulator,
+                arm64_binfmt,
+                arm64_binfmt_error,
+            )
+            for spec in platforms
+        ]
+
+    if arm64_emulator is not None:
+        final_emulator = validate_arm64_emulator(arm64_emulator.path)
+        if final_emulator is None or final_emulator.sha256 != arm64_emulator.sha256:
+            raise LifecycleLabError(
+                "arm64 emulator changed while lifecycle evidence was being collected"
+            )
+    if arm64_binfmt is not None and arm64_emulator is not None:
+        final_binfmt = validate_arm64_binfmt(
+            arm64_emulator, arm64_binfmt.path
+        )
+        if final_binfmt != arm64_binfmt:
+            raise LifecycleLabError(
+                "arm64 binfmt registration changed while lifecycle evidence was "
+                "being collected"
+            )
+
+    results_by_coordinate = {
+        (str(result["distribution"]), str(result["architecture_id"])): result
+        for result in platform_results
+    }
+    missing_coordinates = sorted(
+        REQUIRED_PLATFORM_COORDINATES - set(results_by_coordinate)
+    )
+    architecture_coverage: list[dict[str, object]] = []
+    for architecture in ARCHITECTURE_LABELS:
+        expected = sorted(
+            coordinate
+            for coordinate in REQUIRED_PLATFORM_COORDINATES
+            if coordinate[1] == architecture
+        )
+        present = [
+            results_by_coordinate[coordinate]
+            for coordinate in expected
+            if coordinate in results_by_coordinate
+        ]
+        status = coverage_status(present, len(expected))
+        architecture_coverage.append(
+            {
+                "architecture": ARCHITECTURE_LABELS[architecture],
+                "architecture_id": architecture,
+                "status": status,
+                "required_distributions": [item[0] for item in expected],
+                "completed_distributions": sorted(
+                    str(result["distribution"])
+                    for result in present
+                    if result["status"] == "pass"
+                ),
+                "incomplete_or_failed_distributions": sorted(
+                    str(result["distribution"])
+                    for result in present
+                    if result["status"] != "pass"
+                ),
+            }
+        )
+
+    family_architecture_coverage: list[dict[str, object]] = []
+    for architecture in ARCHITECTURE_LABELS:
+        for family in REQUIRED_FAMILIES:
+            expected_specs = [
+                spec
+                for spec in DEFAULT_PLATFORMS
+                if spec.architecture == architecture and spec.family == family
+            ]
+            present = [
+                results_by_coordinate[platform_coordinate(spec)]
+                for spec in expected_specs
+                if platform_coordinate(spec) in results_by_coordinate
+            ]
+            family_architecture_coverage.append(
+                {
+                    "family": family,
+                    "architecture": ARCHITECTURE_LABELS[architecture],
+                    "architecture_id": architecture,
+                    "status": coverage_status(present, len(expected_specs)),
+                    "required_distributions": [
+                        spec.distribution for spec in expected_specs
+                    ],
+                    "completed_distributions": sorted(
+                        str(result["distribution"])
+                        for result in present
+                        if result["status"] == "pass"
+                    ),
+                }
+            )
+
+    if any(result["status"] == "fail" for result in platform_results):
+        container_status = "fail"
+    elif missing_coordinates or any(
+        result["status"] == "incomplete" for result in platform_results
+    ):
+        container_status = "incomplete"
+    elif set(results_by_coordinate) != REQUIRED_PLATFORM_COORDINATES:
+        container_status = "incomplete"
+    elif platform_results and all(
+        result["status"] == "pass" for result in platform_results
+    ):
+        container_status = "pass"
+    else:
+        container_status = "incomplete"
+
+    completed_architectures = [
+        item["architecture"]
+        for item in architecture_coverage
+        if item["status"] == "pass"
+    ]
+    incomplete_architectures = [
+        {
+            "architecture": item["architecture"],
+            "status": item["status"],
+            "reason": "not every required distribution completed every lifecycle scenario",
+        }
+        for item in architecture_coverage
+        if item["status"] != "pass"
+    ]
+    classification = classify_lifecycle_evidence(platform_results)
+    report: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "status": container_status,
+        "harness_complete": classification["harness_complete"],
+        "release_ready": classification["release_ready"],
+        "blocker_ids": classification["blocker_ids"],
+        "unexpected_failed_checks": classification[
+            "unexpected_failed_checks"
+        ],
+        "package_version_contract": build_package_version_contract(pairs),
+        "scope": {
+            "container_lab_complete": container_status == "pass",
+            "coordinate_classification": classification[
+                "coordinate_classification"
+            ],
+            "host_architecture": actual_host_architecture,
+            "network_during_image_bootstrap": "rootless Podman default",
+            "network_during_package_operations": "disabled",
+            "host_mutation": "bounded to rootless Podman storage and a temporary workdir",
+            "architectures_completed": completed_architectures,
+            "architectures_incomplete_or_failed": incomplete_architectures,
+            "architecture_coverage": architecture_coverage,
+            "family_architecture_coverage": family_architecture_coverage,
+            "required_platform_coordinates": [
+                {"distribution": distribution, "architecture": architecture}
+                for distribution, architecture in sorted(REQUIRED_PLATFORM_COORDINATES)
+            ],
+            "missing_platform_coordinates": [
+                {"distribution": distribution, "architecture": architecture}
+                for distribution, architecture in missing_coordinates
+            ],
+            "arm64_coverage_policy": (
+                "arm64/aarch64 is complete only after each DEB, RPM, and APK "
+                "distribution variant executes natively or through a validated "
+                "persistent host binfmt registration whose interpreter exactly "
+                "matches the checksum-recorded --arm64-emulator"
+            ),
+            "rollback_model": (
+                "external package-manager downgrade to the separately supplied, "
+                "checksum-verified previous artifact; this is not a SysWarden "
+                "product rollback feature"
+            ),
+            "freebsd": {
+                "status": "vm_required",
+                "reason": (
+                    "A real FreeBSD VM is required for pkg, rc.d, PF, service "
+                    "startup, signature loading, and runtime-path validation."
+                ),
+            },
+        },
+        "engine": {
+            "name": "podman",
+            "version": podman_version,
+            "rootless": True,
+            "arm64_emulator": (
+                {
+                    "path": str(arm64_emulator.path),
+                    "sha256": arm64_emulator.sha256,
+                    "regular_file": True,
+                    "executable": True,
+                    "symlink": False,
+                    "role": "host binfmt interpreter",
+                }
+                if arm64_emulator is not None
+                else None
+            ),
+            "arm64_binfmt": (
+                {
+                    "path": str(arm64_binfmt.path),
+                    "sha256": arm64_binfmt.sha256,
+                    "interpreter": arm64_binfmt.interpreter,
+                    "flags": arm64_binfmt.flags,
+                }
+                if arm64_binfmt is not None
+                else None
+            ),
+        },
+        "package_roots": {
+            "candidate": str(candidate_root),
+            "previous": str(previous_root),
+            "mount_mode": "read-only",
+        },
+        "platforms": platform_results,
+    }
+    validate_report_version_contract(report)
+    return report
+
+
+def write_report(path: Path, report: dict[str, object], pretty: bool) -> None:
+    destination = path.expanduser().absolute()
+    parent = require_real_directory(destination.parent, "report parent directory")
+    try:
+        metadata = destination.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot inspect report destination {destination}: {exc}") from exc
+    else:
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise LifecycleLabError(
+                f"report destination must be absent or a regular file: {destination}"
+            )
+    serialized = json.dumps(
+        report, indent=2 if pretty else None, sort_keys=True
+    ) + "\n"
+    temporary = parent / f".{destination.name}.{uuid.uuid4().hex}.tmp"
+    try:
+        temporary.write_text(serialized, encoding="utf-8")
+        temporary.chmod(0o600)
+        os.replace(temporary, destination)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--packages-dir", type=Path, required=True)
+    parser.add_argument("--previous-packages-dir", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--pretty", action="store_true")
+    parser.add_argument("--podman", default="podman")
+    parser.add_argument(
+        "--arm64-emulator",
+        type=Path,
+        help=(
+            "exact qemu-aarch64-static interpreter registered by enabled host "
+            "binfmt_misc with persistent flag F on a non-arm64 host"
+        ),
+    )
+    parser.add_argument(
+        "--pull-policy", choices=("never", "missing", "always"), default="missing"
+    )
+    parser.add_argument("--scenario-timeout", type=int, default=600)
+    defaults = {
+        platform_coordinate(spec): spec.image for spec in DEFAULT_PLATFORMS
+    }
+    parser.add_argument(
+        "--debian-image",
+        "--debian-amd64-image",
+        dest="debian_amd64_image",
+        default=defaults[("debian", "amd64")],
+    )
+    parser.add_argument(
+        "--debian-arm64-image", default=defaults[("debian", "arm64")]
+    )
+    parser.add_argument(
+        "--ubuntu-amd64-image", default=defaults[("ubuntu", "amd64")]
+    )
+    parser.add_argument(
+        "--ubuntu-arm64-image", default=defaults[("ubuntu", "arm64")]
+    )
+    parser.add_argument(
+        "--fedora-image",
+        "--fedora-amd64-image",
+        dest="fedora_amd64_image",
+        default=defaults[("fedora", "amd64")],
+    )
+    parser.add_argument(
+        "--fedora-arm64-image", default=defaults[("fedora", "arm64")]
+    )
+    parser.add_argument(
+        "--almalinux-amd64-image", default=defaults[("almalinux", "amd64")]
+    )
+    parser.add_argument(
+        "--almalinux-arm64-image", default=defaults[("almalinux", "arm64")]
+    )
+    parser.add_argument(
+        "--alpine-image",
+        "--alpine-amd64-image",
+        dest="alpine_amd64_image",
+        default=defaults[("alpine", "amd64")],
+    )
+    parser.add_argument(
+        "--alpine-arm64-image", default=defaults[("alpine", "arm64")]
+    )
+    return parser
+
+
+def configured_platforms(args: argparse.Namespace) -> tuple[PlatformSpec, ...]:
+    images = {
+        ("debian", "amd64"): args.debian_amd64_image,
+        ("debian", "arm64"): args.debian_arm64_image,
+        ("ubuntu", "amd64"): args.ubuntu_amd64_image,
+        ("ubuntu", "arm64"): args.ubuntu_arm64_image,
+        ("fedora", "amd64"): args.fedora_amd64_image,
+        ("fedora", "arm64"): args.fedora_arm64_image,
+        ("almalinux", "amd64"): args.almalinux_amd64_image,
+        ("almalinux", "arm64"): args.almalinux_arm64_image,
+        ("alpine", "amd64"): args.alpine_amd64_image,
+        ("alpine", "arm64"): args.alpine_arm64_image,
+    }
+    return tuple(
+        PlatformSpec(
+            **{
+                **asdict(spec),
+                "image": images[platform_coordinate(spec)],
+            }
+        )
+        for spec in DEFAULT_PLATFORMS
+    )
+
+
+def error_report(exc: Exception) -> dict[str, object]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "status": "fail",
+        "harness_complete": False,
+        "release_ready": False,
+        "blocker_ids": [],
+        "unexpected_failed_checks": [f"harness:{exc}"],
+        "error": str(exc),
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.scenario_timeout < 30:
+        report = error_report(
+            LifecycleLabError("--scenario-timeout must be at least 30 seconds")
+        )
+    else:
+        try:
+            report = run_lab(args, platforms=configured_platforms(args))
+        except (LifecycleLabError, OSError) as exc:
+            report = error_report(exc)
+
+    serialized = json.dumps(
+        report, indent=2 if args.pretty else None, sort_keys=True
+    ) + "\n"
+    if args.output is not None:
+        try:
+            write_report(args.output, report, args.pretty)
+        except LifecycleLabError as exc:
+            report = error_report(exc)
+            serialized = json.dumps(
+                report, indent=2 if args.pretty else None, sort_keys=True
+            ) + "\n"
+    sys.stdout.write(serialized)
+    return 0 if report.get("status") == "pass" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

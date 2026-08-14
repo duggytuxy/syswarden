@@ -79,7 +79,8 @@ type WsMsg struct {
 
 var webTuiCmd = &cobra.Command{
 	Use:   "web-tui",
-	Short: "Start the Web-TUI server (WebTTY)",
+	Short: "Start the Web-TUI HTTPS listener",
+	Long:  "Starts an HTTPS Web-TUI listener. The default bind is 0.0.0.0:62027 and the server uses an in-memory self-signed certificate.",
 	Run: func(cmd *cobra.Command, args []string) {
 		if webToken == "" {
 			if config.GlobalConfig != nil && config.GlobalConfig.WebTUIPassword != "" {
@@ -255,6 +256,6 @@ var webTuiCmd = &cobra.Command{
 
 func init() {
 	webTuiCmd.Flags().StringVar(&bindAddr, "bind", "0.0.0.0:62027", "IP:Port to bind the Web-TUI server")
-	webTuiCmd.Flags().StringVar(&webToken, "token", "", "Secure token for Web-TUI access (Required)")
+	webTuiCmd.Flags().StringVar(&webToken, "token", "", "Web-TUI access token; falls back to configuration or generates one when omitted")
 	rootCmd.AddCommand(webTuiCmd)
 }

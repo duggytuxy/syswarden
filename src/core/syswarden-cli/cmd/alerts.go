@@ -18,7 +18,7 @@ import (
 
 var alertsCmd = &cobra.Command{
 	Use:   "alerts",
-	Short: "Launch the real-time TUI dashboard for alerts",
+	Short: "Stream kernel and WAAP alert events",
 	Run: func(cmd *cobra.Command, args []string) {
 		if !term.IsTerminal(int(os.Stdout.Fd())) {
 			runTextModeFallback()

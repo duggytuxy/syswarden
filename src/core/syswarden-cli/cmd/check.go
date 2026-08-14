@@ -8,7 +8,7 @@ import (
 
 var checkCmd = &cobra.Command{
 	Use:   "check <IP>",
-	Short: "Perform a global diagnostic on an IP",
+	Short: "Inspect recorded firewall state for an address or CIDR",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		firewall.CheckIP(args[0])

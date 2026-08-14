@@ -97,7 +97,12 @@ func readConfigToken() string {
 
 var webTokenCmd = &cobra.Command{
 	Use:   "web-token",
-	Short: "Manage the Web-TUI secure access token",
+	Short: "Display or rotate the Web-TUI access token",
+	Long: "Displays the configured Web-TUI access token. If no token exists, an invocation " +
+		"without --rotate generates and persists one, then attempts to restart " +
+		"syswarden-webtui.service. --rotate always replaces the persisted token and makes the same " +
+		"restart attempt. If that attempt fails, a running Web-TUI process may continue accepting " +
+		"its previous token.",
 	Run: func(cmd *cobra.Command, args []string) {
 		token := readConfigToken()
 
@@ -121,6 +126,6 @@ var webTokenCmd = &cobra.Command{
 }
 
 func init() {
-	webTokenCmd.Flags().BoolVarP(&rotateToken, "rotate", "r", false, "Generate a new token and invalidate the old one")
+	webTokenCmd.Flags().BoolVarP(&rotateToken, "rotate", "r", false, "Persist a replacement token and request a Web-TUI service restart")
 	rootCmd.AddCommand(webTokenCmd)
 }

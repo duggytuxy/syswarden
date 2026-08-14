@@ -4,394 +4,334 @@
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/package.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/package.yml?style=flat&logo=githubactions&logoColor=white" alt="SysWarden Builder and Packager">
   </a>
-  <a href="https://github.com/duggytuxy/syswarden/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/duggytuxy/syswarden?style=flat&logo=opensourceinitiative&logoColor=white" alt="GitHub License">
-  </a>
-  <img src="https://img.shields.io/badge/Platform-Linux_Universal-0052cc?style=flat&logo=linux&logoColor=white" alt="Linux Universal">
-  <img src="https://img.shields.io/badge/Platform-FreeBSD_14.4+-ab2b28?style=flat&logo=freebsd&logoColor=white" alt="FreeBSD 14.4+">
-  <img src="https://img.shields.io/badge/Platform-Alpine_Linux_3.21+-0D597F?style=flat&logo=alpinelinux&logoColor=white" alt="Alpine Linux 3.21+">
-  <img src="https://img.shields.io/badge/Language-100%25_Go_Native-00ADD8?style=flat&logo=go&logoColor=white" alt="100% Go Native">
-  <img src="https://img.shields.io/badge/Compliance-EU_CRA_Ready-003399?style=flat&logo=shield&logoColor=white" alt="EU CRA Ready">
-  <img src="https://img.shields.io/badge/Compliance-ISO27001_Ready-003399?style=flat&logo=shield&logoColor=white" alt="ISO27001 Ready">
-  <img src="https://img.shields.io/badge/Compliance-NIS2_Ready-3DD407?style=flat&logo=shield&logoColor=white" alt="NIS2 Ready">
-
-  <br>
-  <br>
-
-  <a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
-    <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
-  </a>
-  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/scorecard.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/scorecard.yml?style=flat&logo=githubactions&logoColor=white&label=OSSF%20Scorecard%20Supply%20Chain%20Security" alt="OSSF Scorecard Supply Chain Security">
-  </a>
   <a href="https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml">
     <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/security-audit.yml?style=flat&logo=githubactions&logoColor=white&label=SysWarden%20Security%20Audit" alt="SysWarden Security Audit">
   </a>
-  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/dependabot/dependabot-updates">
-    <img src="https://img.shields.io/badge/Dependabot-Active-025e8c?style=flat&logo=dependabot&logoColor=white" alt="Dependabot Updates">
+  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/scorecard.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/scorecard.yml?style=flat&logo=githubactions&logoColor=white&label=OSSF%20Scorecard" alt="OpenSSF Scorecard">
   </a>
-  <img src="https://img.shields.io/badge/Status-Production_Ready-blue?style=flat&logo=status&logoColor=white" alt="Production Ready">
+  <a href="https://github.com/duggytuxy/syswarden/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/duggytuxy/syswarden?style=flat&logo=opensourceinitiative&logoColor=white" alt="GitHub License">
+  </a>
 </p>
 
-# SysWarden v4 🇧🇪🇫🇷
-> **Active Defense and HIDS/HIPS/WAAP Out-of-Band Orchestration for Critical Linux Infrastructure**
+# SysWarden v4
 
-**SysWarden** is an Enterprise-grade Hardened Host Intrusion Detection & Prevention System (HIDS - HIPS) engineered in **100% Native Golang**. Designed for critical Linux infrastructures, it enforces automated part of CIS Level 2 hardening, integrates global Threat Intelligence, and orchestrates dynamic network defense with absolute zero-trust execution.
+Current source version: **v4.02.8**.
 
-It acts as the definitive first line of defense for critical GNU/Linux infrastructures. By fusing dynamic firewall orchestration (`nftables`/`iptables`/`pf`), global Threat Intelligence ([Data-Shield IPv4 Blocklists](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist), GeoIP, ASN), a high-speed memory-safe WAF daemon (`syswarden-core`), and SIEM alert routing natively via Go, SysWarden neutralizes threats at the network (L2/L3/L4) and application (L7) levels without exposing your kernel to shell injection risks.
+SysWarden is a host firewall orchestrator and an out-of-band security-log
+analysis toolkit implemented primarily in Go. Its CLI manages configuration,
+threat-intelligence lists, firewall rules, system services and optional
+integrations. `syswarden-core` reads logs that another service has already
+written and can add addresses to kernel firewall sets. It does not proxy,
+terminate, inspect or sanitize live HTTP traffic.
 
-> [!IMPORTANT]
-> **Zero CWE Mitigation:** Re-architected entirely in Go, SysWarden v2 strongly mitigates risks of OS Command Injection (CWE-78), Memory Corruption (CWE-119), and Resource Exhaustion (CWE-400), seamlessly accelerating your **ISO 27001, NIS2, and CIS Benchmark** compliance.
+This README describes the current repository state. A package being produced
+by the build workflow is not, by itself, evidence that installation, upgrade,
+restart and rollback have passed on the target operating system.
 
-## Architectural Capabilities (HIDS-HIPS-WAAP)
+## Validation status
 
-**1. A "Next-Gen HIPS" (Host Intrusion Prevention System)**
-At its core, SysWarden is a formidable HIPS. Unlike a traditional IDS (Intrusion Detection System) that merely alerts, SysWarden actively prevents attacks across multiple concrete OSI layers:
-* **Layer 2 (Data Link)**: ARP Request Rate-Limiting to instantly kill ARP Flooding/Spoofing attacks without breaking VRRP HA setups. *(Note: Layer 2 protection is strictly designed for internal LAN/VLAN environments and is not applicable to publicly exposed edge servers).*
-* **Layer 3 & 4 (Network & Transport)**: Stateful IP, CIDR, ASN, and GeoIP filtering via the `inet` family with explicit TCP Flag anomaly detection (e.g. killing invalid SYN/FIN/RST combinations). Includes a **Zero-Trust Strict ALLOW Mode** natively dropping any IP worldwide that isn't explicitly whitelisted via GeoIP or ASN.
-* **Layer 7 (Application)**: Advanced WAAP (Web Application Firewall) inspecting payloads via Zero-Overhead Substring Matching for zero-day exploits (SQLi, XSS, LFI, RCE) and HTTP 401/403/404 Brute-Force tracking via the native Go `WAAPEngine`.
-
-### Complete Architecture Pipeline
-
-```text
-    [ INTERNET / EXTERNAL THREATS ]
-                  |
-                  v
-  ======================================================
-  [ EDGE / PUBLICLY EXPOSED SERVER ]
-    (SysWarden: L3/L4 & L7 Defenses Active)
-    
-    +------------------------------------------------+
-    | [+] L3/L4: GeoIP, ASN, TCP Anomaly Mitigation  |
-    | [+] L7: WAAP Engine (Nginx/Traefik Access Logs)|
-    | [+] Orchestration: Threat Intel Sync & HA      |
-    +------------------------------------------------+
-                  |
-                  v (Sanitized Traffic)
-         [ Web Apps / Public APIs ]
-  ======================================================
-                  |
-         (Internal Corporate Network)
-                  |
-                  v
-  ======================================================
-  [ INTERNAL LAN/VLAN SERVER ]
-    (SysWarden: L2, L3/L4 & L7 Defenses Active)
-    
-    +------------------------------------------------+
-    | [+] L2: ARP Spoofing/Flooding Prevention       | <-- LAN/VLAN Exclusive
-    | [+] L3/L4: CIDR Whitelisting & Strict Allow    |
-    | [+] L7: WAAP Engine (Database/Auth Payloads)   |
-    | [+] Orchestration: Internal HA Sync            |
-    +------------------------------------------------+
-                  |
-                  v (Sanitized Traffic)
-        [ Critical Internal Services ]
-  ======================================================
-```
-
-### System Footprint & Ecosystem
-
-SysWarden operates with absolute transparency. Below is the complete mapping of its orchestration files, modules, and kernel hooks:
-
-```text
-[ SYSWARDEN ECOSYSTEM & SYSTEM FOOTPRINT ]
-
-/opt/syswarden/
- ├── bin/
- │    ├── syswarden                (Unified Orchestrator CLI)
- │    ├── syswarden-core           (L7 WAAP & Telemetry Daemon)
- │    └── syswarden-tui            (Real-Time Observability Dashboard)
- └── (Binaries are statically compiled, 100% Native Go)
-
-/etc/syswarden/
- ├── config/
- │    └── modules/
- │         ├── 10-core.toml        (Engine & Daemon Core Params)
- │         ├── 20-network.toml     (L2/L3 Firewalls & Honeyports)
- │         ├── 30-security.toml    (WAAP & L7 Engine Rules)
- │         ├── 40-integrations.toml(SIEM, HA, Webhooks)
- │         └── 99-user.toml        (Admin Custom Overrides)
- └── state/
-      └── .migration_backup        (Failsafe pre-upgrade configuration backup)
-
-/var/lib/syswarden/
- ├── feeds/
- │    ├── datashield.ipv4          (Dynamic IPv4 Intelligence Blocklist)
- │    ├── asn.txt                  (Banned ASNs Registry)
- │    └── geoip.txt                (Blocked Countries Registry)
- └── db/
-      └── telemetry.cache          (Stateful WAF Ban Tracking & Rate Limiting)
-
-[ SYSTEMD SERVICES ]
- ├── syswarden.service             (Core Go WAAP Background Daemon)
- └── syswarden-nftables.service    (Kernel Firewall Boot Orchestration)
-
-[ KERNEL NETFILTER CHAIN (nftables / pf) ]
- ├── table inet syswarden
- │    ├── chain arp_protect        (L2 MAC/IP ARP Rate-Limiting - LAN Only)
- │    ├── chain prerouting         (L3/L4 GeoIP, ASN, TCP anomalies drop)
- │    ├── chain input              (L7 Auto-Bans, Strict ALLOW modes)
- │    └── chain docker_protect     (CWPP routing protection & isolation)
-```
-
-**2. A CWPP (Cloud Workload Protection Platform)**
-By natively integrating Docker protection (Layer 3 via the `docker_protect` chain and Layer 7 via the Aho-Corasick WAF), SysWarden secures modern workloads. Whether the server hosts a Traefik cluster, databases, or containerized APIs, SysWarden wraps the containers in a shield without ever breaking their internal routing. This perfectly mirrors the behavior of enterprise agents like CrowdStrike or Palo Alto Prisma Cloud on Linux servers.
-
-**3. An Embedded WAAP (Web Application and API Protection)**
-The legacy term "WAF" is increasingly replaced by "WAAP" as attacks aggressively target APIs. By specifically targeting Docker API abuse, authentication endpoints (Nextcloud, Proxmox, Gitlab), and application payloads (SQLi, RCE, LFI) via its `syswarden-core` Go engine, SysWarden acts as an embedded WAAP. It guarantees "Zero-Trust" even if the traffic is encrypted, by reading the access logs decrypted by your reverse proxy.
-
-**4. Out-of-Band Orchestration (Active Defense)**
-SysWarden doesn't just block. It actively manages its own Threat Intelligence (ingesting Data-Shield, ASN, GeoIP feeds), synchronizes bans across different enterprise servers via its HA (High Availability) clustering module, and natively forwards telemetry out-of-band. It autonomously orchestrates the entire active defense lifecycle.
-
-> [!TIP]
-> ### Ecosystem Synergy: The Ultimate Defense
-> While SysWarden excels as an Out-of-Band orchestrator and first line of defense at the kernel edge, a truly impenetrable architecture often requires deep, inline traffic inspection. For a complete, enterprise-grade In-Band WAF/WAAP solution, we highly recommend pairing SysWarden with [BunkerWeb](https://github.com/bunkerity/bunkerweb) by Bunkerity. Together, they form a robust, multi-layered security posture: BunkerWeb intercepts and sanitizes hostile payloads in real-time (In-Band), while SysWarden orchestrates behavioral threat intelligence, kernel-level network blocks, and system-wide Active Defense (Out-of-Band).
-
-## Enterprise-Grade Features
-
-**100% Go Native Orchestration (Zero-Shell Execution)**
-* **Absolute Security:** Deprecated all legacy Bash scripts. Firewall generation, Systemd provisioning, and Telemetry operations are executed entirely in Go memory, utilizing native `os/exec` wrappers to eliminate `bash -c` vulnerabilities.
-* **Strict CIDR Validation:** Threat feeds are parsed mathematically using `net.ParseCIDR()`, instantly destroying malformed payloads or metadata injections (CWE-20 mitigation).
-* **Asynchronous Telemetry Worker:** Replaced brittle system crons with native Go `sync.WaitGroup` goroutines. Telemetry and HA syncing run flawlessly in the background with strict memory leak prevention.
-
-**Insider Threat Detection & Honeyports (Zero-Trust)**
-* **Shadow Mode:** Prevents legitimate administrative lockouts. When malicious Web Application attacks (e.g. PrivEsc, RCE attempts) originate from whitelisted administrative IPs, SysWarden silently tags the event as a `SHADOW-ALERT`. Legitimate admins are not banned, preventing disruption of service, while the SOC receives immediate notifications.
-* **Native L3 Honeyports:** Trap internal network scanners using `SYSWARDEN_HONEYPORTS`. Expose decoy ports (e.g. `6379`, `3306`) seamlessly integrated into the kernel firewall. Whitelisted IPs attempting access trigger shadow alerts, while external malicious IPs are instantly banned.
-* **Adaptive Hybrid Telemetry Engine:** Natively bridges L7 WAF Logs using high-speed `rsyslog` UDS sockets (Ubuntu/Debian) or seamlessly falls back to a native `systemd-journald` + Direct File Tailing hybrid engine (Fedora/RHEL) ensuring zero blind spots across disparate enterprise OS architectures.
-* **Layer 3/4 Catch-All Auditing:** Enforces total visibility by securely logging any packet hitting the hardware drop threshold before execution, populating the real-time observability console (`syswarden alerts`) with granular "Catch-All" traffic analytics.
-
-**Core Network Defense (Hardware & Layer 2/3)**
-* **OSI Layer 2 (ARP)**: An isolated `arp` table limits ARP requests to strictly mitigate network saturation floods natively.
-* **OSI Layer 3 (IP/Routing)**: Native Go `net/http` clients securely download and sync hostile countries (GeoIP), cybercrime hosters, and rogue ASNs.
-
-**Stateful & Protocol Optimization (Layer 3/4)**
-* Implements UFW-grade stateful enforcement by silently destroying late `FIN-ACK`/`RST` packets on expired `conntrack` sessions, and strictly blocking `NEW` connections lacking the `SYN` flag.
-* Modern web protocols natively supported. As a Zero-Trust Overlay, SysWarden guarantees HTTP/3 QUIC survival without stateful interference on UDP traffic.
-
-**Application Security & Active Response (Layer 7)**
-* Protects 56+ vital services (Docker, Nginx, Databases) using the ultra-fast `syswarden-core` WAF daemon.
-* **Multi-Tenant Docker WAF Bridge:** Transparently streams access logs from Traefik and isolated ModSecurity containers directly into the native Go engine using an asynchronous `rsyslog` (`imfile`/`omuxsock`) bridge.
-* **Native WAAP (L7) Engine:** Replaces Fail2ban entirely. Asynchronously parses raw access logs (Traefik, Nginx, Apache) in real-time. Detects advanced signatures (SQLi, XSS, LFI, RCE, Scanners) via Zero-Overhead Substring Matching for immediate blocking, and enforces native Nftables bans on abusive HTTP 401/403/404 attempts using memory-safe sliding-window tracking.
-* Native SIEM integration (`syswarden-cli` injects directly to `rsyslog` over TLS/UDP).
-* Sends critical bans securely to Discord/Teams webhooks natively, protected by `context.WithTimeout` against SSRF and deadlocks.
-
-**Observability & Lifecycle Management**
-* Monitor active threats via the Go-compiled **SysWarden TUI** (`syswarden-tui`), a localized, high-speed interface requiring zero open web ports.
-* Manage your infrastructure via the unified `syswarden-cli` orchestrator (e.g., `syswarden install`, `syswarden update`, `syswarden migrate-config`).
-
-> [!NOTE]
-> **For CISOs and CIOs (Strategic Impact):** By offloading volumetric mitigation to the network edge and forwarding only high-fidelity behavioral data natively through Go, SysWarden drastically reduces SIEM ingestion costs and guarantees unbreachable operational continuity.
-
-## Supported Operating Systems & Firewall Backends
-
-SysWarden dynamically adapts to the native firewall orchestration engines of modern enterprise Linux distributions. The architecture relies on deep `systemd` integration:
-
-| Operating System | Native Firewall Engine(s) Supported | Status |
+| Target | What the repository currently proves | Release qualification |
 | :--- | :--- | :--- |
-| **Debian 13+** | `nftables`, `iptables` | Enterprise Ready |
-| **Ubuntu 24.04+** | `ufw`, `nftables`, `iptables` | Enterprise Ready |
-| **RHEL 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
-| **Alma Linux 10+ / Rocky Linux 9+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
-| **CentOS Stream 10+** | `firewalld`, `nftables`, `iptables` | Enterprise Ready |
-| **Fedora 43+** | `firewalld`, `nftables`, `iptables` | Production Ready |
-| **Alpine Linux 3.21+** | `nftables` | Enterprise Ready |
-| **FreeBSD 14.4+** | `pf` (Packet Filter) | Enterprise Ready |
+| Linux amd64 | The CLI, core and TUI compile; unit, contract and golden-rule tests run in CI | Privileged virtual-machine install, firewall, upgrade and rollback cycles have not passed in this repository state |
+| Linux arm64 | The three binaries cross-compile and package metadata is generated | Native arm64 lifecycle evidence is still required |
+| Debian/Ubuntu `.deb` | amd64 and arm64 package recipes exist | Not release-qualified by a complete VM lifecycle gate |
+| RHEL-family `.rpm` | x86_64 and aarch64 package recipes exist | Not release-qualified by a complete VM lifecycle gate |
+| Alpine `.apk` | x86_64 and aarch64 package recipes exist | **Known blocker:** the current Linux binaries request the glibc ELF interpreter and do not run on a standard musl-only Alpine installation |
+| FreeBSD `.txz` | amd64 binaries cross-compile and a package recipe exists | **Known blocker:** the package stages binaries below `/usr/local/syswarden/bin`, while current service/runtime paths still reference `/opt/syswarden`; do not install this package |
 
-## Installation Guide (v2.0 Native Deployment)
+The Linux distribution names previously listed here were build intentions, not
+per-distribution lifecycle results. Until the corresponding VM gates pass, use
+SysWarden only in an isolated laboratory with console access and a tested host
+snapshot or rollback path.
 
-SysWarden is exclusively distributed via standard package managers (`.deb` / `.rpm`).
+## Components and data flow
 
-### 1. Enterprise Installation via Packages (.deb & .rpm)
+- `syswarden-cli` is the privileged operator interface.
+- `syswarden-core` tails configured access or security logs, evaluates WAAP
+  signatures and brute-force thresholds, and writes telemetry.
+- `syswarden-tui` displays local telemetry in a terminal and opens no network
+  listener itself. The current TUI implements a responsive layout, an ASCII
+  24-hour rolling timeline whose buckets are stored in UTC while the current
+  axis labels are rendered from local time, and profile-aware header tagging.
+- `syswarden web-tui` exposes the terminal UI through HTTPS and WebSocket. It
+  is a separate, network-facing mode with different risks.
 
-The Go CLI and dependencies are automatically placed in `/opt/syswarden/bin/`, securely embedding the default configuration.
+```text
+application or reverse-proxy logs
+              |
+              v
+       syswarden-core
+       |            |
+       v            v
+local telemetry   requested bans
+       |            |
+       v            v
+syswarden-tui   nftables or pf
+```
+
+The WAAP engine is out-of-band log analysis. A detection can lead to a later
+firewall update, but SysWarden is not in the HTTP request path and cannot clean
+or rewrite a request before an application receives it.
+
+## Implemented capabilities and limits
+
+### Firewall and threat intelligence
+
+The Linux implementation generates nftables rules and maintains IPv4 and IPv6
+list files under `/etc/syswarden/lists`. The FreeBSD implementation generates
+PF rules. GeoIP, ASN, custom feeds, whitelists, SSH exceptions, honeyports,
+WireGuard and L2 options are configuration-controlled.
+
+These controls can disconnect an administrator. Keep an out-of-band console,
+back up the active configuration and firewall rules, and test rollback before
+enabling strict allow lists, changing SSH access, or applying rules remotely.
+The current reload path removes and reapplies SysWarden rules and can restart
+`syswarden-core`; it is not an atomic or connection-preserving operation.
+
+### WAAP log analysis
+
+`syswarden-core` can tail configured Nginx, Apache, Traefik, Caddy or other log
+paths and evaluate signatures for SQL injection, XSS, LFI, RCE, scanners and
+HTTP failure thresholds. Detection depends on the log format, log availability,
+permissions and signature coverage. It does not replace an inline WAF, and the
+repository does not establish a fixed service-count, false-positive rate,
+latency or resource bound.
+
+### Native TUI and Web-TUI
+
+The native TUI is local and does not require an open port. The Web-TUI is
+different: its default bind is `0.0.0.0:62027`, its service is enabled by the
+current install path, it creates an in-memory self-signed certificate, and it
+accepts a token through Basic authentication, a cookie or a legacy URL query
+parameter. Restrict the listener with `--bind`, protect the port with a trusted
+network control, and do not place tokens in URLs or logs.
+
+### High availability
+
+When enabled, the HA API listens on configurable TCP port `62026` by default.
+It uses TLS 1.3 with a newly generated self-signed certificate. The current CLI
+client sets `InsecureSkipVerify`, so it encrypts traffic but does not verify the
+peer certificate. A bearer token is optional and an empty token enables a
+legacy IP-only mode. Use a strong shared token and an isolated trusted network.
+
+`syswarden ha-sync` compares the local blocklist with each configured peer and
+pushes locally recorded entries that the peer does not report. The installer
+also adds a one-way HA push cron entry every 30 minutes. This is not
+bidirectional reconciliation or instantaneous event replication. Current HA
+HTTP clients lack bounded request timeouts, and the unban request does not
+attach the bearer token; treat mixed-version and failure recovery as
+unvalidated.
+
+### SIEM and webhooks
+
+SIEM forwarding is implemented through rsyslog. UDP and cleartext TCP are
+available. When a CA path is configured, the current rsyslog template uses
+anonymous TLS authentication, so the documentation does not classify it as
+strict authenticated TLS. Webhook URLs are operator-supplied destinations; the
+current implementation has no destination allowlist or private-network
+filtering. One setup request has a timeout, while another alert path uses the
+default HTTP client without an explicit timeout.
+
+## Network listeners
+
+| Component | Default | Condition | Current security note |
+| :--- | :--- | :--- | :--- |
+| Native TUI | No listener | Launched with `syswarden tui` | Local terminal process |
+| Web-TUI | `0.0.0.0:62027` | Service or `syswarden web-tui` is running | Self-signed TLS and bearer-style token; restrict the bind address |
+| HA API | all interfaces on TCP `62026` | HA is enabled with at least one peer | Self-signed TLS; CLI certificate verification is disabled |
+| WireGuard | Configurable; legacy default `51820` | WireGuard is enabled | Verify the configured port and firewall rules on the host |
+
+## Files and services on Linux
+
+| Purpose | Current path or name |
+| :--- | :--- |
+| Binaries | `/opt/syswarden/bin/syswarden-cli`, `/opt/syswarden/bin/syswarden-core`, `/opt/syswarden/bin/syswarden-tui` |
+| CLI links | `/usr/local/bin/syswarden`, `/usr/local/bin/syswarden-tui` |
+| Master configuration | `/etc/syswarden/config/config.toml` |
+| Ordered modules | `/etc/syswarden/config/modules/00-core.toml` through `99-user.toml` |
+| Firewall and intelligence lists | `/etc/syswarden/lists` |
+| Telemetry | `/var/lib/syswarden/ui/data.json` |
+| Logs | `/var/log/syswarden` |
+| systemd services | `syswarden-core.service`, `syswarden-firewall.service`, `syswarden-webtui.service` |
+
+The current FreeBSD package and runtime paths are inconsistent, as described in
+the validation table. Linux paths must not be assumed to describe a working
+FreeBSD installation.
+
+## Build verification
+
+The repository build script requires Go and PowerShell. The audited Lot 0
+environment uses the official PowerShell 7.6.4 release. The script builds the
+three components for linux/amd64, linux/arm64 and freebsd/amd64 and validates
+the resulting executable inventory.
 
 ```bash
-# 1. Fetch the latest release version automatically
-VERSION=$(curl -s https://api.github.com/repos/duggytuxy/syswarden/releases/latest | grep '"tag_name":' | cut -d '"' -f 4)
-V_NUM=${VERSION#v}
-
-# 2. Download the appropriate package and its checksum
-# For Debian/Ubuntu (amd64 & arm64)
-wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_amd64.deb
-wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_arm64.deb
-# For RHEL/AlmaLinux/Rocky (x86_64 & aarch64)
-wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}-1.x86_64.rpm
-wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}-1.aarch64.rpm
-# For Alpine Linux (x86_64 & aarch64)
-wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_x86_64.apk
-wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden_${V_NUM}_aarch64.apk
-# For FreeBSD 14+ (amd64)
-wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/syswarden-${V_NUM}.txz
-
-# Also download the checksums
-wget https://github.com/duggytuxy/syswarden/releases/download/${VERSION}/SHA256SUMS.txt
-
-# 3. Verify Integrity
-sha256sum -c SHA256SUMS.txt --ignore-missing
-
-# 4. Install the package
-# For Debian/Ubuntu
-sudo apt-get install -y ./syswarden_${V_NUM}_*.deb
-# For RHEL/AlmaLinux/Rocky
-sudo dnf install -y ./syswarden-${V_NUM}-1.*.rpm
-# For Alpine Linux
-sudo apk add --allow-untrusted ./syswarden_${V_NUM}_*.apk
-# For FreeBSD 14+
-sudo pkg add ./syswarden-${V_NUM}.txz
-
-# 4. Read the exhaustive SysAdmin manual to understand all Data-Shield lists and configuration parameters
-sudo syswarden manual
-
-# 5. Review and tailor the embedded TOML configuration to your infrastructure
-# SysWarden v3 completely deprecates syswarden-auto.conf in favor of a strictly structured TOML schema.
-sudo syswarden config
-
-# The interactive wizard dynamically manages parameters across /etc/syswarden/config/modules/, for example:
-# - core.enforcement_mode = "enforcing" (Actively bans malicious IPs)
-# - network.arp_protect = true (Enable 10req/sec ARP Flood limits on LAN)
-# - network.lan_mode = true (Enable Local LAN Mode to save RAM by skipping global OSINT downloads)
-# - waap.bruteforce_logs = "/var/log/traefik/access.log" (Enable L7 WAF log parsing)
-
-# 5. Execute the Go Orchestrator to apply policies instantly
-sudo syswarden install
+pwsh -File ./build.ps1
 ```
 
-### 2. Updating Configurations (Zero-Downtime)
+Building does not install or start SysWarden.
 
-If you modify the configuration later using `syswarden config` (e.g., to enable a SIEM, add a GeoIP block, or modify whitelists), apply the changes instantly without interrupting production traffic:
+## Installation safety
 
-```bash
-sudo syswarden reload
+The package workflow is configured to generate two DEB, two RPM, two APK and
+one FreeBSD package plus `SHA256SUMS.txt`. Check the assets actually attached to
+the selected GitHub release before using any filename or command.
+
+> [!CAUTION]
+> The current package post-install script invokes `syswarden-cli install`
+> automatically. That operation can install dependencies, change SSH and host
+> hardening, replace or modify firewall services, download feeds, create cron
+> jobs, enable the Web-TUI, and restart services. Do not run it on a remotely
+> administered host without console access, backups and a tested rollback.
+
+Do not install the current Alpine or FreeBSD package. Do not use
+`apk --allow-untrusted`. For a Linux laboratory test, download only the package
+matching the host architecture and its release checksum file, verify the exact
+package entry, inspect the package scripts, and take a snapshot before invoking
+the package manager. Attestations, an SBOM or a checksum should be relied upon
+only when that exact artifact is present and verifies for the selected release.
+
+## Configuration
+
+Configuration is loaded from `/etc/syswarden/config/config.toml` and ordered
+TOML files below `/etc/syswarden/config/modules`. Later filenames override
+earlier modules; `99-user.toml` is reserved for operator overrides. The legacy
+`/opt/syswarden/syswarden-auto.conf` format remains available for migration.
+
+Use the interactive editor or place a small override in `99-user.toml`:
+
+```toml
+[core]
+ssh_port = "22"
+
+[waap]
+enforcement_mode = "audit"
+bruteforce_logs = "/var/log/nginx/access.log"
+bruteforce_threshold = 5
+bruteforce_window_seconds = 60
+
+[integrations.ha]
+enabled = false
+peer_ips = []
+peer_port = 62026
+token = ""
+
+[user]
+webtui_password = ""
 ```
 
-### 3. Real-Time Observability & Alerts
+Back up the complete configuration directory before editing. Validate the
+result locally before applying it. An empty HA token selects the legacy mode;
+it is shown above only because HA is disabled.
 
-SysWarden provides comprehensive monitoring modes tailored for immediate action and long-term analysis. Both dashboards natively isolate and track **ALLOWED** (legitimate traffic) connections dynamically in bright green, making authorized services (e.g., successful SSH logins, Nginx/Apache 2xx requests) visually distinct from blocked threats.
+## Operator commands
 
-**A. Live Threat Streaming (Real-Time)**
-To watch every single connection attempt (L2/L3/L4 structural drops, L7 WAF bans, and validated ALLOWED services) in real-time directly from the kernel and engine logs:
-```bash
-sudo syswarden alerts
+Use `syswarden --help` and command-specific help as the command contract. The
+main commands include:
+
+```text
+alerts             Stream the alert dashboard.
+allow-ssh          Add an SSH exception registry entry; verify the kernel rule.
+audit              Run a local operational diagnostic, not a compliance audit.
+block              Add addresses or CIDRs to the persistent blocklist.
+check              Inspect one address.
+config             Open the configuration editor.
+config-get         Read one modular configuration key.
+ha-sync            Push missing local blocklist entries to configured HA peers.
+install            Apply the installation pipeline; this is host-mutating.
+list               Show manual registries.
+manual             Display the embedded operator reference.
+migrate-config     Convert a legacy configuration.
+reload             Reapply policy and normally restart the core.
+revoke-ssh         Remove an SSH exception registry entry.
+tui                Launch the local terminal dashboard.
+unblock            Remove addresses or CIDRs from the blocklist.
+uninstall          Delete SysWarden services, rules, configuration, data and logs.
+unwhitelist        Remove addresses or CIDRs from the whitelist.
+update             Run the current in-place updater; see the warning below.
+update-feeds       Refresh feeds and reapply firewall policy.
+web-token          Display the configured token or persist a replacement and request a Web-TUI restart.
+web-tui            Start the network-facing Web-TUI server.
+whitelist          Add addresses or CIDRs to the whitelist.
+whitelist-infra    Detect and add local infrastructure addresses.
 ```
 
-**B. Telemetry Dashboard (TUI)**
-To monitor global system health, metrics, top blocked ASNs, and observe real-time legitimate service activity, launch the integrated Terminal User Interface:
-```bash
-sudo syswarden tui
-```
+If no token is configured, `syswarden web-token` generates and persists one
+even without `--rotate`, then requests a `syswarden-webtui.service` restart.
+`--rotate` persists a replacement token and requests the same restart. If that
+restart fails, a running Web-TUI process may continue accepting the previous
+token.
 
-### 4. Upgrading SysWarden
+The port-specific bypass semantics of `allow-ssh` and `revoke-ssh` have not
+passed a privileged kernel contract test. Do not depend on them for remote
+access recovery.
 
-To check for the latest Enterprise updates and perform an automated in-place upgrade (via GitHub Releases or APT):
+## Lifecycle warnings
 
-```bash
-sudo syswarden update
-```
+- `syswarden reload` reapplies firewall policy, repairs cron entries and
+  normally restarts `syswarden-core.service`. Take a ruleset snapshot and keep
+  console access before running it.
+- `syswarden audit` is a local operational diagnostic. Its output is not an
+  ISO 27001, NIS2, CRA or CIS certification.
+- `syswarden update` currently downloads a package without verifying a release
+  checksum or signature, uses fixed temporary filenames, and selects amd64 or
+  x86_64 for DEB/RPM even on other architectures. Do not use this updater until
+  those issues are corrected; perform a separately verified package upgrade in
+  a laboratory instead.
+- `syswarden uninstall` is destructive. It deletes SysWarden configuration,
+  data, logs, services and firewall tables. It does not restore every previous
+  host setting. Back up `/etc/syswarden`, `/var/lib/syswarden`, relevant logs,
+  firewall state, SSH configuration and hardening files before considering it.
 
-### 5. Quick Uninstall
+## Security posture and limitations
 
-Safely reverse all OS hardening and kernel routing injected by SysWarden, reverting the machine to its native state in milliseconds:
+- SysWarden runs privileged operations and can cause network lockout or service
+  interruption. An out-of-band recovery path is a prerequisite.
+- Current firewall reload is not transactional.
+- Current ban paths can report success without independently proving the final
+  kernel state in every failure mode.
+- WAAP is based on previously written logs and cannot stop a request before it
+  reaches the logging application.
+- HA certificate identity is not verified by the CLI client, legacy tokenless
+  mode exists, unban authentication is incomplete, and request sizes and
+  timeouts are not fully bounded.
+- Web-TUI listens on all interfaces by default and uses a self-signed
+  certificate plus a shared token.
+- SIEM TLS currently uses anonymous authentication.
+- Webhook destinations are not protected by a complete SSRF policy.
+- The updater does not verify downloaded packages and uses unsafe fixed
+  temporary paths.
+- Complete install, upgrade, restart and rollback evidence is still required
+  for every claimed operating-system and architecture combination.
+- SysWarden provides controls and audit evidence that may assist a security
+  program; it is not a regulatory certification or a substitute for an
+  independent assessment.
 
-```bash
-sudo syswarden uninstall
-```
-
-### 6. Native Enterprise Management & Auditing
-
-SysWarden v2 includes a comprehensive, native Golang CLI to orchestrate all firewalls and system checks directly without bash scripts.
-
-**DevSecOps Full Audit:**
-Run a complete system compliance and integration check (Rsyslog bridges, Docker routing, WAF telemetry, Cron health):
-```bash
-sudo syswarden audit
-```
-
-### 7. Dynamic Management
-SysWarden provides an instantaneous, zero-delay CLI for incident response.
-
-```bash
-# Block or unblock an IP or CIDR Subnet instantly (e.g. 10.0.0.0/24)
-sudo syswarden block <IP/CIDR>
-sudo syswarden unblock <IP/CIDR>
-
-# Whitelist an IP or CIDR globally (optional PORT)
-sudo syswarden whitelist <IP/CIDR> [PORT]
-sudo syswarden unwhitelist <IP/CIDR>
-
-# Grant or revoke SSH-exclusive access
-sudo syswarden allow-ssh <IP> [PORT]
-sudo syswarden revoke-ssh <IP>
-
-# Auto-detect and whitelist critical infrastructure (DNS, Gateway)
-sudo syswarden whitelist-infra
-```
-
-**Diagnostics:**
-```bash
-# Check if an IP is blocked, whitelisted, or active in memory
-sudo syswarden check <IP>
-
-# List all active custom rules
-sudo syswarden list
-```
-
-### 8. High Availability (HA) Cluster Setup
-
-SysWarden natively supports High Availability (HA) clustering. When an attacker is blocked on one node (L3 or L7), the ban is instantly and securely replicated to all registered peers.
-
-Starting with v3.51.0, the HA synchronization uses a **"Zero-Touch" TLS P2P API**, abandoning the legacy SSH-based sync. The `syswarden-core` daemon dynamically generates self-signed certificates and enforces strict Zero-Trust TCP IP validation.
-
-**Prerequisites:**
-1. Both servers must have SysWarden installed and running.
-2. They must be able to communicate securely via a dedicated TCP port of your choice (default: `62026`).
-
-> [!TIP]
-> **Zero-Touch Auto-Whitelist**: The HA clustering engine natively and autonomously whitelists all configured `SYSWARDEN_HA_PEER_IP` nodes upon installation or reload. This eliminates the need for manual firewall interventions to allow the TLS P2P API traffic.
-
-**Configuration on each node:**
-1. Edit your enterprise configuration via the secure CLI:
-```bash
-sudo syswarden config
-```
-2. Enable HA, add your peer IP(s) (can be comma or space-separated), and set the custom TLS port:
-```conf
-# Within the Interactive Wizard (syswarden config -> HA/Integrations):
-integrations.ha.enable = true
-integrations.ha.peer_ip = ["172.16.0.1", "10.0.0.2", "10.0.0.3"]
-integrations.ha.port = "62026"
-```
-3. Reload the configuration instantly:
-```bash
-sudo syswarden reload
-```
-
-**Manual Synchronization:**
-While the `syswarden-core` daemon synchronizes in the background, you can also manually trigger a full blocklist push to all your peers at any time:
-```bash
-sudo syswarden ha-sync
-```
+Security issues should be reported according to [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
-To learn everything about the SysWarden ecosystem, explore detailed configurations, and read advanced usage guides, visit our [official documentation page](https://github.com/duggytuxy/syswarden/wiki/Deployment-Tutorial)
+The separate [SysWarden wiki](https://github.com/duggytuxy/syswarden/wiki)
+contains deployment notes and use cases. Wiki changes use a separate review and
+maintainer-controlled publication gate; a wiki page may lag the source until
+that gate is completed. When the wiki and this README disagree, prefer tested
+behavior in the source candidate and report the inconsistency.
 
 ## Target and support
 
-> Goal: 36% reached/year (Goal) to fund continuous DevSecOps improvements and infrastructure.
+> Goal: 37% reached/year (Goal) to fund continuous DevSecOps improvements and infrastructure.
 
-Developing **SysWarden** and maintaining the zero-false-positive **Data-Shield IPv4 blocklists** requires dedicated server infrastructure and non-stop threat monitoring.
-
-Reaching this annual goal guarantees my 100% independence, funding a continuous development cycle without corporate constraints. Your support directly pays for the servers and keeps these enterprise-grade cybersecurity tools free, updated, and accessible to everyone.
-
-Let's build a safer internet together!
+Developing SysWarden and maintaining the Data-Shield IPv4 blocklists requires
+server infrastructure and ongoing monitoring. Contributions and support help
+fund that work.
 
 [![Support on Ko-Fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/laurentmduggytuxy)
 
 ## License
 
-SysWarden is free and open-source software distributed under the **GNU General Public License v3.0 (GPLv3)**.
-
-You are free to use, modify, and distribute this software in compliance with the license terms. [LICENSE](/LICENSE) file for more details.
+SysWarden is free and open-source software distributed under the
+[GNU General Public License v3.0](LICENSE).
 
 *Developed and maintained by DuggyTuxy (Laurent M.).*

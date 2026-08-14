@@ -345,12 +345,7 @@ func SendComplianceAlert(msg, status string) {
 		hostname = "SYSWARDEN-NODE"
 	}
 
-	title := "✅ SYSWARDEN Compliance OK"
-	color := 3066993 // Green
-	if status != "OK" {
-		title = "❌ SYSWARDEN Compliance Drift"
-		color = 15158332 // Red
-	}
+	title, color := localCheckAlertPresentation(status)
 
 	payload := DiscordPayload{
 		Content: nil,
@@ -373,7 +368,7 @@ func SendComplianceAlert(msg, status string) {
 
 	data, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("[Webhook] Failed to marshal compliance payload: %v", err)
+		log.Printf("[Webhook] Failed to marshal local-check payload: %v", err)
 		return
 	}
 
@@ -399,9 +394,16 @@ func SendComplianceAlert(msg, status string) {
 		client := &http.Client{Timeout: 5 * time.Second}
 		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
 		if err != nil {
-			log.Printf("[Webhook] Failed to send compliance alert: %v", err)
+			log.Printf("[Webhook] Failed to send local-check alert: %v", err)
 			continue
 		}
 		_ = resp.Body.Close()
 	}
+}
+
+func localCheckAlertPresentation(status string) (string, int) {
+	if status == "OK" {
+		return "✅ SYSWARDEN Local Check: No Deviation Observed", 3066993
+	}
+	return "❌ SYSWARDEN Local Check: Deviation Observed", 15158332
 }

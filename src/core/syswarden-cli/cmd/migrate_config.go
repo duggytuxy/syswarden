@@ -14,7 +14,10 @@ var migrateConfigCmd = &cobra.Command{
 	Short: "Migrate from old config format to modular TOML format",
 	Long: `Migrate your existing syswarden-auto.conf configuration file
 to the new modular TOML format. This creates a new directory structure
-with separated configuration files for each domain.`,
+with separated configuration files for each domain.
+
+With --dry-run, migrated file contents are not written and the source is not
+renamed or wiped, but the output directory and modules subdirectory may be created.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		source, _ := cmd.Flags().GetString("source")
 		output, _ := cmd.Flags().GetString("output")
@@ -39,7 +42,7 @@ with separated configuration files for each domain.`,
 		}
 
 		if dryRun {
-			fmt.Println("[DRY RUN] No changes will be made.")
+			fmt.Println("[DRY RUN] Migrated file contents will not be written and the source will not be renamed or wiped; the output directory and modules subdirectory may be created.")
 		}
 
 		if err := migrator.Run(); err != nil {
@@ -58,5 +61,5 @@ func init() {
 	rootCmd.AddCommand(migrateConfigCmd)
 	migrateConfigCmd.Flags().StringP("source", "s", "", "Source config file path")
 	migrateConfigCmd.Flags().StringP("output", "o", "", "Output directory")
-	migrateConfigCmd.Flags().Bool("dry-run", false, "Show what would be done")
+	migrateConfigCmd.Flags().Bool("dry-run", false, "Do not write migrated file contents; output directories may be created")
 }

@@ -10,8 +10,8 @@ import (
 
 var haSyncCmd = &cobra.Command{
 	Use:   "ha-sync",
-	Short: "Synchronizes the firewall blocklist with the configured HA peer",
-	Long:  `Forces an immediate synchronization of the local blocklist to the High Availability standby node over encrypted channels.`,
+	Short: "Push missing local blocklist entries to configured HA peers",
+	Long:  "Compares the local blocklist with each configured peer and pushes entries that the peer does not report. The current TLS client does not verify peer certificates.",
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := network.SyncHAPeer(); err != nil {
 			fmt.Fprintf(os.Stderr, "[ERROR] HA Sync failed: %v\n", err)

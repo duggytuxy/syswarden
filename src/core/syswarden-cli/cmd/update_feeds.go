@@ -11,7 +11,7 @@ import (
 
 var updateFeedsCmd = &cobra.Command{
 	Use:   "update-feeds",
-	Short: "Silently update Threat Intelligence feeds and reload firewall",
+	Short: "Download configured threat-intelligence feeds and reapply firewall policy",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("[*] Updating Threat Intelligence Feeds...")
 

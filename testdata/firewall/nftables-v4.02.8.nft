@@ -1,0 +1,115 @@
+table netdev syswarden_hw_drop {
+	set syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }
+	set syswarden_zt_allowed { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_zt_allowed6 { type ipv6_addr; flags interval; auto-merge; }
+	set banned_ips { type ipv4_addr; flags timeout; }
+	set banned_ips6 { type ipv6_addr; flags timeout; }
+	set syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_blacklist6 { type ipv6_addr; flags interval; auto-merge; }
+	set syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_geoip6 { type ipv6_addr; flags interval; auto-merge; }
+	set syswarden_asn { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_asn6 { type ipv6_addr; flags interval; auto-merge; }
+	chain ingress_frontline {
+		type filter hook ingress devices = { "eth-test0", "eth-test1" } priority -500; policy accept;
+		ip saddr @syswarden_whitelist accept
+		ip6 saddr @syswarden_whitelist6 accept
+		ip saddr @banned_ips limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-WAF-BLOCK] "
+		ip saddr @banned_ips drop
+		ip6 saddr @banned_ips6 limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-WAF-BLOCK] "
+		ip6 saddr @banned_ips6 drop
+		ip protocol tcp tcp flags ! fin,syn,rst,psh,ack,urg counter drop
+		ip protocol tcp tcp flags & (fin|syn|rst|psh|ack|urg) == fin|syn|rst|psh|ack|urg counter drop
+		ip protocol tcp tcp flags & (fin|syn) == fin|syn counter drop
+		ip protocol tcp tcp flags & (syn|rst) == syn|rst counter drop
+		ip saddr @syswarden_blacklist limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-BLOCK] "
+		ip saddr @syswarden_blacklist drop
+		ip6 saddr @syswarden_blacklist6 limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-BLOCK] "
+		ip6 saddr @syswarden_blacklist6 drop
+		ip saddr @syswarden_geoip limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-GEO] "
+		ip saddr @syswarden_geoip drop
+		ip6 saddr @syswarden_geoip6 limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-GEO] "
+		ip6 saddr @syswarden_geoip6 drop
+		ip saddr @syswarden_asn limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-ASN] "
+		ip saddr @syswarden_asn drop
+		ip6 saddr @syswarden_asn6 limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-ASN] "
+		ip6 saddr @syswarden_asn6 drop
+	}
+}
+
+table inet syswarden {
+	set syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }
+	set syswarden_zt_allowed { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_zt_allowed6 { type ipv6_addr; flags interval; auto-merge; }
+	set banned_ips { type ipv4_addr; flags timeout; }
+	set banned_ips6 { type ipv6_addr; flags timeout; }
+	set syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_blacklist6 { type ipv6_addr; flags interval; auto-merge; }
+	set syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_geoip6 { type ipv6_addr; flags interval; auto-merge; }
+	set syswarden_asn { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_asn6 { type ipv6_addr; flags interval; auto-merge; }
+	chain stateful_protect {
+		type filter hook input priority -10; policy drop;
+		iifname "lo" accept
+		ip saddr @syswarden_whitelist accept
+		ip6 saddr @syswarden_whitelist6 accept
+		ip saddr @banned_ips counter drop
+		ip6 saddr @banned_ips6 counter drop
+		ip saddr @syswarden_blacklist counter drop
+		ip6 saddr @syswarden_blacklist6 counter drop
+		ct state established,related accept
+		ct state invalid counter drop
+		ip frag-off & 0x3fff != 0 counter drop
+		tcp flags & (fin|syn|rst|psh|ack|urg) == 0 counter drop
+		tcp flags & (fin|syn|rst|psh|ack|urg) == fin|psh|urg counter drop
+		tcp flags & (fin|syn|rst|ack) != syn ct state new counter drop
+		ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 203.0.113.0/24 } accept
+		ip saddr != @syswarden_zt_allowed limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-ZERO-TRUST] "
+		ip saddr != @syswarden_zt_allowed drop
+		ip6 saddr != @syswarden_zt_allowed6 limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-ZERO-TRUST] "
+		ip6 saddr != @syswarden_zt_allowed6 drop
+		ct state new tcp dport { 443, 62027, 62026 } accept
+		ct state new udp dport { 53 } accept
+		# SSH Cloaking (Strict WG VPN Only)
+		ip saddr @syswarden_whitelist tcp dport 2222 accept
+		ip6 saddr @syswarden_whitelist6 tcp dport 2222 accept
+		ip saddr 10.66.66.0/24 tcp dport 2222 accept
+		tcp dport 2222 counter drop
+		ct state new tcp dport { 236379 } limit rate 5/second burst 10 packets log prefix "[SYSWARDEN-HONEYPORT] "
+		ct state new tcp dport { 236379 } counter drop
+		# Explicitly trust internal enterprise subnets (Bypass Catch-All)
+		ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 203.0.113.0/24 } accept
+		ct state new limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-BLOCK] [CATCH-ALL] "
+		ct state new counter drop
+	}
+
+	chain data_leak_protect {
+		type filter hook output priority 0; policy accept;
+		tcp dport 8443 accept
+		udp dport 53 udp length > 512 counter log prefix "[SYSWARDEN-DNS-EXFIL] " drop
+	}
+
+	chain docker_protect {
+		type filter hook forward priority -10; policy accept;
+		ip saddr @syswarden_whitelist accept
+		ip6 saddr @syswarden_whitelist6 accept
+		ip saddr @banned_ips counter drop
+		ip daddr @banned_ips counter drop
+		ip6 saddr @banned_ips6 counter drop
+		ip6 daddr @banned_ips6 counter drop
+		ip saddr @syswarden_blacklist counter drop
+		ip daddr @syswarden_blacklist counter drop
+		ip6 saddr @syswarden_blacklist6 counter drop
+		ip6 daddr @syswarden_blacklist6 counter drop
+		ct state established,related accept
+		ip saddr @syswarden_geoip counter drop
+		ip6 saddr @syswarden_geoip6 counter drop
+		ip saddr @syswarden_asn counter drop
+		ip6 saddr @syswarden_asn6 counter drop
+		ip saddr != @syswarden_zt_allowed counter drop
+		ip6 saddr != @syswarden_zt_allowed6 counter drop
+	}
+}

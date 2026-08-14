@@ -17,7 +17,7 @@ func logHeader(title string) {
 }
 
 func pass(msg string) {
-	fmt.Printf("  \033[0;32m[PASS]\033[0m %s\n", msg)
+	fmt.Printf("  \033[0;32m[OBSERVED]\033[0m %s\n", msg)
 }
 
 func fail(msg string) {
@@ -77,7 +77,8 @@ func checkFilePerms(filepath string, validPerms []string, expectedOwner string) 
 }
 
 func RunAudit() {
-	fmt.Printf("\033[1;36m=== SYSWARDEN %s Enterprise Full Audit (Go Engine) ===\033[0m\n", Version)
+	fmt.Printf("\033[1;36m=== SYSWARDEN %s Local Operational Diagnostic ===\033[0m\n", Version)
+	info("This diagnostic reports only the checks shown below; it is not a compliance certification or a complete kernel-state assessment.")
 
 	// Phase 1
 	logHeader("Phase 1: Cron Orchestration")
@@ -128,17 +129,17 @@ func RunAudit() {
 	}
 
 	if config.GlobalConfig.GeoAllowed != "" {
-		pass(fmt.Sprintf("Zero-Trust Strict ALLOW [GeoIP] is actively enforced (Allowed: %s).", config.GlobalConfig.GeoAllowed))
+		pass(fmt.Sprintf("GeoIP strict-allow configuration is set to: %s. Kernel enforcement was not checked here.", config.GlobalConfig.GeoAllowed))
 	} else if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" && config.GlobalConfig.GeoCodes != "none" {
-		pass("GeoIP Threat Intelligence (Classic Block) is actively deployed.")
+		pass("GeoIP classic-block configuration is enabled. Kernel enforcement was not checked here.")
 	} else {
 		info("GeoIP Threat Intelligence (Skipped by user).")
 	}
 
 	if config.GlobalConfig.ASNAllowed != "" {
-		pass(fmt.Sprintf("Zero-Trust Strict ALLOW [ASN] is actively enforced (Allowed: %s).", config.GlobalConfig.ASNAllowed))
+		pass(fmt.Sprintf("ASN strict-allow configuration is set to: %s. Kernel enforcement was not checked here.", config.GlobalConfig.ASNAllowed))
 	} else if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" && config.GlobalConfig.ASNList != "none" {
-		pass("Manual ASN Routing Defense (Classic Block) is actively deployed.")
+		pass("ASN classic-block configuration is enabled. Kernel enforcement was not checked here.")
 	} else {
 		info("Manual ASN Routing Defense (Skipped by user).")
 	}
@@ -181,16 +182,16 @@ func RunAudit() {
 		}
 
 		if config.GlobalConfig.GeoAllowed != "" || config.GlobalConfig.ASNAllowed != "" {
-			pass("WAAP Independence VERIFIED: L7 Engine dynamically overrides L3 Zero-Trust Whitelists.")
+			info("GeoIP or ASN strict-allow configuration is present; L7 override behavior was not exercised by this diagnostic.")
 		}
 
 		if _, err := os.Stat("/var/run/syswarden.sock"); err == nil {
-			pass("SYSWARDEN UDS socket is active and listening for telemetry.")
+			pass("SYSWARDEN UDS socket path exists; listener readiness was not exercised.")
 		} else {
 			fail("SYSWARDEN UDS socket (/var/run/syswarden.sock) is MISSING. Vector logs will be dropped!")
 		}
 		if _, err := os.Stat("/var/log/syswarden/waf.json"); err == nil {
-			pass("WAF JSON telemetry backend is functioning.")
+			pass("WAF JSON telemetry file exists; event flow was not exercised.")
 		} else {
 			fail("WAF JSON telemetry backend is inactive (No waf.json).")
 		}
@@ -199,10 +200,10 @@ func RunAudit() {
 	}
 
 	// Phase 5
-	logHeader("Phase 5: DevSecOps Telemetry & Enterprise Dashboard")
-	info("Enterprise Dashboard (TUI) is active. Local Web Server and TLS checks are no longer required.")
+	logHeader("Phase 5: Telemetry & Local Dashboard Inputs")
+	info("The checks below observe the core service and local TUI data file only.")
 	if isServiceActive("syswarden-core") {
-		pass("Telemetry Generator: syswarden-core background telemetry routine is running.")
+		pass("syswarden-core service is active; telemetry generation was not independently exercised.")
 	} else {
 		fail("Telemetry Generator: syswarden-core is inactive.")
 	}
@@ -216,7 +217,7 @@ func RunAudit() {
 			pass("WireGuard Configuration OK")
 			content, err := os.ReadFile("/etc/wireguard/wg-syswarden.conf") // #nosec
 			if err == nil && strings.Contains(string(content), "PresharedKey = ") {
-				pass("WireGuard Post-Quantum PSK Encryption is ACTIVE.")
+				pass("WireGuard configuration contains a PresharedKey entry; tunnel state was not exercised.")
 			} else {
 				fail("WireGuard Post-Quantum PSK is MISSING.")
 			}
@@ -231,11 +232,11 @@ func RunAudit() {
 	logHeader("Phase 7: CSPM / Persistence Posture")
 	if _, err := exec.LookPath("nft"); err == nil {
 		if _, err := os.Stat("/etc/syswarden/syswarden.nft"); err == nil {
-			pass("Firewall Persistence VERIFIED: Nftables atomic ruleset is locked.")
+			pass("Nftables persistence file exists; load state and locking were not independently checked.")
 		} else {
 			warn("Firewall Persistence UNKNOWN: Nftables base file /etc/syswarden/syswarden.nft is missing.")
 		}
 	}
 
-	fmt.Printf("\n\033[1;32m[✔] SYSWARDEN Audit Sequence Completed.\033[0m\n")
+	fmt.Printf("\n\033[1;32m[✔] SYSWARDEN local diagnostic completed; review each observation and warning.\033[0m\n")
 }

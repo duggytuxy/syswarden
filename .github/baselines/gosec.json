@@ -1,0 +1,404 @@
+{
+  "schema_version": 3,
+  "baseline_commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
+  "gosec_version": "v2.28.0",
+  "policy": "Existing findings are tracked debt, not accepted risk. Byte-identical scanner re-emissions at one physical location are deduplicated; any new physical occurrence, fingerprint, partial scan or Go loading error fails.",
+  "scans": {
+    "linux-cli": {
+      "goos": "linux",
+      "module": "src/core/syswarden-cli",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "tracking": [
+        "SW-LIST-001",
+        "SW-UPD-002",
+        "SW-WEB-001",
+        "SW-NOSEC-001"
+      ],
+      "issues": [
+        {
+          "code_sha256": "90735861ad0a9f0318faa16904d313ca8052587d9202608cf0bffda56366537f",
+          "confidence": "HIGH",
+          "details": "Expect file permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
+          "rule_id": "G302",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "038e44d08ae36aa557581e9ab7f4b8471d0e443a2b394ad371fe65c72d6c8b17",
+          "confidence": "HIGH",
+          "details": "Expect file permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
+          "rule_id": "G302",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "14464871be5217695b2bf89883033009a1254d7082ba19fbf412e474ff23e925",
+          "confidence": "HIGH",
+          "details": "File creation in shared tmp directory without using ioutil.Tempfile",
+          "file": "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
+          "rule_id": "G303",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "154417546e20132abc16b65ee46f8a18fa41aeceedb65f437e0381c4aa7b5ea9",
+          "confidence": "HIGH",
+          "details": "Expect WriteFile permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/cmd/web_token.go",
+          "rule_id": "G306",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "134b465b31467df4fc5e66044491a689dd6b8bc97f56d9d494b7469f86f62473",
+          "confidence": "HIGH",
+          "details": "Expect WriteFile permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/config/migrator.go",
+          "rule_id": "G306",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "d2930d50cb32c633c090e8d1f3f62e12a52d98734bf347f15d5e454063fb7565",
+          "confidence": "HIGH",
+          "details": "Expect WriteFile permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/config/migrator.go",
+          "rule_id": "G306",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "14464871be5217695b2bf89883033009a1254d7082ba19fbf412e474ff23e925",
+          "confidence": "HIGH",
+          "details": "Expect WriteFile permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
+          "rule_id": "G306",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "ca6109fe637dc6ae91e11202ede007ef865cf4367457d18422a9338d324647d6",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "d10ac8df841db9c6718a24f2737217a7b0ff81a39c05f28a14e1d3efb002e065",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "e380e2268bebeaa1195e5be50678c48ad885444f24f8700923f40ee99d37a124",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "803a97978b598dfb2420c067a6788f261365bf73da2cb3983928adacc5cd56eb",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/integration/wazuh.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "a42c6807ad7939924c664033a265d1ee63a0a725cc1b06e56ded09ca5d2150d1",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/network/downloader.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "b76a9e34528c1ec5111e8abc93934ad4c85d40c738c5615c652675fc47d3d217",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/network/downloader.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "8b3c80c50da59cbdfefffe0062bfeb7069067c29efed6783e06b5f5c7af9994a",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        }
+      ]
+    },
+    "linux-core": {
+      "goos": "linux",
+      "module": "src/core/syswarden-core",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "tracking": [
+        "SW-HA-003"
+      ],
+      "issues": [
+        {
+          "code_sha256": "6b07c39aae80f67c76635bfa99b021edd096419a8026e58fcd37c46843a45c0c",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-core/network/ha_api.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "abe2ca6e6096a1e2369bbe2fe72535446aa11f465cbe0fdb6b8ae525ef571e99",
+          "confidence": "HIGH",
+          "details": "Log injection via taint analysis",
+          "file": "src/core/syswarden-core/network/ha_api.go",
+          "rule_id": "G706",
+          "severity": "LOW"
+        }
+      ]
+    },
+    "linux-tui": {
+      "goos": "linux",
+      "module": "src/core/syswarden-tui",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "tracking": [
+        "SW-HA-001"
+      ],
+      "issues": [
+        {
+          "code_sha256": "715462f4035066261cf53f0214ff43d747b46440271b3a471eb6748185832794",
+          "confidence": "HIGH",
+          "details": "TLS InsecureSkipVerify set to true.",
+          "file": "src/core/syswarden-tui/main.go",
+          "rule_id": "G402",
+          "severity": "HIGH"
+        }
+      ]
+    },
+    "freebsd-cli": {
+      "goos": "freebsd",
+      "module": "src/core/syswarden-cli",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "tracking": [
+        "SW-BSD-001",
+        "SW-LIST-001",
+        "SW-WEB-001",
+        "SW-NOSEC-001"
+      ],
+      "issues": [
+        {
+          "code_sha256": "31ffb988bfbfc402cd368fb6db7fbbed1ef7d2afb6d7fa066b9346a58580863c",
+          "confidence": "HIGH",
+          "details": "Errors unhandled",
+          "file": "src/core/syswarden-cli/pkg/security/cis_freebsd.go",
+          "rule_id": "G104",
+          "severity": "LOW"
+        },
+        {
+          "code_sha256": "61a9d2e42bc5cddfc3b9b97cc566efce82776821ba6f09d5e27d0e3e924c2db5",
+          "confidence": "HIGH",
+          "details": "Errors unhandled",
+          "file": "src/core/syswarden-cli/pkg/security/cis_freebsd.go",
+          "rule_id": "G104",
+          "severity": "LOW"
+        },
+        {
+          "code_sha256": "c4b3c6023aaa8ad1c3a6eca0799376024e10da56f236a76fbfa14f5285b035fd",
+          "confidence": "HIGH",
+          "details": "Errors unhandled",
+          "file": "src/core/syswarden-cli/pkg/security/cis_freebsd.go",
+          "rule_id": "G104",
+          "severity": "LOW"
+        },
+        {
+          "code_sha256": "e6c39619a155b532afc56c142aadbdb32abb6e50a59c5d59de4e49460aacbd0b",
+          "confidence": "HIGH",
+          "details": "Errors unhandled",
+          "file": "src/core/syswarden-cli/pkg/security/cis_freebsd.go",
+          "rule_id": "G104",
+          "severity": "LOW"
+        },
+        {
+          "code_sha256": "48b198c9f66cd3087afb9d5e199cc498149c0238a2ecf9077f191c130e9afc0d",
+          "confidence": "HIGH",
+          "details": "Expect file permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/pkg/network/wireguard_freebsd.go",
+          "rule_id": "G302",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "6e80d9d19bb1eb2980689b6cf7c0bdd7f136f1205bef296205efe4c6cb950c60",
+          "confidence": "HIGH",
+          "details": "Expect file permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/pkg/system/service_freebsd.go",
+          "rule_id": "G302",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "154417546e20132abc16b65ee46f8a18fa41aeceedb65f437e0381c4aa7b5ea9",
+          "confidence": "HIGH",
+          "details": "Expect WriteFile permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/cmd/web_token.go",
+          "rule_id": "G306",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "134b465b31467df4fc5e66044491a689dd6b8bc97f56d9d494b7469f86f62473",
+          "confidence": "HIGH",
+          "details": "Expect WriteFile permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/config/migrator.go",
+          "rule_id": "G306",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "d2930d50cb32c633c090e8d1f3f62e12a52d98734bf347f15d5e454063fb7565",
+          "confidence": "HIGH",
+          "details": "Expect WriteFile permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/config/migrator.go",
+          "rule_id": "G306",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "10411db456bc7f8d03c466f5569d680d8c45b680c83b82513f189f410e6643b7",
+          "confidence": "HIGH",
+          "details": "Expect WriteFile permissions to be 0600 or less",
+          "file": "src/core/syswarden-cli/pkg/system/service_freebsd.go",
+          "rule_id": "G306",
+          "severity": "MEDIUM"
+        },
+        {
+          "code_sha256": "ca6109fe637dc6ae91e11202ede007ef865cf4367457d18422a9338d324647d6",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "d10ac8df841db9c6718a24f2737217a7b0ff81a39c05f28a14e1d3efb002e065",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "e380e2268bebeaa1195e5be50678c48ad885444f24f8700923f40ee99d37a124",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "803a97978b598dfb2420c067a6788f261365bf73da2cb3983928adacc5cd56eb",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/integration/wazuh.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "a42c6807ad7939924c664033a265d1ee63a0a725cc1b06e56ded09ca5d2150d1",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/network/downloader.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "b76a9e34528c1ec5111e8abc93934ad4c85d40c738c5615c652675fc47d3d217",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/network/downloader.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "8b3c80c50da59cbdfefffe0062bfeb7069067c29efed6783e06b5f5c7af9994a",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/security/cis_freebsd.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "fc21f49484e553132e726892fa0d3edaa03195526ff6dcd3fcb85bd9c2f8e211",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-cli/pkg/security/os_hardening_freebsd.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        }
+      ]
+    },
+    "freebsd-core": {
+      "goos": "freebsd",
+      "module": "src/core/syswarden-core",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "tracking": [
+        "SW-HA-003"
+      ],
+      "issues": [
+        {
+          "code_sha256": "6b07c39aae80f67c76635bfa99b021edd096419a8026e58fcd37c46843a45c0c",
+          "confidence": "HIGH",
+          "details": "Path traversal via taint analysis",
+          "file": "src/core/syswarden-core/network/ha_api.go",
+          "rule_id": "G703",
+          "severity": "HIGH"
+        },
+        {
+          "code_sha256": "abe2ca6e6096a1e2369bbe2fe72535446aa11f465cbe0fdb6b8ae525ef571e99",
+          "confidence": "HIGH",
+          "details": "Log injection via taint analysis",
+          "file": "src/core/syswarden-core/network/ha_api.go",
+          "rule_id": "G706",
+          "severity": "LOW"
+        }
+      ]
+    },
+    "freebsd-tui": {
+      "goos": "freebsd",
+      "module": "src/core/syswarden-tui",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "tracking": [
+        "SW-HA-001"
+      ],
+      "issues": [
+        {
+          "code_sha256": "715462f4035066261cf53f0214ff43d747b46440271b3a471eb6748185832794",
+          "confidence": "HIGH",
+          "details": "TLS InsecureSkipVerify set to true.",
+          "file": "src/core/syswarden-tui/main.go",
+          "rule_id": "G402",
+          "severity": "HIGH"
+        }
+      ]
+    },
+    "linux-versionctl": {
+      "goos": "linux",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "module": "scripts/versionctl",
+      "tracking": [
+        "SW-REL-001"
+      ],
+      "issues": []
+    },
+    "freebsd-versionctl": {
+      "goos": "freebsd",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "module": "scripts/versionctl",
+      "tracking": [
+        "SW-REL-001"
+      ],
+      "issues": []
+    }
+  }
+}

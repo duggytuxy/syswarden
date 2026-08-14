@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# PROVIDE: syswarden
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="syswarden"
+rcvar="syswarden_enable"
+
+command="/opt/syswarden/syswarden-core"
+pidfile="/var/run/${name}.pid"
+
+# Run in background
+command_args="&"
+
+# Load configuration
+load_rc_config $name
+: ${syswarden_enable:="NO"}
+
+# Hook to capture PID
+start_cmd="syswarden_start"
+stop_cmd="syswarden_stop"
+
+syswarden_start() {
+    echo "Starting SYSWARDEN..."
+    /usr/sbin/daemon -p ${pidfile} ${command}
+}
+
+syswarden_stop() {
+    if [ -f ${pidfile} ]; then
+        echo "Stopping SYSWARDEN..."
+        kill $(cat ${pidfile})
+        rm -f ${pidfile}
+    else
+        echo "SYSWARDEN is not running."
+    fi
+}
+
+run_rc_command "$1"

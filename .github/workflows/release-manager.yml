@@ -1,142 +1,1509 @@
-name: "SysWarden Release Orchestrator"
+name: SysWarden Release Orchestrator
 
+# workflow_run is coordination-only. Publication is dispatched separately at the
+# exact release tag so GitHub OIDC binds provenance to the release commit SHA.
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_run:
+    workflows:
+      - SysWarden Security Audit
+      - SysWarden Builder and Packager
+      - Plumber Compliance
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact SysWarden release tag (select the same tag as the workflow ref)
+        required: true
+        type: string
+      release_sha:
+        description: Exact full commit SHA resolved by the release tag
+        required: true
+        type: string
+      qualification_run_id:
+        description: Exact successful pre-tag release qualification workflow run ID
+        required: true
+        type: string
 
-# OSSF Scorecard: Enforce read-only at the top-level to prevent privilege escalation
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
 
-jobs:
-  gather-and-release:
-    name: "Gather Artifacts, Attest & Release"
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+concurrency:
+  group: >-
+    ${{ github.event_name == 'workflow_run'
+        && format('release-coordinate-{0}', github.event.workflow_run.head_sha)
+        || format('release-publish-{0}', github.sha) }}
+  cancel-in-progress: false
 
-    # OSSF Scorecard: Elevate privileges strictly within this job sandbox
+jobs:
+  coordinate-release:
+    name: Coordinate Exact Tag Gates
+    if: ${{ github.event_name == 'workflow_run' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      actions: read
+      contents: read
+    outputs:
+      ready: ${{ steps.upstream.outputs.ready }}
+      release_tag: ${{ steps.context.outputs.release_tag }}
+      release_sha: ${{ steps.context.outputs.release_sha }}
+      qualification_run_id: ${{ steps.upstream.outputs.qualification_run_id }}
 
     steps:
-      - name: "Checkout repository"
+      - name: Resolve Tag Release Context
+        id: context
+        shell: bash
+        env:
+          TRIGGER_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TRIGGER_BRANCH}" =~ ^v[0-9]+\.[0-9]{2}\.[0-9]+$ ]]; then
+            echo "This completed workflow is not scoped to a SysWarden release tag."
+            echo "candidate=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [[ "${TRIGGER_EVENT}" != "push" ]]; then
+            echo "ERROR: release workflow ${TRIGGER_BRANCH} was not triggered by a push event." >&2
+            exit 1
+          fi
+          if [[ "${TRIGGER_CONCLUSION}" != "success" ]]; then
+            echo "ERROR: triggering workflow concluded ${TRIGGER_CONCLUSION} for ${TRIGGER_BRANCH}." >&2
+            exit 1
+          fi
+          if [[ ! "${TRIGGER_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: invalid release commit SHA: ${TRIGGER_SHA}." >&2
+            exit 1
+          fi
+          {
+            echo "candidate=true"
+            echo "release_tag=${TRIGGER_BRANCH}"
+            echo "release_sha=${TRIGGER_SHA}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout Exact Release Commit
+        if: ${{ steps.context.outputs.candidate == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ steps.context.outputs.release_sha }}
 
-      - name: "Wait for parallel workflows"
-        run: |
-            # Enforce a mandatory 5-minute synchronization delay to allow upstream
-            # workflows (security-audit, package, compliance) to upload artifacts.
-            echo "Sleeping for 300 seconds..."
-            sleep 300
+      - name: Set up Go
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: false
 
-      - name: "Secure artifact retrieval via GitHub CLI"
+      - name: Validate Tag, Source, Changelog, and Main Ancestry
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        shell: bash
         env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
         run: |
-            # Using GH CLI to securely fetch artifacts tied strictly to this commit SHA.
-            COMMIT_SHA="${{ github.sha }}"
-            MAX_RETRIES=3
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${RELEASE_SHA}"
+          TAG_SHA="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [[ "${TAG_SHA}" != "${RELEASE_SHA}" ]]; then
+            echo "ERROR: ${RELEASE_TAG} resolves to ${TAG_SHA}, expected ${RELEASE_SHA}." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${RELEASE_SHA}" origin/main; then
+            echo "ERROR: release commit ${RELEASE_SHA} is not reachable from origin/main." >&2
+            exit 1
+          fi
+          (cd scripts/versionctl && GOWORK=off go test ./...)
+          ./scripts/versioning.sh validate-tag \
+            --repo "${GITHUB_WORKSPACE}" \
+            --tag "${RELEASE_TAG}"
+          commit_message="$(git log -1 --format=%B HEAD)"
+          ./scripts/versioning.sh validate-commit \
+            --repo "${GITHUB_WORKSPACE}" \
+            --base-ref HEAD^ \
+            --tag-phase \
+            --commit-message "${commit_message}"
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s scripts/ci \
+            -p 'release_gate_test.py' \
+            -v
 
-            for ((i = 1; i <= MAX_RETRIES; i++)); do
-                echo "Attempt ${i}: Downloading artifacts for commit ${COMMIT_SHA}..."
-                RUN_IDS=$(gh run list --commit "${COMMIT_SHA}" --json databaseId --jq '.[].databaseId')
-                
-                # Fetch artifacts from all runs associated with this commit
-                for run_id in $RUN_IDS; do
-                    gh run download "$run_id" --dir /tmp/artifacts || true
-                done
+      - name: Resolve Exact Successful Upstream Runs and Artifacts
+        id: upstream
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          workflows=(
+            "package.yml|syswarden-packages-${VERSION}"
+            "security-audit.yml|syswarden-attested-bundle"
+            "security-audit.yml|syswarden-sbom"
+            "compliance.yml|plumber-report"
+          )
+          declare -A run_ids=()
+          pending=false
 
-                # Check if the primary build artifact was successfully downloaded
-                if find /tmp/artifacts -type f -name "syswarden-release.tar.gz" | grep -q .; then
-                    echo "Artifacts successfully pulled."
-                    break
-                else
-                    echo "Missing artifacts. Waiting 60s before retry..."
-                    sleep 60
+          qualification_pages="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/release-qualification.yml/runs" \
+            -f event=workflow_dispatch \
+            -f branch=main \
+            -f head_sha="${RELEASE_SHA}" \
+            -f per_page=100)"
+          qualification_matches="$(jq --arg sha "${RELEASE_SHA}" \
+            '[.[] | .workflow_runs[] | select(
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .run_attempt == 1
+            )]' <<< "${qualification_pages}")"
+          qualification_count="$(jq 'length' <<< "${qualification_matches}")"
+          if [[ "${qualification_count}" -ne 1 ]]; then
+            echo "ERROR: found ${qualification_count} completed successful attempt-1 release qualification runs for main/${RELEASE_SHA}; expected exactly one." >&2
+            exit 1
+          fi
+          qualification_active_count="$(jq --arg sha "${RELEASE_SHA}" \
+            '[.[] | .workflow_runs[] | select(
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .status != "completed"
+            )] | length' <<< "${qualification_pages}")"
+          if [[ "${qualification_active_count}" -ne 0 ]]; then
+            echo "ERROR: ${qualification_active_count} concurrent release qualification runs remain active for main/${RELEASE_SHA}." >&2
+            exit 1
+          fi
+          qualification_run_id="$(jq -r '.[0].id | tostring' <<< "${qualification_matches}")"
+          if [[ ! "${qualification_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: release qualification returned an invalid run ID." >&2
+            exit 1
+          fi
+          qualification_artifact_pages="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${qualification_run_id}/artifacts" \
+            -f per_page=100)"
+          qualification_artifacts="$(jq \
+            '[.[] | .artifacts[] | select(.name == "syswarden-release-qualification")]' \
+            <<< "${qualification_artifact_pages}")"
+          if [[ "$(jq 'length' <<< "${qualification_artifacts}")" -ne 1 ]]; then
+            echo "ERROR: release qualification run ${qualification_run_id} must expose exactly one syswarden-release-qualification artifact." >&2
+            exit 1
+          fi
+          if [[ "$(jq -r '.[0].expired' <<< "${qualification_artifacts}")" != "false" || \
+                "$(jq -r '.[0].size_in_bytes' <<< "${qualification_artifacts}")" -le 0 ]]; then
+            echo "ERROR: syswarden-release-qualification from run ${qualification_run_id} is expired or empty." >&2
+            exit 1
+          fi
+          qualification_artifact_id="$(jq -r '.[0].id | tostring' <<< "${qualification_artifacts}")"
+          if [[ ! "${qualification_artifact_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: syswarden-release-qualification returned an invalid artifact ID." >&2
+            exit 1
+          fi
+          echo "qualification_run_id=${qualification_run_id}" >> "${GITHUB_OUTPUT}"
+          echo "Validated pre-tag release qualification run ${qualification_run_id} and artifact ${qualification_artifact_id} for main/${RELEASE_SHA}."
+
+          print_controlled_retry() {
+            echo "After every exact gate is successful, an authorized maintainer may retry with:"
+            echo "gh workflow run release-manager.yml --repo ${GITHUB_REPOSITORY} --ref ${RELEASE_TAG} --raw-field release_tag=${RELEASE_TAG} --raw-field release_sha=${RELEASE_SHA} --raw-field qualification_run_id=${qualification_run_id}"
+          }
+
+          validation_response="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/auto-versioning.yml/runs" \
+            -f event=push \
+            -f head_sha="${RELEASE_SHA}" \
+            -f per_page=100)"
+          validation_matches="$(jq --arg sha "${RELEASE_SHA}" \
+            '[.[] | .workflow_runs[] | select(
+              .head_sha == $sha and
+              (.head_branch == "main" or .head_branch == "master") and
+              .event == "push"
+            )]' <<< "${validation_response}")"
+          validation_count="$(jq 'length' <<< "${validation_matches}")"
+          if [[ "${validation_count}" -gt 1 ]]; then
+            echo "ERROR: found ${validation_count} Auto Versioning runs for ${RELEASE_SHA}; expected one." >&2
+            exit 1
+          fi
+          if [[ "${validation_count}" -eq 0 ]]; then
+            echo "ERROR: the exact Auto Versioning run for ${RELEASE_SHA} does not exist yet." >&2
+            print_controlled_retry >&2
+            exit 1
+          fi
+          validation_status="$(jq -r '.[0].status' <<< "${validation_matches}")"
+          validation_conclusion="$(jq -r '.[0].conclusion // ""' <<< "${validation_matches}")"
+          validation_id="$(jq -r '.[0].id' <<< "${validation_matches}")"
+          if [[ "${validation_status}" != "completed" ]]; then
+            echo "ERROR: exact Auto Versioning run ${validation_id} is still ${validation_status}." >&2
+            print_controlled_retry >&2
+            exit 1
+          fi
+          if [[ "${validation_conclusion}" != "success" ]]; then
+            echo "ERROR: exact Auto Versioning run ${validation_id} concluded ${validation_conclusion}." >&2
+            print_controlled_retry >&2
+            exit 1
+          fi
+          echo "Validated Auto Versioning run ${validation_id} for ${RELEASE_SHA}."
+
+          for specification in "${workflows[@]}"; do
+            IFS='|' read -r workflow artifact <<< "${specification}"
+            if [[ -n "${run_ids[${workflow}]:-}" ]]; then
+              continue
+            fi
+            response="$(gh api --paginate --slurp --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+              -f event=push \
+              -f head_sha="${RELEASE_SHA}" \
+              -f per_page=100)"
+            matches="$(jq --arg sha "${RELEASE_SHA}" --arg tag "${RELEASE_TAG}" \
+              '[.[] | .workflow_runs[] | select(
+                .head_sha == $sha and
+                .head_branch == $tag and
+                .event == "push"
+              )]' <<< "${response}")"
+            count="$(jq 'length' <<< "${matches}")"
+            if [[ "${count}" -gt 1 ]]; then
+              echo "ERROR: found ${count} ${workflow} runs for ${RELEASE_TAG}/${RELEASE_SHA}." >&2
+              exit 1
+            fi
+            if [[ "${count}" -eq 0 ]]; then
+              echo "Waiting for the exact ${workflow} tag run."
+              pending=true
+              continue
+            fi
+            status="$(jq -r '.[0].status' <<< "${matches}")"
+            conclusion="$(jq -r '.[0].conclusion // ""' <<< "${matches}")"
+            run_id="$(jq -r '.[0].id' <<< "${matches}")"
+            if [[ "${status}" != "completed" ]]; then
+              echo "Exact ${workflow} run ${run_id} is still ${status}."
+              pending=true
+              continue
+            fi
+            if [[ "${conclusion}" != "success" ]]; then
+              echo "ERROR: exact ${workflow} run ${run_id} concluded ${conclusion}." >&2
+              exit 1
+            fi
+            run_ids["${workflow}"]="${run_id}"
+            echo "Validated ${workflow} run ${run_id} for ${RELEASE_TAG}/${RELEASE_SHA}."
+          done
+
+          if [[ "${pending}" == "true" ]]; then
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            echo "Release dispatch is deferred until every tag-scoped workflow completes."
+            exit 0
+          fi
+
+          for specification in "${workflows[@]}"; do
+            IFS='|' read -r workflow artifact <<< "${specification}"
+            run_id="${run_ids[${workflow}]}"
+            artifact_response="$(gh api --paginate --slurp --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+              -f per_page=100)"
+            artifact_matches="$(jq --arg name "${artifact}" \
+              '[.[] | .artifacts[] | select(.name == $name)]' <<< "${artifact_response}")"
+            artifact_count="$(jq 'length' <<< "${artifact_matches}")"
+            if [[ "${artifact_count}" -ne 1 ]]; then
+              echo "ERROR: run ${run_id} has ${artifact_count} artifacts named ${artifact}; expected one." >&2
+              exit 1
+            fi
+            expired="$(jq -r '.[0].expired' <<< "${artifact_matches}")"
+            size="$(jq -r '.[0].size_in_bytes' <<< "${artifact_matches}")"
+            if [[ "${expired}" != "false" || "${size}" -le 0 ]]; then
+              echo "ERROR: artifact ${artifact} is expired or empty." >&2
+              exit 1
+            fi
+            echo "Validated artifact ${artifact} from run ${run_id}."
+          done
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+
+  dispatch-release:
+    name: Dispatch Exact Tag Publisher
+    needs:
+      - coordinate-release
+    if: ${{ needs.coordinate-release.outputs.ready == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Dispatch Publisher in Exact Tag Context
+        if: ${{ env.ACT != 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_RUN_ID: ${{ needs.coordinate-release.outputs.qualification_run_id }}
+          RELEASE_SHA: ${{ needs.coordinate-release.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.coordinate-release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run release-manager.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "${RELEASE_TAG}" \
+            --raw-field "release_tag=${RELEASE_TAG}" \
+            --raw-field "release_sha=${RELEASE_SHA}" \
+            --raw-field "qualification_run_id=${QUALIFICATION_RUN_ID}"
+          echo "Dispatched the publisher at ${RELEASE_TAG}/${RELEASE_SHA} with qualification run ${QUALIFICATION_RUN_ID}."
+
+      - name: Confirm Act Did Not Dispatch GitHub
+        if: ${{ env.ACT == 'true' }}
+        shell: bash
+        run: echo "Act completed release coordination without dispatching GitHub."
+
+  validate-and-stage:
+    name: Validate Tag Gates and Stage Exact Assets
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      ready: ${{ steps.upstream.outputs.ready }}
+      release_tag: ${{ steps.context.outputs.release_tag }}
+      release_sha: ${{ steps.context.outputs.release_sha }}
+      qualification_run_id: ${{ steps.upstream.outputs.qualification_run_id }}
+
+    steps:
+      - name: Validate Exact Tag Dispatch Context
+        id: context
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          EVENT_REF_TYPE: ${{ github.ref_type }}
+          EVENT_SHA: ${{ github.sha }}
+          REQUESTED_QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          REQUESTED_SHA: ${{ inputs.release_sha }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "ERROR: publication is restricted to workflow_dispatch." >&2
+            exit 1
+          fi
+          if [[ ! "${REQUESTED_TAG}" =~ ^v[0-9]+\.[0-9]{2}\.[0-9]+$ ]]; then
+            echo "ERROR: invalid requested release tag: ${REQUESTED_TAG}." >&2
+            exit 1
+          fi
+          if [[ ! "${REQUESTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: invalid requested release SHA: ${REQUESTED_SHA}." >&2
+            exit 1
+          fi
+          if [[ ! "${REQUESTED_QUALIFICATION_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: invalid requested release qualification run ID: ${REQUESTED_QUALIFICATION_RUN_ID}." >&2
+            exit 1
+          fi
+          if [[ "${EVENT_REF_TYPE}" != "tag" || \
+                "${EVENT_REF_NAME}" != "${REQUESTED_TAG}" || \
+                "${EVENT_REF}" != "refs/tags/${REQUESTED_TAG}" ]]; then
+            echo "ERROR: publisher must be dispatched with --ref ${REQUESTED_TAG}." >&2
+            exit 1
+          fi
+          if [[ "${EVENT_SHA}" != "${REQUESTED_SHA}" ]]; then
+            echo "ERROR: dispatch context ${EVENT_SHA} does not equal requested ${REQUESTED_SHA}." >&2
+            exit 1
+          fi
+          {
+            echo "candidate=true"
+            echo "release_tag=${REQUESTED_TAG}"
+            echo "release_sha=${REQUESTED_SHA}"
+            echo "qualification_run_id=${REQUESTED_QUALIFICATION_RUN_ID}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout Exact Release Commit
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ steps.context.outputs.release_sha }}
+
+      - name: Set up Go
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Validate Tag, Source, Changelog, and Main Ancestry
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${RELEASE_SHA}"
+          TAG_SHA="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [[ "${TAG_SHA}" != "${RELEASE_SHA}" ]]; then
+            echo "ERROR: ${RELEASE_TAG} resolves to ${TAG_SHA}, expected ${RELEASE_SHA}." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${RELEASE_SHA}" origin/main; then
+            echo "ERROR: release commit ${RELEASE_SHA} is not reachable from origin/main." >&2
+            exit 1
+          fi
+          (cd scripts/versionctl && GOWORK=off go test ./...)
+          ./scripts/versioning.sh validate-tag \
+            --repo "${GITHUB_WORKSPACE}" \
+            --tag "${RELEASE_TAG}"
+          commit_message="$(git log -1 --format=%B HEAD)"
+          ./scripts/versioning.sh validate-commit \
+            --repo "${GITHUB_WORKSPACE}" \
+            --base-ref HEAD^ \
+            --tag-phase \
+            --commit-message "${commit_message}"
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s scripts/ci \
+            -p 'release_gate_test.py' \
+            -v
+
+      - name: Resolve Exact Successful Upstream Runs
+        id: upstream
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_QUALIFICATION_RUN_ID: ${{ steps.context.outputs.qualification_run_id }}
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          workflows=(
+            "package.yml|syswarden-packages-${VERSION}"
+            "security-audit.yml|syswarden-attested-bundle"
+            "security-audit.yml|syswarden-sbom"
+            "compliance.yml|plumber-report"
+          )
+          declare -A run_ids=()
+
+          qualification_pages="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/release-qualification.yml/runs" \
+            -f event=workflow_dispatch \
+            -f branch=main \
+            -f head_sha="${RELEASE_SHA}" \
+            -f per_page=100)"
+          qualification_matches="$(jq --arg sha "${RELEASE_SHA}" \
+            '[.[] | .workflow_runs[] | select(
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .run_attempt == 1
+            )]' <<< "${qualification_pages}")"
+          qualification_count="$(jq 'length' <<< "${qualification_matches}")"
+          if [[ "${qualification_count}" -ne 1 ]]; then
+            echo "ERROR: found ${qualification_count} completed successful attempt-1 release qualification runs for main/${RELEASE_SHA}; expected exactly one." >&2
+            exit 1
+          fi
+          qualification_active_count="$(jq --arg sha "${RELEASE_SHA}" \
+            '[.[] | .workflow_runs[] | select(
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .status != "completed"
+            )] | length' <<< "${qualification_pages}")"
+          if [[ "${qualification_active_count}" -ne 0 ]]; then
+            echo "ERROR: ${qualification_active_count} concurrent release qualification runs remain active for main/${RELEASE_SHA}." >&2
+            exit 1
+          fi
+          qualification_run_id="$(jq -r '.[0].id | tostring' <<< "${qualification_matches}")"
+          if [[ "${qualification_run_id}" != "${REQUESTED_QUALIFICATION_RUN_ID}" ]]; then
+            echo "ERROR: requested release qualification run ${REQUESTED_QUALIFICATION_RUN_ID} does not equal uniquely resolved run ${qualification_run_id}." >&2
+            exit 1
+          fi
+          qualification_artifact_pages="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${qualification_run_id}/artifacts" \
+            -f per_page=100)"
+          qualification_artifacts="$(jq \
+            '[.[] | .artifacts[] | select(.name == "syswarden-release-qualification")]' \
+            <<< "${qualification_artifact_pages}")"
+          if [[ "$(jq 'length' <<< "${qualification_artifacts}")" -ne 1 ]]; then
+            echo "ERROR: release qualification run ${qualification_run_id} must expose exactly one syswarden-release-qualification artifact." >&2
+            exit 1
+          fi
+          if [[ "$(jq -r '.[0].expired' <<< "${qualification_artifacts}")" != "false" || \
+                "$(jq -r '.[0].size_in_bytes' <<< "${qualification_artifacts}")" -le 0 ]]; then
+            echo "ERROR: syswarden-release-qualification from run ${qualification_run_id} is expired or empty." >&2
+            exit 1
+          fi
+          qualification_artifact_id="$(jq -r '.[0].id | tostring' <<< "${qualification_artifacts}")"
+          if [[ ! "${qualification_artifact_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: syswarden-release-qualification returned an invalid artifact ID." >&2
+            exit 1
+          fi
+          echo "qualification_run_id=${qualification_run_id}" >> "${GITHUB_OUTPUT}"
+          echo "Independently validated pre-tag release qualification run ${qualification_run_id} and artifact ${qualification_artifact_id}."
+
+          validation_response="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/auto-versioning.yml/runs" \
+            -f event=push \
+            -f head_sha="${RELEASE_SHA}" \
+            -f per_page=100)"
+          validation_matches="$(jq --arg sha "${RELEASE_SHA}" \
+            '[.[] | .workflow_runs[] | select(
+              .head_sha == $sha and
+              (.head_branch == "main" or .head_branch == "master") and
+              .event == "push"
+            )]' <<< "${validation_response}")"
+          validation_count="$(jq 'length' <<< "${validation_matches}")"
+          if [[ "${validation_count}" -ne 1 ]]; then
+            echo "ERROR: found ${validation_count} Auto Versioning runs for ${RELEASE_SHA}; expected one." >&2
+            exit 1
+          fi
+          validation_status="$(jq -r '.[0].status' <<< "${validation_matches}")"
+          validation_conclusion="$(jq -r '.[0].conclusion // ""' <<< "${validation_matches}")"
+          validation_id="$(jq -r '.[0].id' <<< "${validation_matches}")"
+          if [[ "${validation_status}" != "completed" ]]; then
+            echo "ERROR: exact Auto Versioning run ${validation_id} is still ${validation_status}." >&2
+            exit 1
+          fi
+          if [[ "${validation_conclusion}" != "success" ]]; then
+            echo "ERROR: exact Auto Versioning run ${validation_id} concluded ${validation_conclusion}." >&2
+            exit 1
+          fi
+          echo "Validated Auto Versioning run ${validation_id} for ${RELEASE_SHA}."
+
+          for specification in "${workflows[@]}"; do
+            IFS='|' read -r workflow artifact <<< "${specification}"
+            if [[ -n "${run_ids[${workflow}]:-}" ]]; then
+              continue
+            fi
+            response="$(gh api --paginate --slurp --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+              -f event=push \
+              -f head_sha="${RELEASE_SHA}" \
+              -f per_page=100)"
+            matches="$(jq --arg sha "${RELEASE_SHA}" --arg tag "${RELEASE_TAG}" \
+              '[.[] | .workflow_runs[] | select(
+                .head_sha == $sha and
+                .head_branch == $tag and
+                .event == "push"
+              )]' <<< "${response}")"
+            count="$(jq 'length' <<< "${matches}")"
+            if [[ "${count}" -ne 1 ]]; then
+              echo "ERROR: found ${count} ${workflow} runs for ${RELEASE_TAG}/${RELEASE_SHA}; expected one." >&2
+              exit 1
+            fi
+            status="$(jq -r '.[0].status' <<< "${matches}")"
+            conclusion="$(jq -r '.[0].conclusion // ""' <<< "${matches}")"
+            run_id="$(jq -r '.[0].id' <<< "${matches}")"
+            if [[ "${status}" != "completed" ]]; then
+              echo "ERROR: exact ${workflow} run ${run_id} is still ${status}." >&2
+              exit 1
+            fi
+            if [[ "${conclusion}" != "success" ]]; then
+              echo "ERROR: exact ${workflow} run ${run_id} concluded ${conclusion}." >&2
+              exit 1
+            fi
+            run_ids["${workflow}"]="${run_id}"
+            echo "Validated ${workflow} run ${run_id} for ${RELEASE_TAG}/${RELEASE_SHA}."
+          done
+
+          mkdir -p incoming
+          qualification_root="${RUNNER_TEMP}/syswarden-release-qualification-stage"
+          mkdir "${qualification_root}"
+          gh run download "${qualification_run_id}" \
+            --name syswarden-release-qualification \
+            --dir "${qualification_root}"
+          for specification in "${workflows[@]}"; do
+            IFS='|' read -r workflow artifact <<< "${specification}"
+            run_id="${run_ids[${workflow}]}"
+            artifact_response="$(gh api --paginate --slurp --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+              -f per_page=100)"
+            artifact_matches="$(jq --arg name "${artifact}" \
+              '[.[] | .artifacts[] | select(.name == $name)]' <<< "${artifact_response}")"
+            artifact_count="$(jq 'length' <<< "${artifact_matches}")"
+            if [[ "${artifact_count}" -ne 1 ]]; then
+              echo "ERROR: run ${run_id} has ${artifact_count} artifacts named ${artifact}; expected one." >&2
+              exit 1
+            fi
+            expired="$(jq -r '.[0].expired' <<< "${artifact_matches}")"
+            size="$(jq -r '.[0].size_in_bytes' <<< "${artifact_matches}")"
+            if [[ "${expired}" != "false" || "${size}" -le 0 ]]; then
+              echo "ERROR: artifact ${artifact} is expired or empty." >&2
+              exit 1
+            fi
+            destination="incoming/${artifact}"
+            mkdir "${destination}"
+            gh run download "${run_id}" \
+              --name "${artifact}" \
+              --dir "${destination}"
+          done
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Revalidate Exact Pre-Tag Qualification and Candidate Packages
+        if: ${{ steps.upstream.outputs.ready == 'true' }}
+        shell: bash
+        env:
+          QUALIFICATION_RUN_ID: ${{ steps.upstream.outputs.qualification_run_id }}
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          QUALIFICATION_ROOT="${RUNNER_TEMP}/syswarden-release-qualification-stage"
+          VERSION="${RELEASE_TAG#v}"
+
+          test -s "${QUALIFICATION_ROOT}/qualification-context.json"
+          test -s "${QUALIFICATION_ROOT}/status/qualification-exit-codes.json"
+          test -s "${QUALIFICATION_ROOT}/EVIDENCE_SHA256SUMS.txt"
+          test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
+          test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
+          diff -u \
+            <(printf '%s\n' EVIDENCE_SHA256SUMS.txt qualification-context.json | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' aggregate bound packages raw status | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' aggregate bound packages packages/candidate packages/previous raw status | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' release-qualification.json) \
+            <(find "${QUALIFICATION_ROOT}/aggregate" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}/raw" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' freebsd-vm-bound.json nftables-bound.json package-lifecycle-bound.json | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}/bound" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' candidate previous | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}/packages" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' qualification-exit-codes.json) \
+            <(find "${QUALIFICATION_ROOT}/status" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          (
+            cd "${QUALIFICATION_ROOT}"
+            diff -u \
+              <(sed -E -n 's#^[0-9a-f]{64}  (\./)?##p' EVIDENCE_SHA256SUMS.txt | LC_ALL=C sort) \
+              <(find . -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n' | LC_ALL=C sort)
+            sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
+          )
+          jq --exit-status \
+            --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg release_tag "${RELEASE_TAG}" \
+            --arg release_sha "${RELEASE_SHA}" \
+            '(keys | sort) == [
+              "candidate_package_artifact_id",
+              "candidate_package_artifact_name",
+              "candidate_package_run_id",
+              "candidate_package_workflow",
+              "previous_package_asset_ids",
+              "previous_release_id",
+              "previous_tag",
+              "release_sha",
+              "release_tag",
+              "repository",
+              "schema_version"
+            ] and
+            .schema_version == 1 and
+            .repository == $repository and
+            .release_tag == $release_tag and
+            .release_sha == $release_sha and
+            .candidate_package_workflow == "package.yml" and
+            .candidate_package_artifact_name ==
+              ("syswarden-packages-" + ($release_tag | ltrimstr("v"))) and
+            (.candidate_package_run_id | type) == "number" and
+            .candidate_package_run_id > 0 and
+            (.candidate_package_artifact_id | type) == "number" and
+            .candidate_package_artifact_id > 0 and
+            (.previous_release_id | type) == "number" and
+            .previous_release_id > 0 and
+            (.previous_tag | type) == "string" and
+            .previous_tag == $aggregate[0].bindings.previous_version and
+            (.previous_package_asset_ids | type) == "array" and
+            (.previous_package_asset_ids | length) == 8 and
+            ([.previous_package_asset_ids[].name] | unique | length) == 8 and
+            all(.previous_package_asset_ids[];
+              (keys | sort) == ["id", "name"] and
+              (.id | type) == "number" and .id > 0 and
+              (.name | type) == "string" and (.name | length) > 0
+            )' "${QUALIFICATION_ROOT}/qualification-context.json"
+          jq --exit-status '
+            (keys | sort) == [
+              "adapter_build",
+              "adapter_verify",
+              "freebsd_lab",
+              "gate_generate",
+              "gate_verify",
+              "nftables_lab",
+              "package_lab"
+            ] and all(.[]; . == 0)
+          ' "${QUALIFICATION_ROOT}/status/qualification-exit-codes.json"
+
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_adapter.py verify \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --expected-sha "${RELEASE_SHA}" \
+            --expected-version "${RELEASE_TAG}" \
+            --candidate-packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
+            --previous-packages-dir "${QUALIFICATION_ROOT}/packages/previous" \
+            --nft-raw "${QUALIFICATION_ROOT}/raw/nftables-raw.json" \
+            --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
+            --freebsd-raw "${QUALIFICATION_ROOT}/raw/freebsd-vm-raw.json" \
+            --max-age-seconds 172800 \
+            --max-report-skew-seconds 0 \
+            --nft-envelope "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \
+            --package-envelope "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json" \
+            --freebsd-envelope "${QUALIFICATION_ROOT}/bound/freebsd-vm-bound.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_gate.py verify \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --expected-sha "${RELEASE_SHA}" \
+            --expected-version "${RELEASE_TAG}" \
+            --candidate-packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
+            --nft-report "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \
+            --package-report "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json" \
+            --freebsd-report "${QUALIFICATION_ROOT}/bound/freebsd-vm-bound.json" \
+            --max-age-seconds 172800 \
+            --max-report-skew-seconds 0 \
+            --aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
+            --require-tag
+
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify-packages \
+            --tag "${RELEASE_TAG}" \
+            --packages "incoming/syswarden-packages-${VERSION}"
+          package_names=(
+            "syswarden_${VERSION}_amd64.deb"
+            "syswarden_${VERSION}_arm64.deb"
+            "syswarden-${VERSION}-1.x86_64.rpm"
+            "syswarden-${VERSION}-1.aarch64.rpm"
+            "syswarden_${VERSION}_x86_64.apk"
+            "syswarden_${VERSION}_aarch64.apk"
+            "syswarden-${VERSION}.txz"
+            "SHA256SUMS.txt"
+          )
+          for package_name in "${package_names[@]}"; do
+            cmp --silent \
+              "${QUALIFICATION_ROOT}/packages/candidate/${package_name}" \
+              "incoming/syswarden-packages-${VERSION}/${package_name}"
+          done
+          echo "Qualification run ${QUALIFICATION_RUN_ID} and the exact tag package bytes are release-ready."
+
+      - name: Validate and Assemble Exact Release Inventory
+        if: ${{ steps.upstream.outputs.ready == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          mkdir -p release_payload
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py prepare \
+            --repository "${GITHUB_WORKSPACE}" \
+            --tag "${RELEASE_TAG}" \
+            --packages "incoming/syswarden-packages-${VERSION}" \
+            --bundle incoming/syswarden-attested-bundle \
+            --sbom incoming/syswarden-sbom \
+            --compliance incoming/plumber-report \
+            --output release_payload/assets \
+            --notes-output release_payload/release_notes.md
+          echo "----- BEGIN VALIDATED RELEASE NOTES -----"
+          sed -n '1,240p' release_payload/release_notes.md
+          echo "----- END VALIDATED RELEASE NOTES -----"
+          echo "----- BEGIN VALIDATED RELEASE CHECKSUMS -----"
+          cat release_payload/assets/RELEASE_SHA256SUMS.txt
+          echo "----- END VALIDATED RELEASE CHECKSUMS -----"
+
+      - name: Upload Validated Release Payload
+        if: ${{ steps.upstream.outputs.ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: validated-release-${{ steps.context.outputs.release_tag }}-${{ steps.context.outputs.release_sha }}
+          path: release_payload/
+          if-no-files-found: error
+          retention-days: 30
+
+  attest-and-publish:
+    name: Attest and Publish Validated Release
+    needs:
+      - validate-and-stage
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.validate-and-stage.outputs.ready == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: syswarden-release-production
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Require Protected Maintainer Release Environment
+        if: ${{ env.ACT != 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          environment_json="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-production")"
+          environment_name="$(jq -r '.name // ""' <<< "${environment_json}")"
+          reviewer_rule_count="$(jq '[
+            .protection_rules[]? |
+            select(
+              .type == "required_reviewers" and
+              (.reviewers | type) == "array" and
+              (.reviewers | length) > 0
+            )
+          ] | length' <<< "${environment_json}")"
+          if [[ "${environment_name}" != "syswarden-release-production" || \
+                "${reviewer_rule_count}" != "1" ]]; then
+            echo "ERROR: syswarden-release-production must exist and have exactly one non-empty required-reviewers protection rule." >&2
+            echo "Publication is blocked until the maintainer configures that GitHub Environment." >&2
+            exit 1
+          fi
+          echo "Protected maintainer release environment is configured."
+
+      - name: Checkout Exact Release Commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.validate-and-stage.outputs.release_sha }}
+
+      - name: Download Validated Release Payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: validated-release-${{ needs.validate-and-stage.outputs.release_tag }}-${{ needs.validate-and-stage.outputs.release_sha }}
+          path: release_payload
+
+      - name: Re-resolve and Download Original Qualification Evidence by Run ID
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_RUN_ID: ${{ needs.validate-and-stage.outputs.qualification_run_id }}
+          RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
+          REQUESTED_QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${QUALIFICATION_RUN_ID}" =~ ^[1-9][0-9]*$ || \
+                "${QUALIFICATION_RUN_ID}" != "${REQUESTED_QUALIFICATION_RUN_ID}" ]]; then
+            echo "ERROR: privileged publisher did not receive the exact validated qualification run ID." >&2
+            exit 1
+          fi
+
+          qualification_run="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${QUALIFICATION_RUN_ID}")"
+          if ! jq -e \
+            --argjson run_id "${QUALIFICATION_RUN_ID}" \
+            --arg sha "${RELEASE_SHA}" \
+            '.id == $run_id and
+             .path == ".github/workflows/release-qualification.yml" and
+             .head_sha == $sha and
+             .head_branch == "main" and
+             .event == "workflow_dispatch" and
+             .status == "completed" and
+             .conclusion == "success" and
+             .run_attempt == 1' <<< "${qualification_run}" >/dev/null; then
+            echo "ERROR: qualification run ${QUALIFICATION_RUN_ID} no longer satisfies the exact immutable run contract." >&2
+            exit 1
+          fi
+
+          qualification_pages="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/release-qualification.yml/runs" \
+            -f event=workflow_dispatch \
+            -f branch=main \
+            -f head_sha="${RELEASE_SHA}" \
+            -f per_page=100)"
+          qualification_matches="$(jq --arg sha "${RELEASE_SHA}" \
+            '[.[] | .workflow_runs[] | select(
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .run_attempt == 1
+            )]' <<< "${qualification_pages}")"
+          if [[ "$(jq 'length' <<< "${qualification_matches}")" -ne 1 || \
+                "$(jq -r '.[0].id | tostring' <<< "${qualification_matches}")" != "${QUALIFICATION_RUN_ID}" ]]; then
+            echo "ERROR: qualification run ${QUALIFICATION_RUN_ID} is no longer the unique completed successful attempt-1 run." >&2
+            exit 1
+          fi
+          qualification_active_count="$(jq --arg sha "${RELEASE_SHA}" \
+            '[.[] | .workflow_runs[] | select(
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "workflow_dispatch" and
+              .status != "completed"
+            )] | length' <<< "${qualification_pages}")"
+          if [[ "${qualification_active_count}" -ne 0 ]]; then
+            echo "ERROR: ${qualification_active_count} concurrent release qualification runs remain active for main/${RELEASE_SHA}." >&2
+            exit 1
+          fi
+
+          qualification_artifact_pages="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${QUALIFICATION_RUN_ID}/artifacts" \
+            -f per_page=100)"
+          qualification_artifacts="$(jq \
+            '[.[] | .artifacts[] | select(.name == "syswarden-release-qualification")]' \
+            <<< "${qualification_artifact_pages}")"
+          if [[ "$(jq 'length' <<< "${qualification_artifacts}")" -ne 1 || \
+                "$(jq -r '.[0].expired' <<< "${qualification_artifacts}")" != "false" || \
+                "$(jq -r '.[0].size_in_bytes' <<< "${qualification_artifacts}")" -le 0 ]]; then
+            echo "ERROR: qualification run ${QUALIFICATION_RUN_ID} no longer exposes exactly one non-expired, non-empty original artifact." >&2
+            exit 1
+          fi
+          qualification_artifact_id="$(jq -r '.[0].id | tostring' <<< "${qualification_artifacts}")"
+          if [[ ! "${qualification_artifact_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: exact qualification artifact ID is invalid." >&2
+            exit 1
+          fi
+          qualification_artifact="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${qualification_artifact_id}")"
+          if ! jq -e \
+            --argjson artifact_id "${qualification_artifact_id}" \
+            --argjson run_id "${QUALIFICATION_RUN_ID}" \
+            '.id == $artifact_id and
+             .name == "syswarden-release-qualification" and
+             .expired == false and
+             .size_in_bytes > 0 and
+             .workflow_run.id == $run_id' <<< "${qualification_artifact}" >/dev/null; then
+            echo "ERROR: qualification artifact ${qualification_artifact_id} no longer belongs to exact run ${QUALIFICATION_RUN_ID}." >&2
+            exit 1
+          fi
+
+          qualification_root="${RUNNER_TEMP}/syswarden-release-qualification-privileged"
+          mkdir "${qualification_root}"
+          gh run download "${QUALIFICATION_RUN_ID}" \
+            --name syswarden-release-qualification \
+            --dir "${qualification_root}"
+
+      - name: Revalidate Tag Context and Payload in Privileged Job
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          EVENT_REF_TYPE: ${{ github.ref_type }}
+          EVENT_SHA: ${{ github.sha }}
+          QUALIFICATION_RUN_ID: ${{ needs.validate-and-stage.outputs.qualification_run_id }}
+          RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.validate-and-stage.outputs.release_tag }}
+          REQUESTED_QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          REQUESTED_SHA: ${{ inputs.release_sha }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" != "workflow_dispatch" || \
+                "${EVENT_REF_TYPE}" != "tag" || \
+                "${EVENT_REF_NAME}" != "${RELEASE_TAG}" || \
+                "${EVENT_REF}" != "refs/tags/${RELEASE_TAG}" || \
+                "${EVENT_SHA}" != "${RELEASE_SHA}" || \
+                "${REQUESTED_TAG}" != "${RELEASE_TAG}" || \
+                "${REQUESTED_SHA}" != "${RELEASE_SHA}" || \
+                "${REQUESTED_QUALIFICATION_RUN_ID}" != "${QUALIFICATION_RUN_ID}" ]]; then
+            echo "ERROR: privileged publisher context is not the validated tag and SHA." >&2
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "${RELEASE_SHA}"
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "${RELEASE_SHA}"
+          git merge-base --is-ancestor "${RELEASE_SHA}" origin/main
+
+          remote_refs="$(git ls-remote --exit-code origin \
+            "refs/tags/${RELEASE_TAG}" \
+            "refs/tags/${RELEASE_TAG}^{}")"
+          remote_tag_sha=""
+          while IFS=$'\t' read -r object_sha ref_name; do
+            case "${ref_name}" in
+              "refs/tags/${RELEASE_TAG}")
+                if [[ -z "${remote_tag_sha}" ]]; then
+                  remote_tag_sha="${object_sha}"
                 fi
-            done
+                ;;
+              "refs/tags/${RELEASE_TAG}^{}")
+                remote_tag_sha="${object_sha}"
+                ;;
+            esac
+          done <<< "${remote_refs}"
+          if [[ "${remote_tag_sha}" != "${RELEASE_SHA}" ]]; then
+            echo "ERROR: remote tag ${RELEASE_TAG} now resolves to ${remote_tag_sha:-nothing}, expected ${RELEASE_SHA}." >&2
+            exit 1
+          fi
 
-            # Print structure for auditability
-            ls -R /tmp/artifacts
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
+            --tag "${RELEASE_TAG}" \
+            --assets release_payload/assets
+          test -s release_payload/release_notes.md
 
-      - name: "Extract and prepare final release assets"
+          QUALIFICATION_ROOT="${RUNNER_TEMP}/syswarden-release-qualification-privileged"
+          VERSION="${RELEASE_TAG#v}"
+          test -s "${QUALIFICATION_ROOT}/qualification-context.json"
+          test -s "${QUALIFICATION_ROOT}/status/qualification-exit-codes.json"
+          test -s "${QUALIFICATION_ROOT}/EVIDENCE_SHA256SUMS.txt"
+          test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
+          test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
+          diff -u \
+            <(printf '%s\n' EVIDENCE_SHA256SUMS.txt qualification-context.json | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' aggregate bound packages raw status | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' aggregate bound packages packages/candidate packages/previous raw status | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' release-qualification.json) \
+            <(find "${QUALIFICATION_ROOT}/aggregate" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}/raw" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' freebsd-vm-bound.json nftables-bound.json package-lifecycle-bound.json | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}/bound" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' candidate previous | LC_ALL=C sort) \
+            <(find "${QUALIFICATION_ROOT}/packages" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort)
+          diff -u \
+            <(printf '%s\n' qualification-exit-codes.json) \
+            <(find "${QUALIFICATION_ROOT}/status" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          (
+            cd "${QUALIFICATION_ROOT}"
+            diff -u \
+              <(sed -E -n 's#^[0-9a-f]{64}  (\./)?##p' EVIDENCE_SHA256SUMS.txt | LC_ALL=C sort) \
+              <(find . -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n' | LC_ALL=C sort)
+            sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
+          )
+          jq --exit-status \
+            --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg release_tag "${RELEASE_TAG}" \
+            --arg release_sha "${RELEASE_SHA}" \
+            '(keys | sort) == [
+              "candidate_package_artifact_id",
+              "candidate_package_artifact_name",
+              "candidate_package_run_id",
+              "candidate_package_workflow",
+              "previous_package_asset_ids",
+              "previous_release_id",
+              "previous_tag",
+              "release_sha",
+              "release_tag",
+              "repository",
+              "schema_version"
+            ] and
+            .schema_version == 1 and
+            .repository == $repository and
+            .release_tag == $release_tag and
+            .release_sha == $release_sha and
+            .candidate_package_workflow == "package.yml" and
+            .candidate_package_artifact_name ==
+              ("syswarden-packages-" + ($release_tag | ltrimstr("v"))) and
+            (.candidate_package_run_id | type) == "number" and
+            .candidate_package_run_id > 0 and
+            (.candidate_package_artifact_id | type) == "number" and
+            .candidate_package_artifact_id > 0 and
+            (.previous_release_id | type) == "number" and
+            .previous_release_id > 0 and
+            (.previous_tag | type) == "string" and
+            .previous_tag == $aggregate[0].bindings.previous_version and
+            (.previous_package_asset_ids | type) == "array" and
+            (.previous_package_asset_ids | length) == 8 and
+            ([.previous_package_asset_ids[].name] | unique | length) == 8 and
+            all(.previous_package_asset_ids[];
+              (keys | sort) == ["id", "name"] and
+              (.id | type) == "number" and .id > 0 and
+              (.name | type) == "string" and (.name | length) > 0
+            )' "${QUALIFICATION_ROOT}/qualification-context.json"
+          jq --exit-status '
+            (keys | sort) == [
+              "adapter_build",
+              "adapter_verify",
+              "freebsd_lab",
+              "gate_generate",
+              "gate_verify",
+              "nftables_lab",
+              "package_lab"
+            ] and all(.[]; . == 0)
+          ' "${QUALIFICATION_ROOT}/status/qualification-exit-codes.json"
+
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_adapter.py verify \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --expected-sha "${RELEASE_SHA}" \
+            --expected-version "${RELEASE_TAG}" \
+            --candidate-packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
+            --previous-packages-dir "${QUALIFICATION_ROOT}/packages/previous" \
+            --nft-raw "${QUALIFICATION_ROOT}/raw/nftables-raw.json" \
+            --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
+            --freebsd-raw "${QUALIFICATION_ROOT}/raw/freebsd-vm-raw.json" \
+            --max-age-seconds 172800 \
+            --max-report-skew-seconds 0 \
+            --nft-envelope "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \
+            --package-envelope "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json" \
+            --freebsd-envelope "${QUALIFICATION_ROOT}/bound/freebsd-vm-bound.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_gate.py verify \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --expected-sha "${RELEASE_SHA}" \
+            --expected-version "${RELEASE_TAG}" \
+            --candidate-packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
+            --nft-report "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \
+            --package-report "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json" \
+            --freebsd-report "${QUALIFICATION_ROOT}/bound/freebsd-vm-bound.json" \
+            --max-age-seconds 172800 \
+            --max-report-skew-seconds 0 \
+            --aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
+            --require-tag
+
+          package_names=(
+            "syswarden_${VERSION}_amd64.deb"
+            "syswarden_${VERSION}_arm64.deb"
+            "syswarden-${VERSION}-1.x86_64.rpm"
+            "syswarden-${VERSION}-1.aarch64.rpm"
+            "syswarden_${VERSION}_x86_64.apk"
+            "syswarden_${VERSION}_aarch64.apk"
+            "syswarden-${VERSION}.txz"
+            "SHA256SUMS.txt"
+          )
+          for package_name in "${package_names[@]}"; do
+            cmp --silent \
+              "${QUALIFICATION_ROOT}/packages/candidate/${package_name}" \
+              "release_payload/assets/${package_name}"
+          done
+          echo "Privileged revalidation retained qualification run ${QUALIFICATION_RUN_ID} and exact candidate package bytes."
+
+      - name: Detect and Validate Existing Release
+        id: existing
+        if: ${{ env.ACT != 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.validate-and-stage.outputs.release_tag }}
         run: |
-            # Creating the final staging directory for the GitHub Release
-            mkdir -p ./release_assets
+          set -euo pipefail
+          {
+            echo "public=false"
+            echo "draft=false"
+          } >> "${GITHUB_OUTPUT}"
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            exit 0
+          fi
 
-            # 1. Fetch syswarden-release.tar.gz from the attested bundle directory
-            BUNDLE_FILE=$(find /tmp/artifacts -type f -name "syswarden-release.tar.gz" | head -n 1)
-            if [ -n "${BUNDLE_FILE}" ]; then
-                cp "${BUNDLE_FILE}" ./release_assets/
-            else
-                echo "CRITICAL: syswarden-release.tar.gz not found!"
-                exit 1
-            fi
+          metadata="$(gh release view "${RELEASE_TAG}" \
+            --json tagName,isDraft,isPrerelease,body)"
+          if [[ "$(jq -r '.tagName' <<< "${metadata}")" != "${RELEASE_TAG}" || \
+                "$(jq -r '.isPrerelease' <<< "${metadata}")" != "false" ]]; then
+            echo "ERROR: existing release metadata is inconsistent with the validated candidate." >&2
+            exit 1
+          fi
+          jq -j '.body' <<< "${metadata}" > existing_release_notes.md
+          cmp --silent release_payload/release_notes.md existing_release_notes.md || {
+            echo "ERROR: existing release notes differ from the validated changelog block." >&2
+            exit 1
+          }
 
-            # 2. Fetch packaging files (.deb, .rpm, .pkg, SHA256SUMS.txt) dynamically
-            # package.yml appends the version to the artifact name
-            PACKAGE_DIR=$(find /tmp/artifacts -type d -name "syswarden-packages-*" | head -n 1)
-            if [ -n "${PACKAGE_DIR}" ]; then
-                find "${PACKAGE_DIR}" -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.txz" -o -name "*.apk" -o -name "SHA256SUMS.txt" \) -exec cp {} ./release_assets/ \;
-            else
-                echo "CRITICAL: syswarden-packages artifact not found!"
-                exit 1
-            fi
+          if [[ "$(jq -r '.isDraft' <<< "${metadata}")" == "true" ]]; then
+            echo "A matching draft exists and must pass exact remote validation before publication."
+            echo "draft=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
 
-            # 3. Fetch Plumber Compliance
-            # Handle both ZIP (v3) or extracted directory (v4)
-            WORKSPACE_DIR=$PWD
-            PLUMBER_ZIP=$(find /tmp/artifacts -type f -name "plumber-report.zip" | head -n 1)
-            if [ -n "${PLUMBER_ZIP}" ]; then
-                cp "${PLUMBER_ZIP}" ./release_assets/
-            else
-                # Fallback: if Plumber creates a directory without zipping the files
-                PLUMBER_DIR=$(find /tmp/artifacts -type d -name "plumber-report" | head -n 1)
-                if [ -n "${PLUMBER_DIR}" ]; then
-                    cd "${PLUMBER_DIR}" || exit 1
-                    zip -r "${WORKSPACE_DIR}/release_assets/plumber-report.zip" ./*
-                    cd - || exit 1
-                else
-                    echo "CRITICAL: plumber-report artifact not found!"
-                    exit 1
-                fi
-            fi
+          mkdir existing_release_assets
+          gh release download "${RELEASE_TAG}" --dir existing_release_assets
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
+            --tag "${RELEASE_TAG}" \
+            --assets existing_release_assets
+          diff --no-index \
+            release_payload/assets/RELEASE_SHA256SUMS.txt \
+            existing_release_assets/RELEASE_SHA256SUMS.txt
+          bash scripts/ci/verify_release_attestations.sh \
+            existing_release_assets \
+            "${GITHUB_REPOSITORY}" \
+            "${GITHUB_REPOSITORY}/.github/workflows/release-manager.yml" \
+            "${RELEASE_SHA}"
+          echo "Existing release ${RELEASE_TAG} already matches the validated payload exactly."
+          echo "public=true" >> "${GITHUB_OUTPUT}"
 
-      - name: "Generate Markdown Release Notes from Changelog"
+      - name: Bind Attestation OIDC Context to the Exact Release Commit
+        if: ${{ env.ACT != 'true' && steps.existing.outputs.public != 'true' }}
+        shell: bash
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
         run: |
-            NOTES_FILE="release_notes.md"
-            
-            # Extract the latest release notes from changelog.md (everything before the first '---')
-            if [ -f "changelog.md" ]; then
-                awk '/^---/{exit} {print}' changelog.md > "${NOTES_FILE}"
-            else
-                echo "CRITICAL: changelog.md not found!"
-                exit 1
-            fi
+          set -euo pipefail
+          if [[ "${EVENT_SHA}" != "${RELEASE_SHA}" ]]; then
+            echo "ERROR: workflow_dispatch OIDC context ${EVENT_SHA} does not equal release ${RELEASE_SHA}." >&2
+            echo "Refusing to attest assets with provenance for a different source commit." >&2
+            exit 1
+          fi
 
-            # Inject compliance audit trail references
-            echo "" >> "${NOTES_FILE}"
-            echo "## COMPLIANCE & SECURITY" >> "${NOTES_FILE}"
-            echo "- Plumber Report Audit bundled as \`plumber-report.zip\`." >> "${NOTES_FILE}"
-            echo "- Cryptographic SBOM (SPDX) and Supply Chain Attestation (SLSA Level 3) generated and attached." >> "${NOTES_FILE}"
-
-      - name: "Generate SLSA Release Attestations"
+      - name: Generate GitHub Build Provenance Attestations
+        if: ${{ env.ACT != 'true' && steps.existing.outputs.public != 'true' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: './release_assets/*'
+          subject-path: release_payload/assets/*
 
-      - name: "Publish GitHub Release"
+      - name: Create Private Draft Release
+        if: ${{ env.ACT != 'true' && steps.existing.outputs.public != 'true' && steps.existing.outputs.draft != 'true' }}
+        shell: bash
         env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate-and-stage.outputs.release_tag }}
         run: |
-            # Execute the release upload via GH CLI, pushing notes and all staged artifacts
-            gh release create "${{ github.ref_name }}" \
-                --title "${{ github.ref_name }}" \
-                --latest \
-                --notes-file release_notes.md \
-                ./release_assets/*
+          set -euo pipefail
+          gh release create "${RELEASE_TAG}" \
+            --verify-tag \
+            --title "${RELEASE_TAG}" \
+            --draft \
+            --notes-file release_payload/release_notes.md \
+            release_payload/assets/*
+
+      - name: Verify Private Draft Assets Before Publication
+        if: ${{ env.ACT != 'true' && steps.existing.outputs.public != 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.validate-and-stage.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          metadata="$(gh release view "${RELEASE_TAG}" --json tagName,isDraft,isPrerelease,body)"
+          if [[ "$(jq -r '.tagName' <<< "${metadata}")" != "${RELEASE_TAG}" || \
+                "$(jq -r '.isDraft' <<< "${metadata}")" != "true" || \
+                "$(jq -r '.isPrerelease' <<< "${metadata}")" != "false" ]]; then
+            echo "ERROR: private draft metadata is inconsistent." >&2
+            exit 1
+          fi
+          jq -j '.body' <<< "${metadata}" > draft_release_notes.md
+          cmp --silent release_payload/release_notes.md draft_release_notes.md
+          mkdir draft_release_assets
+          gh release download "${RELEASE_TAG}" --dir draft_release_assets
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
+            --tag "${RELEASE_TAG}" \
+            --assets draft_release_assets
+          diff --no-index \
+            release_payload/assets/RELEASE_SHA256SUMS.txt \
+            draft_release_assets/RELEASE_SHA256SUMS.txt
+          bash scripts/ci/verify_release_attestations.sh \
+            draft_release_assets \
+            "${GITHUB_REPOSITORY}" \
+            "${GITHUB_REPOSITORY}/.github/workflows/release-manager.yml" \
+            "${RELEASE_SHA}"
+
+      - name: Require Immutable Release Tag Ruleset Before Publication
+        if: ${{ env.ACT != 'true' }}
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.validate-and-stage.outputs.release_tag }}
+          # GitHub omits bypass_actors without ruleset write access. This
+          # protected GitHub App/fine-grained PAT credential is used only for
+          # the two read-only GET requests in this step.
+          RULESET_READ_TOKEN: ${{ secrets.SYSWARDEN_RULESET_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          readonly ruleset_name="syswarden-release-tags-immutable"
+          if [[ -z "${RULESET_READ_TOKEN}" ]]; then
+            echo "ERROR: protected-environment secret SYSWARDEN_RULESET_READ_TOKEN must be a GitHub App or fine-grained PAT credential with Repository Administration: write and is used only for read-only GET requests." >&2
+            exit 1
+          fi
+
+          ruleset_pages="$(GH_TOKEN="${RULESET_READ_TOKEN}" gh api --paginate --slurp --method GET \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/rulesets" \
+            -f targets=tag \
+            -f per_page=100)"
+          if ! RULESET_READ_TOKEN='' jq -e '
+            type == "array" and
+            all(.[]; type == "array" and all(.[]; type == "object"))
+          ' <<< "${ruleset_pages}" >/dev/null; then
+            echo "ERROR: paginated tag-ruleset response has an invalid shape." >&2
+            exit 1
+          fi
+          ruleset_matches="$(RULESET_READ_TOKEN='' jq --arg name "${ruleset_name}" \
+            '[.[][] | select(.name == $name)]' <<< "${ruleset_pages}")"
+          ruleset_count="$(RULESET_READ_TOKEN='' jq 'length' <<< "${ruleset_matches}")"
+          if [[ "${ruleset_count}" -ne 1 ]]; then
+            echo "ERROR: found ${ruleset_count} tag rulesets named ${ruleset_name}; expected exactly one." >&2
+            echo "Publication is blocked until the maintainer configures that external GitHub ruleset." >&2
+            exit 1
+          fi
+          ruleset_id="$(RULESET_READ_TOKEN='' jq -r '.[0].id | tostring' <<< "${ruleset_matches}")"
+          if [[ ! "${ruleset_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: ${ruleset_name} returned an invalid ruleset ID." >&2
+            exit 1
+          fi
+
+          ruleset_detail="$(GH_TOKEN="${RULESET_READ_TOKEN}" gh api --method GET \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}")"
+          unset RULESET_READ_TOKEN
+          ruleset_path="${RUNNER_TEMP}/${ruleset_name}-${ruleset_id}.json"
+          umask 077
+          printf '%s' "${ruleset_detail}" > "${ruleset_path}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/tag_ruleset_gate.py \
+            --ruleset "${ruleset_path}" \
+            --expected-id "${ruleset_id}"
+
+          remote_refs="$(git ls-remote --exit-code origin \
+            "refs/tags/${RELEASE_TAG}" \
+            "refs/tags/${RELEASE_TAG}^{}")"
+          direct_sha=""
+          peeled_sha=""
+          direct_count=0
+          peeled_count=0
+          while IFS=$'\t' read -r object_sha ref_name; do
+            if [[ ! "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "ERROR: immutable-ruleset tag lookup returned an invalid object SHA." >&2
+              exit 1
+            fi
+            case "${ref_name}" in
+              "refs/tags/${RELEASE_TAG}")
+                direct_count=$((direct_count + 1))
+                direct_sha="${object_sha}"
+                ;;
+              "refs/tags/${RELEASE_TAG}^{}")
+                peeled_count=$((peeled_count + 1))
+                peeled_sha="${object_sha}"
+                ;;
+              *)
+                echo "ERROR: immutable-ruleset tag lookup returned unexpected ref ${ref_name:-<empty>}." >&2
+                exit 1
+                ;;
+            esac
+          done <<< "${remote_refs}"
+          if [[ "${direct_count}" -ne 1 || "${peeled_count}" -gt 1 ]]; then
+            echo "ERROR: immutable-ruleset tag lookup returned ${direct_count} direct and ${peeled_count} peeled refs; expected one direct ref and at most one peeled ref." >&2
+            exit 1
+          fi
+          resolved_sha="${peeled_sha:-${direct_sha}}"
+          if [[ "${resolved_sha}" != "${RELEASE_SHA}" ]]; then
+            echo "ERROR: remote tag ${RELEASE_TAG} resolves to ${resolved_sha:-nothing}, expected ${RELEASE_SHA}; release validation is blocked." >&2
+            exit 1
+          fi
+          echo "Immutable tag ruleset and exact remote tag SHA were revalidated for the release."
+
+      - name: Publish Validated Draft Release
+        if: ${{ env.ACT != 'true' }}
+        shell: bash
+        env:
+          EXISTING_PUBLIC: ${{ steps.existing.outputs.public }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.validate-and-stage.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          revalidate_remote_release_tag() {
+            local phase="${1:?remote tag validation phase is required}"
+            local remote_refs=""
+            local direct_sha=""
+            local peeled_sha=""
+            local resolved_sha=""
+            local direct_count=0
+            local peeled_count=0
+
+            if ! remote_refs="$(git ls-remote --exit-code origin \
+              "refs/tags/${RELEASE_TAG}" \
+              "refs/tags/${RELEASE_TAG}^{}")"; then
+              echo "ERROR: ${phase} remote tag lookup failed for ${RELEASE_TAG}; refusing to trust the release ref." >&2
+              return 1
+            fi
+
+            while IFS=$'\t' read -r object_sha ref_name; do
+              if [[ ! "${object_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "ERROR: ${phase} remote tag lookup returned an invalid object SHA for ${RELEASE_TAG}." >&2
+                return 1
+              fi
+              case "${ref_name}" in
+                "refs/tags/${RELEASE_TAG}")
+                  direct_count=$((direct_count + 1))
+                  direct_sha="${object_sha}"
+                  ;;
+                "refs/tags/${RELEASE_TAG}^{}")
+                  peeled_count=$((peeled_count + 1))
+                  peeled_sha="${object_sha}"
+                  ;;
+                *)
+                  echo "ERROR: ${phase} remote tag lookup returned unexpected ref ${ref_name:-<empty>}." >&2
+                  return 1
+                  ;;
+              esac
+            done <<< "${remote_refs}"
+
+            if [[ "${direct_count}" -ne 1 || "${peeled_count}" -gt 1 ]]; then
+              echo "ERROR: ${phase} remote tag lookup returned ${direct_count} direct and ${peeled_count} peeled refs for ${RELEASE_TAG}; expected one direct ref and at most one peeled ref." >&2
+              return 1
+            fi
+            resolved_sha="${peeled_sha:-${direct_sha}}"
+            if [[ "${resolved_sha}" != "${RELEASE_SHA}" ]]; then
+              if [[ "${phase}" == "post-publication" || "${phase}" == "idempotent-public" ]]; then
+                echo "ERROR: the release was made public, but remote tag ${RELEASE_TAG} now resolves to ${resolved_sha:-nothing}, expected ${RELEASE_SHA}." >&2
+              else
+                echo "ERROR: ${phase} remote tag ${RELEASE_TAG} resolves to ${resolved_sha:-nothing}, expected ${RELEASE_SHA}; the draft remains private." >&2
+              fi
+              return 1
+            fi
+            echo "${phase} remote tag ${RELEASE_TAG} resolves exactly to ${RELEASE_SHA}."
+          }
+
+          if [[ "${EXISTING_PUBLIC}" == "true" ]]; then
+            revalidate_remote_release_tag "idempotent-public"
+            echo "Existing public release ${RELEASE_TAG} remains bound to ${RELEASE_SHA}; no publication mutation was attempted."
+            exit 0
+          fi
+          if [[ "${EXISTING_PUBLIC}" != "false" ]]; then
+            echo "ERROR: existing release state is invalid: ${EXISTING_PUBLIC:-<empty>}." >&2
+            exit 1
+          fi
+
+          revalidate_remote_release_tag "pre-publication"
+          gh release edit "${RELEASE_TAG}" --draft=false --latest
+          revalidate_remote_release_tag "post-publication"
+
+      - name: Verify Published Release Assets
+        if: ${{ env.ACT != 'true' && steps.existing.outputs.public != 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.validate-and-stage.outputs.release_sha }}
+          RELEASE_TAG: ${{ needs.validate-and-stage.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          metadata="$(gh release view "${RELEASE_TAG}" --json tagName,isDraft,isPrerelease)"
+          if [[ "$(jq -r '.tagName' <<< "${metadata}")" != "${RELEASE_TAG}" || \
+                "$(jq -r '.isDraft' <<< "${metadata}")" != "false" || \
+                "$(jq -r '.isPrerelease' <<< "${metadata}")" != "false" ]]; then
+            echo "ERROR: published release metadata is inconsistent." >&2
+            exit 1
+          fi
+          mkdir published_release_assets
+          gh release download "${RELEASE_TAG}" --dir published_release_assets
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
+            --tag "${RELEASE_TAG}" \
+            --assets published_release_assets
+          diff --no-index \
+            release_payload/assets/RELEASE_SHA256SUMS.txt \
+            published_release_assets/RELEASE_SHA256SUMS.txt
+          bash scripts/ci/verify_release_attestations.sh \
+            published_release_assets \
+            "${GITHUB_REPOSITORY}" \
+            "${GITHUB_REPOSITORY}/.github/workflows/release-manager.yml" \
+            "${RELEASE_SHA}"
+
+      - name: Confirm Act Stopped Before GitHub-Only Operations
+        if: ${{ env.ACT == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Act validated the complete payload; OIDC attestation and GitHub publication were skipped."

@@ -13,7 +13,7 @@ import (
 
 var tuiCmd = &cobra.Command{
 	Use:   "tui",
-	Short: "Launch the SYSWARDEN Enterprise Dashboard (TUI)",
+	Short: "Launch the local SYSWARDEN terminal dashboard",
 	Run: func(cmd *cobra.Command, args []string) {
 		// Catch SIGINT/SIGTERM in the parent without exiting, so we survive if the child TUI is violently killed.
 		// Using Notify instead of Ignore prevents the child from inheriting SIG_IGN.

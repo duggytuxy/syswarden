@@ -1,0 +1,6 @@
+{"action":"BANNED","timestamp":"2026-08-13T07:00:00Z","ip":"198.51.100.8","jail":"ssh-auth","payload":"Failed password","severity":10}
+{"action":"ALLOWED","timestamp":"2026-08-13T07:01:00Z","ip":"203.0.113.5","jail":"sshd","payload":"Accepted publickey","severity":3}
+{"action":"DETECTED","timestamp":"2026-08-13T07:02:00Z","ip":"198.51.100.9","jail":"sqli","payload":"GET /search","severity":7,"future_context":{"request_id":"fixture"}}
+{"action":"SHADOW-ALERT","timestamp":"2026-08-13T07:03:00Z","ip":"192.0.2.50","jail":"L3-HONEYPORT-SCAN","payload":"fixture","severity":8}
+{"action":"SIMULATED-BAN","timestamp":"2026-08-13T07:04:00Z","ip":"198.51.100.10","jail":"xss","payload":"fixture"}
+{"action":"COMPLIANCE-DRIFT","timestamp":"2026-08-13T07:05:00Z","ip":"127.0.0.1","jail":"NIS2-AUDIT","payload":"fixture drift"}

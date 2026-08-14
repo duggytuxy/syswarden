@@ -77,7 +77,8 @@ func main() {
 	// Start HA P2P Server (Zero-Touch TLS)
 	network.StartHAServer(fwManager)
 
-	// Start Continuous Compliance Watchdog (NIS2/ISO27001)
+	// Start the selected local hardening checks. These checks are not a
+	// compliance assessment.
 	security.StartComplianceWatchdog(telemetryLogger)
 
 	// Handle Graceful Shutdown

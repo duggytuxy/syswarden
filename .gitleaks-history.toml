@@ -1,0 +1,4 @@
+title = "SysWarden Git history Gitleaks policy"
+
+[extend]
+useDefault = true

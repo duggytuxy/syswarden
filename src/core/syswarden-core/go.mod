@@ -1,6 +1,6 @@
 module syswarden-core
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/duggytuxy/ahocorasick v0.0.0-20260730090121-324ac534d992

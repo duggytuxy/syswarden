@@ -10,7 +10,7 @@ import (
 
 var unblockCmd = &cobra.Command{
 	Use:   "unblock <IP>...",
-	Short: "Purges an IP from the blocklist",
+	Short: "Remove addresses or CIDRs from the persistent blocklist",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		for _, ip := range args {

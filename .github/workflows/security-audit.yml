@@ -7,134 +7,768 @@ on:
   push:
     branches: [ "main", "master" ]
     tags: [ "v*" ]
-    # paths removed to allow tags
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
-
-
-
-
-# OSSF Scorecard: Enforce strict read-all at the top-level
 permissions:
   contents: read
 
 jobs:
   hygiene:
     name: Code Hygiene
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.5'
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: latest
-          args: ./src/core/syswarden-cli/... ./src/core/syswarden-core/... ./src/core/syswarden-tui/...
-
-      - name: Run gosec Security Scanner
-        run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
-          gosec ./src/core/syswarden-cli/... ./src/core/syswarden-core/... ./src/core/syswarden-tui/...
-
-      - name: Run govulncheck (Supply Chain Security)
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
-          govulncheck -C ./src/core/syswarden-cli ./...
-          govulncheck -C ./src/core/syswarden-core ./...
-          govulncheck -C ./src/core/syswarden-tui ./...
-
-  anti-leaks:
-    name: Secret Scanning
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e #v3.0.0
+      - name: Capture candidate repository state
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py capture \
+            --output "${RUNNER_TEMP}/hygiene-repository-state.json"
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache-dependency-path: |
+            go.work.sum
+            src/core/syswarden-cli/go.sum
+            src/core/syswarden-core/go.sum
+            src/core/syswarden-tui/go.sum
+
+      - name: Install pinned firewall sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            bubblewrap=0.9.0-1ubuntu0.1
+          test "$(bwrap --version)" = "bubblewrap 0.9.0"
+
+      - name: Verify formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t go_files < <(
+            find src/core scripts/versionctl \
+              -type f -name '*.go' -print0 | sort -z
+          )
+          test "${#go_files[@]}" -gt 0
+          test -z "$(gofmt -l "${go_files[@]}")"
+
+      - name: Test security gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s scripts/ci -p '*_test.py' -v
+
+      - name: Compare frozen and candidate CLI process contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/cli_process_compatibility.py \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --run \
+            --report "${RUNNER_TEMP}/cli-process-compatibility.json"
+
+      - name: Lint public Markdown
+        uses: DavidAnson/markdownlint-cli2-action@fa0cd0f1a052f54da593c83860f2292982f5d142 # v23.2.0
+        with:
+          config: .markdownlint.json
+          globs: README.md
+
+      - name: Enforce documentation truth contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/documentation_gate.py check \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --report "${RUNNER_TEMP}/documentation-truth-report.json"
+
+      - name: Enforce nosec baseline
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RAW_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+        run: |
+          set -euo pipefail
+          base_ref="$(PYTHONDONTWRITEBYTECODE=1 \
+            python3 scripts/ci/security_gate.py base-ref \
+              --raw "${RAW_BASE_REF}" --act "${ACT:-false}")"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/security_gate.py nosec \
+            --baseline .github/baselines/nosec-legacy.json \
+            --base-ref "${base_ref}"
 
-  sast:
-    name: SAST & Supply Chain Security
-    runs-on: ubuntu-latest
+      - name: Run Go tests, race detector and vet by module
+        shell: bash
+        env:
+          SYSWARDEN_ACT_CONTAINER_ISOLATION: ${{ github.event.act == true && 'security-audit-v1' || '' }}
+        run: |
+          set -euo pipefail
+          modules=(
+            src/core/syswarden-cli
+            src/core/syswarden-core
+            src/core/syswarden-tui
+          )
+          for module in "${modules[@]}"; do
+            echo "Testing ${module}"
+            (
+              cd "${module}"
+              go test -mod=readonly ./...
+              go test -race -mod=readonly ./...
+              go vet -mod=readonly ./...
+            )
+          done
+          (
+            cd scripts/versionctl
+            GOWORK=off go test -mod=readonly ./...
+            GOWORK=off go test -race -mod=readonly ./...
+            GOWORK=off go vet -mod=readonly ./...
+          )
+
+      - name: Run bounded parser and network fuzz campaigns
+        shell: bash
+        run: |
+          set -euo pipefail
+          fuzz_target() {
+            local module="$1"
+            local package="$2"
+            local target="$3"
+            echo "Fuzzing ${module}/${package}: ${target}"
+            (
+              cd "${module}"
+              go test -mod=readonly -run '^$' \
+                -fuzz "^${target}$" -fuzztime=5s -parallel=2 "${package}"
+            )
+          }
+          fuzz_target src/core/syswarden-cli ./config FuzzMigratorParseFromMemory
+          fuzz_target src/core/syswarden-cli ./config FuzzIPCIDRPortValidators
+          fuzz_target src/core/syswarden-cli ./pkg/firewall FuzzIsValidIP
+          fuzz_target src/core/syswarden-cli ./pkg/network FuzzHASyncPayloadJSON
+          fuzz_target src/core/syswarden-core ./engine FuzzEngineNetworkAndURLInput
+
+      - name: Cross-compile FreeBSD tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          modules=(
+            src/core/syswarden-cli
+            src/core/syswarden-core
+            src/core/syswarden-tui
+          )
+          for module in "${modules[@]}"; do
+            echo "Cross-compiling ${module} for freebsd/amd64"
+            (
+              cd "${module}"
+              GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 \
+                go test -mod=readonly -run '^$' -exec /bin/true ./...
+            )
+          done
+          (
+            cd scripts/versionctl
+            GOWORK=off GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 \
+              go test -mod=readonly -run '^$' -exec /bin/true ./...
+          )
+
+      - name: Run golangci-lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+          golangci-lint run \
+            ./src/core/syswarden-cli/... \
+            ./src/core/syswarden-core/... \
+            ./src/core/syswarden-tui/...
+          (
+            cd scripts/versionctl
+            GOWORK=off golangci-lint run ./...
+          )
+
+      - name: Run govulncheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
+          govulncheck -C ./src/core/syswarden-cli ./...
+          govulncheck -C ./src/core/syswarden-core ./...
+          govulncheck -C ./src/core/syswarden-tui ./...
+          GOWORK=off govulncheck -C ./scripts/versionctl ./...
+
+      - name: Prove hygiene did not mutate candidate repository state
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py verify \
+            --snapshot "${RUNNER_TEMP}/hygiene-repository-state.json"
+
+  gosec:
+    name: gosec (${{ matrix.scan }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
-      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scan: linux-cli
+            goos: linux
+            goarch: amd64
+            cgo_enabled: '0'
+            module: src/core/syswarden-cli
+          - scan: linux-core
+            goos: linux
+            goarch: amd64
+            cgo_enabled: '0'
+            module: src/core/syswarden-core
+          - scan: linux-tui
+            goos: linux
+            goarch: amd64
+            cgo_enabled: '0'
+            module: src/core/syswarden-tui
+          - scan: linux-versionctl
+            goos: linux
+            goarch: amd64
+            cgo_enabled: '0'
+            module: scripts/versionctl
+          - scan: freebsd-cli
+            goos: freebsd
+            goarch: amd64
+            cgo_enabled: '0'
+            module: src/core/syswarden-cli
+          - scan: freebsd-core
+            goos: freebsd
+            goarch: amd64
+            cgo_enabled: '0'
+            module: src/core/syswarden-core
+          - scan: freebsd-tui
+            goos: freebsd
+            goarch: amd64
+            cgo_enabled: '0'
+            module: src/core/syswarden-tui
+          - scan: freebsd-versionctl
+            goos: freebsd
+            goarch: amd64
+            cgo_enabled: '0'
+            module: scripts/versionctl
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Generate SBOM (SPDX format)
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Install pinned gosec
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+
+      - name: Scan module and enforce reviewed baseline
+        shell: bash
+        env:
+          SCAN: ${{ matrix.scan }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ matrix.cgo_enabled }}
+          MODULE: ${{ matrix.module }}
+          RAW_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+        run: |
+          set -euo pipefail
+          base_ref="$(PYTHONDONTWRITEBYTECODE=1 \
+            python3 scripts/ci/security_gate.py base-ref \
+              --raw "${RAW_BASE_REF}" --act "${ACT:-false}")"
+          report="${RUNNER_TEMP}/gosec-${SCAN}.json"
+          diagnostics="${RUNNER_TEMP}/gosec-${SCAN}.log"
+          target="./..."
+          if [[ "${MODULE}" == "scripts/versionctl" ]]; then
+            export GOWORK=off
+            target="."
+          fi
+          (
+            cd "${MODULE}"
+            gosec -tests -no-fail -fmt=json -out="${report}" "${target}" \
+              2>"${diagnostics}"
+          )
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/security_gate.py gosec-log \
+            --log "${diagnostics}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/security_gate.py gosec \
+            --report "${report}" \
+            --baseline .github/baselines/gosec.json \
+            --scan "${SCAN}" \
+            --tool-binary "$(command -v gosec)" \
+            --base-ref "${base_ref}" \
+            --goos "${GOOS}" \
+            --goarch "${GOARCH}" \
+            --cgo-enabled "${CGO_ENABLED}" \
+            --module "${MODULE}" \
+            --diagnostic-log "${diagnostics}"
+          cp "${report}" "gosec-${SCAN}.json"
+
+      - name: Create gosec SARIF report
+        shell: bash
+        env:
+          SCAN: ${{ matrix.scan }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ matrix.cgo_enabled }}
+          MODULE: ${{ matrix.module }}
+        run: |
+          set -euo pipefail
+          diagnostics="${RUNNER_TEMP}/gosec-${SCAN}-sarif.log"
+          target="./..."
+          if [[ "${MODULE}" == "scripts/versionctl" ]]; then
+            export GOWORK=off
+            target="."
+          fi
+          (
+            cd "${MODULE}"
+            gosec -tests -no-fail -fmt=sarif \
+              -out="${GITHUB_WORKSPACE}/gosec-${SCAN}.sarif" "${target}" \
+              2>"${diagnostics}"
+          )
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/security_gate.py gosec-log \
+            --log "${diagnostics}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/sarif_gate.py \
+            --report "gosec-${SCAN}.sarif" \
+            --json-report "gosec-${SCAN}.json" \
+            --module "${MODULE}"
+          test -s "gosec-${SCAN}.sarif"
+
+      - name: Upload gosec report artifact
+        if: ${{ !github.event.act }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gosec-${{ matrix.scan }}
+          path: |
+            gosec-${{ matrix.scan }}.json
+            gosec-${{ matrix.scan }}.sarif
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload gosec report artifact with Act-compatible protocol
+        if: ${{ github.event.act }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        env:
+          ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
+        with:
+          name: gosec-${{ matrix.scan }}
+          path: |
+            gosec-${{ matrix.scan }}.json
+            gosec-${{ matrix.scan }}.sarif
+          if-no-files-found: error
+          retention-days: 90
+
+  anti-leaks:
+    name: Secret Scanning
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Install pinned Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          GITLEAKS_BIN="${RUNNER_TEMP}/gitleaks-bin"
+          install -d -m 0700 "${GITLEAKS_BIN}"
+          GOBIN="${GITLEAKS_BIN}" \
+            go install github.com/zricethezav/gitleaks/v8@v8.24.3
+          build_info="$(go version -m "${GITLEAKS_BIN}/gitleaks")"
+          grep --fixed-strings \
+            $'\tmod\tgithub.com/zricethezav/gitleaks/v8\tv8.24.3\t' \
+            <<< "${build_info}"
+          printf 'GITLEAKS=%s\n' "${GITLEAKS_BIN}/gitleaks" >> "${GITHUB_ENV}"
+
+      - name: Scan complete Git history
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${GITLEAKS}" git \
+            --config .gitleaks-history.toml \
+            --redact \
+            --no-banner \
+            --no-color \
+            --report-format sarif \
+            --report-path gitleaks-history.sarif \
+            .
+          test -s gitleaks-history.sarif
+          python3 -m json.tool gitleaks-history.sarif >/dev/null
+
+      - name: Scan checked-out candidate content
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${GITLEAKS}" dir \
+            --config .gitleaks.toml \
+            --redact \
+            --no-banner \
+            --no-color \
+            --report-format sarif \
+            --report-path gitleaks-worktree.sarif \
+            .
+          test -s gitleaks-worktree.sarif
+          python3 -m json.tool gitleaks-worktree.sarif >/dev/null
+
+      - name: Upload Gitleaks reports
+        if: ${{ !github.event.act }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-reports
+          path: |
+            gitleaks-history.sarif
+            gitleaks-worktree.sarif
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload Gitleaks reports with Act-compatible protocol
+        if: ${{ github.event.act }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        env:
+          ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
+        with:
+          name: gitleaks-reports
+          path: |
+            gitleaks-history.sarif
+            gitleaks-worktree.sarif
+          if-no-files-found: error
+          retention-days: 90
+
+  sast:
+    name: SAST & Supply Chain Security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install checksum-pinned Trivy
+        shell: bash
+        env:
+          TRIVY_ARCHIVE_SHA256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          TRIVY_VERSION: 0.70.0
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = "Linux"
+          test "$(uname -m)" = "x86_64"
+          trivy_dir="$(mktemp -d "${RUNNER_TEMP}/syswarden-trivy.XXXXXX")"
+          archive="${trivy_dir}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "${archive}" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          printf '%s  %s\n' "${TRIVY_ARCHIVE_SHA256}" "${archive}" | sha256sum --check --strict
+          tar -xzf "${archive}" -C "${trivy_dir}" trivy
+          test -f "${trivy_dir}/trivy"
+          test ! -L "${trivy_dir}/trivy"
+          chmod 0750 "${trivy_dir}/trivy"
+          test "$("${trivy_dir}/trivy" --version)" = "Version: ${TRIVY_VERSION}"
+          printf '%s\n' "${trivy_dir}" >> "${GITHUB_PATH}"
+
+      - name: Generate source dependency SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          skip-setup-trivy: true
+          cache: false
+          version: 'v0.70.0'
           scan-type: 'fs'
           scan-ref: '.'
           format: 'spdx-json'
           output: 'syswarden-sbom.spdx.json'
 
-      - name: Store SBOM Artifact
+      - name: Validate source dependency SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify-sbom \
+            --sbom syswarden-sbom.spdx.json
+
+      - name: Store SBOM artifact
+        if: ${{ !github.event.act }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: syswarden-sbom
           path: syswarden-sbom.spdx.json
+          if-no-files-found: error
           retention-days: 90
 
-      - name: Run Trivy Vulnerability Scanner (SARIF output)
+      - name: Store SBOM artifact with Act-compatible protocol
+        if: ${{ github.event.act }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        env:
+          ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
+        with:
+          name: syswarden-sbom
+          path: syswarden-sbom.spdx.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          skip-setup-trivy: true
+          cache: false
+          version: 'v0.70.0'
           scan-type: 'fs'
           scan-ref: '.'
+          scanners: 'vuln'
           format: 'sarif'
           output: 'trivy-results.sarif'
-          exit-code: '0'
-          ignore-unfixed: true
+          exit-code: '1'
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
+          limit-severities-for-sarif: true
 
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
-        if: always()
+      - name: Validate local Trivy report
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s trivy-results.sarif
+          python3 -m json.tool trivy-results.sarif >/dev/null
+
+      - name: Store Trivy report artifact
+        if: ${{ always() && !github.event.act }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          sarif_file: 'trivy-results.sarif'
+          name: trivy-report
+          path: trivy-results.sarif
+          if-no-files-found: error
+          retention-days: 90
 
-  provenance-attestation:
-    name: Generate Build Provenance
-    needs: [hygiene, anti-leaks, sast]
-    runs-on: ubuntu-latest
+      - name: Store Trivy report artifact with Act-compatible protocol
+        if: ${{ always() && github.event.act }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        env:
+          ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
+        with:
+          name: trivy-report
+          path: trivy-results.sarif
+          if-no-files-found: error
+          retention-days: 90
+
+  build-bundle:
+    name: Build Release Bundle
+    needs: [hygiene, gosec, anti-leaks, sast]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Capture candidate repository state
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py capture \
+            --output "${RUNNER_TEMP}/repository-state.json"
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
-      - name: Compile Modular Source Code
+      - name: Setup pinned PowerShell 7.6.4
+        shell: bash
+        run: bash scripts/ci/setup_powershell.sh
+
+      - name: Compile modular source code
         run: pwsh -File ./build.ps1
 
-      - name: Bundle Compiled SysWarden Scripts
-        run: tar -czvf syswarden-release.tar.gz -C dist .
+      - name: Bundle compiled SysWarden files
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf syswarden-release.tar.gz -C dist .
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify-bundle \
+            --bundle syswarden-release.tar.gz
+          sha256sum syswarden-release.tar.gz > "${RUNNER_TEMP}/syswarden-release.sha256"
+          sha256sum --check --strict "${RUNNER_TEMP}/syswarden-release.sha256"
+          cat "${RUNNER_TEMP}/syswarden-release.sha256"
 
-      - name: "Generate Artifact Attestation"
+      - name: Prove build did not mutate repository state
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py verify \
+            --snapshot "${RUNNER_TEMP}/repository-state.json"
+
+      - name: Upload validated bundle
+        if: ${{ !github.event.act }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: syswarden-validated-bundle
+          path: syswarden-release.tar.gz
+          if-no-files-found: error
+
+      - name: Upload validated bundle with Act-compatible protocol
+        if: ${{ github.event.act }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        env:
+          ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
+        with:
+          name: syswarden-validated-bundle
+          path: syswarden-release.tar.gz
+          if-no-files-found: error
+
+      - name: Confirm Act GitHub-only exclusions
+        if: ${{ env.ACT == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Act exclusion: GitHub SARIF upload is skipped; local SARIF validation ran."
+          echo "Act exclusion: GitHub OIDC provenance attestation is skipped; bundle validation and artifact upload ran."
+          echo "Act exclusion: GitHub release publication is not part of security-audit.yml."
+
+  github-publication:
+    name: Publish Security Evidence
+    if: ${{ github.event_name != 'pull_request' && !github.event.act }}
+    needs: [gosec, sast, build-bundle]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout candidate sources for SARIF correlation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download candidate security evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: gosec-*
+          path: security-evidence
+          merge-multiple: true
+
+      - name: Download candidate Trivy report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: trivy-report
+          path: trivy-evidence
+
+      - name: Download validated bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: syswarden-validated-bundle
+          path: release-evidence
+
+      - name: Validate downloaded security evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t gosec_reports < <(find security-evidence -maxdepth 1 -type f -name 'gosec-*.sarif' -print | sort)
+          test "${#gosec_reports[@]}" -eq 8
+          expected_scans=(freebsd-cli freebsd-core freebsd-tui freebsd-versionctl linux-cli linux-core linux-tui linux-versionctl)
+          for scan in "${expected_scans[@]}"; do
+            test -s "security-evidence/gosec-${scan}.sarif"
+          done
+          test -s trivy-evidence/trivy-results.sarif
+          test -s release-evidence/syswarden-release.tar.gz
+          for report in "${gosec_reports[@]}" trivy-evidence/trivy-results.sarif; do
+            python3 -m json.tool "${report}" >/dev/null
+          done
+
+      - name: Upload gosec SARIF (linux-cli)
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: security-evidence/gosec-linux-cli.sarif
+          category: gosec-linux-cli
+
+      - name: Upload gosec SARIF (linux-core)
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: security-evidence/gosec-linux-core.sarif
+          category: gosec-linux-core
+
+      - name: Upload gosec SARIF (linux-tui)
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: security-evidence/gosec-linux-tui.sarif
+          category: gosec-linux-tui
+
+      - name: Upload gosec SARIF (linux-versionctl)
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: security-evidence/gosec-linux-versionctl.sarif
+          category: gosec-linux-versionctl
+
+      - name: Upload gosec SARIF (freebsd-cli)
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: security-evidence/gosec-freebsd-cli.sarif
+          category: gosec-freebsd-cli
+
+      - name: Upload gosec SARIF (freebsd-core)
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: security-evidence/gosec-freebsd-core.sarif
+          category: gosec-freebsd-core
+
+      - name: Upload gosec SARIF (freebsd-tui)
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: security-evidence/gosec-freebsd-tui.sarif
+          category: gosec-freebsd-tui
+
+      - name: Upload gosec SARIF (freebsd-versionctl)
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: security-evidence/gosec-freebsd-versionctl.sarif
+          category: gosec-freebsd-versionctl
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          sarif_file: trivy-evidence/trivy-results.sarif
+          category: trivy
+
+      - name: Generate artifact attestation
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: 'syswarden-release.tar.gz'
-          
-      - name: Upload Attested Artifact
+          subject-path: release-evidence/syswarden-release.tar.gz
+
+      - name: Upload attested bundle contract
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: syswarden-attested-bundle
-          path: syswarden-release.tar.gz
+          path: release-evidence/syswarden-release.tar.gz
+          if-no-files-found: error
+          retention-days: 90

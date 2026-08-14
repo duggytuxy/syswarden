@@ -8,7 +8,8 @@ import (
 
 var auditCmd = &cobra.Command{
 	Use:   "audit",
-	Short: "Performs a full Enterprise SYSWARDEN Audit",
+	Short: "Run a local SYSWARDEN operational diagnostic",
+	Long:  "Checks selected local services, files, firewall state, and configuration. Its output is not a compliance certification.",
 	Run: func(cmd *cobra.Command, args []string) {
 		system.RunAudit()
 	},

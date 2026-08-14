@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-08-14T08:00:00Z",
+  "github_stars": "101",
+  "github_release": "v4.03.0",
+  "profile_name": "future-node",
+  "system": {
+    "hostname": "node-forward",
+    "uptime": "3 days",
+    "load_average": "0.20 0.30 0.40",
+    "ram_used_mb": 768,
+    "ram_total_mb": 2048,
+    "disk_used_mb": 3072,
+    "disk_total_mb": 8192,
+    "cores": "8",
+    "arch": "arm64",
+    "os": "freebsd",
+    "cpu_model": "Forward fixture CPU",
+    "server_ip": "2001:db8::30",
+    "services": [],
+    "ports": [],
+    "future_temperature_c": 42
+  },
+  "layer3": {
+    "global_blocked": 20,
+    "geoip_blocked": 3,
+    "asn_blocked": 4,
+    "l7_banned": 5,
+    "zero_trust_mode": true,
+    "future_counter": 99
+  },
+  "waf": {
+    "total_banned": 5,
+    "total_detected": 9,
+    "active_signatures": 80,
+    "signatures_data": [],
+    "targeted_ports": [],
+    "banned_ips": [],
+    "top_attackers": [],
+    "risk_radar": [],
+    "sparkline_24h": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5],
+    "allowed_events": [],
+    "future_actions": ["QUARANTINED"]
+  },
+  "whitelist": {
+    "active_ips": 1,
+    "ips": ["2001:db8::40"],
+    "future_expiry": "2026-08-15T08:00:00Z"
+  },
+  "future_schema_version": 2
+}

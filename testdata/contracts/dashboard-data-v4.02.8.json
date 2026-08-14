@@ -1,0 +1,99 @@
+{
+  "timestamp": "2026-08-13T08:00:00Z",
+  "github_stars": "100",
+  "github_release": "v4.02.8",
+  "profile_name": "production",
+  "system": {
+    "hostname": "node-a",
+    "uptime": "1 day",
+    "load_average": "0.10 0.20 0.30",
+    "ram_used_mb": 512,
+    "ram_total_mb": 1024,
+    "disk_used_mb": 2048,
+    "disk_total_mb": 4096,
+    "cores": "4",
+    "arch": "amd64",
+    "os": "linux",
+    "cpu_model": "Example CPU",
+    "server_ip": "192.0.2.10",
+    "services": [
+      {
+        "name": "syswarden-core",
+        "path": "/opt/syswarden/bin/syswarden-core",
+        "status": "active"
+      }
+    ],
+    "ports": [
+      {
+        "ip": "0.0.0.0",
+        "state": "LISTEN",
+        "port": "62027",
+        "protocol": "tcp"
+      }
+    ]
+  },
+  "layer3": {
+    "global_blocked": 10,
+    "geoip_blocked": 2,
+    "asn_blocked": 3,
+    "l7_banned": 4,
+    "zero_trust_mode": false
+  },
+  "waf": {
+    "total_banned": 4,
+    "total_detected": 8,
+    "active_signatures": 78,
+    "signatures_data": [
+      {
+        "name": "sshd",
+        "count": 2,
+        "mitre": "T1110"
+      }
+    ],
+    "targeted_ports": [
+      {
+        "port": "22",
+        "service": "ssh",
+        "hits": 2,
+        "unique_ips": 1
+      }
+    ],
+    "banned_ips": [
+      {
+        "timestamp": "2026-08-13T07:00:00Z",
+        "ip": "198.51.100.8",
+        "jail": "ssh-auth",
+        "payload": "failed",
+        "mitre": "T1110",
+        "action": "ban"
+      }
+    ],
+    "top_attackers": [
+      {
+        "ip": "198.51.100.8",
+        "severity": "high",
+        "port": "22",
+        "country": "BE",
+        "asn": "AS64500",
+        "threat": "scanner",
+        "org": "example",
+        "hits": 2,
+        "last_seen": "now"
+      }
+    ],
+    "risk_radar": [1, 2, 3],
+    "sparkline_24h": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4],
+    "allowed_events": [
+      {
+        "timestamp": "2026-08-13T06:00:00Z",
+        "ip": "203.0.113.5",
+        "service": "sshd",
+        "payload": "Accepted publickey"
+      }
+    ]
+  },
+  "whitelist": {
+    "active_ips": 1,
+    "ips": ["203.0.113.5"]
+  }
+}

@@ -8,136 +8,68 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: version-validation-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   version-bump:
-    permissions:
-      contents: write  # for Git to git push
+    # Preserve the historical status-check identity while making the job read-only.
     name: "SysWarden Version Bumper"
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
 
     steps:
-      - name: "Checkout repository"
+      - name: "Checkout candidate without write credentials"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Fetch full history to manage tags and use the PAT to allow triggering subsequent workflows
           fetch-depth: 0
-          token: ${{ secrets.GH_RELEASE_PAT }}
+          persist-credentials: false
 
-      - name: "Check commit prefix and run versioning"
-        id: versioning
-        shell: pwsh
-        env:
-          COMMIT_MSG: ${{ github.event.head_commit.message }}
+      - name: "Set up Go"
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: "Verify clean checkout"
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          
-          # Extract prefix (e.g. "Patch : ", "Minor : ")
-          $Type = ""
-          if ($env:COMMIT_MSG -match "^Patch\s*:") { $Type = "Patch" }
-          elseif ($env:COMMIT_MSG -match "^Minor\s*:") { $Type = "Minor" }
-          elseif ($env:COMMIT_MSG -match "^Major\s*:") { $Type = "Major" }
-          elseif ($env:COMMIT_MSG -match "^Upgrade\s*:") { $Type = "Upgrade" }
-          
-          if ([string]::IsNullOrEmpty($Type)) {
-              Write-Host "[*] No recognized version prefix in commit message. Skipping auto-versioning."
-              exit 0
-          }
-          
-          Write-Host "[*] Auto-versioning triggered for Type: $Type" -ForegroundColor Cyan
-          
-          # --- PATH CONFIGURATION ---
-          $GitRepoPath = $env:GITHUB_WORKSPACE
-          $TargetFiles = @(
-              (Join-Path $GitRepoPath "src/core/syswarden-cli/pkg/system/upgrade.go")
-              (Join-Path $GitRepoPath "src/core/syswarden-tui/main.go")
-              (Join-Path $GitRepoPath "src/core/syswarden-cli/cmd/install.go")
-              (Join-Path $GitRepoPath "src/core/syswarden-cli/config/default.go")
-              (Join-Path $GitRepoPath "src/core/syswarden-cli/pkg/integration/webhook.go")
-              (Join-Path $GitRepoPath "src/core/syswarden-core/webhook/discord.go")
-          )
-          
-          # --- EXTRACT CURRENT VERSION ---
-          $ReferenceConfig = Join-Path $GitRepoPath "src/core/syswarden-cli/pkg/system/upgrade.go"
-          $MainScriptContent = Get-Content -Path $ReferenceConfig -Raw
-          if ($MainScriptContent -match 'Version\s*=\s*"v(\d+)\.(\d+)\.(\d+)"') {
-              $OldMajor = [int]$Matches[1]
-              $OldMinor = [int]$Matches[2]
-              $OldPatch = [int]$Matches[3]
-              Write-Host "[+] Current Version detected: v$OldMajor.$($OldMinor.ToString('00')).$OldPatch" -ForegroundColor Green
-          } else {
-              Write-Host "[!] Error: Could not parse VERSION variable in $ReferenceConfig" -ForegroundColor Red
-              exit 1
-          }
-          
-          # --- CALCULATE NEW VERSION ---
-          $NewMajor = $OldMajor
-          $NewMinor = $OldMinor
-          $NewPatch = $OldPatch
-          
-          switch ($Type) {
-              'Patch' {
-                  $NewPatch += 1
-              }
-              'Minor' {
-                  $NewMinor += 1
-                  $NewPatch = 0
-              }
-              'Major' {
-                  $NewMinor = ($NewMinor - ($NewMinor % 10)) + 10
-                  $NewPatch = 0
-              }
-              'Upgrade' {
-                  $NewMajor += 1
-                  $NewMinor = 0
-                  $NewPatch = 0
-              }
-          }
-          
-          $NewVersionString = "v$NewMajor.$($NewMinor.ToString('00')).$NewPatch"
-          Write-Host "[+] Calculated New Version: $NewVersionString" -ForegroundColor Yellow
-          
-          # --- SURGICAL FILE REPLACEMENT ---
-          foreach ($File in $TargetFiles) {
-              if (Test-Path $File) {
-                  $Content = Get-Content -Path $File -Raw
-                  $VersionRegex = 'v\d+\.\d{2}\.\d+'
-                  if ($Content -match $VersionRegex) {
-                      $Content = [regex]::Replace($Content, $VersionRegex, $NewVersionString)
-                      Set-Content -Path $File -Value $Content -Encoding utf8 -NoNewline
-                      Write-Host "    [X] Updated: $File" -ForegroundColor Green
-                  } else {
-                      Write-Host "    [-] Skipped (No version string found): $File" -ForegroundColor DarkGray
-                  }
-              } else {
-                  Write-Host "    [!] File not found: $File" -ForegroundColor Red
-              }
-          }
-          
-          # --- GIT ORCHESTRATION ---
-          $VersionNum = $NewVersionString.TrimStart('v')
-          $CommitMsg = switch ($Type) {
-              'Patch' { "⚡ $VersionNum ⚡ : Minor fixes (Please, check release notes for more info)" }
-              'Minor' { "⚡ $VersionNum ⚡ : Minor fixes, New features and optimizations (Please, check release notes for more info)" }
-              'Major' { "⚡ $VersionNum ⚡ : Major fixes, New features and Security patches (CWEs) (Please, check release notes for more info)" }
-              'Upgrade' { "⚡ $VersionNum ⚡ : Core engine upgrade and new features (Please, check release notes for more info)" }
-          }
-          
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add .
-          
-          if (git status --porcelain) {
-              git commit -m "$CommitMsg"
-              git tag "$NewVersionString"
+          set -euo pipefail
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
-              
-              Write-Host "        [>] Pushing to GitHub..." -ForegroundColor DarkCyan
-              git push origin main
-              git push origin --tags
-              
-              Write-Host "    [🎉] Workflow Complete! $NewVersionString is successfully released." -ForegroundColor Green
-          } else {
-              Write-Host "[*] No changes detected after replacement." -ForegroundColor Yellow
-          }
+      - name: "Test version validator"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd scripts/versionctl
+          GOWORK=off go test ./...
+
+      - name: "Validate commit version contract"
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.before }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "${GITHUB_REF}" = "refs/heads/main"
+          if [[ "${BASE_REF}" =~ ^0+$ ]]; then
+            BASE_REF="$(git rev-parse HEAD^)"
+          fi
+          git cat-file -e "${BASE_REF}^{commit}"
+          ./scripts/versioning.sh validate-commit \
+            --repo "${GITHUB_WORKSPACE}" \
+            --base-ref "${BASE_REF}" \
+            --commit-message "${COMMIT_MESSAGE}"
+
+      - name: "Prove validator did not mutate the repository"
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"

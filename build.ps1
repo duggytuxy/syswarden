@@ -1,178 +1,317 @@
 <#
 .SYNOPSIS
-    SysWarden Micro-Modular Compiler (Windows/PowerShell 7+ Edition)
+    SysWarden native binary compiler (PowerShell 7+ edition).
 .DESCRIPTION
-    Compiles individual bash function scripts into a single universal deployment artifact.
-    Guarantees strict Unix (LF) line endings and UTF-8 encoding.
+    Builds the SysWarden CLI, core, and TUI for every configured build target.
+    The build is read-only with respect to Go module manifests and verifies every
+    generated binary before reporting success.
 #>
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$DistDir = "dist"
-$OutputFile = "$DistDir/install-syswarden.sh"
+$RepoRoot = $PSScriptRoot
+$DistDir = Join-Path $RepoRoot 'dist'
 
-Write-Host "[*] Initializing SysWarden Universal Build (PowerShell Edition)..." -ForegroundColor Cyan
+$Components = @(
+    [PSCustomObject]@{
+        Name = 'syswarden-cli'
+        SourceDir = Join-Path $RepoRoot 'src/core/syswarden-cli'
+    },
+    [PSCustomObject]@{
+        Name = 'syswarden-core'
+        SourceDir = Join-Path $RepoRoot 'src/core/syswarden-core'
+    },
+    [PSCustomObject]@{
+        Name = 'syswarden-tui'
+        SourceDir = Join-Path $RepoRoot 'src/core/syswarden-tui'
+    }
+)
 
-Write-Host "[*] Compiling syswarden-core (Golang WAF)..." -ForegroundColor Cyan
-if (!(Get-Command "go" -ErrorAction SilentlyContinue)) {
-    Write-Host "[-] WARNING: Golang is not installed or not in PATH." -ForegroundColor Yellow
-    Write-Host "[-] Attempting automatic installation of Golang via winget..." -ForegroundColor Cyan
-    
-    if (Get-Command "winget" -ErrorAction SilentlyContinue) {
-        winget install GoLang.Go --silent --accept-source-agreements --accept-package-agreements
-        
-        # Refresh environment variables to detect Go in the current session
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        
-        if (!(Get-Command "go" -ErrorAction SilentlyContinue)) {
-            Write-Host "[-] ERROR: Golang automatic installation failed. Please restart your PowerShell session or install manually: https://go.dev/dl/" -ForegroundColor Red
-            exit 1
+$Targets = @(
+    [PSCustomObject]@{
+        Name = 'Linux AMD64'
+        GOOS = 'linux'
+        GOARCH = 'amd64'
+        BuildMode = 'pie'
+        OutputDir = Join-Path $DistDir 'bin'
+    },
+    [PSCustomObject]@{
+        Name = 'Linux ARM64'
+        GOOS = 'linux'
+        GOARCH = 'arm64'
+        BuildMode = 'pie'
+        OutputDir = Join-Path $DistDir 'linux-arm64/bin'
+    },
+    [PSCustomObject]@{
+        Name = 'FreeBSD AMD64'
+        GOOS = 'freebsd'
+        GOARCH = 'amd64'
+        BuildMode = $null
+        OutputDir = Join-Path $DistDir 'freebsd/bin'
+    }
+)
+
+function Get-DisplayPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    return [System.IO.Path]::GetRelativePath($RepoRoot, $Path)
+}
+
+function Assert-GoArtifact {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedOS,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedArch
+    )
+
+    $DisplayPath = Get-DisplayPath -Path $Path
+    if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Missing expected artifact: $DisplayPath"
+    }
+
+    if ((Get-Item -LiteralPath $Path).Length -eq 0) {
+        throw "Generated artifact is empty: $DisplayPath"
+    }
+
+    $Header = [byte[]]::new(20)
+    $Stream = [System.IO.File]::OpenRead($Path)
+    try {
+        if ($Stream.Read($Header, 0, $Header.Length) -ne $Header.Length) {
+            throw "Generated artifact has an incomplete ELF header: $DisplayPath"
         }
-        Write-Host "[+] Golang successfully installed." -ForegroundColor Green
-    } else {
-        Write-Host "[-] ERROR: winget is not available on this system." -ForegroundColor Red
-        Write-Host "[-] Please install Go manually: https://go.dev/dl/" -ForegroundColor Red
-        exit 1
+    } finally {
+        $Stream.Dispose()
+    }
+
+    if (($Header[0] -ne 0x7f) -or ($Header[1] -ne 0x45) -or
+        ($Header[2] -ne 0x4c) -or ($Header[3] -ne 0x46)) {
+        throw "Generated artifact is not an ELF binary: $DisplayPath"
+    }
+
+    if (($Header[4] -ne 2) -or ($Header[5] -ne 1)) {
+        throw "Generated artifact is not a 64-bit little-endian ELF binary: $DisplayPath"
+    }
+
+    $Machine = [int]$Header[18] -bor ([int]$Header[19] -shl 8)
+    $ExpectedMachine = switch ($ExpectedArch) {
+        'amd64' { 0x3e }
+        'arm64' { 0xb7 }
+        default { throw "Unsupported artifact architecture check: $ExpectedArch" }
+    }
+
+    if ($Machine -ne $ExpectedMachine) {
+        throw "Generated artifact has the wrong ELF architecture: $DisplayPath"
+    }
+
+    $BuildInfo = (& go version -m $Path 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to read Go build information from artifact: $DisplayPath"
+    }
+
+    $ExpectedOSPattern = '(?m)^\s*build\s+GOOS=' + [regex]::Escape($ExpectedOS) + '\s*$'
+    $ExpectedArchPattern = '(?m)^\s*build\s+GOARCH=' + [regex]::Escape($ExpectedArch) + '\s*$'
+    $CgoPattern = '(?m)^\s*build\s+CGO_ENABLED=0\s*$'
+
+    if ($BuildInfo -notmatch $ExpectedOSPattern) {
+        throw "Generated artifact has the wrong target OS (expected $ExpectedOS): $DisplayPath"
+    }
+
+    if ($BuildInfo -notmatch $ExpectedArchPattern) {
+        throw "Generated artifact has the wrong target architecture (expected $ExpectedArch): $DisplayPath"
+    }
+
+    if ($BuildInfo -notmatch $CgoPattern) {
+        throw "Generated artifact was not built with CGO_ENABLED=0: $DisplayPath"
     }
 }
 
-if (Test-Path "src/core/syswarden-cli/main.go") {
-    Write-Host "[*] Compiling syswarden-cli (Golang CLI Orchestrator)..." -ForegroundColor Cyan
-    $GoCliDir = "src/core/syswarden-cli"
-    $OriginalLocation = Get-Location
-    Set-Location $GoCliDir
-    
-    try { go mod tidy 2>$null } catch {}
-    
-    $env:GOOS="linux"
-    $env:GOARCH="amd64"
-    $env:CGO_ENABLED="0"
-    go build -buildmode=pie -ldflags="-s -w" -o syswarden-cli .
-    
-    Set-Location $OriginalLocation
-    
-    if (!(Test-Path "$DistDir/bin")) {
-        New-Item -ItemType Directory -Force -Path "$DistDir/bin" | Out-Null
+function Invoke-GoBuild {
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Component,
+
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Target
+    )
+
+    $OutputPath = Join-Path $Target.OutputDir $Component.Name
+    $TemporaryOutputPath = "$OutputPath.tmp"
+    $DisplayPath = Get-DisplayPath -Path $OutputPath
+
+    if (Test-Path -LiteralPath $TemporaryOutputPath) {
+        Remove-Item -LiteralPath $TemporaryOutputPath -Force
     }
-    Copy-Item -Path "$GoCliDir/syswarden-cli" -Destination "$DistDir/bin/syswarden-cli" -Force
-    Write-Host "[+] Golang CLI compiled and copied to $DistDir/bin/" -ForegroundColor Green
-} else {
-    Write-Host "[-] WARNING: syswarden-cli not found. Skipping Go build." -ForegroundColor Yellow
-}
 
-if (Test-Path "src/core/syswarden-core/main.go") {
-    $GoCoreDir = "src/core/syswarden-core"
-    $OriginalLocation = Get-Location
-    Set-Location $GoCoreDir
-    
-    # Init and Tidy
-    if (!(Test-Path "go.mod")) {
-        try { go mod init syswarden-core 2>$null } catch {}
+    $BuildArguments = @('build', '-mod=readonly')
+    if ($null -ne $Target.BuildMode) {
+        $BuildArguments += "-buildmode=$($Target.BuildMode)"
     }
-    try { go mod tidy 2>$null } catch {}
-    
-    # Build for Linux (Cross-Compilation)
-    $env:GOOS="linux"
-    $env:GOARCH="amd64"
-    $env:CGO_ENABLED="0"
-    go build -buildmode=pie -ldflags="-s -w" -o syswarden-core .
-    
-    Set-Location $OriginalLocation
-    
-    if (!(Test-Path "$DistDir/bin")) {
-        New-Item -ItemType Directory -Force -Path "$DistDir/bin" | Out-Null
+    $BuildArguments += '-ldflags=-s -w'
+    $BuildArguments += '-o'
+    $BuildArguments += $TemporaryOutputPath
+    $BuildArguments += '.'
+
+    Write-Host "[*] Building $($Component.Name) for $($Target.Name)..." -ForegroundColor Cyan
+    Push-Location $Component.SourceDir
+    try {
+        & go @BuildArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Go build failed for $($Component.Name) on $($Target.Name)."
+        }
+    } finally {
+        Pop-Location
     }
-    Copy-Item -Path "$GoCoreDir/syswarden-core" -Destination "$DistDir/bin/syswarden-core" -Force
-    Copy-Item -Path "$GoCoreDir/signatures.json" -Destination "$DistDir/signatures.json" -Force
-    Write-Host "[+] Golang WAF compiled and copied to $DistDir/bin/" -ForegroundColor Green
-} else {
-    Write-Host "[-] WARNING: syswarden-core not found. Skipping Go build." -ForegroundColor Yellow
+
+    Assert-GoArtifact `
+        -Path $TemporaryOutputPath `
+        -ExpectedOS $Target.GOOS `
+        -ExpectedArch $Target.GOARCH
+
+    Move-Item -LiteralPath $TemporaryOutputPath -Destination $OutputPath -Force
+    Write-Host "[+] Verified $DisplayPath ($($Target.GOOS)/$($Target.GOARCH))." -ForegroundColor Green
 }
 
-Write-Host "[*] Compiling syswarden-tui (Golang TUI)..." -ForegroundColor Cyan
-if (Test-Path "src/core/syswarden-tui/main.go") {
-    $GoTuiDir = "src/core/syswarden-tui"
-    $OriginalLocation = Get-Location
-    Set-Location $GoTuiDir
-    
-    # Init and Tidy
-    if (!(Test-Path "go.mod")) {
-        try { go mod init syswarden-tui 2>$null } catch {}
+function Assert-ExactDistInventory {
+    $ExpectedFiles = @(
+        'bin/syswarden-cli'
+        'bin/syswarden-core'
+        'bin/syswarden-tui'
+        'freebsd/bin/syswarden-cli'
+        'freebsd/bin/syswarden-core'
+        'freebsd/bin/syswarden-tui'
+        'linux-arm64/bin/syswarden-cli'
+        'linux-arm64/bin/syswarden-core'
+        'linux-arm64/bin/syswarden-tui'
+        'linux-arm64/signatures.json'
+        'signatures.json'
+    ) | Sort-Object
+    $ExpectedDirectories = @(
+        'bin'
+        'freebsd'
+        'freebsd/bin'
+        'linux-arm64'
+        'linux-arm64/bin'
+    ) | Sort-Object
+
+    $Entries = @(Get-ChildItem -LiteralPath $DistDir -Recurse -Force)
+    foreach ($Entry in $Entries) {
+        if (($Entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Build inventory contains a link or reparse point: $(Get-DisplayPath -Path $Entry.FullName)"
+        }
     }
-    try { go mod tidy 2>$null } catch {}
-    
-    # Build for Linux (Cross-Compilation)
-    $env:GOOS="linux"
-    $env:GOARCH="amd64"
-    $env:CGO_ENABLED="0"
-    go build -buildmode=pie -ldflags="-s -w" -o syswarden-tui .
-    
-    Set-Location $OriginalLocation
-    
-    Copy-Item -Path "$GoTuiDir/syswarden-tui" -Destination "$DistDir/bin/syswarden-tui" -Force
-    Write-Host "[+] Golang TUI compiled and copied to $DistDir/bin/" -ForegroundColor Green
-} else {
-    Write-Host "[-] WARNING: syswarden-tui not found. Skipping Go build." -ForegroundColor Yellow
+
+    $ActualFiles = @(
+        $Entries | Where-Object { !$_.PSIsContainer } | ForEach-Object {
+            [System.IO.Path]::GetRelativePath($DistDir, $_.FullName).Replace('\', '/')
+        }
+    ) | Sort-Object
+    $ActualDirectories = @(
+        $Entries | Where-Object { $_.PSIsContainer } | ForEach-Object {
+            [System.IO.Path]::GetRelativePath($DistDir, $_.FullName).Replace('\', '/')
+        }
+    ) | Sort-Object
+
+    if ($ActualFiles.Count -ne $ExpectedFiles.Count) {
+        throw "Build inventory expected $($ExpectedFiles.Count) files but found $($ActualFiles.Count): $($ActualFiles -join ', ')"
+    }
+    for ($Index = 0; $Index -lt $ExpectedFiles.Count; $Index++) {
+        if ($ActualFiles[$Index] -ne $ExpectedFiles[$Index]) {
+            throw "Build file inventory mismatch. Expected: $($ExpectedFiles -join ', '); actual: $($ActualFiles -join ', ')"
+        }
+    }
+    if ($ActualDirectories.Count -ne $ExpectedDirectories.Count) {
+        throw "Build inventory expected $($ExpectedDirectories.Count) directories but found $($ActualDirectories.Count): $($ActualDirectories -join ', ')"
+    }
+    for ($Index = 0; $Index -lt $ExpectedDirectories.Count; $Index++) {
+        if ($ActualDirectories[$Index] -ne $ExpectedDirectories[$Index]) {
+            throw "Build directory inventory mismatch. Expected: $($ExpectedDirectories -join ', '); actual: $($ActualDirectories -join ', ')"
+        }
+    }
 }
 
-Write-Host "[*] Compiling SysWarden Native Go Modules for FreeBSD..." -ForegroundColor Cyan
-if (!(Test-Path "$DistDir/freebsd/bin")) {
-    New-Item -ItemType Directory -Force -Path "$DistDir/freebsd/bin" | Out-Null
+Write-Host '[*] Initializing SysWarden native build (PowerShell edition)...' -ForegroundColor Cyan
+
+if (!(Get-Command 'go' -ErrorAction SilentlyContinue)) {
+    throw 'Go is required to build SysWarden. Install the repository-required Go version and retry.'
 }
 
-$env:GOOS="freebsd"
-$env:GOARCH="amd64"
-$env:CGO_ENABLED="0"
+foreach ($Component in $Components) {
+    $MainFile = Join-Path $Component.SourceDir 'main.go'
+    $ModuleFile = Join-Path $Component.SourceDir 'go.mod'
 
-Set-Location "src/core/syswarden-cli"
-go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-cli .
-Set-Location ../../../
+    if (!(Test-Path -LiteralPath $MainFile -PathType Leaf)) {
+        throw "Missing required source file: $(Get-DisplayPath -Path $MainFile)"
+    }
 
-Write-Host "[*] Compiling SysWarden Native Go Modules for Linux ARM64..." -ForegroundColor Cyan
-if (!(Test-Path "$DistDir/linux-arm64/bin")) {
-    New-Item -ItemType Directory -Force -Path "$DistDir/linux-arm64/bin" | Out-Null
+    if (!(Test-Path -LiteralPath $ModuleFile -PathType Leaf)) {
+        throw "Missing required Go module file: $(Get-DisplayPath -Path $ModuleFile)"
+    }
 }
 
-$env:GOOS="linux"
-$env:GOARCH="arm64"
-$env:CGO_ENABLED="0"
-
-Set-Location "src/core/syswarden-cli"
-go build -buildmode=pie -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-cli .
-Set-Location ../../../
-
-Set-Location "src/core/syswarden-core"
-go build -buildmode=pie -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-core .
-Set-Location ../../../
-Copy-Item -Path "src/core/syswarden-core/signatures.json" -Destination "$DistDir/linux-arm64/signatures.json" -Force
-
-Set-Location "src/core/syswarden-tui"
-go build -buildmode=pie -ldflags="-s -w" -o ../../../dist/linux-arm64/bin/syswarden-tui .
-Set-Location ../../../
-
-Write-Host "[+] Linux ARM64 Compilation successful." -ForegroundColor Green
-
-Set-Location "src/core/syswarden-core"
-go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-core .
-Set-Location ../../../
-
-Set-Location "src/core/syswarden-tui"
-go build -ldflags="-s -w" -o ../../../dist/freebsd/bin/syswarden-tui .
-Set-Location ../../../
-
-Write-Host "[+] FreeBSD Compilation successful." -ForegroundColor Green
-
-# Create dist directory if it doesn't exist
-if (!(Test-Path $DistDir)) {
-    New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+$SignaturesSource = Join-Path $RepoRoot 'src/core/syswarden-core/signatures.json'
+if (!(Test-Path -LiteralPath $SignaturesSource -PathType Leaf)) {
+    throw "Missing required signatures file: $(Get-DisplayPath -Path $SignaturesSource)"
 }
 
-# ==========================================
-# FINAL COMPILATION VERIFICATION
-# ==========================================
-if ((Test-Path "$DistDir/bin/syswarden-cli") -and (Test-Path "$DistDir/bin/syswarden-core")) {
-    Write-Host "[+] Build complete. Artifacts successfully compiled in $DistDir/bin/" -ForegroundColor Green
-} else {
-    Write-Host "[-] ERROR: Missing expected binaries. Build failed." -ForegroundColor Red
-    exit 1
+foreach ($Target in $Targets) {
+    New-Item -ItemType Directory -Force -Path $Target.OutputDir | Out-Null
 }
+
+$PreviousGoOS = [System.Environment]::GetEnvironmentVariable('GOOS', 'Process')
+$PreviousGoArch = [System.Environment]::GetEnvironmentVariable('GOARCH', 'Process')
+$PreviousCgoEnabled = [System.Environment]::GetEnvironmentVariable('CGO_ENABLED', 'Process')
+
+try {
+    $env:CGO_ENABLED = '0'
+
+    foreach ($Target in $Targets) {
+        $env:GOOS = $Target.GOOS
+        $env:GOARCH = $Target.GOARCH
+
+        foreach ($Component in $Components) {
+            Invoke-GoBuild -Component $Component -Target $Target
+        }
+    }
+} finally {
+    [System.Environment]::SetEnvironmentVariable('GOOS', $PreviousGoOS, 'Process')
+    [System.Environment]::SetEnvironmentVariable('GOARCH', $PreviousGoArch, 'Process')
+    [System.Environment]::SetEnvironmentVariable('CGO_ENABLED', $PreviousCgoEnabled, 'Process')
+}
+
+Copy-Item `
+    -LiteralPath $SignaturesSource `
+    -Destination (Join-Path $DistDir 'signatures.json') `
+    -Force
+Copy-Item `
+    -LiteralPath $SignaturesSource `
+    -Destination (Join-Path $DistDir 'linux-arm64/signatures.json') `
+    -Force
+
+$VerifiedArtifactCount = 0
+foreach ($Target in $Targets) {
+    foreach ($Component in $Components) {
+        $ArtifactPath = Join-Path $Target.OutputDir $Component.Name
+        Assert-GoArtifact `
+            -Path $ArtifactPath `
+            -ExpectedOS $Target.GOOS `
+            -ExpectedArch $Target.GOARCH
+        $VerifiedArtifactCount++
+    }
+}
+
+if ($VerifiedArtifactCount -ne 9) {
+    throw "Build verification expected 9 binaries but verified $VerifiedArtifactCount."
+}
+
+Assert-ExactDistInventory
+
+Write-Host "[+] Build complete. Verified all $VerifiedArtifactCount native binaries and the exact 11-file distribution inventory." -ForegroundColor Green

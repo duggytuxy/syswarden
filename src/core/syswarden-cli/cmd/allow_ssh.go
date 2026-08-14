@@ -11,7 +11,8 @@ import (
 
 var allowSSHCmd = &cobra.Command{
 	Use:   "allow-ssh <IP> [PORT]",
-	Short: "Allows direct SSH bypass for this IP",
+	Short: "Add an address to the SSH exception registry",
+	Long:  "Records one address or CIDR in the SSH exception registry and reapplies firewall policy. Verify the resulting kernel rule before relying on it for access.",
 	Args:  cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		port := ""

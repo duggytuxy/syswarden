@@ -11,7 +11,7 @@ import (
 )
 
 var configGetCmd = &cobra.Command{
-	Use:   "config-get [key]",
+	Use:   "config-get <key>",
 	Short: "Get a configuration value by key",
 	Long: `Get a configuration value by key (e.g., core.firewall_backend).
 Useful for shell scripts that need to read the modular configuration.`,

@@ -10,7 +10,7 @@ import (
 
 var unwhitelistCmd = &cobra.Command{
 	Use:   "unwhitelist <IP>...",
-	Short: "Revokes global VIP access",
+	Short: "Remove addresses or CIDRs from the persistent whitelist",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		for _, ip := range args {

@@ -1,0 +1,2 @@
+# Reviewed false positive in the historical vendored xterm.js distribution.
+e486463d808b50be8451e50518c7634ad826d3dd:src/core/syswarden-cli/cmd/ui/assets/xterm.js:generic-api-key:1

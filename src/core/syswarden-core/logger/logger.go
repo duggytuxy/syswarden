@@ -248,7 +248,9 @@ func (l *Logger) LogSimulatedBan(ip, jail, payload string) {
 	log.Printf("[SYSWARDEN-SIMULATED-BAN] IP=%s JAIL=%s PAYLOAD=%s\n", ip, jail, payload)
 }
 
-// LogComplianceDrift logs a compliance deviation.
+// LogComplianceDrift logs a deviation found by a selected local check. The
+// retained method and structured identifiers preserve consumer compatibility;
+// the payload makes no compliance claim.
 func (l *Logger) LogComplianceDrift(msg string) {
 	event := TelemetryEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -268,10 +270,12 @@ func (l *Logger) LogComplianceDrift(msg string) {
 
 	go webhook.SendComplianceAlert(msg, "DRIFT")
 
-	log.Printf("[SYSWARDEN-COMPLIANCE-DRIFT] MSG=%s\n", msg)
+	log.Printf("[SYSWARDEN-LOCAL-CHECK-DRIFT] MSG=%s\n", msg)
 }
 
-// LogComplianceOK logs a successful compliance check.
+// LogComplianceOK logs that the selected local checks did not find a
+// deviation. The retained method and structured identifiers preserve consumer
+// compatibility; the payload makes no compliance claim.
 func (l *Logger) LogComplianceOK(msg string) {
 	event := TelemetryEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -291,7 +295,7 @@ func (l *Logger) LogComplianceOK(msg string) {
 
 	go webhook.SendComplianceAlert(msg, "OK")
 
-	log.Printf("[SYSWARDEN-COMPLIANCE-OK] MSG=%s\n", msg)
+	log.Printf("[SYSWARDEN-LOCAL-CHECK-OK] MSG=%s\n", msg)
 }
 
 func (l *Logger) Close() {

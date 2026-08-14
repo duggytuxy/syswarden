@@ -16,7 +16,7 @@ import (
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install SYSWARDEN and configure security modules",
-	Long:  `Executes the fully automated SYSWARDEN installation pipeline.`,
+	Long:  "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs.",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
 

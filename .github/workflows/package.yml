@@ -1,5 +1,8 @@
 name: SysWarden Builder and Packager
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches:
@@ -22,27 +25,103 @@ permissions:
 jobs:
   build-and-package:
     name: Compile and Build Packages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
 
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.5'
-          cache-dependency-path: 'go.work.sum'
+          go-version: '1.26.6'
+          cache-dependency-path: |
+            go.work.sum
+            src/core/syswarden-cli/go.sum
+            src/core/syswarden-core/go.sum
+            src/core/syswarden-tui/go.sum
+
+      - name: Setup pinned PowerShell 7.6.4
+        shell: bash
+        run: bash scripts/ci/setup_powershell.sh
+
+      - name: Test Package and Release Validators
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd scripts/versionctl && GOWORK=off go test ./...)
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+            scripts/ci/package_lifecycle_contract_test.py \
+            scripts/ci/package_stage_gate_test.py \
+            scripts/ci/release_gate_test.py \
+            scripts/ci/repository_state_test.py \
+            -v
+
+      - name: Validate and Export Version Contract
+        shell: bash
+        env:
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          SOURCE_TAG="$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")"
+          if [[ "${RELEASE_REF_TYPE}" == "tag" ]]; then
+            ./scripts/versioning.sh validate-tag \
+              --repo "${GITHUB_WORKSPACE}" \
+              --tag "${RELEASE_REF_NAME}"
+            if [[ "${SOURCE_TAG}" != "${RELEASE_REF_NAME}" ]]; then
+              echo "ERROR: source version ${SOURCE_TAG} does not match tag ${RELEASE_REF_NAME}." >&2
+              exit 1
+            fi
+          fi
+          echo "RELEASE_TAG=${SOURCE_TAG}" >> "${GITHUB_ENV}"
+          echo "VERSION=${SOURCE_TAG#v}" >> "${GITHUB_ENV}"
+
+      - name: Capture Candidate Repository State
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP:-}"
+          test -d "${RUNNER_TEMP}"
+          PACKAGE_REPOSITORY_STATE="$(mktemp \
+            "${RUNNER_TEMP%/}/syswarden-package-repository-state.XXXXXX")"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py \
+            --repository "${GITHUB_WORKSPACE}" \
+            capture \
+            --output "${PACKAGE_REPOSITORY_STATE}"
+          printf 'PACKAGE_REPOSITORY_STATE=%s\n' "${PACKAGE_REPOSITORY_STATE}" \
+            >> "${GITHUB_ENV}"
 
       - name: Compile Universal Script
         run: pwsh -File ./build.ps1
 
-      - name: Extract Version from Config
-        id: version
+      - name: Validate Compiled Inventory
+        shell: bash
         run: |
-          # Parse the version dynamically from the native Go config
-          VERSION=$(grep -oP 'Version = "v\K[0-9\.]+' src/core/syswarden-cli/pkg/system/upgrade.go || echo "0.0.0")
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          set -euo pipefail
+          expected=(
+            dist/bin/syswarden-cli
+            dist/bin/syswarden-core
+            dist/bin/syswarden-tui
+            dist/linux-arm64/bin/syswarden-cli
+            dist/linux-arm64/bin/syswarden-core
+            dist/linux-arm64/bin/syswarden-tui
+            dist/freebsd/bin/syswarden-cli
+            dist/freebsd/bin/syswarden-core
+            dist/freebsd/bin/syswarden-tui
+            dist/signatures.json
+            dist/linux-arm64/signatures.json
+          )
+          for artifact in "${expected[@]}"; do
+            test -s "${artifact}" || {
+              echo "ERROR: required build artifact is missing or empty: ${artifact}" >&2
+              exit 1
+            }
+          done
 
       - name: Set up Ruby for FPM
         uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
@@ -51,80 +130,109 @@ jobs:
 
       - name: Install FPM and RPM build tools
         run: |
-          # Install Effing Package Management and RPM requirements without docs for speed
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y rpm
-          gem install --no-document fpm
+          gem install --no-document fpm -v 1.17.0
+
+      - name: Create Isolated Packaging Workspace
+        id: package_workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP:-}"
+          test -d "${RUNNER_TEMP}"
+          PACKAGE_WORKSPACE="$(mktemp -d "${RUNNER_TEMP%/}/syswarden-package.XXXXXX")"
+          STAGING_AMD64="${PACKAGE_WORKSPACE}/staging-amd64"
+          STAGING_ARM64="${PACKAGE_WORKSPACE}/staging-arm64"
+          STAGING_FREEBSD="${PACKAGE_WORKSPACE}/staging-freebsd"
+          PACKAGE_ASSETS="${PACKAGE_WORKSPACE}/assets"
+          PACKAGE_SCRIPTS="${PACKAGE_WORKSPACE}/scripts"
+          PACKAGE_CONFIGS="${PACKAGE_WORKSPACE}/configs"
+          install -d -m 0755 \
+            "${STAGING_AMD64}" \
+            "${STAGING_ARM64}" \
+            "${STAGING_FREEBSD}" \
+            "${PACKAGE_ASSETS}"
+          install -d -m 0700 "${PACKAGE_SCRIPTS}" "${PACKAGE_CONFIGS}"
+          {
+            printf 'PACKAGE_WORKSPACE=%s\n' "${PACKAGE_WORKSPACE}"
+            printf 'STAGING_AMD64=%s\n' "${STAGING_AMD64}"
+            printf 'STAGING_ARM64=%s\n' "${STAGING_ARM64}"
+            printf 'STAGING_FREEBSD=%s\n' "${STAGING_FREEBSD}"
+            printf 'PACKAGE_ASSETS=%s\n' "${PACKAGE_ASSETS}"
+            printf 'PACKAGE_SCRIPTS=%s\n' "${PACKAGE_SCRIPTS}"
+            printf 'PACKAGE_CONFIGS=%s\n' "${PACKAGE_CONFIGS}"
+          } >> "${GITHUB_ENV}"
+          printf 'assets=%s\n' "${PACKAGE_ASSETS}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare Staging Environment (AMD64)
         run: |
-          # Create standard Linux filesystem hierarchy for the deployment package
-          mkdir -p staging/opt/syswarden/bin
-          mkdir -p staging/usr/local/bin
+          set -euo pipefail
+          install -d -m 0755 \
+            "${STAGING_AMD64}/opt/syswarden/bin" \
+            "${STAGING_AMD64}/usr/local/bin"
 
-          # Copy the unattended configuration
+          cp dist/bin/syswarden-cli "${STAGING_AMD64}/opt/syswarden/bin/"
+          cp dist/bin/syswarden-core "${STAGING_AMD64}/opt/syswarden/bin/"
+          cp dist/bin/syswarden-tui "${STAGING_AMD64}/opt/syswarden/bin/"
+          cp dist/signatures.json "${STAGING_AMD64}/opt/syswarden/"
 
-          # Copy syswarden-cli, syswarden-core and syswarden-tui binaries from dist/
-          mkdir -p staging/opt/syswarden/bin
-          if [ -f dist/bin/syswarden-cli ]; then
-            cp dist/bin/syswarden-cli staging/opt/syswarden/bin/
-            chmod 750 staging/opt/syswarden/bin/syswarden-cli
-          fi
-
-          if [ -f dist/bin/syswarden-core ]; then
-            cp dist/bin/syswarden-core staging/opt/syswarden/bin/
-            cp dist/signatures.json staging/opt/syswarden/
-            chmod 750 staging/opt/syswarden/bin/syswarden-core
-          fi
-          
-          if [ -f dist/bin/syswarden-tui ]; then
-            cp dist/bin/syswarden-tui staging/opt/syswarden/bin/
-            chmod 750 staging/opt/syswarden/bin/syswarden-tui
-          fi
-
-          # Apply strict execution permissions (Root execution only)
-          chmod 640 staging/opt/syswarden/signatures.json
+          chmod 0750 \
+            "${STAGING_AMD64}/opt/syswarden/bin/syswarden-cli" \
+            "${STAGING_AMD64}/opt/syswarden/bin/syswarden-core" \
+            "${STAGING_AMD64}/opt/syswarden/bin/syswarden-tui"
+          chmod 0640 "${STAGING_AMD64}/opt/syswarden/signatures.json"
 
           # Create a symlink for global execution from the terminal (Routing to Go CLI)
-          ln -s /opt/syswarden/bin/syswarden-cli staging/usr/local/bin/syswarden
-          ln -s /opt/syswarden/bin/syswarden-tui staging/usr/local/bin/syswarden-tui
+          ln -s /opt/syswarden/bin/syswarden-cli \
+            "${STAGING_AMD64}/usr/local/bin/syswarden"
+          ln -s /opt/syswarden/bin/syswarden-tui \
+            "${STAGING_AMD64}/usr/local/bin/syswarden-tui"
 
       - name: Prepare Staging Environment (ARM64)
         run: |
-          mkdir -p staging_arm64/opt/syswarden/bin
-          mkdir -p staging_arm64/usr/local/bin
+          set -euo pipefail
+          install -d -m 0755 \
+            "${STAGING_ARM64}/opt/syswarden/bin" \
+            "${STAGING_ARM64}/usr/local/bin"
 
-          if [ -f dist/linux-arm64/bin/syswarden-cli ]; then
-            cp dist/linux-arm64/bin/syswarden-cli staging_arm64/opt/syswarden/bin/
-            chmod 750 staging_arm64/opt/syswarden/bin/syswarden-cli
-          fi
+          cp dist/linux-arm64/bin/syswarden-cli "${STAGING_ARM64}/opt/syswarden/bin/"
+          cp dist/linux-arm64/bin/syswarden-core "${STAGING_ARM64}/opt/syswarden/bin/"
+          cp dist/linux-arm64/bin/syswarden-tui "${STAGING_ARM64}/opt/syswarden/bin/"
+          cp dist/linux-arm64/signatures.json "${STAGING_ARM64}/opt/syswarden/"
 
-          if [ -f dist/linux-arm64/bin/syswarden-core ]; then
-            cp dist/linux-arm64/bin/syswarden-core staging_arm64/opt/syswarden/bin/
-            cp dist/linux-arm64/signatures.json staging_arm64/opt/syswarden/
-            chmod 750 staging_arm64/opt/syswarden/bin/syswarden-core
-          fi
-          
-          if [ -f dist/linux-arm64/bin/syswarden-tui ]; then
-            cp dist/linux-arm64/bin/syswarden-tui staging_arm64/opt/syswarden/bin/
-            chmod 750 staging_arm64/opt/syswarden/bin/syswarden-tui
-          fi
+          chmod 0750 \
+            "${STAGING_ARM64}/opt/syswarden/bin/syswarden-cli" \
+            "${STAGING_ARM64}/opt/syswarden/bin/syswarden-core" \
+            "${STAGING_ARM64}/opt/syswarden/bin/syswarden-tui"
+          chmod 0640 "${STAGING_ARM64}/opt/syswarden/signatures.json"
 
-          chmod 640 staging_arm64/opt/syswarden/signatures.json
+          ln -s /opt/syswarden/bin/syswarden-cli \
+            "${STAGING_ARM64}/usr/local/bin/syswarden"
+          ln -s /opt/syswarden/bin/syswarden-tui \
+            "${STAGING_ARM64}/usr/local/bin/syswarden-tui"
 
-          ln -s /opt/syswarden/bin/syswarden-cli staging_arm64/usr/local/bin/syswarden
-          ln -s /opt/syswarden/bin/syswarden-tui staging_arm64/usr/local/bin/syswarden-tui
+      - name: Validate Exact Linux Staging Inventories
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
+            linux --root "${STAGING_AMD64}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
+            linux --root "${STAGING_ARM64}"
 
       - name: Build Debian Package (.deb)
         run: |
-          cat << 'EOF' > preinst.sh
+          set -euo pipefail
+          cat << 'EOF' > "${PACKAGE_SCRIPTS}/preinst.sh"
           #!/bin/sh
           if [ -f /opt/syswarden/syswarden-auto.conf ]; then
               mv /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.migration_backup
           fi
           EOF
 
-          cat << 'EOF' > postinst.sh
+          cat << 'EOF' > "${PACKAGE_SCRIPTS}/postinst.sh"
           #!/bin/sh
           export SYSWARDEN_PKG_INSTALL=1
           ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
@@ -191,7 +299,7 @@ jobs:
           fi
           EOF
 
-          cat << 'EOF' > postrm.sh
+          cat << 'EOF' > "${PACKAGE_SCRIPTS}/postrm.sh"
           #!/bin/sh
           # RPM Uninstall ($1 = 0) or DEB Uninstall/Purge
           if [ "$1" = "0" ] || [ "$1" = "purge" ]; then
@@ -202,7 +310,7 @@ jobs:
           fi
           EOF
 
-          cat << 'EOF' > prerm.sh
+          cat << 'EOF' > "${PACKAGE_SCRIPTS}/prerm.sh"
           #!/bin/sh
           # RPM Uninstall ($1 = 0) or DEB Uninstall/Purge
           if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
@@ -234,79 +342,91 @@ jobs:
           fi
           EOF
 
-          chmod +x preinst.sh postinst.sh postrm.sh prerm.sh
+          chmod 0755 \
+            "${PACKAGE_SCRIPTS}/preinst.sh" \
+            "${PACKAGE_SCRIPTS}/postinst.sh" \
+            "${PACKAGE_SCRIPTS}/postrm.sh" \
+            "${PACKAGE_SCRIPTS}/prerm.sh"
 
           fpm -s dir -t deb \
             -n syswarden \
-            -v ${{ env.VERSION }} \
+            -v "${VERSION}" \
+            -p "${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" \
             --vendor "SysWarden Security" \
             --maintainer "SysWarden Engineering" \
             --description "SysWarden Host-based Security Orchestrator for Linux" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture amd64 \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
-            --before-install preinst.sh \
-            --after-install postinst.sh \
-            --before-remove prerm.sh \
-            --after-remove postrm.sh \
-            -C staging .
+            --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
+            --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
+            --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
+            --after-remove "${PACKAGE_SCRIPTS}/postrm.sh" \
+            -C "${STAGING_AMD64}" .
 
           fpm -s dir -t deb \
             -n syswarden \
-            -v ${{ env.VERSION }} \
+            -v "${VERSION}" \
+            -p "${PACKAGE_ASSETS}/syswarden_${VERSION}_arm64.deb" \
             --vendor "SysWarden Security" \
             --maintainer "SysWarden Engineering" \
             --description "SysWarden Host-based Security Orchestrator for Linux (ARM64)" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture arm64 \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
-            --before-install preinst.sh \
-            --after-install postinst.sh \
-            --before-remove prerm.sh \
-            --after-remove postrm.sh \
-            -C staging_arm64 .
+            --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
+            --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
+            --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
+            --after-remove "${PACKAGE_SCRIPTS}/postrm.sh" \
+            -C "${STAGING_ARM64}" .
 
       - name: Build RHEL Family Package (.rpm)
         run: |
+          set -euo pipefail
           fpm -s dir -t rpm \
             -n syswarden \
-            -v ${{ env.VERSION }} \
+            -v "${VERSION}" \
+            -p "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" \
             --vendor "SysWarden Security" \
             --maintainer "SysWarden Engineering" \
             --description "SysWarden Host-based Security Orchestrator for Linux" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture x86_64 \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
-            --before-install preinst.sh \
-            --after-install postinst.sh \
-            --before-remove prerm.sh \
-            --after-remove postrm.sh \
-            -C staging .
+            --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
+            --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
+            --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
+            --after-remove "${PACKAGE_SCRIPTS}/postrm.sh" \
+            -C "${STAGING_AMD64}" .
 
           fpm -s dir -t rpm \
             -n syswarden \
-            -v ${{ env.VERSION }} \
+            -v "${VERSION}" \
+            -p "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.aarch64.rpm" \
             --vendor "SysWarden Security" \
             --maintainer "SysWarden Engineering" \
             --description "SysWarden Host-based Security Orchestrator for Linux (ARM64)" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture aarch64 \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
-            --before-install preinst.sh \
-            --after-install postinst.sh \
-            --before-remove prerm.sh \
-            --after-remove postrm.sh \
-            -C staging_arm64 .
+            --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
+            --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
+            --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
+            --after-remove "${PACKAGE_SCRIPTS}/postrm.sh" \
+            -C "${STAGING_ARM64}" .
 
       - name: Build Alpine Package (.apk)
         run: |
-          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          set -euo pipefail
+          TOOL_DIR="${PACKAGE_WORKSPACE}/tools"
+          install -d -m 0700 "${TOOL_DIR}"
+          GOBIN="${TOOL_DIR}" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           
-          cat << EOF > nfpm_alpine_x86_64.yaml
+          cat << EOF > "${PACKAGE_CONFIGS}/nfpm_alpine_x86_64.yaml"
           name: "syswarden"
           arch: "amd64"
           platform: "linux"
-          version: "${{ env.VERSION }}"
+          version: "${VERSION}"
           maintainer: "SysWarden Engineering"
           description: "SysWarden Host-based Security Orchestrator for Alpine Linux"
           vendor: "SysWarden Security"
@@ -319,22 +439,22 @@ jobs:
             - rsyslog-uxsock
             - bash-completion
           contents:
-            - src: "./staging/opt"
+            - src: "${STAGING_AMD64}/opt"
               dst: "/opt"
-            - src: "./staging/usr"
+            - src: "${STAGING_AMD64}/usr"
               dst: "/usr"
           scripts:
-            preinstall: "./preinst.sh"
-            postinstall: "./postinst.sh"
-            preremove: "./prerm.sh"
-            postremove: "./postrm.sh"
+            preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"
+            postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"
+            preremove: "${PACKAGE_SCRIPTS}/prerm.sh"
+            postremove: "${PACKAGE_SCRIPTS}/postrm.sh"
           EOF
 
-          cat << EOF > nfpm_alpine_aarch64.yaml
+          cat << EOF > "${PACKAGE_CONFIGS}/nfpm_alpine_aarch64.yaml"
           name: "syswarden"
           arch: "arm64"
           platform: "linux"
-          version: "${{ env.VERSION }}"
+          version: "${VERSION}"
           maintainer: "SysWarden Engineering"
           description: "SysWarden Host-based Security Orchestrator for Alpine Linux (ARM64)"
           vendor: "SysWarden Security"
@@ -347,36 +467,52 @@ jobs:
             - rsyslog-uxsock
             - bash-completion
           contents:
-            - src: "./staging_arm64/opt"
+            - src: "${STAGING_ARM64}/opt"
               dst: "/opt"
-            - src: "./staging_arm64/usr"
+            - src: "${STAGING_ARM64}/usr"
               dst: "/usr"
           scripts:
-            preinstall: "./preinst.sh"
-            postinstall: "./postinst.sh"
-            preremove: "./prerm.sh"
-            postremove: "./postrm.sh"
+            preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"
+            postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"
+            preremove: "${PACKAGE_SCRIPTS}/prerm.sh"
+            postremove: "${PACKAGE_SCRIPTS}/postrm.sh"
           EOF
 
-          ~/go/bin/nfpm pkg --config nfpm_alpine_x86_64.yaml --packager apk --target syswarden_${{ env.VERSION }}_x86_64.apk
-          ~/go/bin/nfpm pkg --config nfpm_alpine_aarch64.yaml --packager apk --target syswarden_${{ env.VERSION }}_aarch64.apk
+          "${TOOL_DIR}/nfpm" pkg \
+            --config "${PACKAGE_CONFIGS}/nfpm_alpine_x86_64.yaml" \
+            --packager apk \
+            --target "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk"
+          "${TOOL_DIR}/nfpm" pkg \
+            --config "${PACKAGE_CONFIGS}/nfpm_alpine_aarch64.yaml" \
+            --packager apk \
+            --target "${PACKAGE_ASSETS}/syswarden_${VERSION}_aarch64.apk"
 
-      - name: Build FreeBSD Package (.pkg)
+      - name: Prepare FreeBSD Staging Environment
         run: |
-          mkdir -p staging_fbsd/usr/local/syswarden/bin
-          cp src/core/syswarden-core/signatures.json staging_fbsd/usr/local/syswarden/
-          cp dist/freebsd/bin/* staging_fbsd/usr/local/syswarden/bin/
-          chmod 750 staging_fbsd/usr/local/syswarden/bin/*
-          chmod 640 staging_fbsd/usr/local/syswarden/signatures.json
+          set -euo pipefail
+          install -d -m 0755 "${STAGING_FREEBSD}/usr/local/syswarden/bin"
+          cp src/core/syswarden-core/signatures.json \
+            "${STAGING_FREEBSD}/usr/local/syswarden/"
+          cp dist/freebsd/bin/syswarden-cli \
+            "${STAGING_FREEBSD}/usr/local/syswarden/bin/"
+          cp dist/freebsd/bin/syswarden-core \
+            "${STAGING_FREEBSD}/usr/local/syswarden/bin/"
+          cp dist/freebsd/bin/syswarden-tui \
+            "${STAGING_FREEBSD}/usr/local/syswarden/bin/"
+          chmod 0750 \
+            "${STAGING_FREEBSD}/usr/local/syswarden/bin/syswarden-cli" \
+            "${STAGING_FREEBSD}/usr/local/syswarden/bin/syswarden-core" \
+            "${STAGING_FREEBSD}/usr/local/syswarden/bin/syswarden-tui"
+          chmod 0640 "${STAGING_FREEBSD}/usr/local/syswarden/signatures.json"
 
-          cat << 'EOF' > preinst_fbsd.sh
+          cat << 'EOF' > "${PACKAGE_SCRIPTS}/preinst_fbsd.sh"
           #!/bin/sh
           if [ -f /usr/local/syswarden/syswarden-auto.conf ]; then
               mv /usr/local/syswarden/syswarden-auto.conf /usr/local/syswarden/syswarden-auto.conf.migration_backup
           fi
           EOF
 
-          cat << 'EOF' > postinst_fbsd.sh
+          cat << 'EOF' > "${PACKAGE_SCRIPTS}/postinst_fbsd.sh"
           #!/bin/sh
           export SYSWARDEN_PKG_INSTALL=1
           ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
@@ -391,14 +527,14 @@ jobs:
           service syswarden restart || true
           EOF
 
-          cat << 'EOF' > postrm_fbsd.sh
+          cat << 'EOF' > "${PACKAGE_SCRIPTS}/postrm_fbsd.sh"
           #!/bin/sh
           rm -f /usr/local/bin/syswarden
           rm -f /usr/local/bin/syswarden-tui
           rm -rf /usr/local/syswarden
           EOF
 
-          cat << 'EOF' > prerm_fbsd.sh
+          cat << 'EOF' > "${PACKAGE_SCRIPTS}/prerm_fbsd.sh"
           #!/bin/sh
           service syswarden stop || true
           sysrc -x syswarden_enable || true
@@ -407,35 +543,164 @@ jobs:
           pfctl -t syswarden_whitelist -T kill || true
           pfctl -t banned_ips -T kill || true
           EOF
-          chmod +x preinst_fbsd.sh postinst_fbsd.sh postrm_fbsd.sh prerm_fbsd.sh
+          chmod 0755 \
+            "${PACKAGE_SCRIPTS}/preinst_fbsd.sh" \
+            "${PACKAGE_SCRIPTS}/postinst_fbsd.sh" \
+            "${PACKAGE_SCRIPTS}/postrm_fbsd.sh" \
+            "${PACKAGE_SCRIPTS}/prerm_fbsd.sh"
 
+      - name: Validate Exact FreeBSD Staging Inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
+            freebsd --root "${STAGING_FREEBSD}"
+
+      - name: Build FreeBSD Package (.pkg)
+        run: |
+          set -euo pipefail
           fpm -s dir -t freebsd \
             -n syswarden \
-            -v ${{ env.VERSION }} \
+            -v "${VERSION}" \
+            -p "${PACKAGE_ASSETS}/syswarden-${VERSION}.txz" \
             --vendor "SysWarden Security" \
             --maintainer "SysWarden Engineering" \
             --description "SysWarden Host-based Security Orchestrator for FreeBSD" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture amd64 \
-            --before-install preinst_fbsd.sh \
-            --after-install postinst_fbsd.sh \
-            --before-remove prerm_fbsd.sh \
-            --after-remove postrm_fbsd.sh \
-            -C staging_fbsd .
+            --before-install "${PACKAGE_SCRIPTS}/preinst_fbsd.sh" \
+            --after-install "${PACKAGE_SCRIPTS}/postinst_fbsd.sh" \
+            --before-remove "${PACKAGE_SCRIPTS}/prerm_fbsd.sh" \
+            --after-remove "${PACKAGE_SCRIPTS}/postrm_fbsd.sh" \
+            -C "${STAGING_FREEBSD}" .
+
+      - name: Validate Package Metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          validate_deb() {
+            local path="$1"
+            local architecture="$2"
+            [[ "$(dpkg-deb --field "${path}" Version)" == "${VERSION}" ]]
+            [[ "$(dpkg-deb --field "${path}" Architecture)" == "${architecture}" ]]
+          }
+
+          validate_rpm() {
+            local path="$1"
+            local architecture="$2"
+            [[ "$(rpm --query --package --queryformat '%{VERSION}' "${path}")" == "${VERSION}" ]]
+            [[ "$(rpm --query --package --queryformat '%{ARCH}' "${path}")" == "${architecture}" ]]
+          }
+
+          validate_apk() {
+            local path="$1"
+            local architecture="$2"
+            local member
+            local metadata
+            local package_version
+            local package_architecture
+            member="$(tar --list --file "${path}" | awk '/(^|\/)\.PKGINFO$/ { print }')"
+            [[ "$(wc -l <<< "${member}")" -eq 1 ]]
+            metadata="$(tar --extract --to-stdout --file "${path}" "${member}")"
+            [[ "$(grep --count '^pkgver = ' <<< "${metadata}")" -eq 1 ]]
+            [[ "$(grep --count '^arch = ' <<< "${metadata}")" -eq 1 ]]
+            package_version="$(sed -n 's/^pkgver = //p' <<< "${metadata}")"
+            package_architecture="$(sed -n 's/^arch = //p' <<< "${metadata}")"
+            python3 - "${VERSION}" "${package_version}" <<'PY'
+          import re
+          import sys
+
+          expected, actual = sys.argv[1:]
+          pattern = re.compile(r"^[0-9]+(?:\.[0-9]+){2}$")
+          if pattern.fullmatch(expected) is None or pattern.fullmatch(actual) is None:
+              raise SystemExit("APK versions must contain exactly three numeric components")
+          normalize = lambda value: tuple(int(part) for part in value.split("."))
+          if normalize(expected) != normalize(actual):
+              raise SystemExit(f"APK version mismatch: expected {expected}, found {actual}")
+          PY
+            [[ "${package_architecture}" == "${architecture}" ]]
+          }
+
+          validate_deb "${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" amd64
+          validate_deb "${PACKAGE_ASSETS}/syswarden_${VERSION}_arm64.deb" arm64
+          validate_rpm "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" x86_64
+          validate_rpm "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.aarch64.rpm" aarch64
+          validate_apk "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" x86_64
+          validate_apk "${PACKAGE_ASSETS}/syswarden_${VERSION}_aarch64.apk" aarch64
+
+          freebsd_manifest="$(tar --extract --to-stdout \
+            --file "${PACKAGE_ASSETS}/syswarden-${VERSION}.txz" \
+            +COMPACT_MANIFEST)"
+          jq --exit-status \
+            --arg name syswarden \
+            --arg version "${VERSION}" \
+            '.name == $name and .version == $version' \
+            <<< "${freebsd_manifest}"
 
       - name: Generate Checksums
+        shell: bash
         run: |
-          # Generate SHA256 checksums for integrity verification (Supply Chain Security)
-          sha256sum *.deb *.rpm *.txz *.apk > SHA256SUMS.txt
+          set -euo pipefail
+          assets=(
+            "syswarden_${VERSION}_amd64.deb"
+            "syswarden_${VERSION}_arm64.deb"
+            "syswarden-${VERSION}-1.x86_64.rpm"
+            "syswarden-${VERSION}-1.aarch64.rpm"
+            "syswarden_${VERSION}_x86_64.apk"
+            "syswarden_${VERSION}_aarch64.apk"
+            "syswarden-${VERSION}.txz"
+          )
+          (
+            cd "${PACKAGE_ASSETS}"
+            for asset in "${assets[@]}"; do
+              test -s "${asset}" || {
+                echo "ERROR: required package is missing or empty: ${asset}" >&2
+                exit 1
+              }
+            done
+            sha256sum "${assets[@]}" > SHA256SUMS.txt
+            sha256sum --check --strict SHA256SUMS.txt
+          )
+
+      - name: Validate Exact Package Artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify-packages \
+            --tag "${RELEASE_TAG}" \
+            --packages "${PACKAGE_ASSETS}"
+
+      - name: Prove Packaging Did Not Mutate Source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${PACKAGE_REPOSITORY_STATE:-}" || {
+            echo "ERROR: package repository-state snapshot is unavailable." >&2
+            exit 1
+          }
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py \
+            --repository "${GITHUB_WORKSPACE}" \
+            verify \
+            --snapshot "${PACKAGE_REPOSITORY_STATE}"
 
       - name: Upload Package Artifacts
+        if: ${{ !github.event.act }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: syswarden-packages-${{ env.VERSION }}
-          path: |
-            *.deb
-            *.rpm
-            *.txz
-            *.apk
-            SHA256SUMS.txt
-          retention-days: 7
+          path: ${{ steps.package_workspace.outputs.assets }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Package Artifacts with Act-compatible protocol
+        if: ${{ github.event.act }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        env:
+          ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
+        with:
+          name: syswarden-packages-${{ env.VERSION }}
+          path: ${{ steps.package_workspace.outputs.assets }}
+          if-no-files-found: error
+          retention-days: 30

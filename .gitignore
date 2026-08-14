@@ -32,6 +32,14 @@ staging/
 *.log
 *.out
 tmp/
+__pycache__/
+*.py[cod]
+
+# Local Act runtime data and secrets
+.act-artifacts/
+.act-cache/
+.act-secrets
+act.secrets
 
 # OS & Editor configurations (Prevents pushing personal settings)
 .vscode/

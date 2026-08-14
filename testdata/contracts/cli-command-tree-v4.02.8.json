@@ -1,0 +1,961 @@
+[
+  {
+    "path": "syswarden",
+    "use": "syswarden",
+    "short": "SYSWARDEN Security Orchestrator",
+    "long": "SYSWARDEN v4.02.8 is a Next-Gen Host-based WAF and Security Orchestrator.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for syswarden"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden alerts",
+    "use": "alerts",
+    "short": "Launch the real-time TUI dashboard for alerts",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for alerts"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden allow-ssh",
+    "use": "allow-ssh \u003cIP\u003e [PORT]",
+    "short": "Allows direct SSH bypass for this IP",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for allow-ssh"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "accepts between 1 and 2 arg(s), received 0",
+      "1": "ok",
+      "2": "ok",
+      "3": "accepts between 1 and 2 arg(s), received 3",
+      "4": "accepts between 1 and 2 arg(s), received 4"
+    }
+  },
+  {
+    "path": "syswarden audit",
+    "use": "audit",
+    "short": "Performs a full Enterprise SYSWARDEN Audit",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for audit"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden block",
+    "use": "block \u003cIP\u003e...",
+    "short": "Hot-adds an IP to the kernel drop set",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for block"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "requires at least 1 arg(s), only received 0",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden check",
+    "use": "check \u003cIP\u003e",
+    "short": "Perform a global diagnostic on an IP",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for check"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "accepts 1 arg(s), received 0",
+      "1": "ok",
+      "2": "accepts 1 arg(s), received 2",
+      "3": "accepts 1 arg(s), received 3",
+      "4": "accepts 1 arg(s), received 4"
+    }
+  },
+  {
+    "path": "syswarden completion",
+    "use": "completion",
+    "short": "Generate the autocompletion script for the specified shell",
+    "long": "Generate the autocompletion script for syswarden for the specified shell.\nSee each sub-command's help for details on how to use the generated script.\n",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for completion"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden completion\"",
+      "2": "unknown command \"arg-1\" for \"syswarden completion\"",
+      "3": "unknown command \"arg-1\" for \"syswarden completion\"",
+      "4": "unknown command \"arg-1\" for \"syswarden completion\""
+    }
+  },
+  {
+    "path": "syswarden completion bash",
+    "use": "bash",
+    "short": "Generate the autocompletion script for bash",
+    "long": "Generate the autocompletion script for the bash shell.\n\nThis script depends on the 'bash-completion' package.\nIf it is not installed already, you can install it via your OS's package manager.\n\nTo load completions in your current shell session:\n\n\tsource \u003c(syswarden completion bash)\n\nTo load completions for every new session, execute once:\n\n#### Linux:\n\n\tsyswarden completion bash \u003e /etc/bash_completion.d/syswarden\n\n#### macOS:\n\n\tsyswarden completion bash \u003e $(brew --prefix)/etc/bash_completion.d/syswarden\n\nYou will need to start a new shell for this setup to take effect.\n",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for bash"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden completion bash\"",
+      "2": "unknown command \"arg-1\" for \"syswarden completion bash\"",
+      "3": "unknown command \"arg-1\" for \"syswarden completion bash\"",
+      "4": "unknown command \"arg-1\" for \"syswarden completion bash\""
+    }
+  },
+  {
+    "path": "syswarden completion fish",
+    "use": "fish",
+    "short": "Generate the autocompletion script for fish",
+    "long": "Generate the autocompletion script for the fish shell.\n\nTo load completions in your current shell session:\n\n\tsyswarden completion fish | source\n\nTo load completions for every new session, execute once:\n\n\tsyswarden completion fish \u003e ~/.config/fish/completions/syswarden.fish\n\nYou will need to start a new shell for this setup to take effect.\n",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for fish"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden completion fish\"",
+      "2": "unknown command \"arg-1\" for \"syswarden completion fish\"",
+      "3": "unknown command \"arg-1\" for \"syswarden completion fish\"",
+      "4": "unknown command \"arg-1\" for \"syswarden completion fish\""
+    }
+  },
+  {
+    "path": "syswarden completion powershell",
+    "use": "powershell",
+    "short": "Generate the autocompletion script for powershell",
+    "long": "Generate the autocompletion script for powershell.\n\nTo load completions in your current shell session:\n\n\tsyswarden completion powershell | Out-String | Invoke-Expression\n\nTo load completions for every new session, add the output of the above command\nto your powershell profile.\n",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for powershell"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden completion powershell\"",
+      "2": "unknown command \"arg-1\" for \"syswarden completion powershell\"",
+      "3": "unknown command \"arg-1\" for \"syswarden completion powershell\"",
+      "4": "unknown command \"arg-1\" for \"syswarden completion powershell\""
+    }
+  },
+  {
+    "path": "syswarden completion zsh",
+    "use": "zsh",
+    "short": "Generate the autocompletion script for zsh",
+    "long": "Generate the autocompletion script for the zsh shell.\n\nIf shell completion is not already enabled in your environment you will need\nto enable it.  You can execute the following once:\n\n\techo \"autoload -U compinit; compinit\" \u003e\u003e ~/.zshrc\n\nTo load completions in your current shell session:\n\n\tsource \u003c(syswarden completion zsh)\n\nTo load completions for every new session, execute once:\n\n#### Linux:\n\n\tsyswarden completion zsh \u003e \"${fpath[1]}/_syswarden\"\n\n#### macOS:\n\n\tsyswarden completion zsh \u003e $(brew --prefix)/share/zsh/site-functions/_syswarden\n\nYou will need to start a new shell for this setup to take effect.\n",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for zsh"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden completion zsh\"",
+      "2": "unknown command \"arg-1\" for \"syswarden completion zsh\"",
+      "3": "unknown command \"arg-1\" for \"syswarden completion zsh\"",
+      "4": "unknown command \"arg-1\" for \"syswarden completion zsh\""
+    }
+  },
+  {
+    "path": "syswarden config",
+    "use": "config",
+    "short": "Open the interactive configuration editor",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for config"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden config-get",
+    "use": "config-get [key]",
+    "short": "Get a configuration value by key",
+    "long": "Get a configuration value by key (e.g., core.firewall_backend).\nUseful for shell scripts that need to read the modular configuration.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for config-get"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "accepts 1 arg(s), received 0",
+      "1": "ok",
+      "2": "accepts 1 arg(s), received 2",
+      "3": "accepts 1 arg(s), received 3",
+      "4": "accepts 1 arg(s), received 4"
+    }
+  },
+  {
+    "path": "syswarden ha-sync",
+    "use": "ha-sync",
+    "short": "Synchronizes the firewall blocklist with the configured HA peer",
+    "long": "Forces an immediate synchronization of the local blocklist to the High Availability standby node over encrypted channels.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for ha-sync"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden help",
+    "use": "help [command]",
+    "short": "Help about any command",
+    "long": "Help provides help for any command in the application.\nSimply type syswarden help [path to command] for full details.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for help"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden install",
+    "use": "install",
+    "short": "Install SYSWARDEN and configure security modules",
+    "long": "Executes the fully automated SYSWARDEN installation pipeline.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for install"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden list",
+    "use": "list",
+    "short": "Displays all custom IP registries",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for list"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden manual",
+    "use": "manual",
+    "short": "Comprehensive SysAdmin Manual and Documentation",
+    "long": "Displays the exhaustive SYSWARDEN administration manual, including CLI commands, configuration parameters, and threat intelligence options.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for manual"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden migrate-config",
+    "use": "migrate-config",
+    "short": "Migrate from old config format to modular TOML format",
+    "long": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Show what would be done"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for migrate-config"
+      },
+      {
+        "name": "output",
+        "shorthand": "o",
+        "type": "string",
+        "default": "",
+        "usage": "Output directory"
+      },
+      {
+        "name": "source",
+        "shorthand": "s",
+        "type": "string",
+        "default": "",
+        "usage": "Source config file path"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden reload",
+    "use": "reload",
+    "short": "Reload configuration and restart security engines",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for reload"
+      },
+      {
+        "name": "no-restart",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Do not restart syswarden-core.service (used by systemd)"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden revoke-ssh",
+    "use": "revoke-ssh \u003cIP\u003e",
+    "short": "Revokes direct SSH bypass",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for revoke-ssh"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "accepts 1 arg(s), received 0",
+      "1": "ok",
+      "2": "accepts 1 arg(s), received 2",
+      "3": "accepts 1 arg(s), received 3",
+      "4": "accepts 1 arg(s), received 4"
+    }
+  },
+  {
+    "path": "syswarden tui",
+    "use": "tui",
+    "short": "Launch the SYSWARDEN Enterprise Dashboard (TUI)",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for tui"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden unblock",
+    "use": "unblock \u003cIP\u003e...",
+    "short": "Purges an IP from the blocklist",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for unblock"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "requires at least 1 arg(s), only received 0",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden uninstall",
+    "use": "uninstall",
+    "short": "Completely remove SYSWARDEN from the system",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for uninstall"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden unwhitelist",
+    "use": "unwhitelist \u003cIP\u003e...",
+    "short": "Revokes global VIP access",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for unwhitelist"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "requires at least 1 arg(s), only received 0",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden update",
+    "use": "update",
+    "short": "Check and install SYSWARDEN updates",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for update"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden update-feeds",
+    "use": "update-feeds",
+    "short": "Silently update Threat Intelligence feeds and reload firewall",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for update-feeds"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden web-token",
+    "use": "web-token",
+    "short": "Manage the Web-TUI secure access token",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for web-token"
+      },
+      {
+        "name": "rotate",
+        "shorthand": "r",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Generate a new token and invalidate the old one"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden web-tui",
+    "use": "web-tui",
+    "short": "Start the Web-TUI server (WebTTY)",
+    "flags": [
+      {
+        "name": "bind",
+        "type": "string",
+        "default": "0.0.0.0:62027",
+        "usage": "IP:Port to bind the Web-TUI server"
+      },
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for web-tui"
+      },
+      {
+        "name": "token",
+        "type": "string",
+        "default": "",
+        "usage": "Secure token for Web-TUI access (Required)"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden whitelist",
+    "use": "whitelist \u003cIP\u003e... [PORT]",
+    "short": "Grants global VIP access and bypasses the firewall",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for whitelist"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "requires at least 1 arg(s), only received 0",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  },
+  {
+    "path": "syswarden whitelist-infra",
+    "use": "whitelist-infra",
+    "short": "Auto-detects and whitelists infrastructure IPs",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for whitelist-infra"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "ok",
+      "2": "ok",
+      "3": "ok",
+      "4": "ok"
+    }
+  }
+]

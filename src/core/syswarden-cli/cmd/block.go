@@ -11,7 +11,8 @@ import (
 
 var blockCmd = &cobra.Command{
 	Use:   "block <IP>...",
-	Short: "Hot-adds an IP to the kernel drop set",
+	Short: "Add addresses or CIDRs to the persistent blocklist",
+	Long:  "Records each entry in the persistent blocklist and reapplies firewall policy; success does not independently prove final kernel state.",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		for _, ip := range args {

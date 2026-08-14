@@ -15,11 +15,11 @@ var cfgFile string
 var rootCmd = &cobra.Command{
 	Use:   "syswarden",
 	Short: "SYSWARDEN Security Orchestrator",
-	Long:  fmt.Sprintf(`SYSWARDEN %s is a Next-Gen Host-based WAF and Security Orchestrator.`, system.Version),
+	Long:  "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.",
 	Run: func(cmd *cobra.Command, args []string) {
 		// Default behavior when no subcommand is given
 		fmt.Printf("SYSWARDEN %s CLI\n", system.Version)
-		fmt.Println("Use 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.")
+		fmt.Println("Use 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.")
 	},
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd:   false,

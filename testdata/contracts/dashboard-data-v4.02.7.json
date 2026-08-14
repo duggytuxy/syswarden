@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-08-01T08:00:00Z",
+  "github_stars": "95",
+  "github_release": "v4.02.7",
+  "profile_name": "legacy-node",
+  "system": {
+    "hostname": "node-n-minus-one",
+    "uptime": "2 hours",
+    "load_average": "0.05 0.10 0.15",
+    "ram_used_mb": 256,
+    "ram_total_mb": 1024,
+    "disk_used_mb": 1024,
+    "disk_total_mb": 4096,
+    "cores": "2",
+    "arch": "amd64",
+    "os": "linux",
+    "cpu_model": "Legacy fixture CPU",
+    "server_ip": "192.0.2.7",
+    "services": [],
+    "ports": []
+  },
+  "layer3": {
+    "global_blocked": 1,
+    "geoip_blocked": 0,
+    "asn_blocked": 0,
+    "l7_banned": 1
+  },
+  "waf": {
+    "total_banned": 1,
+    "total_detected": 0,
+    "active_signatures": 75,
+    "signatures_data": [],
+    "banned_ips": [],
+    "top_attackers": [],
+    "sparkline_24h": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+  },
+  "whitelist": {
+    "active_ips": 0,
+    "ips": []
+  }
+}

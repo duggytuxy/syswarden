@@ -1,0 +1,718 @@
+{
+  "schema_version": 1,
+  "cli_baseline": {
+    "version": "v4.02.8",
+    "commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
+    "sha256": "5ab5392b3ed705bac98ad92dabb1018cb6451e265bc4fd92f86f774e1ee14ee3",
+    "source_archive_sha256": "298c1a093c2924909bcc0d5c792c594e2b732c6c65c5bdb1817c5f6757caedb9"
+  },
+  "forbidden_phrases": [
+    "Production Ready",
+    "Enterprise Ready",
+    "military-grade",
+    "absolute defense",
+    "Absolute Security",
+    "zero-overhead",
+    "zero overhead",
+    "zero latency",
+    "zero-shell",
+    "unbreachable",
+    "flawless",
+    "fully compliant",
+    "memory-safe",
+    "SLSA Level",
+    "Sanitized Traffic",
+    "safely reverse",
+    "reverts the OS to its previous state",
+    "atomically without dropping connections",
+    "full HA reconciliation",
+    "full HA synchronization"
+  ],
+  "forbidden_cobra_phrases": [
+    "Next-Gen",
+    "full Enterprise SYSWARDEN Audit",
+    "Hot-add",
+    "global diagnostic",
+    "global VIP access",
+    "bypasses the firewall",
+    "direct SSH bypass",
+    "Enterprise Dashboard",
+    "fully automated",
+    "full HA reconciliation",
+    "full HA synchronization",
+    "Synchronizes the firewall blocklist with the configured HA peer",
+    "immediate synchronization of the local blocklist",
+    "Silently update",
+    "Completely remove SYSWARDEN"
+  ],
+  "approved_cli_public_differences": [
+    {
+      "path": "syswarden",
+      "field": "long",
+      "reason": "Replace the inline-WAF claim with the verified product boundary.",
+      "before": "SYSWARDEN v4.02.8 is a Next-Gen Host-based WAF and Security Orchestrator.",
+      "after": "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF."
+    },
+    {
+      "path": "syswarden alerts",
+      "field": "short",
+      "reason": "Describe the command's alert stream instead of an unrelated dashboard.",
+      "before": "Launch the real-time TUI dashboard for alerts",
+      "after": "Stream kernel and WAAP alert events"
+    },
+    {
+      "path": "syswarden allow-ssh",
+      "field": "long",
+      "reason": "State the persistent-registry behavior and require kernel verification.",
+      "before": "",
+      "after": "Records one address or CIDR in the SSH exception registry and reapplies firewall policy. Verify the resulting kernel rule before relying on it for access."
+    },
+    {
+      "path": "syswarden allow-ssh",
+      "field": "short",
+      "reason": "Remove the unsupported direct-bypass guarantee.",
+      "before": "Allows direct SSH bypass for this IP",
+      "after": "Add an address to the SSH exception registry"
+    },
+    {
+      "path": "syswarden audit",
+      "field": "long",
+      "reason": "Bound the diagnostic scope and disclaim compliance certification.",
+      "before": "",
+      "after": "Checks selected local services, files, firewall state, and configuration. Its output is not a compliance certification."
+    },
+    {
+      "path": "syswarden audit",
+      "field": "short",
+      "reason": "Remove the unsupported enterprise audit claim.",
+      "before": "Performs a full Enterprise SYSWARDEN Audit",
+      "after": "Run a local SYSWARDEN operational diagnostic"
+    },
+    {
+      "path": "syswarden block",
+      "field": "long",
+      "reason": "Document persistence, policy reapplication and the missing kernel proof.",
+      "before": "",
+      "after": "Records each entry in the persistent blocklist and reapplies firewall policy; success does not independently prove final kernel state."
+    },
+    {
+      "path": "syswarden block",
+      "field": "short",
+      "reason": "Remove the unsupported hot-add guarantee.",
+      "before": "Hot-adds an IP to the kernel drop set",
+      "after": "Add addresses or CIDRs to the persistent blocklist"
+    },
+    {
+      "path": "syswarden check",
+      "field": "short",
+      "reason": "Describe the recorded firewall-state lookup accurately.",
+      "before": "Perform a global diagnostic on an IP",
+      "after": "Inspect recorded firewall state for an address or CIDR"
+    },
+    {
+      "path": "syswarden config-get",
+      "field": "use",
+      "reason": "Match the existing exact-argument validator in executable help.",
+      "before": "config-get [key]",
+      "after": "config-get <key>"
+    },
+    {
+      "path": "syswarden ha-sync",
+      "field": "long",
+      "reason": "Describe the implemented one-way push and TLS limitation.",
+      "before": "Forces an immediate synchronization of the local blocklist to the High Availability standby node over encrypted channels.",
+      "after": "Compares the local blocklist with each configured peer and pushes entries that the peer does not report. The current TLS client does not verify peer certificates."
+    },
+    {
+      "path": "syswarden ha-sync",
+      "field": "short",
+      "reason": "Remove the unsupported bidirectional synchronization claim.",
+      "before": "Synchronizes the firewall blocklist with the configured HA peer",
+      "after": "Push missing local blocklist entries to configured HA peers"
+    },
+    {
+      "path": "syswarden install",
+      "field": "long",
+      "reason": "Expose the host-mutating installation scope.",
+      "before": "Executes the fully automated SYSWARDEN installation pipeline.",
+      "after": "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs."
+    },
+    {
+      "path": "syswarden manual",
+      "field": "long",
+      "reason": "Describe the bounded built-in reference instead of calling it exhaustive.",
+      "before": "Displays the exhaustive SYSWARDEN administration manual, including CLI commands, configuration parameters, and threat intelligence options.",
+      "after": "Displays the current product-command inventory, configuration layout, exposed ports, and lifecycle warnings. Cobra help and completion utilities remain available through --help."
+    },
+    {
+      "path": "syswarden manual",
+      "field": "short",
+      "reason": "Describe the built-in operator reference without an unsupported completeness claim.",
+      "before": "Comprehensive SysAdmin Manual and Documentation",
+      "after": "Display the built-in operator reference"
+    },
+    {
+      "path": "syswarden migrate-config",
+      "field": "long",
+      "reason": "Disclose that dry-run suppresses migrated file writes and source mutation but may create the output directory hierarchy.",
+      "before": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.",
+      "after": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.\n\nWith --dry-run, migrated file contents are not written and the source is not\nrenamed or wiped, but the output directory and modules subdirectory may be created."
+    },
+    {
+      "path": "syswarden migrate-config",
+      "field": "flags",
+      "reason": "Make the dry-run flag's directory-creation side effect explicit without changing its behavior.",
+      "before": [
+        {"name": "config", "type": "string", "default": "/opt/syswarden/syswarden-auto.conf", "usage": "config file", "persistent": true},
+        {"name": "dry-run", "type": "bool", "default": "false", "no_option": "true", "usage": "Show what would be done"},
+        {"name": "help", "shorthand": "h", "type": "bool", "default": "false", "no_option": "true", "usage": "help for migrate-config"},
+        {"name": "output", "shorthand": "o", "type": "string", "default": "", "usage": "Output directory"},
+        {"name": "source", "shorthand": "s", "type": "string", "default": "", "usage": "Source config file path"}
+      ],
+      "after": [
+        {"name": "config", "type": "string", "default": "/opt/syswarden/syswarden-auto.conf", "usage": "config file", "persistent": true},
+        {"name": "dry-run", "type": "bool", "default": "false", "no_option": "true", "usage": "Do not write migrated file contents; output directories may be created"},
+        {"name": "help", "shorthand": "h", "type": "bool", "default": "false", "no_option": "true", "usage": "help for migrate-config"},
+        {"name": "output", "shorthand": "o", "type": "string", "default": "", "usage": "Output directory"},
+        {"name": "source", "shorthand": "s", "type": "string", "default": "", "usage": "Source config file path"}
+      ]
+    },
+    {
+      "path": "syswarden reload",
+      "field": "short",
+      "reason": "State the actual policy reapplication and normal core restart.",
+      "before": "Reload configuration and restart security engines",
+      "after": "Reapply policy and normally restart syswarden-core"
+    },
+    {
+      "path": "syswarden revoke-ssh",
+      "field": "short",
+      "reason": "Remove the unsupported direct-bypass wording.",
+      "before": "Revokes direct SSH bypass",
+      "after": "Remove an address from the SSH exception registry"
+    },
+    {
+      "path": "syswarden tui",
+      "field": "short",
+      "reason": "Remove the unsupported enterprise label and state local TUI scope.",
+      "before": "Launch the SYSWARDEN Enterprise Dashboard (TUI)",
+      "after": "Launch the local SYSWARDEN terminal dashboard"
+    },
+    {
+      "path": "syswarden unblock",
+      "field": "short",
+      "reason": "Describe persistent blocklist removal without a purge guarantee.",
+      "before": "Purges an IP from the blocklist",
+      "after": "Remove addresses or CIDRs from the persistent blocklist"
+    },
+    {
+      "path": "syswarden uninstall",
+      "field": "long",
+      "reason": "Warn that the destructive operation does not restore every host setting.",
+      "before": "",
+      "after": "This destructive operation removes SysWarden state and does not restore every prior host setting."
+    },
+    {
+      "path": "syswarden uninstall",
+      "field": "short",
+      "reason": "State the destructive data and configuration scope.",
+      "before": "Completely remove SYSWARDEN from the system",
+      "after": "Delete SysWarden services, rules, configuration, data, and logs"
+    },
+    {
+      "path": "syswarden unwhitelist",
+      "field": "short",
+      "reason": "Remove the unsupported global-access claim.",
+      "before": "Revokes global VIP access",
+      "after": "Remove addresses or CIDRs from the persistent whitelist"
+    },
+    {
+      "path": "syswarden update",
+      "field": "long",
+      "reason": "Disclose that the legacy updater does not verify checksum or signature.",
+      "before": "",
+      "after": "Downloads and installs a release package without currently verifying its checksum or signature. Use a separately verified package-upgrade procedure instead."
+    },
+    {
+      "path": "syswarden update",
+      "field": "short",
+      "reason": "Identify the unsafe path as the legacy in-place updater.",
+      "before": "Check and install SYSWARDEN updates",
+      "after": "Run the legacy in-place package updater"
+    },
+    {
+      "path": "syswarden update-feeds",
+      "field": "short",
+      "reason": "Describe the download and policy reapplication without implying silence.",
+      "before": "Silently update Threat Intelligence feeds and reload firewall",
+      "after": "Download configured threat-intelligence feeds and reapply firewall policy"
+    },
+    {
+      "path": "syswarden web-token",
+      "field": "long",
+      "reason": "Disclose first-use token persistence and the best-effort service restart as well as explicit rotation.",
+      "before": "",
+      "after": "Displays the configured Web-TUI access token. If no token exists, an invocation without --rotate generates and persists one, then attempts to restart syswarden-webtui.service. --rotate always replaces the persisted token and makes the same restart attempt. If that attempt fails, a running Web-TUI process may continue accepting its previous token."
+    },
+    {
+      "path": "syswarden web-token",
+      "field": "flags",
+      "reason": "Avoid promising immediate invalidation when a failed restart can leave the running process on its previous token.",
+      "before": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for web-token"
+        },
+        {
+          "name": "rotate",
+          "shorthand": "r",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "Generate a new token and invalidate the old one"
+        }
+      ],
+      "after": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for web-token"
+        },
+        {
+          "name": "rotate",
+          "shorthand": "r",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "Persist a replacement token and request a Web-TUI service restart"
+        }
+      ]
+    },
+    {
+      "path": "syswarden web-token",
+      "field": "short",
+      "reason": "Describe the implemented display and rotation operations.",
+      "before": "Manage the Web-TUI secure access token",
+      "after": "Display or rotate the Web-TUI access token"
+    },
+    {
+      "path": "syswarden web-tui",
+      "field": "long",
+      "reason": "Expose the default bind and in-memory self-signed certificate.",
+      "before": "",
+      "after": "Starts an HTTPS Web-TUI listener. The default bind is 0.0.0.0:62027 and the server uses an in-memory self-signed certificate."
+    },
+    {
+      "path": "syswarden web-tui",
+      "field": "flags",
+      "reason": "Correct the token flag help: omission uses configuration or secure generation instead of being rejected.",
+      "before": [
+        {
+          "name": "bind",
+          "type": "string",
+          "default": "0.0.0.0:62027",
+          "usage": "IP:Port to bind the Web-TUI server"
+        },
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for web-tui"
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "default": "",
+          "usage": "Secure token for Web-TUI access (Required)"
+        }
+      ],
+      "after": [
+        {
+          "name": "bind",
+          "type": "string",
+          "default": "0.0.0.0:62027",
+          "usage": "IP:Port to bind the Web-TUI server"
+        },
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for web-tui"
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "default": "",
+          "usage": "Web-TUI access token; falls back to configuration or generates one when omitted"
+        }
+      ]
+    },
+    {
+      "path": "syswarden web-tui",
+      "field": "short",
+      "reason": "Describe the network-facing HTTPS listener.",
+      "before": "Start the Web-TUI server (WebTTY)",
+      "after": "Start the Web-TUI HTTPS listener"
+    },
+    {
+      "path": "syswarden whitelist",
+      "field": "long",
+      "reason": "State persistence and require independent kernel verification.",
+      "before": "",
+      "after": "Records each entry in the persistent whitelist and reapplies firewall policy. Verify the resulting kernel rule before relying on the entry."
+    },
+    {
+      "path": "syswarden whitelist",
+      "field": "short",
+      "reason": "Remove the unsupported global firewall-bypass guarantee.",
+      "before": "Grants global VIP access and bypasses the firewall",
+      "after": "Add addresses or CIDRs to the persistent whitelist"
+    }
+  ],
+  "approved_cli_process_differences": [
+    {
+      "case": "root",
+      "stream": "stdout",
+      "reason": "Replace the unsupported comprehensive-documentation wording in the root startup guidance with the bounded built-in operator reference.",
+      "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
+      "after": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+    }
+  ],
+  "product_command_count": 24,
+  "required_readme_phrases": [
+    "Current source version: **{version}**.",
+    "It does not proxy, terminate, inspect or sanitize live HTTP traffic.",
+    "current Linux binaries request the glibc ELF interpreter",
+    "package stages binaries below `/usr/local/syswarden/bin`, while current service/runtime paths still reference `/opt/syswarden`",
+    "Privileged virtual-machine install, firewall, upgrade and rollback cycles have not passed",
+    "default bind is `0.0.0.0:62027`",
+    "sets `InsecureSkipVerify`",
+    "one-way HA push cron entry every 30 minutes",
+    "HA API listens on configurable TCP port `62026` by default",
+    "buckets are stored in UTC while the current axis labels are rendered from local time",
+    "anonymous TLS authentication",
+    "without verifying a release checksum or signature",
+    "If no token is configured, `syswarden web-token` generates and persists one even without `--rotate`",
+    "If that restart fails, a running Web-TUI process may continue accepting the previous token.",
+    "`syswarden uninstall` is destructive",
+    "## Security posture and limitations",
+    "Goal: 37% reached/year (Goal)"
+  ],
+  "required_manual_phrases": [
+    "it is not a compliance certification",
+    "downloaded packages are not currently verified by checksum or signature",
+    "current Linux binaries require glibc",
+    "current package and service/runtime paths disagree",
+    "default bind 0.0.0.0:62027",
+    "one-way push every 30 minutes",
+    "if absent, generates and persists one and requests a restart",
+    "failure can leave the running Web-TUI on its previous token",
+    "configuration, data, logs, services and firewall tables are deleted"
+  ],
+  "required_wiki_phrases": {
+    "Home.md": [
+      "`0.0.0.0:62027` by default",
+      "Blocked: package and service/runtime paths disagree"
+    ],
+    "Deployment-Tutorial.md": [
+      "default API port is TCP `62026`",
+      "`0.0.0.0:62027`",
+      "one-way `ha-sync` push every 30 minutes"
+    ],
+    "Use-cases.md": [
+      "TCP 62026 reachability",
+      "native TUI does not open TCP port 62027",
+      "same one-way push every 30 minutes",
+      "Alpine installation, because the current binaries require the glibc interpreter",
+      "FreeBSD installation, jails, PF edge routing or storage protection, because package and runtime paths disagree"
+    ]
+  },
+  "package_platform_contract": {
+    "artifacts": [
+      {
+        "family": "DEB",
+        "architecture": "amd64",
+        "release_name": "syswarden_{version}_amd64.deb",
+        "workflow_name": "syswarden_${VERSION}_amd64.deb"
+      },
+      {
+        "family": "DEB",
+        "architecture": "arm64",
+        "release_name": "syswarden_{version}_arm64.deb",
+        "workflow_name": "syswarden_${VERSION}_arm64.deb"
+      },
+      {
+        "family": "RPM",
+        "architecture": "x86_64",
+        "release_name": "syswarden-{version}-1.x86_64.rpm",
+        "workflow_name": "syswarden-${VERSION}-1.x86_64.rpm"
+      },
+      {
+        "family": "RPM",
+        "architecture": "aarch64",
+        "release_name": "syswarden-{version}-1.aarch64.rpm",
+        "workflow_name": "syswarden-${VERSION}-1.aarch64.rpm"
+      },
+      {
+        "family": "APK",
+        "architecture": "x86_64",
+        "release_name": "syswarden_{version}_x86_64.apk",
+        "workflow_name": "syswarden_${VERSION}_x86_64.apk"
+      },
+      {
+        "family": "APK",
+        "architecture": "aarch64",
+        "release_name": "syswarden_{version}_aarch64.apk",
+        "workflow_name": "syswarden_${VERSION}_aarch64.apk"
+      },
+      {
+        "family": "FreeBSD",
+        "architecture": "amd64",
+        "release_name": "syswarden-{version}.txz",
+        "workflow_name": "syswarden-${VERSION}.txz"
+      }
+    ],
+    "inventory_phrases": {
+      "README.md": "The package workflow is configured to generate two DEB, two RPM, two APK and one FreeBSD package plus `SHA256SUMS.txt`.",
+      "wiki/Deployment-Tutorial.md": "The package workflow is configured to publish two DEB files, two RPM files, two APK files, one FreeBSD package and `SHA256SUMS.txt`."
+    },
+    "tables": {
+      "README.md": {
+        "heading": "Validation status",
+        "header": [
+          "Target",
+          "What the repository currently proves",
+          "Release qualification"
+        ],
+        "rows": [
+          [
+            "Linux amd64",
+            "The CLI, core and TUI compile; unit, contract and golden-rule tests run in CI",
+            "Privileged virtual-machine install, firewall, upgrade and rollback cycles have not passed in this repository state"
+          ],
+          [
+            "Linux arm64",
+            "The three binaries cross-compile and package metadata is generated",
+            "Native arm64 lifecycle evidence is still required"
+          ],
+          [
+            "Debian/Ubuntu `.deb`",
+            "amd64 and arm64 package recipes exist",
+            "Not release-qualified by a complete VM lifecycle gate"
+          ],
+          [
+            "RHEL-family `.rpm`",
+            "x86_64 and aarch64 package recipes exist",
+            "Not release-qualified by a complete VM lifecycle gate"
+          ],
+          [
+            "Alpine `.apk`",
+            "x86_64 and aarch64 package recipes exist",
+            "**Known blocker:** the current Linux binaries request the glibc ELF interpreter and do not run on a standard musl-only Alpine installation"
+          ],
+          [
+            "FreeBSD `.txz`",
+            "amd64 binaries cross-compile and a package recipe exists",
+            "**Known blocker:** the package stages binaries below `/usr/local/syswarden/bin`, while current service/runtime paths still reference `/opt/syswarden`; do not install this package"
+          ]
+        ]
+      },
+      "wiki/Home.md": {
+        "heading": "Current target status",
+        "header": [
+          "Target",
+          "Current evidence",
+          "Status for this baseline"
+        ],
+        "rows": [
+          [
+            "Linux amd64",
+            "Compile, unit tests, command snapshots and rule golden files",
+            "Privileged VM lifecycle validation is incomplete"
+          ],
+          [
+            "Linux arm64",
+            "Cross-build and package-recipe validation",
+            "Native lifecycle validation is incomplete"
+          ],
+          [
+            "Debian/Ubuntu DEB",
+            "amd64 and arm64 recipes",
+            "Laboratory evaluation only until a complete lifecycle gate passes"
+          ],
+          [
+            "RHEL-family RPM",
+            "x86_64 and aarch64 recipes",
+            "Laboratory evaluation only until a complete lifecycle gate passes"
+          ],
+          [
+            "Alpine APK",
+            "x86_64 and aarch64 recipes",
+            "Blocked: current binaries request the glibc interpreter and do not run on standard musl-only Alpine"
+          ],
+          [
+            "FreeBSD package",
+            "amd64 cross-build and recipe",
+            "Blocked: package and service/runtime paths disagree"
+          ]
+        ]
+      },
+      "wiki/Deployment-Tutorial.md": {
+        "heading": "1. Target decision",
+        "header": [
+          "Package family",
+          "Architectures produced by the workflow",
+          "Decision for v4.02.8"
+        ],
+        "rows": [
+          [
+            "DEB",
+            "amd64, arm64",
+            "Laboratory evaluation after inspecting the exact release assets"
+          ],
+          [
+            "RPM",
+            "x86_64, aarch64",
+            "Laboratory evaluation after inspecting the exact release assets"
+          ],
+          [
+            "APK",
+            "x86_64, aarch64",
+            "Do not install: current binaries require glibc, while standard Alpine is musl-based"
+          ],
+          [
+            "FreeBSD package",
+            "amd64",
+            "Do not install: the package uses `/usr/local/syswarden/bin`, but current runtime/service code still references `/opt/syswarden`"
+          ]
+        ]
+      }
+    }
+  },
+  "source_assertions": [
+    {
+      "id": "web-tui-default-bind",
+      "path": "src/core/syswarden-cli/cmd/web_tui.go",
+      "literal": "webTuiCmd.Flags().StringVar(&bindAddr, \"bind\", \"0.0.0.0:62027\""
+    },
+    {
+      "id": "web-tui-url-token",
+      "path": "src/core/syswarden-cli/cmd/web_tui.go",
+      "literal": "r.URL.Query().Get(\"token\")"
+    },
+    {
+      "id": "ha-default-port",
+      "path": "src/core/syswarden-core/network/ha_api.go",
+      "literal": "Port:    \"62026\""
+    },
+    {
+      "id": "ha-client-skips-certificate-verification",
+      "path": "src/core/syswarden-cli/pkg/network/sync.go",
+      "literal": "InsecureSkipVerify: true"
+    },
+    {
+      "id": "ha-tokenless-legacy-mode",
+      "path": "src/core/syswarden-core/network/ha_api.go",
+      "literal": "Running in Legacy Mode (IP validation only)"
+    },
+    {
+      "id": "ha-thirty-minute-push",
+      "path": "src/core/syswarden-cli/pkg/network/cluster.go",
+      "literal": "*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync"
+    },
+    {
+      "id": "ha-sync-pushes-missing-local-entries",
+      "path": "src/core/syswarden-cli/pkg/network/sync.go",
+      "literal": "payload := HASyncPayload{IPs: toPush}"
+    },
+    {
+      "id": "siem-anonymous-tls",
+      "path": "src/core/syswarden-cli/pkg/integration/siem_linux.go",
+      "literal": "$ActionSendStreamDriverAuthMode anon"
+    },
+    {
+      "id": "updater-unverified-download",
+      "path": "src/core/syswarden-cli/pkg/system/upgrade.go",
+      "literal": "resp, err := http.Get(url)"
+    },
+    {
+      "id": "updater-untrusted-apk",
+      "path": "src/core/syswarden-cli/pkg/system/upgrade.go",
+      "literal": "\"add\", \"--allow-untrusted\", pkgFile"
+    },
+    {
+      "id": "uninstall-removes-configuration",
+      "path": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
+      "literal": "os.RemoveAll(\"/etc/syswarden\")"
+    },
+    {
+      "id": "uninstall-removes-state",
+      "path": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
+      "literal": "os.RemoveAll(\"/var/lib/syswarden\")"
+    },
+    {
+      "id": "uninstall-removes-logs",
+      "path": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
+      "literal": "os.RemoveAll(\"/var/log/syswarden\")"
+    },
+    {
+      "id": "freebsd-package-prefix",
+      "path": ".github/workflows/package.yml",
+      "literal": "${STAGING_FREEBSD}/usr/local/syswarden/bin"
+    },
+    {
+      "id": "freebsd-runtime-prefix-mismatch",
+      "path": "src/core/syswarden-cli/pkg/system/service_freebsd.go",
+      "literal": "command=\"/opt/syswarden/syswarden-core\""
+    },
+    {
+      "id": "reload-reapplies-firewall",
+      "path": "src/core/syswarden-cli/cmd/reload.go",
+      "literal": "firewall.ApplyPolicies()"
+    },
+    {
+      "id": "reload-restarts-core",
+      "path": "src/core/syswarden-cli/cmd/reload.go",
+      "literal": "\"systemctl\", \"restart\", \"syswarden-core.service\""
+    }
+  ]
+}

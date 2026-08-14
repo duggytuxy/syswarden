@@ -11,7 +11,8 @@ import (
 
 var whitelistCmd = &cobra.Command{
 	Use:   "whitelist <IP>... [PORT]",
-	Short: "Grants global VIP access and bypasses the firewall",
+	Short: "Add addresses or CIDRs to the persistent whitelist",
+	Long:  "Records each entry in the persistent whitelist and reapplies firewall policy. Verify the resulting kernel rule before relying on the entry.",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		var ips []string

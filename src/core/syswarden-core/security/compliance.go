@@ -10,7 +10,10 @@ import (
 	"syswarden-core/logger"
 )
 
-// StartComplianceWatchdog runs a background compliance check every 24h at 2 AM.
+const localHardeningCheckOK = "The selected local checks found tcp_syncookies and rp_filter enabled when readable, and syswarden-auto.conf mode 0600 when present. Other settings were not evaluated."
+
+// StartComplianceWatchdog runs selected local hardening checks on startup and
+// every 24 hours at 2 AM. The result is not a compliance assessment.
 func StartComplianceWatchdog(l *logger.Logger) {
 	go func() {
 		// Initial check on startup
@@ -65,6 +68,6 @@ func runComplianceAudit(l *logger.Logger) {
 	}
 
 	if !driftFound {
-		l.LogComplianceOK("All kernel & config hardening (NIS2/ISO27001) compliant.")
+		l.LogComplianceOK(localHardeningCheckOK)
 	}
 }

@@ -11,7 +11,7 @@ import (
 
 var revokeSSHCmd = &cobra.Command{
 	Use:   "revoke-ssh <IP>",
-	Short: "Revokes direct SSH bypass",
+	Short: "Remove an address from the SSH exception registry",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := firewall.RevokeSSH(args[0]); err != nil {
