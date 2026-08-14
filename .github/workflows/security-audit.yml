@@ -44,13 +44,63 @@ jobs:
             src/core/syswarden-tui/go.sum
 
       - name: Install pinned firewall sandbox
+        env:
+          SYSWARDEN_ACT_EVENT: ${{ github.event.act == true && 'true' || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${SYSWARDEN_ACT_EVENT}" == "true" ]]; then
+            echo "Act uses the verified disposable container firewall sandbox."
+            exit 0
+          fi
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             bubblewrap=0.9.0-1ubuntu0.1
           test "$(bwrap --version)" = "bubblewrap 0.9.0"
+          command -v apparmor_parser >/dev/null
+          test -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = "1"
+          test ! -e /etc/apparmor.d/local/bwrap-userns-restrict
+          test ! -e /etc/apparmor.d/local/unpriv_bwrap
+
+          profile=".github/apparmor/bwrap-userns-restrict"
+          printf '%s  %s\n' \
+            'a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859' \
+            "${profile}" | sha256sum --check --strict
+          sudo apparmor_parser --replace --skip-cache "${profile}"
+          sudo grep -Fqx 'bwrap (enforce)' \
+            /sys/kernel/security/apparmor/profiles
+          sudo grep -Fqx 'unpriv_bwrap (enforce)' \
+            /sys/kernel/security/apparmor/profiles
+
+          sandbox_label="$(bwrap \
+            --ro-bind / / \
+            --dev /dev \
+            --proc /proc \
+            --tmpfs /tmp \
+            -- /bin/cat /proc/self/attr/current)"
+          test "${sandbox_label}" = "bwrap//&unpriv_bwrap (enforce)"
+
+          test -x /bin/mount
+          if bwrap \
+            --ro-bind / / \
+            --dev /dev \
+            --proc /proc \
+            --tmpfs /tmp \
+            --dir /tmp/mnt \
+            --uid 0 \
+            --gid 0 \
+            --cap-add ALL \
+            -- /bin/mount -t tmpfs none /tmp/mnt; then
+            echo "ERROR: Bubblewrap child retained usable capabilities." >&2
+            exit 1
+          fi
+
+          (
+            cd src/core/syswarden-cli
+            CI=true go test -mod=readonly -count=1 \
+              -run '^TestNftablesRulesGolden_SW_QA_001$' ./pkg/firewall
+          )
 
       - name: Verify formatting
         shell: bash

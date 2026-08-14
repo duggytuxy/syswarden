@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import collections
+import hashlib
 import json
 import tempfile
 import tomllib
@@ -610,6 +611,104 @@ class ActFixtureTests(unittest.TestCase):
         )
         self.assertIn("config: .markdownlint.json", workflow)
         self.assertIn("globs: README.md", workflow)
+
+    def test_github_bubblewrap_policy_is_pinned_and_fail_closed(self) -> None:
+        workflow = (
+            self.repository / ".github" / "workflows" / "security-audit.yml"
+        ).read_text(encoding="utf-8")
+        profile = (
+            self.repository / ".github" / "apparmor" / "bwrap-userns-restrict"
+        ).read_bytes()
+        policy_readme = (
+            self.repository / ".github" / "apparmor" / "README.md"
+        ).read_text(encoding="utf-8")
+        expected_sha256 = (
+            "a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859"
+        )
+
+        self.assertEqual(hashlib.sha256(profile).hexdigest(), expected_sha256)
+        self.assertIn(expected_sha256, workflow)
+        self.assertIn(expected_sha256, policy_readme)
+        self.assertIn(
+            "7f35adef41d3d1646755df1ade0ef46354c39785", policy_readme
+        )
+        profile_text = profile.decode("utf-8")
+        self.assert_bubblewrap_profile_contract(profile_text)
+        self.assertIn("sudo apparmor_parser --replace --skip-cache", workflow)
+        self.assertIn("/sys/kernel/security/apparmor/profiles", workflow)
+        self.assertIn(
+            "test \"$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)\" = \"1\"",
+            workflow,
+        )
+        self.assertIn("test ! -e /etc/apparmor.d/local/bwrap-userns-restrict", workflow)
+        self.assertIn("test ! -e /etc/apparmor.d/local/unpriv_bwrap", workflow)
+        self.assertIn(
+            'test "${sandbox_label}" = "bwrap//&unpriv_bwrap (enforce)"',
+            workflow,
+        )
+        self.assertIn("--cap-add ALL", workflow)
+        self.assertIn(
+            "ERROR: Bubblewrap child retained usable capabilities.", workflow
+        )
+        self.assertIn("CI=true go test -mod=readonly -count=1", workflow)
+        self.assertIn("-run '^TestNftablesRulesGolden_SW_QA_001$'", workflow)
+        self.assertIn(
+            'if [[ "${SYSWARDEN_ACT_EVENT}" == "true" ]]; then', workflow
+        )
+        self.assertNotIn("apparmor_restrict_unprivileged_userns=0", workflow)
+        self.assertNotIn(
+            "tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns", workflow
+        )
+        self.assertNotIn("sysctl -w", workflow)
+        self.assertNotIn("aa-disable", workflow)
+
+    def test_bubblewrap_policy_rejects_security_contract_mutations(self) -> None:
+        profile = (
+            self.repository / ".github" / "apparmor" / "bwrap-userns-restrict"
+        ).read_text(encoding="utf-8")
+        mutations = (
+            profile.replace("audit deny capability,", "allow capability,", 1),
+            profile.replace(
+                "allow px /** -> bwrap//&unpriv_bwrap,",
+                "allow ix /**,",
+                1,
+            ),
+            profile.replace(
+                "allow pix /** -> &unpriv_bwrap,",
+                "allow ix /**,",
+                1,
+            ),
+            profile.replace(
+                "flags=(attach_disconnected,mediate_deleted)",
+                "flags=(unconfined)",
+                1,
+            ),
+            profile.replace("profile bwrap /usr/bin/bwrap", "profile bwrap /**", 1),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(AssertionError):
+                    self.assert_bubblewrap_profile_contract(mutation)
+
+    def assert_bubblewrap_profile_contract(self, profile: str) -> None:
+        self.assertIn("abi <abi/4.0>,", profile)
+        self.assertEqual(
+            profile.count(
+                "profile bwrap /usr/bin/bwrap "
+                "flags=(attach_disconnected,mediate_deleted)"
+            ),
+            1,
+        )
+        self.assertEqual(profile.count("allow capability,"), 1)
+        self.assertEqual(profile.count("allow userns,"), 2)
+        self.assertEqual(
+            profile.count("allow px /** -> bwrap//&unpriv_bwrap,"), 1
+        )
+        self.assertEqual(profile.count("allow pix /** -> &unpriv_bwrap,"), 1)
+        self.assertEqual(profile.count("audit deny capability,"), 1)
+        self.assertNotIn("flags=(unconfined", profile)
+        self.assertNotIn("complain", profile)
+        self.assertNotIn("profile bwrap /**", profile)
 
     def test_bounded_fuzz_campaigns_are_mandatory(self) -> None:
         workflow = (
