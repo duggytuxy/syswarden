@@ -185,7 +185,7 @@ func applySSHHardening() error {
 	}
 	newLines = append(newLines, "# -------------------------------\n")
 
-	if err := os.WriteFile(sshConf, []byte(strings.Join(newLines, "\n")), 0600); err != nil {
+	if err := rewriteSecurityFileFromSnapshot("/etc/ssh/sshd_config", []byte(strings.Join(newLines, "\n")), content); err != nil {
 		return fmt.Errorf("failed to write sshd_config: %w", err)
 	}
 
@@ -204,14 +204,65 @@ func secureCronPermissions() error {
 	fmt.Println(" -> Securing cron directories permissions (CIS 5.1)")
 	cronDirs := []string{"/etc/cron.d", "/etc/cron.daily", "/etc/cron.hourly", "/etc/cron.weekly", "/etc/cron.monthly"}
 	for _, dir := range cronDirs {
-		if _, err := os.Stat(dir); err == nil {
-			_ = os.Chmod(dir, 0700)
-			_ = os.Chown(dir, 0, 0)
+		filesystemRoot, err := os.OpenRoot("/")
+		if err != nil {
+			return fmt.Errorf("open filesystem root: %w", err)
+		}
+		relativeDir := strings.TrimPrefix(dir, "/")
+		pathInfo, err := filesystemRoot.Lstat(relativeDir)
+		if os.IsNotExist(err) {
+			_ = filesystemRoot.Close()
+			continue
+		}
+		if err != nil {
+			_ = filesystemRoot.Close()
+			return fmt.Errorf("inspect cron directory %s: %w", dir, err)
+		}
+		if !pathInfo.IsDir() || pathInfo.Mode()&os.ModeSymlink != 0 {
+			_ = filesystemRoot.Close()
+			return fmt.Errorf("cron path is not a real directory: %s", dir)
+		}
+		directory, err := filesystemRoot.Open(relativeDir)
+		if err != nil {
+			_ = filesystemRoot.Close()
+			return fmt.Errorf("open cron directory %s: %w", dir, err)
+		}
+		openedInfo, statErr := directory.Stat()
+		if statErr != nil || !os.SameFile(pathInfo, openedInfo) {
+			_ = directory.Close()
+			_ = filesystemRoot.Close()
+			return fmt.Errorf("cron directory changed while opening: %s", dir)
+		}
+		if err := directory.Chmod(0700); err != nil {
+			_ = directory.Close()
+			_ = filesystemRoot.Close()
+			return fmt.Errorf("restrict cron directory %s: %w", dir, err)
+		}
+		if err := directory.Chown(0, 0); err != nil {
+			_ = directory.Close()
+			_ = filesystemRoot.Close()
+			return fmt.Errorf("set cron directory ownership %s: %w", dir, err)
+		}
+		if err := directory.Close(); err != nil {
+			_ = filesystemRoot.Close()
+			return fmt.Errorf("close cron directory %s: %w", dir, err)
+		}
+		if err := filesystemRoot.Close(); err != nil {
+			return fmt.Errorf("close filesystem root after %s: %w", dir, err)
 		}
 	}
-	if _, err := os.Stat("/etc/crontab"); err == nil {
-		_ = os.Chmod("/etc/crontab", 0600)
-		_ = os.Chown("/etc/crontab", 0, 0)
+	if info, err := os.Lstat("/etc/crontab"); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("crontab is not a regular file")
+		}
+		if err := os.Chmod("/etc/crontab", 0600); err != nil {
+			return fmt.Errorf("restrict crontab permissions: %w", err)
+		}
+		if err := os.Chown("/etc/crontab", 0, 0); err != nil {
+			return fmt.Errorf("set crontab ownership: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect crontab: %w", err)
 	}
 	return nil
 }

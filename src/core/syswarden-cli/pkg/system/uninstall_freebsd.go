@@ -95,6 +95,7 @@ func UninstallSystem() error {
 	fmt.Println(" -> Purging remaining files and configurations...")
 	_ = os.RemoveAll("/etc/syswarden")
 	_ = os.RemoveAll("/var/db/syswarden")
+	_ = os.RemoveAll("/var/lib/syswarden/ha")
 	_ = os.RemoveAll("/var/log/syswarden")
 	_ = os.Remove("/var/run/syswarden.sock")
 	_ = os.Remove("/usr/local/etc/syswarden-auto.conf")

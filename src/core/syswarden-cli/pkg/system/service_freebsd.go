@@ -64,9 +64,7 @@ syswarden_stop() {
 run_rc_command "$1"
 `
 
-	servicePath := "/usr/local/etc/rc.d/syswarden"
-	err = os.WriteFile(servicePath, []byte(rcScript), 0755)
-	if err != nil {
+	if err := writeExecutableAtomically("/usr/local/etc/rc.d", "syswarden", []byte(rcScript)); err != nil {
 		return fmt.Errorf("failed to write syswarden rc.d script: %w", err)
 	}
 
@@ -119,12 +117,9 @@ webtui_stop() {
 run_rc_command "$1"
 `
 
-	webtuiServicePath := "/usr/local/etc/rc.d/syswardenwebtui"
-	err = os.WriteFile(webtuiServicePath, []byte(webtuiRcScript), 0600)
-	if err != nil {
+	if err := writeExecutableAtomically("/usr/local/etc/rc.d", "syswardenwebtui", []byte(webtuiRcScript)); err != nil {
 		return fmt.Errorf("failed to write syswardenwebtui rc.d script: %w", err)
 	}
-	_ = os.Chmod(webtuiServicePath, 0755)
 
 	if err := exec.Command("sysrc", "syswardenwebtui_enable=YES").Run(); err != nil { // #nosec
 		fmt.Printf("[WARN] Failed to enable syswardenwebtui in rc.conf: %v\n", err)

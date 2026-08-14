@@ -6,9 +6,24 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/system"
 )
+
+const rsyslogSELinuxPolicy = `module syswarden_rsyslog 1.0;
+require {
+	type syslogd_t;
+	type unconfined_service_t;
+	type init_t;
+	type var_run_t;
+	class sock_file write;
+	class unix_dgram_socket sendto;
+}
+allow syslogd_t unconfined_service_t:unix_dgram_socket sendto;
+allow syslogd_t init_t:unix_dgram_socket sendto;
+allow syslogd_t var_run_t:sock_file write;
+`
 
 // SetupWAFLogForwarder configures Rsyslog to bridge local Web/Docker logs into the Go WAF Socket
 func SetupWAFLogForwarder() error {
@@ -66,29 +81,26 @@ ruleset(name="waf_bridge") {
 	// SELinux Hardening (RHEL/Alma) - Compile and install policy to allow rsyslog -> UDS communication
 	if _, err := exec.LookPath("checkmodule"); err == nil {
 		fmt.Println("[INFO] Compiling and injecting SELinux policy for Rsyslog UDS bridge...")
-		selinuxTE := `module syswarden_rsyslog 1.0;
-require {
-	type syslogd_t;
-	type unconfined_service_t;
-	type init_t;
-	type var_run_t;
-	class sock_file write;
-	class unix_dgram_socket sendto;
-}
-allow syslogd_t unconfined_service_t:unix_dgram_socket sendto;
-allow syslogd_t init_t:unix_dgram_socket sendto;
-allow syslogd_t var_run_t:sock_file write;
-`
-		_ = os.WriteFile("/tmp/syswarden_rsyslog.te", []byte(selinuxTE), 0644)
-		if err := exec.Command("checkmodule", "-M", "-m", "-o", "/tmp/syswarden_rsyslog.mod", "/tmp/syswarden_rsyslog.te").Run(); err == nil {
-			if err := exec.Command("semodule_package", "-o", "/tmp/syswarden_rsyslog.pp", "-m", "/tmp/syswarden_rsyslog.mod").Run(); err == nil {
-				_ = exec.Command("semodule", "-i", "/tmp/syswarden_rsyslog.pp").Run()
+		if err := withPrivateSELinuxPolicyWorkspace("", func(workspace string) error {
+			compile := exec.Command("checkmodule", "-M", "-m", "-o", "syswarden_rsyslog.mod", "syswarden_rsyslog.te")
+			compile.Dir = workspace
+			if err := compile.Run(); err != nil {
+				return fmt.Errorf("compile SELinux policy: %w", err)
 			}
+			pack := exec.Command("semodule_package", "-o", "syswarden_rsyslog.pp", "-m", "syswarden_rsyslog.mod")
+			pack.Dir = workspace
+			if err := pack.Run(); err != nil {
+				return fmt.Errorf("package SELinux policy: %w", err)
+			}
+			install := exec.Command("semodule", "-i", "syswarden_rsyslog.pp")
+			install.Dir = workspace
+			if err := install.Run(); err != nil {
+				return fmt.Errorf("install SELinux policy: %w", err)
+			}
+			return nil
+		}); err != nil {
+			fmt.Printf("[WARN] Failed to install Rsyslog SELinux policy: %v\n", err)
 		}
-		// Clean up
-		_ = os.Remove("/tmp/syswarden_rsyslog.te")
-		_ = os.Remove("/tmp/syswarden_rsyslog.mod")
-		_ = os.Remove("/tmp/syswarden_rsyslog.pp")
 	}
 
 	// Restart Rsyslog safely
@@ -104,4 +116,18 @@ allow syslogd_t var_run_t:sock_file write;
 
 	fmt.Println("[+] WAF Log Bridge successfully configured.")
 	return nil
+}
+
+func withPrivateSELinuxPolicyWorkspace(parent string, action func(workspace string) error) error {
+	workspace, err := os.MkdirTemp(parent, "syswarden-rsyslog-")
+	if err != nil {
+		return fmt.Errorf("create private SELinux policy workspace: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(workspace) }()
+
+	tePath := filepath.Join(workspace, "syswarden_rsyslog.te")
+	if err := os.WriteFile(tePath, []byte(rsyslogSELinuxPolicy), 0600); err != nil {
+		return fmt.Errorf("write SELinux policy source: %w", err)
+	}
+	return action(workspace)
 }

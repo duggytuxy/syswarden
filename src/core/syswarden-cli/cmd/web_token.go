@@ -3,7 +3,9 @@ package cmd
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -43,17 +45,46 @@ func getPublicIP() string {
 }
 
 func updateConfigToken(newToken string) error {
-	tomlPath := "/etc/syswarden/config/modules/99-user.toml"
+	return updateConfigTokenInDirectory("/etc/syswarden/config/modules", newToken)
+}
 
-	// Legacy fallback if TOML doesn't exist at all (though unlikely here)
-	if _, err := os.Stat(tomlPath); os.IsNotExist(err) {
-		// Just ensure directory exists
-		_ = os.MkdirAll("/etc/syswarden/config/modules", 0750)
+func updateConfigTokenInDirectory(directory, newToken string) error {
+	if err := os.MkdirAll(directory, 0750); err != nil {
+		return fmt.Errorf("create Web-TUI configuration directory: %w", err)
 	}
-
-	content, err := os.ReadFile(tomlPath) // #nosec
+	root, err := os.OpenRoot(directory)
 	if err != nil {
+		return fmt.Errorf("open Web-TUI configuration directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	content := []byte("# [99] USER CUSTOM OVERRIDES\n\n[user]\n")
+	pathInfo, err := root.Lstat("99-user.toml")
+	if errors.Is(err, os.ErrNotExist) {
 		content = []byte("# [99] USER CUSTOM OVERRIDES\n\n[user]\n")
+	} else if err != nil {
+		return fmt.Errorf("inspect Web-TUI token file: %w", err)
+	} else {
+		if !pathInfo.Mode().IsRegular() {
+			return fmt.Errorf("Web-TUI token file must be a regular file")
+		}
+		file, err := root.Open("99-user.toml")
+		if err != nil {
+			return fmt.Errorf("open Web-TUI token file: %w", err)
+		}
+		openedInfo, statErr := file.Stat()
+		if statErr != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) {
+			_ = file.Close()
+			return fmt.Errorf("Web-TUI token file changed while opening")
+		}
+		content, err = io.ReadAll(file)
+		closeErr := file.Close()
+		if err != nil {
+			return fmt.Errorf("read Web-TUI token file: %w", err)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close Web-TUI token file: %w", closeErr)
+		}
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -85,7 +116,50 @@ func updateConfigToken(newToken string) error {
 		newLines = append(newLines, fmt.Sprintf(`webtui_password = "%s"`, newToken))
 	}
 
-	return os.WriteFile(tomlPath, []byte(strings.Join(newLines, "\n")), 0640) // #nosec G703
+	return writeWebTokenFileAtomically(root, []byte(strings.Join(newLines, "\n")))
+}
+
+func writeWebTokenFileAtomically(root *os.Root, content []byte) error {
+	randomSuffix := make([]byte, 16)
+	if _, err := rand.Read(randomSuffix); err != nil {
+		return fmt.Errorf("generate Web-TUI token temporary filename: %w", err)
+	}
+	temporaryName := ".99-user.toml.tmp-" + hex.EncodeToString(randomSuffix)
+	temporary, err := root.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return fmt.Errorf("create temporary Web-TUI token file: %w", err)
+	}
+	temporaryOpen := true
+	defer func() {
+		if temporaryOpen {
+			_ = temporary.Close()
+		}
+		_ = root.Remove(temporaryName)
+	}()
+
+	if _, err := temporary.Write(content); err != nil {
+		return fmt.Errorf("write temporary Web-TUI token file: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync temporary Web-TUI token file: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary Web-TUI token file: %w", err)
+	}
+	temporaryOpen = false
+	if err := root.Rename(temporaryName, "99-user.toml"); err != nil {
+		return fmt.Errorf("replace Web-TUI token file atomically: %w", err)
+	}
+
+	directoryFile, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open Web-TUI configuration directory for sync: %w", err)
+	}
+	defer func() { _ = directoryFile.Close() }()
+	if err := directoryFile.Sync(); err != nil {
+		return fmt.Errorf("sync Web-TUI configuration directory: %w", err)
+	}
+	return nil
 }
 
 func readConfigToken() string {

@@ -220,8 +220,8 @@ func TestInitializeDefaultsIsByteIdempotentAndUsesRestrictiveModes(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := info.Mode().Perm(); got != 0640 {
-			t.Errorf("%s mode = %#o, want 0640", relative, got)
+		if got := info.Mode().Perm(); got != 0600 {
+			t.Errorf("%s mode = %#o, want 0600", relative, got)
 		}
 	}
 }

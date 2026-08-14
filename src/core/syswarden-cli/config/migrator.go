@@ -2,6 +2,8 @@ package config
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -161,7 +163,7 @@ func (m *Migrator) generateAllModules(oldConfig map[string]string) error {
 					continue
 				}
 			}
-			if err := os.WriteFile(outputPath, []byte(content), 0640); err != nil {
+			if err := writeSecureFileAtomically(filepath.Dir(outputPath), filepath.Base(outputPath), []byte(content)); err != nil {
 				return err
 			}
 			fmt.Printf("Created: %s\n", outputPath)
@@ -195,10 +197,63 @@ log_level = "INFO"
 	if m.DryRun {
 		fmt.Printf("[DRY RUN] Would create: %s\n", outputPath)
 	} else {
-		if err := os.WriteFile(outputPath, []byte(content), 0640); err != nil {
+		if err := writeSecureFileAtomically(filepath.Dir(outputPath), filepath.Base(outputPath), []byte(content)); err != nil {
 			return err
 		}
 		fmt.Printf("Created: %s\n", outputPath)
+	}
+	return nil
+}
+
+func writeSecureFileAtomically(directory, name string, content []byte) error {
+	if name == "" || filepath.Base(name) != name {
+		return fmt.Errorf("invalid configuration filename %q", name)
+	}
+
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return fmt.Errorf("open configuration directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	randomSuffix := make([]byte, 16)
+	if _, err := rand.Read(randomSuffix); err != nil {
+		return fmt.Errorf("generate temporary filename: %w", err)
+	}
+	temporaryName := "." + name + ".tmp-" + hex.EncodeToString(randomSuffix)
+	temporary, err := root.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return fmt.Errorf("create temporary configuration file: %w", err)
+	}
+	temporaryOpen := true
+	defer func() {
+		if temporaryOpen {
+			_ = temporary.Close()
+		}
+		_ = root.Remove(temporaryName)
+	}()
+
+	if _, err := temporary.Write(content); err != nil {
+		return fmt.Errorf("write temporary configuration file: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync temporary configuration file: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary configuration file: %w", err)
+	}
+	temporaryOpen = false
+	if err := root.Rename(temporaryName, name); err != nil {
+		return fmt.Errorf("replace configuration file atomically: %w", err)
+	}
+
+	directoryFile, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open configuration directory for sync: %w", err)
+	}
+	defer func() { _ = directoryFile.Close() }()
+	if err := directoryFile.Sync(); err != nil {
+		return fmt.Errorf("sync configuration directory: %w", err)
 	}
 	return nil
 }

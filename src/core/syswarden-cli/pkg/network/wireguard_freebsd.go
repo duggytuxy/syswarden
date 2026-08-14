@@ -23,8 +23,12 @@ func SetupWireguard() error {
 		return nil
 	}
 
-	_ = os.MkdirAll("/usr/local/etc/wireguard/clients", 0700)
-	_ = os.Chmod("/usr/local/etc/wireguard", 0700)
+	if err := ensurePrivateDirectory("/usr/local/etc", "wireguard"); err != nil {
+		return fmt.Errorf("prepare WireGuard directory: %w", err)
+	}
+	if err := ensurePrivateDirectory("/usr/local/etc", "wireguard/clients"); err != nil {
+		return fmt.Errorf("prepare WireGuard clients directory: %w", err)
+	}
 
 	// Create sysrc configuration for IP forwarding
 	_ = exec.Command("sysrc", "gateway_enable=YES").Run()        // #nosec
