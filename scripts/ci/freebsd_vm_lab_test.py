@@ -344,7 +344,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
 
     def forward_candidate_artifact(self) -> freebsd_vm_lab.PackageArtifact:
         return freebsd_vm_lab.PackageArtifact(
-            self.root / "syswarden-4.02.10.txz", "4.02.10", self.package_sha
+            self.root / "syswarden-4.02.11.txz", "4.02.11", self.package_sha
         )
 
     def forward_previous_artifact(self) -> freebsd_vm_lab.PackageArtifact:
@@ -365,9 +365,9 @@ class FreeBSDVMLabTests(unittest.TestCase):
         self.assertEqual(candidate, self.artifact())
         self.assertEqual(previous, self.previous_artifact())
 
-    def test_candidate_v40210_requires_exact_dependency_manifest(self) -> None:
+    def test_candidate_v40211_requires_exact_dependency_manifest(self) -> None:
         self.package.unlink()
-        candidate = self.packages / "syswarden-4.02.10.txz"
+        candidate = self.packages / "syswarden-4.02.11.txz"
         candidate.write_bytes(b"candidate with dependency gate")
         digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
         (self.packages / "SHA256SUMS.txt").write_text(
@@ -775,7 +775,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
             "CANDIDATE_REINSTALL",
             "CANDIDATE_RESTART_IDEMPOTENCE",
         ):
-            evidence[f"{phase}_PKG_VERSION"] = "4.02.10"
+            evidence[f"{phase}_PKG_VERSION"] = "4.02.11"
         for phase in ("PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"):
             evidence[f"{phase}_PKG_VERSION"] = "4.02.8"
             evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"

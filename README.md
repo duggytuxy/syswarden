@@ -17,7 +17,7 @@
 
 # SysWarden v4
 
-Current source version: **v4.02.10**.
+Current source version: **v4.02.11**.
 
 > **Active Defense and HIDS/HIPS/WAAP Out-of-Band Orchestration for Critical Linux Infrastructure**
 
@@ -60,18 +60,11 @@ access and a tested host snapshot or rollback path.
 - `syswarden web-tui` exposes the terminal UI through HTTPS and WebSocket. It
   is a separate, network-facing mode with different risks.
 
-```text
-application or reverse-proxy logs
-              |
-              v
-       syswarden-core
-       |            |
-       v            v
-local telemetry   requested bans
-       |            |
-       v            v
-syswarden-tui   nftables or pf
-```
+<p align="center">
+  <a href="assets/syswarden_architecture.svg">
+    <img src="assets/syswarden_architecture.svg" alt="SysWarden HIDS, HIPS and WAAP out-of-band architecture">
+  </a>
+</p>
 
 The WAAP engine is out-of-band log analysis. A detection can lead to a later
 firewall update, but SysWarden is not in the HTTP request path and cannot clean
@@ -116,7 +109,7 @@ parameter. Restrict the listener with `--bind`, protect the port with a trusted
 network control, and do not place tokens in URLs or logs.
 
 A package-level `[webtui] enabled = false` switch and conditional ownership of
-TCP 62027 are not part of v4.02.10. They remain a separate Lot 2 change. The
+TCP 62027 are not part of v4.02.11. They remain a separate Lot 2 change. The
 current package behavior must therefore be treated as Web-TUI enabled.
 
 ### High availability
@@ -191,60 +184,17 @@ avoids synchronization loops.
 BunkerWeb's scheduler can push temporary Layer 7 bans to SysWarden and retrieve
 SysWarden blocklist, whitelist, status and telemetry data through the HA API.
 
-```mermaid
-flowchart LR
-    accTitle: BunkerWeb and SysWarden security flow
-    accDescr: Client traffic crosses the SysWarden nftables forward protection before BunkerWeb. The BunkerWeb scheduler sends source-owned temporary bans directly to every configured peer, while SysWarden nodes continue their authenticated durable synchronization whether the partner integration is disabled or enabled.
+<p align="center">
+  <a href="assets/syswarden_bunkerweb_integration.svg">
+    <img src="assets/syswarden_bunkerweb_integration.svg" alt="SysWarden and BunkerWeb authenticated Layer 7 ban integration contract">
+  </a>
+</p>
 
-    client(["Client traffic"])
-
-    subgraph host["Protected host: data plane"]
-        direction TB
-        nft{"nftables<br/>input + docker_protect forward"}
-        drop["Kernel drop"]
-        bunker["BunkerWeb Layer 7<br/>partner component"]
-        service["BunkerWeb-protected upstream"]
-        sets[("Verified dynamic<br/>kernel sets")]
-
-        nft -->|"banned source or destination"| drop
-        nft -->|"allowed"| bunker
-        bunker -->|"allowed"| service
-        sets -->|"referenced by rules"| nft
-    end
-
-    subgraph control["SysWarden control plane"]
-        direction TB
-        api["HA API :62026<br/>TLS 1.3 + bearer<br/>IP/CIDR peer scope"]
-        state[("Durable lists +<br/>source-owned TTL ledger")]
-        gate{"integrations.bunkerweb.enabled?"}
-        extensions["TTL, batch and<br/>provenance extensions"]
-        reject["Reject enriched mutation<br/>durable node HA unchanged"]
-
-        api <-->|"durable mutations + authenticated reads"| state
-        state --> sets
-        api -->|"enriched mutation only"| gate
-        gate -->|"true"| extensions
-        gate -->|"false"| reject
-        extensions --> state
-    end
-
-    subgraph partner["BunkerWeb plugin plane"]
-        direction TB
-        scheduler["Scheduler<br/>isolated per peer"]
-        cache[("Last valid Layer 7<br/>lists and UI state")]
-        scheduler <--> cache
-    end
-
-    peer["Other SysWarden node HA API<br/>durable always; enriched only<br/>with advertised capabilities"]
-
-    client --> nft
-    bunker -.->|"temporary Layer 7 ban"| scheduler
-    scheduler -->|"temporary ban: direct peer A<br/>POST / DELETE, max 500"| api
-    scheduler -.->|"same source-owned ban:<br/>direct peer B"| peer
-    api -->|"bounded authenticated reads"| scheduler
-    peer <-->|"durable IP/CIDR and L7/WAAP lists<br/>two scheduled pushes, gate false or true"| api
-
-```
+In the "Protected host: data plane", client traffic reaches nftables before
+BunkerWeb. The A-to-B and B-to-A arrows represent two scheduled pushes, gate
+false or true, rather than a continuously open synchronization session.
+Source-owned temporary bans are sent directly by the scheduler to each peer;
+SysWarden nodes do not relay them.
 
 The final `false` branch means only that secure SysWarden node-to-node HA stays
 available; it does not route partner requests through the other node.
@@ -366,7 +316,7 @@ default HTTP client without an explicit timeout.
 | Package and PF recovery state | `/var/db/syswarden` |
 | rc.d services | `/usr/local/etc/rc.d/syswarden`, `/usr/local/etc/rc.d/syswardenwebtui` |
 
-The v4.02.10 PF contract is intentionally bounded. A fresh installation
+The v4.02.11 PF contract is intentionally bounded. A fresh installation
 requires PF to be disabled with an empty live ruleset before SysWarden first
 mutates it. The separately byte-bound historical v4.02.8 transition is also covered. This
 does not claim safe coexistence with an arbitrary pre-existing operator PF
@@ -418,10 +368,10 @@ selected release.
 
 The historical v4.02.8 binary predates the signed updater and cannot perform
 the first signed hop. Linux hosts must install the separately verified
-v4.02.10 package with their native package manager. FreeBSD hosts must first
+v4.02.11 package with their native package manager. FreeBSD hosts must first
 install `curl`, `jq`, `libqrencode`, `rsyslog` and `wireguard-tools`, then use
-`pkg add -f` on the checksum-verified v4.02.10 TXZ. Starting from an installed
-v4.02.10, the signed updater supports the six Linux package targets and
+`pkg add -f` on the checksum-verified v4.02.11 TXZ. Starting from an installed
+v4.02.11, the signed updater supports the six Linux package targets and
 FreeBSD amd64.
 
 ### Install the latest verified Release
@@ -430,7 +380,7 @@ The procedure below downloads exactly one package for the detected operating
 system and architecture. Use it only after that tag is visible in GitHub
 Releases and the release qualification is complete. For the first hop from
 historical v4.02.8, run it as
-`VERSION=v4.02.10 sh ./install-release.sh` after saving the block as
+`VERSION=v4.02.11 sh ./install-release.sh` after saving the block as
 `install-release.sh`; leaving `VERSION` unset selects the latest published
 Release automatically.
 
@@ -665,8 +615,8 @@ access recovery.
   verifies the selected OS/architecture filename, size and SHA-256 again
   immediately before invoking the package manager, and uses a private temporary
   workspace. The historical v4.02.8 binary predates this trust root, so its
-  first upgrade to v4.02.10 must be a separately verified manual package
-  upgrade. From v4.02.10 onward, FreeBSD amd64 uses the same signed contract and
+  first upgrade to v4.02.11 must be a separately verified manual package
+  upgrade. From v4.02.11 onward, FreeBSD amd64 uses the same signed contract and
   invokes native `pkg add -f` only after all verification succeeds.
 - `syswarden uninstall` is destructive. It deletes SysWarden configuration,
   data, logs, services and firewall tables. It does not restore every previous
@@ -712,8 +662,8 @@ maintainer-controlled publication gate; a wiki page may lag the source until
 that gate is completed. When the wiki and this README disagree, prefer tested
 behavior in the source candidate and report the inconsistency.
 
-The version-specific [Lot 1 public security delivery report](docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.10.md)
-records the v4.02.10 source scope, evidence, platform boundaries and final
+The version-specific [Lot 1 public security delivery report](docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.11.md)
+records the v4.02.11 source scope, evidence, platform boundaries and final
 release decision.
 
 ## Target and support

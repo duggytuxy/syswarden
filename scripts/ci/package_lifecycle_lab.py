@@ -359,7 +359,7 @@ PACKAGE_PAYLOAD_PATHS = (
     "/usr/local/bin/syswarden",
     "/usr/local/bin/syswarden-tui",
 )
-FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.10"
+FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.11"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
 FORWARD_ONLY_APK_PREVIOUS = {
     "x86_64": {
@@ -570,7 +570,7 @@ def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> boo
     if historical_binding_touched and not forward_only:
         raise LifecycleLabError(
             "historical APK transition must be the exact byte-bound "
-            "v4.02.8 -> v4.02.10 contract for "
+            "v4.02.8 -> v4.02.11 contract for "
             f"{spec.package_architecture}"
         )
     return forward_only

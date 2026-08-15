@@ -10,12 +10,81 @@ import os
 import subprocess
 import tarfile
 import tempfile
+import textwrap
 import unittest
 import zipfile
 from pathlib import Path
 from unittest import mock
 
 import release_gate
+
+
+REPOSITORY = Path(__file__).resolve().parents[2]
+RELEASE_MANAGER_WORKFLOW = (
+    REPOSITORY / ".github" / "workflows" / "release-manager.yml"
+)
+
+
+def workflow_step_script(workflow: str, step_name: str) -> str:
+    marker = f"      - name: {step_name}\n"
+    if workflow.count(marker) != 1:
+        raise AssertionError(f"expected exactly one workflow step named {step_name}")
+    step = workflow.split(marker, 1)[1].split("\n      - name:", 1)[0]
+    run_marker = "        run: |\n"
+    if step.count(run_marker) != 1:
+        raise AssertionError(f"expected one shell body for workflow step {step_name}")
+    return textwrap.dedent(step.split(run_marker, 1)[1])
+
+
+def run_environment_gate(
+    script: str,
+    environment: dict[str, object],
+    policies: list[dict[str, object]],
+) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory() as temporary:
+        binary_directory = Path(temporary) / "bin"
+        binary_directory.mkdir()
+        gh = binary_directory / "gh"
+        gh.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"/deployment-branch-policies"*)
+    printf '%s\\n' "${TEST_POLICIES_JSON:?}"
+    ;;
+  *"/environments/"*)
+    printf '%s\\n' "${TEST_ENVIRONMENT_JSON:?}"
+    ;;
+  *)
+    echo "unexpected gh invocation: $*" >&2
+    exit 64
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        gh.chmod(0o700)
+        process_environment = os.environ.copy()
+        process_environment.update(
+            {
+                "GITHUB_REPOSITORY": "duggytuxy/syswarden",
+                "GITHUB_REPOSITORY_OWNER": "duggytuxy",
+                "PATH": f"{binary_directory}{os.pathsep}{process_environment['PATH']}",
+                "TEST_ENVIRONMENT_JSON": json.dumps(
+                    environment, separators=(",", ":")
+                ),
+                "TEST_POLICIES_JSON": json.dumps(policies, separators=(",", ":")),
+            }
+        )
+        return subprocess.run(
+            ["/bin/bash", "-c", script],
+            cwd=REPOSITORY,
+            env=process_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
 
 
 class ReleaseGateTests(unittest.TestCase):
@@ -896,12 +965,7 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         self.assertNotIn("syswarden-release-qualification", release_creation)
 
     def test_privileged_publisher_requires_a_protected_maintainer_environment(self) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[2]
-            / ".github"
-            / "workflows"
-            / "release-manager.yml"
-        ).read_text(encoding="utf-8")
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(
             workflow.count("name: syswarden-release-production"),
             1,
@@ -922,8 +986,86 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         self.assertIn('deployment-branch-policies', workflow)
         self.assertIn('.name == "v*" and .type == "tag"', workflow)
         self.assertIn('"${release_tag_policy_count}" != "1"', workflow)
+        environment_script = workflow_step_script(
+            workflow, "Require Protected Maintainer Release Environment"
+        )
+        self.assertIn("required_environment_boolean()", environment_script)
+        self.assertIn('if type == "boolean" then', environment_script)
+        self.assertIn("tostring", environment_script)
+        self.assertNotIn('// "missing"', environment_script)
         privileged_job = workflow.split("  attest-and-publish:", 1)[1]
         self.assertIn("environment:\n      name: syswarden-release-production", privileged_job)
+
+    def test_production_environment_boolean_gate_is_typed_and_fail_closed(self) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        script = workflow_step_script(
+            workflow, "Require Protected Maintainer Release Environment"
+        )
+        valid = {
+            "name": "syswarden-release-production",
+            "protection_rules": [
+                {
+                    "type": "required_reviewers",
+                    "prevent_self_review": False,
+                    "reviewers": [
+                        {
+                            "type": "User",
+                            "reviewer": {"login": "duggytuxy"},
+                        }
+                    ],
+                },
+                {"type": "branch_policy"},
+            ],
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            },
+        }
+        policies = [
+            {
+                "total_count": 1,
+                "branch_policies": [{"name": "v*", "type": "tag"}],
+            }
+        ]
+        result = run_environment_gate(script, valid, policies)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        for name, field, value in (
+            ("protected true", "protected_branches", True),
+            ("custom false", "custom_branch_policies", False),
+        ):
+            with self.subTest(name=name):
+                mutated = json.loads(json.dumps(valid))
+                mutated["deployment_branch_policy"][field] = value
+                result = run_environment_gate(script, mutated, policies)
+                diagnostic = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0, diagnostic)
+                self.assertNotIn("must be boolean", diagnostic)
+                self.assertIn(
+                    "must require exactly one approval", diagnostic
+                )
+
+        for name, field, value, missing in (
+            ("protected missing", "protected_branches", None, True),
+            ("protected null", "protected_branches", None, False),
+            ("protected string", "protected_branches", "false", False),
+            ("custom missing", "custom_branch_policies", None, True),
+            ("custom null", "custom_branch_policies", None, False),
+            ("custom string", "custom_branch_policies", "true", False),
+        ):
+            with self.subTest(name=name):
+                mutated = json.loads(json.dumps(valid))
+                if missing:
+                    del mutated["deployment_branch_policy"][field]
+                else:
+                    mutated["deployment_branch_policy"][field] = value
+                result = run_environment_gate(script, mutated, policies)
+                diagnostic = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0, diagnostic)
+                self.assertIn(
+                    f"deployment_branch_policy.{field} must be boolean",
+                    diagnostic,
+                )
 
     def test_privileged_publisher_requires_exact_immutable_tag_ruleset(self) -> None:
         workflow = (

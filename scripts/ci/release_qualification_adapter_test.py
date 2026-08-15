@@ -494,6 +494,65 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("freebsd-vm-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
+    def test_freebsd_forward_only_v40211_contract_is_exercised(self) -> None:
+        evidence = passing_evidence()
+        evidence["PF_SNAPSHOT_PROVENANCE"] = "legacy_derived"
+        evidence["PREVIOUS_PACKAGE_SHA256"] = (
+            freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_SHA256
+        )
+        for phase in (
+            "CANDIDATE_UPGRADE",
+            "CANDIDATE_REINSTALL",
+            "CANDIDATE_RESTART_IDEMPOTENCE",
+        ):
+            evidence[f"{phase}_PKG_VERSION"] = "4.02.11"
+        for phase in ("PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"):
+            evidence[f"{phase}_PKG_VERSION"] = "4.02.8"
+            evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"
+            evidence[f"{phase}_ELF_CORE_ARCH"] = "arm64"
+            evidence[f"{phase}_ELF_TUI_ARCH"] = "arm64"
+            evidence[f"{phase}_PKG_INVENTORY"] = "\n".join(
+                sorted(freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_INVENTORY)
+            )
+            evidence[f"{phase}_SIGNATURE_ENGINE_COUNT"] = ""
+            evidence[f"{phase}_SIGNATURE_PROBE_RC"] = "2"
+
+        pf_fixture = self.fixture.repo / "testdata/firewall/pf-v4.02.8.conf"
+        report = freebsd_vm_lab.build_report(
+            evidence,
+            freebsd_vm_lab.PackageArtifact(
+                self.fixture.root / "syswarden-4.02.11.txz",
+                "4.02.11",
+                evidence["CANDIDATE_PACKAGE_SHA256"],
+            ),
+            freebsd_vm_lab.PackageArtifact(
+                self.fixture.root / freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_PACKAGE,
+                freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_VERSION,
+                freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_SHA256,
+            ),
+            freebsd_vm_lab.ProductAssets(
+                self.fixture.repo,
+                pf_fixture,
+                self.fixture._digest(pf_fixture),
+                False,
+            ),
+            "127.0.0.1",
+            2222,
+            evidence["PF_ANCHOR_NAME"],
+        )
+        self.assertTrue(report["release_ready"])
+
+        with mock.patch.object(
+            adapter,
+            "_freebsd_check_passes",
+            wraps=adapter._freebsd_check_passes,
+        ) as check_passes:
+            _, _, failed = adapter._validate_freebsd_schema(report)
+        self.assertEqual(failed, [])
+        self.assertTrue(
+            any(call.args[2]["forward_only"] is True for call in check_passes.call_args_list)
+        )
+
     def test_duplicate_json_key_and_unknown_schema_key_are_rejected(self) -> None:
         path = self.fixture.raw / "nftables-raw.json"
         path.write_text(
