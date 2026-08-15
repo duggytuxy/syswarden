@@ -822,3 +822,53 @@ jobs:
           path: release-evidence/syswarden-release.tar.gz
           if-no-files-found: error
           retention-days: 90
+
+  security-audit:
+    name: Security Audit
+    needs:
+      - hygiene
+      - gosec
+      - anti-leaks
+      - sast
+      - build-bundle
+      - github-publication
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce required security results
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ACT_EVENT: ${{ github.event.act == true && 'true' || 'false' }}
+          HYGIENE_RESULT: ${{ needs.hygiene.result }}
+          GOSEC_RESULT: ${{ needs.gosec.result }}
+          ANTI_LEAKS_RESULT: ${{ needs.anti-leaks.result }}
+          SAST_RESULT: ${{ needs.sast.result }}
+          BUILD_BUNDLE_RESULT: ${{ needs.build-bundle.result }}
+          PUBLICATION_RESULT: ${{ needs.github-publication.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for result_name in \
+            HYGIENE_RESULT \
+            GOSEC_RESULT \
+            ANTI_LEAKS_RESULT \
+            SAST_RESULT \
+            BUILD_BUNDLE_RESULT; do
+            result="${!result_name}"
+            if [[ "${result}" != "success" ]]; then
+              echo "ERROR: ${result_name} concluded ${result}." >&2
+              failed=1
+            fi
+          done
+          expected_publication_result="success"
+          if [[ "${EVENT_NAME}" == "pull_request" || "${ACT_EVENT}" == "true" ]]; then
+            expected_publication_result="skipped"
+          fi
+          if [[ "${PUBLICATION_RESULT}" != "${expected_publication_result}" ]]; then
+            echo "ERROR: PUBLICATION_RESULT concluded ${PUBLICATION_RESULT}; expected ${expected_publication_result} for ${EVENT_NAME}." >&2
+            failed=1
+          fi
+          exit "${failed}"

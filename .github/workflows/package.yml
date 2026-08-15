@@ -758,3 +758,22 @@ jobs:
           path: ${{ steps.package_workspace.outputs.assets }}
           if-no-files-found: error
           retention-days: 30
+
+  package:
+    name: Package
+    needs: [build-and-package]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce package build result
+        shell: bash
+        env:
+          BUILD_RESULT: ${{ needs.build-and-package.result }}
+        run: |
+          set -euo pipefail
+          if [[ "${BUILD_RESULT}" != "success" ]]; then
+            echo "ERROR: Compile and Build Packages concluded ${BUILD_RESULT}." >&2
+            exit 1
+          fi
