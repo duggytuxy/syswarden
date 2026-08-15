@@ -128,6 +128,15 @@ func TestVerifyAcceptsDeterministicSignedManifest(t *testing.T) {
 	if err := verify(fixture.repository, firstSignedVersion, fixture.packages, fixture.manifest, fixture.signature); err != nil {
 		t.Fatalf("verify valid signed manifest: %v", err)
 	}
+	candidate := fixture.parsed(t)
+	if len(candidate.Artifacts) != 7 {
+		t.Fatalf("manifest artifact count = %d, want 7", len(candidate.Artifacts))
+	}
+	freeBSD := candidate.Artifacts[len(candidate.Artifacts)-1]
+	if freeBSD.OS != "freebsd" || freeBSD.Architecture != "amd64" ||
+		freeBSD.Format != "txz" || freeBSD.Filename != "syswarden-4.02.9.txz" {
+		t.Fatalf("FreeBSD manifest artifact = %#v", freeBSD)
+	}
 }
 
 func TestVerifyRejectsAdversarialSignedMetadata(t *testing.T) {

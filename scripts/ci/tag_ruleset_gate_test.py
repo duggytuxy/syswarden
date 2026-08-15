@@ -13,7 +13,11 @@ import tag_ruleset_gate
 
 
 class TagRulesetGateTests(unittest.TestCase):
-    ruleset_id = 42
+    ruleset_id = 20886342
+    expected_repository = "example/syswarden"
+    fixture_path = (
+        Path(__file__).parent / "fixtures" / "tag-ruleset-current-anonymized.json"
+    )
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -21,34 +25,13 @@ class TagRulesetGateTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
 
     def valid_document(self) -> dict[str, object]:
-        return {
-            "id": self.ruleset_id,
-            "name": tag_ruleset_gate.RULESET_NAME,
-            "target": "tag",
-            "source_type": "Repository",
-            "source": "syswarden/syswarden",
-            "enforcement": "active",
-            "bypass_actors": [],
-            "conditions": {
-                "ref_name": {"include": ["refs/tags/v*"], "exclude": []}
-            },
-            "rules": [{"type": "deletion"}, {"type": "update"}],
-            "node_id": "RRS_lACkVXNlcgQB",
-            "_links": {
-                "self": {
-                    "href": "https://api.github.com/repos/syswarden/syswarden/rulesets/42"
-                },
-                "html": {
-                    "href": "https://github.com/syswarden/syswarden/rules/42"
-                },
-            },
-            "created_at": "2026-08-14T10:20:30Z",
-            "updated_at": "2026-08-14T10:20:30Z",
-        }
+        return json.loads(self.fixture_path.read_text(encoding="utf-8"))
 
     def validate(self, document: dict[str, object] | None = None) -> None:
         tag_ruleset_gate.validate_ruleset(
-            document or self.valid_document(), self.ruleset_id
+            document or self.valid_document(),
+            self.ruleset_id,
+            self.expected_repository,
         )
 
     def write_document(self, document: dict[str, object] | None = None) -> Path:
@@ -65,6 +48,21 @@ class TagRulesetGateTests(unittest.TestCase):
         reversed_rules = self.valid_document()
         reversed_rules["rules"] = list(reversed(reversed_rules["rules"]))
         self.validate(reversed_rules)
+
+    def test_accepts_canonical_rfc3339_timestamps_with_timezones(self) -> None:
+        timestamps = (
+            "2026-08-15T10:10:02Z",
+            "2026-08-15T10:10:02.817Z",
+            "2026-08-15T10:10:02+00:00",
+            "2026-08-15T12:10:02.817+02:00",
+            "2026-08-15T04:40:02.123456789-05:30",
+        )
+        for timestamp in timestamps:
+            with self.subTest(timestamp=timestamp):
+                document = self.valid_document()
+                document["created_at"] = timestamp
+                document["updated_at"] = timestamp
+                self.validate(document)
 
     def test_rejects_wrong_id_name_target_or_enforcement(self) -> None:
         mutations = {
@@ -87,6 +85,17 @@ class TagRulesetGateTests(unittest.TestCase):
                     del document["bypass_actors"]
                 else:
                     document["bypass_actors"] = bypass
+                self.assert_invalid(document)
+
+    def test_requires_a_non_bypassable_requester(self) -> None:
+        unsafe_values = (None, False, "always", "pull_requests_only", "exempt")
+        for value in unsafe_values:
+            with self.subTest(value=value):
+                document = self.valid_document()
+                if value is None:
+                    del document["current_user_can_bypass"]
+                else:
+                    document["current_user_can_bypass"] = value
                 self.assert_invalid(document)
 
     def test_rejects_broad_or_excluded_ref_conditions(self) -> None:
@@ -119,7 +128,7 @@ class TagRulesetGateTests(unittest.TestCase):
         documents = []
 
         top = self.valid_document()
-        top["current_user_can_bypass"] = False
+        top["unexpected_top_level_field"] = False
         documents.append(top)
 
         conditions = self.valid_document()
@@ -148,7 +157,6 @@ class TagRulesetGateTests(unittest.TestCase):
             "source_type": [],
             "source": "",
             "node_id": None,
-            "created_at": "2026-08-14T10:20:30+00:00",
         }
         for key, value in mutations.items():
             with self.subTest(key=key):
@@ -158,6 +166,79 @@ class TagRulesetGateTests(unittest.TestCase):
         document = self.valid_document()
         document["_links"]["self"]["href"] = "http://api.github.com/rulesets/42"
         self.assert_invalid(document)
+
+    def test_rejects_non_repository_or_unrelated_sources_and_links(self) -> None:
+        documents = []
+
+        organization = self.valid_document()
+        organization["source_type"] = "Organization"
+        documents.append(organization)
+
+        unrelated_source = self.valid_document()
+        unrelated_source["source"] = "unrelated/repository"
+        documents.append(unrelated_source)
+
+        unrelated_api = self.valid_document()
+        unrelated_api["_links"]["self"]["href"] = (
+            "https://api.github.com/repos/unrelated/repository/rulesets/20886342"
+        )
+        documents.append(unrelated_api)
+
+        unrelated_html = self.valid_document()
+        unrelated_html["_links"]["html"]["href"] = (
+            "https://github.com/unrelated/repository/rules/20886342"
+        )
+        documents.append(unrelated_html)
+
+        invalid_host = self.valid_document()
+        invalid_host["_links"]["self"]["href"] = (
+            "https://example.invalid/example/syswarden/rulesets/20886342"
+        )
+        documents.append(invalid_host)
+
+        for index, document in enumerate(documents):
+            with self.subTest(index=index):
+                self.assert_invalid(document)
+
+    def test_rejects_invalid_expected_repository_names(self) -> None:
+        invalid_names = (
+            "unqualified",
+            "/syswarden",
+            "example/",
+            "example/../syswarden",
+            "https://example.invalid/example/syswarden",
+        )
+        for repository in invalid_names:
+            with self.subTest(repository=repository):
+                with self.assertRaises(tag_ruleset_gate.RulesetGateError):
+                    tag_ruleset_gate.validate_ruleset(
+                        self.valid_document(), self.ruleset_id, repository
+                    )
+
+    def test_rejects_naive_invalid_or_noncanonical_timestamps(self) -> None:
+        timestamps = (
+            "2026-08-15T10:10:02",
+            "2026-08-15 10:10:02Z",
+            "2026-08-15t10:10:02z",
+            "2026-08-15T10:10:02,817Z",
+            "2026-08-15T10:10:02.817+0200",
+            "2026-08-15T10:10:02.817+02",
+            "2026-08-15T10:10:02.817-00:00",
+            "2026-08-15T10:10:02.817+24:00",
+            "2026-08-15T10:10:02.817+02:60",
+            "2026-02-30T10:10:02Z",
+            "2026-08-15T24:10:02Z",
+            "2026-08-15T10:60:02Z",
+            "2026-08-15T10:10:60Z",
+            " 2026-08-15T10:10:02Z",
+            "2026-08-15T10:10:02Z ",
+            [],
+        )
+        for timestamp in timestamps:
+            with self.subTest(timestamp=timestamp):
+                document = self.valid_document()
+                document["created_at"] = timestamp
+                self.assert_invalid(document)
 
     def test_strict_parser_rejects_duplicate_keys_and_nonfinite_values(self) -> None:
         payloads = (
@@ -198,16 +279,43 @@ class TagRulesetGateTests(unittest.TestCase):
         path = self.write_document()
         self.assertEqual(
             tag_ruleset_gate.main(
-                ["--ruleset", str(path), "--expected-id", str(self.ruleset_id)]
+                [
+                    "--ruleset",
+                    str(path),
+                    "--expected-id",
+                    str(self.ruleset_id),
+                    "--expected-repository",
+                    self.expected_repository,
+                ]
             ),
             0,
+        )
+        self.assertEqual(
+            tag_ruleset_gate.main(
+                [
+                    "--ruleset",
+                    str(path),
+                    "--expected-id",
+                    str(self.ruleset_id),
+                    "--expected-repository",
+                    "https://example.invalid/example/syswarden",
+                ]
+            ),
+            2,
         )
         invalid = copy.deepcopy(self.valid_document())
         invalid["enforcement"] = "disabled"
         path.write_text(json.dumps(invalid), encoding="utf-8")
         self.assertEqual(
             tag_ruleset_gate.main(
-                ["--ruleset", str(path), "--expected-id", str(self.ruleset_id)]
+                [
+                    "--ruleset",
+                    str(path),
+                    "--expected-id",
+                    str(self.ruleset_id),
+                    "--expected-repository",
+                    self.expected_repository,
+                ]
             ),
             2,
         )

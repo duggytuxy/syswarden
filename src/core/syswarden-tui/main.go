@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -31,10 +30,9 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v4.02.9"
+const SysWardenVersion = "v4.02.10"
 const haPeerCABundleFile = "/etc/syswarden/ha-ca.pem"
 const haModularConfigDirectory = "/etc/syswarden/config"
-const haLegacyConfigFile = "/opt/syswarden/syswarden-auto.conf"
 const maxTUIHAResponseBytes = 1024 * 1024
 
 var (
@@ -430,16 +428,14 @@ func main() {
 							AddButtons([]string{"y", "n"}).
 							SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 								if buttonLabel == "y" {
-									recentlyUnbannedMu.Lock()
-									recentlyUnbanned[ip] = time.Now()
-									recentlyUnbannedMu.Unlock()
-
 									go func(targetIP string) {
-										syswardenPath := "/opt/syswarden/bin/syswarden"
-										if _, err := os.Stat(syswardenPath); os.IsNotExist(err) {
-											syswardenPath = "syswarden"
+										if err := runSyswardenIPAction("unblock", targetIP); err != nil {
+											showTUIActionError(app, mainFlex, "unblock", targetIP, err)
+											return
 										}
-										_ = exec.Command(syswardenPath, "unblock", targetIP).Run() // #nosec
+										recentlyUnbannedMu.Lock()
+										recentlyUnbanned[targetIP] = time.Now()
+										recentlyUnbannedMu.Unlock()
 										readDataAndUpdate()
 									}(ip)
 								}
@@ -465,11 +461,10 @@ func main() {
 							SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 								if buttonLabel == "y" {
 									go func(targetIP string) {
-										syswardenPath := "/opt/syswarden/bin/syswarden"
-										if _, err := os.Stat(syswardenPath); os.IsNotExist(err) {
-											syswardenPath = "syswarden"
+										if err := runSyswardenIPAction("whitelist", targetIP); err != nil {
+											showTUIActionError(app, mainFlex, "whitelist", targetIP, err)
+											return
 										}
-										_ = exec.Command(syswardenPath, "whitelist", "add", targetIP).Run() // #nosec
 										readDataAndUpdate()
 									}(ip)
 								}
@@ -497,11 +492,10 @@ func main() {
 							SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 								if buttonLabel == "y" {
 									go func(targetIP string) {
-										syswardenPath := "/opt/syswarden/bin/syswarden"
-										if _, err := os.Stat(syswardenPath); os.IsNotExist(err) {
-											syswardenPath = "syswarden"
+										if err := runSyswardenIPAction("block", targetIP); err != nil {
+											showTUIActionError(app, mainFlex, "block", targetIP, err)
+											return
 										}
-										_ = exec.Command(syswardenPath, "block", targetIP).Run() // #nosec
 										readDataAndUpdate()
 									}(ip)
 								}
@@ -555,6 +549,16 @@ func main() {
 		panic(err)
 	}
 	cancel()
+}
+
+func showTUIActionError(app *tview.Application, mainFlex *tview.Flex, action, target string, err error) {
+	app.QueueUpdateDraw(func() {
+		modal := tview.NewModal().
+			SetText(fmt.Sprintf("[red]SysWarden %s failed for %s: %v[-]", action, target, err)).
+			AddButtons([]string{"ok"}).
+			SetDoneFunc(func(int, string) { app.SetRoot(mainFlex, true) })
+		app.SetRoot(modal, false)
+	})
 }
 
 // --- P2P MESH TUI LOGIC ---

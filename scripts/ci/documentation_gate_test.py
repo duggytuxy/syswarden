@@ -295,7 +295,7 @@ invented_key = true
             "running Web-TUI process may continue accepting the previous", readme
         )
         self.assertIn(
-            "failure can leave the running Web-TUI on its previous token",
+            "restart failure returns nonzero and can leave the running Web-TUI on its previous token",
             manual,
         )
 
@@ -320,6 +320,13 @@ invented_key = true
         product_commands = documentation_gate.cobra_commands(REPO_ROOT)
         snapshot_commands = documentation_gate.snapshot_commands(REPO_ROOT)
         self.assertEqual(manual_commands, product_commands)
+        self.assertTrue(
+            {
+                "package-capture-pf",
+                "package-restore-host-state",
+                "package-restore-pf",
+            }.isdisjoint(product_commands)
+        )
         self.assertTrue({"completion", "help"}.issubset(snapshot_commands))
         self.assertTrue({"completion", "help"}.isdisjoint(manual_commands))
 
@@ -443,8 +450,8 @@ invented_key = true
         self.assertTrue(any("artifact count statement changed" in error for error in errors))
 
         wrong_architecture = readme.replace(
-            "amd64 and arm64 package recipes exist",
-            "amd64 and s390x package recipes exist",
+            "amd64 and arm64 package contents",
+            "amd64 and s390x package contents",
             1,
         )
         errors = documentation_gate.validate_package_documentation(
@@ -453,8 +460,8 @@ invented_key = true
         self.assertTrue(any("package/platform table differs" in error for error in errors))
 
         wrong_status = readme.replace(
-            "**Known blocker:** the current Linux binaries request the glibc ELF interpreter",
-            "Supported: the current Linux binaries request the glibc ELF interpreter",
+            "The exact x86_64 and aarch64 packages must still pass the protected lifecycle run",
+            "Release-qualified without the protected lifecycle run",
         )
         errors = documentation_gate.validate_package_documentation(
             wrong_status, "README.md", package_contract
@@ -474,12 +481,12 @@ invented_key = true
         ]
         deployment = """## 1. Target decision
 
-| Package family | Architectures produced by the workflow | Decision for v4.02.9 |
+| Package family | Architectures produced by the workflow | Decision for v4.02.10 |
 | :--- | :--- | :--- |
-| DEB | amd64, arm64 | Laboratory evaluation after inspecting the exact release assets |
-| RPM | x86_64, aarch64 | Laboratory evaluation after inspecting the exact release assets |
-| APK | x86_64, aarch64 | Do not install: current binaries require glibc, while standard Alpine is musl-based |
-| FreeBSD package | amd64 | Do not install: the package uses `/usr/local/syswarden/bin`, but current runtime/service code still references `/opt/syswarden` |
+| DEB | amd64, arm64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |
+| RPM | x86_64, aarch64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |
+| APK | x86_64, aarch64 | Dedicated CGO-free static binaries; amd64 executes on standard Alpine musl; exact protected lifecycle still required |
+| FreeBSD package | amd64 | ABI 14, native `/usr/local`, rc.d, PF and updater contracts; exact protected VM lifecycle still required |
 
 The package workflow is configured to publish two DEB files, two RPM files, two
 APK files, one FreeBSD package and `SHA256SUMS.txt`.
@@ -494,7 +501,10 @@ APK files, one FreeBSD package and `SHA256SUMS.txt`.
         for changed in (
             deployment.replace("two DEB files", "nine DEB files"),
             deployment.replace("x86_64, aarch64", "x86_64, s390x", 1),
-            deployment.replace("Do not install: current binaries require glibc", "Supported"),
+            deployment.replace(
+                "Dedicated CGO-free static binaries; amd64 executes on standard Alpine musl; exact protected lifecycle still required",
+                "Release-qualified without protected lifecycle",
+            ),
         ):
             with self.subTest():
                 errors = documentation_gate.validate_package_documentation(

@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"syswarden-core/internal/runtimepaths"
 	"syswarden-core/utils"
 
 	"github.com/spf13/viper"
@@ -56,6 +57,14 @@ type SystemData struct {
 	ServerIP    string    `json:"server_ip"`
 	Services    []Service `json:"services"`
 	Ports       []Port    `json:"ports"`
+}
+
+type platformSystemStats struct {
+	Uptime      string
+	LoadAverage string
+	RamUsedMb   int
+	RamTotalMb  int
+	CpuModel    string
 }
 
 type Layer3 struct {
@@ -191,16 +200,7 @@ func monitorAllowedEvents(ctx context.Context, logAllowed func(ip, service, payl
 		return
 	}
 
-	bashScript := `
-		{
-			tail -F /var/log/auth.log /var/log/nginx/access.log /var/log/apache2/access.log /var/log/httpd/access_log /var/log/secure /var/log/messages 2>/dev/null &
-			if command -v journalctl &> /dev/null; then
-				journalctl -t sshd -f -n 0 2>/dev/null &
-			fi
-			wait
-		}
-	`
-	cmd := exec.CommandContext(ctx, "bash", "-c", bashScript) // #nosec
+	cmd := allowedEventsCommand(ctx)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("[Telemetry Worker] Failed to start tail for ALLOWED events: %v", err)
@@ -244,19 +244,7 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 		return
 	}
 
-	bashScript := `
-		if command -v journalctl &> /dev/null; then
-			journalctl -k -f -n 0 2>/dev/null
-		elif command -v rc-service &> /dev/null; then
-			tail -F /var/log/messages /var/log/kern.log 2>/dev/null
-		else
-			dmesg -w 2>/dev/null
-		fi
-	`
-	if runtime.GOOS == "freebsd" {
-		bashScript = "tail -F /var/log/messages 2>/dev/null"
-	}
-	cmd := exec.CommandContext(ctx, "bash", "-c", bashScript) // #nosec
+	cmd := kernelDropsCommand(ctx)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("[Telemetry Worker] Failed to start tail for kernel drop events: %v", err)
@@ -429,53 +417,12 @@ func getSystemStats() SystemData {
 	}
 	sys.ServerIP = GetOutboundIP()
 
-	// Uptime
-	if b, err := os.ReadFile("/proc/uptime"); err == nil { // #nosec
-		parts := strings.Fields(string(b))
-		if len(parts) > 0 {
-			if secs, err := strconv.ParseFloat(parts[0], 64); err == nil {
-				d := time.Duration(secs) * time.Second
-				sys.Uptime = d.Round(time.Second).String()
-			}
-		}
-	}
-
-	// Load Average
-	if b, err := os.ReadFile("/proc/loadavg"); err == nil { // #nosec
-		parts := strings.Fields(string(b))
-		if len(parts) >= 3 {
-			sys.LoadAverage = fmt.Sprintf("%s %s %s", parts[0], parts[1], parts[2])
-		}
-	}
-
-	// CPU Model
-	if b, err := os.ReadFile("/proc/cpuinfo"); err == nil { // #nosec
-		for _, line := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(line, "model name") {
-				parts := strings.SplitN(line, ":", 2)
-				if len(parts) == 2 {
-					sys.CpuModel = strings.TrimSpace(parts[1])
-					break
-				}
-			}
-		}
-	}
-
-	// RAM (MemTotal, MemAvailable)
-	if b, err := os.ReadFile("/proc/meminfo"); err == nil { // #nosec
-		var total, avail int
-		for _, line := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(line, "MemTotal:") {
-				_, _ = fmt.Sscanf(line, "MemTotal: %d kB", &total)
-			} else if strings.HasPrefix(line, "MemAvailable:") {
-				_, _ = fmt.Sscanf(line, "MemAvailable: %d kB", &avail)
-			}
-		}
-		if total > 0 {
-			sys.RamTotalMb = total / 1024
-			sys.RamUsedMb = (total - avail) / 1024
-		}
-	}
+	platformStats := collectPlatformSystemStats()
+	sys.Uptime = platformStats.Uptime
+	sys.LoadAverage = platformStats.LoadAverage
+	sys.CpuModel = platformStats.CpuModel
+	sys.RamTotalMb = platformStats.RamTotalMb
+	sys.RamUsedMb = platformStats.RamUsedMb
 
 	// Disk Space
 	var stat syscall.Statfs_t
@@ -495,67 +442,8 @@ func getSystemStats() SystemData {
 	}
 	sys.Os = osName
 
-	// Services
-	services := []string{"syswarden-core", "syswarden-firewall", "sshd"}
-	useOpenRC := false
-	if _, err := exec.LookPath("rc-service"); err == nil {
-		useOpenRC = true
-	}
-
-	if useOpenRC {
-		if err := exec.Command("rc-service", "sshd", "status").Run(); err != nil { // #nosec
-			services[2] = "ssh"
-		}
-	} else {
-		if err := exec.Command("systemctl", "status", "sshd").Run(); err != nil { // #nosec
-			services[2] = "ssh" // Debian/Ubuntu uses ssh instead of sshd
-		}
-	}
-
-	for _, srv := range services {
-		status := "inactive"
-		if useOpenRC {
-			if err := exec.Command("rc-service", srv, "status").Run(); err == nil { // #nosec
-				status = "active"
-			}
-		} else {
-			if err := exec.Command("systemctl", "is-active", srv).Run(); err == nil { // #nosec
-				status = "active"
-			}
-		}
-		sys.Services = append(sys.Services, Service{
-			Name:   srv,
-			Status: status,
-		})
-	}
-
-	// Ports
-	if out, err := exec.Command("ss", "-tuln").Output(); err == nil { // #nosec
-		lines := strings.Split(string(out), "\n")
-		for _, line := range lines {
-			if strings.Contains(line, "LISTEN") || strings.Contains(line, "UNCONN") {
-				parts := strings.Fields(line)
-				if len(parts) >= 5 {
-					proto := parts[0]
-					state := parts[1]
-					localAddr := parts[4]
-
-					lastColon := strings.LastIndex(localAddr, ":")
-					if lastColon != -1 {
-						ip := localAddr[:lastColon]
-						port := localAddr[lastColon+1:]
-
-						sys.Ports = append(sys.Ports, Port{
-							IP:       ip,
-							State:    state,
-							Port:     port,
-							Protocol: proto,
-						})
-					}
-				}
-			}
-		}
-	}
+	sys.Services = collectPlatformServices()
+	sys.Ports = collectPlatformPorts()
 	if sys.Ports == nil {
 		sys.Ports = make([]Port, 0)
 	}
@@ -967,7 +855,7 @@ func getWAFStats() WAF {
 	waf.SignaturesData = []JailData{}
 
 	// Read signatures.json for active signatures count
-	if b, err := os.ReadFile("/opt/syswarden/signatures.json"); err == nil { // #nosec
+	if b, err := runtimepaths.ReadSignatures(); err == nil {
 		var sigs struct {
 			Rules []interface{} `json:"rules"`
 		}

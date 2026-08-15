@@ -341,7 +341,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         )
         adapter.run_verify(args)
 
-    def test_exact_package_blocker_is_derived_and_arbitrary_failure_is_rejected(self) -> None:
+    def test_package_runtime_failures_are_never_waived(self) -> None:
         report = self.fixture.load_raw("package-lifecycle-raw.json")
         for platform in report["platforms"]:
             if platform["distribution"] != "alpine":
@@ -372,10 +372,10 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             "coordinate_classification"
         ]
         self.fixture.save_raw("package-lifecycle-raw.json", report)
-        state = adapter.build_expected(self.fixture.args())
-        self.assertEqual(state.envelopes["package"]["blocker_ids"], ["SW-PKG-001"])
-        self.assertFalse(state.envelopes["package"]["release_ready"])
+        self.assertAdapterError(self.fixture.args())
 
+        self.fixture._make_raw_reports()
+        report = self.fixture.load_raw("package-lifecycle-raw.json")
         event = report["platforms"][0]["scenarios"][0]["events"][0]
         event["status"] = "fail"
         event["detail"] = "synthetic failure"
@@ -442,7 +442,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("package-lifecycle-raw.json", combined)
         self.assertAdapterError(self.fixture.args())
 
-    def test_exact_freebsd_blockers_are_derived_from_observed_manifestations(self) -> None:
+    def test_freebsd_product_failures_are_never_waived(self) -> None:
         evidence = passing_evidence()
         evidence.update(
             {
@@ -481,13 +481,9 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             evidence[f"{phase}_SIGNATURE_ENGINE_COUNT"] = ""
             evidence[f"{phase}_SIGNATURE_PROBE_RC"] = "2"
         self.fixture.write_freebsd_evidence(evidence)
-        state = adapter.build_expected(self.fixture.args())
-        self.assertEqual(
-            state.envelopes["freebsd"]["blocker_ids"],
-            ["SW-BSD-001"],
-        )
-        self.assertFalse(state.envelopes["freebsd"]["release_ready"])
+        self.assertAdapterError(self.fixture.args())
 
+        self.fixture._make_raw_reports()
         report = self.fixture.load_raw("freebsd-vm-raw.json")
         honey = next(
             item
@@ -571,6 +567,34 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("freebsd-vm-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
+    def test_freebsd_restart_and_rcd_observation_keys_are_exact(self) -> None:
+        cases = (
+            (
+                "SW-PKG-FBSD-RESTART-CORE-001",
+                "RC_CORE_RESTART_ONE_RC",
+            ),
+            (
+                "SW-PKG-FBSD-RESTART-WEB-001",
+                "RC_WEB_RESTART_ONE_RC",
+            ),
+            (
+                "SW-PKG-FBSD-RCD-CLEANUP-001",
+                "REMOVE_RC_CORE_ABSENT",
+            ),
+        )
+        for check_id, original_key in cases:
+            with self.subTest(check_id=check_id):
+                self.fixture._make_raw_reports()
+                report = self.fixture.load_raw("freebsd-vm-raw.json")
+                check = next(
+                    item for item in report["checks"] if item["id"] == check_id
+                )
+                check["observed"]["RENAMED_UNTRUSTED_KEY"] = check["observed"].pop(
+                    original_key
+                )
+                self.fixture.save_raw("freebsd-vm-raw.json", report)
+                self.assertAdapterError(self.fixture.args())
+
     def test_freebsd_pf_environment_cannot_contradict_harness_conditions(self) -> None:
         report = self.fixture.load_raw("freebsd-vm-raw.json")
         report["environment"]["pf_initial_status"] = "Enabled"
@@ -616,6 +640,20 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         report = self.fixture.load_raw("package-lifecycle-raw.json")
         report["platforms"][0]["candidate"]["sha256"] = "0" * 64
         self.fixture.save_raw("package-lifecycle-raw.json", report)
+        self.assertAdapterError(self.fixture.args())
+
+    def test_freebsd_pf_provenance_cannot_be_relabelled(self) -> None:
+        report = self.fixture.load_raw("freebsd-vm-raw.json")
+        report["environment"]["pf_snapshot_provenance"] = "legacy_derived"
+        check = next(
+            item
+            for item in report["checks"]
+            if item["id"] == "SW-PKG-FBSD-PF-PROVENANCE-001"
+        )
+        check["observed"] = "legacy_derived"
+        check["status"] = "pass"
+        report["harness_conditions"]["PF snapshot provenance recorded"] = True
+        self.fixture.save_raw("freebsd-vm-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
     def test_raw_symlink_hardlink_alias_and_in_repo_output_are_rejected(self) -> None:

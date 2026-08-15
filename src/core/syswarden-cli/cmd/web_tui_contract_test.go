@@ -128,6 +128,7 @@ func TestWebTUIHelperProcess(t *testing.T) {
 	bindAddr = os.Getenv("SYSWARDEN_WEB_TUI_TEST_ADDRESS")
 	webToken = os.Getenv("SYSWARDEN_WEB_TUI_TEST_TOKEN")
 	config.GlobalConfig = &config.Config{WebTUIPassword: webToken}
+	webTUICommand = func() *exec.Cmd { return exec.Command("syswarden-tui") }
 	webTuiCmd.Run(webTuiCmd, nil)
 }
 

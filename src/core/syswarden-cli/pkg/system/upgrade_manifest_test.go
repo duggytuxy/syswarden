@@ -134,8 +134,13 @@ func TestVerifySignedManifestAcceptsExactContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verifySignedManifest() error = %v", err)
 	}
-	if manifest.Schema != updateManifestSchema || len(manifest.Artifacts) != 6 {
+	if manifest.Schema != updateManifestSchema || len(manifest.Artifacts) != 7 {
 		t.Fatalf("verified manifest = %#v", manifest)
+	}
+	freeBSD := manifest.Artifacts[len(manifest.Artifacts)-1]
+	if freeBSD.OS != "freebsd" || freeBSD.Architecture != "amd64" ||
+		freeBSD.Format != packageFormatTXZ || freeBSD.Filename != "syswarden-4.02.9.txz" {
+		t.Fatalf("FreeBSD manifest identity = %#v", freeBSD)
 	}
 }
 
@@ -144,6 +149,7 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 
 	tests := []struct {
 		name          string
+		goos          string
 		manager       string
 		managerPath   string
 		architecture  string
@@ -153,6 +159,7 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 	}{
 		{
 			name:          "deb amd64",
+			goos:          "linux",
 			manager:       "apt-get",
 			managerPath:   "/usr/bin/apt-get",
 			architecture:  "amd64",
@@ -162,6 +169,7 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 		},
 		{
 			name:          "deb arm64",
+			goos:          "linux",
 			manager:       "apt-get",
 			managerPath:   "/usr/bin/apt-get",
 			architecture:  "arm64",
@@ -171,6 +179,7 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 		},
 		{
 			name:          "rpm amd64",
+			goos:          "linux",
 			manager:       "dnf",
 			managerPath:   "/usr/bin/dnf",
 			architecture:  "amd64",
@@ -180,6 +189,7 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 		},
 		{
 			name:          "rpm arm64",
+			goos:          "linux",
 			manager:       "yum",
 			managerPath:   "/usr/bin/yum",
 			architecture:  "arm64",
@@ -189,6 +199,7 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 		},
 		{
 			name:          "apk amd64",
+			goos:          "linux",
 			manager:       "apk",
 			managerPath:   "/sbin/apk",
 			architecture:  "amd64",
@@ -198,6 +209,7 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 		},
 		{
 			name:          "apk arm64",
+			goos:          "linux",
 			manager:       "apk",
 			managerPath:   "/usr/sbin/apk",
 			architecture:  "arm64",
@@ -205,12 +217,22 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 			wantFilename:  "syswarden_4.02.9_aarch64.apk",
 			wantInstaller: "/usr/sbin/apk",
 		},
+		{
+			name:          "txz freebsd amd64",
+			goos:          "freebsd",
+			manager:       "pkg",
+			managerPath:   "/usr/sbin/pkg",
+			architecture:  "amd64",
+			wantFormat:    packageFormatTXZ,
+			wantFilename:  "syswarden-4.02.9.txz",
+			wantInstaller: "/usr/sbin/pkg",
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			target, err := detectPackageTarget("linux", test.architecture, testUpdateVersion, func(name string) (string, error) {
+			target, err := detectPackageTarget(test.goos, test.architecture, testUpdateVersion, func(name string) (string, error) {
 				if name == test.manager {
 					return test.managerPath, nil
 				}
@@ -236,6 +258,16 @@ func TestAPKUnsignedFlagRemainsBehindVerifiedManifestPipeline(t *testing.T) {
 	}
 }
 
+func TestFreeBSDTXZUsesExactForcedPkgAddArguments(t *testing.T) {
+	t.Parallel()
+
+	arguments := (packageTarget{format: packageFormatTXZ}).installArguments("/var/tmp/syswarden-update-safe/package.txz")
+	if len(arguments) != 3 || arguments[0] != "add" || arguments[1] != "-f" ||
+		arguments[2] != "/var/tmp/syswarden-update-safe/package.txz" {
+		t.Fatalf("FreeBSD pkg install arguments = %#v", arguments)
+	}
+}
+
 func TestDetectPackageTargetRejectsWrongOSArchitectureAndPath(t *testing.T) {
 	t.Parallel()
 
@@ -245,10 +277,12 @@ func TestDetectPackageTargetRejectsWrongOSArchitectureAndPath(t *testing.T) {
 		goarch   string
 		resolved string
 	}{
-		{name: "wrong os", goos: "freebsd", goarch: "amd64", resolved: "/usr/bin/apt-get"},
+		{name: "wrong os", goos: "windows", goarch: "amd64", resolved: "/usr/bin/apt-get"},
 		{name: "wrong architecture", goos: "linux", goarch: "ppc64le", resolved: "/usr/bin/apt-get"},
+		{name: "freebsd wrong architecture", goos: "freebsd", goarch: "arm64", resolved: "/usr/sbin/pkg"},
 		{name: "relative manager", goos: "linux", goarch: "amd64", resolved: "apt-get"},
 		{name: "untrusted absolute manager", goos: "linux", goarch: "amd64", resolved: "/tmp/apt-get"},
+		{name: "untrusted freebsd manager", goos: "freebsd", goarch: "amd64", resolved: "/tmp/pkg"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

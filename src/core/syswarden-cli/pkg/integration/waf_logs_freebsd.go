@@ -5,16 +5,19 @@ package integration
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"syswarden-cli/config"
 )
+
+const freeBSDWAFRsyslogFragment = "/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf"
 
 // SetupWAFLogForwarder configures Rsyslog to bridge local Web/Docker(Jails) logs into the Go WAF Socket
 func SetupWAFLogForwarder() error {
 	fmt.Println("[INFO] Configuring WAF Multi-Tenant Log Bridge (Rsyslog -> UDS)...")
 
-	_ = os.MkdirAll("/usr/local/etc/rsyslog.d", 0750)
-	confPath := "/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf"
+	if err := os.MkdirAll("/usr/local/etc/rsyslog.d", 0750); err != nil {
+		return fmt.Errorf("create FreeBSD rsyslog configuration directory: %w", err)
+	}
+	confPath := freeBSDWAFRsyslogFragment
 
 	// Base modules
 	rsyslogConf := `module(load="imfile")
@@ -53,9 +56,8 @@ ruleset(name="waf_bridge") {
 		return fmt.Errorf("failed to write WAF bridge config: %w", err)
 	}
 
-	// Restart Rsyslog safely
-	if err := exec.Command("service", "rsyslogd", "restart").Run(); err != nil { // #nosec
-		fmt.Printf("[WARN] Failed to restart rsyslogd for WAF bridge: %v\n", err)
+	if err := ensureFreeBSDRsyslogRunning(); err != nil {
+		return fmt.Errorf("activate rsyslogd for WAF bridge: %w", err)
 	}
 
 	fmt.Println("[+] WAF Log Bridge successfully configured.")

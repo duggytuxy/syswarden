@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // SetupService generates and enables the syswarden-core rc.d service natively for FreeBSD
@@ -14,11 +15,11 @@ func SetupService() error {
 
 	err := os.MkdirAll("/var/run", 0750)
 	if err != nil {
-		fmt.Printf("[WARN] Failed to create /var/run directory: %v\n", err)
+		return fmt.Errorf("create /var/run: %w", err)
 	}
 	err = os.MkdirAll("/var/log/syswarden", 0750)
 	if err != nil {
-		fmt.Printf("[WARN] Failed to create /var/log/syswarden directory: %v\n", err)
+		return fmt.Errorf("create /var/log/syswarden: %w", err)
 	}
 
 	rcScript := `#!/bin/sh
@@ -32,11 +33,10 @@ func SetupService() error {
 name="syswarden"
 rcvar="syswarden_enable"
 
-command="/opt/syswarden/syswarden-core"
+command="/usr/local/syswarden/bin/syswarden-core"
+procname="${command}"
 pidfile="/var/run/${name}.pid"
-
-# Run in background
-command_args="&"
+required_files="${command}"
 
 # Load configuration
 load_rc_config $name
@@ -44,21 +44,18 @@ load_rc_config $name
 
 # Hook to capture PID
 start_cmd="syswarden_start"
-stop_cmd="syswarden_stop"
 
 syswarden_start() {
-    echo "Starting SYSWARDEN..."
-    /usr/sbin/daemon -p ${pidfile} ${command}
-}
-
-syswarden_stop() {
-    if [ -f ${pidfile} ]; then
-        echo "Stopping SYSWARDEN..."
-        kill $(cat ${pidfile})
-        rm -f ${pidfile}
-    else
-        echo "SYSWARDEN is not running."
+    running_pid="$(check_pidfile "${pidfile}" "${procname}")"
+    if [ -n "${running_pid}" ]; then
+        echo "SYSWARDEN is already running as ${running_pid}."
+        return 0
     fi
+    if [ -f "${pidfile}" ]; then
+        rm -f "${pidfile}"
+    fi
+    echo "Starting SYSWARDEN..."
+    /usr/sbin/daemon -f -p "${pidfile}" "${command}"
 }
 
 run_rc_command "$1"
@@ -69,13 +66,21 @@ run_rc_command "$1"
 	}
 
 	// Enable service via sysrc
-	if err := exec.Command("sysrc", "syswarden_enable=YES").Run(); err != nil { // #nosec
-		fmt.Printf("[WARN] Failed to enable syswarden in rc.conf: %v\n", err)
+	if output, err := exec.Command("sysrc", "syswarden_enable=YES").CombinedOutput(); err != nil {
+		return fmt.Errorf("enable syswarden in rc.conf: %s: %w", string(output), err)
 	}
-
-	// Start service
-	if err := exec.Command("service", "syswarden", "start").Run(); err != nil { // #nosec
-		fmt.Printf("[WARN] Failed to start syswarden service: %v\n", err)
+	if output, err := exec.Command("sysrc", "-n", "syswarden_enable").CombinedOutput(); err != nil {
+		return fmt.Errorf("verify syswarden enablement: %s: %w", string(output), err)
+	} else if strings.TrimSpace(string(output)) != "YES" {
+		return fmt.Errorf("verify syswarden enablement: unexpected value %q", strings.TrimSpace(string(output)))
+	}
+	if exec.Command("service", "syswarden", "onestatus").Run() != nil {
+		if output, err := exec.Command("service", "syswarden", "start").CombinedOutput(); err != nil {
+			return fmt.Errorf("start syswarden service: %s: %w", string(output), err)
+		}
+	}
+	if output, err := exec.Command("service", "syswarden", "onestatus").CombinedOutput(); err != nil {
+		return fmt.Errorf("verify syswarden service: %s: %w", string(output), err)
 	}
 
 	webtuiRcScript := `#!/bin/sh
@@ -89,29 +94,27 @@ run_rc_command "$1"
 name="syswardenwebtui"
 rcvar="syswardenwebtui_enable"
 
-command="/opt/syswarden/bin/syswarden-cli"
-command_args="web-tui &"
+command="/usr/local/syswarden/bin/syswarden-cli"
+procname="${command}"
 pidfile="/var/run/${name}.pid"
+required_files="${command}"
 
 load_rc_config $name
 : ${syswardenwebtui_enable:="NO"}
 
 start_cmd="webtui_start"
-stop_cmd="webtui_stop"
 
 webtui_start() {
-    echo "Starting SYSWARDEN Web-TUI..."
-    /usr/sbin/daemon -p ${pidfile} ${command} web-tui
-}
-
-webtui_stop() {
-    if [ -f ${pidfile} ]; then
-        echo "Stopping SYSWARDEN Web-TUI..."
-        kill $(cat ${pidfile})
-        rm -f ${pidfile}
-    else
-        echo "SYSWARDEN Web-TUI is not running."
+    running_pid="$(check_pidfile "${pidfile}" "${procname}")"
+    if [ -n "${running_pid}" ]; then
+        echo "SYSWARDEN Web-TUI is already running as ${running_pid}."
+        return 0
     fi
+    if [ -f "${pidfile}" ]; then
+        rm -f "${pidfile}"
+    fi
+    echo "Starting SYSWARDEN Web-TUI..."
+    /usr/sbin/daemon -f -p "${pidfile}" "${command}" web-tui
 }
 
 run_rc_command "$1"
@@ -121,11 +124,21 @@ run_rc_command "$1"
 		return fmt.Errorf("failed to write syswardenwebtui rc.d script: %w", err)
 	}
 
-	if err := exec.Command("sysrc", "syswardenwebtui_enable=YES").Run(); err != nil { // #nosec
-		fmt.Printf("[WARN] Failed to enable syswardenwebtui in rc.conf: %v\n", err)
+	if output, err := exec.Command("sysrc", "syswardenwebtui_enable=YES").CombinedOutput(); err != nil {
+		return fmt.Errorf("enable syswardenwebtui in rc.conf: %s: %w", string(output), err)
 	}
-	if err := exec.Command("service", "syswardenwebtui", "start").Run(); err != nil { // #nosec
-		fmt.Printf("[WARN] Failed to start syswardenwebtui service: %v\n", err)
+	if output, err := exec.Command("sysrc", "-n", "syswardenwebtui_enable").CombinedOutput(); err != nil {
+		return fmt.Errorf("verify syswardenwebtui enablement: %s: %w", string(output), err)
+	} else if strings.TrimSpace(string(output)) != "YES" {
+		return fmt.Errorf("verify syswardenwebtui enablement: unexpected value %q", strings.TrimSpace(string(output)))
+	}
+	if exec.Command("service", "syswardenwebtui", "onestatus").Run() != nil {
+		if output, err := exec.Command("service", "syswardenwebtui", "start").CombinedOutput(); err != nil {
+			return fmt.Errorf("start syswardenwebtui service: %s: %w", string(output), err)
+		}
+	}
+	if output, err := exec.Command("service", "syswardenwebtui", "onestatus").CombinedOutput(); err != nil {
+		return fmt.Errorf("verify syswardenwebtui service: %s: %w", string(output), err)
 	}
 
 	fmt.Println("[SUCCESS] SYSWARDEN rc.d service configured and enabled.")

@@ -117,19 +117,22 @@ DEB_BOOTSTRAP = (
     "apt-get update && "
     "DEBIAN_FRONTEND=noninteractive apt-get install -y "
     "--no-install-recommends nftables ipset curl wget rsyslog cron "
-    "bash-completion && "
+    "bash-completion wireguard-tools qrencode jq binutils file && "
     "if [ -f /etc/dpkg/dpkg.cfg.d/docker ]; then "
     "sed -i '\\|^path-exclude /usr/share/doc/\\*$|d' "
     "/etc/dpkg/dpkg.cfg.d/docker; fi && "
     "rm -rf /var/lib/apt/lists/*"
 )
 RPM_BOOTSTRAP = (
+    "if grep -Eq '^ID=\"?almalinux\"?$' /etc/os-release; then "
+    "dnf -y install epel-release; fi && "
     "dnf -y install nftables ipset curl-minimal wget rsyslog cronie "
-    "bash-completion cpio diffutils && dnf clean all"
+    "bash-completion wireguard-tools qrencode jq checkpolicy "
+    "policycoreutils-python-utils binutils cpio diffutils file && dnf clean all"
 )
 APK_BOOTSTRAP = (
     "apk add --no-cache nftables curl wget rsyslog rsyslog-uxsock "
-    "bash-completion"
+    "bash-completion wireguard-tools libqrencode-tools jq binutils file"
 )
 DEB_PURGE_SEMANTICS = (
     "remove preserves generated /etc and /var state; purge removes generated "
@@ -356,6 +359,18 @@ PACKAGE_PAYLOAD_PATHS = (
     "/usr/local/bin/syswarden",
     "/usr/local/bin/syswarden-tui",
 )
+FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.10"
+FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
+FORWARD_ONLY_APK_PREVIOUS = {
+    "x86_64": {
+        "filename": "syswarden_4.02.8_x86_64.apk",
+        "sha256": "c0869bcb6f9adc1e4ca191ae5f5ed7962c9c89fb2bac9a4d52c0c246b09036d4",
+    },
+    "aarch64": {
+        "filename": "syswarden_4.02.8_aarch64.apk",
+        "sha256": "80a16b099d299db4053249f7bcb3d7c234ee662ad1e10e7081ae92553d13d275",
+    },
+}
 DEB_PACKAGE_PATHS = frozenset(
     (*PACKAGE_PAYLOAD_PATHS,)
     + (
@@ -392,6 +407,27 @@ def _installed_phase_event_checks(scenario: str, label: str) -> tuple[str, ...]:
         f"{scenario}.{label}.inventory.manager",
         f"{scenario}.{label}.inventory.filesystem",
         f"{scenario}.{label}.executable",
+        f"{scenario}.{label}.elf_contract",
+        f"{scenario}.{label}.postinstall_contract",
+    )
+
+
+def _generated_cleanup_event_checks(scenario: str, label: str) -> tuple[str, ...]:
+    return tuple(
+        f"{scenario}.{label}.generated.{key}"
+        for key in (
+            "systemd_core",
+            "systemd_firewall",
+            "systemd_webtui",
+            "openrc_core",
+            "openrc_firewall",
+            "openrc_webtui",
+            "completion",
+            "rsyslog_siem",
+            "rsyslog_waf_bridge",
+            "cron_reference",
+            "cron_unrelated",
+        )
     )
 
 
@@ -404,6 +440,7 @@ def expected_inventory_phase_labels(scenario: str) -> tuple[str, ...]:
             "restart-one",
             "restart-two",
             "rollback",
+            "recovery",
         )
     if scenario in {"remove", "purge"}:
         return ("fresh",)
@@ -415,6 +452,8 @@ def _preparation_event_checks(scenario: str) -> tuple[str, ...]:
         f"{scenario}.platform.uname",
         f"{scenario}.extract.previous",
         f"{scenario}.extract.candidate",
+        f"{scenario}.metadata.previous.sha256",
+        f"{scenario}.metadata.candidate.sha256",
         f"{scenario}.metadata.previous.version",
         f"{scenario}.metadata.candidate.version",
         f"{scenario}.metadata.previous.architecture",
@@ -423,6 +462,7 @@ def _preparation_event_checks(scenario: str) -> tuple[str, ...]:
         f"{scenario}.metadata.previous.payload_inventory",
         f"{scenario}.metadata.candidate.manager_manifest",
         f"{scenario}.metadata.candidate.payload_inventory",
+        f"{scenario}.metadata.candidate.runtime_dependencies",
     )
 
 
@@ -451,6 +491,7 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
         checks.extend(_installed_phase_event_checks(scenario, "restart-two"))
         checks.extend(_state_event_checks(scenario, "restart-two"))
         installed("rollback.previous", "rollback")
+        installed("recovery.candidate", "recovery")
         return tuple(checks)
 
     installed("install.candidate", "fresh")
@@ -462,6 +503,7 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
             f"{scenario}.{removal_label}.payload_inventory",
         )
     )
+    checks.extend(_generated_cleanup_event_checks(scenario, removal_label))
     if family in {"apk"} or (family == "deb" and scenario == "remove"):
         checks.extend(_state_event_checks(scenario, removal_label))
     elif family == "deb":
@@ -499,6 +541,39 @@ class PackageArtifact:
 class PackagePair:
     candidate: PackageArtifact
     previous: PackageArtifact
+
+
+def is_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> bool:
+    if spec.family != "apk":
+        return False
+    expected = FORWARD_ONLY_APK_PREVIOUS[spec.package_architecture]
+    return (
+        pair.candidate.version == FORWARD_ONLY_APK_CANDIDATE_VERSION
+        and pair.candidate.path.name
+        == f"syswarden_{FORWARD_ONLY_APK_CANDIDATE_VERSION}_{spec.package_architecture}.apk"
+        and pair.previous.version == FORWARD_ONLY_APK_PREVIOUS_VERSION
+        and pair.previous.path.name == expected["filename"]
+        and pair.previous.sha256 == expected["sha256"]
+    )
+
+
+def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> bool:
+    if spec.family != "apk":
+        return False
+    expected = FORWARD_ONLY_APK_PREVIOUS[spec.package_architecture]
+    historical_binding_touched = (
+        pair.previous.version == FORWARD_ONLY_APK_PREVIOUS_VERSION
+        or pair.previous.path.name == expected["filename"]
+        or pair.previous.sha256 == expected["sha256"]
+    )
+    forward_only = is_forward_only_apk_pair(spec, pair)
+    if historical_binding_touched and not forward_only:
+        raise LifecycleLabError(
+            "historical APK transition must be the exact byte-bound "
+            "v4.02.8 -> v4.02.10 contract for "
+            f"{spec.package_architecture}"
+        )
+    return forward_only
 
 
 @dataclass(frozen=True)
@@ -976,6 +1051,8 @@ def validate_inputs(
                 )
             pairs[coordinate] = pair
     build_package_version_contract(pairs)
+    for spec in platforms:
+        validate_forward_only_apk_pair(spec, pairs[package_coordinate(spec)])
     return candidate_root, previous_root, pairs
 
 
@@ -1170,6 +1247,58 @@ package_architecture() {
             rm -rf "${metadata}"
             ;;
     esac
+}
+
+expected_runtime_dependencies() {
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            printf '%s\n' bash-completion cron curl ipset jq nftables qrencode rsyslog wget wireguard-tools
+            ;;
+        rpm)
+            printf '%s\n' bash-completion checkpolicy cronie curl ipset jq nftables policycoreutils-python-utils qrencode rsyslog wget wireguard-tools
+            ;;
+        apk)
+            printf '%s\n' bash-completion curl jq libqrencode-tools nftables rsyslog rsyslog-uxsock wget wireguard-tools
+            ;;
+        *)
+            return 2
+            ;;
+    esac | LC_ALL=C sort
+}
+
+package_runtime_dependencies() {
+    package="$1"
+    destination="$2"
+    raw="${destination}.raw"
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            dpkg-deb --field "${package}" Depends 2>/dev/null | tr ',' '\n' | \
+                sed -E 's/^[[:space:]]*//; s/[[:space:]]*\([^)]*\)//; s/[[:space:]]*$//' \
+                > "${raw}" || return 1
+            ;;
+        rpm)
+            rpm -qp --requires "${package}" 2>/dev/null | \
+                sed -E 's/[[:space:]].*$//' | \
+                grep -E '^[A-Za-z0-9][A-Za-z0-9+_.-]*$' > "${raw}" || true
+            ;;
+        apk)
+            metadata="$(mktemp -d /tmp/syswarden-apk-dependencies.XXXXXX)"
+            if ! tar -xf "${package}" -C "${metadata}" .PKGINFO; then
+                rm -rf "${metadata}"
+                return 1
+            fi
+            sed -n 's/^depend = //p' "${metadata}/.PKGINFO" | \
+                sed -E 's/[<>=~].*$//' | \
+                grep -E '^[A-Za-z0-9][A-Za-z0-9+_.-]*$' > "${raw}" || true
+            rm -rf "${metadata}"
+            ;;
+        *)
+            return 2
+            ;;
+    esac
+    LC_ALL=C sort -u "${raw}" > "${destination}"
+    rm -f "${raw}"
+    [ -s "${destination}" ]
 }
 
 installed_version() {
@@ -1490,6 +1619,123 @@ verify_package_artifact() {
     else
         record fail "${PREFIX}.metadata.${label}.payload_inventory" "payload type, mode, owner, link, or content inventory mismatch"
     fi
+    if [ "${label}" = "candidate" ]; then
+        dependencies="/tmp/dependencies-${label}"
+        expected_dependencies="/tmp/dependencies-${label}.expected"
+        expected_runtime_dependencies > "${expected_dependencies}"
+        if package_runtime_dependencies "${package}" "${dependencies}" && \
+           cmp -s "${expected_dependencies}" "${dependencies}"; then
+            record pass "${PREFIX}.metadata.${label}.runtime_dependencies" "exact runtime dependency inventory sha256=$(hash_file "${dependencies}")"
+        else
+            diff -u "${expected_dependencies}" "${dependencies}" >> "${COMMAND_LOG}" 2>&1 || true
+            record fail "${PREFIX}.metadata.${label}.runtime_dependencies" "runtime dependency inventory differs from the reviewed family contract"
+        fi
+    fi
+}
+
+probe_forward_only_apk_payload() {
+    label="$1"
+    check_equal "${label}.version" "${EXPECTED_PREVIOUS_VERSION}" "${PREVIOUS_VERSION}"
+    verify_installed_inventory "${label}" previous
+
+    /opt/syswarden/bin/syswarden-cli --help \
+        > /tmp/syswarden-historical-help.out 2>&1
+    historical_rc=$?
+    if [ "${historical_rc}" -eq 127 ]; then
+        record pass "${PREFIX}.${label}.executable" "historical glibc loader refusal matched exit code 127"
+    else
+        record fail "${PREFIX}.${label}.executable" "historical failure class changed; expected loader exit 127, found ${historical_rc}"
+    fi
+
+    case "${EXPECTED_PACKAGE_ARCHITECTURE}" in
+        x86_64)
+            expected_interp=/lib64/ld-linux-x86-64.so.2
+            expected_machine='Advanced Micro Devices X86-64'
+            ;;
+        aarch64)
+            expected_interp=/lib/ld-linux-aarch64.so.1
+            expected_machine='AArch64'
+            ;;
+        *)
+            expected_interp=invalid
+            expected_machine=invalid
+            ;;
+    esac
+    historical_elf_ok=1
+    for binary in \
+        /opt/syswarden/bin/syswarden-cli \
+        /opt/syswarden/bin/syswarden-core \
+        /opt/syswarden/bin/syswarden-tui; do
+        elf_type="$(readelf --file-header "${binary}" 2>/dev/null | sed -n 's/^[[:space:]]*Type:[[:space:]]*\([^[:space:]]*\).*/\1/p')"
+        machine="$(readelf --file-header "${binary}" 2>/dev/null | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')"
+        interpreter="$(readelf --program-headers "${binary}" 2>/dev/null | sed -n 's/.*Requesting program interpreter: \(.*\)]/\1/p')"
+        [ "${elf_type}" = "DYN" ] || historical_elf_ok=0
+        [ "${machine}" = "${expected_machine}" ] || historical_elf_ok=0
+        [ "${interpreter}" = "${expected_interp}" ] || historical_elf_ok=0
+    done
+    if [ "${historical_elf_ok}" -eq 1 ]; then
+        record pass "${PREFIX}.${label}.elf_contract" "historical payload matched DYN plus exact glibc PT_INTERP failure class"
+    else
+        record fail "${PREFIX}.${label}.elf_contract" "historical APK ELF failure class does not match the byte-bound contract"
+    fi
+    record pass "${PREFIX}.${label}.postinstall_contract" "exact byte-bound v4.02.8 historical postinstall failure input recorded before candidate recovery"
+}
+
+probe_postinstall_contract() {
+    label="$1"
+    postinstall_ok=1
+    for path in \
+        /etc/syswarden/config/config.toml \
+        /etc/syswarden/config/modules/00-core.toml \
+        /etc/syswarden/config/modules/10-network.toml \
+        /etc/syswarden/config/modules/20-security.toml \
+        /etc/syswarden/config/modules/30-waap.toml \
+        /etc/syswarden/config/modules/40-integrations.toml \
+        /etc/syswarden/config/modules/99-user.toml; do
+        [ -f "${path}" ] && [ ! -L "${path}" ] || postinstall_ok=0
+    done
+    if [ ! -s /etc/bash_completion.d/syswarden ] || [ -L /etc/bash_completion.d/syswarden ]; then
+        postinstall_ok=0
+    fi
+    cron_state="$(crontab -l 2>/dev/null || true)"
+    printf '%s\n' "${cron_state}" | grep -Fq '/opt/syswarden/bin/syswarden-cli update-feeds' || postinstall_ok=0
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm)
+            service_contract='systemd'
+            for specification in \
+                '/etc/systemd/system/syswarden-core.service|/opt/syswarden/bin/syswarden-core' \
+                '/etc/systemd/system/syswarden-firewall.service|/opt/syswarden/bin/syswarden-cli reload --no-restart' \
+                '/etc/systemd/system/syswarden-webtui.service|/opt/syswarden/bin/syswarden-cli web-tui'; do
+                path="${specification%%|*}"
+                fragment="${specification#*|}"
+                [ -f "${path}" ] && [ ! -L "${path}" ] && \
+                    [ "$(file_mode "${path}" 2>/dev/null || true)" = "600" ] && \
+                    grep -Fq "${fragment}" "${path}" || postinstall_ok=0
+            done
+            ;;
+        apk)
+            service_contract='openrc'
+            for specification in \
+                '/etc/init.d/syswarden-core|/opt/syswarden/bin/syswarden-core' \
+                '/etc/init.d/syswarden-firewall|/opt/syswarden/bin/syswarden-cli reload --no-restart' \
+                '/etc/init.d/syswarden-webtui|/opt/syswarden/bin/syswarden-cli'; do
+                path="${specification%%|*}"
+                fragment="${specification#*|}"
+                [ -f "${path}" ] && [ ! -L "${path}" ] && \
+                    [ "$(file_mode "${path}" 2>/dev/null || true)" = "755" ] && \
+                    grep -Fq "${fragment}" "${path}" || postinstall_ok=0
+            done
+            ;;
+        *)
+            service_contract='invalid'
+            postinstall_ok=0
+            ;;
+    esac
+    if [ "${postinstall_ok}" -eq 1 ]; then
+        record pass "${PREFIX}.${label}.postinstall_contract" "modular config, ${service_contract} services, completion and feed cron were generated"
+    else
+        record fail "${PREFIX}.${label}.postinstall_contract" "postinstall output contract is incomplete"
+    fi
 }
 
 verify_installed_inventory() {
@@ -1535,6 +1781,46 @@ probe_payload() {
         rc=$?
         record fail "${PREFIX}.${label}.executable" "CLI execution failed with exit code ${rc}"
     fi
+
+    case "${EXPECTED_PACKAGE_ARCHITECTURE}" in
+        amd64|x86_64) expected_machine='Advanced Micro Devices X86-64' ;;
+        arm64|aarch64) expected_machine='AArch64' ;;
+        *) expected_machine=invalid ;;
+    esac
+    elf_contract_ok=1
+    for binary in \
+        /opt/syswarden/bin/syswarden-cli \
+        /opt/syswarden/bin/syswarden-core \
+        /opt/syswarden/bin/syswarden-tui; do
+        elf_type="$(readelf --file-header "${binary}" 2>/dev/null | sed -n 's/^[[:space:]]*Type:[[:space:]]*\([^[:space:]]*\).*/\1/p')"
+        machine="$(readelf --file-header "${binary}" 2>/dev/null | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')"
+        has_interp=0
+        if readelf --program-headers "${binary}" 2>/dev/null | grep -q '[[:space:]]INTERP[[:space:]]'; then
+            has_interp=1
+        fi
+        description="$(file -b "${binary}" 2>/dev/null || true)"
+        [ "${machine}" = "${expected_machine}" ] || elf_contract_ok=0
+        case "${PACKAGE_FAMILY}" in
+            apk)
+                [ "${elf_type}" = "EXEC" ] || elf_contract_ok=0
+                [ "${has_interp}" -eq 0 ] || elf_contract_ok=0
+                printf '%s' "${description}" | grep -Fq 'statically linked' || elf_contract_ok=0
+                ;;
+            deb|rpm)
+                [ "${elf_type}" = "DYN" ] || elf_contract_ok=0
+                [ "${has_interp}" -eq 1 ] || elf_contract_ok=0
+                ;;
+            *)
+                elf_contract_ok=0
+                ;;
+        esac
+    done
+    if [ "${elf_contract_ok}" -eq 1 ]; then
+        record pass "${PREFIX}.${label}.elf_contract" "all payload binaries match the exact package-family ELF contract"
+    else
+        record fail "${PREFIX}.${label}.elf_contract" "payload binaries violate the exact package-family ELF contract"
+    fi
+    probe_postinstall_contract "${label}"
 }
 
 seed_state() {
@@ -1648,11 +1934,65 @@ assert_package_absent() {
     fi
 }
 
+seed_generated_runtime_artifacts() {
+    mkdir -p /etc/rsyslog.d
+    for path in \
+        /etc/rsyslog.d/99-syswarden-siem.conf \
+        /etc/rsyslog.d/99-syswarden-waf-bridge.conf; do
+        printf '%s\n' 'syswarden-lifecycle-generated-artifact' > "${path}"
+    done
+    existing_cron="$(crontab -l 2>/dev/null || true)"
+    {
+        [ -z "${existing_cron}" ] || printf '%s\n' "${existing_cron}"
+        printf '%s\n' '19 4 * * * /opt/syswarden/bin/syswarden-cli update-feeds --operator-option'
+    } | crontab -
+}
+
+assert_generated_runtime_artifacts_absent() {
+    label="$1"
+    check_absent "${label}.generated.systemd_core" /etc/systemd/system/syswarden-core.service
+    check_absent "${label}.generated.systemd_firewall" /etc/systemd/system/syswarden-firewall.service
+    check_absent "${label}.generated.systemd_webtui" /etc/systemd/system/syswarden-webtui.service
+    check_absent "${label}.generated.openrc_core" /etc/init.d/syswarden-core
+    check_absent "${label}.generated.openrc_firewall" /etc/init.d/syswarden-firewall
+    check_absent "${label}.generated.openrc_webtui" /etc/init.d/syswarden-webtui
+    check_absent "${label}.generated.completion" /etc/bash_completion.d/syswarden
+    check_absent "${label}.generated.rsyslog_siem" /etc/rsyslog.d/99-syswarden-siem.conf
+    check_absent "${label}.generated.rsyslog_waf_bridge" /etc/rsyslog.d/99-syswarden-waf-bridge.conf
+    cron_state="$(crontab -l 2>/dev/null || true)"
+    managed_cron="$(printf '%s\n' "${cron_state}" | awk '
+        NF == 9 && $1 == "*/30" && $2 == "*" && $3 == "*" &&
+            $4 == "*" && $5 == "*" &&
+            $6 == "/opt/syswarden/bin/syswarden-cli" &&
+            $7 == "ha-sync" && $8 == ">/dev/null" && $9 == "2>&1" { print }
+        NF == 9 && $1 ~ /^([1-9]|[1-5][0-9])$/ && $2 == "*" &&
+            $3 == "*" && $4 == "*" && $5 == "*" &&
+            $6 == "/opt/syswarden/bin/syswarden-cli" &&
+            $7 == "update-feeds" && $8 == ">/dev/null" && $9 == "2>&1" { print }
+    ')"
+    if [ -n "${managed_cron}" ]; then
+        record fail "${PREFIX}.${label}.generated.cron_reference" "dead SysWarden cron reference remains"
+    else
+        record pass "${PREFIX}.${label}.generated.cron_reference" "SysWarden cron references are absent"
+    fi
+    if printf '%s\n' "${cron_state}" | grep -F -q '19 4 * * * /opt/syswarden/bin/syswarden-cli update-feeds --operator-option'; then
+        record pass "${PREFIX}.${label}.generated.cron_unrelated" "unrelated cron entry is preserved"
+    else
+        record fail "${PREFIX}.${label}.generated.cron_unrelated" "unrelated cron entry was removed"
+    fi
+}
+
 prepare_expected_payloads() {
     if ! run_step extract.previous extract_package "${PREVIOUS_PACKAGE}" /tmp/expected-previous; then
         return 1
     fi
     if ! run_step extract.candidate extract_package "${CANDIDATE_PACKAGE}" /tmp/expected-candidate; then
+        return 1
+    fi
+    check_equal metadata.previous.sha256 "${EXPECTED_PREVIOUS_SHA256}" "$(hash_file "${PREVIOUS_PACKAGE}" 2>/dev/null || true)"
+    check_equal metadata.candidate.sha256 "${EXPECTED_CANDIDATE_SHA256}" "$(hash_file "${CANDIDATE_PACKAGE}" 2>/dev/null || true)"
+    if [ "$(hash_file "${PREVIOUS_PACKAGE}" 2>/dev/null || true)" != "${EXPECTED_PREVIOUS_SHA256}" ] || \
+       [ "$(hash_file "${CANDIDATE_PACKAGE}" 2>/dev/null || true)" != "${EXPECTED_CANDIDATE_SHA256}" ]; then
         return 1
     fi
     PREVIOUS_VERSION="$(package_version "${PREVIOUS_PACKAGE}" 2>/dev/null || true)"
@@ -1694,7 +2034,11 @@ scenario_upgrade_rollback_initial() {
     prepare_expected_payloads || return
     seed_state
     run_install_step install.previous "${PREVIOUS_PACKAGE}" || return
-    probe_payload previous previous "${PREVIOUS_VERSION}"
+    if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
+        probe_forward_only_apk_payload previous
+    else
+        probe_payload previous previous "${PREVIOUS_VERSION}"
+    fi
     assert_all_state_preserved previous
 
     run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}" || return
@@ -1720,8 +2064,15 @@ scenario_upgrade_rollback_restart_two() {
     probe_payload restart-two candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved restart-two
     run_install_step rollback.previous "${PREVIOUS_PACKAGE}" || return
-    probe_payload rollback previous "${EXPECTED_PREVIOUS_VERSION}"
+    if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
+        probe_forward_only_apk_payload rollback
+    else
+        probe_payload rollback previous "${EXPECTED_PREVIOUS_VERSION}"
+    fi
     assert_all_state_preserved rollback
+    run_install_step recovery.candidate "${CANDIDATE_PACKAGE}" || return
+    probe_payload recovery candidate "${EXPECTED_CANDIDATE_VERSION}"
+    assert_all_state_preserved recovery
     printf '%s\n' complete > "${RESTART_STATE_FILE}"
 }
 
@@ -1731,15 +2082,18 @@ scenario_remove() {
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
+    seed_generated_runtime_artifacts
     case "${PACKAGE_FAMILY}" in
         deb|apk)
             run_step remove remove_package || return
             assert_package_absent remove candidate
+            assert_generated_runtime_artifacts_absent remove
             assert_all_state_preserved remove
             ;;
         rpm)
             run_step final-removal remove_package || return
             assert_package_absent final-removal candidate
+            assert_generated_runtime_artifacts_absent final-removal
             check_absent final-removal.state.config /etc/syswarden/config/lifecycle-operator.conf
             check_absent final-removal.state.token /etc/syswarden/config/modules/99-user.toml
             check_absent final-removal.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
@@ -1760,8 +2114,10 @@ scenario_purge() {
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
+    seed_generated_runtime_artifacts
     run_step purge purge_package || return
     assert_package_absent purge candidate
+    assert_generated_runtime_artifacts_absent purge
     case "${PACKAGE_FAMILY}" in
         deb)
             check_absent purge.state.config /etc/syswarden/config/lifecycle-operator.conf
@@ -2404,6 +2760,13 @@ def container_run_arguments(
         "--env",
         f"EXPECTED_PREVIOUS_VERSION={pair.previous.version}",
         "--env",
+        f"EXPECTED_CANDIDATE_SHA256={pair.candidate.sha256}",
+        "--env",
+        f"EXPECTED_PREVIOUS_SHA256={pair.previous.sha256}",
+        "--env",
+        "FORWARD_ONLY_APK_TRANSITION="
+        + ("1" if is_forward_only_apk_pair(spec, pair) else "0"),
+        "--env",
         f"SCENARIO={scenario}",
         "--env",
         f"CANDIDATE_PACKAGE=/candidate/{pair.candidate.path.name}",
@@ -2625,10 +2988,89 @@ def coverage_status(
     return "incomplete"
 
 
+def forward_only_apk_report_contract(
+    platform_result: dict[str, object],
+) -> tuple[bool, list[str]]:
+    if platform_result.get("family") != "apk":
+        return False, []
+    package_architecture = platform_result.get("package_architecture")
+    if package_architecture not in FORWARD_ONLY_APK_PREVIOUS:
+        return False, ["forward-only-apk-architecture-invalid"]
+    previous = platform_result.get("previous")
+    candidate = platform_result.get("candidate")
+    if not isinstance(previous, dict) or not isinstance(candidate, dict):
+        return False, ["forward-only-apk-artifact-binding-absent"]
+    expected = FORWARD_ONLY_APK_PREVIOUS[package_architecture]
+    historical_binding_touched = (
+        previous.get("version") == FORWARD_ONLY_APK_PREVIOUS_VERSION
+        or previous.get("filename") == expected["filename"]
+        or previous.get("sha256") == expected["sha256"]
+    )
+    exact = (
+        historical_binding_touched
+        and previous
+        == {
+            "filename": expected["filename"],
+            "version": FORWARD_ONLY_APK_PREVIOUS_VERSION,
+            "sha256": expected["sha256"],
+        }
+        and candidate.get("version") == FORWARD_ONLY_APK_CANDIDATE_VERSION
+        and candidate.get("filename")
+        == f"syswarden_{FORWARD_ONLY_APK_CANDIDATE_VERSION}_{package_architecture}.apk"
+        and platform_result.get("previous_version")
+        == FORWARD_ONLY_APK_PREVIOUS_VERSION
+        and platform_result.get("candidate_version")
+        == FORWARD_ONLY_APK_CANDIDATE_VERSION
+    )
+    if historical_binding_touched and not exact:
+        return False, ["forward-only-apk-binding-not-exact"]
+    return exact, []
+
+
+def validate_forward_only_apk_events(
+    platform_result: dict[str, object], scenario_result: dict[str, object]
+) -> list[str]:
+    exact, problems = forward_only_apk_report_contract(platform_result)
+    if problems or not exact or scenario_result.get("name") != "upgrade-rollback":
+        return problems
+    expected_details = {
+        "upgrade-rollback.previous.executable": (
+            "historical glibc loader refusal matched exit code 127"
+        ),
+        "upgrade-rollback.previous.elf_contract": (
+            "historical payload matched DYN plus exact glibc PT_INTERP failure class"
+        ),
+        "upgrade-rollback.rollback.executable": (
+            "historical glibc loader refusal matched exit code 127"
+        ),
+        "upgrade-rollback.rollback.elf_contract": (
+            "historical payload matched DYN plus exact glibc PT_INTERP failure class"
+        ),
+        "upgrade-rollback.recovery.candidate": "command completed",
+        "upgrade-rollback.recovery.candidate.maintainer_script": (
+            "maintainer script emitted no Go panic or fatal runtime diagnostic"
+        ),
+    }
+    events = scenario_result.get("events")
+    if not isinstance(events, list):
+        return ["forward-only-apk-events-absent"]
+    by_check = {
+        item.get("check"): item
+        for item in events
+        if isinstance(item, dict) and isinstance(item.get("check"), str)
+    }
+    return [
+        f"forward-only-apk-evidence-mismatch:{check}"
+        for check, detail in expected_details.items()
+        if by_check.get(check)
+        != {"status": "pass", "check": check, "detail": detail}
+    ]
+
+
 def classify_lifecycle_evidence(
     results: Sequence[dict[str, object]],
 ) -> dict[str, object]:
-    """Separate harness completeness from release readiness and known blockers."""
+    """Recompute release readiness without a generic product waiver."""
 
     structural_failures: list[str] = []
     results_by_coordinate = {
@@ -2645,23 +3087,6 @@ def classify_lifecycle_evidence(
         )
     observed_failures: dict[str, str] = {}
     coordinate_classification: list[dict[str, object]] = []
-    candidate_blockers: set[str] = set()
-    coordinate_statuses: dict[tuple[str, str], str] = {}
-    coordinate_has_failures: dict[tuple[str, str], bool] = {}
-
-    expected_alpine_failures = {
-        f"alpine/{architecture}:{check}": "CLI execution failed with exit code 127"
-        for architecture in ARCHITECTURE_LABELS
-        for scenario in EXPECTED_SCENARIOS["apk"]
-        for check in expected_event_checks("apk", scenario)
-        if check.endswith(".executable")
-    }
-    known_failure_sets = {
-        "SW-PKG-001": expected_alpine_failures,
-    }
-    canonical_failures_by_blocker: dict[str, dict[str, str]] = {
-        blocker_id: {} for blocker_id in known_failure_sets
-    }
 
     for distribution, architecture in sorted(REQUIRED_PLATFORM_COORDINATES):
         coordinate_name = f"{distribution}/{architecture}"
@@ -2677,6 +3102,10 @@ def classify_lifecycle_evidence(
             )
         else:
             family = str(platform_result.get("family"))
+            _, binding_problems = forward_only_apk_report_contract(platform_result)
+            coordinate_structural.extend(
+                f"{coordinate_name}:{problem}" for problem in binding_problems
+            )
             scenarios = platform_result.get("scenarios")
             if not isinstance(scenarios, list) or [
                 item.get("name") if isinstance(item, dict) else None
@@ -2720,6 +3149,12 @@ def classify_lifecycle_evidence(
                         f"{coordinate_name}:{scenario_name}:event-contract-invalid"
                     )
                     continue
+                coordinate_structural.extend(
+                    f"{coordinate_name}:{scenario_name}:{problem}"
+                    for problem in validate_forward_only_apk_events(
+                        platform_result, scenario_result
+                    )
+                )
                 try:
                     validate_scenario_inventory_evidence(
                         scenario_result.get("inventory_evidence"),
@@ -2747,20 +3182,6 @@ def classify_lifecycle_evidence(
                     if scenario_failed_events and start_codes[-1] == 0:
                         coordinate_structural.append(
                             f"{coordinate_name}:{scenario_name}:failure-exit-inconsistent"
-                        )
-                    expected_rc127_events = (
-                        distribution == "alpine"
-                        and scenario_failed_events
-                        and all(
-                            event["check"].endswith(".executable")
-                            and event["detail"]
-                            == "CLI execution failed with exit code 127"
-                            for event in scenario_failed_events
-                        )
-                    )
-                    if expected_rc127_events and start_codes != [1] * required_starts:
-                        coordinate_structural.append(
-                            f"{coordinate_name}:{scenario_name}:blocker-exit-inconsistent"
                         )
                     derived_scenario_status = (
                         "pass"
@@ -2792,132 +3213,32 @@ def classify_lifecycle_evidence(
 
         structural_failures.extend(coordinate_structural)
         observed_failures.update(coordinate_failures)
-        expected_by_blocker_for_coordinate = {
-            blocker_id: {
-                identifier: detail
-                for identifier, detail in expected_failures.items()
-                if identifier.startswith(coordinate_name + ":")
-            }
-            for blocker_id, expected_failures in known_failure_sets.items()
-        }
-        active_coordinate_blockers = [
-            blocker_id
-            for blocker_id, expected_failures in expected_by_blocker_for_coordinate.items()
-            if expected_failures
-            and any(identifier in coordinate_failures for identifier in expected_failures)
-            and {
-                identifier: coordinate_failures.get(identifier)
-                for identifier in expected_failures
-            }
-            == expected_failures
-        ]
-        expected_for_coordinate = {
-            identifier: detail
-            for blocker_id in active_coordinate_blockers
-            for identifier, detail in expected_by_blocker_for_coordinate[
-                blocker_id
-            ].items()
-        }
         if not coordinate_structural and not coordinate_failures:
             coordinate_status = "pass"
-            coordinate_blockers: list[str] = []
-        elif (
-            not coordinate_structural
-            and active_coordinate_blockers
-            and coordinate_failures == expected_for_coordinate
-        ):
-            coordinate_status = "blocker"
-            coordinate_blockers = sorted(active_coordinate_blockers)
         else:
             coordinate_status = "incomplete"
-            coordinate_blockers = []
-        coordinate_statuses[(distribution, architecture)] = coordinate_status
-        coordinate_has_failures[(distribution, architecture)] = bool(
-            coordinate_failures
-        )
-        if coordinate_status == "blocker":
-            candidate_blockers.update(coordinate_blockers)
-            for blocker_id in coordinate_blockers:
-                canonical_failures_by_blocker[blocker_id].update(
-                    coordinate_failures
-                )
         coordinate_classification.append(
             {
                 "distribution": distribution,
                 "architecture_id": architecture,
                 "family": family,
                 "status": coordinate_status,
-                "blocker_ids": coordinate_blockers,
+                "blocker_ids": [],
             }
         )
-
-    # A coordinate is canonical only when its complete, exact failure set and
-    # details match one registered blocker.  Preserve that characterization
-    # even when another coordinate is structurally incomplete, but never let
-    # the unrelated incompleteness turn the known failures into "unexpected".
-    # Conversely, a partial set, changed detail, or additional failure never
-    # enters canonical_failures and therefore remains fail-closed below.
-    canonical_blockers: set[str] = set()
-    for blocker_id in sorted(candidate_blockers):
-        applicable_coordinates = {
-            identifier.split(":", 1)[0]
-            for identifier in known_failure_sets[blocker_id]
-        }
-        inconsistent_coordinates = sorted(
-            coordinate
-            for coordinate in applicable_coordinates
-            if (
-                coordinate_statuses.get(tuple(coordinate.split("/", 1)))
-                == "pass"
-                or (
-                    coordinate_statuses.get(tuple(coordinate.split("/", 1)))
-                    == "incomplete"
-                    and coordinate_has_failures.get(
-                        tuple(coordinate.split("/", 1)), False
-                    )
-                )
-            )
-        )
-        if inconsistent_coordinates:
-            structural_failures.append(
-                f"{blocker_id}:blocker-coverage-inconsistent:"
-                + ",".join(inconsistent_coordinates)
-            )
-        else:
-            canonical_blockers.add(blocker_id)
-
-    canonical_failures = {
-        identifier: detail
-        for blocker_id in canonical_blockers
-        for identifier, detail in canonical_failures_by_blocker[
-            blocker_id
-        ].items()
-    }
-    # A real, non-canonical failed check anywhere makes the product outcome
-    # ambiguous and invalidates every global blocker claim.  Structurally
-    # unavailable coordinates may coexist with exact evidence from completed
-    # coordinates, but an observed behavioral drift may not.
-    if set(observed_failures) - set(canonical_failures):
-        canonical_blockers.clear()
-        canonical_failures = {}
-
     unexpected_failed_checks = sorted(
-        set(structural_failures)
-        | (set(observed_failures) - set(canonical_failures))
+        set(structural_failures) | set(observed_failures)
     )
-    blocker_ids = sorted(canonical_blockers)
-    exact_known_blocker = bool(blocker_ids) and not unexpected_failed_checks
     every_check_passed = not unexpected_failed_checks and not observed_failures
     harness_complete = (
-        not unexpected_failed_checks
-        and (every_check_passed or exact_known_blocker)
+        every_check_passed
         and len(results_by_coordinate) == len(REQUIRED_PLATFORM_COORDINATES)
     )
     release_ready = harness_complete and every_check_passed
     return {
         "harness_complete": harness_complete,
         "release_ready": release_ready,
-        "blocker_ids": blocker_ids,
+        "blocker_ids": [],
         "unexpected_failed_checks": unexpected_failed_checks,
         "coordinate_classification": coordinate_classification,
     }

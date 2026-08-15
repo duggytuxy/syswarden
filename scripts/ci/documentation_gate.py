@@ -48,6 +48,12 @@ MARKDOWN_LINK_TARGET_RE = re.compile(r"\]\(\s*(<[^>]+>|[^\s)]+)")
 AUTOLINK_RE = re.compile(r"<(https://[^\s<>]+)>")
 VERSION_RE = re.compile(r"v[0-9]+\.[0-9]{2}\.[0-9]+")
 USE_RE = re.compile(r'\bUse:\s+"([^" ]+)')
+HIDDEN_USE_RE = re.compile(
+    r"&cobra\.Command\s*\{"
+    r"(?:(?!\b(?:Run|RunE):).)*?\bUse:\s+\"([^\" ]+)"
+    r"(?:(?!\b(?:Run|RunE):).)*?\bHidden:\s*true",
+    re.DOTALL,
+)
 MANUAL_COMMAND_RE = re.compile(r'fmt\.Printf\("  %s([a-z][a-z0-9-]+)%s')
 COBRA_PUBLIC_FIELDS = ("use", "short", "long", "example")
 COBRA_UTILITY_COMMANDS = frozenset({"completion", "help"})
@@ -197,7 +203,10 @@ def cobra_commands(repo_root: Path) -> set[str]:
     for path in files:
         if path.name.endswith("_test.go"):
             continue
-        commands.update(USE_RE.findall(read_text(path)))
+        source = read_text(path)
+        discovered = set(USE_RE.findall(source))
+        hidden = set(HIDDEN_USE_RE.findall(source))
+        commands.update(discovered - hidden)
     if "syswarden" not in commands or len(commands) < 20:
         raise DocumentationGateError(
             f"Cobra command discovery is incomplete: {sorted(commands)}"

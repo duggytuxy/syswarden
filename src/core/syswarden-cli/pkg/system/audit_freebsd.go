@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/platformpaths"
 )
 
 func logHeader(title string) {
@@ -33,7 +35,18 @@ func info(msg string) {
 }
 
 func isServiceActive(serviceName string) bool {
-	out, err := exec.Command("service", serviceName, "status").Output() // #nosec
+	var command *exec.Cmd
+	switch serviceName {
+	case "rsyslogd":
+		command = exec.Command("service", "rsyslogd", "onestatus")
+	case "syslogd":
+		command = exec.Command("service", "syslogd", "onestatus")
+	case "syswarden":
+		command = exec.Command("service", "syswarden", "onestatus")
+	default:
+		return false
+	}
+	out, err := command.Output()
 	if err == nil && strings.Contains(string(out), "is running") {
 		return true
 	}
@@ -53,18 +66,25 @@ func checkFilePerms(filepath string, validPerms []string, expectedOwner string) 
 	}
 
 	modeStr := fmt.Sprintf("%04o", info.Mode().Perm())
-	isValid := false
+	permissionsValid := false
 	for _, perm := range validPerms {
-		if strings.Contains(modeStr, perm) {
-			isValid = true
+		if modeStr == fmt.Sprintf("0%s", strings.TrimPrefix(perm, "0")) {
+			permissionsValid = true
 			break
 		}
 	}
+	expectedUID := uint32(0)
+	if expectedOwner != "root" {
+		fail(fmt.Sprintf("%s owner check has unsupported expected identity %q.", filepath, expectedOwner))
+		return
+	}
+	stat, ownerKnown := info.Sys().(*syscall.Stat_t)
+	ownerValid := ownerKnown && stat.Uid == expectedUID
 
-	if isValid {
-		pass(fmt.Sprintf("%s permissions VERIFIED (%s).", filepath, modeStr))
+	if permissionsValid && ownerValid {
+		pass(fmt.Sprintf("%s permissions and owner VERIFIED (%s, %s).", filepath, modeStr, expectedOwner))
 	} else {
-		fail(fmt.Sprintf("%s permissions FAILED (Got %s, Expected one of %v).", filepath, modeStr, validPerms))
+		fail(fmt.Sprintf("%s permissions or owner FAILED (Got mode %s and expected owner %s; expected modes %v).", filepath, modeStr, expectedOwner, validPerms))
 	}
 }
 
@@ -75,7 +95,13 @@ func RunAudit() {
 	// Phase 1
 	logHeader("Phase 1: Cron Orchestration")
 	out, _ := exec.Command("crontab", "-l").Output() // #nosec
-	cronCount := strings.Count(string(out), "syswarden-cli update-feeds")
+	cronCount := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if platformpaths.IsManagedCronLine(line) && len(fields) == 9 && fields[6] == "update-feeds" {
+			cronCount++
+		}
+	}
 	if cronCount == 1 {
 		pass("Cron Orchestration VERIFIED: 'syswarden-cli update-feeds' is actively scheduled.")
 	} else if cronCount > 1 {
@@ -93,10 +119,12 @@ func RunAudit() {
 		checkFilePerms("/var/log/secure", []string{"640", "600"}, "root")
 	}
 
-	if isServiceActive("syslogd") {
-		pass("syslogd daemon is active (FreeBSD default).")
+	if isServiceActive("rsyslogd") {
+		pass("rsyslogd daemon is active for SysWarden log integration.")
+	} else if isServiceActive("syslogd") {
+		pass("syslogd daemon is active; SysWarden rsyslog integration is not active.")
 	} else {
-		fail("syslogd daemon is not running.")
+		fail("Neither rsyslogd nor syslogd is running.")
 	}
 
 	// Phase 3
@@ -148,8 +176,8 @@ func RunAudit() {
 
 	// Phase 4
 	logHeader("Phase 4: Layer 7 Active Defense (SYSWARDEN WAF)")
-	if isServiceActive("syswarden-core") {
-		pass("SYSWARDEN WAF service (syswarden-core) is running.")
+	if isServiceActive("syswarden") {
+		pass("SYSWARDEN WAF service (syswarden) is running.")
 
 		if config.GlobalConfig.BruteforceLogs != "" {
 			if strings.ToLower(config.GlobalConfig.BruteforceLogs) == "auto" {
@@ -180,10 +208,10 @@ func RunAudit() {
 	// Phase 5
 	logHeader("Phase 5: Telemetry & Local Dashboard Inputs")
 	info("The checks below observe the core service and local TUI data file only.")
-	if isServiceActive("syswarden-core") {
-		pass("syswarden-core service is active; telemetry generation was not independently exercised.")
+	if isServiceActive("syswarden") {
+		pass("syswarden service is active; telemetry generation was not independently exercised.")
 	} else {
-		fail("Telemetry Generator: syswarden-core is inactive.")
+		fail("Telemetry Generator: syswarden is inactive.")
 	}
 	checkFilePerms("/var/lib/syswarden/ui/data.json", []string{"600"}, "root")
 
@@ -208,12 +236,18 @@ func RunAudit() {
 
 	// Phase 7
 	logHeader("Phase 7: CSPM / Persistence Posture")
-	if _, err := exec.LookPath("nft"); err == nil {
-		if _, err := os.Stat("/etc/syswarden/syswarden.nft"); err == nil {
-			pass("Nftables persistence file exists; load state and locking were not independently checked.")
-		} else {
-			warn("Firewall Persistence UNKNOWN: Nftables base file /etc/syswarden/syswarden.nft is missing.")
-		}
+	if _, err := os.Stat("/var/db/syswarden/pf-policy-snapshot.json"); err == nil {
+		pass("PF restoration snapshot is present for bounded lifecycle recovery.")
+	} else if os.IsNotExist(err) {
+		warn("PF restoration snapshot is absent; this is expected only after a completed supported uninstall.")
+	} else {
+		fail(fmt.Sprintf("PF restoration snapshot cannot be inspected: %v", err))
+	}
+	if output, err := exec.Command("pfctl", "-s", "info").Output(); err == nil &&
+		strings.Contains(string(output), "Status:") {
+		pass("PF runtime status is queryable through the native FreeBSD backend.")
+	} else {
+		fail("PF runtime status is not queryable.")
 	}
 
 	fmt.Printf("\n\033[1;32m[✔] SYSWARDEN local diagnostic completed; review each observation and warning.\033[0m\n")

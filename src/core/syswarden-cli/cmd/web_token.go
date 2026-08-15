@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
 
 	"syswarden-cli/config"
@@ -173,28 +172,30 @@ var webTokenCmd = &cobra.Command{
 	Short: "Display or rotate the Web-TUI access token",
 	Long: "Displays the configured Web-TUI access token. If no token exists, an invocation " +
 		"without --rotate generates and persists one, then attempts to restart " +
-		"syswarden-webtui.service. --rotate always replaces the persisted token and makes the same " +
+		webTUIServiceDisplay + ". --rotate always replaces the persisted token and makes the same " +
 		"restart attempt. If that attempt fails, a running Web-TUI process may continue accepting " +
 		"its previous token.",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		token := readConfigToken()
 
 		if rotateToken || token == "" {
 			fmt.Println("[SYSWARDEN] Generating a new secure Web-TUI token...")
 			token = generateSecureToken(32)
 			if err := updateConfigToken(token); err != nil {
-				log.Fatalf("[ERROR] Failed to save token to syswarden-auto.conf: %v", err)
+				return fmt.Errorf("save Web-TUI token: %w", err)
 			}
 			fmt.Println("[SYSWARDEN] Token updated successfully.")
 
-			// Restart the daemon to apply changes immediately
-			_ = exec.Command("systemctl", "restart", "syswarden-webtui.service").Run() // #nosec
+			if err := restartWebTUIService(); err != nil {
+				return fmt.Errorf("Web-TUI token was persisted but the running service was not verified with it: %w", err)
+			}
 		}
 
 		ip := getPublicIP()
 		fmt.Printf("\n[+] Web-TUI Client Access URL: https://%s:%s/\n", ip, webtuiPort)
 		fmt.Printf("    Username: admin\n")
 		fmt.Printf("    Password: %s\n\n", token)
+		return nil
 	},
 }
 

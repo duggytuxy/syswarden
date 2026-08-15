@@ -3,106 +3,244 @@
 package system
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/unix"
+
+	"syswarden-cli/pkg/platformpaths"
 )
 
-// UninstallSystem executes a scorched-earth removal of SYSWARDEN and all its dependencies on FreeBSD
+const freeBSDSystemImmutableFlag = 0x00020000
+
+func inactiveServiceResult(command *exec.Cmd, label string) error {
+	err := command.Run()
+	if err == nil {
+		return fmt.Errorf("%s remains active", label)
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+		return nil
+	}
+	return fmt.Errorf("verify %s is inactive: %w", label, err)
+}
+
+func stopFreeBSDService(stopCommand, statusCommand *exec.Cmd, label string) error {
+	_ = stopCommand.Run()
+	return inactiveServiceResult(statusCommand, label)
+}
+
+func removeFreeBSDRCFlag(removeCommand *exec.Cmd, variable, label string) error {
+	_ = removeCommand.Run()
+	output, err := exec.Command("sysrc", "-a").Output()
+	if err != nil {
+		return fmt.Errorf("enumerate rc.conf variables while verifying %s removal: %w", label, err)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, variable+":") ||
+			strings.HasPrefix(trimmed, variable+"=") {
+			return fmt.Errorf("%s remains configured", label)
+		}
+	}
+	return nil
+}
+
+func clearFreeBSDSystemImmutable(path string) error {
+	var stat unix.Stat_t
+	if err := unix.Lstat(path, &stat); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return err
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		return nil
+	}
+	flags := int(stat.Flags &^ freeBSDSystemImmutableFlag)
+	if err := unix.Chflags(path, flags); err != nil {
+		return fmt.Errorf("clear system immutable flag on %s: %w", path, err)
+	}
+	return nil
+}
+
+func unlockFreeBSDProfiles(baseDirectory string) error {
+	entries, err := os.ReadDir(baseDirectory)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var failures []error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		for _, profile := range []string{
+			".profile", ".cshrc", ".shrc", ".login", ".bashrc", ".bash_profile",
+		} {
+			if err := clearFreeBSDSystemImmutable(filepath.Join(baseDirectory, entry.Name(), profile)); err != nil {
+				failures = append(failures, err)
+			}
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func removeManagedFreeBSDCron() error {
+	output, err := exec.Command("crontab", "-l").Output()
+	if err != nil {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+			if _, statErr := os.Lstat("/var/cron/tabs/root"); errors.Is(statErr, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("crontab reported no entries but the root spool file still exists")
+		}
+		return fmt.Errorf("read root crontab: %w", err)
+	}
+	lines := strings.Split(string(output), "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" && !platformpaths.IsManagedCronLine(line) {
+			kept = append(kept, line)
+		}
+	}
+	content := ""
+	if len(kept) > 0 {
+		content = strings.Join(kept, "\n") + "\n"
+	}
+	command := exec.Command("crontab", "-")
+	command.Stdin = strings.NewReader(content)
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("write filtered root crontab: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return nil
+}
+
+func removeFreeBSDPath(path string, recursive bool) error {
+	var err error
+	if recursive {
+		err = os.RemoveAll(path)
+	} else {
+		err = os.Remove(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("remove %s: %w", path, err)
+	}
+	return nil
+}
+
+// UninstallSystem restores the captured PF policy before destructive cleanup.
 func UninstallSystem() error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("uninstall must be executed as root")
 	}
 
 	fmt.Println("[WARN] Starting Deep Clean Uninstallation (Scorched Earth) on FreeBSD...")
-
-	// 1. Terminate Daemons
-	fmt.Println(" -> Stopping and removing SYSWARDEN Core Services...")
-	_ = exec.Command("service", "syswarden", "stop").Run()    // #nosec
-	_ = exec.Command("sysrc", "-x", "syswarden_enable").Run() // #nosec
-	_ = os.Remove("/usr/local/etc/rc.d/syswarden")
-
-	_ = exec.Command("service", "syswarden-webtui", "stop").Run()    // #nosec
-	_ = exec.Command("sysrc", "-x", "syswarden_webtui_enable").Run() // #nosec
-	_ = os.Remove("/usr/local/etc/rc.d/syswarden-webtui")
-
-	// 2. Kill orphan processes
-	_ = exec.Command("pkill", "-9", "-f", "syswarden-core").Run()   // #nosec
-	_ = exec.Command("pkill", "-9", "-f", "syswarden-webtui").Run() // #nosec
-
-	// 3. Remove WireGuard
-	if _, err := os.Stat("/usr/local/etc/wireguard/wg-syswarden.conf"); err == nil {
-		fmt.Println(" -> Removing WireGuard VPN configs...")
-		_ = exec.Command("sysrc", "-x", "wireguard_interfaces").Run() // #nosec
-		_ = exec.Command("service", "wireguard", "stop").Run()        // #nosec
-		_ = os.Remove("/usr/local/etc/wireguard/wg-syswarden.conf")
-		_ = os.RemoveAll("/usr/local/etc/wireguard/clients")
+	var failures []error
+	if err := stopFreeBSDService(
+		exec.Command("service", "syswarden", "onestop"),
+		exec.Command("service", "syswarden", "onestatus"),
+		"syswarden service",
+	); err != nil {
+		failures = append(failures, err)
+	}
+	if err := stopFreeBSDService(
+		exec.Command("service", "syswardenwebtui", "onestop"),
+		exec.Command("service", "syswardenwebtui", "onestatus"),
+		"syswardenwebtui service",
+	); err != nil {
+		failures = append(failures, err)
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("refusing uninstall while services may still be active: %w", errors.Join(failures...))
+	}
+	for _, path := range []string{
+		"/usr/local/etc/rsyslog.d/99-syswarden-siem.conf",
+		"/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf",
+	} {
+		if err := removeFreeBSDPath(path, false); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("refusing uninstall before generated logging fragments are safely removed: %w", errors.Join(failures...))
+	}
+	if err := RestoreFreeBSDPackageHostState(); err != nil {
+		return fmt.Errorf("restore pre-SysWarden host state before uninstall: %w", err)
+	}
+	if output, err := exec.Command(
+		"/usr/local/syswarden/bin/syswarden-cli",
+		"package-restore-pf",
+	).CombinedOutput(); err != nil {
+		return fmt.Errorf("restore captured PF policy before uninstall: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 
-	// 4. Clean Firewall Rules
-	fmt.Println(" -> Cleaning Firewall Rules (Packet Filter)...")
-	// Flush specific tables
-	_ = exec.Command("pfctl", "-t", "syswarden_whitelist", "-T", "kill").Run() // #nosec
-	_ = exec.Command("pfctl", "-t", "syswarden_blacklist", "-T", "kill").Run() // #nosec
-	_ = exec.Command("pfctl", "-t", "banned_ips", "-T", "kill").Run()          // #nosec
-	_ = exec.Command("pfctl", "-t", "syswarden_geoip", "-T", "kill").Run()     // #nosec
-	_ = exec.Command("pfctl", "-t", "syswarden_asn", "-T", "kill").Run()       // #nosec
+	if err := removeFreeBSDRCFlag(
+		exec.Command("sysrc", "-x", "syswarden_enable"),
+		"syswarden_enable",
+		"syswarden_enable",
+	); err != nil {
+		failures = append(failures, err)
+	}
+	if err := removeFreeBSDRCFlag(
+		exec.Command("sysrc", "-x", "syswardenwebtui_enable"),
+		"syswardenwebtui_enable",
+		"syswardenwebtui_enable",
+	); err != nil {
+		failures = append(failures, err)
+	}
 
-	// 5. Clean up Cron and Syslog
-	fmt.Println(" -> Cleaning up background jobs and SIEM...")
-	_ = os.Remove("/usr/local/etc/rsyslog.d/99-syswarden-siem.conf")
-	_ = os.Remove("/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf")
-	_ = exec.Command("service", "rsyslogd", "restart").Run() // #nosec
+	for _, baseDirectory := range []string{"/home", "/usr/home"} {
+		if err := unlockFreeBSDProfiles(baseDirectory); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if err := clearFreeBSDSystemImmutable("/etc/syslog.conf"); err != nil {
+		failures = append(failures, err)
+	}
+	if err := removeManagedFreeBSDCron(); err != nil {
+		failures = append(failures, err)
+	}
 
-	// Revert Hardening
-	fmt.Println(" -> Reverting OS Hardening...")
-	_ = os.Remove("/var/cron/allow")
-
-	// Unlock user profiles
-	if dirs, err := os.ReadDir("/home"); err == nil {
-		for _, d := range dirs {
-			if d.IsDir() {
-				profiles := []string{".profile", ".bashrc", ".bash_profile"}
-				for _, p := range profiles {
-					pPath := "/home/" + d.Name() + "/" + p
-					if _, err := os.Stat(pPath); err == nil {
-						_ = exec.Command("chflags", "noschg", pPath).Run() // #nosec
-					}
-				}
-			}
+	for _, path := range []string{
+		"/usr/local/etc/rc.d/syswarden",
+		"/usr/local/etc/rc.d/syswardenwebtui",
+		"/usr/local/etc/rsyslog.d/99-syswarden-siem.conf",
+		"/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf",
+		"/var/run/syswarden.sock",
+		"/usr/local/etc/syswarden-auto.conf",
+		"/usr/local/bin/syswarden",
+		"/usr/local/bin/syswarden-tui",
+	} {
+		if err := removeFreeBSDPath(path, false); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	for _, path := range []string{
+		"/etc/syswarden",
+		"/var/db/syswarden",
+		"/var/lib/syswarden",
+		"/var/log/syswarden",
+		"/usr/local/syswarden",
+	} {
+		if err := removeFreeBSDPath(path, true); err != nil {
+			failures = append(failures, err)
 		}
 	}
 
-	// Remove cron natively
-	out, _ := exec.Command("crontab", "-l").Output() // #nosec
-	lines := strings.Split(string(out), "\n")
-	var newLines []string
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && !strings.Contains(line, "syswarden-cli") {
-			newLines = append(newLines, line)
-		}
+	if len(failures) > 0 {
+		return fmt.Errorf("FreeBSD uninstall completed with unresolved cleanup errors: %w", errors.Join(failures...))
 	}
-	newCron := ""
-	if len(newLines) > 0 {
-		newCron = strings.Join(newLines, "\n") + "\n"
-	}
-	cmd := exec.Command("crontab", "-") // #nosec
-	cmd.Stdin = strings.NewReader(newCron)
-	_ = cmd.Run()
-
-	// 6. Scorched Earth Files
-	fmt.Println(" -> Purging remaining files and configurations...")
-	_ = os.RemoveAll("/etc/syswarden")
-	_ = os.RemoveAll("/var/db/syswarden")
-	_ = os.RemoveAll("/var/lib/syswarden/ha")
-	_ = os.RemoveAll("/var/log/syswarden")
-	_ = os.Remove("/var/run/syswarden.sock")
-	_ = os.Remove("/usr/local/etc/syswarden-auto.conf")
-	_ = os.RemoveAll("/opt/syswarden")
-	_ = os.Remove("/usr/local/bin/syswarden")
-	_ = os.Remove("/usr/local/bin/syswarden-tui")
-
 	fmt.Println("[SUCCESS] Uninstallation complete. A reboot is recommended.")
 	return nil
 }

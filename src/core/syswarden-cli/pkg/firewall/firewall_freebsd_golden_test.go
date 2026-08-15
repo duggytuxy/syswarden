@@ -26,6 +26,10 @@ func TestPFRulesGolden_SW_QA_001(t *testing.T) {
 		t.Fatal(err)
 	}
 	captured := filepath.Join(root, "captured.pf")
+	operatorPolicy := filepath.Join(root, "operator.pf")
+	if err := os.WriteFile(operatorPolicy, []byte("pass in on vtnet-test0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	writeFreeBSDExecutable(t, filepath.Join(toolDir, "route"), `#!/bin/sh
 /bin/cat <<'EOF'
    route to: default
@@ -44,16 +48,39 @@ EOF
 if [ "$1" = "-f" ]; then
     /bin/cat > "$SYSWARDEN_PF_TEST_CAPTURE"
 fi
+if [ "$1" = "-n" ] && [ "$2" = "-f" ]; then
+    /bin/cat >/dev/null
+fi
 if [ "$1" = "-s" ] && [ "$2" = "info" ]; then
     echo 'Status: Enabled'
 fi
 exit 0
 `)
+	writeFreeBSDExecutable(t, filepath.Join(toolDir, "sysrc"), `#!/bin/sh
+if [ "$1" = "-n" ] && [ "$2" = "pf_rules" ]; then
+    printf '%s\n' "$SYSWARDEN_PF_TEST_SOURCE"
+    exit 0
+fi
+if [ "$1" = "-n" ] && [ "$2" = "pf_enable" ]; then
+    printf '%s\n' YES
+    exit 0
+fi
+exit 1
+`)
 	t.Setenv("PATH", toolDir)
 	t.Setenv("SYSWARDEN_PF_TEST_CAPTURE", captured)
+	t.Setenv("SYSWARDEN_PF_TEST_SOURCE", operatorPolicy)
 	previousLockPath := pfRuntimeLockPath
+	previousSnapshotDirectory := pfSnapshotDirectory
+	previousExpectedOwner := pfExpectedOwner
 	pfRuntimeLockPath = filepath.Join(root, "syswarden-firewall.lock")
-	t.Cleanup(func() { pfRuntimeLockPath = previousLockPath })
+	pfSnapshotDirectory = filepath.Join(root, "snapshot")
+	pfExpectedOwner = os.Geteuid
+	t.Cleanup(func() {
+		pfRuntimeLockPath = previousLockPath
+		pfSnapshotDirectory = previousSnapshotDirectory
+		pfExpectedOwner = previousExpectedOwner
+	})
 
 	previous := config.GlobalConfig
 	t.Cleanup(func() { config.GlobalConfig = previous })

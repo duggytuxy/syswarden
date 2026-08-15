@@ -45,7 +45,7 @@ func InstallDependencies() error {
 		}
 	} else if _, err := exec.LookPath("pkg"); err == nil {
 		fmt.Println(" -> Detected FreeBSD (pkg)")
-		cmd := exec.CommandContext(ctx, "pkg", "install", "-y", "pf", "wireguard-tools", "libqrencode", "curl", "jq") // #nosec
+		cmd := exec.CommandContext(ctx, "pkg", "install", "-y", "wireguard-tools", "libqrencode", "curl", "jq", "rsyslog")
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("PKG installation failed: %w", err)
 		}

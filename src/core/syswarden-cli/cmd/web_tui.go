@@ -15,10 +15,10 @@ import (
 	"math/big"
 	"net/http"
 	"os"
-	"os/exec"
 	"time"
 
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/platformpaths"
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
@@ -26,8 +26,9 @@ import (
 )
 
 var (
-	bindAddr string
-	webToken string
+	bindAddr      string
+	webToken      string
+	webTUICommand = platformpaths.TUICommand
 )
 
 var upgrader = websocket.Upgrader{
@@ -174,15 +175,8 @@ var webTuiCmd = &cobra.Command{
 				}
 			}()
 
-			tuiPath := "/opt/syswarden/bin/syswarden-tui"
-			// Check if we are running in dev mode
-			if _, err := os.Stat(tuiPath); os.IsNotExist(err) {
-				// Fallback to searching in PATH for dev environments
-				tuiPath = "syswarden-tui"
-			}
-
-			// Secure zero-shell execution
-			tuiCmd := exec.Command(tuiPath) // #nosec G204
+			// The production helper resolves only the packaged absolute path.
+			tuiCmd := webTUICommand()
 			tuiCmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 			ptmx, err := pty.Start(tuiCmd)

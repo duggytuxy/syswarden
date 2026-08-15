@@ -8,6 +8,7 @@ import json
 import re
 import stat
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -16,8 +17,15 @@ RULESET_NAME = "syswarden-release-tags-immutable"
 EXPECTED_INCLUDE = ["refs/tags/v*"]
 EXPECTED_RULE_TYPES = frozenset({"update", "deletion"})
 MAX_RULESET_BYTES = 1024 * 1024
+REPOSITORY_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/"
+    r"[A-Za-z0-9._-]{1,100}$"
+)
 TIMESTAMP_RE = re.compile(
-    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    r"^(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})"
+    r"T(?P<time>[0-9]{2}:[0-9]{2}:[0-9]{2})"
+    r"(?:\.(?P<fraction>[0-9]+))?"
+    r"(?P<offset>Z|[+-][0-9]{2}:[0-9]{2})$"
 )
 
 TOP_LEVEL_KEYS = frozenset(
@@ -26,6 +34,7 @@ TOP_LEVEL_KEYS = frozenset(
         "bypass_actors",
         "conditions",
         "created_at",
+        "current_user_can_bypass",
         "enforcement",
         "id",
         "name",
@@ -80,10 +89,41 @@ def _positive_integer(value: Any, label: str) -> int:
     return value
 
 
+def _repository_name(value: Any, label: str) -> str:
+    repository = _nonempty_string(value, label)
+    if REPOSITORY_RE.fullmatch(repository) is None:
+        raise RulesetGateError(f"{label} must be a canonical owner/repository name")
+    _, name = repository.split("/", 1)
+    if name in {".", ".."}:
+        raise RulesetGateError(f"{label} must be a canonical owner/repository name")
+    return repository
+
+
 def _validate_timestamp(value: Any, label: str) -> None:
     timestamp = _nonempty_string(value, label)
-    if TIMESTAMP_RE.fullmatch(timestamp) is None:
-        raise RulesetGateError(f"{label} must be a UTC GitHub timestamp")
+    match = TIMESTAMP_RE.fullmatch(timestamp)
+    if match is None:
+        raise RulesetGateError(
+            f"{label} must be a canonical timezone-aware RFC3339 timestamp"
+        )
+    offset = match.group("offset")
+    if offset == "-00:00" or (
+        offset != "Z" and (int(offset[1:3]) > 23 or int(offset[4:6]) > 59)
+    ):
+        raise RulesetGateError(
+            f"{label} must be a canonical timezone-aware RFC3339 timestamp"
+        )
+    normalized = timestamp[:-1] + "+00:00" if timestamp.endswith("Z") else timestamp
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise RulesetGateError(
+            f"{label} must be a canonical timezone-aware RFC3339 timestamp"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise RulesetGateError(
+            f"{label} must be a canonical timezone-aware RFC3339 timestamp"
+        )
 
 
 def parse_ruleset(payload: bytes) -> dict[str, Any]:
@@ -133,7 +173,13 @@ def read_ruleset(path: Path) -> dict[str, Any]:
     return parse_ruleset(payload)
 
 
-def validate_ruleset(document: dict[str, Any], expected_id: int) -> None:
+def validate_ruleset(
+    document: dict[str, Any], expected_id: int, expected_repository: str
+) -> None:
+    expected_id = _positive_integer(expected_id, "expected ruleset ID")
+    expected_repository = _repository_name(
+        expected_repository, "expected repository"
+    )
     ruleset = _exact_keys(document, TOP_LEVEL_KEYS, "ruleset")
     if _positive_integer(ruleset["id"], "ruleset.id") != expected_id:
         raise RulesetGateError("ruleset.id does not match the uniquely selected list entry")
@@ -145,9 +191,17 @@ def validate_ruleset(document: dict[str, Any], expected_id: int) -> None:
         raise RulesetGateError("ruleset.enforcement must equal 'active'")
     if ruleset["bypass_actors"] != []:
         raise RulesetGateError("ruleset.bypass_actors must be an explicit empty array")
+    if ruleset["current_user_can_bypass"] != "never":
+        raise RulesetGateError(
+            "ruleset.current_user_can_bypass must equal 'never'"
+        )
 
-    _nonempty_string(ruleset["source_type"], "ruleset.source_type")
-    _nonempty_string(ruleset["source"], "ruleset.source")
+    if ruleset["source_type"] != "Repository":
+        raise RulesetGateError("ruleset.source_type must equal 'Repository'")
+    if ruleset["source"] != expected_repository:
+        raise RulesetGateError(
+            "ruleset.source does not match the expected repository"
+        )
     _nonempty_string(ruleset["node_id"], "ruleset.node_id")
     _validate_timestamp(ruleset["created_at"], "ruleset.created_at")
     _validate_timestamp(ruleset["updated_at"], "ruleset.updated_at")
@@ -191,14 +245,22 @@ def validate_ruleset(document: dict[str, Any], expected_id: int) -> None:
     links = _exact_keys(
         ruleset["_links"], frozenset({"html", "self"}), "ruleset._links"
     )
+    expected_links = {
+        "self": (
+            f"https://api.github.com/repos/{expected_repository}/rulesets/"
+            f"{expected_id}"
+        ),
+        "html": f"https://github.com/{expected_repository}/rules/{expected_id}",
+    }
     for link_name in ("self", "html"):
         link = _exact_keys(
             links[link_name], frozenset({"href"}), f"ruleset._links.{link_name}"
         )
         href = _nonempty_string(link["href"], f"ruleset._links.{link_name}.href")
-        if not href.startswith("https://"):
+        if href != expected_links[link_name]:
             raise RulesetGateError(
-                f"ruleset._links.{link_name}.href must be an HTTPS URL"
+                f"ruleset._links.{link_name}.href does not match the exact "
+                "repository ruleset URL"
             )
 
 
@@ -206,6 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ruleset", type=Path, required=True)
     parser.add_argument("--expected-id", type=int, required=True)
+    parser.add_argument("--expected-repository", required=True)
     return parser
 
 
@@ -213,7 +276,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         expected_id = _positive_integer(args.expected_id, "--expected-id")
-        validate_ruleset(read_ruleset(args.ruleset), expected_id)
+        expected_repository = _repository_name(
+            args.expected_repository, "--expected-repository"
+        )
+        validate_ruleset(
+            read_ruleset(args.ruleset), expected_id, expected_repository
+        )
     except RulesetGateError as exc:
         print(f"immutable release-tag ruleset invalid: {exc}", file=sys.stderr)
         return 2

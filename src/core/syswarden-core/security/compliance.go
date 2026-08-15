@@ -3,10 +3,10 @@ package security
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"syswarden-core/internal/runtimepaths"
 	"syswarden-core/logger"
 )
 
@@ -51,7 +51,7 @@ func runComplianceAudit(l *logger.Logger) {
 	}
 
 	// Check syswarden-auto.conf permissions
-	confPath := "/opt/syswarden/syswarden-auto.conf"
+	confPath := runtimepaths.LegacyConfig()
 	stat, err := os.Stat(confPath)
 	if err == nil {
 		mode := stat.Mode().Perm()
@@ -61,11 +61,8 @@ func runComplianceAudit(l *logger.Logger) {
 		}
 	}
 
-	// Optionally run full CLI audit if installed
-	if _, err := os.Stat("/opt/syswarden/bin/syswarden"); err == nil {
-		cmd := exec.Command("/opt/syswarden/bin/syswarden", "audit") // #nosec G204
-		_ = cmd.Run()
-	}
+	// Optionally run the full CLI audit through the fixed native package path.
+	runtimepaths.RunInstalledComplianceAudit()
 
 	if !driftFound {
 		l.LogComplianceOK(localHardeningCheckOK)

@@ -306,6 +306,9 @@ func ApplyPolicies() error {
 		return fmt.Errorf("acquire shared PF transaction lock: %w", err)
 	}
 	defer releasePFRuntimeLock(lock)
+	if err := capturePFPolicySnapshotLocked(PFSnapshotExactLive); err != nil {
+		return fmt.Errorf("capture pre-mutation PF policy: %w", err)
+	}
 
 	// Validate the exact candidate before any PF mutation.
 	checkCmd := exec.Command("pfctl", "-nf", "-")

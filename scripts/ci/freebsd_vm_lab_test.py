@@ -58,9 +58,20 @@ def passing_evidence() -> dict[str, str]:
             "OS_NAME": "FreeBSD",
             "OS_RELEASE": "14.4-RELEASE-p2",
             "MACHINE": "amd64",
+            "DEPENDENCIES_INSTALL_RC": "0",
+            "DEPENDENCY_INVENTORY": "\n".join(
+                sorted(freebsd_vm_lab.EXPECTED_FREEBSD_DEPENDENCIES)
+            ),
             "PREVIOUS_PACKAGE_SHA256": "b" * 64,
             "CANDIDATE_PACKAGE_SHA256": "a" * 64,
             "PF_BASELINE_STATUS": "Disabled",
+            "PF_SNAPSHOT_PROVENANCE": "exact_live",
+            "PF_FRESH_CAPTURE_RC": "0",
+            "PF_FRESH_PROVENANCE": "exact_live",
+            "PF_FRESH_RESTORE_RC": "0",
+            "PF_NONEMPTY_CAPTURE_REJECTED": "1",
+            "PF_NONEMPTY_STATE_PRESERVED": "1",
+            "MIGRATION_BACKUP_BASELINE": freebsd_vm_lab.EXPECTED_MIGRATION_BACKUP_STATE,
             "PF_FINAL_STATUS": "Disabled",
             "PF_SNAPSHOT_SHA256": hashlib.sha256(b"").hexdigest(),
             "PF_FIXTURE_SHA256": PF_FIXTURE_SHA256,
@@ -71,6 +82,17 @@ def passing_evidence() -> dict[str, str]:
             "RESTART_BASELINE_INVENTORY": RESTART_METADATA_INVENTORY,
             "RESTART_ONE_INVENTORY": RESTART_METADATA_INVENTORY,
             "RESTART_TWO_INVENTORY": RESTART_METADATA_INVENTORY,
+            "RSYSLOG_CONFIG_VALIDATE_RC": "0",
+            "RSYSLOG_ENABLED": "YES",
+            "RSYSLOG_STATUS_RC": "0",
+            "SYSLOGD_INACTIVE": "1",
+            "LOG_BASELINE_SYSLOGD_STATUS_RC": "0",
+            "LOG_BASELINE_RSYSLOGD_STATUS_RC": "1",
+            "LOG_BASELINE_SYSLOGD_ENABLE": "present:YES",
+            "LOG_BASELINE_RSYSLOGD_ENABLE": "absent",
+            "LOG_BASELINE_RSYSLOGD_PIDFILE": "absent",
+            "CRON_ALLOW_BASELINE": f"file:{'c' * 64}:600:0:0",
+            "CRON_DENY_BASELINE": f"file:{'d' * 64}:600:0:0",
             "MODE_CLI": "750",
             "MODE_CORE": "750",
             "MODE_TUI": "750",
@@ -79,12 +101,18 @@ def passing_evidence() -> dict[str, str]:
             "LINK_TUI": "/usr/local/syswarden/bin/syswarden-tui",
             "CLI_DIRECT_RC": "0",
             "CLI_LINK_RC": "0",
+            "TUI_REINSTALL_RC": "124",
+            "TUI_RECOVERY_RC": "124",
             "RC_CORE_MODE": "755",
             "RC_WEB_MODE": "755",
             "RC_CORE_COMMAND": "/usr/local/syswarden/bin/syswarden-core",
             "RC_WEB_COMMAND": "/usr/local/syswarden/bin/syswarden-cli",
             "RC_CORE_ENABLED": "YES",
             "RC_WEB_ENABLED": "YES",
+            "UPGRADE_RC_CORE_ENABLED": "YES",
+            "UPGRADE_RC_WEB_ENABLED": "YES",
+            "UPGRADE_RC_CORE_STATUS_RC": "0",
+            "UPGRADE_RC_WEB_STATUS_RC": "0",
             "RC_CORE_START_RC": "0",
             "RC_CORE_STATUS_RC": "0",
             "RC_CORE_RESTART_ONE_RC": "0",
@@ -111,6 +139,21 @@ def passing_evidence() -> dict[str, str]:
             ),
             "REMOVE_USER_CONFIG_SHA256": freebsd_vm_lab.USER_CONFIG_SHA256,
             "REMOVE_USER_DATA_SHA256": freebsd_vm_lab.USER_DATA_SHA256,
+            "REMOVE_MIGRATION_BACKUP_STATE": freebsd_vm_lab.EXPECTED_MIGRATION_BACKUP_STATE,
+            "REMOVE_SYSLOGD_STATUS_RC": "0",
+            "REMOVE_RSYSLOGD_STATUS_RC": "1",
+            "REMOVE_SYSLOGD_ENABLE": "present:YES",
+            "REMOVE_RSYSLOGD_ENABLE": "absent",
+            "REMOVE_RSYSLOGD_PIDFILE": "absent",
+            "REMOVE_LOGGING_BASELINE_RESTORED": "1",
+            "REMOVE_CRON_ALLOW_STATE": f"file:{'c' * 64}:600:0:0",
+            "REMOVE_CRON_DENY_STATE": f"file:{'d' * 64}:600:0:0",
+            "REMOVE_CRON_ACCESS_PRESERVED": "1",
+            "REMOVE_HOST_STATE_ABSENT": "1",
+            "REMOVE_PF_STATUS": "Disabled",
+            "REMOVE_PF_SNAPSHOT_SHA256": hashlib.sha256(b"").hexdigest(),
+            "REMOVE_PF_BASELINE_RESTORED": "1",
+            "REMOVE_PF_SYSWARDEN_TABLE_ABSENT": "1",
         }
     )
     for phase, version in (
@@ -149,6 +192,11 @@ def passing_evidence() -> dict[str, str]:
                 f"{phase}_SIGNATURE_STATE_BEFORE": "absent",
                 f"{phase}_SIGNATURE_STATE_AFTER": "absent",
                 f"{phase}_SIGNATURE_STATE_RESTORED": "1",
+                f"{phase}_POSTINSTALL_MARKER_STATE": freebsd_vm_lab.EXPECTED_POSTINSTALL_MARKER_STATE,
+                f"{phase}_POSTINSTALL_DIAGNOSTICS_CLEAN": "1",
+                f"{phase}_MODULAR_CONFIG_INVENTORY": "\n".join(
+                    sorted(freebsd_vm_lab.EXPECTED_MODULAR_CONFIG_INVENTORY)
+                ),
             }
         )
     return values
@@ -191,6 +239,20 @@ class FakeRunner(freebsd_vm_lab.CommandRunner):
             evidence["PF_ANCHOR_NAME"] = f"syswarden_lot0_{command[-2]}"
             stdout = marker_output(evidence)
         return freebsd_vm_lab.CommandResult(command, 0, stdout, "")
+
+
+class FailingCopyRunner(FakeRunner):
+    def run(
+        self,
+        args: tuple[str, ...],
+        *,
+        timeout: int,
+        input_text: str | None = None,
+    ) -> freebsd_vm_lab.CommandResult:
+        result = super().run(args, timeout=timeout, input_text=input_text)
+        if args[0] == "scp":
+            return freebsd_vm_lab.CommandResult(tuple(args), 1, "", "copy failed")
+        return result
 
 
 class FreeBSDVMLabTests(unittest.TestCase):
@@ -280,6 +342,18 @@ class FreeBSDVMLabTests(unittest.TestCase):
             self.previous_package, "4.02.7", self.previous_package_sha
         )
 
+    def forward_candidate_artifact(self) -> freebsd_vm_lab.PackageArtifact:
+        return freebsd_vm_lab.PackageArtifact(
+            self.root / "syswarden-4.02.10.txz", "4.02.10", self.package_sha
+        )
+
+    def forward_previous_artifact(self) -> freebsd_vm_lab.PackageArtifact:
+        return freebsd_vm_lab.PackageArtifact(
+            self.root / freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_PACKAGE,
+            freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_VERSION,
+            freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_SHA256,
+        )
+
     def test_discovers_exact_txz_and_verifies_checksum(self) -> None:
         artifact = freebsd_vm_lab.discover_package(self.packages)
         self.assertEqual(artifact.path, self.package)
@@ -290,6 +364,34 @@ class FreeBSDVMLabTests(unittest.TestCase):
         )
         self.assertEqual(candidate, self.artifact())
         self.assertEqual(previous, self.previous_artifact())
+
+    def test_candidate_v40210_requires_exact_dependency_manifest(self) -> None:
+        self.package.unlink()
+        candidate = self.packages / "syswarden-4.02.10.txz"
+        candidate.write_bytes(b"candidate with dependency gate")
+        digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        (self.packages / "SHA256SUMS.txt").write_text(
+            f"{digest}  {candidate.name}\n", encoding="utf-8"
+        )
+        with mock.patch.object(
+            freebsd_vm_lab.freebsd_package_manifest,
+            "verify",
+            side_effect=ValueError("missing deps"),
+        ):
+            with self.assertRaisesRegex(
+                freebsd_vm_lab.FreeBSDVMLabError,
+                "dependency manifest is invalid",
+            ):
+                freebsd_vm_lab.discover_package_pair(
+                    self.packages, self.previous_packages
+                )
+        with mock.patch.object(
+            freebsd_vm_lab.freebsd_package_manifest, "verify"
+        ) as verify:
+            freebsd_vm_lab.discover_package_pair(
+                self.packages, self.previous_packages
+            )
+            verify.assert_called_once_with(candidate)
 
     def test_package_pair_is_distinct_ordered_and_independently_checksummed(self) -> None:
         with self.assertRaisesRegex(
@@ -308,6 +410,37 @@ class FreeBSDVMLabTests(unittest.TestCase):
             freebsd_vm_lab.discover_package_pair(
                 self.packages, self.previous_packages
             )
+
+    def test_forward_only_transition_is_version_name_and_byte_bound(self) -> None:
+        candidate = self.forward_candidate_artifact()
+        previous = self.forward_previous_artifact()
+        self.assertTrue(
+            freebsd_vm_lab.is_forward_only_transition(candidate, previous)
+        )
+        for mutation in (
+            freebsd_vm_lab.PackageArtifact(
+                previous.path, previous.version, "0" * 64
+            ),
+            freebsd_vm_lab.PackageArtifact(
+                previous.path.with_name("syswarden-4.02.8-copy.txz"),
+                previous.version,
+                previous.sha256,
+            ),
+            freebsd_vm_lab.PackageArtifact(
+                previous.path, "4.02.7", previous.sha256
+            ),
+        ):
+            with self.subTest(previous=mutation):
+                self.assertFalse(
+                    freebsd_vm_lab.is_forward_only_transition(candidate, mutation)
+                )
+                with self.assertRaisesRegex(
+                    freebsd_vm_lab.FreeBSDVMLabError,
+                    "exact v4.02.8 package bytes",
+                ):
+                    freebsd_vm_lab.validate_forward_only_binding(
+                        candidate, mutation
+                    )
 
         (self.previous_packages / "SHA256SUMS.txt").write_text(
             f"{'0' * 64}  {self.previous_package.name}\n", encoding="utf-8"
@@ -480,6 +613,119 @@ class FreeBSDVMLabTests(unittest.TestCase):
             "78",
         )
 
+    def test_standalone_txz_prerequisites_are_installed_before_pkg_add(self) -> None:
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        prerequisite = (
+            'pkg install -y \\\n'
+            "    curl jq libqrencode rsyslog wireguard-tools"
+        )
+        self.assertIn(prerequisite, script)
+        self.assertLess(
+            script.index(prerequisite),
+            script.index('pkg add -f "$work/$previous_package_name"'),
+        )
+        self.assertIn("DEPENDENCIES_INSTALL_RC", freebsd_vm_lab.EVIDENCE_KEYS)
+        self.assertIn("DEPENDENCY_INVENTORY", freebsd_vm_lab.EVIDENCE_KEYS)
+
+    def test_dependency_and_generated_cleanup_evidence_fail_closed(self) -> None:
+        evidence = passing_evidence()
+        evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
+        evidence["PREVIOUS_PACKAGE_SHA256"] = self.previous_package_sha
+        evidence["DEPENDENCY_INVENTORY"] = "curl\njq"
+        evidence["REMOVE_CRON_REFERENCE_ABSENT"] = "0"
+        evidence["REMOVE_RSYSLOG_SIEM_ABSENT"] = "0"
+        report = freebsd_vm_lab.build_report(
+            evidence,
+            self.artifact(),
+            self.previous_artifact(),
+            freebsd_vm_lab.inspect_product_assets(self.repo),
+            "127.0.0.1",
+            2222,
+        )
+        self.assertFalse(report["release_ready"])
+        self.assertIn(
+            "SW-PKG-FBSD-DEPS-001", report["unexpected_failed_check_ids"]
+        )
+        self.assertIn(
+            "SW-PKG-FBSD-GENERATED-CLEANUP-001",
+            report["unexpected_failed_check_ids"],
+        )
+
+    def test_freebsd_removal_seeds_and_verifies_dead_reference_cleanup(self) -> None:
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        for fragment in (
+            "# syswarden-freebsd-lab-preserve",
+            "# syswarden-freebsd-lab-operator-preserve",
+            "/usr/local/syswarden/bin/syswarden-cli update-feeds",
+            "/opt/syswarden/bin/syswarden-cli ha-sync",
+            "/opt/syswarden/bin/syswarden-cli update-feeds",
+            "/usr/local/etc/rsyslog.d/99-syswarden-siem.conf",
+            "/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf",
+            "REMOVE_CRON_REFERENCE_ABSENT",
+            "REMOVE_CRON_UNRELATED_PRESERVED",
+        ):
+            self.assertIn(fragment, script)
+
+    def test_host_state_and_legacy_cron_cannot_leak_between_vm_runs(self) -> None:
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        preclean = script[script.index("preclean=1") : script.index("emit PRECLEAN")]
+        self.assertIn("/var/db/syswarden", preclean)
+        self.assertIn("/var/cron/allow", preclean)
+        self.assertIn("/var/cron/deny", preclean)
+        self.assertIn("/var/db/syswarden/pf-policy-snapshot.json", script)
+        self.assertIn("/var/db/syswarden/pf-transition-v4.02.8", script)
+        self.assertIn("REMOVE_HOST_STATE_ABSENT", script)
+        cleanup_function = script[
+            script.index("cleanup_vm() {") : script.index("final_cleanup() {")
+        ]
+        self.assertIn("rm -rf /var/db/syswarden", cleanup_function)
+        self.assertIn('$6 == "/opt/syswarden/bin/syswarden-cli"', cleanup_function)
+        final_cleanup = script[script.rindex("cleanup_ok=1") :]
+        self.assertIn("/var/db/syswarden", final_cleanup)
+        self.assertIn("/(usr/local|opt)/syswarden/bin/syswarden-cli", final_cleanup)
+
+    def test_candidate_postinstall_marker_and_tui_probes_are_fail_closed(self) -> None:
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        self.assertIn("POSTINSTALL_MARKER_STATE", freebsd_vm_lab.PHASE_EVIDENCE_SUFFIXES)
+        self.assertIn(
+            "POSTINSTALL_DIAGNOSTICS_CLEAN",
+            freebsd_vm_lab.PHASE_EVIDENCE_SUFFIXES,
+        )
+        self.assertIn("MODULAR_CONFIG_INVENTORY", freebsd_vm_lab.PHASE_EVIDENCE_SUFFIXES)
+        self.assertIn("signature_state /usr/local/syswarden/.postinstall-ok", script)
+        self.assertIn("post-install script failed", script)
+        self.assertIn("env TERM=xterm timeout 5 script -q /dev/null", script)
+        self.assertIn("TUI_REINSTALL_RC", freebsd_vm_lab.BASE_EVIDENCE_KEYS)
+        self.assertIn("TUI_RECOVERY_RC", freebsd_vm_lab.BASE_EVIDENCE_KEYS)
+
+        evidence = passing_evidence()
+        evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
+        evidence["PREVIOUS_PACKAGE_SHA256"] = self.previous_package_sha
+        evidence["CANDIDATE_UPGRADE_POSTINSTALL_MARKER_STATE"] = "absent"
+        evidence["CANDIDATE_REINSTALL_MODULAR_CONFIG_INVENTORY"] = ""
+        evidence["TUI_RECOVERY_RC"] = "0"
+        report = freebsd_vm_lab.build_report(
+            evidence,
+            self.artifact(),
+            self.previous_artifact(),
+            freebsd_vm_lab.inspect_product_assets(self.repo),
+            "127.0.0.1",
+            2222,
+        )
+        self.assertFalse(report["release_ready"])
+        self.assertIn(
+            "SW-PKG-FBSD-CANDIDATE-UPGRADE-POSTINSTALL-001",
+            report["unexpected_failed_check_ids"],
+        )
+        self.assertIn(
+            "SW-PKG-FBSD-CANDIDATE-REINSTALL-POSTINSTALL-001",
+            report["unexpected_failed_check_ids"],
+        )
+        self.assertIn(
+            "SW-PKG-FBSD-TUI-EXEC-001",
+            report["unexpected_failed_check_ids"],
+        )
+
     def test_each_phase_inventory_user_state_and_signature_load_fail_closed(self) -> None:
         evidence = passing_evidence()
         evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
@@ -517,27 +763,40 @@ class FreeBSDVMLabTests(unittest.TestCase):
         self.assertEqual(report["blocker_ids"], [])
         self.assertTrue(blockers.issubset(report["unexpected_failed_check_ids"]))
 
-    def test_exact_legacy_abi_and_previous_mixed_elf_are_known_bsd_blocker(self) -> None:
+    def test_exact_v4028_forward_only_transition_can_recover_candidate(self) -> None:
         evidence = passing_evidence()
+        evidence["PF_SNAPSHOT_PROVENANCE"] = "legacy_derived"
         evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
-        evidence["PREVIOUS_PACKAGE_SHA256"] = self.previous_package_sha
-        for phase in freebsd_vm_lab.LIFECYCLE_PHASES:
-            evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"
+        evidence["PREVIOUS_PACKAGE_SHA256"] = (
+            freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_SHA256
+        )
+        for phase in (
+            "CANDIDATE_UPGRADE",
+            "CANDIDATE_REINSTALL",
+            "CANDIDATE_RESTART_IDEMPOTENCE",
+        ):
+            evidence[f"{phase}_PKG_VERSION"] = "4.02.10"
         for phase in ("PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"):
+            evidence[f"{phase}_PKG_VERSION"] = "4.02.8"
+            evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"
             evidence[f"{phase}_ELF_CORE_ARCH"] = "arm64"
             evidence[f"{phase}_ELF_TUI_ARCH"] = "arm64"
+            evidence[f"{phase}_PKG_INVENTORY"] = "\n".join(
+                sorted(freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_INVENTORY)
+            )
             evidence[f"{phase}_SIGNATURE_ENGINE_COUNT"] = ""
             evidence[f"{phase}_SIGNATURE_PROBE_RC"] = "2"
         report = freebsd_vm_lab.build_report(
             evidence,
-            self.artifact(),
-            self.previous_artifact(),
+            self.forward_candidate_artifact(),
+            self.forward_previous_artifact(),
             freebsd_vm_lab.inspect_product_assets(self.repo),
             "127.0.0.1",
             2222,
         )
-        self.assertEqual(report["product_status"], "known_blocker")
-        self.assertEqual(report["blocker_ids"], ["SW-BSD-001"])
+        self.assertEqual(report["product_status"], "pass")
+        self.assertIs(report["release_ready"], True)
+        self.assertEqual(report["blocker_ids"], [])
         self.assertEqual(report["unexpected_failed_check_ids"], [])
         previous_package = report["lifecycle_phases"]["previous_install"][
             "package"
@@ -546,6 +805,96 @@ class FreeBSDVMLabTests(unittest.TestCase):
             previous_package["elf_architectures"],
             {"cli": "amd64", "core": "arm64", "tui": "arm64"},
         )
+
+    def test_pf_snapshot_provenance_is_transition_bound(self) -> None:
+        evidence = passing_evidence()
+        evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
+        evidence["PREVIOUS_PACKAGE_SHA256"] = self.previous_package_sha
+        evidence["PF_SNAPSHOT_PROVENANCE"] = "legacy_derived"
+        report = freebsd_vm_lab.build_report(
+            evidence,
+            self.artifact(),
+            self.previous_artifact(),
+            freebsd_vm_lab.inspect_product_assets(self.repo),
+            "127.0.0.1",
+            2222,
+        )
+        provenance = next(
+            item
+            for item in report["checks"]
+            if item["id"] == "SW-PKG-FBSD-PF-PROVENANCE-001"
+        )
+        self.assertEqual(provenance["status"], "blocker")
+        self.assertFalse(report["release_ready"])
+
+    def test_migration_backup_metadata_drift_blocks_release(self) -> None:
+        evidence = passing_evidence()
+        evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
+        evidence["PREVIOUS_PACKAGE_SHA256"] = self.previous_package_sha
+        evidence["REMOVE_MIGRATION_BACKUP_STATE"] = "symlink:bad:777:1001:1001"
+        report = freebsd_vm_lab.build_report(
+            evidence,
+            self.artifact(),
+            self.previous_artifact(),
+            freebsd_vm_lab.inspect_product_assets(self.repo),
+            "127.0.0.1",
+            2222,
+        )
+        backup = next(
+            item
+            for item in report["checks"]
+            if item["id"] == "SW-PKG-FBSD-MIGRATION-BACKUP-001"
+        )
+        self.assertEqual(backup["status"], "blocker")
+        self.assertFalse(report["release_ready"])
+
+    def test_fresh_pf_nonempty_mutation_or_acceptance_blocks_release(self) -> None:
+        for key in ("PF_NONEMPTY_CAPTURE_REJECTED", "PF_NONEMPTY_STATE_PRESERVED"):
+            with self.subTest(key=key):
+                evidence = passing_evidence()
+                evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
+                evidence["PREVIOUS_PACKAGE_SHA256"] = self.previous_package_sha
+                evidence[key] = "0"
+                report = freebsd_vm_lab.build_report(
+                    evidence,
+                    self.artifact(),
+                    self.previous_artifact(),
+                    freebsd_vm_lab.inspect_product_assets(self.repo),
+                    "127.0.0.1",
+                    2222,
+                )
+                boundary = next(
+                    item
+                    for item in report["checks"]
+                    if item["id"] == "SW-PKG-FBSD-PF-FRESH-BOUNDARY-001"
+                )
+                self.assertEqual(boundary["status"], "blocker")
+                self.assertFalse(report["release_ready"])
+
+    def test_rsyslog_validation_enablement_and_status_are_mandatory(self) -> None:
+        for key, failure in (
+            ("RSYSLOG_CONFIG_VALIDATE_RC", "1"),
+            ("RSYSLOG_ENABLED", "NO"),
+            ("RSYSLOG_STATUS_RC", "1"),
+            ("SYSLOGD_INACTIVE", "0"),
+            ("REMOVE_LOGGING_BASELINE_RESTORED", "0"),
+            ("REMOVE_CRON_ACCESS_PRESERVED", "0"),
+            ("REMOVE_HOST_STATE_ABSENT", "0"),
+        ):
+            with self.subTest(key=key):
+                evidence = passing_evidence()
+                evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
+                evidence["PREVIOUS_PACKAGE_SHA256"] = self.previous_package_sha
+                evidence[key] = failure
+                report = freebsd_vm_lab.build_report(
+                    evidence,
+                    self.artifact(),
+                    self.previous_artifact(),
+                    freebsd_vm_lab.inspect_product_assets(self.repo),
+                    "127.0.0.1",
+                    2222,
+                )
+                self.assertFalse(report["release_ready"])
 
     def test_arbitrary_abi_elf_or_loader_failure_is_never_expected(self) -> None:
         evidence = passing_evidence()
@@ -685,7 +1034,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
         )
         self.assertEqual(report["harness_status"], "pass")
         self.assertEqual(report["product_status"], "fail")
-        self.assertEqual(report["blocker_ids"], ["SW-BSD-001"])
+        self.assertEqual(report["blocker_ids"], [])
         self.assertTrue(
             {
                 "SW-PF-FBSD-FIXTURE-SYNTAX-001",
@@ -775,10 +1124,14 @@ class FreeBSDVMLabTests(unittest.TestCase):
         self.assertEqual(report["harness_status"], "pass")
         self.assertEqual(report["product_status"], "fail")
         self.assertIs(report["release_ready"], False)
-        self.assertEqual(report["blocker_ids"], ["SW-BSD-001"])
-        self.assertEqual(
-            report["unexpected_failed_check_ids"],
-            ["SW-PF-FBSD-HONEYPORT-001"],
+        self.assertEqual(report["blocker_ids"], [])
+        self.assertTrue(
+            {
+                "SW-PKG-FBSD-PREFIX-001",
+                "SW-PKG-FBSD-RCD-CORE-001",
+                "SW-PKG-FBSD-RCD-WEB-001",
+                "SW-PF-FBSD-HONEYPORT-001",
+            }.issubset(report["unexpected_failed_check_ids"])
         )
         self.assertTrue(
             {
@@ -943,13 +1296,9 @@ class FreeBSDVMLabTests(unittest.TestCase):
         check_id = "SW-PKG-FBSD-CANDIDATE-REINSTALL-SIGNATURE-RESTORE-001"
         self.assertEqual(report["product_status"], "fail")
         self.assertIn(check_id, report["unexpected_failed_check_ids"])
-        self.assertNotIn(check_id, freebsd_vm_lab.EXPECTED_FAILED_CHECK_BLOCKERS)
+        self.assertEqual(report["blocker_ids"], [])
 
-    def test_expected_and_unexpected_failures_are_classified_separately(self) -> None:
-        self.assertEqual(
-            set(freebsd_vm_lab.EXPECTED_FAILED_CHECK_BLOCKERS.values()),
-            freebsd_vm_lab.CANONICAL_BLOCKER_IDS,
-        )
+    def test_every_unmet_nontransition_contract_is_unexpected(self) -> None:
         evidence = passing_evidence()
         evidence.update(
             {
@@ -968,10 +1317,12 @@ class FreeBSDVMLabTests(unittest.TestCase):
             2222,
         )
         self.assertEqual(report["product_status"], "fail")
-        self.assertEqual(report["blocker_ids"], ["SW-BSD-001"])
-        self.assertEqual(
-            report["unexpected_failed_check_ids"],
-            ["SW-PKG-FBSD-CANDIDATE-UPGRADE-INVENTORY-001"],
+        self.assertEqual(report["blocker_ids"], [])
+        self.assertTrue(
+            {
+                "SW-PKG-FBSD-PREFIX-001",
+                "SW-PKG-FBSD-CANDIDATE-UPGRADE-INVENTORY-001",
+            }.issubset(report["unexpected_failed_check_ids"])
         )
 
     def test_fake_run_uses_only_ssh_scp_and_never_a_host_pf_command(self) -> None:
@@ -1007,6 +1358,13 @@ class FreeBSDVMLabTests(unittest.TestCase):
         self.assertIn("pfctl", remote_call[1] or "")
         self.assertFalse(any(TOKEN in value for value in remote_call[0]))
         self.assertIn(f"token={TOKEN}\n", remote_call[1] or "")
+        cleanup_call = next(
+            call
+            for call in runner.calls
+            if carries_script(call[1], freebsd_vm_lab.CLEANUP_SCRIPT)
+        )
+        self.assertIn("sudo", cleanup_call[0])
+        self.assertIn('[ -e "$cleanup_path" ] || [ -L "$cleanup_path" ]', cleanup_call[1] or "")
         for value in (
             self.previous_package.name,
             self.previous_package_sha,
@@ -1029,6 +1387,18 @@ class FreeBSDVMLabTests(unittest.TestCase):
             )
         )
 
+    def test_transport_workspace_cleanup_runs_after_copy_failure(self) -> None:
+        runner = FailingCopyRunner(passing_evidence())
+        with self.assertRaisesRegex(freebsd_vm_lab.FreeBSDVMLabError, "copy"):
+            freebsd_vm_lab.run_lab(self.args(), runner=runner)
+        self.assertTrue(
+            any(
+                carries_script(input_text, freebsd_vm_lab.CLEANUP_SCRIPT)
+                for _, input_text in runner.calls
+            ),
+            "root cleanup was not attempted after SCP failure",
+        )
+
     def test_remote_script_orders_full_lifecycle_and_real_signature_probes(self) -> None:
         script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
         syntax = subprocess.run(
@@ -1039,6 +1409,27 @@ class FreeBSDVMLabTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        for required in (
+            'sealed_work="${transport_work}.sealed"',
+            'transport_entries="$(find "$transport_work" -mindepth 1 -maxdepth 1 -print',
+            'sealed_entries="$(find "$sealed_work" -mindepth 1 -maxdepth 1 -print',
+            'cp -P "$transport_work/$input_name" "$sealed_work/$input_name"',
+            'stat -f \'%u:%g:%Lp\'',
+            'emit SEALED_INPUTS 1',
+            'verify_sealed_input "$work/$previous_package_name"',
+            'verify_sealed_input "$work/$candidate_package_name"',
+            'verify_sealed_input "$work/pf-v4.02.8.conf"',
+            '[ -e "$transport_work" ] || [ -L "$transport_work" ]',
+        ):
+            self.assertIn(required, script)
+        self.assertEqual(
+            script.count('verify_sealed_input "$work/$previous_package_name"'),
+            2,
+        )
+        self.assertEqual(
+            script.count('verify_sealed_input "$work/$candidate_package_name"'),
+            3,
+        )
         user_state_seed = script.index(
             ">/etc/syswarden/config/lifecycle-user.conf"
         )
@@ -1049,24 +1440,29 @@ class FreeBSDVMLabTests(unittest.TestCase):
         candidate_reinstall = script.index(
             'pkg add -f "$work/$candidate_package_name"', candidate_upgrade + 1
         )
+        previous_rollback = script.index(
+            'pkg add -f "$work/$previous_package_name"', candidate_reinstall
+        )
+        candidate_recovery = script.index(
+            'pkg add -f "$work/$candidate_package_name"',
+            previous_rollback,
+        )
         restart_capture = script.index(
             "capture_installed_phase CANDIDATE_RESTART_IDEMPOTENCE",
-            candidate_reinstall,
+            candidate_recovery,
         )
-        previous_rollback = script.index(
-            'pkg add -f "$work/$previous_package_name"', restart_capture
-        )
-        removal = script.index("pkg delete -fy syswarden", previous_rollback)
+        removal = script.index("pkg delete -fy syswarden", restart_capture)
         self.assertLess(user_state_seed, previous_install)
         self.assertLess(previous_install, candidate_upgrade)
         self.assertLess(candidate_upgrade, candidate_reinstall)
-        self.assertLess(candidate_reinstall, restart_capture)
-        self.assertLess(restart_capture, previous_rollback)
-        self.assertLess(previous_rollback, removal)
+        self.assertLess(candidate_reinstall, previous_rollback)
+        self.assertLess(previous_rollback, candidate_recovery)
+        self.assertLess(candidate_recovery, restart_capture)
+        self.assertLess(restart_capture, removal)
         self.assertEqual(script.count("service syswarden onerestart"), 2)
         self.assertEqual(script.count("service syswardenwebtui onerestart"), 2)
         fixture_verification = script.index(
-            'sha256 -q "$work/pf-v4.02.8.conf"',
+            'verify_sealed_input "$work/pf-v4.02.8.conf"',
             script.index("if [ \"$interface\" != \"INVALID\" ]"),
         )
         pf_application = script.index('pfctl -n -a "$anchor"', fixture_verification)
@@ -1076,14 +1472,23 @@ class FreeBSDVMLabTests(unittest.TestCase):
         lock_release = script.index('rmdir "$lock_path"', first_pf_mutation)
         self.assertLess(lock_acquire, first_pf_mutation)
         self.assertLess(first_pf_mutation, lock_release)
-        signature_trap = script.index(
-            "trap 'restore_signature_state >/dev/null 2>&1' EXIT"
+        signature_before = script.index(
+            'signature_before="$(signature_state "$signature_file")"'
         )
-        signature_mutation = script.index(
-            'rm -rf "$runtime_signature"', signature_trap
+        signature_execution = script.index(
+            "timeout 8 /usr/local/syswarden/bin/syswarden-core",
+            signature_before,
         )
-        self.assertLess(signature_trap, signature_mutation)
-        self.assertIn('cp -p "$runtime_signature"', script)
+        signature_after = script.index(
+            'signature_after="$(signature_state "$signature_file")"',
+            signature_execution,
+        )
+        self.assertLess(signature_before, signature_execution)
+        self.assertLess(signature_execution, signature_after)
+        self.assertIn(
+            "signature_file=/usr/local/syswarden/signatures.json", script
+        )
+        self.assertNotIn("runtime_signature=/opt/syswarden", script)
         self.assertIn('SIGNATURE_STATE_RESTORED" "$signature_restored"', script)
         restart_baseline = script.index("emit RESTART_BASELINE_INVENTORY")
         restart_one = script.index("emit RESTART_ONE_INVENTORY")
@@ -1144,7 +1549,10 @@ class FreeBSDVMLabTests(unittest.TestCase):
             body = script[function_start:function_end]
             self.assertIn('rmdir "$lock_path"', body)
             cleanup = body.index("cleanup_vm")
-            work = body.index('rm -rf "$work"')
+            work = body.index('for cleanup_path in "$work"')
+            self.assertIn('rm -rf "$cleanup_path"', body)
+            self.assertIn('[ -e "$cleanup_path" ] || [ -L "$cleanup_path" ]', body)
+            self.assertIn('"$transport_work" "$sealed_work"', body)
             lock = body.index('rmdir "$lock_path"')
             self.assertLess(cleanup, work)
             self.assertLess(work, lock)

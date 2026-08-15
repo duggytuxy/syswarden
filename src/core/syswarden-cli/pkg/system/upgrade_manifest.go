@@ -27,6 +27,7 @@ const (
 	packageFormatDEB                 = "deb"
 	packageFormatRPM                 = "rpm"
 	packageFormatAPK                 = "apk"
+	packageFormatTXZ                 = "txz"
 	releaseTrustRootsSchema          = "syswarden-release-trust-roots/v1"
 )
 
@@ -324,6 +325,7 @@ func expectedManifestIdentities() []packageTarget {
 		{os: "linux", architecture: "arm64", format: packageFormatRPM},
 		{os: "linux", architecture: "amd64", format: packageFormatAPK},
 		{os: "linux", architecture: "arm64", format: packageFormatAPK},
+		{os: "freebsd", architecture: "amd64", format: packageFormatTXZ},
 	}
 }
 
@@ -353,14 +355,38 @@ func detectPackageTarget(
 	goos, goarch, version string,
 	lookPath func(string) (string, error),
 ) (packageTarget, error) {
-	if goos != "linux" {
+	if goos != "linux" && goos != "freebsd" {
 		return packageTarget{}, fmt.Errorf("in-place updater does not support operating system %q", goos)
 	}
-	if goarch != "amd64" && goarch != "arm64" {
+	if (goos == "linux" && goarch != "amd64" && goarch != "arm64") ||
+		(goos == "freebsd" && goarch != "amd64") {
 		return packageTarget{}, fmt.Errorf("in-place updater does not support architecture %q", goarch)
 	}
 	if lookPath == nil {
 		return packageTarget{}, errors.New("package-manager lookup is unavailable")
+	}
+	if goos == "freebsd" {
+		resolved, err := lookPath("pkg")
+		if err != nil {
+			return packageTarget{}, errors.New("no supported FreeBSD package manager found (pkg)")
+		}
+		if !strings.HasPrefix(resolved, "/") {
+			return packageTarget{}, errors.New("package manager \"pkg\" did not resolve to an absolute path")
+		}
+		if !trustedPackageManagerPath("pkg", resolved) {
+			return packageTarget{}, fmt.Errorf("package manager \"pkg\" resolved to untrusted path %q", resolved)
+		}
+		filename, err := packageFilename(version, packageFormatTXZ, goarch)
+		if err != nil {
+			return packageTarget{}, err
+		}
+		return packageTarget{
+			os:           goos,
+			architecture: goarch,
+			format:       packageFormatTXZ,
+			filename:     filename,
+			installer:    resolved,
+		}, nil
 	}
 
 	managerCandidates := []struct {
@@ -408,6 +434,8 @@ func trustedPackageManagerPath(name, resolved string) bool {
 		return resolved == "/usr/bin/yum"
 	case "apk":
 		return resolved == "/sbin/apk" || resolved == "/usr/sbin/apk"
+	case "pkg":
+		return resolved == "/usr/sbin/pkg" || resolved == "/usr/local/sbin/pkg"
 	default:
 		return false
 	}
@@ -438,6 +466,10 @@ func packageFilename(version, format, goarch string) (string, error) {
 		case "arm64":
 			return fmt.Sprintf("syswarden_%s_aarch64.apk", cleanVersion), nil
 		}
+	case packageFormatTXZ:
+		if goarch == "amd64" {
+			return fmt.Sprintf("syswarden-%s.txz", cleanVersion), nil
+		}
 	}
 	return "", fmt.Errorf("unsupported package target format=%q architecture=%q", format, goarch)
 }
@@ -451,6 +483,8 @@ func (target packageTarget) installArguments(packagePath string) []string {
 		// Ed25519 manifest is mandatory before this narrowly scoped native
 		// package-signature bypass can be reached.
 		return []string{"add", "--allow-untrusted", packagePath}
+	case packageFormatTXZ:
+		return []string{"add", "-f", packagePath}
 	default:
 		return nil
 	}

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/system"
 )
 
 // ApplyCISHardening applies CIS Level 2 controls natively for FreeBSD
@@ -152,74 +153,32 @@ func restrictCoreDumps() error {
 
 func applySSHHardening() error {
 	fmt.Println(" -> Applying CIS Level 2 SSH Hardening")
-	sshConf := "/etc/ssh/sshd_config"
-	if _, err := os.Stat(sshConf); err != nil {
-		return nil
-	}
-
-	// Create a backup before any modification
-	backupConf := sshConf + ".syswarden.bak"
-	if err := exec.Command("cp", sshConf, backupConf).Run(); err != nil { // #nosec
-		return fmt.Errorf("failed to backup sshd_config: %w", err)
-	}
-
-	content, err := os.ReadFile(sshConf) // #nosec
-	if err != nil {
-		return err
-	}
-
-	lines := strings.Split(string(content), "\n")
-	configMap := map[string]string{
+	return system.ConfigureFreeBSDSSHDirectives(map[string]string{
+		"AllowTcpForwarding":  "no",
 		"X11Forwarding":       "no",
 		"MaxAuthTries":        "4",
 		"ClientAliveInterval": "300",
 		"ClientAliveCountMax": "3",
-	}
-
-	var newLines []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if !strings.HasPrefix(trimmed, "#") {
-			parts := strings.Fields(trimmed)
-			if len(parts) > 0 {
-				if _, exists := configMap[parts[0]]; exists {
-					newLines = append(newLines, "# SYSWARDEN OVERRIDE: "+line)
-					continue
-				}
-			}
-		}
-		newLines = append(newLines, line)
-	}
-
-	newLines = append(newLines, "\n# --- SYSWARDEN CIS HARDENING ---")
-	for k, v := range configMap {
-		newLines = append(newLines, fmt.Sprintf("%s %s", k, v))
-	}
-	newLines = append(newLines, "# -------------------------------\n")
-
-	if err := rewriteSecurityFileFromSnapshot("/etc/ssh/sshd_config", []byte(strings.Join(newLines, "\n")), content); err != nil {
-		return fmt.Errorf("failed to write sshd_config: %w", err)
-	}
-
-	// Verify before restarting
-	if err := exec.Command("sshd", "-t").Run(); err != nil { // #nosec
-		// Rollback
-		_ = exec.Command("cp", backupConf, sshConf).Run() // #nosec
-		return fmt.Errorf("sshd -t failed, rolling back changes: %w", err)
-	}
-
-	_ = exec.Command("service", "sshd", "restart").Run() // #nosec
-	return nil
+	})
 }
 
 func secureCronPermissions() error {
 	fmt.Println(" -> Securing cron directories permissions")
-	cronDirs := []string{"/var/cron/tabs", "/etc/crontab"}
-	for _, dir := range cronDirs {
-		if _, err := os.Stat(dir); err == nil {
-			_ = os.Chmod(dir, 0600)
-			_ = exec.Command("chown", "root:wheel", dir).Run() // #nosec
+	if _, err := os.Stat("/var/cron/tabs"); err == nil {
+		const ownerTraverse = os.FileMode(0100)
+		if err := os.Chmod("/var/cron/tabs", os.FileMode(0600)|ownerTraverse); err != nil {
+			return err
+		}
+		if err := os.Chown("/var/cron/tabs", 0, 0); err != nil {
+			return err
+		}
+	}
+	if _, err := os.Stat("/etc/crontab"); err == nil {
+		if err := os.Chmod("/etc/crontab", 0600); err != nil {
+			return err
+		}
+		if err := os.Chown("/etc/crontab", 0, 0); err != nil {
+			return err
 		}
 	}
 	return nil

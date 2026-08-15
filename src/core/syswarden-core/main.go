@@ -12,6 +12,7 @@ import (
 	"syswarden-core/config"
 	"syswarden-core/engine"
 	"syswarden-core/firewall"
+	"syswarden-core/internal/runtimepaths"
 	"syswarden-core/logger"
 	"syswarden-core/network"
 	"syswarden-core/security"
@@ -33,8 +34,8 @@ func main() {
 
 	log.Println("[SYSWARDEN-Core] Starting Next-Gen WAF Daemon...")
 
-	// Initialize Logger (Parity: Write to /opt/syswarden/data.json for TUI)
-	_ = os.MkdirAll("/opt/syswarden", 0750)
+	// Ensure the native package root exists for runtime assets.
+	_ = os.MkdirAll(runtimepaths.InstallRoot(), 0750)
 	telemetryLogger := logger.NewLogger("/var/log/syswarden/waf.json")
 	telemetryLogger.Info("SYSWARDEN Core Daemon initialized")
 
@@ -49,7 +50,7 @@ func main() {
 	waapConfig := network.LoadWAAPConfig()
 
 	// Initialize Threat Engine
-	threatEngine, err := engine.NewEngine("/opt/syswarden/signatures.json", waapConfig.Threshold, int(waapConfig.Window.Seconds()))
+	threatEngine, err := engine.NewEngine(runtimepaths.Signatures(), waapConfig.Threshold, int(waapConfig.Window.Seconds()))
 	if err != nil {
 		log.Fatalf("[SYSWARDEN-Core] Failed to initialize threat engine: %v", err)
 	}
