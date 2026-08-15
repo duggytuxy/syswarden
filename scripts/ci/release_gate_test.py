@@ -398,14 +398,32 @@ class ReleaseGateTests(unittest.TestCase):
             / "workflows"
             / "release-manager.yml"
         ).read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("qualification_root_directories+=(update)"), 2)
+        self.assertEqual(
+            workflow.count("qualification_root_directories+=(tools update)"), 2
+        )
         self.assertEqual(
             workflow.count("go run ./scripts/ci/update_manifest.go verify"), 2
+        )
+        self.assertEqual(
+            workflow.count("python3 scripts/ci/freebsd_updater_vm_probe.py"), 2
+        )
+        self.assertEqual(
+            workflow.count(
+                '--report "${QUALIFICATION_ROOT}/raw/freebsd-updater-raw.json"'
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                '--test-binary "${QUALIFICATION_ROOT}/tools/'
+                'syswarden-updater-freebsd.test"'
+            ),
+            2,
         )
         self.assertEqual(workflow.count('--repository "${GITHUB_WORKSPACE}"'), 7)
         self.assertNotIn('if [[ "${RELEASE_TAG}" != "v4.02.8" ]]', workflow)
         self.assertEqual(workflow.count("requires-signed-update --tag"), 3)
-        self.assertEqual(workflow.count('if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]'), 6)
+        self.assertEqual(workflow.count('if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]'), 8)
         self.assertIn("--update-manifest-dir", workflow)
         self.assertIn("Set Up Go for Signed Update Verification", workflow)
         self.assertNotIn("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", workflow)
@@ -738,6 +756,9 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         for section in (validate, privileged):
             self.assertIn("EVIDENCE_SHA256SUMS.txt qualification-context.json", section)
             self.assertIn("aggregate bound packages raw status", section)
+            self.assertIn("qualification_root_directories+=(tools update)", section)
+            self.assertIn("qualification_all_directories+=(tools update)", section)
+            self.assertIn("qualification_raw_files+=(freebsd-updater-raw.json)", section)
             self.assertIn(
                 "freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json",
                 section,
@@ -747,6 +768,9 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                 section,
             )
             self.assertIn("qualification-exit-codes.json", section)
+            self.assertIn("syswarden-updater-freebsd.test", section)
+            self.assertIn("freebsd-updater-raw.json", section)
+            self.assertIn("freebsd_updater_verify", section)
             self.assertIn("test -z \"$(find \"${QUALIFICATION_ROOT}\" -type l", section)
             self.assertIn("! -type f ! -type d -print -quit", section)
             self.assertIn(
@@ -770,6 +794,36 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             self.assertIn('--nft-envelope "${QUALIFICATION_ROOT}/bound/nftables-bound.json"', section)
             self.assertIn(
                 '--aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json"',
+                section,
+            )
+            self.assertIn(
+                "python3 scripts/ci/freebsd_updater_vm_probe.py", section
+            )
+            self.assertIn(
+                'chmod 0700 -- "${QUALIFICATION_ROOT}/tools/'
+                'syswarden-updater-freebsd.test"',
+                section,
+            )
+            self.assertIn(
+                'test "$(stat -c \'%a\' "${QUALIFICATION_ROOT}/tools/'
+                'syswarden-updater-freebsd.test")" = "700"',
+                section,
+            )
+            self.assertLess(
+                section.index("sha256sum --check --strict EVIDENCE_SHA256SUMS.txt"),
+                section.index('chmod 0700 -- "${QUALIFICATION_ROOT}/tools/'),
+            )
+            self.assertLess(
+                section.index('chmod 0700 -- "${QUALIFICATION_ROOT}/tools/'),
+                section.index("python3 scripts/ci/freebsd_updater_vm_probe.py"),
+            )
+            self.assertIn(
+                '--test-binary "${QUALIFICATION_ROOT}/tools/'
+                'syswarden-updater-freebsd.test"',
+                section,
+            )
+            self.assertIn(
+                '--report "${QUALIFICATION_ROOT}/raw/freebsd-updater-raw.json"',
                 section,
             )
             self.assertIn(
@@ -861,7 +915,13 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             workflow,
         )
         self.assertIn('.type == "required_reviewers"', workflow)
-        self.assertIn('(.reviewers | length) > 0', workflow)
+        self.assertIn('.prevent_self_review == false', workflow)
+        self.assertIn('(.reviewers | length) == 1', workflow)
+        self.assertIn('.reviewers[0].reviewer.login == $owner', workflow)
+        self.assertIn('"${protection_rule_count}" != "2"', workflow)
+        self.assertIn('deployment-branch-policies', workflow)
+        self.assertIn('.name == "v*" and .type == "tag"', workflow)
+        self.assertIn('"${release_tag_policy_count}" != "1"', workflow)
         privileged_job = workflow.split("  attest-and-publish:", 1)[1]
         self.assertIn("environment:\n      name: syswarden-release-production", privileged_job)
 
@@ -924,6 +984,10 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         )
         self.assertIn("python3 scripts/ci/tag_ruleset_gate.py", between)
         self.assertIn('--expected-id "${ruleset_id}"', between)
+        self.assertEqual(
+            between.count('--expected-repository "${GITHUB_REPOSITORY}"'),
+            1,
+        )
         self.assertEqual(between.count("--method GET"), 2)
         self.assertNotIn("--method POST", between)
         self.assertNotIn("--method PUT", between)

@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -371,6 +372,53 @@ class PackageLifecycleLabTests(unittest.TestCase):
         )
         self.assertEqual(pairs["deb:amd64"].candidate.version, "4.02.8")
         self.assertEqual(pairs["deb:amd64"].previous.version, "4.02.7")
+
+    def test_forward_only_apk_contract_is_fixture_bound_per_architecture(self) -> None:
+        fixture = json.loads(
+            Path(__file__)
+            .with_name("fixtures")
+            .joinpath("package-forward-only-v4.02.8.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            fixture["artifacts"],
+            package_lifecycle_lab.FORWARD_ONLY_APK_PREVIOUS,
+        )
+        for spec in package_lifecycle_lab.DEFAULT_PLATFORMS:
+            if spec.family != "apk":
+                continue
+            historical = fixture["artifacts"][spec.package_architecture]
+            pair = package_lifecycle_lab.PackagePair(
+                candidate=package_lifecycle_lab.PackageArtifact(
+                    self.candidate
+                    / f"syswarden_4.02.10_{spec.package_architecture}.apk",
+                    "4.02.10",
+                    "a" * 64,
+                ),
+                previous=package_lifecycle_lab.PackageArtifact(
+                    self.previous / historical["filename"],
+                    "4.02.8",
+                    historical["sha256"],
+                ),
+            )
+            self.assertTrue(
+                package_lifecycle_lab.validate_forward_only_apk_pair(spec, pair)
+            )
+            tampered = package_lifecycle_lab.PackagePair(
+                candidate=pair.candidate,
+                previous=package_lifecycle_lab.PackageArtifact(
+                    pair.previous.path,
+                    pair.previous.version,
+                    "0" * 64,
+                ),
+            )
+            with self.assertRaisesRegex(
+                package_lifecycle_lab.LifecycleLabError,
+                "exact byte-bound",
+            ):
+                package_lifecycle_lab.validate_forward_only_apk_pair(
+                    spec, tampered
+                )
 
     def test_syswarden_version_parser_is_canonical_and_numeric(self) -> None:
         self.assertEqual(
@@ -852,6 +900,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertIn("assert_all_state_preserved candidate", script)
         self.assertIn("assert_all_state_preserved reinstall", script)
         self.assertIn("assert_all_state_preserved rollback", script)
+        self.assertIn("assert_all_state_preserved recovery", script)
         self.assertIn("assert_all_state_preserved restart-one", script)
         self.assertIn("assert_all_state_preserved restart-two", script)
         self.assertIn("verify_installed_inventory", script)
@@ -878,6 +927,71 @@ class PackageLifecycleLabTests(unittest.TestCase):
             script,
         )
         self.assertIn("normalize_apk_version", script)
+        self.assertIn("package_runtime_dependencies", script)
+        self.assertIn("expected_runtime_dependencies", script)
+        self.assertIn("metadata.${label}.runtime_dependencies", script)
+        self.assertIn("probe_postinstall_contract", script)
+        lifecycle_order = (
+            'run_install_step install.previous "${PREVIOUS_PACKAGE}"',
+            'run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}"',
+            'run_install_step reinstall.candidate "${CANDIDATE_PACKAGE}"',
+            'run_install_step rollback.previous "${PREVIOUS_PACKAGE}"',
+            'run_install_step recovery.candidate "${CANDIDATE_PACKAGE}"',
+        )
+        self.assertEqual(
+            [script.index(fragment) for fragment in lifecycle_order],
+            sorted(script.index(fragment) for fragment in lifecycle_order),
+        )
+
+    def test_forward_only_shell_invokes_historical_and_recovery_package_steps(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        functions = source[
+            source.index("scenario_upgrade_rollback_initial() {") : source.index(
+                "\nscenario_remove() {"
+            )
+        ]
+        shell = self.root / "forward-only-order.sh"
+        calls = self.root / "package-manager-calls"
+        restart = self.root / "restart-state"
+        shell.write_text(
+            "#!/bin/sh\n"
+            "set -u\n"
+            f'CALLS="{calls}"\n'
+            f'RESTART_STATE_FILE="{restart}"\n'
+            'PREVIOUS_PACKAGE="/previous/exact-v4.02.8.apk"\n'
+            'CANDIDATE_PACKAGE="/candidate/v4.02.10.apk"\n'
+            'PREVIOUS_VERSION="4.02.8"\n'
+            'CANDIDATE_VERSION="4.02.10"\n'
+            'EXPECTED_PREVIOUS_VERSION="4.02.8"\n'
+            'EXPECTED_CANDIDATE_VERSION="4.02.10"\n'
+            'FORWARD_ONLY_APK_TRANSITION="1"\n'
+            "prepare_expected_payloads() { return 0; }\n"
+            "seed_state() { :; }\n"
+            "load_state_contract() { return 0; }\n"
+            'run_install_step() { printf "%s\\n" "$1" >> "${CALLS}"; }\n'
+            "probe_forward_only_apk_payload() { :; }\n"
+            "probe_payload() { :; }\n"
+            "assert_all_state_preserved() { :; }\n"
+            + functions
+            + "\nscenario_upgrade_rollback_initial\n"
+            + "scenario_upgrade_rollback_restart_two\n",
+            encoding="utf-8",
+        )
+        shell.chmod(0o700)
+        result = subprocess.run(
+            (str(shell),), check=False, capture_output=True, text=True
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            calls.read_text(encoding="utf-8").splitlines(),
+            [
+                "install.previous",
+                "upgrade.candidate",
+                "reinstall.candidate",
+                "rollback.previous",
+                "recovery.candidate",
+            ],
+        )
 
     def test_maintainer_panic_is_canonical_only_when_manager_returns_zero(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -1256,7 +1370,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
                         adversarial
                     )
 
-    def test_exact_alpine_rc127_set_is_the_only_known_package_blocker(self) -> None:
+    def test_alpine_rc127_failures_are_never_a_generic_waiver(self) -> None:
         report = package_lifecycle_lab.run_lab(
             self.args(), runner=FakePodmanRunner()
         )
@@ -1281,17 +1395,17 @@ class PackageLifecycleLabTests(unittest.TestCase):
         classification = package_lifecycle_lab.classify_lifecycle_evidence(
             platforms
         )
-        self.assertTrue(classification["harness_complete"])
+        self.assertFalse(classification["harness_complete"])
         self.assertFalse(classification["release_ready"])
-        self.assertEqual(classification["blocker_ids"], ["SW-PKG-001"])
-        self.assertEqual(classification["unexpected_failed_checks"], [])
+        self.assertEqual(classification["blocker_ids"], [])
+        self.assertTrue(classification["unexpected_failed_checks"])
         alpine_coordinates = [
             item
             for item in classification["coordinate_classification"]
             if item["distribution"] == "alpine"
         ]
         self.assertTrue(
-            all(item["status"] == "blocker" for item in alpine_coordinates)
+            all(item["status"] == "incomplete" for item in alpine_coordinates)
         )
 
         adversarial = json.loads(json.dumps(platforms))
@@ -1340,6 +1454,95 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertTrue(
             missing_expected_failure["unexpected_failed_checks"]
         )
+
+    def test_exact_forward_only_apk_evidence_requires_candidate_recovery(self) -> None:
+        report = package_lifecycle_lab.run_lab(
+            self.args(), runner=FakePodmanRunner()
+        )
+        platforms = json.loads(json.dumps(report["platforms"]))
+        for platform_result in platforms:
+            if platform_result["family"] != "apk":
+                continue
+            architecture = platform_result["package_architecture"]
+            historical = package_lifecycle_lab.FORWARD_ONLY_APK_PREVIOUS[
+                architecture
+            ]
+            platform_result.update(
+                candidate_version="4.02.10",
+                previous_version="4.02.8",
+                candidate={
+                    "filename": f"syswarden_4.02.10_{architecture}.apk",
+                    "version": "4.02.10",
+                    "sha256": "c" * 64,
+                },
+                previous={
+                    "filename": historical["filename"],
+                    "version": "4.02.8",
+                    "sha256": historical["sha256"],
+                },
+            )
+            scenario = next(
+                item
+                for item in platform_result["scenarios"]
+                if item["name"] == "upgrade-rollback"
+            )
+            details = {
+                "upgrade-rollback.previous.executable": (
+                    "historical glibc loader refusal matched exit code 127"
+                ),
+                "upgrade-rollback.previous.elf_contract": (
+                    "historical payload matched DYN plus exact glibc PT_INTERP failure class"
+                ),
+                "upgrade-rollback.rollback.executable": (
+                    "historical glibc loader refusal matched exit code 127"
+                ),
+                "upgrade-rollback.rollback.elf_contract": (
+                    "historical payload matched DYN plus exact glibc PT_INTERP failure class"
+                ),
+                "upgrade-rollback.recovery.candidate": "command completed",
+                "upgrade-rollback.recovery.candidate.maintainer_script": (
+                    "maintainer script emitted no Go panic or fatal runtime diagnostic"
+                ),
+            }
+            for event in scenario["events"]:
+                if event["check"] in details:
+                    event["detail"] = details[event["check"]]
+
+        classification = package_lifecycle_lab.classify_lifecycle_evidence(
+            platforms
+        )
+        self.assertTrue(classification["harness_complete"])
+        self.assertTrue(classification["release_ready"])
+        self.assertEqual(classification["blocker_ids"], [])
+
+        missing_recovery = json.loads(json.dumps(platforms))
+        recovery = next(
+            event
+            for platform_result in missing_recovery
+            if platform_result["distribution"] == "alpine"
+            and platform_result["architecture_id"] == "amd64"
+            for scenario in platform_result["scenarios"]
+            if scenario["name"] == "upgrade-rollback"
+            for event in scenario["events"]
+            if event["check"] == "upgrade-rollback.recovery.candidate"
+        )
+        recovery["detail"] = "candidate recovery was skipped"
+        rejected = package_lifecycle_lab.classify_lifecycle_evidence(
+            missing_recovery
+        )
+        self.assertFalse(rejected["harness_complete"])
+        self.assertTrue(rejected["unexpected_failed_checks"])
+
+        wrong_hash = json.loads(json.dumps(platforms))
+        next(
+            item
+            for item in wrong_hash
+            if item["distribution"] == "alpine"
+            and item["architecture_id"] == "arm64"
+        )["previous"]["sha256"] = "0" * 64
+        rejected = package_lifecycle_lab.classify_lifecycle_evidence(wrong_hash)
+        self.assertFalse(rejected["harness_complete"])
+        self.assertTrue(rejected["unexpected_failed_checks"])
 
     def test_config_panics_are_unexpected_after_cfg_closure(self) -> None:
         report = package_lifecycle_lab.run_lab(
@@ -1457,6 +1660,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
         checks = package_lifecycle_lab.expected_event_checks("rpm", "remove")
         self.assertIn("remove.final-removal", checks)
         self.assertIn("remove.final-removal.purge-equivalent", checks)
+        self.assertIn("remove.final-removal.generated.systemd_core", checks)
+        self.assertIn("remove.final-removal.generated.openrc_webtui", checks)
+        self.assertIn("remove.final-removal.generated.completion", checks)
+        self.assertIn("remove.final-removal.generated.cron_reference", checks)
+        self.assertIn("remove.final-removal.generated.cron_unrelated", checks)
         self.assertFalse(any("not_applicable" in check for check in checks))
         report = package_lifecycle_lab.run_lab(
             self.args(), runner=FakePodmanRunner()
@@ -1473,6 +1681,86 @@ class PackageLifecycleLabTests(unittest.TestCase):
                         for item in platform_result["scenarios"]
                     )
                 )
+
+    def test_remove_and_purge_seed_and_verify_generated_runtime_artifacts(self) -> None:
+        script = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        self.assertIn("seed_generated_runtime_artifacts", script)
+        self.assertIn("assert_generated_runtime_artifacts_absent", script)
+        self.assertIn("/etc/systemd/system/syswarden-firewall.service", script)
+        self.assertIn("/etc/init.d/syswarden-firewall", script)
+        self.assertIn("/etc/bash_completion.d/syswarden", script)
+        self.assertIn("/etc/rsyslog.d/99-syswarden-siem.conf", script)
+        self.assertIn("/opt/syswarden/bin/syswarden-cli update-feeds", script)
+        self.assertIn(
+            "19 4 * * * /opt/syswarden/bin/syswarden-cli update-feeds --operator-option",
+            script,
+        )
+        for family, scenario in (
+            ("deb", "remove"),
+            ("deb", "purge"),
+            ("rpm", "remove"),
+            ("apk", "remove"),
+            ("apk", "purge"),
+        ):
+            with self.subTest(family=family, scenario=scenario):
+                checks = package_lifecycle_lab.expected_event_checks(family, scenario)
+                generated = [check for check in checks if ".generated." in check]
+                self.assertEqual(len(generated), 11)
+
+    def test_candidate_dependency_and_postinstall_events_are_mandatory(self) -> None:
+        for family, scenarios in package_lifecycle_lab.EXPECTED_SCENARIOS.items():
+            for scenario in scenarios:
+                with self.subTest(family=family, scenario=scenario):
+                    checks = package_lifecycle_lab.expected_event_checks(
+                        family, scenario
+                    )
+                    self.assertIn(
+                        f"{scenario}.metadata.candidate.runtime_dependencies",
+                        checks,
+                    )
+                    candidate_labels = (
+                        ("candidate", "reinstall", "recovery")
+                        if scenario == "upgrade-rollback"
+                        else ("fresh",)
+                    )
+                    for label in candidate_labels:
+                        self.assertIn(
+                            f"{scenario}.{label}.postinstall_contract", checks
+                        )
+
+    def test_bootstrap_preinstalls_every_declared_runtime_dependency(self) -> None:
+        expected = {
+            "deb": (
+                package_lifecycle_lab.DEB_BOOTSTRAP,
+                {
+                    "nftables", "ipset", "curl", "wget", "rsyslog", "cron",
+                    "bash-completion", "wireguard-tools", "qrencode", "jq",
+                },
+            ),
+            "rpm": (
+                package_lifecycle_lab.RPM_BOOTSTRAP,
+                {
+                    "nftables", "ipset", "wget", "rsyslog", "cronie",
+                    "bash-completion", "wireguard-tools", "qrencode", "jq",
+                    "checkpolicy", "policycoreutils-python-utils",
+                },
+            ),
+            "apk": (
+                package_lifecycle_lab.APK_BOOTSTRAP,
+                {
+                    "nftables", "curl", "wget", "rsyslog", "rsyslog-uxsock",
+                    "bash-completion", "wireguard-tools", "libqrencode-tools", "jq",
+                },
+            ),
+        }
+        for family, (bootstrap, dependencies) in expected.items():
+            with self.subTest(family=family):
+                for dependency in dependencies:
+                    self.assertRegex(
+                        bootstrap,
+                        rf"(?:^|\s){re.escape(dependency)}(?:\s|$)",
+                    )
+        self.assertIn("epel-release", package_lifecycle_lab.RPM_BOOTSTRAP)
 
     def test_failed_event_fails_platform_and_overall_report(self) -> None:
         runner = FakePodmanRunner(event_status="fail")

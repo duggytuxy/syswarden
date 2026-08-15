@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"syswarden-cli/pkg/platformpaths"
 
 	"github.com/spf13/cobra"
 )
@@ -45,13 +46,13 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %sunwhitelist%s         : Removes one or more addresses or CIDRs from the whitelist.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %supdate%s              : Installs an update only after signed-manifest and package verification.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %supdate-feeds%s        : Downloads configured feeds and reapplies firewall policy.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %sweb-token%s           : Displays the configured token; if absent, generates and persists one and requests a restart. --rotate persists a replacement and requests a restart; failure can leave the running Web-TUI on its previous token.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %sweb-token%s           : Displays the configured token; if absent, generates and persists one and requests a restart. --rotate persists a replacement; restart failure returns nonzero and can leave the running Web-TUI on its previous token.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sweb-tui%s             : Starts the network-facing Web-TUI server.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %swhitelist%s           : Adds one or more addresses or CIDRs to the whitelist.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %swhitelist-infra%s     : Detects and adds local infrastructure addresses.\n\n", ansiGreen, ansiReset)
 
 		fmt.Printf("%s--- 2. GLOBAL FLAGS ---%s\n", ansiYellow, ansiReset)
-		fmt.Printf("  %s--config <path>%s : Overrides the legacy flat file path. The default is /opt/syswarden/syswarden-auto.conf.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %s--config <path>%s : Overrides the legacy flat file path. The default is %s.\n", ansiGreen, ansiReset, platformpaths.LegacyConfig)
 		fmt.Printf("  %s--help%s          : Displays Cobra help for the selected command.\n\n", ansiGreen, ansiReset)
 
 		fmt.Printf("%s--- 3. MODULAR CONFIGURATION (TOML) ---%s\n", ansiYellow, ansiReset)
@@ -91,10 +92,10 @@ var manualCmd = &cobra.Command{
 
 		fmt.Printf("%s--- 5. SAFETY LIMITS ---%s\n", ansiYellow, ansiReset)
 		fmt.Printf("  %sRELOAD:%s the Linux nftables candidate is committed atomically and verified; compatibility-wrapper failure leaves nftables authoritative and returns an error. The core normally restarts, so keep console access and a ruleset backup.\n", ansiRed, ansiReset)
-		fmt.Printf("  %sUPDATE:%s v4.02.9+ requires a trusted Ed25519 release manifest; v4.02.8 needs a separately verified manual first upgrade.\n", ansiRed, ansiReset)
-		fmt.Printf("  %sUNINSTALL:%s configuration, data, logs, services and firewall tables are deleted; it is not a rollback.\n", ansiRed, ansiReset)
-		fmt.Printf("  %sALPINE:%s current Linux binaries require glibc and do not run on standard musl-only Alpine.\n", ansiRed, ansiReset)
-		fmt.Printf("  %sFREEBSD:%s current package and service/runtime paths disagree; the package is not installable as documented.\n\n", ansiRed, ansiReset)
+		fmt.Printf("  %sUPDATE:%s v4.02.9+ requires a trusted Ed25519 release manifest; v4.02.8 needs a separately verified manual first hop to v4.02.10. Signed Linux and FreeBSD amd64 updates are then supported.\n", ansiRed, ansiReset)
+		fmt.Printf("  %sUNINSTALL:%s configuration, data, logs, services and firewall tables are deleted; it is not a rollback. On FreeBSD, use this command instead of raw pkg delete.\n", ansiRed, ansiReset)
+		fmt.Printf("  %sALPINE:%s dedicated CGO-free static APK binaries are built for x86_64 and aarch64; install only an exact release-qualified artifact.\n", ansiRed, ansiReset)
+		fmt.Printf("  %sFREEBSD:%s v4.02.10 uses native /usr/local paths and rc.d on amd64. The first v4.02.8 hop is manual, and fresh installation requires PF disabled with an empty live ruleset.\n\n", ansiRed, ansiReset)
 
 		fmt.Printf("%s================================================================================%s\n", ansiCyan, ansiReset)
 		fmt.Printf("%sRead README.md and the command-specific --help output before a host-mutating action.%s\n", ansiWhite, ansiReset)

@@ -9,11 +9,10 @@
 name="syswarden"
 rcvar="syswarden_enable"
 
-command="/opt/syswarden/syswarden-core"
+command="/usr/local/syswarden/bin/syswarden-core"
+procname="${command}"
 pidfile="/var/run/${name}.pid"
-
-# Run in background
-command_args="&"
+required_files="${command}"
 
 # Load configuration
 load_rc_config $name
@@ -21,21 +20,18 @@ load_rc_config $name
 
 # Hook to capture PID
 start_cmd="syswarden_start"
-stop_cmd="syswarden_stop"
 
 syswarden_start() {
-    echo "Starting SYSWARDEN..."
-    /usr/sbin/daemon -p ${pidfile} ${command}
-}
-
-syswarden_stop() {
-    if [ -f ${pidfile} ]; then
-        echo "Stopping SYSWARDEN..."
-        kill $(cat ${pidfile})
-        rm -f ${pidfile}
-    else
-        echo "SYSWARDEN is not running."
+    running_pid="$(check_pidfile "${pidfile}" "${procname}")"
+    if [ -n "${running_pid}" ]; then
+        echo "SYSWARDEN is already running as ${running_pid}."
+        return 0
     fi
+    if [ -f "${pidfile}" ]; then
+        rm -f "${pidfile}"
+    fi
+    echo "Starting SYSWARDEN..."
+    /usr/sbin/daemon -f -p "${pidfile}" "${command}"
 }
 
 run_rc_command "$1"

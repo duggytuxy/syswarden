@@ -675,10 +675,13 @@ jobs:
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
           qualification_root_directories=(aggregate bound packages raw status)
           qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
+          qualification_raw_files=(freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json)
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            qualification_root_directories+=(update)
-            qualification_all_directories+=(update)
+            qualification_root_directories+=(tools update)
+            qualification_all_directories+=(tools update)
+            qualification_raw_files+=(freebsd-updater-raw.json)
           else
+            test ! -e "${QUALIFICATION_ROOT}/tools"
             test ! -e "${QUALIFICATION_ROOT}/update"
           fi
           diff -u \
@@ -694,7 +697,7 @@ jobs:
             <(printf '%s\n' release-qualification.json) \
             <(find "${QUALIFICATION_ROOT}/aggregate" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
-            <(printf '%s\n' freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json | LC_ALL=C sort) \
+            <(printf '%s\n' "${qualification_raw_files[@]}" | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}/raw" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
             <(printf '%s\n' freebsd-vm-bound.json nftables-bound.json package-lifecycle-bound.json | LC_ALL=C sort) \
@@ -706,6 +709,9 @@ jobs:
             <(printf '%s\n' qualification-exit-codes.json) \
             <(find "${QUALIFICATION_ROOT}/status" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            diff -u \
+              <(printf '%s\n' syswarden-updater-freebsd.test) \
+              <(find "${QUALIFICATION_ROOT}/tools" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
             diff -u \
               <(printf '%s\n' syswarden-update-manifest-v1.json syswarden-update-manifest-v1.json.sig | LC_ALL=C sort) \
               <(find "${QUALIFICATION_ROOT}/update" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
@@ -724,6 +730,21 @@ jobs:
               <(find . -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n' | LC_ALL=C sort)
             sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
           )
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            test -f "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
+            test ! -L "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
+            chmod 0700 -- "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
+            test "$(stat -c '%a' "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test")" = "700"
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_updater_vm_probe.py \
+              verify \
+              --packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
+              --previous-packages-dir "${QUALIFICATION_ROOT}/packages/previous" \
+              --manifest "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
+              --signature "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig" \
+              --test-binary "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test" \
+              --release-sha "${RELEASE_SHA}" \
+              --report "${QUALIFICATION_ROOT}/raw/freebsd-updater-raw.json"
+          fi
           jq --exit-status \
             --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
             --arg repository "${GITHUB_REPOSITORY}" \
@@ -765,8 +786,19 @@ jobs:
               (.id | type) == "number" and .id > 0 and
               (.name | type) == "string" and (.name | length) > 0
             )' "${QUALIFICATION_ROOT}/qualification-context.json"
-          jq --exit-status '
-            (keys | sort) == [
+          jq --exit-status \
+            --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" '
+            (keys | sort) == (if $signed_update_required then [
+              "adapter_build",
+              "adapter_verify",
+              "freebsd_lab",
+              "freebsd_updater",
+              "freebsd_updater_verify",
+              "gate_generate",
+              "gate_verify",
+              "nftables_lab",
+              "package_lab"
+            ] else [
               "adapter_build",
               "adapter_verify",
               "freebsd_lab",
@@ -774,7 +806,7 @@ jobs:
               "gate_verify",
               "nftables_lab",
               "package_lab"
-            ] and all(.[]; . == 0)
+            ] end) and all(.[]; . == 0)
           ' "${QUALIFICATION_ROOT}/status/qualification-exit-codes.json"
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_adapter.py verify \
@@ -894,18 +926,51 @@ jobs:
           environment_json="$(gh api \
             "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-production")"
           environment_name="$(jq -r '.name // ""' <<< "${environment_json}")"
-          reviewer_rule_count="$(jq '[
+          reviewer_rule_count="$(jq --arg owner "${GITHUB_REPOSITORY_OWNER}" '[
             .protection_rules[]? |
             select(
               .type == "required_reviewers" and
+              .prevent_self_review == false and
               (.reviewers | type) == "array" and
-              (.reviewers | length) > 0
+              (.reviewers | length) == 1 and
+              .reviewers[0].type == "User" and
+              .reviewers[0].reviewer.login == $owner
             )
           ] | length' <<< "${environment_json}")"
+          branch_policy_rule_count="$(jq '[
+            .protection_rules[]? | select(.type == "branch_policy")
+          ] | length' <<< "${environment_json}")"
+          protection_rule_count="$(jq '[.protection_rules[]?] | length' \
+            <<< "${environment_json}")"
+          protected_branches="$(jq -r \
+            '.deployment_branch_policy.protected_branches // "missing"' \
+            <<< "${environment_json}")"
+          custom_branch_policies="$(jq -r \
+            '.deployment_branch_policy.custom_branch_policies // "missing"' \
+            <<< "${environment_json}")"
           if [[ "${environment_name}" != "syswarden-release-production" || \
-                "${reviewer_rule_count}" != "1" ]]; then
-            echo "ERROR: syswarden-release-production must exist and have exactly one non-empty required-reviewers protection rule." >&2
+                "${reviewer_rule_count}" != "1" || \
+                "${branch_policy_rule_count}" != "1" || \
+                "${protection_rule_count}" != "2" || \
+                "${protected_branches}" != "false" || \
+                "${custom_branch_policies}" != "true" ]]; then
+            echo "ERROR: syswarden-release-production must require exactly one approval from the repository owner and one custom tag policy." >&2
             echo "Publication is blocked until the maintainer configures that GitHub Environment." >&2
+            exit 1
+          fi
+          policies_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-production/deployment-branch-policies" \
+            -f per_page=100)"
+          declared_policy_count="$(jq -r '.[0].total_count' <<< "${policies_json}")"
+          policy_count="$(jq '[.[] | .branch_policies[]?] | length' <<< "${policies_json}")"
+          release_tag_policy_count="$(jq '[
+            .[] | .branch_policies[]? |
+            select(.name == "v*" and .type == "tag")
+          ] | length' <<< "${policies_json}")"
+          if [[ "${declared_policy_count}" != "1" || \
+                "${policy_count}" != "1" || \
+                "${release_tag_policy_count}" != "1" ]]; then
+            echo "ERROR: syswarden-release-production must allow deployments from v* tags only." >&2
             exit 1
           fi
           echo "Protected maintainer release environment is configured."
@@ -1099,10 +1164,13 @@ jobs:
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
           qualification_root_directories=(aggregate bound packages raw status)
           qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
+          qualification_raw_files=(freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json)
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            qualification_root_directories+=(update)
-            qualification_all_directories+=(update)
+            qualification_root_directories+=(tools update)
+            qualification_all_directories+=(tools update)
+            qualification_raw_files+=(freebsd-updater-raw.json)
           else
+            test ! -e "${QUALIFICATION_ROOT}/tools"
             test ! -e "${QUALIFICATION_ROOT}/update"
           fi
           diff -u \
@@ -1118,7 +1186,7 @@ jobs:
             <(printf '%s\n' release-qualification.json) \
             <(find "${QUALIFICATION_ROOT}/aggregate" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
-            <(printf '%s\n' freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json | LC_ALL=C sort) \
+            <(printf '%s\n' "${qualification_raw_files[@]}" | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}/raw" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
             <(printf '%s\n' freebsd-vm-bound.json nftables-bound.json package-lifecycle-bound.json | LC_ALL=C sort) \
@@ -1130,6 +1198,9 @@ jobs:
             <(printf '%s\n' qualification-exit-codes.json) \
             <(find "${QUALIFICATION_ROOT}/status" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            diff -u \
+              <(printf '%s\n' syswarden-updater-freebsd.test) \
+              <(find "${QUALIFICATION_ROOT}/tools" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
             diff -u \
               <(printf '%s\n' syswarden-update-manifest-v1.json syswarden-update-manifest-v1.json.sig | LC_ALL=C sort) \
               <(find "${QUALIFICATION_ROOT}/update" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
@@ -1148,6 +1219,21 @@ jobs:
               <(find . -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n' | LC_ALL=C sort)
             sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
           )
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            test -f "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
+            test ! -L "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
+            chmod 0700 -- "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
+            test "$(stat -c '%a' "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test")" = "700"
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_updater_vm_probe.py \
+              verify \
+              --packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
+              --previous-packages-dir "${QUALIFICATION_ROOT}/packages/previous" \
+              --manifest "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
+              --signature "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig" \
+              --test-binary "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test" \
+              --release-sha "${RELEASE_SHA}" \
+              --report "${QUALIFICATION_ROOT}/raw/freebsd-updater-raw.json"
+          fi
           jq --exit-status \
             --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
             --arg repository "${GITHUB_REPOSITORY}" \
@@ -1189,8 +1275,19 @@ jobs:
               (.id | type) == "number" and .id > 0 and
               (.name | type) == "string" and (.name | length) > 0
             )' "${QUALIFICATION_ROOT}/qualification-context.json"
-          jq --exit-status '
-            (keys | sort) == [
+          jq --exit-status \
+            --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" '
+            (keys | sort) == (if $signed_update_required then [
+              "adapter_build",
+              "adapter_verify",
+              "freebsd_lab",
+              "freebsd_updater",
+              "freebsd_updater_verify",
+              "gate_generate",
+              "gate_verify",
+              "nftables_lab",
+              "package_lab"
+            ] else [
               "adapter_build",
               "adapter_verify",
               "freebsd_lab",
@@ -1198,7 +1295,7 @@ jobs:
               "gate_verify",
               "nftables_lab",
               "package_lab"
-            ] and all(.[]; . == 0)
+            ] end) and all(.[]; . == 0)
           ' "${QUALIFICATION_ROOT}/status/qualification-exit-codes.json"
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_adapter.py verify \
@@ -1431,7 +1528,8 @@ jobs:
           printf '%s' "${ruleset_detail}" > "${ruleset_path}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/tag_ruleset_gate.py \
             --ruleset "${ruleset_path}" \
-            --expected-id "${ruleset_id}"
+            --expected-id "${ruleset_id}" \
+            --expected-repository "${GITHUB_REPOSITORY}"
 
           remote_refs="$(git ls-remote --exit-code origin \
             "refs/tags/${RELEASE_TAG}" \

@@ -82,7 +82,7 @@ function Assert-GoArtifact {
         throw "Generated artifact is empty: $DisplayPath"
     }
 
-    $Header = [byte[]]::new(20)
+    $Header = [byte[]]::new(64)
     $Stream = [System.IO.File]::OpenRead($Path)
     try {
         if ($Stream.Read($Header, 0, $Header.Length) -ne $Header.Length) {
@@ -110,6 +110,11 @@ function Assert-GoArtifact {
 
     if ($Machine -ne $ExpectedMachine) {
         throw "Generated artifact has the wrong ELF architecture: $DisplayPath"
+    }
+
+    $ElfType = [int]$Header[16] -bor ([int]$Header[17] -shl 8)
+    if (($ExpectedOS -eq 'linux') -and ($ElfType -ne 3)) {
+        throw "Generated Linux artifact is not an ELF PIE executable: $DisplayPath"
     }
 
     $BuildInfo = (& go version -m $Path 2>&1 | Out-String)

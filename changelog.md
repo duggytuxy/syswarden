@@ -1,3 +1,31 @@
+# Release v4.02.10
+
+### FIXED 🐛
+- **Alpine packages:** Build dedicated CGO-free static x86_64 and aarch64 executables so APK installations no longer depend on the glibc ELF interpreter.
+- **FreeBSD package:** Align the amd64 TXZ on FreeBSD 14 ABI, native `/usr/local` paths, owned rc.d services, exact dependencies and bounded cleanup behavior.
+- **FreeBSD runtime:** Add native service, telemetry, audit, SSH, PF, cron, rsyslog, WireGuard, TUI and uninstall handling with fail-closed error reporting.
+- **Package lifecycle:** Preserve operator configuration and host state across install, upgrade, reinstall and supported uninstall while rejecting unsafe directories, symlinks and concurrent staging changes.
+- **Release qualification:** Seal FreeBSD VM inputs, bind exact candidate and historical packages by digest, and remove false-positive lifecycle evidence for known immutable v4.02.8 defects.
+
+### SECURITY 🔒
+- **Signed FreeBSD updates:** Extend the canonical Ed25519 manifest to the FreeBSD amd64 TXZ and verify its name, platform, size and SHA-256 again before native `pkg add -f`.
+- **Updater evidence:** Build a clean-SHA-bound FreeBSD qualification binary, execute the signed transition on the protected disposable VM, and recompute its exact report in both release-manager trust boundaries.
+- **PF recovery:** Require a fresh disabled and empty PF baseline for new installations, preserve the exact byte-bound historical v4.02.8 transition, and reject unsupported arbitrary PF coexistence.
+- **Release governance:** Validate the exact immutable tag ruleset response, preserve the non-signed v4.02.8 path, and require every signed updater status to be present and zero before publication.
+- **Security baseline:** Remove only resolved legacy nosec annotations without adding, moving or reintroducing any suppression.
+
+### UPGRADE NOTES 📦
+- The immutable v4.02.8 binary predates the signed updater. Do not use `syswarden update` for its first hop. Download exactly one v4.02.10 package matching the host, download `SHA256SUMS.txt` from the same Release, verify that exact package, then install it with the native package manager.
+- **Debian or Ubuntu:** after checksum verification, run `sudo apt-get install -y ./syswarden_4.02.10_amd64.deb` or use the `arm64` filename on an ARM64 host.
+- **RHEL, AlmaLinux or Rocky Linux:** after checksum verification, run `sudo dnf install -y ./syswarden-4.02.10-1.x86_64.rpm` or use the `aarch64` filename on an ARM64 host.
+- **Alpine Linux:** after checksum verification, run `sudo apk add --allow-untrusted ./syswarden_4.02.10_x86_64.apk` or use the `aarch64` filename on an ARM64 host. Never use `--allow-untrusted` before the SHA-256 check succeeds.
+- FreeBSD v4.02.8 hosts must install `curl`, `jq`, `libqrencode`, `rsyslog` and `wireguard-tools`, then use `pkg add -f` on the verified v4.02.10 TXZ. Signed native FreeBSD updates are available from v4.02.10 onward.
+- The package post-install hook performs the initial `syswarden install`. Review the result with `sudo syswarden manual` and `sudo syswarden config`. The complete architecture-selecting procedure is in the README section [Install the latest verified Release](README.md#install-the-latest-verified-release).
+- On FreeBSD, use `syswarden uninstall` rather than raw `pkg delete`. The package manager can remove payloads after a failing pre-deinstall script, and its no-script mode bypasses recovery hooks.
+- The package-level `[webtui] enabled = false` default and conditional TCP 62027 ownership remain separate Lot 2 work; v4.02.10 preserves the current Web-TUI-enabled package behavior.
+
+---
+
 # Release v4.02.9
 
 ### FIXED 🐛

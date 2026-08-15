@@ -406,6 +406,10 @@ func TestExternalCommandContractRejectsUnexpectedArguments(t *testing.T) {
 	if err := validateExternalCommand("/usr/bin/apt-get", []string{"install", "-y", validPackage}); err != nil {
 		t.Fatalf("validateExternalCommand() rejected exact installer contract: %v", err)
 	}
+	validTXZ := "/var/tmp/syswarden-update-safe/package.txz"
+	if err := validateExternalCommand("/usr/sbin/pkg", []string{"add", "-f", validTXZ}); err != nil {
+		t.Fatalf("validateExternalCommand() rejected exact FreeBSD installer contract: %v", err)
+	}
 	invalid := []struct {
 		name string
 		args []string
@@ -414,6 +418,11 @@ func TestExternalCommandContractRejectsUnexpectedArguments(t *testing.T) {
 		{name: "/usr/bin/apt-get", args: []string{"install", "-y", "/tmp/package.deb"}},
 		{name: "/usr/bin/apt-get", args: []string{"remove", "-y", validPackage}},
 		{name: "/sbin/apk", args: []string{"add", "/var/tmp/syswarden-update-safe/package.apk"}},
+		{name: "/usr/sbin/pkg", args: []string{"add", validTXZ}},
+		{name: "/usr/sbin/pkg", args: []string{"add", "-f", "/tmp/package.txz"}},
+		{name: "/tmp/pkg", args: []string{"add", "-f", validTXZ}},
+		{name: "/usr/sbin/service", args: []string{"syswarden", "stop"}},
+		{name: "/usr/sbin/service", args: []string{"operator-service", "restart"}},
 	}
 	for _, command := range invalid {
 		if err := validateExternalCommand(command.name, command.args); err == nil {
@@ -644,6 +653,106 @@ func TestAPKAllowUntrustedIsReachableOnlyAfterManifestAndPackageVerification(t *
 	}
 }
 
+func TestFreeBSDUpdaterInstallsOnlyVerifiedTXZAndActivatesRCD(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	packagePayload := []byte("verified FreeBSD txz package")
+	manifestBytes := testMarshalManifest(t, testUpdateManifest(t, testUpdateVersion, packagePayload))
+	validSignature := testSignManifest(privateKey, manifestBytes)
+
+	for _, test := range []struct {
+		name         string
+		signature    []byte
+		wantError    bool
+		wantInstalls int32
+	}{
+		{name: "valid signed TXZ", signature: validSignature, wantInstalls: 1},
+		{name: "invalid manifest signature", signature: testTamperedSignature(t, validSignature), wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var installs atomic.Int32
+			var packageDownloaded atomic.Bool
+			var activationCalls atomic.Int32
+			packageName := "syswarden-4.02.9.txz"
+			client := staticHTTPClient(func(request *http.Request) (*http.Response, error) {
+				switch request.URL.Path {
+				case "/latest":
+					return testHTTPResponse(http.StatusOK, []byte(`{"tag_name":"`+testUpdateVersion+`"}`)), nil
+				case "/download/" + testUpdateVersion + "/" + updateManifestAssetName:
+					return testHTTPResponse(http.StatusOK, manifestBytes), nil
+				case "/download/" + testUpdateVersion + "/" + updateManifestSignatureAssetName:
+					return testHTTPResponse(http.StatusOK, test.signature), nil
+				case "/download/" + testUpdateVersion + "/" + packageName:
+					packageDownloaded.Store(true)
+					return testHTTPResponse(http.StatusOK, packagePayload), nil
+				default:
+					return testHTTPResponse(http.StatusNotFound, []byte("not found")), nil
+				}
+			})
+			u := testUpdaterForPlatform(
+				client,
+				t.TempDir(),
+				"freebsd",
+				"amd64",
+				map[string]ed25519.PublicKey{testReleaseKeyID: publicKey},
+				func(_ context.Context, name string, args ...string) error {
+					switch name {
+					case "/usr/sbin/pkg":
+						if !packageDownloaded.Load() {
+							t.Fatal("FreeBSD installer ran before the authenticated package download")
+						}
+						if len(args) != 3 || args[0] != "add" || args[1] != "-f" {
+							t.Fatalf("FreeBSD installer arguments = %#v", args)
+						}
+						content, err := readUpdaterTestFile(filepath.Dir(args[2]), filepath.Base(args[2]))
+						if err != nil {
+							t.Fatalf("read authenticated TXZ: %v", err)
+						}
+						if !bytes.Equal(content, packagePayload) {
+							t.Fatalf("FreeBSD installer package content = %q", content)
+						}
+						installs.Add(1)
+					case "/usr/local/syswarden/bin/syswarden-cli", "/usr/sbin/service":
+						activationCalls.Add(1)
+					default:
+						t.Fatalf("unexpected FreeBSD command %q %#v", name, args)
+					}
+					return nil
+				},
+			)
+			u.lookPath = func(name string) (string, error) {
+				switch name {
+				case "pkg":
+					return "/usr/sbin/pkg", nil
+				case "service":
+					return "/usr/sbin/service", nil
+				default:
+					return "", os.ErrNotExist
+				}
+			}
+
+			err := u.run(t.Context())
+			if test.wantError && err == nil {
+				t.Fatal("FreeBSD updater accepted an invalid manifest signature")
+			}
+			if !test.wantError && err != nil {
+				t.Fatalf("FreeBSD updater error = %v", err)
+			}
+			if installs.Load() != test.wantInstalls {
+				t.Fatalf("FreeBSD installer calls = %d, want %d", installs.Load(), test.wantInstalls)
+			}
+			if test.wantError && activationCalls.Load() != 0 {
+				t.Fatalf("FreeBSD activation ran %d times after rejected metadata", activationCalls.Load())
+			}
+			if !test.wantError && activationCalls.Load() != 5 {
+				t.Fatalf("FreeBSD activation calls = %d, want 5", activationCalls.Load())
+			}
+		})
+	}
+}
+
 func TestFinishUpgradeReturnsPartialAndMultipleActivationFailures(t *testing.T) {
 	t.Parallel()
 
@@ -714,6 +823,61 @@ func TestFinishUpgradeReturnsPartialAndMultipleActivationFailures(t *testing.T) 
 	}
 }
 
+func TestFinishUpgradeFreeBSDAggregatesActivationFailures(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	var calls atomic.Int32
+	u := &updater{
+		stdout: &output,
+		lookPath: func(name string) (string, error) {
+			if name == "service" {
+				return "/usr/sbin/service", nil
+			}
+			return "", os.ErrNotExist
+		},
+		runCommand: func(_ context.Context, name string, args ...string) error {
+			calls.Add(1)
+			key := strings.Join(append([]string{name}, args...), " ")
+			switch key {
+			case "/usr/local/syswarden/bin/syswarden-cli web-token":
+				return errors.New("token failed")
+			case "/usr/sbin/service syswarden restart":
+				return errors.New("core failed")
+			case "/usr/sbin/service syswarden onestatus":
+				return errors.New("core status failed")
+			case "/usr/sbin/service syswardenwebtui restart":
+				return errors.New("web failed")
+			case "/usr/sbin/service syswardenwebtui onestatus":
+				return errors.New("web status failed")
+			default:
+				return nil
+			}
+		},
+	}
+	err := u.finishUpgrade(t.Context(), packageTarget{os: "freebsd", format: packageFormatTXZ})
+	if err == nil {
+		t.Fatal("finishUpgrade() accepted failed FreeBSD activation")
+	}
+	for _, expected := range []string{
+		"initialize Web-TUI token",
+		"restart syswarden",
+		"verify syswarden status",
+		"restart syswardenwebtui",
+		"verify syswardenwebtui status",
+	} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("finishUpgrade() error %q does not contain %q", err, expected)
+		}
+	}
+	if calls.Load() != 5 {
+		t.Errorf("FreeBSD activation command calls = %d, want 5", calls.Load())
+	}
+	if strings.Contains(output.String(), "completed successfully") {
+		t.Fatalf("failed FreeBSD activation printed a success message: %q", output.String())
+	}
+}
+
 func newUpdaterTestClient(
 	manifestBytes, signatureBytes, packageBytes []byte,
 ) *http.Client {
@@ -740,12 +904,21 @@ func testUpdater(
 	keys map[string]ed25519.PublicKey,
 	runner commandRunner,
 ) *updater {
+	return testUpdaterForPlatform(client, tempBase, "linux", goarch, keys, runner)
+}
+
+func testUpdaterForPlatform(
+	client *http.Client,
+	tempBase, goos, goarch string,
+	keys map[string]ed25519.PublicKey,
+	runner commandRunner,
+) *updater {
 	return &updater{
 		client:          client,
 		latestURL:       "https://updates.test/latest",
 		downloadBaseURL: "https://updates.test/download",
 		currentVersion:  "v4.02.8",
-		goos:            "linux",
+		goos:            goos,
 		goarch:          goarch,
 		tempBase:        tempBase,
 		trustedKeys:     keys,

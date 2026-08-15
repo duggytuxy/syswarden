@@ -1,8 +1,8 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
-	"os/exec"
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
 	"syswarden-cli/pkg/network"
@@ -15,55 +15,59 @@ var noRestart bool
 var reloadCmd = &cobra.Command{
 	Use:   "reload",
 	Short: "Reapply policy and normally restart syswarden-core",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("[*] Reloading SYSWARDEN configuration from memory...")
-		hadReportedError := false
+		var failures []error
 
 		// Re-apply Firewall and Whitelists based on new config
 		if err := firewall.ApplyPolicies(); err != nil {
 			fmt.Printf("[ERROR] Firewall reload failed: %v\n", err)
-			hadReportedError = true
+			failures = append(failures, fmt.Errorf("firewall reload: %w", err))
 		}
 
 		// Re-apply Wireguard if changed
 		if err := network.SetupWireguard(); err != nil {
 			fmt.Printf("[ERROR] Wireguard reload failed: %v\n", err)
-			hadReportedError = true
+			failures = append(failures, fmt.Errorf("WireGuard reload: %w", err))
 		}
 
 		// Re-apply WAF Log Bridge (Rsyslog)
 		if err := integration.SetupWAFLogForwarder(); err != nil {
 			fmt.Printf("[ERROR] WAF Log Bridge reload failed: %v\n", err)
-			hadReportedError = true
+			failures = append(failures, fmt.Errorf("WAF log bridge reload: %w", err))
 		}
 
 		// Re-apply AbuseIPDB / Telemetry configuration
 		if err := integration.SetupAbuseIPDB(); err != nil {
 			fmt.Printf("[ERROR] AbuseIPDB reload failed: %v\n", err)
-			hadReportedError = true
+			failures = append(failures, fmt.Errorf("AbuseIPDB reload: %w", err))
 		}
 
 		// Re-apply Background Cron Orchestration (Repairs missing jobs)
 		fmt.Println("[*] Verifying background orchestration...")
 		if err := network.SetupFeedsCron(); err != nil {
 			fmt.Printf("[WARN] Threat feeds cron repair failed: %v\n", err)
-			hadReportedError = true
+			failures = append(failures, fmt.Errorf("threat feeds cron repair: %w", err))
 		}
 		if err := network.SetupHACluster(); err != nil {
 			fmt.Printf("[WARN] HA cluster cron repair failed: %v\n", err)
-			hadReportedError = true
+			failures = append(failures, fmt.Errorf("HA cluster cron repair: %w", err))
 		}
 
 		// Restart Daemons gracefully
 		if !noRestart {
 			fmt.Println("[*] Restarting background engines...")
-			if err := exec.Command("systemctl", "restart", "syswarden-core.service").Run(); err != nil {
+			if err := restartCoreService(); err != nil {
 				fmt.Printf("[WARN] syswarden-core restart failed: %v\n", err)
-				hadReportedError = true
+				failures = append(failures, fmt.Errorf("core service restart: %w", err))
 			}
 		}
 
-		fmt.Println(reloadCompletionMessage(hadReportedError))
+		fmt.Println(reloadCompletionMessage(len(failures) > 0))
+		if len(failures) > 0 {
+			return fmt.Errorf("reload sequence did not reach a verified state: %w", errors.Join(failures...))
+		}
+		return nil
 	},
 }
 

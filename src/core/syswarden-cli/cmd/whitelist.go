@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 
@@ -14,8 +15,9 @@ var whitelistCmd = &cobra.Command{
 	Short: "Add addresses or CIDRs to the persistent whitelist",
 	Long:  "Records each entry in the persistent whitelist and reapplies firewall policy. Verify the resulting kernel rule before relying on the entry.",
 	Args:  cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var ips []string
+		var failures []error
 		port := ""
 		portRegex := regexp.MustCompile(`^[0-9]+$`)
 		for _, arg := range args {
@@ -29,9 +31,13 @@ var whitelistCmd = &cobra.Command{
 
 		for _, ip := range ips {
 			if err := firewall.AddToWhitelist(ip, port); err != nil {
-				fmt.Printf("[ERROR] %s: %v\n", ip, err)
+				failures = append(failures, fmt.Errorf("whitelist %s: %w", ip, err))
 			}
 		}
+		if len(ips) == 0 {
+			failures = append(failures, fmt.Errorf("at least one IP address or CIDR is required"))
+		}
+		return errors.Join(failures...)
 	},
 }
 

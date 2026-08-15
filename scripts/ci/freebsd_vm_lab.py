@@ -28,6 +28,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
 
+import freebsd_package_manifest
+
 
 SCHEMA_VERSION = 2
 VM_MARKER_PATH = "/var/run/syswarden-lot0-disposable.marker"
@@ -45,50 +47,41 @@ EXPECTED_ENGINE_SIGNATURE_COUNT = 194
 EXPECTED_FREEBSD_PACKAGE_ABI = "FreeBSD:14:amd64"
 KNOWN_LEGACY_FREEBSD_PACKAGE_ABI = "FreeBSD:13:amd64"
 EXPECTED_NATIVE_ELF_ARCH = "amd64"
-CANONICAL_BLOCKER_IDS = frozenset({"SW-BSD-001"})
-KNOWN_FREEBSD_CORE_COMMAND = "/opt/syswarden/syswarden-core"
-KNOWN_FREEBSD_WEB_COMMAND = "/opt/syswarden/bin/syswarden-cli"
-EXPECTED_FAILED_CHECK_BLOCKERS = {
-    "SW-PKG-FBSD-PREVIOUS-INSTALL-ABI-001": "SW-BSD-001",
-    "SW-PKG-FBSD-PREVIOUS-INSTALL-ELF-001": "SW-BSD-001",
-    "SW-PKG-FBSD-PREVIOUS-INSTALL-SIGNATURES-001": "SW-BSD-001",
-    "SW-PKG-FBSD-CANDIDATE-UPGRADE-ABI-001": "SW-BSD-001",
-    "SW-PKG-FBSD-CANDIDATE-REINSTALL-ABI-001": "SW-BSD-001",
-    "SW-PKG-FBSD-CANDIDATE-RESTART-IDEMPOTENCE-001": "SW-BSD-001",
-    "SW-PKG-FBSD-CANDIDATE-RESTART-IDEMPOTENCE-ABI-001": "SW-BSD-001",
-    "SW-PKG-FBSD-PREVIOUS-ROLLBACK-ABI-001": "SW-BSD-001",
-    "SW-PKG-FBSD-PREVIOUS-ROLLBACK-ELF-001": "SW-BSD-001",
-    "SW-PKG-FBSD-PREVIOUS-ROLLBACK-SIGNATURES-001": "SW-BSD-001",
-    "SW-PKG-FBSD-PREFIX-001": "SW-BSD-001",
-    "SW-PKG-FBSD-RCD-CORE-001": "SW-BSD-001",
-    "SW-PKG-FBSD-RCD-WEB-001": "SW-BSD-001",
-    "SW-PKG-FBSD-RCD-CORE-PATH-001": "SW-BSD-001",
-    "SW-PKG-FBSD-RCD-WEB-PATH-001": "SW-BSD-001",
-    "SW-PKG-FBSD-RCD-ENABLE-001": "SW-BSD-001",
-    "SW-PKG-FBSD-START-CORE-001": "SW-BSD-001",
-    "SW-PKG-FBSD-RESTART-CORE-001": "SW-BSD-001",
-    "SW-PKG-FBSD-START-WEB-001": "SW-BSD-001",
-    "SW-PKG-FBSD-RESTART-WEB-001": "SW-BSD-001",
-}
-ABI_CHECK_PHASES = {
-    "SW-PKG-FBSD-PREVIOUS-INSTALL-ABI-001": "PREVIOUS_INSTALL",
-    "SW-PKG-FBSD-CANDIDATE-UPGRADE-ABI-001": "CANDIDATE_UPGRADE",
-    "SW-PKG-FBSD-CANDIDATE-REINSTALL-ABI-001": "CANDIDATE_REINSTALL",
-    "SW-PKG-FBSD-CANDIDATE-RESTART-IDEMPOTENCE-ABI-001": (
-        "CANDIDATE_RESTART_IDEMPOTENCE"
-    ),
-    "SW-PKG-FBSD-PREVIOUS-ROLLBACK-ABI-001": "PREVIOUS_ROLLBACK",
-}
-PREVIOUS_MIXED_ELF_CHECK_PHASES = {
-    "SW-PKG-FBSD-PREVIOUS-INSTALL-ELF-001": "PREVIOUS_INSTALL",
-    "SW-PKG-FBSD-PREVIOUS-INSTALL-SIGNATURES-001": "PREVIOUS_INSTALL",
-    "SW-PKG-FBSD-PREVIOUS-ROLLBACK-ELF-001": "PREVIOUS_ROLLBACK",
-    "SW-PKG-FBSD-PREVIOUS-ROLLBACK-SIGNATURES-001": "PREVIOUS_ROLLBACK",
-}
+EXPECTED_FREEBSD_DEPENDENCIES = frozenset(
+    freebsd_package_manifest.FREEBSD_RUNTIME_DEPENDENCIES
+)
+POSTINSTALL_MARKER_CONTENT = "syswarden-freebsd-postinstall-v1\n"
+EXPECTED_POSTINSTALL_MARKER_STATE = (
+    "file:"
+    + hashlib.sha256(POSTINSTALL_MARKER_CONTENT.encode("utf-8")).hexdigest()
+    + ":600:0:0"
+)
+EXPECTED_MODULAR_CONFIG_INVENTORY = frozenset(
+    {
+        "/etc/syswarden/config/config.toml",
+        "/etc/syswarden/config/modules/00-core.toml",
+        "/etc/syswarden/config/modules/10-network.toml",
+        "/etc/syswarden/config/modules/20-security.toml",
+        "/etc/syswarden/config/modules/30-waap.toml",
+        "/etc/syswarden/config/modules/40-integrations.toml",
+        "/etc/syswarden/config/modules/99-user.toml",
+    }
+)
+FORWARD_ONLY_PREVIOUS_VERSION = "4.02.8"
+FORWARD_ONLY_PREVIOUS_PACKAGE = "syswarden-4.02.8.txz"
+FORWARD_ONLY_PREVIOUS_SHA256 = (
+    "8b3b489821450b3afd74548c6db5ad92001b8a69f923e2b9a99ce550353b6e37"
+)
 USER_CONFIG_STATE = "syswarden-freebsd-user-config-state-v1\n"
 USER_DATA_STATE = "syswarden-freebsd-user-data-state-v1\n"
+MIGRATION_BACKUP_STATE = "syswarden-freebsd-legacy-backup-state-v1\n"
 USER_CONFIG_SHA256 = hashlib.sha256(USER_CONFIG_STATE.encode("utf-8")).hexdigest()
 USER_DATA_SHA256 = hashlib.sha256(USER_DATA_STATE.encode("utf-8")).hexdigest()
+EXPECTED_MIGRATION_BACKUP_STATE = (
+    "file:"
+    + hashlib.sha256(MIGRATION_BACKUP_STATE.encode("utf-8")).hexdigest()
+    + ":600:0:0"
+)
 ANCHOR_NAME_PATTERN = re.compile(r"^syswarden_lot0_[a-f0-9]{32}$")
 METADATA_INVENTORY_ROOTS = (
     "/usr/local/syswarden",
@@ -129,10 +122,23 @@ PHASE_EVIDENCE_SUFFIXES = frozenset(
         "SIGNATURE_STATE_BEFORE",
         "SIGNATURE_STATE_AFTER",
         "SIGNATURE_STATE_RESTORED",
+        "POSTINSTALL_MARKER_STATE",
+        "POSTINSTALL_DIAGNOSTICS_CLEAN",
+        "MODULAR_CONFIG_INVENTORY",
     }
 )
 
 EXPECTED_PACKAGE_INVENTORY = frozenset(
+    {
+        "/usr/local/etc/rc.d/syswarden",
+        "/usr/local/etc/rc.d/syswardenwebtui",
+        "/usr/local/syswarden/bin/syswarden-cli",
+        "/usr/local/syswarden/bin/syswarden-core",
+        "/usr/local/syswarden/bin/syswarden-tui",
+        "/usr/local/syswarden/signatures.json",
+    }
+)
+FORWARD_ONLY_PREVIOUS_INVENTORY = frozenset(
     {
         "/usr/local/syswarden/bin/syswarden-cli",
         "/usr/local/syswarden/bin/syswarden-core",
@@ -143,6 +149,7 @@ EXPECTED_PACKAGE_INVENTORY = frozenset(
 EXPECTED_USER_STATE_INVENTORY = frozenset(
     {
         "/etc/syswarden/config/lifecycle-user.conf",
+        "/etc/syswarden/config/syswarden-auto.conf.bak",
         "/var/lib/syswarden/lifecycle-user.state",
     }
 )
@@ -171,12 +178,23 @@ BASE_EVIDENCE_KEYS = frozenset(
         "PF_TOOL_READY",
         "TIMEOUT_TOOL_READY",
         "FILE_TOOL_READY",
+        "SCRIPT_TOOL_READY",
+        "DEPENDENCIES_INSTALL_RC",
+        "DEPENDENCY_INVENTORY",
         "PRECLEAN",
+        "SEALED_INPUTS",
         "PREVIOUS_PACKAGE_SHA256",
         "CANDIDATE_PACKAGE_SHA256",
         "PF_BASELINE_READY",
         "PF_BASELINE_CLEAN",
         "PF_BASELINE_STATUS",
+        "PF_SNAPSHOT_PROVENANCE",
+        "PF_FRESH_CAPTURE_RC",
+        "PF_FRESH_PROVENANCE",
+        "PF_FRESH_RESTORE_RC",
+        "PF_NONEMPTY_CAPTURE_REJECTED",
+        "PF_NONEMPTY_STATE_PRESERVED",
+        "MIGRATION_BACKUP_BASELINE",
         "PF_FINAL_STATUS",
         "PF_SNAPSHOT_SHA256",
         "PF_FIXTURE_SHA256",
@@ -187,6 +205,17 @@ BASE_EVIDENCE_KEYS = frozenset(
         "RESTART_BASELINE_INVENTORY",
         "RESTART_ONE_INVENTORY",
         "RESTART_TWO_INVENTORY",
+        "RSYSLOG_CONFIG_VALIDATE_RC",
+        "RSYSLOG_ENABLED",
+        "RSYSLOG_STATUS_RC",
+        "SYSLOGD_INACTIVE",
+        "LOG_BASELINE_SYSLOGD_STATUS_RC",
+        "LOG_BASELINE_RSYSLOGD_STATUS_RC",
+        "LOG_BASELINE_SYSLOGD_ENABLE",
+        "LOG_BASELINE_RSYSLOGD_ENABLE",
+        "LOG_BASELINE_RSYSLOGD_PIDFILE",
+        "CRON_ALLOW_BASELINE",
+        "CRON_DENY_BASELINE",
         "MODE_CLI",
         "MODE_CORE",
         "MODE_TUI",
@@ -195,6 +224,8 @@ BASE_EVIDENCE_KEYS = frozenset(
         "LINK_TUI",
         "CLI_DIRECT_RC",
         "CLI_LINK_RC",
+        "TUI_REINSTALL_RC",
+        "TUI_RECOVERY_RC",
         "SIGNATURE_PACKAGE_PATH",
         "SIGNATURE_RUNTIME_PATH",
         "RC_CORE_PRESENT",
@@ -205,6 +236,10 @@ BASE_EVIDENCE_KEYS = frozenset(
         "RC_WEB_COMMAND",
         "RC_CORE_ENABLED",
         "RC_WEB_ENABLED",
+        "UPGRADE_RC_CORE_ENABLED",
+        "UPGRADE_RC_WEB_ENABLED",
+        "UPGRADE_RC_CORE_STATUS_RC",
+        "UPGRADE_RC_WEB_STATUS_RC",
         "RC_CORE_START_RC",
         "RC_CORE_STATUS_RC",
         "RC_CORE_RESTART_ONE_RC",
@@ -234,9 +269,28 @@ BASE_EVIDENCE_KEYS = frozenset(
         "REMOVE_RC_WEB_ABSENT",
         "REMOVE_CORE_FLAG_ABSENT",
         "REMOVE_WEB_FLAG_ABSENT",
+        "REMOVE_CRON_REFERENCE_ABSENT",
+        "REMOVE_CRON_UNRELATED_PRESERVED",
+        "REMOVE_RSYSLOG_SIEM_ABSENT",
+        "REMOVE_RSYSLOG_WAF_BRIDGE_ABSENT",
+        "REMOVE_SYSLOGD_STATUS_RC",
+        "REMOVE_RSYSLOGD_STATUS_RC",
+        "REMOVE_SYSLOGD_ENABLE",
+        "REMOVE_RSYSLOGD_ENABLE",
+        "REMOVE_RSYSLOGD_PIDFILE",
+        "REMOVE_LOGGING_BASELINE_RESTORED",
+        "REMOVE_CRON_ALLOW_STATE",
+        "REMOVE_CRON_DENY_STATE",
+        "REMOVE_CRON_ACCESS_PRESERVED",
+        "REMOVE_HOST_STATE_ABSENT",
         "REMOVE_USER_STATE_INVENTORY",
         "REMOVE_USER_CONFIG_SHA256",
         "REMOVE_USER_DATA_SHA256",
+        "REMOVE_MIGRATION_BACKUP_STATE",
+        "REMOVE_PF_STATUS",
+        "REMOVE_PF_SNAPSHOT_SHA256",
+        "REMOVE_PF_BASELINE_RESTORED",
+        "REMOVE_PF_SYSWARDEN_TABLE_ABSENT",
         "LAB_CLEANUP_OK",
         "PF_BASELINE_RESTORED",
     }
@@ -490,6 +544,36 @@ def version_tuple(version: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())
 
 
+def is_forward_only_transition(
+    candidate: PackageArtifact, previous: PackageArtifact
+) -> bool:
+    """Recognize only the immutable v4.02.8 to v4.02.10 transition."""
+
+    return (
+        candidate.version == "4.02.10"
+        and previous.version == FORWARD_ONLY_PREVIOUS_VERSION
+        and previous.path.name == FORWARD_ONLY_PREVIOUS_PACKAGE
+        and previous.sha256 == FORWARD_ONLY_PREVIOUS_SHA256
+    )
+
+
+def validate_forward_only_binding(
+    candidate: PackageArtifact, previous: PackageArtifact
+) -> None:
+    touches_historical_contract = (
+        previous.version == FORWARD_ONLY_PREVIOUS_VERSION
+        or previous.path.name == FORWARD_ONLY_PREVIOUS_PACKAGE
+        or previous.sha256 == FORWARD_ONLY_PREVIOUS_SHA256
+    )
+    if touches_historical_contract and not is_forward_only_transition(
+        candidate, previous
+    ):
+        raise FreeBSDVMLabError(
+            "the historical FreeBSD transition is allowed only for the exact "
+            "v4.02.8 package bytes followed by candidate v4.02.10"
+        )
+
+
 def discover_package_pair(
     candidate_packages_dir: Path, previous_packages_dir: Path
 ) -> tuple[PackageArtifact, PackageArtifact]:
@@ -524,6 +608,14 @@ def discover_package_pair(
         raise FreeBSDVMLabError(
             "previous FreeBSD package version must be older than the candidate"
         )
+    validate_forward_only_binding(candidate, previous)
+    if version_tuple(candidate.version) >= (4, 2, 10):
+        try:
+            freebsd_package_manifest.verify(candidate.path)
+        except Exception as exc:
+            raise FreeBSDVMLabError(
+                "candidate FreeBSD package dependency manifest is invalid"
+            ) from exc
     return candidate, previous
 
 
@@ -704,10 +796,49 @@ case "$work" in
     /tmp/syswarden-freebsd-lot0-[a-f0-9][a-f0-9]*) ;;
     *) exit 90 ;;
 esac
-[ ! -e "$work" ]
+[ ! -e "$work" ] && [ ! -L "$work" ]
 umask 077
 mkdir "$work"
 chmod 700 "$work"
+'''.strip()
+
+
+CLEANUP_SCRIPT = r'''
+set -eu
+token="${token:?VM marker token was not supplied through stdin}"
+transport_work="$1"
+work="$transport_work"
+case "$work" in
+    /tmp/syswarden-freebsd-lot0-[a-f0-9][a-f0-9]*) ;;
+    *) exit 90 ;;
+esac
+marker="$(cat /var/run/syswarden-lot0-disposable.marker 2>/dev/null)"
+if [ "$marker" != "SYSWARDEN_LOT0_DISPOSABLE_VM=${token}" ] || \
+   [ -L /var/run/syswarden-lot0-disposable.marker ] || \
+   [ "$(stat -f '%u' /var/run/syswarden-lot0-disposable.marker 2>/dev/null)" != "0" ]; then
+    exit 91
+fi
+attempt=0
+while [ -e /var/run/syswarden-lot0-lab.lock ] || \
+      [ -L /var/run/syswarden-lot0-lab.lock ]; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -gt 30 ]; then
+        exit 92
+    fi
+    sleep 1
+done
+for cleanup_path in "$work" "${work}.sealed"; do
+    case "$cleanup_path" in
+        /tmp/syswarden-freebsd-lot0-[a-f0-9][a-f0-9]*|\
+        /tmp/syswarden-freebsd-lot0-[a-f0-9][a-f0-9]*.sealed)
+            rm -rf "$cleanup_path"
+            ;;
+        *) exit 90 ;;
+    esac
+    if [ -e "$cleanup_path" ] || [ -L "$cleanup_path" ]; then
+        exit 93
+    fi
+done
 '''.strip()
 
 
@@ -717,7 +848,9 @@ umask 077
 export LC_ALL=C
 token="${token:?VM marker token was not supplied through stdin}"
 
-work="$1"
+transport_work="$1"
+work="$transport_work"
+sealed_work="${transport_work}.sealed"
 previous_package_name="$2"
 previous_expected_sha="$3"
 previous_expected_version="$4"
@@ -745,6 +878,13 @@ boolean() {
 quiet_boolean() {
     if "$@" >/dev/null 2>&1; then printf 1; else printf 0; fi
 }
+verify_sealed_input() {
+    sealed_path="$1"
+    sealed_sha="$2"
+    [ -f "$sealed_path" ] && [ ! -L "$sealed_path" ] && \
+        [ "$(stat -f '%u:%g:%Lp' "$sealed_path" 2>/dev/null)" = "0:0:600" ] && \
+        [ "$(sha256 -q "$sealed_path" 2>/dev/null)" = "$sealed_sha" ]
+}
 cleanup_vm() {
     if [ "$vm_cleanup_authorized" -ne 1 ]; then
         return 0
@@ -763,16 +903,51 @@ cleanup_vm() {
     sysrc -x syswardenwebtui_enable >/dev/null 2>&1 || true
     rm -f /usr/local/bin/syswarden /usr/local/bin/syswarden-tui
     rm -f /usr/local/etc/rc.d/syswarden /usr/local/etc/rc.d/syswardenwebtui
+    rm -f /usr/local/etc/rsyslog.d/99-syswarden-siem.conf
+    rm -f /usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf
+    if command -v crontab >/dev/null 2>&1; then
+        cleanup_cron="$(mktemp -t syswarden-lab-cron)" || return 1
+        if crontab -l >"$cleanup_cron" 2>/dev/null; then
+            awk '
+                /# syswarden-freebsd-lab-preserve/ { next }
+                /# syswarden-freebsd-lab-operator-preserve/ { next }
+                NF == 9 && ($6 == "/usr/local/syswarden/bin/syswarden-cli" ||
+                    $6 == "/opt/syswarden/bin/syswarden-cli") &&
+                    (($1 == "*/30" && $7 == "ha-sync") ||
+                     ($1 ~ /^([1-9]|[1-5][0-9])$/ && $7 == "update-feeds")) &&
+                    $2 == "*" && $3 == "*" && $4 == "*" && $5 == "*" &&
+                    $8 == ">/dev/null" && $9 == "2>&1" { next }
+                { print }
+            ' "$cleanup_cron" | crontab - || true
+        fi
+        rm -f "$cleanup_cron"
+    fi
     rm -rf /usr/local/syswarden /opt/syswarden /etc/syswarden /var/lib/syswarden
+    rm -rf /var/db/syswarden
+    rm -f /var/cron/allow /var/cron/deny
 }
 # shellcheck disable=SC2317 # Invoked indirectly by the final signal/exit trap.
 final_cleanup() {
     cleanup_exit_status="$1"
+    cleanup_path_failed=0
     trap - EXIT HUP INT TERM
     cleanup_vm
-    rm -rf "$work"
+    for cleanup_path in "$work" "$transport_work" "$sealed_work"; do
+        case "$cleanup_path" in
+            /tmp/syswarden-freebsd-lot0-[a-f0-9][a-f0-9]*|\
+            /tmp/syswarden-freebsd-lot0-[a-f0-9][a-f0-9]*.sealed)
+                rm -rf "$cleanup_path"
+                ;;
+        esac
+        if [ -e "$cleanup_path" ] || [ -L "$cleanup_path" ]; then
+            cleanup_path_failed=1
+        fi
+    done
     if [ "$lock_acquired" -eq 1 ]; then
         rmdir "$lock_path" >/dev/null 2>&1 || true
+    fi
+    if [ "$cleanup_path_failed" -ne 0 ] && [ "$cleanup_exit_status" -eq 0 ]; then
+        cleanup_exit_status=94
     fi
     exit "$cleanup_exit_status"
 }
@@ -795,10 +970,38 @@ elf_arch_of() {
 flag_value() {
     sysrc -n "$1" 2>/dev/null || true
 }
+flag_state() {
+    flag_name="$1"
+    flag_output="$(sysrc -a 2>/dev/null)" || return 1
+    flag_line="$(printf '%s\n' "$flag_output" | awk -F: -v key="$flag_name" '
+        $1 == key { sub(/^[^:]*:[[:space:]]*/, "", $0); print; found=1; exit }
+        END { if (!found) exit 1 }
+    ')"
+    if [ "$?" -eq 0 ]; then
+        printf 'present:%s' "$flag_line"
+    else
+        printf absent
+    fi
+}
 user_state_inventory() {
     for path in \
         /etc/syswarden/config/lifecycle-user.conf \
+        /etc/syswarden/config/syswarden-auto.conf.bak \
         /var/lib/syswarden/lifecycle-user.state; do
+        if [ -f "$path" ] && [ ! -L "$path" ]; then
+            printf '%s\n' "$path"
+        fi
+    done | LC_ALL=C sort
+}
+modular_config_inventory() {
+    for path in \
+        /etc/syswarden/config/config.toml \
+        /etc/syswarden/config/modules/00-core.toml \
+        /etc/syswarden/config/modules/10-network.toml \
+        /etc/syswarden/config/modules/20-security.toml \
+        /etc/syswarden/config/modules/30-waap.toml \
+        /etc/syswarden/config/modules/40-integrations.toml \
+        /etc/syswarden/config/modules/99-user.toml; do
         if [ -f "$path" ] && [ ! -L "$path" ]; then
             printf '%s\n' "$path"
         fi
@@ -864,122 +1067,44 @@ probe_signatures() {
     phase="$1"
     signature_file=/usr/local/syswarden/signatures.json
     signature_log="$work/signature-${phase}.log"
-    runtime_signature=/opt/syswarden/signatures.json
-    (
-        runtime_parent=/opt/syswarden
-        runtime_parent_existed=0
-        [ -d "$runtime_parent" ] && runtime_parent_existed=1
-        runtime_signature_kind="absent"
-        runtime_signature_target=
-        runtime_signature_mode=
-        runtime_signature_uid=
-        runtime_signature_gid=
-        runtime_signature_backup="$work/runtime-signature-${phase}.save"
-        runtime_signature_backup_ready=1
-        runtime_signature_mutated=0
-        if [ -L "$runtime_signature" ]; then
-            runtime_signature_kind="symlink"
-            runtime_signature_target="$(readlink "$runtime_signature" 2>/dev/null || true)"
-            runtime_signature_mode="$(stat -f '%Lp' "$runtime_signature" 2>/dev/null || true)"
-            runtime_signature_uid="$(stat -f '%u' "$runtime_signature" 2>/dev/null || true)"
-            runtime_signature_gid="$(stat -f '%g' "$runtime_signature" 2>/dev/null || true)"
-        elif [ -f "$runtime_signature" ]; then
-            runtime_signature_kind="file"
-            runtime_signature_mode="$(stat -f '%Lp' "$runtime_signature" 2>/dev/null || true)"
-            runtime_signature_uid="$(stat -f '%u' "$runtime_signature" 2>/dev/null || true)"
-            runtime_signature_gid="$(stat -f '%g' "$runtime_signature" 2>/dev/null || true)"
-            cp -p "$runtime_signature" "$runtime_signature_backup" || \
-                runtime_signature_backup_ready=0
-        elif [ -e "$runtime_signature" ]; then
-            runtime_signature_kind="other"
+    signature_before="$(signature_state "$signature_file")"
+    signature_rules="$(grep -Ec '^[[:space:]]*"id"[[:space:]]*:' "$signature_file" 2>/dev/null || true)"
+    signature_probe_rc=125
+    signature_engine_count=
+    signature_load_error=1
+    service syswardenwebtui onestop >/dev/null 2>&1 || true
+    service syswarden onestop >/dev/null 2>&1 || true
+    rm -f /var/run/syswarden.sock
+    if [ -f "$signature_file" ] && [ ! -L "$signature_file" ]; then
+        timeout 8 /usr/local/syswarden/bin/syswarden-core \
+            >"$signature_log" 2>&1
+        signature_probe_rc=$?
+        signature_engine_count="$(sed -n 's/.*Loaded \([0-9][0-9]*\) threat signatures.*/\1/p' "$signature_log" | tail -n 1)"
+        signature_load_error=0
+        if grep -q 'Failed to initialize threat engine' \
+            "$signature_log" 2>/dev/null; then
+            signature_load_error=1
         fi
-        signature_before="$(signature_state "$runtime_signature")"
-        restore_signature_state() {
-            if [ "$runtime_signature_mutated" -eq 0 ]; then
-                return 0
-            fi
-            case "$runtime_signature_kind" in
-                absent)
-                    rm -rf "$runtime_signature"
-                    if [ "$runtime_parent_existed" -eq 0 ]; then
-                        rmdir "$runtime_parent" >/dev/null 2>&1 || true
-                    fi
-                    ;;
-                file)
-                    rm -rf "$runtime_signature"
-                    cp -p "$runtime_signature_backup" "$runtime_signature" || return 1
-                    chown "${runtime_signature_uid}:${runtime_signature_gid}" \
-                        "$runtime_signature" || return 1
-                    chmod "$runtime_signature_mode" "$runtime_signature" || return 1
-                    ;;
-                symlink)
-                    rm -rf "$runtime_signature"
-                    ln -s "$runtime_signature_target" "$runtime_signature" || return 1
-                    chown -h "${runtime_signature_uid}:${runtime_signature_gid}" \
-                        "$runtime_signature" || return 1
-                    chmod -h "$runtime_signature_mode" "$runtime_signature" || return 1
-                    ;;
-                other)
-                    ;;
-            esac
-            return 0
-        }
+    fi
+    rm -f /var/run/syswarden.sock
+    signature_after="$(signature_state "$signature_file")"
+    signature_restored=0
+    if [ "$signature_before" = "$signature_after" ]; then
+        signature_restored=1
+    fi
 
-        # Install restoration before the first mutation of the runtime path.
-        trap 'restore_signature_state >/dev/null 2>&1' EXIT
-        trap 'exit 97' HUP INT TERM
-
-        signature_rules="$(grep -Ec '^[[:space:]]*"id"[[:space:]]*:' "$signature_file" 2>/dev/null || true)"
-        signature_probe_rc=125
-        signature_engine_count=
-        signature_load_error=1
-        service syswardenwebtui onestop >/dev/null 2>&1 || true
-        service syswarden onestop >/dev/null 2>&1 || true
-        rm -f /var/run/syswarden.sock
-        if [ "$runtime_signature_kind" != other ] && \
-           [ "$runtime_signature_backup_ready" -eq 1 ] && \
-           [ -f "$signature_file" ] && [ ! -L "$signature_file" ]; then
-            if mkdir -p "$runtime_parent"; then
-                runtime_signature_mutated=1
-                rm -rf "$runtime_signature"
-            fi
-            if [ "$runtime_signature_mutated" -eq 1 ] && \
-               cp "$signature_file" "$runtime_signature"; then
-                timeout 8 /usr/local/syswarden/bin/syswarden-core \
-                    >"$signature_log" 2>&1
-                signature_probe_rc=$?
-                signature_engine_count="$(sed -n 's/.*Loaded \([0-9][0-9]*\) threat signatures.*/\1/p' "$signature_log" | tail -n 1)"
-                signature_load_error=0
-                if grep -q 'Failed to initialize threat engine' \
-                    "$signature_log" 2>/dev/null; then
-                    signature_load_error=1
-                fi
-            fi
-        fi
-        rm -f /var/run/syswarden.sock
-        restore_signature_state
-        signature_restore_rc=$?
-        signature_after="$(signature_state "$runtime_signature")"
-        signature_restored=0
-        if [ "$signature_restore_rc" -eq 0 ] && \
-           [ "$signature_before" = "$signature_after" ]; then
-            signature_restored=1
-            trap - EXIT
-        fi
-        trap - HUP INT TERM
-
-        emit "${phase}_SIGNATURE_RULE_COUNT" "$signature_rules"
-        emit "${phase}_SIGNATURE_ENGINE_COUNT" "$signature_engine_count"
-        emit "${phase}_SIGNATURE_PROBE_RC" "$signature_probe_rc"
-        emit "${phase}_SIGNATURE_LOAD_ERROR" "$signature_load_error"
-        emit "${phase}_SIGNATURE_STATE_BEFORE" "$signature_before"
-        emit "${phase}_SIGNATURE_STATE_AFTER" "$signature_after"
-        emit "${phase}_SIGNATURE_STATE_RESTORED" "$signature_restored"
-    )
+    emit "${phase}_SIGNATURE_RULE_COUNT" "$signature_rules"
+    emit "${phase}_SIGNATURE_ENGINE_COUNT" "$signature_engine_count"
+    emit "${phase}_SIGNATURE_PROBE_RC" "$signature_probe_rc"
+    emit "${phase}_SIGNATURE_LOAD_ERROR" "$signature_load_error"
+    emit "${phase}_SIGNATURE_STATE_BEFORE" "$signature_before"
+    emit "${phase}_SIGNATURE_STATE_AFTER" "$signature_after"
+    emit "${phase}_SIGNATURE_STATE_RESTORED" "$signature_restored"
 }
 capture_installed_phase() {
     phase="$1"
     operation_rc="$2"
+    operation_log="$3"
     emit "${phase}_OPERATION_RC" "$operation_rc"
     emit "${phase}_PKG_INSTALLED" "$(quiet_boolean pkg info -e syswarden)"
     emit "${phase}_PKG_NAME" "$(pkg query '%n' syswarden 2>/dev/null || true)"
@@ -992,6 +1117,13 @@ capture_installed_phase() {
     emit "${phase}_USER_STATE_INVENTORY" "$(user_state_inventory)"
     emit "${phase}_USER_CONFIG_SHA256" "$(sha256 -q /etc/syswarden/config/lifecycle-user.conf 2>/dev/null || true)"
     emit "${phase}_USER_DATA_SHA256" "$(sha256 -q /var/lib/syswarden/lifecycle-user.state 2>/dev/null || true)"
+    emit "${phase}_POSTINSTALL_MARKER_STATE" "$(signature_state /usr/local/syswarden/.postinstall-ok)"
+    diagnostics_clean=1
+    if grep -Eiq 'panic:|\[ERROR\]|post-install script failed|exec format error|permission denied' "$operation_log" 2>/dev/null; then
+        diagnostics_clean=0
+    fi
+    emit "${phase}_POSTINSTALL_DIAGNOSTICS_CLEAN" "$diagnostics_clean"
+    emit "${phase}_MODULAR_CONFIG_INVENTORY" "$(modular_config_inventory)"
     probe_signatures "$phase"
 }
 
@@ -1016,6 +1148,7 @@ emit PKG_TOOL_READY "$(quiet_boolean command -v pkg)"
 emit PF_TOOL_READY "$(quiet_boolean command -v pfctl)"
 emit TIMEOUT_TOOL_READY "$(quiet_boolean command -v timeout)"
 emit FILE_TOOL_READY "$(quiet_boolean command -v file)"
+emit SCRIPT_TOOL_READY "$(quiet_boolean command -v script)"
 
 safe_work=0
 case "$work" in
@@ -1045,22 +1178,73 @@ if [ "$safe_work" -ne 1 ] || [ "$(id -u)" -ne 0 ] || \
    [ "$previous_expected_version" = "$candidate_expected_version" ]; then
     exit 91
 fi
+if [ "$previous_expected_version" = "4.02.8" ]; then
+    if [ "$previous_package_name" != "syswarden-4.02.8.txz" ] || \
+       [ "$previous_expected_sha" != "8b3b489821450b3afd74548c6db5ad92001b8a69f923e2b9a99ce550353b6e37" ] || \
+       [ "$candidate_expected_version" != "4.02.10" ]; then
+        exit 91
+    fi
+fi
 trap 'final_cleanup "$?"' EXIT HUP INT TERM
 
+if [ -L /tmp ] || [ ! -d /tmp ] || \
+   [ "$(stat -f '%u:%g:%Lp' /tmp 2>/dev/null)" != "0:0:1777" ] || \
+   [ -L "$transport_work" ] || [ ! -d "$transport_work" ] || \
+   [ "$(stat -f '%Lp' "$transport_work" 2>/dev/null)" != "700" ] || \
+   [ -e "$sealed_work" ] || [ -L "$sealed_work" ]; then
+    exit 91
+fi
+transport_uid="$(stat -f '%u' "$transport_work" 2>/dev/null)"
+transport_gid="$(stat -f '%g' "$transport_work" 2>/dev/null)"
+case "$transport_uid" in ''|*[!0-9]*) exit 91 ;; esac
+case "$transport_gid" in ''|*[!0-9]*) exit 91 ;; esac
+if [ "$transport_uid" -eq 0 ]; then
+    exit 91
+fi
+transport_entries="$(find "$transport_work" -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l | tr -d '[:space:]')"
+if [ "$transport_entries" != "3" ]; then
+    exit 91
+fi
 for required_input in \
-    "$work/$previous_package_name" \
-    "$work/$candidate_package_name" \
-    "$work/pf-v4.02.8.conf"; do
-    if [ ! -f "$required_input" ] || [ -L "$required_input" ]; then
+    "$transport_work/$previous_package_name" \
+    "$transport_work/$candidate_package_name" \
+    "$transport_work/pf-v4.02.8.conf"; do
+    if [ ! -f "$required_input" ] || [ -L "$required_input" ] || \
+       [ "$(stat -f '%u:%g' "$required_input" 2>/dev/null)" != "$transport_uid:$transport_gid" ]; then
         exit 91
     fi
 done
-chown -R 0:0 "$work" || exit 91
-chmod 700 "$work" || exit 91
-chmod 600 \
-    "$work/$previous_package_name" \
-    "$work/$candidate_package_name" \
-    "$work/pf-v4.02.8.conf" || exit 91
+mkdir -m 700 "$sealed_work" || exit 91
+if [ -L "$sealed_work" ] || [ ! -d "$sealed_work" ] || \
+   [ "$(stat -f '%u:%g:%Lp' "$sealed_work" 2>/dev/null)" != "0:0:700" ]; then
+    exit 91
+fi
+for input_name in \
+    "$previous_package_name" \
+    "$candidate_package_name" \
+    pf-v4.02.8.conf; do
+    cp -P "$transport_work/$input_name" "$sealed_work/$input_name" || exit 91
+    chown 0:0 "$sealed_work/$input_name" || exit 91
+    chmod 600 "$sealed_work/$input_name" || exit 91
+    if [ ! -f "$sealed_work/$input_name" ] || [ -L "$sealed_work/$input_name" ] || \
+       [ "$(stat -f '%u:%g:%Lp' "$sealed_work/$input_name" 2>/dev/null)" != "0:0:600" ]; then
+        exit 91
+    fi
+done
+sealed_entries="$(find "$sealed_work" -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l | tr -d '[:space:]')"
+if [ "$sealed_entries" != "3" ]; then
+    exit 91
+fi
+rm -f \
+    "$transport_work/$previous_package_name" \
+    "$transport_work/$candidate_package_name" \
+    "$transport_work/pf-v4.02.8.conf" || exit 91
+rmdir "$transport_work" || exit 91
+if [ -e "$transport_work" ] || [ -L "$transport_work" ]; then
+    exit 91
+fi
+work="$sealed_work"
+emit SEALED_INPUTS 1
 
 preclean=1
 pkg info -e syswarden >/dev/null 2>&1 && preclean=0
@@ -1068,7 +1252,8 @@ for path in \
     /usr/local/syswarden /opt/syswarden /usr/local/bin/syswarden \
     /usr/local/bin/syswarden-tui /usr/local/etc/rc.d/syswarden \
     /usr/local/etc/rc.d/syswardenwebtui /etc/syswarden \
-    /var/lib/syswarden; do
+    /var/lib/syswarden /var/db/syswarden \
+    /var/cron/allow /var/cron/deny; do
     if [ -e "$path" ] || [ -L "$path" ]; then
         preclean=0
     fi
@@ -1139,24 +1324,87 @@ printf '%s\n' 'syswarden-freebsd-user-config-state-v1' \
     >/etc/syswarden/config/lifecycle-user.conf
 printf '%s\n' 'syswarden-freebsd-user-data-state-v1' \
     >/var/lib/syswarden/lifecycle-user.state
+printf '%s\n' 'syswarden-freebsd-legacy-backup-state-v1' \
+    >/etc/syswarden/config/syswarden-auto.conf.bak
+chmod 0600 /etc/syswarden/config/syswarden-auto.conf.bak
+chown 0:0 /etc/syswarden/config/syswarden-auto.conf.bak
+emit MIGRATION_BACKUP_BASELINE "$(signature_state /etc/syswarden/config/syswarden-auto.conf.bak)"
 
+# A standalone txz cannot fetch dependencies through pkg add. Install the
+# exact manifest prerequisites from the official configured pkg repositories
+# before exercising the release asset itself.
+env ASSUME_ALWAYS_YES=yes timeout "$command_timeout" pkg install -y \
+    curl jq libqrencode rsyslog wireguard-tools \
+    >"$work/dependencies-install.log" 2>&1
+dependencies_install_rc=$?
+emit DEPENDENCIES_INSTALL_RC "$dependencies_install_rc"
+emit DEPENDENCY_INVENTORY "$(
+    for dependency in curl jq libqrencode rsyslog wireguard-tools; do
+        if pkg info -e "$dependency" >/dev/null 2>&1; then
+            printf '%s\n' "$dependency"
+        fi
+    done | LC_ALL=C sort
+)"
+if [ "$dependencies_install_rc" -ne 0 ]; then
+    exit 97
+fi
+
+service syslogd onestatus >"$work/log-baseline-syslogd.log" 2>&1
+log_baseline_syslogd_status_rc=$?
+service rsyslogd onestatus >"$work/log-baseline-rsyslogd.log" 2>&1
+log_baseline_rsyslogd_status_rc=$?
+log_baseline_syslogd_enable="$(flag_state syslogd_enable)"
+log_baseline_rsyslogd_enable="$(flag_state rsyslogd_enable)"
+log_baseline_rsyslogd_pidfile="$(flag_state rsyslogd_pidfile)"
+emit LOG_BASELINE_SYSLOGD_STATUS_RC "$log_baseline_syslogd_status_rc"
+emit LOG_BASELINE_RSYSLOGD_STATUS_RC "$log_baseline_rsyslogd_status_rc"
+emit LOG_BASELINE_SYSLOGD_ENABLE "$log_baseline_syslogd_enable"
+emit LOG_BASELINE_RSYSLOGD_ENABLE "$log_baseline_rsyslogd_enable"
+emit LOG_BASELINE_RSYSLOGD_PIDFILE "$log_baseline_rsyslogd_pidfile"
+
+verify_sealed_input "$work/$previous_package_name" "$previous_expected_sha" || exit 93
 env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
     timeout "$command_timeout" pkg add -f "$work/$previous_package_name" \
     >"$work/previous-install.log" 2>&1
 previous_install_rc=$?
-capture_installed_phase PREVIOUS_INSTALL "$previous_install_rc"
+capture_installed_phase PREVIOUS_INSTALL "$previous_install_rc" "$work/previous-install.log"
 
+# The candidate must preserve safe operator-owned cron access policy. Seed it
+# only after exercising the immutable historical package, whose old hardening
+# behavior cannot be changed.
+printf '%s\n' 'root,nobody' >/var/cron/allow
+printf '%s\n' 'daemon' >/var/cron/deny
+chown 0:0 /var/cron/allow /var/cron/deny
+chmod 0600 /var/cron/allow /var/cron/deny
+cron_allow_baseline="$(signature_state /var/cron/allow)"
+cron_deny_baseline="$(signature_state /var/cron/deny)"
+emit CRON_ALLOW_BASELINE "$cron_allow_baseline"
+emit CRON_DENY_BASELINE "$cron_deny_baseline"
+
+verify_sealed_input "$work/$candidate_package_name" "$candidate_expected_sha" || exit 93
 env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
     timeout "$command_timeout" pkg add -f "$work/$candidate_package_name" \
     >"$work/candidate-upgrade.log" 2>&1
 candidate_upgrade_rc=$?
-capture_installed_phase CANDIDATE_UPGRADE "$candidate_upgrade_rc"
+pf_snapshot_provenance="$({
+    jq -er 'select(.schema_version == 1) | .provenance | select(. == "exact_live" or . == "legacy_derived")' \
+        /var/db/syswarden/pf-policy-snapshot.json
+} 2>/dev/null || true)"
+emit PF_SNAPSHOT_PROVENANCE "$pf_snapshot_provenance"
+emit UPGRADE_RC_CORE_ENABLED "$(flag_value syswarden_enable)"
+emit UPGRADE_RC_WEB_ENABLED "$(flag_value syswardenwebtui_enable)"
+service syswarden onestatus >"$work/candidate-upgrade-core-status.log" 2>&1
+emit UPGRADE_RC_CORE_STATUS_RC "$?"
+service syswardenwebtui onestatus >"$work/candidate-upgrade-web-status.log" 2>&1
+emit UPGRADE_RC_WEB_STATUS_RC "$?"
+capture_installed_phase CANDIDATE_UPGRADE "$candidate_upgrade_rc" "$work/candidate-upgrade.log"
 
+verify_sealed_input "$work/$candidate_package_name" "$candidate_expected_sha" || exit 93
 env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
     timeout "$command_timeout" pkg add -f "$work/$candidate_package_name" \
     >"$work/candidate-reinstall.log" 2>&1
 candidate_reinstall_rc=$?
-capture_installed_phase CANDIDATE_REINSTALL "$candidate_reinstall_rc"
+capture_installed_phase CANDIDATE_REINSTALL "$candidate_reinstall_rc" "$work/candidate-reinstall.log"
 
 emit MODE_CLI "$(mode_of /usr/local/syswarden/bin/syswarden-cli)"
 emit MODE_CORE "$(mode_of /usr/local/syswarden/bin/syswarden-core)"
@@ -1170,8 +1418,12 @@ timeout 20 /usr/local/syswarden/bin/syswarden-cli --help \
 emit CLI_DIRECT_RC "$?"
 timeout 20 /usr/local/bin/syswarden --help >"$work/cli-link.log" 2>&1
 emit CLI_LINK_RC "$?"
+env TERM=xterm timeout 5 script -q /dev/null \
+    /usr/local/syswarden/bin/syswarden-tui \
+    >"$work/tui-reinstall.log" 2>&1
+emit TUI_REINSTALL_RC "$?"
 emit SIGNATURE_PACKAGE_PATH "$(boolean test -f /usr/local/syswarden/signatures.json)"
-emit SIGNATURE_RUNTIME_PATH "$(boolean test -f /opt/syswarden/signatures.json)"
+emit SIGNATURE_RUNTIME_PATH "$(boolean test -f /usr/local/syswarden/signatures.json)"
 
 emit RC_CORE_PRESENT "$(boolean test -f /usr/local/etc/rc.d/syswarden)"
 emit RC_WEB_PRESENT "$(boolean test -f /usr/local/etc/rc.d/syswardenwebtui)"
@@ -1241,8 +1493,6 @@ for restart_rc in \
         restart_idempotence_rc=1
     fi
 done
-capture_installed_phase CANDIDATE_RESTART_IDEMPOTENCE "$restart_idempotence_rc"
-
 interface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
 case "$interface" in
     ''|*[!A-Za-z0-9_.-]*) interface="INVALID" ;;
@@ -1259,8 +1509,7 @@ if [ "$interface" != "INVALID" ]; then
     # Revalidate immediately before deriving and applying the PF input.  The
     # copied fixture has already been made root-owned and non-writable by the
     # transport account.
-    if [ "$(sha256 -q "$work/pf-v4.02.8.conf" 2>/dev/null)" != \
-         "$pf_expected_sha" ]; then
+    if ! verify_sealed_input "$work/pf-v4.02.8.conf" "$pf_expected_sha"; then
         exit 93
     fi
     sed -e "s/vtnet-test0/$interface/g" \
@@ -1303,11 +1552,87 @@ else
 fi
 emit PF_HONEYPORT_SOURCE_BAD "$source_bad"
 
+verify_sealed_input "$work/$previous_package_name" "$previous_expected_sha" || exit 93
 env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
     timeout "$command_timeout" pkg add -f "$work/$previous_package_name" \
     >"$work/previous-rollback.log" 2>&1
 previous_rollback_rc=$?
-capture_installed_phase PREVIOUS_ROLLBACK "$previous_rollback_rc"
+capture_installed_phase PREVIOUS_ROLLBACK "$previous_rollback_rc" "$work/previous-rollback.log"
+
+# The exact v4.02.8 bytes are immutable and non-native. Qualification records
+# that known failure class, then always returns to the candidate before removal.
+# Any other previous package remains subject to the normal strict phase checks.
+verify_sealed_input "$work/$candidate_package_name" "$candidate_expected_sha" || exit 93
+env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
+    timeout "$command_timeout" pkg add -f "$work/$candidate_package_name" \
+    >"$work/candidate-recovery.log" 2>&1
+candidate_recovery_rc=$?
+if [ "$candidate_recovery_rc" -ne 0 ]; then
+    exit 98
+fi
+env TERM=xterm timeout 5 script -q /dev/null \
+    /usr/local/syswarden/bin/syswarden-tui \
+    >"$work/tui-recovery.log" 2>&1
+tui_recovery_rc=$?
+emit TUI_RECOVERY_RC "$tui_recovery_rc"
+if [ "$tui_recovery_rc" -ne 124 ]; then
+    candidate_recovery_rc=1
+fi
+service syswarden onestatus >/dev/null 2>&1 || \
+    timeout 20 service syswarden onestart \
+        >"$work/core-recovery-start.log" 2>&1
+core_recovery_start_rc=$?
+service syswarden onestatus >"$work/core-recovery-status.log" 2>&1
+core_recovery_status_rc=$?
+service syswardenwebtui onestatus >/dev/null 2>&1 || \
+    timeout 20 service syswardenwebtui onestart \
+        >"$work/web-recovery-start.log" 2>&1
+web_recovery_start_rc=$?
+service syswardenwebtui onestatus >"$work/web-recovery-status.log" 2>&1
+web_recovery_status_rc=$?
+for recovery_rc in \
+    "$restart_idempotence_rc" \
+    "$core_recovery_start_rc" "$core_recovery_status_rc" \
+    "$web_recovery_start_rc" "$web_recovery_status_rc"; do
+    if [ "$recovery_rc" -ne 0 ]; then
+        candidate_recovery_rc=1
+    fi
+done
+capture_installed_phase CANDIDATE_RESTART_IDEMPOTENCE \
+    "$candidate_recovery_rc" "$work/candidate-recovery.log"
+
+/usr/local/sbin/rsyslogd -N1 >"$work/rsyslog-validate.log" 2>&1
+emit RSYSLOG_CONFIG_VALIDATE_RC "$?"
+emit RSYSLOG_ENABLED "$(flag_value rsyslogd_enable)"
+service rsyslogd onestatus >"$work/rsyslog-status.log" 2>&1
+emit RSYSLOG_STATUS_RC "$?"
+service syslogd onestatus >"$work/syslogd-transition-status.log" 2>&1
+if [ "$?" -eq 1 ]; then
+    emit SYSLOGD_INACTIVE 1
+else
+    emit SYSLOGD_INACTIVE 0
+fi
+
+cp /usr/local/syswarden/bin/syswarden-cli "$work/syswarden-cli-pf-probe"
+chown 0:0 "$work/syswarden-cli-pf-probe"
+chmod 0700 "$work/syswarden-cli-pf-probe"
+
+# Seed exact package-generated references so removal must clean them while
+# preserving an unrelated crontab entry.
+existing_cron="$(crontab -l 2>/dev/null || true)"
+{
+    [ -z "$existing_cron" ] || printf '%s\n' "$existing_cron"
+    printf '%s\n' '17 3 * * * /usr/bin/true # syswarden-freebsd-lab-preserve'
+	printf '%s\n' '19 4 * * * /usr/local/syswarden/bin/syswarden-cli update-feeds --operator-option >/dev/null 2>&1 # syswarden-freebsd-lab-operator-preserve'
+    printf '%s\n' '23 * * * * /usr/local/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+	printf '%s\n' '*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1'
+	printf '%s\n' '29 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+} | crontab -
+mkdir -p /usr/local/etc/rsyslog.d
+printf '%s\n' 'syswarden-freebsd-lab-generated' \
+    >/usr/local/etc/rsyslog.d/99-syswarden-siem.conf
+printf '%s\n' 'syswarden-freebsd-lab-generated' \
+    >/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf
 
 env ASSUME_ALWAYS_YES=yes timeout 120 pkg delete -fy syswarden \
     >"$work/pkg-delete.log" 2>&1
@@ -1346,21 +1671,188 @@ if ! sysrc -n syswardenwebtui_enable >/dev/null 2>&1; then
     remove_web_flag_absent=1
 fi
 emit REMOVE_WEB_FLAG_ABSENT "$remove_web_flag_absent"
+remove_cron="$(crontab -l 2>/dev/null || true)"
+emit REMOVE_CRON_REFERENCE_ABSENT "$(
+	if printf '%s\n' "$remove_cron" | awk '
+	    NF == 9 && ($6 == "/usr/local/syswarden/bin/syswarden-cli" ||
+	        $6 == "/opt/syswarden/bin/syswarden-cli") &&
+	        (($1 == "*/30" && $7 == "ha-sync") ||
+	         ($1 ~ /^([1-9]|[1-5][0-9])$/ && $7 == "update-feeds")) &&
+	        $2 == "*" && $3 == "*" && $4 == "*" && $5 == "*" &&
+	        $8 == ">/dev/null" && $9 == "2>&1" { found=1 }
+	    END { exit(found ? 0 : 1) }
+	'; then
+        printf 0
+    else
+        printf 1
+    fi
+)"
+emit REMOVE_CRON_UNRELATED_PRESERVED "$(
+	if printf '%s\n' "$remove_cron" | grep -F -q '# syswarden-freebsd-lab-preserve' &&
+	   printf '%s\n' "$remove_cron" | grep -F -q '# syswarden-freebsd-lab-operator-preserve'; then
+        printf 1
+    else
+        printf 0
+    fi
+)"
+emit REMOVE_RSYSLOG_SIEM_ABSENT "$(boolean test ! -e /usr/local/etc/rsyslog.d/99-syswarden-siem.conf)"
+emit REMOVE_RSYSLOG_WAF_BRIDGE_ABSENT "$(boolean test ! -e /usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf)"
+service rsyslogd onestatus >"$work/rsyslog-remove-status.log" 2>&1
+remove_rsyslogd_status_rc=$?
+service syslogd onestatus >"$work/syslogd-remove-status.log" 2>&1
+remove_syslogd_status_rc=$?
+remove_syslogd_enable="$(flag_state syslogd_enable)"
+remove_rsyslogd_enable="$(flag_state rsyslogd_enable)"
+remove_rsyslogd_pidfile="$(flag_state rsyslogd_pidfile)"
+emit REMOVE_SYSLOGD_STATUS_RC "$remove_syslogd_status_rc"
+emit REMOVE_RSYSLOGD_STATUS_RC "$remove_rsyslogd_status_rc"
+emit REMOVE_SYSLOGD_ENABLE "$remove_syslogd_enable"
+emit REMOVE_RSYSLOGD_ENABLE "$remove_rsyslogd_enable"
+emit REMOVE_RSYSLOGD_PIDFILE "$remove_rsyslogd_pidfile"
+remove_logging_restored=0
+if [ "$remove_syslogd_status_rc" -eq "$log_baseline_syslogd_status_rc" ] && \
+   [ "$remove_rsyslogd_status_rc" -eq "$log_baseline_rsyslogd_status_rc" ] && \
+   [ "$remove_syslogd_enable" = "$log_baseline_syslogd_enable" ] && \
+   [ "$remove_rsyslogd_enable" = "$log_baseline_rsyslogd_enable" ] && \
+   [ "$remove_rsyslogd_pidfile" = "$log_baseline_rsyslogd_pidfile" ]; then
+    remove_logging_restored=1
+fi
+emit REMOVE_LOGGING_BASELINE_RESTORED "$remove_logging_restored"
+remove_cron_allow_state="$(signature_state /var/cron/allow)"
+remove_cron_deny_state="$(signature_state /var/cron/deny)"
+emit REMOVE_CRON_ALLOW_STATE "$remove_cron_allow_state"
+emit REMOVE_CRON_DENY_STATE "$remove_cron_deny_state"
+remove_cron_access_preserved=0
+if [ "$remove_cron_allow_state" = "$cron_allow_baseline" ] && \
+   [ "$remove_cron_deny_state" = "$cron_deny_baseline" ]; then
+    remove_cron_access_preserved=1
+fi
+emit REMOVE_CRON_ACCESS_PRESERVED "$remove_cron_access_preserved"
+remove_host_state_absent=1
+for host_state_path in \
+    /var/db/syswarden/pf-policy-snapshot.json \
+    /var/db/syswarden/pf-transition-v4.02.8 \
+    /var/db/syswarden/logging-service-state.json \
+    /var/db/syswarden/wireguard-state.json \
+    /var/db/syswarden/cron-access-state.json \
+    /var/db/syswarden; do
+    if [ -e "$host_state_path" ] || [ -L "$host_state_path" ]; then
+        remove_host_state_absent=0
+    fi
+done
+emit REMOVE_HOST_STATE_ABSENT "$remove_host_state_absent"
 emit REMOVE_USER_STATE_INVENTORY "$(user_state_inventory)"
 emit REMOVE_USER_CONFIG_SHA256 "$(sha256 -q /etc/syswarden/config/lifecycle-user.conf 2>/dev/null || true)"
 emit REMOVE_USER_DATA_SHA256 "$(sha256 -q /var/lib/syswarden/lifecycle-user.state 2>/dev/null || true)"
+emit REMOVE_MIGRATION_BACKUP_STATE "$(signature_state /etc/syswarden/config/syswarden-auto.conf.bak)"
+
+# Prove package removal itself restored the persisted host PF policy. This is
+# intentionally captured before cleanup_vm so laboratory cleanup cannot mask a
+# stale global ruleset or table left by the maintainer script.
+pfctl -sr >"$work/pf-filter-remove" 2>&1
+remove_filter_rc=$?
+pfctl -sn >"$work/pf-nat-remove" 2>&1
+remove_nat_rc=$?
+pfctl -s Tables >"$work/pf-tables-remove" 2>&1
+remove_tables_rc=$?
+pfctl -s info >"$work/pf-info-remove" 2>&1
+remove_info_rc=$?
+remove_pf_status="$(awk '/^Status:/{print $2; exit}' "$work/pf-info-remove")"
+remove_pf_snapshot_sha="$(cat "$work/pf-filter-remove" "$work/pf-nat-remove" "$work/pf-tables-remove" | sha256 -q)"
+remove_pf_restored=0
+if [ "$remove_filter_rc" -eq 0 ] && [ "$remove_nat_rc" -eq 0 ] && \
+   [ "$remove_tables_rc" -eq 0 ] && [ "$remove_info_rc" -eq 0 ] && \
+   [ "$remove_pf_status" = "$baseline_status" ] && \
+   [ "$remove_pf_snapshot_sha" = "$snapshot_sha" ] && \
+   cmp -s "$work/pf-filter-before" "$work/pf-filter-remove" && \
+   cmp -s "$work/pf-nat-before" "$work/pf-nat-remove" && \
+   cmp -s "$work/pf-tables-before" "$work/pf-tables-remove"; then
+    remove_pf_restored=1
+fi
+remove_syswarden_tables_absent=1
+if grep -E -q '(^|[[:space:]])(syswarden_[[:alnum:]_]*|banned_ips)([[:space:]]|$)' \
+    "$work/pf-tables-remove"; then
+    remove_syswarden_tables_absent=0
+fi
+emit REMOVE_PF_STATUS "$remove_pf_status"
+emit REMOVE_PF_SNAPSHOT_SHA256 "$remove_pf_snapshot_sha"
+emit REMOVE_PF_BASELINE_RESTORED "$remove_pf_restored"
+emit REMOVE_PF_SYSWARDEN_TABLE_ABSENT "$remove_syswarden_tables_absent"
+
+# Exercise the fresh v4.02.10 PF boundary with the exact candidate CLI after
+# the historical package snapshot has been consumed. Fresh capture is allowed
+# only on the disabled empty baseline; a nonempty anchor must be rejected
+# before any PF or snapshot mutation.
+"$work/syswarden-cli-pf-probe" package-capture-pf \
+    >"$work/pf-fresh-capture.log" 2>&1
+fresh_capture_rc=$?
+emit PF_FRESH_CAPTURE_RC "$fresh_capture_rc"
+fresh_provenance="$({
+    jq -er 'select(.schema_version == 1 and .provenance == "exact_live") | .provenance' \
+        /var/db/syswarden/pf-policy-snapshot.json
+} 2>/dev/null || true)"
+emit PF_FRESH_PROVENANCE "$fresh_provenance"
+"$work/syswarden-cli-pf-probe" package-restore-pf \
+    >"$work/pf-fresh-restore.log" 2>&1
+fresh_restore_rc=$?
+emit PF_FRESH_RESTORE_RC "$fresh_restore_rc"
+
+printf 'pass quick on lo0\n' >"$work/pf-fresh-reject.conf"
+pfctl -a "$anchor" -f "$work/pf-fresh-reject.conf" \
+    >"$work/pf-fresh-reject-apply.log" 2>&1
+pfctl -a "$anchor" -sr >"$work/pf-fresh-reject-before" 2>&1
+pfctl -sr >"$work/pf-fresh-main-before" 2>&1
+pfctl -sn >>"$work/pf-fresh-main-before" 2>&1
+pfctl -s Tables >>"$work/pf-fresh-main-before" 2>&1
+pfctl -s info >>"$work/pf-fresh-main-before" 2>&1
+"$work/syswarden-cli-pf-probe" package-capture-pf \
+    >"$work/pf-fresh-reject.log" 2>&1
+fresh_reject_rc=$?
+pfctl -a "$anchor" -sr >"$work/pf-fresh-reject-after" 2>&1
+pfctl -sr >"$work/pf-fresh-main-after" 2>&1
+pfctl -sn >>"$work/pf-fresh-main-after" 2>&1
+pfctl -s Tables >>"$work/pf-fresh-main-after" 2>&1
+pfctl -s info >>"$work/pf-fresh-main-after" 2>&1
+fresh_rejected=0
+if [ "$fresh_reject_rc" -ne 0 ] && \
+   [ ! -e /var/db/syswarden/pf-policy-snapshot.json ]; then
+    fresh_rejected=1
+fi
+emit PF_NONEMPTY_CAPTURE_REJECTED "$fresh_rejected"
+fresh_state_preserved=0
+if [ -s "$work/pf-fresh-reject-before" ] && \
+   cmp -s "$work/pf-fresh-reject-before" "$work/pf-fresh-reject-after" && \
+   cmp -s "$work/pf-fresh-main-before" "$work/pf-fresh-main-after"; then
+    fresh_state_preserved=1
+fi
+emit PF_NONEMPTY_STATE_PRESERVED "$fresh_state_preserved"
+pfctl -a "$anchor" -F all >/dev/null 2>&1
 
 cleanup_vm
 cleanup_ok=1
 pkg info -e syswarden >/dev/null 2>&1 && cleanup_ok=0
 for path in /usr/local/syswarden /opt/syswarden /usr/local/bin/syswarden \
     /usr/local/bin/syswarden-tui /usr/local/etc/rc.d/syswarden \
-    /usr/local/etc/rc.d/syswardenwebtui /etc/syswarden \
-    /var/lib/syswarden; do
+    /usr/local/etc/rc.d/syswardenwebtui \
+    /usr/local/etc/rsyslog.d/99-syswarden-siem.conf \
+    /usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf /etc/syswarden \
+    /var/lib/syswarden /var/db/syswarden \
+    /var/cron/allow /var/cron/deny; do
     if [ -e "$path" ] || [ -L "$path" ]; then
         cleanup_ok=0
     fi
 done
+cleanup_cron_state="$(crontab -l 2>/dev/null || true)"
+if printf '%s\n' "$cleanup_cron_state" | grep -E -q \
+   '/(usr/local|opt)/syswarden/bin/syswarden-cli'; then
+    cleanup_ok=0
+fi
+if printf '%s\n' "$cleanup_cron_state" | grep -F -q '# syswarden-freebsd-lab-preserve'; then
+    cleanup_ok=0
+fi
+if printf '%s\n' "$cleanup_cron_state" | grep -F -q '# syswarden-freebsd-lab-operator-preserve'; then
+    cleanup_ok=0
+fi
 emit LAB_CLEANUP_OK "$cleanup_ok"
 pfctl -sr >"$work/pf-filter-after" 2>&1
 filter_after_rc=$?
@@ -1566,6 +2058,8 @@ def phase_checks(
     phase: str,
     expected_version: str,
     check_prefix: str,
+    *,
+    historical_forward_only: bool = False,
 ) -> list[dict[str, object]]:
     inventory = evidence_inventory(evidence[f"{phase}_PKG_INVENTORY"])
     user_inventory = evidence_inventory(evidence[f"{phase}_USER_STATE_INVENTORY"])
@@ -1592,6 +2086,29 @@ def phase_checks(
             f"{phase}_SIGNATURE_STATE_RESTORED"
         ],
     }
+    expected_abi = (
+        KNOWN_LEGACY_FREEBSD_PACKAGE_ABI
+        if historical_forward_only
+        else EXPECTED_FREEBSD_PACKAGE_ABI
+    )
+    expected_elf = (
+        {"cli": "amd64", "core": "arm64", "tui": "arm64"}
+        if historical_forward_only
+        else {
+            "cli": EXPECTED_NATIVE_ELF_ARCH,
+            "core": EXPECTED_NATIVE_ELF_ARCH,
+            "tui": EXPECTED_NATIVE_ELF_ARCH,
+        }
+    )
+    expected_inventory = (
+        FORWARD_ONLY_PREVIOUS_INVENTORY
+        if historical_forward_only
+        else EXPECTED_PACKAGE_INVENTORY
+    )
+    expected_signature_engine_count = (
+        "" if historical_forward_only else str(EXPECTED_ENGINE_SIGNATURE_COUNT)
+    )
+    expected_signature_probe_rc = "2" if historical_forward_only else "124"
     return [
         check(
             f"SW-PKG-FBSD-{check_prefix}-001",
@@ -1613,30 +2130,26 @@ def phase_checks(
         check(
             f"SW-PKG-FBSD-{check_prefix}-ABI-001",
             "architecture",
-            evidence[f"{phase}_PKG_ARCH"] == EXPECTED_FREEBSD_PACKAGE_ABI,
-            EXPECTED_FREEBSD_PACKAGE_ABI,
+            evidence[f"{phase}_PKG_ARCH"] == expected_abi,
+            expected_abi,
             evidence[f"{phase}_PKG_ARCH"],
-            "Every package phase must declare the exact ABI of the FreeBSD 14 amd64 qualification guest.",
+            "Candidate phases require FreeBSD 14 amd64. The exact historical transition records only the byte-bound v4.02.8 ABI defect.",
         ),
         check(
             f"SW-PKG-FBSD-{check_prefix}-ELF-001",
             "architecture",
-            set(elf_observed.values()) == {EXPECTED_NATIVE_ELF_ARCH},
-            {
-                "cli": EXPECTED_NATIVE_ELF_ARCH,
-                "core": EXPECTED_NATIVE_ELF_ARCH,
-                "tui": EXPECTED_NATIVE_ELF_ARCH,
-            },
+            elf_observed == expected_elf,
+            expected_elf,
             elf_observed,
-            "The CLI, core, and TUI must each be native amd64 ELF executables at every installed phase.",
+            "Candidate binaries must all be native amd64. Historical mixed architecture is accepted only as an exact v4.02.8 transition observation.",
         ),
         check(
             f"SW-PKG-FBSD-{check_prefix}-INVENTORY-001",
             "lifecycle",
-            inventory == EXPECTED_PACKAGE_INVENTORY,
-            sorted(EXPECTED_PACKAGE_INVENTORY),
+            inventory == expected_inventory,
+            sorted(expected_inventory),
             sorted(inventory),
-            "Every installed phase must retain the exact four-file package inventory.",
+            "The inventory must match either the six-file candidate contract or the exact four-file historical transition input.",
         ),
         check(
             f"SW-PKG-FBSD-{check_prefix}-STATE-001",
@@ -1662,17 +2175,22 @@ def phase_checks(
             evidence[f"{phase}_SIGNATURE_RULE_COUNT"]
             == str(EXPECTED_SIGNATURE_RULE_COUNT)
             and evidence[f"{phase}_SIGNATURE_ENGINE_COUNT"]
-            == str(EXPECTED_ENGINE_SIGNATURE_COUNT)
-            and evidence[f"{phase}_SIGNATURE_PROBE_RC"] == "124"
+            == expected_signature_engine_count
+            and evidence[f"{phase}_SIGNATURE_PROBE_RC"]
+            == expected_signature_probe_rc
             and evidence[f"{phase}_SIGNATURE_LOAD_ERROR"] == "0",
             {
                 "rule_definitions": EXPECTED_SIGNATURE_RULE_COUNT,
-                "engine_loaded": EXPECTED_ENGINE_SIGNATURE_COUNT,
-                "probe_return_code": 124,
+                "engine_loaded": (
+                    "unavailable in exact historical mixed-architecture input"
+                    if historical_forward_only
+                    else EXPECTED_ENGINE_SIGNATURE_COUNT
+                ),
+                "probe_return_code": int(expected_signature_probe_rc),
                 "loader_error": False,
             },
             signature_observed,
-            "The packaged database must contain all 78 rule definitions and the real core loader must compile all 194 effective signatures and remain alive for the bounded probe.",
+            "Candidate phases require a live native core loading all signatures. The byte-bound historical input must fail with its exact non-native execution class.",
         ),
         check(
             f"SW-PKG-FBSD-{check_prefix}-SIGNATURE-RESTORE-001",
@@ -1698,6 +2216,7 @@ def product_checks(
     previous: PackageArtifact,
 ) -> list[dict[str, object]]:
     checks: list[dict[str, object]] = []
+    forward_only = is_forward_only_transition(candidate, previous)
     for phase, expected_version, check_prefix in (
         ("PREVIOUS_INSTALL", previous.version, "PREVIOUS-INSTALL"),
         ("CANDIDATE_UPGRADE", candidate.version, "CANDIDATE-UPGRADE"),
@@ -1709,7 +2228,55 @@ def product_checks(
         ),
         ("PREVIOUS_ROLLBACK", previous.version, "PREVIOUS-ROLLBACK"),
     ):
-        checks.extend(phase_checks(evidence, phase, expected_version, check_prefix))
+        checks.extend(
+            phase_checks(
+                evidence,
+                phase,
+                expected_version,
+                check_prefix,
+                historical_forward_only=(
+                    forward_only
+                    and phase in {"PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"}
+                ),
+            )
+        )
+
+    for phase, check_prefix in (
+        ("CANDIDATE_UPGRADE", "CANDIDATE-UPGRADE"),
+        ("CANDIDATE_REINSTALL", "CANDIDATE-REINSTALL"),
+        (
+            "CANDIDATE_RESTART_IDEMPOTENCE",
+            "CANDIDATE-RESTART-IDEMPOTENCE",
+        ),
+    ):
+        modular_inventory = evidence_inventory(
+            evidence[f"{phase}_MODULAR_CONFIG_INVENTORY"]
+        )
+        observed = {
+            "marker_state": evidence[f"{phase}_POSTINSTALL_MARKER_STATE"],
+            "diagnostics_clean": evidence[
+                f"{phase}_POSTINSTALL_DIAGNOSTICS_CLEAN"
+            ],
+            "modular_config_inventory": sorted(modular_inventory),
+        }
+        checks.append(
+            check(
+                f"SW-PKG-FBSD-{check_prefix}-POSTINSTALL-001",
+                "lifecycle",
+                observed["marker_state"] == EXPECTED_POSTINSTALL_MARKER_STATE
+                and observed["diagnostics_clean"] == "1"
+                and modular_inventory == EXPECTED_MODULAR_CONFIG_INVENTORY,
+                {
+                    "marker_state": EXPECTED_POSTINSTALL_MARKER_STATE,
+                    "diagnostics_clean": "1",
+                    "modular_config_inventory": sorted(
+                        EXPECTED_MODULAR_CONFIG_INVENTORY
+                    ),
+                },
+                observed,
+                "Candidate package phases must finish the critical post-install script, emit no fatal diagnostic, and create the complete modular configuration.",
+            )
+        )
 
     pf_rule_count = (
         int(evidence["PF_FIXTURE_RULE_COUNT"])
@@ -1739,8 +2306,10 @@ def product_checks(
         ),
     }
     remove_user_inventory = evidence_inventory(evidence["REMOVE_USER_STATE_INVENTORY"])
+    dependency_inventory = evidence_inventory(evidence["DEPENDENCY_INVENTORY"])
     checks.extend(
         [
+            check("SW-PKG-FBSD-DEPS-001", "package", evidence["DEPENDENCIES_INSTALL_RC"] == "0" and dependency_inventory == EXPECTED_FREEBSD_DEPENDENCIES, {"prerequisite_command": "pkg install -y curl jq libqrencode rsyslog wireguard-tools", "inventory": sorted(EXPECTED_FREEBSD_DEPENDENCIES)}, {"return_code": evidence["DEPENDENCIES_INSTALL_RC"], "inventory": sorted(dependency_inventory)}, "The standalone txz requires the exact declared dependencies to be installed from configured official pkg repositories before pkg add."),
             check("SW-PKG-FBSD-MODE-CLI-001", "package", evidence["MODE_CLI"] == "750", "750", evidence["MODE_CLI"], "The CLI must retain the staged executable mode."),
             check("SW-PKG-FBSD-MODE-CORE-001", "package", evidence["MODE_CORE"] == "750", "750", evidence["MODE_CORE"], "The core must retain the staged executable mode."),
             check("SW-PKG-FBSD-MODE-TUI-001", "package", evidence["MODE_TUI"] == "750", "750", evidence["MODE_TUI"], "The TUI must retain the staged executable mode."),
@@ -1749,13 +2318,42 @@ def product_checks(
             check("SW-PKG-FBSD-LINK-TUI-001", "package", evidence["LINK_TUI"] == "/usr/local/syswarden/bin/syswarden-tui", "/usr/local/syswarden/bin/syswarden-tui", evidence["LINK_TUI"], "The public TUI symlink must target the packaged binary."),
             check("SW-PKG-FBSD-EXEC-DIRECT-001", "runtime", evidence["CLI_DIRECT_RC"] == "0", 0, evidence["CLI_DIRECT_RC"], "The candidate CLI must execute natively after reinstall."),
             check("SW-PKG-FBSD-EXEC-LINK-001", "runtime", evidence["CLI_LINK_RC"] == "0", 0, evidence["CLI_LINK_RC"], "The candidate public entry point must execute natively after reinstall."),
+            check("SW-PKG-FBSD-TUI-EXEC-001", "runtime", evidence["TUI_REINSTALL_RC"] == "124" and evidence["TUI_RECOVERY_RC"] == "124", "candidate TUI remains alive in a bounded native pseudo-terminal probe after reinstall and recovery", {"reinstall_return_code": evidence["TUI_REINSTALL_RC"], "recovery_return_code": evidence["TUI_RECOVERY_RC"]}, "The packaged TUI must execute natively under a pseudo-terminal in both candidate states; timeout 124 is the exact bounded success class."),
             check("SW-PKG-FBSD-SIG-PACKAGED-001", "runtime", evidence["SIGNATURE_PACKAGE_PATH"] == "1", True, evidence["SIGNATURE_PACKAGE_PATH"] == "1", "The candidate package must install its signature database."),
-            check("SW-PKG-FBSD-PREFIX-001", "runtime", evidence["SIGNATURE_RUNTIME_PATH"] == "1", "/opt/syswarden/signatures.json exists without laboratory assistance", evidence["SIGNATURE_RUNTIME_PATH"] == "1", "The compatibility-copy signature probe does not excuse the package/runtime prefix mismatch; this check is captured before the temporary probe path is created."),
+            check("SW-PKG-FBSD-PREFIX-001", "runtime", evidence["SIGNATURE_RUNTIME_PATH"] == "1", "/usr/local/syswarden/signatures.json is the native packaged runtime path", evidence["SIGNATURE_RUNTIME_PATH"] == "1", "The core must load the packaged signature database directly from the native FreeBSD prefix without a compatibility copy."),
             check("SW-PKG-FBSD-RCD-CORE-001", "rc.d", evidence["RC_CORE_PRESENT"] == "1" and evidence["RC_CORE_MODE"] == "755", "core rc.d script exists with mode 755", {"present": evidence["RC_CORE_PRESENT"], "mode": evidence["RC_CORE_MODE"]}, "Candidate reinstallation must create a runnable core service script."),
             check("SW-PKG-FBSD-RCD-WEB-001", "rc.d", evidence["RC_WEB_PRESENT"] == "1" and evidence["RC_WEB_MODE"] == "755", "web rc.d script exists with mode 755", {"present": evidence["RC_WEB_PRESENT"], "mode": evidence["RC_WEB_MODE"]}, "Candidate reinstallation must create a runnable Web-TUI service script."),
             check("SW-PKG-FBSD-RCD-CORE-PATH-001", "rc.d", evidence["RC_CORE_COMMAND"] == "/usr/local/syswarden/bin/syswarden-core", "/usr/local/syswarden/bin/syswarden-core", evidence["RC_CORE_COMMAND"], "The core service command must reference the packaged path."),
             check("SW-PKG-FBSD-RCD-WEB-PATH-001", "rc.d", evidence["RC_WEB_COMMAND"] == "/usr/local/syswarden/bin/syswarden-cli", "/usr/local/syswarden/bin/syswarden-cli", evidence["RC_WEB_COMMAND"], "The Web-TUI service command must reference the packaged path."),
             check("SW-PKG-FBSD-RCD-ENABLE-001", "rc.d", evidence["RC_CORE_ENABLED"] == "YES" and evidence["RC_WEB_ENABLED"] == "YES", "both services enabled", {"core": evidence["RC_CORE_ENABLED"], "web": evidence["RC_WEB_ENABLED"]}, "Both generated rc.d services must be enabled."),
+            check("SW-PKG-FBSD-UPGRADE-RCD-001", "rc.d", evidence["UPGRADE_RC_CORE_ENABLED"] == "YES" and evidence["UPGRADE_RC_WEB_ENABLED"] == "YES" and evidence["UPGRADE_RC_CORE_STATUS_RC"] == "0" and evidence["UPGRADE_RC_WEB_STATUS_RC"] == "0", "both services enabled and running immediately after candidate upgrade", {"core_enabled": evidence["UPGRADE_RC_CORE_ENABLED"], "web_enabled": evidence["UPGRADE_RC_WEB_ENABLED"], "core_status": evidence["UPGRADE_RC_CORE_STATUS_RC"], "web_status": evidence["UPGRADE_RC_WEB_STATUS_RC"]}, "The v4.02.8 to candidate transition must leave both rc.d services enabled and running before any later probe can stop or repair them."),
+            check(
+                "SW-PKG-FBSD-PF-PROVENANCE-001",
+                "pf",
+                evidence["PF_SNAPSHOT_PROVENANCE"]
+                == ("legacy_derived" if forward_only else "exact_live"),
+                "legacy_derived only for the exact byte-bound v4.02.8 transition; exact_live otherwise",
+                evidence["PF_SNAPSHOT_PROVENANCE"],
+                "PF restoration provenance must match the package transition and may never overstate the immutable historical state.",
+            ),
+            check(
+                "SW-PKG-FBSD-PF-FRESH-BOUNDARY-001",
+                "pf",
+                evidence["PF_FRESH_CAPTURE_RC"] == "0"
+                and evidence["PF_FRESH_PROVENANCE"] == "exact_live"
+                and evidence["PF_FRESH_RESTORE_RC"] == "0"
+                and evidence["PF_NONEMPTY_CAPTURE_REJECTED"] == "1"
+                and evidence["PF_NONEMPTY_STATE_PRESERVED"] == "1",
+                "fresh disabled empty capture/restore succeeds; nonempty PF is rejected without mutation",
+                {
+                    "capture_return_code": evidence["PF_FRESH_CAPTURE_RC"],
+                    "provenance": evidence["PF_FRESH_PROVENANCE"],
+                    "restore_return_code": evidence["PF_FRESH_RESTORE_RC"],
+                    "nonempty_rejected": evidence["PF_NONEMPTY_CAPTURE_REJECTED"],
+                    "nonempty_state_preserved": evidence["PF_NONEMPTY_STATE_PRESERVED"],
+                },
+                "Fresh v4.02.10 PF ownership is restricted to a disabled empty host and must reject coexistence before mutation.",
+            ),
             check("SW-PKG-FBSD-START-CORE-001", "startup", evidence["RC_CORE_START_RC"] == "0" and evidence["RC_CORE_STATUS_RC"] == "0", "core starts and reports running", {"start": evidence["RC_CORE_START_RC"], "status": evidence["RC_CORE_STATUS_RC"]}, "The candidate core must start through rc.d."),
             check("SW-PKG-FBSD-RESTART-CORE-001", "startup", all(evidence[key] == "0" for key in ("RC_CORE_RESTART_ONE_RC", "RC_CORE_RESTART_ONE_STATUS_RC", "RC_CORE_RESTART_TWO_RC", "RC_CORE_RESTART_TWO_STATUS_RC")), "two consecutive core restarts succeed and report running", {key: evidence[key] for key in ("RC_CORE_RESTART_ONE_RC", "RC_CORE_RESTART_ONE_STATUS_RC", "RC_CORE_RESTART_TWO_RC", "RC_CORE_RESTART_TWO_STATUS_RC")}, "A second consecutive restart is the bounded rc.d idempotence check."),
             check("SW-PKG-FBSD-START-WEB-001", "startup", evidence["RC_WEB_START_RC"] == "0" and evidence["RC_WEB_STATUS_RC"] == "0", "Web-TUI starts and reports running", {"start": evidence["RC_WEB_START_RC"], "status": evidence["RC_WEB_STATUS_RC"]}, "The candidate Web-TUI must start through rc.d."),
@@ -1770,12 +2368,99 @@ def product_checks(
                 restart_inventory_observed,
                 "Both consecutive restart cycles must preserve the complete scoped filesystem inventory and metadata.",
             ),
+            check(
+                "SW-PKG-FBSD-RSYSLOG-001",
+                "integration",
+                evidence["RSYSLOG_CONFIG_VALIDATE_RC"] == "0"
+                and evidence["RSYSLOG_ENABLED"] == "YES"
+                and evidence["RSYSLOG_STATUS_RC"] == "0"
+                and evidence["SYSLOGD_INACTIVE"] == "1",
+                "candidate rsyslog configuration validates, base syslogd is stopped, and the enabled daemon is running",
+                {
+                    "validation_return_code": evidence["RSYSLOG_CONFIG_VALIDATE_RC"],
+                    "enabled": evidence["RSYSLOG_ENABLED"],
+                    "status_return_code": evidence["RSYSLOG_STATUS_RC"],
+                    "base_syslogd_inactive": evidence["SYSLOGD_INACTIVE"],
+                },
+                "The FreeBSD WAF bridge may only report success after rsyslog validates, is enabled and is running.",
+            ),
             check("SW-PF-FBSD-FIXTURE-SYNTAX-001", "pf", evidence["PF_FIXTURE_SYNTAX_RC"] == "0", 0, evidence["PF_FIXTURE_SYNTAX_RC"], "The frozen FreeBSD PF policy must pass the native kernel parser."),
             check("SW-PF-FBSD-FIXTURE-APPLY-001", "pf", evidence["PF_FIXTURE_APPLY_RC"] == "0" and pf_rule_count > 0, "isolated anchor contains rules", {"return_code": evidence["PF_FIXTURE_APPLY_RC"], "rules": evidence["PF_FIXTURE_RULE_COUNT"]}, "The policy is loaded only into a unique, unattached VM anchor."),
             check("SW-PF-FBSD-HONEYPORT-001", "pf", evidence["PF_HONEYPORT_SOURCE_BAD"] == "0" and evidence["PF_HONEYPORT_EXACT_VALUE"] == "23, 6379" and evidence["PF_HONEYPORT_SYNTAX_RC"] == "0", "the exact { 23, 6379 } rule passes the native PF parser", {"source_concatenates_ports": evidence["PF_HONEYPORT_SOURCE_BAD"] == "1", "exact_port_value": evidence["PF_HONEYPORT_EXACT_VALUE"], "native_syntax_return_code": evidence["PF_HONEYPORT_SYNTAX_RC"]}, "The corrected source must keep both configured honeyports distinct and prove the exact rule with pfctl -n."),
             check("SW-PKG-FBSD-REMOVE-001", "cleanup", evidence["REMOVE_RC"] == "0" and evidence["REMOVE_PACKAGE_ABSENT"] == "1" and evidence["REMOVE_PKG_INVENTORY"] == "" and evidence["REMOVE_PAYLOAD_ABSENT"] == "1" and evidence["REMOVE_LINKS_ABSENT"] == "1", "pkg delete removes registration, inventory, payload and public links", {"return_code": evidence["REMOVE_RC"], "package_absent": evidence["REMOVE_PACKAGE_ABSENT"], "inventory": sorted(evidence_inventory(evidence["REMOVE_PKG_INVENTORY"])), "payload_absent": evidence["REMOVE_PAYLOAD_ABSENT"], "links_absent": evidence["REMOVE_LINKS_ABSENT"]}, "FreeBSD exposes native removal through pkg delete and has no separate purge operation."),
             check("SW-PKG-FBSD-REMOVE-STATE-001", "cleanup", remove_user_inventory == EXPECTED_USER_STATE_INVENTORY and evidence["REMOVE_USER_CONFIG_SHA256"] == USER_CONFIG_SHA256 and evidence["REMOVE_USER_DATA_SHA256"] == USER_DATA_SHA256, {"semantics": "pkg delete preserves unowned operator state; no separate purge", "inventory": sorted(EXPECTED_USER_STATE_INVENTORY), "config_sha256": USER_CONFIG_SHA256, "data_sha256": USER_DATA_SHA256}, {"inventory": sorted(remove_user_inventory), "config_sha256": evidence["REMOVE_USER_CONFIG_SHA256"], "data_sha256": evidence["REMOVE_USER_DATA_SHA256"]}, "Native FreeBSD removal must preserve unowned operator configuration and data byte-for-byte; laboratory cleanup happens only after this evidence is emitted."),
+            check(
+                "SW-PKG-FBSD-MIGRATION-BACKUP-001",
+                "cleanup",
+                evidence["MIGRATION_BACKUP_BASELINE"]
+                == EXPECTED_MIGRATION_BACKUP_STATE
+                and evidence["REMOVE_MIGRATION_BACKUP_STATE"]
+                == EXPECTED_MIGRATION_BACKUP_STATE,
+                EXPECTED_MIGRATION_BACKUP_STATE,
+                {
+                    "before": evidence["MIGRATION_BACKUP_BASELINE"],
+                    "after": evidence["REMOVE_MIGRATION_BACKUP_STATE"],
+                },
+                "The operator migration backup must retain its type, bytes, mode and ownership across native package removal.",
+            ),
             check("SW-PKG-FBSD-RCD-CLEANUP-001", "cleanup", all(evidence[key] == "1" for key in ("REMOVE_RC_CORE_ABSENT", "REMOVE_RC_WEB_ABSENT", "REMOVE_CORE_FLAG_ABSENT", "REMOVE_WEB_FLAG_ABSENT")), "rc.d scripts and enable flags removed", {key: evidence[key] for key in ("REMOVE_RC_CORE_ABSENT", "REMOVE_RC_WEB_ABSENT", "REMOVE_CORE_FLAG_ABSENT", "REMOVE_WEB_FLAG_ABSENT")}, "Package removal must not leave startup artifacts behind."),
+            check(
+                "SW-PKG-FBSD-GENERATED-CLEANUP-001",
+                "cleanup",
+                all(
+                    evidence[key] == "1"
+                    for key in (
+                        "REMOVE_CRON_REFERENCE_ABSENT",
+                        "REMOVE_CRON_UNRELATED_PRESERVED",
+                        "REMOVE_RSYSLOG_SIEM_ABSENT",
+                        "REMOVE_RSYSLOG_WAF_BRIDGE_ABSENT",
+                        "REMOVE_LOGGING_BASELINE_RESTORED",
+                        "REMOVE_CRON_ACCESS_PRESERVED",
+                    )
+                ),
+                "generated references removed; operator cron access and logging baseline restored",
+                {
+                    key: evidence[key]
+                    for key in (
+                        "REMOVE_CRON_REFERENCE_ABSENT",
+                        "REMOVE_CRON_UNRELATED_PRESERVED",
+                        "REMOVE_RSYSLOG_SIEM_ABSENT",
+                        "REMOVE_RSYSLOG_WAF_BRIDGE_ABSENT",
+                        "REMOVE_LOGGING_BASELINE_RESTORED",
+                        "REMOVE_CRON_ACCESS_PRESERVED",
+                    )
+                },
+                "Package removal must remove generated references while restoring the exact pre-SysWarden logging state and preserving operator cron access files.",
+            ),
+            check(
+                "SW-PKG-FBSD-PF-RESTORE-001",
+                "cleanup",
+                evidence["REMOVE_PF_BASELINE_RESTORED"] == "1"
+                and evidence["REMOVE_PF_SYSWARDEN_TABLE_ABSENT"] == "1"
+                and evidence["REMOVE_PF_STATUS"] == evidence["PF_BASELINE_STATUS"]
+                and evidence["REMOVE_PF_SNAPSHOT_SHA256"]
+                == evidence["PF_SNAPSHOT_SHA256"]
+                and evidence["REMOVE_HOST_STATE_ABSENT"] == "1",
+                {
+                    "status": evidence["PF_BASELINE_STATUS"],
+                    "snapshot_sha256": evidence["PF_SNAPSHOT_SHA256"],
+                    "syswarden_tables_absent": "1",
+                    "baseline_restored": "1",
+                    "host_state_absent": "1",
+                },
+                {
+                    "status": evidence["REMOVE_PF_STATUS"],
+                    "snapshot_sha256": evidence["REMOVE_PF_SNAPSHOT_SHA256"],
+                    "syswarden_tables_absent": evidence[
+                        "REMOVE_PF_SYSWARDEN_TABLE_ABSENT"
+                    ],
+                    "baseline_restored": evidence[
+                        "REMOVE_PF_BASELINE_RESTORED"
+                    ],
+                    "host_state_absent": evidence["REMOVE_HOST_STATE_ABSENT"],
+                },
+                "pkg delete must restore the captured persisted PF policy before any laboratory cleanup runs.",
+            ),
         ]
     )
     return checks
@@ -1787,8 +2472,11 @@ def harness_conditions(evidence: dict[str, str]) -> dict[str, bool]:
         "disposable VM marker revalidated": evidence["MARKER_MATCH"] == "1",
         "root-owned VM marker revalidated": evidence["MARKER_SAFE"] == "1",
         "FreeBSD 14.4 amd64 revalidated": evidence["OS_NAME"] == "FreeBSD" and evidence["OS_RELEASE"].startswith("14.4-RELEASE") and evidence["MACHINE"] == "amd64",
-        "native tools available": all(evidence[key] == "1" for key in ("PKG_TOOL_READY", "PF_TOOL_READY", "TIMEOUT_TOOL_READY", "FILE_TOOL_READY")),
+        "native tools available": all(evidence[key] == "1" for key in ("PKG_TOOL_READY", "PF_TOOL_READY", "TIMEOUT_TOOL_READY", "FILE_TOOL_READY", "SCRIPT_TOOL_READY")),
         "clean disposable snapshot": evidence["PRECLEAN"] == "1" and evidence["PF_BASELINE_READY"] == "1" and evidence["PF_BASELINE_CLEAN"] == "1" and evidence["PF_BASELINE_STATUS"] == "Disabled",
+        "root-sealed exact transport inventory": evidence["SEALED_INPUTS"] == "1",
+        "PF snapshot provenance recorded": evidence["PF_SNAPSHOT_PROVENANCE"]
+        in {"exact_live", "legacy_derived"},
         "verified previous package transfer": bool(
             re.fullmatch(r"[0-9a-f]{64}", evidence["PREVIOUS_PACKAGE_SHA256"])
         ),
@@ -1804,6 +2492,14 @@ def harness_conditions(evidence: dict[str, str]) -> dict[str, bool]:
         )
         is not None,
         "PF anchor removed": evidence["PF_ANCHOR_CLEAN"] == "1",
+        "PF restored by package removal": evidence[
+            "REMOVE_PF_BASELINE_RESTORED"
+        ]
+        == "1"
+        and evidence["REMOVE_PF_SYSWARDEN_TABLE_ABSENT"] == "1"
+        and evidence["REMOVE_PF_STATUS"] == evidence["PF_BASELINE_STATUS"]
+        and evidence["REMOVE_PF_SNAPSHOT_SHA256"] == evidence["PF_SNAPSHOT_SHA256"]
+        and evidence["REMOVE_HOST_STATE_ABSENT"] == "1",
         "lab filesystem cleanup": evidence["LAB_CLEANUP_OK"] == "1",
         "PF snapshot restored": evidence["PF_BASELINE_RESTORED"] == "1"
         and evidence["PF_FINAL_STATUS"] == "Disabled",
@@ -1814,155 +2510,13 @@ def classify_failed_checks(
     checks: Sequence[dict[str, object]],
     evidence: dict[str, str],
 ) -> tuple[list[str], list[str]]:
-    """Separate approved roadmap blockers from every unexpected failure."""
+    """Treat every unmet contract as an unexpected release failure."""
 
-    guest_is_expected = (
-        evidence["OS_NAME"] == "FreeBSD"
-        and evidence["OS_RELEASE"].startswith("14.4-RELEASE")
-        and evidence["MACHINE"] == "amd64"
-    )
-    exact_prefix_mismatch = (
-        evidence["SIGNATURE_PACKAGE_PATH"] == "1"
-        and evidence["SIGNATURE_RUNTIME_PATH"] == "0"
-    )
-    exact_missing_rcd = all(
-        (
-            evidence["RC_CORE_PRESENT"] == "0",
-            evidence["RC_WEB_PRESENT"] == "0",
-            evidence["RC_CORE_MODE"] == "",
-            evidence["RC_WEB_MODE"] == "",
-            evidence["RC_CORE_COMMAND"] == "",
-            evidence["RC_WEB_COMMAND"] == "",
-            evidence["RC_CORE_ENABLED"] == "",
-            evidence["RC_WEB_ENABLED"] == "",
-            all(
-                evidence[key] == "1"
-                for key in (
-                    "RC_CORE_START_RC",
-                    "RC_CORE_STATUS_RC",
-                    "RC_CORE_RESTART_ONE_RC",
-                    "RC_CORE_RESTART_ONE_STATUS_RC",
-                    "RC_CORE_RESTART_TWO_RC",
-                    "RC_CORE_RESTART_TWO_STATUS_RC",
-                    "RC_WEB_START_RC",
-                    "RC_WEB_STATUS_RC",
-                    "RC_WEB_RESTART_ONE_RC",
-                    "RC_WEB_RESTART_ONE_STATUS_RC",
-                    "RC_WEB_RESTART_TWO_RC",
-                    "RC_WEB_RESTART_TWO_STATUS_RC",
-                )
-            ),
-            evidence["CANDIDATE_RESTART_IDEMPOTENCE_OPERATION_RC"] == "1",
-        )
-    )
-    exact_legacy_rcd_prefix = (
-        evidence["RC_CORE_COMMAND"] == KNOWN_FREEBSD_CORE_COMMAND
-        and evidence["RC_WEB_COMMAND"] == KNOWN_FREEBSD_WEB_COMMAND
-    )
-    rcd_absence_ids = {
-        "SW-PKG-FBSD-CANDIDATE-RESTART-IDEMPOTENCE-001",
-        "SW-PKG-FBSD-RCD-CORE-001",
-        "SW-PKG-FBSD-RCD-WEB-001",
-        "SW-PKG-FBSD-RCD-ENABLE-001",
-    }
-    rcd_path_ids = {
-        "SW-PKG-FBSD-RCD-CORE-PATH-001",
-        "SW-PKG-FBSD-RCD-WEB-PATH-001",
-    }
-    rcd_runtime_ids = {
-        "SW-PKG-FBSD-START-CORE-001",
-        "SW-PKG-FBSD-RESTART-CORE-001",
-        "SW-PKG-FBSD-START-WEB-001",
-        "SW-PKG-FBSD-RESTART-WEB-001",
-    }
-
-    def exact_expected_blocker(check_id: str) -> str | None:
-        mapped = EXPECTED_FAILED_CHECK_BLOCKERS.get(check_id)
-        if mapped is None or not guest_is_expected:
-            return None
-        if check_id in ABI_CHECK_PHASES:
-            phase = ABI_CHECK_PHASES[check_id]
-            if (
-                evidence[f"{phase}_PKG_ARCH"]
-                == KNOWN_LEGACY_FREEBSD_PACKAGE_ABI
-            ):
-                return mapped
-            return None
-        if check_id in PREVIOUS_MIXED_ELF_CHECK_PHASES:
-            phase = PREVIOUS_MIXED_ELF_CHECK_PHASES[check_id]
-            exact_mixed_elf = (
-                evidence[f"{phase}_ELF_CLI_ARCH"] == "amd64"
-                and evidence[f"{phase}_ELF_CORE_ARCH"] == "arm64"
-                and evidence[f"{phase}_ELF_TUI_ARCH"] == "arm64"
-            )
-            if not exact_mixed_elf:
-                return None
-            if check_id.endswith("-SIGNATURES-001"):
-                exact_exec_format_consequence = (
-                    evidence[f"{phase}_SIGNATURE_RULE_COUNT"]
-                    == str(EXPECTED_SIGNATURE_RULE_COUNT)
-                    and evidence[f"{phase}_SIGNATURE_ENGINE_COUNT"] == ""
-                    and evidence[f"{phase}_SIGNATURE_PROBE_RC"] == "2"
-                    and evidence[f"{phase}_SIGNATURE_LOAD_ERROR"] == "0"
-                    and evidence[f"{phase}_SIGNATURE_STATE_RESTORED"] == "1"
-                    and valid_signature_state(
-                        evidence[f"{phase}_SIGNATURE_STATE_BEFORE"]
-                    )
-                    and evidence[f"{phase}_SIGNATURE_STATE_BEFORE"]
-                    == evidence[f"{phase}_SIGNATURE_STATE_AFTER"]
-                )
-                return mapped if exact_exec_format_consequence else None
-            return mapped
-        if check_id == "SW-PKG-FBSD-PREFIX-001":
-            return mapped if exact_prefix_mismatch else None
-        if check_id in rcd_absence_ids:
-            return mapped if exact_missing_rcd else None
-        if check_id in rcd_path_ids:
-            if exact_missing_rcd or exact_legacy_rcd_prefix:
-                return mapped
-            return None
-        if check_id in rcd_runtime_ids:
-            if exact_missing_rcd:
-                return mapped
-            if exact_legacy_rcd_prefix:
-                relevant_values = (
-                    evidence[key]
-                    for key in (
-                        "RC_CORE_START_RC",
-                        "RC_CORE_STATUS_RC",
-                        "RC_CORE_RESTART_ONE_RC",
-                        "RC_CORE_RESTART_ONE_STATUS_RC",
-                        "RC_CORE_RESTART_TWO_RC",
-                        "RC_CORE_RESTART_TWO_STATUS_RC",
-                        "RC_WEB_START_RC",
-                        "RC_WEB_STATUS_RC",
-                        "RC_WEB_RESTART_ONE_RC",
-                        "RC_WEB_RESTART_ONE_STATUS_RC",
-                        "RC_WEB_RESTART_TWO_RC",
-                        "RC_WEB_RESTART_TWO_STATUS_RC",
-                    )
-                )
-                return mapped if all(value == "1" for value in relevant_values) else None
-            return None
-        return None
-
-    failed_check_ids = [
+    del evidence
+    failed_check_ids = sorted(
         str(item["id"]) for item in checks if item.get("status") != "pass"
-    ]
-    classified = {
-        check_id: exact_expected_blocker(check_id) for check_id in failed_check_ids
-    }
-    blocker_ids = sorted({value for value in classified.values() if value})
-    if not set(blocker_ids).issubset(CANONICAL_BLOCKER_IDS):
-        raise FreeBSDVMLabError("non-canonical expected blocker classification")
-    unexpected_failed_check_ids = sorted(
-        check_id
-        for check_id in failed_check_ids
-        if classified[check_id] is None
     )
-    return blocker_ids, unexpected_failed_check_ids
-
-
+    return [], failed_check_ids
 def build_report(
     evidence: dict[str, str],
     candidate: PackageArtifact,
@@ -2011,9 +2565,9 @@ def build_report(
             "pf_scope": "unique unattached anchor plus disposable-VM package behavior",
             "guest_lock": "atomic root-owned /var/run lock held through PF restoration",
             "pf_snapshot": "empty guest ruleset and exact Disabled status captured before mutation and restored after cleanup",
-            "lifecycle": "previous install -> candidate upgrade -> candidate reinstall -> previous rollback -> pkg delete",
-            "remove_purge_semantics": "FreeBSD pkg has no separate purge operation; pkg delete must remove package-owned artifacts and preserve unowned operator state",
-            "signature_probe": "each installed phase temporarily presents the packaged database at the core's hard-coded runtime path, requires exactly 78 rule definitions and a real loader report of 194 effective signatures, then trap-restores and verifies exact type/bytes/mode/uid/gid or absence",
+            "lifecycle": "previous install -> candidate upgrade -> candidate reinstall -> two restart cycles -> previous rollback observation -> mandatory candidate recovery -> pkg delete",
+            "remove_purge_semantics": "FreeBSD pkg has no separate purge operation; pkg pre-deinstall failures do not block payload deletion and pkg delete -D skips scripts; use syswarden uninstall for supported fail-closed PF restoration before package removal",
+            "signature_probe": "each installed phase executes the core directly against /usr/local/syswarden/signatures.json, requires exactly 78 rule definitions and a real loader report of 194 effective signatures for candidate phases, and verifies unchanged type/bytes/mode/uid/gid",
             "restart_inventory": "complete scoped path/type/mode/uid/gid/link inventory must remain identical after both restart cycles",
             "vm_disposition": "discard or externally revert the disposable VM snapshot after the lab; the installer intentionally mutates guest state beyond package and PF paths",
         },
@@ -2021,8 +2575,10 @@ def build_report(
             "os": evidence["OS_NAME"],
             "release": evidence["OS_RELEASE"],
             "machine": evidence["MACHINE"],
+            "transport_inputs_sealed": evidence["SEALED_INPUTS"] == "1",
             "pf_interface": evidence["PF_INTERFACE"],
             "pf_initial_status": evidence["PF_BASELINE_STATUS"],
+            "pf_snapshot_provenance": evidence["PF_SNAPSHOT_PROVENANCE"],
             "pf_final_status": evidence["PF_FINAL_STATUS"],
             "pf_snapshot_sha256": evidence["PF_SNAPSHOT_SHA256"],
             "pf_anchor": evidence["PF_ANCHOR_NAME"],
@@ -2073,6 +2629,20 @@ def build_report(
                     ),
                     "config_sha256": evidence["REMOVE_USER_CONFIG_SHA256"],
                     "data_sha256": evidence["REMOVE_USER_DATA_SHA256"],
+                },
+                "pf_restore": {
+                    "status": evidence["REMOVE_PF_STATUS"],
+                    "snapshot_sha256": evidence["REMOVE_PF_SNAPSHOT_SHA256"],
+                    "syswarden_tables_absent": evidence[
+                        "REMOVE_PF_SYSWARDEN_TABLE_ABSENT"
+                    ]
+                    == "1",
+                    "baseline_restored": evidence[
+                        "REMOVE_PF_BASELINE_RESTORED"
+                    ]
+                    == "1",
+                    "host_state_absent": evidence["REMOVE_HOST_STATE_ABSENT"]
+                    == "1",
                 },
                 "semantics": "pkg delete; no separate FreeBSD purge operation",
             },
@@ -2125,50 +2695,69 @@ def run_lab(
     )
     require_transport_success(prepared, "prepare disposable VM workspace")
 
-    for source, name in (
-        (previous.path, previous.path.name),
-        (candidate.path, candidate.path.name),
-        (assets.pf_fixture, assets.pf_fixture.name),
-    ):
-        copied = active_runner.run(
-            scp_arguments(
-                scp_program,
-                host,
-                args.ssh_port,
-                args.ssh_user,
-                identity,
-                known_hosts,
-                source,
-                f"{remote_root}/{name}",
-            ),
-            timeout=120,
-        )
-        require_transport_success(copied, f"copy {name} into disposable VM")
+    remote: CommandResult | None = None
+    try:
+        for source, name in (
+            (previous.path, previous.path.name),
+            (candidate.path, candidate.path.name),
+            (assets.pf_fixture, assets.pf_fixture.name),
+        ):
+            copied = active_runner.run(
+                scp_arguments(
+                    scp_program,
+                    host,
+                    args.ssh_port,
+                    args.ssh_user,
+                    identity,
+                    known_hosts,
+                    source,
+                    f"{remote_root}/{name}",
+                ),
+                timeout=120,
+            )
+            require_transport_success(copied, f"copy {name} into disposable VM")
 
-    remote = active_runner.run(
-        ssh_base
-        + (
-            "sudo",
-            "-n",
-            "/bin/sh",
-            "-s",
-            "--",
-            remote_root,
-            previous.path.name,
-            previous.sha256,
-            previous.version,
-            candidate.path.name,
-            candidate.sha256,
-            candidate.version,
-            "1" if assets.honeyport_source_bad else "0",
-            assets.pf_fixture_sha256,
-            anchor_nonce,
-            str(args.command_timeout),
-        ),
-        timeout=(args.command_timeout * 4) + 360,
-        input_text=script_stdin_with_token(REMOTE_LAB_SCRIPT, marker_token),
-    )
-    require_transport_success(remote, "FreeBSD package/PF laboratory")
+        remote = active_runner.run(
+            ssh_base
+            + (
+                "sudo",
+                "-n",
+                "/bin/sh",
+                "-s",
+                "--",
+                remote_root,
+                previous.path.name,
+                previous.sha256,
+                previous.version,
+                candidate.path.name,
+                candidate.sha256,
+                candidate.version,
+                "1" if assets.honeyport_source_bad else "0",
+                assets.pf_fixture_sha256,
+                anchor_nonce,
+                str(args.command_timeout),
+            ),
+            timeout=(args.command_timeout * 4) + 360,
+            input_text=script_stdin_with_token(REMOTE_LAB_SCRIPT, marker_token),
+        )
+        require_transport_success(remote, "FreeBSD package/PF laboratory")
+    finally:
+        cleaned = active_runner.run(
+            ssh_base
+            + (
+                "sudo",
+                "-n",
+                "/bin/sh",
+                "-s",
+                "--",
+                remote_root,
+            ),
+            timeout=60,
+            input_text=script_stdin_with_token(CLEANUP_SCRIPT, marker_token),
+        )
+        require_transport_success(cleaned, "clean disposable VM transport workspace")
+    if remote is None:
+        raise FreeBSDVMLabError("FreeBSD laboratory did not produce a result")
     evidence = parse_markers(remote.stdout, EVIDENCE_KEYS)
     return build_report(
         evidence,

@@ -123,6 +123,41 @@ jobs:
             }
           done
 
+          validate_linux_pie() {
+            local artifact="$1"
+            local expected_machine="$2"
+            local elf_type
+            local machine
+            elf_type="$(readelf --file-header "${artifact}" | sed -n 's/^[[:space:]]*Type:[[:space:]]*\([^[:space:]]*\).*/\1/p')"
+            machine="$(readelf --file-header "${artifact}" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')"
+            [[ "${elf_type}" == "DYN" ]] || {
+              echo "ERROR: Linux artifact is not PIE: ${artifact}" >&2
+              exit 1
+            }
+            [[ "${machine}" == "${expected_machine}" ]] || {
+              echo "ERROR: Linux artifact has unexpected machine ${machine}: ${artifact}" >&2
+              exit 1
+            }
+            go version -m "${artifact}" | grep -Eq '^[[:space:]]*build[[:space:]]+CGO_ENABLED=0$' || {
+              echo "ERROR: Linux artifact was not built with CGO_ENABLED=0: ${artifact}" >&2
+              exit 1
+            }
+          }
+
+          for artifact in \
+            dist/bin/syswarden-cli \
+            dist/bin/syswarden-core \
+            dist/bin/syswarden-tui; do
+            validate_linux_pie "${artifact}" 'Advanced Micro Devices X86-64'
+          done
+          for artifact in \
+            dist/linux-arm64/bin/syswarden-cli \
+            dist/linux-arm64/bin/syswarden-core \
+            dist/linux-arm64/bin/syswarden-tui; do
+            validate_linux_pie "${artifact}" 'AArch64'
+          done
+          dist/bin/syswarden-cli --help >/dev/null
+
       - name: Set up Ruby for FPM
         uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
@@ -145,6 +180,8 @@ jobs:
           PACKAGE_WORKSPACE="$(mktemp -d "${RUNNER_TEMP%/}/syswarden-package.XXXXXX")"
           STAGING_AMD64="${PACKAGE_WORKSPACE}/staging-amd64"
           STAGING_ARM64="${PACKAGE_WORKSPACE}/staging-arm64"
+          STAGING_APK_AMD64="${PACKAGE_WORKSPACE}/staging-apk-amd64"
+          STAGING_APK_ARM64="${PACKAGE_WORKSPACE}/staging-apk-arm64"
           STAGING_FREEBSD="${PACKAGE_WORKSPACE}/staging-freebsd"
           PACKAGE_ASSETS="${PACKAGE_WORKSPACE}/assets"
           PACKAGE_SCRIPTS="${PACKAGE_WORKSPACE}/scripts"
@@ -152,6 +189,8 @@ jobs:
           install -d -m 0755 \
             "${STAGING_AMD64}" \
             "${STAGING_ARM64}" \
+            "${STAGING_APK_AMD64}" \
+            "${STAGING_APK_ARM64}" \
             "${STAGING_FREEBSD}" \
             "${PACKAGE_ASSETS}"
           install -d -m 0700 "${PACKAGE_SCRIPTS}" "${PACKAGE_CONFIGS}"
@@ -159,6 +198,8 @@ jobs:
             printf 'PACKAGE_WORKSPACE=%s\n' "${PACKAGE_WORKSPACE}"
             printf 'STAGING_AMD64=%s\n' "${STAGING_AMD64}"
             printf 'STAGING_ARM64=%s\n' "${STAGING_ARM64}"
+            printf 'STAGING_APK_AMD64=%s\n' "${STAGING_APK_AMD64}"
+            printf 'STAGING_APK_ARM64=%s\n' "${STAGING_APK_ARM64}"
             printf 'STAGING_FREEBSD=%s\n' "${STAGING_FREEBSD}"
             printf 'PACKAGE_ASSETS=%s\n' "${PACKAGE_ASSETS}"
             printf 'PACKAGE_SCRIPTS=%s\n' "${PACKAGE_SCRIPTS}"
@@ -213,6 +254,84 @@ jobs:
           ln -s /opt/syswarden/bin/syswarden-tui \
             "${STAGING_ARM64}/usr/local/bin/syswarden-tui"
 
+      - name: Build and Stage Static Alpine Binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          build_apk_stage() {
+            local goarch="$1"
+            local stage="$2"
+            install -d -m 0755 \
+              "${stage}/opt/syswarden/bin" \
+              "${stage}/usr/local/bin"
+            for component in syswarden-cli syswarden-core syswarden-tui; do
+              env \
+                CGO_ENABLED=0 \
+                GOOS=linux \
+                GOARCH="${goarch}" \
+                GOFLAGS=-mod=readonly \
+                go -C "src/core/${component}" build \
+                  -mod=readonly \
+                  -ldflags='-s -w' \
+                  -o "${stage}/opt/syswarden/bin/${component}" \
+                  .
+              chmod 0750 "${stage}/opt/syswarden/bin/${component}"
+            done
+            cp src/core/syswarden-core/signatures.json \
+              "${stage}/opt/syswarden/signatures.json"
+            chmod 0640 "${stage}/opt/syswarden/signatures.json"
+            ln -s /opt/syswarden/bin/syswarden-cli \
+              "${stage}/usr/local/bin/syswarden"
+            ln -s /opt/syswarden/bin/syswarden-tui \
+              "${stage}/usr/local/bin/syswarden-tui"
+          }
+
+          validate_static_apk_binary() {
+            local artifact="$1"
+            local expected_machine="$2"
+            local elf_type
+            local machine
+            elf_type="$(readelf --file-header "${artifact}" | sed -n 's/^[[:space:]]*Type:[[:space:]]*\([^[:space:]]*\).*/\1/p')"
+            machine="$(readelf --file-header "${artifact}" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')"
+            [[ "${elf_type}" == "EXEC" ]] || {
+              echo "ERROR: Alpine artifact is not a static ET_EXEC binary: ${artifact}" >&2
+              exit 1
+            }
+            [[ "${machine}" == "${expected_machine}" ]] || {
+              echo "ERROR: Alpine artifact has unexpected machine ${machine}: ${artifact}" >&2
+              exit 1
+            }
+            if readelf --program-headers "${artifact}" | grep -q '[[:space:]]INTERP[[:space:]]'; then
+              echo "ERROR: Alpine artifact contains a dynamic PT_INTERP loader: ${artifact}" >&2
+              exit 1
+            fi
+            file "${artifact}" | grep -Fq 'statically linked' || {
+              echo "ERROR: Alpine artifact is not statically linked: ${artifact}" >&2
+              exit 1
+            }
+            go version -m "${artifact}" | grep -Eq '^[[:space:]]*build[[:space:]]+CGO_ENABLED=0$' || {
+              echo "ERROR: Alpine artifact was not built with CGO_ENABLED=0: ${artifact}" >&2
+              exit 1
+            }
+          }
+
+          build_apk_stage amd64 "${STAGING_APK_AMD64}"
+          build_apk_stage arm64 "${STAGING_APK_ARM64}"
+          for artifact in "${STAGING_APK_AMD64}"/opt/syswarden/bin/*; do
+            validate_static_apk_binary "${artifact}" 'Advanced Micro Devices X86-64'
+          done
+          for artifact in "${STAGING_APK_ARM64}"/opt/syswarden/bin/*; do
+            validate_static_apk_binary "${artifact}" 'AArch64'
+          done
+          "${STAGING_APK_AMD64}/opt/syswarden/bin/syswarden-cli" --help >/dev/null
+          docker run --rm \
+            --network none \
+            --security-opt no-new-privileges \
+            --volume "${STAGING_APK_AMD64}/opt/syswarden/bin/syswarden-cli:/usr/local/bin/syswarden:ro" \
+            docker.io/library/alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6 \
+            /usr/local/bin/syswarden --help >/dev/null
+
       - name: Validate Exact Linux Staging Inventories
         shell: bash
         run: |
@@ -221,6 +340,10 @@ jobs:
             linux --root "${STAGING_AMD64}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_ARM64}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
+            linux --root "${STAGING_APK_AMD64}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
+            linux --root "${STAGING_APK_ARM64}"
 
       - name: Build Debian Package (.deb)
         run: |
@@ -228,6 +351,38 @@ jobs:
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/preinst.sh"
           #!/bin/sh
           set -e
+          secure_private_directory() {
+              path="$1"
+              if [ -L "${path}" ] || { [ -e "${path}" ] && [ ! -d "${path}" ]; }; then
+                  echo "Refusing unsafe SysWarden directory: ${path}" >&2
+                  exit 1
+              fi
+              if [ ! -d "${path}" ]; then
+                  (umask 027 && mkdir -p "${path}")
+              fi
+              expected_user="$(id -un)"
+              expected_group="$(id -gn)"
+              if [ "$(find "${path}" -prune -user "${expected_user}" -group "${expected_group}" -print)" != "${path}" ]; then
+                  echo "Refusing non-owner-controlled SysWarden directory: ${path}" >&2
+                  exit 1
+              fi
+              chmod go-w,o-rwx "${path}"
+              if [ -L "${path}" ] || [ ! -d "${path}" ] || \
+                 [ "$(find "${path}" -prune -user "${expected_user}" -group "${expected_group}" -print)" != "${path}" ]; then
+                  echo "SysWarden directory identity changed while securing it: ${path}" >&2
+                  exit 1
+              fi
+          }
+          for directory in \
+              /etc/syswarden \
+              /etc/syswarden/config \
+              /etc/syswarden/config/modules \
+              /etc/syswarden/lists \
+              /etc/syswarden/tls \
+              /var/lib/syswarden \
+              /var/lib/syswarden/ui; do
+              secure_private_directory "${directory}"
+          done
           if [ -f /opt/syswarden/syswarden-auto.conf ] && \
              [ ! -e /opt/syswarden/syswarden-auto.conf.migration_backup ] && \
              [ ! -e /opt/syswarden/syswarden-auto.conf.migration_backup.migrated ]; then
@@ -241,6 +396,10 @@ jobs:
           export SYSWARDEN_PKG_INSTALL=1
           ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
           ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
+
+          systemd_running() {
+              command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+          }
 
           modular_config_complete() {
               for file in \
@@ -287,9 +446,9 @@ jobs:
           fi
 
           # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
-          if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
+          if [ "$1" = "2" ] || { [ "$1" = "configure" ] && [ -n "${2:-}" ]; }; then
               /opt/syswarden/bin/syswarden-cli install
-              if command -v systemctl >/dev/null 2>&1; then
+              if systemd_running; then
                   systemctl daemon-reload
                   /opt/syswarden/bin/syswarden-cli reload
                   systemctl enable syswarden-firewall || true
@@ -305,7 +464,7 @@ jobs:
           # RPM Install ($1 = 1) or DEB Install ($1 = configure && $2 == "")
           elif [ "$1" = "1" ] || [ "$1" = "configure" ]; then
               /opt/syswarden/bin/syswarden-cli install
-              if command -v systemctl >/dev/null 2>&1; then
+              if systemd_running; then
                   systemctl restart syswarden-core || true
                   systemctl restart syswarden-webtui || true
               elif command -v rc-service >/dev/null 2>&1; then
@@ -322,20 +481,66 @@ jobs:
 
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/postrm.sh"
           #!/bin/sh
-          # RPM Uninstall ($1 = 0) or DEB Uninstall/Purge
+          systemd_running() {
+              command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+          }
+          cleanup_generated_runtime_artifacts() {
+              rm -f \
+                  /etc/systemd/system/syswarden-core.service \
+                  /etc/systemd/system/syswarden-firewall.service \
+                  /etc/systemd/system/syswarden-webtui.service \
+                  /etc/init.d/syswarden-core \
+                  /etc/init.d/syswarden-firewall \
+                  /etc/init.d/syswarden-webtui \
+                  /etc/bash_completion.d/syswarden \
+                  /etc/rsyslog.d/99-syswarden-siem.conf \
+                  /etc/rsyslog.d/99-syswarden-waf-bridge.conf
+              if command -v crontab >/dev/null 2>&1; then
+                  umask 077
+                  cron_backup="$(mktemp /var/tmp/syswarden-cron.XXXXXX)" || return 1
+                  trap 'rm -f -- "$cron_backup"' 0 1 2 15
+                  if crontab -l > "${cron_backup}" 2>/dev/null; then
+                      awk '
+                          NF == 9 && $1 == "*/30" && $2 == "*" && $3 == "*" &&
+                              $4 == "*" && $5 == "*" &&
+                              $6 == "/opt/syswarden/bin/syswarden-cli" &&
+                              $7 == "ha-sync" && $8 == ">/dev/null" && $9 == "2>&1" { next }
+                          NF == 9 && $1 ~ /^([1-9]|[1-5][0-9])$/ && $2 == "*" &&
+                              $3 == "*" && $4 == "*" && $5 == "*" &&
+                              $6 == "/opt/syswarden/bin/syswarden-cli" &&
+                              $7 == "update-feeds" && $8 == ">/dev/null" && $9 == "2>&1" { next }
+                          { print }
+                      ' "${cron_backup}" | crontab - || true
+                  fi
+                  rm -f -- "${cron_backup}"
+                  trap - 0 1 2 15
+              fi
+              if systemd_running; then
+                  systemctl daemon-reload || true
+                  systemctl try-restart rsyslog.service || true
+              elif command -v rc-service >/dev/null 2>&1; then
+                  rc-service rsyslog status >/dev/null 2>&1 && rc-service rsyslog restart || true
+              fi
+          }
+
+          # RPM final erase, DEB removal/purge, or Alpine post-remove.
+          if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+              cleanup_generated_runtime_artifacts
+              rm -f /usr/local/bin/syswarden
+              rm -f /usr/local/bin/syswarden-tui
+          fi
+          # RPM final erase and DEB purge remove configuration by contract.
           if [ "$1" = "0" ] || [ "$1" = "purge" ]; then
-            rm -f /usr/local/bin/syswarden
-            rm -f /usr/local/bin/syswarden-tui
-            rm -rf /opt/syswarden
-            rm -rf /etc/syswarden
+              rm -rf /opt/syswarden
+              rm -rf /etc/syswarden
           fi
           EOF
 
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/prerm.sh"
           #!/bin/sh
           # RPM Uninstall ($1 = 0) or DEB Uninstall/Purge
-          if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-              if command -v systemctl >/dev/null 2>&1; then
+          if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+              if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
                   systemctl stop syswarden-core.service || true
                   systemctl disable syswarden-core.service || true
                   systemctl stop syswarden-firewall.service || true
@@ -362,10 +567,21 @@ jobs:
               }
               trap 'rm -f -- "$cron_backup"' 0 1 2 15
               if crontab -l > "${cron_backup}" 2>/dev/null; then
-                  grep -v 'syswarden-cli' "${cron_backup}" | crontab - || true
+                  awk '
+                      NF == 9 && $1 == "*/30" && $2 == "*" && $3 == "*" &&
+                          $4 == "*" && $5 == "*" &&
+                          $6 == "/opt/syswarden/bin/syswarden-cli" &&
+                          $7 == "ha-sync" && $8 == ">/dev/null" && $9 == "2>&1" { next }
+                      NF == 9 && $1 ~ /^([1-9]|[1-5][0-9])$/ && $2 == "*" &&
+                          $3 == "*" && $4 == "*" && $5 == "*" &&
+                          $6 == "/opt/syswarden/bin/syswarden-cli" &&
+                          $7 == "update-feeds" && $8 == ">/dev/null" && $9 == "2>&1" { next }
+                      { print }
+                  ' "${cron_backup}" | crontab - || true
               fi
               rm -f -- "${cron_backup}"
               trap - 0 1 2 15
+              rm -f /etc/rsyslog.d/99-syswarden-siem.conf || true
               rm -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true
           fi
           EOF
@@ -386,6 +602,7 @@ jobs:
             --url "https://github.com/${{ github.repository }}" \
             --architecture amd64 \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
+            -d "wireguard-tools" -d "qrencode" -d "jq" \
             --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
             --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
             --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
@@ -402,6 +619,7 @@ jobs:
             --url "https://github.com/${{ github.repository }}" \
             --architecture arm64 \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
+            -d "wireguard-tools" -d "qrencode" -d "jq" \
             --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
             --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
             --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
@@ -421,6 +639,7 @@ jobs:
             --url "https://github.com/${{ github.repository }}" \
             --architecture x86_64 \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
+            -d "wireguard-tools" -d "qrencode" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
             --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
             --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
             --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
@@ -437,6 +656,7 @@ jobs:
             --url "https://github.com/${{ github.repository }}" \
             --architecture aarch64 \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
+            -d "wireguard-tools" -d "qrencode" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
             --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
             --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
             --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
@@ -466,10 +686,13 @@ jobs:
             - rsyslog
             - rsyslog-uxsock
             - bash-completion
+            - wireguard-tools
+            - libqrencode-tools
+            - jq
           contents:
-            - src: "${STAGING_AMD64}/opt"
+            - src: "${STAGING_APK_AMD64}/opt"
               dst: "/opt"
-            - src: "${STAGING_AMD64}/usr"
+            - src: "${STAGING_APK_AMD64}/usr"
               dst: "/usr"
           scripts:
             preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"
@@ -494,10 +717,13 @@ jobs:
             - rsyslog
             - rsyslog-uxsock
             - bash-completion
+            - wireguard-tools
+            - libqrencode-tools
+            - jq
           contents:
-            - src: "${STAGING_ARM64}/opt"
+            - src: "${STAGING_APK_ARM64}/opt"
               dst: "/opt"
-            - src: "${STAGING_ARM64}/usr"
+            - src: "${STAGING_APK_ARM64}/usr"
               dst: "/usr"
           scripts:
             preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"
@@ -518,7 +744,9 @@ jobs:
       - name: Prepare FreeBSD Staging Environment
         run: |
           set -euo pipefail
-          install -d -m 0755 "${STAGING_FREEBSD}/usr/local/syswarden/bin"
+          install -d -m 0755 \
+            "${STAGING_FREEBSD}/usr/local/syswarden/bin" \
+            "${STAGING_FREEBSD}/usr/local/etc/rc.d"
           cp src/core/syswarden-core/signatures.json \
             "${STAGING_FREEBSD}/usr/local/syswarden/"
           cp dist/freebsd/bin/syswarden-cli \
@@ -532,10 +760,59 @@ jobs:
             "${STAGING_FREEBSD}/usr/local/syswarden/bin/syswarden-core" \
             "${STAGING_FREEBSD}/usr/local/syswarden/bin/syswarden-tui"
           chmod 0640 "${STAGING_FREEBSD}/usr/local/syswarden/signatures.json"
+          install -m 0755 testdata/services/freebsd-syswarden.rc \
+            "${STAGING_FREEBSD}/usr/local/etc/rc.d/syswarden"
+          install -m 0755 testdata/services/freebsd-syswardenwebtui.rc \
+            "${STAGING_FREEBSD}/usr/local/etc/rc.d/syswardenwebtui"
 
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/preinst_fbsd.sh"
           #!/bin/sh
           set -e
+          secure_private_directory() {
+              path="$1"
+              if [ -L "${path}" ] || { [ -e "${path}" ] && [ ! -d "${path}" ]; }; then
+                  echo "Refusing unsafe SysWarden directory: ${path}" >&2
+                  exit 1
+              fi
+              if [ ! -d "${path}" ]; then
+                  (umask 027 && mkdir -p "${path}")
+              fi
+              expected_user="$(id -un)"
+              expected_group="$(id -gn)"
+              if [ "$(find "${path}" -prune -user "${expected_user}" -group "${expected_group}" -print)" != "${path}" ]; then
+                  echo "Refusing non-owner-controlled SysWarden directory: ${path}" >&2
+                  exit 1
+              fi
+              chmod go-w,o-rwx "${path}"
+              if [ -L "${path}" ] || [ ! -d "${path}" ] || \
+                 [ "$(find "${path}" -prune -user "${expected_user}" -group "${expected_group}" -print)" != "${path}" ]; then
+                  echo "SysWarden directory identity changed while securing it: ${path}" >&2
+                  exit 1
+              fi
+          }
+          for directory in \
+              /etc/syswarden \
+              /etc/syswarden/config \
+              /etc/syswarden/config/modules \
+              /etc/syswarden/lists \
+              /etc/syswarden/tls \
+              /var/lib/syswarden \
+              /var/db/syswarden; do
+              secure_private_directory "${directory}"
+          done
+          transition_marker=/var/db/syswarden/pf-transition-v4.02.8
+          rm -f "${transition_marker}"
+          if pkg info -e syswarden >/dev/null 2>&1 && \
+             [ "$(pkg query '%v' syswarden 2>/dev/null || true)" = "4.02.8" ]; then
+              marker_tmp=${transition_marker}.tmp
+              umask 077
+              printf '%s\n' 'legacy_derived:v4.02.8' > "${marker_tmp}"
+              chmod 0600 "${marker_tmp}"
+              mv -f "${marker_tmp}" "${transition_marker}"
+          fi
+          rm -f \
+              /usr/local/syswarden/.postinstall-ok \
+              /usr/local/syswarden/.postinstall-ok.tmp
           if [ -f /usr/local/syswarden/syswarden-auto.conf ] && \
              [ ! -e /usr/local/syswarden/syswarden-auto.conf.migration_backup ] && \
              [ ! -e /usr/local/syswarden/syswarden-auto.conf.migration_backup.migrated ]; then
@@ -549,6 +826,14 @@ jobs:
           export SYSWARDEN_PKG_INSTALL=1
           ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
           ln -sf /usr/local/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
+          transition_marker=/var/db/syswarden/pf-transition-v4.02.8
+          if [ -f "${transition_marker}" ] && \
+             [ "$(cat "${transition_marker}")" = "legacy_derived:v4.02.8" ]; then
+              /usr/local/syswarden/bin/syswarden-cli package-capture-pf --legacy-v4-02-8
+          else
+              /usr/local/syswarden/bin/syswarden-cli package-capture-pf
+          fi
+          rm -f "${transition_marker}"
           modular_config_complete() {
               for file in \
                   /etc/syswarden/config/config.toml \
@@ -564,6 +849,7 @@ jobs:
           }
           migrate_legacy_configuration() {
               source=/usr/local/syswarden/syswarden-auto.conf.migration_backup
+              backup=/etc/syswarden/config/syswarden-auto.conf.bak
               marker=/etc/syswarden/config/.migration-in-progress
               if [ -f "${marker}" ]; then
                   /usr/local/syswarden/bin/syswarden-cli migrate-config --source "${source}" --output /etc/syswarden/config
@@ -571,31 +857,93 @@ jobs:
                   /usr/local/syswarden/bin/syswarden-cli migrate-config --source "${source}" --output /etc/syswarden/config
               fi
               if [ -f "${source}.migrated" ]; then
-                  mv "${source}.migrated" /usr/local/syswarden/syswarden-auto.conf.bak
+                  preserved=${source}.migrated
               elif [ -f "${source}" ] && [ ! -f "${marker}" ] && modular_config_complete; then
-                  mv "${source}" /usr/local/syswarden/syswarden-auto.conf.bak
+                  preserved=${source}
+              else
+                  preserved=
+              fi
+              if [ -n "${preserved}" ]; then
+                  if [ -f "${backup}" ]; then
+                      cmp -s "${preserved}" "${backup}" || {
+                          echo "Refusing to overwrite a different preserved legacy configuration" >&2
+                          return 1
+                      }
+                      rm -f "${preserved}"
+                  else
+                      mv "${preserved}" "${backup}"
+                  fi
+                  chmod 0600 "${backup}"
               fi
           }
           migrate_legacy_configuration
           /usr/local/bin/syswarden install
-          service syswarden restart || true
+          service syswarden restart
+          service syswarden onestatus
+          service syswardenwebtui restart
+          service syswardenwebtui onestatus
+          marker=/usr/local/syswarden/.postinstall-ok
+          marker_tmp=/usr/local/syswarden/.postinstall-ok.tmp
+          umask 077
+          printf '%s\n' 'syswarden-freebsd-postinstall-v1' > "${marker_tmp}"
+          chmod 0600 "${marker_tmp}"
+          mv -f "${marker_tmp}" "${marker}"
           EOF
 
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/postrm_fbsd.sh"
           #!/bin/sh
+          set -eu
+          if command -v crontab >/dev/null 2>&1; then
+              umask 077
+              cron_backup="$(mktemp -t syswarden-cron)" || exit 1
+              trap 'rm -f -- "$cron_backup"' 0 1 2 15
+              if crontab -l > "${cron_backup}" 2>/dev/null; then
+                  awk '
+                      NF == 9 && $1 == "*/30" && $2 == "*" && $3 == "*" &&
+                          $4 == "*" && $5 == "*" &&
+                          ($6 == "/usr/local/syswarden/bin/syswarden-cli" ||
+                           $6 == "/opt/syswarden/bin/syswarden-cli") &&
+                          $7 == "ha-sync" && $8 == ">/dev/null" && $9 == "2>&1" { next }
+                      NF == 9 && $1 ~ /^([1-9]|[1-5][0-9])$/ && $2 == "*" &&
+                          $3 == "*" && $4 == "*" && $5 == "*" &&
+                          ($6 == "/usr/local/syswarden/bin/syswarden-cli" ||
+                           $6 == "/opt/syswarden/bin/syswarden-cli") &&
+                          $7 == "update-feeds" && $8 == ">/dev/null" && $9 == "2>&1" { next }
+                      { print }
+                  ' "${cron_backup}" | crontab - || true
+              fi
+              rm -f -- "${cron_backup}"
+              trap - 0 1 2 15
+          fi
+          rm -f /usr/local/etc/rsyslog.d/99-syswarden-siem.conf
+          rm -f /usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf
           rm -f /usr/local/bin/syswarden
           rm -f /usr/local/bin/syswarden-tui
+          rm -f /usr/local/etc/rc.d/syswarden
+          rm -f /usr/local/etc/rc.d/syswardenwebtui
           rm -rf /usr/local/syswarden
+          rmdir /var/db/syswarden 2>/dev/null || true
           EOF
 
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/prerm_fbsd.sh"
           #!/bin/sh
-          service syswarden stop || true
+          set -eu
+          service syswarden onestop >/dev/null 2>&1 || true
+          if service syswarden onestatus >/dev/null 2>&1; then
+              echo "syswarden service is still running; PF restore is unsafe" >&2
+              exit 1
+          fi
+          service syswardenwebtui onestop >/dev/null 2>&1 || true
+          if service syswardenwebtui onestatus >/dev/null 2>&1; then
+              echo "syswardenwebtui service is still running; package removal is unsafe" >&2
+              exit 1
+          fi
           sysrc -x syswarden_enable || true
-          pfctl -t syswarden_blacklist -T kill || true
-          pfctl -t syswarden_blacklist6 -T kill || true
-          pfctl -t syswarden_whitelist -T kill || true
-          pfctl -t banned_ips -T kill || true
+          sysrc -x syswardenwebtui_enable || true
+          rm -f /usr/local/etc/rsyslog.d/99-syswarden-siem.conf
+          rm -f /usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf
+          /usr/local/syswarden/bin/syswarden-cli package-restore-host-state
+          /usr/local/syswarden/bin/syswarden-cli package-restore-pf
           EOF
           chmod 0755 \
             "${PACKAGE_SCRIPTS}/preinst_fbsd.sh" \
@@ -622,11 +970,14 @@ jobs:
             --description "SysWarden Host-based Security Orchestrator for FreeBSD" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture amd64 \
+            --freebsd-osversion 14 \
             --before-install "${PACKAGE_SCRIPTS}/preinst_fbsd.sh" \
             --after-install "${PACKAGE_SCRIPTS}/postinst_fbsd.sh" \
             --before-remove "${PACKAGE_SCRIPTS}/prerm_fbsd.sh" \
             --after-remove "${PACKAGE_SCRIPTS}/postrm_fbsd.sh" \
             -C "${STAGING_FREEBSD}" .
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_package_manifest.py \
+            finalize "${PACKAGE_ASSETS}/syswarden-${VERSION}.txz"
 
       - name: Validate Package Metadata
         shell: bash
@@ -686,10 +1037,12 @@ jobs:
           freebsd_manifest="$(tar --extract --to-stdout \
             --file "${PACKAGE_ASSETS}/syswarden-${VERSION}.txz" \
             +COMPACT_MANIFEST)"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_package_manifest.py \
+            verify "${PACKAGE_ASSETS}/syswarden-${VERSION}.txz"
           jq --exit-status \
             --arg name syswarden \
             --arg version "${VERSION}" \
-            '.name == $name and .version == $version' \
+            '.name == $name and .version == $version and .arch == "FreeBSD:14:amd64" and (.deps | keys) == ["curl", "jq", "libqrencode", "rsyslog", "wireguard-tools"]' \
             <<< "${freebsd_manifest}"
 
       - name: Generate Checksums

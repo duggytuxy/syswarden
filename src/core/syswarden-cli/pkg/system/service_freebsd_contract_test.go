@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,15 @@ func TestFreeBSDRCScriptsGolden_SW_PKG_001(t *testing.T) {
 		t.Run(variable, func(t *testing.T) {
 			t.Parallel()
 			got := extractAssignedString(t, sourcePath, variable)
+			if !strings.Contains(got, `check_pidfile "${pidfile}" "${procname}"`) {
+				t.Fatal("FreeBSD rc.d start must reject a stale or unrelated pidfile by process identity")
+			}
+			if !strings.Contains(got, `procname="${command}"`) {
+				t.Fatal("FreeBSD rc.d must bind pidfile validation to the native executable")
+			}
+			if strings.Contains(got, "stop_cmd=") || strings.Contains(got, "kill -0") {
+				t.Fatal("FreeBSD rc.d stop must use rc.subr check_pidfile and wait_for_pids semantics")
+			}
 			if os.Getenv("SYSWARDEN_UPDATE_CONTRACT_GOLDENS") == "1" {
 				if err := os.WriteFile(fixturePath, []byte(got), 0600); err != nil {
 					t.Fatalf("update rc.d golden: %v", err)
@@ -41,6 +51,36 @@ func TestFreeBSDRCScriptsGolden_SW_PKG_001(t *testing.T) {
 				t.Fatalf("FreeBSD rc.d script changed; review startup, stop, paths, permissions and ordering before updating %s", fixturePath)
 			}
 		})
+	}
+}
+
+func TestFreeBSDServiceSetupFailsClosedOnEnableAndStartErrors_SW_PKG_001(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source path")
+	}
+	root, err := os.OpenRoot(filepath.Dir(currentFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	content, err := root.ReadFile("service_freebsd.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	for _, required := range []string{
+		`exec.Command("sysrc", "-n", "syswarden_enable")`,
+		`exec.Command("service", "syswarden", "onestatus")`,
+		`exec.Command("sysrc", "-n", "syswardenwebtui_enable")`,
+		`exec.Command("service", "syswardenwebtui", "onestatus")`,
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("FreeBSD service setup lacks %q", required)
+		}
+	}
+	if strings.Contains(source, "Failed to start syswarden") || strings.Contains(source, "Failed to enable syswarden") {
+		t.Fatal("FreeBSD service setup must return enable/start failures, not log false success")
 	}
 }
 

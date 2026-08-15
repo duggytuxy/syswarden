@@ -13,6 +13,7 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 PACKAGE_WORKFLOW = REPOSITORY / ".github" / "workflows" / "package.yml"
+BUILD_SCRIPT = REPOSITORY / "build.ps1"
 
 
 class PackageLifecycleContractTests(unittest.TestCase):
@@ -55,6 +56,12 @@ class PackageLifecycleContractTests(unittest.TestCase):
         end = script.index(invocation, start) + len(invocation)
         return script[start:end]
 
+    def secure_directory_function(self, script_name: str) -> str:
+        script = self.script(script_name)
+        start = script.index("secure_private_directory() {")
+        end = script.index("\n}\n", start) + len("\n}\n")
+        return script[start:end]
+
     def test_linux_package_family_and_architecture_matrix(self) -> None:
         required_assets = {
             'syswarden_${VERSION}_amd64.deb',
@@ -78,6 +85,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
         for variable, suffix in (
             ("STAGING_AMD64", "staging-amd64"),
             ("STAGING_ARM64", "staging-arm64"),
+            ("STAGING_APK_AMD64", "staging-apk-amd64"),
+            ("STAGING_APK_ARM64", "staging-apk-arm64"),
             ("STAGING_FREEBSD", "staging-freebsd"),
             ("PACKAGE_ASSETS", "assets"),
             ("PACKAGE_SCRIPTS", "scripts"),
@@ -91,11 +100,13 @@ class PackageLifecycleContractTests(unittest.TestCase):
 
         self.assertEqual(
             self.workflow.count("scripts/ci/package_stage_gate.py"),
-            3,
+            5,
         )
         for platform, root in (
             ("linux", "STAGING_AMD64"),
             ("linux", "STAGING_ARM64"),
+            ("linux", "STAGING_APK_AMD64"),
+            ("linux", "STAGING_APK_ARM64"),
             ("freebsd", "STAGING_FREEBSD"),
         ):
             with self.subTest(platform=platform, root=root):
@@ -166,7 +177,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn('export SYSWARDEN_PKG_INSTALL=1', postinstall)
         self.assertIn("set -e", postinstall)
         self.assertIn('[ "$1" = "2" ]', postinstall)
-        self.assertIn('[ "$1" = "configure" -a -n "$2" ]', postinstall)
+        self.assertIn(
+            '{ [ "$1" = "configure" ] && [ -n "${2:-}" ]; }',
+            postinstall,
+        )
         self.assertIn('! modular_config_complete', postinstall)
         self.assertIn('marker=/etc/syswarden/config/.migration-in-progress', postinstall)
         self.assertIn('mv "${source}.migrated" /opt/syswarden/syswarden-auto.conf.bak', postinstall)
@@ -178,12 +192,55 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn('/opt/syswarden/bin/syswarden-cli install', postinstall)
         self.assertIn('[ -f /etc/alpine-release ]', postinstall)
 
+    def test_package_preinstall_tightens_directories_and_rejects_links(self) -> None:
+        for script_name in ("preinst.sh", "preinst_fbsd.sh"):
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                private = root / "private"
+                private.mkdir(mode=0o755)
+                private.chmod(0o755)
+                function = self.secure_directory_function(script_name)
+                self.assertIn("find", function)
+                self.assertIn("-user", function)
+                self.assertIn("-group", function)
+                self.assertIn("identity changed while securing", function)
+
+                tightened = subprocess.run(
+                    ["/bin/sh", "-c", function + '\nsecure_private_directory "$1"', "probe", str(private)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(tightened.returncode, 0, tightened)
+                self.assertEqual(private.stat().st_mode & 0o777, 0o750)
+
+                target = root / "target"
+                target.mkdir(mode=0o700)
+                link = root / "link"
+                link.symlink_to(target, target_is_directory=True)
+                rejected = subprocess.run(
+                    ["/bin/sh", "-c", function + '\nsecure_private_directory "$1"', "probe", str(link)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(rejected.returncode, 0, rejected)
+                self.assertIn("Refusing unsafe SysWarden directory", rejected.stderr)
+                self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+
     def test_linux_remove_and_purge_contract(self) -> None:
         preremove = self.script("prerm.sh")
         self.assertNotIn("/tmp/sw_cron.bak", preremove)
         self.assertIn("mktemp /var/tmp/syswarden-cron.XXXXXX", preremove)
         self.assertIn("umask 077", preremove)
         self.assertIn("trap 'rm -f -- \"$cron_backup\"' 0 1 2 15", preremove)
+        self.assertIn('$7 == "ha-sync"', preremove)
+        self.assertIn('$7 == "update-feeds"', preremove)
+        self.assertIn('$6 == "/opt/syswarden/bin/syswarden-cli"', preremove)
+        self.assertNotIn(
+            "grep -F -v '/opt/syswarden/bin/syswarden-cli'", preremove
+        )
+        self.assertNotIn("grep -v 'syswarden-cli'", preremove)
         postremove = self.script("postrm.sh")
         for state in ('"0"', '"remove"', '"purge"'):
             self.assertIn(f'[ "$1" = {state} ]', preremove)
@@ -201,9 +258,55 @@ class PackageLifecycleContractTests(unittest.TestCase):
             self.assertIn(f"nft delete table {table}", preremove)
         self.assertIn('[ "$1" = "0" ]', postremove)
         self.assertIn('[ "$1" = "purge" ]', postremove)
-        self.assertNotIn('[ "$1" = "remove" ]', postremove)
+        self.assertIn('[ "$1" = "remove" ]', postremove)
+        self.assertIn("[ -f /etc/alpine-release ]", postremove)
         self.assertIn("rm -rf /opt/syswarden", postremove)
         self.assertIn("rm -rf /etc/syswarden", postremove)
+        self.assertIn("cleanup_generated_runtime_artifacts", postremove)
+        for generated in (
+            "/etc/systemd/system/syswarden-core.service",
+            "/etc/systemd/system/syswarden-firewall.service",
+            "/etc/systemd/system/syswarden-webtui.service",
+            "/etc/init.d/syswarden-core",
+            "/etc/init.d/syswarden-firewall",
+            "/etc/init.d/syswarden-webtui",
+            "/etc/bash_completion.d/syswarden",
+            "/etc/rsyslog.d/99-syswarden-siem.conf",
+            "/etc/rsyslog.d/99-syswarden-waf-bridge.conf",
+        ):
+            self.assertIn(generated, postremove)
+        self.assertIn('$7 == "ha-sync"', postremove)
+        self.assertIn('$7 == "update-feeds"', postremove)
+        self.assertNotIn("grep -F -v '/opt/syswarden/bin/syswarden-cli'", postremove)
+        self.assertIn("[ -d /run/systemd/system ]", postremove)
+
+    def test_linux_postinstall_does_not_treat_systemctl_presence_as_active_systemd(self) -> None:
+        postinstall = self.script("postinst.sh")
+        self.assertIn("systemd_running()", postinstall)
+        self.assertIn("[ -d /run/systemd/system ]", postinstall)
+        self.assertIn("systemctl daemon-reload\n", postinstall)
+        self.assertIn("/opt/syswarden/bin/syswarden-cli reload\n", postinstall)
+        self.assertNotIn("systemctl daemon-reload || true", postinstall)
+
+    def test_linux_packages_declare_every_runtime_dependency(self) -> None:
+        for dependency in (
+            "wireguard-tools",
+            "qrencode",
+            "jq",
+        ):
+            self.assertGreaterEqual(
+                self.workflow.count(f'-d "{dependency}"'),
+                4,
+                dependency,
+            )
+        for dependency in ("checkpolicy", "policycoreutils-python-utils"):
+            self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 2)
+        for dependency in ("wireguard-tools", "libqrencode-tools", "jq"):
+            self.assertGreaterEqual(
+                self.workflow.count(f"            - {dependency}\n"),
+                2,
+                dependency,
+            )
 
     def test_freebsd_package_lifecycle_contract(self) -> None:
         preinstall = self.script("preinst_fbsd.sh")
@@ -221,11 +324,53 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("/usr/local/bin/syswarden install", postinstall)
         self.assertIn("set -e", postinstall)
         self.assertNotRegex(postinstall, r"migrate-config[^\n]*\|\|\s*true")
-        self.assertIn("service syswarden restart || true", postinstall)
-        self.assertIn("service syswarden stop || true", preremove)
+        for command in (
+            "service syswarden restart",
+            "service syswarden onestatus",
+            "service syswardenwebtui restart",
+            "service syswardenwebtui onestatus",
+        ):
+            self.assertIn(command, postinstall)
+        self.assertNotRegex(
+            postinstall,
+            r"service syswarden(?:webtui)? (?:restart|onestatus)\s*\|\|\s*true",
+        )
+        self.assertIn("/usr/local/syswarden/.postinstall-ok", preinstall)
+        self.assertIn("syswarden-freebsd-postinstall-v1", postinstall)
+        self.assertLess(
+            postinstall.index("/usr/local/bin/syswarden install"),
+            postinstall.index("syswarden-freebsd-postinstall-v1"),
+        )
+        self.assertIn("service syswarden onestop", preremove)
+        self.assertIn("service syswarden onestatus", preremove)
+        self.assertIn("service syswardenwebtui onestop", preremove)
+        self.assertIn("service syswardenwebtui onestatus", preremove)
         self.assertIn("sysrc -x syswarden_enable || true", preremove)
+        self.assertIn("set -eu", preremove)
+        self.assertIn(
+            "/usr/local/syswarden/bin/syswarden-cli package-restore-host-state",
+            preremove,
+        )
+        self.assertIn(
+            "/usr/local/syswarden/bin/syswarden-cli package-restore-pf",
+            preremove,
+        )
+        self.assertLess(
+            preremove.index("package-restore-host-state"),
+            preremove.index("package-restore-pf"),
+        )
+        self.assertNotIn("pfctl -t", preremove)
         self.assertIn("rm -rf /usr/local/syswarden", postremove)
+        self.assertIn("set -eu", postremove)
         self.assertNotIn("rm -rf /etc/syswarden", postremove)
+        self.assertIn("$7 == \"ha-sync\"", postremove)
+        self.assertIn("$7 == \"update-feeds\"", postremove)
+        self.assertIn("$6 == \"/usr/local/syswarden/bin/syswarden-cli\"", postremove)
+        self.assertIn("$6 == \"/opt/syswarden/bin/syswarden-cli\"", postremove)
+        self.assertIn("/usr/local/etc/rsyslog.d/99-syswarden-siem.conf", postremove)
+        self.assertIn("/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf", postremove)
+        self.assertNotIn("service rsyslogd restart", postremove)
+        self.assertIn("rmdir /var/db/syswarden", postremove)
 
     def test_package_migration_state_machine_is_retry_safe_and_preserves_modular_bytes(self) -> None:
         platforms = (
@@ -239,7 +384,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "postinst_fbsd.sh",
                 "/usr/local/syswarden/bin/syswarden-cli",
                 "/usr/local/syswarden/syswarden-auto.conf.migration_backup",
-                "/usr/local/syswarden/syswarden-auto.conf.bak",
+                "/etc/syswarden/config/syswarden-auto.conf.bak",
             ),
         )
         for script_name, cli_path, source_path, backup_path in platforms:
@@ -398,9 +543,48 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         self.assertIn('[[ "${package_architecture}" == "${architecture}" ]]', self.workflow)
 
-    def test_freebsd_runtime_path_divergence_is_explicitly_frozen(self) -> None:
+    def test_package_formats_use_their_exact_linux_binary_variants(self) -> None:
+        build_script = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("BuildMode = 'pie'", build_script)
+        self.assertNotIn("-ldflags=-s -w -d", build_script)
+        self.assertIn("validate_linux_pie", self.workflow)
+        self.assertIn("validate_static_apk_binary", self.workflow)
+        self.assertIn("STAGING_APK_AMD64", self.workflow)
+        self.assertIn("STAGING_APK_ARM64", self.workflow)
+        self.assertIn('elf_type}" == "EXEC"', self.workflow)
+        self.assertIn("CGO_ENABLED=0", self.workflow)
+        self.assertIn(
+            '"${STAGING_APK_AMD64}/opt/syswarden/bin/syswarden-cli" --help',
+            self.workflow,
+        )
+        self.assertIn(
+            "docker.io/library/alpine:3.22@sha256:"
+            "7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6",
+            self.workflow,
+        )
+        self.assertIn("/usr/local/bin/syswarden --help", self.workflow)
+        for generic_root in ("STAGING_AMD64", "STAGING_ARM64"):
+            with self.subTest(generic_root=generic_root):
+                self.assertEqual(
+                    self.workflow.count(f'-C "${{{generic_root}}}" .'),
+                    2,
+                )
+        for apk_root in ("STAGING_APK_AMD64", "STAGING_APK_ARM64"):
+            with self.subTest(apk_root=apk_root):
+                self.assertIn(f'- src: "${{{apk_root}}}/opt"', self.workflow)
+
+    def test_freebsd_package_uses_one_native_runtime_prefix(self) -> None:
         core_main = (
             REPOSITORY / "src" / "core" / "syswarden-core" / "main.go"
+        ).read_text(encoding="utf-8")
+        runtime_paths = (
+            REPOSITORY
+            / "src"
+            / "core"
+            / "syswarden-core"
+            / "internal"
+            / "runtimepaths"
+            / "paths.go"
         ).read_text(encoding="utf-8")
         service_source = (
             REPOSITORY
@@ -412,9 +596,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
             / "service_freebsd.go"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            'NewEngine("/opt/syswarden/signatures.json"',
+            "engine.NewEngine(runtimepaths.Signatures()",
             core_main,
         )
+        self.assertIn('freeBSDInstallRoot = "/usr/local/syswarden"', runtime_paths)
         self.assertIn(
             'STAGING_FREEBSD="${PACKAGE_WORKSPACE}/staging-freebsd"',
             self.workflow,
@@ -424,7 +609,29 @@ class PackageLifecycleContractTests(unittest.TestCase):
             r"cp\s+src/core/syswarden-core/signatures\.json\s+\\\s+"
             r'"\$\{STAGING_FREEBSD\}/usr/local/syswarden/"',
         )
-        self.assertIn('command="/opt/syswarden/syswarden-core"', service_source)
+        self.assertIn('command="/usr/local/syswarden/bin/syswarden-core"', service_source)
+        self.assertIn('command="/usr/local/syswarden/bin/syswarden-cli"', service_source)
+        self.assertNotIn('command="/opt/syswarden', service_source)
+        self.assertIn('--freebsd-osversion 14', self.workflow)
+        self.assertIn('.arch == "FreeBSD:14:amd64"', self.workflow)
+        self.assertIn(
+            "scripts/ci/freebsd_package_manifest.py", self.workflow
+        )
+        for dependency in (
+            "curl",
+            "jq",
+            "libqrencode",
+            "rsyslog",
+            "wireguard-tools",
+        ):
+            with self.subTest(freebsd_dependency=dependency):
+                self.assertIn(dependency, self.workflow)
+        for script in ("syswarden", "syswardenwebtui"):
+            with self.subTest(rc_script=script):
+                self.assertIn(
+                    f'"${{STAGING_FREEBSD}}/usr/local/etc/rc.d/{script}"',
+                    self.workflow,
+                )
         for binary in ("syswarden-cli", "syswarden-core", "syswarden-tui"):
             with self.subTest(binary=binary):
                 self.assertRegex(

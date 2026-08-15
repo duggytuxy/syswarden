@@ -57,6 +57,14 @@ FREEBSD_ENTRIES = {
     ".": DIRECTORY,
     "usr": DIRECTORY,
     "usr/local": DIRECTORY,
+    "usr/local/etc": DIRECTORY,
+    "usr/local/etc/rc.d": DIRECTORY,
+    "usr/local/etc/rc.d/syswarden": ExpectedEntry(
+        "file", mode=0o755, nonempty=True
+    ),
+    "usr/local/etc/rc.d/syswardenwebtui": ExpectedEntry(
+        "file", mode=0o755, nonempty=True
+    ),
     "usr/local/syswarden": DIRECTORY,
     "usr/local/syswarden/bin": DIRECTORY,
     "usr/local/syswarden/bin/syswarden-cli": ExpectedEntry(

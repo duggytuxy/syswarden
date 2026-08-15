@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/platformpaths"
 	"syswarden-cli/pkg/system"
 
 	"github.com/spf13/cobra"
@@ -39,7 +40,7 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(func() { initConfigHook() })
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "/opt/syswarden/syswarden-auto.conf", "config file")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", platformpaths.LegacyConfig, "config file")
 }
 
 var initConfigHook = initConfig

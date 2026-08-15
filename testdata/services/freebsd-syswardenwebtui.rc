@@ -9,29 +9,27 @@
 name="syswardenwebtui"
 rcvar="syswardenwebtui_enable"
 
-command="/opt/syswarden/bin/syswarden-cli"
-command_args="web-tui &"
+command="/usr/local/syswarden/bin/syswarden-cli"
+procname="${command}"
 pidfile="/var/run/${name}.pid"
+required_files="${command}"
 
 load_rc_config $name
 : ${syswardenwebtui_enable:="NO"}
 
 start_cmd="webtui_start"
-stop_cmd="webtui_stop"
 
 webtui_start() {
-    echo "Starting SYSWARDEN Web-TUI..."
-    /usr/sbin/daemon -p ${pidfile} ${command} web-tui
-}
-
-webtui_stop() {
-    if [ -f ${pidfile} ]; then
-        echo "Stopping SYSWARDEN Web-TUI..."
-        kill $(cat ${pidfile})
-        rm -f ${pidfile}
-    else
-        echo "SYSWARDEN Web-TUI is not running."
+    running_pid="$(check_pidfile "${pidfile}" "${procname}")"
+    if [ -n "${running_pid}" ]; then
+        echo "SYSWARDEN Web-TUI is already running as ${running_pid}."
+        return 0
     fi
+    if [ -f "${pidfile}" ]; then
+        rm -f "${pidfile}"
+    fi
+    echo "Starting SYSWARDEN Web-TUI..."
+    /usr/sbin/daemon -f -p "${pidfile}" "${command}" web-tui
 }
 
 run_rc_command "$1"

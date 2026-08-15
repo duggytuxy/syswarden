@@ -82,12 +82,15 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.workflow.count("name: syswarden-release-qualification"), 2
         )
 
-    def test_environment_api_enforces_review_and_main_only(self) -> None:
+    def test_environment_api_enforces_automatic_qualification_and_main_only(self) -> None:
         required = (
             "environments/syswarden-release-qualification",
             '.type == "required_reviewers"',
-            ".prevent_self_review == true",
-            '(.reviewers | length) > 0',
+            '.type == "branch_policy"',
+            '"${reviewer_rule_count}" != "0"',
+            '"${branch_policy_rule_count}" != "1"',
+            '"${protection_rule_count}" != "1"',
+            "must require no reviewer or wait gate",
             ".deployment_branch_policy.protected_branches",
             ".deployment_branch_policy.custom_branch_policies",
             "deployment-branch-policies",
@@ -97,6 +100,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         )
         for contract in required:
             self.assertIn(contract, self.workflow)
+        self.assertNotIn(".prevent_self_review == true", self.workflow)
+        self.assertNotIn("(.reviewers | length) > 0", self.workflow)
         self.assertGreaterEqual(
             self.workflow.count("gh api --paginate --slurp --method GET"), 3
         )
@@ -193,6 +198,72 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(self.workflow.count("set +e"), 5)
         self.assertIn("--ssh-host 127.0.0.1", self.workflow)
 
+    def test_signed_freebsd_updater_is_built_bound_run_and_recomputed(self) -> None:
+        build = self.workflow.split(
+            "      - name: Build Exact FreeBSD Signed Updater Qualification Binary\n",
+            1,
+        )[1].split("      - name:", 1)[0]
+        probe = self.workflow.split(
+            "      - name: Run and Recompute Signed FreeBSD Updater Transition\n",
+            1,
+        )[1].split("      - name:", 1)[0]
+        self.assertIn("GOOS=freebsd", build)
+        self.assertIn("GOARCH=amd64", build)
+        self.assertIn("GOAMD64=v1", build)
+        self.assertIn("CGO_ENABLED=0", build)
+        self.assertIn("GOFLAGS=-mod=readonly", build)
+        self.assertIn("GOTOOLCHAIN=local", build)
+        self.assertIn("-buildvcs=true", build)
+        self.assertIn("./pkg/system", build)
+        self.assertIn(
+            "freeBSDUpdaterQualificationSourceSHA=${RELEASE_SHA}", build
+        )
+        self.assertIn('test -z "$(git status --porcelain=v1 --untracked-files=all)"', build)
+        self.assertNotIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", build)
+
+        for contract in (
+            "scripts/ci/freebsd_updater_vm_probe.py",
+            'run "${common_arguments[@]}"',
+            'verify "${common_arguments[@]}"',
+            '--packages-dir "${CANDIDATE_PACKAGES_DIR}"',
+            '--previous-packages-dir "${PREVIOUS_PACKAGES_DIR}"',
+            '--manifest "${ARTIFACT_ROOT}/update/syswarden-update-manifest-v1.json"',
+            '--signature "${ARTIFACT_ROOT}/update/syswarden-update-manifest-v1.json.sig"',
+            '--test-binary "${TOOLS_DIR}/syswarden-updater-freebsd.test"',
+            '--release-sha "${RELEASE_SHA}"',
+            '--ssh-host 127.0.0.1',
+            '--vm-marker-token-file "${FREEBSD_MARKER_TOKEN_FILE}"',
+            '--output "${report}"',
+            '"${STATUS_DIR}/freebsd-updater.rc"',
+            '"${STATUS_DIR}/freebsd-updater-verify.rc"',
+        ):
+            self.assertIn(contract, probe)
+        self.assertNotIn("set -x", probe)
+        self.assertNotIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", probe)
+        self.assertLess(
+            self.workflow.index("Generate and Verify Signed Update Manifest"),
+            self.workflow.index("Run and Recompute Signed FreeBSD Updater Transition"),
+        )
+        self.assertLess(
+            self.workflow.index("Run and Recompute Signed FreeBSD Updater Transition"),
+            self.workflow.index("Seal Exact Qualification Evidence Inventory"),
+        )
+        verdict = self.workflow.split(
+            "      - name: Enforce Final Release Qualification Verdict\n",
+            1,
+        )[1]
+        self.assertIn(
+            "SIGNED_UPDATE_REQUIRED: ${{ steps.update_contract.outputs.required }}",
+            verdict,
+        )
+        self.assertIn(
+            'jq --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}"',
+            verdict,
+        )
+        self.assertIn('if $signed_update_required then [', verdict)
+        self.assertEqual(verdict.count('"freebsd_updater"'), 1)
+        self.assertEqual(verdict.count('"freebsd_updater_verify"'), 1)
+
     def test_freebsd_secrets_are_files_mode_0600_and_token_is_never_an_argument(self) -> None:
         for secret in (
             "secrets.SYSWARDEN_FREEBSD_SSH_PRIVATE_KEY",
@@ -245,12 +316,14 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "bound/nftables-bound.json",
             "bound/package-lifecycle-bound.json",
             "raw/freebsd-vm-raw.json",
+            "raw/freebsd-updater-raw.json",
             "raw/nftables-raw.json",
             "raw/package-lifecycle-raw.json",
             "packages/candidate/SHA256SUMS.txt",
             "packages/previous/SHA256SUMS.txt",
             "qualification-context.json",
             "status/qualification-exit-codes.json",
+            "tools/syswarden-updater-freebsd.test",
             'if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then',
             "update/syswarden-update-manifest-v1.json",
             "update/syswarden-update-manifest-v1.json.sig",

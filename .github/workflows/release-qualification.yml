@@ -43,7 +43,7 @@ jobs:
       contents: read
 
     steps:
-      - name: Require Protected Qualification Environment
+      - name: Require Restricted Automatic Qualification Environment
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -54,18 +54,14 @@ jobs:
           environment_json="$(gh api --method GET \
             "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-qualification")"
           environment_name="$(jq -r '.name // ""' <<< "${environment_json}")"
-          required_reviewer_rule_count="$(jq '[
-            .protection_rules[]? |
-            select(
-              .type == "required_reviewers" and
-              .prevent_self_review == true and
-              (.reviewers | type) == "array" and
-              (.reviewers | length) > 0
-            )
-          ] | length' <<< "${environment_json}")"
-          all_reviewer_rule_count="$(jq '[
+          reviewer_rule_count="$(jq '[
             .protection_rules[]? | select(.type == "required_reviewers")
           ] | length' <<< "${environment_json}")"
+          branch_policy_rule_count="$(jq '[
+            .protection_rules[]? | select(.type == "branch_policy")
+          ] | length' <<< "${environment_json}")"
+          protection_rule_count="$(jq '[.protection_rules[]?] | length' \
+            <<< "${environment_json}")"
           protected_branches="$(jq -r \
             '.deployment_branch_policy.protected_branches // "missing"' \
             <<< "${environment_json}")"
@@ -73,11 +69,12 @@ jobs:
             '.deployment_branch_policy.custom_branch_policies // "missing"' \
             <<< "${environment_json}")"
           if [[ "${environment_name}" != "syswarden-release-qualification" || \
-                "${required_reviewer_rule_count}" != "1" || \
-                "${all_reviewer_rule_count}" != "1" || \
+                "${reviewer_rule_count}" != "0" || \
+                "${branch_policy_rule_count}" != "1" || \
+                "${protection_rule_count}" != "1" || \
                 "${protected_branches}" != "false" || \
                 "${custom_branch_policies}" != "true" ]]; then
-            echo "ERROR: the qualification environment must require non-self review and custom branch policies only." >&2
+            echo "ERROR: the qualification environment must require no reviewer or wait gate and exactly one custom branch policy." >&2
             exit 1
           fi
 
@@ -222,6 +219,7 @@ jobs:
           raw_dir="${artifact_root}/raw"
           bound_dir="${artifact_root}/bound"
           aggregate_dir="${artifact_root}/aggregate"
+          tools_dir="${artifact_root}/tools"
           status_dir="${qualification_root}/status-internal"
           secrets_dir="${qualification_root}/secrets"
           signing_tool_dir="${qualification_root}/signing-tool"
@@ -270,6 +268,7 @@ jobs:
             printf 'RAW_DIR=%s\n' "${raw_dir}"
             printf 'BOUND_DIR=%s\n' "${bound_dir}"
             printf 'AGGREGATE_DIR=%s\n' "${aggregate_dir}"
+            printf 'TOOLS_DIR=%s\n' "${tools_dir}"
             printf 'STATUS_DIR=%s\n' "${status_dir}"
             printf 'SECRETS_DIR=%s\n' "${secrets_dir}"
             printf 'SIGNING_TOOL_DIR=%s\n' "${signing_tool_dir}"
@@ -398,6 +397,36 @@ jobs:
           tool_sha256="${tool_sha256%% *}"
           [[ "${tool_sha256}" =~ ^[0-9a-f]{64}$ ]]
           echo "sha256=${tool_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build Exact FreeBSD Signed Updater Qualification Binary
+        if: ${{ steps.update_contract.outputs.required == 'true' }}
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = "go1.26.6"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          install -d -m 0700 "${TOOLS_DIR}"
+          test_binary="${TOOLS_DIR}/syswarden-updater-freebsd.test"
+          env \
+            GOARCH=amd64 \
+            GOENV=off \
+            GOFLAGS=-mod=readonly \
+            GOOS=freebsd \
+            GOAMD64=v1 \
+            GOTOOLCHAIN=local \
+            CGO_ENABLED=0 \
+            go -C src/core/syswarden-cli test \
+              -c \
+              -buildvcs=true \
+              -ldflags="-X=syswarden-cli/pkg/system.freeBSDUpdaterQualificationSourceSHA=${RELEASE_SHA}" \
+              -o "${test_binary}" \
+              ./pkg/system
+          chmod 0700 "${test_binary}"
+          test -f "${test_binary}"
+          test ! -L "${test_binary}"
+          test -x "${test_binary}"
 
       - name: Download Latest Public Previous Packages by Asset ID
         id: previous
@@ -777,6 +806,47 @@ jobs:
           signing_complete=true
           trap - EXIT HUP INT TERM
 
+      - name: Run and Recompute Signed FreeBSD Updater Transition
+        if: >-
+          ${{ steps.update_contract.outputs.required == 'true' &&
+              steps.signed_update.outcome == 'success' }}
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          common_arguments=(
+            --packages-dir "${CANDIDATE_PACKAGES_DIR}"
+            --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}"
+            --manifest "${ARTIFACT_ROOT}/update/syswarden-update-manifest-v1.json"
+            --signature "${ARTIFACT_ROOT}/update/syswarden-update-manifest-v1.json.sig"
+            --test-binary "${TOOLS_DIR}/syswarden-updater-freebsd.test"
+            --release-sha "${RELEASE_SHA}"
+          )
+          report="${RAW_DIR}/freebsd-updater-raw.json"
+          set +e
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_updater_vm_probe.py \
+            run "${common_arguments[@]}" \
+            --ssh-host 127.0.0.1 \
+            --ssh-port "${FREEBSD_SSH_PORT}" \
+            --ssh-user "${FREEBSD_SSH_USER}" \
+            --identity-file "${FREEBSD_IDENTITY_FILE}" \
+            --known-hosts-file "${FREEBSD_KNOWN_HOSTS_FILE}" \
+            --vm-marker-token-file "${FREEBSD_MARKER_TOKEN_FILE}" \
+            --output "${report}" \
+            --pretty
+          updater_rc=$?
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_updater_vm_probe.py \
+            verify "${common_arguments[@]}" \
+            --report "${report}"
+          updater_verify_rc=$?
+          set -e
+          printf '%s\n' "${updater_rc}" > "${STATUS_DIR}/freebsd-updater.rc"
+          printf '%s\n' "${updater_verify_rc}" > "${STATUS_DIR}/freebsd-updater-verify.rc"
+          chmod 0600 \
+            "${STATUS_DIR}/freebsd-updater.rc" \
+            "${STATUS_DIR}/freebsd-updater-verify.rc"
+
       - name: Seal Exact Qualification Evidence Inventory
         id: inventory
         shell: bash
@@ -796,15 +866,27 @@ jobs:
             [[ "${value}" =~ ^[0-9]+$ ]] || return 1
             printf '%s' "${value}"
           }
+          freebsd_updater=0
+          freebsd_updater_verify=0
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            freebsd_updater="$(read_rc "${STATUS_DIR}/freebsd-updater.rc")"
+            freebsd_updater_verify="$(read_rc "${STATUS_DIR}/freebsd-updater-verify.rc")"
+          elif [[ "${SIGNED_UPDATE_REQUIRED}" != "false" ]]; then
+            echo "ERROR: signed update requirement is not a canonical boolean." >&2
+            exit 1
+          fi
           jq -n -S \
+            --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" \
             --argjson package_lab "$(read_rc "${STATUS_DIR}/package-lab.rc")" \
             --argjson freebsd_lab "$(read_rc "${STATUS_DIR}/freebsd-lab.rc")" \
+            --argjson freebsd_updater "${freebsd_updater}" \
+            --argjson freebsd_updater_verify "${freebsd_updater_verify}" \
             --argjson nftables_lab "$(read_rc "${STATUS_DIR}/nftables-lab.rc")" \
             --argjson adapter_build "$(read_rc "${STATUS_DIR}/adapter-build.rc")" \
             --argjson adapter_verify "$(read_rc "${STATUS_DIR}/adapter-verify.rc")" \
             --argjson gate_generate "$(read_rc "${STATUS_DIR}/gate-generate.rc")" \
             --argjson gate_verify "$(read_rc "${STATUS_DIR}/gate-verify.rc")" \
-            '{
+            '({
               package_lab: $package_lab,
               freebsd_lab: $freebsd_lab,
               nftables_lab: $nftables_lab,
@@ -812,7 +894,10 @@ jobs:
               adapter_verify: $adapter_verify,
               gate_generate: $gate_generate,
               gate_verify: $gate_verify
-            }' > "${ARTIFACT_ROOT}/status/qualification-exit-codes.json"
+            } + if $signed_update_required then {
+              freebsd_updater: $freebsd_updater,
+              freebsd_updater_verify: $freebsd_updater_verify
+            } else {} end)' > "${ARTIFACT_ROOT}/status/qualification-exit-codes.json"
 
           expected=(
             "aggregate/release-qualification.json"
@@ -852,10 +937,14 @@ jobs:
           )
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
             expected+=(
+              "raw/freebsd-updater-raw.json"
+              "tools/syswarden-updater-freebsd.test"
               "update/syswarden-update-manifest-v1.json"
               "update/syswarden-update-manifest-v1.json.sig"
             )
-            expected_directories+=(update)
+            expected_directories+=(tools update)
+            test "$(stat -c '%u' "${TOOLS_DIR}/syswarden-updater-freebsd.test")" = "$(id -u)"
+            test "$(stat -c '%a' "${TOOLS_DIR}/syswarden-updater-freebsd.test")" = "700"
           fi
           mapfile -t sorted_expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
           mapfile -t actual_before_manifest < <(
@@ -935,6 +1024,11 @@ jobs:
             rm -f -- "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
             rmdir -- "${SIGNING_TOOL_DIR}" 2>/dev/null || true
           fi
+          if [[ -n "${TOOLS_DIR:-}" && \
+                "${TOOLS_DIR}" == "${RUNNER_TEMP%/}"/syswarden-release-qualification.*/artifact/tools ]]; then
+            rm -f -- "${TOOLS_DIR}/syswarden-updater-freebsd.test"
+            rmdir -- "${TOOLS_DIR}" 2>/dev/null || true
+          fi
 
       - name: Enforce Final Release Qualification Verdict
         if: ${{ always() }}
@@ -942,6 +1036,7 @@ jobs:
         env:
           EXPECTED_RELEASE_SHA: ${{ inputs.release_sha }}
           EXPECTED_RELEASE_TAG: ${{ inputs.release_tag }}
+          SIGNED_UPDATE_REQUIRED: ${{ steps.update_contract.outputs.required }}
           INVENTORY_OUTCOME: ${{ steps.inventory.outcome }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
         run: |
@@ -978,8 +1073,13 @@ jobs:
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --aggregate "${AGGREGATE_DIR}/release-qualification.json"
-          jq --exit-status '
-            (keys | sort) == [
+          if [[ "${SIGNED_UPDATE_REQUIRED}" != "true" && \
+                "${SIGNED_UPDATE_REQUIRED}" != "false" ]]; then
+            echo "ERROR: signed update requirement is not a canonical boolean." >&2
+            exit 1
+          fi
+          jq --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" --exit-status '
+            (keys | sort) == (([
               "adapter_build",
               "adapter_verify",
               "freebsd_lab",
@@ -987,5 +1087,8 @@ jobs:
               "gate_verify",
               "nftables_lab",
               "package_lab"
-            ] and all(.[]; . == 0)
+            ] + (if $signed_update_required then [
+              "freebsd_updater",
+              "freebsd_updater_verify"
+            ] else [] end)) | sort) and all(.[]; . == 0)
           ' "${ARTIFACT_ROOT}/status/qualification-exit-codes.json"

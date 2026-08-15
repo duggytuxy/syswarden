@@ -17,7 +17,9 @@
 
 # SysWarden v4
 
-Current source version: **v4.02.9**.
+Current source version: **v4.02.10**.
+
+> **Active Defense and HIDS/HIPS/WAAP Out-of-Band Orchestration for Critical Linux Infrastructure**
 
 SysWarden is a host firewall orchestrator and an out-of-band security-log
 analysis toolkit implemented primarily in Go. Its CLI manages configuration,
@@ -34,17 +36,17 @@ restart and rollback have passed on the target operating system.
 
 | Target | What the repository currently proves | Release qualification |
 | :--- | :--- | :--- |
-| Linux amd64 | The CLI, core and TUI compile; unit, contract and golden-rule tests run in CI | Privileged virtual-machine install, firewall, upgrade and rollback cycles have not passed in this repository state |
-| Linux arm64 | The three binaries cross-compile and package metadata is generated | Native arm64 lifecycle evidence is still required |
-| Debian/Ubuntu `.deb` | amd64 and arm64 package recipes exist | Not release-qualified by a complete VM lifecycle gate |
-| RHEL-family `.rpm` | x86_64 and aarch64 package recipes exist | Not release-qualified by a complete VM lifecycle gate |
-| Alpine `.apk` | x86_64 and aarch64 package recipes exist | **Known blocker:** the current Linux binaries request the glibc ELF interpreter and do not run on a standard musl-only Alpine installation |
-| FreeBSD `.txz` | amd64 binaries cross-compile and a package recipe exists | **Known blocker:** the package stages binaries below `/usr/local/syswarden/bin`, while current service/runtime paths still reference `/opt/syswarden`; do not install this package |
+| Linux amd64 | The CLI, core and TUI compile and execute; unit, race, contract, package and golden-rule tests run in the candidate gates | The protected package lifecycle and privileged kernel labs must pass on the exact release SHA before a tag is created |
+| Linux arm64 | The three binaries cross-compile and package metadata is checked against the exact architecture | The protected binfmt lifecycle must execute the exact candidate packages before release |
+| Debian/Ubuntu `.deb` | amd64 and arm64 package contents, dependencies, maintainer scripts and lifecycle contracts are validated | The final protected install, upgrade, restart and rollback run remains mandatory |
+| RHEL-family `.rpm` | x86_64 and aarch64 package contents, dependencies, maintainer scripts and lifecycle contracts are validated | The final protected install, upgrade, restart and rollback run remains mandatory |
+| Alpine `.apk` | Dedicated x86_64 and aarch64 CGO-free static executables are packaged; the amd64 binary has no ELF interpreter and executes on standard Alpine musl | The exact x86_64 and aarch64 packages must still pass the protected lifecycle run |
+| FreeBSD `.txz` | The amd64 package is ABI 14, uses native `/usr/local` paths, carries both rc.d scripts, cross-compiles, and has fail-closed package, PF and signed-updater contracts | The exact package lifecycle and signed updater transition must pass on the protected disposable FreeBSD VM |
 
-The Linux distribution names previously listed here were build intentions, not
-per-distribution lifecycle results. Until the corresponding VM gates pass, use
-SysWarden only in an isolated laboratory with console access and a tested host
-snapshot or rollback path.
+These rows describe the source candidate and its gates, not an already
+published release. Until the protected qualification passes for the exact
+commit and artifacts, use SysWarden only in an isolated laboratory with console
+access and a tested host snapshot or rollback path.
 
 ## Components and data flow
 
@@ -112,6 +114,10 @@ current install path, it creates an in-memory self-signed certificate, and it
 accepts a token through Basic authentication, a cookie or a legacy URL query
 parameter. Restrict the listener with `--bind`, protect the port with a trusted
 network control, and do not place tokens in URLs or logs.
+
+A package-level `[webtui] enabled = false` switch and conditional ownership of
+TCP 62027 are not part of v4.02.10. They remain a separate Lot 2 change. The
+current package behavior must therefore be treated as Web-TUI enabled.
 
 ### High availability
 
@@ -348,9 +354,23 @@ default HTTP client without an explicit timeout.
 | Logs | `/var/log/syswarden` |
 | systemd services | `syswarden-core.service`, `syswarden-firewall.service`, `syswarden-webtui.service` |
 
-The current FreeBSD package and runtime paths are inconsistent, as described in
-the validation table. Linux paths must not be assumed to describe a working
-FreeBSD installation.
+## Files and services on FreeBSD
+
+| Purpose | Current path or name |
+| :--- | :--- |
+| Package binaries | `/usr/local/syswarden/bin/syswarden-cli`, `/usr/local/syswarden/bin/syswarden-core`, `/usr/local/syswarden/bin/syswarden-tui` |
+| CLI links | `/usr/local/bin/syswarden`, `/usr/local/bin/syswarden-tui` |
+| Configuration and modules | `/etc/syswarden/config/config.toml`, `/etc/syswarden/config/modules` |
+| Runtime signature inventory | `/usr/local/syswarden/signatures.json` |
+| Persistent data | `/var/lib/syswarden` |
+| Package and PF recovery state | `/var/db/syswarden` |
+| rc.d services | `/usr/local/etc/rc.d/syswarden`, `/usr/local/etc/rc.d/syswardenwebtui` |
+
+The v4.02.10 PF contract is intentionally bounded. A fresh installation
+requires PF to be disabled with an empty live ruleset before SysWarden first
+mutates it. The separately byte-bound historical v4.02.8 transition is also covered. This
+does not claim safe coexistence with an arbitrary pre-existing operator PF
+policy.
 
 ## Build verification
 
@@ -371,10 +391,11 @@ The package workflow is configured to generate two DEB, two RPM, two APK and
 one FreeBSD package plus `SHA256SUMS.txt`. Check the assets actually attached to
 the selected GitHub release before using any filename or command.
 
-Starting with v4.02.9, a qualified release also carries
+Starting with the historical signed-protocol floor v4.02.9, a qualified release also carries
 `syswarden-update-manifest-v1.json` and
-`syswarden-update-manifest-v1.json.sig`. The manifest binds the exact Linux
-package filenames, platforms, sizes and SHA-256 digests. The binary trusts the
+`syswarden-update-manifest-v1.json.sig`. In this candidate, the manifest binds
+the exact six Linux package identities and the FreeBSD amd64 TXZ identity,
+including filenames, platforms, sizes and SHA-256 digests. The binary trusts the
 embedded public key `syswarden-update-2026-01`; the matching Ed25519 private key
 is held only by the protected release-qualification environment and is never a
 repository file, command-line argument or release artifact.
@@ -386,12 +407,170 @@ repository file, command-line argument or release artifact.
 > jobs, enable the Web-TUI, and restart services. Do not run it on a remotely
 > administered host without console access, backups and a tested rollback.
 
-Do not install the current Alpine or FreeBSD package. Do not use
-`apk --allow-untrusted`. For a Linux laboratory test, download only the package
-matching the host architecture and its release checksum file, verify the exact
-package entry, inspect the package scripts, and take a snapshot before invoking
-the package manager. Attestations, an SBOM or a checksum should be relied upon
-only when that exact artifact is present and verifies for the selected release.
+For any platform, download only the package matching the host architecture and
+its release checksum file, verify the exact package entry, inspect the package
+scripts, and take a snapshot before invoking the package manager. Never invoke
+`apk --allow-untrusted` on an unverified download. SysWarden uses that package
+manager option only after the detached Ed25519 manifest and the package size and
+SHA-256 have all been verified. Attestations, an SBOM or a checksum should be
+relied upon only when that exact artifact is present and verifies for the
+selected release.
+
+The historical v4.02.8 binary predates the signed updater and cannot perform
+the first signed hop. Linux hosts must install the separately verified
+v4.02.10 package with their native package manager. FreeBSD hosts must first
+install `curl`, `jq`, `libqrencode`, `rsyslog` and `wireguard-tools`, then use
+`pkg add -f` on the checksum-verified v4.02.10 TXZ. Starting from an installed
+v4.02.10, the signed updater supports the six Linux package targets and
+FreeBSD amd64.
+
+### Install the latest verified Release
+
+The procedure below downloads exactly one package for the detected operating
+system and architecture. Use it only after that tag is visible in GitHub
+Releases and the release qualification is complete. For the first hop from
+historical v4.02.8, run it as
+`VERSION=v4.02.10 sh ./install-release.sh` after saving the block as
+`install-release.sh`; leaving `VERSION` unset selects the latest published
+Release automatically.
+
+```sh
+#!/bin/sh
+set -eu
+
+fetch_stdout() {
+    url=$1
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url"
+    elif command -v fetch >/dev/null 2>&1; then
+        fetch -qo - "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$url"
+    else
+        echo "curl, fetch or wget is required" >&2
+        exit 1
+    fi
+}
+
+download_file() {
+    url=$1
+    destination=$2
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 3 -o "$destination" "$url"
+    elif command -v fetch >/dev/null 2>&1; then
+        fetch -qo "$destination" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$destination" "$url"
+    else
+        echo "curl, fetch or wget is required" >&2
+        exit 1
+    fi
+}
+
+VERSION=${VERSION:-$(
+    fetch_stdout https://api.github.com/repos/duggytuxy/syswarden/releases/latest |
+        awk -F '"' '/"tag_name":/ { print $4; exit }'
+)}
+printf '%s\n' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]{2}\.[0-9]+$' || {
+    echo "invalid or missing release tag: $VERSION" >&2
+    exit 1
+}
+V_NUM=${VERSION#v}
+
+SYSTEM=$(uname -s)
+MACHINE=$(uname -m)
+case "$SYSTEM" in
+    Linux)
+        test -r /etc/os-release || {
+            echo "missing /etc/os-release" >&2
+            exit 1
+        }
+        OS_IDS=$(sed -n -e 's/^ID=//p' -e 's/^ID_LIKE=//p' /etc/os-release |
+            tr '\n' ' ' | tr -d "\"'")
+        case " $OS_IDS " in
+            *" alpine "*) FAMILY=apk ;;
+            *" debian "*|*" ubuntu "*) FAMILY=deb ;;
+            *" rhel "*|*" fedora "*|*" centos "*|*" rocky "*|*" almalinux "*) FAMILY=rpm ;;
+            *) echo "unsupported Linux family: ${OS_IDS:-unknown}" >&2; exit 1 ;;
+        esac
+        ;;
+    FreeBSD) FAMILY=txz ;;
+    *) echo "unsupported operating system: $SYSTEM" >&2; exit 1 ;;
+esac
+
+case "$FAMILY:$MACHINE" in
+    deb:x86_64|deb:amd64) PACKAGE="syswarden_${V_NUM}_amd64.deb" ;;
+    deb:aarch64|deb:arm64) PACKAGE="syswarden_${V_NUM}_arm64.deb" ;;
+    rpm:x86_64|rpm:amd64) PACKAGE="syswarden-${V_NUM}-1.x86_64.rpm" ;;
+    rpm:aarch64|rpm:arm64) PACKAGE="syswarden-${V_NUM}-1.aarch64.rpm" ;;
+    apk:x86_64|apk:amd64) PACKAGE="syswarden_${V_NUM}_x86_64.apk" ;;
+    apk:aarch64|apk:arm64) PACKAGE="syswarden_${V_NUM}_aarch64.apk" ;;
+    txz:amd64|txz:x86_64) PACKAGE="syswarden-${V_NUM}.txz" ;;
+    *) echo "unsupported architecture: $SYSTEM/$MACHINE" >&2; exit 1 ;;
+esac
+
+umask 077
+WORKDIR="syswarden-release-${VERSION}"
+mkdir "$WORKDIR"
+cd "$WORKDIR"
+BASE_URL="https://github.com/duggytuxy/syswarden/releases/download/${VERSION}"
+download_file "${BASE_URL}/${PACKAGE}" "$PACKAGE"
+download_file "${BASE_URL}/SHA256SUMS.txt" SHA256SUMS.txt
+
+MATCH_COUNT=$(awk -v file="$PACKAGE" '
+    $2 == file || $2 == ("*" file) { count++ }
+    END { print count + 0 }
+' SHA256SUMS.txt)
+test "$MATCH_COUNT" -eq 1 || {
+    echo "checksum manifest must contain exactly one entry for $PACKAGE" >&2
+    exit 1
+}
+EXPECTED=$(awk -v file="$PACKAGE" '
+    $2 == file || $2 == ("*" file) { print $1; exit }
+' SHA256SUMS.txt)
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL=$(sha256sum "$PACKAGE" | awk '{ print $1 }')
+else
+    ACTUAL=$(sha256 -q "$PACKAGE")
+fi
+test "$ACTUAL" = "$EXPECTED" || {
+    echo "SHA-256 verification failed for $PACKAGE" >&2
+    exit 1
+}
+echo "SHA-256 verified: $PACKAGE"
+
+if test "$(id -u)" -eq 0; then
+    ELEVATE=
+elif command -v sudo >/dev/null 2>&1; then
+    ELEVATE=sudo
+elif command -v doas >/dev/null 2>&1; then
+    ELEVATE=doas
+else
+    echo "run the installation step as root, with sudo or with doas" >&2
+    exit 1
+fi
+
+case "$FAMILY" in
+    deb) $ELEVATE apt-get install -y "./$PACKAGE" ;;
+    rpm) $ELEVATE dnf install -y "./$PACKAGE" ;;
+    apk) $ELEVATE apk add --allow-untrusted "./$PACKAGE" ;;
+    txz)
+        $ELEVATE pkg install -y curl jq libqrencode rsyslog wireguard-tools
+        $ELEVATE pkg add -f "./$PACKAGE"
+        ;;
+esac
+```
+
+The checksum must pass before `apk --allow-untrusted` is reached. The package
+post-install hook performs the initial `syswarden install`. Review the manual
+and configuration afterward; rerun the installation command only when you
+intend to reapply the configured host controls:
+
+```sh
+sudo syswarden manual
+sudo syswarden config
+sudo syswarden install
+```
 
 ## Configuration
 
@@ -465,9 +644,9 @@ whitelist-infra    Detect and add local infrastructure addresses.
 
 If no token is configured, `syswarden web-token` generates and persists one
 even without `--rotate`, then requests a `syswarden-webtui.service` restart.
-`--rotate` persists a replacement token and requests the same restart. If that
-restart fails, a running Web-TUI process may continue accepting the previous
-token.
+`--rotate` persists a replacement token and requests the same platform service
+restart. If that restart fails, the command returns nonzero and reports partial
+state; a running Web-TUI process may continue accepting the previous token.
 
 The port-specific bypass semantics of `allow-ssh` and `revoke-ssh` have not
 passed a privileged kernel contract test. Do not depend on them for remote
@@ -480,16 +659,22 @@ access recovery.
   console access before running it.
 - `syswarden audit` is a local operational diagnostic. Its output is not an
   ISO 27001, NIS2, CRA or CIS certification.
-- `syswarden update` accepts v4.02.9 and later only when the release provides a
+- `syswarden update` accepts the historical v4.02.9 protocol floor and later
+  only when the release provides a
   canonical manifest and detached Ed25519 signature trusted by the binary. It
   verifies the selected OS/architecture filename, size and SHA-256 again
   immediately before invoking the package manager, and uses a private temporary
   workspace. The historical v4.02.8 binary predates this trust root, so its
-  first upgrade to v4.02.9 must be a separately verified manual package upgrade.
+  first upgrade to v4.02.10 must be a separately verified manual package
+  upgrade. From v4.02.10 onward, FreeBSD amd64 uses the same signed contract and
+  invokes native `pkg add -f` only after all verification succeeds.
 - `syswarden uninstall` is destructive. It deletes SysWarden configuration,
   data, logs, services and firewall tables. It does not restore every previous
   host setting. Back up `/etc/syswarden`, `/var/lib/syswarden`, relevant logs,
   firewall state, SSH configuration and hardening files before considering it.
+  On FreeBSD, use this supported command rather than raw `pkg delete`: pkg does
+  not guarantee that a failing pre-deinstall script aborts payload removal, and
+  `pkg delete -D` skips package scripts entirely.
 
 ## Security posture and limitations
 
@@ -507,11 +692,12 @@ access recovery.
   certificate plus a shared token.
 - SIEM TLS currently uses anonymous authentication.
 - Webhook destinations are not protected by a complete SSRF policy.
-- Signed update manifests protect v4.02.9 and later. The release signing private
+- Signed update manifests use the historical v4.02.9 protocol floor. The release signing private
   key remains an external protected-environment secret and is not recoverable
   from this repository.
-- Complete install, upgrade, restart and rollback evidence is still required
-  for every claimed operating-system and architecture combination.
+- Complete install, upgrade, restart and rollback evidence must pass on the
+  exact protected release candidate before any operating-system or architecture
+  combination is called release-qualified.
 - SysWarden provides controls and audit evidence that may assist a security
   program; it is not a regulatory certification or a substitute for an
   independent assessment.
@@ -526,8 +712,8 @@ maintainer-controlled publication gate; a wiki page may lag the source until
 that gate is completed. When the wiki and this README disagree, prefer tested
 behavior in the source candidate and report the inconsistency.
 
-The version-specific [Lot 1 public security delivery report](docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.9.md)
-records the validated v4.02.9 source scope, evidence and continuing NO-GO
+The version-specific [Lot 1 public security delivery report](docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.10.md)
+records the v4.02.10 source scope, evidence, platform boundaries and final
 release decision.
 
 ## Target and support

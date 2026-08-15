@@ -5,7 +5,7 @@ package integration
 import (
 	"fmt"
 	"os"
-	"os/exec"
+	"strings"
 	"syswarden-cli/config"
 )
 
@@ -26,9 +26,18 @@ func SetupSIEM() error {
 	if ip == "" || port == "" {
 		return fmt.Errorf("SIEM IP or Port is missing in configuration")
 	}
+	wafFragment, err := os.ReadFile(freeBSDWAFRsyslogFragment)
+	if err != nil {
+		return fmt.Errorf("read required WAF rsyslog module fragment: %w", err)
+	}
+	if !strings.Contains(string(wafFragment), `module(load="imfile")`) {
+		return fmt.Errorf("required WAF rsyslog imfile module declaration is missing")
+	}
 
 	// 1. We write the rsyslog configuration natively
-	_ = os.MkdirAll("/usr/local/etc/rsyslog.d", 0750)
+	if err := os.MkdirAll("/usr/local/etc/rsyslog.d", 0750); err != nil {
+		return fmt.Errorf("create FreeBSD rsyslog configuration directory: %w", err)
+	}
 	confPath := "/usr/local/etc/rsyslog.d/99-syswarden-siem.conf"
 
 	// Secure formatting (CWE-117)
@@ -52,7 +61,6 @@ func SetupSIEM() error {
 
 	// Add native JSON WAAP telemetry forwarding via imfile
 	rsyslogConf += "\n# SYSWARDEN WAAP Native JSON Telemetry\n"
-	rsyslogConf += "module(load=\"imfile\" PollingInterval=\"10\")\n"
 	rsyslogConf += "input(type=\"imfile\"\n"
 	rsyslogConf += "      File=\"/var/log/syswarden/waf.json\"\n"
 	rsyslogConf += "      Tag=\"syswarden-waf-json\"\n"
@@ -63,9 +71,8 @@ func SetupSIEM() error {
 		return fmt.Errorf("failed to write rsyslog SIEM config: %w", err)
 	}
 
-	// 2. Restart Rsyslog safely
-	if err := exec.Command("service", "rsyslogd", "restart").Run(); err != nil { // #nosec
-		fmt.Printf("[WARN] Failed to restart rsyslogd: %v\n", err)
+	if err := ensureFreeBSDRsyslogRunning(); err != nil {
+		return fmt.Errorf("activate rsyslogd for SIEM forwarding: %w", err)
 	}
 
 	fmt.Printf("[+] SIEM Forwarder successfully configured (%s:%s/%s)\n", ip, port, proto)

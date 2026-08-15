@@ -3,7 +3,6 @@ package firewall
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"syswarden-cli/config"
 )
@@ -49,25 +48,11 @@ func AutoWhitelistAdminAndInfra() error {
 		// Metadata
 		ipsToAdd = append(ipsToAdd, "169.254.169.254")
 
-		// DNS
-		out, _ := exec.Command("sh", "-c", "grep '^nameserver' /etc/resolv.conf | awk '{print $2}'").Output() // #nosec
-		for _, ip := range strings.Fields(string(out)) {
-			if valid, isIPv4 := IsValidIP(ip); valid && isIPv4 {
-				ipsToAdd = append(ipsToAdd, ip)
-			}
+		infraIPs, err := infraIPv4Candidates()
+		if err != nil {
+			return err
 		}
-
-		// Default Gateway
-		out, _ = exec.Command("sh", "-c", "ip -4 route show default 2>/dev/null | grep -Eo 'via [0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | awk '{print $2}'").Output() // #nosec
-		for _, ip := range strings.Fields(string(out)) {
-			if valid, isIPv4 := IsValidIP(ip); valid && isIPv4 {
-				ipsToAdd = append(ipsToAdd, ip)
-			}
-		}
-
-		// Local IPs
-		out, _ = exec.Command("sh", "-c", "ip -4 addr show | grep -oEo 'inet [0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+' | awk '{print $2}' | grep -v '^127\\.'").Output() // #nosec
-		for _, ip := range strings.Fields(string(out)) {
+		for _, ip := range infraIPs {
 			if valid, isIPv4 := IsValidIP(ip); valid && isIPv4 {
 				ipsToAdd = append(ipsToAdd, ip)
 			}

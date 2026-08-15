@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"syswarden-cli/pkg/platformpaths"
 	"syswarden-cli/pkg/system"
 	"time"
 )
@@ -1000,14 +1001,14 @@ func SetupFeedsCron() error {
 	// Generate a random minute (1-59) to prevent "Thundering Herd" API collisions
 	randomMinute := rand.Intn(59) + 1 // #nosec
 
-	cronJob := fmt.Sprintf("%d * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1", randomMinute)
+	cronJob := fmt.Sprintf("%d * * * * %s update-feeds >/dev/null 2>&1", randomMinute, platformpaths.CLI)
 
 	// Add to crontab natively
 	out, _ := exec.Command("crontab", "-l").Output() // #nosec
 	lines := strings.Split(string(out), "\n")
 	var newLines []string
 	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && !strings.Contains(line, "syswarden-cli update-feeds") {
+		if strings.TrimSpace(line) != "" && !platformpaths.IsManagedCronLine(line) {
 			newLines = append(newLines, line)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/platformpaths"
 
 	"github.com/spf13/cobra"
 )
@@ -32,7 +33,7 @@ renamed or wiped, but the output directory and modules subdirectory may be creat
 		}
 
 		if source == "" {
-			source = "/opt/syswarden/syswarden-auto.conf"
+			source = platformpaths.LegacyConfig
 		}
 		if output == "" {
 			output = "/etc/syswarden/config"

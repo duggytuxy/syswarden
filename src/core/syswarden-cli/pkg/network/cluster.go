@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/platformpaths"
 )
 
 type haClusterPeerPlan struct {
@@ -65,12 +66,12 @@ func buildHACrontab(existing string, enableOutbound bool) string {
 	lines := strings.Split(existing, "\n")
 	newLines := make([]string, 0, len(lines)+1)
 	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && !strings.Contains(line, "syswarden-cli ha-sync") {
+		if strings.TrimSpace(line) != "" && !platformpaths.IsManagedCronLine(line) {
 			newLines = append(newLines, line)
 		}
 	}
 	if enableOutbound {
-		newLines = append(newLines, "*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1")
+		newLines = append(newLines, "*/30 * * * * "+platformpaths.CLI+" ha-sync >/dev/null 2>&1")
 	}
 	newCron := ""
 	if len(newLines) > 0 {
@@ -102,7 +103,11 @@ func SetupHACluster() error {
 	for _, ip := range peerPlan.Allowlist {
 		// Just call the binary to avoid cyclical imports or complex logic
 		fmt.Printf("[INFO] Auto-whitelisting HA Peer IP: %s\n", ip)
-		_ = exec.Command("/opt/syswarden/bin/syswarden-cli", "whitelist", ip).Run() // #nosec
+		whitelistCmd, err := platformpaths.WhitelistCommand(ip)
+		if err != nil {
+			return err
+		}
+		_ = whitelistCmd.Run()
 	}
 
 	if len(peerPlan.Dialable) == 0 {

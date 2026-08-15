@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/system"
 )
 
 // ApplyOSHardening enforces OS-level access and logging restrictions natively for FreeBSD
@@ -20,7 +21,9 @@ func ApplyOSHardening() error {
 
 	fmt.Println("[INFO] Applying strict OS hardening (Crontab, Wheel, Profiles)...")
 
-	lockCrontab()
+	if err := lockCrontab(); err != nil {
+		return fmt.Errorf("lock FreeBSD cron access: %w", err)
+	}
 	purgePrivilegedGroups()
 	lockUserProfiles()
 	applyLogAntiForging()
@@ -29,10 +32,9 @@ func ApplyOSHardening() error {
 	return nil
 }
 
-func lockCrontab() {
+func lockCrontab() error {
 	fmt.Println(" -> Locking down Crontab to root only")
-	_ = os.WriteFile("/var/cron/allow", []byte("root\n"), 0600)
-	_ = os.Remove("/var/cron/deny")
+	return system.EnsureFreeBSDCronAccess()
 }
 
 func purgePrivilegedGroups() {

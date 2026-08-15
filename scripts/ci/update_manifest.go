@@ -93,6 +93,7 @@ var manifestIdentities = []artifactIdentity{
 	{os: "linux", architecture: "arm64", format: "rpm"},
 	{os: "linux", architecture: "amd64", format: "apk"},
 	{os: "linux", architecture: "arm64", format: "apk"},
+	{os: "freebsd", architecture: "amd64", format: "txz"},
 }
 
 func parseVersion(raw string) (semanticVersion, error) {
@@ -178,6 +179,10 @@ func packageFilename(tag, format, architecture string) (string, error) {
 			return fmt.Sprintf("syswarden_%s_x86_64.apk", version), nil
 		case "arm64":
 			return fmt.Sprintf("syswarden_%s_aarch64.apk", version), nil
+		}
+	case "txz":
+		if architecture == "amd64" {
+			return fmt.Sprintf("syswarden-%s.txz", version), nil
 		}
 	}
 	return "", fmt.Errorf("unsupported package target %s/%s", format, architecture)

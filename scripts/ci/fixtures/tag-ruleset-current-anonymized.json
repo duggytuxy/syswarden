@@ -1,0 +1,37 @@
+{
+  "id": 20886342,
+  "name": "syswarden-release-tags-immutable",
+  "target": "tag",
+  "source_type": "Repository",
+  "source": "example/syswarden",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/tags/v*"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "update"
+    },
+    {
+      "type": "deletion"
+    }
+  ],
+  "node_id": "RRS_REDACTED_CURRENT_RULESET",
+  "created_at": "2026-08-15T12:10:02.817+02:00",
+  "updated_at": "2026-08-15T12:10:02.839+02:00",
+  "bypass_actors": [],
+  "current_user_can_bypass": "never",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/example/syswarden/rulesets/20886342"
+    },
+    "html": {
+      "href": "https://github.com/example/syswarden/rules/20886342"
+    }
+  }
+}
