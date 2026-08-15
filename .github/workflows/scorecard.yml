@@ -3,6 +3,8 @@ name: OSSF Scorecard Supply Chain Security
 on:
   push:
     branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
   # Recommandé par l'OSSF : un scan hebdomadaire automatisé
   schedule:
     - cron: '30 2 * * 1'
@@ -11,14 +13,12 @@ permissions:
   contents: read
 
 jobs:
-  analysis:
-    name: Scorecard analysis
+  pull-request-analysis:
+    name: Scorecard analysis (pull request)
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
-      # Required to upload the SARIF results to GitHub Code Scanning
-      security-events: write
-      # Required to publish results and get a badge
-      id-token: write
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,9 +30,61 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
+          publish_results: false
+
+  published-analysis:
+    name: Scorecard analysis and publication
+    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run and publish OSSF Scorecard analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
           publish_results: true
 
       - name: Upload SARIF results to Code Scanning
         uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           sarif_file: results.sarif
+
+  scorecard:
+    name: Scorecard supply-chain security
+    needs: [pull-request-analysis, published-analysis]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce event-specific Scorecard result
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PULL_REQUEST_RESULT: ${{ needs.pull-request-analysis.result }}
+          PUBLISHED_RESULT: ${{ needs.published-analysis.result }}
+        run: |
+          set -euo pipefail
+          case "${EVENT_NAME}" in
+            pull_request)
+              [[ "${PULL_REQUEST_RESULT}" == "success" ]]
+              [[ "${PUBLISHED_RESULT}" == "skipped" ]]
+              ;;
+            push|schedule)
+              [[ "${PULL_REQUEST_RESULT}" == "skipped" ]]
+              [[ "${PUBLISHED_RESULT}" == "success" ]]
+              ;;
+            *)
+              echo "ERROR: unsupported Scorecard event ${EVENT_NAME}." >&2
+              exit 1
+              ;;
+          esac

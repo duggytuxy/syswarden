@@ -128,12 +128,15 @@ class AdapterFixture:
         freebsd = self.repo / "src/core/syswarden-cli/pkg/firewall/firewall_freebsd.go"
         linux.parent.mkdir(parents=True, exist_ok=True)
         linux.write_text(
-            'strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")\n',
+            "canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)\n",
             encoding="utf-8",
         )
         freebsd.write_text(
-            'strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")\n',
+            "canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)\n",
             encoding="utf-8",
+        )
+        (linux.parent / "honeyports.go").write_text(
+            'strings.Join(canonical, ", ")\n', encoding="utf-8"
         )
         self._git("add", ".")
         self._git("commit", "-qm", "fixture")
@@ -202,10 +205,10 @@ class AdapterFixture:
             "schema_version": 1,
             "generated_at": self.now.isoformat(),
             "harness_status": "pass",
-            "product_status": "known_blocker",
-            "release_ready": False,
+            "product_status": "pass",
+            "release_ready": True,
             "finding_id": "SW-FW-004",
-            "summary": "The reviewed honeyport serialization is rejected by the kernel.",
+            "summary": "The corrected honeyport serialization is accepted by the kernel.",
             "engine": {
                 "name": "podman",
                 "version": "5.6.0",
@@ -220,10 +223,11 @@ class AdapterFixture:
             },
             "conditions": {
                 "separate_network_namespace": True,
-                "exact_ruleset_rejected": True,
-                "exact_ruleset_left_no_objects": True,
+                "historical_concatenation_rejected_before_mutation": True,
                 "kernel_reported_invalid_port": True,
-                "honeyport_only_normalization_passed_syntax_check": True,
+                "corrected_ruleset_applied": True,
+                "current_generator_contract_passed": True,
+                "dynamic_timeout_replication_applied": True,
                 "isolated_ruleset_cleanup_succeeded": True,
             },
             "kernel_error": "Service out of range",
@@ -378,7 +382,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
-    def test_config_blocker_and_combined_package_blockers_are_exact_sets(self) -> None:
+    def test_maintainer_script_failures_are_rejected_alone_and_with_alpine_blocker(self) -> None:
         def classify(*, include_alpine: bool) -> dict[str, object]:
             report = self.fixture.load_raw("package-lifecycle-raw.json")
             for platform in report["platforms"]:
@@ -426,48 +430,15 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             return report
 
         config_only = classify(include_alpine=False)
+        self.assertEqual(config_only["blocker_ids"], [])
+        self.assertTrue(config_only["unexpected_failed_checks"])
         self.fixture.save_raw("package-lifecycle-raw.json", config_only)
-        state = adapter.build_expected(self.fixture.args())
-        self.assertEqual(
-            state.envelopes["package"]["blocker_ids"], ["SW-CFG-001"]
-        )
-        statuses = {
-            item["platform"]: item["status"]
-            for item in state.envelopes["package"]["coverage"]["coordinates"]
-        }
-        self.assertEqual(statuses["alpine"], "pass")
-
-        inconsistent = json.loads(json.dumps(config_only))
-        non_alpine_coordinate = next(
-            item
-            for item in inconsistent["scope"]["coordinate_classification"]
-            if item["distribution"] != "alpine"
-        )
-        non_alpine_coordinate["status"] = "pass"
-        non_alpine_coordinate["blocker_ids"] = []
-        self.fixture.save_raw("package-lifecycle-raw.json", inconsistent)
         self.assertAdapterError(self.fixture.args())
 
         self.fixture._make_raw_reports()
         combined = classify(include_alpine=True)
-        self.fixture.save_raw("package-lifecycle-raw.json", combined)
-        state = adapter.build_expected(self.fixture.args())
-        self.assertEqual(
-            state.envelopes["package"]["blocker_ids"],
-            ["SW-CFG-001", "SW-PKG-001"],
-        )
-
-        # One omitted manifestation cannot be promoted to the canonical blocker.
-        event = next(
-            event
-            for platform in combined["platforms"]
-            if platform["distribution"] != "alpine"
-            for scenario in platform["scenarios"]
-            for event in scenario["events"]
-            if event["check"].endswith(".maintainer_script")
-        )
-        event["status"] = "pass"
-        event["detail"] = "synthetic pass"
+        self.assertEqual(combined["blocker_ids"], [])
+        self.assertTrue(combined["unexpected_failed_checks"])
         self.fixture.save_raw("package-lifecycle-raw.json", combined)
         self.assertAdapterError(self.fixture.args())
 
@@ -485,12 +456,6 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 "RC_CORE_ENABLED": "",
                 "RC_WEB_ENABLED": "",
                 "CANDIDATE_RESTART_IDEMPOTENCE_OPERATION_RC": "1",
-                "PF_FIXTURE_SYNTAX_RC": "1",
-                "PF_FIXTURE_APPLY_RC": "125",
-                "PF_FIXTURE_RULE_COUNT": "0",
-                "PF_HONEYPORT_SOURCE_BAD": "1",
-                "PF_HONEYPORT_EXACT_VALUE": "236379",
-                "PF_HONEYPORT_SYNTAX_RC": "1",
             }
         )
         for key in (
@@ -519,7 +484,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         state = adapter.build_expected(self.fixture.args())
         self.assertEqual(
             state.envelopes["freebsd"]["blocker_ids"],
-            ["SW-BSD-001", "SW-FW-004"],
+            ["SW-BSD-001"],
         )
         self.assertFalse(state.envelopes["freebsd"]["release_ready"])
 

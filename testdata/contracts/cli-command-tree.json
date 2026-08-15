@@ -390,7 +390,7 @@
     "path": "syswarden ha-sync",
     "use": "ha-sync",
     "short": "Push missing local blocklist entries to configured HA peers",
-    "long": "Compares the local blocklist with each configured peer and pushes entries that the peer does not report. The current TLS client does not verify peer certificates.",
+    "long": "Compares the local blocklist with each exact configured peer and pushes entries that the peer does not report. TLS 1.3 peer verification uses /etc/syswarden/ha-ca.pem when present and otherwise the system trust roots. CIDR peer entries authorize inbound clients only and are never dialed.",
     "flags": [
       {
         "name": "config",
@@ -771,8 +771,8 @@
   {
     "path": "syswarden update",
     "use": "update",
-    "short": "Run the legacy in-place package updater",
-    "long": "Downloads and installs a release package without currently verifying its checksum or signature. Use a separately verified package-upgrade procedure instead.",
+    "short": "Install a release verified by a signed manifest",
+    "long": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. The v4.02.8 first upgrade must use a separately verified manual package procedure.",
     "flags": [
       {
         "name": "config",

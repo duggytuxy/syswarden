@@ -120,6 +120,119 @@ class ReleaseGateTests(unittest.TestCase):
         with zipfile.ZipFile(output / release_gate.COMPLIANCE_ARCHIVE_NAME) as archive:
             self.assertEqual(archive.namelist(), ["native/report.json"])
 
+    def test_signed_update_asset_contract_starts_after_legacy_first_hop(self) -> None:
+        self.assertFalse(release_gate.signed_update_required("v4.02.8"))
+        self.assertTrue(release_gate.signed_update_required("v4.02.9"))
+        self.assertTrue(release_gate.signed_update_required("v5.00.0"))
+        legacy = release_gate.expected_release_assets("v4.02.8")
+        signed = release_gate.expected_release_assets("v4.02.9")
+        self.assertNotIn(release_gate.UPDATE_MANIFEST_NAME, legacy)
+        self.assertNotIn(release_gate.UPDATE_SIGNATURE_NAME, legacy)
+        self.assertIn(release_gate.UPDATE_MANIFEST_NAME, signed)
+        self.assertIn(release_gate.UPDATE_SIGNATURE_NAME, signed)
+
+    def test_signed_update_predicate_cli_is_semantic_and_machine_readable(self) -> None:
+        for tag, expected in (
+            ("v4.02.7", "false"),
+            ("v4.02.8", "false"),
+            ("v4.02.9", "true"),
+            ("v4.02.10", "true"),
+            ("v5.00.0", "true"),
+        ):
+            with self.subTest(tag=tag), mock.patch(
+                "sys.argv", ["release_gate.py", "requires-signed-update", "--tag", tag]
+            ), mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+                self.assertEqual(release_gate.main(), 0)
+                self.assertEqual(output.getvalue(), expected + "\n")
+
+    def test_signed_release_fails_closed_without_qualification_manifest(self) -> None:
+        self.tag = "v4.02.9"
+        self.version = "4.02.9"
+        args = type(
+            "Args",
+            (),
+            {
+                "repository": self.make_repository(),
+                "tag": self.tag,
+                "packages": self.make_packages(),
+                "bundle": self.make_bundle(),
+                "sbom": self.make_sbom(),
+                "compliance": self.make_compliance(),
+                "output": self.root / "output",
+                "notes_output": self.root / "release_notes.md",
+                "update_manifest_dir": None,
+            },
+        )()
+        with self.assertRaisesRegex(
+            release_gate.ReleaseGateError, "signed update manifest directory is required"
+        ):
+            release_gate.prepare(args)
+
+    def test_signed_prepare_binds_manifest_into_exact_release_inventory(self) -> None:
+        self.tag = "v4.02.9"
+        self.version = "4.02.9"
+        update = self.root / "update"
+        self.write_file(update / release_gate.UPDATE_MANIFEST_NAME, b"manifest\n")
+        self.write_file(update / release_gate.UPDATE_SIGNATURE_NAME, b"signature\n")
+        repository = self.make_repository()
+        output = self.root / "output"
+        args = type(
+            "Args",
+            (),
+            {
+                "repository": repository,
+                "tag": self.tag,
+                "packages": self.make_packages(),
+                "bundle": self.make_bundle(),
+                "sbom": self.make_sbom(),
+                "compliance": self.make_compliance(),
+                "output": output,
+                "notes_output": self.root / "release_notes.md",
+                "update_manifest_dir": update,
+            },
+        )()
+        with mock.patch("release_gate.verify_signed_update_manifest") as verifier:
+            release_gate.prepare(args)
+            release_gate.verify_assets(output, self.tag, repository)
+        self.assertGreaterEqual(verifier.call_count, 3)
+        self.assertEqual(
+            {path.name for path in output.iterdir()},
+            release_gate.expected_release_assets(self.tag),
+        )
+        checksums = release_gate.parse_checksum_manifest(
+            output / release_gate.RELEASE_CHECKSUM_NAME
+        )
+        self.assertIn(release_gate.UPDATE_MANIFEST_NAME, checksums)
+        self.assertIn(release_gate.UPDATE_SIGNATURE_NAME, checksums)
+
+    def test_public_verifier_strips_private_secret_from_subprocess(self) -> None:
+        repository = self.root / "repository"
+        repository.mkdir()
+        packages = self.root / "packages"
+        packages.mkdir()
+        manifest = self.root / release_gate.UPDATE_MANIFEST_NAME
+        signature = self.root / release_gate.UPDATE_SIGNATURE_NAME
+        self.write_file(manifest)
+        self.write_file(signature)
+        marker = "PRIVATE-KEY-MUST-NOT-REACH-GO-RUN"
+        with mock.patch.dict(
+            os.environ,
+            {release_gate.UPDATE_PRIVATE_KEY_ENV: marker},
+        ), mock.patch(
+            "release_gate.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ) as runner:
+            release_gate.verify_signed_update_manifest(
+                repository, "v4.02.9", packages, manifest, signature
+            )
+        call = runner.call_args
+        command = call.args[0]
+        environment = call.kwargs["env"]
+        self.assertNotIn(release_gate.UPDATE_PRIVATE_KEY_ENV, environment)
+        self.assertNotIn(marker, command)
+        self.assertEqual(environment["GOFLAGS"], "-mod=readonly")
+        self.assertNotIn("shell", call.kwargs)
+
     def test_package_artifact_rejects_extra_file(self) -> None:
         packages = self.make_packages()
         self.write_file(packages / "unexpected.deb")
@@ -224,6 +337,78 @@ class ReleaseGateTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertEqual(workflow.count("jq -j '.body'"), 2)
         self.assertNotIn("jq -r '.body'", workflow)
+
+    def test_qualification_signer_compiles_before_protected_secret_exposure(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[2]
+            / ".github"
+            / "workflows"
+            / "release-qualification.yml"
+        ).read_text(encoding="utf-8")
+        build = workflow.split(
+            "      - name: Build and Test Signed Update Manifest Tool\n", 1
+        )[1].split("      - name:", 1)[0]
+        signer = workflow.split(
+            "      - name: Generate and Verify Signed Update Manifest\n", 1
+        )[1].split("      - name:", 1)[0]
+        self.assertIn(
+            "if: ${{ steps.update_contract.outputs.required == 'true' }}", build
+        )
+        self.assertIn("GOFLAGS=-mod=readonly go build", build)
+        self.assertIn("update_manifest_test.go", build)
+        self.assertIn('"${SIGNING_TOOL_DIR}/syswarden-update-manifest"', build)
+        self.assertNotIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", build)
+        self.assertIn(
+            "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY: "
+            "${{ secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY }}",
+            signer,
+        )
+        self.assertIn('unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY', signer)
+        self.assertIn('env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY', signer)
+        self.assertNotIn("go run", signer)
+        self.assertNotIn("sha256sum", signer)
+        self.assertNotIn("stat -c", signer)
+        self.assertNotIn("$(id", signer)
+        self.assertNotIn("set -x", signer)
+        self.assertNotIn('echo "${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}', signer)
+        self.assertNotIn("printf '%s' \"${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}", signer)
+        self.assertEqual(
+            workflow.count("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"), 1
+        )
+        self.assertIn('"update/syswarden-update-manifest-v1.json"', workflow)
+        self.assertIn('"update/syswarden-update-manifest-v1.json.sig"', workflow)
+        self.assertLess(
+            workflow.index("Require Successful Qualification Before Release Signing"),
+            workflow.index("Generate and Verify Signed Update Manifest"),
+        )
+        self.assertLess(
+            workflow.index("Generate and Verify Signed Update Manifest"),
+            workflow.index("Seal Exact Qualification Evidence Inventory"),
+        )
+        self.assertIn("refusing to sign because ${status_file}", workflow)
+        self.assertIn('rm -f -- "${manifest_path}" "${signature_path}"', signer)
+        self.assertIn(
+            '"${update_dir}/syswarden-update-manifest-v1.json.sig"', workflow
+        )
+
+    def test_release_manager_revalidates_signed_assets_and_preserves_v4028(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[2]
+            / ".github"
+            / "workflows"
+            / "release-manager.yml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("qualification_root_directories+=(update)"), 2)
+        self.assertEqual(
+            workflow.count("go run ./scripts/ci/update_manifest.go verify"), 2
+        )
+        self.assertEqual(workflow.count('--repository "${GITHUB_WORKSPACE}"'), 7)
+        self.assertNotIn('if [[ "${RELEASE_TAG}" != "v4.02.8" ]]', workflow)
+        self.assertEqual(workflow.count("requires-signed-update --tag"), 3)
+        self.assertEqual(workflow.count('if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]'), 6)
+        self.assertIn("--update-manifest-dir", workflow)
+        self.assertIn("Set Up Go for Signed Update Verification", workflow)
+        self.assertNotIn("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", workflow)
 
     def publish_script(self) -> str:
         workflow = (

@@ -592,8 +592,11 @@ func AddToWhitelist(ip string, port string) error {
 	if err := addToFile(file, entry); err != nil {
 		return err
 	}
+	if err := ApplyPolicies(); err != nil {
+		return err
+	}
 	fmt.Printf("[SUCCESS] IP %s safely whitelisted.\n", entry)
-	return ApplyPolicies()
+	return nil
 }
 
 // RemoveFromWhitelist removes an IP from the whitelist
@@ -617,8 +620,11 @@ func RemoveFromWhitelist(ip string) error {
 		return fmt.Errorf("remove IP from whitelist: %w", err)
 	}
 	if found {
+		if err := ApplyPolicies(); err != nil {
+			return err
+		}
 		fmt.Printf("[SUCCESS] IP %s removed from whitelist.\n", ip)
-		return ApplyPolicies()
+		return nil
 	}
 	fmt.Printf("[INFO] IP %s not found in whitelist.\n", ip)
 	return nil
@@ -639,13 +645,36 @@ func AddToBlocklist(ip string) error {
 	if err := addToFile(file, ip); err != nil {
 		return err
 	}
-	fmt.Printf("[SUCCESS] IP %s safely blocklisted.\n", ip)
 
 	if runtime.GOOS == "freebsd" {
 		_ = exec.Command("pfctl", "-k", ip).Run() // #nosec
 	}
 
-	return ApplyPolicies()
+	if err := ApplyPolicies(); err != nil {
+		return err
+	}
+	fmt.Printf("[SUCCESS] IP %s safely blocklisted.\n", ip)
+	return nil
+}
+
+func completeBlocklistRemoval(
+	ip string,
+	output io.Writer,
+	applyPolicies func() error,
+	syncHAUnban func([]string) error,
+) error {
+	var operationErrors []error
+	if err := applyPolicies(); err != nil {
+		operationErrors = append(operationErrors, fmt.Errorf("apply firewall policies after blocklist removal: %w", err))
+	}
+	if err := syncHAUnban([]string{ip}); err != nil {
+		operationErrors = append(operationErrors, fmt.Errorf("synchronize HA unban after blocklist removal: %w", err))
+	}
+	if err := errors.Join(operationErrors...); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(output, "[SUCCESS] IP %s removed from blocklist.\n", ip)
+	return err
 }
 
 // RemoveFromBlocklist removes an IP from the blocklist
@@ -663,12 +692,7 @@ func RemoveFromBlocklist(ip string) error {
 	if err := removeFromFile(file, ip); err != nil {
 		return err
 	}
-	fmt.Printf("[SUCCESS] IP %s removed from blocklist.\n", ip)
-
-	// Synchronize UNBAN to HA cluster
-	_ = network.SyncHAUnban([]string{ip})
-
-	return ApplyPolicies()
+	return completeBlocklistRemoval(ip, os.Stdout, ApplyPolicies, network.SyncHAUnban)
 }
 
 // AllowSSH adds an IP to the SSH bypass list
@@ -681,8 +705,11 @@ func AllowSSH(ip string, port string) error {
 	if err := addToFile(SSHBypass, entry); err != nil {
 		return err
 	}
+	if err := ApplyPolicies(); err != nil {
+		return err
+	}
 	fmt.Printf("[SUCCESS] SSH Bypass granted for %s.\n", entry)
-	return ApplyPolicies()
+	return nil
 }
 
 // RevokeSSH removes an IP from the SSH bypass list
@@ -700,8 +727,11 @@ func RevokeSSH(ip string) error {
 		return fmt.Errorf("remove IP from SSH bypass list: %w", err)
 	}
 	if found {
+		if err := ApplyPolicies(); err != nil {
+			return err
+		}
 		fmt.Printf("[SUCCESS] SSH Bypass revoked for %s.\n", ip)
-		return ApplyPolicies()
+		return nil
 	}
 	fmt.Printf("[INFO] IP %s not found in SSH bypass list.\n", ip)
 	return nil

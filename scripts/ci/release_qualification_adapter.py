@@ -260,23 +260,24 @@ def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> 
         _fail("nft laboratory namespace is not distinct from the host namespace")
     condition_keys = {
         "separate_network_namespace",
-        "exact_ruleset_rejected",
-        "exact_ruleset_left_no_objects",
+        "historical_concatenation_rejected_before_mutation",
         "kernel_reported_invalid_port",
-        "honeyport_only_normalization_passed_syntax_check",
+        "corrected_ruleset_applied",
+        "current_generator_contract_passed",
+        "dynamic_timeout_replication_applied",
         "isolated_ruleset_cleanup_succeeded",
     }
     conditions = _exact_keys(document["conditions"], condition_keys, "nft.conditions")
     if any(_boolean(value, f"nft.conditions.{key}") is not True for key, value in conditions.items()):
-        _fail("nft raw report no longer proves the exact reviewed kernel blocker")
+        _fail("nft raw report no longer proves the corrected kernel contract")
     if "Service out of range" not in _string(document["kernel_error"], "nft.kernel_error"):
         _fail("nft kernel error does not prove the reviewed invalid-port rejection")
     _string(document["summary"], "nft.summary")
     derived_harness = all(conditions.values()) and engine["rootless"] is True
     if (
         document["harness_status"] != ("pass" if derived_harness else "fail")
-        or document["product_status"] != "known_blocker"
-        or _boolean(document["release_ready"], "nft.release_ready") is not False
+        or document["product_status"] != "pass"
+        or _boolean(document["release_ready"], "nft.release_ready") is not True
         or document["finding_id"] != "SW-FW-004"
     ):
         _fail("nft top-level classification is inconsistent with nested evidence")
@@ -287,10 +288,15 @@ def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> 
     generator = gate._blob(
         binding.root, "src/core/syswarden-cli/pkg/firewall/firewall_linux.go"
     )
+    serializer = gate._blob(
+        binding.root, "src/core/syswarden-cli/pkg/firewall/honeyports.go"
+    )
     if (
         golden.count("tcp dport { 236379 }") != 2
         or 'strings.Join(m.Security.Honeyports, " ")' not in loader
-        or 'strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")' not in generator
+        or "canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)" not in generator
+        or 'strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")' in generator
+        or 'strings.Join(canonical, ", ")' not in serializer
     ):
         _fail("nft raw characterization does not match the expected Git source contract")
     act_images = re.findall(
@@ -301,8 +307,8 @@ def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> 
         _fail("nft engine image does not match the digest-pinned Act image in Git")
     return {
         "harness_complete": derived_harness,
-        "release_ready": False,
-        "blocker_ids": ["SW-FW-004"],
+        "release_ready": True,
+        "blocker_ids": [],
         "conditions": {
             "network_namespace_isolated": conditions["separate_network_namespace"],
             "host_namespace_untouched": (
@@ -310,11 +316,8 @@ def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> 
                 and engine["network"] == "none"
                 and host_namespace != lab_namespace
             ),
-            "kernel_apply_executed": conditions["exact_ruleset_rejected"],
-            "cleanup_complete": (
-                conditions["exact_ruleset_left_no_objects"]
-                and conditions["isolated_ruleset_cleanup_succeeded"]
-            ),
+            "kernel_apply_executed": conditions["corrected_ruleset_applied"],
+            "cleanup_complete": conditions["isolated_ruleset_cleanup_succeeded"],
         },
         "network_namespaces": {"host": host_namespace, "laboratory": lab_namespace},
     }
@@ -692,12 +695,7 @@ def _validate_package(
             _fail(f"package.{key} is not derived from lifecycle evidence")
     if classification["harness_complete"] is not True or unexpected:
         _fail("package lifecycle harness is incomplete or contains unexpected failures")
-    if blockers not in (
-        [],
-        ["SW-CFG-001"],
-        ["SW-PKG-001"],
-        ["SW-CFG-001", "SW-PKG-001"],
-    ):
+    if blockers not in ([], ["SW-PKG-001"]):
         _fail("package lifecycle blocker mapping is not canonical")
     expected_status = "pass" if classification["release_ready"] else "fail"
     if document["status"] != expected_status:
@@ -897,7 +895,7 @@ def _freebsd_check_passes(check_id: str, observed: Any, versions: dict[str, str]
         _boolean(value["source_concatenates_ports"], f"{check_id}.observed.source_concatenates_ports")
         _string(value["exact_port_value"], f"{check_id}.observed.exact_port_value", empty=True)
         _string(value["native_syntax_return_code"], f"{check_id}.observed.native_syntax_return_code", empty=True)
-        return value == {"source_concatenates_ports": False, "exact_port_value": "", "native_syntax_return_code": "not_run"}
+        return value == {"source_concatenates_ports": False, "exact_port_value": "23, 6379", "native_syntax_return_code": "0"}
     if check_id == "SW-PKG-FBSD-REMOVE-001":
         value = _exact_keys(observed, {"return_code", "package_absent", "inventory", "payload_absent", "links_absent"}, f"{check_id}.observed")
         _string_list(value["inventory"], f"{check_id}.observed.inventory", sorted_unique=True)

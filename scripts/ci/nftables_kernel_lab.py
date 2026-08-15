@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Characterize the v4.02.8 nftables golden in an isolated kernel namespace.
+"""Prove the corrected honeyport rules in an isolated nftables namespace.
 
-This laboratory never applies rules to the host namespace.  It records the
-known honeyport serialization defect as a release blocker until the Lot 1
-transactional firewall work intentionally replaces this contract.
+This laboratory never applies rules to the host namespace. It also proves that
+the historical 236379 regression is rejected before any ruleset mutation.
 """
 
 from __future__ import annotations
@@ -83,12 +82,11 @@ def pinned_act_image(repo_root: Path) -> str:
     return matches[0]
 
 
-def verify_known_source_contract(repo_root: Path, golden: Path) -> str:
+def verify_corrected_source_contract(repo_root: Path, golden: Path) -> str:
     text = golden.read_text(encoding="utf-8")
     if text.count("tcp dport { 236379 }") != 2:
         raise NftablesLabError(
-            "the frozen golden no longer contains exactly two known 236379 honeyport rules; "
-            "review and replace this characterization intentionally"
+            "the frozen baseline no longer contains exactly two historical 236379 honeyport rules"
         )
     loader = require_regular_file(
         repo_root / "src/core/syswarden-cli/config/config_loader.go",
@@ -98,11 +96,29 @@ def verify_known_source_contract(repo_root: Path, golden: Path) -> str:
         repo_root / "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
         "Linux firewall generator",
     ).read_text(encoding="utf-8")
+    serializer = require_regular_file(
+        repo_root / "src/core/syswarden-cli/pkg/firewall/honeyports.go",
+        "honeyport serializer",
+    ).read_text(encoding="utf-8")
     if 'strings.Join(m.Security.Honeyports, " ")' not in loader:
-        raise NftablesLabError("the known honeyport loader source contract changed")
-    if 'strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")' not in generator:
-        raise NftablesLabError("the known honeyport generator source contract changed")
-    return text.replace("tcp dport { 236379 }", "tcp dport { 23, 6379 }")
+        raise NftablesLabError("the compatible honeyport loader contract changed")
+    if 'canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)' not in generator:
+        raise NftablesLabError("the Linux generator does not use the validated serializer")
+    if 'strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")' in generator:
+        raise NftablesLabError("the concatenating honeyport implementation is still present")
+    if 'strings.Join(canonical, ", ")' not in serializer:
+        raise NftablesLabError("the honeyport serializer does not preserve item separators")
+    candidate = text.replace("tcp dport { 236379 }", "tcp dport { 23, 6379 }")
+    candidate = candidate.replace(
+        "flags timeout;", "flags interval,timeout;"
+    )
+    candidate = candidate.replace(
+        'type filter hook ingress devices = { "eth-test0", "eth-test1" }',
+        'type filter hook ingress device "lo"',
+    )
+    if candidate.count("tcp dport { 23, 6379 }") != 2 or "236379" in candidate:
+        raise NftablesLabError("the corrected candidate does not contain two distinct honeyports")
+    return candidate
 
 
 def require_success(result: CommandResult, description: str) -> None:
@@ -145,21 +161,63 @@ def ensure_rootless_engine(
     return version.stdout.strip()
 
 
+def prove_current_generator_contract(
+    runner: CommandRunner, repo_root: Path
+) -> None:
+    result = runner.run(
+        (
+            "go",
+            "-C",
+            str(repo_root / "src/core/syswarden-cli"),
+            "test",
+            "-mod=readonly",
+            "-count=1",
+            "-run=^TestNftablesRulesGolden_SW_QA_001$",
+            "-v",
+            "./pkg/firewall",
+        ),
+        timeout=240,
+    )
+    require_success(result, "current Linux firewall generator contract")
+    combined = result.stdout + "\n" + result.stderr
+    if (
+        "--- PASS: TestNftablesRulesGolden_SW_QA_001" not in combined
+        or "--- SKIP: TestNftablesRulesGolden_SW_QA_001" in combined
+    ):
+        raise NftablesLabError(
+            "current Linux firewall generator contract did not execute to PASS"
+        )
+
+
 CONTAINER_SCRIPT = r'''
 set +e
 printf 'NETNS=%s\n' "$(readlink /proc/self/ns/net)"
 printf 'NFT_VERSION=%s\n' "$(nft --version)"
-nft -f /fixture/syswarden.nft >/tmp/exact.out 2>/tmp/exact.err
-printf 'EXACT_APPLY_RC=%s\n' "$?"
-nft -j list ruleset >/tmp/after.json 2>/tmp/list.err
-printf 'EXACT_LIST_RC=%s\n' "$?"
-python3 -c 'import json; d=json.load(open("/tmp/after.json")); print("EXACT_OBJECTS="+str(len(d["nftables"])-1))'
-nft -c -f /fixture/honeyports-normalized.nft >/tmp/normalized.out 2>/tmp/normalized.err
-printf 'NORMALIZED_CHECK_RC=%s\n' "$?"
+nft -c -f /fixture/syswarden.nft >/tmp/legacy.out 2>/tmp/legacy.err
+printf 'LEGACY_CHECK_RC=%s\n' "$?"
+nft -j list ruleset >/tmp/before.json 2>/tmp/list-before.err
+printf 'LEGACY_LIST_RC=%s\n' "$?"
+python3 -c 'import json; d=json.load(open("/tmp/before.json")); print("LEGACY_OBJECTS="+str(len(d["nftables"])-1))'
+nft -f /fixture/honeyports-candidate.nft >/tmp/candidate.out 2>/tmp/candidate.err
+printf 'CANDIDATE_APPLY_RC=%s\n' "$?"
+nft -j list ruleset >/tmp/after.json 2>/tmp/list-after.err
+printf 'CANDIDATE_LIST_RC=%s\n' "$?"
+python3 -c 'import json; d=json.load(open("/tmp/after.json")); print("CANDIDATE_OBJECTS="+str(len(d["nftables"])-1))'
+nft add element inet syswarden banned_ips '{ 198.51.100.0-198.51.100.255 timeout 3600s expires 3599s }' >/tmp/dynamic.out 2>/tmp/dynamic.err && \
+nft add element inet syswarden banned_ips6 '{ 2001:db8::-2001:db8::ffff:ffff:ffff:ffff timeout 3600s expires 3599s }' >>/tmp/dynamic.out 2>>/tmp/dynamic.err && \
+nft add element netdev syswarden_hw_drop banned_ips '{ 198.51.100.0-198.51.100.255 timeout 3600s expires 3599s }' >>/tmp/dynamic.out 2>>/tmp/dynamic.err && \
+nft add element netdev syswarden_hw_drop banned_ips6 '{ 2001:db8::-2001:db8::ffff:ffff:ffff:ffff timeout 3600s expires 3599s }' >>/tmp/dynamic.out 2>>/tmp/dynamic.err
+printf 'DYNAMIC_ADD_RC=%s\n' "$?"
+nft -j list ruleset >/tmp/dynamic.json 2>/tmp/dynamic-list.err
+printf 'DYNAMIC_LIST_RC=%s\n' "$?"
+python3 -c 'import json; d=json.load(open("/tmp/dynamic.json")); w={("inet","syswarden","banned_ips"),("inet","syswarden","banned_ips6"),("netdev","syswarden_hw_drop","banned_ips"),("netdev","syswarden_hw_drop","banned_ips6")}; o=[x.get("element") or x.get("set") for x in d["nftables"]]; f={(x.get("family"),x.get("table"),x.get("name")) for x in o if isinstance(x,dict) and "\"timeout\"" in json.dumps(x.get("elem",[])) and "\"expires\"" in json.dumps(x.get("elem",[]))}; print("DYNAMIC_TIMEOUT_OK="+str(int(f==w)))'
 nft flush ruleset >/tmp/flush.out 2>/tmp/flush.err
 printf 'CLEANUP_RC=%s\n' "$?"
 printf '%s\n' 'ERROR_BEGIN'
-cat /tmp/exact.err
+cat /tmp/legacy.err
+cat /tmp/candidate.err
+cat /tmp/dynamic.err
+cat /tmp/dynamic-list.err
 printf '%s\n' 'ERROR_END'
 exit 0
 '''.strip()
@@ -181,7 +239,7 @@ def container_arguments(
         "--volume",
         f"{golden}:/fixture/syswarden.nft:ro",
         "--volume",
-        f"{normalized}:/fixture/honeyports-normalized.nft:ro",
+        f"{normalized}:/fixture/honeyports-candidate.nft:ro",
         image,
         "bash",
         "-c",
@@ -213,10 +271,15 @@ def parse_container_output(stdout: str) -> tuple[dict[str, str], str]:
     expected = {
         "NETNS",
         "NFT_VERSION",
-        "EXACT_APPLY_RC",
-        "EXACT_LIST_RC",
-        "EXACT_OBJECTS",
-        "NORMALIZED_CHECK_RC",
+        "LEGACY_CHECK_RC",
+        "LEGACY_LIST_RC",
+        "LEGACY_OBJECTS",
+        "CANDIDATE_APPLY_RC",
+        "CANDIDATE_LIST_RC",
+        "CANDIDATE_OBJECTS",
+        "DYNAMIC_ADD_RC",
+        "DYNAMIC_LIST_RC",
+        "DYNAMIC_TIMEOUT_OK",
         "CLEANUP_RC",
     }
     if set(markers) != expected:
@@ -241,8 +304,9 @@ def run_lab(
     golden = require_regular_file(
         root / "testdata/firewall/nftables-v4.02.8.nft", "nftables golden"
     )
-    normalized_text = verify_known_source_contract(root, golden)
+    normalized_text = verify_corrected_source_contract(root, golden)
     active_runner = runner or CommandRunner()
+    prove_current_generator_contract(active_runner, root)
     engine_version = ensure_rootless_engine(
         active_runner, podman, image, pull_policy
     )
@@ -258,31 +322,40 @@ def run_lab(
     markers, kernel_error = parse_container_output(result.stdout)
     conditions = {
         "separate_network_namespace": markers["NETNS"] != host_netns,
-        "exact_ruleset_rejected": markers["EXACT_APPLY_RC"] == "1",
-        "exact_ruleset_left_no_objects": (
-            markers["EXACT_LIST_RC"] == "0" and markers["EXACT_OBJECTS"] == "0"
+        "historical_concatenation_rejected_before_mutation": (
+            markers["LEGACY_CHECK_RC"] == "1"
+            and markers["LEGACY_LIST_RC"] == "0"
+            and markers["LEGACY_OBJECTS"] == "0"
         ),
         "kernel_reported_invalid_port": "Service out of range" in kernel_error,
-        "honeyport_only_normalization_passed_syntax_check": (
-            markers["NORMALIZED_CHECK_RC"] == "0"
+        "corrected_ruleset_applied": (
+            markers["CANDIDATE_APPLY_RC"] == "0"
+            and markers["CANDIDATE_LIST_RC"] == "0"
+            and int(markers["CANDIDATE_OBJECTS"]) > 0
+        ),
+        "current_generator_contract_passed": True,
+        "dynamic_timeout_replication_applied": (
+            markers["DYNAMIC_ADD_RC"] == "0"
+            and markers["DYNAMIC_LIST_RC"] == "0"
+            and markers["DYNAMIC_TIMEOUT_OK"] == "1"
         ),
         "isolated_ruleset_cleanup_succeeded": markers["CLEANUP_RC"] == "0",
     }
     if not all(conditions.values()):
         raise NftablesLabError(
-            "nftables evidence no longer matches the reviewed baseline blocker: "
+            "nftables evidence does not prove the corrected honeyport contract: "
             + json.dumps(conditions, sort_keys=True)
         )
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(),
         "harness_status": "pass",
-        "product_status": "known_blocker",
-        "release_ready": False,
+        "product_status": "pass",
+        "release_ready": True,
         "finding_id": FINDING_ID,
         "summary": (
-            "The v4.02.8 generator serializes honeyports 23 and 6379 as the "
-            "out-of-range port 236379; the isolated kernel rejects the exact ruleset."
+            "The corrected generator keeps honeyports 23 and 6379 distinct, the isolated "
+            "kernel applies the candidate, and the historical 236379 form is rejected."
         ),
         "engine": {
             "name": "podman",

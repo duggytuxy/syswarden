@@ -5,9 +5,135 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
+
+func readLoggerTestFile(t *testing.T, path string) []byte {
+	t.Helper()
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	wire, err := root.ReadFile(filepath.Base(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}
+
+func TestPersistentBlocklistWriterIsAtomicCanonicalAndFailClosed_SW_HA_003(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "syswarden_blacklist.ipv4")
+	for _, entry := range []string{"198.51.100.9", "198.51.100.7", "198.51.100.9", "203.0.113.9/24"} {
+		if err := UpdatePersistentBlocklist(path, entry, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wire := readLoggerTestFile(t, path)
+	if string(wire) != "198.51.100.7\n198.51.100.9\n203.0.113.0/24\n" {
+		t.Fatalf("canonical deduplicated blocklist = %q", wire)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		t.Fatalf("published blocklist info=%v err=%v", info, err)
+	}
+	if err := UpdatePersistentBlocklist(path, "198.51.100.9", false); err != nil {
+		t.Fatal(err)
+	}
+	wire = readLoggerTestFile(t, path)
+	if string(wire) != "198.51.100.7\n203.0.113.0/24\n" {
+		t.Fatalf("atomic removal = %q", wire)
+	}
+
+	const workers = 64
+	var wait sync.WaitGroup
+	for index := 1; index <= workers; index++ {
+		index := index
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			if err := UpdatePersistentBlocklist(path, "192.0.2."+strconv.Itoa(index), true); err != nil {
+				t.Errorf("concurrent persistence: %v", err)
+			}
+		}()
+	}
+	wait.Wait()
+	wire = readLoggerTestFile(t, path)
+	if got := len(strings.Fields(string(wire))); got != workers+2 {
+		t.Fatalf("concurrent atomic writer retained %d entries, want %d", got, workers+2)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(directory, "operator-target")
+	if err := os.WriteFile(target, []byte("operator data\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePersistentBlocklist(path, "198.51.100.100", true); err == nil {
+		t.Fatal("persistent blocklist writer accepted a symlink destination")
+	}
+	targetWire := readLoggerTestFile(t, target)
+	if !reflect.DeepEqual(targetWire, []byte("operator data\n")) {
+		t.Fatalf("symlink target changed: %q", targetWire)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	insecureRoot, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer insecureRoot.Close()
+	insecureFile, err := insecureRoot.OpenFile(filepath.Base(path), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := insecureFile.Write([]byte("198.51.100.11\n")); err != nil {
+		_ = insecureFile.Close()
+		t.Fatal(err)
+	}
+	if err := insecureFile.Chmod(0644); err != nil {
+		_ = insecureFile.Close()
+		t.Fatal(err)
+	}
+	if err := insecureFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePersistentBlocklist(path, "198.51.100.12", true); err == nil {
+		t.Fatal("persistent blocklist writer accepted an insecure destination mode")
+	}
+	if wire := readLoggerTestFile(t, path); string(wire) != "198.51.100.11\n" {
+		t.Fatalf("insecure destination changed despite rejection: %q", wire)
+	}
+
+	realParent := t.TempDir()
+	realChild := filepath.Join(realParent, "real-child")
+	if err := os.Mkdir(realChild, 0700); err != nil {
+		t.Fatal(err)
+	}
+	linkedParent := filepath.Join(directory, "linked-ancestor")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePersistentBlocklist(filepath.Join(linkedParent, "real-child", "syswarden_blacklist.ipv4"), "198.51.100.12", true); err == nil {
+		t.Fatal("persistent blocklist writer accepted a symbolic-link ancestor")
+	}
+	if _, err := os.Lstat(filepath.Join(realChild, "syswarden_blacklist.ipv4")); !os.IsNotExist(err) {
+		t.Fatalf("symbolic-link ancestor target was mutated: %v", err)
+	}
+	if err := UpdatePersistentBlocklist(directory+"/./syswarden_blacklist.ipv4", "198.51.100.12", true); err == nil {
+		t.Fatal("persistent blocklist writer accepted a non-canonical path")
+	}
+}
 
 func TestLocalCheckTelemetryPreservesStructuredCompatibility_SW_DOC_001(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "waf.json")

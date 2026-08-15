@@ -2,15 +2,19 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -26,17 +31,26 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v4.02.8"
+const SysWardenVersion = "v4.02.9"
 const haPeerCABundleFile = "/etc/syswarden/ha-ca.pem"
+const haModularConfigDirectory = "/etc/syswarden/config"
+const haLegacyConfigFile = "/opt/syswarden/syswarden-auto.conf"
+const maxTUIHAResponseBytes = 1024 * 1024
 
 var (
 	activeNodeIP        = "local"
 	haPeerPort          = "62026"
+	haBearerToken       string
+	haRuntimeConfigErr  error
+	haRuntimeConfigMu   sync.RWMutex
 	httpClient, haCAErr = newHAHTTPClient(haPeerCABundleFile)
 )
 
 func newHAHTTPClient(caBundleFile string) (*http.Client, error) {
 	rootCAs, err := loadHATrustRoots(caBundleFile)
+	if err != nil {
+		return nil, err
+	}
 	client := &http.Client{
 		Timeout: 2 * time.Second,
 		Transport: &http.Transport{
@@ -45,43 +59,166 @@ func newHAHTTPClient(caBundleFile string) (*http.Client, error) {
 				RootCAs:    rootCAs,
 			},
 		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("HA redirects are disabled")
+		},
 	}
-	return client, err
+	return client, nil
 }
 
 func loadHATrustRoots(caBundleFile string) (*x509.CertPool, error) {
 	caBundleFile = filepath.Clean(caBundleFile)
-	bundle, err := os.ReadFile(caBundleFile)
-	if err == nil {
-		roots := x509.NewCertPool()
-		if !roots.AppendCertsFromPEM(bundle) {
-			return x509.NewCertPool(), fmt.Errorf("HA CA bundle %s contains no certificates", caBundleFile)
+	info, err := os.Lstat(caBundleFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		roots, systemErr := x509.SystemCertPool()
+		if systemErr != nil || roots == nil {
+			roots = x509.NewCertPool()
 		}
 		return roots, nil
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return x509.NewCertPool(), fmt.Errorf("read HA CA bundle %s: %w", caBundleFile, err)
+	if err != nil {
+		return nil, fmt.Errorf("inspect HA CA bundle: %w", err)
 	}
-	roots, systemErr := x509.SystemCertPool()
-	if systemErr != nil {
-		return x509.NewCertPool(), fmt.Errorf("load system certificate pool: %w", systemErr)
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("HA CA bundle must be a regular file")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || (int(stat.Uid) != 0 && int(stat.Uid) != os.Geteuid()) {
+		return nil, fmt.Errorf("HA CA bundle has an unexpected owner")
+	}
+	if info.Mode().Perm()&0022 != 0 {
+		return nil, fmt.Errorf("HA CA bundle must not be group/world writable")
+	}
+	parent := filepath.Dir(caBundleFile)
+	parentInfo, err := os.Lstat(parent)
+	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("HA CA bundle parent must be a real directory")
+	}
+	root, err := os.OpenRoot(parent)
+	if err != nil {
+		return nil, fmt.Errorf("open HA CA bundle parent: %w", err)
+	}
+	defer root.Close()
+	openedParent, err := root.Stat(".")
+	if err != nil || !os.SameFile(parentInfo, openedParent) {
+		return nil, fmt.Errorf("HA CA bundle parent changed while opening")
+	}
+	file, err := root.Open(filepath.Base(caBundleFile))
+	if err != nil {
+		return nil, fmt.Errorf("open HA CA bundle: %w", err)
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened HA CA bundle: %w", err)
+	}
+	currentInfo, err := root.Lstat(filepath.Base(caBundleFile))
+	if err != nil || !openedInfo.Mode().IsRegular() || !currentInfo.Mode().IsRegular() ||
+		!os.SameFile(info, openedInfo) || !os.SameFile(openedInfo, currentInfo) {
+		return nil, fmt.Errorf("HA CA bundle changed while opening")
+	}
+	const maxHACABytes = 1024 * 1024
+	bundle, err := io.ReadAll(io.LimitReader(file, maxHACABytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read HA CA bundle: %w", err)
+	}
+	roots := x509.NewCertPool()
+	if len(bundle) > maxHACABytes {
+		return nil, fmt.Errorf("HA CA bundle contains no valid certificate")
+	}
+	if err := addStrictHATrustCertificates(roots, bundle); err != nil {
+		return nil, fmt.Errorf("HA CA bundle is invalid: %w", err)
 	}
 	return roots, nil
 }
 
-func haPeerURL(peer, path string) string {
+func addStrictHATrustCertificates(roots *x509.CertPool, bundle []byte) error {
+	if roots == nil {
+		return fmt.Errorf("certificate pool is unavailable")
+	}
+	remaining := bundle
+	certificates := 0
+	for {
+		remaining = bytes.TrimLeft(remaining, " \t\r\n")
+		if len(remaining) == 0 {
+			break
+		}
+		if !bytes.HasPrefix(remaining, []byte("-----BEGIN CERTIFICATE-----")) {
+			return fmt.Errorf("unexpected data outside a CERTIFICATE block")
+		}
+		block, rest := pem.Decode(remaining)
+		if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			return fmt.Errorf("invalid CERTIFICATE block")
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return fmt.Errorf("parse CERTIFICATE block: %w", err)
+		}
+		roots.AddCert(certificate)
+		certificates++
+		remaining = rest
+	}
+	if certificates == 0 {
+		return fmt.Errorf("bundle contains no certificate")
+	}
+	return nil
+}
+
+func haPeerURL(peer, path string) (string, error) {
 	peer = strings.TrimSpace(peer)
 	if strings.HasPrefix(peer, "[") && strings.HasSuffix(peer, "]") {
 		peer = strings.TrimSuffix(strings.TrimPrefix(peer, "["), "]")
 	}
-	return "https://" + net.JoinHostPort(peer, haPeerPort) + path
+	address, err := netip.ParseAddr(peer)
+	if err != nil || address.Is4In6() || address.Zone() != "" {
+		return "", fmt.Errorf("HA destination must be an exact IP address")
+	}
+	haRuntimeConfigMu.RLock()
+	port := haPeerPort
+	haRuntimeConfigMu.RUnlock()
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", fmt.Errorf("invalid HA peer port")
+	}
+	return "https://" + net.JoinHostPort(address.String(), strconv.Itoa(portNumber)) + path, nil
 }
 
 func haGet(url string) (*http.Response, error) {
 	if haCAErr != nil {
 		return nil, fmt.Errorf("HA TLS trust configuration: %w", haCAErr)
 	}
-	return httpClient.Get(url)
+	haRuntimeConfigMu.RLock()
+	token := haBearerToken
+	configErr := haRuntimeConfigErr
+	haRuntimeConfigMu.RUnlock()
+	if configErr != nil {
+		return nil, fmt.Errorf("HA configuration unavailable: %w", configErr)
+	}
+	if token == "" || strings.TrimSpace(token) != token {
+		return nil, fmt.Errorf("HA bearer token is required; configure integrations.ha.token and upgrade legacy HA clients")
+	}
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	wire, readErr := io.ReadAll(io.LimitReader(response.Body, maxTUIHAResponseBytes+1))
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read HA response: %w", readErr)
+	}
+	if len(wire) > maxTUIHAResponseBytes {
+		return nil, fmt.Errorf("HA response exceeds %d bytes", maxTUIHAResponseBytes)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close HA response: %w", closeErr)
+	}
+	response.Body = io.NopCloser(bytes.NewReader(wire))
+	return response, nil
 }
 
 // --- DATA MODELS ---
@@ -422,25 +559,321 @@ func main() {
 
 // --- P2P MESH TUI LOGIC ---
 
-func getHAPeers() []string {
-	var peers []string
-	file, err := os.Open("/opt/syswarden/syswarden-auto.conf") // #nosec
-	if err != nil {
-		return peers
-	}
-	defer func() { _ = file.Close() }()
+type tuiHAConfig struct {
+	Enabled  bool
+	PeerIPs  []string
+	PeerPort string
+	Token    string
+}
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "SYSWARDEN_HA_PEER_IP=") {
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) == 2 {
-				ips := strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "\"'"))
-				ips = strings.ReplaceAll(ips, ",", " ")
-				peers = append(peers, strings.Fields(ips)...)
+func getHAPeers() []string {
+	cfg, err := loadTUIHAConfig(haModularConfigDirectory, haLegacyConfigFile)
+	haRuntimeConfigMu.Lock()
+	defer haRuntimeConfigMu.Unlock()
+	haRuntimeConfigErr = err
+	if err != nil || !cfg.Enabled {
+		haBearerToken = ""
+		return nil
+	}
+	haPeerPort = cfg.PeerPort
+	haBearerToken = cfg.Token
+	return dialableTUIHAPeers(cfg.PeerIPs)
+}
+
+func loadTUIHAConfig(modularDirectory, legacyFile string) (tuiHAConfig, error) {
+	info, err := os.Lstat(modularDirectory)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return tuiHAConfig{}, fmt.Errorf("modular HA config must be a real directory")
+		}
+		cfg := tuiHAConfig{PeerPort: "62026"}
+		files := make([]string, 0)
+		master := filepath.Join(modularDirectory, "config.toml")
+		if _, statErr := os.Lstat(master); statErr == nil {
+			files = append(files, master)
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return tuiHAConfig{}, fmt.Errorf("inspect modular HA master config: %w", statErr)
+		}
+		modules := filepath.Join(modularDirectory, "modules")
+		if moduleInfo, statErr := os.Lstat(modules); statErr == nil {
+			if moduleInfo.Mode()&os.ModeSymlink != 0 || !moduleInfo.IsDir() {
+				return tuiHAConfig{}, fmt.Errorf("modular HA modules path must be a real directory")
+			}
+			entries, readErr := os.ReadDir(modules)
+			if readErr != nil {
+				return tuiHAConfig{}, fmt.Errorf("read modular HA modules: %w", readErr)
+			}
+			moduleFiles := make([]string, 0)
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".toml") {
+					moduleFiles = append(moduleFiles, filepath.Join(modules, entry.Name()))
+				}
+			}
+			sort.Strings(moduleFiles)
+			files = append(files, moduleFiles...)
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return tuiHAConfig{}, fmt.Errorf("inspect modular HA modules: %w", statErr)
+		}
+		for _, file := range files {
+			wire, readErr := readTUIConfigFile(file)
+			if readErr != nil {
+				return tuiHAConfig{}, readErr
+			}
+			if err := mergeTUIHATOML(&cfg, wire); err != nil {
+				return tuiHAConfig{}, fmt.Errorf("parse modular HA configuration: %w", err)
 			}
 		}
+		return validateTUIHAConfig(cfg)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return tuiHAConfig{}, fmt.Errorf("inspect modular HA configuration: %w", err)
+	}
+	wire, err := readTUIConfigFile(legacyFile)
+	if err != nil {
+		return tuiHAConfig{}, fmt.Errorf("read legacy HA configuration: %w", err)
+	}
+	cfg, err := parseTUILegacyHAConfig(wire)
+	if err != nil {
+		return tuiHAConfig{}, err
+	}
+	return validateTUIHAConfig(cfg)
+}
+
+func readTUIConfigFile(path string) ([]byte, error) {
+	path = filepath.Clean(path)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("HA configuration file must be regular")
+	}
+	if info.Mode().Perm()&0022 != 0 {
+		return nil, fmt.Errorf("HA configuration file must not be group/world writable")
+	}
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	file, err := root.Open(filepath.Base(path))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	current, err := root.Lstat(filepath.Base(path))
+	if err != nil || !opened.Mode().IsRegular() || !current.Mode().IsRegular() ||
+		!os.SameFile(info, opened) || !os.SameFile(opened, current) {
+		return nil, fmt.Errorf("HA configuration file changed while opening")
+	}
+	const maxConfigBytes = 1024 * 1024
+	wire, err := io.ReadAll(io.LimitReader(file, maxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(wire) > maxConfigBytes {
+		return nil, fmt.Errorf("HA configuration file is too large")
+	}
+	return wire, nil
+}
+
+func mergeTUIHATOML(cfg *tuiHAConfig, wire []byte) error {
+	scanner := bufio.NewScanner(strings.NewReader(string(wire)))
+	section := ""
+	seen := make(map[string]struct{})
+	for scanner.Scan() {
+		line := strings.TrimSpace(stripTUIConfigComment(scanner.Text()))
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			if !strings.HasSuffix(line, "]") {
+				return fmt.Errorf("invalid TOML section")
+			}
+			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
+			continue
+		}
+		if section != "integrations.ha" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid HA TOML assignment")
+		}
+		key, value := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate HA TOML key")
+		}
+		seen[key] = struct{}{}
+		switch key {
+		case "enabled":
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return err
+			}
+			cfg.Enabled = parsed
+		case "peer_ips":
+			values, err := parseTUIStringArray(value)
+			if err != nil {
+				return err
+			}
+			cfg.PeerIPs = values
+		case "peer_port":
+			cfg.PeerPort = strings.Trim(value, "\"'")
+		case "token":
+			parsed, err := parseTUIQuotedString(value)
+			if err != nil {
+				return err
+			}
+			cfg.Token = parsed
+		}
+	}
+	return scanner.Err()
+}
+
+func stripTUIConfigComment(line string) string {
+	var quote rune
+	escaped := false
+	for index, character := range line {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if character == '\\' && quote == '"' {
+			escaped = true
+			continue
+		}
+		if character == '\'' || character == '"' {
+			if quote == 0 {
+				quote = character
+			} else if quote == character {
+				quote = 0
+			}
+			continue
+		}
+		if character == '#' && quote == 0 {
+			return line[:index]
+		}
+	}
+	return line
+}
+
+func parseTUIQuotedString(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if len(value) < 2 {
+		return "", fmt.Errorf("HA TOML value must be quoted")
+	}
+	if value[0] == '\'' && value[len(value)-1] == '\'' {
+		return value[1 : len(value)-1], nil
+	}
+	if value[0] != '"' || value[len(value)-1] != '"' {
+		return "", fmt.Errorf("HA TOML value must be quoted")
+	}
+	return strconv.Unquote(value)
+}
+
+func parseTUIStringArray(value string) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if len(value) < 2 || value[0] != '[' || value[len(value)-1] != ']' {
+		return nil, fmt.Errorf("HA peer_ips must be a string array")
+	}
+	inner := strings.TrimSpace(value[1 : len(value)-1])
+	if inner == "" {
+		return []string{}, nil
+	}
+	parts := strings.Split(inner, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		parsed, err := parseTUIQuotedString(strings.TrimSpace(part))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, parsed)
+	}
+	return result, nil
+}
+
+func parseTUILegacyHAConfig(wire []byte) (tuiHAConfig, error) {
+	cfg := tuiHAConfig{PeerPort: "62026"}
+	scanner := bufio.NewScanner(strings.NewReader(string(wire)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+		switch strings.TrimSpace(parts[0]) {
+		case "SYSWARDEN_HA_ENABLED":
+			cfg.Enabled = value == "y" || value == "1" || strings.EqualFold(value, "true")
+		case "SYSWARDEN_HA_PEER_IP":
+			cfg.PeerIPs = strings.Fields(strings.ReplaceAll(value, ",", " "))
+		case "SYSWARDEN_HA_PEER_PORT":
+			cfg.PeerPort = value
+		case "SYSWARDEN_HA_TOKEN":
+			cfg.Token = value
+		}
+	}
+	return cfg, scanner.Err()
+}
+
+func validateTUIHAConfig(cfg tuiHAConfig) (tuiHAConfig, error) {
+	if cfg.PeerPort == "" {
+		cfg.PeerPort = "62026"
+	}
+	port, err := strconv.Atoi(cfg.PeerPort)
+	if err != nil || port < 1 || port > 65535 {
+		return tuiHAConfig{}, fmt.Errorf("invalid HA peer port")
+	}
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+	if cfg.Token == "" || strings.TrimSpace(cfg.Token) != cfg.Token {
+		return tuiHAConfig{}, fmt.Errorf("HA bearer token is required; configure integrations.ha.token and upgrade legacy HA clients")
+	}
+	if len(cfg.PeerIPs) == 0 {
+		return tuiHAConfig{}, fmt.Errorf("HA peer_ips is required")
+	}
+	for _, peer := range cfg.PeerIPs {
+		if strings.Contains(peer, "/") {
+			prefix, err := netip.ParsePrefix(peer)
+			if err != nil || prefix.Addr().Is4In6() || prefix.Addr().Zone() != "" || prefix.Addr() != prefix.Masked().Addr() {
+				return tuiHAConfig{}, fmt.Errorf("invalid HA peer CIDR")
+			}
+			continue
+		}
+		address, err := netip.ParseAddr(strings.Trim(peer, "[]"))
+		if err != nil || address.Is4In6() || address.Zone() != "" {
+			return tuiHAConfig{}, fmt.Errorf("invalid exact HA peer")
+		}
+	}
+	return cfg, nil
+}
+
+func dialableTUIHAPeers(configured []string) []string {
+	peers := make([]string, 0, len(configured))
+	seen := make(map[string]struct{}, len(configured))
+	for _, peer := range configured {
+		if strings.Contains(peer, "/") {
+			continue
+		}
+		address, err := netip.ParseAddr(strings.Trim(peer, "[]"))
+		if err != nil || address.Is4In6() || address.Zone() != "" {
+			continue
+		}
+		canonical := address.String()
+		if _, duplicate := seen[canonical]; duplicate {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		peers = append(peers, canonical)
 	}
 	return peers
 }
@@ -500,7 +933,7 @@ func showNodesList(mainFlex *tview.Flex) {
 	table.SetCell(0, 4, tview.NewTableCell("Version").SetTextColor(tcell.ColorYellow).SetSelectable(false))
 
 	if len(peers) == 0 {
-		table.SetCell(1, 0, tview.NewTableCell("No peers configured in syswarden-auto.conf").SetTextColor(tcell.ColorGray))
+		table.SetCell(1, 0, tview.NewTableCell("No dialable exact HA peers configured").SetTextColor(tcell.ColorGray))
 	} else {
 		for i, ip := range peers {
 			row := i + 1
@@ -511,7 +944,12 @@ func showNodesList(mainFlex *tview.Flex) {
 			table.SetCell(row, 4, tview.NewTableCell("...").SetTextColor(tcell.ColorGray))
 
 			go func(ip string, r int) {
-				resp, err := haGet(haPeerURL(ip, "/ha/status"))
+				endpoint, endpointErr := haPeerURL(ip, "/ha/status")
+				var resp *http.Response
+				err := endpointErr
+				if err == nil {
+					resp, err = haGet(endpoint)
+				}
 
 				app.QueueUpdateDraw(func() {
 					if err != nil {
@@ -573,7 +1011,11 @@ func readDataAndUpdate() {
 	if activeNodeIP == "local" {
 		bytes, err = os.ReadFile(DataFile) // #nosec
 	} else {
-		resp, reqErr := haGet(haPeerURL(activeNodeIP, "/ha/telemetry"))
+		endpoint, reqErr := haPeerURL(activeNodeIP, "/ha/telemetry")
+		var resp *http.Response
+		if reqErr == nil {
+			resp, reqErr = haGet(endpoint)
+		}
 		if reqErr != nil {
 			err = reqErr
 		} else {

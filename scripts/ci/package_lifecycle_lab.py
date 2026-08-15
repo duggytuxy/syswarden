@@ -2656,25 +2656,7 @@ def classify_lifecycle_evidence(
         for check in expected_event_checks("apk", scenario)
         if check.endswith(".executable")
     }
-    expected_config_failures = {
-        f"{distribution}/{architecture}:{check}": (
-            "package manager returned success after maintainer script emitted a Go panic"
-        )
-        for distribution, architecture in REQUIRED_PLATFORM_COORDINATES
-        if distribution != "alpine"
-        for family in (
-            next(
-                spec.family
-                for spec in DEFAULT_PLATFORMS
-                if platform_coordinate(spec) == (distribution, architecture)
-            ),
-        )
-        for scenario in EXPECTED_SCENARIOS[family]
-        for check in expected_event_checks(family, scenario)
-        if check.endswith(".maintainer_script")
-    }
     known_failure_sets = {
-        "SW-CFG-001": expected_config_failures,
         "SW-PKG-001": expected_alpine_failures,
     }
     canonical_failures_by_blocker: dict[str, dict[str, str]] = {

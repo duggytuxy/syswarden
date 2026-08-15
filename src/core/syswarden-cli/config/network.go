@@ -18,6 +18,7 @@ type BlocklistsConfig struct {
 	CustomURL6  string `mapstructure:"custom_url_ipv6"`
 	CustomHash  string `mapstructure:"custom_hash"`
 	CustomHash6 string `mapstructure:"custom_hash_ipv6"`
+	UseSpamhaus bool   `mapstructure:"use_spamhaus"`
 }
 
 type GeoConfig struct {

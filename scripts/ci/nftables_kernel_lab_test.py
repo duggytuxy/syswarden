@@ -27,6 +27,12 @@ class FakeRunner(nftables_kernel_lab.CommandRunner):
     def run(self, args: tuple[str, ...], *, timeout: int) -> nftables_kernel_lab.CommandResult:
         del timeout
         self.calls.append(tuple(args))
+        if args[0] == "go":
+            return nftables_kernel_lab.CommandResult(
+                0,
+                "--- PASS: TestNftablesRulesGolden_SW_QA_001 (0.01s)\nPASS\n",
+                "",
+            )
         if args[1] == "info":
             return nftables_kernel_lab.CommandResult(0, "true\n", "")
         if args[1] == "version":
@@ -45,10 +51,15 @@ class FakeRunner(nftables_kernel_lab.CommandRunner):
                     (
                         f"NETNS={host_netns}-isolated",
                         "NFT_VERSION=nftables v1.1.6 (Commodore Bullmoose #2)",
-                        "EXACT_APPLY_RC=1",
-                        "EXACT_LIST_RC=0",
-                        "EXACT_OBJECTS=0",
-                        "NORMALIZED_CHECK_RC=0",
+                        "LEGACY_CHECK_RC=1",
+                        "LEGACY_LIST_RC=0",
+                        "LEGACY_OBJECTS=0",
+                        "CANDIDATE_APPLY_RC=0",
+                        "CANDIDATE_LIST_RC=0",
+                        "CANDIDATE_OBJECTS=42",
+                        "DYNAMIC_ADD_RC=0",
+                        "DYNAMIC_LIST_RC=0",
+                        "DYNAMIC_TIMEOUT_OK=1",
                         "CLEANUP_RC=0",
                         "ERROR_BEGIN",
                         "/fixture/syswarden.nft:81: Service out of range",
@@ -81,47 +92,61 @@ class NftablesKernelLabTests(unittest.TestCase):
         )
         loader.parent.mkdir(parents=True)
         generator.parent.mkdir(parents=True)
+        serializer = (
+            self.root
+            / "src/core/syswarden-cli/pkg/firewall/honeyports.go"
+        )
         loader.write_text(
             'strings.Join(m.Security.Honeyports, " ")\n', encoding="utf-8"
         )
         generator.write_text(
-            'strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")\n',
+            "canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)\n",
             encoding="utf-8",
         )
+        serializer.write_text(
+            'strings.Join(canonical, ", ")\n', encoding="utf-8"
+        )
 
-    def test_characterizes_known_blocker_without_claiming_release_ready(self) -> None:
+    def test_proves_corrected_candidate_and_claims_local_lab_ready(self) -> None:
         runner = FakeRunner()
         report = nftables_kernel_lab.run_lab(
             self.root, "podman", "never", runner=runner
         )
         self.assertEqual(report["harness_status"], "pass")
-        self.assertEqual(report["product_status"], "known_blocker")
+        self.assertEqual(report["product_status"], "pass")
         self.assertEqual(report["finding_id"], "SW-FW-004")
-        self.assertIs(report["release_ready"], False)
+        self.assertIs(report["release_ready"], True)
         self.assertTrue(all(report["conditions"].values()))
         run = next(call for call in runner.calls if call[1] == "run")
         self.assertIn("--network=none", run)
         self.assertIn("--cap-add=NET_ADMIN", run)
         self.assertNotIn("--privileged", run)
         self.assertEqual(sum(value.endswith(":ro") for value in run), 2)
+        generator = next(call for call in runner.calls if call[0] == "go")
+        self.assertIn("-mod=readonly", generator)
 
-    def test_rejects_changed_or_missing_known_defect(self) -> None:
+    def test_rejects_missing_frozen_regression_baseline(self) -> None:
         golden = self.root / "testdata/firewall/nftables-v4.02.8.nft"
         golden.write_text("tcp dport { 23, 6379 }\n", encoding="utf-8")
         with self.assertRaisesRegex(
             nftables_kernel_lab.NftablesLabError, "no longer contains"
         ):
-            nftables_kernel_lab.verify_known_source_contract(self.root, golden)
+            nftables_kernel_lab.verify_corrected_source_contract(self.root, golden)
 
     def test_rejects_non_isolated_or_partial_kernel_evidence(self) -> None:
         output = "\n".join(
             (
                 f"NETNS={os.readlink('/proc/self/ns/net')}",
                 "NFT_VERSION=nftables v1.1.6 (Commodore Bullmoose #2)",
-                "EXACT_APPLY_RC=1",
-                "EXACT_LIST_RC=0",
-                "EXACT_OBJECTS=1",
-                "NORMALIZED_CHECK_RC=0",
+                "LEGACY_CHECK_RC=1",
+                "LEGACY_LIST_RC=0",
+                "LEGACY_OBJECTS=1",
+                "CANDIDATE_APPLY_RC=0",
+                "CANDIDATE_LIST_RC=0",
+                "CANDIDATE_OBJECTS=42",
+                "DYNAMIC_ADD_RC=0",
+                "DYNAMIC_LIST_RC=0",
+                "DYNAMIC_TIMEOUT_OK=1",
                 "CLEANUP_RC=0",
                 "ERROR_BEGIN",
                 "Service out of range",
@@ -129,7 +154,7 @@ class NftablesKernelLabTests(unittest.TestCase):
             )
         )
         markers, error = nftables_kernel_lab.parse_container_output(output)
-        self.assertEqual(markers["EXACT_OBJECTS"], "1")
+        self.assertEqual(markers["LEGACY_OBJECTS"], "1")
         self.assertEqual(error, "Service out of range")
 
     def test_requires_exact_digest_pinned_act_image(self) -> None:

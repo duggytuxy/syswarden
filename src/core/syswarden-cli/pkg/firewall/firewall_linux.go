@@ -3,16 +3,25 @@
 package firewall
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
+	"syscall"
 	"syswarden-cli/config"
 	"time"
 )
+
+const linuxWrapperStateVersion = "syswarden-firewall-wrappers-v1"
+
+var linuxWrapperStateFile = filepath.Join(nftStateDirectory, "firewall-wrappers.state")
 
 // ApplyPolicies triggers the main Linux firewall injection using native Netlink / CLI Nftables
 func ApplyPolicies() error {
@@ -27,28 +36,34 @@ func ApplyPolicies() error {
 		for _, iface := range strings.Split(config.GlobalConfig.Interfaces, ",") {
 			trimmed := strings.TrimSpace(iface)
 			if trimmed != "" {
-				interfaces = append(interfaces, trimmed)
+				canonical, err := canonicalInterfaceName(trimmed)
+				if err != nil {
+					return err
+				}
+				if !contains(interfaces, canonical) {
+					interfaces = append(interfaces, canonical)
+				}
 			}
 		}
 	} else {
-		interfaces = append(interfaces, GetActiveInterface()) // Fallback to primary if empty
+		activeInterface, err := canonicalInterfaceName(GetActiveInterface())
+		if err != nil {
+			return err
+		}
+		interfaces = append(interfaces, activeInterface) // Fallback to primary if empty
+	}
+	if len(interfaces) == 0 {
+		return fmt.Errorf("no valid firewall interface is configured")
 	}
 
-	// 2. Safely wipe existing tables (Universal backward compatibility)
-	// We run these natively and ignore errors if they don't exist, avoiding the 'destroy' syntax error on old nftables.
-	_ = exec.Command("nft", "delete", "table", "inet", "syswarden").Run()           // #nosec
-	_ = exec.Command("nft", "delete", "table", "inet", "syswarden_table").Run()     // #nosec
-	_ = exec.Command("nft", "delete", "table", "netdev", "syswarden_hw_drop").Run() // #nosec
-	_ = exec.Command("nft", "delete", "table", "arp", "syswarden_arp").Run()        // #nosec
-
-	// 3. Hardware Drop Table (L2)
+	// 2. Hardware Drop Table (L2)
 	_, _ = nftRules.WriteString("table netdev syswarden_hw_drop {\n")
 	_, _ = nftRules.WriteString("\tset syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_zt_allowed { type ipv4_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_zt_allowed6 { type ipv6_addr; flags interval; auto-merge; }\n")
-	_, _ = nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags timeout; }\n")
-	_, _ = nftRules.WriteString("\tset banned_ips6 { type ipv6_addr; flags timeout; }\n")
+	_, _ = nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags interval,timeout; }\n")
+	_, _ = nftRules.WriteString("\tset banned_ips6 { type ipv6_addr; flags interval,timeout; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_blacklist6 { type ipv6_addr; flags interval; auto-merge; }\n")
 
@@ -115,8 +130,8 @@ func ApplyPolicies() error {
 	_, _ = nftRules.WriteString("\tset syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_zt_allowed { type ipv4_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_zt_allowed6 { type ipv6_addr; flags interval; auto-merge; }\n")
-	_, _ = nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags timeout; }\n")
-	_, _ = nftRules.WriteString("\tset banned_ips6 { type ipv6_addr; flags timeout; }\n")
+	_, _ = nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags interval,timeout; }\n")
+	_, _ = nftRules.WriteString("\tset banned_ips6 { type ipv6_addr; flags interval,timeout; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_blacklist6 { type ipv6_addr; flags interval; auto-merge; }\n")
 	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
@@ -129,15 +144,16 @@ func ApplyPolicies() error {
 	}
 
 	// Trust LAN Subnets (RFC1918 by default + Custom config)
-	validLANSubnets := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
-	if config.GlobalConfig.LANSubnets != "" {
-		cleaned := strings.ReplaceAll(config.GlobalConfig.LANSubnets, ",", " ")
-		subnets := strings.Fields(cleaned)
-		for _, s := range subnets {
-			if s != "" {
-				validLANSubnets = append(validLANSubnets, s)
-			}
-		}
+	validLANSubnets, err := canonicalPolicyNetworks(
+		[]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
+		config.GlobalConfig.LANSubnets,
+	)
+	if err != nil {
+		return err
+	}
+	validLANSubnets4, validLANSubnets6, err := splitPolicyNetworksByFamily(validLANSubnets)
+	if err != nil {
+		return fmt.Errorf("split LAN subnets by address family: %w", err)
 	}
 
 	// Stateful L4 Protections (Host Input)
@@ -164,8 +180,11 @@ func ApplyPolicies() error {
 	// ZERO-TRUST MODE: Drop everything that is not in the Zero-Trust allowed GEO/ASN list
 	if config.GlobalConfig.GeoAllowed != "" || config.GlobalConfig.ASNAllowed != "" {
 		// LAN Bypass: Explicitly allow internal enterprise subnets to bypass Zero-Trust
-		if len(validLANSubnets) > 0 {
-			_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr { %s } accept\n", strings.Join(validLANSubnets, ", "))
+		if len(validLANSubnets4) > 0 {
+			_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr { %s } accept\n", strings.Join(validLANSubnets4, ", "))
+		}
+		if len(validLANSubnets6) > 0 {
+			_, _ = fmt.Fprintf(&nftRules, "\t\tip6 saddr { %s } accept\n", strings.Join(validLANSubnets6, ", "))
 		}
 
 		_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ZERO-TRUST] \"\n")
@@ -175,7 +194,15 @@ func ApplyPolicies() error {
 	}
 
 	// Dynamically allow explicitly opened ports
-	tcpPorts, udpPorts := GetOpenPorts()
+	detectedTCPPorts, detectedUDPPorts := GetOpenPorts()
+	tcpPorts, err := canonicalPorts("detected TCP ports", detectedTCPPorts)
+	if err != nil {
+		return err
+	}
+	udpPorts, err := canonicalPorts("detected UDP ports", detectedUDPPorts)
+	if err != nil {
+		return err
+	}
 
 	// Ensure Web-TUI port is always explicitly opened
 	webTuiPort := "62027"
@@ -183,48 +210,18 @@ func ApplyPolicies() error {
 		tcpPorts = append(tcpPorts, webTuiPort)
 	}
 
-	// Safely force open Web-TUI in OS wrapper firewalls if they exist (avoid conflicts)
-	if _, err := exec.LookPath("ufw"); err == nil {
-		_ = exec.Command("ufw", "allow", fmt.Sprintf("%s/tcp", webTuiPort)).Run() // #nosec
-	}
-	if _, err := exec.LookPath("firewall-cmd"); err == nil {
-		_ = exec.Command("firewall-cmd", "--add-port="+webTuiPort+"/tcp", "--permanent").Run() // #nosec
-		_ = exec.Command("firewall-cmd", "--reload").Run()                                     // #nosec
-	}
-	if _, err := exec.LookPath("iptables"); err == nil {
-		_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", webTuiPort, "-m", "comment", "--comment", "SYSWARDEN_CORE", "-j", "ACCEPT").Run() // #nosec
-	}
-
 	// Ensure HA Peer Port is always explicitly opened if HA is enabled
+	wrapperPorts := []string{webTuiPort}
 	if config.GlobalConfig.HAEnabled && config.GlobalConfig.HAPeerPort != "" {
-		if !contains(tcpPorts, config.GlobalConfig.HAPeerPort) {
-			tcpPorts = append(tcpPorts, config.GlobalConfig.HAPeerPort)
+		haPort, portErr := canonicalPort(config.GlobalConfig.HAPeerPort)
+		if portErr != nil {
+			return fmt.Errorf("invalid HA peer port: %w", portErr)
 		}
-
-		// Safely force open in OS wrapper firewalls if they exist (avoid conflicts)
-		if _, err := exec.LookPath("ufw"); err == nil {
-			_ = exec.Command("ufw", "allow", fmt.Sprintf("%s/tcp", config.GlobalConfig.HAPeerPort)).Run() // #nosec
+		if !contains(tcpPorts, haPort) {
+			tcpPorts = append(tcpPorts, haPort)
 		}
-		if _, err := exec.LookPath("firewall-cmd"); err == nil {
-			_ = exec.Command("firewall-cmd", "--add-port="+config.GlobalConfig.HAPeerPort+"/tcp", "--permanent").Run() // #nosec
-			_ = exec.Command("firewall-cmd", "--reload").Run()                                                         // #nosec
-		}
-		if _, err := exec.LookPath("iptables"); err == nil {
-			_ = exec.Command("iptables", "-I", "INPUT", "-p", "tcp", "--dport", config.GlobalConfig.HAPeerPort, "-m", "comment", "--comment", "SYSWARDEN_CORE", "-j", "ACCEPT").Run() // #nosec
-		}
-	}
-
-	// Apply all trusted subnets to UFW, Firewalld and iptables
-	for _, s := range validLANSubnets {
-		if _, err := exec.LookPath("ufw"); err == nil {
-			_ = exec.Command("ufw", "allow", "from", s).Run() // #nosec
-		}
-		if _, err := exec.LookPath("firewall-cmd"); err == nil {
-			_ = exec.Command("firewall-cmd", "--add-source="+s, "--zone=trusted", "--permanent").Run() // #nosec
-			_ = exec.Command("firewall-cmd", "--reload").Run()                                         // #nosec
-		}
-		if _, err := exec.LookPath("iptables"); err == nil {
-			_ = exec.Command("iptables", "-I", "INPUT", "-s", s, "-j", "ACCEPT").Run() // #nosec
+		if !contains(wrapperPorts, haPort) {
+			wrapperPorts = append(wrapperPorts, haPort)
 		}
 	}
 
@@ -249,15 +246,23 @@ func ApplyPolicies() error {
 			sshPort = "22"
 		}
 	}
+	sshPort, err = canonicalPort(sshPort)
+	if err != nil {
+		return fmt.Errorf("invalid SSH port: %w", err)
+	}
 
 	// SSH Cloaking (WireGuard VPN Only) vs Standard SSH
 	if config.GlobalConfig.EnableWG {
+		wireGuardSubnet, subnetErr := canonicalIPv4Network(config.GlobalConfig.WGSubnet, "WireGuard subnet")
+		if subnetErr != nil {
+			return subnetErr
+		}
 		_, _ = nftRules.WriteString("\t\t# SSH Cloaking (Strict WG VPN Only)\n")
 		// Always allow explicitly whitelisted IPs
 		_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr @syswarden_whitelist tcp dport %s accept\n", sshPort)
 		_, _ = fmt.Fprintf(&nftRules, "\t\tip6 saddr @syswarden_whitelist6 tcp dport %s accept\n", sshPort)
 		// Allow from the WireGuard Subnet
-		_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr %s tcp dport %s accept\n", config.GlobalConfig.WGSubnet, sshPort)
+		_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr %s tcp dport %s accept\n", wireGuardSubnet, sshPort)
 		// Drop from anywhere else
 		_, _ = fmt.Fprintf(&nftRules, "\t\ttcp dport %s counter drop\n", sshPort)
 	} else {
@@ -267,15 +272,23 @@ func ApplyPolicies() error {
 
 	// Honeyports (Insider Threat Detection)
 	if config.GlobalConfig.LANMode && config.GlobalConfig.HoneyPorts != "" {
-		ports := strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")
+		ports, err := canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)
+		if err != nil {
+			return fmt.Errorf("invalid honeyport configuration: %w", err)
+		}
 		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } limit rate 5/second burst 10 packets log prefix \"[SYSWARDEN-HONEYPORT] \"\n", ports)
 		_, _ = fmt.Fprintf(&nftRules, "\t\tct state new tcp dport { %s } counter drop\n", ports)
 	}
 
 	// Explicitly trust internal enterprise subnets (Bypass Catch-All)
-	if len(validLANSubnets) > 0 {
+	if len(validLANSubnets4) > 0 || len(validLANSubnets6) > 0 {
 		_, _ = nftRules.WriteString("\t\t# Explicitly trust internal enterprise subnets (Bypass Catch-All)\n")
-		_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr { %s } accept\n", strings.Join(validLANSubnets, ", "))
+		if len(validLANSubnets4) > 0 {
+			_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr { %s } accept\n", strings.Join(validLANSubnets4, ", "))
+		}
+		if len(validLANSubnets6) > 0 {
+			_, _ = fmt.Fprintf(&nftRules, "\t\tip6 saddr { %s } accept\n", strings.Join(validLANSubnets6, ", "))
+		}
 	}
 
 	// CATCH-ALL Default Deny Logging
@@ -335,121 +348,66 @@ func ApplyPolicies() error {
 		_, _ = nftRules.WriteString("\t}\n}\n\n")
 	}
 
-	// 5. Write atomic base file securely (Empty Sets)
-	nftFile := "/etc/syswarden/syswarden.nft"
-	if err := os.MkdirAll("/etc/syswarden", 0750); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-	if err := os.WriteFile(nftFile, []byte(nftRules.String()), 0600); err != nil {
-		return fmt.Errorf("failed to write atomic nft file: %w", err)
-	}
-
-	// 6. Execute Base Structure atomically (Fast & safe)
+	// Prepare every set before the single kernel transaction. No firewall or
+	// wrapper state has been mutated when this phase returns an error.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "nft", "-f", nftFile) // #nosec
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to apply base nftables: %w\nOutput: %s", err, string(out))
+	populations, err := prepareNftSetPopulations(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to prepare nftables sets: %w", err)
 	}
-
-	// 7. Stream IP Sets dynamically (Anti-OOM / Netlink Buffer Space Fix)
-	fmt.Println(" -> Streaming blocklists to kernel safely...")
-
-	// Temporarily increase Netlink socket buffer to handle massive atomic loads (8MB)
+	verification := buildNftVerificationPlan(populations, config.GlobalConfig.ArpProtect)
+	transactionID, err := applyNftablesPolicyWithWrappers(
+		ctx,
+		execNFTCommandRunner{},
+		nftStateDirectory,
+		nftRules.String(),
+		populations,
+		verification,
+		func() error { return applyLinuxFirewallWrappersLocked(validLANSubnets, wrapperPorts) },
+	)
+	if err != nil {
+		return err
+	}
 	_ = exec.Command("sysctl", "-w", "net.core.wmem_max=8388608").Run() // #nosec
 	_ = exec.Command("sysctl", "-w", "net.core.rmem_max=8388608").Run() // #nosec
 
-	whitelistFiles := []string{
-		"/etc/syswarden/lists/syswarden_whitelist.ipv4",
-		"/etc/syswarden/lists/syswarden_saas_monitors.ipv4",
-	}
-
-	var ztFiles []string
-	var ztFiles6 []string
-
-	if config.GlobalConfig.GeoAllowed != "" {
-		codes := strings.Split(config.GlobalConfig.GeoAllowed, " ")
-		for _, code := range codes {
-			code = strings.TrimSpace(code)
-			if code != "" && code != "none" {
-				ztFiles = append(ztFiles, fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv4", strings.ToLower(code)))
-			}
-		}
-	}
-	if config.GlobalConfig.ASNAllowed != "" {
-		asns := strings.Split(config.GlobalConfig.ASNAllowed, " ")
-		for _, asn := range asns {
-			asn = strings.TrimSpace(asn)
-			if asn != "" && asn != "none" && asn != "auto" {
-				if !strings.HasPrefix(asn, "AS") {
-					asn = "AS" + asn
-				}
-				ztFiles = append(ztFiles, fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv4", strings.ToUpper(asn)))
-				ztFiles6 = append(ztFiles6, fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv6", strings.ToUpper(asn)))
-			}
-		}
-	}
-
-	whitelistFiles = append(whitelistFiles,
-		"/etc/syswarden/lists/syswarden_whitelist.ipv6",
-		"/etc/syswarden/lists/syswarden_saas_monitors.ipv6",
-	)
-	populateSet(ctx, whitelistFiles, "syswarden_whitelist")
-	populateSet(ctx, whitelistFiles, "syswarden_whitelist6")
-
-	if len(ztFiles) > 0 {
-		ztAllFiles := append(ztFiles, ztFiles6...)
-		populateSet(ctx, ztAllFiles, "syswarden_zt_allowed")
-		populateSet(ctx, ztAllFiles, "syswarden_zt_allowed6")
-	}
-
-	blacklistFiles := []string{
-		"/etc/syswarden/lists/syswarden_blacklist.ipv4",
-		"/etc/syswarden/lists/syswarden_threatintel.ipv4",
-		"/etc/syswarden/lists/syswarden_blacklist.ipv6",
-		"/etc/syswarden/lists/syswarden_threatintel.ipv6",
-	}
-	populateSet(ctx, blacklistFiles, "syswarden_blacklist")
-	populateSet(ctx, blacklistFiles, "syswarden_blacklist6")
-
-	var geoFiles []string
-	if config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != "" {
-		codes := strings.Split(config.GlobalConfig.GeoCodes, " ")
-		for _, code := range codes {
-			code = strings.TrimSpace(code)
-			if code != "" && code != "none" {
-				geoFiles = append(geoFiles, fmt.Sprintf("/etc/syswarden/lists/%s.ipv4", strings.ToLower(code)))
-				geoFiles = append(geoFiles, fmt.Sprintf("/etc/syswarden/lists/%s.ipv6", strings.ToLower(code)))
-			}
-		}
-	}
-	if len(geoFiles) > 0 {
-		populateSet(ctx, geoFiles, "syswarden_geoip")
-		populateSet(ctx, geoFiles, "syswarden_geoip6")
-	}
-
-	var asnFiles []string
-	if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" {
-		asns := strings.Split(config.GlobalConfig.ASNList, " ")
-		for _, asn := range asns {
-			asn = strings.TrimSpace(asn)
-			if asn != "" && asn != "none" && asn != "auto" {
-				if !strings.HasPrefix(asn, "AS") {
-					asn = "AS" + asn
-				}
-				asnFiles = append(asnFiles, fmt.Sprintf("/etc/syswarden/lists/%s.ipv4", strings.ToUpper(asn)))
-				asnFiles = append(asnFiles, fmt.Sprintf("/etc/syswarden/lists/%s.ipv6", strings.ToUpper(asn)))
-			}
-		}
-	}
-	if len(asnFiles) > 0 {
-		populateSet(ctx, asnFiles, "syswarden_asn")
-		populateSet(ctx, asnFiles, "syswarden_asn6")
-	}
-
-	fmt.Println("[INFO] Nftables applied successfully.")
+	fmt.Printf("[INFO] Nftables transaction %s applied and verified successfully.\n", transactionID)
 	return nil
+}
+
+func applyNftablesPolicyWithWrappers(ctx context.Context, runner nftCommandRunner, stateDirectory, baseRules string, populations []nftSetPopulation, verification nftVerificationPlan, reconcileWrappers func() error) (string, error) {
+	transactionID, err := newFirewallTransactionID()
+	if err != nil {
+		return "", err
+	}
+	lock, err := acquireNFTReloadGuard()
+	if err != nil {
+		return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: acquire reload lock: %w", transactionID, err)
+	}
+	defer releaseNFTReloadGuard(lock)
+	transactionID, err = applyNftablesTransactionLocked(ctx, runner, stateDirectory, baseRules, populations, verification, transactionID)
+	if err != nil {
+		return transactionID, err
+	}
+
+	// Wrapper firewalls are compatibility layers. nftables is authoritative and
+	// has already been applied, independently verified, and persisted here. A
+	// wrapper failure is therefore explicit but never triggers a misleading
+	// rollback of the authoritative policy.
+	if reconcileWrappers != nil {
+		if err := reconcileWrappers(); err != nil {
+			return transactionID, committedWrapperReconciliationError(transactionID, err)
+		}
+	}
+	return transactionID, nil
+}
+
+func committedWrapperReconciliationError(transactionID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("nftables transaction %s is committed and remains authoritative; compatibility wrapper reconciliation is incomplete: %w", transactionID, err)
 }
 
 // getLocalIPs fetches all local IPv4 addresses (excluding loopback) for ARP spoofing protection
@@ -537,54 +495,679 @@ func contains(slice []string, val string) bool {
 	return false
 }
 
-func populateSet(ctx context.Context, filepaths []string, setName string) {
-	var chunk []string
-	isIPv6Set := strings.HasSuffix(setName, "6")
+func prepareNftSetPopulations(ctx context.Context) ([]nftSetPopulation, error) {
+	const listDirectory = "/etc/syswarden/lists"
+	optional := func(name string) nftListSource {
+		return nftListSource{path: filepath.Join(listDirectory, name)}
+	}
 
-	for _, filepath := range filepaths {
-		content, err := os.ReadFile(filepath) // #nosec
-		if err != nil {
+	whitelist4 := []nftListSource{optional("syswarden_whitelist.ipv4"), optional("syswarden_saas_monitors.ipv4")}
+	whitelist6 := []nftListSource{optional("syswarden_whitelist.ipv6"), optional("syswarden_saas_monitors.ipv6")}
+	blacklist4 := []nftListSource{optional("syswarden_blacklist.ipv4"), optional("syswarden_threatintel.ipv4")}
+	blacklist6 := []nftListSource{optional("syswarden_blacklist.ipv6"), optional("syswarden_threatintel.ipv6")}
+
+	zt4, zt6, ztErr := configuredNftSources(listDirectory, config.GlobalConfig.GeoAllowed, config.GlobalConfig.ASNAllowed, true)
+	geo4, geo6, geoErr := configuredNftSources(listDirectory, config.GlobalConfig.GeoCodes, "", false)
+	asn4, asn6, asnErr := configuredNftSources(listDirectory, "", config.GlobalConfig.ASNList, false)
+
+	requests := []struct {
+		name    string
+		sources []nftListSource
+		enabled bool
+	}{
+		{name: "syswarden_whitelist", sources: whitelist4, enabled: true},
+		{name: "syswarden_whitelist6", sources: whitelist6, enabled: true},
+		{name: "syswarden_zt_allowed", sources: zt4, enabled: true},
+		{name: "syswarden_zt_allowed6", sources: zt6, enabled: true},
+		{name: "syswarden_blacklist", sources: blacklist4, enabled: true},
+		{name: "syswarden_blacklist6", sources: blacklist6, enabled: true},
+		{name: "syswarden_geoip", sources: geo4, enabled: config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != ""},
+		{name: "syswarden_geoip6", sources: geo6, enabled: config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != ""},
+		{name: "syswarden_asn", sources: asn4, enabled: config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != ""},
+		{name: "syswarden_asn6", sources: asn6, enabled: config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != ""},
+	}
+
+	populations := make([]nftSetPopulation, 0, len(requests))
+	errs := []error{ztErr, geoErr, asnErr}
+	for _, request := range requests {
+		if !request.enabled {
 			continue
 		}
-		lines := strings.Split(string(content), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			// Ignore empty lines and comments
-			if line != "" && !strings.HasPrefix(line, "#") {
-				valid, isIPv4 := IsValidIP(line)
-				if valid {
-					// Strictly enforce address family mapping
-					if isIPv6Set && !isIPv4 {
-						chunk = append(chunk, line)
-					} else if !isIPv6Set && isIPv4 {
-						chunk = append(chunk, line)
-					}
+		population, err := populateSet(ctx, request.sources, request.name)
+		populations = append(populations, population)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return populations, errors.Join(errs...)
+}
+
+func configuredNftSources(directory, countries, asns string, allowed bool) ([]nftListSource, []nftListSource, error) {
+	var ipv4 []nftListSource
+	var ipv6 []nftListSource
+	var errs []error
+	prefix := ""
+	if allowed {
+		prefix = "allowed_"
+	}
+	for _, country := range strings.Fields(strings.ReplaceAll(countries, ",", " ")) {
+		if strings.EqualFold(country, "none") {
+			continue
+		}
+		if len(country) != 2 || !isASCIILetters(country) {
+			errs = append(errs, fmt.Errorf("invalid country list identifier %q", country))
+			continue
+		}
+		base := prefix + strings.ToLower(country)
+		ipv4 = append(ipv4, nftListSource{path: filepath.Join(directory, base+".ipv4"), required: true})
+		ipv6 = append(ipv6, nftListSource{path: filepath.Join(directory, base+".ipv6"), required: true})
+	}
+	for _, configuredASN := range strings.Fields(strings.ReplaceAll(asns, ",", " ")) {
+		if strings.EqualFold(configuredASN, "none") || strings.EqualFold(configuredASN, "auto") {
+			continue
+		}
+		digits := configuredASN
+		if len(digits) >= 2 && strings.EqualFold(digits[:2], "AS") {
+			digits = digits[2:]
+		}
+		if digits == "" || !isASCIIDigits(digits) {
+			errs = append(errs, fmt.Errorf("invalid ASN list identifier %q", configuredASN))
+			continue
+		}
+		base := prefix + "AS" + digits
+		ipv4 = append(ipv4, nftListSource{path: filepath.Join(directory, base+".ipv4"), required: true})
+		ipv6 = append(ipv6, nftListSource{path: filepath.Join(directory, base+".ipv6"), required: true})
+	}
+	return ipv4, ipv6, errors.Join(errs...)
+}
+
+func isASCIILetters(value string) bool {
+	for _, r := range value {
+		if r < 'A' || r > 'Z' && r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIDigits(value string) bool {
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func buildNftVerificationPlan(populations []nftSetPopulation, arpProtect bool) nftVerificationPlan {
+	plan := nftVerificationPlan{
+		tables: map[nftObjectKey]struct{}{
+			{family: "inet", name: "syswarden"}:           {},
+			{family: "netdev", name: "syswarden_hw_drop"}: {},
+		},
+		chains: map[nftObjectKey]string{
+			{family: "inet", table: "syswarden", name: "stateful_protect"}:            "input",
+			{family: "inet", table: "syswarden", name: "data_leak_protect"}:           "output",
+			{family: "inet", table: "syswarden", name: "docker_protect"}:              "forward",
+			{family: "netdev", table: "syswarden_hw_drop", name: "ingress_frontline"}: "ingress",
+		},
+		sets: make(map[nftObjectKey]int),
+	}
+	if arpProtect {
+		plan.tables[nftObjectKey{family: "arp", name: "syswarden_arp"}] = struct{}{}
+		plan.chains[nftObjectKey{family: "arp", table: "syswarden_arp", name: "input"}] = "input"
+	}
+	for _, setName := range []string{
+		"syswarden_whitelist", "syswarden_whitelist6", "syswarden_zt_allowed", "syswarden_zt_allowed6",
+		"syswarden_blacklist", "syswarden_blacklist6",
+	} {
+		plan.sets[nftObjectKey{family: "inet", table: "syswarden", name: setName}] = 0
+		plan.sets[nftObjectKey{family: "netdev", table: "syswarden_hw_drop", name: setName}] = 0
+	}
+	for _, setName := range []string{"banned_ips", "banned_ips6"} {
+		plan.sets[nftObjectKey{family: "inet", table: "syswarden", name: setName}] = -1
+		plan.sets[nftObjectKey{family: "netdev", table: "syswarden_hw_drop", name: setName}] = -1
+	}
+	for _, population := range populations {
+		count := len(population.entries)
+		plan.sets[nftObjectKey{family: "inet", table: "syswarden", name: population.name}] = count
+		plan.sets[nftObjectKey{family: "netdev", table: "syswarden_hw_drop", name: population.name}] = count
+	}
+	return plan
+}
+
+func runLinuxFirewallCommand(path string, arguments ...string) ([]byte, error) {
+	command := exec.Command(path, arguments...) // #nosec G204 -- path comes from LookPath and all arguments are canonical firewall values
+	command.Env = append(command.Environ(), "LC_ALL=C", "LANG=C")
+	return command.CombinedOutput()
+}
+
+type linuxWrapperRule struct {
+	backend string
+	kind    string
+	value   string
+}
+
+func (rule linuxWrapperRule) key() string {
+	return rule.backend + "\t" + rule.kind + "\t" + rule.value
+}
+
+func canonicalLinuxWrapperRule(backend, kind, value string) (linuxWrapperRule, error) {
+	switch backend {
+	case "ufw", "firewalld", "iptables", "ip6tables":
+	default:
+		return linuxWrapperRule{}, fmt.Errorf("unsupported wrapper backend %q", backend)
+	}
+	rule := linuxWrapperRule{backend: backend, kind: kind}
+	switch kind {
+	case "port":
+		canonical, err := canonicalPort(value)
+		if err != nil || canonical != value {
+			return linuxWrapperRule{}, fmt.Errorf("invalid wrapper port %q", value)
+		}
+		rule.value = canonical
+	case "source":
+		canonical, isIPv4, err := canonicalIPOrPrefix(value)
+		if err != nil || canonical != value {
+			return linuxWrapperRule{}, fmt.Errorf("invalid wrapper source %q", value)
+		}
+		if backend == "iptables" && !isIPv4 {
+			return linuxWrapperRule{}, fmt.Errorf("IPv6 source %q is assigned to iptables", value)
+		}
+		if backend == "ip6tables" && isIPv4 {
+			return linuxWrapperRule{}, fmt.Errorf("IPv4 source %q is assigned to ip6tables", value)
+		}
+		rule.value = canonical
+	default:
+		return linuxWrapperRule{}, fmt.Errorf("unsupported wrapper rule kind %q", kind)
+	}
+	return rule, nil
+}
+
+func readLinuxWrapperState(path string) (map[string]linuxWrapperRule, bool, error) {
+	file, err := openRootedNFTFile(path, os.O_RDONLY, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return make(map[string]linuxWrapperRule), false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("open wrapper ownership state: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect wrapper ownership state: %w", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || !ok || int64(stat.Uid) != int64(os.Geteuid()) {
+		return nil, false, fmt.Errorf("wrapper ownership state is not a private regular file owned by the effective user")
+	}
+	const maximumWrapperStateSize = 1 << 20
+	if info.Size() < 0 || info.Size() > maximumWrapperStateSize {
+		return nil, false, fmt.Errorf("wrapper ownership state exceeds %d bytes", maximumWrapperStateSize)
+	}
+	content, err := io.ReadAll(io.LimitReader(file, maximumWrapperStateSize+1))
+	if err != nil {
+		return nil, false, fmt.Errorf("read wrapper ownership state: %w", err)
+	}
+	if len(content) > maximumWrapperStateSize {
+		return nil, false, fmt.Errorf("wrapper ownership state exceeds %d bytes", maximumWrapperStateSize)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
+	if len(lines) == 0 || lines[0] != linuxWrapperStateVersion {
+		return nil, false, fmt.Errorf("wrapper ownership state has an unsupported header")
+	}
+	rules := make(map[string]linuxWrapperRule, len(lines)-1)
+	for lineNumber, line := range lines[1:] {
+		if line == "" {
+			return nil, false, fmt.Errorf("wrapper ownership state line %d is empty", lineNumber+2)
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 {
+			return nil, false, fmt.Errorf("wrapper ownership state line %d is malformed", lineNumber+2)
+		}
+		rule, err := canonicalLinuxWrapperRule(fields[0], fields[1], fields[2])
+		if err != nil {
+			return nil, false, fmt.Errorf("wrapper ownership state line %d: %w", lineNumber+2, err)
+		}
+		if _, duplicate := rules[rule.key()]; duplicate {
+			return nil, false, fmt.Errorf("wrapper ownership state line %d duplicates %s", lineNumber+2, rule.key())
+		}
+		rules[rule.key()] = rule
+	}
+	return rules, true, nil
+}
+
+func writeLinuxWrapperState(path string, rules map[string]linuxWrapperRule) error {
+	keys := make([]string, 0, len(rules))
+	for key := range rules {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var content strings.Builder
+	_, _ = content.WriteString(linuxWrapperStateVersion + "\n")
+	for _, key := range keys {
+		rule := rules[key]
+		_, _ = fmt.Fprintf(&content, "%s\t%s\t%s\n", rule.backend, rule.kind, rule.value)
+	}
+	directory := filepath.Dir(path)
+	candidate, err := os.CreateTemp(directory, ".firewall-wrappers-state-")
+	if err != nil {
+		return fmt.Errorf("create wrapper ownership candidate: %w", err)
+	}
+	candidatePath := candidate.Name()
+	defer func() { _ = os.Remove(candidatePath) }()
+	if err := candidate.Chmod(0600); err != nil {
+		_ = candidate.Close()
+		return fmt.Errorf("protect wrapper ownership candidate: %w", err)
+	}
+	if _, err := io.WriteString(candidate, content.String()); err != nil {
+		_ = candidate.Close()
+		return fmt.Errorf("write wrapper ownership candidate: %w", err)
+	}
+	if err := candidate.Sync(); err != nil {
+		_ = candidate.Close()
+		return fmt.Errorf("sync wrapper ownership candidate: %w", err)
+	}
+	if err := candidate.Close(); err != nil {
+		return fmt.Errorf("close wrapper ownership candidate: %w", err)
+	}
+	if err := publishNftablesFile(directory, candidatePath, path); err != nil {
+		return fmt.Errorf("publish wrapper ownership state: %w", err)
+	}
+	return nil
+}
+
+func copyLinuxWrapperRules(source map[string]linuxWrapperRule) map[string]linuxWrapperRule {
+	destination := make(map[string]linuxWrapperRule, len(source))
+	for key, rule := range source {
+		destination[key] = rule
+	}
+	return destination
+}
+
+func wrapperCommandPresent(path string, arguments ...string) (bool, error) {
+	output, err := runLinuxFirewallCommand(path, arguments...)
+	if err == nil {
+		return true, nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("query %s %s: %w: %s", path, strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
+}
+
+func ensureWrapperCommand(path string, queryArguments, addArguments []string) (bool, error) {
+	present, err := wrapperCommandPresent(path, queryArguments...)
+	if err != nil {
+		return false, err
+	}
+	if present {
+		return false, nil
+	}
+	if output, err := runLinuxFirewallCommand(path, addArguments...); err != nil {
+		return false, fmt.Errorf("add wrapper rule through %s: %w: %s", path, err, strings.TrimSpace(string(output)))
+	}
+	present, err = wrapperCommandPresent(path, queryArguments...)
+	if err != nil {
+		return false, err
+	}
+	if !present {
+		return false, fmt.Errorf("wrapper rule added through %s but post-verification still reports it absent", path)
+	}
+	return true, nil
+}
+
+func ufwWrapperPresent(path, value string, requireOwnershipMarker bool) (bool, error) {
+	output, err := runLinuxFirewallCommand(path, "status")
+	if err != nil {
+		return false, fmt.Errorf("query ufw wrapper state: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	lines := strings.Split(string(output), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "Status: active" {
+		return false, fmt.Errorf("ufw is installed but not active")
+	}
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		hasValue := false
+		hasAllow := false
+		for _, field := range fields {
+			hasValue = hasValue || field == value
+			hasAllow = hasAllow || field == "ALLOW"
+		}
+		if hasValue && hasAllow {
+			if !requireOwnershipMarker || strings.Contains(line, "# SYSWARDEN_CORE") {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func linuxWrapperRuleArguments(rule linuxWrapperRule, operation string, permanent bool) ([]string, error) {
+	switch rule.backend {
+	case "iptables", "ip6tables":
+		var body []string
+		switch rule.kind {
+		case "port":
+			body = []string{"INPUT", "-p", "tcp", "--dport", rule.value, "-m", "comment", "--comment", "SYSWARDEN_CORE", "-j", "ACCEPT"}
+		case "source":
+			body = []string{"INPUT", "-s", rule.value, "-m", "comment", "--comment", "SYSWARDEN_CORE", "-j", "ACCEPT"}
+		}
+		switch operation {
+		case "query":
+			return append([]string{"-C"}, body...), nil
+		case "add":
+			return append([]string{"-I", "INPUT", "1"}, body[1:]...), nil
+		case "remove":
+			return append([]string{"-D"}, body...), nil
+		}
+	case "firewalld":
+		prefix := []string{}
+		if permanent {
+			prefix = append(prefix, "--permanent")
+		}
+		var selector string
+		if rule.kind == "port" {
+			selector = "port=" + rule.value + "/tcp"
+		} else {
+			prefix = append(prefix, "--zone=trusted")
+			selector = "source=" + rule.value
+		}
+		switch operation {
+		case "query":
+			return append(prefix, "--query-"+selector), nil
+		case "add":
+			return append(prefix, "--add-"+selector), nil
+		case "remove":
+			return append(prefix, "--remove-"+selector), nil
+		}
+	case "ufw":
+		value := rule.value
+		arguments := []string{}
+		if operation == "remove" {
+			arguments = append(arguments, "--force", "delete")
+		}
+		arguments = append(arguments, "allow")
+		if rule.kind == "port" {
+			arguments = append(arguments, value+"/tcp")
+		} else {
+			arguments = append(arguments, "from", value)
+		}
+		arguments = append(arguments, "comment", "SYSWARDEN_CORE")
+		return arguments, nil
+	}
+	return nil, fmt.Errorf("unsupported %s operation for wrapper rule %s", operation, rule.key())
+}
+
+func linuxWrapperRulePresent(rule linuxWrapperRule, path string, owned, permanent bool) (bool, error) {
+	if rule.backend == "ufw" {
+		value := rule.value
+		if rule.kind == "port" {
+			value += "/tcp"
+		}
+		return ufwWrapperPresent(path, value, owned)
+	}
+	arguments, err := linuxWrapperRuleArguments(rule, "query", permanent)
+	if err != nil {
+		return false, err
+	}
+	present, err := wrapperCommandPresent(path, arguments...)
+	if err != nil || present || owned || rule.backend != "iptables" && rule.backend != "ip6tables" {
+		return present, err
+	}
+	// A simple operator-owned ACCEPT may predate SysWarden and has no ownership
+	// comment. Treat it as sufficient compatibility coverage, but never record
+	// or later remove it through the SysWarden ownership manifest.
+	var body []string
+	if rule.kind == "port" {
+		body = []string{"-C", "INPUT", "-p", "tcp", "--dport", rule.value, "-j", "ACCEPT"}
+	} else {
+		body = []string{"-C", "INPUT", "-s", rule.value, "-j", "ACCEPT"}
+	}
+	return wrapperCommandPresent(path, body...)
+}
+
+func ensureLinuxWrapperRule(rule linuxWrapperRule, path string) (bool, error) {
+	if rule.backend == "ufw" {
+		present, err := linuxWrapperRulePresent(rule, path, true, false)
+		if err != nil || present {
+			return false, err
+		}
+		arguments, err := linuxWrapperRuleArguments(rule, "add", false)
+		if err != nil {
+			return false, err
+		}
+		if output, err := runLinuxFirewallCommand(path, arguments...); err != nil {
+			return false, fmt.Errorf("add ufw wrapper rule: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+		present, err = linuxWrapperRulePresent(rule, path, true, false)
+		if err != nil || !present {
+			return false, errors.Join(err, fmt.Errorf("ufw wrapper post-verification still reports %s absent", rule.value))
+		}
+		return true, nil
+	}
+	query, err := linuxWrapperRuleArguments(rule, "query", true)
+	if err != nil {
+		return false, err
+	}
+	add, err := linuxWrapperRuleArguments(rule, "add", true)
+	if err != nil {
+		return false, err
+	}
+	return ensureWrapperCommand(path, query, add)
+}
+
+func removeLinuxWrapperRule(rule linuxWrapperRule, path string) (bool, error) {
+	removed := false
+	for attempt := 0; attempt < 256; attempt++ {
+		present, err := linuxWrapperRulePresent(rule, path, true, true)
+		if err != nil {
+			return removed, err
+		}
+		if !present {
+			return removed, nil
+		}
+		arguments, err := linuxWrapperRuleArguments(rule, "remove", true)
+		if err != nil {
+			return removed, err
+		}
+		if output, err := runLinuxFirewallCommand(path, arguments...); err != nil {
+			return removed, fmt.Errorf("remove wrapper rule %s through %s: %w: %s", rule.key(), path, err, strings.TrimSpace(string(output)))
+		}
+		removed = true
+		if rule.backend == "firewalld" {
+			present, err = linuxWrapperRulePresent(rule, path, true, true)
+			if err != nil || present {
+				return removed, errors.Join(err, fmt.Errorf("firewalld permanent rule %s remains after removal", rule.key()))
+			}
+			return removed, nil
+		}
+	}
+	return removed, fmt.Errorf("refuse more than 256 duplicate removals for wrapper rule %s", rule.key())
+}
+
+func discoverLinuxWrapperPaths() map[string]string {
+	paths := make(map[string]string)
+	for backend, executable := range map[string]string{
+		"ufw":       "ufw",
+		"firewalld": "firewall-cmd",
+		"iptables":  "iptables",
+		"ip6tables": "ip6tables",
+	} {
+		if path, err := exec.LookPath(executable); err == nil {
+			paths[backend] = path
+		}
+	}
+	return paths
+}
+
+func desiredLinuxWrapperRules(trustedSubnets, ports []string, paths map[string]string) (map[string]linuxWrapperRule, error) {
+	rules := make(map[string]linuxWrapperRule)
+	appendRule := func(backend, kind, value string) error {
+		rule, err := canonicalLinuxWrapperRule(backend, kind, value)
+		if err != nil {
+			return err
+		}
+		rules[rule.key()] = rule
+		return nil
+	}
+	for _, port := range ports {
+		canonical, err := canonicalPort(port)
+		if err != nil {
+			return nil, err
+		}
+		for _, backend := range []string{"ufw", "firewalld", "iptables"} {
+			if _, available := paths[backend]; available {
+				if err := appendRule(backend, "port", canonical); err != nil {
+					return nil, err
 				}
 			}
 		}
 	}
-	if len(chunk) > 0 {
-		applyChunk(ctx, setName, chunk)
+	for _, subnet := range trustedSubnets {
+		canonical, isIPv4, err := canonicalIPOrPrefix(subnet)
+		if err != nil {
+			return nil, err
+		}
+		for _, backend := range []string{"ufw", "firewalld"} {
+			if _, available := paths[backend]; available {
+				if err := appendRule(backend, "source", canonical); err != nil {
+					return nil, err
+				}
+			}
+		}
+		backend := "ip6tables"
+		if isIPv4 {
+			backend = "iptables"
+		}
+		if _, available := paths[backend]; available {
+			if err := appendRule(backend, "source", canonical); err != nil {
+				return nil, err
+			}
+		}
 	}
+	return rules, nil
 }
 
-func applyChunk(ctx context.Context, setName string, chunk []string) {
-	var nftRules strings.Builder
-	_, _ = fmt.Fprintf(&nftRules, "add element netdev syswarden_hw_drop %s { \n%s\n }\n", setName, strings.Join(chunk, ",\n"))
-	cmd := exec.Command("nft", "-f", "-") // #nosec
-	cmd.Stdin = bytes.NewReader([]byte(nftRules.String()))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		fmt.Printf("[ERROR] Failed to load NETDEV chunk %s : %v\nOutput: %s\n", setName, err, string(out))
+func applyLinuxFirewallWrappers(trustedSubnets, ports []string) error {
+	lock, err := acquireNFTReloadGuard()
+	if err != nil {
+		return fmt.Errorf("acquire wrapper reconciliation lock: %w", err)
+	}
+	defer releaseNFTReloadGuard(lock)
+	return applyLinuxFirewallWrappersLocked(trustedSubnets, ports)
+}
+
+func applyLinuxFirewallWrappersLocked(trustedSubnets, ports []string) error {
+	paths := discoverLinuxWrapperPaths()
+	desired, err := desiredLinuxWrapperRules(trustedSubnets, ports, paths)
+	if err != nil {
+		return fmt.Errorf("prepare wrapper rules: %w", err)
+	}
+	previous, stateExists, err := readLinuxWrapperState(linuxWrapperStateFile)
+	if err != nil {
+		return err
+	}
+	if len(desired) == 0 && len(previous) == 0 {
+		return nil
 	}
 
-	nftRules.Reset()
-
-	ipStr := strings.Join(chunk, ", ")
-	_, _ = fmt.Fprintf(&nftRules, "add element inet syswarden %s { %s }\n", setName, ipStr)
-
-	cmd2 := exec.Command("nft", "-f", "-") // #nosec
-	cmd2.Stdin = bytes.NewReader([]byte(nftRules.String()))
-	if out, err := cmd2.CombinedOutput(); err != nil {
-		fmt.Printf("[ERROR] Failed to load INET chunk %s : %v\nOutput: %s\n", setName, err, string(out))
+	var preflightErrs []error
+	for _, rule := range previous {
+		if _, available := paths[rule.backend]; !available {
+			preflightErrs = append(preflightErrs, fmt.Errorf("cannot reconcile owned %s rule because its executable is unavailable", rule.backend))
+		}
 	}
+	finalOwned := make(map[string]linuxWrapperRule)
+	pendingOwned := copyLinuxWrapperRules(previous)
+	preexisting := make(map[string]linuxWrapperRule)
+	for key, rule := range desired {
+		if _, owned := previous[key]; owned {
+			finalOwned[key] = rule
+			continue
+		}
+		path := paths[rule.backend]
+		present, queryErr := linuxWrapperRulePresent(rule, path, false, true)
+		if queryErr != nil {
+			preflightErrs = append(preflightErrs, fmt.Errorf("preflight wrapper rule %s: %w", key, queryErr))
+			continue
+		}
+		if present {
+			preexisting[key] = rule
+			continue
+		}
+		pendingOwned[key] = rule
+		finalOwned[key] = rule
+	}
+	if err := errors.Join(preflightErrs...); err != nil {
+		return err
+	}
+	if !stateExists || len(pendingOwned) > 0 {
+		if err := writeLinuxWrapperState(linuxWrapperStateFile, pendingOwned); err != nil {
+			return err
+		}
+	}
+
+	var errs []error
+	staleFirewalld := false
+	for key, rule := range previous {
+		if _, stillDesired := desired[key]; stillDesired {
+			continue
+		}
+		if rule.backend == "firewalld" {
+			staleFirewalld = true
+		}
+		if _, removeErr := removeLinuxWrapperRule(rule, paths[rule.backend]); removeErr != nil {
+			errs = append(errs, removeErr)
+		}
+	}
+	for key, rule := range desired {
+		if _, existedWithoutOwnership := preexisting[key]; existedWithoutOwnership {
+			present, queryErr := linuxWrapperRulePresent(rule, paths[rule.backend], false, true)
+			if queryErr != nil || !present {
+				errs = append(errs, errors.Join(queryErr, fmt.Errorf("pre-existing wrapper rule %s disappeared during reconciliation", key)))
+			}
+			continue
+		}
+		if _, ensureErr := ensureLinuxWrapperRule(rule, paths[rule.backend]); ensureErr != nil {
+			errs = append(errs, ensureErr)
+		}
+	}
+
+	_, hasFirewalld := paths["firewalld"]
+	if hasFirewalld && (staleFirewalld || len(desired) > 0 || len(previous) > 0) {
+		if output, reloadErr := runLinuxFirewallCommand(paths["firewalld"], "--reload"); reloadErr != nil {
+			errs = append(errs, fmt.Errorf("reload firewalld wrapper state: %w: %s", reloadErr, strings.TrimSpace(string(output))))
+		} else {
+			for key, rule := range desired {
+				if rule.backend != "firewalld" {
+					continue
+				}
+				present, queryErr := linuxWrapperRulePresent(rule, paths["firewalld"], false, false)
+				if queryErr != nil || !present {
+					errs = append(errs, errors.Join(queryErr, fmt.Errorf("firewalld runtime rule %s is not active after reload", key)))
+				}
+			}
+			for key, rule := range previous {
+				if rule.backend != "firewalld" {
+					continue
+				}
+				if _, stillDesired := desired[key]; stillDesired {
+					continue
+				}
+				present, queryErr := linuxWrapperRulePresent(rule, paths["firewalld"], false, false)
+				if queryErr != nil || present {
+					errs = append(errs, errors.Join(queryErr, fmt.Errorf("stale firewalld runtime rule %s remains after reload", key)))
+				}
+			}
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	if err := writeLinuxWrapperState(linuxWrapperStateFile, finalOwned); err != nil {
+		return err
+	}
+	return nil
 }

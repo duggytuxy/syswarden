@@ -1,3 +1,14 @@
+# Release v4.02.9
+
+### FIXED 🐛
+- **Configuration safety:** Preserved v4.02.8 settings through atomic, retry-safe migration and fail-closed validation.
+- **Firewall correctness:** Made nftables reloads transactional, preserved dynamic bans, verified PF state, and corrected honeyport serialization.
+- **HA security:** Enforced TLS 1.3 certificate verification, mandatory bearer authentication, bounded requests, and durable two-node synchronization.
+- **BunkerWeb integration:** Added opt-in TTL, provenance, and CIDR peer support while keeping durable node-to-node L7/WAAP synchronization active with the partner gate disabled or enabled.
+- **Signed updates:** Added fail-closed Ed25519 manifests for v4.02.9 and later, with secure package staging and verification immediately before installation.
+
+---
+
 # Release v4.02.8
 
 ### FIXED 🐛

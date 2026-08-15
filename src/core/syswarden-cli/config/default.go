@@ -1,7 +1,7 @@
 package config
 
 const DefaultConfig = `# ==============================================================================
-# Version=v4.02.8
+# Version=v4.02.9
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -147,11 +147,13 @@ SYSWARDEN_LAN_MODE="n"
 # [6] HIGH AVAILABILITY & VPN
 # ==========================================
 # --- HA Cluster Sync ---
-# y = Enable, n = Disable (Replicates state to a standby node over encrypted channels)
-SYSWARDEN_HA_ENABLED="y"
-# HA Shared Secret Token for API Authentication (Must be identical on all nodes)
+# y = Enable, n = Disable (Replicates state to authenticated peers over encrypted channels)
+# HA stays disabled until both peer_ips and a shared bearer token are configured.
+SYSWARDEN_HA_ENABLED="n"
+# HA Shared Secret Token for API Authentication (Required when HA is enabled; must be identical on all nodes)
 SYSWARDEN_HA_TOKEN=""
-# Standby NODE IP (Automatically whitelisted for TLS P2P API)
+# Authorized peer IP or CIDR for the TLS P2P API.
+# Exact IPs are also outbound sync destinations; CIDRs are inbound allowlist scopes only.
 SYSWARDEN_HA_PEER_IP=""
 # Standby NODE TLS Port
 SYSWARDEN_HA_PEER_PORT="62026"
@@ -193,6 +195,11 @@ SYSWARDEN_ENABLE_WEBHOOK="n"
 SYSWARDEN_WEBHOOK_URL_DISCORD=""
 SYSWARDEN_WEBHOOK_URL_TEAMS=""
 SYSWARDEN_WEBHOOK_URL_SLACK=""
+
+# --- BunkerWeb partnership API contract ---
+# y = Enable the enriched TTL/provenance HA contract for BunkerWeb.
+# Requires HA, a non-empty bearer token, and at least one exact peer IP or canonical CIDR.
+SYSWARDEN_BUNKERWEB_ENABLED="n"
 
 # --- Wazuh Agent ---
 # y = Enable, n = Disable

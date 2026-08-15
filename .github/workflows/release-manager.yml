@@ -134,6 +134,9 @@ jobs:
             -s scripts/ci \
             -p 'release_gate_test.py' \
             -v
+          GOFLAGS=-mod=readonly go test \
+            ./scripts/ci/update_manifest.go \
+            ./scripts/ci/update_manifest_test.go
 
       - name: Resolve Exact Successful Upstream Runs and Artifacts
         id: upstream
@@ -470,6 +473,9 @@ jobs:
             -s scripts/ci \
             -p 'release_gate_test.py' \
             -v
+          GOFLAGS=-mod=readonly go test \
+            ./scripts/ci/update_manifest.go \
+            ./scripts/ci/update_manifest_test.go
 
       - name: Resolve Exact Successful Upstream Runs
         id: upstream
@@ -659,20 +665,30 @@ jobs:
           set -euo pipefail
           QUALIFICATION_ROOT="${RUNNER_TEMP}/syswarden-release-qualification-stage"
           VERSION="${RELEASE_TAG#v}"
+          SIGNED_UPDATE_REQUIRED="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+            requires-signed-update --tag "${RELEASE_TAG}")"
 
           test -s "${QUALIFICATION_ROOT}/qualification-context.json"
           test -s "${QUALIFICATION_ROOT}/status/qualification-exit-codes.json"
           test -s "${QUALIFICATION_ROOT}/EVIDENCE_SHA256SUMS.txt"
           test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
+          qualification_root_directories=(aggregate bound packages raw status)
+          qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            qualification_root_directories+=(update)
+            qualification_all_directories+=(update)
+          else
+            test ! -e "${QUALIFICATION_ROOT}/update"
+          fi
           diff -u \
             <(printf '%s\n' EVIDENCE_SHA256SUMS.txt qualification-context.json | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
-            <(printf '%s\n' aggregate bound packages raw status | LC_ALL=C sort) \
+            <(printf '%s\n' "${qualification_root_directories[@]}" | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort)
           diff -u \
-            <(printf '%s\n' aggregate bound packages packages/candidate packages/previous raw status | LC_ALL=C sort) \
+            <(printf '%s\n' "${qualification_all_directories[@]}" | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
           diff -u \
             <(printf '%s\n' release-qualification.json) \
@@ -689,6 +705,18 @@ jobs:
           diff -u \
             <(printf '%s\n' qualification-exit-codes.json) \
             <(find "${QUALIFICATION_ROOT}/status" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            diff -u \
+              <(printf '%s\n' syswarden-update-manifest-v1.json syswarden-update-manifest-v1.json.sig | LC_ALL=C sort) \
+              <(find "${QUALIFICATION_ROOT}/update" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+            env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY GOFLAGS=-mod=readonly \
+              go run ./scripts/ci/update_manifest.go verify \
+                --repository "${GITHUB_WORKSPACE}" \
+                --tag "${RELEASE_TAG}" \
+                --packages "${QUALIFICATION_ROOT}/packages/candidate" \
+                --manifest "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
+                --signature "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig"
+          fi
           (
             cd "${QUALIFICATION_ROOT}"
             diff -u \
@@ -804,7 +832,16 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${RELEASE_TAG#v}"
+          SIGNED_UPDATE_REQUIRED="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+            requires-signed-update --tag "${RELEASE_TAG}")"
           mkdir -p release_payload
+          update_manifest_arguments=()
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            update_manifest_arguments=(
+              --update-manifest-dir
+              "${RUNNER_TEMP}/syswarden-release-qualification-stage/update"
+            )
+          fi
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py prepare \
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
@@ -813,7 +850,8 @@ jobs:
             --sbom incoming/syswarden-sbom \
             --compliance incoming/plumber-report \
             --output release_payload/assets \
-            --notes-output release_payload/release_notes.md
+            --notes-output release_payload/release_notes.md \
+            "${update_manifest_arguments[@]}"
           echo "----- BEGIN VALIDATED RELEASE NOTES -----"
           sed -n '1,240p' release_payload/release_notes.md
           echo "----- END VALIDATED RELEASE NOTES -----"
@@ -878,6 +916,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ needs.validate-and-stage.outputs.release_sha }}
+
+      - name: Set Up Go for Signed Update Verification
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: false
 
       - name: Download Validated Release Payload
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1002,6 +1046,8 @@ jobs:
           REQUESTED_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          SIGNED_UPDATE_REQUIRED="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+            requires-signed-update --tag "${RELEASE_TAG}")"
           if [[ "${EVENT_NAME}" != "workflow_dispatch" || \
                 "${EVENT_REF_TYPE}" != "tag" || \
                 "${EVENT_REF_NAME}" != "${RELEASE_TAG}" || \
@@ -1039,6 +1085,7 @@ jobs:
           fi
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
+            --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
             --assets release_payload/assets
           test -s release_payload/release_notes.md
@@ -1050,14 +1097,22 @@ jobs:
           test -s "${QUALIFICATION_ROOT}/EVIDENCE_SHA256SUMS.txt"
           test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
+          qualification_root_directories=(aggregate bound packages raw status)
+          qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            qualification_root_directories+=(update)
+            qualification_all_directories+=(update)
+          else
+            test ! -e "${QUALIFICATION_ROOT}/update"
+          fi
           diff -u \
             <(printf '%s\n' EVIDENCE_SHA256SUMS.txt qualification-context.json | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
-            <(printf '%s\n' aggregate bound packages raw status | LC_ALL=C sort) \
+            <(printf '%s\n' "${qualification_root_directories[@]}" | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort)
           diff -u \
-            <(printf '%s\n' aggregate bound packages packages/candidate packages/previous raw status | LC_ALL=C sort) \
+            <(printf '%s\n' "${qualification_all_directories[@]}" | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
           diff -u \
             <(printf '%s\n' release-qualification.json) \
@@ -1074,6 +1129,18 @@ jobs:
           diff -u \
             <(printf '%s\n' qualification-exit-codes.json) \
             <(find "${QUALIFICATION_ROOT}/status" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            diff -u \
+              <(printf '%s\n' syswarden-update-manifest-v1.json syswarden-update-manifest-v1.json.sig | LC_ALL=C sort) \
+              <(find "${QUALIFICATION_ROOT}/update" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+            env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY GOFLAGS=-mod=readonly \
+              go run ./scripts/ci/update_manifest.go verify \
+                --repository "${GITHUB_WORKSPACE}" \
+                --tag "${RELEASE_TAG}" \
+                --packages "${QUALIFICATION_ROOT}/packages/candidate" \
+                --manifest "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
+                --signature "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig"
+          fi
           (
             cd "${QUALIFICATION_ROOT}"
             diff -u \
@@ -1176,6 +1243,15 @@ jobs:
               "${QUALIFICATION_ROOT}/packages/candidate/${package_name}" \
               "release_payload/assets/${package_name}"
           done
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            for update_asset in \
+              syswarden-update-manifest-v1.json \
+              syswarden-update-manifest-v1.json.sig; do
+              cmp --silent \
+                "${QUALIFICATION_ROOT}/update/${update_asset}" \
+                "release_payload/assets/${update_asset}"
+            done
+          fi
           echo "Privileged revalidation retained qualification run ${QUALIFICATION_RUN_ID} and exact candidate package bytes."
 
       - name: Detect and Validate Existing Release
@@ -1218,6 +1294,7 @@ jobs:
           mkdir existing_release_assets
           gh release download "${RELEASE_TAG}" --dir existing_release_assets
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
+            --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
             --assets existing_release_assets
           diff --no-index \
@@ -1287,6 +1364,7 @@ jobs:
           mkdir draft_release_assets
           gh release download "${RELEASE_TAG}" --dir draft_release_assets
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
+            --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
             --assets draft_release_assets
           diff --no-index \
@@ -1490,6 +1568,7 @@ jobs:
           mkdir published_release_assets
           gh release download "${RELEASE_TAG}" --dir published_release_assets
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
+            --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
             --assets published_release_assets
           diff --no-index \

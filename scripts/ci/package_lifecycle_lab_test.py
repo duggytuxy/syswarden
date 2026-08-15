@@ -1341,7 +1341,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
             missing_expected_failure["unexpected_failed_checks"]
         )
 
-    def test_exact_config_panics_are_a_known_blocker_but_partial_set_is_not(self) -> None:
+    def test_config_panics_are_unexpected_after_cfg_closure(self) -> None:
         report = package_lifecycle_lab.run_lab(
             self.args(), runner=FakePodmanRunner()
         )
@@ -1365,10 +1365,10 @@ class PackageLifecycleLabTests(unittest.TestCase):
         classification = package_lifecycle_lab.classify_lifecycle_evidence(
             platforms
         )
-        self.assertTrue(classification["harness_complete"])
+        self.assertFalse(classification["harness_complete"])
         self.assertFalse(classification["release_ready"])
-        self.assertEqual(classification["blocker_ids"], ["SW-CFG-001"])
-        self.assertEqual(classification["unexpected_failed_checks"], [])
+        self.assertEqual(classification["blocker_ids"], [])
+        self.assertTrue(classification["unexpected_failed_checks"])
 
         partial = json.loads(json.dumps(platforms))
         event = next(
@@ -1428,35 +1428,9 @@ class PackageLifecycleLabTests(unittest.TestCase):
         )
         self.assertFalse(classification["harness_complete"])
         self.assertFalse(classification["release_ready"])
-        self.assertEqual(
-            classification["blocker_ids"], ["SW-CFG-001", "SW-PKG-001"]
-        )
-        self.assertEqual(
-            classification["unexpected_failed_checks"],
-            [
-                f"{distribution}/arm64:scenario-contract-incomplete"
-                for distribution in (
-                    "almalinux",
-                    "alpine",
-                    "debian",
-                    "fedora",
-                    "ubuntu",
-                )
-            ],
-        )
-        amd64 = {
-            item["distribution"]: item
-            for item in classification["coordinate_classification"]
-            if item["architecture_id"] == "amd64"
-        }
-        self.assertEqual(amd64["alpine"]["blocker_ids"], ["SW-PKG-001"])
-        self.assertTrue(
-            all(
-                item["blocker_ids"] == ["SW-CFG-001"]
-                for distribution, item in amd64.items()
-                if distribution != "alpine"
-            )
-        )
+        self.assertEqual(classification["blocker_ids"], [])
+        self.assertTrue(classification["unexpected_failed_checks"])
+        self.assertNotIn("SW-CFG-001", repr(classification))
 
         changed_detail = json.loads(json.dumps(platforms))
         drifted = next(
@@ -1474,12 +1448,6 @@ class PackageLifecycleLabTests(unittest.TestCase):
         )
         self.assertFalse(rejected["harness_complete"])
         self.assertEqual(rejected["blocker_ids"], [])
-        self.assertTrue(
-            any(
-                item.startswith("SW-CFG-001:blocker-coverage-inconsistent:")
-                for item in rejected["unexpected_failed_checks"]
-            )
-        )
         self.assertIn(
             f"ubuntu/amd64:{drifted['check']}",
             rejected["unexpected_failed_checks"],

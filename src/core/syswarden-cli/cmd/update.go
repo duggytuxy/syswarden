@@ -7,14 +7,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var runSystemUpgrade = system.UpgradeSystem
+
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Run the legacy in-place package updater",
-	Long:  "Downloads and installs a release package without currently verifying its checksum or signature. Use a separately verified package-upgrade procedure instead.",
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := system.UpgradeSystem(); err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
+	Short: "Install a release verified by a signed manifest",
+	Long:  "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. The v4.02.8 first upgrade must use a separately verified manual package procedure.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := runSystemUpgrade(); err != nil {
+			return fmt.Errorf("update failed: %w", err)
 		}
+		return nil
 	},
 }
 

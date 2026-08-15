@@ -161,17 +161,20 @@ func TestCLIProcessExitCodeContract_SW_QA_001(t *testing.T) {
 		wantExit       int
 		stdoutContains string
 		stderrContains string
+		stderrEmpty    bool
 	}{
 		{
 			name:           "root command",
 			wantExit:       0,
 			stdoutContains: "Use 'syswarden manual'",
+			stderrEmpty:    true,
 		},
 		{
 			name:           "help",
 			args:           []string{"--help"},
 			wantExit:       0,
 			stdoutContains: "Available Commands:",
+			stderrEmpty:    true,
 		},
 		{
 			name:           "unknown command",
@@ -199,6 +202,9 @@ func TestCLIProcessExitCodeContract_SW_QA_001(t *testing.T) {
 			}
 			if !strings.Contains(stderr, test.stderrContains) {
 				t.Fatalf("stderr does not contain %q:\n%s", test.stderrContains, stderr)
+			}
+			if test.stderrEmpty && stderr != "" {
+				t.Fatalf("stderr is not empty:\n%s", stderr)
 			}
 		})
 	}

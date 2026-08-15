@@ -227,16 +227,49 @@ jobs:
           set -euo pipefail
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/preinst.sh"
           #!/bin/sh
-          if [ -f /opt/syswarden/syswarden-auto.conf ]; then
+          set -e
+          if [ -f /opt/syswarden/syswarden-auto.conf ] && \
+             [ ! -e /opt/syswarden/syswarden-auto.conf.migration_backup ] && \
+             [ ! -e /opt/syswarden/syswarden-auto.conf.migration_backup.migrated ]; then
               mv /opt/syswarden/syswarden-auto.conf /opt/syswarden/syswarden-auto.conf.migration_backup
           fi
           EOF
 
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/postinst.sh"
           #!/bin/sh
+          set -e
           export SYSWARDEN_PKG_INSTALL=1
           ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
           ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
+
+          modular_config_complete() {
+              for file in \
+                  /etc/syswarden/config/config.toml \
+                  /etc/syswarden/config/modules/00-core.toml \
+                  /etc/syswarden/config/modules/10-network.toml \
+                  /etc/syswarden/config/modules/20-security.toml \
+                  /etc/syswarden/config/modules/30-waap.toml \
+                  /etc/syswarden/config/modules/40-integrations.toml \
+                  /etc/syswarden/config/modules/99-user.toml; do
+                  [ -f "${file}" ] || return 1
+              done
+              return 0
+          }
+          migrate_legacy_configuration() {
+              source=/opt/syswarden/syswarden-auto.conf.migration_backup
+              marker=/etc/syswarden/config/.migration-in-progress
+              if [ -f "${marker}" ]; then
+                  /opt/syswarden/bin/syswarden-cli migrate-config --source "${source}" --output /etc/syswarden/config
+              elif [ -f "${source}" ] && ! modular_config_complete; then
+                  /opt/syswarden/bin/syswarden-cli migrate-config --source "${source}" --output /etc/syswarden/config
+              fi
+              if [ -f "${source}.migrated" ]; then
+                  mv "${source}.migrated" /opt/syswarden/syswarden-auto.conf.bak
+              elif [ -f "${source}" ] && [ ! -f "${marker}" ] && modular_config_complete; then
+                  mv "${source}" /opt/syswarden/syswarden-auto.conf.bak
+              fi
+          }
+          migrate_legacy_configuration
 
           # Install Bash Autocompletion
           mkdir -p /etc/bash_completion.d
@@ -255,12 +288,6 @@ jobs:
 
           # RPM Upgrade ($1 = 2) or DEB Upgrade ($1 = configure && $2 != "")
           if [ "$1" = "2" ] || [ "$1" = "configure" -a -n "$2" ]; then
-              if [ -f /opt/syswarden/syswarden-auto.conf.migration_backup ]; then
-                  if [ ! -d /etc/syswarden/config/modules ] || [ -z "$(ls -A /etc/syswarden/config/modules 2>/dev/null)" ]; then
-                      /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
-                  fi
-                  mv /opt/syswarden/syswarden-auto.conf.migration_backup /opt/syswarden/syswarden-auto.conf.bak || true
-              fi
               /opt/syswarden/bin/syswarden-cli install
               if command -v systemctl >/dev/null 2>&1; then
                   systemctl daemon-reload
@@ -287,12 +314,6 @@ jobs:
               fi
           # Alpine APK Install/Upgrade (APK passes version string in $1)
           elif [ -f /etc/alpine-release ]; then
-              if [ -f /opt/syswarden/syswarden-auto.conf.migration_backup ]; then
-                  if [ ! -d /etc/syswarden/config/modules ] || [ -z "$(ls -A /etc/syswarden/config/modules 2>/dev/null)" ]; then
-                      /opt/syswarden/bin/syswarden-cli migrate-config --source /opt/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
-                  fi
-                  mv /opt/syswarden/syswarden-auto.conf.migration_backup /opt/syswarden/syswarden-auto.conf.bak || true
-              fi
               /opt/syswarden/bin/syswarden-cli install
               # syswarden update handles the daemon restart in Alpine, so we just reload.
               /opt/syswarden/bin/syswarden-cli reload || true
@@ -334,10 +355,17 @@ jobs:
               nft delete table netdev syswarden_hw_drop || true
               nft delete table arp syswarden_arp || true
               nft delete table inet syswarden || true
-              if crontab -l > /tmp/sw_cron.bak 2>/dev/null; then
-                  grep -v 'syswarden-cli' /tmp/sw_cron.bak | crontab - || true
-                  rm -f /tmp/sw_cron.bak
+              umask 077
+              cron_backup="$(mktemp /var/tmp/syswarden-cron.XXXXXX)" || {
+                  echo "Unable to create the private cron backup" >&2
+                  exit 1
+              }
+              trap 'rm -f -- "$cron_backup"' 0 1 2 15
+              if crontab -l > "${cron_backup}" 2>/dev/null; then
+                  grep -v 'syswarden-cli' "${cron_backup}" | crontab - || true
               fi
+              rm -f -- "${cron_backup}"
+              trap - 0 1 2 15
               rm -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true
           fi
           EOF
@@ -507,22 +535,48 @@ jobs:
 
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/preinst_fbsd.sh"
           #!/bin/sh
-          if [ -f /usr/local/syswarden/syswarden-auto.conf ]; then
+          set -e
+          if [ -f /usr/local/syswarden/syswarden-auto.conf ] && \
+             [ ! -e /usr/local/syswarden/syswarden-auto.conf.migration_backup ] && \
+             [ ! -e /usr/local/syswarden/syswarden-auto.conf.migration_backup.migrated ]; then
               mv /usr/local/syswarden/syswarden-auto.conf /usr/local/syswarden/syswarden-auto.conf.migration_backup
           fi
           EOF
 
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/postinst_fbsd.sh"
           #!/bin/sh
+          set -e
           export SYSWARDEN_PKG_INSTALL=1
           ln -sf /usr/local/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
           ln -sf /usr/local/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
-          if [ -f /usr/local/syswarden/syswarden-auto.conf.migration_backup ]; then
-              if [ ! -d /etc/syswarden/config/modules ] || [ -z "$(ls -A /etc/syswarden/config/modules 2>/dev/null)" ]; then
-                  /usr/local/syswarden/bin/syswarden-cli migrate-config --source /usr/local/syswarden/syswarden-auto.conf.migration_backup --output /etc/syswarden/config || true
+          modular_config_complete() {
+              for file in \
+                  /etc/syswarden/config/config.toml \
+                  /etc/syswarden/config/modules/00-core.toml \
+                  /etc/syswarden/config/modules/10-network.toml \
+                  /etc/syswarden/config/modules/20-security.toml \
+                  /etc/syswarden/config/modules/30-waap.toml \
+                  /etc/syswarden/config/modules/40-integrations.toml \
+                  /etc/syswarden/config/modules/99-user.toml; do
+                  [ -f "${file}" ] || return 1
+              done
+              return 0
+          }
+          migrate_legacy_configuration() {
+              source=/usr/local/syswarden/syswarden-auto.conf.migration_backup
+              marker=/etc/syswarden/config/.migration-in-progress
+              if [ -f "${marker}" ]; then
+                  /usr/local/syswarden/bin/syswarden-cli migrate-config --source "${source}" --output /etc/syswarden/config
+              elif [ -f "${source}" ] && ! modular_config_complete; then
+                  /usr/local/syswarden/bin/syswarden-cli migrate-config --source "${source}" --output /etc/syswarden/config
               fi
-              mv /usr/local/syswarden/syswarden-auto.conf.migration_backup /usr/local/syswarden/syswarden-auto.conf.bak || true
-          fi
+              if [ -f "${source}.migrated" ]; then
+                  mv "${source}.migrated" /usr/local/syswarden/syswarden-auto.conf.bak
+              elif [ -f "${source}" ] && [ ! -f "${marker}" ] && modular_config_complete; then
+                  mv "${source}" /usr/local/syswarden/syswarden-auto.conf.bak
+              fi
+          }
+          migrate_legacy_configuration
           /usr/local/bin/syswarden install
           service syswarden restart || true
           EOF
@@ -704,3 +758,22 @@ jobs:
           path: ${{ steps.package_workspace.outputs.assets }}
           if-no-files-found: error
           retention-days: 30
+
+  package:
+    name: Package
+    needs: [build-and-package]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce package build result
+        shell: bash
+        env:
+          BUILD_RESULT: ${{ needs.build-and-package.result }}
+        run: |
+          set -euo pipefail
+          if [[ "${BUILD_RESULT}" != "success" ]]; then
+            echo "ERROR: Compile and Build Packages concluded ${BUILD_RESULT}." >&2
+            exit 1
+          fi
