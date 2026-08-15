@@ -882,13 +882,6 @@ func requireOrSkipLoopbackHA(t *testing.T, err error) {
 	t.Skipf("loopback HA contract requires sockets unavailable in this sandbox: %v", err)
 }
 
-func withGlobalConfig(t *testing.T, value *config.Config) {
-	t.Helper()
-	previous := config.GlobalConfig
-	config.GlobalConfig = value
-	t.Cleanup(func() { config.GlobalConfig = previous })
-}
-
 func testHASyncOptions(t *testing.T, client *http.Client) haSyncOptions {
 	t.Helper()
 	root := t.TempDir()

@@ -890,11 +890,8 @@ func listExistingSyswardenTables(ctx context.Context, runner nftCommandRunner) (
 			continue
 		}
 		target := nftTableTarget{family: entry.Table.Family, name: entry.Table.Name}
-		for _, allowed := range syswardenNFTTables {
-			if target == allowed {
-				existing[target] = true
-				break
-			}
+		if isSyswardenNFTTable(target) {
+			existing[target] = true
 		}
 	}
 	return existing, nil

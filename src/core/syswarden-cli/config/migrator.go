@@ -343,14 +343,6 @@ func ensureMissingConfigFile(directory, name string, content []byte) error {
 	return writeMissingSecureFile(directory, name, content)
 }
 
-func (m *Migrator) parseOldConfig() (map[string]string, error) {
-	content, err := readSecureFileByPath(m.SourcePath)
-	if err != nil {
-		return nil, err
-	}
-	return parseLegacyConfig(bytes.NewReader(content))
-}
-
 // ParseFromMemory parses the legacy flat configuration format directly from a string in memory
 func (m *Migrator) ParseFromMemory(content string) (map[string]string, error) {
 	return parseLegacyConfig(strings.NewReader(content))

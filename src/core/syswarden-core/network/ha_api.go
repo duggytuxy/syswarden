@@ -440,14 +440,6 @@ func newHAAPI(cfg HAConfig, fwManager firewall.Manager, coreVersion, blacklistIP
 	return api, nil
 }
 
-func newHAHandler(cfg HAConfig, fwManager firewall.Manager, coreVersion, blacklistIPv4, blacklistIPv6, telemetryFile, banLedgerFile string) (http.Handler, error) {
-	api, err := newHAAPI(cfg, fwManager, coreVersion, blacklistIPv4, blacklistIPv6, telemetryFile, banLedgerFile)
-	if err != nil {
-		return nil, err
-	}
-	return api.handler(), nil
-}
-
 func (api *haAPI) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ha/sync", api.handleSync)
@@ -504,10 +496,6 @@ func readHARootedFileBounded(path string, limit int64) ([]byte, error) {
 	}
 	defer root.Close()
 	return readHARegularFileBounded(root, filepath.Base(path), limit)
-}
-
-func readHARegularFile(root *os.Root, name string) ([]byte, error) {
-	return readHARegularFileBounded(root, name, 0)
 }
 
 func readHARegularFileBounded(root *os.Root, name string, limit int64) ([]byte, error) {
