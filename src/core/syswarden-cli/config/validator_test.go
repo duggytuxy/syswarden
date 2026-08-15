@@ -64,6 +64,142 @@ func TestValidateConfigContract_SW_CFG_002(t *testing.T) {
 	if err := validateConfig(&invalid); err == nil {
 		t.Fatal("modular configuration accepted an invalid SSH port")
 	}
+
+	invalid = *valid
+	invalid.Integrations.Wazuh.Enabled = true
+	if err := validateConfig(&invalid); err == nil {
+		t.Fatal("modular configuration accepted enabled Wazuh without a manager endpoint")
+	}
+
+	invalid = *valid
+	invalid.Integrations.SIEM.Port = "70000"
+	if err := validateConfig(&invalid); err == nil {
+		t.Fatal("modular configuration accepted an invalid SIEM port")
+	}
+
+	invalid = *valid
+	invalid.Security.Honeyports = []string{"23", "not-a-port"}
+	if err := validateConfig(&invalid); err == nil {
+		t.Fatal("modular configuration accepted an invalid honeyport")
+	}
+}
+
+func TestValidateHARequiresTokenAndAcceptsPeerCIDRs(t *testing.T) {
+	base := &ModularConfig{}
+	base.Core.ConfigDir = "/etc/syswarden/config/modules"
+	base.Core.LogLevel = "INFO"
+	base.Core.FirewallBackend = "keep"
+	base.Core.SSHPort = "2222"
+	base.Network.Wireguard.Port = "51820"
+	base.Network.Wireguard.Subnet = "10.10.0.0/24"
+	base.Security.Compliance.CheckInterval = "24h"
+	base.WAAP.EnforcementMode = "enforcing"
+	base.WAAP.BruteforceThreshold = 5
+	base.WAAP.BruteforceWindowSeconds = 60
+	base.Integrations.HA.Enabled = true
+	base.Integrations.HA.PeerPort = 62026
+	base.Integrations.HA.PeerIPs = []string{"10.20.30.0/29", "2001:db8::20"}
+	base.Integrations.HA.Token = "shared-cluster-token"
+
+	if err := validateConfig(base); err != nil {
+		t.Fatalf("valid HA IP/CIDR configuration was rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ModularConfig)
+	}{
+		{
+			name: "empty token",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.Token = ""
+			},
+		},
+		{
+			name: "surrounding token whitespace",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.Token = " shared-cluster-token "
+			},
+		},
+		{
+			name: "missing peers",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = nil
+			},
+		},
+		{
+			name: "invalid peer",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"docker-network"}
+			},
+		},
+		{
+			name: "IPv4-mapped IPv6 peer",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"::ffff:192.0.2.10"}
+			},
+		},
+		{
+			name: "CIDR with host bits",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"10.20.30.3/29"}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			candidate := *base
+			candidate.Integrations.HA.PeerIPs = append([]string(nil), base.Integrations.HA.PeerIPs...)
+			test.mutate(&candidate)
+			if err := validateConfig(&candidate); err == nil {
+				t.Fatal("invalid HA configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestBunkerWebFeatureGateRequiresAuthenticatedHA_SW_CFG_002(t *testing.T) {
+	base := &ModularConfig{}
+	base.Core.ConfigDir = "/etc/syswarden/config/modules"
+	base.Core.LogLevel = "INFO"
+	base.Core.FirewallBackend = "keep"
+	base.Core.SSHPort = "2222"
+	base.Network.Wireguard.Port = "51820"
+	base.Network.Wireguard.Subnet = "10.10.0.0/24"
+	base.Security.Compliance.CheckInterval = "24h"
+	base.WAAP.EnforcementMode = "enforcing"
+	base.WAAP.BruteforceThreshold = 5
+	base.WAAP.BruteforceWindowSeconds = 60
+	base.Integrations.HA.PeerPort = 62026
+
+	if err := validateConfig(base); err != nil {
+		t.Fatalf("disabled BunkerWeb gate changed the default contract: %v", err)
+	}
+
+	base.Integrations.BunkerWeb.Enabled = true
+	if err := validateConfig(base); err == nil {
+		t.Fatal("BunkerWeb gate accepted disabled HA")
+	}
+
+	base.Integrations.HA.Enabled = true
+	base.Integrations.HA.Token = " shared-token "
+	base.Integrations.HA.PeerIPs = []string{"192.0.2.20"}
+	if err := validateConfig(base); err == nil {
+		t.Fatal("BunkerWeb gate accepted an HA token with surrounding whitespace")
+	}
+
+	base.Integrations.HA.Token = "shared-token"
+	base.Integrations.HA.PeerIPs = nil
+	if err := validateConfig(base); err == nil {
+		t.Fatal("BunkerWeb gate accepted an empty HA peer allowlist")
+	}
+
+	base.Integrations.HA.PeerIPs = []string{"192.0.2.20", "10.20.30.0/29"}
+	if err := validateConfig(base); err != nil {
+		t.Fatalf("BunkerWeb gate rejected authenticated HA with canonical peers: %v", err)
+	}
 }
 
 func TestMapToGlobalConfigCompatibility(t *testing.T) {
@@ -80,6 +216,7 @@ func TestMapToGlobalConfigCompatibility(t *testing.T) {
 	modular.WAAP.BruteforceWindowSeconds = 90
 	modular.Integrations.HA.PeerIPs = []string{"192.0.2.20", "192.0.2.21"}
 	modular.Integrations.HA.PeerPort = 62026
+	modular.Integrations.BunkerWeb.Enabled = true
 
 	mapToGlobalConfig(modular)
 	if GlobalConfig == nil {
@@ -96,5 +233,8 @@ func TestMapToGlobalConfigCompatibility(t *testing.T) {
 	}
 	if GlobalConfig.HAPeerIP != "192.0.2.20 192.0.2.21" || GlobalConfig.HAPeerPort != "62026" {
 		t.Fatalf("HA mapping changed: peers=%q port=%q", GlobalConfig.HAPeerIP, GlobalConfig.HAPeerPort)
+	}
+	if !GlobalConfig.BunkerWebEnabled {
+		t.Fatal("BunkerWeb feature gate was not mapped to the runtime configuration")
 	}
 }

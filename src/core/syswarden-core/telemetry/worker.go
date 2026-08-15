@@ -126,14 +126,15 @@ type Whitelist struct {
 }
 
 type DashboardData struct {
-	Timestamp     string     `json:"timestamp"`
-	GithubStars   string     `json:"github_stars"`
-	GithubRelease string     `json:"github_release"`
-	ProfileName   string     `json:"profile_name"`
-	System        SystemData `json:"system"`
-	Layer3        Layer3     `json:"layer3"`
-	WAF           WAF        `json:"waf"`
-	Whitelist     Whitelist  `json:"whitelist"`
+	Timestamp     string       `json:"timestamp"`
+	GithubStars   string       `json:"github_stars"`
+	GithubRelease string       `json:"github_release"`
+	ProfileName   string       `json:"profile_name"`
+	System        SystemData   `json:"system"`
+	Layer3        Layer3       `json:"layer3"`
+	WAF           WAF          `json:"waf"`
+	Whitelist     Whitelist    `json:"whitelist"`
+	HA            *HATelemetry `json:"ha,omitempty"`
 }
 
 // TelemetryEvent parses lines from waf.json
@@ -287,8 +288,13 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 
 				if hits == 3 {
 					// 3 strikes: Permanently Ban IP using Firewall Manager
-					if fwManager != nil {
-						_ = fwManager.Ban(ip)
+					if fwManager == nil {
+						log.Printf("[Telemetry Worker] Firewall unavailable; refusing to report a port-scan ban for %s", ip)
+						continue
+					}
+					if err := fwManager.Ban(ip); err != nil {
+						log.Printf("[Telemetry Worker] Firewall rejected port-scan ban for %s: %v", ip, err)
+						continue
 					}
 					logBan(ip, "L3-PORTSCAN", line)
 				}
@@ -310,8 +316,13 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 
 				if hits == 1 {
 					// 1 strike is enough for Honeyport
-					if fwManager != nil {
-						_ = fwManager.Ban(ip)
+					if fwManager == nil {
+						log.Printf("[Telemetry Worker] Firewall unavailable; refusing to report a honeyport ban for %s", ip)
+						continue
+					}
+					if err := fwManager.Ban(ip); err != nil {
+						log.Printf("[Telemetry Worker] Firewall rejected honeyport ban for %s: %v", ip, err)
+						continue
 					}
 					logBan(ip, "L3-HONEYPORT-SCAN", line)
 				}
@@ -362,6 +373,7 @@ func generateTelemetry() {
 		Layer3:        getLayer3Stats(),
 		WAF:           getWAFStats(),
 		Whitelist:     getWhitelistStats(),
+		HA:            getHATelemetry(),
 	}
 
 	uiDir := "/var/lib/syswarden/ui"

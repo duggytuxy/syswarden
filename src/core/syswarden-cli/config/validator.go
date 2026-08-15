@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -19,6 +21,7 @@ func init() {
 	_ = validate.RegisterValidation("cidr_slice", validateCIDRSlice)
 	_ = validate.RegisterValidation("ip", validateIP)
 	_ = validate.RegisterValidation("ip_slice", validateIPSlice)
+	_ = validate.RegisterValidation("ip_or_cidr_slice", validateIPOrCIDRSlice)
 	_ = validate.RegisterValidation("port", validatePort)
 	_ = validate.RegisterValidation("port_slice", validatePortSlice)
 	_ = validate.RegisterValidation("asn", validateASN)
@@ -29,7 +32,35 @@ func init() {
 }
 
 func validateConfig(config *ModularConfig) error {
-	return validate.Struct(config)
+	if config == nil {
+		return fmt.Errorf("configuration must not be nil")
+	}
+	if err := validate.Struct(config); err != nil {
+		return err
+	}
+	if config.Integrations.BunkerWeb.Enabled {
+		if !config.Integrations.HA.Enabled {
+			return fmt.Errorf("integrations.bunkerweb.enabled requires integrations.ha.enabled=true")
+		}
+		if config.Integrations.HA.Token == "" || strings.TrimSpace(config.Integrations.HA.Token) != config.Integrations.HA.Token {
+			return fmt.Errorf("integrations.bunkerweb.enabled requires a non-empty integrations.ha.token without surrounding whitespace")
+		}
+		if len(config.Integrations.HA.PeerIPs) == 0 {
+			return fmt.Errorf("integrations.bunkerweb.enabled requires at least one exact IP or canonical CIDR in integrations.ha.peer_ips")
+		}
+	}
+	if config.Integrations.HA.Enabled {
+		if config.Integrations.HA.Token == "" || strings.TrimSpace(config.Integrations.HA.Token) != config.Integrations.HA.Token {
+			return fmt.Errorf("integrations.ha.token must be a non-empty bearer token without surrounding whitespace when HA is enabled")
+		}
+		if len(config.Integrations.HA.PeerIPs) == 0 {
+			return fmt.Errorf("integrations.ha.peer_ips must contain at least one IP address or CIDR when HA is enabled")
+		}
+	}
+	if config.Integrations.Wazuh.Enabled && strings.TrimSpace(config.Integrations.Wazuh.IP) == "" {
+		return fmt.Errorf("integrations.wazuh.ip must be non-empty when Wazuh is enabled")
+	}
+	return nil
 }
 
 func validateCIDR(fl validator.FieldLevel) bool {
@@ -67,6 +98,30 @@ func validateIPSlice(fl validator.FieldLevel) bool {
 			continue
 		}
 		if net.ParseIP(ip) == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func validateIPOrCIDRSlice(fl validator.FieldLevel) bool {
+	values, ok := fl.Field().Interface().([]string)
+	if !ok {
+		return false
+	}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return false
+		}
+		if address, err := netip.ParseAddr(value); err == nil {
+			if address.Is4In6() || address.Zone() != "" {
+				return false
+			}
+			continue
+		}
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil || prefix.Addr().Is4In6() || prefix.Addr().Zone() != "" || prefix != prefix.Masked() {
 			return false
 		}
 	}

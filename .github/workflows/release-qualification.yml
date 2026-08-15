@@ -224,6 +224,7 @@ jobs:
           aggregate_dir="${artifact_root}/aggregate"
           status_dir="${qualification_root}/status-internal"
           secrets_dir="${qualification_root}/secrets"
+          signing_tool_dir="${qualification_root}/signing-tool"
           install -d -m 0700 \
             "${artifact_root}" \
             "${candidate_packages}" \
@@ -233,7 +234,8 @@ jobs:
             "${aggregate_dir}" \
             "${artifact_root}/status" \
             "${status_dir}" \
-            "${secrets_dir}"
+            "${secrets_dir}" \
+            "${signing_tool_dir}"
 
           if [[ -z "${QEMU_AARCH64_STATIC}" || \
                 "${QEMU_AARCH64_STATIC}" != /* || \
@@ -270,6 +272,7 @@ jobs:
             printf 'AGGREGATE_DIR=%s\n' "${aggregate_dir}"
             printf 'STATUS_DIR=%s\n' "${status_dir}"
             printf 'SECRETS_DIR=%s\n' "${secrets_dir}"
+            printf 'SIGNING_TOOL_DIR=%s\n' "${signing_tool_dir}"
             printf 'QEMU_AARCH64_STATIC=%s\n' "${QEMU_AARCH64_STATIC}"
           } >> "${GITHUB_ENV}"
           {
@@ -359,6 +362,42 @@ jobs:
             verify-packages \
             --tag "${RELEASE_TAG}" \
             --packages "${CANDIDATE_PACKAGES_DIR}"
+
+      - name: Resolve Signed Update Contract
+        id: update_contract
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          required="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+            requires-signed-update --tag "${RELEASE_TAG}")"
+          if [[ "${required}" != "true" && "${required}" != "false" ]]; then
+            echo "ERROR: signed update contract returned invalid state ${required}." >&2
+            exit 1
+          fi
+          echo "required=${required}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and Test Signed Update Manifest Tool
+        id: manifest_tool
+        if: ${{ steps.update_contract.outputs.required == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOFLAGS=-mod=readonly go test \
+            ./scripts/ci/update_manifest.go \
+            ./scripts/ci/update_manifest_test.go
+          GOFLAGS=-mod=readonly go build \
+            -o "${SIGNING_TOOL_DIR}/syswarden-update-manifest" \
+            ./scripts/ci/update_manifest.go
+          chmod 0700 "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test -f "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test ! -L "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test -x "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          tool_sha256="$(sha256sum "${SIGNING_TOOL_DIR}/syswarden-update-manifest")"
+          tool_sha256="${tool_sha256%% *}"
+          [[ "${tool_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          echo "sha256=${tool_sha256}" >> "${GITHUB_OUTPUT}"
 
       - name: Download Latest Public Previous Packages by Asset ID
         id: previous
@@ -637,12 +676,114 @@ jobs:
           printf '%s\n' "${verify_rc}" > "${STATUS_DIR}/gate-verify.rc"
           chmod 0600 "${STATUS_DIR}/gate-generate.rc" "${STATUS_DIR}/gate-verify.rc"
 
+      - name: Require Successful Qualification Before Release Signing
+        id: signing_gate
+        if: ${{ steps.update_contract.outputs.required == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_files=(
+            package-lab.rc
+            freebsd-lab.rc
+            nftables-lab.rc
+            adapter-build.rc
+            adapter-verify.rc
+            gate-generate.rc
+            gate-verify.rc
+          )
+          for status_file in "${status_files[@]}"; do
+            status_path="${STATUS_DIR}/${status_file}"
+            test -f "${status_path}"
+            test ! -L "${status_path}"
+            status="$(cat "${status_path}")"
+            if [[ "${status}" != "0" ]]; then
+              echo "ERROR: refusing to sign because ${status_file} returned ${status}." >&2
+              exit 1
+            fi
+          done
+          echo "qualified=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Revalidate Manifest Tool Before Secret Exposure
+        id: verified_manifest_tool
+        if: >-
+          ${{ steps.update_contract.outputs.required == 'true' &&
+              steps.signing_gate.outputs.qualified == 'true' }}
+        shell: bash
+        env:
+          EXPECTED_MANIFEST_TOOL_SHA256: ${{ steps.manifest_tool.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          manifest_tool="${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test -f "${manifest_tool}"
+          test ! -L "${manifest_tool}"
+          test -x "${manifest_tool}"
+          test "$(stat -c '%u' "${manifest_tool}")" = "$(id -u)"
+          test "$(stat -c '%a' "${manifest_tool}")" = "700"
+          actual_tool_sha256="$(sha256sum "${manifest_tool}")"
+          actual_tool_sha256="${actual_tool_sha256%% *}"
+          if [[ ! "${EXPECTED_MANIFEST_TOOL_SHA256}" =~ ^[0-9a-f]{64}$ || \
+                "${actual_tool_sha256}" != "${EXPECTED_MANIFEST_TOOL_SHA256}" ]]; then
+            echo "ERROR: the manifest tool changed after its validated build." >&2
+            exit 1
+          fi
+          echo "verified=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate and Verify Signed Update Manifest
+        id: signed_update
+        if: >-
+          ${{ steps.update_contract.outputs.required == 'true' &&
+              steps.signing_gate.outputs.qualified == 'true' &&
+              steps.verified_manifest_tool.outputs.verified == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY: ${{ secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          manifest_dir="${ARTIFACT_ROOT}/update"
+          manifest_path="${manifest_dir}/syswarden-update-manifest-v1.json"
+          signature_path="${manifest_path}.sig"
+          signing_complete=false
+          clear_signing_material() {
+            unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
+            if [[ "${signing_complete}" != "true" ]]; then
+              rm -f -- "${manifest_path}" "${signature_path}"
+              rmdir -- "${manifest_dir}" 2>/dev/null || true
+            fi
+          }
+          trap clear_signing_material EXIT HUP INT TERM
+          if [[ -z "${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}" ]]; then
+            echo "ERROR: the protected Ed25519 release-signing secret is required." >&2
+            exit 1
+          fi
+          manifest_tool="${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test -f "${manifest_tool}"
+          test ! -L "${manifest_tool}"
+          test -x "${manifest_tool}"
+          "${manifest_tool}" generate \
+            --repository "${GITHUB_WORKSPACE}" \
+            --tag "${RELEASE_TAG}" \
+            --packages "${CANDIDATE_PACKAGES_DIR}" \
+            --output "${manifest_dir}"
+          unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
+          env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY \
+            "${manifest_tool}" verify \
+              --repository "${GITHUB_WORKSPACE}" \
+              --tag "${RELEASE_TAG}" \
+              --packages "${CANDIDATE_PACKAGES_DIR}" \
+              --manifest "${manifest_path}" \
+              --signature "${signature_path}"
+          signing_complete=true
+          trap - EXIT HUP INT TERM
+
       - name: Seal Exact Qualification Evidence Inventory
         id: inventory
         shell: bash
         env:
           PREVIOUS_TAG: ${{ inputs.previous_tag }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SIGNED_UPDATE_REQUIRED: ${{ steps.update_contract.outputs.required }}
         run: |
           set -euo pipefail
           umask 077
@@ -700,6 +841,22 @@ jobs:
             "raw/package-lifecycle-raw.json"
             "status/qualification-exit-codes.json"
           )
+          expected_directories=(
+            aggregate
+            bound
+            packages
+            packages/candidate
+            packages/previous
+            raw
+            status
+          )
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            expected+=(
+              "update/syswarden-update-manifest-v1.json"
+              "update/syswarden-update-manifest-v1.json.sig"
+            )
+            expected_directories+=(update)
+          fi
           mapfile -t sorted_expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
           mapfile -t actual_before_manifest < <(
             find -P "${ARTIFACT_ROOT}" -type f -printf '%P\n' | LC_ALL=C sort
@@ -711,15 +868,6 @@ jobs:
               <(printf '%s\n' "${actual_before_manifest[@]}") >&2 || true
             exit 1
           fi
-          expected_directories=(
-            aggregate
-            bound
-            packages
-            packages/candidate
-            packages/previous
-            raw
-            status
-          )
           mapfile -t sorted_expected_directories < <(
             printf '%s\n' "${expected_directories[@]}" | LC_ALL=C sort
           )
@@ -748,7 +896,8 @@ jobs:
             sha256sum "${sorted_expected[@]}" > EVIDENCE_SHA256SUMS.txt
             sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
           )
-          test "$(find -P "${ARTIFACT_ROOT}" -type f | wc -l)" -eq 26
+          test "$(find -P "${ARTIFACT_ROOT}" -type f | wc -l)" \
+            -eq "$(( ${#sorted_expected[@]} + 1 ))"
 
       - name: Upload Exact Qualification Evidence
         id: upload
@@ -772,6 +921,19 @@ jobs:
               "${SECRETS_DIR}/freebsd-identity" \
               "${SECRETS_DIR}/freebsd-known-hosts" \
               "${SECRETS_DIR}/freebsd-marker-token"
+          fi
+          update_dir="${ARTIFACT_ROOT:-}/update"
+          if [[ -n "${ARTIFACT_ROOT:-}" && \
+                "${update_dir}" == "${RUNNER_TEMP%/}"/syswarden-release-qualification.*/artifact/update ]]; then
+            rm -f -- \
+              "${update_dir}/syswarden-update-manifest-v1.json" \
+              "${update_dir}/syswarden-update-manifest-v1.json.sig"
+            rmdir -- "${update_dir}" 2>/dev/null || true
+          fi
+          if [[ -n "${SIGNING_TOOL_DIR:-}" && \
+                "${SIGNING_TOOL_DIR}" == "${RUNNER_TEMP%/}"/syswarden-release-qualification.*/signing-tool ]]; then
+            rm -f -- "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+            rmdir -- "${SIGNING_TOOL_DIR}" 2>/dev/null || true
           fi
 
       - name: Enforce Final Release Qualification Verdict

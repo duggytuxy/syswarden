@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -45,6 +47,13 @@ class PackageLifecycleContractTests(unittest.TestCase):
             f"package script {name} must have exactly one isolated heredoc",
         )
         return bodies[0]
+
+    def migration_state_machine(self, script_name: str) -> str:
+        script = self.script(script_name)
+        start = script.index("modular_config_complete() {")
+        invocation = "\nmigrate_legacy_configuration\n"
+        end = script.index(invocation, start) + len(invocation)
+        return script[start:end]
 
     def test_linux_package_family_and_architecture_matrix(self) -> None:
         required_assets = {
@@ -149,20 +158,32 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "/opt/syswarden/syswarden-auto.conf.migration_backup",
             preinstall,
         )
+        self.assertIn(
+            "[ ! -e /opt/syswarden/syswarden-auto.conf.migration_backup ]",
+            preinstall,
+        )
+        self.assertIn("set -e", preinstall)
         self.assertIn('export SYSWARDEN_PKG_INSTALL=1', postinstall)
+        self.assertIn("set -e", postinstall)
         self.assertIn('[ "$1" = "2" ]', postinstall)
         self.assertIn('[ "$1" = "configure" -a -n "$2" ]', postinstall)
-        self.assertIn('[ ! -d /etc/syswarden/config/modules ]', postinstall)
-        self.assertIn(
-            'mv /opt/syswarden/syswarden-auto.conf.migration_backup '
-            '/opt/syswarden/syswarden-auto.conf.bak || true',
-            postinstall,
+        self.assertIn('! modular_config_complete', postinstall)
+        self.assertIn('marker=/etc/syswarden/config/.migration-in-progress', postinstall)
+        self.assertIn('mv "${source}.migrated" /opt/syswarden/syswarden-auto.conf.bak', postinstall)
+        self.assertLess(
+            postinstall.index("migrate_legacy_configuration\n"),
+            postinstall.index('if [ "$1" = "2" ]'),
         )
+        self.assertNotRegex(postinstall, r"migrate-config[^\n]*\|\|\s*true")
         self.assertIn('/opt/syswarden/bin/syswarden-cli install', postinstall)
         self.assertIn('[ -f /etc/alpine-release ]', postinstall)
 
     def test_linux_remove_and_purge_contract(self) -> None:
         preremove = self.script("prerm.sh")
+        self.assertNotIn("/tmp/sw_cron.bak", preremove)
+        self.assertIn("mktemp /var/tmp/syswarden-cron.XXXXXX", preremove)
+        self.assertIn("umask 077", preremove)
+        self.assertIn("trap 'rm -f -- \"$cron_backup\"' 0 1 2 15", preremove)
         postremove = self.script("postrm.sh")
         for state in ('"0"', '"remove"', '"purge"'):
             self.assertIn(f'[ "$1" = {state} ]', preremove)
@@ -194,12 +215,153 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "/usr/local/syswarden/syswarden-auto.conf.migration_backup",
             preinstall,
         )
+        self.assertIn("set -e", preinstall)
+        self.assertIn("migrate_legacy_configuration", postinstall)
+        self.assertIn(".migration-in-progress", postinstall)
         self.assertIn("/usr/local/bin/syswarden install", postinstall)
+        self.assertIn("set -e", postinstall)
+        self.assertNotRegex(postinstall, r"migrate-config[^\n]*\|\|\s*true")
         self.assertIn("service syswarden restart || true", postinstall)
         self.assertIn("service syswarden stop || true", preremove)
         self.assertIn("sysrc -x syswarden_enable || true", preremove)
         self.assertIn("rm -rf /usr/local/syswarden", postremove)
         self.assertNotIn("rm -rf /etc/syswarden", postremove)
+
+    def test_package_migration_state_machine_is_retry_safe_and_preserves_modular_bytes(self) -> None:
+        platforms = (
+            (
+                "postinst.sh",
+                "/opt/syswarden/bin/syswarden-cli",
+                "/opt/syswarden/syswarden-auto.conf.migration_backup",
+                "/opt/syswarden/syswarden-auto.conf.bak",
+            ),
+            (
+                "postinst_fbsd.sh",
+                "/usr/local/syswarden/bin/syswarden-cli",
+                "/usr/local/syswarden/syswarden-auto.conf.migration_backup",
+                "/usr/local/syswarden/syswarden-auto.conf.bak",
+            ),
+        )
+        for script_name, cli_path, source_path, backup_path in platforms:
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                cli = root / "syswarden-cli"
+                calls = root / "calls"
+                cli.write_text(
+                    "#!/bin/sh\n"
+                    f"printf '%s\\n' \"$*\" >> {calls}\n"
+                    "source_path=\noutput_path=\n"
+                    "while [ \"$#\" -gt 0 ]; do\n"
+                    "  case \"$1\" in\n"
+                    "    --source) source_path=$2; shift 2 ;;\n"
+                    "    --output) output_path=$2; shift 2 ;;\n"
+                    "    *) shift ;;\n"
+                    "  esac\n"
+                    "done\n"
+                    "mkdir -p \"${output_path}/modules\"\n"
+                    "printf 'migrated\\n' > \"${output_path}/modules/40-integrations.toml\"\n"
+                    "rm -f \"${output_path}/.migration-in-progress\"\n"
+                    "if [ -f \"${source_path}\" ]; then mv \"${source_path}\" \"${source_path}.migrated\"; fi\n",
+                    encoding="utf-8",
+                )
+                cli.chmod(0o700)
+                config_root = root / "config"
+                source = root / "legacy.migration_backup"
+                backup = root / "legacy.bak"
+                state_machine = self.migration_state_machine(script_name)
+                state_machine = state_machine.replace(cli_path, str(cli))
+                state_machine = state_machine.replace(source_path, str(source))
+                state_machine = state_machine.replace(backup_path, str(backup))
+                state_machine = state_machine.replace("/etc/syswarden/config", str(config_root))
+
+                def run_state_machine() -> subprocess.CompletedProcess[str]:
+                    return subprocess.run(
+                        ["/bin/sh", "-c", "set -e\n" + state_machine],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+
+                source.write_text("legacy-fresh\n", encoding="utf-8")
+                fresh = run_state_machine()
+                self.assertEqual(fresh.returncode, 0, fresh)
+                self.assertEqual(backup.read_text(encoding="utf-8"), "legacy-fresh\n")
+                self.assertTrue(calls.exists())
+
+                calls.unlink()
+                backup.unlink()
+                source.write_text("legacy-existing\n", encoding="utf-8")
+                modules = config_root / "modules"
+                modules.mkdir(parents=True, exist_ok=True)
+                complete_modular_files = {
+                    config_root / "config.toml": "master-byte-exact\n",
+                    modules / "00-core.toml": "core-byte-exact\n",
+                    modules / "10-network.toml": "network-byte-exact\n",
+                    modules / "20-security.toml": "security-byte-exact\n",
+                    modules / "30-waap.toml": "waap-byte-exact\n",
+                    modules / "40-integrations.toml": "integrations-byte-exact\n",
+                    modules / "99-user.toml": "user-byte-exact\n",
+                }
+                for path, content in complete_modular_files.items():
+                    path.write_text(content, encoding="utf-8")
+                preserved = run_state_machine()
+                self.assertEqual(preserved.returncode, 0, preserved)
+                self.assertFalse(calls.exists(), "existing modular config unexpectedly reran migration")
+                for path, content in complete_modular_files.items():
+                    self.assertEqual(path.read_text(encoding="utf-8"), content)
+                self.assertEqual(backup.read_text(encoding="utf-8"), "legacy-existing\n")
+
+                backup.unlink()
+                source.write_text("legacy-retry\n", encoding="utf-8")
+                (config_root / ".migration-in-progress").write_text("publishing\n", encoding="utf-8")
+                retried = run_state_machine()
+                self.assertEqual(retried.returncode, 0, retried)
+                self.assertTrue(calls.exists(), "transaction marker did not force migration retry")
+                self.assertFalse((config_root / ".migration-in-progress").exists())
+                self.assertEqual(backup.read_text(encoding="utf-8"), "legacy-retry\n")
+
+    def test_linux_state_machine_precedes_every_package_family_branch(self) -> None:
+        postinstall = self.script("postinst.sh")
+        invocation = postinstall.index("migrate_legacy_configuration\n")
+        for branch in (
+            'if [ "$1" = "2" ]',
+            'elif [ "$1" = "1" ]',
+            'elif [ -f /etc/alpine-release ]',
+        ):
+            with self.subTest(branch=branch):
+                self.assertLess(invocation, postinstall.index(branch))
+
+    def test_postinstall_propagates_install_failure_without_completion(self) -> None:
+        for script_name, install_command in (
+            ("postinst.sh", "/opt/syswarden/bin/syswarden-cli install"),
+            ("postinst_fbsd.sh", "/usr/local/bin/syswarden install"),
+        ):
+            with self.subTest(script=script_name), tempfile.TemporaryDirectory() as temporary:
+                postinstall = self.script(script_name)
+                self.assertLess(postinstall.index("set -e"), postinstall.index(install_command))
+                self.assertNotIn(f"{install_command} || true", postinstall)
+
+                fake_cli = Path(temporary) / "syswarden-cli"
+                fake_cli.write_text(
+                    "#!/bin/sh\nprintf '[ERROR] configuration preflight failed\\n' >&2\nexit 23\n",
+                    encoding="utf-8",
+                )
+                fake_cli.chmod(0o700)
+                probe = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        'set -e\n"$1" install\nprintf "Installation Complete\\n"',
+                        "postinstall-probe",
+                        str(fake_cli),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(probe.returncode, 23, probe)
+                self.assertIn("[ERROR] configuration preflight failed", probe.stderr)
+                self.assertNotIn("Installation Complete", probe.stdout)
 
     def test_no_package_rollback_implementation_is_claimed(self) -> None:
         scripts = "\n".join(

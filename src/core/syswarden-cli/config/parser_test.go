@@ -87,7 +87,132 @@ MALFORMED_LINE
 }
 
 func TestLoadOldConfigMissingFileFails(t *testing.T) {
-	if err := loadOldConfig(filepath.Join(t.TempDir(), "missing.conf")); err == nil {
+	previous := &Config{SSHPort: "2222", FirewallBackend: "keep"}
+	previousState := CurrentLoadState()
+	GlobalConfig = previous
+	t.Cleanup(func() {
+		GlobalConfig = NewFailSafeConfig()
+		loadStateMu.Lock()
+		loadState = previousState
+		loadStateMu.Unlock()
+	})
+
+	missing := filepath.Join(t.TempDir(), "missing.conf")
+	if err := loadOldConfig(missing); err == nil {
 		t.Fatal("loadOldConfig() succeeded for a missing file")
+	}
+	if GlobalConfig != previous || GlobalConfig.SSHPort != "2222" {
+		t.Fatal("failed legacy load replaced the last validated configuration")
+	}
+	state := CurrentLoadState()
+	if !state.Degraded || state.Source != missing || state.Error == "" {
+		t.Fatalf("load state = %#v, want a degraded state bound to the failed source", state)
+	}
+}
+
+func TestLoadOldConfigRejectsInvalidCandidateWithoutReplacingActive_SW_CFG_001(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "syswarden-auto.conf")
+	if err := os.WriteFile(configPath, []byte("SYSWARDEN_HA_PEER_PORT=70000\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := &Config{SSHPort: "2222", FirewallBackend: "keep"}
+	previousState := CurrentLoadState()
+	GlobalConfig = previous
+	t.Cleanup(func() {
+		GlobalConfig = NewFailSafeConfig()
+		loadStateMu.Lock()
+		loadState = previousState
+		loadStateMu.Unlock()
+	})
+
+	if err := loadOldConfig(configPath); err == nil {
+		t.Fatal("loadOldConfig() accepted an invalid port")
+	}
+	if GlobalConfig != previous || GlobalConfig.SSHPort != "2222" {
+		t.Fatal("invalid legacy candidate replaced the active configuration")
+	}
+	if state := CurrentLoadState(); !state.Degraded || state.Source != configPath || state.Error == "" {
+		t.Fatalf("load state = %#v, want degraded legacy rejection", state)
+	}
+}
+
+func TestLegacyHAAndTypedValidationMatchesModularFailClosedContract_SW_CFG_001(t *testing.T) {
+	original := GlobalConfig
+	t.Cleanup(func() { GlobalConfig = original })
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "HA token without peer",
+			content: "SYSWARDEN_HA_ENABLED=y\n" +
+				"SYSWARDEN_HA_TOKEN=shared-token\nSYSWARDEN_HA_PEER_IP=\n",
+		},
+		{
+			name: "HA peer without token",
+			content: "SYSWARDEN_HA_ENABLED=y\n" +
+				"SYSWARDEN_HA_TOKEN=\nSYSWARDEN_HA_PEER_IP=192.0.2.20\n",
+		},
+		{
+			name: "non-canonical HA peer",
+			content: "SYSWARDEN_HA_ENABLED=y\n" +
+				"SYSWARDEN_HA_TOKEN=shared-token\nSYSWARDEN_HA_PEER_IP=10.20.30.3/29\n",
+		},
+		{
+			name: "BunkerWeb without HA",
+			content: "SYSWARDEN_HA_ENABLED=n\n" +
+				"SYSWARDEN_BUNKERWEB_ENABLED=y\n",
+		},
+		{
+			name:    "invalid SIEM port",
+			content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_SIEM_PORT=70000\n",
+		},
+		{
+			name:    "invalid honeyport",
+			content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_HONEYPORTS=23,invalid\n",
+		},
+		{
+			name:    "invalid HA boolean",
+			content: "SYSWARDEN_HA_ENABLED=automatic\n",
+		},
+		{
+			name:    "invalid BunkerWeb boolean",
+			content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_BUNKERWEB_ENABLED=automatic\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "legacy.conf")
+			if err := os.WriteFile(path, []byte(test.content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			previous := &Config{SSHPort: "2222", FirewallBackend: "keep"}
+			GlobalConfig = previous
+			if err := loadOldConfig(path); err == nil {
+				t.Fatal("invalid legacy configuration was accepted")
+			}
+			if GlobalConfig != previous {
+				t.Fatal("invalid legacy configuration replaced the previous GlobalConfig")
+			}
+		})
+	}
+}
+
+func TestLegacyValidAuthenticatedHARemainsEnabled_SW_CFG_001(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.conf")
+	content := "SYSWARDEN_HA_ENABLED=y\n" +
+		"SYSWARDEN_HA_TOKEN=shared-token\n" +
+		"SYSWARDEN_HA_PEER_IP=192.0.2.20,10.20.30.0/29\n" +
+		"SYSWARDEN_BUNKERWEB_ENABLED=y\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := GlobalConfig
+	t.Cleanup(func() { GlobalConfig = previous })
+	if err := loadOldConfig(path); err != nil {
+		t.Fatalf("valid legacy HA configuration rejected: %v", err)
+	}
+	if !GlobalConfig.HAEnabled || !GlobalConfig.BunkerWebEnabled {
+		t.Fatalf("valid legacy gates = HA %t, BunkerWeb %t", GlobalConfig.HAEnabled, GlobalConfig.BunkerWebEnabled)
 	}
 }

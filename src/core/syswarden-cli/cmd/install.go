@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
@@ -17,48 +16,23 @@ var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install SYSWARDEN and configure security modules",
 	Long:  "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs.",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
 
-		// --- Fresh Install Bootstrapping ---
-		configDir := "/etc/syswarden/config/modules"
-		isFreshInstall := false
-		if _, err := os.Stat(configDir); os.IsNotExist(err) {
-			isFreshInstall = true
-		} else {
-			entries, err := os.ReadDir(configDir)
-			if err == nil && len(entries) == 0 {
-				isFreshInstall = true
-			}
+		if err := installConfigPreflight("/etc/syswarden/config"); err != nil {
+			return installStageError("configuration preflight failed before host mutation", err)
 		}
-
-		if isFreshInstall {
-			fmt.Println("[INFO] Fresh installation detected. Initializing default modular configuration...")
-			if err := config.InitializeDefaults("/etc/syswarden/config"); err != nil {
-				fmt.Printf("[ERROR] Failed to initialize default configuration: %v\n", err)
-			} else {
-				fmt.Println("[SUCCESS] Modular configuration initialized at /etc/syswarden/config/modules")
-				// Re-hydrate the GlobalConfig in memory so the rest of the install uses the correct settings
-				if err := config.ParseConfig("/etc/syswarden/config"); err != nil {
-					fmt.Printf("[WARNING] Failed to reload generated configuration: %v\n", err)
-				}
-			}
-		}
-		// -----------------------------------
 
 		if err := system.InstallDependencies(); err != nil {
-			fmt.Printf("[ERROR] Dependency installation failed: %v\n", err)
-			return
+			return installStageError("dependency installation failed", err)
 		}
 
 		if err := system.ConfigureSSH(); err != nil {
-			fmt.Printf("[ERROR] SSH configuration failed: %v\n", err)
-			return
+			return installStageError("SSH configuration failed", err)
 		}
 
 		if _, err := system.SelectFastestMirror(); err != nil {
-			fmt.Printf("[ERROR] Mirror benchmarking failed: %v\n", err)
-			return
+			return installStageError("mirror benchmarking failed", err)
 		}
 
 		// Phase 2: Network Intelligence
@@ -68,64 +42,62 @@ var installCmd = &cobra.Command{
 			mirrorURL = "https://codeberg.org/"
 		}
 		if err := network.DownloadFeeds(mirrorURL, config.GlobalConfig.CustomURLIPv6, config.GlobalConfig.CustomHash, config.GlobalConfig.CustomHashIPv6, config.GlobalConfig.ListChoice, config.GlobalConfig.GeoCodes, config.GlobalConfig.ASNList, config.GlobalConfig.GeoAllowed, config.GlobalConfig.ASNAllowed, config.GlobalConfig.LANMode, config.GlobalConfig.UseSpamhaus); err != nil {
-			fmt.Printf("[ERROR] Failed to download threat intelligence feeds: %v\n", err)
-			return
+			return installStageError("failed to download threat intelligence feeds", err)
 		}
 
 		if err := network.SetupFeedsCron(); err != nil {
-			fmt.Printf("[ERROR] Failed to configure threat feeds cron job: %v\n", err)
+			return installStageError("failed to configure threat feeds cron job", err)
 		}
 
 		// Phase 2: Firewall Orchestration
 		fmt.Println("[SYSWARDEN] Starting Firewall Engine...")
 
 		if err := system.OptimizeHostFirewall(); err != nil {
-			fmt.Printf("[ERROR] Host firewall optimization failed: %v\n", err)
+			return installStageError("host firewall optimization failed", err)
 		}
 
 		if err := firewall.AutoWhitelistAdminAndInfra(); err != nil {
-			fmt.Printf("[ERROR] Auto-Whitelisting failed: %v\n", err)
+			return installStageError("auto-whitelisting failed", err)
 		}
 
 		if err := firewall.ApplyPolicies(); err != nil {
-			fmt.Printf("[ERROR] Failed to apply SYSWARDEN Overlay rules: %v\n", err)
-			return
+			return installStageError("failed to apply SYSWARDEN overlay rules", err)
 		}
 
 		// Phase 3: External Integrations & Log Bridges
 		fmt.Println("[SYSWARDEN] Starting Integrations & Log Bridges...")
 		if err := integration.SetupWAFLogForwarder(); err != nil {
-			fmt.Printf("[ERROR] WAF Log Bridge failed: %v\n", err)
+			return installStageError("WAF log bridge failed", err)
 		}
 		if err := integration.SetupWebhooks(); err != nil {
-			fmt.Printf("[ERROR] Webhook configuration failed: %v\n", err)
+			return installStageError("webhook configuration failed", err)
 		}
 		if err := integration.SetupSIEM(); err != nil {
-			fmt.Printf("[ERROR] SIEM configuration failed: %v\n", err)
+			return installStageError("SIEM configuration failed", err)
 		}
 		if err := integration.SetupWazuh(); err != nil {
-			fmt.Printf("[ERROR] Wazuh configuration failed: %v\n", err)
+			return installStageError("Wazuh configuration failed", err)
 		}
 		if err := integration.SetupAbuseIPDB(); err != nil {
-			fmt.Printf("[ERROR] AbuseIPDB configuration failed: %v\n", err)
+			return installStageError("AbuseIPDB configuration failed", err)
 		}
 
 		// Phase 4: Security Hardening (Wave 1 of Grand Purge)
 		fmt.Println("[SYSWARDEN] Starting OS & CIS Hardening...")
 		if err := security.ApplyCISHardening(); err != nil {
-			fmt.Printf("[ERROR] CIS Hardening failed: %v\n", err)
+			return installStageError("CIS hardening failed", err)
 		}
 		if err := security.ApplyOSHardening(); err != nil {
-			fmt.Printf("[ERROR] OS Hardening failed: %v\n", err)
+			return installStageError("OS hardening failed", err)
 		}
 
 		// Phase 2.5: Private Network & HA (Wave 2 of Grand Purge)
 		fmt.Println("[SYSWARDEN] Starting Private Network & HA Cluster...")
 		if err := network.SetupWireguard(); err != nil {
-			fmt.Printf("[ERROR] WireGuard setup failed: %v\n", err)
+			return installStageError("WireGuard setup failed", err)
 		}
 		if err := network.SetupHACluster(); err != nil {
-			fmt.Printf("[ERROR] HA Cluster setup failed: %v\n", err)
+			return installStageError("HA cluster setup failed", err)
 		}
 
 		// Web-TUI Initialization (Must run before Phase 5 to prevent Web-TUI crashes on minimal OS)
@@ -133,14 +105,14 @@ var installCmd = &cobra.Command{
 		if token == "" {
 			token = generateSecureToken(32)
 			if err := updateConfigToken(token); err != nil {
-				fmt.Printf("[ERROR] Failed to save Web-TUI token: %v\n", err)
+				return installStageError("failed to save Web-TUI token", err)
 			}
 		}
 
 		// Phase 5: Deployment Orchestration
 		fmt.Println("[SYSWARDEN] Starting Systemd Orchestration...")
 		if err := system.SetupService(); err != nil {
-			fmt.Printf("[ERROR] Systemd setup failed: %v\n", err)
+			return installStageError("service setup failed", err)
 		}
 
 		ip := getPublicIP()
@@ -150,8 +122,32 @@ var installCmd = &cobra.Command{
 		fmt.Printf("    Password: %s\n", token)
 		fmt.Printf("======================================================\n\n")
 
-		fmt.Println("[SYSWARDEN] v4.02.8 Native Installation Complete.")
+		fmt.Println("[SYSWARDEN] v4.02.9 Native Installation Complete.")
+		return nil
 	},
+}
+
+var installConfigPreflight = prepareInstallConfiguration
+
+func installStageError(stage string, err error) error {
+	return fmt.Errorf("[ERROR] %s: %w", stage, err)
+}
+
+func prepareInstallConfiguration(configRoot string) error {
+	if err := config.EnsureDefaults(configRoot); err != nil {
+		return fmt.Errorf("complete missing modular defaults: %w", err)
+	}
+	if err := config.ParseConfig(configRoot); err != nil {
+		return fmt.Errorf("validate modular configuration: %w", err)
+	}
+	if config.GlobalConfig == nil {
+		return fmt.Errorf("validated configuration is unavailable")
+	}
+	state := config.CurrentLoadState()
+	if state.Degraded {
+		return fmt.Errorf("configuration remains degraded: %s", state.Error)
+	}
+	return nil
 }
 
 func init() {

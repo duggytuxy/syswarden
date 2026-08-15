@@ -102,8 +102,8 @@ def passing_evidence() -> dict[str, str]:
             "PF_FIXTURE_APPLY_RC": "0",
             "PF_FIXTURE_RULE_COUNT": "24",
             "PF_HONEYPORT_SOURCE_BAD": "0",
-            "PF_HONEYPORT_EXACT_VALUE": "",
-            "PF_HONEYPORT_SYNTAX_RC": "not_run",
+            "PF_HONEYPORT_EXACT_VALUE": "23, 6379",
+            "PF_HONEYPORT_SYNTAX_RC": "0",
             "REMOVE_RC": "0",
             "REMOVE_PKG_INVENTORY": "",
             "REMOVE_USER_STATE_INVENTORY": "\n".join(
@@ -217,7 +217,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
         )
         source.parent.mkdir(parents=True)
         source.write_text(
-            'strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")\n',
+            "canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)\n",
             encoding="utf-8",
         )
 
@@ -579,7 +579,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
             report["unexpected_failed_check_ids"],
         )
 
-    def test_pf_failures_are_known_only_with_exact_236379_proof(self) -> None:
+    def test_pf_honeyport_regression_is_an_unexpected_failure(self) -> None:
         evidence = passing_evidence()
         evidence.update(
             {
@@ -601,9 +601,15 @@ class FreeBSDVMLabTests(unittest.TestCase):
             "127.0.0.1",
             2222,
         )
-        self.assertEqual(report["product_status"], "known_blocker")
-        self.assertEqual(report["blocker_ids"], ["SW-FW-004"])
-        self.assertEqual(report["unexpected_failed_check_ids"], [])
+        self.assertEqual(report["product_status"], "fail")
+        self.assertEqual(report["blocker_ids"], [])
+        self.assertTrue(
+            {
+                "SW-PF-FBSD-FIXTURE-SYNTAX-001",
+                "SW-PF-FBSD-FIXTURE-APPLY-001",
+                "SW-PF-FBSD-HONEYPORT-001",
+            }.issubset(report["unexpected_failed_check_ids"])
+        )
 
         evidence["PF_HONEYPORT_EXACT_VALUE"] = "236380"
         arbitrary_report = freebsd_vm_lab.build_report(
@@ -678,9 +684,15 @@ class FreeBSDVMLabTests(unittest.TestCase):
             2222,
         )
         self.assertEqual(report["harness_status"], "pass")
-        self.assertEqual(report["product_status"], "known_blocker")
-        self.assertEqual(report["blocker_ids"], ["SW-BSD-001", "SW-FW-004"])
-        self.assertEqual(report["unexpected_failed_check_ids"], [])
+        self.assertEqual(report["product_status"], "fail")
+        self.assertEqual(report["blocker_ids"], ["SW-BSD-001"])
+        self.assertTrue(
+            {
+                "SW-PF-FBSD-FIXTURE-SYNTAX-001",
+                "SW-PF-FBSD-FIXTURE-APPLY-001",
+                "SW-PF-FBSD-HONEYPORT-001",
+            }.issubset(report["unexpected_failed_check_ids"])
+        )
 
     def test_second_restart_is_a_required_idempotence_check(self) -> None:
         evidence = passing_evidence()
@@ -714,7 +726,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
         )
         self.assertIs(report["release_ready"], False)
 
-    def test_current_prefix_rcd_startup_and_pf_defects_are_blockers(self) -> None:
+    def test_current_prefix_rcd_are_blockers_but_honeyport_regression_is_not(self) -> None:
         evidence = passing_evidence()
         evidence.update(
             {
@@ -761,10 +773,13 @@ class FreeBSDVMLabTests(unittest.TestCase):
             if item["status"] == "blocker"
         }
         self.assertEqual(report["harness_status"], "pass")
-        self.assertEqual(report["product_status"], "known_blocker")
+        self.assertEqual(report["product_status"], "fail")
         self.assertIs(report["release_ready"], False)
-        self.assertEqual(report["blocker_ids"], ["SW-BSD-001", "SW-FW-004"])
-        self.assertEqual(report["unexpected_failed_check_ids"], [])
+        self.assertEqual(report["blocker_ids"], ["SW-BSD-001"])
+        self.assertEqual(
+            report["unexpected_failed_check_ids"],
+            ["SW-PF-FBSD-HONEYPORT-001"],
+        )
         self.assertTrue(
             {
                 "SW-PKG-FBSD-PREFIX-001",
@@ -774,7 +789,6 @@ class FreeBSDVMLabTests(unittest.TestCase):
                 "SW-PKG-FBSD-RCD-WEB-PATH-001",
                 "SW-PKG-FBSD-START-CORE-001",
                 "SW-PKG-FBSD-START-WEB-001",
-                "SW-PF-FBSD-HONEYPORT-001",
             }.issubset(blockers)
         )
 

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"syswarden-cli/config"
 
@@ -18,21 +17,25 @@ with separated configuration files for each domain.
 
 With --dry-run, migrated file contents are not written and the source is not
 renamed or wiped, but the output directory and modules subdirectory may be created.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		source, _ := cmd.Flags().GetString("source")
-		output, _ := cmd.Flags().GetString("output")
-		dryRun, _ := cmd.Flags().GetBool("dry-run")
+	RunE: func(cmd *cobra.Command, args []string) error {
+		source, err := cmd.Flags().GetString("source")
+		if err != nil {
+			return err
+		}
+		output, err := cmd.Flags().GetString("output")
+		if err != nil {
+			return err
+		}
+		dryRun, err := cmd.Flags().GetBool("dry-run")
+		if err != nil {
+			return err
+		}
 
 		if source == "" {
 			source = "/opt/syswarden/syswarden-auto.conf"
 		}
 		if output == "" {
 			output = "/etc/syswarden/config"
-		}
-
-		if _, err := os.Stat(source); os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "[ERROR] Source config file not found: %s\n", source)
-			os.Exit(1)
 		}
 
 		migrator := &config.Migrator{
@@ -42,18 +45,18 @@ renamed or wiped, but the output directory and modules subdirectory may be creat
 		}
 
 		if dryRun {
-			fmt.Println("[DRY RUN] Migrated file contents will not be written and the source will not be renamed or wiped; the output directory and modules subdirectory may be created.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "[DRY RUN] Migrated file contents will not be written and the source will not be renamed or wiped; the output directory and modules subdirectory may be created.")
 		}
 
 		if err := migrator.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] Migration failed: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("[ERROR] migration failed: %w", err)
 		}
 
 		if !dryRun {
-			fmt.Println("\n✅ Configuration migrated successfully!")
-			fmt.Printf("New configuration: %s\n", output)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nConfiguration migrated successfully.")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "New configuration: %s\n", output)
 		}
+		return nil
 	},
 }
 

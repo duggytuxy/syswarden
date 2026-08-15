@@ -1,35 +1,51 @@
 package network
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"syswarden-core/firewall"
+	corelogger "syswarden-core/logger"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/viper"
 )
 
 type HAConfig struct {
-	Enabled string
-	Token   string
-	PeerIPs []string
-	Port    string
+	Enabled          string
+	Token            string
+	PeerIPs          []string
+	Port             string
+	BunkerWebEnabled bool
 }
 
 func loadHAConfig() HAConfig {
@@ -43,6 +59,7 @@ func loadHAConfig() HAConfig {
 	if viper.GetBool("integrations.ha.enabled") {
 		cfg.Enabled = "y"
 	}
+	cfg.BunkerWebEnabled = viper.GetBool("integrations.bunkerweb.enabled")
 
 	if token := viper.GetString("integrations.ha.token"); token != "" {
 		cfg.Token = token
@@ -116,46 +133,59 @@ func generateSelfSignedCertPEM() ([]byte, []byte, error) {
 }
 
 type HASyncPayload struct {
-	IPs []string `json:"ips"`
+	IPs        []string      `json:"ips"`
+	Bans       []HAActiveBan `json:"bans,omitempty"`
+	NextCursor string        `json:"next_cursor,omitempty"`
+}
+
+type HAActiveBan struct {
+	IP           string `json:"ip"`
+	Source       string `json:"source"`
+	Reason       string `json:"reason"`
+	PeerScope    string `json:"peer_scope"`
+	OriginPeerIP string `json:"origin_peer_ip"`
+	ExpiresAt    string `json:"expires_at"`
 }
 
 const (
 	haBlacklistIPv4File  = "/etc/syswarden/lists/syswarden_blacklist.ipv4"
 	haBlacklistIPv6File  = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
+	haTelemetryDataFile  = "/var/lib/syswarden/ui/data.json"
+	haBanLedgerFile      = "/var/lib/syswarden/ha/bans.json"
 	defaultHATLSDir      = "/var/lib/syswarden/ha"
 	haTLSCertificateName = "server.crt"
 	haTLSPrivateKeyName  = "server.key"
+	maxHARequestBytes    = 2 * 1024 * 1024
+	maxHATelemetryBytes  = 1024 * 1024
+	maxHABlocklistBytes  = 1024 * 1024
+	maxHAIPsPerRequest   = 1024
+	maxHABansPerRequest  = 500
+	haReadTimeout        = 5 * time.Second
+	haReadHeaderTimeout  = 3 * time.Second
+	haWriteTimeout       = 10 * time.Second
+	haIdleTimeout        = 30 * time.Second
+	maxHALedgerBytes     = 16 * 1024 * 1024
+	maxHALedgerRecords   = 16_384
+	maxHASweepPerPass    = 256
+	haSweepInterval      = time.Second
+	maxHASourceBytes     = 64
+	maxHAReasonBytes     = 512
 )
-
-var haTLSDir = defaultHATLSDir
-
-type haBlacklistFamily uint8
 
 const (
-	haBlacklistIPv4 haBlacklistFamily = iota
-	haBlacklistIPv6
+	haLedgerVersion    = 1
+	haBanPendingApply  = "pending_apply"
+	haBanActive        = "active"
+	haBanPendingDelete = "pending_delete"
 )
 
-func blacklistFamilyForIP(ip string) haBlacklistFamily {
-	if strings.Contains(ip, ":") {
-		return haBlacklistIPv6
-	}
-	return haBlacklistIPv4
-}
-
-func readBlacklistFileForIP(ip string) ([]byte, error) {
-	if blacklistFamilyForIP(ip) == haBlacklistIPv6 {
-		return os.ReadFile(haBlacklistIPv6File)
-	}
-	return os.ReadFile(haBlacklistIPv4File)
-}
-
-func writeBlacklistFileForIP(ip string, content []byte) error {
-	if blacklistFamilyForIP(ip) == haBlacklistIPv6 {
-		return os.WriteFile(haBlacklistIPv6File, content, 0600)
-	}
-	return os.WriteFile(haBlacklistIPv4File, content, 0600)
-}
+var (
+	haTLSDir               = defaultHATLSDir
+	haRuntimeBlacklistIPv4 = haBlacklistIPv4File
+	haRuntimeBlacklistIPv6 = haBlacklistIPv6File
+	haRuntimeTelemetryFile = haTelemetryDataFile
+	haRuntimeBanLedgerFile = haBanLedgerFile
+)
 
 func loadOrCreateHATLSCertificate(directory string) (tls.Certificate, error) {
 	directory = filepath.Clean(directory)
@@ -355,16 +385,1727 @@ func syncDirectory(directory string) (resultErr error) {
 	return handle.Sync()
 }
 
+type haAPI struct {
+	cfg           HAConfig
+	allowedPeers  []netip.Prefix
+	fwManager     firewall.Manager
+	coreVersion   string
+	blacklistIPv4 string
+	blacklistIPv6 string
+	telemetryFile string
+	banLedgerFile string
+	now           func() time.Time
+	mutationMu    sync.RWMutex
+	sweepCursor   int
+}
+
+func newHAAPI(cfg HAConfig, fwManager firewall.Manager, coreVersion, blacklistIPv4, blacklistIPv6, telemetryFile, banLedgerFile string) (*haAPI, error) {
+	if cfg.Token == "" || strings.TrimSpace(cfg.Token) != cfg.Token {
+		return nil, fmt.Errorf("HA token is required")
+	}
+	if len(cfg.PeerIPs) == 0 {
+		return nil, fmt.Errorf("at least one HA peer IP or CIDR is required")
+	}
+	allowedPeers := make([]netip.Prefix, 0, len(cfg.PeerIPs))
+	seenPeers := make(map[string]struct{}, len(cfg.PeerIPs))
+	for _, configuredPeer := range cfg.PeerIPs {
+		peer, err := canonicalHAPeerPrefix(configuredPeer)
+		if err != nil {
+			return nil, fmt.Errorf("invalid configured HA peer: %w", err)
+		}
+		key := peer.String()
+		if _, duplicate := seenPeers[key]; duplicate {
+			continue
+		}
+		seenPeers[key] = struct{}{}
+		allowedPeers = append(allowedPeers, peer)
+	}
+	sort.Slice(allowedPeers, func(i, j int) bool {
+		if allowedPeers[i].Bits() != allowedPeers[j].Bits() {
+			return allowedPeers[i].Bits() > allowedPeers[j].Bits()
+		}
+		return allowedPeers[i].String() < allowedPeers[j].String()
+	})
+	api := &haAPI{
+		cfg:           cfg,
+		allowedPeers:  allowedPeers,
+		fwManager:     fwManager,
+		coreVersion:   coreVersion,
+		blacklistIPv4: filepath.Clean(blacklistIPv4),
+		blacklistIPv6: filepath.Clean(blacklistIPv6),
+		telemetryFile: filepath.Clean(telemetryFile),
+		banLedgerFile: filepath.Clean(banLedgerFile),
+		now:           time.Now,
+	}
+	return api, nil
+}
+
+func newHAHandler(cfg HAConfig, fwManager firewall.Manager, coreVersion, blacklistIPv4, blacklistIPv6, telemetryFile, banLedgerFile string) (http.Handler, error) {
+	api, err := newHAAPI(cfg, fwManager, coreVersion, blacklistIPv4, blacklistIPv6, telemetryFile, banLedgerFile)
+	if err != nil {
+		return nil, err
+	}
+	return api.handler(), nil
+}
+
+func (api *haAPI) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ha/sync", api.handleSync)
+	mux.HandleFunc("/ha/telemetry", api.handleTelemetry)
+	mux.HandleFunc("/ha/status", api.handleStatus)
+	return mux
+}
+
+func canonicalHAPeerPrefix(value string) (netip.Prefix, error) {
+	value = strings.TrimSpace(value)
+	if address, err := netip.ParseAddr(value); err == nil {
+		if address.Is4In6() || address.Zone() != "" {
+			return netip.Prefix{}, fmt.Errorf("IPv4-mapped or zoned peer addresses are not allowed")
+		}
+		return netip.PrefixFrom(address, address.BitLen()), nil
+	}
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil || !prefix.IsValid() {
+		return netip.Prefix{}, fmt.Errorf("invalid HA peer IP or CIDR")
+	}
+	if prefix.Addr().Is4In6() || prefix.Addr().Zone() != "" {
+		return netip.Prefix{}, fmt.Errorf("IPv4-mapped or zoned peer CIDRs are not allowed")
+	}
+	if prefix.Addr() != prefix.Masked().Addr() {
+		return netip.Prefix{}, fmt.Errorf("HA peer CIDR contains host bits outside its mask")
+	}
+	return prefix.Masked(), nil
+}
+
+func canonicalHAAddress(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if address, err := netip.ParseAddr(value); err == nil {
+		if address.Is4In6() || address.Zone() != "" {
+			return "", fmt.Errorf("invalid HA IP or CIDR address %q", value)
+		}
+		return address.String(), nil
+	}
+	prefix, err := netip.ParsePrefix(value)
+	if err == nil && prefix.IsValid() && !prefix.Addr().Is4In6() && prefix.Addr().Zone() == "" {
+		return prefix.Masked().String(), nil
+	}
+	return "", fmt.Errorf("invalid HA IP or CIDR address %q", value)
+}
+
+func readHARootedFile(path string) ([]byte, error) {
+	return readHARootedFileBounded(path, 0)
+}
+
+func readHARootedFileBounded(path string, limit int64) ([]byte, error) {
+	path = filepath.Clean(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return readHARegularFileBounded(root, filepath.Base(path), limit)
+}
+
+func readHARegularFile(root *os.Root, name string) ([]byte, error) {
+	return readHARegularFileBounded(root, name, 0)
+}
+
+func readHARegularFileBounded(root *os.Root, name string, limit int64) ([]byte, error) {
+	before, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("HA file is not a regular file: %s", name)
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	current, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !current.Mode().IsRegular() ||
+		!os.SameFile(before, opened) || !os.SameFile(opened, current) {
+		return nil, fmt.Errorf("HA file changed while opening: %s", name)
+	}
+	reader := io.Reader(file)
+	if limit > 0 {
+		reader = io.LimitReader(file, limit+1)
+	}
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	if limit > 0 && int64(len(content)) > limit {
+		return nil, fmt.Errorf("HA file exceeds %d bytes: %s", limit, name)
+	}
+	return content, nil
+}
+
+type haPeerIdentity struct {
+	IP    string
+	Scope string
+}
+
+func (api *haAPI) authorizePeer(w http.ResponseWriter, r *http.Request) (haPeerIdentity, bool) {
+	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return haPeerIdentity{}, false
+	}
+	remoteIP, err := netip.ParseAddr(remoteHost)
+	if err != nil || remoteIP.Is4In6() || remoteIP.Zone() != "" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return haPeerIdentity{}, false
+	}
+	matchedScope := ""
+	for _, peer := range api.allowedPeers {
+		if peer.Contains(remoteIP) {
+			matchedScope = peer.String()
+			break
+		}
+	}
+	if matchedScope == "" {
+		log.Printf("[HA Cluster] Unauthorized request dropped")
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return haPeerIdentity{}, false
+	}
+	expectedHash := sha256.Sum256([]byte("Bearer " + api.cfg.Token))
+	providedHash := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+	if subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) != 1 {
+		log.Printf("[HA Cluster] Unauthorized HA API attempt dropped")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return haPeerIdentity{}, false
+	}
+	return haPeerIdentity{IP: remoteIP.String(), Scope: matchedScope}, true
+}
+
+func (api *haAPI) handleSync(w http.ResponseWriter, r *http.Request) {
+	peer, authorized := api.authorizePeer(w, r)
+	if !authorized {
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if r.URL.RawQuery != "" && !api.cfg.BunkerWebEnabled {
+			http.Error(w, "BunkerWeb integration is disabled; configure integrations.bunkerweb.enabled", http.StatusForbidden)
+			return
+		}
+		api.mutationMu.RLock()
+		ips, bans, err := api.readHASyncSnapshot(api.now())
+		api.mutationMu.RUnlock()
+		if err != nil {
+			log.Printf("[HA Cluster] Failed to read synchronized blocklists: %v", err)
+			http.Error(w, "Blocklist unavailable", http.StatusInternalServerError)
+			return
+		}
+		if len(ips) == 0 {
+			ips = nil // Preserve the deployed {"ips":null} empty-list contract.
+		}
+		payload := HASyncPayload{IPs: ips}
+		if r.URL.RawQuery != "" {
+			start, limit, ok := decodeHAProvenanceQuery(w, r)
+			if !ok {
+				return
+			}
+			if start > len(bans) {
+				http.Error(w, "Invalid provenance cursor", http.StatusBadRequest)
+				return
+			}
+			end := start + limit
+			if end > len(bans) {
+				end = len(bans)
+			}
+			payload.Bans = bans[start:end]
+			if end < len(bans) {
+				payload.NextCursor = encodeHAProvenanceCursor(end)
+			}
+		}
+		writeHAJSON(w, http.StatusOK, payload)
+	case http.MethodPost, http.MethodDelete:
+		mutation, ok := decodeHAMutationPayload(w, r)
+		if !ok {
+			return
+		}
+		if len(mutation.temporaries) > 0 && !api.cfg.BunkerWebEnabled {
+			http.Error(w, "BunkerWeb integration is disabled; configure integrations.bunkerweb.enabled", http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodPost {
+			if len(mutation.temporaries) > 0 {
+				api.applyHATemporaryBans(w, peer, mutation.temporaries)
+			} else {
+				api.applyHABans(w, mutation.ips)
+			}
+			return
+		}
+		if len(mutation.temporaries) > 0 {
+			api.applyHATemporaryUnbans(w, peer, mutation.temporaries)
+		} else {
+			api.applyHAUnbans(w, mutation.ips)
+		}
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func decodeHAProvenanceQuery(w http.ResponseWriter, r *http.Request) (int, int, bool) {
+	query := r.URL.Query()
+	for key, values := range query {
+		if (key != "details" && key != "limit" && key != "cursor") || len(values) != 1 {
+			http.Error(w, "Invalid provenance query", http.StatusBadRequest)
+			return 0, 0, false
+		}
+	}
+	if query.Get("details") != "true" {
+		http.Error(w, "Invalid provenance query", http.StatusBadRequest)
+		return 0, 0, false
+	}
+	limit := 100
+	if value := query.Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 500 {
+			http.Error(w, "Invalid provenance limit", http.StatusBadRequest)
+			return 0, 0, false
+		}
+		limit = parsed
+	}
+	start := 0
+	if value := query.Get("cursor"); value != "" {
+		decoded, err := base64.RawURLEncoding.DecodeString(value)
+		if err != nil || base64.RawURLEncoding.EncodeToString(decoded) != value {
+			http.Error(w, "Invalid provenance cursor", http.StatusBadRequest)
+			return 0, 0, false
+		}
+		parsed, err := strconv.Atoi(string(decoded))
+		if err != nil || parsed < 0 {
+			http.Error(w, "Invalid provenance cursor", http.StatusBadRequest)
+			return 0, 0, false
+		}
+		start = parsed
+	}
+	return start, limit, true
+}
+
+func encodeHAProvenanceCursor(offset int) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(offset)))
+}
+
+type haTemporaryBanRequest struct {
+	IP     string
+	TTL    time.Duration
+	Reason string
+	Source string
+}
+
+type haMutationRequest struct {
+	ips         []string
+	temporaries []haTemporaryBanRequest
+}
+
+func decodeHAMutationPayload(w http.ResponseWriter, r *http.Request) (haMutationRequest, bool) {
+	if r.ContentLength > maxHARequestBytes {
+		http.Error(w, "Payload Too Large", http.StatusRequestEntityTooLarge)
+		return haMutationRequest{}, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxHARequestBytes)
+	decoder := json.NewDecoder(r.Body)
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			http.Error(w, "Payload Too Large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		}
+		return haMutationRequest{}, false
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err != nil {
+			var maxBytesError *http.MaxBytesError
+			if errors.As(err, &maxBytesError) {
+				http.Error(w, "Payload Too Large", http.StatusRequestEntityTooLarge)
+			} else {
+				http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			}
+		} else {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		}
+		return haMutationRequest{}, false
+	}
+	fields, err := decodeHAObjectFields(raw)
+	if err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return haMutationRequest{}, false
+	}
+	if ipsWire, legacy := fields["ips"]; legacy {
+		if len(fields) != 1 {
+			http.Error(w, "Ambiguous HA mutation", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		var ips []string
+		if err := json.Unmarshal(ipsWire, &ips); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		return decodeHALegacyAddresses(w, ips)
+	}
+	if bansWire, batch := fields["bans"]; batch {
+		if len(fields) != 1 {
+			http.Error(w, "Ambiguous HA mutation", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		return decodeHATemporaryBanBatch(w, bansWire, r.Method)
+	}
+	if r.Method == http.MethodDelete {
+		if len(fields) != 2 {
+			http.Error(w, "Invalid temporary DELETE", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		ipWire, ok := fields["ip"]
+		if !ok {
+			http.Error(w, "Invalid temporary DELETE", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		sourceWire, sourceOK := fields["source"]
+		var ip, source string
+		if !sourceOK || json.Unmarshal(ipWire, &ip) != nil || json.Unmarshal(sourceWire, &source) != nil || !validHASource(source) {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		canonical, err := canonicalHAAddress(ip)
+		if err != nil {
+			http.Error(w, "Invalid IP or CIDR address", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		return haMutationRequest{temporaries: []haTemporaryBanRequest{{IP: canonical, Source: source}}}, true
+	}
+	if r.Method != http.MethodPost || len(fields) != 4 {
+		http.Error(w, "Invalid temporary ban", http.StatusBadRequest)
+		return haMutationRequest{}, false
+	}
+	for _, required := range []string{"ip", "ttl", "reason", "source"} {
+		if _, ok := fields[required]; !ok {
+			http.Error(w, "Invalid temporary ban", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+	}
+	var ip, reason, source string
+	var ttlSeconds int64
+	if json.Unmarshal(fields["ip"], &ip) != nil || json.Unmarshal(fields["reason"], &reason) != nil ||
+		json.Unmarshal(fields["source"], &source) != nil || json.Unmarshal(fields["ttl"], &ttlSeconds) != nil {
+		http.Error(w, "Invalid temporary ban", http.StatusBadRequest)
+		return haMutationRequest{}, false
+	}
+	canonical, err := canonicalHAAddress(ip)
+	if err != nil || ttlSeconds < int64(firewall.MinimumBanTTL/time.Second) ||
+		ttlSeconds > int64(firewall.MaximumBanTTL/time.Second) || !validHASource(source) || !validHAReason(reason) {
+		http.Error(w, "Invalid temporary ban", http.StatusBadRequest)
+		return haMutationRequest{}, false
+	}
+	return haMutationRequest{temporaries: []haTemporaryBanRequest{{
+		IP: canonical, TTL: time.Duration(ttlSeconds) * time.Second, Reason: reason, Source: source,
+	}}}, true
+}
+
+func decodeHAObjectFields(raw []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return nil, fmt.Errorf("HA mutation must be an object")
+	}
+	fields := make(map[string]json.RawMessage)
+	allowed := map[string]struct{}{"ips": {}, "bans": {}, "ip": {}, "ttl": {}, "reason": {}, "source": {}}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid HA mutation field")
+		}
+		if _, ok := allowed[key]; !ok {
+			return nil, fmt.Errorf("unknown HA mutation field")
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return nil, fmt.Errorf("duplicate HA mutation field")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		fields[key] = value
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return nil, fmt.Errorf("invalid HA mutation object")
+	}
+	if decoder.Decode(&json.RawMessage{}) != io.EOF {
+		return nil, fmt.Errorf("trailing HA mutation value")
+	}
+	return fields, nil
+}
+
+func decodeHATemporaryBanBatch(w http.ResponseWriter, wire []byte, method string) (haMutationRequest, bool) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(wire, &items); err != nil || len(items) == 0 {
+		http.Error(w, "Invalid temporary ban batch", http.StatusBadRequest)
+		return haMutationRequest{}, false
+	}
+	if len(items) > maxHABansPerRequest {
+		http.Error(w, "Too Many Bans", http.StatusRequestEntityTooLarge)
+		return haMutationRequest{}, false
+	}
+	requests := make([]haTemporaryBanRequest, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		fields, err := decodeHAObjectFields(item)
+		if err != nil {
+			http.Error(w, "Invalid temporary ban batch", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		requiredCount := 4
+		if method == http.MethodDelete {
+			requiredCount = 2
+		}
+		if len(fields) != requiredCount {
+			http.Error(w, "Invalid temporary ban batch", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		var ip, source string
+		if json.Unmarshal(fields["ip"], &ip) != nil || json.Unmarshal(fields["source"], &source) != nil || !validHASource(source) {
+			http.Error(w, "Invalid temporary ban batch", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		canonical, err := canonicalHAAddress(ip)
+		if err != nil {
+			http.Error(w, "Invalid temporary ban batch", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		request := haTemporaryBanRequest{IP: canonical, Source: source}
+		if method == http.MethodPost {
+			var ttlSeconds int64
+			if _, ok := fields["ttl"]; !ok {
+				http.Error(w, "Invalid temporary ban batch", http.StatusBadRequest)
+				return haMutationRequest{}, false
+			}
+			if _, ok := fields["reason"]; !ok || json.Unmarshal(fields["ttl"], &ttlSeconds) != nil ||
+				json.Unmarshal(fields["reason"], &request.Reason) != nil || ttlSeconds < int64(firewall.MinimumBanTTL/time.Second) ||
+				ttlSeconds > int64(firewall.MaximumBanTTL/time.Second) || !validHAReason(request.Reason) {
+				http.Error(w, "Invalid temporary ban batch", http.StatusBadRequest)
+				return haMutationRequest{}, false
+			}
+			request.TTL = time.Duration(ttlSeconds) * time.Second
+		} else if method != http.MethodDelete {
+			http.Error(w, "Invalid temporary ban batch", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		key := request.IP + "\x00" + request.Source
+		if _, duplicate := seen[key]; duplicate {
+			http.Error(w, "Duplicate temporary ban", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		seen[key] = struct{}{}
+		requests = append(requests, request)
+	}
+	sort.Slice(requests, func(i, j int) bool {
+		if requests[i].IP != requests[j].IP {
+			return requests[i].IP < requests[j].IP
+		}
+		return requests[i].Source < requests[j].Source
+	})
+	return haMutationRequest{temporaries: requests}, true
+}
+
+func decodeHALegacyAddresses(w http.ResponseWriter, ips []string) (haMutationRequest, bool) {
+	if len(ips) > maxHAIPsPerRequest {
+		http.Error(w, "Too Many IPs", http.StatusRequestEntityTooLarge)
+		return haMutationRequest{}, false
+	}
+	canonical := make([]string, 0, len(ips))
+	seen := make(map[string]struct{}, len(ips))
+	for _, value := range ips {
+		ip, err := canonicalHAAddress(value)
+		if err != nil {
+			http.Error(w, "Invalid IP or CIDR address", http.StatusBadRequest)
+			return haMutationRequest{}, false
+		}
+		if _, duplicate := seen[ip]; duplicate {
+			continue
+		}
+		seen[ip] = struct{}{}
+		canonical = append(canonical, ip)
+	}
+	sort.Strings(canonical)
+	return haMutationRequest{ips: canonical}, true
+}
+
+func validHASource(source string) bool {
+	if len(source) < 1 || len(source) > maxHASourceBytes {
+		return false
+	}
+	for _, character := range source {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') && !strings.ContainsRune("._:/-", character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validHAReason(reason string) bool {
+	if len(reason) < 1 || len(reason) > maxHAReasonBytes || !utf8.ValidString(reason) || strings.TrimSpace(reason) == "" {
+		return false
+	}
+	for _, character := range reason {
+		if unicode.IsControl(character) || !unicode.IsPrint(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func (api *haAPI) applyHABans(w http.ResponseWriter, ips []string) {
+	api.mutationMu.Lock()
+	defer api.mutationMu.Unlock()
+	log.Printf("[HA Cluster] Received %d validated banned addresses from an authenticated peer", len(ips))
+	if len(ips) > 0 && api.fwManager == nil {
+		http.Error(w, "Firewall unavailable", http.StatusInternalServerError)
+		return
+	}
+	for _, ip := range ips {
+		if err := api.applyPermanentHABan(ip); err != nil {
+			log.Printf("[HA Cluster] Failed to apply a synchronized ban")
+			http.Error(w, "Firewall mutation failed", http.StatusInternalServerError)
+			return
+		}
+		if err := api.setStoredIP(ip, true); err != nil {
+			log.Printf("[HA Cluster] Failed to persist a synchronized ban")
+			http.Error(w, "Blocklist mutation failed", http.StatusInternalServerError)
+			return
+		}
+	}
+	writeHAJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (api *haAPI) applyPermanentHABan(ip string) error {
+	manager, ok := api.fwManager.(firewall.BanPermanentManager)
+	if ok {
+		return manager.BanPermanent(ip)
+	}
+	// Preserve mixed-version compatibility with older firewall managers. Their
+	// historical Ban contract is the only available durable operation.
+	return api.fwManager.Ban(ip)
+}
+
+func (api *haAPI) applyHAUnbans(w http.ResponseWriter, ips []string) {
+	api.mutationMu.Lock()
+	defer api.mutationMu.Unlock()
+	now := api.now().UTC().Truncate(time.Second)
+	log.Printf("[HA Cluster] Received %d validated addresses to unban from an authenticated peer", len(ips))
+	if len(ips) > 0 && api.fwManager == nil {
+		http.Error(w, "Firewall unavailable", http.StatusInternalServerError)
+		return
+	}
+	for _, ip := range ips {
+		if err := api.setStoredIP(ip, false); err != nil {
+			log.Printf("[HA Cluster] Failed to persist a synchronized unban")
+			http.Error(w, "Blocklist mutation failed", http.StatusInternalServerError)
+			return
+		}
+		if desired, err := api.reconcileDesiredHABanAfterRemoval(ip, now); err != nil {
+			log.Printf("[HA Cluster] Failed to reconcile remaining synchronized bans")
+			http.Error(w, "Firewall reconciliation failed", http.StatusInternalServerError)
+			return
+		} else if desired {
+			log.Printf("[HA Cluster] Legacy unban preserved a temporary ban")
+		}
+	}
+	writeHAJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (api *haAPI) blacklistFile(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		parsed, _, _ = net.ParseCIDR(ip)
+	}
+	if parsed != nil && parsed.To4() == nil {
+		return api.blacklistIPv6
+	}
+	return api.blacklistIPv4
+}
+
+func (api *haAPI) readStoredIPs() ([]string, error) {
+	var all []string
+	for _, path := range []string{api.blacklistIPv4, api.blacklistIPv6} {
+		content, err := readHARootedFileBounded(path, maxHABlocklistBytes)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for lineNumber, line := range strings.Split(string(content), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			ip, err := canonicalHAAddress(line)
+			if err != nil {
+				return nil, fmt.Errorf("%s:%d: %w", path, lineNumber+1, err)
+			}
+			all = append(all, ip)
+		}
+	}
+	seen := make(map[string]struct{}, len(all))
+	unique := make([]string, 0, len(all))
+	for _, ip := range all {
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		unique = append(unique, ip)
+	}
+	sort.Strings(unique)
+	return unique, nil
+}
+
+func (api *haAPI) setStoredIP(ip string, present bool) error {
+	return corelogger.UpdatePersistentBlocklist(api.blacklistFile(ip), ip, present)
+}
+
+func openHADataDirectory(path string) (*os.Root, string, error) {
+	cleanPath := filepath.Clean(path)
+	if !filepath.IsAbs(cleanPath) || cleanPath != path {
+		return nil, "", fmt.Errorf("HA data path must be absolute and canonical")
+	}
+	directoryPath := filepath.Dir(cleanPath)
+	name := filepath.Base(cleanPath)
+	if name == "." || name == string(filepath.Separator) || filepath.Base(name) != name {
+		return nil, "", fmt.Errorf("invalid HA data file name")
+	}
+	directoryInfo, err := os.Lstat(directoryPath)
+	if err != nil {
+		return nil, "", err
+	}
+	if !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, "", fmt.Errorf("HA data parent must be a real directory")
+	}
+	directory, err := os.OpenRoot(directoryPath)
+	if err != nil {
+		return nil, "", err
+	}
+	openedInfo, err := directory.Stat(".")
+	if err != nil || !os.SameFile(directoryInfo, openedInfo) {
+		_ = directory.Close()
+		return nil, "", fmt.Errorf("HA data parent changed while opening")
+	}
+	return directory, name, nil
+}
+
+func lockHADataDirectory(directory *os.Root) (*os.File, error) {
+	lockFile, err := directory.Open(".")
+	if err != nil {
+		return nil, fmt.Errorf("open HA blocklist directory lock: %w", err)
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		_ = lockFile.Close()
+		return nil, fmt.Errorf("lock HA blocklist directory: %w", err)
+	}
+	return lockFile, nil
+}
+
+func unlockHADataDirectory(lockFile *os.File) {
+	_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	_ = lockFile.Close()
+}
+
+func readHAStoredIPSet(directory *os.Root, name string) (map[string]struct{}, error) {
+	stored := make(map[string]struct{})
+	content, err := readHARegularFileBounded(directory, name, maxHABlocklistBytes)
+	if errors.Is(err, fs.ErrNotExist) {
+		return stored, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for lineNumber, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		storedIP, err := canonicalHAAddress(line)
+		if err != nil {
+			return nil, fmt.Errorf("%s:%d: %w", name, lineNumber+1, err)
+		}
+		stored[storedIP] = struct{}{}
+	}
+	return stored, nil
+}
+
+func createHAStagingFile(directory *os.Root, name string) (*os.File, string, error) {
+	for range 128 {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, "", fmt.Errorf("generate HA staging file name: %w", err)
+		}
+		stagingName := "." + name + ".syswarden-" + hex.EncodeToString(random[:]) + ".tmp"
+		file, err := directory.OpenFile(stagingName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("create HA staging file: %w", err)
+		}
+		return file, stagingName, nil
+	}
+	return nil, "", fmt.Errorf("create HA staging file: too many name collisions")
+}
+
+func publishHAFileAtomically(directory *os.Root, name string, content []byte) (resultErr error) {
+	destinationInfo, destinationErr := directory.Lstat(name)
+	destinationExists := destinationErr == nil
+	if destinationErr != nil && !errors.Is(destinationErr, fs.ErrNotExist) {
+		return destinationErr
+	}
+	if destinationExists && !destinationInfo.Mode().IsRegular() {
+		return fmt.Errorf("HA blocklist destination is not a regular file: %s", name)
+	}
+
+	file, stagingName, err := createHAStagingFile(directory, name)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+		if stagingName != "" {
+			_ = directory.Remove(stagingName)
+		}
+	}()
+	if err := file.Chmod(0600); err != nil {
+		return fmt.Errorf("restrict HA staging file: %w", err)
+	}
+	if written, err := file.Write(content); err != nil {
+		return fmt.Errorf("write HA staging file: %w", err)
+	} else if written != len(content) {
+		return fmt.Errorf("write HA staging file: %w", io.ErrShortWrite)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync HA staging file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close HA staging file: %w", err)
+	}
+	file = nil
+
+	currentInfo, currentErr := directory.Lstat(name)
+	if destinationExists {
+		if currentErr != nil || !currentInfo.Mode().IsRegular() || !os.SameFile(destinationInfo, currentInfo) {
+			return fmt.Errorf("HA blocklist destination changed before publication: %s", name)
+		}
+	} else if !errors.Is(currentErr, fs.ErrNotExist) {
+		if currentErr == nil {
+			return fmt.Errorf("HA blocklist destination appeared before publication: %s", name)
+		}
+		return currentErr
+	}
+	if err := directory.Rename(stagingName, name); err != nil {
+		return fmt.Errorf("publish HA blocklist atomically: %w", err)
+	}
+	stagingName = ""
+	directoryFile, err := directory.Open(".")
+	if err != nil {
+		return fmt.Errorf("open HA blocklist directory for sync: %w", err)
+	}
+	if err := directoryFile.Sync(); err != nil {
+		_ = directoryFile.Close()
+		return fmt.Errorf("sync HA blocklist directory: %w", err)
+	}
+	if err := directoryFile.Close(); err != nil {
+		return fmt.Errorf("close HA blocklist directory: %w", err)
+	}
+	return nil
+}
+
+type haBanLedger struct {
+	Version int                 `json:"version"`
+	Bans    []haBanLedgerRecord `json:"bans"`
+}
+
+type haBanLedgerRecord struct {
+	IP           string `json:"ip"`
+	Source       string `json:"source"`
+	Reason       string `json:"reason"`
+	PeerScope    string `json:"peer_scope"`
+	OriginPeerIP string `json:"origin_peer_ip"`
+	ExpiresAt    string `json:"expires_at"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+	State        string `json:"state"`
+}
+
+func haLedgerRecordKey(record haBanLedgerRecord) string {
+	return record.IP + "\x00" + record.Source + "\x00" + record.PeerScope
+}
+
+func readHALedgerInDirectory(directory *os.Root, name string) (haBanLedger, error) {
+	info, err := directory.Lstat(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return haBanLedger{Version: haLedgerVersion}, nil
+	}
+	if err != nil {
+		return haBanLedger{}, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		return haBanLedger{}, fmt.Errorf("HA ban ledger must be a regular 0600 file")
+	}
+	wire, err := readHARegularFileBounded(directory, name, maxHALedgerBytes)
+	if err != nil {
+		return haBanLedger{}, err
+	}
+	if err := rejectHADuplicateJSONKeys(wire); err != nil {
+		return haBanLedger{}, fmt.Errorf("decode HA ban ledger: %w", err)
+	}
+	decoder := json.NewDecoder(io.LimitReader(bytes.NewReader(wire), maxHALedgerBytes+1))
+	decoder.DisallowUnknownFields()
+	var ledger haBanLedger
+	if err := decoder.Decode(&ledger); err != nil {
+		return haBanLedger{}, fmt.Errorf("decode HA ban ledger: %w", err)
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return haBanLedger{}, fmt.Errorf("decode HA ban ledger: trailing JSON")
+	}
+	if err := validateHALedger(ledger); err != nil {
+		return haBanLedger{}, err
+	}
+	return ledger, nil
+}
+
+func rejectHADuplicateJSONKeys(wire []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	if err := scanHAJSONValue(decoder, 0); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("trailing JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func scanHAJSONValue(decoder *json.Decoder, depth int) error {
+	if depth > 64 {
+		return fmt.Errorf("JSON nesting exceeds 64 levels")
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, compound := token.(json.Delim)
+	if !compound {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("JSON object key is not a string")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return fmt.Errorf("duplicate JSON key %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := scanHAJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim('}') {
+			return fmt.Errorf("invalid JSON object")
+		}
+		return nil
+	case '[':
+		for decoder.More() {
+			if err := scanHAJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim(']') {
+			return fmt.Errorf("invalid JSON array")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unexpected JSON delimiter")
+	}
+}
+
+func validateHALedger(ledger haBanLedger) error {
+	if ledger.Version != haLedgerVersion {
+		return fmt.Errorf("unsupported HA ban ledger version %d", ledger.Version)
+	}
+	if len(ledger.Bans) > maxHALedgerRecords {
+		return fmt.Errorf("HA ban ledger exceeds %d records", maxHALedgerRecords)
+	}
+	seen := make(map[string]struct{}, len(ledger.Bans))
+	for index, record := range ledger.Bans {
+		canonicalIP, err := canonicalHAAddress(record.IP)
+		if err != nil || canonicalIP != record.IP || !validHASource(record.Source) || !validHAReason(record.Reason) {
+			return fmt.Errorf("invalid HA ban ledger record %d", index)
+		}
+		scope, err := canonicalHAPeerPrefix(record.PeerScope)
+		if err != nil || scope.String() != record.PeerScope {
+			return fmt.Errorf("invalid HA ban ledger peer scope at record %d", index)
+		}
+		origin, err := netip.ParseAddr(record.OriginPeerIP)
+		if err != nil || origin.Is4In6() || origin.Zone() != "" || !scope.Contains(origin) {
+			return fmt.Errorf("invalid HA ban ledger origin at record %d", index)
+		}
+		created, createdErr := parseCanonicalHATime(record.CreatedAt)
+		updated, updatedErr := parseCanonicalHATime(record.UpdatedAt)
+		expires, expiresErr := parseCanonicalHATime(record.ExpiresAt)
+		if createdErr != nil || updatedErr != nil || expiresErr != nil || updated.Before(created) || !expires.After(created) {
+			return fmt.Errorf("invalid HA ban ledger timestamps at record %d", index)
+		}
+		if record.State != haBanPendingApply && record.State != haBanActive && record.State != haBanPendingDelete {
+			return fmt.Errorf("invalid HA ban ledger state at record %d", index)
+		}
+		key := haLedgerRecordKey(record)
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate HA ban ledger record %d", index)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func parseCanonicalHATime(value string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil || parsed.UTC().Format(time.RFC3339) != value {
+		return time.Time{}, fmt.Errorf("invalid canonical HA timestamp")
+	}
+	return parsed.UTC(), nil
+}
+
+func sortHALedger(ledger *haBanLedger) {
+	sort.Slice(ledger.Bans, func(i, j int) bool {
+		left, right := ledger.Bans[i], ledger.Bans[j]
+		if left.IP != right.IP {
+			return left.IP < right.IP
+		}
+		if left.Source != right.Source {
+			return left.Source < right.Source
+		}
+		return left.PeerScope < right.PeerScope
+	})
+}
+
+func (api *haAPI) readHALedger() (haBanLedger, error) {
+	directory, name, err := openHADataDirectory(api.banLedgerFile)
+	if err != nil {
+		return haBanLedger{}, err
+	}
+	defer directory.Close()
+	lockFile, err := lockHADataDirectory(directory)
+	if err != nil {
+		return haBanLedger{}, err
+	}
+	defer unlockHADataDirectory(lockFile)
+	return readHALedgerInDirectory(directory, name)
+}
+
+func (api *haAPI) mutateHALedger(mutator func(*haBanLedger) error) error {
+	directory, name, err := openHADataDirectory(api.banLedgerFile)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	lockFile, err := lockHADataDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer unlockHADataDirectory(lockFile)
+	ledger, err := readHALedgerInDirectory(directory, name)
+	if err != nil {
+		return err
+	}
+	if err := mutator(&ledger); err != nil {
+		return err
+	}
+	sortHALedger(&ledger)
+	if err := validateHALedger(ledger); err != nil {
+		return err
+	}
+	wire, err := json.Marshal(ledger)
+	if err != nil {
+		return err
+	}
+	if len(wire) > maxHALedgerBytes {
+		return fmt.Errorf("HA ban ledger exceeds %d bytes", maxHALedgerBytes)
+	}
+	return publishHAFileAtomically(directory, name, wire)
+}
+
+func (api *haAPI) readHASyncSnapshot(now time.Time) ([]string, []HAActiveBan, error) {
+	staticIPs, err := api.readStoredIPs()
+	if err != nil {
+		return nil, nil, err
+	}
+	ledger, err := api.readHALedger()
+	if err != nil {
+		return nil, nil, err
+	}
+	now = now.UTC()
+	all := append([]string(nil), staticIPs...)
+	bans := make([]HAActiveBan, 0, len(ledger.Bans))
+	for _, record := range ledger.Bans {
+		expires, err := parseCanonicalHATime(record.ExpiresAt)
+		if err != nil {
+			return nil, nil, err
+		}
+		if record.State != haBanActive || !expires.After(now) {
+			continue
+		}
+		all = append(all, record.IP)
+		bans = append(bans, HAActiveBan{
+			IP: record.IP, Source: record.Source, Reason: record.Reason, PeerScope: record.PeerScope,
+			OriginPeerIP: record.OriginPeerIP, ExpiresAt: record.ExpiresAt,
+		})
+	}
+	all = uniqueSortedHAAddresses(all)
+	sort.Slice(bans, func(i, j int) bool {
+		if bans[i].IP != bans[j].IP {
+			return bans[i].IP < bans[j].IP
+		}
+		if bans[i].Source != bans[j].Source {
+			return bans[i].Source < bans[j].Source
+		}
+		if bans[i].PeerScope != bans[j].PeerScope {
+			return bans[i].PeerScope < bans[j].PeerScope
+		}
+		if bans[i].OriginPeerIP != bans[j].OriginPeerIP {
+			return bans[i].OriginPeerIP < bans[j].OriginPeerIP
+		}
+		return bans[i].ExpiresAt < bans[j].ExpiresAt
+	})
+	return all, bans, nil
+}
+
+func uniqueSortedHAAddresses(addresses []string) []string {
+	seen := make(map[string]struct{}, len(addresses))
+	result := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		if _, duplicate := seen[address]; duplicate {
+			continue
+		}
+		seen[address] = struct{}{}
+		result = append(result, address)
+	}
+	sort.Strings(result)
+	return result
+}
+
+var errHALedgerFull = errors.New("HA ban ledger capacity reached")
+
+func (api *haAPI) temporaryBanMode() (firewall.BanExpiryMode, error) {
+	if api.fwManager == nil {
+		return "", fmt.Errorf("firewall unavailable")
+	}
+	reporter, ok := api.fwManager.(firewall.BanExpiryReporter)
+	if !ok {
+		return "", fmt.Errorf("firewall backend does not report temporary-ban semantics")
+	}
+	mode := reporter.BanExpiryMode()
+	if mode == firewall.BanExpiryNative {
+		if _, ok := api.fwManager.(firewall.BanWithTTLManager); !ok {
+			return "", fmt.Errorf("native-expiry firewall lacks BanWithTTL")
+		}
+		return mode, nil
+	}
+	if mode != firewall.BanExpiryExternal {
+		return "", fmt.Errorf("unsupported firewall expiry mode")
+	}
+	return mode, nil
+}
+
+func (api *haAPI) storedIPPresent(ip string) (bool, error) {
+	directory, name, err := openHADataDirectory(api.blacklistFile(ip))
+	if err != nil {
+		return false, err
+	}
+	defer directory.Close()
+	lockFile, err := lockHADataDirectory(directory)
+	if err != nil {
+		return false, err
+	}
+	defer unlockHADataDirectory(lockFile)
+	stored, err := readHAStoredIPSet(directory, name)
+	if err != nil {
+		return false, err
+	}
+	_, present := stored[ip]
+	return present, nil
+}
+
+func (api *haAPI) desiredHABan(ip string, now time.Time) (bool, bool, time.Time, error) {
+	static, err := api.storedIPPresent(ip)
+	if err != nil {
+		return false, false, time.Time{}, err
+	}
+	ledger, err := api.readHALedger()
+	if err != nil {
+		return false, false, time.Time{}, err
+	}
+	var latest time.Time
+	for _, record := range ledger.Bans {
+		if record.IP != ip || record.State == haBanPendingDelete {
+			continue
+		}
+		expires, err := parseCanonicalHATime(record.ExpiresAt)
+		if err != nil {
+			return false, false, time.Time{}, err
+		}
+		if expires.After(now) && expires.After(latest) {
+			latest = expires
+		}
+	}
+	return static || !latest.IsZero(), static, latest, nil
+}
+
+func (api *haAPI) applyDesiredHABan(ip string, now time.Time) (bool, error) {
+	desired, static, latest, err := api.desiredHABan(ip, now)
+	if err != nil || !desired {
+		return desired, err
+	}
+	if static {
+		return true, api.applyPermanentHABan(ip)
+	}
+	mode, err := api.temporaryBanMode()
+	if err != nil {
+		return true, err
+	}
+	if mode == firewall.BanExpiryExternal {
+		return true, api.fwManager.Ban(ip)
+	}
+	remaining := boundedHARemainingTTL(latest, now)
+	return true, api.fwManager.(firewall.BanWithTTLManager).BanWithTTL(ip, remaining)
+}
+
+func boundedHARemainingTTL(latest, now time.Time) time.Duration {
+	remaining := latest.Sub(now)
+	if remaining%time.Second != 0 {
+		remaining = (remaining/time.Second + 1) * time.Second
+	}
+	if remaining < firewall.MinimumBanTTL {
+		remaining = firewall.MinimumBanTTL
+	}
+	if remaining > firewall.MaximumBanTTL {
+		remaining = firewall.MaximumBanTTL
+	}
+	return remaining
+}
+
+func (api *haAPI) reconcileDesiredHABanAfterRemoval(ip string, now time.Time) (bool, error) {
+	desired, static, latest, err := api.desiredHABan(ip, now)
+	if err != nil {
+		return false, err
+	}
+	if !desired {
+		if api.fwManager == nil {
+			return false, fmt.Errorf("firewall unavailable")
+		}
+		return false, api.fwManager.Unban(ip)
+	}
+	if static {
+		return true, api.applyPermanentHABan(ip)
+	}
+	mode, err := api.temporaryBanMode()
+	if err != nil {
+		return true, err
+	}
+	if mode == firewall.BanExpiryExternal {
+		return true, api.fwManager.Ban(ip)
+	}
+	reconciler, ok := api.fwManager.(firewall.BanTTLReconciler)
+	if !ok {
+		return true, fmt.Errorf("native-expiry firewall lacks exact TTL reconciliation")
+	}
+	return true, reconciler.ReconcileBanTTL(ip, boundedHARemainingTTL(latest, now))
+}
+
+func (api *haAPI) stageHATemporaryBans(peer haPeerIdentity, requests []haTemporaryBanRequest, now time.Time) (map[string]struct{}, error) {
+	keys := make(map[string]struct{}, len(requests))
+	err := api.mutateHALedger(func(ledger *haBanLedger) error {
+		existing := make(map[string]int, len(ledger.Bans))
+		for index, record := range ledger.Bans {
+			existing[haLedgerRecordKey(record)] = index
+		}
+		newRecords := 0
+		for _, request := range requests {
+			key := request.IP + "\x00" + request.Source + "\x00" + peer.Scope
+			keys[key] = struct{}{}
+			if _, found := existing[key]; !found {
+				newRecords++
+			}
+		}
+		if len(ledger.Bans)+newRecords > maxHALedgerRecords {
+			return errHALedgerFull
+		}
+		for _, request := range requests {
+			key := request.IP + "\x00" + request.Source + "\x00" + peer.Scope
+			expires := now.Add(request.TTL)
+			if index, found := existing[key]; found {
+				record := &ledger.Bans[index]
+				currentExpiry, err := parseCanonicalHATime(record.ExpiresAt)
+				if err != nil {
+					return err
+				}
+				if currentExpiry.After(expires) {
+					expires = currentExpiry
+				}
+				record.Reason = request.Reason
+				record.OriginPeerIP = peer.IP
+				record.ExpiresAt = expires.Format(time.RFC3339)
+				record.UpdatedAt = now.Format(time.RFC3339)
+				record.State = haBanPendingApply
+				continue
+			}
+			existing[key] = len(ledger.Bans)
+			ledger.Bans = append(ledger.Bans, haBanLedgerRecord{
+				IP: request.IP, Source: request.Source, Reason: request.Reason, PeerScope: peer.Scope,
+				OriginPeerIP: peer.IP, ExpiresAt: expires.Format(time.RFC3339), CreatedAt: now.Format(time.RFC3339),
+				UpdatedAt: now.Format(time.RFC3339), State: haBanPendingApply,
+			})
+		}
+		return nil
+	})
+	return keys, err
+}
+
+func (api *haAPI) temporaryAdmissionState(peer haPeerIdentity, requests []haTemporaryBanRequest, now time.Time) (bool, bool, error) {
+	ledger, err := api.readHALedger()
+	if err != nil {
+		return false, false, err
+	}
+	existing := make(map[string]struct{}, len(ledger.Bans))
+	needsRecovery := false
+	for _, record := range ledger.Bans {
+		existing[haLedgerRecordKey(record)] = struct{}{}
+		expires, err := parseCanonicalHATime(record.ExpiresAt)
+		if err != nil {
+			return false, false, err
+		}
+		if record.State != haBanActive || !expires.After(now) {
+			needsRecovery = true
+		}
+	}
+	newRecords := 0
+	for _, request := range requests {
+		key := request.IP + "\x00" + request.Source + "\x00" + peer.Scope
+		if _, found := existing[key]; found {
+			continue
+		}
+		existing[key] = struct{}{}
+		newRecords++
+	}
+	return needsRecovery, len(ledger.Bans)+newRecords > maxHALedgerRecords, nil
+}
+
+func (api *haAPI) markHATemporaryBansActive(keys map[string]struct{}, successfulIPs map[string]struct{}, now time.Time) error {
+	return api.mutateHALedger(func(ledger *haBanLedger) error {
+		found := 0
+		for index := range ledger.Bans {
+			record := &ledger.Bans[index]
+			if _, expected := keys[haLedgerRecordKey(*record)]; !expected {
+				continue
+			}
+			if _, successful := successfulIPs[record.IP]; !successful {
+				continue
+			}
+			record.State = haBanActive
+			record.UpdatedAt = now.Format(time.RFC3339)
+			found++
+		}
+		if found == 0 && len(successfulIPs) > 0 {
+			return fmt.Errorf("staged HA temporary bans disappeared")
+		}
+		return nil
+	})
+}
+
+func (api *haAPI) applyHATemporaryBans(w http.ResponseWriter, peer haPeerIdentity, requests []haTemporaryBanRequest) {
+	api.mutationMu.Lock()
+	defer api.mutationMu.Unlock()
+	now := api.now().UTC().Truncate(time.Second)
+	if _, err := api.temporaryBanMode(); err != nil {
+		http.Error(w, "Temporary firewall bans unavailable", http.StatusInternalServerError)
+		return
+	}
+	needsRecovery, ledgerFull, err := api.temporaryAdmissionState(peer, requests, now)
+	if err != nil {
+		http.Error(w, "HA ban ledger unavailable", http.StatusInternalServerError)
+		return
+	}
+	if ledgerFull && !needsRecovery {
+		http.Error(w, "HA ban ledger full", http.StatusInsufficientStorage)
+		return
+	}
+	if needsRecovery {
+		if err := api.reconcileHABansLocked(now, maxHALedgerRecords); err != nil {
+			http.Error(w, "HA ban recovery failed", http.StatusInternalServerError)
+			return
+		}
+	}
+	keys, err := api.stageHATemporaryBans(peer, requests, now)
+	if errors.Is(err, errHALedgerFull) {
+		http.Error(w, "HA ban ledger full", http.StatusInsufficientStorage)
+		return
+	}
+	if err != nil {
+		http.Error(w, "HA ban ledger unavailable", http.StatusInternalServerError)
+		return
+	}
+	uniqueIPs := make([]string, 0, len(requests))
+	seenIPs := make(map[string]struct{}, len(requests))
+	for _, request := range requests {
+		if _, duplicate := seenIPs[request.IP]; duplicate {
+			continue
+		}
+		seenIPs[request.IP] = struct{}{}
+		uniqueIPs = append(uniqueIPs, request.IP)
+	}
+	successfulIPs := make(map[string]struct{}, len(uniqueIPs))
+	var mutationErrors []error
+	for _, ip := range uniqueIPs {
+		if _, err := api.applyDesiredHABan(ip, now); err != nil {
+			mutationErrors = append(mutationErrors, err)
+			continue
+		}
+		successfulIPs[ip] = struct{}{}
+	}
+	if err := api.markHATemporaryBansActive(keys, successfulIPs, now); err != nil {
+		http.Error(w, "HA ban ledger publication failed", http.StatusInternalServerError)
+		return
+	}
+	if joined := errors.Join(mutationErrors...); joined != nil {
+		log.Printf("[HA Cluster] temporary ban batch partially failed origin=%s count=%d", peer.IP, len(mutationErrors))
+		http.Error(w, "Firewall mutation failed", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[HA Cluster] temporary ban batch active origin=%s count=%d", peer.IP, len(requests))
+	writeHAJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (api *haAPI) markHATemporaryDeletes(requests []haTemporaryBanRequest, peerScope string, now time.Time) error {
+	requested := make(map[string]struct{}, len(requests))
+	for _, request := range requests {
+		requested[request.IP+"\x00"+request.Source] = struct{}{}
+	}
+	return api.mutateHALedger(func(ledger *haBanLedger) error {
+		for index := range ledger.Bans {
+			record := &ledger.Bans[index]
+			_, matches := requested[record.IP+"\x00"+record.Source]
+			if matches && record.PeerScope == peerScope {
+				record.State = haBanPendingDelete
+				record.UpdatedAt = now.Format(time.RFC3339)
+			}
+		}
+		return nil
+	})
+}
+
+func (api *haAPI) removeHATemporaryDeletes(ip string, sources map[string]struct{}, peerScope string) error {
+	return api.mutateHALedger(func(ledger *haBanLedger) error {
+		remaining := ledger.Bans[:0]
+		for _, record := range ledger.Bans {
+			_, sourceMatches := sources[record.Source]
+			if record.IP == ip && sourceMatches && record.PeerScope == peerScope && record.State == haBanPendingDelete {
+				continue
+			}
+			remaining = append(remaining, record)
+		}
+		ledger.Bans = remaining
+		return nil
+	})
+}
+
+func (api *haAPI) applyHATemporaryUnbans(w http.ResponseWriter, peer haPeerIdentity, requests []haTemporaryBanRequest) {
+	api.mutationMu.Lock()
+	defer api.mutationMu.Unlock()
+	now := api.now().UTC().Truncate(time.Second)
+	if api.fwManager == nil {
+		http.Error(w, "Firewall unavailable", http.StatusInternalServerError)
+		return
+	}
+	if err := api.markHATemporaryDeletes(requests, peer.Scope, now); err != nil {
+		http.Error(w, "HA ban ledger unavailable", http.StatusInternalServerError)
+		return
+	}
+	byIP := make(map[string]map[string]struct{}, len(requests))
+	for _, request := range requests {
+		if byIP[request.IP] == nil {
+			byIP[request.IP] = make(map[string]struct{})
+		}
+		byIP[request.IP][request.Source] = struct{}{}
+	}
+	ips := make([]string, 0, len(byIP))
+	for ip := range byIP {
+		ips = append(ips, ip)
+	}
+	sort.Strings(ips)
+	var mutationErrors []error
+	for _, ip := range ips {
+		desired, err := api.reconcileDesiredHABanAfterRemoval(ip, now)
+		if err != nil {
+			mutationErrors = append(mutationErrors, err)
+			continue
+		}
+		if err := api.removeHATemporaryDeletes(ip, byIP[ip], peer.Scope); err != nil {
+			mutationErrors = append(mutationErrors, err)
+			continue
+		}
+		if desired {
+			log.Printf("[HA Cluster] temporary delete preserved another desired ban origin=%s", peer.IP)
+		}
+	}
+	if joined := errors.Join(mutationErrors...); joined != nil {
+		log.Printf("[HA Cluster] temporary delete batch partially failed origin=%s count=%d", peer.IP, len(mutationErrors))
+		http.Error(w, "Firewall mutation failed", http.StatusInternalServerError)
+		return
+	}
+	writeHAJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (api *haAPI) reconcileHABansLocked(now time.Time, limit int) error {
+	ledger, err := api.readHALedger()
+	if err != nil {
+		return err
+	}
+	allIPs := make([]string, 0)
+	seen := make(map[string]struct{})
+	needsTransition := make(map[string]bool)
+	for _, record := range ledger.Bans {
+		expires, err := parseCanonicalHATime(record.ExpiresAt)
+		if err != nil {
+			return err
+		}
+		if record.State != haBanActive || !expires.After(now) {
+			needsTransition[record.IP] = true
+		}
+		if _, duplicate := seen[record.IP]; duplicate {
+			continue
+		}
+		seen[record.IP] = struct{}{}
+		allIPs = append(allIPs, record.IP)
+	}
+	if len(allIPs) == 0 || limit <= 0 {
+		api.sweepCursor = 0
+		return nil
+	}
+	if limit > len(allIPs) {
+		limit = len(allIPs)
+	}
+	start := api.sweepCursor % len(allIPs)
+	candidates := make([]string, 0, limit)
+	for offset := 0; offset < limit; offset++ {
+		candidates = append(candidates, allIPs[(start+offset)%len(allIPs)])
+	}
+	api.sweepCursor = (start + limit) % len(allIPs)
+	for _, ip := range candidates {
+		transition := needsTransition[ip]
+		if transition {
+			if err := api.mutateHALedger(func(current *haBanLedger) error {
+				for index := range current.Bans {
+					record := &current.Bans[index]
+					if record.IP != ip {
+						continue
+					}
+					expires, err := parseCanonicalHATime(record.ExpiresAt)
+					if err != nil {
+						return err
+					}
+					if !expires.After(now) {
+						record.State = haBanPendingDelete
+						record.UpdatedAt = now.Format(time.RFC3339)
+					}
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		if transition {
+			_, err = api.reconcileDesiredHABanAfterRemoval(ip, now)
+		} else {
+			_, err = api.applyDesiredHABan(ip, now)
+		}
+		if err != nil {
+			return err
+		}
+		if !transition {
+			continue
+		}
+		if err := api.mutateHALedger(func(current *haBanLedger) error {
+			remaining := current.Bans[:0]
+			for _, record := range current.Bans {
+				if record.IP == ip && record.State == haBanPendingDelete {
+					continue
+				}
+				if record.IP == ip && record.State == haBanPendingApply {
+					record.State = haBanActive
+					record.UpdatedAt = now.Format(time.RFC3339)
+				}
+				remaining = append(remaining, record)
+			}
+			current.Bans = remaining
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (api *haAPI) reconcileHABans(now time.Time, limit int) error {
+	api.mutationMu.Lock()
+	defer api.mutationMu.Unlock()
+	return api.reconcileHABansLocked(now.UTC().Truncate(time.Second), limit)
+}
+
+func (api *haAPI) startHASweeper(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(haSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				if err := api.reconcileHABans(now, maxHASweepPerPass); err != nil {
+					log.Printf("[HA Cluster] temporary-ban reconciliation failed: %v", err)
+				}
+			}
+		}
+	}()
+}
+
+func writeHAJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func (api *haAPI) handleTelemetry(w http.ResponseWriter, r *http.Request) {
+	if _, authorized := api.authorizePeer(w, r); !authorized {
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	content, err := readHARootedFileBounded(api.telemetryFile, maxHATelemetryBytes)
+	if err != nil {
+		http.Error(w, "Telemetry unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(content)
+}
+
+func (api *haAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if _, authorized := api.authorizePeer(w, r); !authorized {
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "unknown"
+	}
+	osName := "Linux"
+	if osRelease, err := os.ReadFile("/etc/os-release"); err == nil {
+		for _, line := range strings.Split(string(osRelease), "\n") {
+			if strings.HasPrefix(line, "PRETTY_NAME=") {
+				osName = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
+				break
+			}
+		}
+	}
+	capabilities := []string{"auth_all_routes", "peer_cidr", "tls_verified_client"}
+	if api.cfg.BunkerWebEnabled {
+		capabilities = []string{"auth_all_routes", "peer_cidr", "sync_ttl", "sync_provenance", "tls_verified_client"}
+	}
+	writeHAJSON(w, http.StatusOK, struct {
+		Hostname     string   `json:"hostname"`
+		OS           string   `json:"os"`
+		Version      string   `json:"version"`
+		Status       string   `json:"status"`
+		APIVersion   string   `json:"api_version"`
+		Capabilities []string `json:"capabilities"`
+	}{
+		Hostname: hostname, OS: osName, Version: api.coreVersion, Status: "online", APIVersion: "2",
+		Capabilities: capabilities,
+	})
+}
+
+func newHAServer(address string, handler http.Handler, certificate tls.Certificate) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadTimeout:       haReadTimeout,
+		ReadHeaderTimeout: haReadHeaderTimeout,
+		WriteTimeout:      haWriteTimeout,
+		IdleTimeout:       haIdleTimeout,
+		MaxHeaderBytes:    16 * 1024,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{certificate},
+			MinVersion:   tls.VersionTLS13,
+		},
+	}
+}
+
+func prepareHAServerAPI(api *haAPI) error {
+	if api == nil {
+		return fmt.Errorf("HA API is unavailable")
+	}
+	return api.reconcileHABans(time.Now(), maxHALedgerRecords)
+}
+
 func StartHAServer(fwManager firewall.Manager) {
 	cfg := loadHAConfig()
 	if (cfg.Enabled != "y" && cfg.Enabled != "true" && cfg.Enabled != "1") || len(cfg.PeerIPs) == 0 {
 		return
 	}
-
-	log.Printf("[HA Cluster] Starting TLS P2P API on port %s", cfg.Port)
+	if cfg.Token == "" || strings.TrimSpace(cfg.Token) != cfg.Token {
+		log.Printf("[HA Cluster] Refusing to start: HA token is required")
+		return
+	}
 
 	coreVersion := "unknown"
-	cmd := exec.Command("syswarden") // #nosec
+	cmd := exec.Command("syswarden")
 	if out, err := cmd.Output(); err == nil {
 		lines := strings.Split(string(out), "\n")
 		if len(lines) > 0 {
@@ -380,266 +2121,21 @@ func StartHAServer(fwManager firewall.Manager) {
 		log.Printf("[HA Cluster] Failed to load persistent TLS identity: %v", err)
 		return
 	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ha/sync", func(w http.ResponseWriter, r *http.Request) {
-		// Zero-Trust: TCP IP Validation
-		remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-
-		allowed := false
-		for _, peer := range cfg.PeerIPs {
-			if peer == remoteIP {
-				allowed = true
-				break
-			}
-		}
-
-		if !allowed {
-			log.Printf("[HA Cluster] Unauthorized sync attempt dropped from %s", remoteIP) // #nosec G706
-			http.Error(w, "Forbidden: IP not in cluster", http.StatusForbidden)
-			return
-		}
-
-		// Zero-Trust: Cryptographic Token Validation
-		if cfg.Token == "" {
-			log.Printf("[HA Cluster] WARNING: SYSWARDEN_HA_TOKEN is missing. Running in Legacy Mode (IP validation only). Please configure a token for maximum security.")
-		} else {
-			authHeader := r.Header.Get("Authorization")
-			expectedHeader := "Bearer " + cfg.Token
-			if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expectedHeader)) != 1 {
-				log.Printf("[HA Cluster] Unauthorized sync attempt dropped (invalid token)")
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-
-		if r.Method == http.MethodGet {
-			// Return current blocklists
-			// IMPORTANT: syswarden_blacklist.ipv4/.ipv6 contain the WAF L7 Dynamic Bans
-			// They are synchronized across the HA cluster so that all nodes can inject them into L3 (nftables @banned_ips)
-			var allIPs []string
-			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4"); err == nil { // #nosec
-				lines := strings.Split(strings.TrimSpace(string(content)), "\n")
-				for _, l := range lines {
-					if l != "" {
-						allIPs = append(allIPs, strings.TrimSpace(l))
-					}
-				}
-			}
-			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv6"); err == nil { // #nosec
-				lines := strings.Split(strings.TrimSpace(string(content)), "\n")
-				for _, l := range lines {
-					if l != "" {
-						allIPs = append(allIPs, strings.TrimSpace(l))
-					}
-				}
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(HASyncPayload{IPs: allIPs})
-			return
-		}
-
-		if r.Method == http.MethodPost {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				http.Error(w, "Bad Request", http.StatusBadRequest)
-				return
-			}
-
-			var payload HASyncPayload
-			if err := json.Unmarshal(body, &payload); err != nil {
-				http.Error(w, "Invalid JSON", http.StatusBadRequest)
-				return
-			}
-
-			log.Printf("[HA Cluster] Received %d banned IPs from peer %s", len(payload.IPs), remoteIP) // #nosec G706
-
-			// Read current state to prevent duplicates
-			existingIPs := make(map[string]bool)
-			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4"); err == nil { // #nosec
-				for _, l := range strings.Split(string(content), "\n") {
-					existingIPs[strings.TrimSpace(l)] = true
-				}
-			}
-			if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv6"); err == nil { // #nosec
-				for _, l := range strings.Split(string(content), "\n") {
-					existingIPs[strings.TrimSpace(l)] = true
-				}
-			}
-
-			for _, ip := range payload.IPs {
-				_ = fwManager.Ban(ip)
-
-				if existingIPs[ip] {
-					continue
-				}
-
-				// Also persist locally to blocklist
-				if !strings.Contains(ip, ":") {
-					f, _ := os.OpenFile("/etc/syswarden/lists/syswarden_blacklist.ipv4", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
-					if f != nil {
-						_, _ = f.WriteString(ip + "\n")
-						_ = f.Close()
-					}
-				} else {
-					f, _ := os.OpenFile("/etc/syswarden/lists/syswarden_blacklist.ipv6", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec
-					if f != nil {
-						_, _ = f.WriteString(ip + "\n")
-						_ = f.Close()
-					}
-				}
-			}
-
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-			return
-		}
-		if r.Method == http.MethodDelete {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				http.Error(w, "Bad Request", http.StatusBadRequest)
-				return
-			}
-
-			var payload HASyncPayload
-			if err := json.Unmarshal(body, &payload); err != nil {
-				http.Error(w, "Invalid JSON", http.StatusBadRequest)
-				return
-			}
-
-			log.Printf("[HA Cluster] Received %d IPs to UNBAN from peer %s", len(payload.IPs), remoteIP) // #nosec G706
-
-			for _, ip := range payload.IPs {
-				_ = fwManager.Unban(ip)
-
-				if content, err := readBlacklistFileForIP(ip); err == nil {
-					lines := strings.Split(string(content), "\n")
-					var newLines []string
-					for _, l := range lines {
-						if strings.TrimSpace(l) != ip && strings.TrimSpace(l) != "" {
-							newLines = append(newLines, l)
-						}
-					}
-					if len(newLines) > 0 {
-						_ = writeBlacklistFileForIP(ip, []byte(strings.Join(newLines, "\n")+"\n"))
-					} else {
-						_ = writeBlacklistFileForIP(ip, []byte(""))
-					}
-				}
-			}
-
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-			return
-		}
-
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-	})
-
-	mux.HandleFunc("/ha/telemetry", func(w http.ResponseWriter, r *http.Request) {
-		remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-
-		allowed := false
-		for _, peer := range cfg.PeerIPs {
-			if peer == remoteIP {
-				allowed = true
-				break
-			}
-		}
-
-		if !allowed {
-			log.Printf("[HA Cluster] Unauthorized telemetry attempt dropped from %s", remoteIP) // #nosec G706
-			http.Error(w, "Forbidden: IP not in cluster", http.StatusForbidden)
-			return
-		}
-
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		content, err := os.ReadFile("/var/lib/syswarden/ui/data.json") // #nosec
-		if err != nil {
-			http.Error(w, "Telemetry unavailable", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(content)
-	})
-
-	mux.HandleFunc("/ha/status", func(w http.ResponseWriter, r *http.Request) {
-		remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-
-		allowed := false
-		for _, peer := range cfg.PeerIPs {
-			if peer == remoteIP {
-				allowed = true
-				break
-			}
-		}
-
-		if !allowed {
-			http.Error(w, "Forbidden: IP not in cluster", http.StatusForbidden)
-			return
-		}
-
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		hostname, _ := os.Hostname()
-		if hostname == "" {
-			hostname = "unknown"
-		}
-
-		// Very lightweight OS check from /etc/os-release
-		osName := "Linux"
-		if osRelease, err := os.ReadFile("/etc/os-release"); err == nil { // #nosec
-			for _, line := range strings.Split(string(osRelease), "\n") {
-				if strings.HasPrefix(line, "PRETTY_NAME=") {
-					osName = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
-					break
-				}
-			}
-		}
-
-		statusData := map[string]string{
-			"hostname": hostname,
-			"os":       osName,
-			"version":  coreVersion, // syswarden current core version dynamically extracted
-			"status":   "online",
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(statusData)
-	})
-
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%s", cfg.Port),
-		Handler: mux,
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS13,
-		},
-		ReadHeaderTimeout: 3 * time.Second,
+	api, err := newHAAPI(cfg, fwManager, coreVersion, haRuntimeBlacklistIPv4, haRuntimeBlacklistIPv6, haRuntimeTelemetryFile, haRuntimeBanLedgerFile)
+	if err != nil {
+		log.Printf("[HA Cluster] Refusing invalid HA configuration: %v", err)
+		return
 	}
+	if err := prepareHAServerAPI(api); err != nil {
+		log.Printf("[HA Cluster] Initial temporary-ban reconciliation failed: %v", err)
+		return
+	}
+	api.startHASweeper(context.Background())
 
+	server := newHAServer(fmt.Sprintf(":%s", cfg.Port), api.handler(), cert)
+	log.Printf("[HA Cluster] Starting bounded TLS P2P API on port %s", cfg.Port)
 	go func() {
-		if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+		if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("[HA Cluster] Server failed: %v", err)
 		}
 	}()

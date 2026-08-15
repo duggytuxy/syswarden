@@ -8,7 +8,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+
+	"syswarden-cli/config"
 
 	"github.com/spf13/cobra"
 )
@@ -16,83 +19,74 @@ import (
 var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Open the interactive configuration editor",
-	Run: func(cmd *cobra.Command, args []string) {
-		configDir := "/etc/syswarden/config/modules"
-
-		// Ensure directory exists
-		if _, err := os.Stat(configDir); os.IsNotExist(err) {
-			fmt.Println("[ERROR] Modular configuration not found.")
-			fmt.Println("Please run 'syswarden migrate-config' first to initialize the configuration.")
-			return
+	RunE: func(cmd *cobra.Command, args []string) error {
+		configRoot := configEditorRoot
+		configDir := filepath.Join(configRoot, "modules")
+		info, err := os.Lstat(configDir)
+		if err != nil {
+			return fmt.Errorf("[ERROR] modular configuration is unavailable: %w; run 'syswarden migrate-config' first", err)
 		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("[ERROR] modular configuration path %s is not a real directory", configDir)
+		}
+		reader := bufio.NewReader(cmd.InOrStdin())
+		output := cmd.OutOrStdout()
 
 		for {
-			fmt.Print("\033[H\033[2J") // Clear screen
-			fmt.Println("\n==========================================")
-			fmt.Println("[SysWarden] Modular Configuration Editor")
-			fmt.Println("==========================================")
-			fmt.Println("Please select the module you want to edit:")
-			fmt.Println("1) Core System & Backend   (00-core.toml)")
-			fmt.Println("2) Network & Threat Intel  (10-network.toml)")
-			fmt.Println("3) Security & Hardening    (20-security.toml)")
-			fmt.Println("4) WAAP Engine             (30-waap.toml)")
-			fmt.Println("5) Integrations & HA       (40-integrations.toml)")
-			fmt.Println("6) Custom User Overrides   (99-user.toml)")
-			fmt.Println("7) Set Profile Name")
-			fmt.Println("8) Import Configuration File")
-			fmt.Println("9) Master Configuration    (config.toml)")
-			fmt.Println("0) Save & Exit")
-			fmt.Print("\nSelect [0-9]: ")
+			_, _ = fmt.Fprint(output, "\033[H\033[2J")
+			_, _ = fmt.Fprintln(output, "\n==========================================")
+			_, _ = fmt.Fprintln(output, "[SysWarden] Modular Configuration Editor")
+			_, _ = fmt.Fprintln(output, "==========================================")
+			_, _ = fmt.Fprintln(output, "Please select the module you want to edit:")
+			_, _ = fmt.Fprintln(output, "1) Core System & Backend   (00-core.toml)")
+			_, _ = fmt.Fprintln(output, "2) Network & Threat Intel  (10-network.toml)")
+			_, _ = fmt.Fprintln(output, "3) Security & Hardening    (20-security.toml)")
+			_, _ = fmt.Fprintln(output, "4) WAAP Engine             (30-waap.toml)")
+			_, _ = fmt.Fprintln(output, "5) Integrations, HA & BunkerWeb (40-integrations.toml)")
+			_, _ = fmt.Fprintln(output, "6) Custom User Overrides   (99-user.toml)")
+			_, _ = fmt.Fprintln(output, "7) Set Profile Name")
+			_, _ = fmt.Fprintln(output, "8) Import Configuration File")
+			_, _ = fmt.Fprintln(output, "9) Master Configuration    (config.toml)")
+			_, _ = fmt.Fprintln(output, "0) Save & Exit")
+			_, _ = fmt.Fprint(output, "\nSelect [0-9]: ")
 
-			var choice int
-			_, err := fmt.Scanf("%d", &choice)
-			if err != nil {
-				// Clear the stdin buffer if non-integer is provided
-				var discard string
-				_, _ = fmt.Scanln(&discard)
-				fmt.Println("[ERROR] Invalid input. Please enter a number between 0 and 6.")
+			line, err := reader.ReadString('\n')
+			if err != nil && len(line) == 0 {
+				return fmt.Errorf("[ERROR] read configuration menu input: %w", err)
+			}
+			choice, parseErr := strconv.Atoi(strings.TrimSpace(line))
+			if parseErr != nil {
+				_, _ = fmt.Fprintln(output, "[ERROR] Invalid input. Please enter a number between 0 and 9.")
 				continue
 			}
 
 			if choice == 0 {
-				fmt.Println("\n[*] Exiting Configuration Editor.")
-				fmt.Println("Remember to run 'sudo syswarden reload' to apply changes.")
-				fmt.Println("(If this is a fresh setup, run 'sudo syswarden install' instead).")
-				break
+				_, _ = fmt.Fprintln(output, "\n[*] Exiting Configuration Editor.")
+				_, _ = fmt.Fprintln(output, "Remember to run 'sudo syswarden reload' to apply changes.")
+				_, _ = fmt.Fprintln(output, "(If this is a fresh setup, run 'sudo syswarden install' instead).")
+				return nil
 			}
 
 			if choice < 1 || choice > 9 {
-				fmt.Println("[ERROR] Invalid choice. Please try again.")
+				_, _ = fmt.Fprintln(output, "[ERROR] Invalid choice. Please try again.")
 				continue
 			}
 
 			if choice == 7 {
-				setProfileName(filepath.Join(configDir, "99-user.toml"))
+				if err := setProfileName(reader, output, configRoot); err != nil {
+					return fmt.Errorf("[ERROR] set profile name: %w", err)
+				}
 				continue
 			}
 
 			if choice == 8 {
-				importConfiguration(filepath.Join(configDir, "99-user.toml"))
+				if err := importConfiguration(reader, output, configRoot); err != nil {
+					return fmt.Errorf("[ERROR] import configuration: %w", err)
+				}
 				continue
 			}
 
-			var targetFile string
-			switch choice {
-			case 1:
-				targetFile = "00-core.toml"
-			case 2:
-				targetFile = "10-network.toml"
-			case 3:
-				targetFile = "20-security.toml"
-			case 4:
-				targetFile = "30-waap.toml"
-			case 5:
-				targetFile = "40-integrations.toml"
-			case 6:
-				targetFile = "99-user.toml"
-			case 9:
-				targetFile = "../config.toml"
-			}
+			targetFile := configEditorTarget(choice)
 
 			targetPath := filepath.Join(configDir, targetFile)
 
@@ -104,137 +98,89 @@ var configCmd = &cobra.Command{
 				} else if _, err := exec.LookPath("vi"); err == nil {
 					editor = "vi"
 				} else {
-					fmt.Println("[ERROR] No suitable editor found (nano/vi). Please set EDITOR environment variable.")
-					break
+					return fmt.Errorf("[ERROR] no suitable editor found (nano/vi); set EDITOR")
 				}
 			}
 
-			fmt.Printf("\n[*] Opening %s with %s...\n", targetPath, editor)
-
-			execCmd := exec.Command(editor, targetPath) // #nosec
-			execCmd.Stdin = os.Stdin
-			execCmd.Stdout = os.Stdout
-			execCmd.Stderr = os.Stderr
-			if err := execCmd.Run(); err != nil {
-				fmt.Printf("[ERROR] Editor execution failed: %v\n", err)
+			_, _ = fmt.Fprintf(output, "\n[*] Opening %s with %s...\n", targetPath, editor)
+			if err := launchConfigEditor(editor, targetPath, cmd.InOrStdin(), output, cmd.ErrOrStderr()); err != nil {
+				return fmt.Errorf("[ERROR] editor execution failed: %w", err)
 			}
-
-			fmt.Println("[*] Configuration updated successfully.")
+			_, _ = fmt.Fprintln(output, "[*] Configuration updated successfully.")
 		}
 	},
 }
 
-func setProfileName(userTomlPath string) {
-	fmt.Print("\nEnter Profile Name (max 15 chars, no accents): ")
-	reader := bufio.NewReader(os.Stdin)
+var configEditorRoot = "/etc/syswarden/config"
+
+var launchConfigEditor = func(editor, targetPath string, stdin io.Reader, stdout, stderr io.Writer) error {
+	execCmd := exec.Command(editor, targetPath) // #nosec G204 -- editor is explicitly selected by the local operator
+	execCmd.Stdin = stdin
+	execCmd.Stdout = stdout
+	execCmd.Stderr = stderr
+	return execCmd.Run()
+}
+
+func configEditorTarget(choice int) string {
+	switch choice {
+	case 1:
+		return "00-core.toml"
+	case 2:
+		return "10-network.toml"
+	case 3:
+		return "20-security.toml"
+	case 4:
+		return "30-waap.toml"
+	case 5:
+		return "40-integrations.toml"
+	case 6:
+		return "99-user.toml"
+	case 9:
+		return "../config.toml"
+	default:
+		return ""
+	}
+}
+
+func setProfileName(reader *bufio.Reader, output io.Writer, configRoot string) error {
+	_, _ = fmt.Fprint(output, "\nEnter Profile Name (max 15 chars, no accents): ")
 	input, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Println("[ERROR] Failed to read input.")
-		return
+		return fmt.Errorf("read profile name: %w", err)
 	}
 	profileName := strings.TrimSpace(input)
 	if len(profileName) == 0 {
-		fmt.Println("[WARNING] Profile name cannot be empty.")
-		return
+		return fmt.Errorf("profile name cannot be empty")
 	}
 	if len(profileName) > 15 {
-		fmt.Println("[ERROR] Profile name exceeds 15 characters.")
-		return
+		return fmt.Errorf("profile name exceeds 15 characters")
 	}
 	validRegex := regexp.MustCompile(`^[a-zA-Z0-9_\-\s]+$`)
 	if !validRegex.MatchString(profileName) {
-		fmt.Println("[ERROR] Profile name contains invalid characters (accents/special).")
-		return
+		return fmt.Errorf("profile name contains invalid characters")
 	}
-
-	content, err := os.ReadFile(userTomlPath) // #nosec
-	var newContent []string
-	if err == nil {
-		lines := strings.Split(string(content), "\n")
-		inUserBlock := false
-		profileSet := false
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-				if trimmed == "[user]" {
-					inUserBlock = true
-				} else {
-					if inUserBlock && !profileSet {
-						newContent = append(newContent, fmt.Sprintf("profile_name = \"%s\"", profileName))
-						profileSet = true
-					}
-					inUserBlock = false
-				}
-			}
-			if inUserBlock && strings.HasPrefix(trimmed, "profile_name") {
-				newContent = append(newContent, fmt.Sprintf("profile_name = \"%s\"", profileName))
-				profileSet = true
-				continue
-			}
-			newContent = append(newContent, line)
-		}
-		if inUserBlock && !profileSet {
-			newContent = append(newContent, fmt.Sprintf("profile_name = \"%s\"", profileName))
-			profileSet = true
-		}
-		if !profileSet {
-			newContent = append(newContent, "\n[user]")
-			newContent = append(newContent, fmt.Sprintf("profile_name = \"%s\"", profileName))
-		}
-	} else {
-		newContent = []string{"[user]", fmt.Sprintf("profile_name = \"%s\"", profileName)}
+	if err := config.SetValidatedProfileName(configRoot, profileName); err != nil {
+		return err
 	}
-
-	err = os.WriteFile(userTomlPath, []byte(strings.Join(newContent, "\n")), 0640) // #nosec
-	if err != nil {
-		fmt.Println("[ERROR] Failed to save profile name:", err)
-		return
-	}
-	fmt.Printf("[SUCCESS] Profile name set to '%s'.\n", profileName)
-	fmt.Println("Press ENTER to continue...")
-	_, _ = reader.ReadString('\n')
+	_, _ = fmt.Fprintf(output, "[SUCCESS] Profile name set to '%s'.\n", profileName)
+	return nil
 }
 
-func importConfiguration(userTomlPath string) {
-	fmt.Print("\nEnter the absolute path to the TOML configuration file to import: ")
-	reader := bufio.NewReader(os.Stdin)
+func importConfiguration(reader *bufio.Reader, output io.Writer, configRoot string) error {
+	_, _ = fmt.Fprint(output, "\nEnter the absolute path to the TOML configuration file to import: ")
 	input, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Println("[ERROR] Failed to read input.")
-		return
+		return fmt.Errorf("read import path: %w", err)
 	}
 	sourcePath := strings.TrimSpace(input)
-	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
-		fmt.Println("[ERROR] File not found:", sourcePath)
-		return
+	if !filepath.IsAbs(sourcePath) {
+		return fmt.Errorf("import path must be absolute")
 	}
-
-	sourceFile, err := os.Open(sourcePath) // #nosec
-	if err != nil {
-		fmt.Println("[ERROR] Failed to open source file:", err)
-		return
+	if err := config.ImportValidatedUserModule(configRoot, sourcePath); err != nil {
+		return err
 	}
-	defer func() {
-		_ = sourceFile.Close()
-	}()
-
-	destFile, err := os.OpenFile(userTomlPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0640) // #nosec
-	if err != nil {
-		fmt.Println("[ERROR] Failed to open destination file:", err)
-		return
-	}
-	defer func() {
-		_ = destFile.Close()
-	}()
-
-	_, err = io.Copy(destFile, sourceFile)
-	if err != nil {
-		fmt.Println("[ERROR] Failed to copy configuration:", err)
-		return
-	}
-	fmt.Println("[SUCCESS] Configuration successfully imported to User Overrides.")
-	fmt.Println("Press ENTER to continue...")
-	_, _ = reader.ReadString('\n')
+	_, _ = fmt.Fprintln(output, "[SUCCESS] Configuration successfully imported to User Overrides.")
+	return nil
 }
 
 func init() {

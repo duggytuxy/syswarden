@@ -42,12 +42,18 @@ EOF
 `)
 	writeFreeBSDExecutable(t, filepath.Join(toolDir, "pfctl"), `#!/bin/sh
 if [ "$1" = "-f" ]; then
-    /bin/cp "$2" "$SYSWARDEN_PF_TEST_CAPTURE"
+    /bin/cat > "$SYSWARDEN_PF_TEST_CAPTURE"
+fi
+if [ "$1" = "-s" ] && [ "$2" = "info" ]; then
+    echo 'Status: Enabled'
 fi
 exit 0
 `)
 	t.Setenv("PATH", toolDir)
 	t.Setenv("SYSWARDEN_PF_TEST_CAPTURE", captured)
+	previousLockPath := pfRuntimeLockPath
+	pfRuntimeLockPath = filepath.Join(root, "syswarden-firewall.lock")
+	t.Cleanup(func() { pfRuntimeLockPath = previousLockPath })
 
 	previous := config.GlobalConfig
 	t.Cleanup(func() { config.GlobalConfig = previous })

@@ -1,7 +1,7 @@
 package config
 
 type SecurityConfig struct {
-	Honeyports []string         `mapstructure:"honeyports"`
+	Honeyports []string         `mapstructure:"honeyports" validate:"port_slice"`
 	L2         L2Config         `mapstructure:"l2"`
 	Compliance ComplianceConfig `mapstructure:"compliance"`
 }

@@ -474,7 +474,7 @@ invented_key = true
         ]
         deployment = """## 1. Target decision
 
-| Package family | Architectures produced by the workflow | Decision for v4.02.8 |
+| Package family | Architectures produced by the workflow | Decision for v4.02.9 |
 | :--- | :--- | :--- |
 | DEB | amd64, arm64 | Laboratory evaluation after inspecting the exact release assets |
 | RPM | x86_64, aarch64 | Laboratory evaluation after inspecting the exact release assets |

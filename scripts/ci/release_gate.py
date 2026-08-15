@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -22,6 +24,11 @@ SBOM_NAME = "syswarden-sbom.spdx.json"
 COMPLIANCE_ARCHIVE_NAME = "plumber-report.zip"
 PACKAGE_CHECKSUM_NAME = "SHA256SUMS.txt"
 RELEASE_CHECKSUM_NAME = "RELEASE_SHA256SUMS.txt"
+UPDATE_MANIFEST_NAME = "syswarden-update-manifest-v1.json"
+UPDATE_SIGNATURE_NAME = f"{UPDATE_MANIFEST_NAME}.sig"
+UPDATE_MANIFEST_TOOL = "scripts/ci/update_manifest.go"
+UPDATE_PRIVATE_KEY_ENV = "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"
+FIRST_SIGNED_UPDATE_TAG = "v4.02.9"
 EXPECTED_SBOM_APPLICATIONS = {
     "scripts/versionctl/go.mod",
     "src/core/syswarden-cli/go.mod",
@@ -55,6 +62,18 @@ def parse_tag(tag: str) -> str:
             f"invalid release tag {tag!r}; expected vMAJOR.MINOR.PATCH with a two-digit minor"
         )
     return tag[1:]
+
+
+def tag_components(tag: str) -> tuple[int, int, int]:
+    match = VERSION_PATTERN.fullmatch(tag)
+    if match is None:
+        parse_tag(tag)
+        raise AssertionError("unreachable")
+    return tuple(int(component) for component in match.groups())
+
+
+def signed_update_required(tag: str) -> bool:
+    return tag_components(tag) >= tag_components(FIRST_SIGNED_UPDATE_TAG)
 
 
 def package_names(version: str) -> list[str]:
@@ -302,6 +321,11 @@ def release_notes(repository: Path, tag: str) -> str:
         "- The native Plumber compliance report is preserved in `plumber-report.zip`.",
         "- GitHub build provenance attestations cover the exact published asset inventory.",
     ]
+    if signed_update_required(tag):
+        evidence.append(
+            "- The updater package set is bound by the authenticated "
+            "`syswarden-update-manifest-v1.json` and detached Ed25519 signature."
+        )
     return "\n".join(block + evidence) + "\n"
 
 
@@ -320,6 +344,51 @@ def write_checksum_manifest(directory: Path, names: Iterable[str], output_name: 
     (directory / output_name).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def verify_signed_update_manifest(
+    repository: Path,
+    tag: str,
+    packages: Path,
+    manifest_path: Path,
+    signature_path: Path,
+) -> None:
+    regular_nonempty_file(manifest_path, "signed update manifest")
+    regular_nonempty_file(signature_path, "signed update manifest signature")
+    environment = os.environ.copy()
+    environment.pop(UPDATE_PRIVATE_KEY_ENV, None)
+    environment["GOFLAGS"] = "-mod=readonly"
+    command = [
+        "go",
+        "run",
+        f"./{UPDATE_MANIFEST_TOOL}",
+        "verify",
+        "--repository",
+        str(repository),
+        "--tag",
+        tag,
+        "--packages",
+        str(packages),
+        "--manifest",
+        str(manifest_path),
+        "--signature",
+        str(signature_path),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repository,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ReleaseGateError(f"cannot execute signed update manifest verifier: {exc}") from exc
+    if result.returncode != 0:
+        diagnostic = result.stderr.strip() or "verifier exited unsuccessfully"
+        raise ReleaseGateError(f"signed update manifest verification failed: {diagnostic}")
+
+
 def prepare(args: argparse.Namespace) -> None:
     repository = args.repository.resolve()
     version = parse_tag(args.tag)
@@ -331,6 +400,29 @@ def prepare(args: argparse.Namespace) -> None:
     notes_output = args.notes_output.resolve()
 
     package_assets = validate_packages(packages, version)
+
+    signed_assets: list[str] = []
+    if signed_update_required(args.tag):
+        update_manifest_directory = getattr(args, "update_manifest_dir", None)
+        if update_manifest_directory is None:
+            raise ReleaseGateError(
+                f"signed update manifest directory is required for {args.tag}"
+            )
+        update_manifest_directory = update_manifest_directory.resolve()
+        exact_root_files(
+            update_manifest_directory,
+            {UPDATE_MANIFEST_NAME, UPDATE_SIGNATURE_NAME},
+            "signed update manifest artifact",
+        )
+        verify_signed_update_manifest(
+            repository,
+            args.tag,
+            packages,
+            update_manifest_directory / UPDATE_MANIFEST_NAME,
+            update_manifest_directory / UPDATE_SIGNATURE_NAME,
+        )
+        signed_assets = [UPDATE_MANIFEST_NAME, UPDATE_SIGNATURE_NAME]
+
     exact_root_files(bundle_dir, {BUNDLE_NAME}, "bundle artifact")
     exact_root_files(sbom_dir, {SBOM_NAME}, "SBOM artifact")
     bundle = bundle_dir / BUNDLE_NAME
@@ -344,17 +436,21 @@ def prepare(args: argparse.Namespace) -> None:
     shutil.copyfile(bundle, output / BUNDLE_NAME)
     shutil.copyfile(sbom, output / SBOM_NAME)
     write_compliance_archive(compliance, output / COMPLIANCE_ARCHIVE_NAME)
+    if signed_assets:
+        update_manifest_directory = args.update_manifest_dir.resolve()
+        for name in signed_assets:
+            shutil.copyfile(update_manifest_directory / name, output / name)
 
     inventory_without_release_manifest = set(package_assets) | {
         PACKAGE_CHECKSUM_NAME,
         BUNDLE_NAME,
         SBOM_NAME,
         COMPLIANCE_ARCHIVE_NAME,
-    }
+    } | set(signed_assets)
     write_checksum_manifest(
         output, inventory_without_release_manifest, RELEASE_CHECKSUM_NAME
     )
-    verify_assets(output, args.tag)
+    verify_assets(output, args.tag, repository)
 
     notes = release_notes(repository, args.tag)
     notes_output.parent.mkdir(parents=True, exist_ok=True)
@@ -363,16 +459,19 @@ def prepare(args: argparse.Namespace) -> None:
 
 def expected_release_assets(tag: str) -> set[str]:
     version = parse_tag(tag)
-    return set(package_names(version)) | {
+    assets = set(package_names(version)) | {
         PACKAGE_CHECKSUM_NAME,
         RELEASE_CHECKSUM_NAME,
         BUNDLE_NAME,
         SBOM_NAME,
         COMPLIANCE_ARCHIVE_NAME,
     }
+    if signed_update_required(tag):
+        assets |= {UPDATE_MANIFEST_NAME, UPDATE_SIGNATURE_NAME}
+    return assets
 
 
-def verify_assets(directory: Path, tag: str) -> None:
+def verify_assets(directory: Path, tag: str, repository: Path | None = None) -> None:
     expected = expected_release_assets(tag)
     exact_root_files(directory, expected, "release asset")
     version = parse_tag(tag)
@@ -383,6 +482,18 @@ def verify_assets(directory: Path, tag: str) -> None:
     compliance_archive = directory / COMPLIANCE_ARCHIVE_NAME
     regular_nonempty_file(compliance_archive, "Plumber report archive")
     validate_compliance_archive(compliance_archive)
+    if signed_update_required(tag):
+        if repository is None:
+            raise ReleaseGateError(
+                f"repository is required to verify signed update assets for {tag}"
+            )
+        verify_signed_update_manifest(
+            repository.resolve(),
+            tag,
+            directory,
+            directory / UPDATE_MANIFEST_NAME,
+            directory / UPDATE_SIGNATURE_NAME,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -398,10 +509,12 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--compliance", type=Path, required=True)
     prepare_parser.add_argument("--output", type=Path, required=True)
     prepare_parser.add_argument("--notes-output", type=Path, required=True)
+    prepare_parser.add_argument("--update-manifest-dir", type=Path)
 
     verify_parser = subparsers.add_parser("verify", help="verify a final release asset directory")
     verify_parser.add_argument("--tag", required=True)
     verify_parser.add_argument("--assets", type=Path, required=True)
+    verify_parser.add_argument("--repository", type=Path)
 
     packages_parser = subparsers.add_parser(
         "verify-packages", help="verify a package workflow artifact directory"
@@ -418,6 +531,12 @@ def build_parser() -> argparse.ArgumentParser:
         "verify-sbom", help="verify the pinned source SBOM contract"
     )
     sbom_parser.add_argument("--sbom", type=Path, required=True)
+
+    signed_update_parser = subparsers.add_parser(
+        "requires-signed-update",
+        help="print whether a release tag requires the signed update contract",
+    )
+    signed_update_parser.add_argument("--tag", required=True)
     return parser
 
 
@@ -429,7 +548,8 @@ def main() -> int:
             prepare(args)
             print(f"Release asset validation passed for {args.tag}")
         elif args.command == "verify":
-            verify_assets(args.assets.resolve(), args.tag)
+            repository = args.repository.resolve() if args.repository is not None else None
+            verify_assets(args.assets.resolve(), args.tag, repository)
             print(f"Release asset inventory passed for {args.tag}")
         elif args.command == "verify-packages":
             validate_packages(args.packages.resolve(), parse_tag(args.tag))
@@ -437,9 +557,11 @@ def main() -> int:
         elif args.command == "verify-bundle":
             validate_bundle(args.bundle.resolve())
             print("Release bundle validation passed")
-        else:
+        elif args.command == "verify-sbom":
             validate_sbom(args.sbom.resolve())
             print("Source SBOM validation passed")
+        else:
+            print("true" if signed_update_required(args.tag) else "false")
     except (ReleaseGateError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

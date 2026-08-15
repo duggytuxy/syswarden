@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -128,7 +129,10 @@ func ApplyPolicies() error {
 	}
 
 	// Active interface
-	activeIf := GetActiveInterface()
+	activeIf, err := canonicalInterfaceName(GetActiveInterface())
+	if err != nil {
+		return err
+	}
 
 	// Layer 4 Structural Anomaly Mitigation (Scrubbing normalizes packets and drops invalid flags)
 	_, _ = pfRules.WriteString("scrub in all fragment reassemble\n\n")
@@ -139,15 +143,12 @@ func ApplyPolicies() error {
 	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s proto tcp all flags NONE/WEUAPRSF\n", activeIf))
 
 	// Trust LAN Subnets (RFC1918 by default + Custom config)
-	validLANSubnets := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
-	if config.GlobalConfig.LANSubnets != "" {
-		cleaned := strings.ReplaceAll(config.GlobalConfig.LANSubnets, ",", " ")
-		subnets := strings.Fields(cleaned)
-		for _, s := range subnets {
-			if s != "" {
-				validLANSubnets = append(validLANSubnets, s)
-			}
-		}
+	validLANSubnets, err := canonicalPolicyNetworks(
+		[]string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
+		config.GlobalConfig.LANSubnets,
+	)
+	if err != nil {
+		return err
 	}
 
 	// 1. Infra Whitelist (Absolute Priority - Bypasses everything)
@@ -190,9 +191,21 @@ func ApplyPolicies() error {
 			sshPort = "22"
 		}
 	}
+	sshPort, err = canonicalPort(sshPort)
+	if err != nil {
+		return fmt.Errorf("invalid SSH port: %w", err)
+	}
 
 	// Dynamically allow explicitly opened ports
-	tcpPorts, udpPorts := GetOpenPorts()
+	detectedTCPPorts, detectedUDPPorts := GetOpenPorts()
+	tcpPorts, err := canonicalPorts("detected TCP ports", detectedTCPPorts)
+	if err != nil {
+		return err
+	}
+	udpPorts, err := canonicalPorts("detected UDP ports", detectedUDPPorts)
+	if err != nil {
+		return err
+	}
 
 	// Ensure Web-TUI port is always explicitly opened
 	webTuiPort := "62027"
@@ -209,15 +222,19 @@ func ApplyPolicies() error {
 
 	// Ensure HA Peer Port is always explicitly opened if HA is enabled
 	if config.GlobalConfig.HAEnabled && config.GlobalConfig.HAPeerPort != "" {
+		haPort, portErr := canonicalPort(config.GlobalConfig.HAPeerPort)
+		if portErr != nil {
+			return fmt.Errorf("invalid HA peer port: %w", portErr)
+		}
 		found := false
 		for _, p := range tcpPorts {
-			if p == config.GlobalConfig.HAPeerPort {
+			if p == haPort {
 				found = true
 				break
 			}
 		}
 		if !found {
-			tcpPorts = append(tcpPorts, config.GlobalConfig.HAPeerPort)
+			tcpPorts = append(tcpPorts, haPort)
 		}
 	}
 
@@ -236,9 +253,13 @@ func ApplyPolicies() error {
 
 	// SSH Cloaking (WireGuard VPN Only) vs Standard SSH
 	if config.GlobalConfig.EnableWG {
+		wireGuardSubnet, subnetErr := canonicalIPv4Network(config.GlobalConfig.WGSubnet, "WireGuard subnet")
+		if subnetErr != nil {
+			return subnetErr
+		}
 		_, _ = pfRules.WriteString("# SSH Cloaking (Strict WG VPN Only)\n")
 		_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick on %s proto tcp from <syswarden_whitelist> to any port %s keep state\n", activeIf, sshPort))
-		_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick on wg-syswarden proto tcp from %s to any port %s keep state\n", config.GlobalConfig.WGSubnet, sshPort))
+		_, _ = pfRules.WriteString(fmt.Sprintf("pass in quick on wg-syswarden proto tcp from %s to any port %s keep state\n", wireGuardSubnet, sshPort))
 		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s proto tcp to any port %s\n", activeIf, sshPort))
 	} else {
 		_, _ = pfRules.WriteString("# Standard SSH Access\n")
@@ -247,7 +268,10 @@ func ApplyPolicies() error {
 
 	// Honeyports (Insider Threat Detection)
 	if config.GlobalConfig.LANMode && config.GlobalConfig.HoneyPorts != "" {
-		ports := strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")
+		ports, err := canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)
+		if err != nil {
+			return fmt.Errorf("invalid honeyport configuration: %w", err)
+		}
 		_, _ = pfRules.WriteString(fmt.Sprintf("block drop in log quick on %s proto tcp to any port { %s }\n", activeIf, ports))
 	}
 
@@ -266,22 +290,48 @@ func ApplyPolicies() error {
 	_, _ = pfRules.WriteString(fmt.Sprintf("pass out quick on %s proto tcp to any port 8443 keep state\n", activeIf)) // Ensure outbound mTLS to Nexus is explicitly allowed
 	_, _ = pfRules.WriteString(fmt.Sprintf("pass out on %s all keep state\n", activeIf))
 
-	// Write pf configuration to temporary file
-	tempPfFile := "/tmp/syswarden_pf.conf"
-	err := os.WriteFile(tempPfFile, []byte(pfRules.String()), 0600)
+	// Write the candidate inside an unpredictable owner-only directory.
+	tempPfFile, cleanupPFFile, err := createPrivatePFConfig("", []byte(pfRules.String()))
 	if err != nil {
 		return fmt.Errorf("failed to write pf configuration: %w", err)
 	}
-	defer os.Remove(tempPfFile)
+	defer cleanupPFFile()
+	candidateFile, err := openPrivatePFConfig(tempPfFile)
+	if err != nil {
+		return fmt.Errorf("open validated pf configuration: %w", err)
+	}
+	defer func() { _ = candidateFile.Close() }()
+	lock, err := acquirePFRuntimeLock()
+	if err != nil {
+		return fmt.Errorf("acquire shared PF transaction lock: %w", err)
+	}
+	defer releasePFRuntimeLock(lock)
+
+	// Validate the exact candidate before any PF mutation.
+	checkCmd := exec.Command("pfctl", "-nf", "-")
+	checkCmd.Stdin = candidateFile
+	if out, err := checkCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("pfctl candidate validation failed: %s (err: %w)", string(out), err)
+	}
+	if _, err := candidateFile.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind validated pf configuration: %w", err)
+	}
 
 	// Apply configuration natively via pfctl
-	execCmd := exec.Command("pfctl", "-f", tempPfFile) // #nosec
+	execCmd := exec.Command("pfctl", "-f", "-")
+	execCmd.Stdin = candidateFile
 	if out, err := execCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("pfctl execution failed: %s (err: %w)", string(out), err)
 	}
 
-	// Enable pf if not already enabled
-	_ = exec.Command("pfctl", "-e").Run() // #nosec
+	// Enable PF if necessary, then verify the actual enforcement state. The
+	// enable command may report an already-enabled state differently across PF
+	// versions, so the status query is the authoritative result.
+	enableOutput, enableErr := exec.Command("pfctl", "-e").CombinedOutput()
+	statusOutput, statusErr := exec.Command("pfctl", "-s", "info").CombinedOutput()
+	if statusErr != nil || !pfStatusEnabledOutput(statusOutput) {
+		return fmt.Errorf("PF rules loaded but enforcement is not enabled (enable: %v: %s, status: %v: %s)", enableErr, strings.TrimSpace(string(enableOutput)), statusErr, strings.TrimSpace(string(statusOutput)))
+	}
 
 	// Native Kernel Layer 2 Hardening (ARP Spoofing Protection)
 	if config.GlobalConfig.EnableL2 {
@@ -292,6 +342,16 @@ func ApplyPolicies() error {
 
 	fmt.Println("[SUCCESS] FreeBSD PF policies successfully applied.")
 	return nil
+}
+
+func pfStatusEnabledOutput(output []byte) bool {
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && strings.TrimSuffix(fields[0], ":") == "Status" && fields[1] == "Enabled" {
+			return true
+		}
+	}
+	return false
 }
 
 // GetActiveInterface identifies the primary network interface natively on FreeBSD

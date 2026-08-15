@@ -45,7 +45,7 @@ EXPECTED_ENGINE_SIGNATURE_COUNT = 194
 EXPECTED_FREEBSD_PACKAGE_ABI = "FreeBSD:14:amd64"
 KNOWN_LEGACY_FREEBSD_PACKAGE_ABI = "FreeBSD:13:amd64"
 EXPECTED_NATIVE_ELF_ARCH = "amd64"
-CANONICAL_BLOCKER_IDS = frozenset({"SW-BSD-001", "SW-FW-004"})
+CANONICAL_BLOCKER_IDS = frozenset({"SW-BSD-001"})
 KNOWN_FREEBSD_CORE_COMMAND = "/opt/syswarden/syswarden-core"
 KNOWN_FREEBSD_WEB_COMMAND = "/opt/syswarden/bin/syswarden-cli"
 EXPECTED_FAILED_CHECK_BLOCKERS = {
@@ -69,9 +69,6 @@ EXPECTED_FAILED_CHECK_BLOCKERS = {
     "SW-PKG-FBSD-RESTART-CORE-001": "SW-BSD-001",
     "SW-PKG-FBSD-START-WEB-001": "SW-BSD-001",
     "SW-PKG-FBSD-RESTART-WEB-001": "SW-BSD-001",
-    "SW-PF-FBSD-FIXTURE-SYNTAX-001": "SW-FW-004",
-    "SW-PF-FBSD-FIXTURE-APPLY-001": "SW-FW-004",
-    "SW-PF-FBSD-HONEYPORT-001": "SW-FW-004",
 }
 ABI_CHECK_PHASES = {
     "SW-PKG-FBSD-PREVIOUS-INSTALL-ABI-001": "PREVIOUS_INSTALL",
@@ -550,6 +547,10 @@ def inspect_product_assets(repo_root: Path) -> ProductAssets:
         'strings.ReplaceAll(config.GlobalConfig.HoneyPorts, " ", "")'
         in source_text
     )
+    if not source_bad and "canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)" not in source_text:
+        raise FreeBSDVMLabError(
+            "FreeBSD firewall source does not use the reviewed honeyport serializer"
+        )
     return ProductAssets(repository, fixture, sha256_file(fixture), source_bad)
 
 
@@ -1283,16 +1284,15 @@ if [ "$interface" != "INVALID" ]; then
     if [ "$source_bad" -eq 1 ]; then
         honeyports='23 6379'
         honeyport_exact_value="$(printf '%s' "$honeyports" | tr -d ' ')"
-        printf 'block drop in log quick on %s proto tcp to any port { %s }\n' \
-            "$interface" "$honeyport_exact_value" \
-            >"$work/pf-honeyport-bad.conf"
-        emit PF_HONEYPORT_EXACT_VALUE "$honeyport_exact_value"
-        pfctl -n -a "$anchor" -f "$work/pf-honeyport-bad.conf" >"$work/pf-honeyport.log" 2>&1
-        emit PF_HONEYPORT_SYNTAX_RC "$?"
     else
-        emit PF_HONEYPORT_EXACT_VALUE ""
-        emit PF_HONEYPORT_SYNTAX_RC "not_run"
+        honeyport_exact_value='23, 6379'
     fi
+    printf 'block drop in log quick on %s proto tcp to any port { %s }\n' \
+        "$interface" "$honeyport_exact_value" \
+        >"$work/pf-honeyport.conf"
+    emit PF_HONEYPORT_EXACT_VALUE "$honeyport_exact_value"
+    pfctl -n -a "$anchor" -f "$work/pf-honeyport.conf" >"$work/pf-honeyport.log" 2>&1
+    emit PF_HONEYPORT_SYNTAX_RC "$?"
 else
     emit PF_FIXTURE_SYNTAX_RC 125
     emit PF_FIXTURE_APPLY_RC 125
@@ -1772,7 +1772,7 @@ def product_checks(
             ),
             check("SW-PF-FBSD-FIXTURE-SYNTAX-001", "pf", evidence["PF_FIXTURE_SYNTAX_RC"] == "0", 0, evidence["PF_FIXTURE_SYNTAX_RC"], "The frozen FreeBSD PF policy must pass the native kernel parser."),
             check("SW-PF-FBSD-FIXTURE-APPLY-001", "pf", evidence["PF_FIXTURE_APPLY_RC"] == "0" and pf_rule_count > 0, "isolated anchor contains rules", {"return_code": evidence["PF_FIXTURE_APPLY_RC"], "rules": evidence["PF_FIXTURE_RULE_COUNT"]}, "The policy is loaded only into a unique, unattached VM anchor."),
-            check("SW-PF-FBSD-HONEYPORT-001", "pf", evidence["PF_HONEYPORT_SOURCE_BAD"] == "0" and evidence["PF_HONEYPORT_EXACT_VALUE"] == "" and evidence["PF_HONEYPORT_SYNTAX_RC"] == "not_run", "two honeyports remain two valid ports", {"source_concatenates_ports": evidence["PF_HONEYPORT_SOURCE_BAD"] == "1", "exact_port_value": evidence["PF_HONEYPORT_EXACT_VALUE"], "native_syntax_return_code": evidence["PF_HONEYPORT_SYNTAX_RC"]}, "The current source concatenates space-separated honeyports into the invalid port 236379."),
+            check("SW-PF-FBSD-HONEYPORT-001", "pf", evidence["PF_HONEYPORT_SOURCE_BAD"] == "0" and evidence["PF_HONEYPORT_EXACT_VALUE"] == "23, 6379" and evidence["PF_HONEYPORT_SYNTAX_RC"] == "0", "the exact { 23, 6379 } rule passes the native PF parser", {"source_concatenates_ports": evidence["PF_HONEYPORT_SOURCE_BAD"] == "1", "exact_port_value": evidence["PF_HONEYPORT_EXACT_VALUE"], "native_syntax_return_code": evidence["PF_HONEYPORT_SYNTAX_RC"]}, "The corrected source must keep both configured honeyports distinct and prove the exact rule with pfctl -n."),
             check("SW-PKG-FBSD-REMOVE-001", "cleanup", evidence["REMOVE_RC"] == "0" and evidence["REMOVE_PACKAGE_ABSENT"] == "1" and evidence["REMOVE_PKG_INVENTORY"] == "" and evidence["REMOVE_PAYLOAD_ABSENT"] == "1" and evidence["REMOVE_LINKS_ABSENT"] == "1", "pkg delete removes registration, inventory, payload and public links", {"return_code": evidence["REMOVE_RC"], "package_absent": evidence["REMOVE_PACKAGE_ABSENT"], "inventory": sorted(evidence_inventory(evidence["REMOVE_PKG_INVENTORY"])), "payload_absent": evidence["REMOVE_PAYLOAD_ABSENT"], "links_absent": evidence["REMOVE_LINKS_ABSENT"]}, "FreeBSD exposes native removal through pkg delete and has no separate purge operation."),
             check("SW-PKG-FBSD-REMOVE-STATE-001", "cleanup", remove_user_inventory == EXPECTED_USER_STATE_INVENTORY and evidence["REMOVE_USER_CONFIG_SHA256"] == USER_CONFIG_SHA256 and evidence["REMOVE_USER_DATA_SHA256"] == USER_DATA_SHA256, {"semantics": "pkg delete preserves unowned operator state; no separate purge", "inventory": sorted(EXPECTED_USER_STATE_INVENTORY), "config_sha256": USER_CONFIG_SHA256, "data_sha256": USER_DATA_SHA256}, {"inventory": sorted(remove_user_inventory), "config_sha256": evidence["REMOVE_USER_CONFIG_SHA256"], "data_sha256": evidence["REMOVE_USER_DATA_SHA256"]}, "Native FreeBSD removal must preserve unowned operator configuration and data byte-for-byte; laboratory cleanup happens only after this evidence is emitted."),
             check("SW-PKG-FBSD-RCD-CLEANUP-001", "cleanup", all(evidence[key] == "1" for key in ("REMOVE_RC_CORE_ABSENT", "REMOVE_RC_WEB_ABSENT", "REMOVE_CORE_FLAG_ABSENT", "REMOVE_WEB_FLAG_ABSENT")), "rc.d scripts and enable flags removed", {key: evidence[key] for key in ("REMOVE_RC_CORE_ABSENT", "REMOVE_RC_WEB_ABSENT", "REMOVE_CORE_FLAG_ABSENT", "REMOVE_WEB_FLAG_ABSENT")}, "Package removal must not leave startup artifacts behind."),
@@ -1859,12 +1859,6 @@ def classify_failed_checks(
         evidence["RC_CORE_COMMAND"] == KNOWN_FREEBSD_CORE_COMMAND
         and evidence["RC_WEB_COMMAND"] == KNOWN_FREEBSD_WEB_COMMAND
     )
-    exact_honeyport_236379 = (
-        evidence["PF_HONEYPORT_SOURCE_BAD"] == "1"
-        and evidence["PF_HONEYPORT_EXACT_VALUE"] == "236379"
-        and evidence["PF_HONEYPORT_SYNTAX_RC"] == "1"
-    )
-
     rcd_absence_ids = {
         "SW-PKG-FBSD-CANDIDATE-RESTART-IDEMPOTENCE-001",
         "SW-PKG-FBSD-RCD-CORE-001",
@@ -1949,21 +1943,6 @@ def classify_failed_checks(
                     )
                 )
                 return mapped if all(value == "1" for value in relevant_values) else None
-            return None
-        if check_id == "SW-PF-FBSD-HONEYPORT-001":
-            return mapped if exact_honeyport_236379 else None
-        if check_id == "SW-PF-FBSD-FIXTURE-SYNTAX-001":
-            if exact_honeyport_236379 and evidence["PF_FIXTURE_SYNTAX_RC"] == "1":
-                return mapped
-            return None
-        if check_id == "SW-PF-FBSD-FIXTURE-APPLY-001":
-            if (
-                exact_honeyport_236379
-                and evidence["PF_FIXTURE_SYNTAX_RC"] == "1"
-                and evidence["PF_FIXTURE_APPLY_RC"] == "125"
-                and evidence["PF_FIXTURE_RULE_COUNT"] == "0"
-            ):
-                return mapped
             return None
         return None
 

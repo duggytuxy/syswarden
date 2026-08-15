@@ -1,0 +1,29 @@
+# [40] INTEGRATIONS & NOTIFICATIONS
+# Priority: 40
+
+[integrations.ha]
+enabled = true
+# Format requires quotes: ["10.0.0.1", "10.0.0.2"]
+peer_ips = []
+peer_port = 62026
+
+# HA Shared Secret Token for API Authentication (Must be identical on all nodes)
+# Generate a secure token using: openssl rand -hex 32
+token = ""
+
+[integrations.siem]
+enabled = false
+ip = ""
+port = "6514"
+protocol = "tls"
+tls_ca = "/etc/ssl/certs/ca-certificates.crt"
+
+[integrations.abuseipdb]
+enabled = false
+api_key = ""
+
+[integrations.webhooks]
+enabled = false
+discord_url = ""
+teams_url = ""
+slack_url = ""

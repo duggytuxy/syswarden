@@ -17,7 +17,7 @@
 
 # SysWarden v4
 
-Current source version: **v4.02.8**.
+Current source version: **v4.02.9**.
 
 SysWarden is a host firewall orchestrator and an out-of-band security-log
 analysis toolkit implemented primarily in Go. Its CLI manages configuration,
@@ -87,8 +87,13 @@ WireGuard and L2 options are configuration-controlled.
 These controls can disconnect an administrator. Keep an out-of-band console,
 back up the active configuration and firewall rules, and test rollback before
 enabling strict allow lists, changing SSH access, or applying rules remotely.
-The current reload path removes and reapplies SysWarden rules and can restart
-`syswarden-core`; it is not an atomic or connection-preserving operation.
+On Linux, reload prepares and validates one complete nftables candidate, commits
+it atomically under the shared SysWarden firewall lock, preserves active dynamic
+bans, and verifies the resulting state. Compatibility wrappers are reconciled
+after the nftables commit; if a wrapper fails, the command returns an error and
+the verified nftables state remains authoritative for a safe retry. A policy
+change or the normal `syswarden-core` restart can still disconnect an
+administrator, so reload is not a connection-preservation guarantee.
 
 ### WAAP log analysis
 
@@ -118,7 +123,7 @@ The directory is private to the service and both identity files are created
 with owner-only permissions. The generated certificate is valid for one year.
 The server rejects a persisted identity outside its validity window. Replace
 the certificate and key during a controlled maintenance window before expiry,
-then redistribute only the new `server.crt` to TUI clients.
+then redistribute only the new `server.crt` to TUI and `ha-sync` client hosts.
 
 The native TUI verifies HA peer certificates. It uses
 `/etc/syswarden/ha-ca.pem` when that bundle exists and otherwise uses the system
@@ -129,19 +134,182 @@ a client. Restart the native TUI after creating, replacing or removing the trust
 bundle because trust roots are loaded when the process starts. The peer address
 must match a DNS name or IP address in the certificate.
 
-This TUI trust configuration does not change the synchronization client. The
-separate `syswarden ha-sync` client still sets `InsecureSkipVerify`, so that
-one-way synchronization traffic is encrypted but the peer certificate is not
-verified. A bearer token is optional and an empty token enables a legacy
-IP-only mode. Use a strong shared token and an isolated trusted network.
+The native TUI and `syswarden ha-sync` use the same trust rule: when
+`/etc/syswarden/ha-ca.pem` exists, that file is the exclusive HA trust pool;
+otherwise they use the system trust roots. Both clients require TLS 1.3, reject
+redirects and use bounded requests. A missing, unreadable, invalid or unsafe
+explicit bundle causes a closed failure. The bearer token is required on
+`/ha/sync`, `/ha/status` and `/ha/telemetry`; an empty or whitespace-padded token
+prevents the HA listener from starting. A legacy client that omits the bearer
+token receives `401 Unauthorized`; there is no tokenless compatibility mode.
 
-`syswarden ha-sync` compares the local blocklist with each configured peer and
-pushes locally recorded entries that the peer does not report. The installer
-also adds a one-way HA push cron entry every 30 minutes. This is not
-bidirectional reconciliation or instantaneous event replication. The separate
-`ha-sync` and unban HTTP clients lack bounded request timeouts, and the unban
-request does not attach the bearer token; treat mixed-version and failure
-recovery as unvalidated.
+`peer_ips` accepts exact IP addresses and canonical CIDRs. Exact addresses are
+both inbound authorization entries and outbound synchronization destinations.
+CIDRs authorize inbound peers only and are never converted into outbound URLs.
+This permits a scheduler on a dedicated container network to change addresses
+inside an operator-selected prefix without weakening bearer authentication. A
+CIDR-only configuration is a valid inbound-only mode and installs no outbound
+`ha-sync` cron entry.
+
+The historical `/ha/sync` wire shape remains available for durable blocklist
+replication when it is authenticated. The additive API also accepts temporary
+bans with an integer TTL, claimed source and printable reason. Enriched requests
+are limited to 500 bans per batch and a TTL between one second and 30 days.
+SysWarden records the observed peer address and matched peer scope, reconciles
+expiry with the active firewall backend, and exposes bounded provenance details
+without changing the legacy `GET /ha/sync` response. The local ledger is stored
+in `/var/lib/syswarden/ha/bans.json`.
+
+One `syswarden ha-sync` invocation remains a bounded one-way push to exact
+peers. Configure and schedule each SysWarden node against the other to obtain
+A-to-B and B-to-A exchange; a CIDR is never an outbound destination. The
+BunkerWeb integration uses the same authenticated API for temporary Layer 7
+bans, blocklist retrieval and cached status/telemetry. It does not require
+access to SysWarden files, the Docker socket or the SysWarden CLI.
+
+Disabling the BunkerWeb integration does not disable node-to-node HA. Exact
+SysWarden peers continue to exchange durable authenticated blocklist entries,
+including operator-owned IP/CIDR entries and exact IPs persisted after local
+Layer 7/WAAP detections. TLS 1.3 peer verification and the bearer token remain
+mandatory in both directions; only the partner-specific enriched
+TTL/provenance contract is gated.
+
+Enabling BunkerWeb is equally additive: the same durable A-to-B and B-to-A
+Layer 7/WAAP exchange continues. Source-owned temporary BunkerWeb bans are sent
+directly by its multi-peer scheduler to each SysWarden peer; SysWarden nodes do
+not relay those records transitively, which preserves their TTL and origin and
+avoids synchronization loops.
+
+### BunkerWeb integration contract
+
+BunkerWeb's scheduler can push temporary Layer 7 bans to SysWarden and retrieve
+SysWarden blocklist, whitelist, status and telemetry data through the HA API.
+
+```mermaid
+flowchart LR
+    accTitle: BunkerWeb and SysWarden security flow
+    accDescr: Client traffic crosses the SysWarden nftables forward protection before BunkerWeb. The BunkerWeb scheduler sends source-owned temporary bans directly to every configured peer, while SysWarden nodes continue their authenticated durable synchronization whether the partner integration is disabled or enabled.
+
+    client(["Client traffic"])
+
+    subgraph host["Protected host: data plane"]
+        direction TB
+        nft{"nftables<br/>input + docker_protect forward"}
+        drop["Kernel drop"]
+        bunker["BunkerWeb Layer 7<br/>partner component"]
+        service["BunkerWeb-protected upstream"]
+        sets[("Verified dynamic<br/>kernel sets")]
+
+        nft -->|"banned source or destination"| drop
+        nft -->|"allowed"| bunker
+        bunker -->|"allowed"| service
+        sets -->|"referenced by rules"| nft
+    end
+
+    subgraph control["SysWarden control plane"]
+        direction TB
+        api["HA API :62026<br/>TLS 1.3 + bearer<br/>IP/CIDR peer scope"]
+        state[("Durable lists +<br/>source-owned TTL ledger")]
+        gate{"integrations.bunkerweb.enabled?"}
+        extensions["TTL, batch and<br/>provenance extensions"]
+        reject["Reject enriched mutation<br/>durable node HA unchanged"]
+
+        api <-->|"durable mutations + authenticated reads"| state
+        state --> sets
+        api -->|"enriched mutation only"| gate
+        gate -->|"true"| extensions
+        gate -->|"false"| reject
+        extensions --> state
+    end
+
+    subgraph partner["BunkerWeb plugin plane"]
+        direction TB
+        scheduler["Scheduler<br/>isolated per peer"]
+        cache[("Last valid Layer 7<br/>lists and UI state")]
+        scheduler <--> cache
+    end
+
+    peer["Other SysWarden node HA API<br/>durable always; enriched only<br/>with advertised capabilities"]
+
+    client --> nft
+    bunker -.->|"temporary Layer 7 ban"| scheduler
+    scheduler -->|"temporary ban: direct peer A<br/>POST / DELETE, max 500"| api
+    scheduler -.->|"same source-owned ban:<br/>direct peer B"| peer
+    api -->|"bounded authenticated reads"| scheduler
+    peer <-->|"durable IP/CIDR and L7/WAAP lists<br/>two scheduled pushes, gate false or true"| api
+
+```
+
+The final `false` branch means only that secure SysWarden node-to-node HA stays
+available; it does not route partner requests through the other node.
+
+The enriched TTL, batch and provenance extensions require the explicit
+`[integrations.bunkerweb] enabled = true` gate, which defaults to `false` and is
+validated against the authenticated HA configuration. The authenticated legacy
+HA wire remains independent of this partner gate.
+
+Run `sudo syswarden config`, choose `5` (`Integrations & HA`), configure
+`[integrations.ha]` with a non-empty token and at least one exact IP or canonical
+CIDR, then set `[integrations.bunkerweb] enabled = true`. Review the generated
+`40-integrations.toml` and apply it with `sudo syswarden reload`; any validation
+or reload error must be treated as a failed activation.
+The scheduler must inspect the authenticated `/ha/status` capabilities and use
+the enriched body only when both `sync_ttl` and `sync_provenance` are present.
+Their absence means the authenticated historical HA contract only; it never
+permits a TLS or bearer-token downgrade.
+
+The scheduler should send at most 500 enriched bans per request, retain its last
+valid cache when a response is invalid, and send the bearer token on every
+request. The `source` field is a caller claim; SysWarden also records the
+observed source address and matched `peer_ips` scope for operator attribution.
+
+The initial partner design uses the following scheduler policy. These
+frequencies are BunkerWeb plugin settings, not server-side polling performed by
+SysWarden.
+
+| Purpose | HA request | Planned frequency |
+| :--- | :--- | :--- |
+| Push or withdraw active Layer 7 bans | `POST` or `DELETE /ha/sync` | Once per minute when a diff exists |
+| Retrieve the effective blocklist | `GET /ha/sync` | Once per minute, plus the hourly list refresh |
+| Refresh Layer 7 blocklist and whitelist caches | `GET /ha/sync` and `GET /ha/telemetry` | Once per hour |
+| Refresh the BunkerWeb status card | `GET /ha/status` and `GET /ha/telemetry` | Once per minute |
+
+Each peer is isolated: an unavailable peer must not stop synchronization with
+the others. The plugin uses only the authenticated HA API and never edits
+`/etc/syswarden/lists`, invokes `syswarden-cli`, or accesses a SysWarden socket.
+Plugin audit mode, last-known-good cache handling, Layer 7 whitelist priority,
+fail-open behavior and Nginx reload avoidance are partner-side contracts and
+must be proven in the BunkerWeb test stack rather than reported as SysWarden
+test successes.
+
+The partnership test matrix is deliberately split so that local API evidence is
+not presented as an end-to-end plugin result.
+
+| # | Planned partner scenario | Evidence in this repository | Required external evidence |
+| :---: | :--- | :--- | :--- |
+| 1 | A real Layer 7 attacker is banned and pushed | Authenticated temporary-ban API and kernel reconciliation | Real BunkerWeb detection, scheduler request and resulting kernel drop |
+| 2 | A temporary ban is removed after expiry | TTL bounds, restart recovery and expiry reconciliation | Partner expiry/withdrawal cycle |
+| 3 | Operator-owned entries survive plugin cycles | Source/scope ownership isolation | Multiple real scheduler cycles against an operator entry |
+| 4 | Audit mode emits no mutations | Not executed here | BunkerWeb audit-mode job and request-log assertion |
+| 5 | A downloaded blocklist causes a Layer 7 refusal | Read API only | BunkerWeb cache load and HTTP/preread decision |
+| 6 | Whitelist takes priority over blocklist | Read API only | BunkerWeb Lua decision order |
+| 7 | Peer outage remains fail-open with last-known-good cache | Not executed here | BunkerWeb outage and recovery stack |
+| 8 | SysWarden state appears in the BunkerWeb UI | Authenticated bounded status and telemetry APIs | Scheduler cache plus UI rendering |
+| 9 | Optional real-time push meets its latency target | Not executed here | BunkerWeb real-time path and timing assertion |
+| 10 | TLS works in CA, fingerprint and explicit-unsafe modes | SysWarden TLS 1.3 and CA verification only | All three BunkerWeb client configurations; unsafe mode must remain explicit |
+| 11 | Push-only cycles do not reload Nginx | Not executed here | BunkerWeb scheduler and process-state assertion |
+
+On Linux, the `docker_protect` nftables chain is attached to the `forward` hook.
+It checks both source and destination addresses against the dynamic bans and
+SysWarden blocklists. This matters for container workloads because forwarded
+traffic can bypass a host policy that protects only the `input` hook.
+
+SysWarden does not yet expose a remote whitelist-write endpoint or per-client
+scoped tokens. Those capabilities are deliberately outside this API revision;
+the shared HA token grants the existing HA routes and must be protected as a
+secret. For optional WAAP log analysis, mount the BunkerWeb Nginx log directory
+on the host and configure the explicit mounted access-log path in
+`waap.bruteforce_logs`.
 
 ### SIEM and webhooks
 
@@ -159,7 +327,7 @@ default HTTP client without an explicit timeout.
 | :--- | :--- | :--- | :--- |
 | Native TUI | No listener | Launched with `syswarden tui` | Local terminal process |
 | Web-TUI | `0.0.0.0:62027` | Service or `syswarden web-tui` is running | Self-signed TLS and bearer-style token; restrict the bind address |
-| HA API | all interfaces on TCP `62026` | HA is enabled with at least one peer | Persistent self-signed TLS 1.3 identity; native TUI verification uses its HA CA bundle or system roots, while `ha-sync` verification remains disabled |
+| HA API | all interfaces on TCP `62026` | HA is enabled with at least one authorized IP/CIDR and a bearer token | Persistent TLS 1.3 identity; all routes require the bearer token; TUI and `ha-sync` verify with the explicit HA CA bundle or system roots |
 | WireGuard | Configurable; legacy default `51820` | WireGuard is enabled | Verify the configured port and firewall rules on the host |
 
 ## Files and services on Linux
@@ -174,6 +342,8 @@ default HTTP client without an explicit timeout.
 | HA API public certificate | `/var/lib/syswarden/ha/server.crt` |
 | HA API private key | `/var/lib/syswarden/ha/server.key`; never copy it to a client |
 | Native TUI HA trust bundle | `/etc/syswarden/ha-ca.pem`, with system roots used only when this file is absent |
+| HA temporary-ban ledger | `/var/lib/syswarden/ha/bans.json` |
+| HA outbound sync status | `/var/lib/syswarden/ha/sync-status.json` |
 | Telemetry | `/var/lib/syswarden/ui/data.json` |
 | Logs | `/var/log/syswarden` |
 | systemd services | `syswarden-core.service`, `syswarden-firewall.service`, `syswarden-webtui.service` |
@@ -200,6 +370,14 @@ Building does not install or start SysWarden.
 The package workflow is configured to generate two DEB, two RPM, two APK and
 one FreeBSD package plus `SHA256SUMS.txt`. Check the assets actually attached to
 the selected GitHub release before using any filename or command.
+
+Starting with v4.02.9, a qualified release also carries
+`syswarden-update-manifest-v1.json` and
+`syswarden-update-manifest-v1.json.sig`. The manifest binds the exact Linux
+package filenames, platforms, sizes and SHA-256 digests. The binary trusts the
+embedded public key `syswarden-update-2026-01`; the matching Ed25519 private key
+is held only by the protected release-qualification environment and is never a
+repository file, command-line argument or release artifact.
 
 > [!CAUTION]
 > The current package post-install script invokes `syswarden-cli install`
@@ -240,13 +418,18 @@ peer_ips = []
 peer_port = 62026
 token = ""
 
+[integrations.bunkerweb]
+enabled = false
+
 [user]
 webtui_password = ""
 ```
 
 Back up the complete configuration directory before editing. Validate the
-result locally before applying it. An empty HA token selects the legacy mode;
-it is shown above only because HA is disabled.
+result locally before applying it. The empty token shown above is valid only
+because HA is disabled. Enabling HA requires a non-empty token and at least one
+exact peer IP or canonical CIDR. The BunkerWeb extensions are also disabled by
+default; enabling them requires a valid enabled HA configuration.
 
 ## Operator commands
 
@@ -272,7 +455,7 @@ tui                Launch the local terminal dashboard.
 unblock            Remove addresses or CIDRs from the blocklist.
 uninstall          Delete SysWarden services, rules, configuration, data and logs.
 unwhitelist        Remove addresses or CIDRs from the whitelist.
-update             Run the current in-place updater; see the warning below.
+update             Run the signed in-place updater; see the version and first-hop warning below.
 update-feeds       Refresh feeds and reapply firewall policy.
 web-token          Display the configured token or persist a replacement and request a Web-TUI restart.
 web-tui            Start the network-facing Web-TUI server.
@@ -297,11 +480,12 @@ access recovery.
   console access before running it.
 - `syswarden audit` is a local operational diagnostic. Its output is not an
   ISO 27001, NIS2, CRA or CIS certification.
-- `syswarden update` currently downloads a package without verifying a release
-  checksum or signature, uses fixed temporary filenames, and selects amd64 or
-  x86_64 for DEB/RPM even on other architectures. Do not use this updater until
-  those issues are corrected; perform a separately verified package upgrade in
-  a laboratory instead.
+- `syswarden update` accepts v4.02.9 and later only when the release provides a
+  canonical manifest and detached Ed25519 signature trusted by the binary. It
+  verifies the selected OS/architecture filename, size and SHA-256 again
+  immediately before invoking the package manager, and uses a private temporary
+  workspace. The historical v4.02.8 binary predates this trust root, so its
+  first upgrade to v4.02.9 must be a separately verified manual package upgrade.
 - `syswarden uninstall` is destructive. It deletes SysWarden configuration,
   data, logs, services and firewall tables. It does not restore every previous
   host setting. Back up `/etc/syswarden`, `/var/lib/syswarden`, relevant logs,
@@ -311,20 +495,21 @@ access recovery.
 
 - SysWarden runs privileged operations and can cause network lockout or service
   interruption. An out-of-band recovery path is a prerequisite.
-- Current firewall reload is not transactional.
-- Current ban paths can report success without independently proving the final
-  kernel state in every failure mode.
+- Firewall changes can still interrupt connectivity. Keep console access and a
+  ruleset snapshot even when the transactional preflight and post-verification
+  gates pass.
 - WAAP is based on previously written logs and cannot stop a request before it
   reaches the logging application.
-- The native TUI verifies HA certificates, but the separate `syswarden ha-sync`
-  client does not. Legacy tokenless mode exists, unban authentication is
-  incomplete, and request sizes and timeouts are not fully bounded.
+- HA uses one shared bearer token rather than separately scoped client tokens.
+  The default self-signed identity requires an authenticated out-of-band trust
+  bootstrap before the TUI or `ha-sync` can connect.
 - Web-TUI listens on all interfaces by default and uses a self-signed
   certificate plus a shared token.
 - SIEM TLS currently uses anonymous authentication.
 - Webhook destinations are not protected by a complete SSRF policy.
-- The updater does not verify downloaded packages and uses unsafe fixed
-  temporary paths.
+- Signed update manifests protect v4.02.9 and later. The release signing private
+  key remains an external protected-environment secret and is not recoverable
+  from this repository.
 - Complete install, upgrade, restart and rollback evidence is still required
   for every claimed operating-system and architecture combination.
 - SysWarden provides controls and audit evidence that may assist a security
@@ -340,6 +525,10 @@ contains deployment notes and use cases. Wiki changes use a separate review and
 maintainer-controlled publication gate; a wiki page may lag the source until
 that gate is completed. When the wiki and this README disagree, prefer tested
 behavior in the source candidate and report the inconsistency.
+
+The version-specific [Lot 1 public security delivery report](docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.9.md)
+records the validated v4.02.9 source scope, evidence and continuing NO-GO
+release decision.
 
 ## Target and support
 
