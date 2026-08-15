@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ func FuzzMigratorParseFromMemory(f *testing.F) {
 		"KEY_ONE='value'\nKEY_TWO=second # comment\n",
 		"INVALID\n=ignored\nDUPLICATE=first\nDUPLICATE=second\n",
 		"SPACED = value with spaces\nQUOTED=\"unterminated\n",
+		"HASH_LITERAL=#\nHASH_FRAGMENT=value#fragment\nQUOTED_HASH=\"#tag\"\n",
 		"BINARY=\x00\xff\n",
 	}
 	for _, seed := range seeds {
@@ -36,16 +38,25 @@ func FuzzMigratorParseFromMemory(f *testing.F) {
 			t.Fatalf("ParseFromMemory() is not deterministic: first %#v, second %#v", first, second)
 		}
 
-		for key, value := range first {
+		for key := range first {
 			if key == "" || key != strings.TrimSpace(key) {
 				t.Fatalf("parser returned a non-canonical key %q", key)
 			}
-			if value != strings.TrimSpace(value) {
-				t.Fatalf("parser returned a non-canonical value for %q: %q", key, value)
-			}
-			if strings.Contains(value, "#") {
-				t.Fatalf("parser retained an inline comment for %q: %q", key, value)
-			}
+		}
+
+		encoded := "v" + base64.RawStdEncoding.EncodeToString([]byte(content))
+		withComment, err := migrator.ParseFromMemory(
+			"FUZZ_UNQUOTED=   " + encoded + "   # inline comment\n" +
+				"FUZZ_QUOTED=\"  " + encoded + "  \" # inline comment\n",
+		)
+		if err != nil {
+			t.Fatalf("parse inline-comment probes: %v", err)
+		}
+		if got := withComment["FUZZ_UNQUOTED"]; got != encoded {
+			t.Fatalf("unquoted inline-comment probe = %q, want %q", got, encoded)
+		}
+		if got, want := withComment["FUZZ_QUOTED"], "  "+encoded+"  "; got != want {
+			t.Fatalf("quoted inline-comment probe = %q, want %q", got, want)
 		}
 	})
 }

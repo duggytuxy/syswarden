@@ -270,6 +270,13 @@ func TestParseFromMemoryLegacyInlineCommentBehavior_SW_CFG_002(t *testing.T) {
 # comment
 KEY_ONE="value"
 		KEY_TWO="second" # inline comment
+KEY_THREE=#
+KEY_FOUR=value#fragment
+KEY_FIVE="#quoted"
+KEY_SIX='single#quoted'
+KEY_SEVEN=value # inline comment
+KEY_EIGHT="  quoted spaces  " # inline comment
+KEY_NINE=   unquoted-spaces   # inline comment
 INVALID
 =ignored
 `)
@@ -281,6 +288,20 @@ INVALID
 	}
 	if parsed["KEY_TWO"] != "second" {
 		t.Errorf("KEY_TWO = %q, want second without quote residue", parsed["KEY_TWO"])
+	}
+	expectedValues := map[string]string{
+		"KEY_THREE": "#",
+		"KEY_FOUR":  "value#fragment",
+		"KEY_FIVE":  "#quoted",
+		"KEY_SIX":   "single#quoted",
+		"KEY_SEVEN": "value",
+		"KEY_EIGHT": "  quoted spaces  ",
+		"KEY_NINE":  "unquoted-spaces",
+	}
+	for key, want := range expectedValues {
+		if got := parsed[key]; got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
 	}
 	if _, exists := parsed["INVALID"]; exists {
 		t.Error("malformed line was accepted")
