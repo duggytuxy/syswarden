@@ -33,7 +33,7 @@ const (
 type PFSnapshotProvenance string
 
 const (
-	// PFSnapshotExactLive records the live policy before the first v4.02.10 mutation.
+	// PFSnapshotExactLive records the live policy before the first v4.02.11 mutation.
 	PFSnapshotExactLive PFSnapshotProvenance = "exact_live"
 	// PFSnapshotLegacyDerived records only the configured policy when v4.02.8
 	// has already overwritten the live PF policy.

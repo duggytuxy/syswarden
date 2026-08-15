@@ -1123,8 +1123,8 @@ def _validate_freebsd_schema(document: dict[str, Any]) -> tuple[dict[str, Any], 
         _string(item["version"], f"freebsd.inputs.{side}.version")
         _sha256(item["sha256"], f"freebsd.inputs.{side}.sha256")
     forward_only = (
-        inputs["candidate"]["package"] == "syswarden-4.02.10.txz"
-        and inputs["candidate"]["version"] == "4.02.10"
+        inputs["candidate"]["package"] == "syswarden-4.02.11.txz"
+        and inputs["candidate"]["version"] == "4.02.11"
         and inputs["previous"]["package"]
         == freebsd_lab.FORWARD_ONLY_PREVIOUS_PACKAGE
         and inputs["previous"]["version"]
@@ -1143,7 +1143,7 @@ def _validate_freebsd_schema(document: dict[str, Any]) -> tuple[dict[str, Any], 
     if historical_binding_touched and not forward_only:
         _fail(
             "FreeBSD historical transition must be the exact byte-bound "
-            "v4.02.8 -> v4.02.10 contract"
+            "v4.02.8 -> v4.02.11 contract"
         )
     _string(inputs["pf_fixture"], "freebsd.inputs.pf_fixture")
     _sha256(inputs["pf_fixture_sha256"], "freebsd.inputs.pf_fixture_sha256")
@@ -1365,8 +1365,8 @@ def _validate_freebsd(
     derived_product = "pass"
     inputs = document["inputs"]
     forward_only = (
-        inputs["candidate"]["package"] == "syswarden-4.02.10.txz"
-        and inputs["candidate"]["version"] == "4.02.10"
+        inputs["candidate"]["package"] == "syswarden-4.02.11.txz"
+        and inputs["candidate"]["version"] == "4.02.11"
         and inputs["previous"]["package"]
         == freebsd_lab.FORWARD_ONLY_PREVIOUS_PACKAGE
         and inputs["previous"]["version"]

@@ -8,6 +8,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +19,30 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class DocumentationGateTest(unittest.TestCase):
+    def test_architecture_diagrams_are_safe_native_svg_and_readme_mermaid_free(self) -> None:
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("assets/syswarden_architecture.svg", readme)
+        self.assertIn("assets/syswarden_bunkerweb_integration.svg", readme)
+        self.assertNotIn("```mermaid", readme)
+
+        for relative_path in (
+            "assets/syswarden_architecture.svg",
+            "assets/syswarden_bunkerweb_integration.svg",
+        ):
+            root = ET.parse(REPO_ROOT / relative_path).getroot()
+            self.assertEqual(root.attrib.get("role"), "img")
+            labelled_by = root.attrib.get("aria-labelledby", "").split()
+            self.assertEqual(labelled_by, ["title", "description"])
+            element_names = {
+                element.tag.rsplit("}", 1)[-1] for element in root.iter()
+            }
+            self.assertNotIn("script", element_names)
+            self.assertNotIn("foreignObject", element_names)
+            for element in root.iter():
+                for attribute in element.attrib:
+                    self.assertFalse(attribute.lower().startswith("on"))
+                    self.assertNotIn(attribute.rsplit("}", 1)[-1], {"href"})
+
     def test_repository_documentation_contract(self) -> None:
         records, errors = documentation_gate.validate_repository(REPO_ROOT)
         self.assertEqual(errors, [])
@@ -481,7 +506,7 @@ invented_key = true
         ]
         deployment = """## 1. Target decision
 
-| Package family | Architectures produced by the workflow | Decision for v4.02.10 |
+| Package family | Architectures produced by the workflow | Decision for v4.02.11 |
 | :--- | :--- | :--- |
 | DEB | amd64, arm64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |
 | RPM | x86_64, aarch64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |

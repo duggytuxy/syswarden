@@ -391,8 +391,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             pair = package_lifecycle_lab.PackagePair(
                 candidate=package_lifecycle_lab.PackageArtifact(
                     self.candidate
-                    / f"syswarden_4.02.10_{spec.package_architecture}.apk",
-                    "4.02.10",
+                    / f"syswarden_4.02.11_{spec.package_architecture}.apk",
+                    "4.02.11",
                     "a" * 64,
                 ),
                 previous=package_lifecycle_lab.PackageArtifact(
@@ -959,11 +959,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
             f'CALLS="{calls}"\n'
             f'RESTART_STATE_FILE="{restart}"\n'
             'PREVIOUS_PACKAGE="/previous/exact-v4.02.8.apk"\n'
-            'CANDIDATE_PACKAGE="/candidate/v4.02.10.apk"\n'
+            'CANDIDATE_PACKAGE="/candidate/v4.02.11.apk"\n'
             'PREVIOUS_VERSION="4.02.8"\n'
-            'CANDIDATE_VERSION="4.02.10"\n'
+            'CANDIDATE_VERSION="4.02.11"\n'
             'EXPECTED_PREVIOUS_VERSION="4.02.8"\n'
-            'EXPECTED_CANDIDATE_VERSION="4.02.10"\n'
+            'EXPECTED_CANDIDATE_VERSION="4.02.11"\n'
             'FORWARD_ONLY_APK_TRANSITION="1"\n'
             "prepare_expected_payloads() { return 0; }\n"
             "seed_state() { :; }\n"
@@ -1468,11 +1468,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 architecture
             ]
             platform_result.update(
-                candidate_version="4.02.10",
+                candidate_version="4.02.11",
                 previous_version="4.02.8",
                 candidate={
-                    "filename": f"syswarden_4.02.10_{architecture}.apk",
-                    "version": "4.02.10",
+                    "filename": f"syswarden_4.02.11_{architecture}.apk",
+                    "version": "4.02.11",
                     "sha256": "c" * 64,
                 },
                 previous={

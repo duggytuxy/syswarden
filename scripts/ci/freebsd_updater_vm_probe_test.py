@@ -44,7 +44,7 @@ def passing_evidence() -> dict[str, str]:
         "UPDATER_RESULT_SHA256": "a" * 64,
         "UPDATER_RESULT_EXACT": "1",
         "UPDATER_RESULT_LINE": f"--- PASS: {subject.TEST_NAME} (1.23s)",
-        "CANDIDATE_VERSION": "4.02.10",
+        "CANDIDATE_VERSION": "4.02.11",
         "CORE_ENABLED": "YES",
         "WEB_ENABLED": "YES",
         "CORE_STATUS_RC": "0",
@@ -80,13 +80,13 @@ class FreeBSDUpdaterVMProbeTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.candidate_path = fixture(self.root / "syswarden-4.02.10.txz", b"candidate")
+        self.candidate_path = fixture(self.root / "syswarden-4.02.11.txz", b"candidate")
         self.previous_path = fixture(self.root / "syswarden-4.02.8.txz", b"previous")
         self.manifest = fixture(self.root / "syswarden-update-manifest-v1.json", b"{}\n")
         self.signature = fixture(self.root / "syswarden-update-manifest-v1.json.sig", b"signature\n")
         self.test_binary = fixture(self.root / subject.TEST_BINARY_NAME, b"ELF", 0o700)
         self.candidate = vm_lab.PackageArtifact(
-            self.candidate_path, "4.02.10", hashlib.sha256(b"candidate").hexdigest()
+            self.candidate_path, "4.02.11", hashlib.sha256(b"candidate").hexdigest()
         )
         self.previous = vm_lab.PackageArtifact(
             self.previous_path, "4.02.8", hashlib.sha256(b"previous").hexdigest()
@@ -116,7 +116,7 @@ class FreeBSDUpdaterVMProbeTests(unittest.TestCase):
         report = self.report()
         self.assertTrue(report["release_ready"])
         self.assertEqual(report["blocker_ids"], [])
-        self.assertEqual(report["inputs"]["candidate"]["version"], "4.02.10")
+        self.assertEqual(report["inputs"]["candidate"]["version"], "4.02.11")
         self.assertEqual(report["inputs"]["previous"]["version"], "4.02.8")
 
     def test_each_material_observation_is_fail_closed(self) -> None:

@@ -925,6 +925,17 @@ jobs:
           set -euo pipefail
           environment_json="$(gh api \
             "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-production")"
+          required_environment_boolean() {
+            local field="${1:?environment boolean field is required}"
+            jq -er --arg field "${field}" '
+              .deployment_branch_policy[$field] |
+              if type == "boolean" then
+                tostring
+              else
+                error("deployment_branch_policy." + $field + " must be boolean")
+              end
+            ' <<< "${environment_json}"
+          }
           environment_name="$(jq -r '.name // ""' <<< "${environment_json}")"
           reviewer_rule_count="$(jq --arg owner "${GITHUB_REPOSITORY_OWNER}" '[
             .protection_rules[]? |
@@ -942,12 +953,10 @@ jobs:
           ] | length' <<< "${environment_json}")"
           protection_rule_count="$(jq '[.protection_rules[]?] | length' \
             <<< "${environment_json}")"
-          protected_branches="$(jq -r \
-            '.deployment_branch_policy.protected_branches // "missing"' \
-            <<< "${environment_json}")"
-          custom_branch_policies="$(jq -r \
-            '.deployment_branch_policy.custom_branch_policies // "missing"' \
-            <<< "${environment_json}")"
+          protected_branches="$(required_environment_boolean \
+            "protected_branches")"
+          custom_branch_policies="$(required_environment_boolean \
+            "custom_branch_policies")"
           if [[ "${environment_name}" != "syswarden-release-production" || \
                 "${reviewer_rule_count}" != "1" || \
                 "${branch_policy_rule_count}" != "1" || \

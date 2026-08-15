@@ -1,3 +1,25 @@
+# Release v4.02.11
+
+### FIXED 🐛
+- **Qualification environment:** Preserve the valid `protected_branches=false` GitHub API value instead of treating it as missing, while continuing to reject absent, null, string or otherwise non-boolean policy fields.
+- **Release publication:** Apply the same fail-closed boolean parsing to the protected production environment so a correctly restricted `v*` tag policy can reach the publisher.
+- **Regression coverage:** Execute the environment-policy parser against real JSON booleans and adversarial missing, null and string values instead of relying only on source-text assertions.
+
+### RELEASE STATUS 📦
+- v4.02.10 was merged as a source candidate but was never tagged or published because the protected qualification gate rejected GitHub's valid boolean `false`. No v4.02.10 Release asset was exposed to users.
+- v4.02.11 supersedes that unpublished candidate and is the first Lot 1 package set eligible for protected qualification, immutable tagging and publication of the complete 14-asset Release.
+
+### UPGRADE NOTES 📦
+- The immutable v4.02.8 binary predates the signed updater. Do not use `syswarden update` for its first hop. Download exactly one v4.02.11 package matching the host plus `SHA256SUMS.txt`, verify that exact package, then install it with the native package manager.
+- **Debian or Ubuntu:** after checksum verification, run `sudo apt-get install -y ./syswarden_4.02.11_amd64.deb` or use the `arm64` filename on an ARM64 host.
+- **RHEL, AlmaLinux or Rocky Linux:** after checksum verification, run `sudo dnf install -y ./syswarden-4.02.11-1.x86_64.rpm` or use the `aarch64` filename on an ARM64 host.
+- **Alpine Linux:** after checksum verification, run `sudo apk add --allow-untrusted ./syswarden_4.02.11_x86_64.apk` or use the `aarch64` filename on an ARM64 host. Never use `--allow-untrusted` before the SHA-256 check succeeds.
+- **FreeBSD 14 amd64:** install `curl`, `jq`, `libqrencode`, `rsyslog` and `wireguard-tools`, then run `sudo pkg add -f ./syswarden-4.02.11.txz` after checksum verification.
+- Starting from an installed v4.02.11, `syswarden update` uses the signed Ed25519 manifest for the six Linux targets and FreeBSD amd64.
+- Review the package post-install result with `sudo syswarden manual` and `sudo syswarden config`. The complete architecture-selecting procedure remains in the README section [Install the latest verified Release](README.md#install-the-latest-verified-release).
+
+---
+
 # Release v4.02.10
 
 ### FIXED 🐛

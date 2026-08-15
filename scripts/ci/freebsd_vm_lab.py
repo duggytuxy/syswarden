@@ -547,10 +547,10 @@ def version_tuple(version: str) -> tuple[int, int, int]:
 def is_forward_only_transition(
     candidate: PackageArtifact, previous: PackageArtifact
 ) -> bool:
-    """Recognize only the immutable v4.02.8 to v4.02.10 transition."""
+    """Recognize only the immutable v4.02.8 to v4.02.11 transition."""
 
     return (
-        candidate.version == "4.02.10"
+        candidate.version == "4.02.11"
         and previous.version == FORWARD_ONLY_PREVIOUS_VERSION
         and previous.path.name == FORWARD_ONLY_PREVIOUS_PACKAGE
         and previous.sha256 == FORWARD_ONLY_PREVIOUS_SHA256
@@ -570,7 +570,7 @@ def validate_forward_only_binding(
     ):
         raise FreeBSDVMLabError(
             "the historical FreeBSD transition is allowed only for the exact "
-            "v4.02.8 package bytes followed by candidate v4.02.10"
+            "v4.02.8 package bytes followed by candidate v4.02.11"
         )
 
 
@@ -1181,7 +1181,7 @@ fi
 if [ "$previous_expected_version" = "4.02.8" ]; then
     if [ "$previous_package_name" != "syswarden-4.02.8.txz" ] || \
        [ "$previous_expected_sha" != "8b3b489821450b3afd74548c6db5ad92001b8a69f923e2b9a99ce550353b6e37" ] || \
-       [ "$candidate_expected_version" != "4.02.10" ]; then
+       [ "$candidate_expected_version" != "4.02.11" ]; then
         exit 91
     fi
 fi
@@ -1779,7 +1779,7 @@ emit REMOVE_PF_SNAPSHOT_SHA256 "$remove_pf_snapshot_sha"
 emit REMOVE_PF_BASELINE_RESTORED "$remove_pf_restored"
 emit REMOVE_PF_SYSWARDEN_TABLE_ABSENT "$remove_syswarden_tables_absent"
 
-# Exercise the fresh v4.02.10 PF boundary with the exact candidate CLI after
+# Exercise the fresh v4.02.11 PF boundary with the exact candidate CLI after
 # the historical package snapshot has been consumed. Fresh capture is allowed
 # only on the disabled empty baseline; a nonempty anchor must be rejected
 # before any PF or snapshot mutation.
@@ -2352,7 +2352,7 @@ def product_checks(
                     "nonempty_rejected": evidence["PF_NONEMPTY_CAPTURE_REJECTED"],
                     "nonempty_state_preserved": evidence["PF_NONEMPTY_STATE_PRESERVED"],
                 },
-                "Fresh v4.02.10 PF ownership is restricted to a disabled empty host and must reject coexistence before mutation.",
+                "Fresh v4.02.11 PF ownership is restricted to a disabled empty host and must reject coexistence before mutation.",
             ),
             check("SW-PKG-FBSD-START-CORE-001", "startup", evidence["RC_CORE_START_RC"] == "0" and evidence["RC_CORE_STATUS_RC"] == "0", "core starts and reports running", {"start": evidence["RC_CORE_START_RC"], "status": evidence["RC_CORE_STATUS_RC"]}, "The candidate core must start through rc.d."),
             check("SW-PKG-FBSD-RESTART-CORE-001", "startup", all(evidence[key] == "0" for key in ("RC_CORE_RESTART_ONE_RC", "RC_CORE_RESTART_ONE_STATUS_RC", "RC_CORE_RESTART_TWO_RC", "RC_CORE_RESTART_TWO_STATUS_RC")), "two consecutive core restarts succeed and report running", {key: evidence[key] for key in ("RC_CORE_RESTART_ONE_RC", "RC_CORE_RESTART_ONE_STATUS_RC", "RC_CORE_RESTART_TWO_RC", "RC_CORE_RESTART_TWO_STATUS_RC")}, "A second consecutive restart is the bounded rc.d idempotence check."),
