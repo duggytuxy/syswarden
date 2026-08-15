@@ -83,14 +83,13 @@ func initConfig() {
 	}
 
 	if tomlExists {
-		if err := config.ParseConfig("/etc/syswarden/config"); err != nil {
-			fmt.Fprintf(os.Stderr, "[WARNING] Failed to load modular config: %v\n", err)
-			fmt.Fprintf(os.Stderr, "[WARNING] Continuing in degraded mode. Please fix using 'syswarden config'\n")
-		}
-	} else {
-		if err := config.ParseConfig(cfgFile); err != nil {
-			fmt.Fprintf(os.Stderr, "[WARNING] Failed to load config: %v\n", err)
-			fmt.Fprintf(os.Stderr, "[WARNING] Continuing in degraded mode. Please fix using 'syswarden config'\n")
-		}
+		_ = config.ParseConfig("/etc/syswarden/config")
+		return
 	}
+
+	// ParseConfig records a failed source in CurrentLoadState. Keep startup
+	// silent here so root, help, and repair commands retain their process
+	// contract; mutating commands surface the recorded failure through the
+	// fail-closed PersistentPreRunE guard above.
+	_ = config.ParseConfig(cfgFile)
 }

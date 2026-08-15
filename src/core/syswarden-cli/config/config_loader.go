@@ -25,13 +25,19 @@ type modularConfigSource struct {
 // flat syswarden-auto.conf format.
 func ParseConfig(configPath string) error {
 	if info, err := os.Lstat(configPath); err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+		if err := loadModularConfig(configPath); err != nil {
+			return err
+		}
 		log.Println("[INFO] Using new modular TOML configuration format")
-		return loadModularConfig(configPath)
+		return nil
 	}
 
+	if err := loadOldConfig(configPath); err != nil {
+		return err
+	}
 	log.Println("[WARNING] Using old flat configuration format (deprecated)")
 	log.Println("Please run 'syswarden migrate-config' to migrate to the new modular TOML format.")
-	return loadOldConfig(configPath)
+	return nil
 }
 
 func loadModularConfig(configDir string) (loadErr error) {
