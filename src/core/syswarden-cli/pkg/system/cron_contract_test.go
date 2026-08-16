@@ -1,6 +1,9 @@
 package system
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -190,6 +193,159 @@ func TestManagedRootCronRemovalFailsClosed(t *testing.T) {
 			t.Fatal("crontab write failure was accepted")
 		}
 	})
+}
+
+func TestPrivateCronWorkIsModeLockedAndIgnoresHostileTMPDIR(t *testing.T) {
+	hostileTmp := filepath.Join(t.TempDir(), "attacker-controlled-tmp")
+	if err := os.Mkdir(hostileTmp, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", hostileTmp)
+	command := exec.Command("/bin/sh", "-c", "exit 0")
+	workPath, err := preparePrivateCronWork(command)
+	if err != nil {
+		t.Fatalf("prepare private cron work: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := removePrivateCronWork(workPath); err != nil {
+			t.Errorf("cleanup private cron work: %v", err)
+		}
+	})
+	if filepath.Dir(workPath) != "/var/tmp" ||
+		!strings.HasPrefix(filepath.Base(workPath), "syswarden-cron.") {
+		t.Fatalf("unexpected private cron work path: %q", workPath)
+	}
+	if strings.HasPrefix(workPath, hostileTmp+string(os.PathSeparator)) {
+		t.Fatalf("hostile TMPDIR controlled cron work path: %q", workPath)
+	}
+	cachePath := filepath.Join(workPath, "cache")
+	for _, path := range []string{workPath, cachePath} {
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			t.Fatalf("inspect private cron directory %q: %v", path, statErr)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 {
+			t.Fatalf("private cron directory %q has type/mode %v", path, info.Mode())
+		}
+	}
+	xdgCount := 0
+	for _, variable := range command.Environ() {
+		if strings.HasPrefix(variable, "XDG_CACHE_HOME=") {
+			xdgCount++
+			if variable != "XDG_CACHE_HOME="+cachePath {
+				t.Fatalf("unexpected private cron cache environment: %q", variable)
+			}
+		}
+	}
+	if xdgCount != 1 {
+		t.Fatalf("private cron cache environment count = %d, want 1", xdgCount)
+	}
+	backup := filepath.Join(cachePath, "crontab", "crontab.bak")
+	if err := os.Mkdir(filepath.Dir(backup), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backup, []byte("previous cron\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removePrivateCronWork(workPath); err != nil {
+		t.Fatalf("remove private cron work: %v", err)
+	}
+	if _, statErr := os.Lstat(workPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("private cron work remains: %v", statErr)
+	}
+	if _, statErr := os.Lstat(backup); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("Cronie backup remains: %v", statErr)
+	}
+}
+
+func TestManagedRootCronUsesPrivateCronieCacheWithoutResidue(t *testing.T) {
+	managed := "17 * * * * " + platformpaths.CLI + " update-feeds >/dev/null 2>&1"
+	operator := "19 4 * * * /usr/local/bin/operator"
+
+	for _, writeExit := range []int{0, 23} {
+		name := "successful write"
+		if writeExit != 0 {
+			name = "failed write"
+		}
+		t.Run(name, func(t *testing.T) {
+			hostileTmp := filepath.Join(t.TempDir(), "attacker-controlled-tmp")
+			if err := os.Mkdir(hostileTmp, 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TMPDIR", hostileTmp)
+			cacheReader, cacheWriter, pipeErr := os.Pipe()
+			if pipeErr != nil {
+				t.Fatalf("create private cache path pipe: %v", pipeErr)
+			}
+			defer cacheReader.Close()
+			defer cacheWriter.Close()
+			readCommand := exec.Command(
+				"/bin/sh",
+				"-c",
+				`printf '%s\n' "${SYSWARDEN_TEST_MANAGED}" "${SYSWARDEN_TEST_OPERATOR}"`,
+			)
+			readCommand.Env = append(
+				os.Environ(),
+				"SYSWARDEN_TEST_MANAGED="+managed,
+				"SYSWARDEN_TEST_OPERATOR="+operator,
+			)
+			writeCommand := exec.Command(
+				"/bin/sh",
+				"-c",
+				`set -eu
+test -n "${XDG_CACHE_HOME:-}"
+test -d "${XDG_CACHE_HOME}"
+test ! -L "${XDG_CACHE_HOME}"
+mkdir -p "${XDG_CACHE_HOME}/crontab"
+printf 'previous cron\n' > "${XDG_CACHE_HOME}/crontab/crontab.bak"
+printf '%s' "${XDG_CACHE_HOME}" >&3
+cat >/dev/null
+exit "${SYSWARDEN_TEST_WRITE_EXIT}"`,
+			)
+			writeCommand.Env = append(
+				os.Environ(),
+				fmt.Sprintf("SYSWARDEN_TEST_WRITE_EXIT=%d", writeExit),
+			)
+			writeCommand.ExtraFiles = []*os.File{cacheWriter}
+
+			err := removeManagedRootCron(readCommand, writeCommand)
+			if writeExit == 0 && err != nil {
+				t.Fatalf("cron cleanup failed: %v", err)
+			}
+			if writeExit != 0 && err == nil {
+				t.Fatal("cron write failure was accepted")
+			}
+			if closeErr := cacheWriter.Close(); closeErr != nil {
+				t.Fatalf("close private cache path writer: %v", closeErr)
+			}
+			cachePathBytes, readErr := io.ReadAll(cacheReader)
+			if readErr != nil {
+				t.Fatalf("read private cache marker: %v", readErr)
+			}
+			cachePath := string(cachePathBytes)
+			workPath := filepath.Dir(cachePath)
+			if filepath.Dir(workPath) != "/var/tmp" ||
+				!strings.HasPrefix(filepath.Base(workPath), "syswarden-cron.") {
+				t.Fatalf("unexpected private cron work path: %q", cachePath)
+			}
+			if strings.HasPrefix(workPath, hostileTmp+string(os.PathSeparator)) {
+				t.Fatalf("hostile TMPDIR controlled cron work path: %q", workPath)
+			}
+			varTmp, openErr := os.OpenRoot("/var/tmp")
+			if openErr != nil {
+				t.Fatalf("open bounded cron work root: %v", openErr)
+			}
+			defer varTmp.Close()
+			relativeWork := filepath.Base(workPath)
+			if _, statErr := varTmp.Stat(relativeWork); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("private cron work remains: %v", statErr)
+			}
+			backup := filepath.Join(relativeWork, "cache", "crontab", "crontab.bak")
+			if _, statErr := varTmp.Stat(backup); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("Cronie backup remains: %v", statErr)
+			}
+		})
+	}
 }
 
 func TestManagedOnlyRootCrontabIsRemovedAndAbsenceVerified(t *testing.T) {

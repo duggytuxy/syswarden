@@ -20,9 +20,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class DocumentationGateTest(unittest.TestCase):
-    def test_v40212_changelog_records_exact_nosec_reduction(self) -> None:
+    def test_v40212_historical_changelog_records_exact_nosec_reduction(self) -> None:
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
-        release_block = changelog.split("\n---\n", 1)[0]
+        release_block = changelog.split("# Release v4.02.12\n", 1)[1].split(
+            "\n---\n", 1
+        )[0]
         self.assertIn(
             "Remove only the eight resolved legacy crontab suppressions",
             release_block,
@@ -552,7 +554,7 @@ invented_key = true
         ]
         deployment = """## 1. Target decision
 
-| Package family | Architectures produced by the workflow | Decision for v4.02.12 |
+| Package family | Architectures produced by the workflow | Decision for v4.02.13 |
 | :--- | :--- | :--- |
 | DEB | amd64, arm64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |
 | RPM | x86_64, aarch64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |

@@ -345,7 +345,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_APK_ARM64}"
 
-      - name: Build Debian Package (.deb)
+      - name: Prepare Linux Maintainer Scripts
         run: |
           set -euo pipefail
           cat << 'EOF' > "${PACKAGE_SCRIPTS}/preinst.sh"
@@ -561,8 +561,28 @@ jobs:
           syswarden_cleanup_cron_work() {
               [ -n "${cron_work:-}" ] || return 0
               syswarden_cron_cleanup_target="${cron_work}"
+              if [ "${XDG_CACHE_HOME:-}" = "${syswarden_cron_cleanup_target}/cache" ]; then
+                  unset XDG_CACHE_HOME
+              fi
+              cron_cache=
+              rm -rf -- "${syswarden_cron_cleanup_target}" || return 1
+              if [ -e "${syswarden_cron_cleanup_target}" ] || [ -L "${syswarden_cron_cleanup_target}" ]; then
+                  printf '%s\n' 'private cron work directory remains after cleanup' >&2
+                  return 1
+              fi
               cron_work=
-              rm -rf -- "${syswarden_cron_cleanup_target}"
+          }
+          syswarden_prepare_cron_work() {
+              cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || return 1
+              chmod 0700 "${cron_work}" || return 1
+              cron_cache="${cron_work}/cache"
+              mkdir "${cron_cache}" || return 1
+              chmod 0700 "${cron_cache}" || return 1
+              XDG_CACHE_HOME="${cron_cache}"
+              export XDG_CACHE_HOME
+              cron_backup="${cron_work}/backup"
+              cron_error="${cron_work}/error"
+              cron_filtered="${cron_work}/filtered"
           }
           syswarden_cleanup_crontab() {
               syswarden_cron_backup="$1"
@@ -612,11 +632,7 @@ jobs:
                   trap 'syswarden_cleanup_cron_work; exit 129' 1
                   trap 'syswarden_cleanup_cron_work; exit 130' 2
                   trap 'syswarden_cleanup_cron_work; exit 143' 15
-                  cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || return 1
-                  chmod 0700 "${cron_work}" || return 1
-                  cron_backup="${cron_work}/backup"
-                  cron_error="${cron_work}/error"
-                  cron_filtered="${cron_work}/filtered"
+                  syswarden_prepare_cron_work || return 1
                   syswarden_cleanup_crontab \
                       "${cron_backup}" "${cron_error}" "${cron_filtered}" \
                       /opt/syswarden/bin/syswarden-cli || return 1
@@ -726,8 +742,28 @@ jobs:
           syswarden_cleanup_cron_work() {
               [ -n "${cron_work:-}" ] || return 0
               syswarden_cron_cleanup_target="${cron_work}"
+              if [ "${XDG_CACHE_HOME:-}" = "${syswarden_cron_cleanup_target}/cache" ]; then
+                  unset XDG_CACHE_HOME
+              fi
+              cron_cache=
+              rm -rf -- "${syswarden_cron_cleanup_target}" || return 1
+              if [ -e "${syswarden_cron_cleanup_target}" ] || [ -L "${syswarden_cron_cleanup_target}" ]; then
+                  printf '%s\n' 'private cron work directory remains after cleanup' >&2
+                  return 1
+              fi
               cron_work=
-              rm -rf -- "${syswarden_cron_cleanup_target}"
+          }
+          syswarden_prepare_cron_work() {
+              cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || return 1
+              chmod 0700 "${cron_work}" || return 1
+              cron_cache="${cron_work}/cache"
+              mkdir "${cron_cache}" || return 1
+              chmod 0700 "${cron_cache}" || return 1
+              XDG_CACHE_HOME="${cron_cache}"
+              export XDG_CACHE_HOME
+              cron_backup="${cron_work}/backup"
+              cron_error="${cron_work}/error"
+              cron_filtered="${cron_work}/filtered"
           }
           syswarden_cleanup_crontab() {
               syswarden_cron_backup="$1"
@@ -784,14 +820,10 @@ jobs:
               trap 'syswarden_cleanup_cron_work; exit 129' 1
               trap 'syswarden_cleanup_cron_work; exit 130' 2
               trap 'syswarden_cleanup_cron_work; exit 143' 15
-              cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || {
+              syswarden_prepare_cron_work || {
                   echo "Unable to create the private cron backup" >&2
                   exit 1
               }
-              chmod 0700 "${cron_work}" || exit 1
-              cron_backup="${cron_work}/backup"
-              cron_error="${cron_work}/error"
-              cron_filtered="${cron_work}/filtered"
               syswarden_cleanup_crontab \
                   "${cron_backup}" "${cron_error}" "${cron_filtered}" \
                   /opt/syswarden/bin/syswarden-cli || exit 1
@@ -808,6 +840,9 @@ jobs:
             "${PACKAGE_SCRIPTS}/postrm.sh" \
             "${PACKAGE_SCRIPTS}/prerm.sh"
 
+      - name: Build Debian Package (.deb)
+        run: |
+          set -euo pipefail
           fpm -s dir -t deb \
             -n syswarden \
             -v "${VERSION}" \
@@ -897,6 +932,7 @@ jobs:
           homepage: "https://github.com/${{ github.repository }}"
           depends:
             - nftables
+            - openrc
             - curl
             - wget
             - rsyslog
@@ -915,6 +951,9 @@ jobs:
             postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"
             preremove: "${PACKAGE_SCRIPTS}/prerm.sh"
             postremove: "${PACKAGE_SCRIPTS}/postrm.sh"
+          apk:
+            scripts:
+              postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"
           EOF
 
           cat << EOF > "${PACKAGE_CONFIGS}/nfpm_alpine_aarch64.yaml"
@@ -928,6 +967,7 @@ jobs:
           homepage: "https://github.com/${{ github.repository }}"
           depends:
             - nftables
+            - openrc
             - curl
             - wget
             - rsyslog
@@ -946,6 +986,9 @@ jobs:
             postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"
             preremove: "${PACKAGE_SCRIPTS}/prerm.sh"
             postremove: "${PACKAGE_SCRIPTS}/postrm.sh"
+          apk:
+            scripts:
+              postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"
           EOF
 
           "${TOOL_DIR}/nfpm" pkg \
@@ -1189,8 +1232,28 @@ jobs:
           syswarden_cleanup_cron_work() {
               [ -n "${cron_work:-}" ] || return 0
               syswarden_cron_cleanup_target="${cron_work}"
+              if [ "${XDG_CACHE_HOME:-}" = "${syswarden_cron_cleanup_target}/cache" ]; then
+                  unset XDG_CACHE_HOME
+              fi
+              cron_cache=
+              rm -rf -- "${syswarden_cron_cleanup_target}" || return 1
+              if [ -e "${syswarden_cron_cleanup_target}" ] || [ -L "${syswarden_cron_cleanup_target}" ]; then
+                  printf '%s\n' 'private cron work directory remains after cleanup' >&2
+                  return 1
+              fi
               cron_work=
-              rm -rf -- "${syswarden_cron_cleanup_target}"
+          }
+          syswarden_prepare_cron_work() {
+              cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || return 1
+              chmod 0700 "${cron_work}" || return 1
+              cron_cache="${cron_work}/cache"
+              mkdir "${cron_cache}" || return 1
+              chmod 0700 "${cron_cache}" || return 1
+              XDG_CACHE_HOME="${cron_cache}"
+              export XDG_CACHE_HOME
+              cron_backup="${cron_work}/backup"
+              cron_error="${cron_work}/error"
+              cron_filtered="${cron_work}/filtered"
           }
           syswarden_cleanup_crontab() {
               syswarden_cron_backup="$1"
@@ -1226,11 +1289,7 @@ jobs:
               trap 'syswarden_cleanup_cron_work; exit 129' 1
               trap 'syswarden_cleanup_cron_work; exit 130' 2
               trap 'syswarden_cleanup_cron_work; exit 143' 15
-              cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || exit 1
-              chmod 0700 "${cron_work}" || exit 1
-              cron_backup="${cron_work}/backup"
-              cron_error="${cron_work}/error"
-              cron_filtered="${cron_work}/filtered"
+              syswarden_prepare_cron_work || exit 1
               syswarden_cleanup_crontab \
                   "${cron_backup}" "${cron_error}" "${cron_filtered}" \
                   /usr/local/syswarden/bin/syswarden-cli \
@@ -1328,11 +1387,25 @@ jobs:
             local metadata
             local package_version
             local package_architecture
+            local -a postinstall_members=()
+            local -a postupgrade_members=()
             member="$(tar --list --file "${path}" | awk '/(^|\/)\.PKGINFO$/ { print }')"
             [[ "$(wc -l <<< "${member}")" -eq 1 ]]
             metadata="$(tar --extract --to-stdout --file "${path}" "${member}")"
             [[ "$(grep --count '^pkgver = ' <<< "${metadata}")" -eq 1 ]]
             [[ "$(grep --count '^arch = ' <<< "${metadata}")" -eq 1 ]]
+            [[ "$(grep --count '^depend = openrc$' <<< "${metadata}")" -eq 1 ]]
+            mapfile -t postinstall_members < <(
+              tar --list --file "${path}" | awk '/(^|\/)\.post-install$/ { print }'
+            )
+            mapfile -t postupgrade_members < <(
+              tar --list --file "${path}" | awk '/(^|\/)\.post-upgrade$/ { print }'
+            )
+            [[ "${#postinstall_members[@]}" -eq 1 ]]
+            [[ "${#postupgrade_members[@]}" -eq 1 ]]
+            cmp -s \
+              <(tar --extract --to-stdout --file "${path}" "${postinstall_members[0]}") \
+              <(tar --extract --to-stdout --file "${path}" "${postupgrade_members[0]}")
             package_version="$(sed -n 's/^pkgver = //p' <<< "${metadata}")"
             package_architecture="$(sed -n 's/^arch = //p' <<< "${metadata}")"
             python3 - "${VERSION}" "${package_version}" <<'PY'

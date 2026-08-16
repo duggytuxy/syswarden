@@ -131,7 +131,7 @@ RPM_BOOTSTRAP = (
     "policycoreutils-python-utils binutils cpio diffutils file && dnf clean all"
 )
 APK_BOOTSTRAP = (
-    "apk add --no-cache nftables curl wget rsyslog rsyslog-uxsock "
+    "apk add --no-cache nftables openrc curl wget rsyslog rsyslog-uxsock "
     "bash-completion wireguard-tools libqrencode-tools jq binutils file"
 )
 DEB_PURGE_SEMANTICS = (
@@ -342,6 +342,35 @@ PACKAGE_COORDINATE_PATTERNS = {
     for spec in DEFAULT_PLATFORMS
 }
 REQUIRED_FAMILIES = ("deb", "rpm", "apk")
+NATIVE_AGGREGATE_HOST = "native-shards:amd64,arm64"
+QUALIFICATION_BINDING_KEYS = frozenset(
+    {
+        "schema_version",
+        "repository",
+        "release_sha",
+        "release_tag",
+        "previous_tag",
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "candidate_run_id",
+        "candidate_artifact_id",
+        "candidate_artifact_name",
+        "previous_release_id",
+        "candidate_manifest_sha256",
+        "previous_manifest_sha256",
+    }
+)
+NATIVE_SHARD_KEYS = frozenset({"schema_version", "architecture"})
+NATIVE_SHARDS_KEYS = frozenset({"schema_version", "mode", "reports"})
+NATIVE_SHARD_RECORD_KEYS = frozenset(
+    {
+        "architecture",
+        "host_architecture",
+        "report_sha256",
+        "engine_name",
+        "engine_version",
+    }
+)
 
 OPERATOR_STATE_KEYS = (
     "config",
@@ -360,7 +389,7 @@ PACKAGE_PAYLOAD_PATHS = (
     "/usr/local/bin/syswarden",
     "/usr/local/bin/syswarden-tui",
 )
-FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.12"
+FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.13"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
 FORWARD_ONLY_APK_PREVIOUS = {
     "x86_64": {
@@ -571,7 +600,7 @@ def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> boo
     if historical_binding_touched and not forward_only:
         raise LifecycleLabError(
             "historical APK transition must be the exact byte-bound "
-            "v4.02.8 -> v4.02.12 contract for "
+            "v4.02.8 -> v4.02.13 contract for "
             f"{spec.package_architecture}"
         )
     return forward_only
@@ -1260,7 +1289,7 @@ expected_runtime_dependencies() {
             printf '%s\n' bash-completion checkpolicy cronie curl ipset jq nftables policycoreutils-python-utils qrencode rsyslog wget wireguard-tools
             ;;
         apk)
-            printf '%s\n' bash-completion curl jq libqrencode-tools nftables rsyslog rsyslog-uxsock wget wireguard-tools
+            printf '%s\n' bash-completion curl jq libqrencode-tools nftables openrc rsyslog rsyslog-uxsock wget wireguard-tools
             ;;
         *)
             return 2
@@ -2672,6 +2701,20 @@ def normalize_host_architecture(value: str) -> str | None:
     return None
 
 
+def required_coordinates_for_architecture(
+    architecture: str,
+) -> frozenset[tuple[str, str]]:
+    if architecture not in ARCHITECTURE_LABELS:
+        raise LifecycleLabError(
+            f"unsupported package lifecycle architecture shard {architecture!r}"
+        )
+    return frozenset(
+        coordinate
+        for coordinate in REQUIRED_PLATFORM_COORDINATES
+        if coordinate[1] == architecture
+    )
+
+
 def probe_platform_execution(
     runner: CommandRunner,
     podman: str,
@@ -3126,8 +3169,16 @@ def validate_forward_only_apk_events(
 
 def classify_lifecycle_evidence(
     results: Sequence[dict[str, object]],
+    *,
+    required_platform_coordinates: frozenset[tuple[str, str]] = REQUIRED_PLATFORM_COORDINATES,
 ) -> dict[str, object]:
     """Recompute release readiness without a generic product waiver."""
+
+    if (
+        not required_platform_coordinates
+        or not required_platform_coordinates.issubset(REQUIRED_PLATFORM_COORDINATES)
+    ):
+        raise LifecycleLabError("required platform coordinate contract is invalid")
 
     structural_failures: list[str] = []
     results_by_coordinate = {
@@ -3137,7 +3188,7 @@ def classify_lifecycle_evidence(
     if len(results_by_coordinate) != len(results):
         structural_failures.append("matrix:duplicate-platform-coordinate")
     for distribution, architecture in sorted(
-        set(results_by_coordinate) - REQUIRED_PLATFORM_COORDINATES
+        set(results_by_coordinate) - required_platform_coordinates
     ):
         structural_failures.append(
             f"matrix:unexpected-platform-coordinate:{distribution}/{architecture}"
@@ -3145,7 +3196,7 @@ def classify_lifecycle_evidence(
     observed_failures: dict[str, str] = {}
     coordinate_classification: list[dict[str, object]] = []
 
-    for distribution, architecture in sorted(REQUIRED_PLATFORM_COORDINATES):
+    for distribution, architecture in sorted(required_platform_coordinates):
         coordinate_name = f"{distribution}/{architecture}"
         platform_result = results_by_coordinate.get((distribution, architecture))
         coordinate_structural: list[str] = []
@@ -3289,7 +3340,7 @@ def classify_lifecycle_evidence(
     every_check_passed = not unexpected_failed_checks and not observed_failures
     harness_complete = (
         every_check_passed
-        and len(results_by_coordinate) == len(REQUIRED_PLATFORM_COORDINATES)
+        and len(results_by_coordinate) == len(required_platform_coordinates)
     )
     release_ready = harness_complete and every_check_passed
     return {
@@ -3301,7 +3352,11 @@ def classify_lifecycle_evidence(
     }
 
 
-def validate_report_version_contract(report: dict[str, object]) -> None:
+def validate_report_version_contract(
+    report: dict[str, object],
+    *,
+    required_platform_coordinates: frozenset[tuple[str, str]] = REQUIRED_PLATFORM_COORDINATES,
+) -> None:
     """Reject a report whose artifact-version evidence is incomplete or mutable."""
 
     schema_version = report.get("schema_version")
@@ -3539,7 +3594,10 @@ def validate_report_version_contract(report: dict[str, object]) -> None:
         raise LifecycleLabError(
             "package lifecycle report version coordinates do not cover its platforms"
         )
-    classification = classify_lifecycle_evidence(platforms)
+    classification = classify_lifecycle_evidence(
+        platforms,
+        required_platform_coordinates=required_platform_coordinates,
+    )
     for key in (
         "harness_complete",
         "release_ready",
@@ -3567,6 +3625,132 @@ def validate_report_version_contract(report: dict[str, object]) -> None:
         )
 
 
+def _positive_identifier(value: object, label: str) -> int:
+    if type(value) is int and value > 0:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value):
+        return int(value)
+    raise LifecycleLabError(f"{label} must be a positive canonical integer")
+
+
+def _manifest_sha256(root: Path, label: str) -> str:
+    path = root / "SHA256SUMS.txt"
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot inspect {label}: {exc}") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise LifecycleLabError(f"{label} must be a regular non-symlink file")
+    return sha256_file(path)
+
+
+def validate_qualification_binding(
+    value: object,
+    *,
+    expected: dict[str, object] | None = None,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != QUALIFICATION_BINDING_KEYS:
+        raise LifecycleLabError("qualification binding schema is not exact")
+    binding = dict(value)
+    if type(binding["schema_version"]) is not int or binding["schema_version"] != 1:
+        raise LifecycleLabError("qualification binding schema version must be 1")
+    repository = binding["repository"]
+    if not isinstance(repository, str) or re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository
+    ) is None:
+        raise LifecycleLabError("qualification repository is not canonical")
+    release_sha = binding["release_sha"]
+    if not isinstance(release_sha, str) or re.fullmatch(
+        r"[0-9a-f]{40}", release_sha
+    ) is None:
+        raise LifecycleLabError("qualification release SHA is not canonical")
+    for key in ("release_tag", "previous_tag"):
+        tag = binding[key]
+        if not isinstance(tag, str) or re.fullmatch(
+            r"v[0-9]+\.[0-9]{2}\.[0-9]+", tag
+        ) is None:
+            raise LifecycleLabError(f"qualification {key} is not canonical")
+    if binding["release_tag"] == binding["previous_tag"]:
+        raise LifecycleLabError("qualification release and previous tags must differ")
+    artifact_name = binding["candidate_artifact_name"]
+    if not isinstance(artifact_name, str) or artifact_name != (
+        "syswarden-packages-" + str(binding["release_tag"]).removeprefix("v")
+    ):
+        raise LifecycleLabError("qualification candidate artifact name is invalid")
+    for key in (
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "candidate_run_id",
+        "candidate_artifact_id",
+        "previous_release_id",
+    ):
+        if type(binding[key]) is not int or binding[key] <= 0:
+            raise LifecycleLabError(
+                f"qualification {key} must be a positive JSON integer"
+            )
+    for key in ("candidate_manifest_sha256", "previous_manifest_sha256"):
+        digest = binding[key]
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise LifecycleLabError(f"qualification {key} is not a SHA-256 digest")
+    if expected is not None and binding != expected:
+        raise LifecycleLabError("qualification binding differs from the expected inputs")
+    return binding
+
+
+def build_qualification_binding(
+    args: argparse.Namespace,
+    candidate_root: Path,
+    previous_root: Path,
+    version_contract: dict[str, object],
+) -> dict[str, object]:
+    binding = {
+        "schema_version": 1,
+        "repository": getattr(args, "qualification_repository", None),
+        "release_sha": getattr(args, "qualification_release_sha", None),
+        "release_tag": getattr(args, "qualification_release_tag", None),
+        "previous_tag": getattr(args, "qualification_previous_tag", None),
+        "workflow_run_id": _positive_identifier(
+            getattr(args, "qualification_workflow_run_id", None),
+            "qualification workflow_run_id",
+        ),
+        "workflow_run_attempt": _positive_identifier(
+            getattr(args, "qualification_workflow_run_attempt", None),
+            "qualification workflow_run_attempt",
+        ),
+        "candidate_run_id": _positive_identifier(
+            getattr(args, "qualification_candidate_run_id", None),
+            "qualification candidate_run_id",
+        ),
+        "candidate_artifact_id": _positive_identifier(
+            getattr(args, "qualification_candidate_artifact_id", None),
+            "qualification candidate_artifact_id",
+        ),
+        "candidate_artifact_name": getattr(
+            args, "qualification_candidate_artifact_name", None
+        ),
+        "previous_release_id": _positive_identifier(
+            getattr(args, "qualification_previous_release_id", None),
+            "qualification previous_release_id",
+        ),
+        "candidate_manifest_sha256": _manifest_sha256(
+            candidate_root, "candidate checksum manifest"
+        ),
+        "previous_manifest_sha256": _manifest_sha256(
+            previous_root, "previous checksum manifest"
+        ),
+    }
+    validated = validate_qualification_binding(binding)
+    if validated["release_tag"] != "v" + str(version_contract["candidate_version"]):
+        raise LifecycleLabError(
+            "qualification release tag differs from candidate package versions"
+        )
+    if validated["previous_tag"] != "v" + str(version_contract["previous_version"]):
+        raise LifecycleLabError(
+            "qualification previous tag differs from previous package versions"
+        )
+    return validated
+
+
 def run_lab(
     args: argparse.Namespace,
     *,
@@ -3575,10 +3759,33 @@ def run_lab(
     host_architecture: str | None = None,
 ) -> dict[str, object]:
     active_runner = runner or CommandRunner()
+    architecture_shard = getattr(args, "architecture_shard", None)
+    required_platform_coordinates = (
+        required_coordinates_for_architecture(architecture_shard)
+        if architecture_shard is not None
+        else REQUIRED_PLATFORM_COORDINATES
+    )
+    observed_platform_coordinates = frozenset(
+        platform_coordinate(spec) for spec in platforms
+    )
+    if architecture_shard is not None and (
+        observed_platform_coordinates != required_platform_coordinates
+        or len(platforms) != len(required_platform_coordinates)
+    ):
+        raise LifecycleLabError(
+            f"{architecture_shard} shard must contain its exact five platform coordinates"
+        )
     candidate_root, previous_root, pairs = validate_inputs(
         args.packages_dir, args.previous_packages_dir, platforms
     )
     actual_host_architecture = host_architecture or platform.machine()
+    normalized_host = normalize_host_architecture(actual_host_architecture)
+    if architecture_shard is not None and normalized_host != architecture_shard:
+        raise LifecycleLabError(
+            f"{architecture_shard} shard requires a native {architecture_shard} host"
+        )
+    if architecture_shard is not None and getattr(args, "arm64_emulator", None) is not None:
+        raise LifecycleLabError("native architecture shards forbid ARM64 emulation")
     arm64_emulator = validate_arm64_emulator(
         getattr(args, "arm64_emulator", None)
     )
@@ -3645,13 +3852,13 @@ def run_lab(
         for result in platform_results
     }
     missing_coordinates = sorted(
-        REQUIRED_PLATFORM_COORDINATES - set(results_by_coordinate)
+        required_platform_coordinates - set(results_by_coordinate)
     )
     architecture_coverage: list[dict[str, object]] = []
-    for architecture in ARCHITECTURE_LABELS:
+    for architecture in sorted({item[1] for item in required_platform_coordinates}):
         expected = sorted(
             coordinate
-            for coordinate in REQUIRED_PLATFORM_COORDINATES
+            for coordinate in required_platform_coordinates
             if coordinate[1] == architecture
         )
         present = [
@@ -3680,12 +3887,14 @@ def run_lab(
         )
 
     family_architecture_coverage: list[dict[str, object]] = []
-    for architecture in ARCHITECTURE_LABELS:
+    for architecture in sorted({item[1] for item in required_platform_coordinates}):
         for family in REQUIRED_FAMILIES:
             expected_specs = [
                 spec
                 for spec in DEFAULT_PLATFORMS
-                if spec.architecture == architecture and spec.family == family
+                if spec.architecture == architecture
+                and spec.family == family
+                and platform_coordinate(spec) in required_platform_coordinates
             ]
             present = [
                 results_by_coordinate[platform_coordinate(spec)]
@@ -3715,7 +3924,7 @@ def run_lab(
         result["status"] == "incomplete" for result in platform_results
     ):
         container_status = "incomplete"
-    elif set(results_by_coordinate) != REQUIRED_PLATFORM_COORDINATES:
+    elif set(results_by_coordinate) != required_platform_coordinates:
         container_status = "incomplete"
     elif platform_results and all(
         result["status"] == "pass" for result in platform_results
@@ -3738,7 +3947,11 @@ def run_lab(
         for item in architecture_coverage
         if item["status"] != "pass"
     ]
-    classification = classify_lifecycle_evidence(platform_results)
+    classification = classify_lifecycle_evidence(
+        platform_results,
+        required_platform_coordinates=required_platform_coordinates,
+    )
+    version_contract = build_package_version_contract(pairs)
     report: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -3749,7 +3962,7 @@ def run_lab(
         "unexpected_failed_checks": classification[
             "unexpected_failed_checks"
         ],
-        "package_version_contract": build_package_version_contract(pairs),
+        "package_version_contract": version_contract,
         "scope": {
             "container_lab_complete": container_status == "pass",
             "coordinate_classification": classification[
@@ -3765,17 +3978,22 @@ def run_lab(
             "family_architecture_coverage": family_architecture_coverage,
             "required_platform_coordinates": [
                 {"distribution": distribution, "architecture": architecture}
-                for distribution, architecture in sorted(REQUIRED_PLATFORM_COORDINATES)
+                for distribution, architecture in sorted(required_platform_coordinates)
             ],
             "missing_platform_coordinates": [
                 {"distribution": distribution, "architecture": architecture}
                 for distribution, architecture in missing_coordinates
             ],
             "arm64_coverage_policy": (
-                "arm64/aarch64 is complete only after each DEB, RPM, and APK "
-                "distribution variant executes natively or through a validated "
-                "persistent host binfmt registration whose interpreter exactly "
-                "matches the checksum-recorded --arm64-emulator"
+                "qualification shards require native execution on matching amd64 "
+                "and arm64 hosts and forbid emulation"
+                if architecture_shard is not None
+                else (
+                    "arm64/aarch64 is complete only after each DEB, RPM, and APK "
+                    "distribution variant executes natively or through a validated "
+                    "persistent host binfmt registration whose interpreter exactly "
+                    "matches the checksum-recorded --arm64-emulator"
+                )
             ),
             "rollback_model": (
                 "external package-manager downgrade to the separately supplied, "
@@ -3824,6 +4042,524 @@ def run_lab(
         },
         "platforms": platform_results,
     }
+    if architecture_shard is not None:
+        report["qualification_binding"] = build_qualification_binding(
+            args,
+            candidate_root,
+            previous_root,
+            version_contract,
+        )
+        report["native_shard"] = {
+            "schema_version": 1,
+            "architecture": architecture_shard,
+        }
+    validate_report_version_contract(
+        report,
+        required_platform_coordinates=required_platform_coordinates,
+    )
+    return report
+
+
+def validate_native_shard_report(
+    report: dict[str, object],
+    *,
+    architecture: str,
+    expected_binding: dict[str, object],
+) -> None:
+    expected_top_keys = {
+        "schema_version",
+        "generated_at",
+        "status",
+        "harness_complete",
+        "release_ready",
+        "blocker_ids",
+        "unexpected_failed_checks",
+        "package_version_contract",
+        "scope",
+        "engine",
+        "package_roots",
+        "platforms",
+        "qualification_binding",
+        "native_shard",
+    }
+    if set(report) != expected_top_keys:
+        raise LifecycleLabError("native shard report top-level schema is not exact")
+    required_coordinates = required_coordinates_for_architecture(architecture)
+    validate_qualification_binding(
+        report.get("qualification_binding"), expected=expected_binding
+    )
+    native_shard = report.get("native_shard")
+    if (
+        not isinstance(native_shard, dict)
+        or set(native_shard) != NATIVE_SHARD_KEYS
+        or type(native_shard.get("schema_version")) is not int
+        or native_shard.get("schema_version") != 1
+        or native_shard.get("architecture") != architecture
+    ):
+        raise LifecycleLabError("native shard identity is invalid")
+    scope = report.get("scope")
+    if not isinstance(scope, dict) or normalize_host_architecture(
+        str(scope.get("host_architecture", ""))
+    ) != architecture:
+        raise LifecycleLabError("native shard host architecture is inconsistent")
+    expected_coordinates_json = [
+        {"distribution": distribution, "architecture": item_architecture}
+        for distribution, item_architecture in sorted(required_coordinates)
+    ]
+    if (
+        scope.get("required_platform_coordinates") != expected_coordinates_json
+        or scope.get("missing_platform_coordinates") != []
+    ):
+        raise LifecycleLabError("native shard platform coordinate scope is not exact")
+    architecture_coverage = scope.get("architecture_coverage")
+    family_coverage = scope.get("family_architecture_coverage")
+    if (
+        not isinstance(architecture_coverage, list)
+        or len(architecture_coverage) != 1
+        or not isinstance(architecture_coverage[0], dict)
+        or architecture_coverage[0].get("architecture_id") != architecture
+        or not isinstance(family_coverage, list)
+        or len(family_coverage) != len(REQUIRED_FAMILIES)
+        or {
+            (item.get("family"), item.get("architecture_id"))
+            for item in family_coverage
+            if isinstance(item, dict)
+        }
+        != {(family, architecture) for family in REQUIRED_FAMILIES}
+    ):
+        raise LifecycleLabError("native shard coverage summary is not exact")
+    engine = report.get("engine")
+    if (
+        not isinstance(engine, dict)
+        or set(engine)
+        != {"name", "version", "rootless", "arm64_emulator", "arm64_binfmt"}
+        or engine.get("name") != "podman"
+        or not isinstance(engine.get("version"), str)
+        or not engine.get("version")
+        or engine.get("rootless") is not True
+        or engine.get("arm64_emulator") is not None
+        or engine.get("arm64_binfmt") is not None
+    ):
+        raise LifecycleLabError("native shard engine evidence is invalid")
+    roots = report.get("package_roots")
+    if (
+        not isinstance(roots, dict)
+        or set(roots) != {"candidate", "previous", "mount_mode"}
+        or roots.get("mount_mode") != "read-only"
+        or not isinstance(roots.get("candidate"), str)
+        or not Path(roots["candidate"]).is_absolute()
+        or not isinstance(roots.get("previous"), str)
+        or not Path(roots["previous"]).is_absolute()
+        or roots["candidate"] == roots["previous"]
+    ):
+        raise LifecycleLabError("native shard package roots are invalid")
+    platforms = report.get("platforms")
+    if not isinstance(platforms, list) or len(platforms) != len(required_coordinates):
+        raise LifecycleLabError("native shard platform inventory is incomplete")
+    specs = {
+        platform_coordinate(spec): spec
+        for spec in DEFAULT_PLATFORMS
+        if spec.architecture == architecture
+    }
+    seen: set[tuple[str, str]] = set()
+    observed_order: list[tuple[str, str]] = []
+    for platform_result in platforms:
+        if not isinstance(platform_result, dict):
+            raise LifecycleLabError("native shard platform result is invalid")
+        coordinate = (
+            str(platform_result.get("distribution")),
+            str(platform_result.get("architecture_id")),
+        )
+        if coordinate in seen or coordinate not in required_coordinates:
+            raise LifecycleLabError(
+                "native shard platform coordinate is duplicate or unsupported"
+            )
+        seen.add(coordinate)
+        observed_order.append(coordinate)
+        spec = specs[coordinate]
+        expected_platform_metadata = {
+            "family": spec.family,
+            "architecture": ARCHITECTURE_LABELS[spec.architecture],
+            "package_architecture": spec.package_architecture,
+            "podman_platform": spec.podman_platform,
+            "image": spec.image,
+            "lifecycle_network": "disabled",
+            "bootstrap_execution": "native_container_build",
+        }
+        if any(
+            platform_result.get(key) != value
+            for key, value in expected_platform_metadata.items()
+        ):
+            raise LifecycleLabError(
+                f"native shard platform metadata is invalid at {coordinate}"
+            )
+        probe = platform_result.get("architecture_probe")
+        if (
+            not isinstance(probe, dict)
+            or set(probe)
+            != {
+                "status",
+                "execution_mode",
+                "podman_platform",
+                "expected_uname",
+                "actual_uname",
+                "container_exit_code",
+                "network",
+                "filesystem",
+                "emulator",
+                "binfmt",
+            }
+            or probe.get("status") != "available"
+            or probe.get("execution_mode") != "native"
+            or probe.get("podman_platform") != spec.podman_platform
+            or probe.get("expected_uname") != spec.uname_architecture
+            or probe.get("actual_uname") != spec.uname_architecture
+            or type(probe.get("container_exit_code")) is not int
+            or probe.get("container_exit_code") != 0
+            or probe.get("network") != "disabled"
+            or probe.get("filesystem") != "read-only with bounded /tmp tmpfs"
+            or probe.get("emulator") is not None
+            or probe.get("binfmt") is not None
+        ):
+            raise LifecycleLabError(
+                f"native shard execution evidence is invalid at {coordinate}"
+            )
+    if seen != required_coordinates:
+        raise LifecycleLabError("native shard platform coordinate set is incomplete")
+    expected_order = [
+        platform_coordinate(spec)
+        for spec in DEFAULT_PLATFORMS
+        if spec.architecture == architecture
+    ]
+    if observed_order != expected_order:
+        raise LifecycleLabError("native shard platform coordinate order is not canonical")
+    validate_report_version_contract(
+        report,
+        required_platform_coordinates=required_coordinates,
+    )
+
+
+def _read_native_shard(
+    path: Path,
+    label: str,
+) -> tuple[dict[str, object], str, tuple[int, int]]:
+    absolute = path.expanduser().absolute()
+    try:
+        before = absolute.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot inspect {label}: {exc}") from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise LifecycleLabError(f"{label} must be a regular non-symlink file")
+    if before.st_size <= 0 or before.st_size > 64 * 1024 * 1024:
+        raise LifecycleLabError(f"{label} size is invalid")
+    try:
+        payload = absolute.read_bytes()
+        after = absolute.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot read {label}: {exc}") from exc
+    if (
+        (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        or len(payload) != before.st_size
+    ):
+        raise LifecycleLabError(f"{label} changed while it was read")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise LifecycleLabError(f"{label} contains duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    try:
+        report = json.loads(payload, object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LifecycleLabError(f"{label} is not strict UTF-8 JSON: {exc}") from exc
+    if not isinstance(report, dict):
+        raise LifecycleLabError(f"{label} root must be an object")
+    return (
+        report,
+        hashlib.sha256(payload).hexdigest(),
+        (before.st_dev, before.st_ino),
+    )
+
+
+def _aggregate_matrix_summary(
+    platform_results: Sequence[dict[str, object]],
+) -> tuple[str, dict[str, object], dict[str, object]]:
+    results_by_coordinate = {
+        (str(result.get("distribution")), str(result.get("architecture_id"))): result
+        for result in platform_results
+    }
+    if len(results_by_coordinate) != len(platform_results):
+        raise LifecycleLabError("native shard aggregate contains duplicate coordinates")
+    if set(results_by_coordinate) != REQUIRED_PLATFORM_COORDINATES:
+        raise LifecycleLabError("native shard aggregate platform matrix is not exact")
+    architecture_coverage: list[dict[str, object]] = []
+    family_architecture_coverage: list[dict[str, object]] = []
+    for architecture in ARCHITECTURE_LABELS:
+        expected = sorted(
+            coordinate
+            for coordinate in REQUIRED_PLATFORM_COORDINATES
+            if coordinate[1] == architecture
+        )
+        present = [results_by_coordinate[coordinate] for coordinate in expected]
+        architecture_coverage.append(
+            {
+                "architecture": ARCHITECTURE_LABELS[architecture],
+                "architecture_id": architecture,
+                "status": coverage_status(present, len(expected)),
+                "required_distributions": [item[0] for item in expected],
+                "completed_distributions": sorted(
+                    str(result["distribution"])
+                    for result in present
+                    if result["status"] == "pass"
+                ),
+                "incomplete_or_failed_distributions": sorted(
+                    str(result["distribution"])
+                    for result in present
+                    if result["status"] != "pass"
+                ),
+            }
+        )
+        for family in REQUIRED_FAMILIES:
+            specs = [
+                spec
+                for spec in DEFAULT_PLATFORMS
+                if spec.architecture == architecture and spec.family == family
+            ]
+            family_results = [
+                results_by_coordinate[platform_coordinate(spec)] for spec in specs
+            ]
+            family_architecture_coverage.append(
+                {
+                    "family": family,
+                    "architecture": ARCHITECTURE_LABELS[architecture],
+                    "architecture_id": architecture,
+                    "status": coverage_status(family_results, len(specs)),
+                    "required_distributions": [spec.distribution for spec in specs],
+                    "completed_distributions": sorted(
+                        str(result["distribution"])
+                        for result in family_results
+                        if result["status"] == "pass"
+                    ),
+                }
+            )
+    if any(result.get("status") == "fail" for result in platform_results):
+        status = "fail"
+    elif any(result.get("status") != "pass" for result in platform_results):
+        status = "incomplete"
+    else:
+        status = "pass"
+    classification = classify_lifecycle_evidence(platform_results)
+    scope = {
+        "container_lab_complete": status == "pass",
+        "coordinate_classification": classification["coordinate_classification"],
+        "host_architecture": NATIVE_AGGREGATE_HOST,
+        "network_during_image_bootstrap": (
+            "rootless Podman default on each native architecture shard"
+        ),
+        "network_during_package_operations": "disabled",
+        "host_mutation": (
+            "bounded to rootless Podman storage and temporary workdirs on each "
+            "native architecture runner"
+        ),
+        "architectures_completed": [
+            item["architecture"]
+            for item in architecture_coverage
+            if item["status"] == "pass"
+        ],
+        "architectures_incomplete_or_failed": [
+            {
+                "architecture": item["architecture"],
+                "status": item["status"],
+                "reason": (
+                    "not every required distribution completed every lifecycle scenario"
+                ),
+            }
+            for item in architecture_coverage
+            if item["status"] != "pass"
+        ],
+        "architecture_coverage": architecture_coverage,
+        "family_architecture_coverage": family_architecture_coverage,
+        "required_platform_coordinates": [
+            {"distribution": distribution, "architecture": architecture}
+            for distribution, architecture in sorted(REQUIRED_PLATFORM_COORDINATES)
+        ],
+        "missing_platform_coordinates": [],
+        "arm64_coverage_policy": (
+            "arm64/aarch64 qualification requires the native ubuntu-24.04-arm "
+            "shard; emulation and binfmt execution are forbidden"
+        ),
+        "rollback_model": (
+            "external package-manager downgrade to the separately supplied, "
+            "checksum-verified previous artifact; this is not a SysWarden "
+            "product rollback feature"
+        ),
+        "freebsd": {
+            "status": "vm_required",
+            "reason": (
+                "A real FreeBSD VM is required for pkg, rc.d, PF, service "
+                "startup, signature loading, and runtime-path validation."
+            ),
+        },
+    }
+    return status, classification, scope
+
+
+def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object]:
+    candidate_root, previous_root, pairs = validate_inputs(
+        args.packages_dir,
+        args.previous_packages_dir,
+        DEFAULT_PLATFORMS,
+    )
+    version_contract = build_package_version_contract(pairs)
+    expected_binding = build_qualification_binding(
+        args,
+        candidate_root,
+        previous_root,
+        version_contract,
+    )
+    paths = {
+        "amd64": args.aggregate_amd64_report,
+        "arm64": args.aggregate_arm64_report,
+    }
+    shard_reports: dict[str, dict[str, object]] = {}
+    shard_digests: dict[str, str] = {}
+    identities: set[tuple[int, int]] = set()
+    for architecture in ("amd64", "arm64"):
+        report, digest, identity = _read_native_shard(
+            paths[architecture], f"{architecture} native shard report"
+        )
+        if identity in identities:
+            raise LifecycleLabError("native shard reports must have distinct inodes")
+        identities.add(identity)
+        validate_native_shard_report(
+            report,
+            architecture=architecture,
+            expected_binding=expected_binding,
+        )
+        shard_reports[architecture] = report
+        shard_digests[architecture] = digest
+
+    expected_contract_coordinates = {
+        str(item["coordinate"]): item
+        for item in version_contract["coordinates"]
+        if isinstance(item, dict)
+    }
+    platform_results: list[dict[str, object]] = []
+    observed_package_coordinates: set[str] = set()
+    for architecture in ("amd64", "arm64"):
+        shard = shard_reports[architecture]
+        shard_contract = shard["package_version_contract"]
+        if not isinstance(shard_contract, dict):
+            raise LifecycleLabError("native shard version contract is invalid")
+        for key in (
+            "scheme",
+            "relation",
+            "previous_version",
+            "candidate_version",
+            "previous_numeric",
+            "candidate_numeric",
+        ):
+            if shard_contract.get(key) != version_contract[key]:
+                raise LifecycleLabError(
+                    f"{architecture} shard version contract differs at {key}"
+                )
+        coordinates = shard_contract.get("coordinates")
+        if not isinstance(coordinates, list):
+            raise LifecycleLabError("native shard package coordinates are invalid")
+        for item in coordinates:
+            if not isinstance(item, dict):
+                raise LifecycleLabError("native shard package coordinate is invalid")
+            coordinate = str(item.get("coordinate"))
+            if (
+                coordinate in observed_package_coordinates
+                or expected_contract_coordinates.get(coordinate) != item
+            ):
+                raise LifecycleLabError(
+                    "native shard package coordinate is duplicate or mismatched"
+                )
+            observed_package_coordinates.add(coordinate)
+        platforms = shard.get("platforms")
+        if not isinstance(platforms, list):
+            raise LifecycleLabError("native shard platform list is invalid")
+        for platform_result in platforms:
+            if not isinstance(platform_result, dict):
+                raise LifecycleLabError("native shard platform result is invalid")
+            coordinate = f"{platform_result.get('family')}:{platform_result.get('package_architecture')}"
+            pair = pairs.get(coordinate)
+            if pair is None:
+                raise LifecycleLabError("native shard references an unknown package coordinate")
+            if platform_result.get("candidate") != {
+                "filename": pair.candidate.path.name,
+                "version": pair.candidate.version,
+                "sha256": pair.candidate.sha256,
+            } or platform_result.get("previous") != {
+                "filename": pair.previous.path.name,
+                "version": pair.previous.version,
+                "sha256": pair.previous.sha256,
+            }:
+                raise LifecycleLabError(
+                    "native shard artifact evidence differs from current package bytes"
+                )
+            platform_results.append(platform_result)
+    if observed_package_coordinates != set(expected_contract_coordinates):
+        raise LifecycleLabError("native shard package coordinate union is incomplete")
+
+    status, classification, scope = _aggregate_matrix_summary(platform_results)
+    native_records = []
+    for architecture in ("amd64", "arm64"):
+        shard = shard_reports[architecture]
+        shard_scope = shard["scope"]
+        shard_engine = shard["engine"]
+        if not isinstance(shard_scope, dict) or not isinstance(shard_engine, dict):
+            raise LifecycleLabError("native shard metadata is invalid")
+        native_records.append(
+            {
+                "architecture": architecture,
+                "host_architecture": normalize_host_architecture(
+                    str(shard_scope["host_architecture"])
+                ),
+                "report_sha256": shard_digests[architecture],
+                "engine_name": shard_engine["name"],
+                "engine_version": shard_engine["version"],
+            }
+        )
+    report: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "status": status,
+        "harness_complete": classification["harness_complete"],
+        "release_ready": classification["release_ready"],
+        "blocker_ids": classification["blocker_ids"],
+        "unexpected_failed_checks": classification["unexpected_failed_checks"],
+        "package_version_contract": version_contract,
+        "scope": scope,
+        "engine": {
+            "name": "podman",
+            "version": ";".join(
+                f"{item['architecture']}={item['engine_version']}"
+                for item in native_records
+            ),
+            "rootless": True,
+            "arm64_emulator": None,
+            "arm64_binfmt": None,
+        },
+        "package_roots": {
+            "candidate": str(candidate_root),
+            "previous": str(previous_root),
+            "mount_mode": "read-only",
+        },
+        "platforms": platform_results,
+        "qualification_binding": expected_binding,
+        "native_shards": {
+            "schema_version": 1,
+            "mode": "native_architecture_shards_v1",
+            "reports": native_records,
+        },
+    }
     validate_report_version_contract(report)
     return report
 
@@ -3864,6 +4600,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument("--podman", default="podman")
+    parser.add_argument("--architecture-shard", choices=("amd64", "arm64"))
+    parser.add_argument("--aggregate-amd64-report", type=Path)
+    parser.add_argument("--aggregate-arm64-report", type=Path)
+    parser.add_argument("--qualification-repository")
+    parser.add_argument("--qualification-release-sha")
+    parser.add_argument("--qualification-release-tag")
+    parser.add_argument("--qualification-previous-tag")
+    parser.add_argument("--qualification-workflow-run-id")
+    parser.add_argument("--qualification-workflow-run-attempt")
+    parser.add_argument("--qualification-candidate-run-id")
+    parser.add_argument("--qualification-candidate-artifact-id")
+    parser.add_argument("--qualification-candidate-artifact-name")
+    parser.add_argument("--qualification-previous-release-id")
     parser.add_argument(
         "--arm64-emulator",
         type=Path,
@@ -3942,6 +4691,8 @@ def configured_platforms(args: argparse.Namespace) -> tuple[PlatformSpec, ...]:
             }
         )
         for spec in DEFAULT_PLATFORMS
+        if args.architecture_shard is None
+        or spec.architecture == args.architecture_shard
     )
 
 
@@ -3961,13 +4712,31 @@ def error_report(exc: Exception) -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.scenario_timeout < 30:
+    aggregate_requested = (
+        args.aggregate_amd64_report is not None
+        or args.aggregate_arm64_report is not None
+    )
+    if aggregate_requested and (
+        args.aggregate_amd64_report is None
+        or args.aggregate_arm64_report is None
+        or args.architecture_shard is not None
+        or args.arm64_emulator is not None
+    ):
+        report = error_report(
+            LifecycleLabError(
+                "aggregation requires exactly both shard reports and forbids shard/emulator options"
+            )
+        )
+    elif args.scenario_timeout < 30:
         report = error_report(
             LifecycleLabError("--scenario-timeout must be at least 30 seconds")
         )
     else:
         try:
-            report = run_lab(args, platforms=configured_platforms(args))
+            if aggregate_requested:
+                report = aggregate_native_shard_reports(args)
+            else:
+                report = run_lab(args, platforms=configured_platforms(args))
         except (LifecycleLabError, OSError) as exc:
             report = error_report(exc)
 

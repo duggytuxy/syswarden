@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -19,6 +20,17 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 PACKAGE_WORKFLOW = REPOSITORY / ".github" / "workflows" / "package.yml"
 BUILD_SCRIPT = REPOSITORY / "build.ps1"
 LOCAL_BUILD_SCRIPT = REPOSITORY / "build_packages.sh"
+
+
+def workflow_step_script(workflow: str, step_name: str) -> str:
+    marker = f"      - name: {step_name}\n"
+    if workflow.count(marker) != 1:
+        raise AssertionError(f"expected exactly one workflow step named {step_name}")
+    step = workflow.split(marker, 1)[1].split("\n      - name:", 1)[0]
+    run_marker = "        run: |\n"
+    if step.count(run_marker) != 1:
+        raise AssertionError(f"expected one shell body for workflow step {step_name}")
+    return textwrap.dedent(step.split(run_marker, 1)[1])
 
 
 class PackageLifecycleContractTests(unittest.TestCase):
@@ -53,6 +65,20 @@ class PackageLifecycleContractTests(unittest.TestCase):
             f"package script {name} must have exactly one isolated heredoc",
         )
         return bodies[0]
+
+    def test_package_workflow_shell_steps_fit_github_limit(self) -> None:
+        for step_name in (
+            "Prepare Linux Maintainer Scripts",
+            "Build Debian Package (.deb)",
+        ):
+            with self.subTest(step=step_name):
+                script = workflow_step_script(self.workflow, step_name)
+                encoded_size = len(json.dumps(script, ensure_ascii=False))
+                self.assertLessEqual(
+                    encoded_size,
+                    21_000,
+                    f"GitHub rejects {step_name!r} above 21,000 encoded characters",
+                )
 
     def local_build_script(self, name: str) -> str:
         source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
@@ -431,6 +457,13 @@ class PackageLifecycleContractTests(unittest.TestCase):
             fake_crontab = fake_bin / "crontab"
             fake_crontab.write_text(
                 "#!/bin/sh\n"
+                "record_cronie_backup() {\n"
+                "  [ \"${CRONTAB_CREATE_BACKUP:-0}\" -eq 1 ] || return 0\n"
+                "  [ -n \"${XDG_CACHE_HOME:-}\" ] || return 96\n"
+                "  mkdir -p \"${XDG_CACHE_HOME}/crontab\" || return 1\n"
+                "  printf 'previous cron\\n' > \"${XDG_CACHE_HOME}/crontab/crontab.bak\" || return 1\n"
+                "  printf '%s' \"${XDG_CACHE_HOME}\" > \"${CRONTAB_CACHE_PATH_OUTPUT}\" || return 1\n"
+                "}\n"
                 "case \"${1:-}\" in\n"
                 "  -l)\n"
                 "    if [ -e \"${CRONTAB_REMOVED_MARKER}\" ]; then\n"
@@ -443,6 +476,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "    exit \"${CRONTAB_READ_RC:-0}\"\n"
                 "    ;;\n"
                 "  -r)\n"
+                "    record_cronie_backup || exit $?\n"
                 "    crontab_remove_rc=${CRONTAB_REMOVE_RC:-0}\n"
                 "    if [ \"${crontab_remove_rc}\" -eq 0 ]; then\n"
                 "      : > \"${CRONTAB_REMOVED_MARKER}\"\n"
@@ -454,6 +488,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "    exit \"${crontab_remove_rc}\"\n"
                 "    ;;\n"
                 "  -)\n"
+                "    record_cronie_backup || exit $?\n"
                 "    cat > \"${CRONTAB_WRITE_OUTPUT}\"\n"
                 "    exit \"${CRONTAB_WRITE_RC:-0}\"\n"
                 "    ;;\n"
@@ -474,6 +509,20 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_cmp.chmod(0o700)
+            fake_mktemp = fake_bin / "mktemp"
+            real_mktemp = shutil.which("mktemp")
+            self.assertIsNotNone(real_mktemp)
+            fake_mktemp.write_text(
+                "#!/bin/sh\n"
+                "[ \"$#\" -eq 2 ] || exit 95\n"
+                "[ \"$1\" = -d ] || exit 95\n"
+                "[ \"$2\" = /var/tmp/syswarden-cron.XXXXXX ] || exit 95\n"
+                "[ -n \"${SYSWARDEN_TEST_MKTEMP_ROOT:-}\" ] || exit 94\n"
+                f'exec "{real_mktemp}" -d '
+                '"${SYSWARDEN_TEST_MKTEMP_ROOT}/syswarden-cron.XXXXXX"\n',
+                encoding="utf-8",
+            )
+            fake_mktemp.chmod(0o700)
             backup = root / "backup"
             error = root / "error"
             filtered = root / "filtered"
@@ -499,6 +548,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     {
                         "PATH": f"{fake_bin}:{environment.get('PATH', '')}",
                         "CRONTAB_WRITE_OUTPUT": str(written),
+                        "CRONTAB_CACHE_PATH_OUTPUT": str(root / "cache-path"),
+                        "CRONTAB_CREATE_BACKUP": "0",
                         "CRONTAB_REMOVED_MARKER": str(removed),
                         "CRONTAB_READ_RC": "0",
                         "CRONTAB_WRITE_RC": "0",
@@ -511,6 +562,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                         "CRONTAB_VERIFY_STDERR": "no crontab for root\n",
                         "CMP_FORCE_RC": "",
                         "SYSWARDEN_CRON_ABSENCE_SPOOL": "",
+                        "SYSWARDEN_TEST_MKTEMP_ROOT": str(root),
                         **updates,
                     }
                 )
@@ -669,6 +721,74 @@ class PackageLifecycleContractTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(removed.exists())
 
+            cache_path_output = root / "cache-path"
+            prepared_command = [
+                "/bin/sh",
+                "-c",
+                reference
+                + "\numask 077\n"
+                + "SYSWARDEN_CRON_ABSENCE_SPOOL=\n"
+                + "cron_work=\n"
+                + "trap 'syswarden_cleanup_cron_work' 0\n"
+                + "trap 'syswarden_cleanup_cron_work; exit 129' 1\n"
+                + "trap 'syswarden_cleanup_cron_work; exit 130' 2\n"
+                + "trap 'syswarden_cleanup_cron_work; exit 143' 15\n"
+                + "syswarden_prepare_cron_work || exit 1\n"
+                + 'syswarden_cleanup_crontab "${cron_backup}" '
+                + '"${cron_error}" "${cron_filtered}" "$1" || exit 1\n'
+                + "syswarden_cleanup_cron_work || exit 1\n"
+                + "trap - 0 1 2 15\n",
+                "cronie-private-cache-contract",
+                "/opt/syswarden/bin/syswarden-cli",
+            ]
+            for write_rc in ("0", "23"):
+                with self.subTest(cronie_write_rc=write_rc):
+                    written.unlink(missing_ok=True)
+                    cache_path_output.unlink(missing_ok=True)
+                    environment = os.environ.copy()
+                    environment.update(
+                        {
+                            "PATH": f"{fake_bin}:{environment.get('PATH', '')}",
+                            "CRONTAB_WRITE_OUTPUT": str(written),
+                            "CRONTAB_CACHE_PATH_OUTPUT": str(cache_path_output),
+                            "CRONTAB_CREATE_BACKUP": "1",
+                            "CRONTAB_READ_RC": "0",
+                            "CRONTAB_STDOUT": managed + "\n" + operator,
+                            "CRONTAB_STDERR": "",
+                            "CRONTAB_WRITE_RC": write_rc,
+                            "SYSWARDEN_TEST_MKTEMP_ROOT": str(root),
+                        }
+                    )
+                    result = subprocess.run(
+                        prepared_command,
+                        check=False,
+                        capture_output=True,
+                        env=environment,
+                    )
+                    if write_rc == "0":
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(written.read_bytes(), operator.encode("utf-8"))
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                    self.assertTrue(
+                        cache_path_output.exists(),
+                        "private Cronie cache setup did not reach crontab: "
+                        + result.stderr.decode("utf-8", errors="replace"),
+                    )
+                    cache_path = Path(
+                        cache_path_output.read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(cache_path.name, "cache")
+                    self.assertTrue(cache_path.parent.name.startswith("syswarden-cron."))
+                    self.assertFalse(
+                        cache_path.parent.exists(),
+                        "private Cronie cache work directory remains",
+                    )
+                    self.assertFalse(
+                        (cache_path / "crontab" / "crontab.bak").exists(),
+                        "Cronie backup remains outside cleanup",
+                    )
+
     def test_active_local_package_builder_uses_exact_fail_closed_cron_cleanup(self) -> None:
         preremove = self.local_build_script("prerm.sh")
         self.assertIn("syswarden_cleanup_crontab", preremove)
@@ -699,7 +819,17 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 for handler in handlers:
                     self.assertIn(handler, script)
                 self.assertIn("mktemp -d", script)
+                self.assertIn("syswarden_prepare_cron_work", script)
                 self.assertIn('chmod 0700 "${cron_work}"', script)
+                self.assertIn('cron_cache="${cron_work}/cache"', script)
+                self.assertIn('chmod 0700 "${cron_cache}"', script)
+                self.assertIn('XDG_CACHE_HOME="${cron_cache}"', script)
+                self.assertIn("export XDG_CACHE_HOME", script)
+                self.assertIn("unset XDG_CACHE_HOME", script)
+                self.assertIn(
+                    "private cron work directory remains after cleanup",
+                    script,
+                )
                 self.assertIn('cron_backup="${cron_work}/backup"', script)
                 self.assertIn('cron_error="${cron_work}/error"', script)
                 self.assertIn('cron_filtered="${cron_work}/filtered"', script)
@@ -774,12 +904,39 @@ class PackageLifecycleContractTests(unittest.TestCase):
             )
         for dependency in ("checkpolicy", "policycoreutils-python-utils"):
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 2)
-        for dependency in ("wireguard-tools", "libqrencode-tools", "jq"):
+        for dependency in ("wireguard-tools", "libqrencode-tools", "jq", "openrc"):
             self.assertGreaterEqual(
                 self.workflow.count(f"            - {dependency}\n"),
                 2,
                 dependency,
             )
+
+    def test_apk_fresh_and_upgrade_hooks_share_the_exact_postinstall_contract(self) -> None:
+        workflow_postinstall = 'postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"'
+        workflow_postupgrade = 'postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"'
+        workflow_apk_hook = (
+            "          apk:\n"
+            "            scripts:\n"
+            '              postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"\n'
+        )
+        self.assertEqual(self.workflow.count(workflow_postinstall), 2)
+        self.assertEqual(self.workflow.count(workflow_postupgrade), 2)
+        self.assertEqual(self.workflow.count(workflow_apk_hook), 2)
+        self.assertEqual(self.workflow.count("            - openrc\n"), 2)
+        self.assertIn(".post-install$/", self.workflow)
+        self.assertIn(".post-upgrade$/", self.workflow)
+        self.assertIn("^depend = openrc$", self.workflow)
+        self.assertIn('"${postinstall_members[0]}"', self.workflow)
+        self.assertIn('"${postupgrade_members[0]}"', self.workflow)
+
+        local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(local.count('postinstall: "./postinst.sh"'), 1)
+        self.assertEqual(local.count('postupgrade: "./postinst.sh"'), 1)
+        self.assertEqual(
+            local.count('apk:\n  scripts:\n    postupgrade: "./postinst.sh"\n'),
+            1,
+        )
+        self.assertEqual(local.count("  - openrc\n"), 1)
 
     def test_freebsd_package_lifecycle_contract(self) -> None:
         preinstall = self.script("preinst_fbsd.sh")
