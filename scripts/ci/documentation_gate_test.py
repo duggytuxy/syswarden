@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -19,13 +20,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class DocumentationGateTest(unittest.TestCase):
+    def test_v40212_changelog_records_exact_nosec_reduction(self) -> None:
+        changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
+        release_block = changelog.split("\n---\n", 1)[0]
+        self.assertIn(
+            "Remove only the eight resolved legacy crontab suppressions",
+            release_block,
+        )
+
     def test_architecture_diagrams_are_safe_native_svg_and_readme_mermaid_free(self) -> None:
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("assets/syswarden_hero.svg", readme)
         self.assertIn("assets/syswarden_architecture.svg", readme)
         self.assertIn("assets/syswarden_bunkerweb_integration.svg", readme)
         self.assertNotIn("```mermaid", readme)
 
         for relative_path in (
+            "assets/syswarden_hero.svg",
             "assets/syswarden_architecture.svg",
             "assets/syswarden_bunkerweb_integration.svg",
         ):
@@ -47,6 +58,41 @@ class DocumentationGateTest(unittest.TestCase):
         records, errors = documentation_gate.validate_repository(REPO_ROOT)
         self.assertEqual(errors, [])
         self.assertEqual([record.path for record in records], ["README.md"])
+
+    def test_public_report_contract_is_exact_anonymized_and_preserves_history(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        report_contract = contract["public_report_contract"]
+        version = documentation_gate.source_version(REPO_ROOT)
+        expected_path = f"docs/reports/LOT1_PUBLIC_SECURITY_REPORT_{version}.md"
+        self.assertEqual(report_contract["path"], expected_path)
+
+        report_path = REPO_ROOT / report_contract["path"]
+        report = report_path.read_text(encoding="utf-8")
+        self.assertEqual(
+            documentation_gate.require_phrases(
+                report,
+                report_contract["required_phrases"],
+                version,
+                report_contract["path"],
+            ),
+            [],
+        )
+        report.encode("ascii")
+        self.assertNotIn("\u2014", report)
+        for phrase in report_contract["forbidden_phrases"]:
+            self.assertNotIn(phrase.lower(), report.lower())
+
+        release_assets = re.findall(r"^\d+\. `([^`]+)`[.;]$", report, re.MULTILINE)
+        self.assertEqual(release_assets, report_contract["expected_assets"])
+        self.assertEqual(len(release_assets), 14)
+        self.assertEqual(len(set(release_assets)), 14)
+
+        for preserved in report_contract["preserved_reports"]:
+            preserved_path = REPO_ROOT / preserved["path"]
+            self.assertEqual(
+                hashlib.sha256(preserved_path.read_bytes()).hexdigest(),
+                preserved["sha256"],
+            )
 
     def test_readme_code_mismatch_is_rejected(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
@@ -506,7 +552,7 @@ invented_key = true
         ]
         deployment = """## 1. Target decision
 
-| Package family | Architectures produced by the workflow | Decision for v4.02.11 |
+| Package family | Architectures produced by the workflow | Decision for v4.02.12 |
 | :--- | :--- | :--- |
 | DEB | amd64, arm64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |
 | RPM | x86_64, aarch64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |

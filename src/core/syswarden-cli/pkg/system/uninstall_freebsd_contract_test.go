@@ -33,7 +33,14 @@ func TestFreeBSDUninstallIsFailClosedAndUsesCapturedPFRestore(t *testing.T) {
 		`".cshrc"`,
 		`clearFreeBSDSystemImmutable("/etc/syslog.conf")`,
 		`errors.Join(failures...)`,
-		`platformpaths.IsManagedCronLine(line)`,
+		`readRootCrontab(exec.Command("crontab", "-l"))`,
+		`verifyAbsentRootCronSpool("/var/cron/tabs/root")`,
+		`removeManagedRootCronContent(`,
+		`exec.Command("crontab", "-r")`,
+		`exec.Command("crontab", "-l")`,
+		`exec.Command("crontab", "-")`,
+		`if removed {`,
+		`verifyAbsentRootCronSpool("/var/cron/tabs/root")`,
 		`RestoreFreeBSDPackageHostState()`,
 	} {
 		if !strings.Contains(source, required) {

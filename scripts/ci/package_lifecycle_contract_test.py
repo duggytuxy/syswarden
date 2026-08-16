@@ -3,10 +3,14 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import signal
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -14,6 +18,7 @@ from pathlib import Path
 REPOSITORY = Path(__file__).resolve().parents[2]
 PACKAGE_WORKFLOW = REPOSITORY / ".github" / "workflows" / "package.yml"
 BUILD_SCRIPT = REPOSITORY / "build.ps1"
+LOCAL_BUILD_SCRIPT = REPOSITORY / "build_packages.sh"
 
 
 class PackageLifecycleContractTests(unittest.TestCase):
@@ -48,6 +53,53 @@ class PackageLifecycleContractTests(unittest.TestCase):
             f"package script {name} must have exactly one isolated heredoc",
         )
         return bodies[0]
+
+    def local_build_script(self, name: str) -> str:
+        source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        opener = re.compile(
+            rf"^\s*cat\s+<<\s*'(?P<delimiter>[A-Z][A-Z0-9_]*)'\s+>\s+"
+            rf"{re.escape(name)}\s*$"
+        )
+        lines = source.splitlines()
+        bodies: list[str] = []
+        for index, line in enumerate(lines):
+            match = opener.match(line)
+            if match is None:
+                continue
+            delimiter = match.group("delimiter")
+            body: list[str] = []
+            for candidate in lines[index + 1 :]:
+                if candidate.strip() == delimiter:
+                    bodies.append(textwrap.dedent("\n".join(body)))
+                    break
+                body.append(candidate)
+            else:
+                self.fail(f"local package script {name} has no heredoc terminator")
+        self.assertEqual(
+            len(bodies),
+            1,
+            f"local package script {name} must have exactly one isolated heredoc",
+        )
+        return bodies[0]
+
+    def cron_functions(self, script: str) -> str:
+        start = script.index("syswarden_managed_cron_line() {")
+        cleanup = script.index("syswarden_cleanup_crontab() {", start)
+        end = script.index("\n}\n", cleanup) + len("\n}\n")
+        return script[start:end]
+
+    def cron_script_matrix(self) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+        linux_paths = ("/opt/syswarden/bin/syswarden-cli",)
+        freebsd_paths = (
+            "/usr/local/syswarden/bin/syswarden-cli",
+            "/opt/syswarden/bin/syswarden-cli",
+        )
+        return (
+            ("workflow-prerm", self.script("prerm.sh"), linux_paths),
+            ("workflow-postrm", self.script("postrm.sh"), linux_paths),
+            ("workflow-freebsd-postrm", self.script("postrm_fbsd.sh"), freebsd_paths),
+            ("local-build-prerm", self.local_build_script("prerm.sh"), linux_paths),
+        )
 
     def migration_state_machine(self, script_name: str) -> str:
         script = self.script(script_name)
@@ -231,12 +283,27 @@ class PackageLifecycleContractTests(unittest.TestCase):
     def test_linux_remove_and_purge_contract(self) -> None:
         preremove = self.script("prerm.sh")
         self.assertNotIn("/tmp/sw_cron.bak", preremove)
-        self.assertIn("mktemp /var/tmp/syswarden-cron.XXXXXX", preremove)
+        self.assertIn("mktemp -d /var/tmp/syswarden-cron.XXXXXX", preremove)
         self.assertIn("umask 077", preremove)
-        self.assertIn("trap 'rm -f -- \"$cron_backup\"' 0 1 2 15", preremove)
-        self.assertIn('$7 == "ha-sync"', preremove)
-        self.assertIn('$7 == "update-feeds"', preremove)
-        self.assertIn('$6 == "/opt/syswarden/bin/syswarden-cli"', preremove)
+        self.assertIn(
+            'cron_backup="${cron_work}/backup"',
+            preremove,
+        )
+        self.assertIn('cron_error="${cron_work}/error"', preremove)
+        self.assertIn('cron_filtered="${cron_work}/filtered"', preremove)
+        self.assertIn('chmod 0700 "${cron_work}"', preremove)
+        self.assertNotIn('${cron_backup}.error', preremove)
+        self.assertNotIn('${cron_backup}.filtered', preremove)
+        self.assertIn("syswarden_cleanup_crontab", preremove)
+        self.assertIn(
+            '"*/30 * * * * ${syswarden_cron_cli} ha-sync >/dev/null 2>&1"',
+            preremove,
+        )
+        self.assertIn(
+            '"${syswarden_cron_minute} * * * * ${syswarden_cron_cli} update-feeds >/dev/null 2>&1"',
+            preremove,
+        )
+        self.assertIn("/opt/syswarden/bin/syswarden-cli || exit 1", preremove)
         self.assertNotIn(
             "grep -F -v '/opt/syswarden/bin/syswarden-cli'", preremove
         )
@@ -275,10 +342,416 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "/etc/rsyslog.d/99-syswarden-waf-bridge.conf",
         ):
             self.assertIn(generated, postremove)
-        self.assertIn('$7 == "ha-sync"', postremove)
-        self.assertIn('$7 == "update-feeds"', postremove)
+        self.assertIn("syswarden_cleanup_crontab", postremove)
+        self.assertIn("cleanup_generated_runtime_artifacts || exit 1", postremove)
         self.assertNotIn("grep -F -v '/opt/syswarden/bin/syswarden-cli'", postremove)
         self.assertIn("[ -d /run/systemd/system ]", postremove)
+
+    def test_package_cron_filters_are_exact_and_preserve_operator_bytes(self) -> None:
+        for name, script, managed_paths in self.cron_script_matrix():
+            functions = self.cron_functions(script)
+            managed_lines = [
+                line
+                for path in managed_paths
+                for line in (
+                    f"*/30 * * * * {path} ha-sync >/dev/null 2>&1",
+                    f"17 * * * * {path} update-feeds >/dev/null 2>&1",
+                )
+            ]
+            primary = managed_paths[0]
+            survivors = [
+                "# operator note mentioning syswarden-cli",
+                f"19 4 * * * {primary} update-feeds --operator-option",
+                " " + managed_lines[0],
+                managed_lines[1] + " ",
+                managed_lines[1].replace("17 *", "17  *", 1),
+                managed_lines[0].replace("*/30 *", "*/30\t*", 1),
+                " \t ",
+            ]
+            alternate = (
+                "23 * * * * /usr/local/syswarden/bin/syswarden-cli "
+                "update-feeds >/dev/null 2>&1"
+            )
+            if "/usr/local/syswarden/bin/syswarden-cli" not in managed_paths:
+                survivors.append(alternate)
+            input_lines = [survivors[0], *managed_lines, *survivors[1:]]
+            if alternate not in input_lines:
+                input_lines.append(alternate)
+            for final_lf in (False, True):
+                with self.subTest(script=name, final_lf=final_lf), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    source = root / "input"
+                    destination = root / "output"
+                    source_bytes = "\n".join(input_lines).encode("utf-8")
+                    if final_lf:
+                        source_bytes += b"\n"
+                    managed_candidates = set(managed_lines)
+                    if "/usr/local/syswarden/bin/syswarden-cli" in managed_paths:
+                        managed_candidates.add(alternate)
+                    expected = b""
+                    for index, line in enumerate(input_lines):
+                        if line in managed_candidates:
+                            continue
+                        expected += line.encode("utf-8")
+                        if index < len(input_lines) - 1 or final_lf:
+                            expected += b"\n"
+                    source.write_bytes(source_bytes)
+                    result = subprocess.run(
+                        [
+                            "/bin/sh",
+                            "-c",
+                            functions
+                            + '\nsyswarden_cron_source="$1"\n'
+                            + 'syswarden_cron_destination="$2"\n'
+                            + "shift 2\n"
+                            + 'syswarden_filter_crontab "${syswarden_cron_source}" '
+                            + '"${syswarden_cron_destination}" "$@"',
+                            "cron-filter-contract",
+                            str(source),
+                            str(destination),
+                            *managed_paths,
+                        ],
+                        check=False,
+                        capture_output=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(destination.read_bytes(), expected)
+
+    def test_package_cron_cleanup_distinguishes_absence_and_errors(self) -> None:
+        matrix = self.cron_script_matrix()
+        reference = self.cron_functions(matrix[0][1])
+        for name, script, _paths in matrix[1:]:
+            with self.subTest(shared_helper=name):
+                self.assertEqual(self.cron_functions(script), reference)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_crontab = fake_bin / "crontab"
+            fake_crontab.write_text(
+                "#!/bin/sh\n"
+                "case \"${1:-}\" in\n"
+                "  -l)\n"
+                "    if [ -e \"${CRONTAB_REMOVED_MARKER}\" ]; then\n"
+                "      printf '%s' \"${CRONTAB_VERIFY_STDOUT:-}\"\n"
+                "      printf '%s' \"${CRONTAB_VERIFY_STDERR:-}\" >&2\n"
+                "      exit \"${CRONTAB_VERIFY_RC:-1}\"\n"
+                "    fi\n"
+                "    printf '%s' \"${CRONTAB_STDOUT:-}\"\n"
+                "    printf '%s' \"${CRONTAB_STDERR:-}\" >&2\n"
+                "    exit \"${CRONTAB_READ_RC:-0}\"\n"
+                "    ;;\n"
+                "  -r)\n"
+                "    crontab_remove_rc=${CRONTAB_REMOVE_RC:-0}\n"
+                "    if [ \"${crontab_remove_rc}\" -eq 0 ]; then\n"
+                "      : > \"${CRONTAB_REMOVED_MARKER}\"\n"
+                "      if [ \"${CRONTAB_REMOVE_SPOOL:-0}\" -eq 1 ] && "
+                "[ -n \"${SYSWARDEN_CRON_ABSENCE_SPOOL:-}\" ]; then\n"
+                "        rm -f -- \"${SYSWARDEN_CRON_ABSENCE_SPOOL}\"\n"
+                "      fi\n"
+                "    fi\n"
+                "    exit \"${crontab_remove_rc}\"\n"
+                "    ;;\n"
+                "  -)\n"
+                "    cat > \"${CRONTAB_WRITE_OUTPUT}\"\n"
+                "    exit \"${CRONTAB_WRITE_RC:-0}\"\n"
+                "    ;;\n"
+                "  *) exit 97 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_crontab.chmod(0o700)
+            fake_cmp = fake_bin / "cmp"
+            real_cmp = shutil.which("cmp")
+            self.assertIsNotNone(real_cmp)
+            fake_cmp.write_text(
+                "#!/bin/sh\n"
+                "if [ -n \"${CMP_FORCE_RC:-}\" ]; then\n"
+                "  exit \"${CMP_FORCE_RC}\"\n"
+                "fi\n"
+                f'exec "{real_cmp}" "$@"\n',
+                encoding="utf-8",
+            )
+            fake_cmp.chmod(0o700)
+            backup = root / "backup"
+            error = root / "error"
+            filtered = root / "filtered"
+            written = root / "written"
+            removed = root / "removed"
+            command = [
+                "/bin/sh",
+                "-c",
+                reference
+                + '\nsyswarden_cleanup_crontab "$1" "$2" "$3" "$4"',
+                "cron-cleanup-contract",
+                str(backup),
+                str(error),
+                str(filtered),
+                "/opt/syswarden/bin/syswarden-cli",
+            ]
+
+            def run_cleanup(**updates: str) -> subprocess.CompletedProcess[bytes]:
+                written.unlink(missing_ok=True)
+                removed.unlink(missing_ok=True)
+                environment = os.environ.copy()
+                environment.update(
+                    {
+                        "PATH": f"{fake_bin}:{environment.get('PATH', '')}",
+                        "CRONTAB_WRITE_OUTPUT": str(written),
+                        "CRONTAB_REMOVED_MARKER": str(removed),
+                        "CRONTAB_READ_RC": "0",
+                        "CRONTAB_WRITE_RC": "0",
+                        "CRONTAB_REMOVE_RC": "0",
+                        "CRONTAB_REMOVE_SPOOL": "0",
+                        "CRONTAB_STDOUT": "",
+                        "CRONTAB_STDERR": "",
+                        "CRONTAB_VERIFY_RC": "1",
+                        "CRONTAB_VERIFY_STDOUT": "",
+                        "CRONTAB_VERIFY_STDERR": "no crontab for root\n",
+                        "CMP_FORCE_RC": "",
+                        "SYSWARDEN_CRON_ABSENCE_SPOOL": "",
+                        **updates,
+                    }
+                )
+                return subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    env=environment,
+                )
+
+            for message in (
+                "no crontab for root",
+                "crontab: no crontab for root",
+                "crontab: can't open 'root': No such file or directory",
+            ):
+                for terminator in ("", "\n"):
+                    with self.subTest(absence=message, terminator=repr(terminator)):
+                        result = run_cleanup(
+                            CRONTAB_READ_RC="1",
+                            CRONTAB_STDERR=message + terminator,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertFalse(written.exists())
+                        self.assertFalse(removed.exists())
+
+            spool = root / "root-spool"
+            spool.write_text("operator cron\n", encoding="utf-8")
+            result = run_cleanup(
+                CRONTAB_READ_RC="1",
+                CRONTAB_STDERR="crontab: no crontab for root\n",
+                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(written.exists())
+            spool.unlink()
+            spool.symlink_to(root / "missing-spool-target")
+            result = run_cleanup(
+                CRONTAB_READ_RC="1",
+                CRONTAB_STDERR="crontab: no crontab for root\n",
+                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(written.exists())
+            spool.unlink()
+
+            for read_rc, stdout, message in (
+                ("1", "", "permission denied\n"),
+                ("1", "", "no crontab for root\nextra diagnostic\n"),
+                ("1", "", " no crontab for root\n"),
+                ("1", "", "no crontab for root \n"),
+                ("2", "", "no crontab for root\n"),
+                ("1", "partial stdout", "no crontab for root\n"),
+            ):
+                with self.subTest(read_rc=read_rc, stdout=stdout, read_error=message):
+                    result = run_cleanup(
+                        CRONTAB_READ_RC=read_rc,
+                        CRONTAB_STDOUT=stdout,
+                        CRONTAB_STDERR=message,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(written.exists())
+                    self.assertFalse(removed.exists())
+
+            managed = (
+                "17 * * * * /opt/syswarden/bin/syswarden-cli "
+                "update-feeds >/dev/null 2>&1"
+            )
+            operator = (
+                "19 4 * * * /opt/syswarden/bin/syswarden-cli "
+                "update-feeds --operator-option"
+            )
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n" + operator,
+                CRONTAB_STDERR="provider warning must not become cron input\n",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(written.read_bytes(), operator.encode("utf-8"))
+
+            result = run_cleanup(CRONTAB_STDOUT=operator)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(written.exists(), "unchanged operator crontab was rewritten")
+            self.assertFalse(removed.exists(), "operator crontab was removed")
+
+            result = run_cleanup(CRONTAB_STDOUT="")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(written.exists(), "explicit empty crontab was rewritten")
+            self.assertFalse(removed.exists(), "explicit empty crontab was removed")
+
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n", CMP_FORCE_RC="2"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(written.exists(), "cmp error reached crontab write")
+
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n", CRONTAB_WRITE_RC="23"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(removed.exists(), "managed-only crontab was not removed")
+            self.assertFalse(written.exists(), "managed-only crontab was rewritten empty")
+
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n", CRONTAB_REMOVE_RC="23"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(removed.exists())
+            self.assertFalse(written.exists())
+
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n", CRONTAB_VERIFY_RC="0"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(removed.exists())
+            self.assertFalse(written.exists())
+
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n",
+                CRONTAB_VERIFY_RC="2",
+                CRONTAB_VERIFY_STDERR="permission denied\n",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(removed.exists())
+            self.assertFalse(written.exists())
+
+            spool.write_text(managed + "\n", encoding="utf-8")
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n",
+                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(spool.exists())
+            spool.unlink()
+
+            spool.symlink_to(root / "missing-spool-target")
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n",
+                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(spool.is_symlink())
+            spool.unlink()
+
+            spool.write_text(managed + "\n", encoding="utf-8")
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n",
+                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
+                CRONTAB_REMOVE_SPOOL="1",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(spool.exists())
+
+            result = run_cleanup(
+                CRONTAB_STDOUT=managed + "\n" + operator,
+                CRONTAB_WRITE_RC="23",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(removed.exists())
+
+    def test_active_local_package_builder_uses_exact_fail_closed_cron_cleanup(self) -> None:
+        preremove = self.local_build_script("prerm.sh")
+        self.assertIn("syswarden_cleanup_crontab", preremove)
+        self.assertIn("/opt/syswarden/bin/syswarden-cli || exit 1", preremove)
+        self.assertIn("mktemp -d /var/tmp/syswarden-cron.XXXXXX", preremove)
+        self.assertIn("LC_ALL=C crontab -r", preremove)
+        self.assertIn(
+            'syswarden_read_crontab "${syswarden_cron_backup}" '
+            '"${syswarden_cron_error}"',
+            preremove,
+        )
+        self.assertIn('chmod 0700 "${cron_work}"', preremove)
+        self.assertNotIn('${cron_backup}.error', preremove)
+        self.assertNotIn('${cron_backup}.filtered', preremove)
+        self.assertNotIn("grep -v 'syswarden-cli'", preremove)
+        self.assertNotIn("grep -F -v '/opt/syswarden/bin/syswarden-cli'", preremove)
+
+    def test_package_cron_signal_handlers_cleanup_and_never_succeed(self) -> None:
+        handlers = (
+            "trap 'syswarden_cleanup_cron_work' 0",
+            "trap 'syswarden_cleanup_cron_work; exit 129' 1",
+            "trap 'syswarden_cleanup_cron_work; exit 130' 2",
+            "trap 'syswarden_cleanup_cron_work; exit 143' 15",
+        )
+        matrix = self.cron_script_matrix()
+        for name, script, _paths in matrix:
+            with self.subTest(handler_contract=name):
+                for handler in handlers:
+                    self.assertIn(handler, script)
+                self.assertIn("mktemp -d", script)
+                self.assertIn('chmod 0700 "${cron_work}"', script)
+                self.assertIn('cron_backup="${cron_work}/backup"', script)
+                self.assertIn('cron_error="${cron_work}/error"', script)
+                self.assertIn('cron_filtered="${cron_work}/filtered"', script)
+                self.assertIn("LC_ALL=C crontab -r", script)
+                self.assertIn(
+                    "crontab -r returned success but the root crontab is still present",
+                    script,
+                )
+                self.assertNotIn('${cron_backup}.error', script)
+                self.assertNotIn('${cron_backup}.filtered', script)
+                if name == "workflow-freebsd-postrm":
+                    self.assertIn(
+                        "SYSWARDEN_CRON_ABSENCE_SPOOL=/var/cron/tabs/root",
+                        script,
+                    )
+                else:
+                    self.assertIn("SYSWARDEN_CRON_ABSENCE_SPOOL=\n", script)
+
+        functions = self.cron_functions(matrix[0][1])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            work = root / "private-cron-work"
+            work.mkdir(mode=0o700)
+            (work / "backup").write_text("operator cron\n", encoding="utf-8")
+            ready = root / "ready"
+            code = (
+                functions
+                + '\ncron_work="$1"\n'
+                + "\n".join(handlers)
+                + '\nprintf ready > "$2"\n'
+                + "while :; do sleep 1; done\n"
+            )
+            process = subprocess.Popen(
+                [
+                    "/bin/sh",
+                    "-c",
+                    code,
+                    "cron-signal-contract",
+                    str(work),
+                    str(ready),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            deadline = time.monotonic() + 5
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready.exists(), "signal probe did not become ready")
+            process.send_signal(signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=5)
+            self.assertNotEqual(process.returncode, 0, (stdout, stderr))
+            self.assertFalse(work.exists(), "signal handler left private cron work")
 
     def test_linux_postinstall_does_not_treat_systemctl_presence_as_active_systemd(self) -> None:
         postinstall = self.script("postinst.sh")
@@ -363,10 +836,17 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("rm -rf /usr/local/syswarden", postremove)
         self.assertIn("set -eu", postremove)
         self.assertNotIn("rm -rf /etc/syswarden", postremove)
-        self.assertIn("$7 == \"ha-sync\"", postremove)
-        self.assertIn("$7 == \"update-feeds\"", postremove)
-        self.assertIn("$6 == \"/usr/local/syswarden/bin/syswarden-cli\"", postremove)
-        self.assertIn("$6 == \"/opt/syswarden/bin/syswarden-cli\"", postremove)
+        self.assertIn("syswarden_cleanup_crontab", postremove)
+        self.assertIn("/usr/local/syswarden/bin/syswarden-cli", postremove)
+        self.assertIn("/opt/syswarden/bin/syswarden-cli", postremove)
+        self.assertIn("mktemp -d /var/tmp/syswarden-cron.XXXXXX", postremove)
+        self.assertIn(
+            "SYSWARDEN_CRON_ABSENCE_SPOOL=/var/cron/tabs/root",
+            postremove,
+        )
+        self.assertIn('chmod 0700 "${cron_work}"', postremove)
+        self.assertNotIn('${cron_backup}.error', postremove)
+        self.assertNotIn('${cron_backup}.filtered', postremove)
         self.assertIn("/usr/local/etc/rsyslog.d/99-syswarden-siem.conf", postremove)
         self.assertIn("/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf", postremove)
         self.assertNotIn("service rsyslogd restart", postremove)

@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -391,8 +393,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             pair = package_lifecycle_lab.PackagePair(
                 candidate=package_lifecycle_lab.PackageArtifact(
                     self.candidate
-                    / f"syswarden_4.02.11_{spec.package_architecture}.apk",
-                    "4.02.11",
+                    / f"syswarden_4.02.12_{spec.package_architecture}.apk",
+                    "4.02.12",
                     "a" * 64,
                 ),
                 previous=package_lifecycle_lab.PackageArtifact(
@@ -797,11 +799,23 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertEqual(args[1], "create")
         self.assertNotIn("--rm", args)
         self.assertIn("--network=none", args)
+        self.assertEqual(
+            [args[index + 1] for index, value in enumerate(args) if value == "--cap-add"],
+            ["NET_ADMIN"],
+        )
         self.assertEqual(args[args.index("--platform") + 1], "linux/amd64")
         self.assertIn("--security-opt=no-new-privileges", args)
         self.assertIn(f"{self.candidate}:/candidate:ro", args)
         self.assertIn(f"{self.previous}:/previous:ro", args)
         self.assertNotIn("--privileged", args)
+        for host_namespace in (
+            "--network=host",
+            "--pid=host",
+            "--ipc=host",
+            "--uts=host",
+            "--userns=host",
+        ):
+            self.assertNotIn(host_namespace, args)
         self.assertNotIn("/run/podman/podman.sock", " ".join(args))
         self.assertIn("EXPECTED_PACKAGE_ARCHITECTURE=amd64", args)
         self.assertIn("EXPECTED_UNAME_ARCHITECTURE=x86_64", args)
@@ -819,6 +833,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertIn("--network=none", probe)
         self.assertIn("--read-only", probe)
         self.assertIn("--cap-drop=all", probe)
+        self.assertNotIn("--cap-add", probe)
         self.assertNotIn("--privileged", probe)
         self.assertNotIn("--volume", probe)
 
@@ -854,6 +869,14 @@ class PackageLifecycleLabTests(unittest.TestCase):
         )
         self.assertIn("EXPECTED_PACKAGE_ARCHITECTURE=aarch64", lifecycle)
         self.assertIn("EXPECTED_UNAME_ARCHITECTURE=aarch64", lifecycle)
+        self.assertEqual(
+            [
+                lifecycle[index + 1]
+                for index, value in enumerate(lifecycle)
+                if value == "--cap-add"
+            ],
+            ["NET_ADMIN"],
+        )
 
         self.assertNotIn("--entrypoint", lifecycle)
         self.assertNotIn(str(self.emulator), lifecycle)
@@ -892,6 +915,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
             "/etc/syswarden/config/lifecycle-operator.conf",
             "/etc/syswarden/config/modules/99-user.toml",
             "/etc/syswarden/lists/syswarden_blacklist.ipv4",
+            "/etc/syswarden/lists/syswarden_blacklist.ipv6",
             "/var/lib/syswarden/ui/data.json",
             "/etc/syswarden/tls/operator.pem",
         ):
@@ -943,6 +967,167 @@ class PackageLifecycleLabTests(unittest.TestCase):
             sorted(script.index(fragment) for fragment in lifecycle_order),
         )
 
+    def test_seed_state_uses_separate_address_family_files(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        seed = source[
+            source.index("seed_state() {") : source.index("\nload_state_contract() {")
+        ]
+        for family, path in (
+            (4, "/etc/syswarden/lists/syswarden_blacklist.ipv4"),
+            (6, "/etc/syswarden/lists/syswarden_blacklist.ipv6"),
+        ):
+            producers = [
+                line.strip()
+                for line in seed.splitlines()
+                if line.lstrip().startswith("printf ") and path in line
+            ]
+            with self.subTest(path=path):
+                self.assertEqual(len(producers), 1)
+                tokens = shlex.split(producers[0])
+                redirect = tokens.index(">")
+                self.assertEqual(tokens[redirect + 1], path)
+                addresses = tokens[2:redirect]
+                self.assertGreaterEqual(len(addresses), 1)
+                self.assertTrue(
+                    all(
+                        ipaddress.ip_address(value).version == family
+                        for value in addresses
+                    )
+                )
+        self.assertIn("list_ipv6", package_lifecycle_lab.OPERATOR_STATE_KEYS)
+        self.assertIn("'[network]' 'interfaces = \"lo\"'", seed)
+        self.assertNotIn('interfaces = "eth0"', seed)
+
+    def test_previous_package_is_installed_and_probed_before_operator_seed(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        initial = source[
+            source.index("scenario_upgrade_rollback_initial() {") : source.index(
+                "\nscenario_upgrade_rollback_restart_one() {"
+            )
+        ]
+        install = initial.index(
+            'run_install_step install.previous "${PREVIOUS_PACKAGE}"'
+        )
+        probes = (
+            initial.index("probe_forward_only_apk_payload previous"),
+            initial.index('probe_payload previous previous "${PREVIOUS_VERSION}"'),
+        )
+        seed = initial.index("seed_state")
+        preserved = initial.index("assert_all_state_preserved previous")
+        candidate = initial.index(
+            'run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}"'
+        )
+        self.assertTrue(all(install < probe < seed for probe in probes))
+        self.assertLess(seed, preserved)
+        self.assertLess(preserved, candidate)
+
+    def test_forward_only_apk_downgrade_flag_is_exactly_bounded(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        install_function = source[
+            source.index("is_exact_forward_only_apk_rollback() {") : source.index(
+                "\nremove_package() {"
+            )
+        ]
+        fake_bin = self.root / "fake-bin"
+        fake_bin.mkdir()
+        apk = fake_bin / "apk"
+        apk.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$@\" > \"${APK_ARGUMENTS}\"\n",
+            encoding="utf-8",
+        )
+        apk.chmod(0o700)
+        shell = self.root / "apk-install-contract.sh"
+        shell.write_text(
+            "#!/bin/sh\n"
+            "set -u\n"
+            "hash_file() { sha256sum \"$1\" | awk '{ print $1 }'; }\n"
+            + install_function
+            + '\ninstall_package "${PACKAGE_PATH}" "${CHECK}"\n',
+            encoding="utf-8",
+        )
+        shell.chmod(0o700)
+        previous_path = self.root / "syswarden_4.02.8_x86_64.apk"
+        previous_path.write_bytes(b"exact historical APK fixture")
+        previous = str(previous_path)
+        candidate_path = self.root / "syswarden_4.02.12_x86_64.apk"
+        candidate_path.write_bytes(b"candidate APK fixture")
+        candidate = str(candidate_path)
+        previous_sha256 = hashlib.sha256(previous_path.read_bytes()).hexdigest()
+        cases = (
+            ("exact-rollback", "1", "rollback.previous", previous, previous_sha256, 0, True),
+            ("regular-upgrade", "1", "upgrade.candidate", candidate, previous_sha256, 0, False),
+            (
+                "non-forward-rollback",
+                "0",
+                "rollback.previous",
+                previous,
+                previous_sha256,
+                0,
+                False,
+            ),
+            ("wrong-package", "1", "rollback.previous", candidate, previous_sha256, 1, False),
+            ("wrong-digest", "1", "rollback.previous", previous, "0" * 64, 1, False),
+        )
+        for (
+            name,
+            transition,
+            check,
+            package,
+            expected_sha256,
+            expected_rc,
+            expected_force,
+        ) in cases:
+            with self.subTest(name=name):
+                arguments = self.root / f"{name}.args"
+                env = os.environ.copy()
+                env.update(
+                    {
+                        "PATH": f"{fake_bin}:{env.get('PATH', '')}",
+                        "APK_ARGUMENTS": str(arguments),
+                        "PACKAGE_FAMILY": "apk",
+                        "PACKAGE_PATH": package,
+                        "CHECK": check,
+                        "FORWARD_ONLY_APK_TRANSITION": transition,
+                        "PREVIOUS_PACKAGE": previous,
+                        "EXPECTED_PREVIOUS_VERSION": "4.02.8",
+                        "EXPECTED_PREVIOUS_SHA256": expected_sha256,
+                    }
+                )
+                result = subprocess.run(
+                    (str(shell),),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+                self.assertEqual(result.returncode, expected_rc, result.stderr)
+                observed = (
+                    arguments.read_text(encoding="utf-8").splitlines()
+                    if arguments.exists()
+                    else []
+                )
+                self.assertEqual("--force-old-apk" in observed, expected_force)
+                if expected_rc == 0:
+                    self.assertEqual(observed[-1], package)
+
+    def test_forward_only_probe_recomputes_version_after_restart(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        probe = source[
+            source.index("probe_forward_only_apk_payload() {") : source.index(
+                "\nprobe_postinstall_contract() {"
+            )
+        ]
+        self.assertIn(
+            'actual_version="$(installed_version 2>/dev/null || true)"', probe
+        )
+        self.assertIn(
+            'check_equal "${label}.version" "${EXPECTED_PREVIOUS_VERSION}" '
+            '"${actual_version}"',
+            probe,
+        )
+        self.assertNotIn("${PREVIOUS_VERSION}", probe)
+
     def test_forward_only_shell_invokes_historical_and_recovery_package_steps(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
         functions = source[
@@ -959,11 +1144,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
             f'CALLS="{calls}"\n'
             f'RESTART_STATE_FILE="{restart}"\n'
             'PREVIOUS_PACKAGE="/previous/exact-v4.02.8.apk"\n'
-            'CANDIDATE_PACKAGE="/candidate/v4.02.11.apk"\n'
+            'CANDIDATE_PACKAGE="/candidate/v4.02.12.apk"\n'
             'PREVIOUS_VERSION="4.02.8"\n'
-            'CANDIDATE_VERSION="4.02.11"\n'
+            'CANDIDATE_VERSION="4.02.12"\n'
             'EXPECTED_PREVIOUS_VERSION="4.02.8"\n'
-            'EXPECTED_CANDIDATE_VERSION="4.02.11"\n'
+            'EXPECTED_CANDIDATE_VERSION="4.02.12"\n'
             'FORWARD_ONLY_APK_TRANSITION="1"\n'
             "prepare_expected_payloads() { return 0; }\n"
             "seed_state() { :; }\n"
@@ -1468,11 +1653,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 architecture
             ]
             platform_result.update(
-                candidate_version="4.02.11",
+                candidate_version="4.02.12",
                 previous_version="4.02.8",
                 candidate={
-                    "filename": f"syswarden_4.02.11_{architecture}.apk",
-                    "version": "4.02.11",
+                    "filename": f"syswarden_4.02.12_{architecture}.apk",
+                    "version": "4.02.12",
                     "sha256": "c" * 64,
                 },
                 previous={
@@ -1693,6 +1878,40 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertIn("/opt/syswarden/bin/syswarden-cli update-feeds", script)
         self.assertIn(
             "19 4 * * * /opt/syswarden/bin/syswarden-cli update-feeds --operator-option",
+            script,
+        )
+        for adversarial in (
+            "# operator note mentioning syswarden-cli",
+            " */30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1",
+            "17  * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1",
+            "*/30\\t* * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1",
+            "23 * * * * /usr/local/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1",
+        ):
+            with self.subTest(adversarial=adversarial):
+                self.assertIn(adversarial, script)
+        self.assertIn("printf '%s \\n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'", script)
+        self.assertIn("printf ' \\t \\n'", script)
+        self.assertIn(
+            "LC_ALL=C crontab -l > /tmp/syswarden-existing-cron "
+            "2>/tmp/syswarden-existing-cron.error || return 1",
+            script,
+        )
+        self.assertIn(
+            'LC_ALL=C crontab -l 2>/tmp/syswarden-remove-cron.error',
+            script,
+        )
+        self.assertIn(
+            '$0 == "*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync '
+            '>/dev/null 2>&1"',
+            script,
+        )
+        self.assertIn(
+            '$0 == $1 " * * * * /opt/syswarden/bin/syswarden-cli '
+            'update-feeds >/dev/null 2>&1"',
+            script,
+        )
+        self.assertIn(
+            'while IFS= read -r operator_cron_line || [ -n "${operator_cron_line}" ]',
             script,
         )
         for family, scenario in (

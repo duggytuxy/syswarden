@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"syswarden-cli/config"
-	"syswarden-cli/pkg/platformpaths"
 )
 
 func logHeader(title string) {
@@ -94,15 +93,10 @@ func RunAudit() {
 
 	// Phase 1
 	logHeader("Phase 1: Cron Orchestration")
-	out, _ := exec.Command("crontab", "-l").Output() // #nosec
-	cronCount := 0
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if platformpaths.IsManagedCronLine(line) && len(fields) == 9 && fields[6] == "update-feeds" {
-			cronCount++
-		}
-	}
-	if cronCount == 1 {
+	cronCount, cronErr := inspectManagedFeedCron(exec.Command("crontab", "-l"))
+	if cronErr != nil {
+		fail(fmt.Sprintf("Cron Orchestration FAILED: cannot read root crontab: %v", cronErr))
+	} else if cronCount == 1 {
 		pass("Cron Orchestration VERIFIED: 'syswarden-cli update-feeds' is actively scheduled.")
 	} else if cronCount > 1 {
 		fail(fmt.Sprintf("Cron Duplication FAILED: %d SYSWARDEN cron jobs detected! Idempotency violated.", cronCount))

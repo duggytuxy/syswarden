@@ -11,8 +11,6 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
-
-	"syswarden-cli/pkg/platformpaths"
 )
 
 const freeBSDSystemImmutableFlag = 0x00020000
@@ -93,32 +91,27 @@ func unlockFreeBSDProfiles(baseDirectory string) error {
 }
 
 func removeManagedFreeBSDCron() error {
-	output, err := exec.Command("crontab", "-l").Output()
+	existing, present, err := readRootCrontab(exec.Command("crontab", "-l"))
 	if err != nil {
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
-			if _, statErr := os.Lstat("/var/cron/tabs/root"); errors.Is(statErr, os.ErrNotExist) {
-				return nil
-			}
-			return fmt.Errorf("crontab reported no entries but the root spool file still exists")
+		return fmt.Errorf("clean root crontab: %w", err)
+	}
+	if !present {
+		return verifyAbsentRootCronSpool("/var/cron/tabs/root")
+	}
+	removed, err := removeManagedRootCronContent(
+		existing,
+		present,
+		exec.Command("crontab", "-"),
+		exec.Command("crontab", "-r"),
+		exec.Command("crontab", "-l"),
+	)
+	if err != nil {
+		return fmt.Errorf("clean root crontab: %w", err)
+	}
+	if removed {
+		if err := verifyAbsentRootCronSpool("/var/cron/tabs/root"); err != nil {
+			return fmt.Errorf("clean root crontab: %w", err)
 		}
-		return fmt.Errorf("read root crontab: %w", err)
-	}
-	lines := strings.Split(string(output), "\n")
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && !platformpaths.IsManagedCronLine(line) {
-			kept = append(kept, line)
-		}
-	}
-	content := ""
-	if len(kept) > 0 {
-		content = strings.Join(kept, "\n") + "\n"
-	}
-	command := exec.Command("crontab", "-")
-	command.Stdin = strings.NewReader(content)
-	if output, err := command.CombinedOutput(); err != nil {
-		return fmt.Errorf("write filtered root crontab: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 	return nil
 }

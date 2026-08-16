@@ -1,3 +1,35 @@
+# Release v4.02.12
+
+### FIXED 🐛
+- **Threat-feed scheduling:** Reconcile the `update-feeds` and `ha-sync` root cron entries independently so disabling or reconfiguring HA never removes the hourly threat-intelligence refresh.
+- **HA scheduling:** Remove only stale SysWarden `ha-sync` entries when HA is disabled, has no outbound peer or becomes inbound-only, while preserving the feed schedule and operator-owned cron lines byte-for-byte.
+- **Cron safety:** Fail closed on real crontab read or write errors, recognize only the exact Vixie, FreeBSD and BusyBox empty-crontab conditions, and never inject successful-command stderr into the root crontab.
+- **Dual-stack lifecycle:** Keep IPv4 and IPv6 operator entries in their matching `.ipv4` and `.ipv6` files and prove their independent hashes, modes and ownership across upgrade, reinstall, restart, rollback, recovery, removal and purge.
+- **Historical package transition:** Install and probe the exact v4.02.8 package on a clean package state before seeding operator configuration, then require the v4.02.12 candidate to preserve that state through the complete lifecycle.
+- **Alpine rollback:** Permit `--force-old-apk` only for the SHA-bound v4.02.8 rollback inside the exact forward-only transition, recompute the installed version after every container restart, and require successful recovery to v4.02.12.
+
+### SECURITY 🔒
+- **Isolated firewall proof:** Exercise nftables with only `NET_ADMIN` inside a rootless private network namespace using `--network=none` and the loopback interface, without privileged mode or host network, PID, IPC, UTS or user namespaces.
+- **Cron ownership:** Match only canonical SysWarden-generated feed and HA entries. Whitespace variants, additional arguments, lookalikes and unrelated operator tasks remain untouched.
+- **Fail-closed qualification:** The protected release workflow signs and seals nothing unless every Linux lifecycle, FreeBSD VM, nftables, adapter and evidence gate succeeds for the exact candidate SHA.
+- **Security baseline:** Remove only the eight resolved legacy crontab suppressions, without adding, moving or reclassifying any security suppression.
+
+### RELEASE STATUS 📦
+- v4.02.11 was merged as a source candidate but was never tagged or published. Protected qualification run `31905061431` stopped before signing after detecting an invalid mixed-family laboratory fixture and the real HA/feed cron reconciliation defect. No v4.02.11 Release asset was exposed to users.
+- v4.02.12 supersedes the unpublished v4.02.11 candidate. The last public Release remains v4.02.8 until v4.02.12 passes the protected qualification on its exact merged SHA and the immutable tag publisher verifies the complete 14-asset inventory.
+- The expected Release inventory is seven native packages plus `SHA256SUMS.txt`, `RELEASE_SHA256SUMS.txt`, `syswarden-release.tar.gz`, `syswarden-sbom.spdx.json`, `plumber-report.zip`, `syswarden-update-manifest-v1.json` and `syswarden-update-manifest-v1.json.sig`.
+
+### UPGRADE NOTES 📦
+- The immutable v4.02.8 binary predates the signed updater. Do not use `syswarden update` for its first hop. Download exactly one v4.02.12 package matching the host plus `SHA256SUMS.txt`, verify that exact package, then install it with the native package manager.
+- **Debian or Ubuntu:** after checksum verification, run `sudo apt-get install -y ./syswarden_4.02.12_amd64.deb` or use the `arm64` filename on an ARM64 host.
+- **RHEL, AlmaLinux or Rocky Linux:** after checksum verification, run `sudo dnf install -y ./syswarden-4.02.12-1.x86_64.rpm` or use the `aarch64` filename on an ARM64 host.
+- **Alpine Linux:** after checksum verification, run `sudo apk add --allow-untrusted ./syswarden_4.02.12_x86_64.apk` or use the `aarch64` filename on an ARM64 host. Never use `--allow-untrusted` before the SHA-256 check succeeds.
+- **FreeBSD 14 amd64:** install `curl`, `jq`, `libqrencode`, `rsyslog` and `wireguard-tools`, then run `sudo pkg add -f ./syswarden-4.02.12.txz` after checksum verification. Use `syswarden uninstall` rather than raw `pkg delete`, whose script-failure behavior cannot guarantee PF recovery.
+- Starting from an installed v4.02.12, `syswarden update` verifies the signed Ed25519 manifest for the six Linux targets and FreeBSD amd64 before installing future published versions.
+- Review the package post-install result with `sudo syswarden manual` and `sudo syswarden config`. The complete architecture-selecting procedure remains in the README section [Install the latest verified Release](README.md#install-the-latest-verified-release).
+
+---
+
 # Release v4.02.11
 
 ### FIXED 🐛

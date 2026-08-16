@@ -553,11 +553,11 @@ func TestHACIDRPeersAreInboundOnlyAndNeverDialed_SW_HA_001(t *testing.T) {
 		}
 	}
 	existingCron := "15 2 * * * /usr/local/bin/backup\n*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1\n"
-	inboundOnlyCron := buildHACrontab(existingCron, false)
+	inboundOnlyCron := mustHACron(t, existingCron, false)
 	if strings.Contains(inboundOnlyCron, "ha-sync") || !strings.Contains(inboundOnlyCron, "backup") {
 		t.Fatalf("inbound-only cron plan = %q", inboundOnlyCron)
 	}
-	outboundCron := buildHACrontab(existingCron, true)
+	outboundCron := mustHACron(t, existingCron, true)
 	if strings.Count(outboundCron, "ha-sync") != 1 || !strings.Contains(outboundCron, "backup") {
 		t.Fatalf("outbound cron plan = %q", outboundCron)
 	}
