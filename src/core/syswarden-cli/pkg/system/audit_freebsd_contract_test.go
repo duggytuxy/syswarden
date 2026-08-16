@@ -26,14 +26,15 @@ func TestFreeBSDAuditVerifiesOwnerAndExactManagedCron_SW_PKG_001(t *testing.T) {
 	for _, required := range []string{
 		`info.Sys().(*syscall.Stat_t)`,
 		`stat.Uid == expectedUID`,
-		`platformpaths.IsManagedCronLine(line)`,
-		`fields[6] == "update-feeds"`,
+		`inspectManagedFeedCron(exec.Command("crontab", "-l"))`,
+		`Cron Orchestration FAILED: cannot read root crontab`,
 	} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("FreeBSD audit lacks %q", required)
 		}
 	}
-	if strings.Contains(source, `strings.Count(string(out), "syswarden-cli update-feeds")`) {
+	if strings.Contains(source, `strings.Count(string(out), "syswarden-cli update-feeds")`) ||
+		strings.Contains(source, `out, _ := exec.Command("crontab", "-l").Output()`) {
 		t.Fatal("FreeBSD audit still counts substring matches as managed cron entries")
 	}
 }

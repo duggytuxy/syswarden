@@ -117,22 +117,14 @@ func UninstallSystem() error {
 	// 5.5 Clean up Cron and Rsyslog
 	fmt.Println(" -> Cleaning up background jobs and log bridges...")
 
-	// Remove cron natively
-	out, _ := exec.Command("crontab", "-l").Output() // #nosec
-	lines := strings.Split(string(out), "\n")
-	var newLines []string
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && !strings.Contains(line, "syswarden-cli") {
-			newLines = append(newLines, line)
-		}
+	// Remove only canonical SysWarden cron entries and fail before any write if
+	// the operator crontab cannot be read exactly.
+	if err := removeManagedRootCron(
+		exec.Command("crontab", "-l"),
+		exec.Command("crontab", "-"),
+	); err != nil {
+		return fmt.Errorf("clean root crontab: %w", err)
 	}
-	newCron := ""
-	if len(newLines) > 0 {
-		newCron = strings.Join(newLines, "\n") + "\n"
-	}
-	cmd := exec.Command("crontab", "-") // #nosec
-	cmd.Stdin = strings.NewReader(newCron)
-	_ = cmd.Run()
 	_ = os.Remove("/etc/rsyslog.d/99-syswarden-waf-bridge.conf")
 	_ = os.Remove("/etc/rsyslog.d/99-syswarden-siem.conf")
 	_ = exec.Command("systemctl", "restart", "rsyslog").Run() // #nosec

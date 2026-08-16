@@ -173,6 +173,115 @@ EOF
 
 cat << 'EOF' > prerm.sh
 #!/bin/sh
+syswarden_managed_cron_line() {
+    syswarden_cron_candidate="$1"
+    shift
+    syswarden_cron_minute="${syswarden_cron_candidate%% *}"
+    for syswarden_cron_cli do
+        if [ "${syswarden_cron_candidate}" = "*/30 * * * * ${syswarden_cron_cli} ha-sync >/dev/null 2>&1" ]; then
+            return 0
+        fi
+        case "${syswarden_cron_minute}" in
+            [1-9]|[1-5][0-9])
+                if [ "${syswarden_cron_candidate}" = "${syswarden_cron_minute} * * * * ${syswarden_cron_cli} update-feeds >/dev/null 2>&1" ]; then
+                    return 0
+                fi
+                ;;
+        esac
+    done
+    return 1
+}
+syswarden_filter_crontab() {
+    syswarden_cron_input="$1"
+    syswarden_cron_output="$2"
+    shift 2
+    {
+        while :; do
+            syswarden_cron_candidate=
+            if IFS= read -r syswarden_cron_candidate; then
+                syswarden_cron_terminated=1
+            else
+                syswarden_cron_terminated=0
+                [ -n "${syswarden_cron_candidate}" ] || break
+            fi
+            if ! syswarden_managed_cron_line "${syswarden_cron_candidate}" "$@"; then
+                if [ "${syswarden_cron_terminated}" -eq 1 ]; then
+                    printf '%s\n' "${syswarden_cron_candidate}" || return 1
+                else
+                    printf '%s' "${syswarden_cron_candidate}" || return 1
+                fi
+            fi
+        done
+    } < "${syswarden_cron_input}" > "${syswarden_cron_output}"
+}
+syswarden_read_crontab() {
+    syswarden_cron_backup="$1"
+    syswarden_cron_error="$2"
+    syswarden_cron_present=0
+    if LC_ALL=C crontab -l > "${syswarden_cron_backup}" 2> "${syswarden_cron_error}"; then
+        syswarden_cron_present=1
+        return 0
+    else
+        syswarden_cron_rc=$?
+    fi
+    [ "${syswarden_cron_rc}" -eq 1 ] || {
+        printf 'crontab -l failed with exit %s\n' "${syswarden_cron_rc}" >&2
+        return 1
+    }
+    [ ! -s "${syswarden_cron_backup}" ] || {
+        printf '%s\n' 'crontab -l emitted partial stdout while reporting absence' >&2
+        return 1
+    }
+    syswarden_cron_message="$(cat "${syswarden_cron_error}")"
+    syswarden_cron_lines="$(LC_ALL=C awk 'END { print NR + 0 }' "${syswarden_cron_error}")"
+    case "${syswarden_cron_lines}:${syswarden_cron_message}" in
+        "1:no crontab for root"|\
+        "1:crontab: no crontab for root"|\
+        "1:crontab: can't open 'root': No such file or directory")
+            if [ -n "${SYSWARDEN_CRON_ABSENCE_SPOOL:-}" ] && \
+               { [ -e "${SYSWARDEN_CRON_ABSENCE_SPOOL}" ] || [ -L "${SYSWARDEN_CRON_ABSENCE_SPOOL}" ]; }; then
+                printf '%s\n' 'crontab reported absence while the configured spool path still exists' >&2
+                return 1
+            fi
+            : > "${syswarden_cron_backup}"
+            return 0
+            ;;
+    esac
+    printf '%s\n' "${syswarden_cron_message}" >&2
+    return 1
+}
+syswarden_cleanup_cron_work() {
+    [ -n "${cron_work:-}" ] || return 0
+    syswarden_cron_cleanup_target="${cron_work}"
+    cron_work=
+    rm -rf -- "${syswarden_cron_cleanup_target}"
+}
+syswarden_cleanup_crontab() {
+    syswarden_cron_backup="$1"
+    syswarden_cron_error="$2"
+    syswarden_cron_filtered="$3"
+    shift 3
+    syswarden_read_crontab "${syswarden_cron_backup}" "${syswarden_cron_error}" || return 1
+    [ "${syswarden_cron_present}" -eq 1 ] || return 0
+    syswarden_filter_crontab "${syswarden_cron_backup}" "${syswarden_cron_filtered}" "$@" || return 1
+    if cmp -s "${syswarden_cron_backup}" "${syswarden_cron_filtered}"; then
+        return 0
+    else
+        syswarden_cron_cmp_rc=$?
+    fi
+    [ "${syswarden_cron_cmp_rc}" -eq 1 ] || return 1
+    if [ ! -s "${syswarden_cron_filtered}" ]; then
+        LC_ALL=C crontab -r || return 1
+        syswarden_read_crontab "${syswarden_cron_backup}" "${syswarden_cron_error}" || return 1
+        [ "${syswarden_cron_present}" -eq 0 ] || {
+            printf '%s\n' 'crontab -r returned success but the root crontab is still present' >&2
+            return 1
+        }
+        return 0
+    fi
+    crontab - < "${syswarden_cron_filtered}" || return 1
+}
+
 # RPM Uninstall ($1 = 0) or DEB Uninstall/Purge
 if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     if command -v systemctl >/dev/null 2>&1; then
@@ -194,7 +303,23 @@ if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     fi
     nft delete table netdev syswarden_hw_drop || true
     nft delete table inet syswarden || true
-    crontab -l | grep -v 'syswarden-cli' | crontab - || true
+    umask 077
+    SYSWARDEN_CRON_ABSENCE_SPOOL=
+    cron_work=
+    trap 'syswarden_cleanup_cron_work' 0
+    trap 'syswarden_cleanup_cron_work; exit 129' 1
+    trap 'syswarden_cleanup_cron_work; exit 130' 2
+    trap 'syswarden_cleanup_cron_work; exit 143' 15
+    cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || exit 1
+    chmod 0700 "${cron_work}" || exit 1
+    cron_backup="${cron_work}/backup"
+    cron_error="${cron_work}/error"
+    cron_filtered="${cron_work}/filtered"
+    syswarden_cleanup_crontab \
+        "${cron_backup}" "${cron_error}" "${cron_filtered}" \
+        /opt/syswarden/bin/syswarden-cli || exit 1
+    syswarden_cleanup_cron_work || exit 1
+    trap - 0 1 2 15
     rm -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true
 fi
 EOF

@@ -82,9 +82,10 @@ func RunAudit() {
 
 	// Phase 1
 	logHeader("Phase 1: Cron Orchestration")
-	out, _ := exec.Command("crontab", "-l").Output() // #nosec
-	cronCount := strings.Count(string(out), "syswarden-cli update-feeds")
-	if cronCount == 1 {
+	cronCount, cronErr := inspectManagedFeedCron(exec.Command("crontab", "-l"))
+	if cronErr != nil {
+		fail(fmt.Sprintf("Cron Orchestration FAILED: cannot read root crontab: %v", cronErr))
+	} else if cronCount == 1 {
 		pass("Cron Orchestration VERIFIED: 'syswarden-cli update-feeds' is actively scheduled.")
 	} else if cronCount > 1 {
 		fail(fmt.Sprintf("Cron Duplication FAILED: %d SYSWARDEN cron jobs detected! Idempotency violated.", cronCount))

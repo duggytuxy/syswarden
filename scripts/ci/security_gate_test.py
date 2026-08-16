@@ -409,6 +409,28 @@ class NosecGateTests(unittest.TestCase):
             [("src/core/example/example.go", content)]
         )
 
+    def test_repository_policy_count_matches_legacy_inventory(self) -> None:
+        baseline_path = (
+            Path(__file__).resolve().parents[2]
+            / ".github"
+            / "baselines"
+            / "nosec-legacy.json"
+        )
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        policy = baseline.get("policy")
+        self.assertIsInstance(policy, str)
+        prefix = "The "
+        suffix = " legacy annotations remain tracked debt."
+        self.assertTrue(policy.startswith(prefix))
+        declaration, separator, _ = policy.partition(suffix)
+        self.assertEqual(separator, suffix)
+        declared = declaration[len(prefix) :]
+        self.assertTrue(declared.isdecimal())
+        self.assertEqual(
+            int(declared),
+            sum(security_gate.nosec_counter(baseline).values()),
+        )
+
     def test_existing_legacy_annotation_is_a_subset(self) -> None:
         content = "package example\nvar _ = dangerous() // #nosec\n"
         baseline, _, _ = self.inventory(content)

@@ -1001,28 +1001,26 @@ func SetupFeedsCron() error {
 	// Generate a random minute (1-59) to prevent "Thundering Herd" API collisions
 	randomMinute := rand.Intn(59) + 1 // #nosec
 
-	cronJob := fmt.Sprintf("%d * * * * %s update-feeds >/dev/null 2>&1", randomMinute, platformpaths.CLI)
-
 	// Add to crontab natively
-	out, _ := exec.Command("crontab", "-l").Output() // #nosec
-	lines := strings.Split(string(out), "\n")
-	var newLines []string
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && !platformpaths.IsManagedCronLine(line) {
-			newLines = append(newLines, line)
-		}
+	existing, _, err := readRootCrontab(exec.Command("crontab", "-l"))
+	if err != nil {
+		return fmt.Errorf("failed to inspect feeds cron job: %w", err)
 	}
-	newLines = append(newLines, cronJob)
-
-	newCron := strings.Join(newLines, "\n") + "\n"
-	cmd := exec.Command("crontab", "-") // #nosec
-	cmd.Stdin = strings.NewReader(newCron)
-	if err := cmd.Run(); err != nil {
+	newCron, err := buildFeedsCrontab(existing, randomMinute)
+	if err != nil {
+		return fmt.Errorf("failed to reconcile feeds cron job: %w", err)
+	}
+	if err := writeRootCrontab(exec.Command("crontab", "-"), newCron); err != nil {
 		return fmt.Errorf("failed to inject feeds cron job: %w", err)
 	}
 	fmt.Printf("[+] Background Threat Feeds updater injected successfully (Hourly at minute %d).\n", randomMinute)
 
 	return nil
+}
+
+func buildFeedsCrontab(existing string, minute int) (string, error) {
+	cronJob := fmt.Sprintf("%d * * * * %s update-feeds >/dev/null 2>&1", minute, platformpaths.CLI)
+	return platformpaths.ReconcileCronRecords(existing, platformpaths.IsManagedFeedCronLine, cronJob)
 }
 
 // FetchASNWhois retrieves IPv4 and IPv6 prefixes for an ASN natively via TCP WHOIS

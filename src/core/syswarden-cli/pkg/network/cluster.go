@@ -1,6 +1,7 @@
 package network
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"os/exec"
@@ -52,38 +53,84 @@ func planHAClusterPeers(value string) (haClusterPeerPlan, error) {
 	return plan, nil
 }
 
-func configureHASyncCron(enableOutbound bool) {
-	out, _ := exec.Command("crontab", "-l").Output() // #nosec
-	newCron := buildHACrontab(string(out), enableOutbound)
-	cmd := exec.Command("crontab", "-") // #nosec
-	cmd.Stdin = strings.NewReader(newCron)
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("[WARN] Failed to update HA cron job: %v\n", err)
-	}
-}
-
-func buildHACrontab(existing string, enableOutbound bool) string {
-	lines := strings.Split(existing, "\n")
-	newLines := make([]string, 0, len(lines)+1)
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && !platformpaths.IsManagedCronLine(line) {
-			newLines = append(newLines, line)
+func readRootCrontab(command *exec.Cmd) (string, bool, error) {
+	environment := command.Environ()
+	filteredEnvironment := make([]string, 0, len(environment)+1)
+	for _, variable := range environment {
+		if !strings.HasPrefix(variable, "LC_ALL=") {
+			filteredEnvironment = append(filteredEnvironment, variable)
 		}
 	}
-	if enableOutbound {
-		newLines = append(newLines, "*/30 * * * * "+platformpaths.CLI+" ha-sync >/dev/null 2>&1")
+	command.Env = append(filteredEnvironment, "LC_ALL=C")
+
+	out, err := command.Output()
+	if err == nil {
+		return string(out), true, nil
 	}
-	newCron := ""
-	if len(newLines) > 0 {
-		newCron = strings.Join(newLines, "\n") + "\n"
+	var exitError *exec.ExitError
+	if len(out) == 0 && errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+		message := strings.TrimSuffix(string(exitError.Stderr), "\n")
+		if message == "no crontab for root" ||
+			message == "crontab: no crontab for root" ||
+			message == "crontab: can't open 'root': No such file or directory" {
+			return "", false, nil
+		}
 	}
-	return newCron
+	return "", false, fmt.Errorf("failed to read root crontab: %w", err)
+}
+
+func writeRootCrontab(command *exec.Cmd, content string) error {
+	command.Stdin = strings.NewReader(content)
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("failed to write root crontab: %w", err)
+	}
+	return nil
+}
+
+func updateRootCrontab(readCommand, writeCommand *exec.Cmd, build func(string) (string, error)) error {
+	existing, _, err := readRootCrontab(readCommand)
+	if err != nil {
+		return err
+	}
+	updated, err := build(existing)
+	if err != nil {
+		return err
+	}
+	if updated == existing {
+		return nil
+	}
+	return writeRootCrontab(writeCommand, updated)
+}
+
+func configureHASyncCron(enableOutbound bool) error {
+	err := updateRootCrontab(
+		exec.Command("crontab", "-l"),
+		exec.Command("crontab", "-"),
+		func(existing string) (string, error) { return buildHACrontab(existing, enableOutbound) },
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update HA cron job: %w", err)
+	}
+	return nil
+}
+
+func buildHACrontab(existing string, enableOutbound bool) (string, error) {
+	if !enableOutbound {
+		return platformpaths.ReconcileCronRecords(existing, platformpaths.IsManagedHACronLine, "")
+	}
+	return platformpaths.ReconcileCronRecords(
+		existing,
+		platformpaths.IsManagedHACronLine,
+		"*/30 * * * * "+platformpaths.CLI+" ha-sync >/dev/null 2>&1",
+	)
 }
 
 func SetupHACluster() error {
 	if !config.GlobalConfig.HAEnabled {
+		if err := configureHASyncCron(false); err != nil {
+			return err
+		}
 		fmt.Println("[INFO] HA Cluster Sync is DISABLED.")
-		configureHASyncCron(false)
 		return nil
 	}
 
@@ -93,6 +140,9 @@ func SetupHACluster() error {
 	}
 	peerPort := config.GlobalConfig.HAPeerPort
 	if len(peerPlan.Allowlist) == 0 {
+		if err := configureHASyncCron(false); err != nil {
+			return err
+		}
 		fmt.Println("[WARN] HA Cluster enabled but no Peer IP configured.")
 		return nil
 	}
@@ -111,12 +161,16 @@ func SetupHACluster() error {
 	}
 
 	if len(peerPlan.Dialable) == 0 {
-		configureHASyncCron(false)
+		if err := configureHASyncCron(false); err != nil {
+			return err
+		}
 		fmt.Println("[+] HA Cluster ENABLED in inbound-only mode (no dialable exact peer configured).")
 		return nil
 	}
 
-	configureHASyncCron(true)
+	if err := configureHASyncCron(true); err != nil {
+		return err
+	}
 	fmt.Println("[+] HA Cluster Sync ENABLED.")
 	return nil
 }

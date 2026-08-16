@@ -347,6 +347,7 @@ OPERATOR_STATE_KEYS = (
     "config",
     "token",
     "list",
+    "list_ipv6",
     "data",
     "certificate",
 )
@@ -359,7 +360,7 @@ PACKAGE_PAYLOAD_PATHS = (
     "/usr/local/bin/syswarden",
     "/usr/local/bin/syswarden-tui",
 )
-FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.11"
+FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.12"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
 FORWARD_ONLY_APK_PREVIOUS = {
     "x86_64": {
@@ -509,7 +510,7 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
     elif family == "deb":
         checks.extend(
             f"{scenario}.{removal_label}.state.{key}"
-            for key in ("config", "token", "list", "certificate")
+            for key in ("config", "token", "list", "list_ipv6", "certificate")
         )
         for key in ("data",):
             checks.extend(
@@ -519,7 +520,7 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
     elif family == "rpm":
         checks.extend(
             f"{scenario}.{removal_label}.state.{key}"
-            for key in ("config", "token", "list", "certificate")
+            for key in ("config", "token", "list", "list_ipv6", "certificate")
         )
         for key in ("data",):
             checks.extend(
@@ -570,7 +571,7 @@ def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> boo
     if historical_binding_touched and not forward_only:
         raise LifecycleLabError(
             "historical APK transition must be the exact byte-bound "
-            "v4.02.8 -> v4.02.11 contract for "
+            "v4.02.8 -> v4.02.12 contract for "
             f"{spec.package_architecture}"
         )
     return forward_only
@@ -1074,6 +1075,7 @@ RESULT_FILE="/results/events.tsv"
 COMMAND_LOG="/results/commands.log"
 RESTART_STATE_FILE="/results/restart-state"
 OPERATOR_STATE_FILE="/results/operator-state"
+OPERATOR_CRON_FILE="/results/operator-cron-lines"
 FAILURES=0
 PREFIX="${SCENARIO}"
 INVOCATION="initial"
@@ -1084,7 +1086,7 @@ if [ "${SCENARIO}" = "upgrade-rollback" ] && [ -f "${RESTART_STATE_FILE}" ]; the
 else
     : > "${RESULT_FILE}"
     : > "${COMMAND_LOG}"
-    rm -f "${RESTART_STATE_FILE}" "${OPERATOR_STATE_FILE}"
+    rm -f "${RESTART_STATE_FILE}" "${OPERATOR_STATE_FILE}" "${OPERATOR_CRON_FILE}"
 fi
 
 record() {
@@ -1120,7 +1122,7 @@ run_install_step() {
     package="$2"
     diagnostic="/tmp/syswarden-maintainer-${check}"
     printf 'COMMAND %s\n' "${check}" >> "${COMMAND_LOG}"
-    if install_package "${package}" > "${diagnostic}" 2>&1; then
+    if install_package "${package}" "${check}" > "${diagnostic}" 2>&1; then
         command_rc=0
         record pass "${PREFIX}.${check}" "command completed"
     else
@@ -1320,8 +1322,19 @@ installed_version() {
     esac
 }
 
+is_exact_forward_only_apk_rollback() {
+    check="$1"
+    package="$2"
+    [ "${check}" = "rollback.previous" ] || return 1
+    [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ] || return 1
+    [ "${package}" = "${PREVIOUS_PACKAGE}" ] || return 1
+    [ "${EXPECTED_PREVIOUS_VERSION}" = "4.02.8" ] || return 1
+    [ "$(hash_file "${package}" 2>/dev/null || true)" = "${EXPECTED_PREVIOUS_SHA256}" ]
+}
+
 install_package() {
     package="$1"
+    check="${2:-}"
     case "${PACKAGE_FAMILY}" in
         deb)
             DEBIAN_FRONTEND=noninteractive dpkg --install "${package}"
@@ -1330,7 +1343,14 @@ install_package() {
             rpm -Uvh --replacepkgs --oldpackage "${package}"
             ;;
         apk)
-            apk add --allow-untrusted --no-network --force-overwrite "${package}"
+            if [ "${check}" = "rollback.previous" ] && \
+               [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
+                is_exact_forward_only_apk_rollback "${check}" "${package}" || return 1
+                apk add --allow-untrusted --no-network --force-overwrite \
+                    --force-old-apk "${package}"
+            else
+                apk add --allow-untrusted --no-network --force-overwrite "${package}"
+            fi
             ;;
     esac
 }
@@ -1635,7 +1655,8 @@ verify_package_artifact() {
 
 probe_forward_only_apk_payload() {
     label="$1"
-    check_equal "${label}.version" "${EXPECTED_PREVIOUS_VERSION}" "${PREVIOUS_VERSION}"
+    actual_version="$(installed_version 2>/dev/null || true)"
+    check_equal "${label}.version" "${EXPECTED_PREVIOUS_VERSION}" "${actual_version}"
     verify_installed_inventory "${label}" previous
 
     /opt/syswarden/bin/syswarden-cli --help \
@@ -1697,8 +1718,16 @@ probe_postinstall_contract() {
     if [ ! -s /etc/bash_completion.d/syswarden ] || [ -L /etc/bash_completion.d/syswarden ]; then
         postinstall_ok=0
     fi
-    cron_state="$(crontab -l 2>/dev/null || true)"
-    printf '%s\n' "${cron_state}" | grep -Fq '/opt/syswarden/bin/syswarden-cli update-feeds' || postinstall_ok=0
+    if cron_state="$(LC_ALL=C crontab -l 2>/tmp/syswarden-postinstall-cron.error)"; then
+        feed_cron_count="$(printf '%s\n' "${cron_state}" | awk '
+            $1 ~ /^([1-9]|[1-5][0-9])$/ &&
+                $0 == $1 " * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1" { count++ }
+            END { print count + 0 }
+        ')"
+        [ "${feed_cron_count}" -eq 1 ] || postinstall_ok=0
+    else
+        postinstall_ok=0
+    fi
     case "${PACKAGE_FAMILY}" in
         deb|rpm)
             service_contract='systemd'
@@ -1827,25 +1856,32 @@ seed_state() {
     mkdir -p /etc/syswarden/config/modules /etc/syswarden/lists /etc/syswarden/tls
     mkdir -p /var/lib/syswarden/ui
     printf '%s\n' 'operator-setting=preserve-exactly' > /etc/syswarden/config/lifecycle-operator.conf
-    printf '%s\n' '[user]' 'webtui_password = "lot0-lifecycle-token"' > /etc/syswarden/config/modules/99-user.toml
-    printf '%s\n' '198.51.100.42' '2001:db8::42' > /etc/syswarden/lists/syswarden_blacklist.ipv4
+    printf '%s\n' \
+        '[network]' 'interfaces = "lo"' '' \
+        '[user]' 'webtui_password = "lot0-lifecycle-token"' \
+        > /etc/syswarden/config/modules/99-user.toml
+    printf '%s\n' '198.51.100.42' > /etc/syswarden/lists/syswarden_blacklist.ipv4
+    printf '%s\n' '2001:db8::42' > /etc/syswarden/lists/syswarden_blacklist.ipv6
     printf '%s\n' '{"schema":1,"sentinel":"preserve-exactly"}' > /var/lib/syswarden/ui/data.json
     printf '%s\n' '-----BEGIN CERTIFICATE-----' 'lot0-lifecycle-certificate' '-----END CERTIFICATE-----' > /etc/syswarden/tls/operator.pem
     chmod 0640 /etc/syswarden/config/lifecycle-operator.conf
     chmod 0640 /etc/syswarden/config/modules/99-user.toml
     chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv4
+    chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv6
     chmod 0600 /var/lib/syswarden/ui/data.json
     chmod 0600 /etc/syswarden/tls/operator.pem
 
     STATE_CONFIG_HASH="$(hash_file /etc/syswarden/config/lifecycle-operator.conf)"
     STATE_TOKEN_HASH="$(hash_file /etc/syswarden/config/modules/99-user.toml)"
     STATE_LIST_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv4)"
+    STATE_LIST_IPV6_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv6)"
     STATE_DATA_HASH="$(hash_file /var/lib/syswarden/ui/data.json)"
     STATE_CERT_HASH="$(hash_file /etc/syswarden/tls/operator.pem)"
     {
         printf 'STATE_CONFIG_HASH=%s\n' "${STATE_CONFIG_HASH}"
         printf 'STATE_TOKEN_HASH=%s\n' "${STATE_TOKEN_HASH}"
         printf 'STATE_LIST_HASH=%s\n' "${STATE_LIST_HASH}"
+        printf 'STATE_LIST_IPV6_HASH=%s\n' "${STATE_LIST_IPV6_HASH}"
         printf 'STATE_DATA_HASH=%s\n' "${STATE_DATA_HASH}"
         printf 'STATE_CERT_HASH=%s\n' "${STATE_CERT_HASH}"
     } > "${OPERATOR_STATE_FILE}"
@@ -1857,11 +1893,12 @@ load_state_contract() {
     STATE_CONFIG_HASH="$(sed -n 's/^STATE_CONFIG_HASH=//p' "${OPERATOR_STATE_FILE}")"
     STATE_TOKEN_HASH="$(sed -n 's/^STATE_TOKEN_HASH=//p' "${OPERATOR_STATE_FILE}")"
     STATE_LIST_HASH="$(sed -n 's/^STATE_LIST_HASH=//p' "${OPERATOR_STATE_FILE}")"
+    STATE_LIST_IPV6_HASH="$(sed -n 's/^STATE_LIST_IPV6_HASH=//p' "${OPERATOR_STATE_FILE}")"
     STATE_DATA_HASH="$(sed -n 's/^STATE_DATA_HASH=//p' "${OPERATOR_STATE_FILE}")"
     STATE_CERT_HASH="$(sed -n 's/^STATE_CERT_HASH=//p' "${OPERATOR_STATE_FILE}")"
     for expected_hash in \
         "${STATE_CONFIG_HASH}" "${STATE_TOKEN_HASH}" "${STATE_LIST_HASH}" \
-        "${STATE_DATA_HASH}" "${STATE_CERT_HASH}"
+        "${STATE_LIST_IPV6_HASH}" "${STATE_DATA_HASH}" "${STATE_CERT_HASH}"
     do
         case "${expected_hash}" in
             *[!0-9a-f]*|'') return 1 ;;
@@ -1908,6 +1945,7 @@ assert_all_state_preserved() {
     assert_preserved "${label}" config /etc/syswarden/config/lifecycle-operator.conf "${STATE_CONFIG_HASH}" 640
     assert_preserved "${label}" token /etc/syswarden/config/modules/99-user.toml "${STATE_TOKEN_HASH}" 640
     assert_preserved "${label}" list /etc/syswarden/lists/syswarden_blacklist.ipv4 "${STATE_LIST_HASH}" 600
+    assert_preserved "${label}" list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6 "${STATE_LIST_IPV6_HASH}" 600
     assert_preserved "${label}" data /var/lib/syswarden/ui/data.json "${STATE_DATA_HASH}" 600
     assert_preserved "${label}" certificate /etc/syswarden/tls/operator.pem "${STATE_CERT_HASH}" 600
 }
@@ -1941,10 +1979,20 @@ seed_generated_runtime_artifacts() {
         /etc/rsyslog.d/99-syswarden-waf-bridge.conf; do
         printf '%s\n' 'syswarden-lifecycle-generated-artifact' > "${path}"
     done
-    existing_cron="$(crontab -l 2>/dev/null || true)"
+    LC_ALL=C crontab -l > /tmp/syswarden-existing-cron 2>/tmp/syswarden-existing-cron.error || return 1
     {
-        [ -z "${existing_cron}" ] || printf '%s\n' "${existing_cron}"
+        printf '%s\n' '# operator note mentioning syswarden-cli'
         printf '%s\n' '19 4 * * * /opt/syswarden/bin/syswarden-cli update-feeds --operator-option'
+        printf '%s\n' ' */30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1'
+        printf '%s \n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+        printf '%s\n' '17  * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+        printf '*/30\t* * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1\n'
+        printf '%s\n' '23 * * * * /usr/local/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+        printf ' \t \n'
+    } > "${OPERATOR_CRON_FILE}"
+    {
+        cat /tmp/syswarden-existing-cron
+        cat "${OPERATOR_CRON_FILE}"
     } | crontab -
 }
 
@@ -1959,23 +2007,28 @@ assert_generated_runtime_artifacts_absent() {
     check_absent "${label}.generated.completion" /etc/bash_completion.d/syswarden
     check_absent "${label}.generated.rsyslog_siem" /etc/rsyslog.d/99-syswarden-siem.conf
     check_absent "${label}.generated.rsyslog_waf_bridge" /etc/rsyslog.d/99-syswarden-waf-bridge.conf
-    cron_state="$(crontab -l 2>/dev/null || true)"
+    if ! cron_state="$(LC_ALL=C crontab -l 2>/tmp/syswarden-remove-cron.error)"; then
+        record fail "${PREFIX}.${label}.generated.cron_reference" "root crontab could not be read after removal"
+        record fail "${PREFIX}.${label}.generated.cron_unrelated" "operator cron preservation could not be verified"
+        return
+    fi
     managed_cron="$(printf '%s\n' "${cron_state}" | awk '
-        NF == 9 && $1 == "*/30" && $2 == "*" && $3 == "*" &&
-            $4 == "*" && $5 == "*" &&
-            $6 == "/opt/syswarden/bin/syswarden-cli" &&
-            $7 == "ha-sync" && $8 == ">/dev/null" && $9 == "2>&1" { print }
-        NF == 9 && $1 ~ /^([1-9]|[1-5][0-9])$/ && $2 == "*" &&
-            $3 == "*" && $4 == "*" && $5 == "*" &&
-            $6 == "/opt/syswarden/bin/syswarden-cli" &&
-            $7 == "update-feeds" && $8 == ">/dev/null" && $9 == "2>&1" { print }
+        $0 == "*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1" { print }
+        $1 ~ /^([1-9]|[1-5][0-9])$/ &&
+            $0 == $1 " * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1" { print }
     ')"
     if [ -n "${managed_cron}" ]; then
         record fail "${PREFIX}.${label}.generated.cron_reference" "dead SysWarden cron reference remains"
     else
         record pass "${PREFIX}.${label}.generated.cron_reference" "SysWarden cron references are absent"
     fi
-    if printf '%s\n' "${cron_state}" | grep -F -q '19 4 * * * /opt/syswarden/bin/syswarden-cli update-feeds --operator-option'; then
+    operator_cron_ok=1
+    while IFS= read -r operator_cron_line || [ -n "${operator_cron_line}" ]; do
+        if ! printf '%s\n' "${cron_state}" | grep -F -x -q "${operator_cron_line}"; then
+            operator_cron_ok=0
+        fi
+    done < "${OPERATOR_CRON_FILE}"
+    if [ "${operator_cron_ok}" -eq 1 ]; then
         record pass "${PREFIX}.${label}.generated.cron_unrelated" "unrelated cron entry is preserved"
     else
         record fail "${PREFIX}.${label}.generated.cron_unrelated" "unrelated cron entry was removed"
@@ -2032,13 +2085,13 @@ probe_execution_architecture() {
 
 scenario_upgrade_rollback_initial() {
     prepare_expected_payloads || return
-    seed_state
     run_install_step install.previous "${PREVIOUS_PACKAGE}" || return
     if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
         probe_forward_only_apk_payload previous
     else
         probe_payload previous previous "${PREVIOUS_VERSION}"
     fi
+    seed_state
     assert_all_state_preserved previous
 
     run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}" || return
@@ -2082,7 +2135,7 @@ scenario_remove() {
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
-    seed_generated_runtime_artifacts
+    seed_generated_runtime_artifacts || return
     case "${PACKAGE_FAMILY}" in
         deb|apk)
             run_step remove remove_package || return
@@ -2097,6 +2150,7 @@ scenario_remove() {
             check_absent final-removal.state.config /etc/syswarden/config/lifecycle-operator.conf
             check_absent final-removal.state.token /etc/syswarden/config/modules/99-user.toml
             check_absent final-removal.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
+            check_absent final-removal.state.list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6
             check_absent final-removal.state.certificate /etc/syswarden/tls/operator.pem
             assert_preserved final-removal data /var/lib/syswarden/ui/data.json "${STATE_DATA_HASH}" 600
             if ! installed_version >/dev/null 2>&1 && [ ! -s /tmp/remaining-final-removal ]; then
@@ -2114,7 +2168,7 @@ scenario_purge() {
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
-    seed_generated_runtime_artifacts
+    seed_generated_runtime_artifacts || return
     run_step purge purge_package || return
     assert_package_absent purge candidate
     assert_generated_runtime_artifacts_absent purge
@@ -2123,6 +2177,7 @@ scenario_purge() {
             check_absent purge.state.config /etc/syswarden/config/lifecycle-operator.conf
             check_absent purge.state.token /etc/syswarden/config/modules/99-user.toml
             check_absent purge.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
+            check_absent purge.state.list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6
             check_absent purge.state.certificate /etc/syswarden/tls/operator.pem
             assert_preserved purge data /var/lib/syswarden/ui/data.json "${STATE_DATA_HASH}" 600
             ;;
@@ -2734,6 +2789,8 @@ def container_run_arguments(
         "--name",
         name,
         "--network=none",
+        "--cap-add",
+        "NET_ADMIN",
         "--platform",
         spec.podman_platform,
         "--security-opt=no-new-privileges",
