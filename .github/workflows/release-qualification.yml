@@ -28,8 +28,323 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  package-lifecycle-arm64:
+    name: Native ARM64 Package Lifecycle Shard
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.seal.outputs.artifact_name }}
+      report_sha256: ${{ steps.seal.outputs.report_sha256 }}
+      candidate_run_id: ${{ steps.candidate.outputs.run_id }}
+      candidate_artifact_id: ${{ steps.candidate.outputs.artifact_id }}
+      candidate_artifact_name: ${{ steps.candidate.outputs.artifact_name }}
+      previous_release_id: ${{ steps.previous.outputs.release_id }}
+
+    steps:
+      - name: Checkout Exact ARM64 Candidate Commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+
+      - name: Validate Native ARM64 Shard Context
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          EVENT_REF_TYPE: ${{ github.ref_type }}
+          EVENT_SHA: ${{ github.sha }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" != "workflow_dispatch" || \
+                "${EVENT_REF_TYPE}" != "branch" || \
+                "${EVENT_REF_NAME}" != "main" || \
+                "${EVENT_REF}" != "refs/heads/main" || \
+                "${EVENT_SHA}" != "${RELEASE_SHA}" || \
+                ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
+                ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]{2}\.[0-9]+$ || \
+                ! "${PREVIOUS_TAG}" =~ ^v[0-9]+\.[0-9]{2}\.[0-9]+$ || \
+                "${RELEASE_TAG}" == "${PREVIOUS_TAG}" ]]; then
+            echo "ERROR: native ARM64 qualification context is not the exact main candidate." >&2
+            exit 1
+          fi
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${RELEASE_SHA}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")" = \
+            "${RELEASE_TAG}"
+          test "$(uname -m)" = "aarch64"
+          command -v gh >/dev/null
+          command -v jq >/dev/null
+          command -v podman >/dev/null
+          command -v python3 >/dev/null
+          command -v sha256sum >/dev/null
+
+      - name: Create Native ARM64 Shard Workspace
+        id: arm_workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "${RUNNER_TEMP:-}"
+          test -d "${RUNNER_TEMP}"
+          test ! -L "${RUNNER_TEMP}"
+          shard_root="$(mktemp -d \
+            "${RUNNER_TEMP%/}/syswarden-package-arm64.XXXXXX")"
+          candidate_packages="${shard_root}/packages/candidate"
+          previous_packages="${shard_root}/packages/previous"
+          evidence_dir="${shard_root}/evidence"
+          install -d -m 0700 \
+            "${candidate_packages}" \
+            "${previous_packages}" \
+            "${evidence_dir}"
+          {
+            printf 'SHARD_ROOT=%s\n' "${shard_root}"
+            printf 'ARM_CANDIDATE_PACKAGES_DIR=%s\n' "${candidate_packages}"
+            printf 'ARM_PREVIOUS_PACKAGES_DIR=%s\n' "${previous_packages}"
+            printf 'ARM_EVIDENCE_DIR=%s\n' "${evidence_dir}"
+          } >> "${GITHUB_ENV}"
+          {
+            printf 'candidate_packages_dir=%s\n' "${candidate_packages}"
+            printf 'previous_packages_dir=%s\n' "${previous_packages}"
+            printf 'evidence_dir=%s\n' "${evidence_dir}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve Exact ARM64 Candidate Package Artifact
+        id: candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          runs_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/package.yml/runs" \
+            -f event=push \
+            -f head_sha="${RELEASE_SHA}" \
+            -f per_page=100)"
+          matches="$(jq --arg sha "${RELEASE_SHA}" '[
+            .[] | .workflow_runs[]? |
+            select(
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "push"
+            )
+          ]' <<< "${runs_json}")"
+          if [[ "$(jq 'length' <<< "${matches}")" != "1" ]]; then
+            echo "ERROR: expected one ARM64 source package run for ${RELEASE_SHA}." >&2
+            exit 1
+          fi
+          run_id="$(jq -r '.[0].id' <<< "${matches}")"
+          run_status="$(jq -r '.[0].status' <<< "${matches}")"
+          run_conclusion="$(jq -r '.[0].conclusion // ""' <<< "${matches}")"
+          if [[ ! "${run_id}" =~ ^[0-9]+$ || \
+                "${run_status}" != "completed" || \
+                "${run_conclusion}" != "success" ]]; then
+            echo "ERROR: exact ARM64 source package run is not a completed success." >&2
+            exit 1
+          fi
+          artifact_name="syswarden-packages-${version}"
+          artifacts_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+            -f per_page=100)"
+          artifact_matches="$(jq --arg name "${artifact_name}" '[
+            .[] | .artifacts[]? | select(.name == $name)
+          ]' <<< "${artifacts_json}")"
+          if [[ "$(jq 'length' <<< "${artifact_matches}")" != "1" ]]; then
+            echo "ERROR: exact ARM64 source artifact is absent or ambiguous." >&2
+            exit 1
+          fi
+          artifact_id="$(jq -r '.[0].id' <<< "${artifact_matches}")"
+          expired="$(jq -r '.[0].expired' <<< "${artifact_matches}")"
+          size="$(jq -r '.[0].size_in_bytes' <<< "${artifact_matches}")"
+          if [[ ! "${artifact_id}" =~ ^[0-9]+$ || \
+                "${expired}" != "false" || \
+                ! "${size}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: exact ARM64 source artifact is expired, empty, or malformed." >&2
+            exit 1
+          fi
+          {
+            printf 'run_id=%s\n' "${run_id}"
+            printf 'artifact_id=%s\n' "${artifact_id}"
+            printf 'artifact_name=%s\n' "${artifact_name}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Download Exact ARM64 Candidate Packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.candidate.outputs.artifact_name }}
+          path: ${{ steps.arm_workspace.outputs.candidate_packages_dir }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.candidate.outputs.run_id }}
+
+      - name: Verify Exact ARM64 Candidate Package Inventory
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+            verify-packages \
+            --tag "${RELEASE_TAG}" \
+            --packages "${ARM_CANDIDATE_PACKAGES_DIR}"
+
+      - name: Download Exact ARM64 Previous Packages
+        id: previous
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+        run: |
+          set -euo pipefail
+          umask 077
+          previous_version="${PREVIOUS_TAG#v}"
+          release_json="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/releases/latest")"
+          release_id="$(jq -r '.id' <<< "${release_json}")"
+          if [[ "$(jq -r '.tag_name' <<< "${release_json}")" != "${PREVIOUS_TAG}" || \
+                "$(jq -r '.draft' <<< "${release_json}")" != "false" || \
+                "$(jq -r '.prerelease' <<< "${release_json}")" != "false" || \
+                "$(jq -r '.published_at // ""' <<< "${release_json}")" == "" || \
+                ! "${release_id}" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: ARM64 previous_tag is not the latest public release." >&2
+            exit 1
+          fi
+          assets_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
+            -f per_page=100)"
+          expected_assets=(
+            "syswarden_${previous_version}_amd64.deb"
+            "syswarden_${previous_version}_arm64.deb"
+            "syswarden-${previous_version}-1.x86_64.rpm"
+            "syswarden-${previous_version}-1.aarch64.rpm"
+            "syswarden_${previous_version}_x86_64.apk"
+            "syswarden_${previous_version}_aarch64.apk"
+            "syswarden-${previous_version}.txz"
+            "SHA256SUMS.txt"
+          )
+          for asset_name in "${expected_assets[@]}"; do
+            matches="$(jq --arg name "${asset_name}" '[
+              .[] | .[] | select(.name == $name)
+            ]' <<< "${assets_json}")"
+            if [[ "$(jq 'length' <<< "${matches}")" != "1" ]]; then
+              echo "ERROR: ARM64 previous asset ${asset_name} is absent or ambiguous." >&2
+              exit 1
+            fi
+            asset_id="$(jq -r '.[0].id' <<< "${matches}")"
+            asset_state="$(jq -r '.[0].state' <<< "${matches}")"
+            asset_size="$(jq -r '.[0].size' <<< "${matches}")"
+            if [[ ! "${asset_id}" =~ ^[0-9]+$ || \
+                  "${asset_state}" != "uploaded" || \
+                  ! "${asset_size}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "ERROR: ARM64 previous asset ${asset_name} is invalid." >&2
+              exit 1
+            fi
+            destination="${ARM_PREVIOUS_PACKAGES_DIR}/${asset_name}"
+            gh api --method GET \
+              -H 'Accept: application/octet-stream' \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+              > "${destination}"
+            test -s "${destination}"
+            test -f "${destination}"
+            test ! -L "${destination}"
+            chmod 0600 "${destination}"
+          done
+          printf 'release_id=%s\n' "${release_id}" >> "${GITHUB_OUTPUT}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+            verify-packages \
+            --tag "${PREVIOUS_TAG}" \
+            --packages "${ARM_PREVIOUS_PACKAGES_DIR}"
+
+      - name: Run Native ARM64 Package Lifecycle Shard
+        shell: bash
+        env:
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact_id }}
+          CANDIDATE_ARTIFACT_NAME: ${{ steps.candidate.outputs.artifact_name }}
+          CANDIDATE_RUN_ID: ${{ steps.candidate.outputs.run_id }}
+          PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.release_id }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          set +e
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_lifecycle_lab.py \
+            --packages-dir "${ARM_CANDIDATE_PACKAGES_DIR}" \
+            --previous-packages-dir "${ARM_PREVIOUS_PACKAGES_DIR}" \
+            --architecture-shard arm64 \
+            --qualification-repository "${GITHUB_REPOSITORY}" \
+            --qualification-release-sha "${RELEASE_SHA}" \
+            --qualification-release-tag "${RELEASE_TAG}" \
+            --qualification-previous-tag "${PREVIOUS_TAG}" \
+            --qualification-workflow-run-id "${GITHUB_RUN_ID}" \
+            --qualification-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --qualification-candidate-run-id "${CANDIDATE_RUN_ID}" \
+            --qualification-candidate-artifact-id "${CANDIDATE_ARTIFACT_ID}" \
+            --qualification-candidate-artifact-name "${CANDIDATE_ARTIFACT_NAME}" \
+            --qualification-previous-release-id "${PREVIOUS_RELEASE_ID}" \
+            --pull-policy always \
+            --output "${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.json" \
+            --pretty
+          shard_rc=$?
+          set -e
+          printf '%s\n' "${shard_rc}" > \
+            "${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.rc"
+          chmod 0600 "${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.rc"
+
+      - name: Seal Native ARM64 Package Lifecycle Shard
+        id: seal
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          report="${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.json"
+          status="${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.rc"
+          for path in "${report}" "${status}"; do
+            test -s "${path}"
+            test -f "${path}"
+            test ! -L "${path}"
+          done
+          report_sha256="$(sha256sum "${report}")"
+          report_sha256="${report_sha256%% *}"
+          [[ "${report_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          (
+            cd "${ARM_EVIDENCE_DIR}"
+            sha256sum \
+              package-lifecycle-arm64.json \
+              package-lifecycle-arm64.rc > SHA256SUMS.txt
+            sha256sum --check --strict SHA256SUMS.txt
+          )
+          artifact_name="syswarden-package-lifecycle-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
+          {
+            printf 'artifact_name=%s\n' "${artifact_name}"
+            printf 'report_sha256=%s\n' "${report_sha256}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Upload Native ARM64 Package Lifecycle Shard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.seal.outputs.artifact_name }}
+          path: ${{ steps.arm_workspace.outputs.evidence_dir }}
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
   qualify-release:
     name: Qualify Exact Pre-Tag Commit
+    needs: package-lifecycle-arm64
     runs-on:
       - self-hosted
       - linux
@@ -64,6 +379,17 @@ jobs:
               end
             ' <<< "${environment_json}"
           }
+          required_top_level_environment_boolean() {
+            local field="${1:?environment boolean field is required}"
+            jq -er --arg field "${field}" '
+              .[$field] |
+              if type == "boolean" then
+                tostring
+              else
+                error($field + " must be boolean")
+              end
+            ' <<< "${environment_json}"
+          }
           environment_name="$(jq -r '.name // ""' <<< "${environment_json}")"
           reviewer_rule_count="$(jq '[
             .protection_rules[]? | select(.type == "required_reviewers")
@@ -77,13 +403,16 @@ jobs:
             "protected_branches")"
           custom_branch_policies="$(required_environment_boolean \
             "custom_branch_policies")"
+          can_admins_bypass="$(required_top_level_environment_boolean \
+            "can_admins_bypass")"
           if [[ "${environment_name}" != "syswarden-release-qualification" || \
                 "${reviewer_rule_count}" != "0" || \
                 "${branch_policy_rule_count}" != "1" || \
                 "${protection_rule_count}" != "1" || \
                 "${protected_branches}" != "false" || \
-                "${custom_branch_policies}" != "true" ]]; then
-            echo "ERROR: the qualification environment must require no reviewer or wait gate and exactly one custom branch policy." >&2
+                "${custom_branch_policies}" != "true" || \
+                "${can_admins_bypass}" != "false" ]]; then
+            echo "ERROR: the qualification environment must require no reviewer or wait gate, forbid administrator bypass, and have exactly one custom branch policy." >&2
             exit 1
           fi
 
@@ -190,8 +519,6 @@ jobs:
       - name: Create Isolated Qualification Workspace
         id: workspace
         shell: bash
-        env:
-          QEMU_AARCH64_STATIC: ${{ vars.SYSWARDEN_QEMU_AARCH64_STATIC }}
         run: |
           set -euo pipefail
           umask 077
@@ -244,31 +571,6 @@ jobs:
             "${secrets_dir}" \
             "${signing_tool_dir}"
 
-          if [[ -z "${QEMU_AARCH64_STATIC}" || \
-                "${QEMU_AARCH64_STATIC}" != /* || \
-                ! -f "${QEMU_AARCH64_STATIC}" || \
-                -L "${QEMU_AARCH64_STATIC}" || \
-                ! -x "${QEMU_AARCH64_STATIC}" ]]; then
-            echo "ERROR: SYSWARDEN_QEMU_AARCH64_STATIC must name an absolute, executable, non-symlink regular file." >&2
-            exit 1
-          fi
-          binfmt_entry=/proc/sys/fs/binfmt_misc/qemu-aarch64
-          if [[ ! -f "${binfmt_entry}" || -L "${binfmt_entry}" ]]; then
-            echo "ERROR: the dedicated runner has no trustworthy aarch64 binfmt registration." >&2
-            exit 1
-          fi
-          mapfile -t binfmt_interpreters < <(
-            sed -n 's/^interpreter //p' "${binfmt_entry}"
-          )
-          binfmt_flags="$(sed -n 's/^flags: //p' "${binfmt_entry}")"
-          if ! grep -Fxq enabled "${binfmt_entry}" || \
-             [[ "${#binfmt_interpreters[@]}" -ne 1 ]] || \
-             [[ "${binfmt_interpreters[0]}" != "${QEMU_AARCH64_STATIC}" ]] || \
-             [[ "${binfmt_flags}" != *F* ]]; then
-            echo "ERROR: aarch64 binfmt must be enabled with the exact QEMU interpreter and fix-binary flag." >&2
-            exit 1
-          fi
-
           {
             printf 'QUALIFICATION_ROOT=%s\n' "${qualification_root}"
             printf 'ARTIFACT_ROOT=%s\n' "${artifact_root}"
@@ -281,12 +583,18 @@ jobs:
             printf 'STATUS_DIR=%s\n' "${status_dir}"
             printf 'SECRETS_DIR=%s\n' "${secrets_dir}"
             printf 'SIGNING_TOOL_DIR=%s\n' "${signing_tool_dir}"
-            printf 'QEMU_AARCH64_STATIC=%s\n' "${QEMU_AARCH64_STATIC}"
           } >> "${GITHUB_ENV}"
           {
+            printf 'qualification_root=%s\n' "${qualification_root}"
             printf 'artifact_root=%s\n' "${artifact_root}"
             printf 'candidate_packages_dir=%s\n' "${candidate_packages}"
           } >> "${GITHUB_OUTPUT}"
+
+      - name: Download Exact Native ARM64 Lifecycle Shard
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package-lifecycle-arm64.outputs.artifact_name }}
+          path: ${{ steps.workspace.outputs.qualification_root }}/arm64-shard
 
       - name: Resolve Unique Successful Main Package Artifact
         id: candidate
@@ -552,22 +860,110 @@ jobs:
             }' > "${ARTIFACT_ROOT}/qualification-context.json"
           chmod 0600 "${ARTIFACT_ROOT}/qualification-context.json"
 
-      - name: Run Linux Package Lifecycle Laboratory
+      - name: Verify and Aggregate Native Package Lifecycle Shards
         shell: bash
+        env:
+          ARM_ARTIFACT_NAME: ${{ needs.package-lifecycle-arm64.outputs.artifact_name }}
+          ARM_CANDIDATE_ARTIFACT_ID: ${{ needs.package-lifecycle-arm64.outputs.candidate_artifact_id }}
+          ARM_CANDIDATE_ARTIFACT_NAME: ${{ needs.package-lifecycle-arm64.outputs.candidate_artifact_name }}
+          ARM_CANDIDATE_RUN_ID: ${{ needs.package-lifecycle-arm64.outputs.candidate_run_id }}
+          ARM_PREVIOUS_RELEASE_ID: ${{ needs.package-lifecycle-arm64.outputs.previous_release_id }}
+          ARM_REPORT_SHA256: ${{ needs.package-lifecycle-arm64.outputs.report_sha256 }}
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact_id }}
+          CANDIDATE_ARTIFACT_NAME: ${{ steps.candidate.outputs.artifact_name }}
+          CANDIDATE_RUN_ID: ${{ steps.candidate.outputs.run_id }}
+          PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.release_id }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          arm_dir="${QUALIFICATION_ROOT}/arm64-shard"
+          expected_arm_artifact="syswarden-package-lifecycle-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
+          if [[ "${ARM_ARTIFACT_NAME}" != "${expected_arm_artifact}" || \
+                "${ARM_CANDIDATE_RUN_ID}" != "${CANDIDATE_RUN_ID}" || \
+                "${ARM_CANDIDATE_ARTIFACT_ID}" != "${CANDIDATE_ARTIFACT_ID}" || \
+                "${ARM_CANDIDATE_ARTIFACT_NAME}" != "${CANDIDATE_ARTIFACT_NAME}" || \
+                "${ARM_PREVIOUS_RELEASE_ID}" != "${PREVIOUS_RELEASE_ID}" || \
+                ! "${ARM_REPORT_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: native ARM64 shard provenance differs from the exact qualification inputs." >&2
+            exit 1
+          fi
+          mapfile -t arm_files < <(
+            find -P "${arm_dir}" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' |
+              LC_ALL=C sort
+          )
+          expected_arm_files=(
+            SHA256SUMS.txt
+            package-lifecycle-arm64.json
+            package-lifecycle-arm64.rc
+          )
+          if [[ "${arm_files[*]}" != "${expected_arm_files[*]}" ]]; then
+            echo "ERROR: native ARM64 shard inventory is not exact." >&2
+            exit 1
+          fi
+          while IFS= read -r -d '' entry; do
+            test -f "${entry}"
+            test ! -L "${entry}"
+          done < <(find -P "${arm_dir}" -mindepth 1 -maxdepth 1 -print0)
+          (
+            cd "${arm_dir}"
+            sha256sum --check --strict SHA256SUMS.txt
+          )
+          actual_arm_sha256="$(sha256sum \
+            "${arm_dir}/package-lifecycle-arm64.json")"
+          actual_arm_sha256="${actual_arm_sha256%% *}"
+          test "${actual_arm_sha256}" = "${ARM_REPORT_SHA256}"
+          arm_rc="$(cat "${arm_dir}/package-lifecycle-arm64.rc")"
+          [[ "${arm_rc}" =~ ^[0-9]+$ ]]
+          install -m 0600 \
+            "${arm_dir}/package-lifecycle-arm64.json" \
+            "${RAW_DIR}/package-lifecycle-arm64.json"
+
+          common_binding_arguments=(
+            --qualification-repository "${GITHUB_REPOSITORY}"
+            --qualification-release-sha "${RELEASE_SHA}"
+            --qualification-release-tag "${RELEASE_TAG}"
+            --qualification-previous-tag "${PREVIOUS_TAG}"
+            --qualification-workflow-run-id "${GITHUB_RUN_ID}"
+            --qualification-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}"
+            --qualification-candidate-run-id "${CANDIDATE_RUN_ID}"
+            --qualification-candidate-artifact-id "${CANDIDATE_ARTIFACT_ID}"
+            --qualification-candidate-artifact-name "${CANDIDATE_ARTIFACT_NAME}"
+            --qualification-previous-release-id "${PREVIOUS_RELEASE_ID}"
+          )
           set +e
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_lifecycle_lab.py \
             --packages-dir "${CANDIDATE_PACKAGES_DIR}" \
             --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}" \
-            --arm64-emulator "${QEMU_AARCH64_STATIC}" \
+            --architecture-shard amd64 \
+            "${common_binding_arguments[@]}" \
             --pull-policy never \
+            --output "${RAW_DIR}/package-lifecycle-amd64.json" \
+            --pretty
+          amd64_rc=$?
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_lifecycle_lab.py \
+            --packages-dir "${CANDIDATE_PACKAGES_DIR}" \
+            --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}" \
+            --aggregate-amd64-report "${RAW_DIR}/package-lifecycle-amd64.json" \
+            --aggregate-arm64-report "${RAW_DIR}/package-lifecycle-arm64.json" \
+            "${common_binding_arguments[@]}" \
             --output "${RAW_DIR}/package-lifecycle-raw.json" \
             --pretty
-          laboratory_rc=$?
+          aggregate_rc=$?
           set -e
-          printf '%s\n' "${laboratory_rc}" > "${STATUS_DIR}/package-lab.rc"
-          chmod 0600 "${STATUS_DIR}/package-lab.rc"
+          if [[ "${aggregate_rc}" -eq 0 && "${amd64_rc}" -ne 0 ]] || \
+             [[ "${aggregate_rc}" -eq 0 && "${arm_rc}" -ne 0 ]]; then
+            echo "ERROR: a native shard returned nonzero while the aggregate claimed success." >&2
+            aggregate_rc=97
+          fi
+          printf '%s\n' "${amd64_rc}" > "${STATUS_DIR}/package-lab-amd64.rc"
+          printf '%s\n' "${arm_rc}" > "${STATUS_DIR}/package-lab-arm64.rc"
+          printf '%s\n' "${aggregate_rc}" > "${STATUS_DIR}/package-lab.rc"
+          chmod 0600 \
+            "${STATUS_DIR}/package-lab-amd64.rc" \
+            "${STATUS_DIR}/package-lab-arm64.rc" \
+            "${STATUS_DIR}/package-lab.rc"
 
       - name: Prepare Ephemeral FreeBSD Transport Secrets
         shell: bash
@@ -647,6 +1043,10 @@ jobs:
       - name: Build and Verify Bound Laboratory Envelopes
         shell: bash
         env:
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact_id }}
+          CANDIDATE_ARTIFACT_NAME: ${{ steps.candidate.outputs.artifact_name }}
+          CANDIDATE_RUN_ID: ${{ steps.candidate.outputs.run_id }}
+          PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.release_id }}
           RELEASE_SHA: ${{ inputs.release_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
@@ -659,7 +1059,16 @@ jobs:
             --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}"
             --nft-raw "${RAW_DIR}/nftables-raw.json"
             --package-raw "${RAW_DIR}/package-lifecycle-raw.json"
+            --package-amd64-shard "${RAW_DIR}/package-lifecycle-amd64.json"
+            --package-arm64-shard "${RAW_DIR}/package-lifecycle-arm64.json"
             --freebsd-raw "${RAW_DIR}/freebsd-vm-raw.json"
+            --expected-repository "${GITHUB_REPOSITORY}"
+            --expected-workflow-run-id "${GITHUB_RUN_ID}"
+            --expected-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}"
+            --expected-candidate-run-id "${CANDIDATE_RUN_ID}"
+            --expected-candidate-artifact-id "${CANDIDATE_ARTIFACT_ID}"
+            --expected-candidate-artifact-name "${CANDIDATE_ARTIFACT_NAME}"
+            --expected-previous-release-id "${PREVIOUS_RELEASE_ID}"
             --max-age-seconds 172800
             --max-report-skew-seconds 0
           )
@@ -932,6 +1341,8 @@ jobs:
             "qualification-context.json"
             "raw/freebsd-vm-raw.json"
             "raw/nftables-raw.json"
+            "raw/package-lifecycle-amd64.json"
+            "raw/package-lifecycle-arm64.json"
             "raw/package-lifecycle-raw.json"
             "status/qualification-exit-codes.json"
           )
@@ -1043,10 +1454,14 @@ jobs:
         if: ${{ always() }}
         shell: bash
         env:
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact_id }}
+          CANDIDATE_ARTIFACT_NAME: ${{ steps.candidate.outputs.artifact_name }}
+          CANDIDATE_RUN_ID: ${{ steps.candidate.outputs.run_id }}
           EXPECTED_RELEASE_SHA: ${{ inputs.release_sha }}
           EXPECTED_RELEASE_TAG: ${{ inputs.release_tag }}
           SIGNED_UPDATE_REQUIRED: ${{ steps.update_contract.outputs.required }}
           INVENTORY_OUTCOME: ${{ steps.inventory.outcome }}
+          PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.release_id }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
         run: |
           set -euo pipefail
@@ -1064,7 +1479,16 @@ jobs:
             --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}" \
             --nft-raw "${RAW_DIR}/nftables-raw.json" \
             --package-raw "${RAW_DIR}/package-lifecycle-raw.json" \
+            --package-amd64-shard "${RAW_DIR}/package-lifecycle-amd64.json" \
+            --package-arm64-shard "${RAW_DIR}/package-lifecycle-arm64.json" \
             --freebsd-raw "${RAW_DIR}/freebsd-vm-raw.json" \
+            --expected-repository "${GITHUB_REPOSITORY}" \
+            --expected-workflow-run-id "${GITHUB_RUN_ID}" \
+            --expected-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --expected-candidate-run-id "${CANDIDATE_RUN_ID}" \
+            --expected-candidate-artifact-id "${CANDIDATE_ARTIFACT_ID}" \
+            --expected-candidate-artifact-name "${CANDIDATE_ARTIFACT_NAME}" \
+            --expected-previous-release-id "${PREVIOUS_RELEASE_ID}" \
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --nft-envelope "${BOUND_DIR}/nftables-bound.json" \

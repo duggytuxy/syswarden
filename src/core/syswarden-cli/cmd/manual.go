@@ -92,10 +92,10 @@ var manualCmd = &cobra.Command{
 
 		fmt.Printf("%s--- 5. SAFETY LIMITS ---%s\n", ansiYellow, ansiReset)
 		fmt.Printf("  %sRELOAD:%s the Linux nftables candidate is committed atomically and verified; compatibility-wrapper failure leaves nftables authoritative and returns an error. The core normally restarts, so keep console access and a ruleset backup.\n", ansiRed, ansiReset)
-		fmt.Printf("  %sUPDATE:%s v4.02.9+ requires a trusted Ed25519 release manifest; v4.02.8 needs a separately verified manual first hop to v4.02.12. Signed Linux and FreeBSD amd64 updates are then supported.\n", ansiRed, ansiReset)
+		fmt.Printf("  %sUPDATE:%s v4.02.9+ requires a trusted Ed25519 release manifest; v4.02.8 needs a separately verified manual first hop to v4.02.13. Signed Linux and FreeBSD amd64 updates are then supported.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sUNINSTALL:%s configuration, data, logs, services and firewall tables are deleted; it is not a rollback. On FreeBSD, use this command instead of raw pkg delete.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sALPINE:%s dedicated CGO-free static APK binaries are built for x86_64 and aarch64; install only an exact release-qualified artifact.\n", ansiRed, ansiReset)
-		fmt.Printf("  %sFREEBSD:%s v4.02.12 uses native /usr/local paths and rc.d on amd64. The first v4.02.8 hop is manual, and fresh installation requires PF disabled with an empty live ruleset.\n\n", ansiRed, ansiReset)
+		fmt.Printf("  %sFREEBSD:%s v4.02.13 uses native /usr/local paths and rc.d on amd64. The first v4.02.8 hop is manual, and fresh installation requires PF disabled with an empty live ruleset.\n\n", ansiRed, ansiReset)
 
 		fmt.Printf("%s================================================================================%s\n", ansiCyan, ansiReset)
 		fmt.Printf("%sRead README.md and the command-specific --help output before a host-mutating action.%s\n", ansiWhite, ansiReset)

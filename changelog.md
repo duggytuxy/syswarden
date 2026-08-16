@@ -1,3 +1,34 @@
+# Release v4.02.13
+
+### FIXED 🐛
+- **Alpine service runtime:** Declare OpenRC as an APK dependency and install it in the lifecycle bootstrap so fresh packages can create and control the three owned services.
+- **Alpine upgrades:** Attach the exact fail-closed installation contract to both APK `.post-install` and `.post-upgrade`, covering upgrade, reinstall, restart and recovery instead of fresh installation alone.
+- **RPM cron cleanup:** Confine Cronie's automatic crontab backup to a private 0700 work directory, remove that directory on success or failure, and reject any remaining SysWarden cron reference after package removal.
+- **Native ARM64 qualification:** Execute all five ARM64 DEB, RPM and APK coordinates on a GitHub-hosted ARM64 machine instead of QEMU user-mode, whose netlink limitation cannot prove nftables behavior.
+- **Lifecycle evidence:** Split the Linux package matrix into exact native amd64 and ARM64 shards, then require their complete, non-overlapping coordinate union before release readiness can be true.
+
+### SECURITY 🔒
+- **Shard binding:** Bind both native lifecycle reports to the same workflow run, attempt, release SHA, package artifact, previous public Release and candidate and previous checksum manifests; reject missing, duplicate, emulated or mismatched evidence.
+- **Cron privacy:** Ignore a hostile `TMPDIR`, redirect `XDG_CACHE_HOME` only inside a private `/var/tmp` directory, verify its type and mode, and prove that Cronie backup data is removed even after a write failure.
+- **Environment policy:** Require `can_admins_bypass=false` as a real JSON boolean in the protected qualification environment before accepting or signing any evidence.
+- **Fail-closed publication:** Keep signing, immutable tagging and the 14-asset publisher unreachable unless the native Linux shards, FreeBSD VM, signed updater, nftables and evidence adapters all pass for the exact merged commit.
+
+### RELEASE STATUS 📦
+- v4.02.12 was merged as a source candidate but was never tagged or published. Protected qualification run `31965382720` stopped before signing after detecting the missing Alpine OpenRC dependency and upgrade hook, Cronie backup residue after RPM removal, and the QEMU ARM64 netlink laboratory limitation. No v4.02.12 qualification artifact, signature, tag, Release or Release asset was created.
+- v4.02.13 supersedes the unpublished v4.02.12 candidate. The last public Release remains v4.02.8 until v4.02.13 passes protected qualification on its exact merged SHA and the immutable tag publisher verifies the complete inventory.
+- The expected Release inventory is seven native packages plus `SHA256SUMS.txt`, `RELEASE_SHA256SUMS.txt`, `syswarden-release.tar.gz`, `syswarden-sbom.spdx.json`, `plumber-report.zip`, `syswarden-update-manifest-v1.json` and `syswarden-update-manifest-v1.json.sig`, exactly 14 assets.
+
+### UPGRADE NOTES 📦
+- The immutable v4.02.8 binary predates the signed updater. Do not use `syswarden update` for its first hop. Download exactly one v4.02.13 package matching the host plus `SHA256SUMS.txt`, verify that exact package, then install it with the native package manager.
+- **Debian or Ubuntu:** after checksum verification, run `sudo apt-get install -y ./syswarden_4.02.13_amd64.deb` or use the `arm64` filename on an ARM64 host.
+- **RHEL, AlmaLinux or Rocky Linux:** after checksum verification, run `sudo dnf install -y ./syswarden-4.02.13-1.x86_64.rpm` or use the `aarch64` filename on an ARM64 host.
+- **Alpine Linux:** after checksum verification, run `sudo apk add --allow-untrusted ./syswarden_4.02.13_x86_64.apk` or use the `aarch64` filename on an ARM64 host. Never use `--allow-untrusted` before the SHA-256 check succeeds.
+- **FreeBSD 14 amd64:** install `curl`, `jq`, `libqrencode`, `rsyslog` and `wireguard-tools`, then run `sudo pkg add -f ./syswarden-4.02.13.txz` after checksum verification. Use `syswarden uninstall` rather than raw `pkg delete`, whose script-failure behavior cannot guarantee PF recovery.
+- Starting from an installed v4.02.13, `syswarden update` verifies the signed Ed25519 manifest for the six Linux targets and FreeBSD amd64 before installing future published versions.
+- Review the package post-install result with `sudo syswarden manual` and `sudo syswarden config`. The complete architecture-selecting procedure remains in the README section [Install the latest verified Release](README.md#install-the-latest-verified-release).
+
+---
+
 # Release v4.02.12
 
 ### FIXED 🐛

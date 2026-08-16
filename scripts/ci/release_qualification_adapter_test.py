@@ -35,6 +35,13 @@ ACT_IMAGE = (
 class AdapterFixture:
     version = "v4.02.8"
     previous_version = "v4.02.7"
+    repository = "duggytuxy/syswarden"
+    workflow_run_id = 1001
+    workflow_run_attempt = 1
+    candidate_run_id = 900
+    candidate_artifact_id = 901
+    candidate_artifact_name = "syswarden-packages-4.02.8"
+    previous_release_id = 800
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -159,19 +166,65 @@ class AdapterFixture:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _make_raw_reports(self) -> None:
-        package_args = argparse.Namespace(
-            packages_dir=self.candidate,
-            previous_packages_dir=self.previous,
-            podman="podman",
-            pull_policy="never",
-            scenario_timeout=60,
-            arm64_emulator=self.emulator,
-            _arm64_binfmt_registration=self.binfmt,
+        common_package_args = {
+            "packages_dir": self.candidate,
+            "previous_packages_dir": self.previous,
+            "podman": "podman",
+            "pull_policy": "never",
+            "scenario_timeout": 60,
+            "arm64_emulator": None,
+            "qualification_repository": self.repository,
+            "qualification_release_sha": self.commit,
+            "qualification_release_tag": self.version,
+            "qualification_previous_tag": self.previous_version,
+            "qualification_workflow_run_id": str(self.workflow_run_id),
+            "qualification_workflow_run_attempt": str(self.workflow_run_attempt),
+            "qualification_candidate_run_id": str(self.candidate_run_id),
+            "qualification_candidate_artifact_id": str(self.candidate_artifact_id),
+            "qualification_candidate_artifact_name": self.candidate_artifact_name,
+            "qualification_previous_release_id": str(self.previous_release_id),
+            "aggregate_amd64_report": None,
+            "aggregate_arm64_report": None,
+        }
+        shard_paths: dict[str, Path] = {}
+        for offset, (architecture, host) in enumerate(
+            (("amd64", "x86_64"), ("arm64", "aarch64")),
+            1,
+        ):
+            package_args = argparse.Namespace(
+                **common_package_args,
+                architecture_shard=architecture,
+            )
+            platforms = tuple(
+                spec
+                for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
+                if spec.architecture == architecture
+            )
+            shard = package_lifecycle_lab.run_lab(
+                package_args,
+                runner=FakePodmanRunner(),
+                platforms=platforms,
+                host_architecture=host,
+            )
+            shard["generated_at"] = (
+                self.now + timedelta(seconds=offset)
+            ).isoformat()
+            shard_path = self.raw / f"package-lifecycle-{architecture}.json"
+            shard_path.write_text(
+                json.dumps(shard, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            shard_paths[architecture] = shard_path
+        aggregate_args = argparse.Namespace(
+            **{
+                **common_package_args,
+                "architecture_shard": None,
+                "aggregate_amd64_report": shard_paths["amd64"],
+                "aggregate_arm64_report": shard_paths["arm64"],
+            }
         )
-        package_report = package_lifecycle_lab.run_lab(
-            package_args,
-            runner=FakePodmanRunner(),
-            host_architecture="x86_64",
+        package_report = package_lifecycle_lab.aggregate_native_shard_reports(
+            aggregate_args
         )
         package_report["generated_at"] = (self.now + timedelta(seconds=11)).isoformat()
 
@@ -278,7 +331,16 @@ class AdapterFixture:
             "previous_packages_dir": self.previous,
             "nft_raw": self.raw / "nftables-raw.json",
             "package_raw": self.raw / "package-lifecycle-raw.json",
+            "package_amd64_shard": self.raw / "package-lifecycle-amd64.json",
+            "package_arm64_shard": self.raw / "package-lifecycle-arm64.json",
             "freebsd_raw": self.raw / "freebsd-vm-raw.json",
+            "expected_repository": self.repository,
+            "expected_workflow_run_id": self.workflow_run_id,
+            "expected_workflow_run_attempt": self.workflow_run_attempt,
+            "expected_candidate_run_id": self.candidate_run_id,
+            "expected_candidate_artifact_id": self.candidate_artifact_id,
+            "expected_candidate_artifact_name": self.candidate_artifact_name,
+            "expected_previous_release_id": self.previous_release_id,
             "max_age_seconds": 172800,
             "max_report_skew_seconds": 0,
             "nft_output": self.bound / "nftables-bound.json",
@@ -334,6 +396,8 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             previous_packages_dir=relocated / "packages/previous",
             nft_raw=relocated / "raw/nftables-raw.json",
             package_raw=relocated / "raw/package-lifecycle-raw.json",
+            package_amd64_shard=relocated / "raw/package-lifecycle-amd64.json",
+            package_arm64_shard=relocated / "raw/package-lifecycle-arm64.json",
             freebsd_raw=relocated / "raw/freebsd-vm-raw.json",
             nft_envelope=relocated / "bound/nftables-bound.json",
             package_envelope=relocated / "bound/package-lifecycle-bound.json",
@@ -494,7 +558,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("freebsd-vm-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
-    def test_freebsd_forward_only_v40212_contract_is_exercised(self) -> None:
+    def test_freebsd_forward_only_v40213_contract_is_exercised(self) -> None:
         evidence = passing_evidence()
         evidence["PF_SNAPSHOT_PROVENANCE"] = "legacy_derived"
         evidence["PREVIOUS_PACKAGE_SHA256"] = (
@@ -505,7 +569,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             "CANDIDATE_REINSTALL",
             "CANDIDATE_RESTART_IDEMPOTENCE",
         ):
-            evidence[f"{phase}_PKG_VERSION"] = "4.02.12"
+            evidence[f"{phase}_PKG_VERSION"] = "4.02.13"
         for phase in ("PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"):
             evidence[f"{phase}_PKG_VERSION"] = "4.02.8"
             evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"
@@ -521,8 +585,8 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         report = freebsd_vm_lab.build_report(
             evidence,
             freebsd_vm_lab.PackageArtifact(
-                self.fixture.root / "syswarden-4.02.12.txz",
-                "4.02.12",
+                self.fixture.root / "syswarden-4.02.13.txz",
+                "4.02.13",
                 evidence["CANDIDATE_PACKAGE_SHA256"],
             ),
             freebsd_vm_lab.PackageArtifact(
@@ -574,7 +638,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
-    def test_arm64_probe_cannot_claim_native_or_report_the_host_uname(self) -> None:
+    def test_arm64_probe_must_be_native_and_report_the_native_uname(self) -> None:
         report = self.fixture.load_raw("package-lifecycle-raw.json")
         arm64 = next(
             item
@@ -585,6 +649,39 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
+    def test_native_shard_files_and_workflow_binding_are_independently_revalidated(self) -> None:
+        arm_path = self.fixture.raw / "package-lifecycle-arm64.json"
+        arm = self.fixture.load_raw("package-lifecycle-arm64.json")
+        arm["qualification_binding"]["workflow_run_id"] += 1
+        self.fixture.save_raw("package-lifecycle-arm64.json", arm)
+        aggregate = self.fixture.load_raw("package-lifecycle-raw.json")
+        record = next(
+            item
+            for item in aggregate["native_shards"]["reports"]
+            if item["architecture"] == "arm64"
+        )
+        record["report_sha256"] = hashlib.sha256(arm_path.read_bytes()).hexdigest()
+        self.fixture.save_raw("package-lifecycle-raw.json", aggregate)
+        self.assertAdapterError(self.fixture.args())
+
+        self.fixture._make_raw_reports()
+        self.assertAdapterError(
+            self.fixture.args(expected_workflow_run_id=self.fixture.workflow_run_id + 1)
+        )
+
+        self.fixture._make_raw_reports()
+        self.assertAdapterError(
+            self.fixture.args(
+                package_arm64_shard=self.fixture.raw / "package-lifecycle-amd64.json"
+            )
+        )
+
+        self.fixture._make_raw_reports()
+        aggregate = self.fixture.load_raw("package-lifecycle-raw.json")
+        aggregate["native_shards"]["reports"].reverse()
+        self.fixture.save_raw("package-lifecycle-raw.json", aggregate)
+        self.assertAdapterError(self.fixture.args())
+
         self.fixture._make_raw_reports()
         report = self.fixture.load_raw("package-lifecycle-raw.json")
         arm64 = next(
@@ -593,16 +690,30 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             if item["architecture_id"] == "arm64"
         )
         arm64["architecture_probe"].update(
-            execution_mode="native",
-            emulator=None,
-            binfmt=None,
+            execution_mode="host_binfmt_qemu_aarch64",
         )
-        arm64["bootstrap_execution"] = "native_container_build"
+        arm64["bootstrap_execution"] = "podman_platform_with_validated_host_binfmt"
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
         self.fixture._make_raw_reports()
         report = self.fixture.load_raw("package-lifecycle-raw.json")
         report["platforms"][0]["scenarios"][0]["events"][0]["status"] = "fail"
+        self.fixture.save_raw("package-lifecycle-raw.json", report)
+        self.assertAdapterError(self.fixture.args())
+
+        self.fixture._make_raw_reports()
+        report = self.fixture.load_raw("package-lifecycle-raw.json")
+        report["platforms"][0]["scenarios"][0]["events"][0]["detail"] = (
+            "aggregate-only forged detail"
+        )
+        self.fixture.save_raw("package-lifecycle-raw.json", report)
+        self.assertAdapterError(self.fixture.args())
+
+        self.fixture._make_raw_reports()
+        report = self.fixture.load_raw("package-lifecycle-raw.json")
+        report["scope"]["architecture_coverage"][0][
+            "completed_distributions"
+        ].reverse()
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 

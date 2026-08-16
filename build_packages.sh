@@ -253,8 +253,28 @@ syswarden_read_crontab() {
 syswarden_cleanup_cron_work() {
     [ -n "${cron_work:-}" ] || return 0
     syswarden_cron_cleanup_target="${cron_work}"
+    if [ "${XDG_CACHE_HOME:-}" = "${syswarden_cron_cleanup_target}/cache" ]; then
+        unset XDG_CACHE_HOME
+    fi
+    cron_cache=
+    rm -rf -- "${syswarden_cron_cleanup_target}" || return 1
+    if [ -e "${syswarden_cron_cleanup_target}" ] || [ -L "${syswarden_cron_cleanup_target}" ]; then
+        printf '%s\n' 'private cron work directory remains after cleanup' >&2
+        return 1
+    fi
     cron_work=
-    rm -rf -- "${syswarden_cron_cleanup_target}"
+}
+syswarden_prepare_cron_work() {
+    cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || return 1
+    chmod 0700 "${cron_work}" || return 1
+    cron_cache="${cron_work}/cache"
+    mkdir "${cron_cache}" || return 1
+    chmod 0700 "${cron_cache}" || return 1
+    XDG_CACHE_HOME="${cron_cache}"
+    export XDG_CACHE_HOME
+    cron_backup="${cron_work}/backup"
+    cron_error="${cron_work}/error"
+    cron_filtered="${cron_work}/filtered"
 }
 syswarden_cleanup_crontab() {
     syswarden_cron_backup="$1"
@@ -310,11 +330,7 @@ if [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     trap 'syswarden_cleanup_cron_work; exit 129' 1
     trap 'syswarden_cleanup_cron_work; exit 130' 2
     trap 'syswarden_cleanup_cron_work; exit 143' 15
-    cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || exit 1
-    chmod 0700 "${cron_work}" || exit 1
-    cron_backup="${cron_work}/backup"
-    cron_error="${cron_work}/error"
-    cron_filtered="${cron_work}/filtered"
+    syswarden_prepare_cron_work || exit 1
     syswarden_cleanup_crontab \
         "${cron_backup}" "${cron_error}" "${cron_filtered}" \
         /opt/syswarden/bin/syswarden-cli || exit 1
@@ -371,6 +387,7 @@ vendor: "SysWarden Security"
 homepage: "https://github.com/duggytuxy/syswarden"
 depends:
   - nftables
+  - openrc
   - curl
   - wget
   - rsyslog
@@ -386,6 +403,9 @@ scripts:
   postinstall: "./postinst.sh"
   preremove: "./prerm.sh"
   postremove: "./postrm.sh"
+apk:
+  scripts:
+    postupgrade: "./postinst.sh"
 EOF
 "$(go env GOPATH)/bin/nfpm" pkg --config nfpm_alpine_amd64.yaml --packager apk --target .
 rm -f nfpm_alpine_amd64.yaml

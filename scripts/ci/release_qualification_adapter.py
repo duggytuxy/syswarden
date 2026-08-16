@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Strictly bind raw SysWarden runtime-lab reports to release evidence.
 
-The laboratory reports deliberately contain no Git or release-package binding.
-This adapter validates their exact schemas, independently re-verifies the Git
-checkout and both package sets, derives all qualification decisions from nested
-evidence, and emits the three canonical envelopes consumed by
-``release_qualification_gate.py``.
+The native package shards carry an explicit qualification-run binding so their
+cross-run aggregation is independently reproducible. This adapter validates all
+exact schemas and shard digests, independently re-verifies the Git checkout and
+both package sets, derives decisions from nested evidence, and emits the three
+canonical envelopes consumed by ``release_qualification_gate.py``.
 """
 
 from __future__ import annotations
@@ -72,6 +72,8 @@ RAW_TOP_KEYS = {
             "engine",
             "package_roots",
             "platforms",
+            "qualification_binding",
+            "native_shards",
         }
     ),
     "freebsd": frozenset(
@@ -113,6 +115,7 @@ class ValidatedInputs:
     candidate: gate.PackageManifest
     previous: gate.PackageManifest
     raws: dict[str, RawReport]
+    package_shards: dict[str, RawReport]
     envelopes: dict[str, dict[str, Any]]
 
 
@@ -364,6 +367,38 @@ PACKAGE_SCOPE_KEYS = frozenset(
         "freebsd",
     }
 )
+PACKAGE_QUALIFICATION_BINDING_KEYS = frozenset(
+    {
+        "schema_version",
+        "repository",
+        "release_sha",
+        "release_tag",
+        "previous_tag",
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "candidate_run_id",
+        "candidate_artifact_id",
+        "candidate_artifact_name",
+        "previous_release_id",
+        "candidate_manifest_sha256",
+        "previous_manifest_sha256",
+    }
+)
+PACKAGE_NATIVE_SHARDS_KEYS = frozenset({"schema_version", "mode", "reports"})
+PACKAGE_NATIVE_SHARD_RECORD_KEYS = frozenset(
+    {
+        "architecture",
+        "host_architecture",
+        "report_sha256",
+        "engine_name",
+        "engine_version",
+    }
+)
+PACKAGE_NATIVE_SHARD_NAMES = {
+    "amd64": "package-lifecycle-amd64.json",
+    "arm64": "package-lifecycle-arm64.json",
+}
+PACKAGE_NATIVE_AGGREGATE_HOST = "native-shards:amd64,arm64"
 PACKAGE_PLATFORM_KEYS = frozenset(
     {
         "name",
@@ -409,7 +444,201 @@ def _package_versions(document: dict[str, Any], expected_version: str) -> tuple[
     return previous, candidate
 
 
+def _validate_package_qualification_binding(
+    value: Any,
+) -> dict[str, Any]:
+    binding = _exact_keys(
+        value,
+        PACKAGE_QUALIFICATION_BINDING_KEYS,
+        "package.qualification_binding",
+    )
+    if _integer(binding["schema_version"], "package.qualification_binding.schema_version") != 1:
+        _fail("package qualification binding schema version must be 1")
+    for key in (
+        "repository",
+        "release_sha",
+        "release_tag",
+        "previous_tag",
+        "candidate_artifact_name",
+    ):
+        _string(binding[key], f"package.qualification_binding.{key}")
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", binding["repository"]) is None:
+        _fail("package qualification repository is not canonical")
+    if gate.SHA_RE.fullmatch(binding["release_sha"]) is None:
+        _fail("package qualification release SHA is not canonical")
+    for key in ("release_tag", "previous_tag"):
+        if gate.VERSION_RE.fullmatch(binding[key]) is None:
+            _fail(f"package qualification {key} is not canonical")
+    if binding["release_tag"] == binding["previous_tag"]:
+        _fail("package qualification release and previous tags must differ")
+    for key in (
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "candidate_run_id",
+        "candidate_artifact_id",
+        "previous_release_id",
+    ):
+        if _integer(binding[key], f"package.qualification_binding.{key}") <= 0:
+            _fail(f"package qualification {key} must be positive")
+    for key in ("candidate_manifest_sha256", "previous_manifest_sha256"):
+        _sha256(binding[key], f"package.qualification_binding.{key}")
+    return binding
+
+
+def _validate_package_native_shards(value: Any) -> dict[str, dict[str, Any]]:
+    native_shards = _exact_keys(
+        value,
+        PACKAGE_NATIVE_SHARDS_KEYS,
+        "package.native_shards",
+    )
+    if _integer(native_shards["schema_version"], "package.native_shards.schema_version") != 1:
+        _fail("package native shard schema version must be 1")
+    if native_shards["mode"] != "native_architecture_shards_v1":
+        _fail("package native shard mode is invalid")
+    reports = _list(native_shards["reports"], "package.native_shards.reports")
+    if len(reports) != 2:
+        _fail("package native shard inventory must contain exactly two reports")
+    by_architecture: dict[str, dict[str, Any]] = {}
+    architecture_order: list[str] = []
+    for index, value in enumerate(reports):
+        report = _exact_keys(
+            value,
+            PACKAGE_NATIVE_SHARD_RECORD_KEYS,
+            f"package.native_shards.reports[{index}]",
+        )
+        architecture = _string(
+            report["architecture"],
+            f"package.native_shards.reports[{index}].architecture",
+        )
+        for key in ("host_architecture", "engine_name", "engine_version"):
+            _string(
+                report[key],
+                f"package.native_shards.reports[{index}].{key}",
+            )
+        _sha256(
+            report["report_sha256"],
+            f"package.native_shards.reports[{index}].report_sha256",
+        )
+        if architecture in by_architecture or architecture not in {"amd64", "arm64"}:
+            _fail("package native shard architecture is duplicate or unsupported")
+        if report["host_architecture"] != architecture or report["engine_name"] != "podman":
+            _fail("package native shard host or engine identity is invalid")
+        by_architecture[architecture] = report
+        architecture_order.append(architecture)
+    if set(by_architecture) != {"amd64", "arm64"}:
+        _fail("package native shard architecture inventory is incomplete")
+    if architecture_order != ["amd64", "arm64"]:
+        _fail("package native shard inventory order must be amd64 then arm64")
+    return by_architecture
+
+
+def _validate_package_shard_binding(
+    document: dict[str, Any],
+    package_shards: dict[str, RawReport],
+    expected_binding: dict[str, Any],
+) -> None:
+    binding = _validate_package_qualification_binding(
+        document["qualification_binding"]
+    )
+    if binding != expected_binding:
+        _fail("package qualification binding differs from the exact workflow inputs")
+    records = _validate_package_native_shards(document["native_shards"])
+    if set(package_shards) != {"amd64", "arm64"}:
+        _fail("package native shard file inventory is incomplete")
+    for architecture in ("amd64", "arm64"):
+        raw = package_shards[architecture]
+        record = records[architecture]
+        if raw.snapshot.path.name != PACKAGE_NATIVE_SHARD_NAMES[architecture]:
+            _fail(f"package {architecture} shard basename is invalid")
+        if raw.snapshot.sha256 != record["report_sha256"]:
+            _fail(f"package {architecture} shard digest differs from the aggregate")
+        try:
+            package_lab.validate_native_shard_report(
+                raw.document,
+                architecture=architecture,
+                expected_binding=expected_binding,
+            )
+        except (package_lab.LifecycleLabError, KeyError, TypeError, ValueError) as exc:
+            raise AdapterError(
+                f"invalid package {architecture} native shard evidence: {exc}"
+            ) from exc
+        engine = raw.document["engine"]
+        scope = raw.document["scope"]
+        if record != {
+            "architecture": architecture,
+            "host_architecture": package_lab.normalize_host_architecture(
+                scope["host_architecture"]
+            ),
+            "report_sha256": raw.snapshot.sha256,
+            "engine_name": engine["name"],
+            "engine_version": engine["version"],
+        }:
+            _fail(f"package {architecture} shard metadata differs from its report")
+    shard_platforms = [
+        platform
+        for architecture in ("amd64", "arm64")
+        for platform in package_shards[architecture].document["platforms"]
+    ]
+    if document.get("platforms") != shard_platforms:
+        _fail("package aggregate platform evidence differs from its native shards")
+    try:
+        aggregate_status, aggregate_classification, aggregate_scope = (
+            package_lab._aggregate_matrix_summary(shard_platforms)
+        )
+    except (package_lab.LifecycleLabError, KeyError, TypeError, ValueError) as exc:
+        raise AdapterError(
+            f"invalid package native shard aggregate evidence: {exc}"
+        ) from exc
+    if (
+        document.get("status") != aggregate_status
+        or document.get("harness_complete")
+        != aggregate_classification["harness_complete"]
+        or document.get("release_ready")
+        != aggregate_classification["release_ready"]
+        or document.get("blocker_ids") != aggregate_classification["blocker_ids"]
+        or document.get("unexpected_failed_checks")
+        != aggregate_classification["unexpected_failed_checks"]
+        or document.get("scope") != aggregate_scope
+    ):
+        _fail("package aggregate summary differs from its native shards")
+
+    shard_contracts = [
+        package_shards[architecture].document["package_version_contract"]
+        for architecture in ("amd64", "arm64")
+    ]
+    expected_contract = {
+        key: shard_contracts[0][key]
+        for key in (
+            "scheme",
+            "relation",
+            "previous_version",
+            "candidate_version",
+            "previous_numeric",
+            "candidate_numeric",
+        )
+    }
+    expected_contract["coordinates"] = sorted(
+        [
+            coordinate
+            for contract in shard_contracts
+            for coordinate in contract["coordinates"]
+        ],
+        key=lambda coordinate: coordinate["coordinate"],
+    )
+    if document.get("package_version_contract") != expected_contract:
+        _fail("package aggregate version contract differs from its native shards")
+    expected_engine_version = ";".join(
+        f"{architecture}={records[architecture]['engine_version']}"
+        for architecture in ("amd64", "arm64")
+    )
+    engine = document.get("engine")
+    if not isinstance(engine, dict) or engine.get("version") != expected_engine_version:
+        _fail("package aggregate engine version differs from native shard reports")
+
+
 def _validate_package_schema(document: dict[str, Any]) -> None:
+    _validate_package_qualification_binding(document["qualification_binding"])
+    _validate_package_native_shards(document["native_shards"])
     contract = _exact_keys(
         document["package_version_contract"], PACKAGE_CONTRACT_KEYS, "package.version_contract"
     )
@@ -447,8 +676,9 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
     normalized_host_architecture = package_lab.normalize_host_architecture(
         scope["host_architecture"]
     )
-    if normalized_host_architecture is None:
-        _fail("package host architecture is unsupported or ambiguous")
+    native_aggregate = scope["host_architecture"] == PACKAGE_NATIVE_AGGREGATE_HOST
+    if not native_aggregate or normalized_host_architecture is not None:
+        _fail("package report must identify the exact amd64 plus arm64 native shard model")
     if scope["network_during_package_operations"] != "disabled":
         _fail("package operations were not network-isolated")
     classification = _list(scope["coordinate_classification"], "package.scope.coordinate_classification")
@@ -522,6 +752,8 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
             _fail("package ARM64 binfmt evidence lacks the fix-binary flag")
         if emulator is None or binfmt["interpreter"] != emulator["path"]:
             _fail("package ARM64 binfmt interpreter does not match the emulator")
+    if emulator is not None or binfmt is not None:
+        _fail("package native shard qualification forbids ARM64 emulation")
 
     roots = _exact_keys(document["package_roots"], {"candidate", "previous", "mount_mode"}, "package.package_roots")
     _string(roots["candidate"], "package.package_roots.candidate")
@@ -596,7 +828,7 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
             _string(probe_binfmt["interpreter"], "package probe binfmt interpreter")
             if "F" not in _string(probe_binfmt["flags"], "package probe binfmt flags"):
                 _fail("package probe binfmt flags are invalid")
-        native_coordinate = spec.architecture == normalized_host_architecture
+        native_coordinate = native_aggregate
         cross_arm64_coordinate = (
             spec.architecture == "arm64"
             and normalized_host_architecture != "arm64"
@@ -679,8 +911,15 @@ def _validate_package(
     binding: gate.RepositoryBinding,
     candidate: gate.PackageManifest,
     previous: gate.PackageManifest,
+    package_shards: dict[str, RawReport],
+    expected_qualification_binding: dict[str, Any],
 ) -> dict[str, Any]:
     _validate_package_schema(document)
+    _validate_package_shard_binding(
+        document,
+        package_shards,
+        expected_qualification_binding,
+    )
     try:
         package_lab.validate_report_version_contract(document)
         classification = package_lab.classify_lifecycle_evidence(document["platforms"])
@@ -1123,8 +1362,8 @@ def _validate_freebsd_schema(document: dict[str, Any]) -> tuple[dict[str, Any], 
         _string(item["version"], f"freebsd.inputs.{side}.version")
         _sha256(item["sha256"], f"freebsd.inputs.{side}.sha256")
     forward_only = (
-        inputs["candidate"]["package"] == "syswarden-4.02.12.txz"
-        and inputs["candidate"]["version"] == "4.02.12"
+        inputs["candidate"]["package"] == "syswarden-4.02.13.txz"
+        and inputs["candidate"]["version"] == "4.02.13"
         and inputs["previous"]["package"]
         == freebsd_lab.FORWARD_ONLY_PREVIOUS_PACKAGE
         and inputs["previous"]["version"]
@@ -1143,7 +1382,7 @@ def _validate_freebsd_schema(document: dict[str, Any]) -> tuple[dict[str, Any], 
     if historical_binding_touched and not forward_only:
         _fail(
             "FreeBSD historical transition must be the exact byte-bound "
-            "v4.02.8 -> v4.02.12 contract"
+            "v4.02.8 -> v4.02.13 contract"
         )
     _string(inputs["pf_fixture"], "freebsd.inputs.pf_fixture")
     _sha256(inputs["pf_fixture_sha256"], "freebsd.inputs.pf_fixture_sha256")
@@ -1365,8 +1604,8 @@ def _validate_freebsd(
     derived_product = "pass"
     inputs = document["inputs"]
     forward_only = (
-        inputs["candidate"]["package"] == "syswarden-4.02.12.txz"
-        and inputs["candidate"]["version"] == "4.02.12"
+        inputs["candidate"]["package"] == "syswarden-4.02.13.txz"
+        and inputs["candidate"]["version"] == "4.02.13"
         and inputs["previous"]["package"]
         == freebsd_lab.FORWARD_ONLY_PREVIOUS_PACKAGE
         and inputs["previous"]["version"]
@@ -1505,8 +1744,9 @@ def _revalidate_all(
     candidate: gate.PackageManifest,
     previous: gate.PackageManifest,
     raws: dict[str, RawReport],
+    package_shards: dict[str, RawReport],
 ) -> None:
-    for raw in raws.values():
+    for raw in (*raws.values(), *package_shards.values()):
         gate.revalidate(raw.snapshot, f"{raw.label} raw report")
     for manifest, label in ((candidate, "candidate package evidence"), (previous, "previous package evidence")):
         for snapshot in manifest.snapshots:
@@ -1544,11 +1784,30 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
     candidate = gate.verify_packages(args.candidate_packages_dir, binding)
     raw_paths = {"nft": args.nft_raw, "package": args.package_raw, "freebsd": args.freebsd_raw}
     raws = {key: _load_raw(path, key, binding.root, current, args.max_age_seconds) for key, path in raw_paths.items()}
+    package_shard_paths = {
+        "amd64": args.package_amd64_shard,
+        "arm64": args.package_arm64_shard,
+    }
+    package_shards = {
+        architecture: _load_raw(
+            path,
+            f"package-{architecture}-shard",
+            binding.root,
+            current,
+            args.max_age_seconds,
+        )
+        for architecture, path in package_shard_paths.items()
+    }
     for key, raw in raws.items():
         if raw.snapshot.path.name != RAW_NAMES[key]:
             _fail(f"{key} raw basename must be exactly {RAW_NAMES[key]!r}")
-    if len({(item.snapshot.device, item.snapshot.inode) for item in raws.values()}) != 3 or len({item.snapshot.path for item in raws.values()}) != 3 or len({item.snapshot.path.name for item in raws.values()}) != 3:
-        _fail("the three raw reports must have distinct files, inodes, paths, and basenames")
+    all_raws = [*raws.values(), *package_shards.values()]
+    if (
+        len({(item.snapshot.device, item.snapshot.inode) for item in all_raws}) != 5
+        or len({item.snapshot.path for item in all_raws}) != 5
+        or len({item.snapshot.path.name for item in all_raws}) != 5
+    ):
+        _fail("the raw reports and native shards must have distinct files, inodes, paths, and basenames")
     timestamps = [item.generated_at for item in raws.values()]
     if max(timestamps) - min(timestamps) > timedelta(seconds=RAW_REPORT_MAX_SKEW_SECONDS):
         _fail("raw report timestamps exceed the bounded laboratory collection window")
@@ -1558,6 +1817,26 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
         _fail("Linux and FreeBSD raw reports do not bind the same previous version")
     previous_binding = gate.RepositoryBinding(binding.root, binding.commit_sha, binding.tree_sha, "v" + previous_version)
     previous = gate.verify_packages(args.previous_packages_dir, previous_binding)
+    expected_qualification_binding = {
+        "schema_version": 1,
+        "repository": args.expected_repository,
+        "release_sha": binding.commit_sha,
+        "release_tag": binding.version,
+        "previous_tag": previous_binding.version,
+        "workflow_run_id": args.expected_workflow_run_id,
+        "workflow_run_attempt": args.expected_workflow_run_attempt,
+        "candidate_run_id": args.expected_candidate_run_id,
+        "candidate_artifact_id": args.expected_candidate_artifact_id,
+        "candidate_artifact_name": args.expected_candidate_artifact_name,
+        "previous_release_id": args.expected_previous_release_id,
+        "candidate_manifest_sha256": candidate.sha256,
+        "previous_manifest_sha256": previous.sha256,
+    }
+    _validate_package_qualification_binding(expected_qualification_binding)
+    if args.expected_candidate_artifact_name != (
+        "syswarden-packages-" + binding.version.removeprefix("v")
+    ):
+        _fail("candidate package artifact name does not match the release version")
     candidate_dir_stat = candidate.directory.stat()
     previous_dir_stat = previous.directory.stat()
     if candidate.directory == previous.directory or (
@@ -1569,7 +1848,7 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
     if len(identities) != len(candidate.snapshots) + len(previous.snapshots):
         _fail("candidate and previous package evidence must not share files/inodes")
     raw_identities = {
-        (item.snapshot.device, item.snapshot.inode) for item in raws.values()
+        (item.snapshot.device, item.snapshot.inode) for item in all_raws
     }
     if raw_identities & identities:
         _fail("raw reports must not alias candidate or previous package evidence")
@@ -1584,14 +1863,21 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
     if any(
         raw.snapshot.path.parent.name != "raw"
         or raw.snapshot.path.parent.parent != artifact_root
-        for raw in raws.values()
+        for raw in all_raws
     ):
         _fail("raw reports and package directories do not share the exact artifact layout")
     for old_name, new_name in zip(gate.package_names("v" + previous_version), gate.package_names(binding.version)):
         if previous.checksums[old_name] == candidate.checksums[new_name]:
             _fail(f"previous and candidate package bytes are identical: {old_name}/{new_name}")
     nft = _validate_nft(raws["nft"].document, binding)
-    package = _validate_package(raws["package"].document, binding, candidate, previous)
+    package = _validate_package(
+        raws["package"].document,
+        binding,
+        candidate,
+        previous,
+        package_shards,
+        expected_qualification_binding,
+    )
     freebsd = _validate_freebsd(raws["freebsd"].document, binding, candidate, previous)
     if package["lifecycle"]["previous_version"] != freebsd["lifecycle"]["previous_version"]:
         _fail("Linux and FreeBSD lifecycle evidence disagrees on the previous version")
@@ -1609,8 +1895,15 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
         "package": gate.build_bound_report(kind="linux_package_lifecycle", generated_at=generated_at, raw_report_sha256=raws["package"].snapshot.sha256, bindings=bindings, real_freebsd_vm=False, **package),
         "freebsd": gate.build_bound_report(kind="freebsd_vm", generated_at=generated_at, raw_report_sha256=raws["freebsd"].snapshot.sha256, bindings=bindings, real_freebsd_vm=True, **freebsd),
     }
-    _revalidate_all(binding, candidate, previous, raws)
-    return ValidatedInputs(binding, candidate, previous, raws, envelopes)
+    _revalidate_all(binding, candidate, previous, raws, package_shards)
+    return ValidatedInputs(
+        binding,
+        candidate,
+        previous,
+        raws,
+        package_shards,
+        envelopes,
+    )
 
 
 def _destination_paths(args: argparse.Namespace) -> dict[str, Path]:
@@ -1621,7 +1914,10 @@ def _destination_paths(args: argparse.Namespace) -> dict[str, Path]:
 
 def _validate_destinations(paths: dict[str, Path], state: ValidatedInputs, *, must_exist: bool) -> dict[str, Path]:
     resolved: dict[str, Path] = {}
-    protected = {(item.snapshot.device, item.snapshot.inode) for item in state.raws.values()} | _package_identity_set(state.candidate, state.previous)
+    protected = {
+        (item.snapshot.device, item.snapshot.inode)
+        for item in (*state.raws.values(), *state.package_shards.values())
+    } | _package_identity_set(state.candidate, state.previous)
     existing: set[tuple[int, int]] = set()
     for key, path in paths.items():
         if path.name != OUTPUT_NAMES[key]:
@@ -1659,7 +1955,13 @@ def run_build(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
     for key, snapshot in snapshots.items():
         if snapshot.payload != _canonical(state.envelopes[key]):
             _fail(f"{key} envelope atomic write was not byte-exact")
-    _revalidate_all(state.binding, state.candidate, state.previous, state.raws)
+    _revalidate_all(
+        state.binding,
+        state.candidate,
+        state.previous,
+        state.raws,
+        state.package_shards,
+    )
     return state.envelopes
 
 
@@ -1675,7 +1977,13 @@ def run_verify(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
             _fail(f"{key} envelope is not the byte-exact canonical recomputation")
     for key, snapshot in snapshots.items():
         gate.revalidate(snapshot, f"{key} envelope")
-    _revalidate_all(state.binding, state.candidate, state.previous, state.raws)
+    _revalidate_all(
+        state.binding,
+        state.candidate,
+        state.previous,
+        state.raws,
+        state.package_shards,
+    )
     return state.envelopes
 
 
@@ -1687,7 +1995,16 @@ def _common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--previous-packages-dir", type=Path, required=True)
     parser.add_argument("--nft-raw", type=Path, required=True)
     parser.add_argument("--package-raw", type=Path, required=True)
+    parser.add_argument("--package-amd64-shard", type=Path, required=True)
+    parser.add_argument("--package-arm64-shard", type=Path, required=True)
     parser.add_argument("--freebsd-raw", type=Path, required=True)
+    parser.add_argument("--expected-repository", required=True)
+    parser.add_argument("--expected-workflow-run-id", type=int, required=True)
+    parser.add_argument("--expected-workflow-run-attempt", type=int, required=True)
+    parser.add_argument("--expected-candidate-run-id", type=int, required=True)
+    parser.add_argument("--expected-candidate-artifact-id", type=int, required=True)
+    parser.add_argument("--expected-candidate-artifact-name", required=True)
+    parser.add_argument("--expected-previous-release-id", type=int, required=True)
     parser.add_argument("--max-age-seconds", type=int, required=True)
     parser.add_argument("--max-report-skew-seconds", type=int, default=300)
 

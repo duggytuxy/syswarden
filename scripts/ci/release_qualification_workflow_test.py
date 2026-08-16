@@ -148,6 +148,10 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertEqual(
             self.workflow.count("name: syswarden-release-qualification"), 2
         )
+        self.assertEqual(self.workflow.count("runs-on: ubuntu-24.04-arm"), 1)
+        self.assertEqual(self.workflow.count("- self-hosted"), 1)
+        self.assertIn("needs: package-lifecycle-arm64", self.workflow)
+        self.assertIn('test "$(uname -m)" = "aarch64"', self.workflow)
 
     def test_environment_api_enforces_automatic_qualification_and_main_only(self) -> None:
         required = (
@@ -160,6 +164,9 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "must require no reviewer or wait gate",
             ".deployment_branch_policy[$field]",
             "required_environment_boolean",
+            "required_top_level_environment_boolean",
+            '"${can_admins_bypass}" != "false"',
+            "forbid administrator bypass",
             "deployment-branch-policies",
             '.name == "main" and .type == "branch"',
             '"${policy_count}" != "1"',
@@ -183,6 +190,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
 
         valid = {
             "name": "syswarden-release-qualification",
+            "can_admins_bypass": False,
             "protection_rules": [{"type": "branch_policy"}],
             "deployment_branch_policy": {
                 "protected_branches": False,
@@ -210,6 +218,29 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, diagnostic)
                 self.assertNotIn("must be boolean", diagnostic)
                 self.assertIn("must require no reviewer or wait gate", diagnostic)
+
+        mutated = json.loads(json.dumps(valid))
+        mutated["can_admins_bypass"] = True
+        result = run_environment_gate(script, mutated, policies)
+        diagnostic = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, diagnostic)
+        self.assertIn("forbid administrator bypass", diagnostic)
+
+        for name, value, missing in (
+            ("bypass missing", None, True),
+            ("bypass null", None, False),
+            ("bypass string", "false", False),
+        ):
+            with self.subTest(name=name):
+                mutated = json.loads(json.dumps(valid))
+                if missing:
+                    del mutated["can_admins_bypass"]
+                else:
+                    mutated["can_admins_bypass"] = value
+                result = run_environment_gate(script, mutated, policies)
+                diagnostic = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0, diagnostic)
+                self.assertIn("can_admins_bypass must be boolean", diagnostic)
 
         for name, field, value, missing in (
             ("protected missing", "protected_branches", None, True),
@@ -294,28 +325,73 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(
             self.workflow.count("gh api --paginate --slurp --method GET"), 4
         )
-        self.assertEqual(self.workflow.count("verify-packages"), 2)
+        self.assertEqual(self.workflow.count("verify-packages"), 4)
 
-    def test_arm64_requires_exact_enabled_fix_binary_binfmt(self) -> None:
+    def test_arm64_is_native_and_emulation_is_forbidden(self) -> None:
         required = (
-            "SYSWARDEN_QEMU_AARCH64_STATIC",
-            "/proc/sys/fs/binfmt_misc/qemu-aarch64",
-            "sed -n 's/^interpreter //p'",
-            '"${binfmt_interpreters[0]}" != "${QEMU_AARCH64_STATIC}"',
-            '"${binfmt_flags}" != *F*',
-            "--arm64-emulator \"${QEMU_AARCH64_STATIC}\"",
+            "runs-on: ubuntu-24.04-arm",
+            "--architecture-shard arm64",
+            "--architecture-shard amd64",
+            "package-lifecycle-arm64.json",
+            "package-lifecycle-amd64.json",
+            "--aggregate-amd64-report",
+            "--aggregate-arm64-report",
         )
         for contract in required:
             self.assertIn(contract, self.workflow)
+        for forbidden in (
+            "SYSWARDEN_QEMU_AARCH64_STATIC",
+            "/proc/sys/fs/binfmt_misc/qemu-aarch64",
+            "--arm64-emulator",
+            "host_binfmt_qemu_aarch64",
+        ):
+            self.assertNotIn(forbidden, self.workflow)
+
+    def test_native_shards_are_bound_to_one_run_sha_and_package_source(self) -> None:
+        for argument in (
+            "--qualification-repository",
+            "--qualification-release-sha",
+            "--qualification-release-tag",
+            "--qualification-previous-tag",
+            "--qualification-workflow-run-id",
+            "--qualification-workflow-run-attempt",
+            "--qualification-candidate-run-id",
+            "--qualification-candidate-artifact-id",
+            "--qualification-candidate-artifact-name",
+            "--qualification-previous-release-id",
+        ):
+            self.assertEqual(self.workflow.count(argument), 2)
+        for argument in (
+            "--package-amd64-shard",
+            "--package-arm64-shard",
+            "--expected-repository",
+            "--expected-workflow-run-id",
+            "--expected-workflow-run-attempt",
+            "--expected-candidate-run-id",
+            "--expected-candidate-artifact-id",
+            "--expected-candidate-artifact-name",
+            "--expected-previous-release-id",
+        ):
+            self.assertEqual(self.workflow.count(argument), 2)
+        self.assertIn("sha256sum --check --strict SHA256SUMS.txt", self.workflow)
+        self.assertIn('test "${actual_arm_sha256}" = "${ARM_REPORT_SHA256}"', self.workflow)
+        self.assertIn(
+            '"${ARM_CANDIDATE_RUN_ID}" != "${CANDIDATE_RUN_ID}"',
+            self.workflow,
+        )
+        self.assertIn(
+            "a native shard returned nonzero while the aggregate claimed success",
+            self.workflow,
+        )
 
     def test_all_real_labs_are_fail_closed_and_never_pull_images(self) -> None:
-        for script in (
-            "scripts/ci/package_lifecycle_lab.py",
-            "scripts/ci/freebsd_vm_lab.py",
-            "scripts/ci/nftables_kernel_lab.py",
-        ):
+        self.assertEqual(
+            self.workflow.count("scripts/ci/package_lifecycle_lab.py"), 3
+        )
+        for script in ("scripts/ci/freebsd_vm_lab.py", "scripts/ci/nftables_kernel_lab.py"):
             self.assertEqual(self.workflow.count(script), 1)
         self.assertEqual(self.workflow.count("--pull-policy never"), 2)
+        self.assertEqual(self.workflow.count("--pull-policy always"), 1)
         for status in (
             "package-lab.rc",
             "freebsd-lab.rc",
@@ -445,6 +521,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "raw/freebsd-vm-raw.json",
             "raw/freebsd-updater-raw.json",
             "raw/nftables-raw.json",
+            "raw/package-lifecycle-amd64.json",
+            "raw/package-lifecycle-arm64.json",
             "raw/package-lifecycle-raw.json",
             "packages/candidate/SHA256SUMS.txt",
             "packages/previous/SHA256SUMS.txt",

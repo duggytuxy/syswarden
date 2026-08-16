@@ -675,7 +675,13 @@ jobs:
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
           qualification_root_directories=(aggregate bound packages raw status)
           qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
-          qualification_raw_files=(freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json)
+          qualification_raw_files=(
+            freebsd-vm-raw.json
+            nftables-raw.json
+            package-lifecycle-amd64.json
+            package-lifecycle-arm64.json
+            package-lifecycle-raw.json
+          )
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
             qualification_root_directories+=(tools update)
             qualification_all_directories+=(tools update)
@@ -786,6 +792,14 @@ jobs:
               (.id | type) == "number" and .id > 0 and
               (.name | type) == "string" and (.name | length) > 0
             )' "${QUALIFICATION_ROOT}/qualification-context.json"
+          candidate_run_id="$(jq -r '.candidate_package_run_id' \
+            "${QUALIFICATION_ROOT}/qualification-context.json")"
+          candidate_artifact_id="$(jq -r '.candidate_package_artifact_id' \
+            "${QUALIFICATION_ROOT}/qualification-context.json")"
+          candidate_artifact_name="$(jq -r '.candidate_package_artifact_name' \
+            "${QUALIFICATION_ROOT}/qualification-context.json")"
+          previous_release_id="$(jq -r '.previous_release_id' \
+            "${QUALIFICATION_ROOT}/qualification-context.json")"
           jq --exit-status \
             --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" '
             (keys | sort) == (if $signed_update_required then [
@@ -817,7 +831,16 @@ jobs:
             --previous-packages-dir "${QUALIFICATION_ROOT}/packages/previous" \
             --nft-raw "${QUALIFICATION_ROOT}/raw/nftables-raw.json" \
             --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
+            --package-amd64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json" \
+            --package-arm64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-arm64.json" \
             --freebsd-raw "${QUALIFICATION_ROOT}/raw/freebsd-vm-raw.json" \
+            --expected-repository "${GITHUB_REPOSITORY}" \
+            --expected-workflow-run-id "${QUALIFICATION_RUN_ID}" \
+            --expected-workflow-run-attempt 1 \
+            --expected-candidate-run-id "${candidate_run_id}" \
+            --expected-candidate-artifact-id "${candidate_artifact_id}" \
+            --expected-candidate-artifact-name "${candidate_artifact_name}" \
+            --expected-previous-release-id "${previous_release_id}" \
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --nft-envelope "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \
@@ -936,6 +959,17 @@ jobs:
               end
             ' <<< "${environment_json}"
           }
+          required_top_level_environment_boolean() {
+            local field="${1:?environment boolean field is required}"
+            jq -er --arg field "${field}" '
+              .[$field] |
+              if type == "boolean" then
+                tostring
+              else
+                error($field + " must be boolean")
+              end
+            ' <<< "${environment_json}"
+          }
           environment_name="$(jq -r '.name // ""' <<< "${environment_json}")"
           reviewer_rule_count="$(jq --arg owner "${GITHUB_REPOSITORY_OWNER}" '[
             .protection_rules[]? |
@@ -957,13 +991,16 @@ jobs:
             "protected_branches")"
           custom_branch_policies="$(required_environment_boolean \
             "custom_branch_policies")"
+          can_admins_bypass="$(required_top_level_environment_boolean \
+            "can_admins_bypass")"
           if [[ "${environment_name}" != "syswarden-release-production" || \
                 "${reviewer_rule_count}" != "1" || \
                 "${branch_policy_rule_count}" != "1" || \
                 "${protection_rule_count}" != "2" || \
                 "${protected_branches}" != "false" || \
-                "${custom_branch_policies}" != "true" ]]; then
-            echo "ERROR: syswarden-release-production must require exactly one approval from the repository owner and one custom tag policy." >&2
+                "${custom_branch_policies}" != "true" || \
+                "${can_admins_bypass}" != "false" ]]; then
+            echo "ERROR: syswarden-release-production must forbid administrator bypass, require exactly one approval from the repository owner, and allow one custom tag policy." >&2
             echo "Publication is blocked until the maintainer configures that GitHub Environment." >&2
             exit 1
           fi
@@ -1173,7 +1210,13 @@ jobs:
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
           qualification_root_directories=(aggregate bound packages raw status)
           qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
-          qualification_raw_files=(freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json)
+          qualification_raw_files=(
+            freebsd-vm-raw.json
+            nftables-raw.json
+            package-lifecycle-amd64.json
+            package-lifecycle-arm64.json
+            package-lifecycle-raw.json
+          )
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
             qualification_root_directories+=(tools update)
             qualification_all_directories+=(tools update)
@@ -1284,6 +1327,14 @@ jobs:
               (.id | type) == "number" and .id > 0 and
               (.name | type) == "string" and (.name | length) > 0
             )' "${QUALIFICATION_ROOT}/qualification-context.json"
+          candidate_run_id="$(jq -r '.candidate_package_run_id' \
+            "${QUALIFICATION_ROOT}/qualification-context.json")"
+          candidate_artifact_id="$(jq -r '.candidate_package_artifact_id' \
+            "${QUALIFICATION_ROOT}/qualification-context.json")"
+          candidate_artifact_name="$(jq -r '.candidate_package_artifact_name' \
+            "${QUALIFICATION_ROOT}/qualification-context.json")"
+          previous_release_id="$(jq -r '.previous_release_id' \
+            "${QUALIFICATION_ROOT}/qualification-context.json")"
           jq --exit-status \
             --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" '
             (keys | sort) == (if $signed_update_required then [
@@ -1315,7 +1366,16 @@ jobs:
             --previous-packages-dir "${QUALIFICATION_ROOT}/packages/previous" \
             --nft-raw "${QUALIFICATION_ROOT}/raw/nftables-raw.json" \
             --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
+            --package-amd64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json" \
+            --package-arm64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-arm64.json" \
             --freebsd-raw "${QUALIFICATION_ROOT}/raw/freebsd-vm-raw.json" \
+            --expected-repository "${GITHUB_REPOSITORY}" \
+            --expected-workflow-run-id "${QUALIFICATION_RUN_ID}" \
+            --expected-workflow-run-attempt 1 \
+            --expected-candidate-run-id "${candidate_run_id}" \
+            --expected-candidate-artifact-id "${candidate_artifact_id}" \
+            --expected-candidate-artifact-name "${candidate_artifact_name}" \
+            --expected-previous-release-id "${previous_release_id}" \
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --nft-envelope "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \

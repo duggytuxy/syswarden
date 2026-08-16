@@ -823,15 +823,31 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             1,
         )
         for section in (validate, privileged):
+            for argument in (
+                "--package-amd64-shard",
+                "--package-arm64-shard",
+                "--expected-repository",
+                "--expected-workflow-run-id",
+                "--expected-workflow-run-attempt 1",
+                "--expected-candidate-run-id",
+                "--expected-candidate-artifact-id",
+                "--expected-candidate-artifact-name",
+                "--expected-previous-release-id",
+            ):
+                self.assertIn(argument, section)
             self.assertIn("EVIDENCE_SHA256SUMS.txt qualification-context.json", section)
             self.assertIn("aggregate bound packages raw status", section)
             self.assertIn("qualification_root_directories+=(tools update)", section)
             self.assertIn("qualification_all_directories+=(tools update)", section)
             self.assertIn("qualification_raw_files+=(freebsd-updater-raw.json)", section)
-            self.assertIn(
-                "freebsd-vm-raw.json nftables-raw.json package-lifecycle-raw.json",
-                section,
-            )
+            for raw_name in (
+                "freebsd-vm-raw.json",
+                "nftables-raw.json",
+                "package-lifecycle-amd64.json",
+                "package-lifecycle-arm64.json",
+                "package-lifecycle-raw.json",
+            ):
+                self.assertIn(raw_name, section)
             self.assertIn(
                 "freebsd-vm-bound.json nftables-bound.json package-lifecycle-bound.json",
                 section,
@@ -990,6 +1006,7 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             workflow, "Require Protected Maintainer Release Environment"
         )
         self.assertIn("required_environment_boolean()", environment_script)
+        self.assertIn("required_top_level_environment_boolean()", environment_script)
         self.assertIn('if type == "boolean" then', environment_script)
         self.assertIn("tostring", environment_script)
         self.assertNotIn('// "missing"', environment_script)
@@ -1003,6 +1020,7 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         )
         valid = {
             "name": "syswarden-release-production",
+            "can_admins_bypass": False,
             "protection_rules": [
                 {
                     "type": "required_reviewers",
@@ -1042,8 +1060,16 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                 self.assertNotEqual(result.returncode, 0, diagnostic)
                 self.assertNotIn("must be boolean", diagnostic)
                 self.assertIn(
-                    "must require exactly one approval", diagnostic
+                    "must forbid administrator bypass", diagnostic
                 )
+
+        mutated = json.loads(json.dumps(valid))
+        mutated["can_admins_bypass"] = True
+        result = run_environment_gate(script, mutated, policies)
+        diagnostic = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, diagnostic)
+        self.assertNotIn("must be boolean", diagnostic)
+        self.assertIn("must forbid administrator bypass", diagnostic)
 
         for name, field, value, missing in (
             ("protected missing", "protected_branches", None, True),
@@ -1066,6 +1092,22 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                     f"deployment_branch_policy.{field} must be boolean",
                     diagnostic,
                 )
+
+        for name, value, missing in (
+            ("admin bypass missing", None, True),
+            ("admin bypass null", None, False),
+            ("admin bypass string", "false", False),
+        ):
+            with self.subTest(name=name):
+                mutated = json.loads(json.dumps(valid))
+                if missing:
+                    del mutated["can_admins_bypass"]
+                else:
+                    mutated["can_admins_bypass"] = value
+                result = run_environment_gate(script, mutated, policies)
+                diagnostic = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0, diagnostic)
+                self.assertIn("can_admins_bypass must be boolean", diagnostic)
 
     def test_privileged_publisher_requires_exact_immutable_tag_ruleset(self) -> None:
         workflow = (
