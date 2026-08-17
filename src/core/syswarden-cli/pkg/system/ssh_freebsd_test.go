@@ -21,6 +21,8 @@ func prepareFreeBSDSSHTest(t *testing.T, content string) string {
 	originalRename := freeBSDSSHRename
 	originalRestart := freeBSDSSHRestart
 	originalValidate := freeBSDSSHValidate
+	originalWritePrivateFile := freeBSDSSHWritePrivateFile
+	originalSyncDirectory := freeBSDSSHSyncDirectory
 	originalOwner := freeBSDSSHExpectedOwner
 	freeBSDSSHDirectory = directory
 	freeBSDSSHRename = func(root *os.Root, oldName, newName string) error {
@@ -28,15 +30,156 @@ func prepareFreeBSDSSHTest(t *testing.T, content string) string {
 	}
 	freeBSDSSHRestart = func() error { return nil }
 	freeBSDSSHValidate = func() error { return nil }
+	freeBSDSSHWritePrivateFile = writePrivateSSHFile
+	freeBSDSSHSyncDirectory = syncSSHDirectory
 	freeBSDSSHExpectedOwner = os.Geteuid
 	t.Cleanup(func() {
 		freeBSDSSHDirectory = originalDirectory
 		freeBSDSSHRename = originalRename
 		freeBSDSSHRestart = originalRestart
 		freeBSDSSHValidate = originalValidate
+		freeBSDSSHWritePrivateFile = originalWritePrivateFile
+		freeBSDSSHSyncDirectory = originalSyncDirectory
 		freeBSDSSHExpectedOwner = originalOwner
 	})
 	return directory
+}
+
+func readSSHTestSnapshot(t *testing.T, directory string) freeBSDSSHConfigSnapshot {
+	t.Helper()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	snapshot, err := readSafeFreeBSDSSHFile(root, freeBSDSSHConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func assertSSHTestArtifactsAbsent(t *testing.T, directory string) {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != freeBSDSSHConfig {
+		t.Fatalf("unexpected SSH transaction artifacts: %#v", entries)
+	}
+}
+
+func TestConfigureFreeBSDSSHDirectivesByteExactNoOp(t *testing.T) {
+	original := "PasswordAuthentication yes\nAllowTcpForwarding no\nX11Forwarding no\nMatch User backup\n"
+	directory := prepareFreeBSDSSHTest(t, original)
+	before := readSSHTestSnapshot(t, directory)
+	events := make([]string, 0, 7)
+	freeBSDSSHWritePrivateFile = func(root *os.Root, name string, content []byte, mode os.FileMode, uid, gid int) error {
+		events = append(events, "write:"+name)
+		return writePrivateSSHFile(root, name, content, mode, uid, gid)
+	}
+	freeBSDSSHValidate = func() error {
+		events = append(events, "validate")
+		return nil
+	}
+	freeBSDSSHRename = func(root *os.Root, oldName, newName string) error {
+		events = append(events, "rename")
+		return root.Rename(oldName, newName)
+	}
+	freeBSDSSHSyncDirectory = func(root *os.Root) error {
+		events = append(events, "sync")
+		return syncSSHDirectory(root)
+	}
+	freeBSDSSHRestart = func() error {
+		events = append(events, "restart")
+		return nil
+	}
+
+	if err := ConfigureFreeBSDSSHDirectives(map[string]string{
+		"AllowTcpForwarding": "no",
+		"X11Forwarding":      "no",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after := readSSHTestSnapshot(t, directory)
+	if !sameFreeBSDSSHConfig(before, after) || string(after.content) != original {
+		t.Fatal("byte-exact SSH configuration no-op changed content or metadata")
+	}
+	if len(events) != 0 {
+		t.Fatalf("byte-exact SSH configuration no-op caused side effects: %v", events)
+	}
+	assertSSHTestArtifactsAbsent(t, directory)
+}
+
+func TestConfigureFreeBSDSSHDirectivesChangedContentKeepsTransaction(t *testing.T) {
+	original := "PasswordAuthentication yes\nAllowTcpForwarding yes\n"
+	directory := prepareFreeBSDSSHTest(t, original)
+	testRoot, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := testRoot.Chmod(freeBSDSSHConfig, 0640); err != nil {
+		_ = testRoot.Close()
+		t.Fatal(err)
+	}
+	if err := testRoot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := readSSHTestSnapshot(t, directory)
+	events := make([]string, 0, 7)
+	freeBSDSSHWritePrivateFile = func(root *os.Root, name string, content []byte, mode os.FileMode, uid, gid int) error {
+		events = append(events, "write:"+name)
+		return writePrivateSSHFile(root, name, content, mode, uid, gid)
+	}
+	freeBSDSSHValidate = func() error {
+		events = append(events, "validate")
+		return nil
+	}
+	freeBSDSSHRename = func(root *os.Root, oldName, newName string) error {
+		events = append(events, "rename")
+		return root.Rename(oldName, newName)
+	}
+	freeBSDSSHSyncDirectory = func(root *os.Root) error {
+		events = append(events, "sync")
+		return syncSSHDirectory(root)
+	}
+	freeBSDSSHRestart = func() error {
+		events = append(events, "restart")
+		return nil
+	}
+
+	directives := map[string]string{"AllowTcpForwarding": "no"}
+	want, err := normalizeSSHDirectives(original, directives)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ConfigureFreeBSDSSHDirectives(directives); err != nil {
+		t.Fatal(err)
+	}
+	after := readSSHTestSnapshot(t, directory)
+	if string(after.content) != want || string(after.content) == original {
+		t.Fatalf("SSH transaction did not install normalized content:\n%s", after.content)
+	}
+	if after.mode != before.mode || after.uid != before.uid || after.gid != before.gid {
+		t.Fatalf(
+			"SSH transaction changed metadata: before=%o:%d:%d after=%o:%d:%d",
+			before.mode, before.uid, before.gid, after.mode, after.uid, after.gid,
+		)
+	}
+	wantEvents := []string{
+		"write:" + freeBSDSSHBackup,
+		"write:" + freeBSDSSHConfigTmp,
+		"validate",
+		"rename",
+		"sync",
+		"restart",
+		"sync",
+	}
+	if strings.Join(events, ",") != strings.Join(wantEvents, ",") {
+		t.Fatalf("SSH transaction sequence changed: got %v want %v", events, wantEvents)
+	}
+	assertSSHTestArtifactsAbsent(t, directory)
 }
 
 func readSSHTestFile(t *testing.T, directory, name string) string {

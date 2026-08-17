@@ -21,6 +21,8 @@ FREEBSD_RUNTIME_DEPENDENCIES = {
     "wireguard-tools": {"origin": "net/wireguard-tools", "version": "*"},
 }
 MANIFEST_NAMES = ("+COMPACT_MANIFEST", "+MANIFEST")
+PACKAGE_MEMBER_IDENTITY = (0, 0, "root", "wheel")
+PAX_IDENTITY_FIELDS = frozenset({"uid", "gid", "uname", "gname"})
 
 
 class FreeBSDManifestError(RuntimeError):
@@ -47,6 +49,23 @@ def manifest_bytes(raw: bytes, name: str) -> bytes:
         raise FreeBSDManifestError(f"{name} carries unexpected dependencies")
     document["deps"] = FREEBSD_RUNTIME_DEPENDENCIES
     return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def normalize_member_identity(member: tarfile.TarInfo) -> None:
+    member.uid, member.gid, member.uname, member.gname = PACKAGE_MEMBER_IDENTITY
+    member.pax_headers = {
+        key: value
+        for key, value in member.pax_headers.items()
+        if key not in PAX_IDENTITY_FIELDS
+    }
+
+
+def verify_member_identity(member: tarfile.TarInfo) -> None:
+    identity = (member.uid, member.gid, member.uname, member.gname)
+    if identity != PACKAGE_MEMBER_IDENTITY:
+        raise FreeBSDManifestError(
+            f"unexpected owner metadata for package member {member.name}"
+        )
 
 
 def finalize(path_value: Path) -> None:
@@ -76,6 +95,7 @@ def finalize(path_value: Path) -> None:
         with tarfile.open(temporary, "w:xz", format=tarfile.PAX_FORMAT) as target:
             for member in ordered:
                 data = payloads[member.name]
+                normalize_member_identity(member)
                 if member.name in MANIFEST_NAMES:
                     if data is None:
                         raise FreeBSDManifestError(f"{member.name} is not a regular file")
@@ -93,9 +113,11 @@ def finalize(path_value: Path) -> None:
 def verify(path_value: Path) -> None:
     path = package_path(path_value)
     with tarfile.open(path, "r:xz") as package:
+        members = package.getmembers()
+        for member in members:
+            verify_member_identity(member)
         for name in MANIFEST_NAMES:
-            matches = package.getmembers()
-            member_matches = [member for member in matches if member.name == name]
+            member_matches = [member for member in members if member.name == name]
             if len(member_matches) != 1:
                 raise FreeBSDManifestError(f"missing exact {name}")
             stream = package.extractfile(member_matches[0])

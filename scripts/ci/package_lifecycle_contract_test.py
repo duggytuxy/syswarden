@@ -567,7 +567,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "fi\n"
                 "[ \"$3\" = --queryformat ] || exit 90\n"
                 "case \"$4\" in\n"
-                "  '%{VERSION}') printf 4.02.14 ;;\n"
+                "  '%{VERSION}') printf 4.02.15 ;;\n"
                 "  '%{ARCH}') printf x86_64 ;;\n"
                 "  *) exit 91 ;;\n"
                 "esac\n",
@@ -586,7 +586,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     [
                         "/bin/bash",
                         "-c",
-                        "set -euo pipefail\nVERSION=4.02.14\n"
+                        "set -euo pipefail\nVERSION=4.02.15\n"
                         + validate_rpm
                         + '\nvalidate_rpm "$1" x86_64',
                         "rpm-artifact-contract",
@@ -1149,7 +1149,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             members = {
                 ".PKGINFO": (
                     "pkgname = syswarden\n"
-                    "pkgver = 4.02.14\n"
+                    "pkgver = 4.02.15\n"
                     f"arch = {architecture}\n"
                     "depend = openrc\n"
                 ).encode("utf-8"),
@@ -1167,7 +1167,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 [
                     "/bin/bash",
                     "-c",
-                    "set -euo pipefail\nVERSION=4.02.14\n"
+                    "set -euo pipefail\nVERSION=4.02.15\n"
                     + validate_function
                     + '\nvalidate_apk "$1" "$2"',
                     "apk-archive-contract",
@@ -1180,8 +1180,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            x86 = root / "syswarden_4.02.14_x86_64.apk"
-            arm = root / "syswarden_4.02.14_aarch64.apk"
+            x86 = root / "syswarden_4.02.15_x86_64.apk"
+            arm = root / "syswarden_4.02.15_aarch64.apk"
             write_apk(x86, "x86_64", hooks)
             write_apk(arm, "aarch64", hooks)
             accepted = validate(x86, "x86_64")

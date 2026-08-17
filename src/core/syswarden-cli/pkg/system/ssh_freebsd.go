@@ -32,7 +32,9 @@ var (
 	freeBSDSSHValidate = func() error {
 		return exec.Command("sshd", "-t", "-f", freeBSDSSHDirectory+"/"+freeBSDSSHConfigTmp).Run()
 	}
-	freeBSDSSHExpectedOwner = os.Geteuid
+	freeBSDSSHWritePrivateFile = writePrivateSSHFile
+	freeBSDSSHSyncDirectory    = syncSSHDirectory
+	freeBSDSSHExpectedOwner    = os.Geteuid
 )
 
 type freeBSDSSHConfigSnapshot struct {
@@ -147,12 +149,18 @@ func ConfigureFreeBSDSSHDirectives(directives map[string]string) error {
 	if _, err := root.Lstat(freeBSDSSHBackup); !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("rollback sshd_config path is not clean")
 	}
-	normalized, err := normalizeSSHDirectives(string(original.content), directives)
+	originalContent := string(original.content)
+	normalized, err := normalizeSSHDirectives(originalContent, directives)
 	if err != nil {
 		return err
 	}
+	// A byte-identical result has no transaction to commit and must not restart
+	// sshd, which could disrupt the qualification transport itself.
+	if normalized == originalContent {
+		return nil
+	}
 	updated := []byte(normalized)
-	if err := writePrivateSSHFile(root, freeBSDSSHBackup, original.content, original.mode, original.uid, original.gid); err != nil {
+	if err := freeBSDSSHWritePrivateFile(root, freeBSDSSHBackup, original.content, original.mode, original.uid, original.gid); err != nil {
 		return fmt.Errorf("create sshd_config rollback snapshot: %w", err)
 	}
 	backupPresent := true
@@ -163,7 +171,7 @@ func ConfigureFreeBSDSSHDirectives(directives map[string]string) error {
 		}
 		_ = root.Remove(freeBSDSSHConfigTmp)
 	}()
-	if err := writePrivateSSHFile(root, freeBSDSSHConfigTmp, updated, original.mode, original.uid, original.gid); err != nil {
+	if err := freeBSDSSHWritePrivateFile(root, freeBSDSSHConfigTmp, updated, original.mode, original.uid, original.gid); err != nil {
 		return fmt.Errorf("create candidate sshd_config: %w", err)
 	}
 	if err := freeBSDSSHValidate(); err != nil {
@@ -196,7 +204,7 @@ func ConfigureFreeBSDSSHDirectives(directives map[string]string) error {
 			return fmt.Errorf("%v; rollback failed and snapshot was preserved: %w", cause, rollbackErr)
 		}
 		backupPresent = false
-		if syncErr := syncSSHDirectory(root); syncErr != nil {
+		if syncErr := freeBSDSSHSyncDirectory(root); syncErr != nil {
 			return fmt.Errorf("%v; rollback directory sync failed: %w", cause, syncErr)
 		}
 		if restartErr := freeBSDSSHRestart(); restartErr != nil {
@@ -204,7 +212,7 @@ func ConfigureFreeBSDSSHDirectives(directives map[string]string) error {
 		}
 		return cause
 	}
-	if err := syncSSHDirectory(root); err != nil {
+	if err := freeBSDSSHSyncDirectory(root); err != nil {
 		return rollback(fmt.Errorf("sync SSH configuration directory: %w", err))
 	}
 	if err := freeBSDSSHRestart(); err != nil {
@@ -214,7 +222,7 @@ func ConfigureFreeBSDSSHDirectives(directives map[string]string) error {
 		return fmt.Errorf("remove sshd_config rollback snapshot: %w", err)
 	}
 	backupPresent = false
-	return syncSSHDirectory(root)
+	return freeBSDSSHSyncDirectory(root)
 }
 
 // ConfigureSSH configures the SSH daemon securely on FreeBSD.

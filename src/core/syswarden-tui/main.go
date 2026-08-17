@@ -30,7 +30,7 @@ import (
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v4.02.14"
+const SysWardenVersion = "v4.02.15"
 const haPeerCABundleFile = "/etc/syswarden/ha-ca.pem"
 const haModularConfigDirectory = "/etc/syswarden/config"
 const maxTUIHAResponseBytes = 1024 * 1024

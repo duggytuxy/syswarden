@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -27,7 +28,11 @@ func TestPFRulesGolden_SW_QA_001(t *testing.T) {
 	}
 	captured := filepath.Join(root, "captured.pf")
 	operatorPolicy := filepath.Join(root, "operator.pf")
+	pfState := filepath.Join(root, "pf-state")
 	if err := os.WriteFile(operatorPolicy, []byte("pass in on vtnet-test0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pfState, []byte("Disabled\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	writeFreeBSDExecutable(t, filepath.Join(toolDir, "route"), `#!/bin/sh
@@ -45,16 +50,14 @@ root daemon 1 5 udp4 *:53 *:*
 EOF
 `)
 	writeFreeBSDExecutable(t, filepath.Join(toolDir, "pfctl"), `#!/bin/sh
-if [ "$1" = "-f" ]; then
-    /bin/cat > "$SYSWARDEN_PF_TEST_CAPTURE"
-fi
-if [ "$1" = "-n" ] && [ "$2" = "-f" ]; then
-    /bin/cat >/dev/null
-fi
-if [ "$1" = "-s" ] && [ "$2" = "info" ]; then
-    echo 'Status: Enabled'
-fi
-exit 0
+case "$*" in
+    '-nf -') /bin/cat >/dev/null ;;
+    '-f -') /bin/cat > "$SYSWARDEN_PF_TEST_CAPTURE" ;;
+    '-s info') printf 'Status: %s\n' "$(/bin/cat "$SYSWARDEN_PF_TEST_STATE")" ;;
+    '-sr'|'-sn'|'-ss'|'-s Tables'|'-s Anchors') : ;;
+    '-e') printf '%s\n' Enabled > "$SYSWARDEN_PF_TEST_STATE" ;;
+    *) exit 91 ;;
+esac
 `)
 	writeFreeBSDExecutable(t, filepath.Join(toolDir, "sysrc"), `#!/bin/sh
 if [ "$1" = "-n" ] && [ "$2" = "pf_rules" ]; then
@@ -67,19 +70,44 @@ if [ "$1" = "-n" ] && [ "$2" = "pf_enable" ]; then
 fi
 exit 1
 `)
+	writeFreeBSDExecutable(t, filepath.Join(toolDir, "kldstat"), `#!/bin/sh
+[ "$*" = "-q -m pf" ]
+`)
 	t.Setenv("PATH", toolDir)
 	t.Setenv("SYSWARDEN_PF_TEST_CAPTURE", captured)
 	t.Setenv("SYSWARDEN_PF_TEST_SOURCE", operatorPolicy)
+	t.Setenv("SYSWARDEN_PF_TEST_STATE", pfState)
 	previousLockPath := pfRuntimeLockPath
 	previousSnapshotDirectory := pfSnapshotDirectory
 	previousExpectedOwner := pfExpectedOwner
+	previousControlDevice := pfControlDevicePath
+	previousPFCTLCommand := newPFCTLCommand
+	previousSysrcCommand := newPFSysrcCommand
+	previousKLDStatCommand := newPFKLDStatCommand
+	previousInspectKernelState := inspectPFKernelState
 	pfRuntimeLockPath = filepath.Join(root, "syswarden-firewall.lock")
 	pfSnapshotDirectory = filepath.Join(root, "snapshot")
 	pfExpectedOwner = os.Geteuid
+	pfControlDevicePath = "/dev/null"
+	newPFCTLCommand = func(arguments ...string) *exec.Cmd {
+		return exec.Command(filepath.Join(toolDir, "pfctl"), arguments...) // #nosec G204 -- executable is an owner-only fixture rooted in t.TempDir
+	}
+	newPFSysrcCommand = func(arguments ...string) *exec.Cmd {
+		return exec.Command(filepath.Join(toolDir, "sysrc"), arguments...) // #nosec G204 -- executable is an owner-only fixture rooted in t.TempDir
+	}
+	newPFKLDStatCommand = func(arguments ...string) *exec.Cmd {
+		return exec.Command(filepath.Join(toolDir, "kldstat"), arguments...) // #nosec G204 -- executable is an owner-only fixture rooted in t.TempDir
+	}
+	inspectPFKernelState = inspectPFInitialKernelStateNative
 	t.Cleanup(func() {
 		pfRuntimeLockPath = previousLockPath
 		pfSnapshotDirectory = previousSnapshotDirectory
 		pfExpectedOwner = previousExpectedOwner
+		pfControlDevicePath = previousControlDevice
+		newPFCTLCommand = previousPFCTLCommand
+		newPFSysrcCommand = previousSysrcCommand
+		newPFKLDStatCommand = previousKLDStatCommand
+		inspectPFKernelState = previousInspectKernelState
 	})
 
 	previous := config.GlobalConfig

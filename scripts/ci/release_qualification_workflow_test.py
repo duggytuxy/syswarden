@@ -107,6 +107,85 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 f"{name} must be pinned to a full commit SHA",
             )
 
+    def assert_nft_private_temp_contract(self, workflow: str) -> None:
+        workspace = workflow_step_script(
+            workflow, "Create Isolated Qualification Workspace"
+        )
+        laboratory = workflow_step_script(
+            workflow, "Run Isolated nftables Kernel Laboratory"
+        )
+        cleanup = workflow_step_script(
+            workflow, "Remove Ephemeral Transport Secrets"
+        )
+        cleanup_step = workflow.split(
+            "      - name: Remove Ephemeral Transport Secrets\n", 1
+        )[1].split("\n      - name:", 1)[0]
+
+        workspace_contracts = (
+            'test -d "${qualification_root}"',
+            'test ! -L "${qualification_root}"',
+            '[[ -O "${qualification_root}" ]]',
+            'stat -c \'%a\' "${qualification_root}"',
+            'nftables_tmp_dir="${qualification_root}/nftables-tmp"',
+            'install -d -m 0700',
+            'test -d "${nftables_tmp_dir}"',
+            'test ! -L "${nftables_tmp_dir}"',
+            '[[ -O "${nftables_tmp_dir}" ]]',
+            'stat -c \'%a\' "${nftables_tmp_dir}"',
+            '"${nftables_tmp_dir}/.write-probe.XXXXXX"',
+            "printf 'NFTABLES_TMP_DIR=%s\\n'",
+        )
+        laboratory_contracts = (
+            "umask 077",
+            'test "${NFTABLES_TMP_DIR}" = "${QUALIFICATION_ROOT}/nftables-tmp"',
+            'test -d "${QUALIFICATION_ROOT}"',
+            'test ! -L "${QUALIFICATION_ROOT}"',
+            '[[ -O "${QUALIFICATION_ROOT}" ]]',
+            'stat -c \'%a\' "${QUALIFICATION_ROOT}"',
+            'test -d "${NFTABLES_TMP_DIR}"',
+            'test ! -L "${NFTABLES_TMP_DIR}"',
+            '[[ -O "${NFTABLES_TMP_DIR}" ]]',
+            'stat -c \'%a\' "${NFTABLES_TMP_DIR}"',
+            '"${NFTABLES_TMP_DIR}/.write-probe.XXXXXX"',
+            "PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/nftables_kernel_lab.py",
+        )
+        cleanup_contracts = (
+            '"${QUALIFICATION_ROOT}" != "${RUNNER_TEMP%/}"/syswarden-release-qualification.*',
+            '"${NFTABLES_TMP_DIR}" != "${QUALIFICATION_ROOT}/nftables-tmp"',
+            'test -d "${QUALIFICATION_ROOT}"',
+            'test ! -L "${QUALIFICATION_ROOT}"',
+            '[[ -O "${QUALIFICATION_ROOT}" ]]',
+            'stat -c \'%a\' "${QUALIFICATION_ROOT}"',
+            'test -d "${NFTABLES_TMP_DIR}"',
+            'test ! -L "${NFTABLES_TMP_DIR}"',
+            '[[ -O "${NFTABLES_TMP_DIR}" ]]',
+            'stat -c \'%a\' "${NFTABLES_TMP_DIR}"',
+            'find -P "${NFTABLES_TMP_DIR}" -xdev -mindepth 1 -delete',
+            'rmdir -- "${NFTABLES_TMP_DIR}"',
+            'test ! -e "${NFTABLES_TMP_DIR}"',
+        )
+        for contract in workspace_contracts:
+            self.assertIn(contract, workspace)
+        for contract in laboratory_contracts:
+            self.assertIn(contract, laboratory)
+        for contract in cleanup_contracts:
+            self.assertIn(contract, cleanup)
+        self.assertIn("if: ${{ always() }}", cleanup_step)
+        self.assertRegex(
+            laboratory,
+            r'(?m)^TMPDIR="\$\{NFTABLES_TMP_DIR\}" \\$'
+        )
+        self.assertRegex(
+            laboratory,
+            r'(?m)^GOTMPDIR="\$\{NFTABLES_TMP_DIR\}" \\$'
+        )
+        self.assertEqual(
+            re.findall(r"(?m)^\s*(TMPDIR|GOTMPDIR)=", workflow),
+            ["TMPDIR", "GOTMPDIR"],
+        )
+        self.assertNotIn("printf 'TMPDIR=", workflow)
+        self.assertNotIn("printf 'GOTMPDIR=", workflow)
+
     def test_is_manual_only_with_three_required_inputs(self) -> None:
         trigger = self.workflow.split("\nenv:", 1)[0]
         self.assertIn("  workflow_dispatch:\n", trigger)
@@ -400,6 +479,401 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.assertIn(status, self.workflow)
         self.assertGreaterEqual(self.workflow.count("set +e"), 5)
         self.assertIn("--ssh-host 127.0.0.1", self.workflow)
+
+    def test_signing_gate_reports_every_nonzero_status_before_secret_exposure(
+        self,
+    ) -> None:
+        script = workflow_step_script(
+            self.workflow, "Require Successful Qualification Before Release Signing"
+        )
+        statuses = {
+            "package-lab.rc": "7",
+            "freebsd-lab.rc": "2",
+            "nftables-lab.rc": "1",
+            "adapter-build.rc": "3",
+            "adapter-verify.rc": "0",
+            "gate-generate.rc": "4",
+            "gate-verify.rc": "0",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            status_dir = root / "status"
+            status_dir.mkdir(mode=0o700)
+            for name, value in statuses.items():
+                path = status_dir / name
+                path.write_text(value + "\n", encoding="ascii")
+                path.chmod(0o600)
+            output = root / "github-output"
+            environment = os.environ.copy()
+            environment.update(
+                {"STATUS_DIR": str(status_dir), "GITHUB_OUTPUT": str(output)}
+            )
+            result = subprocess.run(
+                ["/bin/bash", "-c", script],
+                cwd=REPOSITORY,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        diagnostic = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, diagnostic)
+        for expected in (
+            "package-lab.rc=7",
+            "freebsd-lab.rc=2",
+            "nftables-lab.rc=1",
+            "adapter-build.rc=3",
+            "gate-generate.rc=4",
+        ):
+            self.assertIn(expected, diagnostic)
+        self.assertNotIn("adapter-verify.rc=0", diagnostic)
+        self.assertNotIn("gate-verify.rc=0", diagnostic)
+        self.assertFalse(output.exists())
+
+    def test_signing_gate_accepts_only_uniform_canonical_zero_statuses(self) -> None:
+        script = workflow_step_script(
+            self.workflow, "Require Successful Qualification Before Release Signing"
+        )
+        status_names = (
+            "package-lab.rc",
+            "freebsd-lab.rc",
+            "nftables-lab.rc",
+            "adapter-build.rc",
+            "adapter-verify.rc",
+            "gate-generate.rc",
+            "gate-verify.rc",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            status_dir = root / "status"
+            status_dir.mkdir(mode=0o700)
+            for name in status_names:
+                path = status_dir / name
+                path.write_text("0\n", encoding="ascii")
+                path.chmod(0o600)
+            output = root / "github-output"
+            environment = os.environ.copy()
+            environment.update(
+                {"STATUS_DIR": str(status_dir), "GITHUB_OUTPUT": str(output)}
+            )
+            result = subprocess.run(
+                ["/bin/bash", "-c", script],
+                cwd=REPOSITORY,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            output_text = output.read_text(encoding="ascii")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(output_text, "qualified=true\n")
+
+    def test_final_verdict_lists_all_failures_and_redacts_raw_report_strings(
+        self,
+    ) -> None:
+        script = workflow_step_script(
+            self.workflow, "Enforce Final Release Qualification Verdict"
+        )
+        secret = "SYSWARDEN_TEST_BEARER_DO_NOT_PRINT_6f5baf31"
+        statuses = {
+            "package-lab.rc": "7",
+            "freebsd-lab.rc": "2",
+            "nftables-lab.rc": "1",
+            "adapter-build.rc": "3",
+            "adapter-verify.rc": "0",
+            "gate-generate.rc": "4",
+            "gate-verify.rc": "0",
+            "freebsd-updater.rc": "5",
+            "freebsd-updater-verify.rc": "6",
+        }
+        reports = {
+            "package-lifecycle-raw.json": {
+                "schema_version": 3,
+                "status": "fail",
+                "harness_complete": False,
+                "release_ready": False,
+                "blocker_ids": [secret],
+                "unexpected_failed_checks": [secret, secret],
+                "error": secret,
+            },
+            "freebsd-vm-raw.json": {
+                "schema_version": 2,
+                "harness_status": "fail",
+                "product_status": "not_evaluated",
+                "release_ready": False,
+                "unexpected_failed_check_ids": [],
+                "error": secret,
+            },
+            "nftables-raw.json": {
+                "schema_version": 1,
+                "harness_status": "fail",
+                "product_status": "unknown",
+                "release_ready": False,
+                "error": secret,
+            },
+            "freebsd-updater-raw.json": {
+                "schema_version": 1,
+                "harness_status": "fail",
+                "product_status": "not_evaluated",
+                "release_ready": False,
+                "error": secret,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            status_dir = root / "status"
+            raw_dir = root / "raw"
+            status_dir.mkdir(mode=0o700)
+            raw_dir.mkdir(mode=0o700)
+            for name, value in statuses.items():
+                path = status_dir / name
+                path.write_text(value + "\n", encoding="ascii")
+                path.chmod(0o600)
+            for name, report in reports.items():
+                path = raw_dir / name
+                path.write_text(json.dumps(report), encoding="utf-8")
+                path.chmod(0o600)
+            before = sorted(path.name for path in root.rglob("*") if path.is_file())
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "STATUS_DIR": str(status_dir),
+                    "RAW_DIR": str(raw_dir),
+                    "SIGNED_UPDATE_REQUIRED": "true",
+                    "INVENTORY_OUTCOME": "failure",
+                    "UPLOAD_OUTCOME": "skipped",
+                }
+            )
+            result = subprocess.run(
+                ["/bin/bash", "-c", script],
+                cwd=REPOSITORY,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            after = sorted(path.name for path in root.rglob("*") if path.is_file())
+        diagnostic = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, diagnostic)
+        for name, value in statuses.items():
+            if value != "0":
+                self.assertIn(f"{name}={value}", diagnostic)
+        self.assertNotIn(secret, diagnostic)
+        self.assertEqual(after, before)
+        summary_lines = [
+            line
+            for line in diagnostic.splitlines()
+            if line.startswith('{"qualification_raw_failure_summaries":')
+        ]
+        self.assertEqual(len(summary_lines), 1, diagnostic)
+        summary = json.loads(summary_lines[0])
+        records = summary["qualification_raw_failure_summaries"]
+        self.assertEqual(
+            [record["label"] for record in records],
+            ["package-lifecycle", "freebsd-vm", "nftables", "freebsd-updater"],
+        )
+        expected_keys = {
+            "blocker_count",
+            "error_present",
+            "harness_complete",
+            "harness_status",
+            "label",
+            "parse_status",
+            "product_status",
+            "release_ready",
+            "schema_version",
+            "status",
+            "unexpected_failure_count",
+        }
+        for record in records:
+            self.assertEqual(set(record), expected_keys)
+            self.assertEqual(record["parse_status"], "valid")
+            self.assertTrue(record["error_present"])
+
+    def test_final_verdict_never_echoes_invalid_status_or_malformed_raw_content(
+        self,
+    ) -> None:
+        script = workflow_step_script(
+            self.workflow, "Enforce Final Release Qualification Verdict"
+        )
+        secret = "SYSWARDEN_TEST_MARKER_TOKEN_DO_NOT_PRINT_219a4b9c"
+        statuses = {
+            "package-lab.rc": "1",
+            "freebsd-lab.rc": secret,
+            "nftables-lab.rc": "0",
+            "adapter-build.rc": "0",
+            "adapter-verify.rc": "0",
+            "gate-generate.rc": "0",
+            "gate-verify.rc": "0",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            status_dir = root / "status"
+            raw_dir = root / "raw"
+            status_dir.mkdir(mode=0o700)
+            raw_dir.mkdir(mode=0o700)
+            for name, value in statuses.items():
+                path = status_dir / name
+                path.write_text(value + "\n", encoding="ascii")
+                path.chmod(0o600)
+            malformed = raw_dir / "package-lifecycle-raw.json"
+            malformed.write_text('{"error":"' + secret, encoding="utf-8")
+            malformed.chmod(0o600)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "STATUS_DIR": str(status_dir),
+                    "RAW_DIR": str(raw_dir),
+                    "SIGNED_UPDATE_REQUIRED": "false",
+                    "INVENTORY_OUTCOME": "failure",
+                    "UPLOAD_OUTCOME": "skipped",
+                }
+            )
+            result = subprocess.run(
+                ["/bin/bash", "-c", script],
+                cwd=REPOSITORY,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        diagnostic = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, diagnostic)
+        self.assertIn("freebsd-lab.rc=invalid", diagnostic)
+        self.assertIn("package-lab.rc=1", diagnostic)
+        self.assertNotIn(secret, diagnostic)
+        summary_lines = [
+            line
+            for line in diagnostic.splitlines()
+            if line.startswith('{"qualification_raw_failure_summaries":')
+        ]
+        self.assertEqual(len(summary_lines), 1, diagnostic)
+        summary = json.loads(summary_lines[0])
+        self.assertEqual(
+            summary,
+            {
+                "qualification_raw_failure_summaries": [
+                    {"label": "package-lifecycle", "parse_status": "invalid"}
+                ]
+            },
+        )
+
+    def test_nft_lab_uses_one_private_writable_temp_and_cleans_it_always(self) -> None:
+        self.assert_nft_private_temp_contract(self.workflow)
+
+    def test_nft_private_temp_contract_rejects_unsafe_mutations(self) -> None:
+        mutations = (
+            (
+                'nftables_tmp_dir="${qualification_root}/nftables-tmp"',
+                'nftables_tmp_dir="${RUNNER_TEMP}/nftables-tmp"',
+            ),
+            ('test ! -L "${nftables_tmp_dir}"', ":", 1),
+            (
+                '"${nftables_tmp_dir}/.write-probe.XXXXXX"',
+                '"/tmp/.write-probe.XXXXXX"',
+                1,
+            ),
+            ('TMPDIR="${NFTABLES_TMP_DIR}"', 'TMPDIR="${TMPDIR}"', 1),
+            ('GOTMPDIR="${NFTABLES_TMP_DIR}"', 'GOTMPDIR="${GOTMPDIR}"', 1),
+            (
+                '"${NFTABLES_TMP_DIR}" != "${QUALIFICATION_ROOT}/nftables-tmp"',
+                '"${NFTABLES_TMP_DIR}" != "${RUNNER_TEMP}/nftables-tmp"',
+            ),
+            (
+                'find -P "${NFTABLES_TMP_DIR}" -xdev -mindepth 1 -delete',
+                'rm -rf "${NFTABLES_TMP_DIR}"',
+            ),
+            ("if: ${{ always() }}", "if: ${{ success() }}", 1),
+        )
+        for mutation in mutations:
+            original, replacement, *count = mutation
+            with self.subTest(original=original, replacement=replacement):
+                mutated = self.workflow.replace(
+                    original, replacement, count[0] if count else -1
+                )
+                self.assertNotEqual(mutated, self.workflow)
+                with self.assertRaises(AssertionError):
+                    self.assert_nft_private_temp_contract(mutated)
+
+    def test_nft_private_temp_cleanup_is_bounded_and_fail_closed(self) -> None:
+        script = workflow_step_script(
+            self.workflow, "Remove Ephemeral Transport Secrets"
+        )
+
+        def run_cleanup(
+            runner_temp: Path, qualification_root: Path, nftables_tmp: Path
+        ) -> subprocess.CompletedProcess[str]:
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "RUNNER_TEMP": str(runner_temp),
+                    "QUALIFICATION_ROOT": str(qualification_root),
+                    "NFTABLES_TMP_DIR": str(nftables_tmp),
+                    "ARTIFACT_ROOT": "",
+                    "SECRETS_DIR": "",
+                    "SIGNING_TOOL_DIR": "",
+                    "TOOLS_DIR": "",
+                }
+            )
+            return subprocess.run(
+                ["/bin/bash", "-c", script],
+                cwd=REPOSITORY,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runner_temp = Path(temporary)
+            qualification_root = (
+                runner_temp / "syswarden-release-qualification.valid"
+            )
+            nftables_tmp = qualification_root / "nftables-tmp"
+            nested = nftables_tmp / "nested"
+            qualification_root.mkdir(mode=0o700)
+            nftables_tmp.mkdir(mode=0o700)
+            nested.mkdir(mode=0o700)
+            (nested / "residue").write_text("test\n", encoding="utf-8")
+            result = run_cleanup(runner_temp, qualification_root, nftables_tmp)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(nftables_tmp.exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runner_temp = Path(temporary)
+            qualification_root = (
+                runner_temp / "syswarden-release-qualification.symlink"
+            )
+            qualification_root.mkdir(mode=0o700)
+            outside = runner_temp / "outside"
+            outside.mkdir(mode=0o700)
+            marker = outside / "must-remain"
+            marker.write_text("test\n", encoding="utf-8")
+            nftables_tmp = qualification_root / "nftables-tmp"
+            nftables_tmp.symlink_to(outside, target_is_directory=True)
+            result = run_cleanup(runner_temp, qualification_root, nftables_tmp)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(marker.is_file())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runner_temp = Path(temporary)
+            qualification_root = (
+                runner_temp / "syswarden-release-qualification.escape"
+            )
+            qualification_root.mkdir(mode=0o700)
+            outside = runner_temp / "outside"
+            outside.mkdir(mode=0o700)
+            marker = outside / "must-remain"
+            marker.write_text("test\n", encoding="utf-8")
+            result = run_cleanup(runner_temp, qualification_root, outside)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("refusing unsafe", result.stderr)
+            self.assertTrue(marker.is_file())
 
     def test_signed_freebsd_updater_is_built_bound_run_and_recomputed(self) -> None:
         build = self.workflow.split(

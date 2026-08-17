@@ -89,17 +89,11 @@ func runBubblewrapFirewallGolden(t *testing.T) []byte {
 	}
 	writeLinuxFirewallTestTools(t, toolDir)
 
-	command := exec.Command( // #nosec G204 G702 -- bwrap is resolved by LookPath and every command argument is a controlled test fixture
-		bwrap,
-		"--ro-bind", "/", "/",
-		"--dev", "/dev",
-		"--bind", etcDir, "/etc",
-		"--tmpfs", "/tmp",
-		"--ro-bind", os.Args[0], "/tmp/syswarden-firewall.test",
-		"--ro-bind", toolDir, "/tmp/test-tools",
-		"--setenv", "PATH", "/tmp/test-tools",
-		"--setenv", linuxFirewallHelperEnvironment, "1",
-		"--", "/tmp/syswarden-firewall.test", "-test.run=^TestNftablesRulesGolden_SW_QA_001$",
+	arguments := bubblewrapFirewallGoldenArguments(
+		bwrap, etcDir, toolDir, os.Args[0],
+	)
+	command := exec.Command( // #nosec G204 G702 -- every command argument comes from bubblewrapFirewallGoldenArguments and controlled test fixtures
+		arguments[0], arguments[1:]...,
 	)
 	if output, err := command.CombinedOutput(); err != nil {
 		requireOrSkipFirewallSandbox(t, string(output))
@@ -112,6 +106,54 @@ func runBubblewrapFirewallGolden(t *testing.T) []byte {
 		t.Fatalf("read isolated nftables output: %v", err)
 	}
 	return got
+}
+
+func bubblewrapFirewallGoldenArguments(
+	bwrap, etcDir, toolDir, testExecutable string,
+) []string {
+	return []string{
+		bwrap,
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+		"--bind", etcDir, "/etc",
+		"--tmpfs", "/tmp",
+		"--ro-bind", testExecutable, "/tmp/syswarden-firewall.test",
+		"--ro-bind", toolDir, "/tmp/test-tools",
+		"--setenv", "PATH", "/tmp/test-tools",
+		"--setenv", "TMPDIR", "/tmp",
+		"--setenv", linuxFirewallHelperEnvironment, "1",
+		"--", "/tmp/syswarden-firewall.test", "-test.run=^TestNftablesRulesGolden_SW_QA_001$",
+	}
+}
+
+func TestBubblewrapFirewallGoldenTempIsolationContract_SW_QA_001(t *testing.T) {
+	got := bubblewrapFirewallGoldenArguments(
+		"/usr/bin/bwrap", "/host/etc", "/host/tools", "/host/firewall.test",
+	)
+	want := []string{
+		"/usr/bin/bwrap",
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+		"--bind", "/host/etc", "/etc",
+		"--tmpfs", "/tmp",
+		"--ro-bind", "/host/firewall.test", "/tmp/syswarden-firewall.test",
+		"--ro-bind", "/host/tools", "/tmp/test-tools",
+		"--setenv", "PATH", "/tmp/test-tools",
+		"--setenv", "TMPDIR", "/tmp",
+		"--setenv", linuxFirewallHelperEnvironment, "1",
+		"--", "/tmp/syswarden-firewall.test", "-test.run=^TestNftablesRulesGolden_SW_QA_001$",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("bubblewrap argument count = %d, want %d: %q", len(got), len(want), got)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf(
+				"bubblewrap argument %d = %q, want %q: %q",
+				index, got[index], want[index], got,
+			)
+		}
+	}
 }
 
 func runActContainerFirewallGolden(t *testing.T) []byte {

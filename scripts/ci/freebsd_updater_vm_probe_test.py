@@ -19,6 +19,20 @@ import freebsd_updater_vm_probe as subject
 import freebsd_vm_lab as vm_lab
 
 
+TOKEN = "0" * 32
+
+
+def marker_output(values: dict[str, str]) -> str:
+    return "".join(
+        f"SWL0\t{key}\t{base64.b64encode(value.encode('utf-8')).decode('ascii')}\n"
+        for key, value in values.items()
+    )
+
+
+def carries_script(input_text: str | None, script: str) -> bool:
+    return bool(input_text and input_text.endswith(script + "\n"))
+
+
 def fixture(path: Path, content: bytes, mode: int = 0o600) -> Path:
     path.write_bytes(content)
     path.chmod(mode)
@@ -44,7 +58,7 @@ def passing_evidence() -> dict[str, str]:
         "UPDATER_RESULT_SHA256": "a" * 64,
         "UPDATER_RESULT_EXACT": "1",
         "UPDATER_RESULT_LINE": f"--- PASS: {subject.TEST_NAME} (1.23s)",
-        "CANDIDATE_VERSION": "4.02.14",
+        "CANDIDATE_VERSION": "4.02.15",
         "CORE_ENABLED": "YES",
         "WEB_ENABLED": "YES",
         "CORE_STATUS_RC": "0",
@@ -75,18 +89,101 @@ def passing_evidence() -> dict[str, str]:
     }
 
 
+class UpdaterSequencedRunner(vm_lab.CommandRunner):
+    def __init__(
+        self,
+        cleanup_outcomes: list[int | BaseException],
+        *,
+        remote_returncode: int = 0,
+        remote_evidence: dict[str, str] | None = None,
+        remote_stdout: str | None = None,
+        copy_returncode: int = 0,
+    ) -> None:
+        self.cleanup_outcomes = list(cleanup_outcomes)
+        self.remote_returncode = remote_returncode
+        self.remote_evidence = remote_evidence
+        self.remote_stdout = remote_stdout
+        self.copy_returncode = copy_returncode
+        self.calls: list[tuple[tuple[str, ...], str | None]] = []
+
+    def run(
+        self,
+        args: tuple[str, ...],
+        *,
+        timeout: int,
+        input_text: str | None = None,
+    ) -> vm_lab.CommandResult:
+        del timeout
+        command = tuple(args)
+        self.calls.append((command, input_text))
+        if carries_script(input_text, vm_lab.PROBE_SCRIPT):
+            return vm_lab.CommandResult(
+                command,
+                0,
+                marker_output(
+                    {
+                        "MARKER_MATCH": "1",
+                        "MARKER_SAFE": "1",
+                        "OS_NAME": "FreeBSD",
+                        "OS_RELEASE": "14.4-RELEASE-p2",
+                        "MACHINE": "amd64",
+                        "SUDO_READY": "1",
+                        "BASE64_READY": "1",
+                    }
+                ),
+                "",
+            )
+        if carries_script(input_text, subject.REMOTE_PROBE_SCRIPT):
+            stdout = self.remote_stdout
+            if stdout is None:
+                stdout = marker_output(
+                    passing_evidence()
+                    if self.remote_evidence is None
+                    else self.remote_evidence
+                )
+            return vm_lab.CommandResult(
+                command,
+                self.remote_returncode,
+                stdout,
+                f"untrusted updater stderr {TOKEN}",
+            )
+        if carries_script(input_text, subject.REMOTE_ROOT_CLEANUP_SCRIPT):
+            if not self.cleanup_outcomes:
+                raise AssertionError("unexpected updater cleanup attempt")
+            outcome = self.cleanup_outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return vm_lab.CommandResult(
+                command,
+                outcome,
+                f"untrusted cleanup stdout {TOKEN}",
+                f"untrusted cleanup stderr {TOKEN}",
+            )
+        if command[0] == "scp" and self.copy_returncode != 0:
+            return vm_lab.CommandResult(
+                command,
+                self.copy_returncode,
+                f"untrusted copy stdout {TOKEN}",
+                f"untrusted copy stderr {TOKEN}",
+            )
+        return vm_lab.CommandResult(command, 0, "", "")
+
+
 class FreeBSDUpdaterVMProbeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.candidate_path = fixture(self.root / "syswarden-4.02.14.txz", b"candidate")
+        self.candidate_path = fixture(self.root / "syswarden-4.02.15.txz", b"candidate")
         self.previous_path = fixture(self.root / "syswarden-4.02.8.txz", b"previous")
         self.manifest = fixture(self.root / "syswarden-update-manifest-v1.json", b"{}\n")
         self.signature = fixture(self.root / "syswarden-update-manifest-v1.json.sig", b"signature\n")
         self.test_binary = fixture(self.root / subject.TEST_BINARY_NAME, b"ELF", 0o700)
+        self.marker_token_file = fixture(
+            self.root / "marker-token", (TOKEN + "\n").encode("ascii"), 0o600
+        )
         self.candidate = vm_lab.PackageArtifact(
-            self.candidate_path, "4.02.14", hashlib.sha256(b"candidate").hexdigest()
+            self.candidate_path, "4.02.15", hashlib.sha256(b"candidate").hexdigest()
         )
         self.previous = vm_lab.PackageArtifact(
             self.previous_path, "4.02.8", hashlib.sha256(b"previous").hexdigest()
@@ -112,12 +209,192 @@ class FreeBSDUpdaterVMProbeTests(unittest.TestCase):
             self.release_sha,
         )
 
+    def run_snapshot(
+        self, runner: UpdaterSequencedRunner
+    ) -> dict[str, object]:
+        args = SimpleNamespace(
+            ssh="ssh",
+            scp="scp",
+            ssh_host="127.0.0.1",
+            ssh_port=2222,
+            ssh_user="syswarden",
+            identity_file=self.root / "id_ed25519",
+            known_hosts_file=self.root / "known_hosts",
+            vm_marker_token=None,
+            vm_marker_token_file=self.marker_token_file,
+            command_timeout=600,
+            release_sha=self.release_sha,
+            packages_dir=self.root / "candidate",
+            previous_packages_dir=self.root / "previous",
+            manifest=self.manifest,
+            signature=self.signature,
+            test_binary=self.test_binary,
+        )
+        with (
+            mock.patch.object(
+                vm_lab,
+                "validate_transport_program",
+                side_effect=lambda program, _label: program,
+            ),
+            mock.patch.object(
+                vm_lab,
+                "validate_transport_inputs",
+                return_value=(
+                    "127.0.0.1",
+                    args.identity_file,
+                    args.known_hosts_file,
+                ),
+            ),
+            mock.patch.object(
+                vm_lab,
+                "discover_package_pair",
+                return_value=(self.candidate, self.previous),
+            ),
+            mock.patch.object(
+                subject,
+                "validate_test_binary",
+                return_value=self.test_binary,
+            ),
+            mock.patch.object(vm_lab.time, "sleep"),
+        ):
+            return subject._run_probe_from_snapshot(
+                args,
+                self.digests["test_binary"],
+                runner=runner,
+            )
+
     def test_accepts_exact_transition_and_inputs(self) -> None:
         report = self.report()
         self.assertTrue(report["release_ready"])
         self.assertEqual(report["blocker_ids"], [])
-        self.assertEqual(report["inputs"]["candidate"]["version"], "4.02.14")
+        self.assertEqual(report["inputs"]["candidate"]["version"], "4.02.15")
         self.assertEqual(report["inputs"]["previous"]["version"], "4.02.8")
+
+    def test_updater_in_band_cleanup_proof_skips_external_cleanup(self) -> None:
+        runner = UpdaterSequencedRunner([])
+        report = self.run_snapshot(runner)
+        self.assertTrue(report["release_ready"])
+        cleanup_calls = [
+            call
+            for call in runner.calls
+            if carries_script(call[1], subject.REMOTE_ROOT_CLEANUP_SCRIPT)
+        ]
+        self.assertEqual(cleanup_calls, [])
+
+    def test_updater_invalid_cleanup_markers_clean_and_fail(self) -> None:
+        for marker_mode in (
+            "missing_workspace",
+            "false_workspace",
+            "false_lock",
+        ):
+            with self.subTest(marker_mode=marker_mode):
+                evidence = passing_evidence()
+                if marker_mode == "missing_workspace":
+                    evidence.pop("REMOTE_WORKSPACE_REMOVED")
+                elif marker_mode == "false_workspace":
+                    evidence["REMOTE_WORKSPACE_REMOVED"] = "0"
+                else:
+                    evidence["LAB_LOCK_RELEASED"] = "0"
+                runner = UpdaterSequencedRunner(
+                    [vm_lab.FreeBSDVMLabError(f"transport timeout {TOKEN}"), 0],
+                    remote_evidence=evidence,
+                )
+                with self.assertRaises(vm_lab.FreeBSDVMLabError) as raised:
+                    self.run_snapshot(runner)
+                message = str(raised.exception)
+                expected = (
+                    "markers differ"
+                    if marker_mode == "missing_workspace"
+                    else "remote cleanup markers did not prove"
+                )
+                self.assertIn(expected, message)
+                self.assertNotIn(TOKEN, message)
+                self.assertEqual(
+                    sum(
+                        carries_script(
+                            input_text, subject.REMOTE_ROOT_CLEANUP_SCRIPT
+                        )
+                        for _, input_text in runner.calls
+                    ),
+                    2,
+                )
+
+    def test_updater_malformed_output_cleans_and_redacts(self) -> None:
+        runner = UpdaterSequencedRunner(
+            [0],
+            remote_stdout=f"malformed updater output {TOKEN}\n",
+        )
+        with self.assertRaisesRegex(
+            vm_lab.FreeBSDVMLabError,
+            "invalid VM evidence line",
+        ) as raised:
+            self.run_snapshot(runner)
+        self.assertNotIn(TOKEN, str(raised.exception))
+        self.assertEqual(
+            sum(
+                carries_script(input_text, subject.REMOTE_ROOT_CLEANUP_SCRIPT)
+                for _, input_text in runner.calls
+            ),
+            1,
+        )
+
+    def test_updater_cleanup_exhaustion_is_redacted_and_fail_closed(self) -> None:
+        evidence = passing_evidence()
+        evidence["REMOTE_WORKSPACE_REMOVED"] = "0"
+        runner = UpdaterSequencedRunner(
+            [255, 255, 255], remote_evidence=evidence
+        )
+        with self.assertRaisesRegex(
+            vm_lab.FreeBSDVMLabError,
+            "not proven after 3 attempts",
+        ) as raised:
+            self.run_snapshot(runner)
+        message = str(raised.exception)
+        self.assertNotIn(TOKEN, message)
+        self.assertNotIn("untrusted cleanup", message)
+        self.assertEqual(message.count("exit_255"), 3)
+        self.assertNotIn(
+            TOKEN,
+            json.dumps(subject.error_report(raised.exception), sort_keys=True),
+        )
+
+    def test_updater_primary_transport_error_is_preserved_and_redacted(self) -> None:
+        runner = UpdaterSequencedRunner([255, 0], remote_returncode=9)
+        with self.assertRaisesRegex(
+            vm_lab.FreeBSDVMLabError,
+            "signed-updater transition probe failed with exit code 9",
+        ) as raised:
+            self.run_snapshot(runner)
+        message = str(raised.exception)
+        self.assertNotIn(TOKEN, message)
+        self.assertNotIn("untrusted updater", message)
+        self.assertNotIn("cleanup", message)
+        self.assertEqual(
+            sum(
+                carries_script(input_text, subject.REMOTE_ROOT_CLEANUP_SCRIPT)
+                for _, input_text in runner.calls
+            ),
+            2,
+        )
+
+    def test_updater_copy_error_is_preserved_and_cleanup_retries(self) -> None:
+        runner = UpdaterSequencedRunner(
+            [255, 0],
+            copy_returncode=1,
+        )
+        with self.assertRaisesRegex(
+            vm_lab.FreeBSDVMLabError,
+            "copy .* failed with exit code 1",
+        ) as raised:
+            self.run_snapshot(runner)
+        self.assertNotIn(TOKEN, str(raised.exception))
+        self.assertEqual(
+            sum(
+                carries_script(input_text, subject.REMOTE_ROOT_CLEANUP_SCRIPT)
+                for _, input_text in runner.calls
+            ),
+            2,
+        )
 
     def test_each_material_observation_is_fail_closed(self) -> None:
         mutations = {
@@ -259,6 +536,8 @@ class FreeBSDUpdaterVMProbeTests(unittest.TestCase):
             "emit OPERATOR_STATE_PRESERVED",
             "emit SYSRC_INVENTORY_MATCH",
             "emit HARNESS_RESET_COMPLETE",
+            'emit LAB_LOCK_RELEASED "$lock_released"',
+            'emit REMOTE_WORKSPACE_REMOVED "$workspace_removed"',
         )
         for fragment in required:
             self.assertIn(fragment, script)
@@ -291,6 +570,63 @@ class FreeBSDUpdaterVMProbeTests(unittest.TestCase):
         self.assertIn('chown 0:0 "$work"', prepare)
         self.assertIn('chmod 733 "$work"', prepare)
         self.assertLess(prepare.index('mkdir "$lock_path"'), prepare.index('mkdir "$work"'))
+        workspace_remove = script.rindex('rm -rf "$work"')
+        workspace_marker = script.rindex(
+            'emit REMOTE_WORKSPACE_REMOVED "$workspace_removed"'
+        )
+        self.assertLess(workspace_remove, workspace_marker)
+
+    def test_tmp_sticky_bit_uses_freebsd_high_and_low_mode_fields(self) -> None:
+        corrected = (
+            '[ "$(stat -f \'%HT|%u|%g|%Mp|%Lp\' /tmp)" '
+            "= 'Directory|0|0|1|777' ]"
+        )
+        truncated = (
+            '[ "$(stat -f \'%HT|%u|%g|%Lp\' /tmp)" '
+            "= 'Directory|0|0|1777' ]"
+        )
+
+        def assert_contract(script: str) -> None:
+            self.assertEqual(script.count(corrected), 1)
+            self.assertNotIn(truncated, script)
+
+        script = subject.REMOTE_ROOT_PREPARE_SCRIPT
+        assert_contract(script)
+        with self.assertRaises(AssertionError):
+            assert_contract(script.replace(corrected, truncated, 1))
+
+    def test_external_cleanup_is_idempotent_but_rejects_partial_state(self) -> None:
+        script = subject.REMOTE_ROOT_CLEANUP_SCRIPT
+        already_clean = (
+            'if [ "$work_exists:$lock_exists" = "0:0" ]; then\n'
+            "    exit 0\n"
+            "fi"
+        )
+        partial_rejection = (
+            'if [ "$work_exists:$lock_exists" != "1:1" ]; then\n'
+            "    exit 92\n"
+            "fi"
+        )
+        final_proof = (
+            '[ ! -e "$work" ] && [ ! -L "$work" ]\n'
+            '[ ! -e "$lock_path" ] && [ ! -L "$lock_path" ]'
+        )
+
+        def assert_contract(candidate: str) -> None:
+            self.assertEqual(candidate.count(already_clean), 1)
+            self.assertEqual(candidate.count(partial_rejection), 1)
+            self.assertEqual(candidate.count(final_proof), 1)
+            self.assertLess(
+                candidate.index(already_clean), candidate.index(partial_rejection)
+            )
+            self.assertLess(
+                candidate.index(partial_rejection),
+                candidate.index('rm -rf "$work"'),
+            )
+
+        assert_contract(script)
+        with self.assertRaises(AssertionError):
+            assert_contract(script.replace(partial_rejection, ":", 1))
 
     def test_requires_canonical_transferred_names(self) -> None:
         self.assertEqual(subject.MANIFEST_NAME, self.manifest.name)

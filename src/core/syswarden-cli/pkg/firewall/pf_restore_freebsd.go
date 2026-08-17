@@ -25,8 +25,9 @@ const (
 	maxPFLiveSnapshotBytes    = 24 << 20
 	maxPFSnapshotBytes        = 64 << 20
 	maxPFAnchors              = 128
-	pfSnapshotSchemaVersion   = 1
+	pfSnapshotSchemaVersion   = 2
 	pfSnapshotTemporaryName   = ".pf-policy-snapshot.tmp"
+	pfModuleName              = "pf"
 )
 
 // PFSnapshotProvenance describes what can truthfully be reconstructed.
@@ -38,6 +39,15 @@ const (
 	// PFSnapshotLegacyDerived records only the configured policy when v4.02.8
 	// has already overwritten the live PF policy.
 	PFSnapshotLegacyDerived PFSnapshotProvenance = "legacy_derived"
+)
+
+// PFInitialKernelState records whether the PF control plane existed before
+// SysWarden first acquired its runtime lock for this installation lifecycle.
+type PFInitialKernelState string
+
+const (
+	PFInitialKernelAvailable    PFInitialKernelState = "available"
+	PFInitialKernelModuleAbsent PFInitialKernelState = "module_absent"
 )
 
 type pfSourceIdentity struct {
@@ -69,18 +79,21 @@ type pfLivePolicy struct {
 	NATRules     string             `json:"nat_rules"`
 	Tables       string             `json:"tables"`
 	AnchorNames  string             `json:"anchor_names"`
+	States       string             `json:"states"`
 	TableEntries []pfTableSnapshot  `json:"table_entries"`
 	Anchors      []pfAnchorSnapshot `json:"anchors"`
 }
 
 type pfPolicySnapshot struct {
-	SchemaVersion    int                  `json:"schema_version"`
-	Provenance       PFSnapshotProvenance `json:"provenance"`
-	RuntimeStatus    string               `json:"runtime_status"`
-	ConfiguredStatus string               `json:"configured_status"`
-	LivePolicy       pfLivePolicy         `json:"live_policy"`
-	Source           pfSourceIdentity     `json:"source"`
-	SourceContent    []byte               `json:"source_content"`
+	SchemaVersion      int                  `json:"schema_version"`
+	Provenance         PFSnapshotProvenance `json:"provenance"`
+	InitialKernelState PFInitialKernelState `json:"initial_kernel_state"`
+	MutationStarted    bool                 `json:"mutation_started"`
+	RuntimeStatus      string               `json:"runtime_status"`
+	ConfiguredStatus   string               `json:"configured_status"`
+	LivePolicy         pfLivePolicy         `json:"live_policy"`
+	Source             pfSourceIdentity     `json:"source"`
+	SourceContent      []byte               `json:"source_content"`
 }
 
 type safePFSource struct {
@@ -92,10 +105,27 @@ var (
 	pfSnapshotDirectory = "/var/db/syswarden"
 	pfSnapshotName      = "pf-policy-snapshot.json"
 	pfExpectedOwner     = func() int { return 0 }
+	pfControlDevicePath = "/dev/pf"
+	newPFCTLCommand     = func(arguments ...string) *exec.Cmd {
+		return exec.Command("/sbin/pfctl", arguments...) // #nosec G204 -- the absolute binary and every argument come from fixed internal call sites
+	}
+	newPFSysrcCommand = func(arguments ...string) *exec.Cmd {
+		return exec.Command("/usr/sbin/sysrc", arguments...) // #nosec G204 -- the absolute binary and every argument come from fixed internal call sites
+	}
+	newPFKLDStatCommand = func(arguments ...string) *exec.Cmd {
+		return exec.Command("/sbin/kldstat", arguments...) // #nosec G204 -- the absolute binary and every argument come from fixed internal call sites
+	}
+	newPFKLDLoadCommand = func(arguments ...string) *exec.Cmd {
+		return exec.Command("/sbin/kldload", arguments...) // #nosec G204 -- the absolute binary and every argument come from fixed internal call sites
+	}
+	newPFKLDUnloadCommand = func(arguments ...string) *exec.Cmd {
+		return exec.Command("/sbin/kldunload", arguments...) // #nosec G204 -- the absolute binary and every argument come from fixed internal call sites
+	}
+	inspectPFKernelState = inspectPFInitialKernelStateNative
 )
 
 func normalizedPFConfiguredStatus() (string, error) {
-	output, err := boundedCommandOutput(4096, exec.Command("sysrc", "-n", "pf_enable"))
+	output, err := boundedCommandOutput(4096, newPFSysrcCommand("-n", "pf_enable"))
 	if err != nil {
 		return "", fmt.Errorf("read configured PF enablement: %w", err)
 	}
@@ -111,7 +141,7 @@ func normalizedPFConfiguredStatus() (string, error) {
 }
 
 func configuredPFRulesPath() (string, error) {
-	output, err := boundedCommandOutput(4096, exec.Command("sysrc", "-n", "pf_rules"))
+	output, err := boundedCommandOutput(4096, newPFSysrcCommand("-n", "pf_rules"))
 	if err != nil {
 		return "", fmt.Errorf("read configured PF rules path: %w", err)
 	}
@@ -251,8 +281,113 @@ func boundedPFInput(content []byte, command *exec.Cmd) error {
 	return nil
 }
 
+func runBoundedQuietCommand(command *exec.Cmd) error {
+	stdout := &boundedBuffer{limit: 4096}
+	stderr := &boundedBuffer{limit: 4096}
+	command.Stdout = stdout
+	command.Stderr = stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("%s: %s: %w", command.Path, strings.TrimSpace(stderr.buffer.String()), err)
+	}
+	if stdout.overflow || stderr.overflow {
+		return fmt.Errorf("%s output exceeds its bound", command.Path)
+	}
+	if stdout.buffer.Len() != 0 || stderr.buffer.Len() != 0 {
+		return fmt.Errorf("%s emitted unexpected output", command.Path)
+	}
+	return nil
+}
+
+func pfKernelModulePresent() (bool, error) {
+	command := newPFKLDStatCommand("-q", "-m", pfModuleName)
+	stdout := &boundedBuffer{limit: 4096}
+	stderr := &boundedBuffer{limit: 4096}
+	command.Stdout = stdout
+	command.Stderr = stderr
+	err := command.Run()
+	if stdout.overflow || stderr.overflow {
+		return false, fmt.Errorf("query PF kernel module output exceeds its bound")
+	}
+	if stdout.buffer.Len() != 0 || stderr.buffer.Len() != 0 {
+		return false, fmt.Errorf("query PF kernel module emitted unexpected output")
+	}
+	if err == nil {
+		return true, nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("query PF kernel module: %w", err)
+}
+
+func inspectPFInitialKernelStateNative() (PFInitialKernelState, error) {
+	info, deviceErr := os.Lstat(pfControlDevicePath)
+	deviceAbsent := errors.Is(deviceErr, fs.ErrNotExist)
+	if deviceErr != nil && !deviceAbsent {
+		return "", fmt.Errorf("inspect PF control device: %w", deviceErr)
+	}
+	modulePresent, err := pfKernelModulePresent()
+	if err != nil {
+		return "", err
+	}
+	if deviceAbsent && !modulePresent {
+		return PFInitialKernelModuleAbsent, nil
+	}
+	if deviceAbsent {
+		return "", fmt.Errorf("PF kernel module is present while its control device is absent")
+	}
+	mode := info.Mode()
+	if mode&os.ModeSymlink != 0 || mode&os.ModeDevice == 0 || mode&os.ModeCharDevice == 0 {
+		return "", fmt.Errorf("PF control device is not a nonsymlink character device")
+	}
+	if !modulePresent {
+		return "", fmt.Errorf("PF control device exists while its kernel module is absent")
+	}
+	return PFInitialKernelAvailable, nil
+}
+
+func loadPFKernelModule() error {
+	if err := runBoundedQuietCommand(newPFKLDLoadCommand("-n", "-q", pfModuleName)); err != nil {
+		return fmt.Errorf("load PF kernel module: %w", err)
+	}
+	state, err := inspectPFKernelState()
+	if err != nil {
+		return fmt.Errorf("verify loaded PF kernel module: %w", err)
+	}
+	if state != PFInitialKernelAvailable {
+		return fmt.Errorf("PF kernel module load did not publish its control device")
+	}
+	return nil
+}
+
+func unloadPFKernelModule() error {
+	if err := runBoundedQuietCommand(newPFKLDUnloadCommand("-n", pfModuleName)); err != nil {
+		return fmt.Errorf("unload PF kernel module: %w", err)
+	}
+	state, err := inspectPFKernelState()
+	if err != nil {
+		return fmt.Errorf("verify unloaded PF kernel module: %w", err)
+	}
+	if state != PFInitialKernelModuleAbsent {
+		return fmt.Errorf("PF kernel module remains available after unload")
+	}
+	return nil
+}
+
+func requirePFKernelState(expected PFInitialKernelState) error {
+	actual, err := inspectPFKernelState()
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return fmt.Errorf("PF kernel state mismatch: expected=%s current=%s", expected, actual)
+	}
+	return nil
+}
+
 func currentPFStatus() (string, error) {
-	output, err := boundedCommandOutput(4096, exec.Command("pfctl", "-s", "info"))
+	output, err := boundedCommandOutput(4096, newPFCTLCommand("-s", "info"))
 	if err != nil {
 		return "", fmt.Errorf("query PF status: %w", err)
 	}
@@ -451,21 +586,25 @@ func capturePFAnchors(rootView string) ([]pfAnchorSnapshot, error) {
 }
 
 func currentPFLivePolicy() (pfLivePolicy, error) {
-	filterRules, err := boundedCommandOutput(maxPFViewBytes, exec.Command("pfctl", "-sr"))
+	filterRules, err := boundedCommandOutput(maxPFViewBytes, newPFCTLCommand("-sr"))
 	if err != nil {
 		return pfLivePolicy{}, fmt.Errorf("capture PF filter rules: %w", err)
 	}
-	natRules, err := boundedCommandOutput(maxPFViewBytes, exec.Command("pfctl", "-sn"))
+	natRules, err := boundedCommandOutput(maxPFViewBytes, newPFCTLCommand("-sn"))
 	if err != nil {
 		return pfLivePolicy{}, fmt.Errorf("capture PF NAT rules: %w", err)
 	}
-	tables, err := boundedCommandOutput(maxPFViewBytes, exec.Command("pfctl", "-s", "Tables"))
+	tables, err := boundedCommandOutput(maxPFViewBytes, newPFCTLCommand("-s", "Tables"))
 	if err != nil {
 		return pfLivePolicy{}, fmt.Errorf("capture PF tables: %w", err)
 	}
-	anchorNames, err := boundedCommandOutput(maxPFViewBytes, exec.Command("pfctl", "-s", "Anchors"))
+	anchorNames, err := boundedCommandOutput(maxPFViewBytes, newPFCTLCommand("-s", "Anchors"))
 	if err != nil {
 		return pfLivePolicy{}, fmt.Errorf("capture PF anchors: %w", err)
+	}
+	states, err := boundedCommandOutput(maxPFViewBytes, newPFCTLCommand("-ss"))
+	if err != nil {
+		return pfLivePolicy{}, fmt.Errorf("capture PF states: %w", err)
 	}
 	tableEntries, err := capturePFTableEntries("", string(tables))
 	if err != nil {
@@ -480,6 +619,7 @@ func currentPFLivePolicy() (pfLivePolicy, error) {
 		NATRules:     string(natRules),
 		Tables:       string(tables),
 		AnchorNames:  string(anchorNames),
+		States:       string(states),
 		TableEntries: tableEntries,
 		Anchors:      anchors,
 	}
@@ -505,7 +645,8 @@ func containsSysWardenPFState(values ...string) bool {
 }
 
 func livePFPolicySize(policy pfLivePolicy) int {
-	total := len(policy.FilterRules) + len(policy.NATRules) + len(policy.Tables) + len(policy.AnchorNames)
+	total := len(policy.FilterRules) + len(policy.NATRules) + len(policy.Tables) +
+		len(policy.AnchorNames) + len(policy.States)
 	for _, table := range policy.TableEntries {
 		total += len(table.Name) + len(table.Entries)
 	}
@@ -520,7 +661,7 @@ func livePFPolicySize(policy pfLivePolicy) int {
 }
 
 func containsSysWardenPFStateInLive(policy pfLivePolicy) bool {
-	values := []string{policy.FilterRules, policy.NATRules, policy.Tables, policy.AnchorNames}
+	values := []string{policy.FilterRules, policy.NATRules, policy.Tables, policy.AnchorNames, policy.States}
 	for _, table := range policy.TableEntries {
 		values = append(values, table.Name, table.Entries)
 	}
@@ -535,7 +676,8 @@ func containsSysWardenPFStateInLive(policy pfLivePolicy) bool {
 
 func emptyPFLivePolicy(policy pfLivePolicy) bool {
 	return policy.FilterRules == "" && policy.NATRules == "" && policy.Tables == "" &&
-		policy.AnchorNames == "" && len(policy.TableEntries) == 0 && len(policy.Anchors) == 0
+		policy.AnchorNames == "" && policy.States == "" && len(policy.TableEntries) == 0 &&
+		len(policy.Anchors) == 0
 }
 
 func securePFSnapshotRoot() (*os.Root, error) {
@@ -608,8 +750,19 @@ func validatePFSnapshot(snapshot pfPolicySnapshot) error {
 	if snapshot.Provenance != PFSnapshotExactLive && snapshot.Provenance != PFSnapshotLegacyDerived {
 		return fmt.Errorf("invalid PF snapshot provenance %q", snapshot.Provenance)
 	}
+	if snapshot.InitialKernelState != PFInitialKernelAvailable &&
+		snapshot.InitialKernelState != PFInitialKernelModuleAbsent {
+		return fmt.Errorf("invalid initial PF kernel state %q", snapshot.InitialKernelState)
+	}
 	if snapshot.RuntimeStatus != "Enabled" && snapshot.RuntimeStatus != "Disabled" {
 		return fmt.Errorf("invalid PF snapshot runtime status %q", snapshot.RuntimeStatus)
+	}
+	if snapshot.ConfiguredStatus != "Enabled" && snapshot.ConfiguredStatus != "Disabled" {
+		return fmt.Errorf("invalid PF snapshot configured status %q", snapshot.ConfiguredStatus)
+	}
+	if snapshot.InitialKernelState == PFInitialKernelModuleAbsent &&
+		snapshot.ConfiguredStatus != "Disabled" {
+		return fmt.Errorf("an absent PF kernel requires disabled configured status")
 	}
 	if snapshot.Provenance == PFSnapshotLegacyDerived {
 		if snapshot.ConfiguredStatus != snapshot.RuntimeStatus ||
@@ -617,11 +770,8 @@ func validatePFSnapshot(snapshot pfPolicySnapshot) error {
 			return fmt.Errorf("legacy-derived PF snapshot overstates unavailable live evidence")
 		}
 	} else {
-		if snapshot.ConfiguredStatus != "" {
-			return fmt.Errorf("exact-live PF snapshot contains legacy configured status")
-		}
 		if snapshot.RuntimeStatus != "Disabled" || !emptyPFLivePolicy(snapshot.LivePolicy) {
-			return fmt.Errorf("fresh exact-live PF is supported only for a disabled empty host policy")
+			return fmt.Errorf("fresh exact-live PF is supported only for a disabled empty host policy and state table")
 		}
 	}
 	if snapshot.Source.Path == "" || snapshot.Source.Size != int64(len(snapshot.SourceContent)) {
@@ -695,7 +845,7 @@ func readPFSnapshot() (pfPolicySnapshot, error) {
 	return snapshot, nil
 }
 
-func savePFSnapshot(snapshot pfPolicySnapshot) error {
+func writePFSnapshot(snapshot pfPolicySnapshot, replace bool) error {
 	if err := validatePFSnapshot(snapshot); err != nil {
 		return err
 	}
@@ -712,10 +862,21 @@ func savePFSnapshot(snapshot pfPolicySnapshot) error {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	if _, err := root.Lstat(pfSnapshotName); err == nil {
+	existing, existingErr := root.Lstat(pfSnapshotName)
+	if !replace && existingErr == nil {
 		return fmt.Errorf("PF snapshot already exists")
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("inspect existing PF snapshot: %w", err)
+	}
+	if replace && existingErr != nil {
+		return fmt.Errorf("inspect PF snapshot before replacement: %w", existingErr)
+	}
+	if replace {
+		stat, ok := existing.Sys().(*syscall.Stat_t)
+		if !existing.Mode().IsRegular() || existing.Mode().Perm() != 0600 || !ok ||
+			int(stat.Uid) != pfExpectedOwner() || existing.Size() > maxPFSnapshotBytes {
+			return fmt.Errorf("PF snapshot is unsafe to replace")
+		}
+	} else if !errors.Is(existingErr, fs.ErrNotExist) {
+		return fmt.Errorf("inspect existing PF snapshot: %w", existingErr)
 	}
 	file, err := root.OpenFile(pfSnapshotTemporaryName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -741,11 +902,46 @@ func savePFSnapshot(snapshot pfPolicySnapshot) error {
 		return fmt.Errorf("publish PF snapshot: %w", err)
 	}
 	temporaryExists = false
+	if err := syncPFSnapshotRoot(root); err != nil {
+		return fmt.Errorf("sync published PF snapshot directory: %w", err)
+	}
 	return nil
+}
+
+func syncPFSnapshotRoot(root *os.Root) error {
+	directory, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	return directory.Sync()
+}
+
+func savePFSnapshot(snapshot pfPolicySnapshot) error {
+	return writePFSnapshot(snapshot, false)
+}
+
+func replacePFSnapshot(snapshot pfPolicySnapshot) error {
+	return writePFSnapshot(snapshot, true)
 }
 
 func samePFSource(left safePFSource, right safePFSource) bool {
 	return left.identity == right.identity && bytes.Equal(left.content, right.content)
+}
+
+func requireDisabledEmptyPFLiveState() (pfLivePolicy, error) {
+	status, err := currentPFStatus()
+	if err != nil {
+		return pfLivePolicy{}, err
+	}
+	policy, err := currentPFLivePolicy()
+	if err != nil {
+		return pfLivePolicy{}, err
+	}
+	if status != "Disabled" || !emptyPFLivePolicy(policy) {
+		return pfLivePolicy{}, fmt.Errorf("PF is not a disabled empty host policy and state table")
+	}
+	return policy, nil
 }
 
 func capturePFPolicySnapshotLocked(provenance PFSnapshotProvenance) error {
@@ -762,20 +958,32 @@ func capturePFPolicySnapshotLocked(provenance PFSnapshotProvenance) error {
 	if err != nil {
 		return err
 	}
+	configuredStatus, err := normalizedPFConfiguredStatus()
+	if err != nil {
+		return err
+	}
+	initialKernelState, err := inspectPFKernelState()
+	if err != nil {
+		return err
+	}
+	if initialKernelState == PFInitialKernelModuleAbsent && configuredStatus != "Disabled" {
+		return fmt.Errorf("PF kernel module is absent while configured PF is enabled")
+	}
 	snapshot := pfPolicySnapshot{
-		SchemaVersion: pfSnapshotSchemaVersion,
-		Provenance:    provenance,
-		Source:        source.identity,
-		SourceContent: source.content,
+		SchemaVersion:      pfSnapshotSchemaVersion,
+		Provenance:         provenance,
+		InitialKernelState: initialKernelState,
+		ConfiguredStatus:   configuredStatus,
+		Source:             source.identity,
+		SourceContent:      source.content,
 	}
 	switch provenance {
 	case PFSnapshotExactLive:
-		snapshot.RuntimeStatus, err = currentPFStatus()
-		if err == nil {
-			snapshot.LivePolicy, err = currentPFLivePolicy()
+		snapshot.RuntimeStatus = "Disabled"
+		if initialKernelState == PFInitialKernelAvailable {
+			snapshot.LivePolicy, err = requireDisabledEmptyPFLiveState()
 		}
 	case PFSnapshotLegacyDerived:
-		snapshot.ConfiguredStatus, err = normalizedPFConfiguredStatus()
 		snapshot.RuntimeStatus = snapshot.ConfiguredStatus
 	default:
 		return fmt.Errorf("unsupported PF snapshot provenance %q", provenance)
@@ -790,7 +998,83 @@ func capturePFPolicySnapshotLocked(provenance PFSnapshotProvenance) error {
 	if !samePFSource(source, revalidated) {
 		return fmt.Errorf("PF source changed during snapshot capture")
 	}
+	revalidatedConfiguredStatus, err := normalizedPFConfiguredStatus()
+	if err != nil {
+		return err
+	}
+	if revalidatedConfiguredStatus != configuredStatus {
+		return fmt.Errorf("configured PF status changed during snapshot capture")
+	}
+	revalidatedKernelState, err := inspectPFKernelState()
+	if err != nil {
+		return err
+	}
+	if revalidatedKernelState != initialKernelState {
+		return fmt.Errorf("PF kernel state changed during snapshot capture")
+	}
+	if provenance == PFSnapshotExactLive && initialKernelState == PFInitialKernelAvailable {
+		if _, err := requireDisabledEmptyPFLiveState(); err != nil {
+			return fmt.Errorf("revalidate exact live PF state: %w", err)
+		}
+	}
 	return savePFSnapshot(snapshot)
+}
+
+func ensurePFKernelReadyForMutationLocked() error {
+	snapshot, err := readPFSnapshot()
+	if err != nil {
+		return err
+	}
+	state, err := inspectPFKernelState()
+	if err != nil {
+		return err
+	}
+	if !snapshot.MutationStarted && state != snapshot.InitialKernelState {
+		return fmt.Errorf(
+			"PF kernel state changed before the first policy mutation: snapshot=%s current=%s",
+			snapshot.InitialKernelState,
+			state,
+		)
+	}
+	loadedNow := false
+	if state == PFInitialKernelModuleAbsent {
+		if err := loadPFKernelModule(); err != nil {
+			return err
+		}
+		loadedNow = true
+	}
+	if loadedNow || (!snapshot.MutationStarted && snapshot.Provenance == PFSnapshotExactLive) {
+		if _, err := requireDisabledEmptyPFLiveState(); err != nil {
+			return fmt.Errorf("verify PF before first policy mutation: %w", err)
+		}
+	}
+	return nil
+}
+
+func markPFMutationStartedLocked() error {
+	snapshot, err := readPFSnapshot()
+	if err != nil {
+		return err
+	}
+	if snapshot.MutationStarted {
+		return nil
+	}
+	if err := requireUnchangedPFSnapshotInputs(snapshot); err != nil {
+		return fmt.Errorf("revalidate PF snapshot inputs before mutation: %w", err)
+	}
+	if err := requirePFKernelState(PFInitialKernelAvailable); err != nil {
+		return fmt.Errorf("revalidate PF kernel before mutation: %w", err)
+	}
+	if snapshot.Provenance == PFSnapshotExactLive {
+		if _, err := requireDisabledEmptyPFLiveState(); err != nil {
+			return fmt.Errorf("revalidate exact live PF state before mutation: %w", err)
+		}
+	}
+	snapshot.MutationStarted = true
+	if err := replacePFSnapshot(snapshot); err != nil {
+		return fmt.Errorf("record PF mutation boundary: %w", err)
+	}
+	return nil
 }
 
 // CapturePFPolicySnapshot records the operator PF policy under the same lock
@@ -804,7 +1088,7 @@ func CapturePFPolicySnapshot(provenance PFSnapshotProvenance) error {
 	return capturePFPolicySnapshotLocked(provenance)
 }
 
-func restorePFSource(snapshot pfPolicySnapshot) error {
+func requireUnchangedPFSource(snapshot pfPolicySnapshot) error {
 	current, err := readSafePFSource(snapshot.Source.Path)
 	if err != nil {
 		return err
@@ -813,15 +1097,36 @@ func restorePFSource(snapshot pfPolicySnapshot) error {
 	if !samePFSource(current, expected) {
 		return fmt.Errorf("configured PF source changed after snapshot capture")
 	}
+	return nil
+}
+
+func validatePFSourceForRestore(snapshot pfPolicySnapshot) error {
+	if err := requireUnchangedPFSource(snapshot); err != nil {
+		return err
+	}
 	if !snapshot.Source.Exists {
 		return nil
 	}
-	if err := boundedPFInput(snapshot.SourceContent, exec.Command("pfctl", "-nf", "-")); err != nil {
+	if err := boundedPFInput(snapshot.SourceContent, newPFCTLCommand("-nf", "-")); err != nil {
 		return fmt.Errorf("validate snapshotted PF source: %w", err)
 	}
 	// The source is already byte- and identity-equivalent to the snapshot.
 	// Replacing it would unnecessarily discard ACLs, flags, xattrs or hardlinks
 	// that are outside this bounded snapshot contract.
+	return nil
+}
+
+func requireUnchangedPFSnapshotInputs(snapshot pfPolicySnapshot) error {
+	if err := requireUnchangedPFSource(snapshot); err != nil {
+		return err
+	}
+	configuredStatus, err := normalizedPFConfiguredStatus()
+	if err != nil {
+		return err
+	}
+	if configuredStatus != snapshot.ConfiguredStatus {
+		return fmt.Errorf("configured PF status changed after snapshot capture")
+	}
 	return nil
 }
 
@@ -860,7 +1165,7 @@ func restorePFTableEntries(anchor string, tables []pfTableSnapshot) error {
 }
 
 func restoreExactLivePFPolicy(pfLivePolicy) error {
-	if _, err := boundedCommandOutput(4096, exec.Command("pfctl", "-F", "all")); err != nil {
+	if _, err := boundedCommandOutput(4096, newPFCTLCommand("-F", "all")); err != nil {
 		return fmt.Errorf("restore fresh empty PF policy: %w", err)
 	}
 	return nil
@@ -871,15 +1176,15 @@ func restoreLegacyDerivedPFPolicy(snapshot pfPolicySnapshot) error {
 		if !snapshot.Source.Exists {
 			return fmt.Errorf("enabled legacy-derived PF policy has no source file")
 		}
-		if err := boundedPFInput(snapshot.SourceContent, exec.Command("pfctl", "-nf", "-")); err != nil {
+		if err := boundedPFInput(snapshot.SourceContent, newPFCTLCommand("-nf", "-")); err != nil {
 			return fmt.Errorf("validate legacy-derived PF source: %w", err)
 		}
-		if err := boundedPFInput(snapshot.SourceContent, exec.Command("pfctl", "-f", "-")); err != nil {
+		if err := boundedPFInput(snapshot.SourceContent, newPFCTLCommand("-f", "-")); err != nil {
 			return fmt.Errorf("load legacy-derived PF source: %w", err)
 		}
 		return nil
 	}
-	if _, err := boundedCommandOutput(4096, exec.Command("pfctl", "-F", "all")); err != nil {
+	if _, err := boundedCommandOutput(4096, newPFCTLCommand("-F", "all")); err != nil {
 		return fmt.Errorf("flush legacy-derived empty PF policy: %w", err)
 	}
 	return nil
@@ -893,9 +1198,9 @@ func setPFStatus(expected string) error {
 	if current != expected {
 		var command *exec.Cmd
 		if expected == "Disabled" {
-			command = exec.Command("pfctl", "-d")
+			command = newPFCTLCommand("-d")
 		} else {
-			command = exec.Command("pfctl", "-e")
+			command = newPFCTLCommand("-e")
 		}
 		if output, err := boundedCommandOutput(4096, command); err != nil {
 			return fmt.Errorf("set PF status to %s: %s: %w", expected, strings.TrimSpace(string(output)), err)
@@ -920,6 +1225,9 @@ func removePFSnapshot() error {
 	if err := root.Remove(pfSnapshotName); err != nil {
 		return fmt.Errorf("remove consumed PF snapshot: %w", err)
 	}
+	if err := syncPFSnapshotRoot(root); err != nil {
+		return fmt.Errorf("sync consumed PF snapshot directory: %w", err)
+	}
 	return nil
 }
 
@@ -928,8 +1236,47 @@ func restorePFPolicyLocked() error {
 	if err != nil {
 		return err
 	}
-	if err := restorePFSource(snapshot); err != nil {
+	if err := requireUnchangedPFSnapshotInputs(snapshot); err != nil {
 		return err
+	}
+	kernelState, err := inspectPFKernelState()
+	if err != nil {
+		return err
+	}
+	if kernelState == PFInitialKernelModuleAbsent {
+		if snapshot.InitialKernelState == PFInitialKernelModuleAbsent {
+			if snapshot.MutationStarted {
+				return fmt.Errorf("PF kernel module disappeared after policy mutation started")
+			}
+			if err := requireUnchangedPFSnapshotInputs(snapshot); err != nil {
+				return err
+			}
+			if err := requirePFKernelState(PFInitialKernelModuleAbsent); err != nil {
+				return err
+			}
+			return removePFSnapshot()
+		}
+		return fmt.Errorf("PF kernel module disappeared after an available baseline was captured")
+	}
+	if err := validatePFSourceForRestore(snapshot); err != nil {
+		return err
+	}
+	if !snapshot.MutationStarted && snapshot.Provenance == PFSnapshotExactLive {
+		if _, err := requireDisabledEmptyPFLiveState(); err != nil {
+			return fmt.Errorf("verify unmodified exact PF snapshot: %w", err)
+		}
+		if snapshot.InitialKernelState == PFInitialKernelModuleAbsent {
+			if err := unloadPFKernelModule(); err != nil {
+				return err
+			}
+		}
+		if err := requireUnchangedPFSnapshotInputs(snapshot); err != nil {
+			return err
+		}
+		if err := requirePFKernelState(snapshot.InitialKernelState); err != nil {
+			return err
+		}
+		return removePFSnapshot()
 	}
 	if snapshot.Provenance == PFSnapshotExactLive {
 		if err := restoreExactLivePFPolicy(snapshot.LivePolicy); err != nil {
@@ -950,6 +1297,23 @@ func restorePFPolicyLocked() error {
 	}
 	if snapshot.Provenance == PFSnapshotExactLive && !emptyPFLivePolicy(livePolicy) {
 		return fmt.Errorf("fresh empty PF policy was not restored exactly")
+	}
+	if snapshot.InitialKernelState == PFInitialKernelModuleAbsent {
+		if snapshot.RuntimeStatus != "Disabled" || !emptyPFLivePolicy(livePolicy) {
+			return fmt.Errorf("PF module cannot be unloaded before its disabled empty policy and state table are restored")
+		}
+		if _, err := requireDisabledEmptyPFLiveState(); err != nil {
+			return fmt.Errorf("revalidate disabled empty PF state before module unload: %w", err)
+		}
+		if err := unloadPFKernelModule(); err != nil {
+			return err
+		}
+	}
+	if err := requireUnchangedPFSnapshotInputs(snapshot); err != nil {
+		return err
+	}
+	if err := requirePFKernelState(snapshot.InitialKernelState); err != nil {
+		return err
 	}
 	return removePFSnapshot()
 }

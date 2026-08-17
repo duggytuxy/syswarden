@@ -22,6 +22,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,6 +42,8 @@ USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 REMOTE_ROOT_PATTERN = re.compile(r"^/tmp/syswarden-freebsd-lot0-[a-f0-9]{32}$")
 MARKER_LINE_PATTERN = re.compile(r"^SWL0\t([A-Z0-9_]+)\t([A-Za-z0-9+/=]*)$")
 MAX_EVIDENCE_BYTES = 256_000
+CLEANUP_MAX_ATTEMPTS = 3
+CLEANUP_RETRY_DELAY_SECONDS = 1.0
 
 EXPECTED_SIGNATURE_RULE_COUNT = 78
 EXPECTED_ENGINE_SIGNATURE_COUNT = 194
@@ -188,11 +191,49 @@ BASE_EVIDENCE_KEYS = frozenset(
         "PF_BASELINE_READY",
         "PF_BASELINE_CLEAN",
         "PF_BASELINE_STATUS",
+        "PF_INITIAL_MODULE_ABSENT",
+        "PF_INITIAL_DEVICE_ABSENT",
+        "PF_INITIAL_KLDLOAD_RC",
+        "PF_INITIAL_MODULE_PRESENT",
+        "PF_INITIAL_DEVICE_READY",
         "PF_SNAPSHOT_PROVENANCE",
+        "PF_ABSENT_PRE_MODULE_ABSENT",
+        "PF_ABSENT_PRE_DEVICE_ABSENT",
+        "PF_ABSENT_INSTALL_RC",
+        "PF_ABSENT_INSTALL_POSTINSTALL_MARKER_STATE",
+        "PF_ABSENT_INSTALL_DIAGNOSTICS_CLEAN",
+        "PF_ABSENT_SNAPSHOT_SCHEMA_VERSION",
+        "PF_ABSENT_SNAPSHOT_SAFE",
+        "PF_ABSENT_SNAPSHOT_PROVENANCE",
+        "PF_ABSENT_SNAPSHOT_INITIAL_KERNEL_STATE",
+        "PF_ABSENT_SNAPSHOT_MUTATION_STARTED",
+        "PF_ABSENT_POLICY_MODULE_PRESENT",
+        "PF_ABSENT_POLICY_DEVICE_READY",
+        "PF_ABSENT_POLICY_STATUS",
+        "PF_ABSENT_POLICY_RULE_COUNT",
+        "PF_ABSENT_DELETE_RC",
+        "PF_ABSENT_DELETE_DIAGNOSTICS_CLEAN",
+        "PF_ABSENT_DELETE_PACKAGE_ABSENT",
+        "PF_ABSENT_DELETE_SNAPSHOT_ABSENT",
+        "PF_ABSENT_DELETE_CONFIGURED_STATUS",
+        "PF_ABSENT_DELETE_MODULE_ABSENT",
+        "PF_ABSENT_DELETE_DEVICE_ABSENT",
+        "PF_ABSENT_DELETE_PROBE_LOAD_RC",
+        "PF_ABSENT_DELETE_PROBE_STATUS",
+        "PF_ABSENT_DELETE_PROBE_POLICY_EMPTY",
+        "PF_ABSENT_DELETE_PROBE_UNLOAD_RC",
+        "PF_ABSENT_DELETE_FINAL_MODULE_ABSENT",
+        "PF_ABSENT_DELETE_FINAL_DEVICE_ABSENT",
         "PF_FRESH_CAPTURE_RC",
         "PF_FRESH_PROVENANCE",
         "PF_FRESH_RESTORE_RC",
+        "PF_NONEMPTY_SEED_APPLY_RC",
         "PF_NONEMPTY_CAPTURE_REJECTED",
+        "PF_NONEMPTY_ANCHOR_PRESERVED",
+        "PF_NONEMPTY_FILTER_PRESERVED",
+        "PF_NONEMPTY_NAT_PRESERVED",
+        "PF_NONEMPTY_TABLES_PRESERVED",
+        "PF_NONEMPTY_STATUS_PRESERVED",
         "PF_NONEMPTY_STATE_PRESERVED",
         "MIGRATION_BACKUP_BASELINE",
         "PF_FINAL_STATUS",
@@ -202,6 +243,7 @@ BASE_EVIDENCE_KEYS = frozenset(
         "PF_ANCHOR_NAME",
         "LAB_LOCK_ACQUIRED",
         "LAB_LOCK_RELEASED",
+        "REMOTE_WORKSPACE_REMOVED",
         "RESTART_BASELINE_INVENTORY",
         "RESTART_ONE_INVENTORY",
         "RESTART_TWO_INVENTORY",
@@ -293,6 +335,9 @@ BASE_EVIDENCE_KEYS = frozenset(
         "REMOVE_PF_SYSWARDEN_TABLE_ABSENT",
         "LAB_CLEANUP_OK",
         "PF_BASELINE_RESTORED",
+        "PF_FINAL_GUEST_KLDUNLOAD_RC",
+        "PF_FINAL_GUEST_MODULE_ABSENT",
+        "PF_FINAL_GUEST_DEVICE_ABSENT",
     }
 )
 EVIDENCE_KEYS = BASE_EVIDENCE_KEYS | frozenset(
@@ -547,10 +592,10 @@ def version_tuple(version: str) -> tuple[int, int, int]:
 def is_forward_only_transition(
     candidate: PackageArtifact, previous: PackageArtifact
 ) -> bool:
-    """Recognize only the immutable v4.02.8 to v4.02.14 transition."""
+    """Recognize only the immutable v4.02.8 to v4.02.15 transition."""
 
     return (
-        candidate.version == "4.02.14"
+        candidate.version == "4.02.15"
         and previous.version == FORWARD_ONLY_PREVIOUS_VERSION
         and previous.path.name == FORWARD_ONLY_PREVIOUS_PACKAGE
         and previous.sha256 == FORWARD_ONLY_PREVIOUS_SHA256
@@ -570,7 +615,7 @@ def validate_forward_only_binding(
     ):
         raise FreeBSDVMLabError(
             "the historical FreeBSD transition is allowed only for the exact "
-            "v4.02.8 package bytes followed by candidate v4.02.14"
+            "v4.02.8 package bytes followed by candidate v4.02.15"
         )
 
 
@@ -867,7 +912,12 @@ lock_acquired=0
 vm_cleanup_authorized=0
 pf_cleanup_authorized=0
 baseline_status=
+initial_pf_module_absent=0
+initial_pf_device_absent=0
+retain_pf_module_for_evidence=0
 
+# This program is streamed through /bin/sh -s.  Commands that may read stdin
+# must use /dev/null so they cannot consume unread shell source from fd 0.
 emit() {
     encoded="$(printf '%s' "$2" | /usr/bin/base64 | tr -d '\n')"
     printf 'SWL0\t%s\t%s\n' "$1" "$encoded"
@@ -878,6 +928,20 @@ boolean() {
 quiet_boolean() {
     if "$@" >/dev/null 2>&1; then printf 1; else printf 0; fi
 }
+pf_module_present() {
+    /sbin/kldstat -q -m pf >/dev/null 2>&1
+}
+pf_kernel_module_absent() {
+    /sbin/kldstat -q -m pf >/dev/null 2>&1
+    pf_kernel_module_rc=$?
+    [ "$pf_kernel_module_rc" -eq 1 ]
+}
+pf_device_ready() {
+    [ -c /dev/pf ] && [ ! -L /dev/pf ]
+}
+pf_module_absent() {
+    pf_kernel_module_absent && [ ! -e /dev/pf ] && [ ! -L /dev/pf ]
+}
 verify_sealed_input() {
     sealed_path="$1"
     sealed_sha="$2"
@@ -887,17 +951,25 @@ verify_sealed_input() {
 }
 cleanup_vm() {
     if [ "$vm_cleanup_authorized" -ne 1 ]; then
+        if [ "$initial_pf_module_absent" -eq 1 ] && pf_module_present; then
+            if /sbin/kldunload -n pf >/dev/null 2>&1; then :; fi
+        fi
         return 0
     fi
     service syswardenwebtui onestop >/dev/null 2>&1 || true
     service syswarden onestop >/dev/null 2>&1 || true
-    env ASSUME_ALWAYS_YES=yes pkg delete -fy syswarden >/dev/null 2>&1 || true
+    env ASSUME_ALWAYS_YES=yes pkg delete -fy syswarden \
+        </dev/null >/dev/null 2>&1 || true
     if [ "$pf_cleanup_authorized" -eq 1 ]; then
         pfctl -a "$anchor" -F all >/dev/null 2>&1 || true
         if [ "$baseline_status" = "Disabled" ]; then
             pfctl -d >/dev/null 2>&1 || true
         fi
         pfctl -F all >/dev/null 2>&1 || true
+        if [ "$retain_pf_module_for_evidence" -ne 1 ] && \
+           [ "$initial_pf_module_absent" -eq 1 ] && pf_module_present; then
+            if /sbin/kldunload -n pf >/dev/null 2>&1; then :; fi
+        fi
     fi
     sysrc -x syswarden_enable >/dev/null 2>&1 || true
     sysrc -x syswardenwebtui_enable >/dev/null 2>&1 || true
@@ -923,7 +995,7 @@ cleanup_vm() {
         rm -f "$cleanup_cron"
     fi
     rm -rf /usr/local/syswarden /opt/syswarden /etc/syswarden /var/lib/syswarden
-    rm -rf /var/db/syswarden
+    rm -rf /var/db/syswarden /var/log/syswarden
     rm -f /var/cron/allow /var/cron/deny
 }
 # shellcheck disable=SC2317 # Invoked indirectly by the final signal/exit trap.
@@ -1063,6 +1135,106 @@ signature_state() {
             "$(stat -f '%g' "$path" 2>/dev/null || true)"
     fi
 }
+read_root_crontab_state() {
+    root_crontab_output="$1"
+    root_crontab_error="$2"
+    root_crontab_present=0
+    : >"$root_crontab_output" || return 1
+    : >"$root_crontab_error" || return 1
+    if LC_ALL=C crontab -l >"$root_crontab_output" 2>"$root_crontab_error"; then
+        root_crontab_present=1
+        [ ! -s "$root_crontab_error" ]
+        return $?
+    else
+        root_crontab_rc=$?
+    fi
+    [ "$root_crontab_rc" -eq 1 ] && [ ! -s "$root_crontab_output" ] || return 1
+    root_crontab_message="$(cat "$root_crontab_error")"
+    root_crontab_lines="$(LC_ALL=C awk 'END { print NR + 0 }' "$root_crontab_error")"
+    case "${root_crontab_lines}:${root_crontab_message}" in
+        "1:no crontab for root"|\
+        "1:crontab: no crontab for root"|\
+        "1:crontab: can't open 'root': No such file or directory")
+            return 0
+            ;;
+    esac
+    return 1
+}
+validate_root_crontab_round_trip() {
+    root_crontab_prefix="$1"
+    root_crontab_before="${root_crontab_prefix}.before"
+    root_crontab_probe="${root_crontab_prefix}.probe"
+    root_crontab_after="${root_crontab_prefix}.after"
+    root_crontab_error="${root_crontab_prefix}.error"
+    root_crontab_probe_error="${root_crontab_prefix}.probe.error"
+    root_crontab_probe_stdout="${root_crontab_prefix}.probe.stdout"
+    root_crontab_restored="${root_crontab_prefix}.restored"
+    root_crontab_restore_error="${root_crontab_prefix}.restore.error"
+    root_crontab_restore_stdout="${root_crontab_prefix}.restore.stdout"
+    read_root_crontab_state "$root_crontab_before" "$root_crontab_error" || return 1
+    root_crontab_was_present="$root_crontab_present"
+    {
+        cat "$root_crontab_before" || return 1
+        printf '%s\n' '# syswarden-freebsd-lot0-crontab-round-trip' || return 1
+    } >"$root_crontab_probe" || return 1
+
+    root_crontab_primary_failed=0
+    LC_ALL=C crontab - <"$root_crontab_probe" \
+        >"$root_crontab_probe_stdout" 2>"$root_crontab_probe_error"
+    root_crontab_probe_install_rc=$?
+    if [ "$root_crontab_probe_install_rc" -ne 0 ] || \
+       [ -s "$root_crontab_probe_stdout" ] || \
+       [ -s "$root_crontab_probe_error" ]; then
+        root_crontab_primary_failed=1
+    fi
+    if ! read_root_crontab_state "$root_crontab_after" "$root_crontab_error"; then
+        root_crontab_primary_failed=1
+    elif [ "$root_crontab_present" -ne 1 ] || \
+         ! cmp -s "$root_crontab_probe" "$root_crontab_after"; then
+        root_crontab_primary_failed=1
+    fi
+
+    # Once the probe command has run, restoration is mandatory even when the
+    # install diagnostic, readback, or comparison has already failed.
+    root_crontab_restore_failed=0
+    if [ "$root_crontab_was_present" -eq 1 ]; then
+        LC_ALL=C crontab - <"$root_crontab_before" \
+            >"$root_crontab_restore_stdout" 2>"$root_crontab_restore_error"
+        root_crontab_restore_rc=$?
+        if [ "$root_crontab_restore_rc" -ne 0 ] || \
+           [ -s "$root_crontab_restore_stdout" ] || \
+           [ -s "$root_crontab_restore_error" ]; then
+            root_crontab_restore_failed=1
+        fi
+        if ! read_root_crontab_state \
+            "$root_crontab_restored" "$root_crontab_restore_error"; then
+            root_crontab_restore_failed=1
+        elif [ "$root_crontab_present" -ne 1 ] || \
+             ! cmp -s "$root_crontab_before" "$root_crontab_restored"; then
+            root_crontab_restore_failed=1
+        fi
+    else
+        LC_ALL=C crontab -r \
+            >"$root_crontab_restore_stdout" 2>"$root_crontab_restore_error"
+        root_crontab_restore_rc=$?
+        if [ "$root_crontab_restore_rc" -ne 0 ] || \
+           [ -s "$root_crontab_restore_stdout" ] || \
+           [ -s "$root_crontab_restore_error" ]; then
+            root_crontab_restore_failed=1
+        fi
+        if ! read_root_crontab_state \
+            "$root_crontab_restored" "$root_crontab_restore_error"; then
+            root_crontab_restore_failed=1
+        elif [ "$root_crontab_present" -ne 0 ]; then
+            root_crontab_restore_failed=1
+        fi
+    fi
+    if [ "$root_crontab_primary_failed" -ne 0 ] || \
+       [ "$root_crontab_restore_failed" -ne 0 ]; then
+        return 1
+    fi
+    return 0
+}
 probe_signatures() {
     phase="$1"
     signature_file=/usr/local/syswarden/signatures.json
@@ -1181,14 +1353,19 @@ fi
 if [ "$previous_expected_version" = "4.02.8" ]; then
     if [ "$previous_package_name" != "syswarden-4.02.8.txz" ] || \
        [ "$previous_expected_sha" != "8b3b489821450b3afd74548c6db5ad92001b8a69f923e2b9a99ce550353b6e37" ] || \
-       [ "$candidate_expected_version" != "4.02.14" ]; then
+       [ "$candidate_expected_version" != "4.02.15" ]; then
         exit 91
     fi
 fi
-trap 'final_cleanup "$?"' EXIT HUP INT TERM
+# EXIT owns cleanup exactly once.  Signal handlers first select the canonical
+# 128 plus signal status, then normal EXIT processing invokes final_cleanup.
+trap 'final_cleanup "$?"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [ -L /tmp ] || [ ! -d /tmp ] || \
-   [ "$(stat -f '%u:%g:%Lp' /tmp 2>/dev/null)" != "0:0:1777" ] || \
+   [ "$(stat -f '%u:%g:%Mp:%Lp' /tmp 2>/dev/null)" != "0:0:1:777" ] || \
    [ -L "$transport_work" ] || [ ! -d "$transport_work" ] || \
    [ "$(stat -f '%Lp' "$transport_work" 2>/dev/null)" != "700" ] || \
    [ -e "$sealed_work" ] || [ -L "$sealed_work" ]; then
@@ -1252,7 +1429,7 @@ for path in \
     /usr/local/syswarden /opt/syswarden /usr/local/bin/syswarden \
     /usr/local/bin/syswarden-tui /usr/local/etc/rc.d/syswarden \
     /usr/local/etc/rc.d/syswardenwebtui /etc/syswarden \
-    /var/lib/syswarden /var/db/syswarden \
+    /var/lib/syswarden /var/db/syswarden /var/log/syswarden \
     /var/cron/allow /var/cron/deny; do
     if [ -e "$path" ] || [ -L "$path" ]; then
         preclean=0
@@ -1289,7 +1466,27 @@ lock_acquired=1
 chmod 700 "$lock_path" || exit 96
 emit LAB_LOCK_ACQUIRED 1
 
-kldload pf >"$work/kldload.log" 2>&1 || true
+if pf_kernel_module_absent; then
+    initial_pf_module_absent=1
+fi
+if [ ! -e /dev/pf ] && [ ! -L /dev/pf ]; then
+    initial_pf_device_absent=1
+fi
+emit PF_INITIAL_MODULE_ABSENT "$initial_pf_module_absent"
+emit PF_INITIAL_DEVICE_ABSENT "$initial_pf_device_absent"
+if [ "$initial_pf_module_absent" -ne 1 ] || \
+   [ "$initial_pf_device_absent" -ne 1 ]; then
+    exit 94
+fi
+/sbin/kldload -n -q pf >"$work/kldload.log" 2>&1
+initial_kldload_rc=$?
+emit PF_INITIAL_KLDLOAD_RC "$initial_kldload_rc"
+emit PF_INITIAL_MODULE_PRESENT "$(boolean pf_module_present)"
+emit PF_INITIAL_DEVICE_READY "$(boolean pf_device_ready)"
+if [ "$initial_kldload_rc" -ne 0 ] || ! pf_module_present || \
+   ! pf_device_ready; then
+    exit 94
+fi
 pfctl -s info >"$work/pf-info-before" 2>&1
 pf_ready=$?
 emit PF_BASELINE_READY "$(test "$pf_ready" -eq 0 && printf 1 || printf 0)"
@@ -1330,11 +1527,21 @@ chmod 0600 /etc/syswarden/config/syswarden-auto.conf.bak
 chown 0:0 /etc/syswarden/config/syswarden-auto.conf.bak
 emit MIGRATION_BACKUP_BASELINE "$(signature_state /etc/syswarden/config/syswarden-auto.conf.bak)"
 
-# A standalone txz cannot fetch dependencies through pkg add. Install the
-# exact manifest prerequisites from the official configured pkg repositories
-# before exercising the release asset itself.
+# A standalone txz cannot fetch dependencies through pkg add. Force a bounded
+# catalogue refresh so a stale or partially written local repository database
+# cannot be mistaken for a current empty catalogue, then install the exact
+# manifest prerequisites from the official configured pkg repositories.
+env ASSUME_ALWAYS_YES=yes timeout "$command_timeout" pkg update -f \
+    </dev/null \
+    >"$work/repository-update.log" 2>&1
+repository_update_rc=$?
+if [ "$repository_update_rc" -ne 0 ]; then
+    sed -n '1,200p' "$work/repository-update.log" >&2
+    exit 99
+fi
 env ASSUME_ALWAYS_YES=yes timeout "$command_timeout" pkg install -y \
     curl jq libqrencode rsyslog wireguard-tools \
+    </dev/null \
     >"$work/dependencies-install.log" 2>&1
 dependencies_install_rc=$?
 emit DEPENDENCIES_INSTALL_RC "$dependencies_install_rc"
@@ -1346,6 +1553,7 @@ emit DEPENDENCY_INVENTORY "$(
     done | LC_ALL=C sort
 )"
 if [ "$dependencies_install_rc" -ne 0 ]; then
+    sed -n '1,200p' "$work/dependencies-install.log" >&2
     exit 97
 fi
 
@@ -1363,8 +1571,12 @@ emit LOG_BASELINE_RSYSLOGD_ENABLE "$log_baseline_rsyslogd_enable"
 emit LOG_BASELINE_RSYSLOGD_PIDFILE "$log_baseline_rsyslogd_pidfile"
 
 verify_sealed_input "$work/$previous_package_name" "$previous_expected_sha" || exit 93
+# FreeBSD timeout(1) becomes a process reaper by default. Package hooks may
+# start rc.d services, so -f bounds pkg itself without waiting for or killing
+# the successfully daemonized children after pkg returns.
 env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
-    timeout "$command_timeout" pkg add -f "$work/$previous_package_name" \
+    timeout -f "$command_timeout" pkg add -f "$work/$previous_package_name" \
+    </dev/null \
     >"$work/previous-install.log" 2>&1
 previous_install_rc=$?
 capture_installed_phase PREVIOUS_INSTALL "$previous_install_rc" "$work/previous-install.log"
@@ -1372,10 +1584,26 @@ capture_installed_phase PREVIOUS_INSTALL "$previous_install_rc" "$work/previous-
 # The candidate must preserve safe operator-owned cron access policy. Seed it
 # only after exercising the immutable historical package, whose old hardening
 # behavior cannot be changed.
-printf '%s\n' 'root,nobody' >/var/cron/allow
+printf '%s\n' root nobody >/var/cron/allow
 printf '%s\n' 'daemon' >/var/cron/deny
 chown 0:0 /var/cron/allow /var/cron/deny
 chmod 0600 /var/cron/allow /var/cron/deny
+printf '%s\n' root nobody >"$work/cron-allow-expected"
+printf '%s\n' daemon >"$work/cron-deny-expected"
+if [ "$(id -un)" != root ]; then
+    exit 100
+fi
+for cron_access_path in /var/cron/allow /var/cron/deny; do
+    if [ ! -f "$cron_access_path" ] || [ -L "$cron_access_path" ] || \
+       [ "$(stat -f '%u:%g:%Lp' "$cron_access_path" 2>/dev/null)" != "0:0:600" ]; then
+        exit 100
+    fi
+done
+if ! cmp -s "$work/cron-allow-expected" /var/cron/allow || \
+   ! cmp -s "$work/cron-deny-expected" /var/cron/deny || \
+   ! validate_root_crontab_round_trip "$work/cron-access-round-trip"; then
+    exit 100
+fi
 cron_allow_baseline="$(signature_state /var/cron/allow)"
 cron_deny_baseline="$(signature_state /var/cron/deny)"
 emit CRON_ALLOW_BASELINE "$cron_allow_baseline"
@@ -1383,11 +1611,12 @@ emit CRON_DENY_BASELINE "$cron_deny_baseline"
 
 verify_sealed_input "$work/$candidate_package_name" "$candidate_expected_sha" || exit 93
 env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
-    timeout "$command_timeout" pkg add -f "$work/$candidate_package_name" \
+    timeout -f "$command_timeout" pkg add -f "$work/$candidate_package_name" \
+    </dev/null \
     >"$work/candidate-upgrade.log" 2>&1
 candidate_upgrade_rc=$?
 pf_snapshot_provenance="$({
-    jq -er 'select(.schema_version == 1) | .provenance | select(. == "exact_live" or . == "legacy_derived")' \
+    jq -er 'select(.schema_version == 2) | .provenance | select(. == "exact_live" or . == "legacy_derived")' \
         /var/db/syswarden/pf-policy-snapshot.json
 } 2>/dev/null || true)"
 emit PF_SNAPSHOT_PROVENANCE "$pf_snapshot_provenance"
@@ -1401,7 +1630,8 @@ capture_installed_phase CANDIDATE_UPGRADE "$candidate_upgrade_rc" "$work/candida
 
 verify_sealed_input "$work/$candidate_package_name" "$candidate_expected_sha" || exit 93
 env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
-    timeout "$command_timeout" pkg add -f "$work/$candidate_package_name" \
+    timeout -f "$command_timeout" pkg add -f "$work/$candidate_package_name" \
+    </dev/null \
     >"$work/candidate-reinstall.log" 2>&1
 candidate_reinstall_rc=$?
 capture_installed_phase CANDIDATE_REINSTALL "$candidate_reinstall_rc" "$work/candidate-reinstall.log"
@@ -1420,6 +1650,7 @@ timeout 20 /usr/local/bin/syswarden --help >"$work/cli-link.log" 2>&1
 emit CLI_LINK_RC "$?"
 env TERM=xterm timeout 5 script -q /dev/null \
     /usr/local/syswarden/bin/syswarden-tui \
+    </dev/null \
     >"$work/tui-reinstall.log" 2>&1
 emit TUI_REINSTALL_RC "$?"
 emit SIGNATURE_PACKAGE_PATH "$(boolean test -f /usr/local/syswarden/signatures.json)"
@@ -1434,13 +1665,15 @@ emit RC_WEB_COMMAND "$(awk -F= '/^command=/{gsub(/\"/,"",$2); print $2; exit}' /
 emit RC_CORE_ENABLED "$(flag_value syswarden_enable)"
 emit RC_WEB_ENABLED "$(flag_value syswardenwebtui_enable)"
 
-timeout 20 service syswarden onestart >"$work/core-start.log" 2>&1
+# Keep every rc.d probe bounded, but observe only service(8). Its successful
+# start path intentionally leaves daemonized children behind.
+timeout -f 20 service syswarden onestart >"$work/core-start.log" 2>&1
 core_start_rc=$?
 emit RC_CORE_START_RC "$core_start_rc"
 service syswarden onestatus >"$work/core-status.log" 2>&1
 core_status_rc=$?
 emit RC_CORE_STATUS_RC "$core_status_rc"
-timeout 20 service syswardenwebtui onestart >"$work/web-start.log" 2>&1
+timeout -f 20 service syswardenwebtui onestart >"$work/web-start.log" 2>&1
 web_start_rc=$?
 emit RC_WEB_START_RC "$web_start_rc"
 service syswardenwebtui onestatus >"$work/web-status.log" 2>&1
@@ -1449,13 +1682,13 @@ emit RC_WEB_STATUS_RC "$web_status_rc"
 
 emit RESTART_BASELINE_INVENTORY "$(full_state_inventory)"
 
-timeout 20 service syswarden onerestart >"$work/core-restart-one.log" 2>&1
+timeout -f 20 service syswarden onerestart >"$work/core-restart-one.log" 2>&1
 core_restart_one_rc=$?
 emit RC_CORE_RESTART_ONE_RC "$core_restart_one_rc"
 service syswarden onestatus >"$work/core-restart-one-status.log" 2>&1
 core_restart_one_status_rc=$?
 emit RC_CORE_RESTART_ONE_STATUS_RC "$core_restart_one_status_rc"
-timeout 20 service syswardenwebtui onerestart >"$work/web-restart-one.log" 2>&1
+timeout -f 20 service syswardenwebtui onerestart >"$work/web-restart-one.log" 2>&1
 web_restart_one_rc=$?
 emit RC_WEB_RESTART_ONE_RC "$web_restart_one_rc"
 service syswardenwebtui onestatus >"$work/web-restart-one-status.log" 2>&1
@@ -1464,13 +1697,13 @@ emit RC_WEB_RESTART_ONE_STATUS_RC "$web_restart_one_status_rc"
 
 emit RESTART_ONE_INVENTORY "$(full_state_inventory)"
 
-timeout 20 service syswarden onerestart >"$work/core-restart-two.log" 2>&1
+timeout -f 20 service syswarden onerestart >"$work/core-restart-two.log" 2>&1
 core_restart_two_rc=$?
 emit RC_CORE_RESTART_TWO_RC "$core_restart_two_rc"
 service syswarden onestatus >"$work/core-restart-two-status.log" 2>&1
 core_restart_two_status_rc=$?
 emit RC_CORE_RESTART_TWO_STATUS_RC "$core_restart_two_status_rc"
-timeout 20 service syswardenwebtui onerestart >"$work/web-restart-two.log" 2>&1
+timeout -f 20 service syswardenwebtui onerestart >"$work/web-restart-two.log" 2>&1
 web_restart_two_rc=$?
 emit RC_WEB_RESTART_TWO_RC "$web_restart_two_rc"
 service syswardenwebtui onestatus >"$work/web-restart-two-status.log" 2>&1
@@ -1554,7 +1787,8 @@ emit PF_HONEYPORT_SOURCE_BAD "$source_bad"
 
 verify_sealed_input "$work/$previous_package_name" "$previous_expected_sha" || exit 93
 env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
-    timeout "$command_timeout" pkg add -f "$work/$previous_package_name" \
+    timeout -f "$command_timeout" pkg add -f "$work/$previous_package_name" \
+    </dev/null \
     >"$work/previous-rollback.log" 2>&1
 previous_rollback_rc=$?
 capture_installed_phase PREVIOUS_ROLLBACK "$previous_rollback_rc" "$work/previous-rollback.log"
@@ -1564,7 +1798,8 @@ capture_installed_phase PREVIOUS_ROLLBACK "$previous_rollback_rc" "$work/previou
 # Any other previous package remains subject to the normal strict phase checks.
 verify_sealed_input "$work/$candidate_package_name" "$candidate_expected_sha" || exit 93
 env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
-    timeout "$command_timeout" pkg add -f "$work/$candidate_package_name" \
+    timeout -f "$command_timeout" pkg add -f "$work/$candidate_package_name" \
+    </dev/null \
     >"$work/candidate-recovery.log" 2>&1
 candidate_recovery_rc=$?
 if [ "$candidate_recovery_rc" -ne 0 ]; then
@@ -1572,6 +1807,7 @@ if [ "$candidate_recovery_rc" -ne 0 ]; then
 fi
 env TERM=xterm timeout 5 script -q /dev/null \
     /usr/local/syswarden/bin/syswarden-tui \
+    </dev/null \
     >"$work/tui-recovery.log" 2>&1
 tui_recovery_rc=$?
 emit TUI_RECOVERY_RC "$tui_recovery_rc"
@@ -1579,13 +1815,13 @@ if [ "$tui_recovery_rc" -ne 124 ]; then
     candidate_recovery_rc=1
 fi
 service syswarden onestatus >/dev/null 2>&1 || \
-    timeout 20 service syswarden onestart \
+    timeout -f 20 service syswarden onestart \
         >"$work/core-recovery-start.log" 2>&1
 core_recovery_start_rc=$?
 service syswarden onestatus >"$work/core-recovery-status.log" 2>&1
 core_recovery_status_rc=$?
 service syswardenwebtui onestatus >/dev/null 2>&1 || \
-    timeout 20 service syswardenwebtui onestart \
+    timeout -f 20 service syswardenwebtui onestart \
         >"$work/web-recovery-start.log" 2>&1
 web_recovery_start_rc=$?
 service syswardenwebtui onestatus >"$work/web-recovery-status.log" 2>&1
@@ -1618,23 +1854,41 @@ chown 0:0 "$work/syswarden-cli-pf-probe"
 chmod 0700 "$work/syswarden-cli-pf-probe"
 
 # Seed exact package-generated references so removal must clean them while
-# preserving an unrelated crontab entry.
-existing_cron="$(crontab -l 2>/dev/null || true)"
+# preserving unrelated byte-exact operator entries.
+removal_cron_before="$work/removal-cron-before"
+removal_cron_expected="$work/removal-cron-expected"
+removal_cron_readback="$work/removal-cron-readback"
+removal_cron_error="$work/removal-cron-error"
+removal_cron_stdout="$work/removal-cron-stdout"
+if ! read_root_crontab_state "$removal_cron_before" "$removal_cron_error"; then
+    exit 101
+fi
 {
-    [ -z "$existing_cron" ] || printf '%s\n' "$existing_cron"
+    cat "$removal_cron_before" || exit 101
     printf '%s\n' '17 3 * * * /usr/bin/true # syswarden-freebsd-lab-preserve'
 	printf '%s\n' '19 4 * * * /usr/local/syswarden/bin/syswarden-cli update-feeds --operator-option >/dev/null 2>&1 # syswarden-freebsd-lab-operator-preserve'
     printf '%s\n' '23 * * * * /usr/local/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
 	printf '%s\n' '*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1'
 	printf '%s\n' '29 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
-} | crontab -
+} >"$removal_cron_expected" || exit 101
+if ! LC_ALL=C crontab - <"$removal_cron_expected" \
+    >"$removal_cron_stdout" 2>"$removal_cron_error"; then
+    exit 101
+fi
+if [ -s "$removal_cron_stdout" ] || [ -s "$removal_cron_error" ] || \
+   ! read_root_crontab_state "$removal_cron_readback" "$removal_cron_error" || \
+   [ "$root_crontab_present" -ne 1 ] || \
+   ! cmp -s "$removal_cron_expected" "$removal_cron_readback"; then
+    exit 101
+fi
 mkdir -p /usr/local/etc/rsyslog.d
 printf '%s\n' 'syswarden-freebsd-lab-generated' \
     >/usr/local/etc/rsyslog.d/99-syswarden-siem.conf
 printf '%s\n' 'syswarden-freebsd-lab-generated' \
     >/usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf
 
-env ASSUME_ALWAYS_YES=yes timeout 120 pkg delete -fy syswarden \
+env ASSUME_ALWAYS_YES=yes timeout -f 120 pkg delete -fy syswarden \
+    </dev/null \
     >"$work/pkg-delete.log" 2>&1
 emit REMOVE_RC "$?"
 remove_package_absent=0
@@ -1671,9 +1925,15 @@ if ! sysrc -n syswardenwebtui_enable >/dev/null 2>&1; then
     remove_web_flag_absent=1
 fi
 emit REMOVE_WEB_FLAG_ABSENT "$remove_web_flag_absent"
-remove_cron="$(crontab -l 2>/dev/null || true)"
+remove_cron_read_ok=1
+if ! read_root_crontab_state "$work/remove-cron-readback" \
+    "$work/remove-cron-error"; then
+    remove_cron_read_ok=0
+fi
+remove_cron="$(cat "$work/remove-cron-readback" 2>/dev/null || true)"
 emit REMOVE_CRON_REFERENCE_ABSENT "$(
-	if printf '%s\n' "$remove_cron" | awk '
+	if [ "$remove_cron_read_ok" -eq 1 ] && [ "$root_crontab_present" -eq 1 ] && \
+	   printf '%s\n' "$remove_cron" | awk '
 	    NF == 9 && ($6 == "/usr/local/syswarden/bin/syswarden-cli" ||
 	        $6 == "/opt/syswarden/bin/syswarden-cli") &&
 	        (($1 == "*/30" && $7 == "ha-sync") ||
@@ -1688,8 +1948,11 @@ emit REMOVE_CRON_REFERENCE_ABSENT "$(
     fi
 )"
 emit REMOVE_CRON_UNRELATED_PRESERVED "$(
-	if printf '%s\n' "$remove_cron" | grep -F -q '# syswarden-freebsd-lab-preserve' &&
-	   printf '%s\n' "$remove_cron" | grep -F -q '# syswarden-freebsd-lab-operator-preserve'; then
+	if [ "$remove_cron_read_ok" -eq 1 ] && [ "$root_crontab_present" -eq 1 ] && \
+	   printf '%s\n' "$remove_cron" | grep -F -x -q \
+	       '17 3 * * * /usr/bin/true # syswarden-freebsd-lab-preserve' && \
+	   printf '%s\n' "$remove_cron" | grep -F -x -q \
+	       '19 4 * * * /usr/local/syswarden/bin/syswarden-cli update-feeds --operator-option >/dev/null 2>&1 # syswarden-freebsd-lab-operator-preserve'; then
         printf 1
     else
         printf 0
@@ -1779,6 +2042,179 @@ emit REMOVE_PF_SNAPSHOT_SHA256 "$remove_pf_snapshot_sha"
 emit REMOVE_PF_BASELINE_RESTORED "$remove_pf_restored"
 emit REMOVE_PF_SYSWARDEN_TABLE_ABSENT "$remove_syswarden_tables_absent"
 
+# Exercise the exact candidate package from a genuinely absent PF kernel
+# baseline. The schema-v2 snapshot must record that boundary before the first
+# policy mutation, and native removal must return to the same absent state.
+/sbin/kldunload -n pf >"$work/pf-absent-pre-unload.log" 2>&1
+pf_absent_pre_unload_rc=$?
+pf_absent_pre_module_absent="$(boolean pf_kernel_module_absent)"
+pf_absent_pre_device_absent="$(
+    boolean sh -c '[ ! -e /dev/pf ] && [ ! -L /dev/pf ]'
+)"
+if [ "$pf_absent_pre_unload_rc" -ne 0 ]; then
+    pf_absent_pre_module_absent=0
+    pf_absent_pre_device_absent=0
+fi
+emit PF_ABSENT_PRE_MODULE_ABSENT "$pf_absent_pre_module_absent"
+emit PF_ABSENT_PRE_DEVICE_ABSENT "$pf_absent_pre_device_absent"
+if [ "$pf_absent_pre_unload_rc" -ne 0 ] || \
+   [ "$pf_absent_pre_module_absent" -ne 1 ] || \
+   [ "$pf_absent_pre_device_absent" -ne 1 ]; then
+    exit 94
+fi
+
+verify_sealed_input "$work/$candidate_package_name" "$candidate_expected_sha" || exit 93
+env ASSUME_ALWAYS_YES=yes SYSWARDEN_PKG_INSTALL=1 \
+    timeout -f "$command_timeout" pkg add -f "$work/$candidate_package_name" \
+    </dev/null \
+    >"$work/pf-absent-install.log" 2>&1
+pf_absent_install_rc=$?
+emit PF_ABSENT_INSTALL_RC "$pf_absent_install_rc"
+emit PF_ABSENT_INSTALL_POSTINSTALL_MARKER_STATE \
+    "$(signature_state /usr/local/syswarden/.postinstall-ok)"
+pf_absent_install_diagnostics_clean=1
+if grep -Eiq \
+    'panic:|\[ERROR\]|post-install script failed|exec format error|permission denied' \
+    "$work/pf-absent-install.log" 2>/dev/null; then
+    pf_absent_install_diagnostics_clean=0
+fi
+emit PF_ABSENT_INSTALL_DIAGNOSTICS_CLEAN \
+    "$pf_absent_install_diagnostics_clean"
+
+pf_absent_snapshot=/var/db/syswarden/pf-policy-snapshot.json
+pf_absent_snapshot_safe=0
+if [ -f "$pf_absent_snapshot" ] && [ ! -L "$pf_absent_snapshot" ] && \
+   [ "$(stat -f '%u:%g:%Lp' "$pf_absent_snapshot" 2>/dev/null)" = \
+     "0:0:600" ]; then
+    pf_absent_snapshot_safe=1
+fi
+emit PF_ABSENT_SNAPSHOT_SAFE "$pf_absent_snapshot_safe"
+pf_absent_schema=
+pf_absent_provenance=
+pf_absent_initial_kernel_state=
+pf_absent_mutation_started=
+if [ "$pf_absent_snapshot_safe" -eq 1 ]; then
+    pf_absent_schema="$(jq -er '.schema_version' "$pf_absent_snapshot" 2>/dev/null)"
+    pf_absent_provenance="$(jq -er '.provenance' "$pf_absent_snapshot" 2>/dev/null)"
+    pf_absent_initial_kernel_state="$(
+        jq -er '.initial_kernel_state' "$pf_absent_snapshot" 2>/dev/null
+    )"
+    pf_absent_mutation_started="$(
+        jq -er '.mutation_started' "$pf_absent_snapshot" 2>/dev/null
+    )"
+fi
+emit PF_ABSENT_SNAPSHOT_SCHEMA_VERSION "$pf_absent_schema"
+emit PF_ABSENT_SNAPSHOT_PROVENANCE "$pf_absent_provenance"
+emit PF_ABSENT_SNAPSHOT_INITIAL_KERNEL_STATE \
+    "$pf_absent_initial_kernel_state"
+emit PF_ABSENT_SNAPSHOT_MUTATION_STARTED "$pf_absent_mutation_started"
+
+emit PF_ABSENT_POLICY_MODULE_PRESENT "$(boolean pf_module_present)"
+emit PF_ABSENT_POLICY_DEVICE_READY "$(boolean pf_device_ready)"
+pfctl -s info >"$work/pf-absent-policy-info" 2>&1
+pf_absent_policy_info_rc=$?
+pf_absent_policy_status="$(
+    awk '/^Status:/{print $2; exit}' "$work/pf-absent-policy-info"
+)"
+pfctl -sr >"$work/pf-absent-policy-filter" 2>&1
+pf_absent_policy_filter_rc=$?
+pf_absent_policy_rule_count="$(
+    awk 'NF { count++ } END { print count + 0 }' \
+        "$work/pf-absent-policy-filter"
+)"
+if [ "$pf_absent_policy_info_rc" -ne 0 ]; then
+    pf_absent_policy_status=
+fi
+if [ "$pf_absent_policy_filter_rc" -ne 0 ]; then
+    pf_absent_policy_rule_count=0
+fi
+emit PF_ABSENT_POLICY_STATUS "$pf_absent_policy_status"
+emit PF_ABSENT_POLICY_RULE_COUNT "$pf_absent_policy_rule_count"
+
+env ASSUME_ALWAYS_YES=yes timeout -f 120 pkg delete -fy syswarden \
+    </dev/null \
+    >"$work/pf-absent-delete.log" 2>&1
+pf_absent_delete_rc=$?
+emit PF_ABSENT_DELETE_RC "$pf_absent_delete_rc"
+pf_absent_delete_diagnostics_clean=1
+if grep -Eiq \
+    'panic:|\[ERROR\]|pre-deinstall script failed|post-deinstall script failed|permission denied' \
+    "$work/pf-absent-delete.log" 2>/dev/null; then
+    pf_absent_delete_diagnostics_clean=0
+fi
+emit PF_ABSENT_DELETE_DIAGNOSTICS_CLEAN \
+    "$pf_absent_delete_diagnostics_clean"
+pf_absent_delete_package_absent=0
+if ! pkg info -e syswarden >/dev/null 2>&1; then
+    pf_absent_delete_package_absent=1
+fi
+emit PF_ABSENT_DELETE_PACKAGE_ABSENT \
+    "$pf_absent_delete_package_absent"
+emit PF_ABSENT_DELETE_SNAPSHOT_ABSENT "$((
+    $(boolean test ! -e "$pf_absent_snapshot") *
+    $(boolean test ! -L "$pf_absent_snapshot")
+))"
+pf_absent_configured_status=
+if pf_absent_configured_value="$(sysrc -n pf_enable 2>/dev/null)"; then
+    case "$(printf '%s' "$pf_absent_configured_value" | tr '[:lower:]' '[:upper:]')" in
+        NO|FALSE|OFF|0) pf_absent_configured_status=Disabled ;;
+        YES|TRUE|ON|1) pf_absent_configured_status=Enabled ;;
+    esac
+fi
+emit PF_ABSENT_DELETE_CONFIGURED_STATUS "$pf_absent_configured_status"
+emit PF_ABSENT_DELETE_MODULE_ABSENT "$(boolean pf_kernel_module_absent)"
+emit PF_ABSENT_DELETE_DEVICE_ABSENT "$(
+    boolean sh -c '[ ! -e /dev/pf ] && [ ! -L /dev/pf ]'
+)"
+
+/sbin/kldload -n -q pf >"$work/pf-absent-delete-probe-load.log" 2>&1
+pf_absent_delete_probe_load_rc=$?
+emit PF_ABSENT_DELETE_PROBE_LOAD_RC "$pf_absent_delete_probe_load_rc"
+for pf_absent_probe_view in filter nat tables anchors states; do
+    : >"$work/pf-absent-delete-probe-${pf_absent_probe_view}"
+done
+pfctl -s info >"$work/pf-absent-delete-probe-info" 2>&1
+pf_absent_probe_info_rc=$?
+pfctl -sr >"$work/pf-absent-delete-probe-filter" 2>&1
+pf_absent_probe_filter_rc=$?
+pfctl -sn >"$work/pf-absent-delete-probe-nat" 2>&1
+pf_absent_probe_nat_rc=$?
+pfctl -s Tables >"$work/pf-absent-delete-probe-tables" 2>&1
+pf_absent_probe_tables_rc=$?
+pfctl -s Anchors >"$work/pf-absent-delete-probe-anchors" 2>&1
+pf_absent_probe_anchors_rc=$?
+pfctl -ss >"$work/pf-absent-delete-probe-states" 2>&1
+pf_absent_probe_states_rc=$?
+pf_absent_probe_status="$(
+    awk '/^Status:/{print $2; exit}' "$work/pf-absent-delete-probe-info"
+)"
+emit PF_ABSENT_DELETE_PROBE_STATUS "$pf_absent_probe_status"
+pf_absent_probe_empty=0
+if [ "$pf_absent_delete_probe_load_rc" -eq 0 ] && \
+   [ "$pf_absent_probe_info_rc" -eq 0 ] && \
+   [ "$pf_absent_probe_filter_rc" -eq 0 ] && \
+   [ "$pf_absent_probe_nat_rc" -eq 0 ] && \
+   [ "$pf_absent_probe_tables_rc" -eq 0 ] && \
+   [ "$pf_absent_probe_anchors_rc" -eq 0 ] && \
+   [ "$pf_absent_probe_states_rc" -eq 0 ] && \
+   [ "$pf_absent_probe_status" = "Disabled" ] && \
+   [ ! -s "$work/pf-absent-delete-probe-filter" ] && \
+   [ ! -s "$work/pf-absent-delete-probe-nat" ] && \
+   [ ! -s "$work/pf-absent-delete-probe-tables" ] && \
+   [ ! -s "$work/pf-absent-delete-probe-anchors" ] && \
+   [ ! -s "$work/pf-absent-delete-probe-states" ]; then
+    pf_absent_probe_empty=1
+fi
+emit PF_ABSENT_DELETE_PROBE_POLICY_EMPTY "$pf_absent_probe_empty"
+/sbin/kldunload -n pf >"$work/pf-absent-delete-probe-unload.log" 2>&1
+pf_absent_delete_probe_unload_rc=$?
+emit PF_ABSENT_DELETE_PROBE_UNLOAD_RC "$pf_absent_delete_probe_unload_rc"
+emit PF_ABSENT_DELETE_FINAL_MODULE_ABSENT \
+    "$(boolean pf_kernel_module_absent)"
+emit PF_ABSENT_DELETE_FINAL_DEVICE_ABSENT "$(
+    boolean sh -c '[ ! -e /dev/pf ] && [ ! -L /dev/pf ]'
+)"
+
 # Exercise the fresh candidate PF boundary with the exact candidate CLI after
 # the historical package snapshot has been consumed. Fresh capture is allowed
 # only on the disabled empty baseline; a nonempty anchor must be rejected
@@ -1788,7 +2224,7 @@ emit REMOVE_PF_SYSWARDEN_TABLE_ABSENT "$remove_syswarden_tables_absent"
 fresh_capture_rc=$?
 emit PF_FRESH_CAPTURE_RC "$fresh_capture_rc"
 fresh_provenance="$({
-    jq -er 'select(.schema_version == 1 and .provenance == "exact_live") | .provenance' \
+    jq -er 'select(.schema_version == 2 and .provenance == "exact_live") | .provenance' \
         /var/db/syswarden/pf-policy-snapshot.json
 } 2>/dev/null || true)"
 emit PF_FRESH_PROVENANCE "$fresh_provenance"
@@ -1797,37 +2233,128 @@ emit PF_FRESH_PROVENANCE "$fresh_provenance"
 fresh_restore_rc=$?
 emit PF_FRESH_RESTORE_RC "$fresh_restore_rc"
 
+# The nonempty rejection fixture requires a live PF control plane. Recreate
+# only the known Disabled and empty baseline, and prove it before seeding.
+/sbin/kldload -n -q pf >"$work/pf-nonempty-kldload.log" 2>&1
+pf_nonempty_kldload_rc=$?
+pfctl -s info >"$work/pf-nonempty-baseline-info" 2>&1
+pf_nonempty_info_rc=$?
+pfctl -sr >"$work/pf-nonempty-baseline-filter" 2>&1
+pf_nonempty_filter_rc=$?
+pfctl -sn >"$work/pf-nonempty-baseline-nat" 2>&1
+pf_nonempty_nat_rc=$?
+pfctl -s Tables >"$work/pf-nonempty-baseline-tables" 2>&1
+pf_nonempty_tables_rc=$?
+pfctl -s Anchors >"$work/pf-nonempty-baseline-anchors" 2>&1
+pf_nonempty_anchors_rc=$?
+pfctl -ss >"$work/pf-nonempty-baseline-states" 2>&1
+pf_nonempty_states_rc=$?
+pf_nonempty_status="$(
+    awk '/^Status:/{print $2; exit}' "$work/pf-nonempty-baseline-info"
+)"
+if [ "$pf_nonempty_kldload_rc" -ne 0 ] || \
+   [ "$pf_nonempty_info_rc" -ne 0 ] || \
+   [ "$pf_nonempty_filter_rc" -ne 0 ] || \
+   [ "$pf_nonempty_nat_rc" -ne 0 ] || \
+   [ "$pf_nonempty_tables_rc" -ne 0 ] || \
+   [ "$pf_nonempty_anchors_rc" -ne 0 ] || \
+   [ "$pf_nonempty_states_rc" -ne 0 ] || \
+   [ "$pf_nonempty_status" != "Disabled" ] || \
+   [ -s "$work/pf-nonempty-baseline-filter" ] || \
+   [ -s "$work/pf-nonempty-baseline-nat" ] || \
+   [ -s "$work/pf-nonempty-baseline-tables" ] || \
+   [ -s "$work/pf-nonempty-baseline-anchors" ] || \
+   [ -s "$work/pf-nonempty-baseline-states" ]; then
+    exit 94
+fi
+
 printf 'pass quick on lo0\n' >"$work/pf-fresh-reject.conf"
 pfctl -a "$anchor" -f "$work/pf-fresh-reject.conf" \
     >"$work/pf-fresh-reject-apply.log" 2>&1
+fresh_seed_apply_rc=$?
+emit PF_NONEMPTY_SEED_APPLY_RC "$fresh_seed_apply_rc"
 pfctl -a "$anchor" -sr >"$work/pf-fresh-reject-before" 2>&1
-pfctl -sr >"$work/pf-fresh-main-before" 2>&1
-pfctl -sn >>"$work/pf-fresh-main-before" 2>&1
-pfctl -s Tables >>"$work/pf-fresh-main-before" 2>&1
-pfctl -s info >>"$work/pf-fresh-main-before" 2>&1
+fresh_anchor_before_rc=$?
+pfctl -sr >"$work/pf-fresh-filter-before" 2>&1
+fresh_filter_before_rc=$?
+pfctl -sn >"$work/pf-fresh-nat-before" 2>&1
+fresh_nat_before_rc=$?
+pfctl -s Tables >"$work/pf-fresh-tables-before" 2>&1
+fresh_tables_before_rc=$?
+pfctl -s info >"$work/pf-fresh-info-before" 2>&1
+fresh_info_before_rc=$?
+fresh_status_before="$(awk '/^Status:/{print $2; exit}' "$work/pf-fresh-info-before")"
 "$work/syswarden-cli-pf-probe" package-capture-pf \
     >"$work/pf-fresh-reject.log" 2>&1
 fresh_reject_rc=$?
 pfctl -a "$anchor" -sr >"$work/pf-fresh-reject-after" 2>&1
-pfctl -sr >"$work/pf-fresh-main-after" 2>&1
-pfctl -sn >>"$work/pf-fresh-main-after" 2>&1
-pfctl -s Tables >>"$work/pf-fresh-main-after" 2>&1
-pfctl -s info >>"$work/pf-fresh-main-after" 2>&1
+fresh_anchor_after_rc=$?
+pfctl -sr >"$work/pf-fresh-filter-after" 2>&1
+fresh_filter_after_rc=$?
+pfctl -sn >"$work/pf-fresh-nat-after" 2>&1
+fresh_nat_after_rc=$?
+pfctl -s Tables >"$work/pf-fresh-tables-after" 2>&1
+fresh_tables_after_rc=$?
+pfctl -s info >"$work/pf-fresh-info-after" 2>&1
+fresh_info_after_rc=$?
+fresh_status_after="$(awk '/^Status:/{print $2; exit}' "$work/pf-fresh-info-after")"
 fresh_rejected=0
 if [ "$fresh_reject_rc" -ne 0 ] && \
    [ ! -e /var/db/syswarden/pf-policy-snapshot.json ]; then
     fresh_rejected=1
 fi
 emit PF_NONEMPTY_CAPTURE_REJECTED "$fresh_rejected"
+fresh_anchor_preserved=0
+if [ "$fresh_seed_apply_rc" -eq 0 ] && \
+   [ "$fresh_anchor_before_rc" -eq 0 ] && \
+   [ "$fresh_anchor_after_rc" -eq 0 ] && \
+   [ -s "$work/pf-fresh-reject-before" ] && \
+   cmp -s "$work/pf-fresh-reject-before" "$work/pf-fresh-reject-after"; then
+    fresh_anchor_preserved=1
+fi
+emit PF_NONEMPTY_ANCHOR_PRESERVED "$fresh_anchor_preserved"
+fresh_filter_preserved=0
+if [ "$fresh_filter_before_rc" -eq 0 ] && \
+   [ "$fresh_filter_after_rc" -eq 0 ] && \
+   cmp -s "$work/pf-fresh-filter-before" "$work/pf-fresh-filter-after"; then
+    fresh_filter_preserved=1
+fi
+emit PF_NONEMPTY_FILTER_PRESERVED "$fresh_filter_preserved"
+fresh_nat_preserved=0
+if [ "$fresh_nat_before_rc" -eq 0 ] && \
+   [ "$fresh_nat_after_rc" -eq 0 ] && \
+   cmp -s "$work/pf-fresh-nat-before" "$work/pf-fresh-nat-after"; then
+    fresh_nat_preserved=1
+fi
+emit PF_NONEMPTY_NAT_PRESERVED "$fresh_nat_preserved"
+fresh_tables_preserved=0
+if [ "$fresh_tables_before_rc" -eq 0 ] && \
+   [ "$fresh_tables_after_rc" -eq 0 ] && \
+   cmp -s "$work/pf-fresh-tables-before" "$work/pf-fresh-tables-after"; then
+    fresh_tables_preserved=1
+fi
+emit PF_NONEMPTY_TABLES_PRESERVED "$fresh_tables_preserved"
+fresh_status_preserved=0
+if [ "$fresh_info_before_rc" -eq 0 ] && \
+   [ "$fresh_info_after_rc" -eq 0 ] && \
+   [ "$fresh_status_before" = "$fresh_status_after" ]; then
+    case "$fresh_status_before" in
+        Enabled|Disabled) fresh_status_preserved=1 ;;
+    esac
+fi
+emit PF_NONEMPTY_STATUS_PRESERVED "$fresh_status_preserved"
 fresh_state_preserved=0
-if [ -s "$work/pf-fresh-reject-before" ] && \
-   cmp -s "$work/pf-fresh-reject-before" "$work/pf-fresh-reject-after" && \
-   cmp -s "$work/pf-fresh-main-before" "$work/pf-fresh-main-after"; then
+if [ "$fresh_anchor_preserved" -eq 1 ] && \
+   [ "$fresh_filter_preserved" -eq 1 ] && \
+   [ "$fresh_nat_preserved" -eq 1 ] && \
+   [ "$fresh_tables_preserved" -eq 1 ] && \
+   [ "$fresh_status_preserved" -eq 1 ]; then
     fresh_state_preserved=1
 fi
 emit PF_NONEMPTY_STATE_PRESERVED "$fresh_state_preserved"
 pfctl -a "$anchor" -F all >/dev/null 2>&1
 
+retain_pf_module_for_evidence=1
 cleanup_vm
 cleanup_ok=1
 pkg info -e syswarden >/dev/null 2>&1 && cleanup_ok=0
@@ -1836,7 +2363,7 @@ for path in /usr/local/syswarden /opt/syswarden /usr/local/bin/syswarden \
     /usr/local/etc/rc.d/syswardenwebtui \
     /usr/local/etc/rsyslog.d/99-syswarden-siem.conf \
     /usr/local/etc/rsyslog.d/99-syswarden-waf-bridge.conf /etc/syswarden \
-    /var/lib/syswarden /var/db/syswarden \
+    /var/lib/syswarden /var/db/syswarden /var/log/syswarden \
     /var/cron/allow /var/cron/deny; do
     if [ -e "$path" ] || [ -L "$path" ]; then
         cleanup_ok=0
@@ -1874,6 +2401,18 @@ if [ "$filter_after_rc" -eq 0 ] && [ "$nat_after_rc" -eq 0 ] && \
     restored=1
 fi
 emit PF_BASELINE_RESTORED "$restored"
+retain_pf_module_for_evidence=0
+/sbin/kldunload -n pf >"$work/pf-final-guest-unload.log" 2>&1
+pf_final_guest_unload_rc=$?
+emit PF_FINAL_GUEST_KLDUNLOAD_RC "$pf_final_guest_unload_rc"
+emit PF_FINAL_GUEST_MODULE_ABSENT "$(boolean pf_kernel_module_absent)"
+emit PF_FINAL_GUEST_DEVICE_ABSENT "$(
+    boolean sh -c '[ ! -e /dev/pf ] && [ ! -L /dev/pf ]'
+)"
+if [ "$pf_final_guest_unload_rc" -ne 0 ] || \
+   ! pf_kernel_module_absent || [ -e /dev/pf ] || [ -L /dev/pf ]; then
+    exit 94
+fi
 lock_released=0
 if rmdir "$lock_path" 2>/dev/null; then
     lock_released=1
@@ -1884,7 +2423,12 @@ if [ "$lock_released" -ne 1 ]; then
     exit 96
 fi
 rm -rf "$work"
-if [ -e "$work" ]; then
+workspace_removed=0
+if [ ! -e "$work" ] && [ ! -L "$work" ]; then
+    workspace_removed=1
+fi
+emit REMOTE_WORKSPACE_REMOVED "$workspace_removed"
+if [ "$workspace_removed" -ne 1 ]; then
     exit 96
 fi
 trap - EXIT HUP INT TERM
@@ -1896,12 +2440,14 @@ def parse_markers(output: str, expected: frozenset[str]) -> dict[str, str]:
     if len(output.encode("utf-8")) > MAX_EVIDENCE_BYTES:
         raise FreeBSDVMLabError("VM evidence output exceeds the bounded limit")
     markers: dict[str, str] = {}
-    for raw_line in output.splitlines():
+    for line_number, raw_line in enumerate(output.splitlines(), start=1):
         if not raw_line:
             continue
         match = MARKER_LINE_PATTERN.fullmatch(raw_line)
         if match is None:
-            raise FreeBSDVMLabError(f"invalid VM evidence line: {raw_line[:120]!r}")
+            raise FreeBSDVMLabError(
+                f"invalid VM evidence line at position {line_number}"
+            )
         key, encoded = match.groups()
         if key in markers:
             raise FreeBSDVMLabError(f"duplicate VM evidence marker: {key}")
@@ -1918,12 +2464,63 @@ def parse_markers(output: str, expected: frozenset[str]) -> dict[str, str]:
     return markers
 
 
+def require_in_band_transport_cleanup(markers: dict[str, str]) -> None:
+    if (
+        markers.get("LAB_LOCK_RELEASED") != "1"
+        or markers.get("REMOTE_WORKSPACE_REMOVED") != "1"
+    ):
+        raise FreeBSDVMLabError(
+            "remote cleanup markers did not prove lock release and workspace removal"
+        )
+
+
 def require_transport_success(result: CommandResult, description: str) -> None:
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout)[-4000:]
         raise FreeBSDVMLabError(
-            f"{description} failed with exit code {result.returncode}: {detail}"
+            f"{description} failed with exit code {result.returncode}"
         )
+
+
+def cleanup_transport_workspace(
+    runner: CommandRunner,
+    ssh_base: tuple[str, ...],
+    remote_root: str,
+    marker_token: str,
+    *,
+    cleanup_script: str = CLEANUP_SCRIPT,
+) -> None:
+    """Prove transport cleanup without exposing untrusted SSH diagnostics."""
+
+    cleanup_args = ssh_base + (
+        "sudo",
+        "-n",
+        "/bin/sh",
+        "-s",
+        "--",
+        remote_root,
+    )
+    cleanup_input = script_stdin_with_token(cleanup_script, marker_token)
+    outcomes: list[str] = []
+    for attempt in range(1, CLEANUP_MAX_ATTEMPTS + 1):
+        try:
+            cleaned = runner.run(
+                cleanup_args,
+                timeout=60,
+                input_text=cleanup_input,
+            )
+        except Exception:
+            outcomes.append(f"attempt {attempt}=transport_error")
+        else:
+            if cleaned.returncode == 0:
+                return
+            outcomes.append(f"attempt {attempt}=exit_{cleaned.returncode}")
+        if attempt < CLEANUP_MAX_ATTEMPTS:
+            time.sleep(CLEANUP_RETRY_DELAY_SECONDS)
+
+    raise FreeBSDVMLabError(
+        "clean disposable VM transport workspace was not proven after "
+        f"{CLEANUP_MAX_ATTEMPTS} attempts ({', '.join(outcomes)})"
+    )
 
 
 def validate_probe(markers: dict[str, str]) -> None:
@@ -2337,19 +2934,185 @@ def product_checks(
                 "PF restoration provenance must match the package transition and may never overstate the immutable historical state.",
             ),
             check(
+                "SW-PKG-FBSD-PF-MODULE-ABSENT-INSTALL-001",
+                "pf",
+                evidence["PF_ABSENT_PRE_MODULE_ABSENT"] == "1"
+                and evidence["PF_ABSENT_PRE_DEVICE_ABSENT"] == "1"
+                and evidence["PF_ABSENT_INSTALL_RC"] == "0"
+                and evidence["PF_ABSENT_INSTALL_POSTINSTALL_MARKER_STATE"]
+                == EXPECTED_POSTINSTALL_MARKER_STATE
+                and evidence["PF_ABSENT_INSTALL_DIAGNOSTICS_CLEAN"] == "1"
+                and evidence["PF_ABSENT_SNAPSHOT_SAFE"] == "1"
+                and evidence["PF_ABSENT_SNAPSHOT_SCHEMA_VERSION"] == "2"
+                and evidence["PF_ABSENT_SNAPSHOT_PROVENANCE"] == "exact_live"
+                and evidence["PF_ABSENT_SNAPSHOT_INITIAL_KERNEL_STATE"]
+                == "module_absent"
+                and evidence["PF_ABSENT_SNAPSHOT_MUTATION_STARTED"] == "true"
+                and evidence["PF_ABSENT_POLICY_MODULE_PRESENT"] == "1"
+                and evidence["PF_ABSENT_POLICY_DEVICE_READY"] == "1"
+                and evidence["PF_ABSENT_POLICY_STATUS"] == "Enabled"
+                and evidence["PF_ABSENT_POLICY_RULE_COUNT"].isdigit()
+                and int(evidence["PF_ABSENT_POLICY_RULE_COUNT"]) > 0,
+                {
+                    "pre_module_absent": "1",
+                    "pre_device_absent": "1",
+                    "install_return_code": "0",
+                    "postinstall_marker_state": EXPECTED_POSTINSTALL_MARKER_STATE,
+                    "diagnostics_clean": "1",
+                    "snapshot_safe": "1",
+                    "schema_version": "2",
+                    "provenance": "exact_live",
+                    "initial_kernel_state": "module_absent",
+                    "mutation_started": "true",
+                    "policy_module_present": "1",
+                    "policy_device_ready": "1",
+                    "policy_status": "Enabled",
+                    "policy_rule_count": ">0",
+                },
+                {
+                    "pre_module_absent": evidence["PF_ABSENT_PRE_MODULE_ABSENT"],
+                    "pre_device_absent": evidence["PF_ABSENT_PRE_DEVICE_ABSENT"],
+                    "install_return_code": evidence["PF_ABSENT_INSTALL_RC"],
+                    "postinstall_marker_state": evidence[
+                        "PF_ABSENT_INSTALL_POSTINSTALL_MARKER_STATE"
+                    ],
+                    "diagnostics_clean": evidence[
+                        "PF_ABSENT_INSTALL_DIAGNOSTICS_CLEAN"
+                    ],
+                    "snapshot_safe": evidence["PF_ABSENT_SNAPSHOT_SAFE"],
+                    "schema_version": evidence[
+                        "PF_ABSENT_SNAPSHOT_SCHEMA_VERSION"
+                    ],
+                    "provenance": evidence["PF_ABSENT_SNAPSHOT_PROVENANCE"],
+                    "initial_kernel_state": evidence[
+                        "PF_ABSENT_SNAPSHOT_INITIAL_KERNEL_STATE"
+                    ],
+                    "mutation_started": evidence[
+                        "PF_ABSENT_SNAPSHOT_MUTATION_STARTED"
+                    ],
+                    "policy_module_present": evidence[
+                        "PF_ABSENT_POLICY_MODULE_PRESENT"
+                    ],
+                    "policy_device_ready": evidence[
+                        "PF_ABSENT_POLICY_DEVICE_READY"
+                    ],
+                    "policy_status": evidence["PF_ABSENT_POLICY_STATUS"],
+                    "policy_rule_count": evidence[
+                        "PF_ABSENT_POLICY_RULE_COUNT"
+                    ],
+                },
+                "A real candidate pkg add from an absent PF module must publish schema v2 before mutation, load the control plane, and apply policy.",
+            ),
+            check(
+                "SW-PKG-FBSD-PF-MODULE-ABSENT-REMOVE-001",
+                "pf",
+                evidence["PF_ABSENT_DELETE_RC"] == "0"
+                and evidence["PF_ABSENT_DELETE_DIAGNOSTICS_CLEAN"] == "1"
+                and evidence["PF_ABSENT_DELETE_PACKAGE_ABSENT"] == "1"
+                and evidence["PF_ABSENT_DELETE_SNAPSHOT_ABSENT"] == "1"
+                and evidence["PF_ABSENT_DELETE_CONFIGURED_STATUS"] == "Disabled"
+                and evidence["PF_ABSENT_DELETE_MODULE_ABSENT"] == "1"
+                and evidence["PF_ABSENT_DELETE_DEVICE_ABSENT"] == "1"
+                and evidence["PF_ABSENT_DELETE_PROBE_LOAD_RC"] == "0"
+                and evidence["PF_ABSENT_DELETE_PROBE_STATUS"] == "Disabled"
+                and evidence["PF_ABSENT_DELETE_PROBE_POLICY_EMPTY"] == "1"
+                and evidence["PF_ABSENT_DELETE_PROBE_UNLOAD_RC"] == "0"
+                and evidence["PF_ABSENT_DELETE_FINAL_MODULE_ABSENT"] == "1"
+                and evidence["PF_ABSENT_DELETE_FINAL_DEVICE_ABSENT"] == "1",
+                {
+                    "delete_return_code": "0",
+                    "diagnostics_clean": "1",
+                    "package_absent": "1",
+                    "snapshot_absent": "1",
+                    "configured_status": "Disabled",
+                    "module_absent": "1",
+                    "device_absent": "1",
+                    "probe_load_return_code": "0",
+                    "probe_status": "Disabled",
+                    "probe_policy_empty": "1",
+                    "probe_unload_return_code": "0",
+                    "final_module_absent": "1",
+                    "final_device_absent": "1",
+                },
+                {
+                    "delete_return_code": evidence["PF_ABSENT_DELETE_RC"],
+                    "diagnostics_clean": evidence[
+                        "PF_ABSENT_DELETE_DIAGNOSTICS_CLEAN"
+                    ],
+                    "package_absent": evidence[
+                        "PF_ABSENT_DELETE_PACKAGE_ABSENT"
+                    ],
+                    "snapshot_absent": evidence[
+                        "PF_ABSENT_DELETE_SNAPSHOT_ABSENT"
+                    ],
+                    "configured_status": evidence[
+                        "PF_ABSENT_DELETE_CONFIGURED_STATUS"
+                    ],
+                    "module_absent": evidence[
+                        "PF_ABSENT_DELETE_MODULE_ABSENT"
+                    ],
+                    "device_absent": evidence[
+                        "PF_ABSENT_DELETE_DEVICE_ABSENT"
+                    ],
+                    "probe_load_return_code": evidence[
+                        "PF_ABSENT_DELETE_PROBE_LOAD_RC"
+                    ],
+                    "probe_status": evidence[
+                        "PF_ABSENT_DELETE_PROBE_STATUS"
+                    ],
+                    "probe_policy_empty": evidence[
+                        "PF_ABSENT_DELETE_PROBE_POLICY_EMPTY"
+                    ],
+                    "probe_unload_return_code": evidence[
+                        "PF_ABSENT_DELETE_PROBE_UNLOAD_RC"
+                    ],
+                    "final_module_absent": evidence[
+                        "PF_ABSENT_DELETE_FINAL_MODULE_ABSENT"
+                    ],
+                    "final_device_absent": evidence[
+                        "PF_ABSENT_DELETE_FINAL_DEVICE_ABSENT"
+                    ],
+                },
+                "Native pkg delete must consume the snapshot, restore Disabled and empty PF, then return the module and control device to absence.",
+            ),
+            check(
                 "SW-PKG-FBSD-PF-FRESH-BOUNDARY-001",
                 "pf",
                 evidence["PF_FRESH_CAPTURE_RC"] == "0"
                 and evidence["PF_FRESH_PROVENANCE"] == "exact_live"
                 and evidence["PF_FRESH_RESTORE_RC"] == "0"
+                and evidence["PF_NONEMPTY_SEED_APPLY_RC"] == "0"
                 and evidence["PF_NONEMPTY_CAPTURE_REJECTED"] == "1"
+                and evidence["PF_NONEMPTY_ANCHOR_PRESERVED"] == "1"
+                and evidence["PF_NONEMPTY_FILTER_PRESERVED"] == "1"
+                and evidence["PF_NONEMPTY_NAT_PRESERVED"] == "1"
+                and evidence["PF_NONEMPTY_TABLES_PRESERVED"] == "1"
+                and evidence["PF_NONEMPTY_STATUS_PRESERVED"] == "1"
                 and evidence["PF_NONEMPTY_STATE_PRESERVED"] == "1",
                 "fresh disabled empty capture/restore succeeds; nonempty PF is rejected without mutation",
                 {
                     "capture_return_code": evidence["PF_FRESH_CAPTURE_RC"],
                     "provenance": evidence["PF_FRESH_PROVENANCE"],
                     "restore_return_code": evidence["PF_FRESH_RESTORE_RC"],
+                    "nonempty_seed_apply_return_code": evidence[
+                        "PF_NONEMPTY_SEED_APPLY_RC"
+                    ],
                     "nonempty_rejected": evidence["PF_NONEMPTY_CAPTURE_REJECTED"],
+                    "nonempty_anchor_preserved": evidence[
+                        "PF_NONEMPTY_ANCHOR_PRESERVED"
+                    ],
+                    "nonempty_filter_preserved": evidence[
+                        "PF_NONEMPTY_FILTER_PRESERVED"
+                    ],
+                    "nonempty_nat_preserved": evidence[
+                        "PF_NONEMPTY_NAT_PRESERVED"
+                    ],
+                    "nonempty_tables_preserved": evidence[
+                        "PF_NONEMPTY_TABLES_PRESERVED"
+                    ],
+                    "nonempty_status_preserved": evidence[
+                        "PF_NONEMPTY_STATUS_PRESERVED"
+                    ],
                     "nonempty_state_preserved": evidence["PF_NONEMPTY_STATE_PRESERVED"],
                 },
                 "Fresh candidate PF ownership is restricted to a disabled empty host and must reject coexistence before mutation.",
@@ -2474,6 +3237,14 @@ def harness_conditions(evidence: dict[str, str]) -> dict[str, bool]:
         "FreeBSD 14.4 amd64 revalidated": evidence["OS_NAME"] == "FreeBSD" and evidence["OS_RELEASE"].startswith("14.4-RELEASE") and evidence["MACHINE"] == "amd64",
         "native tools available": all(evidence[key] == "1" for key in ("PKG_TOOL_READY", "PF_TOOL_READY", "TIMEOUT_TOOL_READY", "FILE_TOOL_READY", "SCRIPT_TOOL_READY")),
         "clean disposable snapshot": evidence["PRECLEAN"] == "1" and evidence["PF_BASELINE_READY"] == "1" and evidence["PF_BASELINE_CLEAN"] == "1" and evidence["PF_BASELINE_STATUS"] == "Disabled",
+        "PF kernel begins absent and loads strictly": evidence[
+            "PF_INITIAL_MODULE_ABSENT"
+        ]
+        == "1"
+        and evidence["PF_INITIAL_DEVICE_ABSENT"] == "1"
+        and evidence["PF_INITIAL_KLDLOAD_RC"] == "0"
+        and evidence["PF_INITIAL_MODULE_PRESENT"] == "1"
+        and evidence["PF_INITIAL_DEVICE_READY"] == "1",
         "root-sealed exact transport inventory": evidence["SEALED_INPUTS"] == "1",
         "PF snapshot provenance recorded": evidence["PF_SNAPSHOT_PROVENANCE"]
         in {"exact_live", "legacy_derived"},
@@ -2486,7 +3257,8 @@ def harness_conditions(evidence: dict[str, str]) -> dict[str, bool]:
         "verified PF fixture transfer": evidence["PF_FIXTURE_SHA_MATCH"] == "1"
         and bool(re.fullmatch(r"[0-9a-f]{64}", evidence["PF_FIXTURE_SHA256"])),
         "exclusive guest lock": evidence["LAB_LOCK_ACQUIRED"] == "1"
-        and evidence["LAB_LOCK_RELEASED"] == "1",
+        and evidence["LAB_LOCK_RELEASED"] == "1"
+        and evidence["REMOTE_WORKSPACE_REMOVED"] == "1",
         "unique validated PF anchor": ANCHOR_NAME_PATTERN.fullmatch(
             evidence["PF_ANCHOR_NAME"]
         )
@@ -2503,6 +3275,12 @@ def harness_conditions(evidence: dict[str, str]) -> dict[str, bool]:
         "lab filesystem cleanup": evidence["LAB_CLEANUP_OK"] == "1",
         "PF snapshot restored": evidence["PF_BASELINE_RESTORED"] == "1"
         and evidence["PF_FINAL_STATUS"] == "Disabled",
+        "PF kernel returned to absent guest baseline": evidence[
+            "PF_FINAL_GUEST_KLDUNLOAD_RC"
+        ]
+        == "0"
+        and evidence["PF_FINAL_GUEST_MODULE_ABSENT"] == "1"
+        and evidence["PF_FINAL_GUEST_DEVICE_ABSENT"] == "1",
     }
 
 
@@ -2564,8 +3342,8 @@ def build_report(
             "host_firewall_mutation": False,
             "pf_scope": "unique unattached anchor plus disposable-VM package behavior",
             "guest_lock": "atomic root-owned /var/run lock held through PF restoration",
-            "pf_snapshot": "empty guest ruleset and exact Disabled status captured before mutation and restored after cleanup",
-            "lifecycle": "previous install -> candidate upgrade -> candidate reinstall -> two restart cycles -> previous rollback observation -> mandatory candidate recovery -> pkg delete",
+            "pf_snapshot": "schema-v2 exact Disabled empty policy and state table captured before mutation, including module-absent baselines, and restored with the original kernel state after cleanup",
+            "lifecycle": "previous install -> candidate upgrade -> candidate reinstall -> two restart cycles -> previous rollback observation -> mandatory candidate recovery -> pkg delete -> module-absent candidate install and remove",
             "remove_purge_semantics": "FreeBSD pkg has no separate purge operation; pkg pre-deinstall failures do not block payload deletion and pkg delete -D skips scripts; use syswarden uninstall for supported fail-closed PF restoration before package removal",
             "signature_probe": "each installed phase executes the core directly against /usr/local/syswarden/signatures.json, requires exactly 78 rule definitions and a real loader report of 194 effective signatures for candidate phases, and verifies unchanged type/bytes/mode/uid/gid",
             "restart_inventory": "complete scoped path/type/mode/uid/gid/link inventory must remain identical after both restart cycles",
@@ -2578,8 +3356,26 @@ def build_report(
             "transport_inputs_sealed": evidence["SEALED_INPUTS"] == "1",
             "pf_interface": evidence["PF_INTERFACE"],
             "pf_initial_status": evidence["PF_BASELINE_STATUS"],
+            "pf_initial_kernel_state": (
+                "module_absent"
+                if evidence["PF_INITIAL_MODULE_ABSENT"] == "1"
+                and evidence["PF_INITIAL_DEVICE_ABSENT"] == "1"
+                else "invalid"
+            ),
+            "pf_initial_kernel_load_verified": (
+                evidence["PF_INITIAL_KLDLOAD_RC"] == "0"
+                and evidence["PF_INITIAL_MODULE_PRESENT"] == "1"
+                and evidence["PF_INITIAL_DEVICE_READY"] == "1"
+            ),
             "pf_snapshot_provenance": evidence["PF_SNAPSHOT_PROVENANCE"],
             "pf_final_status": evidence["PF_FINAL_STATUS"],
+            "pf_final_kernel_state": (
+                "module_absent"
+                if evidence["PF_FINAL_GUEST_KLDUNLOAD_RC"] == "0"
+                and evidence["PF_FINAL_GUEST_MODULE_ABSENT"] == "1"
+                and evidence["PF_FINAL_GUEST_DEVICE_ABSENT"] == "1"
+                else "invalid"
+            ),
             "pf_snapshot_sha256": evidence["PF_SNAPSHOT_SHA256"],
             "pf_anchor": evidence["PF_ANCHOR_NAME"],
         },
@@ -2696,6 +3492,10 @@ def run_lab(
     require_transport_success(prepared, "prepare disposable VM workspace")
 
     remote: CommandResult | None = None
+    evidence: dict[str, str] | None = None
+    in_band_cleanup_proven = False
+    primary_error: BaseException | None = None
+    primary_traceback = None
     try:
         for source, name in (
             (previous.path, previous.path.name),
@@ -2741,24 +3541,35 @@ def run_lab(
             input_text=script_stdin_with_token(REMOTE_LAB_SCRIPT, marker_token),
         )
         require_transport_success(remote, "FreeBSD package/PF laboratory")
-    finally:
-        cleaned = active_runner.run(
-            ssh_base
-            + (
-                "sudo",
-                "-n",
-                "/bin/sh",
-                "-s",
-                "--",
+        evidence = parse_markers(remote.stdout, EVIDENCE_KEYS)
+        require_in_band_transport_cleanup(evidence)
+        in_band_cleanup_proven = True
+    except BaseException as exc:
+        primary_error = exc
+        primary_traceback = exc.__traceback__
+
+    cleanup_error: FreeBSDVMLabError | None = None
+    if not in_band_cleanup_proven:
+        try:
+            cleanup_transport_workspace(
+                active_runner,
+                ssh_base,
                 remote_root,
-            ),
-            timeout=60,
-            input_text=script_stdin_with_token(CLEANUP_SCRIPT, marker_token),
-        )
-        require_transport_success(cleaned, "clean disposable VM transport workspace")
-    if remote is None:
+                marker_token,
+            )
+        except FreeBSDVMLabError as exc:
+            cleanup_error = exc
+
+    if primary_error is not None:
+        if cleanup_error is not None and isinstance(primary_error, Exception):
+            raise FreeBSDVMLabError(
+                f"{primary_error}; {cleanup_error}"
+            ) from primary_error
+        raise primary_error.with_traceback(primary_traceback)
+    if cleanup_error is not None:
+        raise cleanup_error
+    if remote is None or evidence is None:
         raise FreeBSDVMLabError("FreeBSD laboratory did not produce a result")
-    evidence = parse_markers(remote.stdout, EVIDENCE_KEYS)
     return build_report(
         evidence,
         candidate,

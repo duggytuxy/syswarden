@@ -454,7 +454,11 @@ class ReleaseGateTests(unittest.TestCase):
             workflow.index("Generate and Verify Signed Update Manifest"),
             workflow.index("Seal Exact Qualification Evidence Inventory"),
         )
-        self.assertIn("refusing to sign because ${status_file}", workflow)
+        self.assertIn(
+            "refusing to sign because qualification status is not uniformly zero",
+            workflow,
+        )
+        self.assertNotIn("refusing to sign because ${status_file}", workflow)
         self.assertIn('rm -f -- "${manifest_path}" "${signature_path}"', signer)
         self.assertIn(
             '"${update_dir}/syswarden-update-manifest-v1.json.sig"', workflow

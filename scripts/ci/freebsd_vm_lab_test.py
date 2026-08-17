@@ -66,10 +66,35 @@ def passing_evidence() -> dict[str, str]:
             "CANDIDATE_PACKAGE_SHA256": "a" * 64,
             "PF_BASELINE_STATUS": "Disabled",
             "PF_SNAPSHOT_PROVENANCE": "exact_live",
+            "PF_INITIAL_KLDLOAD_RC": "0",
+            "PF_ABSENT_INSTALL_RC": "0",
+            "PF_ABSENT_INSTALL_POSTINSTALL_MARKER_STATE": (
+                freebsd_vm_lab.EXPECTED_POSTINSTALL_MARKER_STATE
+            ),
+            "PF_ABSENT_INSTALL_DIAGNOSTICS_CLEAN": "1",
+            "PF_ABSENT_SNAPSHOT_SCHEMA_VERSION": "2",
+            "PF_ABSENT_SNAPSHOT_PROVENANCE": "exact_live",
+            "PF_ABSENT_SNAPSHOT_INITIAL_KERNEL_STATE": "module_absent",
+            "PF_ABSENT_SNAPSHOT_MUTATION_STARTED": "true",
+            "PF_ABSENT_POLICY_STATUS": "Enabled",
+            "PF_ABSENT_POLICY_RULE_COUNT": "20",
+            "PF_ABSENT_DELETE_RC": "0",
+            "PF_ABSENT_DELETE_DIAGNOSTICS_CLEAN": "1",
+            "PF_ABSENT_DELETE_CONFIGURED_STATUS": "Disabled",
+            "PF_ABSENT_DELETE_PROBE_LOAD_RC": "0",
+            "PF_ABSENT_DELETE_PROBE_STATUS": "Disabled",
+            "PF_ABSENT_DELETE_PROBE_UNLOAD_RC": "0",
+            "PF_FINAL_GUEST_KLDUNLOAD_RC": "0",
             "PF_FRESH_CAPTURE_RC": "0",
             "PF_FRESH_PROVENANCE": "exact_live",
             "PF_FRESH_RESTORE_RC": "0",
+            "PF_NONEMPTY_SEED_APPLY_RC": "0",
             "PF_NONEMPTY_CAPTURE_REJECTED": "1",
+            "PF_NONEMPTY_ANCHOR_PRESERVED": "1",
+            "PF_NONEMPTY_FILTER_PRESERVED": "1",
+            "PF_NONEMPTY_NAT_PRESERVED": "1",
+            "PF_NONEMPTY_TABLES_PRESERVED": "1",
+            "PF_NONEMPTY_STATUS_PRESERVED": "1",
             "PF_NONEMPTY_STATE_PRESERVED": "1",
             "MIGRATION_BACKUP_BASELINE": freebsd_vm_lab.EXPECTED_MIGRATION_BACKUP_STATE,
             "PF_FINAL_STATUS": "Disabled",
@@ -255,6 +280,69 @@ class FailingCopyRunner(FakeRunner):
         return result
 
 
+class SequencedCleanupRunner(FakeRunner):
+    def __init__(
+        self,
+        evidence: dict[str, str],
+        cleanup_outcomes: list[int | BaseException],
+        *,
+        remote_returncode: int = 0,
+        remote_stdout: str | None = None,
+    ) -> None:
+        super().__init__(evidence)
+        self.cleanup_outcomes = list(cleanup_outcomes)
+        self.remote_returncode = remote_returncode
+        self.remote_stdout = remote_stdout
+
+    def run(
+        self,
+        args: tuple[str, ...],
+        *,
+        timeout: int,
+        input_text: str | None = None,
+    ) -> freebsd_vm_lab.CommandResult:
+        result = super().run(args, timeout=timeout, input_text=input_text)
+        if carries_script(input_text, freebsd_vm_lab.CLEANUP_SCRIPT):
+            if not self.cleanup_outcomes:
+                raise AssertionError("unexpected cleanup attempt")
+            outcome = self.cleanup_outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return freebsd_vm_lab.CommandResult(
+                tuple(args),
+                outcome,
+                f"untrusted-cleanup-stdout-{TOKEN}",
+                f"untrusted-cleanup-stderr-{TOKEN}",
+            )
+        if carries_script(input_text, freebsd_vm_lab.REMOTE_LAB_SCRIPT):
+            stdout = result.stdout
+            if self.remote_stdout is not None:
+                stdout = self.remote_stdout
+            return freebsd_vm_lab.CommandResult(
+                tuple(args),
+                self.remote_returncode,
+                stdout,
+                f"untrusted-remote-stderr-{TOKEN}",
+            )
+        return result
+
+
+class FailingCopySequencedCleanupRunner(SequencedCleanupRunner):
+    def run(
+        self,
+        args: tuple[str, ...],
+        *,
+        timeout: int,
+        input_text: str | None = None,
+    ) -> freebsd_vm_lab.CommandResult:
+        result = super().run(args, timeout=timeout, input_text=input_text)
+        if args[0] == "scp":
+            return freebsd_vm_lab.CommandResult(
+                tuple(args), 1, f"copy stdout {TOKEN}", f"copy failed {TOKEN}"
+            )
+        return result
+
+
 class FreeBSDVMLabTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -344,7 +432,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
 
     def forward_candidate_artifact(self) -> freebsd_vm_lab.PackageArtifact:
         return freebsd_vm_lab.PackageArtifact(
-            self.root / "syswarden-4.02.14.txz", "4.02.14", self.package_sha
+            self.root / "syswarden-4.02.15.txz", "4.02.15", self.package_sha
         )
 
     def forward_previous_artifact(self) -> freebsd_vm_lab.PackageArtifact:
@@ -365,9 +453,9 @@ class FreeBSDVMLabTests(unittest.TestCase):
         self.assertEqual(candidate, self.artifact())
         self.assertEqual(previous, self.previous_artifact())
 
-    def test_candidate_v40214_requires_exact_dependency_manifest(self) -> None:
+    def test_candidate_v40215_requires_exact_dependency_manifest(self) -> None:
         self.package.unlink()
-        candidate = self.packages / "syswarden-4.02.14.txz"
+        candidate = self.packages / "syswarden-4.02.15.txz"
         candidate.write_bytes(b"candidate with dependency gate")
         digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
         (self.packages / "SHA256SUMS.txt").write_text(
@@ -575,8 +663,11 @@ class FreeBSDVMLabTests(unittest.TestCase):
             freebsd_vm_lab.parse_markers(duplicate, expected)
         with self.assertRaisesRegex(
             freebsd_vm_lab.FreeBSDVMLabError, "invalid VM evidence line"
-        ):
-            freebsd_vm_lab.parse_markers("host command output\n", frozenset())
+        ) as raised:
+            freebsd_vm_lab.parse_markers(
+                f"host command output {TOKEN}\n", frozenset()
+            )
+        self.assertNotIn(TOKEN, str(raised.exception))
 
     def test_product_report_can_pass_only_with_every_real_contract(self) -> None:
         evidence = passing_evidence()
@@ -614,16 +705,40 @@ class FreeBSDVMLabTests(unittest.TestCase):
         )
 
     def test_standalone_txz_prerequisites_are_installed_before_pkg_add(self) -> None:
-        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        refresh = (
+            'pkg update -f \\\n'
+            '    </dev/null \\\n'
+            '    >"$work/repository-update.log" 2>&1'
+        )
         prerequisite = (
             'pkg install -y \\\n'
-            "    curl jq libqrencode rsyslog wireguard-tools"
+            "    curl jq libqrencode rsyslog wireguard-tools \\\n"
+            "    </dev/null"
         )
-        self.assertIn(prerequisite, script)
-        self.assertLess(
-            script.index(prerequisite),
-            script.index('pkg add -f "$work/$previous_package_name"'),
-        )
+
+        def assert_contract(script: str) -> None:
+            self.assertEqual(script.count(refresh), 1)
+            self.assertEqual(script.count(prerequisite), 1)
+            self.assertLess(script.index(refresh), script.index(prerequisite))
+            self.assertLess(
+                script.index(prerequisite),
+                script.index('pkg add -f "$work/$previous_package_name"'),
+            )
+            self.assertIn(
+                "sed -n '1,200p' \"$work/repository-update.log\" >&2\n"
+                "    exit 99",
+                script,
+            )
+            self.assertIn(
+                "sed -n '1,200p' \"$work/dependencies-install.log\" >&2\n"
+                "    exit 97",
+                script,
+            )
+
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        assert_contract(script)
+        with self.assertRaises(AssertionError):
+            assert_contract(script.replace(refresh, ": refresh removed", 1))
         self.assertIn("DEPENDENCIES_INSTALL_RC", freebsd_vm_lab.EVIDENCE_KEYS)
         self.assertIn("DEPENDENCY_INVENTORY", freebsd_vm_lab.EVIDENCE_KEYS)
 
@@ -666,10 +781,245 @@ class FreeBSDVMLabTests(unittest.TestCase):
         ):
             self.assertIn(fragment, script)
 
+    def test_cron_access_and_removal_seed_are_validated_fail_closed(self) -> None:
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        allow_seed = "printf '%s\\n' root nobody >/var/cron/allow"
+        deny_seed = "printf '%s\\n' 'daemon' >/var/cron/deny"
+        access_metadata = (
+            'stat -f \'%u:%g:%Lp\' "$cron_access_path" 2>/dev/null)" '
+            '!= "0:0:600"'
+        )
+        round_trip = (
+            'validate_root_crontab_round_trip '
+            '"$work/cron-access-round-trip"'
+        )
+        removal_install = (
+            'if ! LC_ALL=C crontab - <"$removal_cron_expected" \\\n'
+            '    >"$removal_cron_stdout" 2>"$removal_cron_error"; then'
+        )
+        removal_readback = (
+            'cmp -s "$removal_cron_expected" "$removal_cron_readback"'
+        )
+
+        def assert_contract(candidate: str) -> None:
+            self.assertIn(allow_seed, candidate)
+            self.assertIn(deny_seed, candidate)
+            self.assertNotIn("'root,nobody'", candidate)
+            self.assertIn(access_metadata, candidate)
+            self.assertIn('if [ "$(id -un)" != root ]; then', candidate)
+            self.assertIn(
+                'cmp -s "$work/cron-allow-expected" /var/cron/allow',
+                candidate,
+            )
+            self.assertIn(
+                'cmp -s "$work/cron-deny-expected" /var/cron/deny',
+                candidate,
+            )
+            self.assertIn(round_trip, candidate)
+            self.assertIn(
+                'LC_ALL=C crontab - <"$root_crontab_probe"', candidate
+            )
+            self.assertIn(
+                'cmp -s "$root_crontab_probe" "$root_crontab_after"',
+                candidate,
+            )
+            transaction_start = candidate.index(
+                'LC_ALL=C crontab - <"$root_crontab_probe"'
+            )
+            restoration_start = candidate.index(
+                "# Once the probe command has run, restoration is mandatory",
+                transaction_start,
+            )
+            self.assertNotIn(
+                "return 1", candidate[transaction_start:restoration_start]
+            )
+            self.assertIn(
+                'cmp -s "$root_crontab_before" "$root_crontab_restored"',
+                candidate,
+            )
+            self.assertIn(
+                'if [ "$root_crontab_primary_failed" -ne 0 ] ||',
+                candidate,
+            )
+            self.assertIn(
+                '[ "$root_crontab_restore_failed" -ne 0 ]; then',
+                candidate,
+            )
+            self.assertIn(removal_install, candidate)
+            self.assertIn(removal_readback, candidate)
+            self.assertIn('exit 100', candidate)
+            self.assertIn('exit 101', candidate)
+            self.assertLess(
+                candidate.index(round_trip),
+                candidate.index('pkg add -f "$work/$candidate_package_name"'),
+            )
+            self.assertLess(
+                candidate.index(removal_install),
+                candidate.index(
+                    "pkg delete -fy syswarden", candidate.index(removal_install)
+                ),
+            )
+            self.assertIn(
+                "grep -F -x -q \\\n"
+                "\t       '17 3 * * * /usr/bin/true "
+                "# syswarden-freebsd-lab-preserve'",
+                candidate,
+            )
+            self.assertIn(
+                "grep -F -x -q \\\n"
+                "\t       '19 4 * * * /usr/local/syswarden/bin/"
+                "syswarden-cli update-feeds --operator-option >/dev/null "
+                "2>&1 # syswarden-freebsd-lab-operator-preserve'",
+                candidate,
+            )
+
+        assert_contract(script)
+        for mutation in (
+            script.replace(
+                allow_seed,
+                "printf '%s\\n' 'root,nobody' >/var/cron/allow",
+                1,
+            ),
+            script.replace(allow_seed, "printf '%s\\n' nobody >/var/cron/allow", 1),
+            script.replace(removal_install, removal_install.removeprefix("if ! "), 1),
+            script.replace(removal_readback, ': removal crontab readback ignored', 1),
+        ):
+            with self.assertRaises(AssertionError):
+                assert_contract(mutation)
+
+    def test_crontab_round_trip_restores_state_after_adversarial_failures(
+        self,
+    ) -> None:
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        helper_start = script.index("read_root_crontab_state() {")
+        helper_end = script.index("probe_signatures() {", helper_start)
+        helpers = script[helper_start:helper_end]
+        driver = helpers + r'''
+set +e
+scenario="$1"
+test_root="$2"
+state="$test_root/state"
+initial="$test_root/initial"
+incoming="$test_root/incoming"
+read_count=0
+install_count=0
+
+case "$scenario" in
+    *_present)
+        printf '%s\n' \
+            'SHELL=/bin/sh' \
+            '17 3 * * * /usr/bin/true # byte-exact-operator-state' \
+            >"$state"
+        cp "$state" "$initial"
+        ;;
+    *_absent)
+        rm -f "$state" "$initial"
+        ;;
+    *) exit 90 ;;
+esac
+
+crontab() {
+    case "$1" in
+        -l)
+            read_count=$((read_count + 1))
+            if [ "$scenario" = readback_error_present ] && \
+               [ "$read_count" -eq 2 ]; then
+                printf '%s\n' 'synthetic readback failure' >&2
+                return 2
+            fi
+            if [ "$scenario" = restore_readback_error_present ] && \
+               [ "$read_count" -eq 3 ]; then
+                printf '%s\n' 'synthetic restoration readback failure' >&2
+                return 2
+            fi
+            if [ "$scenario" = cmp_mismatch_present ] && \
+               [ "$read_count" -eq 2 ]; then
+                cat "$state"
+                printf '%s\n' '# synthetic mismatch'
+                return 0
+            fi
+            if [ -f "$state" ]; then
+                cat "$state"
+                return 0
+            fi
+            printf '%s\n' 'no crontab for root' >&2
+            return 1
+            ;;
+        -)
+            install_count=$((install_count + 1))
+            cat >"$incoming" || return 2
+            if [ "$scenario" = restore_write_failure_present ] && \
+               [ "$install_count" -eq 2 ]; then
+                printf '%s\n' 'synthetic restoration write failure' >&2
+                return 2
+            fi
+            cp "$incoming" "$state" || return 2
+            if [ "$scenario" = post_install_diagnostic_present ] && \
+               [ "$install_count" -eq 1 ]; then
+                printf '%s\n' 'synthetic post-install diagnostic' >&2
+            fi
+            return 0
+            ;;
+        -r)
+            if [ "$scenario" = restore_remove_failure_absent ]; then
+                printf '%s\n' 'synthetic restoration remove failure' >&2
+                return 2
+            fi
+            rm -f "$state"
+            return $?
+            ;;
+        *) return 2 ;;
+    esac
+}
+
+validate_root_crontab_round_trip "$test_root/round-trip"
+validation_rc=$?
+restored=0
+case "$scenario" in
+    *_present)
+        if [ -f "$state" ] && cmp -s "$initial" "$state"; then
+            restored=1
+        fi
+        ;;
+    *_absent)
+        if [ ! -e "$state" ]; then
+            restored=1
+        fi
+        ;;
+esac
+printf '%s %s\n' "$validation_rc" "$restored"
+'''
+        scenarios = {
+            "success_present": (0, 1),
+            "success_absent": (0, 1),
+            "post_install_diagnostic_present": (1, 1),
+            "readback_error_present": (1, 1),
+            "cmp_mismatch_present": (1, 1),
+            "restore_write_failure_present": (1, 0),
+            "restore_readback_error_present": (1, 1),
+            "restore_remove_failure_absent": (1, 0),
+        }
+        for scenario, expected in scenarios.items():
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as root:
+                result = subprocess.run(
+                    ("/bin/sh", "-s", "--", scenario, root),
+                    input=driver,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stdout,
+                    f"{expected[0]} {expected[1]}\n",
+                    result.stderr,
+                )
+
     def test_host_state_and_legacy_cron_cannot_leak_between_vm_runs(self) -> None:
         script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
         preclean = script[script.index("preclean=1") : script.index("emit PRECLEAN")]
         self.assertIn("/var/db/syswarden", preclean)
+        self.assertIn("/var/log/syswarden", preclean)
         self.assertIn("/var/cron/allow", preclean)
         self.assertIn("/var/cron/deny", preclean)
         self.assertIn("/var/db/syswarden/pf-policy-snapshot.json", script)
@@ -679,10 +1029,31 @@ class FreeBSDVMLabTests(unittest.TestCase):
             script.index("cleanup_vm() {") : script.index("final_cleanup() {")
         ]
         self.assertIn("rm -rf /var/db/syswarden", cleanup_function)
+        self.assertIn("/var/log/syswarden", cleanup_function)
         self.assertIn('$6 == "/opt/syswarden/bin/syswarden-cli"', cleanup_function)
         final_cleanup = script[script.rindex("cleanup_ok=1") :]
         self.assertIn("/var/db/syswarden", final_cleanup)
+        self.assertIn("/var/log/syswarden", final_cleanup)
         self.assertIn("/(usr/local|opt)/syswarden/bin/syswarden-cli", final_cleanup)
+        self.assertEqual(script.count("/var/log/syswarden"), 3)
+
+        def assert_log_residue_contract(candidate: str) -> None:
+            candidate_preclean = candidate[
+                candidate.index("preclean=1") : candidate.index("emit PRECLEAN")
+            ]
+            cleanup_start = candidate.index("cleanup_vm() {")
+            cleanup_end = candidate.index("final_cleanup() {")
+            candidate_cleanup = candidate[cleanup_start:cleanup_end]
+            candidate_final = candidate[candidate.rindex("cleanup_ok=1") :]
+            self.assertIn("/var/log/syswarden", candidate_preclean)
+            self.assertIn("/var/log/syswarden", candidate_cleanup)
+            self.assertIn("/var/log/syswarden", candidate_final)
+
+        assert_log_residue_contract(script)
+        with self.assertRaises(AssertionError):
+            assert_log_residue_contract(
+                script.replace("/var/log/syswarden", "", 1)
+            )
 
     def test_candidate_postinstall_marker_and_tui_probes_are_fail_closed(self) -> None:
         script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
@@ -775,7 +1146,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
             "CANDIDATE_REINSTALL",
             "CANDIDATE_RESTART_IDEMPOTENCE",
         ):
-            evidence[f"{phase}_PKG_VERSION"] = "4.02.14"
+            evidence[f"{phase}_PKG_VERSION"] = "4.02.15"
         for phase in ("PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"):
             evidence[f"{phase}_PKG_VERSION"] = "4.02.8"
             evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"
@@ -849,12 +1220,22 @@ class FreeBSDVMLabTests(unittest.TestCase):
         self.assertFalse(report["release_ready"])
 
     def test_fresh_pf_nonempty_mutation_or_acceptance_blocks_release(self) -> None:
-        for key in ("PF_NONEMPTY_CAPTURE_REJECTED", "PF_NONEMPTY_STATE_PRESERVED"):
+        mutations = {
+            "PF_NONEMPTY_SEED_APPLY_RC": "1",
+            "PF_NONEMPTY_CAPTURE_REJECTED": "0",
+            "PF_NONEMPTY_ANCHOR_PRESERVED": "0",
+            "PF_NONEMPTY_FILTER_PRESERVED": "0",
+            "PF_NONEMPTY_NAT_PRESERVED": "0",
+            "PF_NONEMPTY_TABLES_PRESERVED": "0",
+            "PF_NONEMPTY_STATUS_PRESERVED": "0",
+            "PF_NONEMPTY_STATE_PRESERVED": "0",
+        }
+        for key, invalid_value in mutations.items():
             with self.subTest(key=key):
                 evidence = passing_evidence()
                 evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
                 evidence["PREVIOUS_PACKAGE_SHA256"] = self.previous_package_sha
-                evidence[key] = "0"
+                evidence[key] = invalid_value
                 report = freebsd_vm_lab.build_report(
                     evidence,
                     self.artifact(),
@@ -869,6 +1250,223 @@ class FreeBSDVMLabTests(unittest.TestCase):
                     if item["id"] == "SW-PKG-FBSD-PF-FRESH-BOUNDARY-001"
                 )
                 self.assertEqual(boundary["status"], "blocker")
+                self.assertFalse(report["release_ready"])
+
+    def test_fresh_pf_preservation_uses_stable_separate_views(self) -> None:
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        self.assertIn(
+            'emit PF_NONEMPTY_SEED_APPLY_RC "$fresh_seed_apply_rc"', script
+        )
+        for component in ("ANCHOR", "FILTER", "NAT", "TABLES", "STATUS"):
+            self.assertIn(
+                f'emit PF_NONEMPTY_{component}_PRESERVED '
+                f'"$fresh_{component.lower()}_preserved"',
+                script,
+            )
+        for view in ("filter", "nat", "tables"):
+            self.assertIn(f'"$work/pf-fresh-{view}-before"', script)
+            self.assertIn(f'"$work/pf-fresh-{view}-after"', script)
+        self.assertIn(
+            "fresh_status_before=\"$(awk '/^Status:/{print $2; exit}' "
+            "\"$work/pf-fresh-info-before\")\"",
+            script,
+        )
+        self.assertIn(
+            "fresh_status_after=\"$(awk '/^Status:/{print $2; exit}' "
+            "\"$work/pf-fresh-info-after\")\"",
+            script,
+        )
+        self.assertNotIn("pf-fresh-main-before", script)
+        self.assertNotIn("pf-fresh-main-after", script)
+        self.assertNotIn(
+            'cmp -s "$work/pf-fresh-info-before" '
+            '"$work/pf-fresh-info-after"',
+            script,
+        )
+
+    def test_module_absent_pkg_lifecycle_is_ordered_and_fail_closed(self) -> None:
+        def assert_contract(candidate: str) -> None:
+            self.assertNotIn(".schema_version == 1", candidate)
+            initial_absent = candidate.index(
+                'emit PF_INITIAL_MODULE_ABSENT "$initial_pf_module_absent"'
+            )
+            initial_load = candidate.index(
+                '/sbin/kldload -n -q pf >"$work/kldload.log" 2>&1',
+                initial_absent,
+            )
+            historical_remove = candidate.index(
+                'emit REMOVE_PF_SYSWARDEN_TABLE_ABSENT', initial_load
+            )
+            absent_unload = candidate.index(
+                '/sbin/kldunload -n pf >"$work/pf-absent-pre-unload.log" 2>&1',
+                historical_remove,
+            )
+            absent_add = candidate.index(
+                'pkg add -f "$work/$candidate_package_name"', absent_unload
+            )
+            snapshot_schema = candidate.index(
+                "PF_ABSENT_SNAPSHOT_SCHEMA_VERSION", absent_add
+            )
+            self.assertIn("PF_ABSENT_SNAPSHOT_MUTATION_STARTED", candidate)
+            mutation_started = candidate.index(
+                "PF_ABSENT_SNAPSHOT_MUTATION_STARTED", snapshot_schema
+            )
+            absent_delete = candidate.index(
+                "timeout -f 120 pkg delete -fy syswarden", mutation_started
+            )
+            snapshot_absent = candidate.index(
+                "PF_ABSENT_DELETE_SNAPSHOT_ABSENT", absent_delete
+            )
+            fresh_capture = candidate.index(
+                '"$work/syswarden-cli-pf-probe" package-capture-pf',
+                snapshot_absent,
+            )
+            nonempty_load = candidate.index(
+                '/sbin/kldload -n -q pf >"$work/pf-nonempty-kldload.log" 2>&1',
+                fresh_capture,
+            )
+            nonempty_seed = candidate.index(
+                'pfctl -a "$anchor" -f "$work/pf-fresh-reject.conf"',
+                nonempty_load,
+            )
+            self.assertIn(
+                '/sbin/kldunload -n pf >"$work/pf-final-guest-unload.log" 2>&1',
+                candidate,
+            )
+            final_unload = candidate.index(
+                '/sbin/kldunload -n pf >"$work/pf-final-guest-unload.log" 2>&1',
+                nonempty_seed,
+            )
+            lock_release = candidate.index("lock_released=0", final_unload)
+            self.assertEqual(
+                [
+                    initial_absent,
+                    initial_load,
+                    historical_remove,
+                    absent_unload,
+                    absent_add,
+                    snapshot_schema,
+                    mutation_started,
+                    absent_delete,
+                    snapshot_absent,
+                    fresh_capture,
+                    nonempty_load,
+                    nonempty_seed,
+                    final_unload,
+                    lock_release,
+                ],
+                sorted(
+                    [
+                        initial_absent,
+                        initial_load,
+                        historical_remove,
+                        absent_unload,
+                        absent_add,
+                        snapshot_schema,
+                        mutation_started,
+                        absent_delete,
+                        snapshot_absent,
+                        fresh_capture,
+                        nonempty_load,
+                        nonempty_seed,
+                        final_unload,
+                        lock_release,
+                    ]
+                ),
+            )
+            self.assertIn("select(.schema_version == 2)", candidate)
+            self.assertIn(
+                'select(.schema_version == 2 and .provenance == "exact_live")',
+                candidate,
+            )
+            for view in ("filter", "nat", "tables", "anchors", "states"):
+                self.assertIn(
+                    f'"$work/pf-absent-delete-probe-{view}"', candidate
+                )
+            self.assertEqual(candidate.count("pfctl -ss"), 2)
+            self.assertNotIn(
+                '/sbin/kldload -n -q pf >"$work/kldload.log" 2>&1 || true',
+                candidate,
+            )
+            self.assertIn("PF_ABSENT_SNAPSHOT_SAFE", candidate)
+            self.assertIn("PF_FINAL_GUEST_MODULE_ABSENT", candidate)
+            self.assertIn("PF_FINAL_GUEST_DEVICE_ABSENT", candidate)
+
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        assert_contract(script)
+        for mutation in (
+            script.replace("select(.schema_version == 2)", "select(.schema_version == 1)", 1),
+            script.replace(
+                "PF_ABSENT_SNAPSHOT_MUTATION_STARTED",
+                "PF_ABSENT_SNAPSHOT_MUTATION_IGNORED",
+                1,
+            ),
+            script.replace("pfctl -ss", ": states probe removed", 1),
+            script.replace(
+                '/sbin/kldunload -n pf >"$work/pf-final-guest-unload.log" 2>&1',
+                ": final unload removed",
+                1,
+            ),
+        ):
+            with self.assertRaises(AssertionError):
+                assert_contract(mutation)
+
+    def test_module_absent_pkg_lifecycle_observations_block_release(self) -> None:
+        mutations = {
+            "PF_ABSENT_PRE_MODULE_ABSENT": "0",
+            "PF_ABSENT_PRE_DEVICE_ABSENT": "0",
+            "PF_ABSENT_INSTALL_RC": "1",
+            "PF_ABSENT_INSTALL_POSTINSTALL_MARKER_STATE": "absent",
+            "PF_ABSENT_INSTALL_DIAGNOSTICS_CLEAN": "0",
+            "PF_ABSENT_SNAPSHOT_SAFE": "0",
+            "PF_ABSENT_SNAPSHOT_SCHEMA_VERSION": "1",
+            "PF_ABSENT_SNAPSHOT_PROVENANCE": "legacy_derived",
+            "PF_ABSENT_SNAPSHOT_INITIAL_KERNEL_STATE": "available",
+            "PF_ABSENT_SNAPSHOT_MUTATION_STARTED": "false",
+            "PF_ABSENT_POLICY_MODULE_PRESENT": "0",
+            "PF_ABSENT_POLICY_DEVICE_READY": "0",
+            "PF_ABSENT_POLICY_STATUS": "Disabled",
+            "PF_ABSENT_POLICY_RULE_COUNT": "0",
+            "PF_ABSENT_DELETE_RC": "1",
+            "PF_ABSENT_DELETE_DIAGNOSTICS_CLEAN": "0",
+            "PF_ABSENT_DELETE_PACKAGE_ABSENT": "0",
+            "PF_ABSENT_DELETE_SNAPSHOT_ABSENT": "0",
+            "PF_ABSENT_DELETE_CONFIGURED_STATUS": "Enabled",
+            "PF_ABSENT_DELETE_MODULE_ABSENT": "0",
+            "PF_ABSENT_DELETE_DEVICE_ABSENT": "0",
+            "PF_ABSENT_DELETE_PROBE_LOAD_RC": "1",
+            "PF_ABSENT_DELETE_PROBE_STATUS": "Enabled",
+            "PF_ABSENT_DELETE_PROBE_POLICY_EMPTY": "0",
+            "PF_ABSENT_DELETE_PROBE_UNLOAD_RC": "1",
+            "PF_ABSENT_DELETE_FINAL_MODULE_ABSENT": "0",
+            "PF_ABSENT_DELETE_FINAL_DEVICE_ABSENT": "0",
+        }
+        for key, invalid_value in mutations.items():
+            with self.subTest(key=key):
+                evidence = passing_evidence()
+                evidence["CANDIDATE_PACKAGE_SHA256"] = self.package_sha
+                evidence["PREVIOUS_PACKAGE_SHA256"] = self.previous_package_sha
+                evidence[key] = invalid_value
+                report = freebsd_vm_lab.build_report(
+                    evidence,
+                    self.artifact(),
+                    self.previous_artifact(),
+                    freebsd_vm_lab.inspect_product_assets(self.repo),
+                    "127.0.0.1",
+                    2222,
+                )
+                expected_id = (
+                    "SW-PKG-FBSD-PF-MODULE-ABSENT-INSTALL-001"
+                    if key.startswith("PF_ABSENT_PRE_")
+                    or key.startswith("PF_ABSENT_INSTALL_")
+                    or key.startswith("PF_ABSENT_SNAPSHOT_")
+                    or key.startswith("PF_ABSENT_POLICY_")
+                    else "SW-PKG-FBSD-PF-MODULE-ABSENT-REMOVE-001"
+                )
+                check = next(
+                    item for item in report["checks"] if item["id"] == expected_id
+                )
+                self.assertEqual(check["status"], "blocker")
                 self.assertFalse(report["release_ready"])
 
     def test_rsyslog_validation_enablement_and_status_are_mandatory(self) -> None:
@@ -1150,6 +1748,9 @@ class FreeBSDVMLabTests(unittest.TestCase):
             "ruleset_not_restored": lambda evidence: evidence.update(
                 PF_BASELINE_RESTORED="0"
             ),
+            "filesystem_residue": lambda evidence: evidence.update(
+                LAB_CLEANUP_OK="0"
+            ),
             "pf_left_enabled": lambda evidence: evidence.update(
                 PF_BASELINE_RESTORED="1",
                 PF_FINAL_STATUS="Enabled",
@@ -1157,6 +1758,24 @@ class FreeBSDVMLabTests(unittest.TestCase):
             "pf_status_missing": lambda evidence: evidence.update(
                 PF_BASELINE_RESTORED="1",
                 PF_FINAL_STATUS="",
+            ),
+            "initial_module_present": lambda evidence: evidence.update(
+                PF_INITIAL_MODULE_ABSENT="0"
+            ),
+            "initial_device_present": lambda evidence: evidence.update(
+                PF_INITIAL_DEVICE_ABSENT="0"
+            ),
+            "initial_load_failed": lambda evidence: evidence.update(
+                PF_INITIAL_KLDLOAD_RC="1"
+            ),
+            "final_unload_failed": lambda evidence: evidence.update(
+                PF_FINAL_GUEST_KLDUNLOAD_RC="1"
+            ),
+            "final_module_present": lambda evidence: evidence.update(
+                PF_FINAL_GUEST_MODULE_ABSENT="0"
+            ),
+            "final_device_present": lambda evidence: evidence.update(
+                PF_FINAL_GUEST_DEVICE_ABSENT="0"
             ),
         }
         for name, mutate in mutations.items():
@@ -1339,6 +1958,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
         runner = FakeRunner(evidence)
         report = freebsd_vm_lab.run_lab(self.args(), runner=runner)
         self.assertEqual(report["harness_status"], "pass")
+        self.assertEqual(report["product_status"], "fail")
         self.assertNotIn(TOKEN, json.dumps(report, sort_keys=True))
         self.assertEqual({call[0][0] for call in runner.calls}, {"ssh", "scp"})
         self.assertFalse(
@@ -1358,13 +1978,13 @@ class FreeBSDVMLabTests(unittest.TestCase):
         self.assertIn("pfctl", remote_call[1] or "")
         self.assertFalse(any(TOKEN in value for value in remote_call[0]))
         self.assertIn(f"token={TOKEN}\n", remote_call[1] or "")
-        cleanup_call = next(
-            call
-            for call in runner.calls
-            if carries_script(call[1], freebsd_vm_lab.CLEANUP_SCRIPT)
+        self.assertFalse(
+            any(
+                carries_script(input_text, freebsd_vm_lab.CLEANUP_SCRIPT)
+                for _, input_text in runner.calls
+            ),
+            "in-band cleanup proof unexpectedly opened another SSH session",
         )
-        self.assertIn("sudo", cleanup_call[0])
-        self.assertIn('[ -e "$cleanup_path" ] || [ -L "$cleanup_path" ]', cleanup_call[1] or "")
         for value in (
             self.previous_package.name,
             self.previous_package_sha,
@@ -1399,6 +2019,176 @@ class FreeBSDVMLabTests(unittest.TestCase):
             "root cleanup was not attempted after SCP failure",
         )
 
+    def test_transport_failure_diagnostics_are_redacted(self) -> None:
+        result = freebsd_vm_lab.CommandResult(
+            ("ssh",), 255, f"hostile stdout {TOKEN}", f"hostile stderr {TOKEN}"
+        )
+        with self.assertRaises(freebsd_vm_lab.FreeBSDVMLabError) as raised:
+            freebsd_vm_lab.require_transport_success(result, "transport probe")
+        message = str(raised.exception)
+        self.assertEqual(message, "transport probe failed with exit code 255")
+        self.assertNotIn(
+            TOKEN,
+            json.dumps(
+                freebsd_vm_lab.error_report(raised.exception), sort_keys=True
+            ),
+        )
+
+    def test_in_band_cleanup_proof_skips_external_cleanup(self) -> None:
+        evidence = passing_evidence()
+        evidence.update(
+            {
+                "CANDIDATE_PACKAGE_SHA256": self.package_sha,
+                "PREVIOUS_PACKAGE_SHA256": self.previous_package_sha,
+            }
+        )
+        runner = SequencedCleanupRunner(evidence, [])
+        report = freebsd_vm_lab.run_lab(self.args(), runner=runner)
+        self.assertEqual(report["harness_status"], "pass")
+        cleanup_calls = [
+            call
+            for call in runner.calls
+            if carries_script(call[1], freebsd_vm_lab.CLEANUP_SCRIPT)
+        ]
+        self.assertEqual(cleanup_calls, [])
+
+    def test_invalid_in_band_cleanup_markers_trigger_cleanup_and_fail(self) -> None:
+        for marker_mode in (
+            "missing_workspace",
+            "false_workspace",
+            "false_lock",
+        ):
+            with self.subTest(marker_mode=marker_mode):
+                evidence = passing_evidence()
+                if marker_mode == "missing_workspace":
+                    evidence.pop("REMOTE_WORKSPACE_REMOVED")
+                elif marker_mode == "false_workspace":
+                    evidence["REMOTE_WORKSPACE_REMOVED"] = "0"
+                else:
+                    evidence["LAB_LOCK_RELEASED"] = "0"
+                runner = SequencedCleanupRunner(evidence, [255, 0])
+                with mock.patch.object(freebsd_vm_lab.time, "sleep") as sleep:
+                    with self.assertRaises(
+                        freebsd_vm_lab.FreeBSDVMLabError
+                    ) as raised:
+                        freebsd_vm_lab.run_lab(self.args(), runner=runner)
+                message = str(raised.exception)
+                expected = (
+                    "markers differ"
+                    if marker_mode == "missing_workspace"
+                    else "remote cleanup markers did not prove"
+                )
+                self.assertIn(expected, message)
+                self.assertNotIn(TOKEN, message)
+                self.assertEqual(
+                    sum(
+                        carries_script(input_text, freebsd_vm_lab.CLEANUP_SCRIPT)
+                        for _, input_text in runner.calls
+                    ),
+                    2,
+                )
+                sleep.assert_called_once_with(
+                    freebsd_vm_lab.CLEANUP_RETRY_DELAY_SECONDS
+                )
+
+    def test_malformed_remote_output_triggers_cleanup_and_is_redacted(self) -> None:
+        runner = SequencedCleanupRunner(
+            passing_evidence(),
+            [0],
+            remote_stdout=f"malformed remote output {TOKEN}\n",
+        )
+        with self.assertRaisesRegex(
+            freebsd_vm_lab.FreeBSDVMLabError,
+            "invalid VM evidence line",
+        ) as raised:
+            freebsd_vm_lab.run_lab(self.args(), runner=runner)
+        self.assertNotIn(TOKEN, str(raised.exception))
+        self.assertEqual(
+            sum(
+                carries_script(input_text, freebsd_vm_lab.CLEANUP_SCRIPT)
+                for _, input_text in runner.calls
+            ),
+            1,
+        )
+
+    def test_cleanup_exhaustion_fails_closed_without_transport_output(self) -> None:
+        evidence = passing_evidence()
+        evidence["REMOTE_WORKSPACE_REMOVED"] = "0"
+        runner = SequencedCleanupRunner(evidence, [255, 255, 255])
+        with mock.patch.object(freebsd_vm_lab.time, "sleep") as sleep:
+            with self.assertRaisesRegex(
+                freebsd_vm_lab.FreeBSDVMLabError,
+                "not proven after 3 attempts",
+            ) as raised:
+                freebsd_vm_lab.run_lab(self.args(), runner=runner)
+        message = str(raised.exception)
+        self.assertNotIn(TOKEN, message)
+        self.assertNotIn("untrusted-cleanup", message)
+        self.assertNotIn(
+            TOKEN,
+            json.dumps(
+                freebsd_vm_lab.error_report(raised.exception), sort_keys=True
+            ),
+        )
+        self.assertEqual(message.count("exit_255"), 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_remote_failure_preserves_primary_error_and_retries_cleanup(self) -> None:
+        runner = SequencedCleanupRunner(
+            passing_evidence(),
+            [255, 0],
+            remote_returncode=9,
+        )
+        with mock.patch.object(freebsd_vm_lab.time, "sleep"):
+            with self.assertRaisesRegex(
+                freebsd_vm_lab.FreeBSDVMLabError,
+                "laboratory failed with exit code 9",
+            ) as raised:
+                freebsd_vm_lab.run_lab(self.args(), runner=runner)
+        self.assertNotIn(TOKEN, str(raised.exception))
+        self.assertEqual(
+            sum(
+                carries_script(input_text, freebsd_vm_lab.CLEANUP_SCRIPT)
+                for _, input_text in runner.calls
+            ),
+            2,
+        )
+
+    def test_primary_error_survives_transient_cleanup_failure(self) -> None:
+        runner = FailingCopySequencedCleanupRunner(
+            passing_evidence(), [255, 0]
+        )
+        with mock.patch.object(freebsd_vm_lab.time, "sleep"):
+            with self.assertRaisesRegex(
+                freebsd_vm_lab.FreeBSDVMLabError,
+                "copy .* failed with exit code 1",
+            ) as raised:
+                freebsd_vm_lab.run_lab(self.args(), runner=runner)
+        self.assertNotIn("cleanup", str(raised.exception))
+        self.assertEqual(
+            sum(
+                carries_script(input_text, freebsd_vm_lab.CLEANUP_SCRIPT)
+                for _, input_text in runner.calls
+            ),
+            2,
+        )
+
+    def test_primary_and_cleanup_errors_are_combined_without_cleanup_secret(self) -> None:
+        runner = FailingCopySequencedCleanupRunner(
+            passing_evidence(), [255, 255, 255]
+        )
+        with mock.patch.object(freebsd_vm_lab.time, "sleep"):
+            with self.assertRaisesRegex(
+                freebsd_vm_lab.FreeBSDVMLabError,
+                "copy .* failed.*clean .*not proven",
+            ) as raised:
+                freebsd_vm_lab.run_lab(self.args(), runner=runner)
+        message = str(raised.exception)
+        self.assertIn("failed with exit code 1", message)
+        self.assertNotIn(TOKEN, message)
+        self.assertNotIn("untrusted-cleanup", message)
+        self.assertEqual(message.count("exit_255"), 3)
+
     def test_remote_script_orders_full_lifecycle_and_real_signature_probes(self) -> None:
         script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
         syntax = subprocess.run(
@@ -1414,21 +2204,29 @@ class FreeBSDVMLabTests(unittest.TestCase):
             'transport_entries="$(find "$transport_work" -mindepth 1 -maxdepth 1 -print',
             'sealed_entries="$(find "$sealed_work" -mindepth 1 -maxdepth 1 -print',
             'cp -P "$transport_work/$input_name" "$sealed_work/$input_name"',
-            'stat -f \'%u:%g:%Lp\'',
+            'stat -f \'%u:%g:%Mp:%Lp\' /tmp',
             'emit SEALED_INPUTS 1',
             'verify_sealed_input "$work/$previous_package_name"',
             'verify_sealed_input "$work/$candidate_package_name"',
             'verify_sealed_input "$work/pf-v4.02.8.conf"',
             '[ -e "$transport_work" ] || [ -L "$transport_work" ]',
+            'emit REMOTE_WORKSPACE_REMOVED "$workspace_removed"',
         ):
             self.assertIn(required, script)
+        self.assertIn("REMOTE_WORKSPACE_REMOVED", freebsd_vm_lab.EVIDENCE_KEYS)
+        workspace_remove = script.rindex('rm -rf "$work"')
+        workspace_marker = script.rindex(
+            'emit REMOTE_WORKSPACE_REMOVED "$workspace_removed"'
+        )
+        self.assertLess(workspace_remove, workspace_marker)
+        self.assertLess(workspace_marker, script.rindex("trap - EXIT HUP INT TERM"))
         self.assertEqual(
             script.count('verify_sealed_input "$work/$previous_package_name"'),
             2,
         )
         self.assertEqual(
             script.count('verify_sealed_input "$work/$candidate_package_name"'),
-            3,
+            4,
         )
         user_state_seed = script.index(
             ">/etc/syswarden/config/lifecycle-user.conf"
@@ -1468,7 +2266,7 @@ class FreeBSDVMLabTests(unittest.TestCase):
         pf_application = script.index('pfctl -n -a "$anchor"', fixture_verification)
         self.assertLess(fixture_verification, pf_application)
         lock_acquire = script.index('mkdir "$lock_path"')
-        first_pf_mutation = script.index('kldload pf', lock_acquire)
+        first_pf_mutation = script.index('/sbin/kldload -n -q pf', lock_acquire)
         lock_release = script.index('rmdir "$lock_path"', first_pf_mutation)
         self.assertLess(lock_acquire, first_pf_mutation)
         self.assertLess(first_pf_mutation, lock_release)
@@ -1531,9 +2329,159 @@ class FreeBSDVMLabTests(unittest.TestCase):
         for suffix in freebsd_vm_lab.PHASE_EVIDENCE_SUFFIXES:
             self.assertIn(f'emit "${{phase}}_{suffix}"', script)
 
+    def test_daemonizing_lifecycle_commands_use_foreground_timeout(self) -> None:
+        service_wrappers = {
+            "timeout -f 20 service syswarden onestart": 2,
+            "timeout -f 20 service syswardenwebtui onestart": 2,
+            "timeout -f 20 service syswarden onerestart": 2,
+            "timeout -f 20 service syswardenwebtui onerestart": 2,
+        }
+        package_wrapper = 'timeout -f "$command_timeout" pkg add -f'
+
+        def assert_contract(candidate: str) -> None:
+            # Every daemonizing service operation keeps the exact 20-second
+            # bound while -f prevents FreeBSD timeout(1) from reaping the
+            # successfully detached service descendants.
+            for wrapper, expected_count in service_wrappers.items():
+                service_command = wrapper.removeprefix("timeout -f 20 ")
+                self.assertEqual(
+                    candidate.count(service_command), expected_count
+                )
+                self.assertEqual(candidate.count(wrapper), expected_count)
+            # A package hook can start the same services, so each lifecycle
+            # package operation needs the caller-provided bound and -f too.
+            self.assertEqual(candidate.count('pkg add -f "$work/$'), 6)
+            self.assertEqual(candidate.count(package_wrapper), 6)
+            self.assertNotIn(
+                'timeout "$command_timeout" pkg add -f', candidate
+            )
+            self.assertEqual(
+                candidate.count("timeout -f 120 pkg delete -fy syswarden"),
+                2,
+            )
+
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        assert_contract(script)
+        for mutation in (
+            script.replace(
+                "timeout -f 20 service syswarden onestart",
+                "timeout 20 service syswarden onestart",
+                1,
+            ),
+            script.replace(
+                "timeout -f 20 service syswarden onestart",
+                "timeout -f 120 service syswarden onestart",
+                1,
+            ),
+            script.replace(
+                package_wrapper,
+                'timeout "$command_timeout" pkg add -f',
+                1,
+            ),
+            script.replace(
+                package_wrapper,
+                'timeout -f 1800 pkg add -f',
+                1,
+            ),
+            script.replace(
+                "timeout -f 120 pkg delete -fy syswarden",
+                "timeout 120 pkg delete -fy syswarden",
+                1,
+            ),
+        ):
+            with self.assertRaises(AssertionError):
+                assert_contract(mutation)
+
+    def test_tmp_sticky_bit_uses_freebsd_high_and_low_mode_fields(self) -> None:
+        corrected = (
+            '[ "$(stat -f \'%u:%g:%Mp:%Lp\' /tmp 2>/dev/null)" '
+            '!= "0:0:1:777" ]'
+        )
+        truncated = (
+            '[ "$(stat -f \'%u:%g:%Lp\' /tmp 2>/dev/null)" '
+            '!= "0:0:1777" ]'
+        )
+
+        def assert_contract(script: str) -> None:
+            self.assertEqual(script.count(corrected), 1)
+            self.assertNotIn(truncated, script)
+
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        assert_contract(script)
+        with self.assertRaises(AssertionError):
+            assert_contract(script.replace(corrected, truncated, 1))
+
+    def test_streamed_remote_commands_use_fixed_standard_input(self) -> None:
+        def assert_contract(script: str) -> None:
+            logical_script = script.replace("\\\n", " ")
+            commands = [
+                line.strip()
+                for line in logical_script.splitlines()
+                if not line.lstrip().startswith("#")
+            ]
+            pkg_commands = [
+                line
+                for line in commands
+                if re.search(r"\bpkg (?:update|install|add|delete)\b", line)
+            ]
+            tui_commands = [
+                line for line in commands if "script -q /dev/null" in line
+            ]
+            self.assertEqual(len(pkg_commands), 11)
+            self.assertEqual(len(tui_commands), 2)
+            for command in pkg_commands + tui_commands:
+                self.assertIn("</dev/null", command)
+
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        assert_contract(script)
+        redirect_positions = [
+            match.start() for match in re.finditer(r"</dev/null", script)
+        ]
+        self.assertEqual(len(redirect_positions), 13)
+        for mutation_index, position in enumerate(redirect_positions):
+            mutated = script[:position] + script[position + len("</dev/null") :]
+            with self.subTest(mutation_index=mutation_index):
+                with self.assertRaises(AssertionError):
+                    assert_contract(mutated)
+
+    def test_signal_traps_use_canonical_status_then_exit_cleanup(self) -> None:
+        def assert_contract(script: str) -> None:
+            expected = (
+                'trap \'final_cleanup "$?"\' EXIT',
+                "trap 'exit 129' HUP",
+                "trap 'exit 130' INT",
+                "trap 'exit 143' TERM",
+            )
+            positions = []
+            for line in expected:
+                self.assertEqual(script.count(line), 1)
+                positions.append(script.index(line))
+            self.assertEqual(positions, sorted(positions))
+            self.assertNotIn(
+                'trap \'final_cleanup "$?"\' EXIT HUP INT TERM', script
+            )
+            self.assertNotIn("trap 'final_cleanup 129' HUP", script)
+            cleanup_start = script.index("final_cleanup() {")
+            cleanup_end = script.index("\n}\n", cleanup_start)
+            cleanup_body = script[cleanup_start:cleanup_end]
+            self.assertIn("trap - EXIT HUP INT TERM", cleanup_body)
+            self.assertIn('exit "$cleanup_exit_status"', cleanup_body)
+
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        assert_contract(script)
+        for expected in (
+            'trap \'final_cleanup "$?"\' EXIT',
+            "trap 'exit 129' HUP",
+            "trap 'exit 130' INT",
+            "trap 'exit 143' TERM",
+        ):
+            with self.subTest(expected=expected):
+                with self.assertRaises(AssertionError):
+                    assert_contract(script.replace(expected, ": trap removed", 1))
+
     def test_final_trap_always_cleans_vm_work_and_guest_lock(self) -> None:
         def assert_contract(script: str) -> None:
-            trap_line = 'trap \'final_cleanup "$?"\' EXIT HUP INT TERM'
+            trap_line = 'trap \'final_cleanup "$?"\' EXIT'
             self.assertEqual(script.count(trap_line), 1)
             self.assertNotIn(
                 'trap \'rmdir "$lock_path" >/dev/null 2>&1 || true; '
@@ -1548,6 +2496,9 @@ class FreeBSDVMLabTests(unittest.TestCase):
             function_end = script.index("\n}\n", function_start)
             body = script[function_start:function_end]
             self.assertIn('rmdir "$lock_path"', body)
+            self.assertIn(
+                'rmdir "$lock_path" >/dev/null 2>&1 || true', body
+            )
             cleanup = body.index("cleanup_vm")
             work = body.index('for cleanup_path in "$work"')
             self.assertIn('rm -rf "$cleanup_path"', body)

@@ -108,7 +108,7 @@ if [ "$marker" != "SYSWARDEN_LOT0_DISPOSABLE_VM=${token}" ]; then
     exit 91
 fi
 [ -d /tmp ] && [ ! -L /tmp ]
-[ "$(stat -f '%HT|%u|%g|%Lp' /tmp)" = 'Directory|0|0|1777' ]
+[ "$(stat -f '%HT|%u|%g|%Mp|%Lp' /tmp)" = 'Directory|0|0|1|777' ]
 if [ -e "$work" ] || [ -L "$work" ]; then
     exit 92
 fi
@@ -156,6 +156,20 @@ marker="$(/bin/cat /var/run/syswarden-lot0-disposable.marker 2>/dev/null)"
 if [ "$marker" != "SYSWARDEN_LOT0_DISPOSABLE_VM=${token}" ]; then
     exit 91
 fi
+work_exists=0
+lock_exists=0
+if [ -e "$work" ] || [ -L "$work" ]; then
+    work_exists=1
+fi
+if [ -e "$lock_path" ] || [ -L "$lock_path" ]; then
+    lock_exists=1
+fi
+if [ "$work_exists:$lock_exists" = "0:0" ]; then
+    exit 0
+fi
+if [ "$work_exists:$lock_exists" != "1:1" ]; then
+    exit 92
+fi
 [ -d "$lock_path" ] && [ ! -L "$lock_path" ]
 [ -f "$lock_path/owner" ] && [ ! -L "$lock_path/owner" ]
 [ "$(stat -f '%HT|%u|%g|%Lp' "$lock_path")" = 'Directory|0|0|700' ]
@@ -166,6 +180,8 @@ fi
 rm -rf "$work"
 rm -f "$lock_path/owner"
 rmdir "$lock_path"
+[ ! -e "$work" ] && [ ! -L "$work" ]
+[ ! -e "$lock_path" ] && [ ! -L "$lock_path" ]
 '''.strip()
 
 
@@ -1195,6 +1211,11 @@ def _run_probe_from_snapshot(
     vm_lab.require_transport_success(prepared, "prepare FreeBSD updater workspace")
 
     inputs = (previous.path, candidate.path, test_binary, manifest, signature)
+    remote: vm_lab.CommandResult | None = None
+    evidence: dict[str, str] | None = None
+    in_band_cleanup_proven = False
+    primary_error: BaseException | None = None
+    primary_traceback = None
     try:
         for source in inputs:
             copied = active_runner.run(
@@ -1211,48 +1232,68 @@ def _run_probe_from_snapshot(
                 timeout=180,
             )
             vm_lab.require_transport_success(copied, f"copy {source.name} into updater VM")
-    except Exception:
-        try:
-            active_runner.run(
-                ssh_base + ("sudo", "-n", "/bin/sh", "-s", "--", remote_root),
-                timeout=30,
-                input_text=vm_lab.script_stdin_with_token(REMOTE_ROOT_CLEANUP_SCRIPT, marker_token),
-            )
-        except Exception:
-            pass
-        raise
+        remote = active_runner.run(
+            ssh_base
+            + (
+                "sudo",
+                "-n",
+                "/bin/sh",
+                "-s",
+                "--",
+                remote_root,
+                previous.path.name,
+                previous.sha256,
+                previous.version,
+                candidate.path.name,
+                candidate.sha256,
+                candidate.version,
+                test_binary.name,
+                digests["test_binary"],
+                manifest.name,
+                digests["manifest"],
+                signature.name,
+                digests["signature"],
+                str(args.command_timeout),
+                TEST_NAME,
+                release_sha,
+                args.ssh_user,
+            ),
+            timeout=(args.command_timeout * 3) + 180,
+            input_text=vm_lab.script_stdin_with_token(REMOTE_PROBE_SCRIPT, marker_token),
+        )
+        vm_lab.require_transport_success(remote, "FreeBSD signed-updater transition probe")
+        evidence = vm_lab.parse_markers(remote.stdout, EVIDENCE_KEYS)
+        vm_lab.require_in_band_transport_cleanup(evidence)
+        in_band_cleanup_proven = True
+    except BaseException as exc:
+        primary_error = exc
+        primary_traceback = exc.__traceback__
 
-    remote = active_runner.run(
-        ssh_base
-        + (
-            "sudo",
-            "-n",
-            "/bin/sh",
-            "-s",
-            "--",
-            remote_root,
-            previous.path.name,
-            previous.sha256,
-            previous.version,
-            candidate.path.name,
-            candidate.sha256,
-            candidate.version,
-            test_binary.name,
-            digests["test_binary"],
-            manifest.name,
-            digests["manifest"],
-            signature.name,
-            digests["signature"],
-            str(args.command_timeout),
-            TEST_NAME,
-            release_sha,
-            args.ssh_user,
-        ),
-        timeout=(args.command_timeout * 3) + 180,
-        input_text=vm_lab.script_stdin_with_token(REMOTE_PROBE_SCRIPT, marker_token),
-    )
-    vm_lab.require_transport_success(remote, "FreeBSD signed-updater transition probe")
-    evidence = vm_lab.parse_markers(remote.stdout, EVIDENCE_KEYS)
+    cleanup_error: vm_lab.FreeBSDVMLabError | None = None
+    if not in_band_cleanup_proven:
+        try:
+            vm_lab.cleanup_transport_workspace(
+                active_runner,
+                ssh_base,
+                remote_root,
+                marker_token,
+                cleanup_script=REMOTE_ROOT_CLEANUP_SCRIPT,
+            )
+        except vm_lab.FreeBSDVMLabError as exc:
+            cleanup_error = exc
+
+    if primary_error is not None:
+        if cleanup_error is not None and isinstance(primary_error, Exception):
+            raise vm_lab.FreeBSDVMLabError(
+                f"{primary_error}; {cleanup_error}"
+            ) from primary_error
+        raise primary_error.with_traceback(primary_traceback)
+    if cleanup_error is not None:
+        raise cleanup_error
+    if remote is None or evidence is None:
+        raise FreeBSDUpdaterProbeError(
+            "FreeBSD signed-updater transition did not produce a result"
+        )
     return build_report(
         evidence,
         candidate,
