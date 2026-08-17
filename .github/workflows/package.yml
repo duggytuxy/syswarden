@@ -484,7 +484,7 @@ jobs:
           syswarden_managed_cron_line() {
               syswarden_cron_candidate="$1"
               shift
-              syswarden_cron_minute="${syswarden_cron_candidate%% *}"
+              syswarden_cron_minute="$(printf '%s\n' "${syswarden_cron_candidate}" | awk 'NR == 1 { print $1; exit }')"
               for syswarden_cron_cli do
                   if [ "${syswarden_cron_candidate}" = "*/30 * * * * ${syswarden_cron_cli} ha-sync >/dev/null 2>&1" ]; then
                       return 0
@@ -665,7 +665,7 @@ jobs:
           syswarden_managed_cron_line() {
               syswarden_cron_candidate="$1"
               shift
-              syswarden_cron_minute="${syswarden_cron_candidate%% *}"
+              syswarden_cron_minute="$(printf '%s\n' "${syswarden_cron_candidate}" | awk 'NR == 1 { print $1; exit }')"
               for syswarden_cron_cli do
                   if [ "${syswarden_cron_candidate}" = "*/30 * * * * ${syswarden_cron_cli} ha-sync >/dev/null 2>&1" ]; then
                       return 0
@@ -953,6 +953,7 @@ jobs:
             postremove: "${PACKAGE_SCRIPTS}/postrm.sh"
           apk:
             scripts:
+              preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"
               postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"
           EOF
 
@@ -988,6 +989,7 @@ jobs:
             postremove: "${PACKAGE_SCRIPTS}/postrm.sh"
           apk:
             scripts:
+              preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"
               postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"
           EOF
 
@@ -1155,7 +1157,7 @@ jobs:
           syswarden_managed_cron_line() {
               syswarden_cron_candidate="$1"
               shift
-              syswarden_cron_minute="${syswarden_cron_candidate%% *}"
+              syswarden_cron_minute="$(printf '%s\n' "${syswarden_cron_candidate}" | awk 'NR == 1 { print $1; exit }')"
               for syswarden_cron_cli do
                   if [ "${syswarden_cron_candidate}" = "*/30 * * * * ${syswarden_cron_cli} ha-sync >/dev/null 2>&1" ]; then
                       return 0
@@ -1376,8 +1378,16 @@ jobs:
           validate_rpm() {
             local path="$1"
             local architecture="$2"
+            local scriptlets
+            local expected_cron_extraction
             [[ "$(rpm --query --package --queryformat '%{VERSION}' "${path}")" == "${VERSION}" ]]
             [[ "$(rpm --query --package --queryformat '%{ARCH}' "${path}")" == "${architecture}" ]]
+            scriptlets="$(rpm --query --package --scripts "${path}")"
+            expected_cron_extraction="syswarden_cron_minute=\"\$(printf '%s\\n' \"\${syswarden_cron_candidate}\" | awk 'NR == 1 { print \$1; exit }')\""
+            [[ "$(grep --fixed-strings --count "${expected_cron_extraction}" <<< "${scriptlets}")" -eq 2 ]]
+            if grep --fixed-strings --quiet '${syswarden_cron_candidate%' <<< "${scriptlets}"; then
+              return 1
+            fi
           }
 
           validate_apk() {
@@ -1387,6 +1397,8 @@ jobs:
             local metadata
             local package_version
             local package_architecture
+            local -a preinstall_members=()
+            local -a preupgrade_members=()
             local -a postinstall_members=()
             local -a postupgrade_members=()
             member="$(tar --list --file "${path}" | awk '/(^|\/)\.PKGINFO$/ { print }')"
@@ -1395,14 +1407,25 @@ jobs:
             [[ "$(grep --count '^pkgver = ' <<< "${metadata}")" -eq 1 ]]
             [[ "$(grep --count '^arch = ' <<< "${metadata}")" -eq 1 ]]
             [[ "$(grep --count '^depend = openrc$' <<< "${metadata}")" -eq 1 ]]
+            mapfile -t preinstall_members < <(
+              tar --list --file "${path}" | awk '/(^|\/)\.pre-install$/ { print }'
+            )
+            mapfile -t preupgrade_members < <(
+              tar --list --file "${path}" | awk '/(^|\/)\.pre-upgrade$/ { print }'
+            )
             mapfile -t postinstall_members < <(
               tar --list --file "${path}" | awk '/(^|\/)\.post-install$/ { print }'
             )
             mapfile -t postupgrade_members < <(
               tar --list --file "${path}" | awk '/(^|\/)\.post-upgrade$/ { print }'
             )
+            [[ "${#preinstall_members[@]}" -eq 1 ]]
+            [[ "${#preupgrade_members[@]}" -eq 1 ]]
             [[ "${#postinstall_members[@]}" -eq 1 ]]
             [[ "${#postupgrade_members[@]}" -eq 1 ]]
+            cmp -s \
+              <(tar --extract --to-stdout --file "${path}" "${preinstall_members[0]}") \
+              <(tar --extract --to-stdout --file "${path}" "${preupgrade_members[0]}")
             cmp -s \
               <(tar --extract --to-stdout --file "${path}" "${postinstall_members[0]}") \
               <(tar --extract --to-stdout --file "${path}" "${postupgrade_members[0]}")
@@ -1423,12 +1446,33 @@ jobs:
             [[ "${package_architecture}" == "${architecture}" ]]
           }
 
+          compare_apk_hook_parity() {
+            local left="$1"
+            local right="$2"
+            local hook="$3"
+            local left_member
+            local right_member
+            left_member="$(tar --list --file "${left}" | awk -F / -v hook="${hook}" '$NF == hook { print }')"
+            right_member="$(tar --list --file "${right}" | awk -F / -v hook="${hook}" '$NF == hook { print }')"
+            [[ -n "${left_member}" && "${left_member}" != *$'\n'* ]]
+            [[ -n "${right_member}" && "${right_member}" != *$'\n'* ]]
+            cmp -s \
+              <(tar --extract --to-stdout --file "${left}" "${left_member}") \
+              <(tar --extract --to-stdout --file "${right}" "${right_member}")
+          }
+
           validate_deb "${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" amd64
           validate_deb "${PACKAGE_ASSETS}/syswarden_${VERSION}_arm64.deb" arm64
           validate_rpm "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" x86_64
           validate_rpm "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.aarch64.rpm" aarch64
           validate_apk "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" x86_64
           validate_apk "${PACKAGE_ASSETS}/syswarden_${VERSION}_aarch64.apk" aarch64
+          for hook in .pre-install .pre-upgrade .post-install .post-upgrade; do
+            compare_apk_hook_parity \
+              "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" \
+              "${PACKAGE_ASSETS}/syswarden_${VERSION}_aarch64.apk" \
+              "${hook}"
+          done
 
           freebsd_manifest="$(tar --extract --to-stdout \
             --file "${PACKAGE_ASSETS}/syswarden-${VERSION}.txz" \

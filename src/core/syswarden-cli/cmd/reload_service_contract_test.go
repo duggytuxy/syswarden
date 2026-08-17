@@ -19,7 +19,11 @@ func TestReloadServiceUsesNativePlatformManager_SW_PKG_001(t *testing.T) {
 	}
 	defer func() { _ = root.Close() }()
 	tests := map[string][]string{
-		"reload_service_default.go": {`exec.Command("systemctl", "restart", "syswarden-core.service")`},
+		"reload_service_default.go": {
+			`coreServiceRestartCommand(system.IsAlpine()).Run()`,
+			`exec.Command("rc-service", "syswarden-core", "restart")`,
+			`exec.Command("systemctl", "restart", "syswarden-core.service")`,
+		},
 		"reload_service_freebsd.go": {
 			`exec.Command("service", "syswarden", "restart")`,
 			`exec.Command("service", "syswarden", "onestatus")`,
