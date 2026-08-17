@@ -554,7 +554,7 @@ invented_key = true
         ]
         deployment = """## 1. Target decision
 
-| Package family | Architectures produced by the workflow | Decision for v4.02.13 |
+| Package family | Architectures produced by the workflow | Decision for v4.02.14 |
 | :--- | :--- | :--- |
 | DEB | amd64, arm64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |
 | RPM | x86_64, aarch64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |

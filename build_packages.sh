@@ -176,7 +176,7 @@ cat << 'EOF' > prerm.sh
 syswarden_managed_cron_line() {
     syswarden_cron_candidate="$1"
     shift
-    syswarden_cron_minute="${syswarden_cron_candidate%% *}"
+    syswarden_cron_minute="$(printf '%s\n' "${syswarden_cron_candidate}" | awk 'NR == 1 { print $1; exit }')"
     for syswarden_cron_cli do
         if [ "${syswarden_cron_candidate}" = "*/30 * * * * ${syswarden_cron_cli} ha-sync >/dev/null 2>&1" ]; then
             return 0
@@ -405,6 +405,7 @@ scripts:
   postremove: "./postrm.sh"
 apk:
   scripts:
+    preupgrade: "./preinst.sh"
     postupgrade: "./postinst.sh"
 EOF
 "$(go env GOPATH)/bin/nfpm" pkg --config nfpm_alpine_amd64.yaml --packager apk --target .

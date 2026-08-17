@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import shutil
 import signal
 import subprocess
+import tarfile
 import tempfile
 import textwrap
 import time
@@ -31,6 +33,33 @@ def workflow_step_script(workflow: str, step_name: str) -> str:
     if step.count(run_marker) != 1:
         raise AssertionError(f"expected one shell body for workflow step {step_name}")
     return textwrap.dedent(step.split(run_marker, 1)[1])
+
+
+def workflow_run_commands(workflow: str) -> tuple[tuple[str, str], ...]:
+    lines = workflow.splitlines()
+    commands: list[tuple[str, str]] = []
+    step_name = ""
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith("      - name: "):
+            step_name = line.removeprefix("      - name: ")
+        if line.startswith("        run: "):
+            value = line.removeprefix("        run: ")
+            if value == "|":
+                body: list[str] = []
+                index += 1
+                while index < len(lines):
+                    candidate = lines[index]
+                    if candidate and len(candidate) - len(candidate.lstrip()) <= 8:
+                        index -= 1
+                        break
+                    body.append(candidate)
+                    index += 1
+                value = textwrap.dedent("\n".join(body))
+            commands.append((step_name, value))
+        index += 1
+    return tuple(commands)
 
 
 class PackageLifecycleContractTests(unittest.TestCase):
@@ -66,13 +95,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         return bodies[0]
 
-    def test_package_workflow_shell_steps_fit_github_limit(self) -> None:
-        for step_name in (
-            "Prepare Linux Maintainer Scripts",
-            "Build Debian Package (.deb)",
-        ):
+    def test_every_package_workflow_run_command_fits_github_limit(self) -> None:
+        commands = workflow_run_commands(self.workflow)
+        self.assertGreater(len(commands), 0)
+        for step_name, script in commands:
             with self.subTest(step=step_name):
-                script = workflow_step_script(self.workflow, step_name)
                 encoded_size = len(json.dumps(script, ensure_ascii=False))
                 self.assertLessEqual(
                     encoded_size,
@@ -376,6 +403,12 @@ class PackageLifecycleContractTests(unittest.TestCase):
     def test_package_cron_filters_are_exact_and_preserve_operator_bytes(self) -> None:
         for name, script, managed_paths in self.cron_script_matrix():
             functions = self.cron_functions(script)
+            self.assertNotIn("syswarden_cron_candidate%", functions)
+            self.assertIn(
+                'printf \'%s\\n\' "${syswarden_cron_candidate}" | '
+                "awk 'NR == 1 { print $1; exit }'",
+                functions,
+            )
             managed_lines = [
                 line
                 for path in managed_paths
@@ -403,45 +436,177 @@ class PackageLifecycleContractTests(unittest.TestCase):
             input_lines = [survivors[0], *managed_lines, *survivors[1:]]
             if alternate not in input_lines:
                 input_lines.append(alternate)
-            for final_lf in (False, True):
-                with self.subTest(script=name, final_lf=final_lf), tempfile.TemporaryDirectory() as temporary:
-                    root = Path(temporary)
-                    source = root / "input"
-                    destination = root / "output"
-                    source_bytes = "\n".join(input_lines).encode("utf-8")
-                    if final_lf:
-                        source_bytes += b"\n"
-                    managed_candidates = set(managed_lines)
-                    if "/usr/local/syswarden/bin/syswarden-cli" in managed_paths:
-                        managed_candidates.add(alternate)
-                    expected = b""
-                    for index, line in enumerate(input_lines):
-                        if line in managed_candidates:
-                            continue
-                        expected += line.encode("utf-8")
-                        if index < len(input_lines) - 1 or final_lf:
-                            expected += b"\n"
-                    source.write_bytes(source_bytes)
-                    result = subprocess.run(
-                        [
-                            "/bin/sh",
-                            "-c",
-                            functions
-                            + '\nsyswarden_cron_source="$1"\n'
-                            + 'syswarden_cron_destination="$2"\n'
-                            + "shift 2\n"
-                            + 'syswarden_filter_crontab "${syswarden_cron_source}" '
-                            + '"${syswarden_cron_destination}" "$@"',
-                            "cron-filter-contract",
-                            str(source),
-                            str(destination),
-                            *managed_paths,
-                        ],
-                        check=False,
-                        capture_output=True,
-                    )
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(destination.read_bytes(), expected)
+            variants = (
+                ("source", functions),
+                ("rpm-scriptlet", functions.replace("%%", "%")),
+            )
+            for variant, executable_functions in variants:
+                for final_lf in (False, True):
+                    with self.subTest(
+                        script=name,
+                        variant=variant,
+                        final_lf=final_lf,
+                    ), tempfile.TemporaryDirectory() as temporary:
+                        root = Path(temporary)
+                        source = root / "input"
+                        destination = root / "output"
+                        source_bytes = "\n".join(input_lines).encode("utf-8")
+                        if final_lf:
+                            source_bytes += b"\n"
+                        managed_candidates = set(managed_lines)
+                        if "/usr/local/syswarden/bin/syswarden-cli" in managed_paths:
+                            managed_candidates.add(alternate)
+                        expected = b""
+                        for index, line in enumerate(input_lines):
+                            if line in managed_candidates:
+                                continue
+                            expected += line.encode("utf-8")
+                            if index < len(input_lines) - 1 or final_lf:
+                                expected += b"\n"
+                        source.write_bytes(source_bytes)
+                        result = subprocess.run(
+                            [
+                                "/bin/sh",
+                                "-c",
+                                executable_functions
+                                + '\nsyswarden_cron_source="$1"\n'
+                                + 'syswarden_cron_destination="$2"\n'
+                                + "shift 2\n"
+                                + 'syswarden_filter_crontab "${syswarden_cron_source}" '
+                                + '"${syswarden_cron_destination}" "$@"',
+                                "cron-filter-contract",
+                                str(source),
+                                str(destination),
+                                *managed_paths,
+                            ],
+                            check=False,
+                            capture_output=True,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(destination.read_bytes(), expected)
+
+    def test_rpm_scriptlet_transform_rejects_percent_and_awk_mutations(self) -> None:
+        functions = self.cron_functions(self.script("prerm.sh"))
+        extraction = (
+            'syswarden_cron_minute="$(printf \'%s\\n\' '
+            '"${syswarden_cron_candidate}" | '
+            "awk 'NR == 1 { print $1; exit }')\""
+        )
+        self.assertEqual(functions.count(extraction), 1)
+
+        managed = (
+            "17 * * * * /opt/syswarden/bin/syswarden-cli "
+            "update-feeds >/dev/null 2>&1\n"
+        )
+
+        def filtered_bytes(candidate_functions: str) -> bytes:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "input"
+                destination = root / "output"
+                source.write_bytes(managed.encode("utf-8"))
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        candidate_functions.replace("%%", "%")
+                        + '\nsyswarden_cron_source="$1"\n'
+                        + 'syswarden_cron_destination="$2"\n'
+                        + 'syswarden_filter_crontab "${syswarden_cron_source}" '
+                        + '"${syswarden_cron_destination}" '
+                        + '"/opt/syswarden/bin/syswarden-cli"',
+                        "rpm-scriptlet-contract",
+                        str(source),
+                        str(destination),
+                    ],
+                    check=False,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return destination.read_bytes()
+
+        self.assertEqual(filtered_bytes(functions), b"")
+        legacy_percent = functions.replace(
+            extraction,
+            'syswarden_cron_minute="${syswarden_cron_candidate%% *}"',
+        )
+        wrong_awk_field = functions.replace("print $1; exit", "print $2; exit")
+        self.assertEqual(filtered_bytes(legacy_percent), managed.encode("utf-8"))
+        self.assertEqual(filtered_bytes(wrong_awk_field), managed.encode("utf-8"))
+
+    def test_rpm_artifact_gate_rejects_transformed_scriptlet_mutations(self) -> None:
+        validation_step = workflow_step_script(
+            self.workflow, "Validate Package Metadata"
+        )
+        function_start = validation_step.index("validate_rpm() {")
+        function_end = validation_step.index("\nvalidate_apk() {", function_start)
+        validate_rpm = validation_step[function_start:function_end]
+        self.assertIn("rpm --query --package --scripts", validate_rpm)
+        self.assertIn("grep --fixed-strings --count", validate_rpm)
+        self.assertIn("'${syswarden_cron_candidate%'", validate_rpm)
+
+        expected = (
+            'syswarden_cron_minute="$(printf \'%s\\n\' '
+            '"${syswarden_cron_candidate}" | '
+            "awk 'NR == 1 { print $1; exit }')\""
+        )
+        legacy = 'syswarden_cron_minute="${syswarden_cron_candidate% *}"'
+        wrong_awk = expected.replace("print $1; exit", "print $2; exit")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            scriptlets = root / "scriptlets"
+            fake_rpm = fake_bin / "rpm"
+            fake_rpm.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$3\" = --scripts ]; then\n"
+                "  cat \"${RPM_SCRIPTLETS_FILE}\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "[ \"$3\" = --queryformat ] || exit 90\n"
+                "case \"$4\" in\n"
+                "  '%{VERSION}') printf 4.02.14 ;;\n"
+                "  '%{ARCH}') printf x86_64 ;;\n"
+                "  *) exit 91 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_rpm.chmod(0o700)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "RPM_SCRIPTLETS_FILE": str(scriptlets),
+            }
+
+            def validate(payload: str) -> subprocess.CompletedProcess[bytes]:
+                scriptlets.write_text(payload, encoding="utf-8")
+                return subprocess.run(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        "set -euo pipefail\nVERSION=4.02.14\n"
+                        + validate_rpm
+                        + '\nvalidate_rpm "$1" x86_64',
+                        "rpm-artifact-contract",
+                        str(root / "candidate.rpm"),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    env=environment,
+                )
+
+            accepted = validate(f"{expected}\n{expected}\n")
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            for name, payload in (
+                ("single-helper", f"{expected}\n"),
+                ("legacy-percent", f"{legacy}\n{legacy}\n"),
+                ("wrong-awk-field", f"{wrong_awk}\n{wrong_awk}\n"),
+            ):
+                with self.subTest(mutation=name):
+                    rejected = validate(payload)
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
 
     def test_package_cron_cleanup_distinguishes_absence_and_errors(self) -> None:
         matrix = self.cron_script_matrix()
@@ -911,32 +1076,180 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 dependency,
             )
 
-    def test_apk_fresh_and_upgrade_hooks_share_the_exact_postinstall_contract(self) -> None:
+    def test_apk_fresh_and_upgrade_hooks_share_exact_pre_and_post_contracts(self) -> None:
+        workflow_preinstall = 'preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"'
+        workflow_preupgrade = 'preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"'
         workflow_postinstall = 'postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"'
         workflow_postupgrade = 'postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"'
         workflow_apk_hook = (
             "          apk:\n"
             "            scripts:\n"
+            '              preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"\n'
             '              postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"\n'
         )
+        self.assertEqual(self.workflow.count(workflow_preinstall), 2)
+        self.assertEqual(self.workflow.count(workflow_preupgrade), 2)
         self.assertEqual(self.workflow.count(workflow_postinstall), 2)
         self.assertEqual(self.workflow.count(workflow_postupgrade), 2)
         self.assertEqual(self.workflow.count(workflow_apk_hook), 2)
         self.assertEqual(self.workflow.count("            - openrc\n"), 2)
+        self.assertIn(".pre-install$/", self.workflow)
+        self.assertIn(".pre-upgrade$/", self.workflow)
         self.assertIn(".post-install$/", self.workflow)
         self.assertIn(".post-upgrade$/", self.workflow)
         self.assertIn("^depend = openrc$", self.workflow)
+        self.assertIn('"${preinstall_members[0]}"', self.workflow)
+        self.assertIn('"${preupgrade_members[0]}"', self.workflow)
         self.assertIn('"${postinstall_members[0]}"', self.workflow)
         self.assertIn('"${postupgrade_members[0]}"', self.workflow)
+        self.assertIn("compare_apk_hook_parity", self.workflow)
+        self.assertIn(
+            "for hook in .pre-install .pre-upgrade .post-install .post-upgrade; do",
+            self.workflow,
+        )
 
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(local.count('preinstall: "./preinst.sh"'), 1)
+        self.assertEqual(local.count('preupgrade: "./preinst.sh"'), 1)
         self.assertEqual(local.count('postinstall: "./postinst.sh"'), 1)
         self.assertEqual(local.count('postupgrade: "./postinst.sh"'), 1)
         self.assertEqual(
-            local.count('apk:\n  scripts:\n    postupgrade: "./postinst.sh"\n'),
+            local.count(
+                'apk:\n  scripts:\n    preupgrade: "./preinst.sh"\n'
+                '    postupgrade: "./postinst.sh"\n'
+            ),
             1,
         )
         self.assertEqual(local.count("  - openrc\n"), 1)
+
+    def test_apk_archive_hook_validation_rejects_missing_drift_and_arch_mismatch(
+        self,
+    ) -> None:
+        validation_step = workflow_step_script(
+            self.workflow, "Validate Package Metadata"
+        )
+        validate_start = validation_step.index("validate_apk() {")
+        parity_start = validation_step.index("\ncompare_apk_hook_parity() {")
+        invocation_start = validation_step.index("\nvalidate_deb ", parity_start)
+        validate_function = validation_step[validate_start:parity_start]
+        parity_function = validation_step[parity_start + 1 : invocation_start]
+
+        hooks = {
+            ".pre-install": b"#!/bin/sh\nprintf pre\n",
+            ".pre-upgrade": b"#!/bin/sh\nprintf pre\n",
+            ".post-install": b"#!/bin/sh\nprintf post\n",
+            ".post-upgrade": b"#!/bin/sh\nprintf post\n",
+        }
+
+        def write_apk(
+            path: Path,
+            architecture: str,
+            archive_hooks: dict[str, bytes],
+        ) -> None:
+            members = {
+                ".PKGINFO": (
+                    "pkgname = syswarden\n"
+                    "pkgver = 4.02.14\n"
+                    f"arch = {architecture}\n"
+                    "depend = openrc\n"
+                ).encode("utf-8"),
+                **archive_hooks,
+            }
+            with tarfile.open(path, "w:gz") as archive:
+                for name, content in members.items():
+                    metadata = tarfile.TarInfo(name)
+                    metadata.mode = 0o755 if name != ".PKGINFO" else 0o600
+                    metadata.size = len(content)
+                    archive.addfile(metadata, io.BytesIO(content))
+
+        def validate(path: Path, architecture: str) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    "set -euo pipefail\nVERSION=4.02.14\n"
+                    + validate_function
+                    + '\nvalidate_apk "$1" "$2"',
+                    "apk-archive-contract",
+                    str(path),
+                    architecture,
+                ],
+                check=False,
+                capture_output=True,
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            x86 = root / "syswarden_4.02.14_x86_64.apk"
+            arm = root / "syswarden_4.02.14_aarch64.apk"
+            write_apk(x86, "x86_64", hooks)
+            write_apk(arm, "aarch64", hooks)
+            accepted = validate(x86, "x86_64")
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+            parity = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    + parity_function
+                    + '\ncompare_apk_hook_parity "$1" "$2" .pre-upgrade',
+                    "apk-parity-contract",
+                    str(x86),
+                    str(arm),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(parity.returncode, 0, parity.stderr)
+
+            mutations = {
+                "missing-preupgrade": {
+                    name: content
+                    for name, content in hooks.items()
+                    if name != ".pre-upgrade"
+                },
+                "drifted-preupgrade": {
+                    **hooks,
+                    ".pre-upgrade": b"#!/bin/sh\nprintf drift\n",
+                },
+                "missing-postupgrade": {
+                    name: content
+                    for name, content in hooks.items()
+                    if name != ".post-upgrade"
+                },
+            }
+            for name, mutated_hooks in mutations.items():
+                with self.subTest(mutation=name):
+                    mutated = root / f"{name}.apk"
+                    write_apk(mutated, "x86_64", mutated_hooks)
+                    rejected = validate(mutated, "x86_64")
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
+
+            wrong_arch = validate(x86, "aarch64")
+            self.assertNotEqual(wrong_arch.returncode, 0, wrong_arch)
+
+            drifted_arm = root / "drifted-arm.apk"
+            write_apk(
+                drifted_arm,
+                "aarch64",
+                {**hooks, ".pre-upgrade": b"#!/bin/sh\nprintf drift\n"},
+            )
+            rejected_parity = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    + parity_function
+                    + '\ncompare_apk_hook_parity "$1" "$2" .pre-upgrade',
+                    "apk-parity-contract",
+                    str(x86),
+                    str(drifted_arm),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            self.assertNotEqual(rejected_parity.returncode, 0, rejected_parity)
 
     def test_freebsd_package_lifecycle_contract(self) -> None:
         preinstall = self.script("preinst_fbsd.sh")

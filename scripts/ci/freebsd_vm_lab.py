@@ -547,10 +547,10 @@ def version_tuple(version: str) -> tuple[int, int, int]:
 def is_forward_only_transition(
     candidate: PackageArtifact, previous: PackageArtifact
 ) -> bool:
-    """Recognize only the immutable v4.02.8 to v4.02.13 transition."""
+    """Recognize only the immutable v4.02.8 to v4.02.14 transition."""
 
     return (
-        candidate.version == "4.02.13"
+        candidate.version == "4.02.14"
         and previous.version == FORWARD_ONLY_PREVIOUS_VERSION
         and previous.path.name == FORWARD_ONLY_PREVIOUS_PACKAGE
         and previous.sha256 == FORWARD_ONLY_PREVIOUS_SHA256
@@ -570,7 +570,7 @@ def validate_forward_only_binding(
     ):
         raise FreeBSDVMLabError(
             "the historical FreeBSD transition is allowed only for the exact "
-            "v4.02.8 package bytes followed by candidate v4.02.13"
+            "v4.02.8 package bytes followed by candidate v4.02.14"
         )
 
 
@@ -1181,7 +1181,7 @@ fi
 if [ "$previous_expected_version" = "4.02.8" ]; then
     if [ "$previous_package_name" != "syswarden-4.02.8.txz" ] || \
        [ "$previous_expected_sha" != "8b3b489821450b3afd74548c6db5ad92001b8a69f923e2b9a99ce550353b6e37" ] || \
-       [ "$candidate_expected_version" != "4.02.13" ]; then
+       [ "$candidate_expected_version" != "4.02.14" ]; then
         exit 91
     fi
 fi

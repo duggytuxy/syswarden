@@ -389,7 +389,7 @@ PACKAGE_PAYLOAD_PATHS = (
     "/usr/local/bin/syswarden",
     "/usr/local/bin/syswarden-tui",
 )
-FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.13"
+FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.14"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
 FORWARD_ONLY_APK_PREVIOUS = {
     "x86_64": {
@@ -600,7 +600,7 @@ def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> boo
     if historical_binding_touched and not forward_only:
         raise LifecycleLabError(
             "historical APK transition must be the exact byte-bound "
-            "v4.02.8 -> v4.02.13 contract for "
+            "v4.02.8 -> v4.02.14 contract for "
             f"{spec.package_architecture}"
         )
     return forward_only
@@ -1598,10 +1598,36 @@ validate_manifest_contract() {
         rpm)
             allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
-            [ "$(grep -Ec '^/usr/lib/\.build-id/[0-9a-f]{2}$' "${manifest}" || true)" = "3" ] || return 1
-            [ "$(grep -Ec '^/usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38}$' "${manifest}" || true)" = "3" ] || return 1
             required_manifest_path "${manifest}" /usr/lib/.build-id || return 1
-            [ "$(wc -l < "${manifest}" | tr -d ' ')" = "13" ] || return 1
+            awk '
+                /^\/usr\/lib\/\.build-id\/[0-9a-f]{2}$/ {
+                    directories[$0]++
+                    next
+                }
+                /^\/usr\/lib\/\.build-id\/[0-9a-f]{2}\/[0-9a-f]{38}$/ {
+                    links++
+                    parent = $0
+                    sub(/\/[0-9a-f]{38}$/, "", parent)
+                    required_directories[parent] = 1
+                    next
+                }
+                END {
+                    if (links != 3) {
+                        exit 1
+                    }
+                    for (directory in directories) {
+                        if (directories[directory] != 1 ||
+                            !(directory in required_directories)) {
+                            exit 1
+                        }
+                    }
+                    for (directory in required_directories) {
+                        if (directories[directory] != 1) {
+                            exit 1
+                        }
+                    }
+                }
+            ' "${manifest}" || return 1
             ;;
     esac
     return 0
@@ -2340,17 +2366,19 @@ def _validate_manager_paths(family: str, paths: list[str]) -> None:
     build_links = {
         path for path in paths if RPM_BUILD_ID_LINK_PATTERN.fullmatch(path)
     }
+    required_build_directories = {
+        path.rsplit("/", 1)[0] for path in build_links
+    }
     expected = (
         set(PACKAGE_PAYLOAD_PATHS)
         | {"/usr/lib/.build-id"}
-        | build_directories
+        | required_build_directories
         | build_links
     )
     if (
         observed != expected
-        or len(build_directories) != 3
         or len(build_links) != 3
-        or len(observed) != 13
+        or build_directories != required_build_directories
     ):
         raise LifecycleLabError("RPM native package inventory is not exact")
 

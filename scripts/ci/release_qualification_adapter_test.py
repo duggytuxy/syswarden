@@ -558,7 +558,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("freebsd-vm-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
-    def test_freebsd_forward_only_v40213_contract_is_exercised(self) -> None:
+    def test_freebsd_forward_only_v40214_contract_is_exercised(self) -> None:
         evidence = passing_evidence()
         evidence["PF_SNAPSHOT_PROVENANCE"] = "legacy_derived"
         evidence["PREVIOUS_PACKAGE_SHA256"] = (
@@ -569,7 +569,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             "CANDIDATE_REINSTALL",
             "CANDIDATE_RESTART_IDEMPOTENCE",
         ):
-            evidence[f"{phase}_PKG_VERSION"] = "4.02.13"
+            evidence[f"{phase}_PKG_VERSION"] = "4.02.14"
         for phase in ("PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"):
             evidence[f"{phase}_PKG_VERSION"] = "4.02.8"
             evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"
@@ -585,8 +585,8 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         report = freebsd_vm_lab.build_report(
             evidence,
             freebsd_vm_lab.PackageArtifact(
-                self.fixture.root / "syswarden-4.02.13.txz",
-                "4.02.13",
+                self.fixture.root / "syswarden-4.02.14.txz",
+                "4.02.14",
                 evidence["CANDIDATE_PACKAGE_SHA256"],
             ),
             freebsd_vm_lab.PackageArtifact(

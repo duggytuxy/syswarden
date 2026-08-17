@@ -51,8 +51,7 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
                     "/usr/lib/.build-id",
                     "/usr/lib/.build-id/11",
                     "/usr/lib/.build-id/11/" + "1" * 38,
-                    "/usr/lib/.build-id/22",
-                    "/usr/lib/.build-id/22/" + "2" * 38,
+                    "/usr/lib/.build-id/11/" + "2" * 38,
                     "/usr/lib/.build-id/33",
                     "/usr/lib/.build-id/33/" + "3" * 38,
                 }
@@ -71,7 +70,7 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
             "/usr/lib/.build-id/11/" + "1" * 38: (
                 "../../../../opt/syswarden/bin/syswarden-cli"
             ),
-            "/usr/lib/.build-id/22/" + "2" * 38: (
+            "/usr/lib/.build-id/11/" + "2" * 38: (
                 "../../../../opt/syswarden/bin/syswarden-core"
             ),
             "/usr/lib/.build-id/33/" + "3" * 38: (
@@ -440,6 +439,14 @@ class PackageLifecycleLabTests(unittest.TestCase):
             fixture["artifacts"],
             package_lifecycle_lab.FORWARD_ONLY_APK_PREVIOUS,
         )
+        self.assertEqual(
+            fixture["candidate_version"],
+            package_lifecycle_lab.FORWARD_ONLY_APK_CANDIDATE_VERSION,
+        )
+        self.assertEqual(
+            fixture["previous_version"],
+            package_lifecycle_lab.FORWARD_ONLY_APK_PREVIOUS_VERSION,
+        )
         for spec in package_lifecycle_lab.DEFAULT_PLATFORMS:
             if spec.family != "apk":
                 continue
@@ -447,8 +454,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             pair = package_lifecycle_lab.PackagePair(
                 candidate=package_lifecycle_lab.PackageArtifact(
                     self.candidate
-                    / f"syswarden_4.02.13_{spec.package_architecture}.apk",
-                    "4.02.13",
+                    / f"syswarden_4.02.14_{spec.package_architecture}.apk",
+                    "4.02.14",
                     "a" * 64,
                 ),
                 previous=package_lifecycle_lab.PackageArtifact(
@@ -1104,7 +1111,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
         previous_path = self.root / "syswarden_4.02.8_x86_64.apk"
         previous_path.write_bytes(b"exact historical APK fixture")
         previous = str(previous_path)
-        candidate_path = self.root / "syswarden_4.02.13_x86_64.apk"
+        candidate_path = self.root / "syswarden_4.02.14_x86_64.apk"
         candidate_path.write_bytes(b"candidate APK fixture")
         candidate = str(candidate_path)
         previous_sha256 = hashlib.sha256(previous_path.read_bytes()).hexdigest()
@@ -1198,11 +1205,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
             f'CALLS="{calls}"\n'
             f'RESTART_STATE_FILE="{restart}"\n'
             'PREVIOUS_PACKAGE="/previous/exact-v4.02.8.apk"\n'
-            'CANDIDATE_PACKAGE="/candidate/v4.02.13.apk"\n'
+            'CANDIDATE_PACKAGE="/candidate/v4.02.14.apk"\n'
             'PREVIOUS_VERSION="4.02.8"\n'
-            'CANDIDATE_VERSION="4.02.13"\n'
+            'CANDIDATE_VERSION="4.02.14"\n'
             'EXPECTED_PREVIOUS_VERSION="4.02.8"\n'
-            'EXPECTED_CANDIDATE_VERSION="4.02.13"\n'
+            'EXPECTED_CANDIDATE_VERSION="4.02.14"\n'
             'FORWARD_ONLY_APK_TRANSITION="1"\n'
             "prepare_expected_payloads() { return 0; }\n"
             "seed_state() { :; }\n"
@@ -1332,6 +1339,54 @@ class PackageLifecycleLabTests(unittest.TestCase):
                     family, [*manifest, manifest[-1]]
                 )
                 self.assertNotEqual(duplicate.returncode, 0)
+
+    def test_rpm_build_id_prefix_collision_requires_exact_unique_parents(
+        self,
+    ) -> None:
+        links = [
+            "/usr/lib/.build-id/1d/" + "1" * 38,
+            "/usr/lib/.build-id/1d/" + "2" * 38,
+            "/usr/lib/.build-id/5b/" + "3" * 38,
+        ]
+        valid = sorted(
+            [
+                *package_lifecycle_lab.PACKAGE_PAYLOAD_PATHS,
+                "/usr/lib/.build-id",
+                "/usr/lib/.build-id/1d",
+                "/usr/lib/.build-id/5b",
+                *links,
+            ]
+        )
+
+        package_lifecycle_lab._validate_manager_paths("rpm", valid)
+        accepted = self.run_embedded_inventory_contract("rpm", valid)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        mutations = {
+            "orphan-directory": [*valid, "/usr/lib/.build-id/aa"],
+            "missing-parent": [
+                path for path in valid if path != "/usr/lib/.build-id/1d"
+            ],
+            "additional-link": [
+                *valid,
+                "/usr/lib/.build-id/5b/" + "4" * 38,
+            ],
+            "missing-link": [path for path in valid if path != links[1]],
+            "unexpected-path": [*valid, "/etc/shadow"],
+        }
+        for name, mutation in mutations.items():
+            adversarial = sorted(mutation)
+            with self.subTest(name=name):
+                with self.assertRaises(
+                    package_lifecycle_lab.LifecycleLabError
+                ):
+                    package_lifecycle_lab._validate_manager_paths(
+                        "rpm", adversarial
+                    )
+                rejected = self.run_embedded_inventory_contract(
+                    "rpm", adversarial
+                )
+                self.assertNotEqual(rejected.returncode, 0)
 
     def test_embedded_inventory_contract_rejects_type_mode_owner_and_link_drift(
         self,
@@ -1949,11 +2004,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 architecture
             ]
             platform_result.update(
-                candidate_version="4.02.13",
+                candidate_version="4.02.14",
                 previous_version="4.02.8",
                 candidate={
-                    "filename": f"syswarden_4.02.13_{architecture}.apk",
-                    "version": "4.02.13",
+                    "filename": f"syswarden_4.02.14_{architecture}.apk",
+                    "version": "4.02.14",
                     "sha256": "c" * 64,
                 },
                 previous={

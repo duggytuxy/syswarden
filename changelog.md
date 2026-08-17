@@ -1,3 +1,34 @@
+# Release v4.02.14
+
+### FIXED 🐛
+- **Alpine upgrades:** Run the same fail-closed directory and legacy-configuration preparation before APK upgrades that already protects fresh installs, so the exact v4.02.8 to v4.02.14 hop repairs historical directory modes before configuration preflight.
+- **Alpine reloads:** Restart `syswarden-core` with OpenRC on Alpine Linux while retaining systemd on the other Linux package targets.
+- **RPM cron cleanup:** Extract the managed cron minute without RPM-sensitive percent expansion, so the packaged pre-remove and post-remove scriptlets delete the exact SysWarden `update-feeds` entry while preserving every operator-owned lookalike byte-for-byte.
+- **RPM inventory evidence:** Accept three exact build-id links whose parent directories are their unique prefix set, including the valid case where two binaries share one prefix, while continuing to reject every missing, orphaned or unexpected package path.
+
+### SECURITY 🔒
+- **APK hook parity:** Require both architectures to contain the expected pre-upgrade, post-upgrade, fresh-install and removal hooks, and verify those hooks from the generated APK archives rather than from source text alone.
+- **Cron transformation proof:** Inspect the generated RPM scriptlets and prove that packaging cannot rewrite the minute parser or leave a canonical SysWarden cron reference behind.
+- **Native lifecycle proof:** Keep amd64 and ARM64 package lifecycles on native hosts, bind both shards to the same exact package artifact and merged SHA, and forbid QEMU user-mode evidence for nftables behavior.
+- **Fail-closed release path:** Keep evidence signing, immutable tagging and publication unreachable unless all native Linux lifecycles, the FreeBSD VM, the signed updater, nftables and both evidence adapters pass on the exact merged commit.
+
+### RELEASE STATUS 📦
+- v4.02.13 was merged as a source candidate but was never tagged or published. Protected qualification run `31972963066` stopped before signing after the native package laboratory detected the Alpine upgrade pre-hook omission, the Alpine systemd-only reload path, an RPM-sensitive cron parser and an overly rigid RPM build-id inventory assertion. No sealed qualification artifact, release signature, tag, public Release or Release asset was created.
+- The native ARM64 shard, real FreeBSD VM laboratory and isolated nftables laboratory passed in that run, but their v4.02.13 evidence is SHA-bound and is not reused as final v4.02.14 evidence.
+- v4.02.14 supersedes the unpublished v4.02.13 candidate. The last public Release remains v4.02.8 until v4.02.14 passes protected qualification on its exact merged SHA and the immutable tag publisher verifies the complete inventory.
+- The expected Release inventory is seven native packages plus `SHA256SUMS.txt`, `RELEASE_SHA256SUMS.txt`, `syswarden-release.tar.gz`, `syswarden-sbom.spdx.json`, `plumber-report.zip`, `syswarden-update-manifest-v1.json` and `syswarden-update-manifest-v1.json.sig`, exactly 14 assets.
+
+### UPGRADE NOTES 📦
+- The immutable v4.02.8 binary predates the signed updater. Do not use `syswarden update` for its first hop. Download exactly one v4.02.14 package matching the host plus `SHA256SUMS.txt`, verify that exact package, then install it with the native package manager.
+- **Debian or Ubuntu:** after checksum verification, run `sudo apt-get install -y ./syswarden_4.02.14_amd64.deb` or use the `arm64` filename on an ARM64 host.
+- **RHEL, AlmaLinux or Rocky Linux:** after checksum verification, run `sudo dnf install -y ./syswarden-4.02.14-1.x86_64.rpm` or use the `aarch64` filename on an ARM64 host.
+- **Alpine Linux:** after checksum verification, run `sudo apk add --allow-untrusted ./syswarden_4.02.14_x86_64.apk` or use the `aarch64` filename on an ARM64 host. Never use `--allow-untrusted` before the SHA-256 check succeeds.
+- **FreeBSD 14 amd64:** install `curl`, `jq`, `libqrencode`, `rsyslog` and `wireguard-tools`, then run `sudo pkg add -f ./syswarden-4.02.14.txz` after checksum verification. Use `syswarden uninstall` rather than raw `pkg delete`, whose script-failure behavior cannot guarantee PF recovery.
+- Starting from an installed v4.02.14, `syswarden update` verifies the signed Ed25519 manifest for the six Linux targets and FreeBSD amd64 before installing future published versions.
+- Review the package post-install result with `sudo syswarden manual` and `sudo syswarden config`. The complete architecture-selecting procedure remains in the README section [Install the latest verified Release](README.md#install-the-latest-verified-release).
+
+---
+
 # Release v4.02.13
 
 ### FIXED 🐛
