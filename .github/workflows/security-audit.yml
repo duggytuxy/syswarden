@@ -757,55 +757,55 @@ jobs:
           done
 
       - name: Upload gosec SARIF (linux-cli)
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: security-evidence/gosec-linux-cli.sarif
           category: gosec-linux-cli
 
       - name: Upload gosec SARIF (linux-core)
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: security-evidence/gosec-linux-core.sarif
           category: gosec-linux-core
 
       - name: Upload gosec SARIF (linux-tui)
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: security-evidence/gosec-linux-tui.sarif
           category: gosec-linux-tui
 
       - name: Upload gosec SARIF (linux-versionctl)
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: security-evidence/gosec-linux-versionctl.sarif
           category: gosec-linux-versionctl
 
       - name: Upload gosec SARIF (freebsd-cli)
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: security-evidence/gosec-freebsd-cli.sarif
           category: gosec-freebsd-cli
 
       - name: Upload gosec SARIF (freebsd-core)
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: security-evidence/gosec-freebsd-core.sarif
           category: gosec-freebsd-core
 
       - name: Upload gosec SARIF (freebsd-tui)
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: security-evidence/gosec-freebsd-tui.sarif
           category: gosec-freebsd-tui
 
       - name: Upload gosec SARIF (freebsd-versionctl)
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: security-evidence/gosec-freebsd-versionctl.sarif
           category: gosec-freebsd-versionctl
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: trivy-evidence/trivy-results.sarif
           category: trivy
