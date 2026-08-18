@@ -138,9 +138,9 @@ func ApplyPolicies() error {
 	_, _ = pfRules.WriteString("scrub in all fragment reassemble\n\n")
 
 	// Threat Intel L3/L4 (Fragments, XMAS, NULL Scans)
-	_, _ = pfRules.WriteString("block drop in quick all fragments\n")
+	_, _ = pfRules.WriteString("block drop in quick all fragment\n")
 	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s proto tcp all flags FUP/WEUAPRSF\n", activeIf))
-	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s proto tcp all flags NONE/WEUAPRSF\n", activeIf))
+	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in quick on %s proto tcp all flags /WEUAPRSF\n", activeIf))
 
 	// Trust LAN Subnets (RFC1918 by default + Custom config)
 	validLANSubnets, err := canonicalPolicyNetworks(
@@ -284,9 +284,6 @@ func ApplyPolicies() error {
 	// Default drop catch-all for incoming
 	_, _ = pfRules.WriteString(fmt.Sprintf("block drop in log on %s all\n", activeIf))
 
-	// DNS Exfiltration Protection (L3/L4)
-	_, _ = pfRules.WriteString(fmt.Sprintf("block drop out log quick on %s proto udp to any port 53 length > 512\n", activeIf))
-
 	_, _ = pfRules.WriteString(fmt.Sprintf("pass out quick on %s proto tcp to any port 8443 keep state\n", activeIf)) // Ensure outbound mTLS to Nexus is explicitly allowed
 	_, _ = pfRules.WriteString(fmt.Sprintf("pass out on %s all keep state\n", activeIf))
 
@@ -309,9 +306,12 @@ func ApplyPolicies() error {
 	if err := capturePFPolicySnapshotLocked(PFSnapshotExactLive); err != nil {
 		return fmt.Errorf("capture pre-mutation PF policy: %w", err)
 	}
+	if err := ensurePFKernelReadyForMutationLocked(); err != nil {
+		return fmt.Errorf("prepare snapshotted PF kernel for mutation: %w", err)
+	}
 
 	// Validate the exact candidate before any PF mutation.
-	checkCmd := exec.Command("pfctl", "-nf", "-")
+	checkCmd := newPFCTLCommand("-nf", "-")
 	checkCmd.Stdin = candidateFile
 	if out, err := checkCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("pfctl candidate validation failed: %s (err: %w)", string(out), err)
@@ -319,9 +319,12 @@ func ApplyPolicies() error {
 	if _, err := candidateFile.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind validated pf configuration: %w", err)
 	}
+	if err := markPFMutationStartedLocked(); err != nil {
+		return err
+	}
 
 	// Apply configuration natively via pfctl
-	execCmd := exec.Command("pfctl", "-f", "-")
+	execCmd := newPFCTLCommand("-f", "-")
 	execCmd.Stdin = candidateFile
 	if out, err := execCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("pfctl execution failed: %s (err: %w)", string(out), err)
@@ -330,8 +333,8 @@ func ApplyPolicies() error {
 	// Enable PF if necessary, then verify the actual enforcement state. The
 	// enable command may report an already-enabled state differently across PF
 	// versions, so the status query is the authoritative result.
-	enableOutput, enableErr := exec.Command("pfctl", "-e").CombinedOutput()
-	statusOutput, statusErr := exec.Command("pfctl", "-s", "info").CombinedOutput()
+	enableOutput, enableErr := newPFCTLCommand("-e").CombinedOutput()
+	statusOutput, statusErr := newPFCTLCommand("-s", "info").CombinedOutput()
 	if statusErr != nil || !pfStatusEnabledOutput(statusOutput) {
 		return fmt.Errorf("PF rules loaded but enforcement is not enabled (enable: %v: %s, status: %v: %s)", enableErr, strings.TrimSpace(string(enableOutput)), statusErr, strings.TrimSpace(string(statusOutput)))
 	}

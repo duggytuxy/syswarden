@@ -549,6 +549,10 @@ jobs:
           test ! -L "${RUNNER_TEMP}"
           qualification_root="$(mktemp -d \
             "${RUNNER_TEMP%/}/syswarden-release-qualification.XXXXXX")"
+          test -d "${qualification_root}"
+          test ! -L "${qualification_root}"
+          [[ -O "${qualification_root}" ]]
+          test "$(stat -c '%a' "${qualification_root}")" = "700"
           artifact_root="${qualification_root}/artifact"
           candidate_packages="${artifact_root}/packages/candidate"
           previous_packages="${artifact_root}/packages/previous"
@@ -559,6 +563,7 @@ jobs:
           status_dir="${qualification_root}/status-internal"
           secrets_dir="${qualification_root}/secrets"
           signing_tool_dir="${qualification_root}/signing-tool"
+          nftables_tmp_dir="${qualification_root}/nftables-tmp"
           install -d -m 0700 \
             "${artifact_root}" \
             "${candidate_packages}" \
@@ -569,7 +574,18 @@ jobs:
             "${artifact_root}/status" \
             "${status_dir}" \
             "${secrets_dir}" \
-            "${signing_tool_dir}"
+            "${signing_tool_dir}" \
+            "${nftables_tmp_dir}"
+          test -d "${nftables_tmp_dir}"
+          test ! -L "${nftables_tmp_dir}"
+          [[ -O "${nftables_tmp_dir}" ]]
+          test "$(stat -c '%a' "${nftables_tmp_dir}")" = "700"
+          nftables_tmp_probe="$(mktemp \
+            "${nftables_tmp_dir}/.write-probe.XXXXXX")"
+          test -f "${nftables_tmp_probe}"
+          test ! -L "${nftables_tmp_probe}"
+          rm -f -- "${nftables_tmp_probe}"
+          test ! -e "${nftables_tmp_probe}"
 
           {
             printf 'QUALIFICATION_ROOT=%s\n' "${qualification_root}"
@@ -583,6 +599,7 @@ jobs:
             printf 'STATUS_DIR=%s\n' "${status_dir}"
             printf 'SECRETS_DIR=%s\n' "${secrets_dir}"
             printf 'SIGNING_TOOL_DIR=%s\n' "${signing_tool_dir}"
+            printf 'NFTABLES_TMP_DIR=%s\n' "${nftables_tmp_dir}"
           } >> "${GITHUB_ENV}"
           {
             printf 'qualification_root=%s\n' "${qualification_root}"
@@ -1030,7 +1047,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          umask 077
+          test -n "${NFTABLES_TMP_DIR:-}"
+          test "${NFTABLES_TMP_DIR}" = "${QUALIFICATION_ROOT}/nftables-tmp"
+          test -d "${QUALIFICATION_ROOT}"
+          test ! -L "${QUALIFICATION_ROOT}"
+          [[ -O "${QUALIFICATION_ROOT}" ]]
+          test "$(stat -c '%a' "${QUALIFICATION_ROOT}")" = "700"
+          test -d "${NFTABLES_TMP_DIR}"
+          test ! -L "${NFTABLES_TMP_DIR}"
+          [[ -O "${NFTABLES_TMP_DIR}" ]]
+          test "$(stat -c '%a' "${NFTABLES_TMP_DIR}")" = "700"
+          nftables_tmp_probe="$(mktemp \
+            "${NFTABLES_TMP_DIR}/.write-probe.XXXXXX")"
+          test -f "${nftables_tmp_probe}"
+          test ! -L "${nftables_tmp_probe}"
+          rm -f -- "${nftables_tmp_probe}"
+          test ! -e "${nftables_tmp_probe}"
           set +e
+          TMPDIR="${NFTABLES_TMP_DIR}" \
+          GOTMPDIR="${NFTABLES_TMP_DIR}" \
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/nftables_kernel_lab.py \
             --repo-root "${GITHUB_WORKSPACE}" \
             --pull-policy never \
@@ -1138,16 +1174,32 @@ jobs:
             gate-generate.rc
             gate-verify.rc
           )
+          failed_statuses=()
+          invalid_statuses=()
           for status_file in "${status_files[@]}"; do
             status_path="${STATUS_DIR}/${status_file}"
-            test -f "${status_path}"
-            test ! -L "${status_path}"
+            if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+              invalid_statuses+=("${status_file}")
+              continue
+            fi
             status="$(cat "${status_path}")"
-            if [[ "${status}" != "0" ]]; then
-              echo "ERROR: refusing to sign because ${status_file} returned ${status}." >&2
-              exit 1
+            if [[ ! "${status}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || \
+               (( 10#${status} > 255 )); then
+              invalid_statuses+=("${status_file}")
+            elif [[ "${status}" != "0" ]]; then
+              failed_statuses+=("${status_file}=${status}")
             fi
           done
+          for invalid_status in "${invalid_statuses[@]}"; do
+            echo "ERROR: qualification status ${invalid_status}=invalid." >&2
+          done
+          for failed_status in "${failed_statuses[@]}"; do
+            echo "ERROR: qualification status ${failed_status}." >&2
+          done
+          if (( ${#invalid_statuses[@]} > 0 || ${#failed_statuses[@]} > 0 )); then
+            echo "ERROR: refusing to sign because qualification status is not uniformly zero." >&2
+            exit 1
+          fi
           echo "qualified=true" >> "${GITHUB_OUTPUT}"
 
       - name: Revalidate Manifest Tool Before Secret Exposure
@@ -1424,6 +1476,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -n "${NFTABLES_TMP_DIR:-}" ]]; then
+            if [[ -z "${QUALIFICATION_ROOT:-}" || \
+                  "${QUALIFICATION_ROOT}" != "${RUNNER_TEMP%/}"/syswarden-release-qualification.* || \
+                  "${NFTABLES_TMP_DIR}" != "${QUALIFICATION_ROOT}/nftables-tmp" ]]; then
+              echo "ERROR: refusing unsafe nftables temporary-directory cleanup." >&2
+              exit 1
+            fi
+            test -d "${QUALIFICATION_ROOT}"
+            test ! -L "${QUALIFICATION_ROOT}"
+            [[ -O "${QUALIFICATION_ROOT}" ]]
+            test "$(stat -c '%a' "${QUALIFICATION_ROOT}")" = "700"
+            test -d "${NFTABLES_TMP_DIR}"
+            test ! -L "${NFTABLES_TMP_DIR}"
+            [[ -O "${NFTABLES_TMP_DIR}" ]]
+            test "$(stat -c '%a' "${NFTABLES_TMP_DIR}")" = "700"
+            find -P "${NFTABLES_TMP_DIR}" -xdev -mindepth 1 -delete
+            rmdir -- "${NFTABLES_TMP_DIR}"
+            test ! -e "${NFTABLES_TMP_DIR}"
+            test ! -L "${NFTABLES_TMP_DIR}"
+          fi
           if [[ -n "${SECRETS_DIR:-}" && \
                 "${SECRETS_DIR}" == "${RUNNER_TEMP%/}"/syswarden-release-qualification.*/secrets ]]; then
             rm -f \
@@ -1465,6 +1537,167 @@ jobs:
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
         run: |
           set -euo pipefail
+          summarize_raw_report() {
+            local label="$1"
+            local path="$2"
+            local size
+            local summary
+            if [[ ! -f "${path}" || -L "${path}" ]]; then
+              jq -cnS --arg label "${label}" \
+                '{label: $label, parse_status: "unavailable"}'
+              return
+            fi
+            size="$(stat -c '%s' "${path}" 2>/dev/null || true)"
+            if [[ ! "${size}" =~ ^[0-9]+$ ]] || (( 10#${size} > 67108864 )); then
+              jq -cnS --arg label "${label}" \
+                '{label: $label, parse_status: "invalid"}'
+              return
+            fi
+            if ! summary="$(jq -cS --arg label "${label}" '
+              def enum_or_null($value; $allowed):
+                if (($value | type) == "string" and
+                    ($allowed | index($value)) != null)
+                then $value
+                else null
+                end;
+              if type != "object" then error("report is not an object") else . end
+              | . as $report
+              | {
+                  label: $label,
+                  parse_status: "valid",
+                  schema_version: (
+                    if (($report.schema_version | type) == "number" and
+                        ($report.schema_version | floor) == $report.schema_version and
+                        $report.schema_version >= 0 and
+                        $report.schema_version <= 100)
+                    then $report.schema_version
+                    else null
+                    end
+                  ),
+                  status: enum_or_null(
+                    $report.status; ["pass", "fail", "incomplete"]
+                  ),
+                  harness_status: enum_or_null(
+                    $report.harness_status; ["pass", "fail"]
+                  ),
+                  product_status: enum_or_null(
+                    $report.product_status;
+                    ["pass", "fail", "known_blocker", "not_evaluated", "unknown"]
+                  ),
+                  release_ready: (
+                    if ($report.release_ready | type) == "boolean"
+                    then $report.release_ready
+                    else null
+                    end
+                  ),
+                  harness_complete: (
+                    if ($report.harness_complete | type) == "boolean"
+                    then $report.harness_complete
+                    else null
+                    end
+                  ),
+                  blocker_count: (
+                    if ($report.blocker_ids | type) == "array"
+                    then ($report.blocker_ids | length)
+                    else null
+                    end
+                  ),
+                  unexpected_failure_count: (
+                    if ($report.unexpected_failed_checks | type) == "array"
+                    then ($report.unexpected_failed_checks | length)
+                    elif ($report.unexpected_failed_check_ids | type) == "array"
+                    then ($report.unexpected_failed_check_ids | length)
+                    else null
+                    end
+                  ),
+                  error_present: (
+                    ($report.error | type) == "string" and
+                    ($report.error | length) > 0
+                  )
+                }
+            ' "${path}" 2>/dev/null)"; then
+              jq -cnS --arg label "${label}" \
+                '{label: $label, parse_status: "invalid"}'
+              return
+            fi
+            printf '%s\n' "${summary}"
+          }
+
+          status_files=(
+            package-lab.rc
+            freebsd-lab.rc
+            nftables-lab.rc
+            adapter-build.rc
+            adapter-verify.rc
+            gate-generate.rc
+            gate-verify.rc
+          )
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            status_files+=(freebsd-updater.rc freebsd-updater-verify.rc)
+          elif [[ "${SIGNED_UPDATE_REQUIRED}" != "false" ]]; then
+            echo "ERROR: signed update requirement is not a canonical boolean." >&2
+          fi
+          failed_statuses=()
+          invalid_statuses=()
+          raw_summaries=()
+          summarized_raws=()
+          if [[ -n "${STATUS_DIR:-}" && -d "${STATUS_DIR}" && \
+                ! -L "${STATUS_DIR}" ]]; then
+            for status_file in "${status_files[@]}"; do
+              status_path="${STATUS_DIR}/${status_file}"
+              if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+                invalid_statuses+=("${status_file}")
+                continue
+              fi
+              status="$(cat "${status_path}")"
+              if [[ ! "${status}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || \
+                 (( 10#${status} > 255 )); then
+                invalid_statuses+=("${status_file}")
+                continue
+              fi
+              if [[ "${status}" == "0" ]]; then
+                continue
+              fi
+              failed_statuses+=("${status_file}=${status}")
+              raw_label=""
+              raw_path=""
+              case "${status_file}" in
+                package-lab.rc)
+                  raw_label="package-lifecycle"
+                  raw_path="${RAW_DIR:-}/package-lifecycle-raw.json"
+                  ;;
+                freebsd-lab.rc)
+                  raw_label="freebsd-vm"
+                  raw_path="${RAW_DIR:-}/freebsd-vm-raw.json"
+                  ;;
+                nftables-lab.rc)
+                  raw_label="nftables"
+                  raw_path="${RAW_DIR:-}/nftables-raw.json"
+                  ;;
+                freebsd-updater.rc|freebsd-updater-verify.rc)
+                  raw_label="freebsd-updater"
+                  raw_path="${RAW_DIR:-}/freebsd-updater-raw.json"
+                  ;;
+              esac
+              if [[ -n "${raw_label}" && \
+                    " ${summarized_raws[*]} " != *" ${raw_label} "* ]]; then
+                summarized_raws+=("${raw_label}")
+                raw_summaries+=("$(summarize_raw_report "${raw_label}" "${raw_path}")")
+              fi
+            done
+          else
+            invalid_statuses+=(status-directory)
+          fi
+          for invalid_status in "${invalid_statuses[@]}"; do
+            echo "ERROR: qualification status ${invalid_status}=invalid." >&2
+          done
+          for failed_status in "${failed_statuses[@]}"; do
+            echo "ERROR: qualification status ${failed_status}." >&2
+          done
+          if (( ${#raw_summaries[@]} > 0 )); then
+            printf '%s\n' "${raw_summaries[@]}" | \
+              jq -csS '{qualification_raw_failure_summaries: .}' >&2
+          fi
           if [[ "${INVENTORY_OUTCOME}" != "success" || \
                 "${UPLOAD_OUTCOME}" != "success" ]]; then
             echo "ERROR: exact qualification evidence was not sealed and uploaded." >&2

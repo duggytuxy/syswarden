@@ -19,7 +19,7 @@
 
 # SysWarden v4
 
-Current source version: **v4.02.14**.
+Current source version: **v4.02.15**.
 
 > **Active Defense and HIDS/HIPS/WAAP Out-of-Band Orchestration for Critical Linux Infrastructure**
 
@@ -50,10 +50,13 @@ published release. Until the protected qualification passes for the exact
 commit and artifacts, use SysWarden only in an isolated laboratory with console
 access and a tested host snapshot or rollback path.
 
-The historical v4.02.13 source candidate failed protected qualification before
-signing, tagging or release publication and was never tagged or published.
-v4.02.14 supersedes it and remains NO-GO until protected qualification passes
-on the exact candidate commit.
+The historical v4.02.14 source candidate failed protected qualification run
+`31993252784` and was never tagged or published. Its native amd64 and ARM64
+package lifecycle shards completed, but FreeBSD and nftables product behavior
+was not evaluated because their harnesses stopped before trusted evidence was
+established. No sealed qualification artifact, signature, tag or public Release
+was created. v4.02.15 supersedes it and remains NO-GO until protected
+qualification passes on the exact candidate commit.
 
 ## Components and data flow
 
@@ -116,7 +119,7 @@ parameter. Restrict the listener with `--bind`, protect the port with a trusted
 network control, and do not place tokens in URLs or logs.
 
 A package-level `[webtui] enabled = false` switch and conditional ownership of
-TCP 62027 are not part of v4.02.14. They remain a separate Lot 2 change. The
+TCP 62027 are not part of v4.02.15. They remain a separate Lot 2 change. The
 current package behavior must therefore be treated as Web-TUI enabled.
 
 ### High availability
@@ -323,7 +326,7 @@ default HTTP client without an explicit timeout.
 | Package and PF recovery state | `/var/db/syswarden` |
 | rc.d services | `/usr/local/etc/rc.d/syswarden`, `/usr/local/etc/rc.d/syswardenwebtui` |
 
-The v4.02.14 PF contract is intentionally bounded. A fresh installation
+The v4.02.15 PF contract is intentionally bounded. A fresh installation
 requires PF to be disabled with an empty live ruleset before SysWarden first
 mutates it. The separately byte-bound historical v4.02.8 transition is also covered. This
 does not claim safe coexistence with an arbitrary pre-existing operator PF
@@ -375,10 +378,10 @@ selected release.
 
 The historical v4.02.8 binary predates the signed updater and cannot perform
 the first signed hop. Linux hosts must install the separately verified
-v4.02.14 package with their native package manager. FreeBSD hosts must first
+v4.02.15 package with their native package manager. FreeBSD hosts must first
 install `curl`, `jq`, `libqrencode`, `rsyslog` and `wireguard-tools`, then use
-`pkg add -f` on the checksum-verified v4.02.14 TXZ. Starting from an installed
-v4.02.14, the signed updater supports the six Linux package targets and
+`pkg add -f` on the checksum-verified v4.02.15 TXZ. Starting from an installed
+v4.02.15, the signed updater supports the six Linux package targets and
 FreeBSD amd64.
 
 ### Install the latest verified Release
@@ -387,7 +390,7 @@ The procedure below downloads exactly one package for the detected operating
 system and architecture. Use it only after that tag is visible in GitHub
 Releases and the release qualification is complete. For the first hop from
 historical v4.02.8, run it as
-`VERSION=v4.02.14 sh ./install-release.sh` after saving the block as
+`VERSION=v4.02.15 sh ./install-release.sh` after saving the block as
 `install-release.sh`; leaving `VERSION` unset selects the latest published
 Release automatically.
 
@@ -622,8 +625,8 @@ access recovery.
   verifies the selected OS/architecture filename, size and SHA-256 again
   immediately before invoking the package manager, and uses a private temporary
   workspace. The historical v4.02.8 binary predates this trust root, so its
-  first upgrade to v4.02.14 must be a separately verified manual package
-  upgrade. From v4.02.14 onward, FreeBSD amd64 uses the same signed contract and
+  first upgrade to v4.02.15 must be a separately verified manual package
+  upgrade. From v4.02.15 onward, FreeBSD amd64 uses the same signed contract and
   invokes native `pkg add -f` only after all verification succeeds.
 - `syswarden uninstall` is destructive. It deletes SysWarden configuration,
   data, logs, services and firewall tables. It does not restore every previous
@@ -669,9 +672,13 @@ maintainer-controlled publication gate; a wiki page may lag the source until
 that gate is completed. When the wiki and this README disagree, prefer tested
 behavior in the source candidate and report the inconsistency.
 
-The version-specific [Lot 1 public security delivery report](docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.14.md)
-records the v4.02.14 source scope, evidence, platform boundaries and current
+The version-specific [Lot 1 public security delivery report](docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.15.md)
+records the v4.02.15 source scope, evidence, platform boundaries and current
 release decision.
+
+The public Release inventory contains exactly 14 assets and no PDF. The local
+`output/` directory is private operator evidence and is excluded from both the
+repository candidate and every public Release.
 
 ## Target and support
 

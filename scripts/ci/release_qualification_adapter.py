@@ -1025,8 +1025,8 @@ FREEBSD_SCOPE_STATIC = {
     "ssh_scope": "local loopback only",
     "pf_scope": "unique unattached anchor plus disposable-VM package behavior",
     "guest_lock": "atomic root-owned /var/run lock held through PF restoration",
-    "pf_snapshot": "empty guest ruleset and exact Disabled status captured before mutation and restored after cleanup",
-    "lifecycle": "previous install -> candidate upgrade -> candidate reinstall -> two restart cycles -> previous rollback observation -> mandatory candidate recovery -> pkg delete",
+    "pf_snapshot": "schema-v2 exact Disabled empty policy and state table captured before mutation, including module-absent baselines, and restored with the original kernel state after cleanup",
+    "lifecycle": "previous install -> candidate upgrade -> candidate reinstall -> two restart cycles -> previous rollback observation -> mandatory candidate recovery -> pkg delete -> module-absent candidate install and remove",
     "remove_purge_semantics": "FreeBSD pkg has no separate purge operation; pkg pre-deinstall failures do not block payload deletion and pkg delete -D skips scripts; use syswarden uninstall for supported fail-closed PF restoration before package removal",
     "signature_probe": "each installed phase executes the core directly against /usr/local/syswarden/signatures.json, requires exactly 78 rule definitions and a real loader report of 194 effective signatures for candidate phases, and verifies unchanged type/bytes/mode/uid/gid",
     "restart_inventory": "complete scoped path/type/mode/uid/gid/link inventory must remain identical after both restart cycles",
@@ -1054,6 +1054,8 @@ FREEBSD_TAIL_CHECKS = (
     "SW-PKG-FBSD-SIG-PACKAGED-001", "SW-PKG-FBSD-PREFIX-001", "SW-PKG-FBSD-RCD-CORE-001", "SW-PKG-FBSD-RCD-WEB-001",
     "SW-PKG-FBSD-RCD-CORE-PATH-001", "SW-PKG-FBSD-RCD-WEB-PATH-001", "SW-PKG-FBSD-RCD-ENABLE-001", "SW-PKG-FBSD-UPGRADE-RCD-001",
     "SW-PKG-FBSD-PF-PROVENANCE-001",
+    "SW-PKG-FBSD-PF-MODULE-ABSENT-INSTALL-001",
+    "SW-PKG-FBSD-PF-MODULE-ABSENT-REMOVE-001",
     "SW-PKG-FBSD-PF-FRESH-BOUNDARY-001",
     "SW-PKG-FBSD-START-CORE-001",
     "SW-PKG-FBSD-RESTART-CORE-001", "SW-PKG-FBSD-START-WEB-001", "SW-PKG-FBSD-RESTART-WEB-001", "SW-PKG-FBSD-RESTART-METADATA-001",
@@ -1200,6 +1202,82 @@ def _freebsd_check_passes(check_id: str, observed: Any, versions: dict[str, Any]
     if check_id == "SW-PKG-FBSD-PF-PROVENANCE-001":
         expected = "legacy_derived" if versions["forward_only"] else "exact_live"
         return _string(observed, f"{check_id}.observed") == expected
+    if check_id == "SW-PKG-FBSD-PF-MODULE-ABSENT-INSTALL-001":
+        value = _dict_strings(
+            observed,
+            {
+                "pre_module_absent",
+                "pre_device_absent",
+                "install_return_code",
+                "postinstall_marker_state",
+                "diagnostics_clean",
+                "snapshot_safe",
+                "schema_version",
+                "provenance",
+                "initial_kernel_state",
+                "mutation_started",
+                "policy_module_present",
+                "policy_device_ready",
+                "policy_status",
+                "policy_rule_count",
+            },
+            f"{check_id}.observed",
+        )
+        return (
+            value
+            == {
+                "pre_module_absent": "1",
+                "pre_device_absent": "1",
+                "install_return_code": "0",
+                "postinstall_marker_state": freebsd_lab.EXPECTED_POSTINSTALL_MARKER_STATE,
+                "diagnostics_clean": "1",
+                "snapshot_safe": "1",
+                "schema_version": "2",
+                "provenance": "exact_live",
+                "initial_kernel_state": "module_absent",
+                "mutation_started": "true",
+                "policy_module_present": "1",
+                "policy_device_ready": "1",
+                "policy_status": "Enabled",
+                "policy_rule_count": value["policy_rule_count"],
+            }
+            and value["policy_rule_count"].isdigit()
+            and int(value["policy_rule_count"]) > 0
+        )
+    if check_id == "SW-PKG-FBSD-PF-MODULE-ABSENT-REMOVE-001":
+        return _dict_strings(
+            observed,
+            {
+                "delete_return_code",
+                "diagnostics_clean",
+                "package_absent",
+                "snapshot_absent",
+                "configured_status",
+                "module_absent",
+                "device_absent",
+                "probe_load_return_code",
+                "probe_status",
+                "probe_policy_empty",
+                "probe_unload_return_code",
+                "final_module_absent",
+                "final_device_absent",
+            },
+            f"{check_id}.observed",
+        ) == {
+            "delete_return_code": "0",
+            "diagnostics_clean": "1",
+            "package_absent": "1",
+            "snapshot_absent": "1",
+            "configured_status": "Disabled",
+            "module_absent": "1",
+            "device_absent": "1",
+            "probe_load_return_code": "0",
+            "probe_status": "Disabled",
+            "probe_policy_empty": "1",
+            "probe_unload_return_code": "0",
+            "final_module_absent": "1",
+            "final_device_absent": "1",
+        }
     if check_id == "SW-PKG-FBSD-PF-FRESH-BOUNDARY-001":
         return _dict_strings(
             observed,
@@ -1207,7 +1285,13 @@ def _freebsd_check_passes(check_id: str, observed: Any, versions: dict[str, Any]
                 "capture_return_code",
                 "provenance",
                 "restore_return_code",
+                "nonempty_seed_apply_return_code",
                 "nonempty_rejected",
+                "nonempty_anchor_preserved",
+                "nonempty_filter_preserved",
+                "nonempty_nat_preserved",
+                "nonempty_tables_preserved",
+                "nonempty_status_preserved",
                 "nonempty_state_preserved",
             },
             f"{check_id}.observed",
@@ -1215,7 +1299,13 @@ def _freebsd_check_passes(check_id: str, observed: Any, versions: dict[str, Any]
             "capture_return_code": "0",
             "provenance": "exact_live",
             "restore_return_code": "0",
+            "nonempty_seed_apply_return_code": "0",
             "nonempty_rejected": "1",
+            "nonempty_anchor_preserved": "1",
+            "nonempty_filter_preserved": "1",
+            "nonempty_nat_preserved": "1",
+            "nonempty_tables_preserved": "1",
+            "nonempty_status_preserved": "1",
             "nonempty_state_preserved": "1",
         }
     if check_id in {"SW-PKG-FBSD-START-CORE-001", "SW-PKG-FBSD-START-WEB-001"}:
@@ -1340,18 +1430,22 @@ def _validate_freebsd_schema(document: dict[str, Any]) -> tuple[dict[str, Any], 
         or int(endpoint_match.group(1)) > 65535
     ):
         _fail("FreeBSD SSH endpoint is not an explicit local-loopback port")
-    environment = _exact_keys(document["environment"], {"os", "release", "machine", "transport_inputs_sealed", "pf_interface", "pf_initial_status", "pf_snapshot_provenance", "pf_final_status", "pf_snapshot_sha256", "pf_anchor"}, "freebsd.environment")
-    for key in ("os", "release", "machine", "pf_interface", "pf_initial_status", "pf_snapshot_provenance", "pf_final_status", "pf_anchor"):
+    environment = _exact_keys(document["environment"], {"os", "release", "machine", "transport_inputs_sealed", "pf_interface", "pf_initial_status", "pf_initial_kernel_state", "pf_initial_kernel_load_verified", "pf_snapshot_provenance", "pf_final_status", "pf_final_kernel_state", "pf_snapshot_sha256", "pf_anchor"}, "freebsd.environment")
+    for key in ("os", "release", "machine", "pf_interface", "pf_initial_status", "pf_initial_kernel_state", "pf_snapshot_provenance", "pf_final_status", "pf_final_kernel_state", "pf_anchor"):
         _string(environment[key], f"freebsd.environment.{key}")
     _sha256(environment["pf_snapshot_sha256"], "freebsd.environment.pf_snapshot_sha256")
     _boolean(environment["transport_inputs_sealed"], "freebsd.environment.transport_inputs_sealed")
+    _boolean(environment["pf_initial_kernel_load_verified"], "freebsd.environment.pf_initial_kernel_load_verified")
     if environment["os"] != "FreeBSD" or not environment["release"].startswith("14.4-RELEASE") or environment["machine"] != "amd64" or freebsd_lab.ANCHOR_NAME_PATTERN.fullmatch(environment["pf_anchor"]) is None:
         _fail("FreeBSD guest/environment identity is invalid")
     if (
         environment["pf_initial_status"] != "Disabled"
+        or environment["pf_initial_kernel_state"] != "module_absent"
+        or environment["pf_initial_kernel_load_verified"] is not True
         or environment["pf_snapshot_provenance"]
         not in {"exact_live", "legacy_derived"}
         or environment["pf_final_status"] != "Disabled"
+        or environment["pf_final_kernel_state"] != "module_absent"
         or environment["pf_snapshot_sha256"] != EMPTY_SHA256
     ):
         _fail("FreeBSD PF baseline was not restored to the exact disabled empty snapshot")
@@ -1362,8 +1456,8 @@ def _validate_freebsd_schema(document: dict[str, Any]) -> tuple[dict[str, Any], 
         _string(item["version"], f"freebsd.inputs.{side}.version")
         _sha256(item["sha256"], f"freebsd.inputs.{side}.sha256")
     forward_only = (
-        inputs["candidate"]["package"] == "syswarden-4.02.14.txz"
-        and inputs["candidate"]["version"] == "4.02.14"
+        inputs["candidate"]["package"] == "syswarden-4.02.15.txz"
+        and inputs["candidate"]["version"] == "4.02.15"
         and inputs["previous"]["package"]
         == freebsd_lab.FORWARD_ONLY_PREVIOUS_PACKAGE
         and inputs["previous"]["version"]
@@ -1382,7 +1476,7 @@ def _validate_freebsd_schema(document: dict[str, Any]) -> tuple[dict[str, Any], 
     if historical_binding_touched and not forward_only:
         _fail(
             "FreeBSD historical transition must be the exact byte-bound "
-            "v4.02.8 -> v4.02.14 contract"
+            "v4.02.8 -> v4.02.15 contract"
         )
     _string(inputs["pf_fixture"], "freebsd.inputs.pf_fixture")
     _sha256(inputs["pf_fixture_sha256"], "freebsd.inputs.pf_fixture_sha256")
@@ -1604,8 +1698,8 @@ def _validate_freebsd(
     derived_product = "pass"
     inputs = document["inputs"]
     forward_only = (
-        inputs["candidate"]["package"] == "syswarden-4.02.14.txz"
-        and inputs["candidate"]["version"] == "4.02.14"
+        inputs["candidate"]["package"] == "syswarden-4.02.15.txz"
+        and inputs["candidate"]["version"] == "4.02.15"
         and inputs["previous"]["package"]
         == freebsd_lab.FORWARD_ONLY_PREVIOUS_PACKAGE
         and inputs["previous"]["version"]
@@ -1661,6 +1755,10 @@ def _validate_freebsd(
             guest_identity and len(observed) == len(_expected_freebsd_checks())
         ),
         "clean disposable snapshot": clean_pf_baseline,
+        "PF kernel begins absent and loads strictly": (
+            environment["pf_initial_kernel_state"] == "module_absent"
+            and environment["pf_initial_kernel_load_verified"] is True
+        ),
         "root-sealed exact transport inventory": environment[
             "transport_inputs_sealed"
         ]
@@ -1699,6 +1797,9 @@ def _validate_freebsd(
             clean_pf_baseline
             and anchor_valid
             and environment["pf_final_status"] == "Disabled"
+        ),
+        "PF kernel returned to absent guest baseline": (
+            environment["pf_final_kernel_state"] == "module_absent"
         ),
     }
     conditions = document["harness_conditions"]

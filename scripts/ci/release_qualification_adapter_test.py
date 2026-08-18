@@ -558,7 +558,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("freebsd-vm-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
-    def test_freebsd_forward_only_v40214_contract_is_exercised(self) -> None:
+    def test_freebsd_forward_only_v40215_contract_is_exercised(self) -> None:
         evidence = passing_evidence()
         evidence["PF_SNAPSHOT_PROVENANCE"] = "legacy_derived"
         evidence["PREVIOUS_PACKAGE_SHA256"] = (
@@ -569,7 +569,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             "CANDIDATE_REINSTALL",
             "CANDIDATE_RESTART_IDEMPOTENCE",
         ):
-            evidence[f"{phase}_PKG_VERSION"] = "4.02.14"
+            evidence[f"{phase}_PKG_VERSION"] = "4.02.15"
         for phase in ("PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"):
             evidence[f"{phase}_PKG_VERSION"] = "4.02.8"
             evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"
@@ -585,8 +585,8 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         report = freebsd_vm_lab.build_report(
             evidence,
             freebsd_vm_lab.PackageArtifact(
-                self.fixture.root / "syswarden-4.02.14.txz",
-                "4.02.14",
+                self.fixture.root / "syswarden-4.02.15.txz",
+                "4.02.15",
                 evidence["CANDIDATE_PACKAGE_SHA256"],
             ),
             freebsd_vm_lab.PackageArtifact(
@@ -764,6 +764,85 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 )
                 self.fixture.save_raw("freebsd-vm-raw.json", report)
                 self.assertAdapterError(self.fixture.args())
+
+    def test_freebsd_pf_fresh_boundary_components_are_exact(self) -> None:
+        mutations = {
+            "nonempty_seed_apply_return_code": "1",
+            "nonempty_anchor_preserved": "0",
+            "nonempty_filter_preserved": "0",
+            "nonempty_nat_preserved": "0",
+            "nonempty_tables_preserved": "0",
+            "nonempty_status_preserved": "0",
+        }
+        for field, invalid_value in mutations.items():
+            with self.subTest(field=field):
+                self.fixture._make_raw_reports()
+                report = self.fixture.load_raw("freebsd-vm-raw.json")
+                check = next(
+                    item
+                    for item in report["checks"]
+                    if item["id"] == "SW-PKG-FBSD-PF-FRESH-BOUNDARY-001"
+                )
+                check["observed"][field] = invalid_value
+                self.fixture.save_raw("freebsd-vm-raw.json", report)
+                self.assertAdapterError(self.fixture.args())
+
+    def test_freebsd_pf_module_absent_lifecycle_is_exact(self) -> None:
+        mutations = {
+            "SW-PKG-FBSD-PF-MODULE-ABSENT-INSTALL-001": {
+                "pre_module_absent": "0",
+                "pre_device_absent": "0",
+                "install_return_code": "1",
+                "postinstall_marker_state": "absent",
+                "diagnostics_clean": "0",
+                "snapshot_safe": "0",
+                "schema_version": "1",
+                "provenance": "legacy_derived",
+                "initial_kernel_state": "available",
+                "mutation_started": "false",
+                "policy_module_present": "0",
+                "policy_device_ready": "0",
+                "policy_status": "Disabled",
+                "policy_rule_count": "0",
+            },
+            "SW-PKG-FBSD-PF-MODULE-ABSENT-REMOVE-001": {
+                "delete_return_code": "1",
+                "diagnostics_clean": "0",
+                "package_absent": "0",
+                "snapshot_absent": "0",
+                "configured_status": "Enabled",
+                "module_absent": "0",
+                "device_absent": "0",
+                "probe_load_return_code": "1",
+                "probe_status": "Enabled",
+                "probe_policy_empty": "0",
+                "probe_unload_return_code": "1",
+                "final_module_absent": "0",
+                "final_device_absent": "0",
+            },
+        }
+        for check_id, fields in mutations.items():
+            for field, invalid_value in fields.items():
+                with self.subTest(check_id=check_id, field=field):
+                    self.fixture._make_raw_reports()
+                    report = self.fixture.load_raw("freebsd-vm-raw.json")
+                    check = next(
+                        item for item in report["checks"] if item["id"] == check_id
+                    )
+                    check["observed"][field] = invalid_value
+                    self.fixture.save_raw("freebsd-vm-raw.json", report)
+                    self.assertAdapterError(self.fixture.args())
+
+        self.fixture._make_raw_reports()
+        report = self.fixture.load_raw("freebsd-vm-raw.json")
+        check = next(
+            item
+            for item in report["checks"]
+            if item["id"] == "SW-PKG-FBSD-PF-MODULE-ABSENT-INSTALL-001"
+        )
+        check["observed"]["unexpected"] = "1"
+        self.fixture.save_raw("freebsd-vm-raw.json", report)
+        self.assertAdapterError(self.fixture.args())
 
     def test_freebsd_pf_environment_cannot_contradict_harness_conditions(self) -> None:
         report = self.fixture.load_raw("freebsd-vm-raw.json")

@@ -14,12 +14,291 @@ from pathlib import Path
 from unittest import mock
 
 import documentation_gate
+import freebsd_vm_lab
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class DocumentationGateTest(unittest.TestCase):
+    def test_tracked_files_do_not_contain_forbidden_dash_utf8_bytes(self) -> None:
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=REPO_ROOT,
+            check=True,
+            stdout=subprocess.PIPE,
+        ).stdout.split(b"\0")
+        # Keep all tracked repository text on plain ASCII hyphens.
+        forbidden = {
+            b"\xe2\x80\x91": "U+2011",
+            b"\xe2\x80\x93": "U+2013",
+            b"\xe2\x80\x94": "U+2014",
+        }
+        offenders = []
+        for relative_path in tracked:
+            if not relative_path:
+                continue
+            decoded_path = relative_path.decode("utf-8", errors="surrogateescape")
+            content = (REPO_ROOT / decoded_path).read_bytes()
+            for sequence, label in forbidden.items():
+                if sequence in content:
+                    offenders.append(f"{decoded_path}: {label}")
+        self.assertEqual(offenders, [])
+
+    def test_v40215_changelog_is_complete_and_preserves_v40214_suffix(self) -> None:
+        changelog = (REPO_ROOT / "changelog.md").read_bytes()
+        marker = b"# Release v4.02.14\n"
+        self.assertEqual(changelog.count(marker), 1)
+        suffix = marker + changelog.split(marker, 1)[1]
+        self.assertEqual(len(suffix), 157650)
+        self.assertEqual(
+            hashlib.sha256(suffix).hexdigest(),
+            "a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5",
+        )
+
+        release_block = changelog.split(b"# Release v4.02.15\n", 1)[1].split(
+            b"\n---\n", 1
+        )[0].decode("utf-8")
+        for phrase in (
+            "Protected qualification run `31993252784`",
+            "native amd64 and ARM64 package lifecycle shards",
+            "FreeBSD and nftables product behavior was therefore not evaluated",
+            "Preserve a redacted primary laboratory error when transport cleanup also fails",
+            "does not publish that successful result",
+            "both `script` TUI probes and all eleven noninteractive `pkg`",
+            "exactly 13 explicit `</dev/null` boundaries",
+            "All six lifecycle `pkg add -f` and two evidence-bearing `pkg delete -fy`",
+            "use bounded FreeBSD `timeout -f`",
+            "consuming unread shell source and returning status 2",
+            "map HUP, INT and TERM to statuses 129, 130 and 143",
+            "Write `root` and `nobody` on separate lines",
+            "byte-exact nonsymlink `root:wheel` 0600 state",
+            "transactional byte-exact root crontab probe and restoration",
+            "restore the original present or absent state even after a primary failure",
+            "fail closed on any primary, restoration or restoration-readback error",
+            "FreeBSD 14.4 singular `fragment` keyword",
+            "rejects the invalid plural `fragments` form",
+            "Publish schema v2 before any PF module load or policy mutation",
+            "record `initial_kernel_state=module_absent`",
+            "state table read through `pfctl -ss`",
+            "Persist `mutation_started=true` immediately before applying",
+            "Restoration unloads PF only when the snapshot recorded an initially absent module",
+            "returns the guest to module and control-device absence",
+            "normalized `sshd_config` content is byte-identical",
+            "zero backup, temporary-file write, candidate validation, rename",
+            "Changed content retains the validated compare-and-swap transaction",
+            "Normalize every TXZ member to numeric UID and GID 0 with `root:wheel` names",
+            "remove PAX `uid`, `gid`, `uname` and `gname` overrides",
+            "reject any numeric or named owner or group drift",
+            "No sealed v4.02.14 qualification artifact",
+            "final disposable FreeBSD VM evidence",
+            "099015d7d7433235b50a2d3cff76782553536af2fe2357dfb5ebf5f999e085",
+            "e3ff75d5961092ca1ab0ec752e8dd70d4121f9bf2cbb26957dc339cdd276bf65",
+            "harness_status=pass",
+            "product_status=fail",
+            "release_ready=false",
+            "Of 75 checks, 68 passed and seven unexpected checks have status `blocker`.",
+            "SW-PKG-FBSD-CANDIDATE-UPGRADE-POSTINSTALL-001",
+            "SW-PKG-FBSD-CANDIDATE-REINSTALL-POSTINSTALL-001",
+            "SW-PKG-FBSD-CANDIDATE-RESTART-IDEMPOTENCE-POSTINSTALL-001",
+            "SW-PKG-FBSD-RCD-ENABLE-001",
+            "SW-PKG-FBSD-UPGRADE-RCD-001",
+            "SW-PKG-FBSD-PF-MODULE-ABSENT-INSTALL-001",
+            "SW-PKG-FBSD-RSYSLOG-001",
+            "diagnostics_clean=0",
+            "mutation_started=false",
+            "base_syslogd_inactive=0",
+            "Publication is stopped.",
+            "No v4.02.15 tag, public Release, Release signature or public asset is authorized or created.",
+            "20 August 2026 at 13:00 CEST",
+            "remove FreeBSD support completely",
+            "v4.02.15 is an unpublished failed candidate.",
+            "Do not install it as a public Release",
+            "exactly 14 assets",
+            "No PDF and no private `output/` file belongs to a public Release.",
+        ):
+            self.assertIn(phrase, release_block)
+
+        script = freebsd_vm_lab.REMOTE_LAB_SCRIPT
+        self.assertEqual(script.count("</dev/null"), 13)
+        self.assertEqual(
+            script.count("env TERM=xterm timeout 5 script -q /dev/null"),
+            2,
+        )
+        self.assertEqual(script.count("pkg update -f"), 1)
+        self.assertEqual(script.count("pkg install -y"), 1)
+        self.assertEqual(script.count("pkg add -f"), 6)
+        self.assertEqual(script.count("pkg delete -fy syswarden"), 3)
+        self.assertEqual(
+            script.count('timeout -f "$command_timeout" pkg add -f'),
+            6,
+        )
+        self.assertEqual(
+            script.count("timeout -f 120 pkg delete -fy syswarden"),
+            2,
+        )
+        self.assertEqual(script.count("trap 'final_cleanup \"$?\"' EXIT"), 1)
+        for signal, status in (("HUP", 129), ("INT", 130), ("TERM", 143)):
+            self.assertEqual(script.count(f"trap 'exit {status}' {signal}"), 1)
+
+        changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
+        release_block = changelog.split("# Release v4.02.15\n", 1)[1].split(
+            "\n---\n", 1
+        )[0]
+        report = (
+            REPO_ROOT / "docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.15.md"
+        ).read_text(encoding="utf-8")
+        for text in (release_block, report):
+            self.assertIn("all eleven noninteractive", text)
+            self.assertIn("exactly 13", text)
+            self.assertIn("six lifecycle", text)
+            self.assertIn("two", text)
+            self.assertIn("timeout -f", text)
+            self.assertIn("both", text)
+            self.assertIn("/dev/null", text)
+            self.assertIn("129", text)
+            self.assertIn("130", text)
+            self.assertIn("143", text)
+            self.assertIn("`root` and `nobody`", text)
+            self.assertIn("root:wheel", text)
+            self.assertIn("0600", text)
+            self.assertIn("byte-exact", text)
+            self.assertIn("singular `fragment`", text)
+            self.assertIn("plural `fragments`", text)
+            self.assertIn("schema v2", text)
+            self.assertIn("initial_kernel_state=module_absent", text)
+            self.assertIn("pfctl -ss", text)
+            self.assertIn("mutation_started=true", text)
+            self.assertIn("initially absent", text)
+            self.assertIn("initially present", text)
+            self.assertIn("module and control-device absence", text)
+            self.assertIn("byte-identical", text)
+            self.assertIn("zero backup", text)
+            self.assertIn("candidate validation", text)
+            self.assertIn("compare-and-swap", text)
+            self.assertIn("restoration", text)
+            self.assertIn("primary", text)
+
+        self.assertIn(
+            "printf '%s\\n' root nobody >/var/cron/allow",
+            script,
+        )
+        self.assertNotIn("'root,nobody' >/var/cron/allow", script)
+        self.assertIn(
+            "stat -f '%u:%g:%Lp' \"$cron_access_path\"",
+            script,
+        )
+        self.assertIn(
+            'validate_root_crontab_round_trip "$work/cron-access-round-trip"',
+            script,
+        )
+        self.assertIn(
+            "# Once the probe command has run, restoration is mandatory",
+            script,
+        )
+        self.assertIn(
+            'cmp -s "$root_crontab_before" "$root_crontab_restored"',
+            script,
+        )
+        self.assertIn(
+            'if [ "$root_crontab_primary_failed" -ne 0 ] ||',
+            script,
+        )
+        self.assertIn(
+            '[ "$root_crontab_restore_failed" -ne 0 ]; then',
+            script,
+        )
+        self.assertIn(
+            'cmp -s "$removal_cron_expected" "$removal_cron_readback"',
+            script,
+        )
+
+        singular_fragment_rule = "block drop in quick all fragment"
+        plural_fragment_rule = "block drop in quick all fragments"
+        for relative_path in (
+            "src/core/syswarden-cli/pkg/firewall/firewall_freebsd.go",
+            "testdata/firewall/pf-v4.02.8.conf",
+        ):
+            policy = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertNotIn(plural_fragment_rule, policy)
+            self.assertEqual(policy.count(singular_fragment_rule), 1)
+
+        pf_restore_source = (
+            REPO_ROOT
+            / "src/core/syswarden-cli/pkg/firewall/pf_restore_freebsd.go"
+        ).read_text(encoding="utf-8")
+        for phrase in (
+            "pfSnapshotSchemaVersion   = 2",
+            'PFInitialKernelModuleAbsent PFInitialKernelState = "module_absent"',
+            'States       string             `json:"states"`',
+            'MutationStarted    bool                 `json:"mutation_started"`',
+            'newPFCTLCommand("-ss")',
+        ):
+            self.assertIn(phrase, pf_restore_source)
+
+        pf_apply_source = (
+            REPO_ROOT
+            / "src/core/syswarden-cli/pkg/firewall/firewall_freebsd.go"
+        ).read_text(encoding="utf-8")
+        transaction_order = [
+            pf_apply_source.index(
+                "capturePFPolicySnapshotLocked(PFSnapshotExactLive)"
+            ),
+            pf_apply_source.index("ensurePFKernelReadyForMutationLocked()"),
+            pf_apply_source.index('newPFCTLCommand("-nf", "-")'),
+            pf_apply_source.index("markPFMutationStartedLocked()"),
+            pf_apply_source.index('newPFCTLCommand("-f", "-")'),
+        ]
+        self.assertEqual(transaction_order, sorted(transaction_order))
+
+        restore_start = pf_restore_source.index(
+            "func restorePFPolicyLocked() error {"
+        )
+        restore_end = pf_restore_source.index(
+            "\n}\n\n// RestorePersistedPFPolicy",
+            restore_start,
+        )
+        restore_source = pf_restore_source[restore_start:restore_end]
+        self.assertEqual(restore_source.count("unloadPFKernelModule()"), 2)
+        self.assertEqual(
+            restore_source.count(
+                "if snapshot.InitialKernelState == PFInitialKernelModuleAbsent {"
+            ),
+            3,
+        )
+
+        for phrase in (
+            'emit PF_INITIAL_MODULE_ABSENT "$initial_pf_module_absent"',
+            'select(.schema_version == 2 and .provenance == "exact_live")',
+            "PF_ABSENT_SNAPSHOT_MUTATION_STARTED",
+            "PF_ABSENT_DELETE_FINAL_MODULE_ABSENT",
+            "PF_ABSENT_DELETE_FINAL_DEVICE_ABSENT",
+            "PF_FINAL_GUEST_MODULE_ABSENT",
+            "PF_FINAL_GUEST_DEVICE_ABSENT",
+        ):
+            self.assertIn(phrase, script)
+
+        ssh_source = (
+            REPO_ROOT / "src/core/syswarden-cli/pkg/system/ssh_freebsd.go"
+        ).read_text(encoding="utf-8")
+        self.assertRegex(
+            ssh_source,
+            r"if normalized == originalContent \{\s+return nil\s+\}",
+        )
+        no_op_guard = ssh_source.index("if normalized == originalContent")
+        for side_effect in (
+            "freeBSDSSHWritePrivateFile(root, freeBSDSSHBackup",
+            "freeBSDSSHWritePrivateFile(root, freeBSDSSHConfigTmp",
+            "freeBSDSSHValidate()",
+            "freeBSDSSHRename(root, freeBSDSSHConfigTmp",
+            "freeBSDSSHSyncDirectory(root)",
+            "freeBSDSSHRestart()",
+        ):
+            self.assertGreater(
+                ssh_source.index(side_effect, no_op_guard),
+                no_op_guard,
+            )
+
     def test_v40212_historical_changelog_records_exact_nosec_reduction(self) -> None:
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
         release_block = changelog.split("# Release v4.02.12\n", 1)[1].split(
@@ -554,7 +833,7 @@ invented_key = true
         ]
         deployment = """## 1. Target decision
 
-| Package family | Architectures produced by the workflow | Decision for v4.02.14 |
+| Package family | Architectures produced by the workflow | Decision for v4.02.15 |
 | :--- | :--- | :--- |
 | DEB | amd64, arm64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |
 | RPM | x86_64, aarch64 | Package contents and lifecycle contracts validated; exact protected lifecycle still required before release |

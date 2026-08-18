@@ -454,8 +454,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             pair = package_lifecycle_lab.PackagePair(
                 candidate=package_lifecycle_lab.PackageArtifact(
                     self.candidate
-                    / f"syswarden_4.02.14_{spec.package_architecture}.apk",
-                    "4.02.14",
+                    / f"syswarden_4.02.15_{spec.package_architecture}.apk",
+                    "4.02.15",
                     "a" * 64,
                 ),
                 previous=package_lifecycle_lab.PackageArtifact(
@@ -1111,7 +1111,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
         previous_path = self.root / "syswarden_4.02.8_x86_64.apk"
         previous_path.write_bytes(b"exact historical APK fixture")
         previous = str(previous_path)
-        candidate_path = self.root / "syswarden_4.02.14_x86_64.apk"
+        candidate_path = self.root / "syswarden_4.02.15_x86_64.apk"
         candidate_path.write_bytes(b"candidate APK fixture")
         candidate = str(candidate_path)
         previous_sha256 = hashlib.sha256(previous_path.read_bytes()).hexdigest()
@@ -1205,11 +1205,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
             f'CALLS="{calls}"\n'
             f'RESTART_STATE_FILE="{restart}"\n'
             'PREVIOUS_PACKAGE="/previous/exact-v4.02.8.apk"\n'
-            'CANDIDATE_PACKAGE="/candidate/v4.02.14.apk"\n'
+            'CANDIDATE_PACKAGE="/candidate/v4.02.15.apk"\n'
             'PREVIOUS_VERSION="4.02.8"\n'
-            'CANDIDATE_VERSION="4.02.14"\n'
+            'CANDIDATE_VERSION="4.02.15"\n'
             'EXPECTED_PREVIOUS_VERSION="4.02.8"\n'
-            'EXPECTED_CANDIDATE_VERSION="4.02.14"\n'
+            'EXPECTED_CANDIDATE_VERSION="4.02.15"\n'
             'FORWARD_ONLY_APK_TRANSITION="1"\n'
             "prepare_expected_payloads() { return 0; }\n"
             "seed_state() { :; }\n"
@@ -2004,11 +2004,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 architecture
             ]
             platform_result.update(
-                candidate_version="4.02.14",
+                candidate_version="4.02.15",
                 previous_version="4.02.8",
                 candidate={
-                    "filename": f"syswarden_4.02.14_{architecture}.apk",
-                    "version": "4.02.14",
+                    "filename": f"syswarden_4.02.15_{architecture}.apk",
+                    "version": "4.02.15",
                     "sha256": "c" * 64,
                 },
                 previous={
