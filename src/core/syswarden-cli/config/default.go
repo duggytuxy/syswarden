@@ -1,7 +1,7 @@
 package config
 
 const DefaultConfig = `# ==============================================================================
-# Version=v4.02.14
+# Version=v4.03.0
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -166,13 +166,7 @@ SYSWARDEN_WG_SUBNET="10.66.66.0/24"
 
 
 # ==========================================
-# [7] WEB-TUI DASHBOARD
-# ==========================================
-# Secure token for Web-TUI authentication. Generated automatically by 'syswarden web-token' if empty.
-SYSWARDEN_WEB_TOKEN=""
-
-# ==========================================
-# [8] SIEM & EXTERNAL INTEGRATIONS
+# [7] SIEM & EXTERNAL INTEGRATIONS
 # ==========================================
 # --- SIEM Log Forwarding (ISO 27001 / NIS2 COMPLIANT) ---
 # y = Enable, n = Disable (Forwards attack logs to an external SIEM via Rsyslog)

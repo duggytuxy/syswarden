@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -258,7 +259,8 @@ func TestHAServerAuthenticationAndMixedVersionContract_SW_HA_001(t *testing.T) {
 		t.Fatalf("status payload = %#v", status)
 	}
 	capabilities, ok := status["capabilities"].([]any)
-	if !ok || len(capabilities) != 5 {
+	wantCapabilities := []any{"auth_all_routes", "native_sync_fence_v1", "peer_cidr", "sync_ttl", "sync_provenance", "tls_verified_client"}
+	if !ok || !reflect.DeepEqual(capabilities, wantCapabilities) {
 		t.Fatalf("status capabilities = %#v", status["capabilities"])
 	}
 	for _, invalidToken := range []string{"", " shared-secret", "shared-secret "} {
@@ -576,13 +578,148 @@ func TestHATemporaryBanLedgerCollisionRenewalAndProvenance_SW_HA_004(t *testing.
 		t.Fatalf("scoped DELETE ledger = %#v, err=%v", ledger.Bans, err)
 	}
 	manager.mu.Lock()
-	if len(manager.unbanned) != 0 || len(manager.ttlBans) != 5 || manager.ttlBans[len(manager.ttlBans)-1].TTL != 110*time.Second {
+	if len(manager.unbanned) != 0 || len(manager.ttlBans) != 4 || manager.ttlBans[len(manager.ttlBans)-1].TTL != 110*time.Second {
 		t.Fatalf("owned delete created an absence or wrong final TTL: ttl=%v unbans=%v", manager.ttlBans, manager.unbanned)
 	}
 	manager.mu.Unlock()
 	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret", `{"ip":"198.51.100.44"}`, "10.20.30.2:43123")
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("unowned temporary DELETE = %d, %q", response.Code, response.Body.String())
+	}
+}
+
+func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
+	const ip = "198.51.100.45"
+	noFirewall := newHAAPITestFixture(t, nil, []string{"192.0.2.10"})
+	response := requestDirectHAHandler(t, noFirewall.handler, http.MethodDelete, "Bearer shared-secret",
+		`{"ip":"198.51.100.45","source":"unknown"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("unknown DELETE without firewall = %d, %q", response.Code, response.Body.String())
+	}
+	if _, err := os.Lstat(noFirewall.ledger); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("unknown DELETE without firewall created a ledger: %v", err)
+	}
+
+	manager := &recordingHAFirewallManager{}
+	fixture := newHAAPITestFixture(t, manager, []string{"10.20.30.6", "10.20.30.0/29"})
+	fixture.api.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
+
+	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
+		`{"ip":"198.51.100.45","source":"unknown"}`, "10.20.30.5:43123")
+	if response.Code != http.StatusOK {
+		t.Fatalf("unknown empty-ledger DELETE = %d, %q", response.Code, response.Body.String())
+	}
+	if _, err := os.Lstat(fixture.ledger); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("unknown empty-ledger DELETE created a ledger: %v", err)
+	}
+	manager.mu.Lock()
+	if len(manager.banned) != 0 || len(manager.unbanned) != 0 {
+		manager.mu.Unlock()
+		t.Fatalf("unknown empty-ledger DELETE mutated firewall: bans=%v unbans=%v", manager.banned, manager.unbanned)
+	}
+	manager.mu.Unlock()
+
+	response = requestDirectHAPath(t, fixture.handler, http.MethodPost, "/ha/sync", "Bearer shared-secret",
+		`{"ip":"198.51.100.45","ttl":120,"reason":"owned claim","source":"producer-a"}`, "10.20.30.5:43123")
+	if response.Code != http.StatusOK {
+		t.Fatalf("owned POST = %d, %q", response.Code, response.Body.String())
+	}
+	ledgerBefore, err := os.ReadFile(fixture.ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityBefore, err := os.Lstat(fixture.ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, request := range []struct {
+		label  string
+		body   string
+		remote string
+	}{
+		{"unknown source", `{"ip":"198.51.100.45","source":"producer-b"}`, "10.20.30.4:43123"},
+		{"wrong peer scope", `{"ip":"198.51.100.45","source":"producer-a"}`, "10.20.30.6:43123"},
+		{"unknown IP batch member", `{"bans":[{"ip":"198.51.100.46","source":"producer-a"}]}`, "10.20.30.3:43123"},
+	} {
+		response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
+			request.body, request.remote)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s DELETE = %d, %q", request.label, response.Code, response.Body.String())
+		}
+		ledgerAfter, err := os.ReadFile(fixture.ledger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		identityAfter, err := os.Lstat(fixture.ledger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(ledgerAfter, ledgerBefore) || !os.SameFile(identityBefore, identityAfter) {
+			t.Fatalf("%s DELETE republished or changed the ledger", request.label)
+		}
+	}
+	manager.mu.Lock()
+	if !reflect.DeepEqual(manager.banned, []string{ip}) || len(manager.unbanned) != 0 {
+		manager.mu.Unlock()
+		t.Fatalf("unowned DELETE mutated firewall: bans=%v unbans=%v", manager.banned, manager.unbanned)
+	}
+	manager.mu.Unlock()
+
+	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
+		`{"ip":"198.51.100.45","source":"producer-a"}`, "10.20.30.3:43123")
+	if response.Code != http.StatusOK {
+		t.Fatalf("owned DELETE = %d, %q", response.Code, response.Body.String())
+	}
+	ledger, err := fixture.api.readHALedger()
+	if err != nil || len(ledger.Bans) != 0 {
+		t.Fatalf("owned DELETE ledger = %#v, err=%v", ledger.Bans, err)
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if !reflect.DeepEqual(manager.unbanned, []string{ip}) {
+		t.Fatalf("owned DELETE firewall calls = %v", manager.unbanned)
+	}
+}
+
+func TestHATemporaryDeletePendingClaimRetryConverges_SW_HA_004(t *testing.T) {
+	const ip = "198.51.100.47"
+	manager := &recordingHAFirewallManager{}
+	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture.api.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
+	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret",
+		`{"ip":"198.51.100.47","ttl":120,"reason":"retry claim","source":"producer-a"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("temporary POST = %d, %q", response.Code, response.Body.String())
+	}
+	manager.mu.Lock()
+	manager.unbanErr = errors.New("injected temporary delete failure")
+	manager.mu.Unlock()
+	response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret",
+		`{"ip":"198.51.100.47","source":"producer-a"}`)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("failed temporary DELETE = %d, %q", response.Code, response.Body.String())
+	}
+	ledger, err := fixture.api.readHALedger()
+	if err != nil || len(ledger.Bans) != 1 || ledger.Bans[0].State != haBanPendingDelete {
+		t.Fatalf("failed temporary DELETE ledger = %#v, err=%v", ledger.Bans, err)
+	}
+	manager.mu.Lock()
+	manager.unbanErr = nil
+	manager.mu.Unlock()
+	response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret",
+		`{"ip":"198.51.100.47","source":"producer-a"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("temporary DELETE retry = %d, %q", response.Code, response.Body.String())
+	}
+	ledger, err = fixture.api.readHALedger()
+	if err != nil || len(ledger.Bans) != 0 {
+		t.Fatalf("temporary DELETE retry ledger = %#v, err=%v", ledger.Bans, err)
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if !reflect.DeepEqual(manager.unbanned, []string{ip, ip}) {
+		t.Fatalf("temporary DELETE retry firewall calls = %v", manager.unbanned)
 	}
 }
 

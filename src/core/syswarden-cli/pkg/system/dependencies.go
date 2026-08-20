@@ -43,12 +43,6 @@ func InstallDependencies() error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("YUM installation failed: %w", err)
 		}
-	} else if _, err := exec.LookPath("pkg"); err == nil {
-		fmt.Println(" -> Detected FreeBSD (pkg)")
-		cmd := exec.CommandContext(ctx, "pkg", "install", "-y", "wireguard-tools", "libqrencode", "curl", "jq", "rsyslog")
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("PKG installation failed: %w", err)
-		}
 	} else if _, err := exec.LookPath("apk"); err == nil {
 		fmt.Println(" -> Detected Alpine Linux (APK)")
 		cmd := exec.CommandContext(ctx, "apk", "add", "--no-cache", "nftables", "wireguard-tools", "libqrencode-tools", "curl", "jq", "rsyslog", "rsyslog-uxsock") // #nosec

@@ -1,383 +1,181 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080" role="img" aria-labelledby="title description">
-  <title id="title">SysWarden HIDS, HIPS and WAAP out-of-band architecture</title>
-  <desc id="description">Live requests go directly to protected APIs, websites, applications and services. SysWarden observes access, security and host telemetry out of band, analyzes HIDS and WAAP signals, then applies HIPS enforcement through nftables on Linux or PF on FreeBSD. Operators use the privileged CLI, local TUI or network-facing Web TUI. TLS 1.3, bearer-authenticated HA peers and the gated BunkerWeb partner API exchange ban, unban, TTL and provenance data.</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="940" viewBox="0 0 1600 940" role="img" aria-labelledby="title description">
+  <title id="title">SysWarden Linux architecture</title>
+  <desc id="description">Protected Linux workloads emit logs and host telemetry to a local SysWarden core. The core manages nftables, local telemetry and an authenticated peer-scoped HA API. Operators use a privileged CLI and a local terminal dashboard. A challenge-bound HA fence protects partner migration cleanup.</desc>
   <defs>
-    <linearGradient id="brandGradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#00A3FF"/>
-      <stop offset="1" stop-color="#0055FF"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#06111f"/>
+      <stop offset="1" stop-color="#0b2033"/>
     </linearGradient>
-    <linearGradient id="coreGradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#14263A"/>
-      <stop offset="1" stop-color="#101826"/>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f3d4c"/>
+      <stop offset="1" stop-color="#102943"/>
     </linearGradient>
-    <radialGradient id="aura" cx="50%" cy="45%" r="60%">
-      <stop offset="0" stop-color="#00A3FF" stop-opacity="0.2"/>
-      <stop offset="1" stop-color="#00A3FF" stop-opacity="0"/>
-    </radialGradient>
-    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-      <path d="M32 0H0V32" fill="none" stroke="#30363D" stroke-width="1" stroke-opacity="0.22"/>
-    </pattern>
-    <filter id="blueGlow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="7" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
+    <filter id="shadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#020617" flood-opacity="0.5"/>
     </filter>
-    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.35"/>
-    </filter>
-    <marker id="arrowCyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10Z" fill="#00A3FF"/>
+    <marker id="arrowCyan" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#38bdf8"/>
     </marker>
-    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10Z" fill="#00E676"/>
-    </marker>
-    <marker id="arrowAmber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10Z" fill="#FFB000"/>
-    </marker>
-    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10Z" fill="#F44336"/>
-    </marker>
-    <marker id="arrowPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10Z" fill="#A371F7"/>
+    <marker id="arrowTeal" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2dd4bf"/>
     </marker>
     <style>
-      .sans { font-family: Inter, "Segoe UI", Arial, sans-serif; }
-      .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
-      .panel { fill: #161B22; stroke: #30363D; stroke-width: 2; }
-      .panel-soft { fill: #111820; stroke: #30363D; stroke-width: 2; }
-      .eyebrow { fill: #8B949E; font-size: 16px; font-weight: 700; letter-spacing: 2.4px; }
-      .heading { fill: #F0F6FC; font-size: 27px; font-weight: 750; }
-      .subheading { fill: #C9D1D9; font-size: 18px; font-weight: 650; }
-      .body { fill: #8B949E; font-size: 15px; }
-      .small { fill: #8B949E; font-size: 13px; }
-      .pill-text { fill: #F0F6FC; font-size: 13px; font-weight: 700; letter-spacing: 0.5px; }
-      .flow { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .h1 { font: 800 36px Inter,Segoe UI,Arial,sans-serif; fill: #f8fafc; }
+      .h2 { font: 750 21px Inter,Segoe UI,Arial,sans-serif; fill: #f8fafc; }
+      .body { font: 500 16px Inter,Segoe UI,Arial,sans-serif; fill: #c1d3df; }
+      .small { font: 500 14px Inter,Segoe UI,Arial,sans-serif; fill: #9db5c7; }
+      .mono { font: 700 14px ui-monospace,SFMono-Regular,Consolas,monospace; fill: #d7f8ff; }
+      .panel { fill: #0d2437; stroke: #234861; stroke-width: 2; }
+      .inner { fill: #102c42; stroke: #2b5872; stroke-width: 1.5; }
+      .tag { fill: #0e3548; stroke: #2dd4bf; stroke-width: 1.3; }
     </style>
   </defs>
 
-  <rect width="1600" height="1080" fill="#0D1117"/>
-  <rect width="1600" height="1080" fill="url(#grid)"/>
-  <ellipse cx="810" cy="555" rx="620" ry="500" fill="url(#aura)"/>
-  <circle cx="1500" cy="90" r="230" fill="#0055FF" opacity="0.07"/>
-  <circle cx="90" cy="1020" r="260" fill="#00A3FF" opacity="0.06"/>
+  <rect width="1600" height="940" rx="28" fill="url(#bg)"/>
+  <text x="70" y="68" class="h1">SysWarden v4.03.0 candidate architecture</text>
+  <text x="70" y="100" class="body">Linux-only host enforcement, local terminal operations and condition-bound HA migration</text>
 
-  <!-- Header -->
-  <g class="sans">
-    <g transform="translate(48 24) scale(0.52)">
-      <path d="M50 0L100 20V60C100 90 75 110 50 120C25 110 0 90 0 60V20L50 0Z" fill="#161B22" stroke="url(#brandGradient)" stroke-width="5" filter="url(#blueGlow)"/>
-      <path d="M50 15L85 30V55C85 75 65 90 50 100C35 90 15 75 15 55V30L50 15Z" fill="none" stroke="#00A3FF" stroke-width="2" opacity="0.6"/>
-      <path d="M34 43L49 58L34 73" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M56 74H72" stroke="#00A3FF" stroke-width="5" stroke-linecap="round"/>
+  <g transform="translate(70 154)" filter="url(#shadow)">
+    <rect width="350" height="294" rx="22" class="panel"/>
+    <text x="26" y="44" class="small" fill="#5eead4">PROTECTED WORKLOADS</text>
+    <g transform="translate(24 68)">
+      <rect width="302" height="58" rx="13" class="inner"/>
+      <text x="18" y="26" class="h2" font-size="18">APIs and services</text>
+      <text x="18" y="47" class="small">Traffic stays on its normal path</text>
     </g>
-    <text x="120" y="58" fill="#FFFFFF" font-size="39" font-weight="800" letter-spacing="1">SYSWARDEN</text>
-    <text x="120" y="84" fill="#8B949E" font-size="15" font-weight="600" letter-spacing="2.1">ACTIVE DEFENSE HIDS / HIPS / WAAP</text>
-    <text x="790" y="50" fill="#F0F6FC" font-size="26" font-weight="750" text-anchor="middle">OUT-OF-BAND DEFENSE ARCHITECTURE</text>
-    <text x="790" y="77" fill="#8B949E" font-size="14" text-anchor="middle">Observe host and application signals, decide locally, enforce at the host edge</text>
-
-    <g transform="translate(1210 25)">
-      <rect width="338" height="64" rx="14" fill="#111820" stroke="#30363D" stroke-width="2"/>
-      <circle cx="24" cy="22" r="5" fill="#00A3FF"/>
-      <text x="38" y="27" class="small">Observe</text>
-      <circle cx="113" cy="22" r="5" fill="#FFB000"/>
-      <text x="127" y="27" class="small">Analyze</text>
-      <circle cx="218" cy="22" r="5" fill="#F44336"/>
-      <text x="232" y="27" class="small">Block</text>
-      <circle cx="24" cy="47" r="5" fill="#00E676"/>
-      <text x="38" y="52" class="small">Serve</text>
-      <circle cx="113" cy="47" r="5" fill="#A371F7"/>
-      <text x="127" y="52" class="small">Orchestrate</text>
+    <g transform="translate(24 138)">
+      <rect width="302" height="58" rx="13" class="inner"/>
+      <text x="18" y="26" class="h2" font-size="18">Security logs</text>
+      <text x="18" y="47" class="small">WAAP and authentication signals</text>
+    </g>
+    <g transform="translate(24 208)">
+      <rect width="302" height="58" rx="13" class="inner"/>
+      <text x="18" y="26" class="h2" font-size="18">Host telemetry</text>
+      <text x="18" y="47" class="small">Kernel, process and service state</text>
     </g>
   </g>
 
-  <!-- Live request path -->
-  <g class="sans" filter="url(#softShadow)">
-    <rect x="40" y="120" width="1520" height="250" rx="24" class="panel-soft"/>
-    <text x="72" y="153" class="eyebrow">1  LIVE REQUEST PATH</text>
-    <g transform="translate(902 133)">
-      <rect width="338" height="28" rx="14" fill="#0D1117" stroke="#00A3FF" stroke-opacity="0.6"/>
-      <text x="169" y="19" class="mono" fill="#00A3FF" font-size="12" font-weight="700" text-anchor="middle">SYSWARDEN IS NOT AN INLINE PROXY</text>
+  <g transform="translate(500 142)" filter="url(#shadow)">
+    <rect width="600" height="322" rx="26" fill="url(#core)" stroke="#2dd4bf" stroke-width="2.5"/>
+    <text x="300" y="48" text-anchor="middle" class="small" fill="#5eead4">HOST-LOCAL TRUST BOUNDARY</text>
+    <text x="300" y="88" text-anchor="middle" class="h1">SysWarden Core</text>
+    <g transform="translate(28 116)">
+      <rect width="166" height="82" rx="14" class="inner"/>
+      <text x="83" y="31" text-anchor="middle" class="mono">CONFIG</text>
+      <text x="83" y="55" text-anchor="middle" class="small">validated modules</text>
+      <text x="83" y="71" text-anchor="middle" class="small">atomic migration</text>
     </g>
-
-    <!-- Legitimate activity -->
-    <g transform="translate(72 178)">
-      <rect width="238" height="142" rx="18" fill="#10251E" stroke="#1D8F5E" stroke-width="2"/>
-      <circle cx="54" cy="54" r="34" fill="#00E676" opacity="0.15"/>
-      <circle cx="47" cy="43" r="11" fill="#00E676"/>
-      <path d="M27 79C30 60 64 60 68 79" fill="#00E676"/>
-      <circle cx="82" cy="48" r="8" fill="#78F5B1"/>
-      <path d="M69 72C72 59 93 59 96 72" fill="#78F5B1"/>
-      <text x="112" y="47" fill="#00E676" font-size="18" font-weight="750">LEGITIMATE</text>
-      <text x="112" y="69" fill="#00E676" font-size="18" font-weight="750">ACTIVITY</text>
-      <text x="20" y="112" class="body">Users and trusted clients</text>
-      <circle cx="208" cy="111" r="12" fill="none" stroke="#00E676" stroke-width="2"/>
-      <path d="M202 111L207 116L215 106" fill="none" stroke="#00E676" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(216 116)">
+      <rect width="166" height="82" rx="14" class="inner"/>
+      <text x="83" y="31" text-anchor="middle" class="mono">WAAP</text>
+      <text x="83" y="55" text-anchor="middle" class="small">out-of-band logs</text>
+      <text x="83" y="71" text-anchor="middle" class="small">bounded decisions</text>
     </g>
-
-    <!-- Suspicious automation -->
-    <g transform="translate(335 178)">
-      <rect width="238" height="142" rx="18" fill="#2A2110" stroke="#B97900" stroke-width="2"/>
-      <circle cx="55" cy="54" r="34" fill="#FFB000" opacity="0.15"/>
-      <rect x="30" y="34" width="50" height="42" rx="10" fill="#FFB000"/>
-      <circle cx="44" cy="54" r="5" fill="#0D1117"/>
-      <circle cx="66" cy="54" r="5" fill="#0D1117"/>
-      <path d="M44 66H66" stroke="#0D1117" stroke-width="4" stroke-linecap="round"/>
-      <path d="M55 25V34M50 25H60" stroke="#FFB000" stroke-width="3" stroke-linecap="round"/>
-      <text x="105" y="47" fill="#FFB000" font-size="18" font-weight="750">SUSPICIOUS</text>
-      <text x="105" y="69" fill="#FFB000" font-size="18" font-weight="750">AUTOMATION</text>
-      <text x="20" y="112" class="body">Bots, scans and bursts</text>
-      <circle cx="208" cy="111" r="12" fill="none" stroke="#FFB000" stroke-width="2"/>
-      <path d="M208 103V111L214 115" fill="none" stroke="#FFB000" stroke-width="2.5" stroke-linecap="round"/>
+    <g transform="translate(404 116)">
+      <rect width="166" height="82" rx="14" class="inner"/>
+      <text x="83" y="31" text-anchor="middle" class="mono">OWNERSHIP</text>
+      <text x="83" y="55" text-anchor="middle" class="small">static + ledger</text>
+      <text x="83" y="71" text-anchor="middle" class="small">separate stores</text>
     </g>
-
-    <!-- Hostile activity -->
-    <g transform="translate(598 178)">
-      <rect width="238" height="142" rx="18" fill="#2A1418" stroke="#B52E35" stroke-width="2"/>
-      <circle cx="54" cy="54" r="34" fill="#F44336" opacity="0.14"/>
-      <path d="M54 25L79 70H29Z" fill="#F44336"/>
-      <path d="M54 41V56M54 64V65" stroke="#0D1117" stroke-width="5" stroke-linecap="round"/>
-      <text x="105" y="47" fill="#F44336" font-size="18" font-weight="750">HOSTILE</text>
-      <text x="105" y="69" fill="#F44336" font-size="18" font-weight="750">ACTIVITY</text>
-      <text x="20" y="112" class="body">Exploits and brute force</text>
-      <circle cx="208" cy="111" r="12" fill="none" stroke="#F44336" stroke-width="2"/>
-      <path d="M202 105L214 117M214 105L202 117" stroke="#F44336" stroke-width="2.5" stroke-linecap="round"/>
+    <g transform="translate(28 220)">
+      <rect width="262" height="72" rx="14" class="tag"/>
+      <text x="131" y="29" text-anchor="middle" class="mono">NFTABLES MANAGER</text>
+      <text x="131" y="52" text-anchor="middle" class="small">validate, commit, verify</text>
     </g>
-
-    <!-- Host edge firewall -->
-    <g transform="translate(1054 174)">
-      <rect width="160" height="152" rx="18" fill="#111D2A" stroke="#00A3FF" stroke-width="2"/>
-      <text x="80" y="25" fill="#8B949E" font-size="12" font-weight="700" text-anchor="middle" letter-spacing="1.6">HOST EDGE</text>
-      <path d="M80 38L111 50V76C111 96 95 110 80 117C65 110 49 96 49 76V50Z" fill="#161B22" stroke="url(#brandGradient)" stroke-width="3"/>
-      <path d="M64 67H96M64 77H96M64 87H96" stroke="#00A3FF" stroke-width="3" stroke-linecap="round"/>
-      <text x="80" y="137" fill="#C9D1D9" font-size="12" font-weight="650" text-anchor="middle">nftables / PF</text>
-    </g>
-
-    <!-- Protected workloads -->
-    <g transform="translate(1270 162)">
-      <rect width="252" height="176" rx="20" fill="#122219" stroke="#238B57" stroke-width="2"/>
-      <text x="126" y="28" fill="#00E676" font-size="14" font-weight="750" text-anchor="middle" letter-spacing="1.4">PROTECTED WORKLOADS</text>
-      <g transform="translate(26 48)">
-        <rect width="200" height="100" rx="12" fill="#0D1117" stroke="#30363D"/>
-        <rect x="15" y="15" width="50" height="28" rx="5" fill="#00A3FF" opacity="0.18" stroke="#00A3FF"/>
-        <rect x="75" y="15" width="50" height="28" rx="5" fill="#00E676" opacity="0.16" stroke="#00E676"/>
-        <rect x="135" y="15" width="50" height="28" rx="5" fill="#A371F7" opacity="0.16" stroke="#A371F7"/>
-        <text x="40" y="34" class="mono" fill="#00A3FF" font-size="11" text-anchor="middle">API</text>
-        <text x="100" y="34" class="mono" fill="#00E676" font-size="11" text-anchor="middle">WEB</text>
-        <text x="160" y="34" class="mono" fill="#A371F7" font-size="11" text-anchor="middle">APP</text>
-        <path d="M17 61H183M17 74H150M17 87H170" stroke="#8B949E" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
-      </g>
-      <text x="126" y="166" class="small" text-anchor="middle">Linux and FreeBSD hosts</text>
-    </g>
-
-    <!-- Request arrows -->
-    <path d="M191 320V330H1016V222H1038M1214 222H1260" class="flow" stroke="#00E676" stroke-width="4" marker-end="url(#arrowGreen)"/>
-    <path d="M454 320V340H1027V259H1038M1214 259H1260" class="flow" stroke="#FFB000" stroke-width="4" marker-end="url(#arrowAmber)"/>
-    <path d="M836 229C920 229 966 286 1038 286M1214 286H1260" class="flow" stroke="#F44336" stroke-width="3" stroke-dasharray="7 8" opacity="0.48" marker-end="url(#arrowRed)"/>
-    <path d="M836 306H1024" class="flow" stroke="#F44336" stroke-width="4"/>
-    <circle cx="1038" cy="306" r="14" fill="#2A1418" stroke="#F44336" stroke-width="3"/>
-    <path d="M1031 299L1045 313M1045 299L1031 313" stroke="#F44336" stroke-width="3" stroke-linecap="round"/>
-    <text x="864" y="214" fill="#F44336" font-size="12" font-weight="650">first event can be logged</text>
-    <text x="860" y="359" fill="#F44336" font-size="12" font-weight="650">later requests blocked</text>
-  </g>
-
-  <!-- Telemetry return path from workloads -->
-  <path d="M1396 338V398H444" class="flow" stroke="#00A3FF" stroke-width="4" stroke-dasharray="8 8" marker-end="url(#arrowCyan)"/>
-  <rect x="760" y="381" width="320" height="28" rx="14" fill="#0D1117" stroke="#00A3FF" stroke-opacity="0.5"/>
-  <text x="920" y="400" class="mono" fill="#00A3FF" font-size="12" font-weight="700" text-anchor="middle">LOGS + HOST SECURITY TELEMETRY</text>
-
-  <!-- Signal intake -->
-  <g class="sans" filter="url(#softShadow)">
-    <rect x="40" y="430" width="400" height="360" rx="24" class="panel"/>
-    <text x="72" y="469" class="eyebrow">2  HIDS / WAAP SIGNAL INTAKE</text>
-    <text x="72" y="504" class="heading">Observe local evidence</text>
-    <text x="72" y="529" class="body">Read-only inputs from configured sources</text>
-
-    <g transform="translate(72 558)">
-      <rect width="336" height="45" rx="11" fill="#101D29" stroke="#22587A"/>
-      <circle cx="24" cy="22" r="8" fill="#00A3FF" opacity="0.9"/>
-      <path d="M21 22H27M24 19V25" stroke="#0D1117" stroke-width="2" stroke-linecap="round"/>
-      <text x="45" y="20" class="subheading" font-size="16">Authentication and service logs</text>
-      <text x="45" y="36" class="small">SSH, system and security events</text>
-    </g>
-    <g transform="translate(72 613)">
-      <rect width="336" height="45" rx="11" fill="#101D29" stroke="#22587A"/>
-      <circle cx="24" cy="22" r="8" fill="#00A3FF" opacity="0.9"/>
-      <path d="M19 18H29V26H19Z" fill="none" stroke="#0D1117" stroke-width="2"/>
-      <text x="45" y="20" class="subheading" font-size="16">Application and proxy logs</text>
-      <text x="45" y="36" class="small">Access, reverse proxy and WAAP events</text>
-    </g>
-    <g transform="translate(72 668)">
-      <rect width="336" height="45" rx="11" fill="#101D29" stroke="#22587A"/>
-      <circle cx="24" cy="22" r="8" fill="#00A3FF" opacity="0.9"/>
-      <path d="M19 25L23 20L27 23L31 17" fill="none" stroke="#0D1117" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="45" y="20" class="subheading" font-size="16">Configured log streams</text>
-      <text x="45" y="36" class="small">Previously written evidence only</text>
-    </g>
-    <g transform="translate(72 723)">
-      <rect width="336" height="39" rx="11" fill="#14231C" stroke="#1D8F5E"/>
-      <text x="168" y="25" fill="#00E676" font-size="13" font-weight="700" text-anchor="middle">OUT-OF-BAND COLLECTION</text>
+    <g transform="translate(310 220)">
+      <rect width="262" height="72" rx="14" class="tag"/>
+      <text x="131" y="29" text-anchor="middle" class="mono">HA API | TCP 62026</text>
+      <text x="131" y="52" text-anchor="middle" class="small">TLS 1.3 + bearer token</text>
     </g>
   </g>
 
-  <!-- SysWarden core -->
-  <g class="sans" filter="url(#softShadow)">
-    <rect x="490" y="430" width="650" height="360" rx="26" fill="url(#coreGradient)" stroke="#00A3FF" stroke-width="2.5"/>
-    <circle cx="815" cy="610" r="270" fill="#00A3FF" opacity="0.035"/>
-    <g transform="translate(520 456) scale(0.38)">
-      <path d="M50 0L100 20V60C100 90 75 110 50 120C25 110 0 90 0 60V20L50 0Z" fill="#161B22" stroke="url(#brandGradient)" stroke-width="6"/>
-      <path d="M34 43L49 58L34 73" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M56 74H72" stroke="#00A3FF" stroke-width="6" stroke-linecap="round"/>
+  <g transform="translate(1180 154)" filter="url(#shadow)">
+    <rect width="350" height="294" rx="22" class="panel"/>
+    <text x="26" y="44" class="small" fill="#5eead4">ENFORCEMENT AND PEERS</text>
+    <g transform="translate(24 68)">
+      <rect width="302" height="78" rx="13" class="inner"/>
+      <text x="18" y="29" class="h2" font-size="18">Linux nftables</text>
+      <text x="18" y="51" class="small">Host input and forwarded traffic</text>
+      <text x="18" y="67" class="small">Exact IPv4 and IPv6 sets</text>
     </g>
-    <text x="575" y="478" class="eyebrow" fill="#00A3FF">3  SYSWARDEN CORE</text>
-    <text x="1080" y="478" fill="#00A3FF" font-size="13" font-weight="750" text-anchor="end">LOCAL DECISION ENGINE</text>
-    <text x="525" y="526" class="heading">Correlate, decide and record</text>
-
-    <g transform="translate(525 554)">
-      <rect width="174" height="116" rx="16" fill="#111820" stroke="#00A3FF"/>
-      <circle cx="27" cy="27" r="13" fill="#00A3FF" opacity="0.18"/>
-      <path d="M21 27H33M27 21V33" stroke="#00A3FF" stroke-width="2.5" stroke-linecap="round"/>
-      <text x="50" y="32" fill="#00A3FF" font-size="17" font-weight="800">HIDS</text>
-      <text x="18" y="61" class="body">Normalize events</text>
-      <text x="18" y="82" class="body">Correlate host signals</text>
-      <text x="18" y="103" class="body">Track thresholds</text>
-    </g>
-    <path d="M706 612H727" class="flow" stroke="#00A3FF" stroke-width="3" marker-end="url(#arrowCyan)"/>
-    <g transform="translate(734 554)">
-      <rect width="174" height="116" rx="16" fill="#221D11" stroke="#FFB000"/>
-      <circle cx="27" cy="27" r="13" fill="#FFB000" opacity="0.18"/>
-      <path d="M20 31L27 20L34 31Z" fill="none" stroke="#FFB000" stroke-width="2.5" stroke-linejoin="round"/>
-      <text x="50" y="32" fill="#FFB000" font-size="17" font-weight="800">WAAP</text>
-      <text x="18" y="61" class="body">Match signatures</text>
-      <text x="18" y="82" class="body">Detect brute force</text>
-      <text x="18" y="103" class="body">Classify L7 events</text>
-    </g>
-    <path d="M915 612H936" class="flow" stroke="#FFB000" stroke-width="3" marker-end="url(#arrowAmber)"/>
-    <g transform="translate(943 554)">
-      <rect width="162" height="116" rx="16" fill="#1B1725" stroke="#A371F7"/>
-      <circle cx="27" cy="27" r="13" fill="#A371F7" opacity="0.18"/>
-      <path d="M20 27L25 32L35 21" fill="none" stroke="#A371F7" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="50" y="32" fill="#A371F7" font-size="16" font-weight="800">DECIDE</text>
-      <text x="18" y="61" class="body">Policy and scope</text>
-      <text x="18" y="82" class="body">TTL and provenance</text>
-      <text x="18" y="103" class="body">Ban or unban</text>
-    </g>
-
-    <g transform="translate(525 691)">
-      <rect width="580" height="70" rx="14" fill="#0D1117" stroke="#30363D"/>
-      <g transform="translate(18 15)">
-        <rect width="118" height="30" rx="15" fill="#10251E" stroke="#1D8F5E"/>
-        <text x="59" y="20" class="pill-text" text-anchor="middle">Atomic state</text>
-      </g>
-      <g transform="translate(148 15)">
-        <rect width="118" height="30" rx="15" fill="#101D29" stroke="#22587A"/>
-        <text x="59" y="20" class="pill-text" text-anchor="middle">Telemetry</text>
-      </g>
-      <g transform="translate(278 15)">
-        <rect width="118" height="30" rx="15" fill="#1B1725" stroke="#6E4AA8"/>
-        <text x="59" y="20" class="pill-text" text-anchor="middle">Ban ledger</text>
-      </g>
-      <text x="414" y="35" fill="#8B949E" font-size="12">Detection changes later traffic.</text>
-      <text x="414" y="51" fill="#8B949E" font-size="12">Requests are not rewritten.</text>
+    <g transform="translate(24 158)">
+      <rect width="302" height="108" rx="13" class="inner"/>
+      <text x="18" y="29" class="h2" font-size="18">HA and BunkerWeb</text>
+      <text x="18" y="52" class="small">Authenticated peer-scoped API</text>
+      <text x="18" y="70" class="small">TTL and provenance gate</text>
+      <text x="18" y="88" class="small">Challenge-bound fence status</text>
     </g>
   </g>
 
-  <!-- HIPS enforcement -->
-  <g class="sans" filter="url(#softShadow)">
-    <rect x="1190" y="430" width="370" height="360" rx="24" class="panel"/>
-    <text x="1222" y="469" class="eyebrow">4  HIPS ENFORCEMENT</text>
-    <text x="1222" y="504" class="heading">Apply at the host edge</text>
-    <text x="1222" y="529" class="body">Local rules, outside the HTTP pipeline</text>
+  <path d="M420 301 H478" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrowCyan)"/>
+  <text x="449" y="283" text-anchor="middle" class="small">logs</text>
+  <path d="M1102 301 H1158" stroke="#2dd4bf" stroke-width="4" marker-end="url(#arrowTeal)"/>
+  <text x="1130" y="283" text-anchor="middle" class="small">policy</text>
 
-    <g transform="translate(1222 555)">
-      <rect width="306" height="76" rx="15" fill="#111D2A" stroke="#00A3FF"/>
-      <path d="M38 14L63 24V45C63 61 50 70 38 76C26 70 13 61 13 45V24Z" fill="#161B22" stroke="#00A3FF" stroke-width="2.5"/>
-      <path d="M25 39H51M25 48H51" stroke="#00A3FF" stroke-width="2.5" stroke-linecap="round"/>
-      <text x="84" y="31" fill="#F0F6FC" font-size="17" font-weight="750">nftables on Linux</text>
-      <text x="84" y="55" fill="#F0F6FC" font-size="17" font-weight="750">PF on FreeBSD</text>
+  <g transform="translate(70 530)" filter="url(#shadow)">
+    <rect width="480" height="208" rx="22" class="panel"/>
+    <text x="26" y="44" class="small" fill="#5eead4">OPERATOR PLANE</text>
+    <g transform="translate(24 68)">
+      <rect width="204" height="108" rx="14" class="inner"/>
+      <text x="102" y="32" text-anchor="middle" class="mono">PRIVILEGED CLI</text>
+      <text x="102" y="58" text-anchor="middle" class="small">config and lifecycle</text>
+      <text x="102" y="78" text-anchor="middle" class="small">fence administration</text>
+      <text x="102" y="96" text-anchor="middle" class="small">host mutation</text>
     </g>
-    <g transform="translate(1222 648)">
-      <rect width="306" height="40" rx="10" fill="#2A1418" stroke="#B52E35"/>
-      <circle cx="20" cy="20" r="7" fill="#F44336"/>
-      <text x="39" y="25" class="subheading" font-size="15">Ban, unban and dynamic TTL</text>
-    </g>
-    <g transform="translate(1222 698)">
-      <rect width="306" height="40" rx="10" fill="#10251E" stroke="#1D8F5E"/>
-      <circle cx="20" cy="20" r="7" fill="#00E676"/>
-      <text x="39" y="25" class="subheading" font-size="15">IPv4, IPv6 and scoped CIDR</text>
-    </g>
-    <g transform="translate(1222 748)">
-      <text x="153" y="0" fill="#8B949E" font-size="12" text-anchor="middle">Validated before mutation, verified after commit</text>
+    <g transform="translate(252 68)">
+      <rect width="204" height="108" rx="14" class="inner"/>
+      <text x="102" y="32" text-anchor="middle" class="mono">NATIVE TUI</text>
+      <text x="102" y="58" text-anchor="middle" class="small">local terminal only</text>
+      <text x="102" y="78" text-anchor="middle" class="small">local telemetry</text>
+      <text x="102" y="96" text-anchor="middle" class="small">no network listener</text>
     </g>
   </g>
 
-  <!-- Main processing arrows -->
-  <path d="M440 612H478" class="flow" stroke="#00A3FF" stroke-width="5" marker-end="url(#arrowCyan)"/>
-  <path d="M1140 612H1178" class="flow" stroke="#F44336" stroke-width="5" marker-end="url(#arrowRed)"/>
-  <text x="459" y="596" class="mono" fill="#00A3FF" font-size="11" text-anchor="middle">EVENTS</text>
-  <text x="1159" y="596" class="mono" fill="#F44336" font-size="11" text-anchor="middle">POLICY</text>
-  <path d="M1516 430V394H1134V337" class="flow" stroke="#0055FF" stroke-width="4" marker-end="url(#arrowCyan)"/>
-  <text x="1380" y="387" class="mono" fill="#00A3FF" font-size="11" text-anchor="middle">RULESET UPDATE</text>
-
-  <!-- Bottom planes -->
-  <g class="sans" filter="url(#softShadow)">
-    <!-- Operator plane -->
-    <rect x="40" y="835" width="490" height="202" rx="24" class="panel-soft"/>
-    <text x="72" y="874" class="eyebrow">OPERATOR PLANE</text>
-    <g transform="translate(72 898)">
-      <rect width="426" height="36" rx="10" fill="#111D2A" stroke="#22587A"/>
-      <text x="16" y="24" class="mono" fill="#00A3FF" font-size="14" font-weight="700">syswarden-cli</text>
-      <text x="156" y="24" class="body">privileged control interface</text>
+  <g transform="translate(610 510)" filter="url(#shadow)">
+    <rect width="920" height="248" rx="22" class="panel"/>
+    <text x="26" y="44" class="small" fill="#5eead4">HA MIGRATION FENCE</text>
+    <g transform="translate(24 68)">
+      <rect width="202" height="142" rx="14" class="inner"/>
+      <text x="101" y="30" text-anchor="middle" class="mono">1 | MANIFEST</text>
+      <text x="18" y="58" class="small">Complete members</text>
+      <text x="18" y="78" class="small">Live leaf pins</text>
+      <text x="18" y="98" class="small">External writers</text>
+      <text x="18" y="118" class="small">One epoch + digests</text>
     </g>
-    <g transform="translate(72 944)">
-      <rect width="426" height="36" rx="10" fill="#14231C" stroke="#1D8F5E"/>
-      <text x="16" y="24" class="mono" fill="#00E676" font-size="14" font-weight="700">syswarden-tui</text>
-      <text x="156" y="24" class="body">local display, no listener</text>
+    <g transform="translate(246 68)">
+      <rect width="202" height="142" rx="14" class="inner"/>
+      <text x="101" y="30" text-anchor="middle" class="mono">2 | ATTEST</text>
+      <text x="18" y="58" class="small">Fresh challenge</text>
+      <text x="18" y="78" class="small">active_drained</text>
+      <text x="18" y="98" class="small">Exact string equality</text>
+      <text x="18" y="118" class="small">Stable condition</text>
     </g>
-    <g transform="translate(72 990)">
-      <rect width="426" height="36" rx="10" fill="#221D11" stroke="#B97900"/>
-      <text x="16" y="24" class="mono" fill="#FFB000" font-size="14" font-weight="700">web-tui</text>
-      <text x="116" y="24" class="body">network-facing HTTPS + WebSocket service</text>
+    <g transform="translate(468 68)">
+      <rect width="202" height="142" rx="14" class="inner"/>
+      <text x="101" y="30" text-anchor="middle" class="mono">3 | CLEAN</text>
+      <text x="18" y="58" class="small">Durable partner journal</text>
+      <text x="18" y="78" class="small">Peer-specific delete</text>
+      <text x="18" y="98" class="small">Condition header</text>
+      <text x="18" y="118" class="small">No inferred ownership</text>
     </g>
-
-    <!-- State and telemetry -->
-    <rect x="555" y="835" width="405" height="202" rx="24" class="panel-soft"/>
-    <text x="587" y="874" class="eyebrow">LOCAL STATE + TELEMETRY</text>
-    <g transform="translate(587 901)">
-      <circle cx="22" cy="22" r="20" fill="#00A3FF" opacity="0.14" stroke="#00A3FF"/>
-      <path d="M11 27L18 20L25 24L34 13" fill="none" stroke="#00A3FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="58" y="16" class="subheading" font-size="16">Status and audit data</text>
-      <text x="58" y="37" class="body">Atomic telemetry publication</text>
-    </g>
-    <g transform="translate(587 957)">
-      <circle cx="22" cy="22" r="20" fill="#A371F7" opacity="0.14" stroke="#A371F7"/>
-      <path d="M14 16H30V29H14ZM18 12H26" fill="none" stroke="#A371F7" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="58" y="16" class="subheading" font-size="16">Ledger and provenance</text>
-      <text x="58" y="37" class="body">TTL-aware local ban history</text>
-    </g>
-
-    <!-- Orchestration plane -->
-    <rect x="985" y="835" width="575" height="202" rx="24" class="panel-soft"/>
-    <text x="1017" y="874" class="eyebrow">5  OUT-OF-BAND ORCHESTRATION</text>
-    <g transform="translate(1017 899)">
-      <circle cx="30" cy="30" r="27" fill="#A371F7" opacity="0.14" stroke="#A371F7"/>
-      <circle cx="21" cy="28" r="8" fill="none" stroke="#A371F7" stroke-width="2.5"/>
-      <circle cx="39" cy="28" r="8" fill="none" stroke="#A371F7" stroke-width="2.5"/>
-      <path d="M27 28H33" stroke="#A371F7" stroke-width="2.5"/>
-      <text x="73" y="17" class="subheading" font-size="16">TLS 1.3 + bearer authenticated HA peers</text>
-      <text x="73" y="39" class="body">Ban, unban, TTL and source provenance</text>
-    </g>
-    <g transform="translate(1017 963)">
-      <circle cx="30" cy="30" r="27" fill="#00E676" opacity="0.12" stroke="#00E676"/>
-      <path d="M16 30H44M30 16V44M20 20L40 40M40 20L20 40" stroke="#00E676" stroke-width="2" stroke-linecap="round"/>
-      <text x="73" y="17" class="subheading" font-size="16">BunkerWeb partner API, gate off by default</text>
-      <text x="73" y="39" class="body">SysWarden contract only, external partner proof</text>
+    <g transform="translate(690 68)">
+      <rect width="202" height="142" rx="14" class="tag"/>
+      <text x="101" y="30" text-anchor="middle" class="mono">4 | RELEASE</text>
+      <text x="18" y="58" class="small">All members stable</text>
+      <text x="18" y="78" class="small">No unexplained residue</text>
+      <text x="18" y="98" class="small">Writer closure durable</text>
+      <text x="18" y="118" class="small">No queued retry</text>
     </g>
   </g>
 
-  <!-- Bottom plane connections -->
-  <path d="M665 790V818H285V835" class="flow" stroke="#8B949E" stroke-width="3" stroke-dasharray="6 7" marker-end="url(#arrowCyan)"/>
-  <path d="M815 790V835" class="flow" stroke="#00A3FF" stroke-width="4" marker-end="url(#arrowCyan)"/>
-  <path d="M965 790V818H1272V835" class="flow" stroke="#A371F7" stroke-width="4" marker-end="url(#arrowPurple)"/>
+  <path d="M550 632 H588" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrowCyan)"/>
+  <path d="M800 464 V494" stroke="#2dd4bf" stroke-width="4" marker-end="url(#arrowTeal)"/>
+
+  <g transform="translate(70 814)">
+    <rect width="1460" height="72" rx="18" fill="#0d2b3e" stroke="#28536d" stroke-width="1.5"/>
+    <text x="28" y="30" class="mono">RELEASE GATE</text>
+    <text x="28" y="53" class="small">6 Linux packages | native ARM64 | nftables lab | signed update manifest | exact 13-asset inventory | immutable qualified SHA</text>
+    <rect x="1192" y="16" width="240" height="40" rx="11" fill="#123a45" stroke="#2dd4bf"/>
+    <text x="1312" y="41" text-anchor="middle" class="mono">FAIL CLOSED</text>
+  </g>
 </svg>

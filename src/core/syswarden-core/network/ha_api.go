@@ -394,6 +394,7 @@ type haAPI struct {
 	blacklistIPv6 string
 	telemetryFile string
 	banLedgerFile string
+	fence         *haFenceController
 	now           func() time.Time
 	mutationMu    sync.RWMutex
 	sweepCursor   int
@@ -436,6 +437,14 @@ func newHAAPI(cfg HAConfig, fwManager firewall.Manager, coreVersion, blacklistIP
 		telemetryFile: filepath.Clean(telemetryFile),
 		banLedgerFile: filepath.Clean(banLedgerFile),
 		now:           time.Now,
+	}
+	fence, err := newHAFenceController(filepath.Join(filepath.Dir(api.banLedgerFile), "fence"), os.Geteuid())
+	if err != nil {
+		return nil, err
+	}
+	api.fence = fence
+	if err := api.fence.prepareForServer(); err != nil {
+		return nil, fmt.Errorf("initialize HA native-sync fence: %w", err)
 	}
 	return api, nil
 }
@@ -627,18 +636,28 @@ func (api *haAPI) handleSync(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "BunkerWeb integration is disabled; configure integrations.bunkerweb.enabled", http.StatusForbidden)
 			return
 		}
-		if r.Method == http.MethodPost {
-			if len(mutation.temporaries) > 0 {
+		if len(mutation.temporaries) > 0 {
+			if r.Method == http.MethodPost {
 				api.applyHATemporaryBans(w, peer, mutation.temporaries)
 			} else {
-				api.applyHABans(w, mutation.ips)
+				api.applyHATemporaryUnbans(w, peer, mutation.temporaries)
 			}
 			return
 		}
-		if len(mutation.temporaries) > 0 {
-			api.applyHATemporaryUnbans(w, peer, mutation.temporaries)
-		} else {
-			api.applyHAUnbans(w, mutation.ips)
+		fenceErr := api.fence.withLegacyMutation(r.Method, r.Header, func() {
+			if r.Method == http.MethodPost {
+				api.applyHABans(w, mutation.ips)
+			} else {
+				api.applyHAUnbans(w, mutation.ips)
+			}
+		})
+		if fenceErr != nil {
+			var protocolError *haFenceHTTPError
+			if errors.As(fenceErr, &protocolError) {
+				http.Error(w, protocolError.Text, protocolError.Status)
+				return
+			}
+			http.Error(w, "HA native-sync fence is unavailable", http.StatusServiceUnavailable)
 		}
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -966,7 +985,7 @@ func validHAReason(reason string) bool {
 func (api *haAPI) applyHABans(w http.ResponseWriter, ips []string) {
 	api.mutationMu.Lock()
 	defer api.mutationMu.Unlock()
-	log.Printf("[HA Cluster] Received %d validated banned addresses from an authenticated peer", len(ips))
+	log.Printf("[HA Cluster] Received %d validated banned addresses from an authenticated peer", len(ips)) // #nosec G706 -- only the integer length of the validated slice is logged
 	if len(ips) > 0 && api.fwManager == nil {
 		http.Error(w, "Firewall unavailable", http.StatusInternalServerError)
 		return
@@ -1000,7 +1019,7 @@ func (api *haAPI) applyHAUnbans(w http.ResponseWriter, ips []string) {
 	api.mutationMu.Lock()
 	defer api.mutationMu.Unlock()
 	now := api.now().UTC().Truncate(time.Second)
-	log.Printf("[HA Cluster] Received %d validated addresses to unban from an authenticated peer", len(ips))
+	log.Printf("[HA Cluster] Received %d validated addresses to unban from an authenticated peer", len(ips)) // #nosec G706 -- only the integer length of the validated slice is logged
 	if len(ips) > 0 && api.fwManager == nil {
 		http.Error(w, "Firewall unavailable", http.StatusInternalServerError)
 		return
@@ -1424,6 +1443,15 @@ func (api *haAPI) readHALedger() (haBanLedger, error) {
 }
 
 func (api *haAPI) mutateHALedger(mutator func(*haBanLedger) error) error {
+	return api.mutateHALedgerIfChanged(func(ledger *haBanLedger) (bool, error) {
+		if err := mutator(ledger); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+}
+
+func (api *haAPI) mutateHALedgerIfChanged(mutator func(*haBanLedger) (bool, error)) error {
 	directory, name, err := openHADataDirectory(api.banLedgerFile)
 	if err != nil {
 		return err
@@ -1438,8 +1466,12 @@ func (api *haAPI) mutateHALedger(mutator func(*haBanLedger) error) error {
 	if err != nil {
 		return err
 	}
-	if err := mutator(&ledger); err != nil {
+	changed, err := mutator(&ledger)
+	if err != nil {
 		return err
+	}
+	if !changed {
+		return nil
 	}
 	sortHALedger(&ledger)
 	if err := validateHALedger(ledger); err != nil {
@@ -1805,22 +1837,37 @@ func (api *haAPI) applyHATemporaryBans(w http.ResponseWriter, peer haPeerIdentit
 	writeHAJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (api *haAPI) markHATemporaryDeletes(requests []haTemporaryBanRequest, peerScope string, now time.Time) error {
+func (api *haAPI) markHATemporaryDeletes(requests []haTemporaryBanRequest, peerScope string, now time.Time) (map[string]map[string]struct{}, error) {
 	requested := make(map[string]struct{}, len(requests))
 	for _, request := range requests {
 		requested[request.IP+"\x00"+request.Source] = struct{}{}
 	}
-	return api.mutateHALedger(func(ledger *haBanLedger) error {
+	matched := make(map[string]map[string]struct{}, len(requests))
+	err := api.mutateHALedgerIfChanged(func(ledger *haBanLedger) (bool, error) {
+		changed := false
 		for index := range ledger.Bans {
 			record := &ledger.Bans[index]
 			_, matches := requested[record.IP+"\x00"+record.Source]
-			if matches && record.PeerScope == peerScope {
-				record.State = haBanPendingDelete
-				record.UpdatedAt = now.Format(time.RFC3339)
+			if !matches || record.PeerScope != peerScope {
+				continue
 			}
+			if matched[record.IP] == nil {
+				matched[record.IP] = make(map[string]struct{})
+			}
+			matched[record.IP][record.Source] = struct{}{}
+			if record.State == haBanPendingDelete {
+				continue
+			}
+			record.State = haBanPendingDelete
+			record.UpdatedAt = now.Format(time.RFC3339)
+			changed = true
 		}
-		return nil
+		return changed, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return matched, nil
 }
 
 func (api *haAPI) removeHATemporaryDeletes(ip string, sources map[string]struct{}, peerScope string) error {
@@ -1842,20 +1889,18 @@ func (api *haAPI) applyHATemporaryUnbans(w http.ResponseWriter, peer haPeerIdent
 	api.mutationMu.Lock()
 	defer api.mutationMu.Unlock()
 	now := api.now().UTC().Truncate(time.Second)
-	if api.fwManager == nil {
-		http.Error(w, "Firewall unavailable", http.StatusInternalServerError)
-		return
-	}
-	if err := api.markHATemporaryDeletes(requests, peer.Scope, now); err != nil {
+	byIP, err := api.markHATemporaryDeletes(requests, peer.Scope, now)
+	if err != nil {
 		http.Error(w, "HA ban ledger unavailable", http.StatusInternalServerError)
 		return
 	}
-	byIP := make(map[string]map[string]struct{}, len(requests))
-	for _, request := range requests {
-		if byIP[request.IP] == nil {
-			byIP[request.IP] = make(map[string]struct{})
-		}
-		byIP[request.IP][request.Source] = struct{}{}
+	if len(byIP) == 0 {
+		writeHAJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	if api.fwManager == nil {
+		http.Error(w, "Firewall unavailable", http.StatusInternalServerError)
+		return
 	}
 	ips := make([]string, 0, len(byIP))
 	for ip := range byIP {
@@ -2029,6 +2074,12 @@ func (api *haAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
+	challenge, err := parseHAFenceChallenge(r.Header)
+	if err != nil {
+		http.Error(w, "Invalid HA fence challenge", http.StatusBadRequest)
+		return
+	}
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "unknown"
@@ -2042,20 +2093,28 @@ func (api *haAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	capabilities := []string{"auth_all_routes", "peer_cidr", "tls_verified_client"}
+	capabilities := []string{"auth_all_routes", haFenceCapability, "peer_cidr", "tls_verified_client"}
 	if api.cfg.BunkerWebEnabled {
-		capabilities = []string{"auth_all_routes", "peer_cidr", "sync_ttl", "sync_provenance", "tls_verified_client"}
+		capabilities = []string{"auth_all_routes", haFenceCapability, "peer_cidr", "sync_ttl", "sync_provenance", "tls_verified_client"}
+	}
+	fenceStatus, fenceErr := api.fence.status(challenge)
+	if fenceErr != nil {
+		log.Printf("[HA Cluster] Native-sync fence status is unavailable: %v", fenceErr)
+	}
+	if fenceStatus.State == haFenceStateActiveDrained && fenceStatus.Condition != "" {
+		w.Header().Set(haFenceConditionHeader, fenceStatus.Condition)
 	}
 	writeHAJSON(w, http.StatusOK, struct {
-		Hostname     string   `json:"hostname"`
-		OS           string   `json:"os"`
-		Version      string   `json:"version"`
-		Status       string   `json:"status"`
-		APIVersion   string   `json:"api_version"`
-		Capabilities []string `json:"capabilities"`
+		Hostname        string                  `json:"hostname"`
+		OS              string                  `json:"os"`
+		Version         string                  `json:"version"`
+		Status          string                  `json:"status"`
+		APIVersion      string                  `json:"api_version"`
+		Capabilities    []string                `json:"capabilities"`
+		NativeSyncFence haNativeSyncFenceStatus `json:"native_sync_fence"`
 	}{
 		Hostname: hostname, OS: osName, Version: api.coreVersion, Status: "online", APIVersion: "2",
-		Capabilities: capabilities,
+		Capabilities: capabilities, NativeSyncFence: fenceStatus,
 	})
 }
 
@@ -2078,6 +2137,9 @@ func newHAServer(address string, handler http.Handler, certificate tls.Certifica
 func prepareHAServerAPI(api *haAPI) error {
 	if api == nil {
 		return fmt.Errorf("HA API is unavailable")
+	}
+	if api.fence == nil {
+		return fmt.Errorf("HA native-sync fence is unavailable")
 	}
 	return api.reconcileHABans(time.Now(), maxHALedgerRecords)
 }

@@ -129,20 +129,20 @@ func TestVerifyAcceptsDeterministicSignedManifest(t *testing.T) {
 		t.Fatalf("verify valid signed manifest: %v", err)
 	}
 	candidate := fixture.parsed(t)
-	if len(candidate.Artifacts) != 7 {
-		t.Fatalf("manifest artifact count = %d, want 7", len(candidate.Artifacts))
+	if len(candidate.Artifacts) != 6 {
+		t.Fatalf("manifest artifact count = %d, want 6", len(candidate.Artifacts))
 	}
-	freeBSD := candidate.Artifacts[len(candidate.Artifacts)-1]
-	if freeBSD.OS != "freebsd" || freeBSD.Architecture != "amd64" ||
-		freeBSD.Format != "txz" || freeBSD.Filename != "syswarden-4.02.9.txz" {
-		t.Fatalf("FreeBSD manifest artifact = %#v", freeBSD)
+	for _, item := range candidate.Artifacts {
+		if item.OS != "linux" || (item.Format != "deb" && item.Format != "rpm" && item.Format != "apk") {
+			t.Fatalf("non-Linux manifest artifact = %#v", item)
+		}
 	}
 }
 
 func TestVerifyRejectsAdversarialSignedMetadata(t *testing.T) {
 	tests := map[string]func(*manifest){
 		"wrong version":      func(candidate *manifest) { candidate.Version = "v4.02.10" },
-		"wrong OS":           func(candidate *manifest) { candidate.Artifacts[0].OS = "freebsd" },
+		"wrong OS":           func(candidate *manifest) { candidate.Artifacts[0].OS = "other" },
 		"wrong architecture": func(candidate *manifest) { candidate.Artifacts[0].Architecture = "arm64" },
 		"wrong format":       func(candidate *manifest) { candidate.Artifacts[0].Format = "rpm" },
 		"wrong filename":     func(candidate *manifest) { candidate.Artifacts[0].Filename = candidate.Artifacts[1].Filename },

@@ -6,6 +6,7 @@
     "sha256": "5ab5392b3ed705bac98ad92dabb1018cb6451e265bc4fd92f86f774e1ee14ee3",
     "source_archive_sha256": "298c1a093c2924909bcc0d5c792c594e2b732c6c65c5bdb1817c5f6757caedb9"
   },
+  "product_command_count": 23,
   "forbidden_phrases": [
     "Production Ready",
     "Enterprise Ready",
@@ -44,6 +45,101 @@
     "immediate synchronization of the local blocklist",
     "Silently update",
     "Completely remove SYSWARDEN"
+  ],
+  "required_readme_phrases": [
+    "Current source version: **{version}**.",
+    "Target candidate: **v4.03.0**.",
+    "The package workflow is configured to generate two DEB, two RPM and two APK packages plus `SHA256SUMS.txt`.",
+    "A qualified v4.03.0 Release contains exactly thirteen public assets:",
+    "The TUI reads local telemetry and HA status. It runs inside the invoking terminal and opens no listening socket.",
+    "SysWarden owns no listener and no generated firewall permission on TCP 62027.",
+    "`DELETE {{\"bans\": [...]}}` removes provenance ledger entries only",
+    "`DELETE {{\"ips\": [...]}}` explicitly removes historical static entries",
+    "The capability `native_sync_fence_v1` announces schema support only.",
+    "`native_sync_fence.state` is `active_drained`",
+    "`X-SysWarden-HA-Fence-Condition` response header equals the JSON `condition` value",
+    "The integrator treats the epoch and both digest values as opaque, case-sensitive strings.",
+    "does not recalculate either digest or reimplement SysWarden canonicalization",
+    "a missing condition receives HTTP 428, a malformed condition receives HTTP 400 and a stale condition receives HTTP 412",
+    "A one-hour continuous absence window is additional evidence only.",
+    "It is never proof of drain",
+    "`schema_version = 1` is the current modular schema.",
+    "When `schema_version` is absent, the configuration is treated as historical input.",
+    "`syswarden config validate` is read-only.",
+    "unknown and deprecated keys are reported as diagnostics",
+    "`syswarden config migrate --dry-run` performs zero source or destination writes",
+    "`syswarden migrate-config` remains a compatibility alias",
+    "`network.saas.allow_monitors` takes precedence over the deprecated `integrations.saas.enabled` alias; if neither is set, monitor allowlisting is disabled.",
+    "Valid canonical IPv4 and IPv6 results are published as one lock-coordinated atomic pair with an SHA-256 pair manifest",
+    "`--port` scopes a whitelist entry to one TCP service",
+    "SSH exceptions are rendered only for the effective SSH port.",
+    "a changed-port mismatch fails closed before candidate policy application",
+    "The core opens them descriptor-relative without following links and revalidates the file identity and type after every rotation",
+    "operators must keep every parent directory protected against untrusted replacement",
+    "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars",
+    "SSH/HA port separation while WireGuard is enabled.",
+    "The report and this README remain candidate documentation until protected qualification passes"
+  ],
+  "required_manual_phrases": [
+    "it is not a compliance certification",
+    "Native TUI: no listening port.",
+    "HA API: configurable TCP port, default 62026",
+    "All HA routes require the bearer token",
+    "canonical CIDRs authorize inbound peers only and are never dialed",
+    "v4.02.9+ requires a trusted Ed25519 release manifest",
+    "dedicated CGO-free static APK binaries are built for x86_64 and aarch64",
+    "configuration, data, logs, services and firewall tables are deleted",
+    "X-SysWarden-HA-Fence-Condition",
+    "opaque, case-sensitive strings",
+    "schema_version = 1 is current; an absent schema_version denotes historical input.",
+    "config validate --path /etc/syswarden/config is read-only and reports unknown and deprecated keys.",
+    "config migrate --dry-run performs zero source or destination writes.",
+    "network.saas.allow_monitors, then deprecated integrations.saas.enabled, then false.",
+    "required-feed failure retains the previous atomic IPv4/IPv6 pair.",
+    "whitelist --port scopes the entry to one TCP service",
+    "SSH exceptions are rendered only for the effective SSH port; a changed-port mismatch blocks candidate policy application.",
+    "WAAP log patterns use canonical single-space separation; the core revalidates exact regular files without following links on every rotation.",
+    "Rsyslog inputs are generated only for initially validated paths; protect parent directories because rsyslog reopens names itself.",
+    "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars.",
+    "With WireGuard and HA enabled, the configured HA peer port must differ from the configured SSH port."
+  ],
+  "required_wiki_phrases": {},
+  "approved_cli_process_differences": [
+    {
+      "case": "root",
+      "stream": "stdout",
+      "reason": "Advance the minor version while preserving the bounded built-in operator reference.",
+      "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
+      "after": "SYSWARDEN v4.03.0 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+    },
+    {
+      "case": "help:syswarden",
+      "stream": "stdout",
+      "reason": "Approve the exact Linux-only root help transition, including the migration fence command and retired browser terminal commands.",
+      "before": "SYSWARDEN v4.02.8 is a Next-Gen Host-based WAF and Security Orchestrator.\n\nUsage:\n  syswarden [flags]\n  syswarden [command]\n\nAvailable Commands:\n  alerts          Launch the real-time TUI dashboard for alerts\n  allow-ssh       Allows direct SSH bypass for this IP\n  audit           Performs a full Enterprise SYSWARDEN Audit\n  block           Hot-adds an IP to the kernel drop set\n  check           Perform a global diagnostic on an IP\n  completion      Generate the autocompletion script for the specified shell\n  config          Open the interactive configuration editor\n  config-get      Get a configuration value by key\n  ha-sync         Synchronizes the firewall blocklist with the configured HA peer\n  help            Help about any command\n  install         Install SYSWARDEN and configure security modules\n  list            Displays all custom IP registries\n  manual          Comprehensive SysAdmin Manual and Documentation\n  migrate-config  Migrate from old config format to modular TOML format\n  reload          Reload configuration and restart security engines\n  revoke-ssh      Revokes direct SSH bypass\n  tui             Launch the SYSWARDEN Enterprise Dashboard (TUI)\n  unblock         Purges an IP from the blocklist\n  uninstall       Completely remove SYSWARDEN from the system\n  unwhitelist     Revokes global VIP access\n  update          Check and install SYSWARDEN updates\n  update-feeds    Silently update Threat Intelligence feeds and reload firewall\n  web-token       Manage the Web-TUI secure access token\n  web-tui         Start the Web-TUI server (WebTTY)\n  whitelist       Grants global VIP access and bypasses the firewall\n  whitelist-infra Auto-detects and whitelists infrastructure IPs\n\nFlags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n  -h, --help            help for syswarden\n\nUse \"syswarden [command] --help\" for more information about a command.\n",
+      "after": "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.\n\nUsage:\n  syswarden [flags]\n  syswarden [command]\n\nAvailable Commands:\n  alerts          Stream kernel and WAAP alert events\n  allow-ssh       Add an address to the SSH exception registry\n  audit           Run a local SYSWARDEN operational diagnostic\n  block           Add addresses or CIDRs to the persistent blocklist\n  check           Inspect recorded firewall state for an address or CIDR\n  completion      Generate the autocompletion script for the specified shell\n  config          Open the interactive configuration editor\n  config-get      Get a configuration value by key\n  ha-fence        Administer the native-sync migration fence\n  ha-sync         Push missing local blocklist entries to configured HA peers\n  help            Help about any command\n  install         Install SYSWARDEN and configure security modules\n  list            Displays all custom IP registries\n  manual          Display the built-in operator reference\n  migrate-config  Migrate from old config format to modular TOML format\n  reload          Reapply policy and normally restart syswarden-core\n  revoke-ssh      Remove an address from the SSH exception registry\n  tui             Launch the local SYSWARDEN terminal dashboard\n  unblock         Remove addresses or CIDRs from the persistent blocklist\n  uninstall       Delete SysWarden services, rules, configuration, data, and logs\n  unwhitelist     Remove addresses or CIDRs from the persistent whitelist\n  update          Install a release verified by a signed manifest\n  update-feeds    Download configured threat-intelligence feeds and reapply firewall policy\n  whitelist       Add addresses or CIDRs to the persistent whitelist\n  whitelist-infra Auto-detects and whitelists infrastructure IPs\n\nFlags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n  -h, --help            help for syswarden\n\nUse \"syswarden [command] --help\" for more information about a command.\n"
+    },
+    {
+      "case": "help:syswarden config",
+      "stream": "stdout",
+      "reason": "Approve the exact addition of the non-mutating validation and migration subcommands to configuration help.",
+      "before": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Open the interactive configuration editor\n\nUsage:\n  syswarden config [flags]\n  syswarden config [command]\n\nAvailable Commands:\n  migrate     Migrate the historical configuration to modular TOML\n  validate    Validate modular configuration without modifying it\n\nFlags:\n  -h, --help   help for config\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nUse \"syswarden config [command] --help\" for more information about a command.\n"
+    },
+    {
+      "case": "help:syswarden whitelist",
+      "stream": "stdout",
+      "reason": "Approve the exact service-scoped whitelist flag and its bounded positional compatibility help.",
+      "before": "Grants global VIP access and bypasses the firewall\n\nUsage:\n  syswarden whitelist <IP>... [PORT] [flags]\n\nFlags:\n  -h, --help   help for whitelist\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Records each entry in the persistent whitelist and reapplies firewall policy. Use --port for a TCP service-scoped entry. A single final positional [PORT] remains temporarily accepted for compatibility. Verify the resulting kernel rule before relying on the entry.\n\nUsage:\n  syswarden whitelist <IP|CIDR>... [PORT] [flags]\n\nFlags:\n  -h, --help          help for whitelist\n      --port string   Scope every whitelist entry to this TCP destination port\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n"
+    },
+    {
+      "case": "arity:syswarden whitelist:0",
+      "stream": "stderr",
+      "reason": "Approve the exact zero-argument usage transition induced by the service-scoped whitelist flag.",
+      "before": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden whitelist <IP>... [PORT] [flags]\n\nFlags:\n  -h, --help   help for whitelist\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n",
+      "after": "Error: requires at least 1 arg(s), only received 0\nUsage:\n  syswarden whitelist <IP|CIDR>... [PORT] [flags]\n\nFlags:\n  -h, --help          help for whitelist\n      --port string   Scope every whitelist entry to this TCP destination port\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n\nrequires at least 1 arg(s), only received 0\n"
+    }
   ],
   "approved_cli_public_differences": [
     {
@@ -110,11 +206,81 @@
       "after": "Inspect recorded firewall state for an address or CIDR"
     },
     {
+      "path": "syswarden config migrate",
+      "field": "command",
+      "reason": "Add the transactional modular configuration migration path.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden config validate",
+      "field": "command",
+      "reason": "Add fail-closed modular configuration validation.",
+      "before": null,
+      "after": "added"
+    },
+    {
       "path": "syswarden config-get",
       "field": "use",
       "reason": "Match the existing exact-argument validator in executable help.",
       "before": "config-get [key]",
       "after": "config-get <key>"
+    },
+    {
+      "path": "syswarden ha-fence",
+      "field": "command",
+      "reason": "Add the root-only native-sync migration fence command.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ha-fence engage",
+      "field": "command",
+      "reason": "Add local native-sync fence engagement and drain.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ha-fence manifest",
+      "field": "command",
+      "reason": "Add the HA fence manifest command group.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ha-fence manifest create",
+      "field": "command",
+      "reason": "Add verified canonical HA fence manifest creation.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ha-fence manifest verify",
+      "field": "command",
+      "reason": "Add strict HA fence manifest and digest verification.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ha-fence recover",
+      "field": "command",
+      "reason": "Add fail-closed recovery for an interrupted fence campaign.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ha-fence release",
+      "field": "command",
+      "reason": "Add release guarded by the unchanged manifest and durable writer closure.",
+      "before": null,
+      "after": "added"
+    },
+    {
+      "path": "syswarden ha-fence status",
+      "field": "command",
+      "reason": "Add machine-readable local HA fence status.",
+      "before": null,
+      "after": "added"
     },
     {
       "path": "syswarden ha-sync",
@@ -153,29 +319,110 @@
     },
     {
       "path": "syswarden migrate-config",
-      "field": "long",
-      "reason": "Disclose that dry-run suppresses migrated file writes and source mutation but may create the output directory hierarchy.",
-      "before": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.",
-      "after": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.\n\nWith --dry-run, migrated file contents are not written and the source is not\nrenamed or wiped, but the output directory and modules subdirectory may be created."
+      "field": "flags",
+      "reason": "Make the fail-closed dry-run contract explicit: no source or destination filesystem mutation.",
+      "before": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "dry-run",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "Show what would be done"
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for migrate-config"
+        },
+        {
+          "name": "output",
+          "shorthand": "o",
+          "type": "string",
+          "default": "",
+          "usage": "Output directory"
+        },
+        {
+          "name": "source",
+          "shorthand": "s",
+          "type": "string",
+          "default": "",
+          "usage": "Source config file path"
+        }
+      ],
+      "after": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "dry-run",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "Validate migration without modifying source or destination files"
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for migrate-config"
+        },
+        {
+          "name": "output",
+          "shorthand": "o",
+          "type": "string",
+          "default": "",
+          "usage": "Output directory"
+        },
+        {
+          "name": "source",
+          "shorthand": "s",
+          "type": "string",
+          "default": "",
+          "usage": "Source config file path"
+        }
+      ]
     },
     {
       "path": "syswarden migrate-config",
-      "field": "flags",
-      "reason": "Make the dry-run flag's directory-creation side effect explicit without changing its behavior.",
-      "before": [
-        {"name": "config", "type": "string", "default": "/opt/syswarden/syswarden-auto.conf", "usage": "config file", "persistent": true},
-        {"name": "dry-run", "type": "bool", "default": "false", "no_option": "true", "usage": "Show what would be done"},
-        {"name": "help", "shorthand": "h", "type": "bool", "default": "false", "no_option": "true", "usage": "help for migrate-config"},
-        {"name": "output", "shorthand": "o", "type": "string", "default": "", "usage": "Output directory"},
-        {"name": "source", "shorthand": "s", "type": "string", "default": "", "usage": "Source config file path"}
-      ],
-      "after": [
-        {"name": "config", "type": "string", "default": "/opt/syswarden/syswarden-auto.conf", "usage": "config file", "persistent": true},
-        {"name": "dry-run", "type": "bool", "default": "false", "no_option": "true", "usage": "Do not write migrated file contents; output directories may be created"},
-        {"name": "help", "shorthand": "h", "type": "bool", "default": "false", "no_option": "true", "usage": "help for migrate-config"},
-        {"name": "output", "shorthand": "o", "type": "string", "default": "", "usage": "Output directory"},
-        {"name": "source", "shorthand": "s", "type": "string", "default": "", "usage": "Source config file path"}
-      ]
+      "field": "arg_outcomes",
+      "reason": "Reject unexpected positional arguments instead of silently accepting them through the compatibility alias.",
+      "before": {
+        "0": "ok",
+        "1": "ok",
+        "2": "ok",
+        "3": "ok",
+        "4": "ok"
+      },
+      "after": {
+        "0": "ok",
+        "1": "unknown command \"arg-1\" for \"syswarden migrate-config\"",
+        "2": "unknown command \"arg-1\" for \"syswarden migrate-config\"",
+        "3": "unknown command \"arg-1\" for \"syswarden migrate-config\"",
+        "4": "unknown command \"arg-1\" for \"syswarden migrate-config\""
+      }
+    },
+    {
+      "path": "syswarden migrate-config",
+      "field": "long",
+      "reason": "State that dry-run validates the migration without mutating either source or destination filesystem state.",
+      "before": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.",
+      "after": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.\n\nWith --dry-run, migrated file contents are not written and the source and\ndestination filesystem are not modified."
     },
     {
       "path": "syswarden reload",
@@ -249,156 +496,24 @@
     },
     {
       "path": "syswarden web-token",
-      "field": "long",
-      "reason": "Disclose first-use token persistence and the best-effort service restart as well as explicit rotation.",
-      "before": "",
-      "after": "Displays the configured Web-TUI access token. If no token exists, an invocation without --rotate generates and persists one, then attempts to restart syswarden-webtui.service. --rotate always replaces the persisted token and makes the same restart attempt. If that attempt fails, a running Web-TUI process may continue accepting its previous token."
-    },
-    {
-      "path": "syswarden web-token",
-      "field": "flags",
-      "reason": "Avoid promising immediate invalidation when a failed restart can leave the running process on its previous token.",
-      "before": [
-        {
-          "name": "config",
-          "type": "string",
-          "default": "/opt/syswarden/syswarden-auto.conf",
-          "usage": "config file",
-          "persistent": true
-        },
-        {
-          "name": "help",
-          "shorthand": "h",
-          "type": "bool",
-          "default": "false",
-          "no_option": "true",
-          "usage": "help for web-token"
-        },
-        {
-          "name": "rotate",
-          "shorthand": "r",
-          "type": "bool",
-          "default": "false",
-          "no_option": "true",
-          "usage": "Generate a new token and invalidate the old one"
-        }
-      ],
-      "after": [
-        {
-          "name": "config",
-          "type": "string",
-          "default": "/opt/syswarden/syswarden-auto.conf",
-          "usage": "config file",
-          "persistent": true
-        },
-        {
-          "name": "help",
-          "shorthand": "h",
-          "type": "bool",
-          "default": "false",
-          "no_option": "true",
-          "usage": "help for web-token"
-        },
-        {
-          "name": "rotate",
-          "shorthand": "r",
-          "type": "bool",
-          "default": "false",
-          "no_option": "true",
-          "usage": "Persist a replacement token and request a Web-TUI service restart"
-        }
-      ]
-    },
-    {
-      "path": "syswarden web-token",
-      "field": "short",
-      "reason": "Describe the implemented display and rotation operations.",
-      "before": "Manage the Web-TUI secure access token",
-      "after": "Display or rotate the Web-TUI access token"
+      "field": "command",
+      "reason": "Remove the retired network token command from the current product surface.",
+      "before": "present",
+      "after": null
     },
     {
       "path": "syswarden web-tui",
-      "field": "long",
-      "reason": "Expose the default bind and in-memory self-signed certificate.",
-      "before": "",
-      "after": "Starts an HTTPS Web-TUI listener. The default bind is 0.0.0.0:62027 and the server uses an in-memory self-signed certificate."
-    },
-    {
-      "path": "syswarden web-tui",
-      "field": "flags",
-      "reason": "Correct the token flag help: omission uses configuration or secure generation instead of being rejected.",
-      "before": [
-        {
-          "name": "bind",
-          "type": "string",
-          "default": "0.0.0.0:62027",
-          "usage": "IP:Port to bind the Web-TUI server"
-        },
-        {
-          "name": "config",
-          "type": "string",
-          "default": "/opt/syswarden/syswarden-auto.conf",
-          "usage": "config file",
-          "persistent": true
-        },
-        {
-          "name": "help",
-          "shorthand": "h",
-          "type": "bool",
-          "default": "false",
-          "no_option": "true",
-          "usage": "help for web-tui"
-        },
-        {
-          "name": "token",
-          "type": "string",
-          "default": "",
-          "usage": "Secure token for Web-TUI access (Required)"
-        }
-      ],
-      "after": [
-        {
-          "name": "bind",
-          "type": "string",
-          "default": "0.0.0.0:62027",
-          "usage": "IP:Port to bind the Web-TUI server"
-        },
-        {
-          "name": "config",
-          "type": "string",
-          "default": "/opt/syswarden/syswarden-auto.conf",
-          "usage": "config file",
-          "persistent": true
-        },
-        {
-          "name": "help",
-          "shorthand": "h",
-          "type": "bool",
-          "default": "false",
-          "no_option": "true",
-          "usage": "help for web-tui"
-        },
-        {
-          "name": "token",
-          "type": "string",
-          "default": "",
-          "usage": "Web-TUI access token; falls back to configuration or generates one when omitted"
-        }
-      ]
-    },
-    {
-      "path": "syswarden web-tui",
-      "field": "short",
-      "reason": "Describe the network-facing HTTPS listener.",
-      "before": "Start the Web-TUI server (WebTTY)",
-      "after": "Start the Web-TUI HTTPS listener"
+      "field": "command",
+      "reason": "Remove the retired network terminal command from the current product surface.",
+      "before": "present",
+      "after": null
     },
     {
       "path": "syswarden whitelist",
       "field": "long",
       "reason": "State persistence and require independent kernel verification.",
       "before": "",
-      "after": "Records each entry in the persistent whitelist and reapplies firewall policy. Verify the resulting kernel rule before relying on the entry."
+      "after": "Records each entry in the persistent whitelist and reapplies firewall policy. Use --port for a TCP service-scoped entry. A single final positional [PORT] remains temporarily accepted for compatibility. Verify the resulting kernel rule before relying on the entry."
     },
     {
       "path": "syswarden whitelist",
@@ -406,220 +521,60 @@
       "reason": "Remove the unsupported global firewall-bypass guarantee.",
       "before": "Grants global VIP access and bypasses the firewall",
       "after": "Add addresses or CIDRs to the persistent whitelist"
-    }
-  ],
-  "approved_cli_process_differences": [
+    },
     {
-      "case": "root",
-      "stream": "stdout",
-      "reason": "Advance the Patch version to v4.02.14 while preserving the bounded built-in operator reference introduced after v4.02.8.",
-      "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
-      "after": "SYSWARDEN v4.02.14 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+      "path": "syswarden whitelist",
+      "field": "use",
+      "reason": "Accept canonical IP or CIDR entries while preserving the temporary positional-port compatibility form.",
+      "before": "whitelist <IP>... [PORT]",
+      "after": "whitelist <IP|CIDR>... [PORT]"
+    },
+    {
+      "path": "syswarden whitelist",
+      "field": "flags",
+      "reason": "Expose the unambiguous TCP service-scope flag while retaining the bounded compatibility form.",
+      "before": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for whitelist"
+        }
+      ],
+      "after": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for whitelist"
+        },
+        {
+          "name": "port",
+          "type": "string",
+          "default": "",
+          "usage": "Scope every whitelist entry to this TCP destination port"
+        }
+      ]
     }
   ],
-  "product_command_count": 24,
-  "required_readme_phrases": [
-    "Current source version: **{version}**.",
-    "Active Defense and HIDS/HIPS/WAAP Out-of-Band Orchestration for Critical Linux Infrastructure",
-    "It does not proxy, terminate, inspect or sanitize live HTTP traffic.",
-    "Dedicated x86_64 and aarch64 CGO-free static executables are packaged",
-    "The amd64 package is ABI 14, uses native `/usr/local` paths",
-    "The protected package lifecycle and privileged kernel labs must pass",
-    "default bind is `0.0.0.0:62027`",
-    "TLS 1.3 with a persistent self-signed identity",
-    "`/var/lib/syswarden/ha/server.crt`",
-    "`/var/lib/syswarden/ha/server.key`",
-    "The generated certificate is valid for one year.",
-    "The server rejects a persisted identity outside its validity window.",
-    "The native TUI verifies HA peer certificates.",
-    "It uses `/etc/syswarden/ha-ca.pem` when that bundle exists and otherwise uses the system trust roots.",
-    "Never copy `server.key` to a client.",
-    "Restart the native TUI after creating, replacing or removing the trust bundle",
-    "trusted out-of-band channel",
-    "verify its fingerprint",
-    "The native TUI and `syswarden ha-sync` use the same trust rule",
-    "The bearer token is required on `/ha/sync`, `/ha/status` and `/ha/telemetry`",
-    "A legacy client that omits the bearer token receives `401 Unauthorized`",
-    "CIDRs authorize inbound peers only and are never converted into outbound URLs.",
-    "Enriched requests are limited to 500 bans per batch",
-    "The BunkerWeb extensions are also disabled by default",
-    "assets/syswarden_architecture.svg",
-    "assets/syswarden_bunkerweb_integration.svg",
-    "Disabling the BunkerWeb integration does not disable node-to-node HA.",
-    "Enabling BunkerWeb is equally additive",
-    "SysWarden nodes do not relay those records transitively",
-    "A-to-B and B-to-A exchange; a CIDR is never an outbound destination.",
-    "choose `5` (`Integrations & HA`)",
-    "any validation or reload error must be treated as a failed activation.",
-    "only when both `sync_ttl` and `sync_provenance` are present.",
-    "it never permits a TLS or bearer-token downgrade.",
-    "The partnership test matrix is deliberately split so that local API evidence is not presented as an end-to-end plugin result.",
-    "Protected host: data plane",
-    "two scheduled pushes, gate false or true",
-    "The final `false` branch means only that secure SysWarden node-to-node HA stays available",
-    "the `docker_protect` nftables chain is attached to the `forward` hook",
-    "commits it atomically under the shared SysWarden firewall lock",
-    "the verified nftables state remains authoritative for a safe retry",
-    "HA API listens on configurable TCP port `62026` by default",
-    "buckets are stored in UTC while the current axis labels are rendered from local time",
-    "anonymous TLS authentication",
-    "canonical manifest and detached Ed25519 signature trusted by the binary",
-    "`syswarden-update-manifest-v1.json.sig`",
-    "embedded public key `syswarden-update-2026-01`",
-    "v4.02.8 binary predates this trust root",
-    "If no token is configured, `syswarden web-token` generates and persists one even without `--rotate`",
-    "If that restart fails, the command returns nonzero and reports partial state",
-    "`syswarden uninstall` is destructive",
-    "The historical v4.02.13 source candidate failed protected qualification before signing, tagging or release publication and was never tagged or published.",
-    "v4.02.14 supersedes it and remains NO-GO",
-    "The procedure below downloads exactly one package for the detected operating system and architecture.",
-    "VERSION=v4.02.14 sh ./install-release.sh",
-    "checksum manifest must contain exactly one entry for $PACKAGE",
-    "docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.14.md",
-    "## Security posture and limitations",
-    "Goal: 37% reached/year (Goal)"
-  ],
-  "required_manual_phrases": [
-    "it is not a compliance certification",
-    "v4.02.9+ requires a trusted Ed25519 release manifest",
-    "dedicated CGO-free static APK binaries are built for x86_64 and aarch64",
-    "v4.02.14 uses native /usr/local paths and rc.d on amd64",
-    "default bind 0.0.0.0:62027",
-    "persistent self-signed TLS 1.3 identity",
-    "/var/lib/syswarden/ha/server.crt and /var/lib/syswarden/ha/server.key",
-    "Never copy server.key to a client",
-    "HA certificate lifetime: one year; replace the identity before expiry and redistribute only server.crt",
-    "TUI and ha-sync trust: /etc/syswarden/ha-ca.pem when present, otherwise system roots",
-    "An explicit HA CA bundle is exclusive and must contain only valid CERTIFICATE blocks; malformed input fails closed.",
-    "Restart clients after trust changes",
-    "Transfer server.crt through a trusted out-of-band channel and verify its fingerprint before trusting it",
-    "All HA routes require the bearer token",
-    "canonical CIDRs authorize inbound peers only and are never dialed",
-    "temporary-ban batches are limited to 500 entries",
-    "enabled (default false; requires authenticated HA)",
-    "Disabling BunkerWeb gates only partner extensions; secure node-to-node HA still exchanges durable L7/WAAP bans.",
-    "docker_protect covers forwarded container traffic",
-    "schedule both nodes for A-to-B and B-to-A exchange",
-    "the Linux nftables candidate is committed atomically and verified",
-    "compatibility-wrapper failure leaves nftables authoritative and returns an error",
-    "if absent, generates and persists one and requests a restart",
-    "restart failure returns nonzero and can leave the running Web-TUI on its previous token",
-    "configuration, data, logs, services and firewall tables are deleted"
-  ],
-  "public_report_contract": {
-    "path": "docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.14.md",
-    "preserved_reports": [
-      {
-        "path": "docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.11.md",
-        "sha256": "7929482c62e42a1c5909c3de3ebd31d00f78d019d8ab4efd0e47bf20f1ec07d7"
-      },
-      {
-        "path": "docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.12.md",
-        "sha256": "eb920e37cc8b3700179149ee2ce14e13ab3221d3a622db39d41bdef81ab4285a"
-      },
-      {
-        "path": "docs/reports/LOT1_PUBLIC_SECURITY_REPORT_v4.02.13.md",
-        "sha256": "164130bc0cc338a79e79d2f09d6d6593b18e2e42ae941d4f4d8b0d577daed0f1"
-      }
-    ],
-    "required_phrases": [
-      "| Product release decision | NO-GO until protected qualification |",
-      "| Candidate | v4.02.14 |",
-      "| Historical public baseline | v4.02.8 |",
-      "| Prior source candidate | v4.02.13, merged but never tagged or published |",
-      "Protected qualification run `31972963066` stopped before signing",
-      "No sealed v4.02.13 qualification artifact, release signature, tag, public Release or Release asset was created.",
-      "v4.02.14 supersedes that unpublished candidate",
-      "hop to v4.02.14 must therefore use a separately verified package and the native package manager",
-      "A qualified v4.02.14 Release must contain exactly these 14 public assets:",
-      "separate native amd64 and ARM64 shards",
-      "Durable node-to-node L7 and WAAP ban exchange remains active with the partner gate false or true",
-      "Raw `pkg delete` is not the supported FreeBSD cleanup path",
-      "FreeBSD jails and coexistence with arbitrary pre-existing PF policy"
-    ],
-    "expected_assets": [
-      "syswarden_4.02.14_amd64.deb",
-      "syswarden_4.02.14_arm64.deb",
-      "syswarden-4.02.14-1.x86_64.rpm",
-      "syswarden-4.02.14-1.aarch64.rpm",
-      "syswarden_4.02.14_x86_64.apk",
-      "syswarden_4.02.14_aarch64.apk",
-      "syswarden-4.02.14.txz",
-      "SHA256SUMS.txt",
-      "RELEASE_SHA256SUMS.txt",
-      "syswarden-release.tar.gz",
-      "syswarden-sbom.spdx.json",
-      "plumber-report.zip",
-      "syswarden-update-manifest-v1.json",
-      "syswarden-update-manifest-v1.json.sig"
-    ],
-    "forbidden_phrases": [
-      "/home/",
-      "duggytuxy",
-      "@gmail.",
-      "@proton."
-    ]
-  },
-  "required_wiki_phrases": {
-    "Home.md": [
-      "`0.0.0.0:62027` by default",
-      "Native `/usr/local` amd64 package, ABI 14, rc.d, PF and updater contracts"
-    ],
-    "Deployment-Tutorial.md": [
-      "default API port is TCP `62026`",
-      "`0.0.0.0:62027`",
-      "one-way `ha-sync` push every 30 minutes",
-      "persistent self-signed identity",
-      "`/var/lib/syswarden/ha/server.crt` and `/var/lib/syswarden/ha/server.key`",
-      "The generated certificate is valid for one year.",
-      "`/etc/syswarden/ha-ca.pem`",
-      "trusted out-of-band channel",
-      "Never copy `server.key` to a client.",
-      "The native TUI and `syswarden ha-sync` verify HA peer certificates.",
-      "A malformed explicit bundle fails closed.",
-      "Every HA route requires the bearer token",
-      "Disabling BunkerWeb leaves this authenticated node-to-node exchange available",
-      "signed Ed25519 update manifest",
-      "The procedure below downloads exactly one package for the detected operating system and architecture.",
-      "VERSION=v4.02.14 sh ./install-release.sh",
-      "checksum manifest must contain exactly one entry for $PACKAGE",
-      "On FreeBSD, use `syswarden uninstall` rather than raw `pkg delete`."
-    ],
-    "Use-cases.md": [
-      "TCP 62026 reachability",
-      "native TUI does not open TCP port 62027",
-      "Test secure HA with BunkerWeb disabled",
-      "A-to-B and B-to-A exchange",
-      "through TLS 1.3 and bearer authentication",
-      "removes partner TTL, batch and provenance capabilities",
-      "any package artifact that has not passed the exact protected v4.02.14 lifecycle",
-      "FreeBSD coexistence with an arbitrary pre-existing PF policy"
-    ],
-    "BunkerWeb-Integration.md": [
-      "assets/syswarden_bunkerweb_integration.svg",
-      "`docker_protect` nftables chain is attached to the `forward` hook",
-      "Protected host: data plane",
-      "two scheduled pushes, gate false or true",
-      "The final `false` branch means only that secure SysWarden node-to-node HA stays available",
-      "`[integrations.bunkerweb] enabled = true`",
-      "An exact IP is both an inbound authorization entry and an outbound SysWarden HA destination.",
-      "CIDR authorizes inbound clients only",
-      "Every request to `/ha/sync`, `/ha/status` and `/ha/telemetry` requires",
-      "mixed-version compatibility never permits a TLS or bearer-token downgrade.",
-      "at most 500 records per request",
-      "Multiple sources can own the same address",
-      "Setting `[integrations.bunkerweb] enabled = false` disables only the enriched partner TTL, batch and provenance API.",
-      "It does not disable authenticated HA between SysWarden nodes.",
-      "Setting it to `true` adds the partner extensions without replacing that durable",
-      "Nodes do not relay those temporary records transitively",
-      "`USE_SYSWARDEN_BLOCKLIST`",
-      "`USE_SYSWARDEN_WHITELIST`",
-      "Start with `SYSWARDEN_ENFORCEMENT=audit`",
-      "An external-only row is never reported as a SysWarden test success.",
-      "Never copy `server.key` to a client.",
-      "v4.02.14 does not expose remote whitelist writes or per-client scoped tokens."
-    ]
-  },
   "package_platform_contract": {
     "artifacts": [
       {
@@ -657,321 +612,279 @@
         "architecture": "aarch64",
         "release_name": "syswarden_{version}_aarch64.apk",
         "workflow_name": "syswarden_${VERSION}_aarch64.apk"
-      },
-      {
-        "family": "FreeBSD",
-        "architecture": "amd64",
-        "release_name": "syswarden-{version}.txz",
-        "workflow_name": "syswarden-${VERSION}.txz"
       }
     ],
     "inventory_phrases": {
-      "README.md": "The package workflow is configured to generate two DEB, two RPM, two APK and one FreeBSD package plus `SHA256SUMS.txt`.",
-      "wiki/Deployment-Tutorial.md": "The package workflow is configured to publish two DEB files, two RPM files, two APK files, one FreeBSD package and `SHA256SUMS.txt`."
+      "README.md": "The package workflow is configured to generate two DEB, two RPM and two APK packages plus `SHA256SUMS.txt`."
     },
     "tables": {
       "README.md": {
-        "heading": "Validation status",
+        "heading": "Supported targets and qualification",
         "header": [
           "Target",
-          "What the repository currently proves",
-          "Release qualification"
+          "Candidate artifact",
+          "Required release proof"
         ],
         "rows": [
           [
-            "Linux amd64",
-            "The CLI, core and TUI compile and execute; unit, race, contract, package and golden-rule tests run in the candidate gates",
-            "The protected package lifecycle and privileged kernel labs must pass on the exact release SHA before a tag is created"
+            "Debian or Ubuntu amd64",
+            "`syswarden_4.03.0_amd64.deb`",
+            "Native install, upgrade, restart, removal and rollback lifecycle"
           ],
           [
-            "Linux arm64",
-            "The three binaries cross-compile and package metadata is checked against the exact architecture",
-            "The protected native ARM64 lifecycle must execute the exact candidate packages before release"
+            "Debian or Ubuntu arm64",
+            "`syswarden_4.03.0_arm64.deb`",
+            "Native ARM64 lifecycle on the exact candidate package"
           ],
           [
-            "Debian/Ubuntu `.deb`",
-            "amd64 and arm64 package contents, dependencies, maintainer scripts and lifecycle contracts are validated",
-            "The final protected install, upgrade, restart and rollback run remains mandatory"
+            "RHEL-family x86_64",
+            "`syswarden-4.03.0-1.x86_64.rpm`",
+            "Native install, upgrade, restart, removal and rollback lifecycle"
           ],
           [
-            "RHEL-family `.rpm`",
-            "x86_64 and aarch64 package contents, dependencies, maintainer scripts and lifecycle contracts are validated",
-            "The final protected install, upgrade, restart and rollback run remains mandatory"
+            "RHEL-family aarch64",
+            "`syswarden-4.03.0-1.aarch64.rpm`",
+            "Native ARM64 lifecycle on the exact candidate package"
           ],
           [
-            "Alpine `.apk`",
-            "Dedicated x86_64 and aarch64 CGO-free static executables are packaged; the amd64 binary has no ELF interpreter and executes on standard Alpine musl",
-            "The exact x86_64 and aarch64 packages must still pass the protected lifecycle run"
+            "Alpine x86_64",
+            "`syswarden_4.03.0_x86_64.apk`",
+            "Native OpenRC lifecycle with the dedicated CGO-free executable"
           ],
           [
-            "FreeBSD `.txz`",
-            "The amd64 package is ABI 14, uses native `/usr/local` paths, carries both rc.d scripts, cross-compiles, and has fail-closed package, PF and signed-updater contracts",
-            "The exact package lifecycle and signed updater transition must pass on the protected disposable FreeBSD VM"
-          ]
-        ]
-      },
-      "wiki/Home.md": {
-        "heading": "Current target status",
-        "header": [
-          "Target",
-          "Current evidence",
-          "Status for this baseline"
-        ],
-        "rows": [
-          [
-            "Linux amd64",
-            "Native build, tests and package lifecycle contracts",
-            "Protected release qualification remains mandatory"
-          ],
-          [
-            "Linux arm64",
-            "Cross-build, exact metadata and package lifecycle contracts",
-            "Protected native ARM64 lifecycle remains mandatory"
-          ],
-          [
-            "Debian/Ubuntu DEB",
-            "amd64 and arm64 package contents and scripts validated",
-            "Exact final lifecycle required before release"
-          ],
-          [
-            "RHEL-family RPM",
-            "x86_64 and aarch64 package contents and scripts validated",
-            "Exact final lifecycle required before release"
-          ],
-          [
-            "Alpine APK",
-            "Dedicated CGO-free static x86_64 and aarch64 binaries; amd64 executes on standard Alpine musl",
-            "Exact protected x86_64 and aarch64 lifecycle required before release"
-          ],
-          [
-            "FreeBSD package",
-            "Native `/usr/local` amd64 package, ABI 14, rc.d, PF and updater contracts",
-            "Exact protected VM lifecycle and signed updater transition required before release"
-          ]
-        ]
-      },
-      "wiki/Deployment-Tutorial.md": {
-        "heading": "1. Target decision",
-        "header": [
-          "Package family",
-          "Architectures produced by the workflow",
-          "Decision for v4.02.14"
-        ],
-        "rows": [
-          [
-            "DEB",
-            "amd64, arm64",
-            "Package contents and lifecycle contracts validated; exact protected lifecycle still required before release"
-          ],
-          [
-            "RPM",
-            "x86_64, aarch64",
-            "Package contents and lifecycle contracts validated; exact protected lifecycle still required before release"
-          ],
-          [
-            "APK",
-            "x86_64, aarch64",
-            "Dedicated CGO-free static binaries; amd64 executes on standard Alpine musl; exact protected lifecycle still required"
-          ],
-          [
-            "FreeBSD package",
-            "amd64",
-            "ABI 14, native `/usr/local`, rc.d, PF and updater contracts; exact protected VM lifecycle still required"
+            "Alpine aarch64",
+            "`syswarden_4.03.0_aarch64.apk`",
+            "Native ARM64 OpenRC lifecycle with the dedicated CGO-free executable"
           ]
         ]
       }
     }
   },
+  "public_report_contract": {
+    "path": "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.0.md",
+    "required_phrases": [
+      "| Candidate | v4.03.0 |",
+      "| Distribution boundary | Linux packages only |",
+      "| Public package count | 6 |",
+      "| Public release asset count | 13 |",
+      "| Decision | NO-GO until protected qualification passes on the exact merged SHA |",
+      "The epoch and both digests are opaque, case-sensitive strings for the integrator.",
+      "The integrator does not recalculate the digests and does not reimplement SysWarden canonicalization.",
+      "`X-SysWarden-HA-Fence-Condition`",
+      "A one-hour absence window is supporting evidence only.",
+      "The current modular format is `schema_version = 1`.",
+      "When `schema_version` is absent, both loaders treat the configuration as historical input.",
+      "`syswarden config validate --path /etc/syswarden/config` performs descriptor-rooted reads and is non-mutating.",
+      "unknown and deprecated keys are returned as sorted diagnostics",
+      "`syswarden config migrate --dry-run` performs zero source or destination writes",
+      "`syswarden migrate-config` remains a compatibility alias",
+      "`network.saas.allow_monitors`. It takes precedence over the deprecated",
+      "absence of both settings means false.",
+      "published as one lock-coordinated atomic pair with an SHA-256 pair manifest",
+      "`syswarden whitelist <IP-or-CIDR> --port <PORT>` limits an entry to that TCP service",
+      "Every SSH exception is rendered only for the effective SSH port.",
+      "candidate nftables application fails closed",
+      "The core opens them descriptor-relative without following links and revalidates the file identity and type after every rotation",
+      "operators must keep every parent directory protected against untrusted replacement",
+      "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars",
+      "SSH/HA port separation while WireGuard is enabled.",
+      "Written partner freeze confirmation was received on 20 August 2026",
+      "The v4.03.0 candidate remains NO-GO"
+    ],
+    "expected_assets": [
+      "syswarden_4.03.0_amd64.deb",
+      "syswarden_4.03.0_arm64.deb",
+      "syswarden-4.03.0-1.x86_64.rpm",
+      "syswarden-4.03.0-1.aarch64.rpm",
+      "syswarden_4.03.0_x86_64.apk",
+      "syswarden_4.03.0_aarch64.apk",
+      "SHA256SUMS.txt",
+      "RELEASE_SHA256SUMS.txt",
+      "syswarden-release.tar.gz",
+      "syswarden-sbom.spdx.json",
+      "plumber-report.zip",
+      "syswarden-update-manifest-v1.json",
+      "syswarden-update-manifest-v1.json.sig"
+    ],
+    "forbidden_phrases": [
+      "/home/",
+      "@gmail.",
+      "@proton."
+    ]
+  },
+  "active_surface_contract": {
+    "documents": [
+      "README.md",
+      "changelog.md",
+      "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.0.md",
+      "assets/syswarden_hero.svg",
+      "assets/syswarden_architecture.svg"
+    ],
+    "report_directory": "docs/reports",
+    "archive_pointer": "Archived pre-v4.03.0 changelog SHA-256: a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5",
+    "public_asset_count": 13,
+    "package_count": 6
+  },
   "source_assertions": [
-    {
-      "id": "web-tui-default-bind",
-      "path": "src/core/syswarden-cli/cmd/web_tui.go",
-      "literal": "webTuiCmd.Flags().StringVar(&bindAddr, \"bind\", \"0.0.0.0:62027\""
-    },
-    {
-      "id": "web-tui-url-token",
-      "path": "src/core/syswarden-cli/cmd/web_tui.go",
-      "literal": "r.URL.Query().Get(\"token\")"
-    },
     {
       "id": "ha-default-port",
       "path": "src/core/syswarden-core/network/ha_api.go",
       "literal": "Port:    \"62026\""
     },
     {
-      "id": "ha-server-persistent-tls-directory",
-      "path": "src/core/syswarden-core/network/ha_api.go",
-      "literal": "defaultHATLSDir      = \"/var/lib/syswarden/ha\""
-    },
-    {
-      "id": "ha-server-public-certificate-name",
-      "path": "src/core/syswarden-core/network/ha_api.go",
-      "literal": "haTLSCertificateName = \"server.crt\""
-    },
-    {
-      "id": "ha-server-private-key-name",
-      "path": "src/core/syswarden-core/network/ha_api.go",
-      "literal": "haTLSPrivateKeyName  = \"server.key\""
-    },
-    {
-      "id": "ha-server-loads-persistent-tls-identity",
-      "path": "src/core/syswarden-core/network/ha_api.go",
-      "literal": "cert, err := loadOrCreateHATLSCertificate(haTLSDir)"
-    },
-    {
-      "id": "ha-server-requires-tls13",
+      "id": "ha-tls13",
       "path": "src/core/syswarden-core/network/ha_api.go",
       "literal": "MinVersion:   tls.VersionTLS13"
     },
     {
-      "id": "ha-sync-client-requires-tls13-and-trust-roots",
-      "path": "src/core/syswarden-cli/pkg/network/sync.go",
-      "literal": "TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: rootCAs}"
-    },
-    {
-      "id": "tui-ha-ca-bundle",
-      "path": "src/core/syswarden-tui/main.go",
-      "literal": "const haPeerCABundleFile = \"/etc/syswarden/ha-ca.pem\""
-    },
-    {
-      "id": "tui-ha-uses-explicit-ca-bundle",
-      "path": "src/core/syswarden-tui/main.go",
-      "literal": "if err := addStrictHATrustCertificates(roots, bundle); err != nil"
-    },
-    {
-      "id": "ha-sync-rejects-partial-ca-bundle",
-      "path": "src/core/syswarden-cli/pkg/network/sync.go",
-      "literal": "if err := addStrictHACertificates(pool, wire); err != nil"
-    },
-    {
-      "id": "tui-ha-system-trust-fallback",
-      "path": "src/core/syswarden-tui/main.go",
-      "literal": "roots, systemErr := x509.SystemCertPool()"
-    },
-    {
-      "id": "tui-ha-requires-tls13",
-      "path": "src/core/syswarden-tui/main.go",
-      "literal": "MinVersion: tls.VersionTLS13"
-    },
-    {
-      "id": "ha-server-requires-bearer-token",
+      "id": "ha-token-required",
       "path": "src/core/syswarden-core/network/ha_api.go",
       "literal": "return nil, fmt.Errorf(\"HA token is required\")"
     },
     {
-      "id": "ha-server-bounds-enriched-batches",
-      "path": "src/core/syswarden-core/network/ha_api.go",
-      "literal": "maxHABansPerRequest  = 500"
-    },
-    {
-      "id": "bunkerweb-integration-defaults-disabled",
-      "path": "src/core/syswarden-cli/config/config_loader.go",
-      "literal": "v.SetDefault(\"integrations.bunkerweb.enabled\", false)"
-    },
-    {
-      "id": "bunkerweb-enriched-mutations-require-explicit-gate",
-      "path": "src/core/syswarden-core/network/ha_api.go",
-      "literal": "if len(mutation.temporaries) > 0 && !api.cfg.BunkerWebEnabled"
-    },
-    {
-      "id": "bunkerweb-capabilities-are-explicit",
+      "id": "partner-capabilities",
       "path": "src/core/syswarden-core/network/ha_api.go",
       "literal": "\"sync_ttl\", \"sync_provenance\""
     },
     {
-      "id": "ha-node-sync-remains-in-both-bunkerweb-gate-modes",
-      "path": "src/core/syswarden-core/network/ha_api_contract_test.go",
-      "literal": "func TestTwoNodeLegacyHADurableBidirectionalSyncWithWAAP_BunkerGateMatrix_SW_HA_002"
+      "id": "fence-capability",
+      "path": "src/core/syswarden-core/network/ha_fence.go",
+      "literal": "haFenceCapability               = \"native_sync_fence_v1\""
     },
     {
-      "id": "ha-sync-does-not-relay-temporary-partner-ledger",
-      "path": "src/core/syswarden-cli/pkg/network/ha_contract_test.go",
-      "literal": "func TestSyncHAPeerDurableWireIndependentOfBunkerGateAndDoesNotRelayTemporaryLedger_SW_HA_004"
+      "id": "fence-condition-header",
+      "path": "src/core/syswarden-core/network/ha_fence.go",
+      "literal": "haFenceConditionHeader          = \"X-SysWarden-HA-Fence-Condition\""
     },
     {
-      "id": "bunkerweb-partner-matrix-never-claims-external-pass",
-      "path": "src/core/syswarden-core/network/ha_api_contract_test.go",
-      "literal": "external-partner/not executed here"
+      "id": "fence-active-drained",
+      "path": "src/core/syswarden-core/network/ha_fence.go",
+      "literal": "haFenceStateActiveDrained       = \"active_drained\""
     },
     {
-      "id": "docker-protect-is-on-forward-hook",
-      "path": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
-      "literal": "type filter hook forward priority -10; policy accept;"
+      "id": "fence-missing-condition",
+      "path": "src/core/syswarden-core/network/ha_fence.go",
+      "literal": "Status: http.StatusPreconditionRequired"
     },
     {
-      "id": "docker-protect-checks-destination-bans",
-      "path": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
-      "literal": "ip daddr @banned_ips counter drop"
+      "id": "fence-stale-condition",
+      "path": "src/core/syswarden-core/network/ha_fence.go",
+      "literal": "Status: http.StatusPreconditionFailed"
     },
     {
-      "id": "ha-thirty-minute-push",
-      "path": "src/core/syswarden-cli/pkg/network/cluster.go",
-      "literal": "\"*/30 * * * * \"+platformpaths.CLI+\" ha-sync >/dev/null 2>&1\""
+      "id": "fence-command",
+      "path": "src/core/syswarden-cli/cmd/ha_fence.go",
+      "literal": "Use:   \"ha-fence\""
     },
     {
-      "id": "ha-sync-pushes-missing-local-entries",
-      "path": "src/core/syswarden-cli/pkg/network/sync.go",
-      "literal": "json.Marshal(HASyncPayload{IPs: missingOnPeer[start:end]})"
+      "id": "fence-manifest-create",
+      "path": "src/core/syswarden-cli/cmd/ha_fence.go",
+      "literal": "Short: \"Create a verified canonical HA fence manifest\""
     },
     {
-      "id": "siem-anonymous-tls",
-      "path": "src/core/syswarden-cli/pkg/integration/siem_linux.go",
-      "literal": "$ActionSendStreamDriverAuthMode anon"
+      "id": "cli-config-schema-v1",
+      "path": "src/core/syswarden-cli/config/modular.go",
+      "literal": "const CurrentSchemaVersion = 1"
     },
     {
-      "id": "updater-verifies-ed25519-manifest",
+      "id": "core-config-schema-v1",
+      "path": "src/core/syswarden-core/config/config.go",
+      "literal": "const CurrentSchemaVersion = 1"
+    },
+    {
+      "id": "config-validate-read-only",
+      "path": "src/core/syswarden-cli/config/validation_report.go",
+      "literal": "without applying environment overrides, rewriting compatibility state"
+    },
+    {
+      "id": "config-dry-run-recovery-guard",
+      "path": "src/core/syswarden-cli/config/migrator.go",
+      "literal": "if m.DryRun && marker != nil {"
+    },
+    {
+      "id": "config-deprecated-saas-alias",
+      "path": "src/core/syswarden-core/config/config.go",
+      "literal": "\"integrations.saas.enabled\": \"network.saas.allow_monitors\""
+    },
+    {
+      "id": "saas-official-precedence",
+      "path": "src/core/syswarden-core/network/saas.go",
+      "literal": "if configuration.IsSet(\"network.saas.allow_monitors\") {"
+    },
+    {
+      "id": "saas-disabled-fallback",
+      "path": "src/core/syswarden-core/network/saas.go",
+      "literal": "if configuration.IsSet(\"integrations.saas.enabled\") {\n\t\treturn configuration.GetBool(\"integrations.saas.enabled\")\n\t}\n\treturn false"
+    },
+    {
+      "id": "saas-feed-bounds",
+      "path": "src/core/syswarden-core/network/saas.go",
+      "literal": "maximumSaaSBodySize  = 1 << 20\n\tmaximumSaaSLineSize  = 1024\n\tmaximumSaaSLines     = 20000\n\tmaximumSaaSEntries   = 10000"
+    },
+    {
+      "id": "saas-https-only",
+      "path": "src/core/syswarden-core/network/saas.go",
+      "literal": "SaaS feed URL must be an absolute HTTPS URL without credentials or a fragment"
+    },
+    {
+      "id": "saas-atomic-pair-publication",
+      "path": "src/core/syswarden-core/network/saas.go",
+      "literal": "func publishSaaSListPair(ipv4Path, ipv6Path string, ipv4Content, ipv6Content []byte) error"
+    },
+    {
+      "id": "canonical-persistent-list-parser",
+      "path": "src/core/syswarden-cli/pkg/firewall/list_values.go",
+      "literal": "func parseCanonicalListEntry(value string, allowPort bool) (canonicalListEntry, error)"
+    },
+    {
+      "id": "ssh-bypass-effective-port",
+      "path": "src/core/syswarden-cli/pkg/firewall/list_values.go",
+      "literal": "does not match the effective SSH port"
+    },
+    {
+      "id": "rsyslog-verified-exact-log-match",
+      "path": "src/core/syswarden-cli/pkg/integration/rsyslog_linux.go",
+      "literal": "Emit the verified exact match rather than its glob."
+    },
+    {
+      "id": "core-waap-real-regular-log",
+      "path": "src/core/syswarden-core/network/waap_log_follower_linux.go",
+      "literal": "is not a real regular file"
+    },
+    {
+      "id": "wireguard-context-validation",
+      "path": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
+      "literal": "func renderWireGuardConfigurations(input wireGuardRenderInput) (string, string, error)"
+    },
+    {
+      "id": "cli-ha-ssh-wireguard-port-collision",
+      "path": "src/core/syswarden-cli/config/validator.go",
+      "literal": "integrations.ha.peer_port must not equal core.ssh_port while WireGuard is enabled"
+    },
+    {
+      "id": "core-ha-ssh-wireguard-port-collision",
+      "path": "src/core/syswarden-core/config/config.go",
+      "literal": "integrations.ha.peer_port must not equal core.ssh_port while WireGuard is enabled"
+    },
+    {
+      "id": "updater-signature",
       "path": "src/core/syswarden-cli/pkg/system/upgrade_manifest.go",
-      "literal": "if !ed25519.Verify(publicKey, manifestBytes, signature)"
+      "literal": "ed25519.Verify(publicKey, manifestBytes, signature)"
     },
     {
-      "id": "updater-reverifies-package-before-install",
-      "path": "src/core/syswarden-cli/pkg/system/upgrade.go",
-      "literal": "verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID)"
+      "id": "release-six-packages",
+      "path": "scripts/ci/release_gate.py",
+      "literal": "f\"syswarden_{version}_aarch64.apk\","
     },
     {
-      "id": "uninstall-removes-configuration",
-      "path": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "literal": "os.RemoveAll(\"/etc/syswarden\")"
+      "id": "release-signed-manifest",
+      "path": "scripts/ci/release_gate.py",
+      "literal": "UPDATE_MANIFEST_NAME = \"syswarden-update-manifest-v1.json\""
     },
     {
-      "id": "uninstall-removes-state",
-      "path": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "literal": "os.RemoveAll(\"/var/lib/syswarden\")"
-    },
-    {
-      "id": "uninstall-removes-logs",
-      "path": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "literal": "os.RemoveAll(\"/var/log/syswarden\")"
-    },
-    {
-      "id": "freebsd-package-prefix",
-      "path": ".github/workflows/package.yml",
-      "literal": "${STAGING_FREEBSD}/usr/local/syswarden/bin"
-    },
-    {
-      "id": "freebsd-runtime-native-prefix",
-      "path": "src/core/syswarden-cli/pkg/system/service_freebsd.go",
-      "literal": "command=\"/usr/local/syswarden/bin/syswarden-core\""
-    },
-    {
-      "id": "reload-reapplies-firewall",
-      "path": "src/core/syswarden-cli/cmd/reload.go",
-      "literal": "firewall.ApplyPolicies()"
-    },
-    {
-      "id": "reload-restarts-core",
-      "path": "src/core/syswarden-cli/cmd/reload.go",
-      "literal": "if err := restartCoreService(); err != nil"
-    },
-    {
-      "id": "reload-restarts-core-linux",
-      "path": "src/core/syswarden-cli/cmd/reload_service_default.go",
-      "literal": "exec.Command(\"systemctl\", \"restart\", \"syswarden-core.service\")"
-    },
-    {
-      "id": "reload-restarts-core-freebsd",
-      "path": "src/core/syswarden-cli/cmd/reload_service_freebsd.go",
-      "literal": "exec.Command(\"service\", \"syswarden\", \"onestatus\")"
+      "id": "package-native-arm64",
+      "path": ".github/workflows/release-qualification.yml",
+      "literal": "runs-on: ubuntu-24.04-arm"
     }
   ]
 }

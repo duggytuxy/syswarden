@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestAutoWhitelistUsesPlatformNativeDiscovery(t *testing.T) {
+func TestAutoWhitelistUsesLinuxNativeDiscovery(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve test source path")
@@ -18,15 +18,6 @@ func TestAutoWhitelistUsesPlatformNativeDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	freeBSD, err := root.ReadFile("auto_whitelist_freebsd.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(freeBSD), "ip -4") ||
-		!strings.Contains(string(freeBSD), `exec.Command("route", "-n", "get", "default")`) ||
-		!strings.Contains(string(freeBSD), "net.Interfaces") {
-		t.Fatal("FreeBSD auto-whitelist does not use bounded native route and interface discovery")
-	}
 	linux, err := root.ReadFile("auto_whitelist_linux.go")
 	if err != nil {
 		t.Fatal(err)

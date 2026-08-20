@@ -204,29 +204,6 @@ jobs:
           fuzz_target src/core/syswarden-cli ./pkg/network FuzzHASyncPayloadJSON
           fuzz_target src/core/syswarden-core ./engine FuzzEngineNetworkAndURLInput
 
-      - name: Cross-compile FreeBSD tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          modules=(
-            src/core/syswarden-cli
-            src/core/syswarden-core
-            src/core/syswarden-tui
-          )
-          for module in "${modules[@]}"; do
-            echo "Cross-compiling ${module} for freebsd/amd64"
-            (
-              cd "${module}"
-              GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 \
-                go test -mod=readonly -run '^$' -exec /bin/true ./...
-            )
-          done
-          (
-            cd scripts/versionctl
-            GOWORK=off GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 \
-              go test -mod=readonly -run '^$' -exec /bin/true ./...
-          )
-
       - name: Run golangci-lint
         shell: bash
         run: |
@@ -286,26 +263,6 @@ jobs:
             module: src/core/syswarden-tui
           - scan: linux-versionctl
             goos: linux
-            goarch: amd64
-            cgo_enabled: '0'
-            module: scripts/versionctl
-          - scan: freebsd-cli
-            goos: freebsd
-            goarch: amd64
-            cgo_enabled: '0'
-            module: src/core/syswarden-cli
-          - scan: freebsd-core
-            goos: freebsd
-            goarch: amd64
-            cgo_enabled: '0'
-            module: src/core/syswarden-core
-          - scan: freebsd-tui
-            goos: freebsd
-            goarch: amd64
-            cgo_enabled: '0'
-            module: src/core/syswarden-tui
-          - scan: freebsd-versionctl
-            goos: freebsd
             goarch: amd64
             cgo_enabled: '0'
             module: scripts/versionctl
@@ -745,8 +702,8 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t gosec_reports < <(find security-evidence -maxdepth 1 -type f -name 'gosec-*.sarif' -print | sort)
-          test "${#gosec_reports[@]}" -eq 8
-          expected_scans=(freebsd-cli freebsd-core freebsd-tui freebsd-versionctl linux-cli linux-core linux-tui linux-versionctl)
+          test "${#gosec_reports[@]}" -eq 4
+          expected_scans=(linux-cli linux-core linux-tui linux-versionctl)
           for scan in "${expected_scans[@]}"; do
             test -s "security-evidence/gosec-${scan}.sarif"
           done
@@ -779,30 +736,6 @@ jobs:
         with:
           sarif_file: security-evidence/gosec-linux-versionctl.sarif
           category: gosec-linux-versionctl
-
-      - name: Upload gosec SARIF (freebsd-cli)
-        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
-        with:
-          sarif_file: security-evidence/gosec-freebsd-cli.sarif
-          category: gosec-freebsd-cli
-
-      - name: Upload gosec SARIF (freebsd-core)
-        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
-        with:
-          sarif_file: security-evidence/gosec-freebsd-core.sarif
-          category: gosec-freebsd-core
-
-      - name: Upload gosec SARIF (freebsd-tui)
-        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
-        with:
-          sarif_file: security-evidence/gosec-freebsd-tui.sarif
-          category: gosec-freebsd-tui
-
-      - name: Upload gosec SARIF (freebsd-versionctl)
-        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
-        with:
-          sarif_file: security-evidence/gosec-freebsd-versionctl.sarif
-          category: gosec-freebsd-versionctl
 
       - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7

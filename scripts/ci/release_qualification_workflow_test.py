@@ -17,6 +17,8 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 WORKFLOW = REPOSITORY / ".github" / "workflows" / "release-qualification.yml"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 ACTION = re.compile(r"(?m)^\s*uses:\s*([^@\s]+)@([^\s#]+)")
+RETIRED_PLATFORM = "free" + "bsd"
+RETIRED_PACKAGE_SUFFIX = "." + "txz"
 
 
 def workflow_step_script(workflow: str, step_name: str) -> str:
@@ -143,7 +145,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertIn("group: syswarden-release-qualification", self.workflow)
         self.assertIn("cancel-in-progress: false", self.workflow)
         self.assertIn("required_tools=(", self.workflow)
-        for tool in ("git", "go", "jq", "podman", "python3", "scp", "ssh"):
+        for tool in ("git", "go", "jq", "podman", "python3"):
             self.assertRegex(self.workflow, rf"(?m)^            {tool}$")
         self.assertEqual(
             self.workflow.count("name: syswarden-release-qualification"), 2
@@ -315,17 +317,64 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "syswarden-${previous_version}-1.aarch64.rpm",
             "syswarden_${previous_version}_x86_64.apk",
             "syswarden_${previous_version}_aarch64.apk",
-            "syswarden-${previous_version}.txz",
             '"SHA256SUMS.txt"',
             '"repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"',
             "-H 'Accept: application/octet-stream'",
         )
         for contract in required:
             self.assertIn(contract, self.workflow)
+        self.assertNotIn(RETIRED_PACKAGE_SUFFIX, self.workflow)
         self.assertGreaterEqual(
             self.workflow.count("gh api --paginate --slurp --method GET"), 4
         )
         self.assertEqual(self.workflow.count("verify-packages"), 4)
+
+    def test_v4028_transition_is_exact_private_and_fails_closed(self) -> None:
+        exact_counts = {
+            'if [[ "${PREVIOUS_TAG}" == "v4.02.8" ]]': 2,
+            "normalize-v4028-linux-packages": 2,
+            "public-release-assets.json": 2,
+            "public-SHA256SUMS.txt": 2,
+            "v4.02.8-linux-transition.json": 2,
+            "jq -cS '[.[] | .[] | {digest, id, name, size, state}]'": 2,
+            'cat "${transition_provenance}"': 2,
+            'sha256sum "${transition_provenance}"': 2,
+        }
+        for contract, expected_count in exact_counts.items():
+            self.assertEqual(self.workflow.count(contract), expected_count, contract)
+        for argument in (
+            '--repository "${GITHUB_REPOSITORY}"',
+            '--release-id "${release_id}"',
+            '--tag "${PREVIOUS_TAG}"',
+            '--source-manifest "${transition_source_manifest}"',
+            '--asset-metadata "${transition_metadata}"',
+            '--output-manifest "${ARM_PREVIOUS_PACKAGES_DIR}/SHA256SUMS.txt"',
+            '--output-manifest "${PREVIOUS_PACKAGES_DIR}/SHA256SUMS.txt"',
+            '--provenance-output "${transition_provenance}"',
+        ):
+            self.assertIn(argument, self.workflow)
+        self.assertEqual(self.workflow.count("transition_required=false"), 2)
+        self.assertEqual(self.workflow.count("transition_required=true"), 2)
+        self.assertNotIn(RETIRED_PACKAGE_SUFFIX, self.workflow)
+        for step_name in (
+            "Download Exact ARM64 Previous Packages",
+            "Download Latest Public Previous Packages by Asset ID",
+        ):
+            script = workflow_step_script(self.workflow, step_name)
+            self.assertLess(
+                script.index("normalize-v4028-linux-packages"),
+                script.index("verify-packages"),
+            )
+            self.assertIn('destination="${transition_source_manifest}"', script)
+        cleanup = workflow_step_script(
+            self.workflow, "Remove Ephemeral Signing Material"
+        )
+        for contract in (
+            '"${TRANSITION_DIR}" != "${QUALIFICATION_ROOT}/historical-transition"',
+            'find -P "${TRANSITION_DIR}" -xdev -mindepth 1 -delete',
+            'rmdir -- "${TRANSITION_DIR}"',
+        ):
+            self.assertIn(contract, cleanup)
 
     def test_arm64_is_native_and_emulation_is_forbidden(self) -> None:
         required = (
@@ -388,67 +437,36 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertEqual(
             self.workflow.count("scripts/ci/package_lifecycle_lab.py"), 3
         )
-        for script in ("scripts/ci/freebsd_vm_lab.py", "scripts/ci/nftables_kernel_lab.py"):
-            self.assertEqual(self.workflow.count(script), 1)
+        self.assertEqual(self.workflow.count("scripts/ci/nftables_kernel_lab.py"), 1)
         self.assertEqual(self.workflow.count("--pull-policy never"), 2)
         self.assertEqual(self.workflow.count("--pull-policy always"), 1)
         for status in (
             "package-lab.rc",
-            "freebsd-lab.rc",
             "nftables-lab.rc",
         ):
             self.assertIn(status, self.workflow)
         self.assertGreaterEqual(self.workflow.count("set +e"), 5)
-        self.assertIn("--ssh-host 127.0.0.1", self.workflow)
+        self.assertNotIn("--ssh-host", self.workflow)
 
-    def test_signed_freebsd_updater_is_built_bound_run_and_recomputed(self) -> None:
-        build = self.workflow.split(
-            "      - name: Build Exact FreeBSD Signed Updater Qualification Binary\n",
-            1,
-        )[1].split("      - name:", 1)[0]
-        probe = self.workflow.split(
-            "      - name: Run and Recompute Signed FreeBSD Updater Transition\n",
-            1,
-        )[1].split("      - name:", 1)[0]
-        self.assertIn("GOOS=freebsd", build)
-        self.assertIn("GOARCH=amd64", build)
-        self.assertIn("GOAMD64=v1", build)
-        self.assertIn("CGO_ENABLED=0", build)
-        self.assertIn("GOFLAGS=-mod=readonly", build)
-        self.assertIn("GOTOOLCHAIN=local", build)
-        self.assertIn("-buildvcs=true", build)
-        self.assertIn("./pkg/system", build)
-        self.assertIn(
-            "freeBSDUpdaterQualificationSourceSHA=${RELEASE_SHA}", build
+    def test_signed_linux_update_manifest_is_gated_and_recomputed(self) -> None:
+        signing = workflow_step_script(
+            self.workflow, "Generate and Verify Signed Update Manifest"
         )
-        self.assertIn('test -z "$(git status --porcelain=v1 --untracked-files=all)"', build)
-        self.assertNotIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", build)
-
         for contract in (
-            "scripts/ci/freebsd_updater_vm_probe.py",
-            'run "${common_arguments[@]}"',
-            'verify "${common_arguments[@]}"',
-            '--packages-dir "${CANDIDATE_PACKAGES_DIR}"',
-            '--previous-packages-dir "${PREVIOUS_PACKAGES_DIR}"',
-            '--manifest "${ARTIFACT_ROOT}/update/syswarden-update-manifest-v1.json"',
-            '--signature "${ARTIFACT_ROOT}/update/syswarden-update-manifest-v1.json.sig"',
-            '--test-binary "${TOOLS_DIR}/syswarden-updater-freebsd.test"',
-            '--release-sha "${RELEASE_SHA}"',
-            '--ssh-host 127.0.0.1',
-            '--vm-marker-token-file "${FREEBSD_MARKER_TOKEN_FILE}"',
-            '--output "${report}"',
-            '"${STATUS_DIR}/freebsd-updater.rc"',
-            '"${STATUS_DIR}/freebsd-updater-verify.rc"',
+            '--packages "${CANDIDATE_PACKAGES_DIR}"',
+            '--manifest "${manifest_path}"',
+            '--signature "${signature_path}"',
+            "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY",
+            "env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY",
         ):
-            self.assertIn(contract, probe)
-        self.assertNotIn("set -x", probe)
-        self.assertNotIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", probe)
+            self.assertIn(contract, signing)
+        self.assertNotIn("set -x", signing)
+        self.assertLess(
+            self.workflow.index("Require Successful Qualification Before Release Signing"),
+            self.workflow.index("Generate and Verify Signed Update Manifest"),
+        )
         self.assertLess(
             self.workflow.index("Generate and Verify Signed Update Manifest"),
-            self.workflow.index("Run and Recompute Signed FreeBSD Updater Transition"),
-        )
-        self.assertLess(
-            self.workflow.index("Run and Recompute Signed FreeBSD Updater Transition"),
             self.workflow.index("Seal Exact Qualification Evidence Inventory"),
         )
         verdict = self.workflow.split(
@@ -459,49 +477,51 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "SIGNED_UPDATE_REQUIRED: ${{ steps.update_contract.outputs.required }}",
             verdict,
         )
-        self.assertIn(
-            'jq --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}"',
-            verdict,
-        )
-        self.assertIn('if $signed_update_required then [', verdict)
-        self.assertEqual(verdict.count('"freebsd_updater"'), 1)
-        self.assertEqual(verdict.count('"freebsd_updater_verify"'), 1)
+        self.assertIn('"${SIGNED_UPDATE_REQUIRED}" != "true"', verdict)
+        self.assertIn("all(.[]; . == 0)", verdict)
 
-    def test_freebsd_secrets_are_files_mode_0600_and_token_is_never_an_argument(self) -> None:
-        for secret in (
-            "secrets.SYSWARDEN_FREEBSD_SSH_PRIVATE_KEY",
-            "secrets.SYSWARDEN_FREEBSD_KNOWN_HOSTS",
-            "secrets.SYSWARDEN_FREEBSD_VM_MARKER_TOKEN",
+    def test_linux_only_contract_has_no_retired_platform_transport_or_tools(self) -> None:
+        lowered = self.workflow.lower()
+        for forbidden in (
+            RETIRED_PLATFORM,
+            RETIRED_PACKAGE_SUFFIX,
+            "syswarden_" + RETIRED_PLATFORM,
+            "--" + RETIRED_PLATFORM + "-raw",
+            "--" + RETIRED_PLATFORM + "-output",
+            "--" + RETIRED_PLATFORM + "-envelope",
+            "--" + RETIRED_PLATFORM + "-report",
+            "tools_dir",
+            "secrets_dir",
         ):
-            self.assertIn(secret, self.workflow)
-        self.assertIn(
-            'chmod 0600 "${identity_file}" "${known_hosts_file}" "${marker_token_file}"',
-            self.workflow,
-        )
-        self.assertIn(
-            '--vm-marker-token-file "${FREEBSD_MARKER_TOKEN_FILE}"',
-            self.workflow,
-        )
-        self.assertNotRegex(self.workflow, r"--vm-marker-token(?:\s|$)")
-        self.assertNotIn("FREEBSD_MARKER_TOKEN}" + " \\\n", self.workflow)
+            self.assertNotIn(forbidden, lowered)
         upload = self.workflow.index("Upload Exact Qualification Evidence")
-        cleanup = self.workflow.index("Remove Ephemeral Transport Secrets")
+        cleanup = self.workflow.index("Remove Ephemeral Signing Material")
         verdict = self.workflow.index("Enforce Final Release Qualification Verdict")
         self.assertLess(upload, cleanup)
         self.assertLess(cleanup, verdict)
+
+    def test_nftables_uses_private_verified_tmpdir_and_safe_cleanup(self) -> None:
+        required = (
+            'test "$(stat -c \'%a\' "${qualification_root}")" = "700"',
+            'nftables_tmp_dir="${qualification_root}/nftables-tmp"',
+            'TMPDIR="${NFTABLES_TMP_DIR}"',
+            'GOTMPDIR="${NFTABLES_TMP_DIR}"',
+            '"${NFTABLES_TMP_DIR}" != "${QUALIFICATION_ROOT}/nftables-tmp"',
+            'find -P "${NFTABLES_TMP_DIR}" -xdev -mindepth 1 -delete',
+            'rmdir -- "${NFTABLES_TMP_DIR}"',
+        )
+        for contract in required:
+            self.assertIn(contract, self.workflow)
 
     def test_adapter_build_verify_and_release_gate_contracts_are_exact(self) -> None:
         required = (
             "release_qualification_adapter.py",
             '--nft-raw "${RAW_DIR}/nftables-raw.json"',
             '--package-raw "${RAW_DIR}/package-lifecycle-raw.json"',
-            '--freebsd-raw "${RAW_DIR}/freebsd-vm-raw.json"',
             '--nft-output "${BOUND_DIR}/nftables-bound.json"',
             '--package-output "${BOUND_DIR}/package-lifecycle-bound.json"',
-            '--freebsd-output "${BOUND_DIR}/freebsd-vm-bound.json"',
             '--nft-envelope "${BOUND_DIR}/nftables-bound.json"',
             '--package-envelope "${BOUND_DIR}/package-lifecycle-bound.json"',
-            '--freebsd-envelope "${BOUND_DIR}/freebsd-vm-bound.json"',
             "--max-age-seconds 172800",
             "--max-report-skew-seconds 0",
             "release_qualification_gate.py",
@@ -511,15 +531,13 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         for contract in required:
             self.assertIn(contract, self.workflow)
         self.assertNotIn("--profile characterization", self.workflow)
+        self.assertNotIn("--" + RETIRED_PLATFORM + "-", self.workflow)
 
     def test_artifact_inventory_is_exact_bound_and_byte_verifiable(self) -> None:
         required = (
             "aggregate/release-qualification.json",
-            "bound/freebsd-vm-bound.json",
             "bound/nftables-bound.json",
             "bound/package-lifecycle-bound.json",
-            "raw/freebsd-vm-raw.json",
-            "raw/freebsd-updater-raw.json",
             "raw/nftables-raw.json",
             "raw/package-lifecycle-amd64.json",
             "raw/package-lifecycle-arm64.json",
@@ -528,7 +546,6 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "packages/previous/SHA256SUMS.txt",
             "qualification-context.json",
             "status/qualification-exit-codes.json",
-            "tools/syswarden-updater-freebsd.test",
             'if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then',
             "update/syswarden-update-manifest-v1.json",
             "update/syswarden-update-manifest-v1.json.sig",

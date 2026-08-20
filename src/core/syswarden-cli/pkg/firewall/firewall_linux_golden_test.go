@@ -40,6 +40,9 @@ func TestNftablesRulesGolden_SW_QA_001(t *testing.T) {
 	if bytes.Count(got, []byte("tcp dport { 23, 6379 }")) != 2 {
 		t.Fatal("generated nftables rules do not preserve honeyports 23 and 6379 as two distinct values")
 	}
+	if bytes.Contains(got, []byte("ct state new tcp dport { 443, 2222")) {
+		t.Fatal("the detected SSH listener bypassed SSH-only source policy")
+	}
 	structuralRules := got
 	if populationStart := bytes.Index(structuralRules, []byte("add element ")); populationStart >= 0 {
 		structuralRules = structuralRules[:populationStart]
@@ -355,6 +358,10 @@ func writeLinuxFirewallTestTools(t *testing.T, toolDir string) {
 	populations := []nftSetPopulation{
 		{name: "syswarden_whitelist"},
 		{name: "syswarden_whitelist6"},
+		{name: "syswarden_whitelist_ports", kind: nftAddressPortPopulation},
+		{name: "syswarden_whitelist_ports6", kind: nftAddressPortPopulation},
+		{name: "syswarden_ssh_bypass", inetOnly: true},
+		{name: "syswarden_ssh_bypass6", inetOnly: true},
 		{name: "syswarden_zt_allowed", entries: []string{"192.0.2.0/24", "198.51.100.0/24"}},
 		{name: "syswarden_zt_allowed6", entries: []string{"2001:db8:1::/48", "2001:db8:2::/48"}},
 		{name: "syswarden_blacklist"},
@@ -402,6 +409,7 @@ exit 0
 /bin/cat <<'EOF'
 Netid State Recv-Q Send-Q Local Address:Port Peer Address:Port
 tcp LISTEN 0 128 0.0.0.0:443 0.0.0.0:*
+tcp LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*
 tcp LISTEN 0 128 127.0.0.1:5432 0.0.0.0:*
 udp UNCONN 0 0 *:53 *:*
 EOF

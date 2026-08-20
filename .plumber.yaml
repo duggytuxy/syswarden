@@ -42,7 +42,7 @@ gitlab:
         # - canary
         # - unstable
       # When true, ALL images must be pinned by digest (e.g., alpine@sha256:...).
-      # This takes precedence over the forbidden tags list — any image not using
+      # This takes precedence over the forbidden tags list - any image not using
       # an immutable digest reference will be flagged, including standard version
       # tags like alpine:3.19 or node:20.
       containerImagesMustBePinnedByDigest: true
@@ -85,10 +85,10 @@ gitlab:
         - registry.gitlab.com/gitlab-org/*
         - registry.gitlab.com/pipeline-components/*
         # Do NOT use host-wide patterns such as ghcr.io/*, gcr.io/*, quay.io/*, mcr.microsoft.com/*,
-        # nvcr.io/* — anyone can publish images on those registries; wildcards would trust all of them.
+        # nvcr.io/* - anyone can publish images on those registries; wildcards would trust all of them.
         # Prefer org-scoped patterns instead, e.g. ghcr.io/my-org/*, quay.io/prometheus/*
 
-        # Docker Hub — well-known publishers (DevOps / CI tooling)
+        # Docker Hub - well-known publishers (DevOps / CI tooling)
         # Each entry below corresponds to a Docker Hub Verified Publisher,
         # the upstream project's own namespace, or an officially recognised
         # community publisher for that tool. See docs/trusted-registries.md
@@ -110,29 +110,29 @@ gitlab:
         - docker.io/hashicorp/* # HashiCorp (IBM) verified publisher
         - docker.io/cimg/* # CircleCI convenience images
         - docker.io/circleci/* # CircleCI legacy convenience images
-        # Docker Hub — cloud vendor official images
+        # Docker Hub - cloud vendor official images
         - docker.io/amazon/* # Amazon Web Services
         - docker.io/google/* # Google
         - docker.io/nvidia/* # NVIDIA verified publisher
         - docker.io/bitnami/* # Bitnami / VMware (Broadcom) verified publisher
-        # Docker Hub — OS / distro official images
+        # Docker Hub - OS / distro official images
         - docker.io/redhat/* # Red Hat
         - docker.io/opensuse/* # openSUSE Project
         - docker.io/gentoo/* # Gentoo Linux maintainers
         - docker.io/nixos/* # NixOS Foundation
         - docker.io/rustlang/* # Rust Programming Language official
-        # Microsoft Container Registry — official Microsoft products
+        # Microsoft Container Registry - official Microsoft products
         - mcr.microsoft.com/dotnet/* # .NET official images
         - mcr.microsoft.com/playwright/* # Playwright (Microsoft) browser images
         - mcr.microsoft.com/playwright # tag-only ref form (no path suffix)
-        # Quay.io — well-known projects with their own organisation
+        # Quay.io - well-known projects with their own organisation
         - quay.io/buildah/* # Containers project (Buildah)
         - quay.io/podman/* # Containers project (Podman)
         - quay.io/containers/* # Containers project umbrella org
         - quay.io/centos/* # CentOS Project (CentOS Stream)
         - quay.io/pypa/* # Python Packaging Authority (manylinux)
         - quay.io/gnome_infrastructure/* # GNOME Infrastructure team
-        # GitHub Container Registry — well-known upstream organisations
+        # GitHub Container Registry - well-known upstream organisations
         # ghcr.io/<org>/* is scoped to a single GitHub organisation, so each
         # entry must be the actual org that publishes the upstream tool.
         - ghcr.io/astral-sh/* # Astral (uv, ruff)
@@ -142,7 +142,7 @@ gitlab:
         - ghcr.io/graalvm/* # Oracle GraalVM team
         - ghcr.io/terraform-linters/* # tflint upstream organisation
         - ghcr.io/prefix-dev/* # prefix.dev (pixi)
-        # Google Container Registry — Google-owned projects
+        # Google Container Registry - Google-owned projects
         - gcr.io/kaniko-project/* # Kaniko (Google Cloud Build)
         - gcr.io/go-containerregistry/* # google/go-containerregistry (crane, gcrane)
         - gcr.io/google.com/cloudsdktool/* # Google Cloud SDK (gcloud) official
@@ -196,7 +196,7 @@ gitlab:
     # Flags `include:` references whose ref resolves upstream as BOTH a tag
     # and a branch: an `include:project` with `ref: v1`, or a CI/CD component
     # `@v1`, where the source project keeps both a `v1` tag and a `v1` branch.
-    # GitLab resolves the tag first, so the pipeline runs today — but a tag
+    # GitLab resolves the tag first, so the pipeline runs today - but a tag
     # deletion, rename, or typo silently switches the include onto the mutable
     # branch, and the reviewer cannot tell from the YAML which revision runs.
     #
@@ -260,14 +260,14 @@ gitlab:
     #
     # Two ways to define requirements (use one, not both):
     #
-    # Option 1 — Expression syntax ('required'):
+    # Option 1 - Expression syntax ('required'):
     #   A natural boolean expression using AND, OR, and parentheses.
     #   AND binds tighter than OR, so "a AND b OR c" means "(a AND b) OR c".
     #
     #   required: components/sast/sast AND components/secret-detection/secret-detection
     #   required: (components/sast/sast AND components/secret-detection/secret-detection) OR your-org/full-security/full-security
     #
-    # Option 2 — Array syntax ('requiredGroups'):
+    # Option 2 - Array syntax ('requiredGroups'):
     #   A list of groups using "OR of ANDs" logic:
     #     - Each inner array = components that must ALL be present (AND)
     #     - Outer array = only ONE group needs to be satisfied (OR)
@@ -297,11 +297,11 @@ gitlab:
     #
     # Two ways to define requirements (use one, not both):
     #
-    # Option 1 — Expression syntax ('required'):
+    # Option 1 - Expression syntax ('required'):
     #   required: templates/go/go AND templates/trivy/trivy
     #   required: (templates/go/go AND templates/trivy/trivy) OR templates/full-go-pipeline
     #
-    # Option 2 — Array syntax ('requiredGroups'):
+    # Option 2 - Array syntax ('requiredGroups'):
     #   requiredGroups:
     #     - ["templates/go/go", "templates/trivy/trivy"]
     #     - ["templates/full-go-pipeline"]
@@ -350,7 +350,7 @@ gitlab:
     #   - envsubst '$CI_COMMIT_MESSAGE' < tpl.sh | sh
     #   - echo "$CI_COMMIT_BRANCH" | xargs sh
     #
-    # Not flagged (safe — shell doesn't re-parse env var values):
+    # Not flagged (safe - shell doesn't re-parse env var values):
     #   - echo $CI_COMMIT_BRANCH
     #   - echo "$CI_COMMIT_MESSAGE"
     #   - curl -d "$CI_MERGE_REQUEST_TITLE" https://...
@@ -596,7 +596,7 @@ github:
       # that any workflow already executes implicitly. Defaults to true.
       trustGithubOfficialActions: true
       # Trust actions whose owner is the same org/user as the scanned
-      # repository — an org's own actions are inside its trust boundary.
+      # repository - an org's own actions are inside its trust boundary.
       # Defaults to true.
       trustSameOrgActions: true
       # When > 0, also trust any action whose upstream repository has at
@@ -641,7 +641,7 @@ github:
         - master
       # When true, ALL images must be pinned by digest (e.g.,
       # alpine@sha256:...). Takes precedence over the forbidden tags
-      # list — any image not using an immutable digest reference is
+      # list - any image not using an immutable digest reference is
       # flagged.
       containerImagesMustBePinnedByDigest: true
 
@@ -671,8 +671,8 @@ github:
     # Reusable workflows must not inherit secrets
     # ===========================================
     # Detects `jobs.<name>.secrets: inherit` calls. Inherit forwards
-    # every secret visible to the caller — repo, organisation,
-    # environment — to the reusable workflow regardless of what it
+    # every secret visible to the caller - repo, organisation,
+    # environment - to the reusable workflow regardless of what it
     # actually needs. Use an explicit secrets map instead.
     reusableWorkflowsMustNotInheritSecrets:
       enabled: true
@@ -697,7 +697,7 @@ github:
     # neutralised via `continue-on-error: true` (mapped to the same
     # IR field as GitLab's allow_failure: true) or manual-dispatch-only
     # triggers. The pattern set covers the GitHub-native scanners
-    # users actually run — `codeql`, `dependency-review`, `trufflehog`,
+    # users actually run - `codeql`, `dependency-review`, `trufflehog`,
     # `gitleaks`, `osv-scanner`, plus generic fallbacks like
     # `*scan*`, `*audit*`, `*security*` so SAST jobs named with
     # project-specific prefixes still match.
@@ -815,7 +815,7 @@ github:
     # Workflows must declare permissions
     # ===========================================
     # Workflows without an explicit `permissions:` block fall back to
-    # the repo-wide GITHUB_TOKEN default — often `contents: write` or
+    # the repo-wide GITHUB_TOKEN default - often `contents: write` or
     # `read-all`. Declaring `permissions: { contents: read }` at the
     # workflow level enforces least-privilege regardless of the repo
     # default.
@@ -829,7 +829,7 @@ github:
     # other shipping rule is pipeline-governance (workflow content);
     # this one inspects repository settings via the GitHub branch-
     # protection API. Requires a token with `repo` scope (classic
-    # PAT) or "Administration: read" (fine-grained PAT) — content-
+    # PAT) or "Administration: read" (fine-grained PAT) - content-
     # only read access is NOT enough. Without scope the collector
     # returns an empty branch list and the rule emits no findings,
     # same degraded contract as missing API auth elsewhere.
@@ -907,8 +907,8 @@ github:
     # Flags workflows and jobs whose effective `permissions:` block is the
     # literal `write-all` shortcut. write-all gives GITHUB_TOKEN every
     # scope (contents, packages, deployments, id-token, …) at the same
-    # time, so any compromise in the workflow — a malicious dependency,
-    # a script-injection bug, a third-party action turning evil — gets
+    # time, so any compromise in the workflow - a malicious dependency,
+    # a script-injection bug, a third-party action turning evil - gets
     # to do anything the repo allows: push to main, publish releases,
     # mint OIDC tokens for cloud accounts, mark deployments succeeded.
     #
@@ -936,7 +936,7 @@ github:
     # Flags `uses: owner/repo@ref` references whose symbolic name resolves
     # upstream as BOTH a tag and a branch (e.g. a tag `v1` kept alongside a
     # long-lived `v1` branch). GitHub Actions resolves tags first, so the
-    # workflow runs the tagged commit today — but a tag deletion, rename, or
+    # workflow runs the tagged commit today - but a tag deletion, rename, or
     # a workflow typo silently switches which revision executes, and the
     # reviewer cannot tell from the YAML alone. Pin to a 40-char commit SHA
     # to remove the ambiguity.
@@ -957,7 +957,7 @@ github:
     # is archived on GitHub. Archived repos no longer receive
     # maintenance: open vulnerabilities stay open, dependency bumps
     # stop, runtime compatibility regressions accumulate. Pinning by
-    # SHA does not save the caller — the last maintainer (or someone
+    # SHA does not save the caller - the last maintainer (or someone
     # who later acquires the namespace) can still push new code under
     # the original repository name.
     #
@@ -1011,7 +1011,7 @@ github:
     # Advisory Database under the `actions` ecosystem. A positive hit
     # means at least one published advisory targets the action's
     # repository. This is the rule that catches the published-CVE
-    # supply-chain class — tj-actions/changed-files (CVE-2025-30066),
+    # supply-chain class - tj-actions/changed-files (CVE-2025-30066),
     # reviewdog/action-setup (March 2025), unpatched versions of
     # `actions/artifact`.
     #
@@ -1023,9 +1023,9 @@ github:
     # How it works: one Advisory Database query per `owner/repo`
     # (`ecosystem=actions`), cached. When the pinned ref resolves to a
     # semver tag, Plumber filters advisories by `vulnerable_version_range`.
-    # A ref that cannot be resolved to a release version — a commit SHA
+    # A ref that cannot be resolved to a release version - a commit SHA
     # with no matching release tag, or a mutable non-numeric tag such as
-    # `rc` / `main` / `latest` — abstains and surfaces a "could not verify"
+    # `rc` / `main` / `latest` - abstains and surfaces a "could not verify"
     # warning rather than matching every advisory for that repo. Upgrade
     # past the fixed-in version and re-pin the SHA to clear the finding.
     #
@@ -1065,9 +1065,9 @@ github:
         - changesets/action
       # Full inventory of cache-restoring actions AND their per-action
       # semantics (the rego hardcodes none of this). mode:
-      #   always  — restores whenever present (actions/cache, rust-cache)
-      #   default — restores unless disableInput holds disableValue
-      #   opt-in  — restores only when enableInput names a package manager
+      #   always  - restores whenever present (actions/cache, rust-cache)
+      #   default - restores unless disableInput holds disableValue
+      #   opt-in  - restores only when enableInput names a package manager
       #             (enableContains further requires that substring in the
       #             value, e.g. build-push-action only caches via GHA when
       #             cache-from mentions type=gha)
@@ -1099,12 +1099,12 @@ github:
         - '(?i)gem\s+push'
         - '(?i)docker\s+push'
       # Verification-only forms that veto a publish-script match on the same
-      # run block — they never publish anything.
+      # run block - they never publish anything.
       publishScriptExcludePatterns:
         - '(?i)--dry-run'
         - '(?i)publishToMavenLocal'
       # Jobs to exempt from this control (glob on `<workflow-file>/<job-id>`).
-      # The escape hatch for release jobs you have reviewed and accepted —
+      # The escape hatch for release jobs you have reviewed and accepted -
       # e.g. a lint job that caches but ships nothing.
       allowedJobs: []
         # - '*/lint'

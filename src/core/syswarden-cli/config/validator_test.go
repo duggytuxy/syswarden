@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCustomValidators(t *testing.T) {
 	t.Parallel()
@@ -27,6 +30,25 @@ func TestCustomValidators(t *testing.T) {
 		{name: "invalid ASN", value: "AS-example", tag: "asn", wantErr: true},
 		{name: "duration", value: "24h", tag: "duration"},
 		{name: "invalid duration", value: "daily", tag: "duration", wantErr: true},
+		{name: "canonical LAN", value: []string{"10.0.0.0/8", "2001:db8::/32"}, tag: "canonical_cidr_slice"},
+		{name: "LAN host bits", value: []string{"10.0.0.1/8"}, tag: "canonical_cidr_slice", wantErr: true},
+		{name: "whitelist shell payload", value: []string{"192.0.2.1;flush"}, tag: "ip_or_cidr_slice", wantErr: true},
+		{name: "country list", value: []string{"be", "FR"}, tag: "country_code_slice"},
+		{name: "long country", value: []string{"BEL"}, tag: "country_code_slice", wantErr: true},
+		{name: "maximum ASN", value: []string{"AS4294967295"}, tag: "asn_slice"},
+		{name: "negative ASN", value: []string{"AS-1"}, tag: "asn_slice", wantErr: true},
+		{name: "oversized ASN", value: []string{"4294967296"}, tag: "asn_slice", wantErr: true},
+		{name: "interfaces", value: "eth0,ens3.10", tag: "interface_list"},
+		{name: "interface command injection", value: "eth0;flush ruleset", tag: "interface_list", wantErr: true},
+		{name: "HTTPS URL", value: "https://feeds.example.invalid/list.txt", tag: "https_url_optional"},
+		{name: "HTTP URL", value: "http://feeds.example.invalid/list.txt", tag: "https_url_optional", wantErr: true},
+		{name: "URL userinfo", value: "https://user:secret@example.invalid/hook", tag: "https_url_optional", wantErr: true}, // #nosec G101 -- deliberate invalid userinfo fixture contains no real credential
+		{name: "SHA-256", value: strings.Repeat("a", 64), tag: "sha256_optional"},
+		{name: "short digest", value: "sha256:abcd", tag: "sha256_optional", wantErr: true},
+		{name: "absolute CA", value: "/etc/syswarden/ca.pem", tag: "absolute_path"},
+		{name: "relative CA", value: "../../ca.pem", tag: "absolute_path", wantErr: true},
+		{name: "absolute log glob", value: "/var/log/nginx/*.log", tag: "log_path_optional"},
+		{name: "log newline", value: "/var/log/access.log\nmodule(load=\"evil\")", tag: "log_path_optional", wantErr: true},
 	}
 
 	for _, test := range tests {
@@ -82,6 +104,27 @@ func TestValidateConfigContract_SW_CFG_002(t *testing.T) {
 	if err := validateConfig(&invalid); err == nil {
 		t.Fatal("modular configuration accepted an invalid honeyport")
 	}
+
+	invalid = *valid
+	invalid.SchemaVersion = CurrentSchemaVersion + 1
+	if err := validateConfig(&invalid); err == nil {
+		t.Fatal("modular configuration accepted an unsupported schema version")
+	}
+
+	invalid = *valid
+	invalid.Integrations.SIEM.Enabled = true
+	invalid.Integrations.SIEM.IP = "192.0.2.20"
+	invalid.Integrations.SIEM.Port = "6514"
+	invalid.Integrations.SIEM.Protocol = "tls"
+	if err := validateConfig(&invalid); err == nil {
+		t.Fatal("modular configuration accepted TLS SIEM without a CA path")
+	}
+
+	invalid = *valid
+	invalid.Integrations.Webhooks.Enabled = true
+	if err := validateConfig(&invalid); err == nil {
+		t.Fatal("modular configuration accepted enabled webhooks without an HTTPS endpoint")
+	}
 }
 
 func TestValidateHARequiresTokenAndAcceptsPeerCIDRs(t *testing.T) {
@@ -119,6 +162,12 @@ func TestValidateHARequiresTokenAndAcceptsPeerCIDRs(t *testing.T) {
 			name: "surrounding token whitespace",
 			mutate: func(config *ModularConfig) {
 				config.Integrations.HA.Token = " shared-cluster-token "
+			},
+		},
+		{
+			name: "embedded token newline",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.Token = "shared\ncluster-token"
 			},
 		},
 		{

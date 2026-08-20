@@ -676,18 +676,15 @@ jobs:
           qualification_root_directories=(aggregate bound packages raw status)
           qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
           qualification_raw_files=(
-            freebsd-vm-raw.json
             nftables-raw.json
             package-lifecycle-amd64.json
             package-lifecycle-arm64.json
             package-lifecycle-raw.json
           )
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            qualification_root_directories+=(tools update)
-            qualification_all_directories+=(tools update)
-            qualification_raw_files+=(freebsd-updater-raw.json)
+            qualification_root_directories+=(update)
+            qualification_all_directories+=(update)
           else
-            test ! -e "${QUALIFICATION_ROOT}/tools"
             test ! -e "${QUALIFICATION_ROOT}/update"
           fi
           diff -u \
@@ -706,7 +703,7 @@ jobs:
             <(printf '%s\n' "${qualification_raw_files[@]}" | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}/raw" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
-            <(printf '%s\n' freebsd-vm-bound.json nftables-bound.json package-lifecycle-bound.json | LC_ALL=C sort) \
+            <(printf '%s\n' nftables-bound.json package-lifecycle-bound.json | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}/bound" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
             <(printf '%s\n' candidate previous | LC_ALL=C sort) \
@@ -715,9 +712,6 @@ jobs:
             <(printf '%s\n' qualification-exit-codes.json) \
             <(find "${QUALIFICATION_ROOT}/status" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            diff -u \
-              <(printf '%s\n' syswarden-updater-freebsd.test) \
-              <(find "${QUALIFICATION_ROOT}/tools" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
             diff -u \
               <(printf '%s\n' syswarden-update-manifest-v1.json syswarden-update-manifest-v1.json.sig | LC_ALL=C sort) \
               <(find "${QUALIFICATION_ROOT}/update" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
@@ -736,21 +730,6 @@ jobs:
               <(find . -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n' | LC_ALL=C sort)
             sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
           )
-          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            test -f "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
-            test ! -L "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
-            chmod 0700 -- "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
-            test "$(stat -c '%a' "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test")" = "700"
-            PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_updater_vm_probe.py \
-              verify \
-              --packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
-              --previous-packages-dir "${QUALIFICATION_ROOT}/packages/previous" \
-              --manifest "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
-              --signature "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig" \
-              --test-binary "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test" \
-              --release-sha "${RELEASE_SHA}" \
-              --report "${QUALIFICATION_ROOT}/raw/freebsd-updater-raw.json"
-          fi
           jq --exit-status \
             --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
             --arg repository "${GITHUB_REPOSITORY}" \
@@ -785,8 +764,8 @@ jobs:
             (.previous_tag | type) == "string" and
             .previous_tag == $aggregate[0].bindings.previous_version and
             (.previous_package_asset_ids | type) == "array" and
-            (.previous_package_asset_ids | length) == 8 and
-            ([.previous_package_asset_ids[].name] | unique | length) == 8 and
+            (.previous_package_asset_ids | length) == 7 and
+            ([.previous_package_asset_ids[].name] | unique | length) == 7 and
             all(.previous_package_asset_ids[];
               (keys | sort) == ["id", "name"] and
               (.id | type) == "number" and .id > 0 and
@@ -800,27 +779,15 @@ jobs:
             "${QUALIFICATION_ROOT}/qualification-context.json")"
           previous_release_id="$(jq -r '.previous_release_id' \
             "${QUALIFICATION_ROOT}/qualification-context.json")"
-          jq --exit-status \
-            --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" '
-            (keys | sort) == (if $signed_update_required then [
+          jq --exit-status '
+            (keys | sort) == ([
               "adapter_build",
               "adapter_verify",
-              "freebsd_lab",
-              "freebsd_updater",
-              "freebsd_updater_verify",
               "gate_generate",
               "gate_verify",
               "nftables_lab",
               "package_lab"
-            ] else [
-              "adapter_build",
-              "adapter_verify",
-              "freebsd_lab",
-              "gate_generate",
-              "gate_verify",
-              "nftables_lab",
-              "package_lab"
-            ] end) and all(.[]; . == 0)
+            ] | sort) and all(.[]; . == 0)
           ' "${QUALIFICATION_ROOT}/status/qualification-exit-codes.json"
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_adapter.py verify \
@@ -833,7 +800,6 @@ jobs:
             --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
             --package-amd64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json" \
             --package-arm64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-arm64.json" \
-            --freebsd-raw "${QUALIFICATION_ROOT}/raw/freebsd-vm-raw.json" \
             --expected-repository "${GITHUB_REPOSITORY}" \
             --expected-workflow-run-id "${QUALIFICATION_RUN_ID}" \
             --expected-workflow-run-attempt 1 \
@@ -844,8 +810,7 @@ jobs:
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --nft-envelope "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \
-            --package-envelope "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json" \
-            --freebsd-envelope "${QUALIFICATION_ROOT}/bound/freebsd-vm-bound.json"
+            --package-envelope "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_gate.py verify \
             --repo-root "${GITHUB_WORKSPACE}" \
             --expected-sha "${RELEASE_SHA}" \
@@ -853,7 +818,6 @@ jobs:
             --candidate-packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
             --nft-report "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \
             --package-report "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json" \
-            --freebsd-report "${QUALIFICATION_ROOT}/bound/freebsd-vm-bound.json" \
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
@@ -869,7 +833,6 @@ jobs:
             "syswarden-${VERSION}-1.aarch64.rpm"
             "syswarden_${VERSION}_x86_64.apk"
             "syswarden_${VERSION}_aarch64.apk"
-            "syswarden-${VERSION}.txz"
             "SHA256SUMS.txt"
           )
           for package_name in "${package_names[@]}"; do
@@ -1211,18 +1174,15 @@ jobs:
           qualification_root_directories=(aggregate bound packages raw status)
           qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
           qualification_raw_files=(
-            freebsd-vm-raw.json
             nftables-raw.json
             package-lifecycle-amd64.json
             package-lifecycle-arm64.json
             package-lifecycle-raw.json
           )
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            qualification_root_directories+=(tools update)
-            qualification_all_directories+=(tools update)
-            qualification_raw_files+=(freebsd-updater-raw.json)
+            qualification_root_directories+=(update)
+            qualification_all_directories+=(update)
           else
-            test ! -e "${QUALIFICATION_ROOT}/tools"
             test ! -e "${QUALIFICATION_ROOT}/update"
           fi
           diff -u \
@@ -1241,7 +1201,7 @@ jobs:
             <(printf '%s\n' "${qualification_raw_files[@]}" | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}/raw" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
-            <(printf '%s\n' freebsd-vm-bound.json nftables-bound.json package-lifecycle-bound.json | LC_ALL=C sort) \
+            <(printf '%s\n' nftables-bound.json package-lifecycle-bound.json | LC_ALL=C sort) \
             <(find "${QUALIFICATION_ROOT}/bound" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           diff -u \
             <(printf '%s\n' candidate previous | LC_ALL=C sort) \
@@ -1250,9 +1210,6 @@ jobs:
             <(printf '%s\n' qualification-exit-codes.json) \
             <(find "${QUALIFICATION_ROOT}/status" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            diff -u \
-              <(printf '%s\n' syswarden-updater-freebsd.test) \
-              <(find "${QUALIFICATION_ROOT}/tools" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
             diff -u \
               <(printf '%s\n' syswarden-update-manifest-v1.json syswarden-update-manifest-v1.json.sig | LC_ALL=C sort) \
               <(find "${QUALIFICATION_ROOT}/update" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
@@ -1271,21 +1228,6 @@ jobs:
               <(find . -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n' | LC_ALL=C sort)
             sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
           )
-          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            test -f "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
-            test ! -L "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
-            chmod 0700 -- "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test"
-            test "$(stat -c '%a' "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test")" = "700"
-            PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_updater_vm_probe.py \
-              verify \
-              --packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
-              --previous-packages-dir "${QUALIFICATION_ROOT}/packages/previous" \
-              --manifest "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json" \
-              --signature "${QUALIFICATION_ROOT}/update/syswarden-update-manifest-v1.json.sig" \
-              --test-binary "${QUALIFICATION_ROOT}/tools/syswarden-updater-freebsd.test" \
-              --release-sha "${RELEASE_SHA}" \
-              --report "${QUALIFICATION_ROOT}/raw/freebsd-updater-raw.json"
-          fi
           jq --exit-status \
             --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
             --arg repository "${GITHUB_REPOSITORY}" \
@@ -1320,8 +1262,8 @@ jobs:
             (.previous_tag | type) == "string" and
             .previous_tag == $aggregate[0].bindings.previous_version and
             (.previous_package_asset_ids | type) == "array" and
-            (.previous_package_asset_ids | length) == 8 and
-            ([.previous_package_asset_ids[].name] | unique | length) == 8 and
+            (.previous_package_asset_ids | length) == 7 and
+            ([.previous_package_asset_ids[].name] | unique | length) == 7 and
             all(.previous_package_asset_ids[];
               (keys | sort) == ["id", "name"] and
               (.id | type) == "number" and .id > 0 and
@@ -1335,27 +1277,15 @@ jobs:
             "${QUALIFICATION_ROOT}/qualification-context.json")"
           previous_release_id="$(jq -r '.previous_release_id' \
             "${QUALIFICATION_ROOT}/qualification-context.json")"
-          jq --exit-status \
-            --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" '
-            (keys | sort) == (if $signed_update_required then [
+          jq --exit-status '
+            (keys | sort) == ([
               "adapter_build",
               "adapter_verify",
-              "freebsd_lab",
-              "freebsd_updater",
-              "freebsd_updater_verify",
               "gate_generate",
               "gate_verify",
               "nftables_lab",
               "package_lab"
-            ] else [
-              "adapter_build",
-              "adapter_verify",
-              "freebsd_lab",
-              "gate_generate",
-              "gate_verify",
-              "nftables_lab",
-              "package_lab"
-            ] end) and all(.[]; . == 0)
+            ] | sort) and all(.[]; . == 0)
           ' "${QUALIFICATION_ROOT}/status/qualification-exit-codes.json"
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_adapter.py verify \
@@ -1368,7 +1298,6 @@ jobs:
             --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
             --package-amd64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json" \
             --package-arm64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-arm64.json" \
-            --freebsd-raw "${QUALIFICATION_ROOT}/raw/freebsd-vm-raw.json" \
             --expected-repository "${GITHUB_REPOSITORY}" \
             --expected-workflow-run-id "${QUALIFICATION_RUN_ID}" \
             --expected-workflow-run-attempt 1 \
@@ -1379,8 +1308,7 @@ jobs:
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --nft-envelope "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \
-            --package-envelope "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json" \
-            --freebsd-envelope "${QUALIFICATION_ROOT}/bound/freebsd-vm-bound.json"
+            --package-envelope "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_gate.py verify \
             --repo-root "${GITHUB_WORKSPACE}" \
             --expected-sha "${RELEASE_SHA}" \
@@ -1388,7 +1316,6 @@ jobs:
             --candidate-packages-dir "${QUALIFICATION_ROOT}/packages/candidate" \
             --nft-report "${QUALIFICATION_ROOT}/bound/nftables-bound.json" \
             --package-report "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json" \
-            --freebsd-report "${QUALIFICATION_ROOT}/bound/freebsd-vm-bound.json" \
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
@@ -1401,7 +1328,6 @@ jobs:
             "syswarden-${VERSION}-1.aarch64.rpm"
             "syswarden_${VERSION}_x86_64.apk"
             "syswarden_${VERSION}_aarch64.apk"
-            "syswarden-${VERSION}.txz"
             "SHA256SUMS.txt"
           )
           for package_name in "${package_names[@]}"; do

@@ -44,7 +44,6 @@ class QualificationFixture:
         self.reports = {
             "nftables_kernel": self.evidence / "nft.json",
             "linux_package_lifecycle": self.evidence / "packages.json",
-            "freebsd_vm": self.evidence / "freebsd.json",
         }
         self.write_reports(profile)
 
@@ -117,18 +116,6 @@ class QualificationFixture:
             name: hashlib.sha256(f"previous:{name}\n".encode()).hexdigest()
             for name in gate.package_names(self.previous_version)
         }
-        if kind == "linux_package_lifecycle":
-            previous_checksums = {
-                name: digest
-                for name, digest in previous_checksums.items()
-                if not name.endswith(".txz")
-            }
-        else:
-            previous_checksums = {
-                name: digest
-                for name, digest in previous_checksums.items()
-                if name.endswith(".txz")
-            }
         return {
             "previous_version": self.previous_version,
             "candidate_version": self.version,
@@ -156,19 +143,10 @@ class QualificationFixture:
         blockers = {
             "nftables_kernel": ["SW-FW-004"],
             "linux_package_lifecycle": ["SW-CFG-001", "SW-PKG-001"],
-            "freebsd_vm": ["SW-BSD-001"],
         }
         characterization = profile == "characterization"
         if kind == "linux_package_lifecycle":
             coordinates = self.linux_coordinates(blocker=characterization)
-        elif kind == "freebsd_vm":
-            coordinates = [
-                {
-                    "platform": "freebsd",
-                    "architecture": "amd64",
-                    "status": "blocker" if characterization else "pass",
-                }
-            ]
         else:
             coordinates = []
         common = {
@@ -197,7 +175,6 @@ class QualificationFixture:
         return gate.build_bound_report(
             **common,
             coordinates=coordinates,
-            real_freebsd_vm=kind == "freebsd_vm",
             lifecycle=self.lifecycle(kind),
         )
 
@@ -226,7 +203,6 @@ class QualificationFixture:
             candidate_packages_dir=self.packages,
             nft_report=self.reports["nftables_kernel"],
             package_report=self.reports["linux_package_lifecycle"],
-            freebsd_report=self.reports["freebsd_vm"],
             max_age_seconds=3600,
             max_report_skew_seconds=300,
             output=output or (self.evidence / "aggregate.json"),
@@ -266,7 +242,7 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         self.assertFalse(aggregate["release_ready"])
         self.assertEqual(
             aggregate["allowlisted_findings"],
-            ["SW-BSD-001", "SW-CFG-001", "SW-FW-004", "SW-PKG-001"],
+            ["SW-CFG-001", "SW-FW-004", "SW-PKG-001"],
         )
 
     def test_legacy_report_without_bindings_is_invalid(self) -> None:
@@ -297,8 +273,6 @@ class ReleaseQualificationGateTests(unittest.TestCase):
             str(self.fixture.reports["nftables_kernel"]),
             "--package-report",
             str(self.fixture.reports["linux_package_lifecycle"]),
-            "--freebsd-report",
-            str(self.fixture.reports["freebsd_vm"]),
             "--max-age-seconds",
             "172800",
             "--output",
@@ -409,9 +383,9 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         (self.fixture.packages / "unexpected.txt").unlink()
 
         nft = self.fixture.load_report("nftables_kernel")
-        freebsd = self.fixture.load_report("freebsd_vm")
-        freebsd["raw_report_sha256"] = nft["raw_report_sha256"]
-        self.fixture.save_report("freebsd_vm", freebsd)
+        package = self.fixture.load_report("linux_package_lifecycle")
+        package["raw_report_sha256"] = nft["raw_report_sha256"]
+        self.fixture.save_report("linux_package_lifecycle", package)
         self.assertEvidenceError(self.fixture.args())
 
     def test_missing_report_age_bound_and_non_utc_timestamp_are_invalid(self) -> None:
@@ -449,13 +423,6 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         document = self.fixture.load_report("linux_package_lifecycle")
         document["coverage"]["coordinates"].pop()
         self.fixture.save_report("linux_package_lifecycle", document)
-        code, _ = gate.run_gate(self.fixture.args(), now=self.fixture.now)
-        self.assertEqual(code, 1)
-
-        self.fixture.write_reports("release")
-        document = self.fixture.load_report("freebsd_vm")
-        document["coverage"]["real_freebsd_vm"] = False
-        self.fixture.save_report("freebsd_vm", document)
         code, _ = gate.run_gate(self.fixture.args(), now=self.fixture.now)
         self.assertEqual(code, 1)
 
@@ -508,7 +475,6 @@ class ReleaseQualificationGateTests(unittest.TestCase):
             "candidate_packages_dir": self.fixture.packages,
             "nft_report": self.fixture.reports["nftables_kernel"],
             "package_report": self.fixture.reports["linux_package_lifecycle"],
-            "freebsd_report": self.fixture.reports["freebsd_vm"],
         }
         for attribute, target in generation_paths.items():
             with self.subTest(path=attribute):
@@ -546,7 +512,6 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         report_paths = {
             "nft_report": self.fixture.reports["nftables_kernel"],
             "package_report": self.fixture.reports["linux_package_lifecycle"],
-            "freebsd_report": self.fixture.reports["freebsd_vm"],
         }
         for attribute, target in report_paths.items():
             with self.subTest(path=attribute):
@@ -601,8 +566,6 @@ class ReleaseQualificationGateTests(unittest.TestCase):
                 verify_args.nft_report = destination
             elif kind == "linux_package_lifecycle":
                 verify_args.package_report = destination
-            else:
-                verify_args.freebsd_report = destination
         aggregate = gate.verify_aggregate(verify_args, now=self.fixture.now)
         self.assertTrue(aggregate["release_ready"])
         self.assertEqual(before, hashlib.sha256(args.output.read_bytes()).hexdigest())
@@ -633,9 +596,7 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         nft = self.fixture.load_report("nftables_kernel")
         self.assertNotIn("lifecycle", nft)
         linux = self.fixture.load_report("linux_package_lifecycle")
-        freebsd = self.fixture.load_report("freebsd_vm")
         self.assertEqual(len(linux["lifecycle"]["previous_package_checksums"]), 6)
-        self.assertEqual(len(freebsd["lifecycle"]["previous_package_checksums"]), 1)
 
         previous_name = next(iter(linux["lifecycle"]["previous_package_checksums"]))
         index = gate.package_names(self.fixture.previous_version).index(previous_name)

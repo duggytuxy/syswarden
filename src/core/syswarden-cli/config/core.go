@@ -1,7 +1,7 @@
 package config
 
 type CoreConfig struct {
-	ConfigDir       string `mapstructure:"config_dir" validate:"required"`
+	ConfigDir       string `mapstructure:"config_dir" validate:"required,absolute_path"`
 	EnterpriseMode  bool   `mapstructure:"enterprise_mode"`
 	LogLevel        string `mapstructure:"log_level" validate:"required,oneof=DEBUG INFO WARN ERROR"`
 	FirewallBackend string `mapstructure:"firewall_backend" validate:"required,oneof=nftables iptables keep"`

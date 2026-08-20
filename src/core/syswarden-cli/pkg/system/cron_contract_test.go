@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -46,10 +45,7 @@ func TestManagedRootCronFilterPreservesOperatorBytesAndLF(t *testing.T) {
 	tab := strings.Replace(ha, "*/30 *", "*/30\t*", 1)
 	operator := "19 4 * * * " + platformpaths.CLI + " update-feeds --operator-option"
 	whitespaceOnly := " \t "
-	alternatePlatform := "23 * * * * /usr/local/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1"
-	if runtime.GOOS == "freebsd" {
-		alternatePlatform = "23 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1"
-	}
+	alternatePlatform := "23 * * * * /srv/operator/bin/syswarden-cli update-feeds >/dev/null 2>&1"
 
 	survivors := []string{
 		comment,
@@ -110,7 +106,7 @@ func TestRootCrontabReadDistinguishesAbsenceFromErrors(t *testing.T) {
 		command *exec.Cmd
 	}{
 		{name: "Debian or Cronie", command: exec.Command("/bin/sh", "-c", "printf '%s\\n' 'no crontab for root' >&2; exit 1")},
-		{name: "FreeBSD", command: exec.Command("/bin/sh", "-c", "printf '%s\\n' 'crontab: no crontab for root' >&2; exit 1")},
+		{name: "prefixed absence", command: exec.Command("/bin/sh", "-c", "printf '%s\\n' 'crontab: no crontab for root' >&2; exit 1")},
 		{name: "BusyBox", command: exec.Command("/bin/sh", "-c", "printf '%s\\n' \"crontab: can't open 'root': No such file or directory\" >&2; exit 1")},
 	}
 	for _, testCase := range absenceCommands {

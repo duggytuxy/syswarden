@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/system"
 )
@@ -25,14 +26,7 @@ allow syslogd_t init_t:unix_dgram_socket sendto;
 allow syslogd_t var_run_t:sock_file write;
 `
 
-// SetupWAFLogForwarder configures Rsyslog to bridge local Web/Docker logs into the Go WAF Socket
-func SetupWAFLogForwarder() error {
-	fmt.Println("[INFO] Configuring WAF Multi-Tenant Log Bridge (Rsyslog -> UDS)...")
-
-	confPath := "/etc/rsyslog.d/99-syswarden-waf-bridge.conf"
-
-	// Base modules
-	rsyslogConf := `module(load="imfile")
+const rsyslogWAFBase = `module(load="imfile")
 module(load="omuxsock")
 $OMUxSockSocket /var/run/syswarden.sock
 
@@ -48,13 +42,7 @@ input(type="imfile" File="/var/log/syslog" Tag="syswarden-waf" ruleset="waf_brid
 input(type="imfile" File="/var/log/messages" Tag="syswarden-waf" ruleset="waf_bridge")
 `
 
-	// Docker Multi-tenant / Traefik / ModSec Logs
-	if config.GlobalConfig.ModsecLogs != "" {
-		rsyslogConf += fmt.Sprintf("\n# Docker Multi-Tenant Logs\ninput(type=\"imfile\" File=\"%s\" Tag=\"syswarden-waf\" ruleset=\"waf_bridge\")\n", config.GlobalConfig.ModsecLogs)
-	}
-
-	// Ruleset to forward everything tagged syswarden-waf to the UDS
-	rsyslogConf += `
+const rsyslogWAFRuleset = `
 template(name="SYSWARDENRaw" type="string" string="%msg%\n")
 
 ruleset(name="waf_bridge") {
@@ -73,6 +61,41 @@ ruleset(name="waf_bridge") {
     *.* :omuxsock:;SYSWARDENRaw
 }
 `
+
+func renderWAFRsyslogConfig(rawPatterns string) (string, int, error) {
+	patterns, err := validatedRsyslogLogPatterns(rawPatterns)
+	if err != nil {
+		return "", 0, err
+	}
+	var rendered strings.Builder
+	rendered.WriteString(rsyslogWAFBase)
+	if len(patterns) > 0 {
+		rendered.WriteString("\n# Docker Multi-Tenant Logs\n")
+	}
+	for _, pattern := range patterns {
+		quoted, err := quoteRsyslogString(pattern)
+		if err != nil {
+			return "", 0, fmt.Errorf("encode rsyslog log pattern: %w", err)
+		}
+		fmt.Fprintf(&rendered, "input(type=\"imfile\" File=%s Tag=\"syswarden-waf\" ruleset=\"waf_bridge\")\n", quoted)
+	}
+	rendered.WriteString(rsyslogWAFRuleset)
+	return rendered.String(), len(patterns), nil
+}
+
+// SetupWAFLogForwarder configures Rsyslog to bridge local Web/Docker logs into the Go WAF Socket
+func SetupWAFLogForwarder() error {
+	fmt.Println("[INFO] Configuring WAF Multi-Tenant Log Bridge (Rsyslog -> UDS)...")
+
+	confPath := "/etc/rsyslog.d/99-syswarden-waf-bridge.conf"
+
+	rsyslogConf, activePatterns, err := renderWAFRsyslogConfig(config.GlobalConfig.ModsecLogs)
+	if err != nil {
+		return fmt.Errorf("render WAF bridge config: %w", err)
+	}
+	if config.GlobalConfig.ModsecLogs != "" && activePatterns == 0 {
+		fmt.Println("[WARN] Configured ModSecurity log patterns have no real regular-file match; custom rsyslog input was omitted.")
+	}
 
 	_ = os.MkdirAll("/etc/rsyslog.d", 0750)
 	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0600); err != nil {
@@ -103,19 +126,37 @@ ruleset(name="waf_bridge") {
 		}
 	}
 
-	// Restart Rsyslog safely
-	if system.IsAlpine() {
-		if err := exec.Command("rc-service", "rsyslog", "restart").Run(); err != nil { // #nosec
-			fmt.Printf("[WARN] Failed to restart rsyslog for WAF bridge (rc-service): %v\n", err)
-		}
-	} else {
-		if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil { // #nosec
-			fmt.Printf("[WARN] Failed to restart rsyslog for WAF bridge: %v\n", err)
-		}
+	if err := restartManagedService("rsyslog"); err != nil {
+		return fmt.Errorf("activate WAF bridge rsyslog configuration: %w", err)
 	}
 
 	fmt.Println("[+] WAF Log Bridge successfully configured.")
 	return nil
+}
+
+func restartManagedService(service string) error {
+	state, err := system.ServiceManagerRuntimeState()
+	if err != nil {
+		return err
+	}
+	switch state {
+	case "OFFLINE":
+		fmt.Printf("[INFO] Service-manager runtime is offline; %s restart is deferred to boot.\n", service)
+		return nil
+	case "ACTIVE":
+		if system.IsAlpine() {
+			if err := exec.Command("rc-service", service, "restart").Run(); err != nil { // #nosec G204 -- caller passes fixed product integration service constants
+				return fmt.Errorf("restart OpenRC service %s: %w", service, err)
+			}
+			return nil
+		}
+		if err := exec.Command("systemctl", "restart", service).Run(); err != nil { // #nosec G204 -- caller passes fixed product integration service constants
+			return fmt.Errorf("restart systemd service %s: %w", service, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("refusing unrecognized service-manager runtime state %q", state)
+	}
 }
 
 func withPrivateSELinuxPolicyWorkspace(parent string, action func(workspace string) error) error {

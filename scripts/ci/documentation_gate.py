@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import tomllib
+import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
@@ -58,7 +59,13 @@ MANUAL_COMMAND_RE = re.compile(r'fmt\.Printf\("  %s([a-z][a-z0-9-]+)%s')
 COBRA_PUBLIC_FIELDS = ("use", "short", "long", "example")
 COBRA_UTILITY_COMMANDS = frozenset({"completion", "help"})
 WORKFLOW_PACKAGE_NAME_RE = re.compile(
-    r"syswarden[${}A-Za-z0-9_.-]+\.(?:deb|rpm|apk|txz)"
+    r"syswarden[${}A-Za-z0-9_.-]+\.(?:deb|rpm|apk)"
+)
+CURRENT_SURFACE_RETIRED_TERMS = (
+    "free" + "bsd",
+    "web" + "-tui",
+    "web" + "_tui",
+    "." + "txz",
 )
 FRENCH_RE = re.compile(
     r"[àâçéèêëîïôùûüÿœ]|\b(?:aucune|ceci|cliquez|doit|français|"
@@ -196,22 +203,12 @@ def config_schema(repo_root: Path) -> set[str]:
 
 
 def cobra_commands(repo_root: Path) -> set[str]:
-    commands: set[str] = set()
-    files = sorted((repo_root / "src/core/syswarden-cli/cmd").glob("*.go"))
-    if not files:
-        raise DocumentationGateError("Cobra command source inventory is empty")
-    for path in files:
-        if path.name.endswith("_test.go"):
-            continue
-        source = read_text(path)
-        discovered = set(USE_RE.findall(source))
-        hidden = set(HIDDEN_USE_RE.findall(source))
-        commands.update(discovered - hidden)
-    if "syswarden" not in commands or len(commands) < 20:
+    records = snapshot_command_records(repo_root)
+    commands = snapshot_command_names(records) - COBRA_UTILITY_COMMANDS
+    if len(commands) < 20:
         raise DocumentationGateError(
-            f"Cobra command discovery is incomplete: {sorted(commands)}"
+            f"Cobra top-level command discovery is incomplete: {sorted(commands)}"
         )
-    commands.remove("syswarden")
     return commands
 
 
@@ -658,7 +655,6 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
             "DEB": f"syswarden_9.99.9_{architecture}.deb",
             "RPM": f"syswarden-9.99.9-1.{architecture}.rpm",
             "APK": f"syswarden_9.99.9_{architecture}.apk",
-            "FreeBSD": "syswarden-9.99.9.txz",
         }.get(family)
         if expected_release_name is None:
             errors.append(f"unsupported documentation package family: {family!r}")
@@ -667,8 +663,6 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
                 f"package artifact naming/architecture mismatch for {coordinate!r}: "
                 f"expected {expected_release_name!r}, got {release_name!r}"
             )
-        if family == "FreeBSD" and architecture != "amd64":
-            errors.append("the current FreeBSD package contract must identify amd64")
         release_names.append(release_name)
         workflow_names.append(artifact["workflow_name"])
 
@@ -693,18 +687,10 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
     expected_inventory_phrases = {
         "README.md": (
             "The package workflow is configured to generate "
-            f"{count_word('DEB')} DEB, {count_word('RPM')} RPM, "
-            f"{count_word('APK')} APK and {count_word('FreeBSD')} FreeBSD "
-            f"package{'s' if family_counts.get('FreeBSD') != 1 else ''} plus "
+            f"{count_word('DEB')} DEB, {count_word('RPM')} RPM "
+            f"and {count_word('APK')} APK packages plus "
             "`SHA256SUMS.txt`."
-        ),
-        "wiki/Deployment-Tutorial.md": (
-            "The package workflow is configured to publish "
-            f"{count_word('DEB')} DEB files, {count_word('RPM')} RPM files, "
-            f"{count_word('APK')} APK files, {count_word('FreeBSD')} FreeBSD "
-            f"package{'s' if family_counts.get('FreeBSD') != 1 else ''} and "
-            "`SHA256SUMS.txt`."
-        ),
+        )
     }
     inventory_phrases = value.get("inventory_phrases")
     if inventory_phrases != expected_inventory_phrases:
@@ -776,6 +762,170 @@ def validate_package_documentation(
             f"expected_header={expected_header}, actual_header={actual_header}, "
             f"expected_rows={expected_rows}, actual_rows={actual_rows}"
         )
+    return errors
+
+
+def validate_active_public_surfaces(
+    repo_root: Path,
+    contract: dict[str, object],
+    known_commands: set[str],
+    known_config_keys: set[str],
+    forbidden_phrases: Iterable[str],
+    version: str,
+) -> list[str]:
+    """Validate the exact current report, changelog and diagram inventory."""
+
+    errors: list[str] = []
+    surface = contract.get("active_surface_contract")
+    report_contract = contract.get("public_report_contract")
+    if not isinstance(surface, dict):
+        return ["documentation contract active_surface_contract must be an object"]
+    if not isinstance(report_contract, dict):
+        return ["documentation contract public_report_contract must be an object"]
+
+    documents = surface.get("documents")
+    if not isinstance(documents, list) or not documents or not all(
+        isinstance(path, str) and path for path in documents
+    ):
+        return ["active public document inventory must be a non-empty string list"]
+    if len(documents) != len(set(documents)):
+        errors.append("active public document inventory contains duplicates")
+
+    loaded: dict[str, str] = {}
+    for relative in documents:
+        path = repo_root / relative
+        try:
+            loaded[relative] = read_text(path)
+        except DocumentationGateError as exc:
+            errors.append(str(exc))
+
+    report_directory = surface.get("report_directory")
+    if not isinstance(report_directory, str) or not report_directory:
+        errors.append("active report directory is missing from the contract")
+    else:
+        directory = repo_root / report_directory
+        if directory.is_symlink() or not directory.is_dir():
+            errors.append(f"current report directory is missing or unsafe: {directory}")
+        else:
+            actual_reports = sorted(
+                path.relative_to(repo_root).as_posix()
+                for path in directory.iterdir()
+                if path.is_file() and not path.is_symlink()
+            )
+            report_path = report_contract.get("path")
+            expected_reports = [report_path] if isinstance(report_path, str) else []
+            if actual_reports != expected_reports:
+                errors.append(
+                    "current public report inventory is not exact; "
+                    f"expected={expected_reports}, actual={actual_reports}"
+                )
+
+    report_relative = report_contract.get("path")
+    report = loaded.get(str(report_relative), "")
+    if not isinstance(report_relative, str) or not report:
+        errors.append("current public release report is missing from active documents")
+    else:
+        report_path = repo_root / report_relative
+        errors.extend(
+            validate_markdown(
+                report_path,
+                report,
+                known_commands,
+                known_config_keys,
+                [*forbidden_phrases, *CURRENT_SURFACE_RETIRED_TERMS],
+                version,
+                None,
+            )
+        )
+        required = report_contract.get("required_phrases")
+        if not isinstance(required, list) or not all(
+            isinstance(phrase, str) and phrase for phrase in required
+        ):
+            errors.append("public report required_phrases must be a string list")
+        else:
+            errors.extend(require_phrases(report, required, version, report_relative))
+
+        expected_assets = report_contract.get("expected_assets")
+        release_assets = release_gate.expected_release_assets("v4.03.0")
+        if not isinstance(expected_assets, list) or not all(
+            isinstance(asset, str) and asset for asset in expected_assets
+        ):
+            errors.append("public report expected_assets must be a string list")
+        elif len(expected_assets) != 13 or set(expected_assets) != release_assets:
+            errors.append(
+                "public report asset contract differs from the exact release gate; "
+                f"release={sorted(release_assets)}, report={sorted(expected_assets)}"
+            )
+        else:
+            inventory_match = re.search(
+                r"(?ms)^## Exact public release inventory\s*$\n(.*?)(?=^## )",
+                report,
+            )
+            listed_assets = (
+                re.findall(r"(?m)^\d+\. `([^`]+)`\s*$", inventory_match.group(1))
+                if inventory_match is not None
+                else []
+            )
+            if listed_assets != expected_assets:
+                errors.append(
+                    "public report numbered asset inventory is not exact; "
+                    f"expected={expected_assets}, actual={listed_assets}"
+                )
+
+        report_forbidden = report_contract.get("forbidden_phrases")
+        if not isinstance(report_forbidden, list) or not all(
+            isinstance(phrase, str) and phrase for phrase in report_forbidden
+        ):
+            errors.append("public report forbidden_phrases must be a string list")
+        else:
+            lowered = report.casefold()
+            for phrase in report_forbidden:
+                if phrase.casefold() in lowered:
+                    errors.append(
+                        f"{report_relative}: prohibited private identifier: {phrase!r}"
+                    )
+
+    changelog = loaded.get("changelog.md", "")
+    archive_pointer = surface.get("archive_pointer")
+    if not isinstance(archive_pointer, str) or not archive_pointer:
+        errors.append("active surface archive_pointer must be a non-empty string")
+    elif not changelog.endswith("\n---\n" + archive_pointer + "\n"):
+        errors.append("changelog does not end with the exact sealed archive pointer")
+
+    for relative, text in loaded.items():
+        lowered = text.casefold()
+        for retired in CURRENT_SURFACE_RETIRED_TERMS:
+            if retired.casefold() in lowered:
+                errors.append(
+                    f"{relative}: retired platform or network-terminal term remains"
+                )
+
+    for relative in ("assets/syswarden_hero.svg", "assets/syswarden_architecture.svg"):
+        text = loaded.get(relative)
+        if text is None:
+            continue
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError as exc:
+            errors.append(f"{relative}: invalid SVG XML: {exc}")
+            continue
+        for element in root.iter():
+            local_name = element.tag.rsplit("}", 1)[-1].casefold()
+            if local_name in {"script", "foreignobject"}:
+                errors.append(f"{relative}: unsafe SVG element: {local_name}")
+            for attribute, value in element.attrib.items():
+                attribute_name = attribute.rsplit("}", 1)[-1].casefold()
+                if attribute_name in {"href", "src"} and ":" in value:
+                    errors.append(
+                        f"{relative}: external or data-bearing SVG reference: {value}"
+                    )
+
+    package_count = surface.get("package_count")
+    asset_count = surface.get("public_asset_count")
+    if package_count != 6 or len(release_gate.package_names("4.03.0")) != 6:
+        errors.append("active surface package count must equal the six-package release gate")
+    if asset_count != 13 or len(release_gate.expected_release_assets("v4.03.0")) != 13:
+        errors.append("active surface asset count must equal the thirteen-asset release gate")
     return errors
 
 
@@ -1130,6 +1280,7 @@ def validate_repository(
     if not isinstance(forbidden, list) or not all(isinstance(item, str) for item in forbidden):
         errors.append("documentation contract forbidden_phrases must be a string list")
         forbidden = []
+    current_forbidden = [*forbidden, *CURRENT_SURFACE_RETIRED_TERMS]
     if not isinstance(cobra_forbidden, list) or not all(
         isinstance(item, str) and item for item in cobra_forbidden
     ):
@@ -1162,7 +1313,7 @@ def validate_repository(
     errors.extend(
         validate_cobra_public_texts(
             snapshot_records,
-            [*forbidden, *cobra_forbidden],
+            [*current_forbidden, *cobra_forbidden],
         )
     )
 
@@ -1212,7 +1363,7 @@ def validate_repository(
             readme,
             commands,
             config_keys,
-            forbidden,
+            current_forbidden,
             version,
             None,
         )
@@ -1230,6 +1381,16 @@ def validate_repository(
         )
     )
     errors.extend(validate_source_assertions(repo_root, contract))
+    errors.extend(
+        validate_active_public_surfaces(
+            repo_root,
+            contract,
+            commands,
+            config_keys,
+            forbidden,
+            version,
+        )
+    )
 
     manual_commands = set(MANUAL_COMMAND_RE.findall(manual))
     if manual_commands != source_commands:
@@ -1267,7 +1428,7 @@ def validate_repository(
                 wiki_records,
                 commands,
                 config_keys,
-                forbidden,
+                current_forbidden,
                 version,
                 wiki_required,
             )

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fail-closed aggregation of SysWarden release-qualification evidence.
 
-The gate consumes three *normalized, bound envelopes*, not the current raw lab
-reports.  Raw nftables/package/FreeBSD reports intentionally fail with exit 2
+The gate consumes two *normalized, bound envelopes*, not the current raw lab
+reports. Raw nftables and package reports intentionally fail with exit 2
 because they do not yet carry the mandatory Git/package bindings.  A producer
 or workflow adapter must validate each raw schema and construct the envelope
 described by :func:`build_bound_report`; this module does not infer or invent
@@ -30,7 +30,6 @@ SCHEMA_VERSION = 1
 REPORT_SCHEMA_VERSIONS = {
     "nftables_kernel": 1,
     "linux_package_lifecycle": 3,
-    "freebsd_vm": 2,
 }
 REPORT_LIMIT = 8 * 1024 * 1024
 PACKAGE_LIMIT = 128 * 1024 * 1024
@@ -42,12 +41,11 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CHECKSUM_RE = re.compile(r"^([0-9a-f]{64})  ([A-Za-z0-9_.-]+)$")
 
 ALLOWLIST = frozenset(
-    {"SW-CFG-001", "SW-FW-004", "SW-PKG-001", "SW-BSD-001"}
+    {"SW-CFG-001", "SW-FW-004", "SW-PKG-001"}
 )
 REPORT_ALLOWLIST = {
     "nftables_kernel": frozenset({"SW-FW-004"}),
     "linux_package_lifecycle": frozenset({"SW-CFG-001", "SW-PKG-001"}),
-    "freebsd_vm": frozenset({"SW-FW-004", "SW-BSD-001"}),
 }
 
 
@@ -317,7 +315,6 @@ def package_names(version: str) -> tuple[str, ...]:
         f"syswarden-{raw}-1.aarch64.rpm",
         f"syswarden_{raw}_x86_64.apk",
         f"syswarden_{raw}_aarch64.apk",
-        f"syswarden-{raw}.txz",
     )
 
 
@@ -395,7 +392,6 @@ REPORT_KEYS = {
     "nftables_kernel": COMMON_REPORT_KEYS
     | {"conditions", "network_namespaces"},
     "linux_package_lifecycle": COMMON_REPORT_KEYS | {"coverage", "lifecycle"},
-    "freebsd_vm": COMMON_REPORT_KEYS | {"coverage", "lifecycle"},
 }
 BINDING_KEYS = frozenset(
     {
@@ -407,7 +403,7 @@ BINDING_KEYS = frozenset(
         "package_checksums",
     }
 )
-COVERAGE_KEYS = frozenset({"coordinates", "real_freebsd_vm"})
+COVERAGE_KEYS = frozenset({"coordinates"})
 COORDINATE_KEYS = frozenset({"platform", "architecture", "status"})
 NFT_CONDITION_KEYS = frozenset(
     {
@@ -456,7 +452,6 @@ def build_bound_report(
     release_ready: bool,
     blocker_ids: Sequence[str],
     coordinates: Sequence[dict[str, str]] = (),
-    real_freebsd_vm: bool = False,
     lifecycle: dict[str, Any] | None = None,
     conditions: dict[str, bool] | None = None,
     network_namespaces: dict[str, str] | None = None,
@@ -487,7 +482,7 @@ def build_bound_report(
             raise EvidenceError(
                 "nftables envelope requires conditions and network namespaces"
             )
-        if lifecycle is not None or coordinates or real_freebsd_vm:
+        if lifecycle is not None or coordinates:
             raise EvidenceError("nftables envelope cannot claim package lifecycle or VM coverage")
         envelope["conditions"] = conditions
         envelope["network_namespaces"] = network_namespaces
@@ -496,10 +491,7 @@ def build_bound_report(
             raise EvidenceError(f"{kind} envelope requires package lifecycle evidence")
         if conditions is not None or network_namespaces is not None:
             raise EvidenceError(f"{kind} envelope cannot contain nftables namespace evidence")
-        envelope["coverage"] = {
-            "coordinates": list(coordinates),
-            "real_freebsd_vm": real_freebsd_vm,
-        }
+        envelope["coverage"] = {"coordinates": list(coordinates)}
         envelope["lifecycle"] = lifecycle
     return envelope
 
@@ -537,9 +529,7 @@ def _validate_coverage(kind: str, document: dict[str, Any]) -> None:
     if not isinstance(coverage, dict):
         raise EvidenceError(f"{kind}.coverage must be an object")
     _exact_keys(coverage, COVERAGE_KEYS, f"{kind}.coverage")
-    if type(coverage["real_freebsd_vm"]) is not bool or not isinstance(
-        coverage["coordinates"], list
-    ):
+    if not isinstance(coverage["coordinates"], list):
         raise EvidenceError(f"{kind}.coverage has invalid types")
     seen: set[tuple[str, str]] = set()
     for index, coordinate in enumerate(coverage["coordinates"]):
@@ -594,7 +584,6 @@ def _validate_lifecycle(
             f"{kind}.lifecycle.previous_package_checksums must be an object"
         )
     pairs = list(zip(package_names(previous), package_names(candidate)))
-    pairs = pairs[:-1] if kind == "linux_package_lifecycle" else pairs[-1:]
     expected_previous_names = {previous_name for previous_name, _ in pairs}
     if set(previous_checksums) != expected_previous_names:
         raise EvidenceError(f"{kind} previous package checksum inventory is incomplete")
@@ -702,7 +691,7 @@ def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[st
         if report.previous_version is not None
     }
     if len(previous_versions) != 1:
-        reasons.append("Linux and FreeBSD reports must bind the same previous version")
+        reasons.append("package evidence must bind exactly one previous version")
     previous_checksums: dict[str, str] = {}
     for report in reports:
         overlap = set(previous_checksums) & set(report.previous_checksums)
@@ -733,8 +722,6 @@ def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[st
         reasons.append("Linux coverage contains an unknown platform or architecture")
     if len(linux_coordinates) != 10:
         reasons.append("Linux coverage must contain exactly ten required coordinates")
-    if linux["real_freebsd_vm"]:
-        reasons.append("Linux package evidence must not claim FreeBSD VM execution")
     package_blockers = set(by_kind["linux_package_lifecycle"].blockers)
     alpine_statuses = {
         status
@@ -761,21 +748,6 @@ def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[st
     nft_conditions = by_kind["nftables_kernel"].document["conditions"]
     if not all(nft_conditions.values()):
         reasons.append("nftables kernel isolation/apply/cleanup evidence is incomplete")
-    freebsd = by_kind["freebsd_vm"].document["coverage"]
-    freebsd_coordinates = {
-        (item["platform"], item["architecture"]): item["status"]
-        for item in freebsd["coordinates"]
-    }
-    if set(freebsd_coordinates) != {("freebsd", "amd64")}:
-        reasons.append("FreeBSD coverage must contain exactly the published amd64 coordinate")
-    if not freebsd["real_freebsd_vm"]:
-        reasons.append("FreeBSD evidence did not execute in a real disposable VM")
-    freebsd_blockers = set(by_kind["freebsd_vm"].blockers)
-    freebsd_status = freebsd_coordinates.get(("freebsd", "amd64"))
-    if freebsd_blockers and freebsd_status != "blocker":
-        reasons.append("FreeBSD findings must be bound to the FreeBSD blocker coordinate")
-    if not freebsd_blockers and freebsd_status == "blocker":
-        reasons.append("FreeBSD blocker coverage lacks a canonical finding")
     for report in reports:
         if report.kind != "nftables_kernel":
             lifecycle = report.document["lifecycle"]
@@ -869,21 +841,20 @@ def evaluate_gate(
     paths = {
         "nftables_kernel": args.nft_report,
         "linux_package_lifecycle": args.package_report,
-        "freebsd_vm": args.freebsd_report,
     }
     reports = tuple(
         parse_report(kind, path, binding, packages, current, args.max_age_seconds)
         for kind, path in paths.items()
     )
     report_identities = {(item.snapshot.device, item.snapshot.inode) for item in reports}
-    if len(report_identities) != 3:
-        raise EvidenceError("the three reports must be distinct files/inodes")
-    if len({item.snapshot.path for item in reports}) != 3:
-        raise EvidenceError("the three reports must have distinct resolved paths")
-    if len({item.snapshot.path.name for item in reports}) != 3:
-        raise EvidenceError("the three reports must have distinct stable filenames")
-    if len({item.document["raw_report_sha256"] for item in reports}) != 3:
-        raise EvidenceError("the three envelopes must bind distinct raw reports")
+    if len(report_identities) != 2:
+        raise EvidenceError("the two reports must be distinct files/inodes")
+    if len({item.snapshot.path for item in reports}) != 2:
+        raise EvidenceError("the two reports must have distinct resolved paths")
+    if len({item.snapshot.path.name for item in reports}) != 2:
+        raise EvidenceError("the two reports must have distinct stable filenames")
+    if len({item.document["raw_report_sha256"] for item in reports}) != 2:
+        raise EvidenceError("the two envelopes must bind distinct raw reports")
     timestamps = [item.generated_at for item in reports]
     if max(timestamps) - min(timestamps) > timedelta(seconds=args.max_report_skew_seconds):
         raise EvidenceError("report timestamps exceed the allowed inter-report skew")
@@ -1025,7 +996,6 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--candidate-packages-dir", type=Path, required=True)
     parser.add_argument("--nft-report", type=Path, required=True)
     parser.add_argument("--package-report", type=Path, required=True)
-    parser.add_argument("--freebsd-report", type=Path, required=True)
     parser.add_argument("--max-age-seconds", type=int, required=True)
     parser.add_argument("--max-report-skew-seconds", type=int, default=300)
 

@@ -3,25 +3,13 @@ package runtimepaths
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
-const (
-	linuxInstallRoot   = "/opt/syswarden"
-	freeBSDInstallRoot = "/usr/local/syswarden"
-)
+const linuxInstallRoot = "/opt/syswarden"
 
-// InstallRootFor returns the native package prefix for a target operating system.
-func InstallRootFor(goos string) string {
-	if goos == "freebsd" {
-		return freeBSDInstallRoot
-	}
-	return linuxInstallRoot
-}
-
-// InstallRoot returns the package prefix for the running binary.
+// InstallRoot returns the Linux package prefix for the running binary.
 func InstallRoot() string {
-	return InstallRootFor(runtime.GOOS)
+	return linuxInstallRoot
 }
 
 // Signatures returns the native packaged signature database path.

@@ -7,7 +7,7 @@ import (
 )
 
 func TestAuditLabelsDescribeBoundedObservations_SW_DOC_001(t *testing.T) {
-	for _, path := range []string{"audit_linux.go", "audit_freebsd.go"} {
+	for _, path := range []string{"audit_linux.go"} {
 		content, err := os.ReadFile(path) // #nosec G304 -- paths are fixed repository test fixtures
 		if err != nil {
 			t.Fatal(err)

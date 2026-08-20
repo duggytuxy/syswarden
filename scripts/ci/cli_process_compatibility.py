@@ -619,6 +619,36 @@ def make_process_cases(records: Sequence[dict[str, object]]) -> list[ProcessCase
     return cases
 
 
+def approved_common_command_paths(
+    baseline: Mapping[str, dict[str, object]],
+    candidate: Mapping[str, dict[str, object]],
+    approved_changes: Sequence[dict[str, object]],
+) -> set[str]:
+    approved_removed = {
+        str(change["path"])
+        for change in approved_changes
+        if change.get("field") == "command"
+        and change.get("before") == "present"
+        and change.get("after") is None
+    }
+    approved_added = {
+        str(change["path"])
+        for change in approved_changes
+        if change.get("field") == "command"
+        and change.get("before") is None
+        and change.get("after") == "added"
+    }
+    actual_removed = set(baseline) - set(candidate)
+    actual_added = set(candidate) - set(baseline)
+    if actual_removed != approved_removed or actual_added != approved_added:
+        raise CompatibilityError(
+            "approved CLI command additions/removals do not match the exact snapshot transition"
+        )
+    if "syswarden" not in baseline or "syswarden" not in candidate:
+        raise CompatibilityError("the root command cannot be added or removed")
+    return set(baseline) & set(candidate)
+
+
 def run_process(binary: Path, case: ProcessCase, cwd: Path) -> ProcessResult:
     try:
         completed = subprocess.run(
@@ -784,9 +814,7 @@ def classify_process_result(
     if not exact["exit_code"]:
         raise CompatibilityError(f"unapproved exit-code difference in {case.case_id!r}")
 
-    replacements = case_replacements(
-        case, baseline_records, candidate_records, approved_public_changes
-    )
+    replacements: list[tuple[str, str, str]] | None = None
     classified_streams: dict[str, str] = {}
     if not isinstance(process_approvals, list):
         raise CompatibilityError("approved_cli_process_differences must be an array")
@@ -819,6 +847,10 @@ def classify_process_result(
                 )
             classified_streams[stream] = "exact-process-approval"
             continue
+        if replacements is None:
+            replacements = case_replacements(
+                case, baseline_records, candidate_records, approved_public_changes
+            )
         canonical_old, canonical_new = canonicalize_pair(old, new, replacements)
         if canonical_old != canonical_new:
             raise CompatibilityError(
@@ -944,11 +976,16 @@ def run_gate(repo_root: Path) -> dict[str, object]:
             candidate_module, candidate_env, candidate_binary
         )
 
-        cases = make_process_cases(baseline_stored)
         baseline_map = records_by_path(baseline_stored)
         candidate_map = records_by_path(candidate_stored)
-        if set(baseline_map) != set(candidate_map):
-            raise CompatibilityError("command additions/removals cannot enter the safe process matrix")
+        common_paths = approved_common_command_paths(
+            baseline_map, candidate_map, approved_changes
+        )
+        cases = [
+            case
+            for case in make_process_cases(baseline_stored)
+            if case.path in common_paths
+        ]
 
         results: dict[str, tuple[ProcessResult, ProcessResult]] = {}
         case_reports: list[dict[str, object]] = []
@@ -1055,8 +1092,8 @@ def run_gate(repo_root: Path) -> dict[str, object]:
             },
             "limitations": [
                 "Only root startup, Cobra help, unknown-command handling, and argument counts rejected before command handlers are executed are compared.",
-                "Successful install, uninstall, update, reload, firewall, service, network, TUI, Web-TUI, token, migration, and synchronization paths are intentionally not executed on the host.",
-                "This process gate does not replace privileged package lifecycle, kernel firewall, FreeBSD runtime, or mixed-version HA/TUI laboratories.",
+                "Successful install, uninstall, update, reload, firewall, service, network, TUI, migration, synchronization, and retired-feature cleanup paths are intentionally not executed on the host.",
+                "This process gate does not replace privileged package lifecycle, kernel firewall, or mixed-version HA/TUI laboratories.",
             ],
         }
 

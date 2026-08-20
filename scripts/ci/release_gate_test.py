@@ -23,6 +23,8 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 RELEASE_MANAGER_WORKFLOW = (
     REPOSITORY / ".github" / "workflows" / "release-manager.yml"
 )
+RETIRED_PLATFORM = "free" + "bsd"
+RETIRED_PACKAGE_SUFFIX = "." + "txz"
 
 
 def workflow_step_script(workflow: str, step_name: str) -> str:
@@ -112,6 +114,100 @@ class ReleaseGateTests(unittest.TestCase):
             "\n".join(lines) + "\n", encoding="utf-8"
         )
         return directory
+
+    def make_historical_transition(
+        self, name: str = "historical-transition"
+    ) -> dict[str, object]:
+        transition = self.root / name
+        transition.mkdir()
+        source_manifest = transition / "public-SHA256SUMS.txt"
+        source_manifest.write_text(
+            "".join(
+                f"{digest}  {asset_name}\n"
+                for asset_name, digest in (
+                    release_gate.HISTORICAL_LINUX_TRANSITION_MANIFEST_RECORDS
+                )
+            ),
+            encoding="utf-8",
+        )
+        metadata_records = [
+            {
+                "digest": expected["digest"],
+                "id": expected["id"],
+                "name": asset_name,
+                "size": expected["size"],
+                "state": "uploaded",
+            }
+            for asset_name, expected in sorted(
+                release_gate.HISTORICAL_LINUX_TRANSITION_ASSETS.items()
+            )
+        ]
+        metadata_records.append(
+            {
+                "digest": "sha256:" + "a" * 64,
+                "id": 999999999,
+                "name": "syswarden-release.tar.gz",
+                "size": 1,
+                "state": "uploaded",
+            }
+        )
+        asset_metadata = transition / "public-release-assets.json"
+        asset_metadata.write_text(
+            json.dumps(metadata_records, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        packages = self.root / f"{name}-packages"
+        packages.mkdir()
+        for asset_name in release_gate.package_names(self.version):
+            self.write_file(packages / asset_name, f"package:{asset_name}\n".encode())
+        return {
+            "asset_metadata": asset_metadata,
+            "metadata_records": metadata_records,
+            "output_manifest": packages / release_gate.PACKAGE_CHECKSUM_NAME,
+            "packages": packages,
+            "provenance_output": transition / "v4.02.8-linux-transition.json",
+            "source_manifest": source_manifest,
+        }
+
+    def historical_sha256(self, packages: Path, mismatch: str | None = None):
+        expected = dict(release_gate.HISTORICAL_LINUX_TRANSITION_MANIFEST_RECORDS)
+        package_root = packages.absolute()
+
+        def digest(path: Path) -> str:
+            candidate = Path(path).absolute()
+            if candidate.parent == package_root and candidate.name in expected:
+                if candidate.name == mismatch:
+                    return "0" * 64
+                return expected[candidate.name]
+            return hashlib.sha256(candidate.read_bytes()).hexdigest()
+
+        return digest
+
+    def normalize_historical_transition(
+        self,
+        fixture: dict[str, object],
+        *,
+        mismatch: str | None = None,
+        **overrides: object,
+    ) -> dict[str, object]:
+        arguments = {
+            "repository": release_gate.HISTORICAL_LINUX_TRANSITION_REPOSITORY,
+            "release_id": release_gate.HISTORICAL_LINUX_TRANSITION_RELEASE_ID,
+            "tag": release_gate.HISTORICAL_LINUX_TRANSITION_TAG,
+            "source_manifest": fixture["source_manifest"],
+            "asset_metadata": fixture["asset_metadata"],
+            "packages": fixture["packages"],
+            "output_manifest": fixture["output_manifest"],
+            "provenance_output": fixture["provenance_output"],
+        }
+        arguments.update(overrides)
+        with mock.patch(
+            "release_gate.sha256",
+            side_effect=self.historical_sha256(
+                Path(arguments["packages"]), mismatch=mismatch
+            ),
+        ):
+            return release_gate.normalize_v4028_linux_packages(**arguments)
 
     def make_bundle(self, extra: str | None = None) -> Path:
         directory = self.root / "bundle"
@@ -315,6 +411,193 @@ class ReleaseGateTests(unittest.TestCase):
         with self.assertRaises(release_gate.ReleaseGateError):
             release_gate.validate_packages(packages, self.version)
 
+    def test_historical_transition_derives_exact_private_linux_manifest(self) -> None:
+        fixture = self.make_historical_transition()
+        provenance = self.normalize_historical_transition(fixture)
+        output_manifest = Path(fixture["output_manifest"])
+        provenance_output = Path(fixture["provenance_output"])
+        linux_names = release_gate.package_names(self.version)
+        expected_records = dict(
+            release_gate.HISTORICAL_LINUX_TRANSITION_MANIFEST_RECORDS
+        )
+        expected_manifest = "".join(
+            f"{expected_records[name]}  {name}\n" for name in linux_names
+        )
+
+        self.assertEqual(output_manifest.read_text(encoding="utf-8"), expected_manifest)
+        self.assertNotIn(RETIRED_PACKAGE_SUFFIX, expected_manifest)
+        self.assertEqual(output_manifest.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(provenance_output.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            provenance["source_manifest"]["sha256"],
+            release_gate.HISTORICAL_LINUX_TRANSITION_MANIFEST_SHA256,
+        )
+        self.assertEqual(provenance["source_manifest"]["package_count"], 7)
+        self.assertEqual(provenance["derived_linux_manifest"]["package_count"], 6)
+        self.assertEqual(len(provenance["source_package_assets"]), 7)
+        self.assertEqual(
+            provenance["provenance_sha256"],
+            hashlib.sha256(provenance_output.read_bytes()).hexdigest(),
+        )
+        persisted = json.loads(provenance_output.read_text(encoding="utf-8"))
+        self.assertEqual(
+            persisted["source_manifest"]["asset_digest"],
+            "sha256:" + release_gate.HISTORICAL_LINUX_TRANSITION_MANIFEST_SHA256,
+        )
+
+    def test_historical_transition_is_restricted_to_one_exact_release(self) -> None:
+        fixture = self.make_historical_transition()
+        for name, override in (
+            ("repository", {"repository": "fork/syswarden"}),
+            ("release id", {"release_id": 1}),
+            ("older version", {"tag": "v4.02.7"}),
+            ("newer version", {"tag": "v4.03.0"}),
+        ):
+            with self.subTest(name=name), self.assertRaises(
+                release_gate.ReleaseGateError
+            ):
+                self.normalize_historical_transition(fixture, **override)
+            self.assertFalse(Path(fixture["output_manifest"]).exists())
+            self.assertFalse(Path(fixture["provenance_output"]).exists())
+
+    def test_historical_transition_rejects_manifest_inventory_mutations(self) -> None:
+        original_records = list(
+            release_gate.HISTORICAL_LINUX_TRANSITION_MANIFEST_RECORDS
+        )
+        mutations = {
+            "missing": original_records[:-1],
+            "duplicate": original_records + [original_records[0]],
+            "extra": original_records + [("unexpected.deb", "a" * 64)],
+            "wrong version": [
+                (
+                    asset_name.replace("4.02.8", "4.03.0", 1),
+                    digest,
+                )
+                if index == 0
+                else (asset_name, digest)
+                for index, (asset_name, digest) in enumerate(original_records)
+            ],
+        }
+        for name, records in mutations.items():
+            with self.subTest(name=name):
+                fixture = self.make_historical_transition(f"manifest-{name}")
+                Path(fixture["source_manifest"]).write_text(
+                    "".join(
+                        f"{digest}  {asset_name}\n"
+                        for asset_name, digest in records
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    self.normalize_historical_transition(fixture)
+                self.assertFalse(Path(fixture["output_manifest"]).exists())
+                self.assertFalse(Path(fixture["provenance_output"]).exists())
+
+    def test_historical_transition_rejects_public_asset_metadata_mutations(self) -> None:
+        for name in (
+            "missing",
+            "duplicate",
+            "extra-version",
+            "wrong-digest",
+            "duplicate-id",
+        ):
+            with self.subTest(name=name):
+                fixture = self.make_historical_transition(f"metadata-{name}")
+                records = json.loads(json.dumps(fixture["metadata_records"]))
+                retired_name = release_gate.HISTORICAL_RETIRED_PACKAGE_NAME
+                retired_index = next(
+                    index
+                    for index, record in enumerate(records)
+                    if record["name"] == retired_name
+                )
+                if name == "missing":
+                    records.pop(retired_index)
+                elif name == "duplicate":
+                    duplicate = dict(records[retired_index])
+                    duplicate["id"] = 999999998
+                    records.append(duplicate)
+                elif name == "extra-version":
+                    records.append(
+                        {
+                            "digest": "sha256:" + "b" * 64,
+                            "id": 999999997,
+                            "name": "syswarden_4.03.0_amd64.deb",
+                            "size": 1,
+                            "state": "uploaded",
+                        }
+                    )
+                elif name == "wrong-digest":
+                    records[retired_index]["digest"] = "sha256:" + "c" * 64
+                else:
+                    records[-1]["id"] = records[retired_index]["id"]
+                Path(fixture["asset_metadata"]).write_text(
+                    json.dumps(records, sort_keys=True, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    self.normalize_historical_transition(fixture)
+                self.assertFalse(Path(fixture["output_manifest"]).exists())
+                self.assertFalse(Path(fixture["provenance_output"]).exists())
+
+    def test_historical_transition_rejects_package_or_path_ambiguity(self) -> None:
+        fixture = self.make_historical_transition()
+        first_package = release_gate.package_names(self.version)[0]
+        with self.assertRaises(release_gate.ReleaseGateError):
+            self.normalize_historical_transition(fixture, mismatch=first_package)
+        self.assertFalse(Path(fixture["output_manifest"]).exists())
+        self.assertFalse(Path(fixture["provenance_output"]).exists())
+
+        Path(fixture["provenance_output"]).symlink_to(fixture["source_manifest"])
+        with self.assertRaises(release_gate.ReleaseGateError):
+            self.normalize_historical_transition(fixture)
+        self.assertFalse(Path(fixture["output_manifest"]).exists())
+
+        Path(fixture["provenance_output"]).unlink()
+        with self.assertRaises(release_gate.ReleaseGateError):
+            self.normalize_historical_transition(
+                fixture,
+                provenance_output=Path(fixture["packages"]) / "provenance.json",
+            )
+        self.assertFalse(Path(fixture["output_manifest"]).exists())
+
+    def test_historical_transition_cli_dispatches_the_exact_contract(self) -> None:
+        fixture = self.make_historical_transition()
+        returned = {
+            "derived_linux_manifest": {"sha256": "b" * 64},
+            "provenance_sha256": "c" * 64,
+            "source_manifest": {"sha256": "a" * 64},
+        }
+        arguments = [
+            "release_gate.py",
+            "normalize-v4028-linux-packages",
+            "--repository",
+            release_gate.HISTORICAL_LINUX_TRANSITION_REPOSITORY,
+            "--release-id",
+            str(release_gate.HISTORICAL_LINUX_TRANSITION_RELEASE_ID),
+            "--tag",
+            release_gate.HISTORICAL_LINUX_TRANSITION_TAG,
+            "--source-manifest",
+            str(fixture["source_manifest"]),
+            "--asset-metadata",
+            str(fixture["asset_metadata"]),
+            "--packages",
+            str(fixture["packages"]),
+            "--output-manifest",
+            str(fixture["output_manifest"]),
+            "--provenance-output",
+            str(fixture["provenance_output"]),
+        ]
+        with mock.patch("sys.argv", arguments), mock.patch(
+            "release_gate.normalize_v4028_linux_packages", return_value=returned
+        ) as normalizer, mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as output:
+            self.assertEqual(release_gate.main(), 0)
+        normalizer.assert_called_once()
+        self.assertIn("source=" + "a" * 64, output.getvalue())
+        self.assertIn("derived=" + "b" * 64, output.getvalue())
+        self.assertIn("provenance=" + "c" * 64, output.getvalue())
+
     def test_bundle_rejects_unexpected_file(self) -> None:
         bundle = self.make_bundle(extra="unexpected") / release_gate.BUNDLE_NAME
         with self.assertRaises(release_gate.ReleaseGateError):
@@ -454,7 +737,11 @@ class ReleaseGateTests(unittest.TestCase):
             workflow.index("Generate and Verify Signed Update Manifest"),
             workflow.index("Seal Exact Qualification Evidence Inventory"),
         )
-        self.assertIn("refusing to sign because ${status_file}", workflow)
+        self.assertIn("qualification status ${failed_status}", workflow)
+        self.assertIn(
+            "refusing to sign because qualification status is not uniformly zero",
+            workflow,
+        )
         self.assertIn('rm -f -- "${manifest_path}" "${signature_path}"', signer)
         self.assertIn(
             '"${update_dir}/syswarden-update-manifest-v1.json.sig"', workflow
@@ -467,32 +754,16 @@ class ReleaseGateTests(unittest.TestCase):
             / "workflows"
             / "release-manager.yml"
         ).read_text(encoding="utf-8")
-        self.assertEqual(
-            workflow.count("qualification_root_directories+=(tools update)"), 2
-        )
+        self.assertEqual(workflow.count("qualification_root_directories+=(update)"), 2)
         self.assertEqual(
             workflow.count("go run ./scripts/ci/update_manifest.go verify"), 2
         )
-        self.assertEqual(
-            workflow.count("python3 scripts/ci/freebsd_updater_vm_probe.py"), 2
-        )
-        self.assertEqual(
-            workflow.count(
-                '--report "${QUALIFICATION_ROOT}/raw/freebsd-updater-raw.json"'
-            ),
-            2,
-        )
-        self.assertEqual(
-            workflow.count(
-                '--test-binary "${QUALIFICATION_ROOT}/tools/'
-                'syswarden-updater-freebsd.test"'
-            ),
-            2,
-        )
+        self.assertNotIn(RETIRED_PLATFORM, workflow.lower())
+        self.assertNotIn(RETIRED_PACKAGE_SUFFIX, workflow)
         self.assertEqual(workflow.count('--repository "${GITHUB_WORKSPACE}"'), 7)
         self.assertNotIn('if [[ "${RELEASE_TAG}" != "v4.02.8" ]]', workflow)
         self.assertEqual(workflow.count("requires-signed-update --tag"), 3)
-        self.assertEqual(workflow.count('if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]'), 8)
+        self.assertEqual(workflow.count('if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]'), 6)
         self.assertIn("--update-manifest-dir", workflow)
         self.assertIn("Set Up Go for Signed Update Verification", workflow)
         self.assertNotIn("secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", workflow)
@@ -837,11 +1108,9 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                 self.assertIn(argument, section)
             self.assertIn("EVIDENCE_SHA256SUMS.txt qualification-context.json", section)
             self.assertIn("aggregate bound packages raw status", section)
-            self.assertIn("qualification_root_directories+=(tools update)", section)
-            self.assertIn("qualification_all_directories+=(tools update)", section)
-            self.assertIn("qualification_raw_files+=(freebsd-updater-raw.json)", section)
+            self.assertIn("qualification_root_directories+=(update)", section)
+            self.assertIn("qualification_all_directories+=(update)", section)
             for raw_name in (
-                "freebsd-vm-raw.json",
                 "nftables-raw.json",
                 "package-lifecycle-amd64.json",
                 "package-lifecycle-arm64.json",
@@ -849,13 +1118,13 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             ):
                 self.assertIn(raw_name, section)
             self.assertIn(
-                "freebsd-vm-bound.json nftables-bound.json package-lifecycle-bound.json",
+                "nftables-bound.json package-lifecycle-bound.json",
                 section,
             )
             self.assertIn("qualification-exit-codes.json", section)
-            self.assertIn("syswarden-updater-freebsd.test", section)
-            self.assertIn("freebsd-updater-raw.json", section)
-            self.assertIn("freebsd_updater_verify", section)
+            self.assertNotIn(RETIRED_PLATFORM, section.lower())
+            self.assertNotIn(RETIRED_PACKAGE_SUFFIX, section)
+            self.assertNotIn("${QUALIFICATION_ROOT}/tools", section)
             self.assertIn("test -z \"$(find \"${QUALIFICATION_ROOT}\" -type l", section)
             self.assertIn("! -type f ! -type d -print -quit", section)
             self.assertIn(
@@ -868,6 +1137,7 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             self.assertIn(
                 '.previous_tag == $aggregate[0].bindings.previous_version', section
             )
+            self.assertIn("(.previous_package_asset_ids | length) == 7", section)
             self.assertIn("all(.[]; . == 0)", section)
             self.assertLess(
                 section.index("sed -E -n 's#^[0-9a-f]{64}"),
@@ -881,34 +1151,15 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                 '--aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json"',
                 section,
             )
+            self.assertIn("go run ./scripts/ci/update_manifest.go verify", section)
             self.assertIn(
-                "python3 scripts/ci/freebsd_updater_vm_probe.py", section
-            )
-            self.assertIn(
-                'chmod 0700 -- "${QUALIFICATION_ROOT}/tools/'
-                'syswarden-updater-freebsd.test"',
+                '--manifest "${QUALIFICATION_ROOT}/update/'
+                'syswarden-update-manifest-v1.json"',
                 section,
             )
             self.assertIn(
-                'test "$(stat -c \'%a\' "${QUALIFICATION_ROOT}/tools/'
-                'syswarden-updater-freebsd.test")" = "700"',
-                section,
-            )
-            self.assertLess(
-                section.index("sha256sum --check --strict EVIDENCE_SHA256SUMS.txt"),
-                section.index('chmod 0700 -- "${QUALIFICATION_ROOT}/tools/'),
-            )
-            self.assertLess(
-                section.index('chmod 0700 -- "${QUALIFICATION_ROOT}/tools/'),
-                section.index("python3 scripts/ci/freebsd_updater_vm_probe.py"),
-            )
-            self.assertIn(
-                '--test-binary "${QUALIFICATION_ROOT}/tools/'
-                'syswarden-updater-freebsd.test"',
-                section,
-            )
-            self.assertIn(
-                '--report "${QUALIFICATION_ROOT}/raw/freebsd-updater-raw.json"',
+                '--signature "${QUALIFICATION_ROOT}/update/'
+                'syswarden-update-manifest-v1.json.sig"',
                 section,
             )
             self.assertIn(
@@ -924,7 +1175,6 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                 "syswarden-${VERSION}-1.aarch64.rpm",
                 "syswarden_${VERSION}_x86_64.apk",
                 "syswarden_${VERSION}_aarch64.apk",
-                "syswarden-${VERSION}.txz",
                 "SHA256SUMS.txt",
             ):
                 self.assertIn(f'"{package_template}"', section)

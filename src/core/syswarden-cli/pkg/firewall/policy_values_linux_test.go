@@ -65,7 +65,7 @@ exit 2
 	for range 2 {
 		if err := applyLinuxFirewallWrappers(
 			[]string{"192.0.2.0/24", "2001:db8::/64"},
-			[]string{"62027"},
+			[]string{"62028"},
 		); err != nil {
 			t.Fatalf("wrapper reconciliation: %v", err)
 		}
@@ -126,13 +126,13 @@ exit 2
 	t.Setenv("SYSWARDEN_WRAPPER_STATE", statePath)
 	if err := applyLinuxFirewallWrappers(
 		[]string{"192.0.2.0/24", "2001:db8::/64"},
-		[]string{"62026", "62027"},
+		[]string{"62026", "62028"},
 	); err != nil {
 		t.Fatalf("initial wrapper reconciliation: %v", err)
 	}
 	if err := applyLinuxFirewallWrappers(
 		[]string{"192.0.2.0/24"},
-		[]string{"62027"},
+		[]string{"62028"},
 	); err != nil {
 		t.Fatalf("stale wrapper reconciliation: %v", err)
 	}
@@ -143,7 +143,7 @@ exit 2
 			t.Fatalf("stale owned wrapper rule %s remains:\n%s", stale, text)
 		}
 	}
-	for _, retained := range []string{"62027", "192.0.2.0/24"} {
+	for _, retained := range []string{"62028", "192.0.2.0/24"} {
 		if !strings.Contains(text, retained) {
 			t.Fatalf("desired wrapper rule %s was removed:\n%s", retained, text)
 		}
@@ -203,7 +203,7 @@ func TestWrapperFailureReportsCommittedAuthoritativeNftState_SW_FW_001(t *testin
 		writeRootedExecutableTestFile(t, filepath.Join(directory, name), []byte("#!/bin/sh\nexit 2\n"))
 	}
 	t.Setenv("PATH", directory)
-	wrapperErr := applyLinuxFirewallWrappers([]string{"192.0.2.0/24"}, []string{"62027"})
+	wrapperErr := applyLinuxFirewallWrappers([]string{"192.0.2.0/24"}, []string{"62028"})
 	if wrapperErr == nil {
 		t.Fatal("failing compatibility wrapper reported success")
 	}
@@ -330,6 +330,15 @@ func TestApplyPoliciesRejectsInjectedValuesBeforeTransaction_SW_FW_001(t *testin
 				value.SSHPort = "22; flush ruleset"
 			},
 			wantError: "SSH port",
+		},
+		{
+			name: "HA port collides with cloaked SSH",
+			configure: func(value *config.Config) {
+				value.EnableWG = true
+				value.HAEnabled = true
+				value.HAPeerPort = "022"
+			},
+			wantError: "HA peer port must differ from the effective SSH port while WireGuard cloaking is enabled",
 		},
 		{
 			name: "WireGuard subnet statement",

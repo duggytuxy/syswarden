@@ -4,7 +4,7 @@
 The native package shards carry an explicit qualification-run binding so their
 cross-run aggregation is independently reproducible. This adapter validates all
 exact schemas and shard digests, independently re-verifies the Git checkout and
-both package sets, derives decisions from nested evidence, and emits the three
+both package sets, derives decisions from nested evidence, and emits the two
 canonical envelopes consumed by ``release_qualification_gate.py``.
 """
 
@@ -23,7 +23,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-import freebsd_vm_lab as freebsd_lab
 import package_lifecycle_lab as package_lab
 import release_qualification_gate as gate
 
@@ -31,12 +30,10 @@ import release_qualification_gate as gate
 OUTPUT_NAMES = {
     "nft": "nftables-bound.json",
     "package": "package-lifecycle-bound.json",
-    "freebsd": "freebsd-vm-bound.json",
 }
 RAW_NAMES = {
     "nft": "nftables-raw.json",
     "package": "package-lifecycle-raw.json",
-    "freebsd": "freebsd-vm-raw.json",
 }
 # Laboratories run sequentially, so raw timestamps cannot be byte-identical.
 # The CLI skew applies to the normalized envelopes; independently bound the raw
@@ -74,24 +71,6 @@ RAW_TOP_KEYS = {
             "platforms",
             "qualification_binding",
             "native_shards",
-        }
-    ),
-    "freebsd": frozenset(
-        {
-            "schema_version",
-            "generated_at",
-            "harness_status",
-            "product_status",
-            "release_ready",
-            "blocker_ids",
-            "unexpected_failed_check_ids",
-            "scope",
-            "environment",
-            "inputs",
-            "restart_metadata_inventories",
-            "lifecycle_phases",
-            "harness_conditions",
-            "checks",
         }
     ),
 }
@@ -364,7 +343,6 @@ PACKAGE_SCOPE_KEYS = frozenset(
         "missing_platform_coordinates",
         "arm64_coverage_policy",
         "rollback_model",
-        "freebsd",
     }
 )
 PACKAGE_QUALIFICATION_BINDING_KEYS = frozenset(
@@ -724,9 +702,6 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
             entry = _exact_keys(item, {"distribution", "architecture"}, f"package.scope.{key}[{index}]")
             _string(entry["distribution"], f"package.scope.{key}[{index}].distribution")
             _string(entry["architecture"], f"package.scope.{key}[{index}].architecture")
-    freebsd_gap = _exact_keys(scope["freebsd"], {"status", "reason"}, "package.scope.freebsd")
-    if freebsd_gap["status"] != "vm_required" or not _string(freebsd_gap["reason"], "package.scope.freebsd.reason"):
-        _fail("package raw report does not preserve the explicit FreeBSD VM gap")
 
     engine = _exact_keys(document["engine"], {"name", "version", "rootless", "arm64_emulator", "arm64_binfmt"}, "package.engine")
     if engine["name"] != "podman" or not _string(engine["version"], "package.engine.version") or _boolean(engine["rootless"], "package.engine.rootless") is not True:
@@ -992,7 +967,6 @@ def _validate_package(
         "previous_package_checksums": {
             name: digest
             for name, digest in previous.checksums.items()
-            if not name.endswith(".txz")
         },
     }
     return {
@@ -1000,737 +974,6 @@ def _validate_package(
         "release_ready": classification["release_ready"],
         "blocker_ids": blockers,
         "coordinates": coordinates,
-        "lifecycle": lifecycle,
-    }
-
-
-FREEBSD_SCOPE_KEYS = frozenset(
-    {
-        "guest",
-        "ssh_endpoint",
-        "ssh_scope",
-        "host_firewall_mutation",
-        "pf_scope",
-        "guest_lock",
-        "pf_snapshot",
-        "lifecycle",
-        "remove_purge_semantics",
-        "signature_probe",
-        "restart_inventory",
-        "vm_disposition",
-    }
-)
-FREEBSD_SCOPE_STATIC = {
-    "guest": "explicitly marked disposable FreeBSD VM",
-    "ssh_scope": "local loopback only",
-    "pf_scope": "unique unattached anchor plus disposable-VM package behavior",
-    "guest_lock": "atomic root-owned /var/run lock held through PF restoration",
-    "pf_snapshot": "empty guest ruleset and exact Disabled status captured before mutation and restored after cleanup",
-    "lifecycle": "previous install -> candidate upgrade -> candidate reinstall -> two restart cycles -> previous rollback observation -> mandatory candidate recovery -> pkg delete",
-    "remove_purge_semantics": "FreeBSD pkg has no separate purge operation; pkg pre-deinstall failures do not block payload deletion and pkg delete -D skips scripts; use syswarden uninstall for supported fail-closed PF restoration before package removal",
-    "signature_probe": "each installed phase executes the core directly against /usr/local/syswarden/signatures.json, requires exactly 78 rule definitions and a real loader report of 194 effective signatures for candidate phases, and verifies unchanged type/bytes/mode/uid/gid",
-    "restart_inventory": "complete scoped path/type/mode/uid/gid/link inventory must remain identical after both restart cycles",
-    "vm_disposition": "discard or externally revert the disposable VM snapshot after the lab; the installer intentionally mutates guest state beyond package and PF paths",
-}
-EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
-FREEBSD_PHASE_KEYS = frozenset({"operation_return_code", "package", "user_state", "signatures"})
-FREEBSD_CHECK_KEYS = frozenset({"id", "category", "status", "expected", "observed", "detail"})
-PHASE_PREFIXES = (
-    ("PREVIOUS-INSTALL", "previous_install"),
-    ("CANDIDATE-UPGRADE", "candidate_upgrade"),
-    ("CANDIDATE-REINSTALL", "candidate_reinstall"),
-    ("CANDIDATE-RESTART-IDEMPOTENCE", "candidate_restart_idempotence"),
-    ("PREVIOUS-ROLLBACK", "previous_rollback"),
-)
-PHASE_SUFFIXES = ("", "-ABI", "-ELF", "-INVENTORY", "-STATE", "-SIGNATURES", "-SIGNATURE-RESTORE")
-FREEBSD_POSTINSTALL_CHECKS = (
-    "SW-PKG-FBSD-CANDIDATE-UPGRADE-POSTINSTALL-001",
-    "SW-PKG-FBSD-CANDIDATE-REINSTALL-POSTINSTALL-001",
-    "SW-PKG-FBSD-CANDIDATE-RESTART-IDEMPOTENCE-POSTINSTALL-001",
-)
-FREEBSD_TAIL_CHECKS = (
-    "SW-PKG-FBSD-DEPS-001", "SW-PKG-FBSD-MODE-CLI-001", "SW-PKG-FBSD-MODE-CORE-001", "SW-PKG-FBSD-MODE-TUI-001", "SW-PKG-FBSD-MODE-SIG-001",
-    "SW-PKG-FBSD-LINK-CLI-001", "SW-PKG-FBSD-LINK-TUI-001", "SW-PKG-FBSD-EXEC-DIRECT-001", "SW-PKG-FBSD-EXEC-LINK-001", "SW-PKG-FBSD-TUI-EXEC-001",
-    "SW-PKG-FBSD-SIG-PACKAGED-001", "SW-PKG-FBSD-PREFIX-001", "SW-PKG-FBSD-RCD-CORE-001", "SW-PKG-FBSD-RCD-WEB-001",
-    "SW-PKG-FBSD-RCD-CORE-PATH-001", "SW-PKG-FBSD-RCD-WEB-PATH-001", "SW-PKG-FBSD-RCD-ENABLE-001", "SW-PKG-FBSD-UPGRADE-RCD-001",
-    "SW-PKG-FBSD-PF-PROVENANCE-001",
-    "SW-PKG-FBSD-PF-FRESH-BOUNDARY-001",
-    "SW-PKG-FBSD-START-CORE-001",
-    "SW-PKG-FBSD-RESTART-CORE-001", "SW-PKG-FBSD-START-WEB-001", "SW-PKG-FBSD-RESTART-WEB-001", "SW-PKG-FBSD-RESTART-METADATA-001",
-    "SW-PKG-FBSD-RSYSLOG-001",
-    "SW-PF-FBSD-FIXTURE-SYNTAX-001", "SW-PF-FBSD-FIXTURE-APPLY-001", "SW-PF-FBSD-HONEYPORT-001", "SW-PKG-FBSD-REMOVE-001",
-    "SW-PKG-FBSD-REMOVE-STATE-001", "SW-PKG-FBSD-MIGRATION-BACKUP-001", "SW-PKG-FBSD-RCD-CLEANUP-001", "SW-PKG-FBSD-GENERATED-CLEANUP-001",
-    "SW-PKG-FBSD-PF-RESTORE-001",
-)
-
-
-def _expected_freebsd_checks() -> list[str]:
-    result = [f"SW-PKG-FBSD-{prefix}{suffix}-001" for prefix, _ in PHASE_PREFIXES for suffix in PHASE_SUFFIXES]
-    result.extend(FREEBSD_POSTINSTALL_CHECKS)
-    result.extend(FREEBSD_TAIL_CHECKS)
-    return result
-
-
-def _dict_strings(value: Any, keys: set[str], label: str) -> dict[str, Any]:
-    result = _exact_keys(value, keys, label)
-    for key in keys:
-        _string(result[key], f"{label}.{key}", empty=True)
-    return result
-
-
-def _marker_boolean(value: Any, label: str) -> bool:
-    marker = _string(value, label, empty=True)
-    if marker not in {"0", "1"}:
-        _fail(f"{label} must be the exact marker '0' or '1'")
-    return marker == "1"
-
-
-def _freebsd_check_passes(check_id: str, observed: Any, versions: dict[str, Any]) -> bool:
-    for prefix, phase in PHASE_PREFIXES:
-        stem = f"SW-PKG-FBSD-{prefix}"
-        if not check_id.startswith(stem):
-            continue
-        historical_forward_only = bool(versions["forward_only"]) and phase in {
-            "previous_install",
-            "previous_rollback",
-        }
-        suffix = check_id[len(stem) : -4]
-        if suffix == "":
-            value = _dict_strings(observed, {"return_code", "installed", "name", "version", "architecture"}, f"{check_id}.observed")
-            return value["return_code"] == "0" and value["installed"] == "1" and value["name"] == "syswarden" and value["version"] == versions[phase]
-        if suffix == "-ABI":
-            expected_abi = (
-                freebsd_lab.KNOWN_LEGACY_FREEBSD_PACKAGE_ABI
-                if historical_forward_only
-                else freebsd_lab.EXPECTED_FREEBSD_PACKAGE_ABI
-            )
-            return _string(observed, f"{check_id}.observed", empty=True) == expected_abi
-        if suffix == "-ELF":
-            value = _dict_strings(observed, {"cli", "core", "tui"}, f"{check_id}.observed")
-            expected_elf = (
-                {"cli": "amd64", "core": "arm64", "tui": "arm64"}
-                if historical_forward_only
-                else {"cli": "amd64", "core": "amd64", "tui": "amd64"}
-            )
-            return value == expected_elf
-        if suffix == "-INVENTORY":
-            expected_inventory = (
-                freebsd_lab.FORWARD_ONLY_PREVIOUS_INVENTORY
-                if historical_forward_only
-                else freebsd_lab.EXPECTED_PACKAGE_INVENTORY
-            )
-            return _string_list(observed, f"{check_id}.observed", sorted_unique=True) == sorted(expected_inventory)
-        if suffix == "-STATE":
-            value = _exact_keys(observed, {"inventory", "config_sha256", "data_sha256"}, f"{check_id}.observed")
-            return _string_list(value["inventory"], f"{check_id}.observed.inventory", sorted_unique=True) == sorted(freebsd_lab.EXPECTED_USER_STATE_INVENTORY) and value["config_sha256"] == freebsd_lab.USER_CONFIG_SHA256 and value["data_sha256"] == freebsd_lab.USER_DATA_SHA256
-        if suffix == "-SIGNATURES":
-            value = _dict_strings(observed, {"rule_definitions", "engine_loaded", "probe_return_code", "loader_error", "runtime_state_before", "runtime_state_after", "runtime_state_restored"}, f"{check_id}.observed")
-            expected_engine = "" if historical_forward_only else str(freebsd_lab.EXPECTED_ENGINE_SIGNATURE_COUNT)
-            expected_probe_rc = "2" if historical_forward_only else "124"
-            return value["rule_definitions"] == str(freebsd_lab.EXPECTED_SIGNATURE_RULE_COUNT) and value["engine_loaded"] == expected_engine and value["probe_return_code"] == expected_probe_rc and value["loader_error"] == "0"
-        if suffix == "-SIGNATURE-RESTORE":
-            value = _dict_strings(observed, {"before", "after", "restored"}, f"{check_id}.observed")
-            return freebsd_lab.valid_signature_state(value["before"]) and value["before"] == value["after"] and value["restored"] == "1"
-    exact_strings = {
-        "SW-PKG-FBSD-MODE-CLI-001": "750", "SW-PKG-FBSD-MODE-CORE-001": "750", "SW-PKG-FBSD-MODE-TUI-001": "750", "SW-PKG-FBSD-MODE-SIG-001": "640",
-        "SW-PKG-FBSD-LINK-CLI-001": "/usr/local/syswarden/bin/syswarden-cli", "SW-PKG-FBSD-LINK-TUI-001": "/usr/local/syswarden/bin/syswarden-tui",
-        "SW-PKG-FBSD-EXEC-DIRECT-001": "0", "SW-PKG-FBSD-EXEC-LINK-001": "0",
-        "SW-PKG-FBSD-RCD-CORE-PATH-001": "/usr/local/syswarden/bin/syswarden-core", "SW-PKG-FBSD-RCD-WEB-PATH-001": "/usr/local/syswarden/bin/syswarden-cli",
-        "SW-PF-FBSD-FIXTURE-SYNTAX-001": "0",
-    }
-    if check_id == "SW-PKG-FBSD-DEPS-001":
-        value = _exact_keys(
-            observed,
-            {"return_code", "inventory"},
-            f"{check_id}.observed",
-        )
-        _string(value["return_code"], f"{check_id}.observed.return_code")
-        inventory = _string_list(
-            value["inventory"],
-            f"{check_id}.observed.inventory",
-            sorted_unique=True,
-        )
-        return (
-            value["return_code"] == "0"
-            and inventory == sorted(freebsd_lab.EXPECTED_FREEBSD_DEPENDENCIES)
-        )
-    if check_id in FREEBSD_POSTINSTALL_CHECKS:
-        value = _exact_keys(
-            observed,
-            {"marker_state", "diagnostics_clean", "modular_config_inventory"},
-            f"{check_id}.observed",
-        )
-        marker_state = _string(
-            value["marker_state"], f"{check_id}.observed.marker_state"
-        )
-        diagnostics_clean = _string(
-            value["diagnostics_clean"],
-            f"{check_id}.observed.diagnostics_clean",
-        )
-        inventory = _string_list(
-            value["modular_config_inventory"],
-            f"{check_id}.observed.modular_config_inventory",
-            sorted_unique=True,
-        )
-        return (
-            marker_state == freebsd_lab.EXPECTED_POSTINSTALL_MARKER_STATE
-            and diagnostics_clean == "1"
-            and inventory == sorted(freebsd_lab.EXPECTED_MODULAR_CONFIG_INVENTORY)
-        )
-    if check_id in exact_strings:
-        return _string(observed, f"{check_id}.observed", empty=True) == exact_strings[check_id]
-    if check_id in {"SW-PKG-FBSD-SIG-PACKAGED-001", "SW-PKG-FBSD-PREFIX-001"}:
-        return _boolean(observed, f"{check_id}.observed") is True
-    if check_id in {"SW-PKG-FBSD-RCD-CORE-001", "SW-PKG-FBSD-RCD-WEB-001"}:
-        value = _dict_strings(observed, {"present", "mode"}, f"{check_id}.observed")
-        return value == {"present": "1", "mode": "755"}
-    if check_id == "SW-PKG-FBSD-RCD-ENABLE-001":
-        return _dict_strings(observed, {"core", "web"}, f"{check_id}.observed") == {"core": "YES", "web": "YES"}
-    if check_id == "SW-PKG-FBSD-UPGRADE-RCD-001":
-        return _dict_strings(
-            observed,
-            {"core_enabled", "web_enabled", "core_status", "web_status"},
-            f"{check_id}.observed",
-        ) == {
-            "core_enabled": "YES",
-            "web_enabled": "YES",
-            "core_status": "0",
-            "web_status": "0",
-        }
-    if check_id == "SW-PKG-FBSD-PF-PROVENANCE-001":
-        expected = "legacy_derived" if versions["forward_only"] else "exact_live"
-        return _string(observed, f"{check_id}.observed") == expected
-    if check_id == "SW-PKG-FBSD-PF-FRESH-BOUNDARY-001":
-        return _dict_strings(
-            observed,
-            {
-                "capture_return_code",
-                "provenance",
-                "restore_return_code",
-                "nonempty_rejected",
-                "nonempty_state_preserved",
-            },
-            f"{check_id}.observed",
-        ) == {
-            "capture_return_code": "0",
-            "provenance": "exact_live",
-            "restore_return_code": "0",
-            "nonempty_rejected": "1",
-            "nonempty_state_preserved": "1",
-        }
-    if check_id in {"SW-PKG-FBSD-START-CORE-001", "SW-PKG-FBSD-START-WEB-001"}:
-        return set(_dict_strings(observed, {"start", "status"}, f"{check_id}.observed").values()) == {"0"}
-    if check_id in {"SW-PKG-FBSD-RESTART-CORE-001", "SW-PKG-FBSD-RESTART-WEB-001"}:
-        service = "CORE" if check_id == "SW-PKG-FBSD-RESTART-CORE-001" else "WEB"
-        expected_keys = {
-            f"RC_{service}_RESTART_ONE_RC",
-            f"RC_{service}_RESTART_ONE_STATUS_RC",
-            f"RC_{service}_RESTART_TWO_RC",
-            f"RC_{service}_RESTART_TWO_STATUS_RC",
-        }
-        value = _dict_strings(observed, expected_keys, f"{check_id}.observed")
-        return set(value.values()) == {"0"}
-    if check_id == "SW-PKG-FBSD-TUI-EXEC-001":
-        value = _dict_strings(
-            observed,
-            {"reinstall_return_code", "recovery_return_code"},
-            f"{check_id}.observed",
-        )
-        return set(value.values()) == {"124"}
-    if check_id == "SW-PKG-FBSD-RESTART-METADATA-001":
-        value = _exact_keys(observed, {"baseline", "after_first_restart", "after_second_restart"}, f"{check_id}.observed")
-        inventories = [value[key] for key in ("baseline", "after_first_restart", "after_second_restart")]
-        return all(type(item) is list and item for item in inventories) and inventories[0] == inventories[1] == inventories[2]
-    if check_id == "SW-PKG-FBSD-RSYSLOG-001":
-        return _dict_strings(
-            observed,
-            {
-                "validation_return_code",
-                "enabled",
-                "status_return_code",
-                "base_syslogd_inactive",
-            },
-            f"{check_id}.observed",
-        ) == {
-            "validation_return_code": "0",
-            "enabled": "YES",
-            "status_return_code": "0",
-            "base_syslogd_inactive": "1",
-        }
-    if check_id == "SW-PF-FBSD-FIXTURE-APPLY-001":
-        value = _dict_strings(observed, {"return_code", "rules"}, f"{check_id}.observed")
-        return value["return_code"] == "0" and value["rules"].isdigit() and int(value["rules"]) > 0
-    if check_id == "SW-PF-FBSD-HONEYPORT-001":
-        value = _exact_keys(observed, {"source_concatenates_ports", "exact_port_value", "native_syntax_return_code"}, f"{check_id}.observed")
-        _boolean(value["source_concatenates_ports"], f"{check_id}.observed.source_concatenates_ports")
-        _string(value["exact_port_value"], f"{check_id}.observed.exact_port_value", empty=True)
-        _string(value["native_syntax_return_code"], f"{check_id}.observed.native_syntax_return_code", empty=True)
-        return value == {"source_concatenates_ports": False, "exact_port_value": "23, 6379", "native_syntax_return_code": "0"}
-    if check_id == "SW-PKG-FBSD-REMOVE-001":
-        value = _exact_keys(observed, {"return_code", "package_absent", "inventory", "payload_absent", "links_absent"}, f"{check_id}.observed")
-        _string_list(value["inventory"], f"{check_id}.observed.inventory", sorted_unique=True)
-        return all(value[key] == "1" for key in ("package_absent", "payload_absent", "links_absent")) and value["return_code"] == "0" and value["inventory"] == []
-    if check_id == "SW-PKG-FBSD-REMOVE-STATE-001":
-        value = _exact_keys(observed, {"inventory", "config_sha256", "data_sha256"}, f"{check_id}.observed")
-        return _string_list(value["inventory"], f"{check_id}.observed.inventory", sorted_unique=True) == sorted(freebsd_lab.EXPECTED_USER_STATE_INVENTORY) and value["config_sha256"] == freebsd_lab.USER_CONFIG_SHA256 and value["data_sha256"] == freebsd_lab.USER_DATA_SHA256
-    if check_id == "SW-PKG-FBSD-MIGRATION-BACKUP-001":
-        value = _dict_strings(observed, {"before", "after"}, f"{check_id}.observed")
-        return set(value.values()) == {freebsd_lab.EXPECTED_MIGRATION_BACKUP_STATE}
-    if check_id == "SW-PKG-FBSD-RCD-CLEANUP-001":
-        expected_keys = {
-            "REMOVE_RC_CORE_ABSENT",
-            "REMOVE_RC_WEB_ABSENT",
-            "REMOVE_CORE_FLAG_ABSENT",
-            "REMOVE_WEB_FLAG_ABSENT",
-        }
-        value = _dict_strings(observed, expected_keys, f"{check_id}.observed")
-        return set(value.values()) == {"1"}
-    if check_id == "SW-PKG-FBSD-GENERATED-CLEANUP-001":
-        expected_keys = {
-            "REMOVE_CRON_REFERENCE_ABSENT",
-            "REMOVE_CRON_UNRELATED_PRESERVED",
-            "REMOVE_RSYSLOG_SIEM_ABSENT",
-            "REMOVE_RSYSLOG_WAF_BRIDGE_ABSENT",
-            "REMOVE_LOGGING_BASELINE_RESTORED",
-            "REMOVE_CRON_ACCESS_PRESERVED",
-        }
-        value = _dict_strings(observed, expected_keys, f"{check_id}.observed")
-        return set(value.values()) == {"1"}
-    if check_id == "SW-PKG-FBSD-PF-RESTORE-001":
-        value = _dict_strings(
-            observed,
-            {
-                "status",
-                "snapshot_sha256",
-                "syswarden_tables_absent",
-                "baseline_restored",
-                "host_state_absent",
-            },
-            f"{check_id}.observed",
-        )
-        _sha256(
-            value["snapshot_sha256"],
-            f"{check_id}.observed.snapshot_sha256",
-        )
-        return (
-            value["status"] in {"Enabled", "Disabled"}
-            and value["syswarden_tables_absent"] == "1"
-            and value["baseline_restored"] == "1"
-            and value["host_state_absent"] == "1"
-        )
-    _fail(f"unsupported FreeBSD check ID: {check_id}")
-    raise AssertionError
-
-
-def _validate_freebsd_schema(document: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
-    _exact_keys(document, RAW_TOP_KEYS["freebsd"], "freebsd raw report")
-    if _integer(document["schema_version"], "freebsd.schema_version") != 2:
-        _fail("FreeBSD raw report schema version must be 2")
-    scope = _exact_keys(document["scope"], FREEBSD_SCOPE_KEYS, "freebsd.scope")
-    for key in FREEBSD_SCOPE_KEYS - {"host_firewall_mutation"}:
-        _string(scope[key], f"freebsd.scope.{key}")
-    if _boolean(scope["host_firewall_mutation"], "freebsd.scope.host_firewall_mutation") is not False or scope["ssh_scope"] != "local loopback only":
-        _fail("FreeBSD raw report does not prove VM-only mutation and loopback SSH")
-    if any(scope[key] != value for key, value in FREEBSD_SCOPE_STATIC.items()):
-        _fail("FreeBSD scope differs from the reviewed disposable-VM contract")
-    endpoint_match = re.fullmatch(r"127\.0\.0\.1:([0-9]+)", scope["ssh_endpoint"])
-    if (
-        endpoint_match is None
-        or int(endpoint_match.group(1)) < 1
-        or int(endpoint_match.group(1)) > 65535
-    ):
-        _fail("FreeBSD SSH endpoint is not an explicit local-loopback port")
-    environment = _exact_keys(document["environment"], {"os", "release", "machine", "transport_inputs_sealed", "pf_interface", "pf_initial_status", "pf_snapshot_provenance", "pf_final_status", "pf_snapshot_sha256", "pf_anchor"}, "freebsd.environment")
-    for key in ("os", "release", "machine", "pf_interface", "pf_initial_status", "pf_snapshot_provenance", "pf_final_status", "pf_anchor"):
-        _string(environment[key], f"freebsd.environment.{key}")
-    _sha256(environment["pf_snapshot_sha256"], "freebsd.environment.pf_snapshot_sha256")
-    _boolean(environment["transport_inputs_sealed"], "freebsd.environment.transport_inputs_sealed")
-    if environment["os"] != "FreeBSD" or not environment["release"].startswith("14.4-RELEASE") or environment["machine"] != "amd64" or freebsd_lab.ANCHOR_NAME_PATTERN.fullmatch(environment["pf_anchor"]) is None:
-        _fail("FreeBSD guest/environment identity is invalid")
-    if (
-        environment["pf_initial_status"] != "Disabled"
-        or environment["pf_snapshot_provenance"]
-        not in {"exact_live", "legacy_derived"}
-        or environment["pf_final_status"] != "Disabled"
-        or environment["pf_snapshot_sha256"] != EMPTY_SHA256
-    ):
-        _fail("FreeBSD PF baseline was not restored to the exact disabled empty snapshot")
-    inputs = _exact_keys(document["inputs"], {"candidate", "previous", "pf_fixture", "pf_fixture_sha256", "pf_fixture_guest_sha256"}, "freebsd.inputs")
-    for side in ("candidate", "previous"):
-        item = _exact_keys(inputs[side], {"package", "version", "sha256"}, f"freebsd.inputs.{side}")
-        _string(item["package"], f"freebsd.inputs.{side}.package")
-        _string(item["version"], f"freebsd.inputs.{side}.version")
-        _sha256(item["sha256"], f"freebsd.inputs.{side}.sha256")
-    forward_only = (
-        inputs["candidate"]["package"] == "syswarden-4.02.14.txz"
-        and inputs["candidate"]["version"] == "4.02.14"
-        and inputs["previous"]["package"]
-        == freebsd_lab.FORWARD_ONLY_PREVIOUS_PACKAGE
-        and inputs["previous"]["version"]
-        == freebsd_lab.FORWARD_ONLY_PREVIOUS_VERSION
-        and inputs["previous"]["sha256"]
-        == freebsd_lab.FORWARD_ONLY_PREVIOUS_SHA256
-    )
-    historical_binding_touched = (
-        inputs["previous"]["package"]
-        == freebsd_lab.FORWARD_ONLY_PREVIOUS_PACKAGE
-        or inputs["previous"]["version"]
-        == freebsd_lab.FORWARD_ONLY_PREVIOUS_VERSION
-        or inputs["previous"]["sha256"]
-        == freebsd_lab.FORWARD_ONLY_PREVIOUS_SHA256
-    )
-    if historical_binding_touched and not forward_only:
-        _fail(
-            "FreeBSD historical transition must be the exact byte-bound "
-            "v4.02.8 -> v4.02.14 contract"
-        )
-    _string(inputs["pf_fixture"], "freebsd.inputs.pf_fixture")
-    _sha256(inputs["pf_fixture_sha256"], "freebsd.inputs.pf_fixture_sha256")
-    _sha256(inputs["pf_fixture_guest_sha256"], "freebsd.inputs.pf_fixture_guest_sha256")
-    inventories = _exact_keys(document["restart_metadata_inventories"], {"baseline", "after_first_restart", "after_second_restart"}, "freebsd.restart_metadata_inventories")
-    for key in inventories:
-        _string_list(inventories[key], f"freebsd.restart_metadata_inventories.{key}", sorted_unique=True)
-    phases = _exact_keys(document["lifecycle_phases"], {item[1] for item in PHASE_PREFIXES} | {"remove"}, "freebsd.lifecycle_phases")
-    for _, phase_name in PHASE_PREFIXES:
-        phase = _exact_keys(phases[phase_name], FREEBSD_PHASE_KEYS, f"freebsd.lifecycle_phases.{phase_name}")
-        _string(phase["operation_return_code"], f"freebsd.lifecycle_phases.{phase_name}.operation_return_code", empty=True)
-        package = _exact_keys(phase["package"], {"installed", "name", "version", "architecture", "elf_architectures", "inventory"}, f"freebsd.lifecycle_phases.{phase_name}.package")
-        _boolean(package["installed"], f"freebsd.lifecycle_phases.{phase_name}.package.installed")
-        for key in ("name", "version", "architecture"):
-            _string(package[key], f"freebsd.lifecycle_phases.{phase_name}.package.{key}", empty=True)
-        elf = _exact_keys(package["elf_architectures"], {"cli", "core", "tui"}, f"freebsd.lifecycle_phases.{phase_name}.package.elf_architectures")
-        for key, value in elf.items():
-            if _string(value, f"freebsd.lifecycle_phases.{phase_name}.package.elf_architectures.{key}") not in {"amd64", "arm64", "invalid"}:
-                _fail("FreeBSD ELF architecture evidence is not normalized")
-        _string_list(package["inventory"], f"freebsd.lifecycle_phases.{phase_name}.package.inventory", sorted_unique=True)
-        user_state = _exact_keys(phase["user_state"], {"inventory", "config_sha256", "data_sha256"}, f"freebsd.lifecycle_phases.{phase_name}.user_state")
-        _string_list(user_state["inventory"], f"freebsd.lifecycle_phases.{phase_name}.user_state.inventory", sorted_unique=True)
-        _sha256(user_state["config_sha256"], f"freebsd.lifecycle_phases.{phase_name}.user_state.config_sha256")
-        _sha256(user_state["data_sha256"], f"freebsd.lifecycle_phases.{phase_name}.user_state.data_sha256")
-        signatures = _exact_keys(phase["signatures"], {"rule_definitions", "engine_loaded", "probe_return_code", "loader_error", "runtime_state_before", "runtime_state_after", "runtime_state_restored"}, f"freebsd.lifecycle_phases.{phase_name}.signatures")
-        for key in ("rule_definitions", "engine_loaded", "probe_return_code", "runtime_state_before", "runtime_state_after"):
-            _string(signatures[key], f"freebsd.lifecycle_phases.{phase_name}.signatures.{key}", empty=True)
-        _boolean(signatures["loader_error"], f"freebsd.lifecycle_phases.{phase_name}.signatures.loader_error")
-        _boolean(signatures["runtime_state_restored"], f"freebsd.lifecycle_phases.{phase_name}.signatures.runtime_state_restored")
-    remove = _exact_keys(phases["remove"], {"operation_return_code", "package_absent", "package_inventory", "user_state", "pf_restore", "semantics"}, "freebsd.lifecycle_phases.remove")
-    _string(remove["operation_return_code"], "freebsd.lifecycle_phases.remove.operation_return_code", empty=True)
-    _boolean(remove["package_absent"], "freebsd.lifecycle_phases.remove.package_absent")
-    _string_list(remove["package_inventory"], "freebsd.lifecycle_phases.remove.package_inventory", sorted_unique=True)
-    _string(remove["semantics"], "freebsd.lifecycle_phases.remove.semantics")
-    remove_state = _exact_keys(remove["user_state"], {"inventory", "config_sha256", "data_sha256"}, "freebsd.lifecycle_phases.remove.user_state")
-    _string_list(remove_state["inventory"], "freebsd.lifecycle_phases.remove.user_state.inventory", sorted_unique=True)
-    _sha256(remove_state["config_sha256"], "freebsd.lifecycle_phases.remove.user_state.config_sha256")
-    _sha256(remove_state["data_sha256"], "freebsd.lifecycle_phases.remove.user_state.data_sha256")
-    remove_pf = _exact_keys(
-        remove["pf_restore"],
-        {
-            "status",
-            "snapshot_sha256",
-            "syswarden_tables_absent",
-            "baseline_restored",
-            "host_state_absent",
-        },
-        "freebsd.lifecycle_phases.remove.pf_restore",
-    )
-    if remove_pf["status"] not in {"Enabled", "Disabled"}:
-        _fail("freebsd.lifecycle_phases.remove.pf_restore.status is invalid")
-    _sha256(
-        remove_pf["snapshot_sha256"],
-        "freebsd.lifecycle_phases.remove.pf_restore.snapshot_sha256",
-    )
-    _boolean(
-        remove_pf["syswarden_tables_absent"],
-        "freebsd.lifecycle_phases.remove.pf_restore.syswarden_tables_absent",
-    )
-    _boolean(
-        remove_pf["baseline_restored"],
-        "freebsd.lifecycle_phases.remove.pf_restore.baseline_restored",
-    )
-    _boolean(
-        remove_pf["host_state_absent"],
-        "freebsd.lifecycle_phases.remove.pf_restore.host_state_absent",
-    )
-    conditions = _exact_keys(document["harness_conditions"], set(freebsd_lab.harness_conditions({key: "" for key in freebsd_lab.EVIDENCE_KEYS})), "freebsd.harness_conditions")
-    for key, value in conditions.items():
-        _boolean(value, f"freebsd.harness_conditions.{key}")
-    checks = _list(document["checks"], "freebsd.checks")
-    expected_ids = _expected_freebsd_checks()
-    if [item.get("id") if type(item) is dict else None for item in checks] != expected_ids:
-        _fail("FreeBSD check inventory/order is not exact")
-    versions = {
-        "forward_only": forward_only,
-        "previous_install": inputs["previous"]["version"],
-        "candidate_upgrade": inputs["candidate"]["version"],
-        "candidate_reinstall": inputs["candidate"]["version"],
-        "candidate_restart_idempotence": inputs["candidate"]["version"],
-        "previous_rollback": inputs["previous"]["version"],
-    }
-    observed: dict[str, Any] = {}
-    failed: list[str] = []
-    for index, value in enumerate(checks):
-        item = _exact_keys(value, FREEBSD_CHECK_KEYS, f"freebsd.checks[{index}]")
-        check_id = _string(item["id"], f"freebsd.checks[{index}].id")
-        _string(item["category"], f"freebsd.checks[{index}].category")
-        _string(item["detail"], f"freebsd.checks[{index}].detail")
-        if item["status"] not in {"pass", "blocker"}:
-            _fail(f"freebsd.checks[{index}].status is invalid")
-        observed[check_id] = item["observed"]
-        derived_pass = _freebsd_check_passes(check_id, item["observed"], versions)
-        if item["status"] != ("pass" if derived_pass else "blocker"):
-            _fail(f"FreeBSD check {check_id} status is inconsistent with observed evidence")
-        if not derived_pass:
-            failed.append(check_id)
-
-    # The raw schema deliberately carries both human-oriented lifecycle phases
-    # and machine-oriented checks.  Neither representation may be edited
-    # independently: require exact value equality for every duplicated fact.
-    for prefix, phase_name in PHASE_PREFIXES:
-        phase = phases[phase_name]
-        package = phase["package"]
-        user_state = phase["user_state"]
-        signatures = phase["signatures"]
-        stem = f"SW-PKG-FBSD-{prefix}"
-        lifecycle_observed = observed[f"{stem}-001"]
-        abi_observed = observed[f"{stem}-ABI-001"]
-        elf_observed = observed[f"{stem}-ELF-001"]
-        inventory_observed = observed[f"{stem}-INVENTORY-001"]
-        state_observed = observed[f"{stem}-STATE-001"]
-        signatures_observed = observed[f"{stem}-SIGNATURES-001"]
-        restore_observed = observed[f"{stem}-SIGNATURE-RESTORE-001"]
-        if (
-            phase["operation_return_code"] != lifecycle_observed["return_code"]
-            or package["installed"]
-            != _marker_boolean(
-                lifecycle_observed["installed"],
-                f"{stem}-001.observed.installed",
-            )
-            or package["name"] != lifecycle_observed["name"]
-            or package["version"] != lifecycle_observed["version"]
-            or package["architecture"] != lifecycle_observed["architecture"]
-            or package["architecture"] != abi_observed
-            or package["elf_architectures"] != elf_observed
-            or package["inventory"] != inventory_observed
-            or user_state != state_observed
-        ):
-            _fail(
-                f"FreeBSD lifecycle phase {phase_name} disagrees with its check evidence"
-            )
-        expected_signature_phase = {
-            "rule_definitions": signatures_observed["rule_definitions"],
-            "engine_loaded": signatures_observed["engine_loaded"],
-            "probe_return_code": signatures_observed["probe_return_code"],
-            "loader_error": _marker_boolean(
-                signatures_observed["loader_error"],
-                f"{stem}-SIGNATURES-001.observed.loader_error",
-            ),
-            "runtime_state_before": signatures_observed["runtime_state_before"],
-            "runtime_state_after": signatures_observed["runtime_state_after"],
-            "runtime_state_restored": _marker_boolean(
-                signatures_observed["runtime_state_restored"],
-                f"{stem}-SIGNATURES-001.observed.runtime_state_restored",
-            ),
-        }
-        expected_restore_phase = {
-            "runtime_state_before": restore_observed["before"],
-            "runtime_state_after": restore_observed["after"],
-            "runtime_state_restored": _marker_boolean(
-                restore_observed["restored"],
-                f"{stem}-SIGNATURE-RESTORE-001.observed.restored",
-            ),
-        }
-        if signatures != expected_signature_phase or any(
-            signatures[key] != value
-            for key, value in expected_restore_phase.items()
-        ):
-            _fail(
-                f"FreeBSD lifecycle phase {phase_name} signature evidence is inconsistent"
-            )
-
-    remove = phases["remove"]
-    remove_observed = observed["SW-PKG-FBSD-REMOVE-001"]
-    remove_state_observed = observed["SW-PKG-FBSD-REMOVE-STATE-001"]
-    remove_pf_observed = observed["SW-PKG-FBSD-PF-RESTORE-001"]
-    expected_remove_pf = {
-        "status": remove_pf_observed["status"],
-        "snapshot_sha256": remove_pf_observed["snapshot_sha256"],
-        "syswarden_tables_absent": _marker_boolean(
-            remove_pf_observed["syswarden_tables_absent"],
-            "SW-PKG-FBSD-PF-RESTORE-001.observed.syswarden_tables_absent",
-        ),
-        "baseline_restored": _marker_boolean(
-            remove_pf_observed["baseline_restored"],
-            "SW-PKG-FBSD-PF-RESTORE-001.observed.baseline_restored",
-        ),
-        "host_state_absent": _marker_boolean(
-            remove_pf_observed["host_state_absent"],
-            "SW-PKG-FBSD-PF-RESTORE-001.observed.host_state_absent",
-        ),
-    }
-    if (
-        remove["operation_return_code"] != remove_observed["return_code"]
-        or remove["package_absent"]
-        != _marker_boolean(
-            remove_observed["package_absent"],
-            "SW-PKG-FBSD-REMOVE-001.observed.package_absent",
-        )
-        or remove["package_inventory"] != remove_observed["inventory"]
-        or remove["user_state"] != remove_state_observed
-        or remove["pf_restore"] != expected_remove_pf
-        or remove["pf_restore"]["status"] != environment["pf_initial_status"]
-        or remove["pf_restore"]["snapshot_sha256"]
-        != environment["pf_snapshot_sha256"]
-        or remove["semantics"]
-        != "pkg delete; no separate FreeBSD purge operation"
-    ):
-        _fail("FreeBSD removal phase disagrees with its check evidence")
-    if document["restart_metadata_inventories"] != observed[
-        "SW-PKG-FBSD-RESTART-METADATA-001"
-    ]:
-        _fail("FreeBSD restart phase inventory disagrees with its check evidence")
-    return phases, observed, failed
-
-
-def _validate_freebsd(
-    document: dict[str, Any],
-    binding: gate.RepositoryBinding,
-    candidate: gate.PackageManifest,
-    previous: gate.PackageManifest,
-) -> dict[str, Any]:
-    phases, observed, failed = _validate_freebsd_schema(document)
-    derived_blockers: list[str] = []
-    unexpected = sorted(failed)
-    if unexpected:
-        _fail(f"FreeBSD report contains unexpected failed checks: {unexpected}")
-    derived_product = "pass"
-    inputs = document["inputs"]
-    forward_only = (
-        inputs["candidate"]["package"] == "syswarden-4.02.14.txz"
-        and inputs["candidate"]["version"] == "4.02.14"
-        and inputs["previous"]["package"]
-        == freebsd_lab.FORWARD_ONLY_PREVIOUS_PACKAGE
-        and inputs["previous"]["version"]
-        == freebsd_lab.FORWARD_ONLY_PREVIOUS_VERSION
-        and inputs["previous"]["sha256"]
-        == freebsd_lab.FORWARD_ONLY_PREVIOUS_SHA256
-    )
-    expected_candidate = next(name for name in candidate.checksums if name.endswith(".txz"))
-    expected_previous = next(name for name in previous.checksums if name.endswith(".txz"))
-    for side, item, manifest, name in (("candidate", inputs["candidate"], candidate, expected_candidate), ("previous", inputs["previous"], previous, expected_previous)):
-        if item != {"package": name, "version": binding.version.removeprefix("v") if side == "candidate" else name.removeprefix("syswarden-").removesuffix(".txz"), "sha256": manifest.checksums[name]}:
-            _fail(f"FreeBSD {side} package input does not match verified release assets")
-    fixture_path = inputs["pf_fixture"]
-    if fixture_path != "testdata/firewall/pf-v4.02.8.conf" or Path(fixture_path).is_absolute() or ".." in Path(fixture_path).parts:
-        _fail("FreeBSD PF fixture path is not the reviewed repository-relative asset")
-    fixture_sha = hashlib.sha256(_git_blob_bytes(binding, fixture_path)).hexdigest()
-    if inputs["pf_fixture_sha256"] != fixture_sha or inputs["pf_fixture_guest_sha256"] != fixture_sha:
-        _fail("FreeBSD PF fixture is not byte-bound to Git and the guest transfer")
-    scope = document["scope"]
-    environment = document["environment"]
-    guest_identity = (
-        environment["os"] == "FreeBSD"
-        and environment["release"].startswith("14.4-RELEASE")
-        and environment["machine"] == "amd64"
-        and scope["guest"] == FREEBSD_SCOPE_STATIC["guest"]
-    )
-    clean_pf_baseline = (
-        environment["pf_initial_status"] == "Disabled"
-        and environment["pf_snapshot_sha256"] == EMPTY_SHA256
-        and scope["pf_snapshot"] == FREEBSD_SCOPE_STATIC["pf_snapshot"]
-    )
-    anchor_valid = (
-        freebsd_lab.ANCHOR_NAME_PATTERN.fullmatch(environment["pf_anchor"])
-        is not None
-        and scope["pf_scope"] == FREEBSD_SCOPE_STATIC["pf_scope"]
-    )
-    package_transfers = {
-        "previous": inputs["previous"]["sha256"]
-        == previous.checksums[expected_previous],
-        "candidate": inputs["candidate"]["sha256"]
-        == candidate.checksums[expected_candidate],
-    }
-    expected_conditions = {
-        "root inside guest": guest_identity,
-        "disposable VM marker revalidated": (
-            guest_identity and scope["guest"] == FREEBSD_SCOPE_STATIC["guest"]
-        ),
-        "root-owned VM marker revalidated": (
-            guest_identity and scope["guest_lock"] == FREEBSD_SCOPE_STATIC["guest_lock"]
-        ),
-        "FreeBSD 14.4 amd64 revalidated": guest_identity,
-        "native tools available": (
-            guest_identity and len(observed) == len(_expected_freebsd_checks())
-        ),
-        "clean disposable snapshot": clean_pf_baseline,
-        "root-sealed exact transport inventory": environment[
-            "transport_inputs_sealed"
-        ]
-        is True,
-        "PF snapshot provenance recorded": (
-            environment["pf_snapshot_provenance"]
-            == ("legacy_derived" if forward_only else "exact_live")
-        ),
-        "verified previous package transfer": package_transfers["previous"],
-        "verified candidate package transfer": package_transfers["candidate"],
-        "verified PF fixture transfer": (
-            inputs["pf_fixture_sha256"] == fixture_sha
-            and inputs["pf_fixture_guest_sha256"] == fixture_sha
-        ),
-        "exclusive guest lock": (
-            scope["guest_lock"] == FREEBSD_SCOPE_STATIC["guest_lock"]
-        ),
-        "unique validated PF anchor": anchor_valid,
-        "PF anchor removed": anchor_valid and clean_pf_baseline,
-        "PF restored by package removal": (
-            phases["remove"]["pf_restore"]["baseline_restored"] is True
-            and phases["remove"]["pf_restore"]["syswarden_tables_absent"]
-            is True
-            and phases["remove"]["pf_restore"]["status"]
-            == environment["pf_initial_status"]
-            and phases["remove"]["pf_restore"]["snapshot_sha256"]
-            == environment["pf_snapshot_sha256"]
-            and phases["remove"]["pf_restore"]["host_state_absent"] is True
-        ),
-        "lab filesystem cleanup": (
-            phases["remove"]["operation_return_code"] == "0"
-            and phases["remove"]["package_absent"] is True
-            and phases["remove"]["package_inventory"] == []
-        ),
-        "PF snapshot restored": (
-            clean_pf_baseline
-            and anchor_valid
-            and environment["pf_final_status"] == "Disabled"
-        ),
-    }
-    conditions = document["harness_conditions"]
-    if conditions != expected_conditions:
-        _fail("FreeBSD harness conditions are inconsistent with factual evidence")
-    derived_harness = all(expected_conditions.values())
-    derived_release = derived_harness and not failed
-    if document["harness_status"] != ("pass" if derived_harness else "fail") or document["product_status"] != derived_product or _boolean(document["release_ready"], "freebsd.release_ready") != derived_release:
-        _fail("FreeBSD top-level status is inconsistent with nested evidence")
-    if _string_list(document["blocker_ids"], "freebsd.blocker_ids", sorted_unique=True) != derived_blockers or _string_list(document["unexpected_failed_check_ids"], "freebsd.unexpected_failed_check_ids", sorted_unique=True) != unexpected:
-        _fail("FreeBSD top-level failure classification is not recomputed evidence")
-    if not derived_harness:
-        _fail("FreeBSD harness is incomplete")
-    previous_version = inputs["previous"]["version"]
-    candidate_version = inputs["candidate"]["version"]
-    lifecycle = {
-        "previous_version": "v" + previous_version,
-        "candidate_version": "v" + candidate_version,
-        "fresh_install": True,
-        "upgrade": True,
-        "reinstall": True,
-        "rollback": True,
-        "remove": True,
-        "purge_semantics": True,
-        "second_restart": True,
-        "previous_package_checksums": {expected_previous: previous.checksums[expected_previous]},
-    }
-    return {
-        "harness_complete": True,
-        "release_ready": derived_release,
-        "blocker_ids": derived_blockers,
-        "coordinates": [{"platform": "freebsd", "architecture": "amd64", "status": "pass" if derived_release else "blocker"}],
         "lifecycle": lifecycle,
     }
 
@@ -1752,11 +995,11 @@ def _revalidate_all(
         for snapshot in manifest.snapshots:
             gate.revalidate(snapshot, label)
     current_candidate = gate.verify_packages(candidate.directory, binding)
-    previous_txz = next(
-        name for name in previous.checksums if name.endswith(".txz")
+    previous_deb = next(
+        name for name in previous.checksums if name.endswith("_amd64.deb")
     )
-    previous_version = "v" + previous_txz.removeprefix("syswarden-").removesuffix(
-        ".txz"
+    previous_version = "v" + previous_deb.removeprefix("syswarden_").removesuffix(
+        "_amd64.deb"
     )
     current_previous = gate.verify_packages(
         previous.directory,
@@ -1782,7 +1025,7 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
     current = (now or datetime.now(UTC)).astimezone(UTC)
     binding = gate.verify_repository(args.repo_root, args.expected_sha, args.expected_version)
     candidate = gate.verify_packages(args.candidate_packages_dir, binding)
-    raw_paths = {"nft": args.nft_raw, "package": args.package_raw, "freebsd": args.freebsd_raw}
+    raw_paths = {"nft": args.nft_raw, "package": args.package_raw}
     raws = {key: _load_raw(path, key, binding.root, current, args.max_age_seconds) for key, path in raw_paths.items()}
     package_shard_paths = {
         "amd64": args.package_amd64_shard,
@@ -1803,18 +1046,15 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
             _fail(f"{key} raw basename must be exactly {RAW_NAMES[key]!r}")
     all_raws = [*raws.values(), *package_shards.values()]
     if (
-        len({(item.snapshot.device, item.snapshot.inode) for item in all_raws}) != 5
-        or len({item.snapshot.path for item in all_raws}) != 5
-        or len({item.snapshot.path.name for item in all_raws}) != 5
+        len({(item.snapshot.device, item.snapshot.inode) for item in all_raws}) != 4
+        or len({item.snapshot.path for item in all_raws}) != 4
+        or len({item.snapshot.path.name for item in all_raws}) != 4
     ):
         _fail("the raw reports and native shards must have distinct files, inodes, paths, and basenames")
     timestamps = [item.generated_at for item in raws.values()]
     if max(timestamps) - min(timestamps) > timedelta(seconds=RAW_REPORT_MAX_SKEW_SECONDS):
         _fail("raw report timestamps exceed the bounded laboratory collection window")
     previous_version, _ = _package_versions(raws["package"].document, binding.version)
-    freebsd_inputs = raws["freebsd"].document.get("inputs")
-    if type(freebsd_inputs) is not dict or type(freebsd_inputs.get("previous")) is not dict or freebsd_inputs["previous"].get("version") != previous_version:
-        _fail("Linux and FreeBSD raw reports do not bind the same previous version")
     previous_binding = gate.RepositoryBinding(binding.root, binding.commit_sha, binding.tree_sha, "v" + previous_version)
     previous = gate.verify_packages(args.previous_packages_dir, previous_binding)
     expected_qualification_binding = {
@@ -1878,9 +1118,6 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
         package_shards,
         expected_qualification_binding,
     )
-    freebsd = _validate_freebsd(raws["freebsd"].document, binding, candidate, previous)
-    if package["lifecycle"]["previous_version"] != freebsd["lifecycle"]["previous_version"]:
-        _fail("Linux and FreeBSD lifecycle evidence disagrees on the previous version")
     generated_at = min(timestamps).isoformat()
     bindings = {
         "commit_sha": binding.commit_sha,
@@ -1892,8 +1129,7 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
     }
     envelopes = {
         "nft": gate.build_bound_report(kind="nftables_kernel", generated_at=generated_at, raw_report_sha256=raws["nft"].snapshot.sha256, bindings=bindings, **nft),
-        "package": gate.build_bound_report(kind="linux_package_lifecycle", generated_at=generated_at, raw_report_sha256=raws["package"].snapshot.sha256, bindings=bindings, real_freebsd_vm=False, **package),
-        "freebsd": gate.build_bound_report(kind="freebsd_vm", generated_at=generated_at, raw_report_sha256=raws["freebsd"].snapshot.sha256, bindings=bindings, real_freebsd_vm=True, **freebsd),
+        "package": gate.build_bound_report(kind="linux_package_lifecycle", generated_at=generated_at, raw_report_sha256=raws["package"].snapshot.sha256, bindings=bindings, **package),
     }
     _revalidate_all(binding, candidate, previous, raws, package_shards)
     return ValidatedInputs(
@@ -1908,8 +1144,8 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
 
 def _destination_paths(args: argparse.Namespace) -> dict[str, Path]:
     if args.command == "build":
-        return {"nft": args.nft_output, "package": args.package_output, "freebsd": args.freebsd_output}
-    return {"nft": args.nft_envelope, "package": args.package_envelope, "freebsd": args.freebsd_envelope}
+        return {"nft": args.nft_output, "package": args.package_output}
+    return {"nft": args.nft_envelope, "package": args.package_envelope}
 
 
 def _validate_destinations(paths: dict[str, Path], state: ValidatedInputs, *, must_exist: bool) -> dict[str, Path]:
@@ -1939,8 +1175,8 @@ def _validate_destinations(paths: dict[str, Path], state: ValidatedInputs, *, mu
             existing.add(identity)
         elif must_exist:
             _fail(f"{key} envelope does not exist")
-    if len(set(resolved.values())) != 3:
-        _fail("the three envelope paths must be distinct")
+    if len(set(resolved.values())) != 2:
+        _fail("the two envelope paths must be distinct")
     return resolved
 
 
@@ -1950,7 +1186,7 @@ def run_build(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
     for key, destination in destinations.items():
         gate.write_atomic(destination, state.envelopes[key], state.binding.root)
     snapshots = {key: gate.read_snapshot(path, f"{key} generated envelope") for key, path in destinations.items()}
-    if len({(item.device, item.inode) for item in snapshots.values()}) != 3:
+    if len({(item.device, item.inode) for item in snapshots.values()}) != 2:
         _fail("generated envelopes do not have distinct inodes")
     for key, snapshot in snapshots.items():
         if snapshot.payload != _canonical(state.envelopes[key]):
@@ -1969,8 +1205,8 @@ def run_verify(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
     state = build_expected(args)
     paths = _validate_destinations(_destination_paths(args), state, must_exist=True)
     snapshots = {key: gate.read_snapshot(path, f"{key} envelope") for key, path in paths.items()}
-    if len({(item.device, item.inode) for item in snapshots.values()}) != 3:
-        _fail("the three envelopes must have distinct inodes")
+    if len({(item.device, item.inode) for item in snapshots.values()}) != 2:
+        _fail("the two envelopes must have distinct inodes")
     for key, snapshot in snapshots.items():
         document = gate.strict_json(snapshot.payload, f"{key} envelope")
         if document != state.envelopes[key] or snapshot.payload != _canonical(state.envelopes[key]):
@@ -1997,7 +1233,6 @@ def _common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--package-raw", type=Path, required=True)
     parser.add_argument("--package-amd64-shard", type=Path, required=True)
     parser.add_argument("--package-arm64-shard", type=Path, required=True)
-    parser.add_argument("--freebsd-raw", type=Path, required=True)
     parser.add_argument("--expected-repository", required=True)
     parser.add_argument("--expected-workflow-run-id", type=int, required=True)
     parser.add_argument("--expected-workflow-run-attempt", type=int, required=True)
@@ -2016,12 +1251,10 @@ def build_parser() -> argparse.ArgumentParser:
     _common_arguments(build)
     build.add_argument("--nft-output", type=Path, required=True)
     build.add_argument("--package-output", type=Path, required=True)
-    build.add_argument("--freebsd-output", type=Path, required=True)
     verify = commands.add_parser("verify", help="verify byte-exact bound envelopes")
     _common_arguments(verify)
     verify.add_argument("--nft-envelope", type=Path, required=True)
     verify.add_argument("--package-envelope", type=Path, required=True)
-    verify.add_argument("--freebsd-envelope", type=Path, required=True)
     return parser
 
 
@@ -2029,7 +1262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         envelopes = run_build(args) if args.command == "build" else run_verify(args)
-    except (gate.EvidenceError, package_lab.LifecycleLabError, freebsd_lab.FreeBSDVMLabError, OSError, ValueError) as exc:
+    except (gate.EvidenceError, package_lab.LifecycleLabError, OSError, ValueError) as exc:
         print(f"release qualification adapter invalid: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(envelopes, indent=2, sort_keys=True))

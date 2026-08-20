@@ -6,9 +6,6 @@ from immutable official-image references for amd64 and arm64. Package operations
 then run without network access. Package directories are mounted read-only. No
 host service, firewall, device, container-engine socket, or non-lab writable path
 is exposed to a test container.
-
-FreeBSD is deliberately outside this container lab: a real FreeBSD VM is
-required for its package, rc.d, PF, and runtime-path contract.
 """
 
 from __future__ import annotations
@@ -117,7 +114,8 @@ DEB_BOOTSTRAP = (
     "apt-get update && "
     "DEBIAN_FRONTEND=noninteractive apt-get install -y "
     "--no-install-recommends nftables ipset curl wget rsyslog cron "
-    "bash-completion wireguard-tools qrencode jq binutils file && "
+    "bash-completion wireguard-tools qrencode jq unattended-upgrades "
+    "apt-listchanges procps e2fsprogs socat binutils file && "
     "if [ -f /etc/dpkg/dpkg.cfg.d/docker ]; then "
     "sed -i '\\|^path-exclude /usr/share/doc/\\*$|d' "
     "/etc/dpkg/dpkg.cfg.d/docker; fi && "
@@ -128,11 +126,13 @@ RPM_BOOTSTRAP = (
     "dnf -y install epel-release; fi && "
     "dnf -y install nftables ipset curl-minimal wget rsyslog cronie "
     "bash-completion wireguard-tools qrencode jq checkpolicy "
-    "policycoreutils-python-utils binutils cpio diffutils file && dnf clean all"
+    "policycoreutils-python-utils dnf-automatic procps-ng e2fsprogs socat binutils "
+    "cpio diffutils file && dnf clean all"
 )
 APK_BOOTSTRAP = (
     "apk add --no-cache nftables openrc curl wget rsyslog rsyslog-uxsock "
-    "bash-completion wireguard-tools libqrencode-tools jq binutils file"
+    "bash-completion wireguard-tools libqrencode-tools jq procps-ng "
+    "e2fsprogs-extra socat binutils file"
 )
 DEB_PURGE_SEMANTICS = (
     "remove preserves generated /etc and /var state; purge removes generated "
@@ -389,7 +389,7 @@ PACKAGE_PAYLOAD_PATHS = (
     "/usr/local/bin/syswarden",
     "/usr/local/bin/syswarden-tui",
 )
-FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.02.14"
+FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.03.0"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
 FORWARD_ONLY_APK_PREVIOUS = {
     "x86_64": {
@@ -452,6 +452,10 @@ def _generated_cleanup_event_checks(scenario: str, label: str) -> tuple[str, ...
             "openrc_core",
             "openrc_firewall",
             "openrc_webtui",
+            "systemd_core_enablement",
+            "systemd_firewall_enablement",
+            "openrc_core_enablement",
+            "openrc_firewall_enablement",
             "completion",
             "rsyslog_siem",
             "rsyslog_waf_bridge",
@@ -533,6 +537,7 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
             f"{scenario}.{removal_label}.payload_inventory",
         )
     )
+    checks.append(f"{scenario}.{removal_label}.service_manager_calls")
     checks.extend(_generated_cleanup_event_checks(scenario, removal_label))
     if family in {"apk"} or (family == "deb" and scenario == "remove"):
         checks.extend(_state_event_checks(scenario, removal_label))
@@ -600,7 +605,7 @@ def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> boo
     if historical_binding_touched and not forward_only:
         raise LifecycleLabError(
             "historical APK transition must be the exact byte-bound "
-            "v4.02.8 -> v4.02.14 contract for "
+            "v4.02.8 -> v4.03.0 contract for "
             f"{spec.package_architecture}"
         )
     return forward_only
@@ -1283,13 +1288,13 @@ package_architecture() {
 expected_runtime_dependencies() {
     case "${PACKAGE_FAMILY}" in
         deb)
-            printf '%s\n' bash-completion cron curl ipset jq nftables qrencode rsyslog wget wireguard-tools
+            printf '%s\n' apt-listchanges bash-completion cron curl e2fsprogs ipset jq nftables procps qrencode rsyslog unattended-upgrades wget wireguard-tools
             ;;
         rpm)
-            printf '%s\n' bash-completion checkpolicy cronie curl ipset jq nftables policycoreutils-python-utils qrencode rsyslog wget wireguard-tools
+            printf '%s\n' bash-completion checkpolicy cronie curl dnf-automatic e2fsprogs ipset jq nftables policycoreutils-python-utils procps-ng qrencode rsyslog wget wireguard-tools
             ;;
         apk)
-            printf '%s\n' bash-completion curl jq libqrencode-tools nftables openrc rsyslog rsyslog-uxsock wget wireguard-tools
+            printf '%s\n' bash-completion curl e2fsprogs-extra jq libqrencode-tools nftables openrc procps-ng rsyslog rsyslog-uxsock wget wireguard-tools
             ;;
         *)
             return 2
@@ -1757,9 +1762,64 @@ probe_forward_only_apk_payload() {
     record pass "${PREFIX}.${label}.postinstall_contract" "exact byte-bound v4.02.8 historical postinstall failure input recorded before candidate recovery"
 }
 
+legacy_webtui_runtime_absent() {
+    legacy_root="${1%/}"
+    for retired_path in \
+        /etc/systemd/system/syswarden-webtui.service \
+        /etc/systemd/system/syswarden-webtui.service.syswarden-retiring \
+        /etc/systemd/system/syswarden-webtui.service.d \
+        /etc/systemd/system/multi-user.target.wants/syswarden-webtui.service \
+        /run/systemd/system/syswarden-webtui.service \
+        /run/systemd/system/syswarden-webtui.service.d \
+        /etc/init.d/syswarden-webtui \
+        /etc/conf.d/syswarden-webtui \
+        /etc/runlevels/default/syswarden-webtui \
+        /run/syswarden-webtui.pid; do
+        [ ! -e "${legacy_root}${retired_path}" ] && \
+            [ ! -L "${legacy_root}${retired_path}" ] || return 1
+    done
+}
+
+install_service_manager_sentinels() {
+    manager_path_state=/tmp/syswarden-manager-original-path
+    if [ -f "${manager_path_state}" ] && [ ! -L "${manager_path_state}" ] && \
+       [ "$(stat -c '%u:%g:%a' "${manager_path_state}" 2>/dev/null || true)" = 0:0:600 ]; then
+        SYSWARDEN_MANAGER_ORIGINAL_PATH="$(cat "${manager_path_state}")" || return 1
+    else
+        [ ! -e "${manager_path_state}" ] && [ ! -L "${manager_path_state}" ] || return 1
+        SYSWARDEN_MANAGER_ORIGINAL_PATH="${SYSWARDEN_MANAGER_ORIGINAL_PATH:-${PATH}}"
+        (umask 077 && printf '%s\n' "${SYSWARDEN_MANAGER_ORIGINAL_PATH}" > "${manager_path_state}") || return 1
+    fi
+    export SYSWARDEN_MANAGER_ORIGINAL_PATH
+    mkdir -p /tmp/syswarden-manager-bin
+    : > /tmp/syswarden-service-manager-calls
+    for manager_command in systemctl rc-service rc-update service; do
+        cat > "/tmp/syswarden-manager-bin/${manager_command}" <<'SYSWARDEN_MANAGER_SENTINEL'
+#!/bin/sh
+printf '%s\n' "${0##*/} $*" >> /tmp/syswarden-service-manager-calls
+exit 97
+SYSWARDEN_MANAGER_SENTINEL
+        chmod 0755 "/tmp/syswarden-manager-bin/${manager_command}"
+    done
+    PATH="/tmp/syswarden-manager-bin:${SYSWARDEN_MANAGER_ORIGINAL_PATH}"
+    export PATH
+}
+
+remove_service_manager_sentinels() {
+    manager_path_state=/tmp/syswarden-manager-original-path
+    if [ -f "${manager_path_state}" ] && [ ! -L "${manager_path_state}" ] && \
+       [ "$(stat -c '%u:%g:%a' "${manager_path_state}" 2>/dev/null || true)" = 0:0:600 ]; then
+        SYSWARDEN_MANAGER_ORIGINAL_PATH="$(cat "${manager_path_state}")" || return 1
+    fi
+    PATH="${SYSWARDEN_MANAGER_ORIGINAL_PATH:-${PATH}}"
+    export PATH
+    rm -rf /tmp/syswarden-manager-bin
+}
+
 probe_postinstall_contract() {
     label="$1"
     postinstall_ok=1
+    actual_version="$(installed_version 2>/dev/null || true)"
     for path in \
         /etc/syswarden/config/config.toml \
         /etc/syswarden/config/modules/00-core.toml \
@@ -1788,26 +1848,38 @@ probe_postinstall_contract() {
             service_contract='systemd'
             for specification in \
                 '/etc/systemd/system/syswarden-core.service|/opt/syswarden/bin/syswarden-core' \
-                '/etc/systemd/system/syswarden-firewall.service|/opt/syswarden/bin/syswarden-cli reload --no-restart' \
-                '/etc/systemd/system/syswarden-webtui.service|/opt/syswarden/bin/syswarden-cli web-tui'; do
+                '/etc/systemd/system/syswarden-firewall.service|/opt/syswarden/bin/syswarden-cli reload --no-restart'; do
                 path="${specification%%|*}"
                 fragment="${specification#*|}"
                 [ -f "${path}" ] && [ ! -L "${path}" ] && \
                     [ "$(file_mode "${path}" 2>/dev/null || true)" = "600" ] && \
                     grep -Fq "${fragment}" "${path}" || postinstall_ok=0
             done
+            for specification in \
+                '/etc/systemd/system/multi-user.target.wants/syswarden-core.service|../syswarden-core.service' \
+                '/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service|../syswarden-firewall.service'; do
+                path="${specification%%|*}"
+                target="${specification#*|}"
+                [ -L "${path}" ] && [ "$(readlink "${path}")" = "${target}" ] || postinstall_ok=0
+            done
             ;;
         apk)
             service_contract='openrc'
             for specification in \
                 '/etc/init.d/syswarden-core|/opt/syswarden/bin/syswarden-core' \
-                '/etc/init.d/syswarden-firewall|/opt/syswarden/bin/syswarden-cli reload --no-restart' \
-                '/etc/init.d/syswarden-webtui|/opt/syswarden/bin/syswarden-cli'; do
+                '/etc/init.d/syswarden-firewall|/opt/syswarden/bin/syswarden-cli reload --no-restart'; do
                 path="${specification%%|*}"
                 fragment="${specification#*|}"
                 [ -f "${path}" ] && [ ! -L "${path}" ] && \
                     [ "$(file_mode "${path}" 2>/dev/null || true)" = "755" ] && \
                     grep -Fq "${fragment}" "${path}" || postinstall_ok=0
+            done
+            for specification in \
+                '/etc/runlevels/default/syswarden-core|/etc/init.d/syswarden-core' \
+                '/etc/runlevels/default/syswarden-firewall|/etc/init.d/syswarden-firewall'; do
+                path="${specification%%|*}"
+                target="${specification#*|}"
+                [ -L "${path}" ] && [ "$(readlink "${path}")" = "${target}" ] || postinstall_ok=0
             done
             ;;
         *)
@@ -1815,8 +1887,99 @@ probe_postinstall_contract() {
             postinstall_ok=0
             ;;
     esac
+    if [ -s /tmp/syswarden-service-manager-calls ]; then
+        postinstall_ok=0
+    fi
+    if [ "${actual_version}" = "${EXPECTED_CANDIDATE_VERSION}" ]; then
+        legacy_webtui_runtime_absent / || postinstall_ok=0
+        if grep -Fq 'webtui_password' \
+            /etc/syswarden/config/config.toml /etc/syswarden/config/modules/*.toml \
+            2>/dev/null; then
+            postinstall_ok=0
+        fi
+        for retired_secret in \
+            lot0-lifecycle-retired-token \
+            lot0-lifecycle-live-retired-token; do
+            if grep -Fq "${retired_secret}" "${COMMAND_LOG}" \
+                /tmp/syswarden-legacy-webtui-process.log 2>/dev/null; then
+                postinstall_ok=0
+            fi
+        done
+        if [ -f /tmp/syswarden-legacy-webtui-process.pid ]; then
+            legacy_webtui_pid="$(cat /tmp/syswarden-legacy-webtui-process.pid)"
+            if [ -r "/proc/${legacy_webtui_pid}/cmdline" ] && \
+               od -An -tx1 -v "/proc/${legacy_webtui_pid}/cmdline" 2>/dev/null | \
+                   tr -d '[:space:]' | grep -Fq '007765622d74756900'; then
+                postinstall_ok=0
+                kill -KILL "${legacy_webtui_pid}" 2>/dev/null || true
+            fi
+            wait "${legacy_webtui_pid}" 2>/dev/null || true
+            rm -f /tmp/syswarden-legacy-webtui-process.pid
+        fi
+        if [ -f /tmp/syswarden-legacy-saas-seeded ]; then
+            legacy_saas_v4=/etc/syswarden/lists/syswarden_saas_monitors.ipv4
+            legacy_saas_v6=/etc/syswarden/lists/syswarden_saas_monitors.ipv6
+            legacy_saas_pair=/etc/syswarden/lists/syswarden_saas_monitors.pair
+            [ -f "${legacy_saas_v4}" ] && [ ! -L "${legacy_saas_v4}" ] && \
+                [ "$(file_mode "${legacy_saas_v4}" 2>/dev/null || true)" = 600 ] && \
+                [ "$(stat -c '%u:%g' "${legacy_saas_v4}" 2>/dev/null || true)" = 0:0 ] && \
+                [ "$(hash_file "${legacy_saas_v4}" 2>/dev/null || true)" = \
+                    daf3972b7d1f162ae7c9b5da4a53efed5ab9cb8fb4a2385139931c37287f440c ] || postinstall_ok=0
+            [ -f "${legacy_saas_v6}" ] && [ ! -L "${legacy_saas_v6}" ] && \
+                [ ! -s "${legacy_saas_v6}" ] && \
+                [ "$(file_mode "${legacy_saas_v6}" 2>/dev/null || true)" = 600 ] && \
+                [ "$(stat -c '%u:%g' "${legacy_saas_v6}" 2>/dev/null || true)" = 0:0 ] || postinstall_ok=0
+            [ -f "${legacy_saas_pair}" ] && [ ! -L "${legacy_saas_pair}" ] && \
+                [ "$(file_mode "${legacy_saas_pair}" 2>/dev/null || true)" = 600 ] && \
+                [ "$(stat -c '%u:%g' "${legacy_saas_pair}" 2>/dev/null || true)" = 0:0 ] || postinstall_ok=0
+            expected_saas_pair=/tmp/syswarden-expected-saas-pair
+            printf '%s\n' \
+                'syswarden-saas-pair-v1' \
+                'ipv4_sha256=daf3972b7d1f162ae7c9b5da4a53efed5ab9cb8fb4a2385139931c37287f440c' \
+                'ipv6_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' \
+                > "${expected_saas_pair}"
+            cmp -s "${expected_saas_pair}" "${legacy_saas_pair}" || postinstall_ok=0
+        fi
+        [ -x /opt/syswarden/bin/syswarden-tui ] || postinstall_ok=0
+        [ -L /usr/local/bin/syswarden-tui ] || postinstall_ok=0
+        [ "$(readlink /usr/local/bin/syswarden-tui 2>/dev/null || true)" = /opt/syswarden/bin/syswarden-tui ] || postinstall_ok=0
+        if nft list table inet syswarden > /tmp/syswarden-candidate-nftables 2>/dev/null; then
+            if grep -Eq 'tcp dport (\{[^}]*[ ,])?62027([ ,}]|$)' /tmp/syswarden-candidate-nftables; then
+                postinstall_ok=0
+            fi
+        else
+            postinstall_ok=0
+        fi
+        if [ -f /tmp/syswarden-operator-62027.pid ]; then
+            operator_listener_pid="$(cat /tmp/syswarden-operator-62027.pid)"
+            if kill -0 "${operator_listener_pid}" 2>/dev/null; then
+                operator_probe="$(printf '%s' 'syswarden-operator-62027' | \
+                    socat -T 2 - TCP:127.0.0.1:62027 2>/dev/null || true)"
+                [ "${operator_probe}" = 'syswarden-operator-62027' ] || postinstall_ok=0
+            else
+                postinstall_ok=0
+                rm -f /tmp/syswarden-operator-62027.pid
+            fi
+        else
+            postinstall_ok=0
+        fi
+    elif [ "${actual_version}" = "${EXPECTED_PREVIOUS_VERSION}" ]; then
+        case "${PACKAGE_FAMILY}" in
+            deb|rpm)
+                [ -f /etc/systemd/system/syswarden-webtui.service ] && \
+                    grep -Fq '/opt/syswarden/bin/syswarden-cli web-tui' \
+                        /etc/systemd/system/syswarden-webtui.service || postinstall_ok=0
+                ;;
+            apk)
+                [ -f /etc/init.d/syswarden-webtui ] && \
+                    grep -Fq 'command_args="web-tui"' /etc/init.d/syswarden-webtui || postinstall_ok=0
+                ;;
+        esac
+    else
+        postinstall_ok=0
+    fi
     if [ "${postinstall_ok}" -eq 1 ]; then
-        record pass "${PREFIX}.${label}.postinstall_contract" "modular config, ${service_contract} services, completion and feed cron were generated"
+        record pass "${PREFIX}.${label}.postinstall_contract" "modular config, native TUI, ${service_contract} services, completion, feed cron, and browser-service retirement match the installed version"
     else
         record fail "${PREFIX}.${label}.postinstall_contract" "postinstall output contract is incomplete"
     fi
@@ -1913,7 +2076,7 @@ seed_state() {
     printf '%s\n' 'operator-setting=preserve-exactly' > /etc/syswarden/config/lifecycle-operator.conf
     printf '%s\n' \
         '[network]' 'interfaces = "lo"' '' \
-        '[user]' 'webtui_password = "lot0-lifecycle-token"' \
+        '[user]' 'profile_name = "lifecycle-operator"' \
         > /etc/syswarden/config/modules/99-user.toml
     printf '%s\n' '198.51.100.42' > /etc/syswarden/lists/syswarden_blacklist.ipv4
     printf '%s\n' '2001:db8::42' > /etc/syswarden/lists/syswarden_blacklist.ipv6
@@ -1941,6 +2104,141 @@ seed_state() {
         printf 'STATE_CERT_HASH=%s\n' "${STATE_CERT_HASH}"
     } > "${OPERATOR_STATE_FILE}"
     chmod 0600 "${OPERATOR_STATE_FILE}"
+}
+
+seed_legacy_webtui_upgrade_state() {
+    legacy_module=/etc/syswarden/config/modules/98-legacy-webtui.toml
+    printf '%s\n' \
+        '# Historical browser credential seeded for bounded upgrade cleanup' \
+        '[user]' \
+        'webtui_password = "lot0-lifecycle-retired-token"' \
+        'profile_name = "preserve-after-browser-retirement"' \
+        > "${legacy_module}" || return 1
+    chmod 0640 "${legacy_module}" || return 1
+    mkdir -p /run
+    printf '%s\n' 4194303 > /run/syswarden-webtui.pid || return 1
+    chmod 0600 /run/syswarden-webtui.pid || return 1
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm)
+            mkdir -p /etc/systemd/system/multi-user.target.wants /run/systemd
+            cat > /etc/systemd/system/syswarden-webtui.service <<'SYSWARDEN_SYSTEMD_WEBTUI'
+[Unit]
+Description=SYSWARDEN Web-TUI (WebTTY)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/syswarden/bin/syswarden-cli web-tui
+Restart=on-failure
+RestartSec=5s
+
+# Security Hardening
+ProtectSystem=full
+ProtectHome=yes
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+SYSWARDEN_SYSTEMD_WEBTUI
+            chmod 0600 /etc/systemd/system/syswarden-webtui.service || return 1
+            ln -sf ../syswarden-webtui.service \
+                /etc/systemd/system/multi-user.target.wants/syswarden-webtui.service || return 1
+            ;;
+        apk)
+            [ -d /run ] && [ ! -L /run ] || return 1
+            [ ! -e /run/openrc ] && [ ! -L /run/openrc ] || return 1
+            rm -f /run/syswarden-webtui.pid
+            printf '%s\n' 4194303 > /run/syswarden-webtui.pid || return 1
+            mkdir -p /etc/init.d /etc/runlevels/default
+            cat > /etc/init.d/syswarden-webtui <<'SYSWARDEN_OPENRC_WEBTUI'
+#!/sbin/openrc-run
+
+name="syswarden-webtui"
+description="SYSWARDEN Web-TUI (WebTTY)"
+command="/opt/syswarden/bin/syswarden-cli"
+command_args="web-tui"
+command_background=true
+pidfile="/run/syswarden-webtui.pid"
+retry="TERM/5/KILL/5"
+
+depend() {
+	need net
+}
+SYSWARDEN_OPENRC_WEBTUI
+            chmod 0755 /etc/init.d/syswarden-webtui || return 1
+            ln -sf /etc/init.d/syswarden-webtui /etc/runlevels/default/syswarden-webtui || return 1
+            ;;
+    esac
+
+    nft delete table inet syswarden >/dev/null 2>&1 || true
+    nft -f - <<'SYSWARDEN_LEGACY_62027_NFT' || return 1
+table inet syswarden {
+	chain stateful_protect {
+		type filter hook input priority -10; policy accept;
+		tcp dport 62027 accept comment "syswarden legacy Web-TUI"
+	}
+}
+SYSWARDEN_LEGACY_62027_NFT
+
+    socat TCP-LISTEN:62027,bind=127.0.0.1,reuseaddr,fork EXEC:/bin/cat \
+        >/tmp/syswarden-operator-62027.log 2>&1 &
+    operator_listener_pid=$!
+    printf '%s\n' "${operator_listener_pid}" > /tmp/syswarden-operator-62027.pid
+    operator_listener_ready=0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if [ "$(printf '%s' 'syswarden-operator-62027' | \
+            socat -T 1 - TCP:127.0.0.1:62027 2>/dev/null || true)" = \
+            'syswarden-operator-62027' ]; then
+            operator_listener_ready=1
+            break
+        fi
+        kill -0 "${operator_listener_pid}" 2>/dev/null || break
+        sleep 0.1
+    done
+    [ "${operator_listener_ready}" -eq 1 ] || return 1
+}
+
+seed_legacy_saas_monitor_state() {
+    legacy_saas_v4=/etc/syswarden/lists/syswarden_saas_monitors.ipv4
+    legacy_saas_v6=/etc/syswarden/lists/syswarden_saas_monitors.ipv6
+    legacy_saas_pair=/etc/syswarden/lists/syswarden_saas_monitors.pair
+    mkdir -p /etc/syswarden/lists || return 1
+    printf '%s\n%s' '192.0.2.10' '198.51.100.0/24' > "${legacy_saas_v4}" || return 1
+    chmod 0600 "${legacy_saas_v4}" || return 1
+    chown 0:0 "${legacy_saas_v4}" || return 1
+    rm -f "${legacy_saas_v6}" "${legacy_saas_pair}" || return 1
+    : > /tmp/syswarden-legacy-saas-seeded
+}
+
+seed_live_legacy_webtui_process() {
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm) ;;
+        *) return 0 ;;
+    esac
+    /opt/syswarden/bin/syswarden-cli web-tui \
+        --bind=127.0.0.1:62028 --token=lot0-lifecycle-live-retired-token \
+        >/tmp/syswarden-legacy-webtui-process.log 2>&1 &
+    legacy_webtui_pid=$!
+    printf '%s\n' "${legacy_webtui_pid}" > /tmp/syswarden-legacy-webtui-process.pid
+    legacy_webtui_ready=0
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        legacy_webtui_status="$(curl --insecure --silent --output /dev/null \
+            --write-out '%{http_code}' https://127.0.0.1:62028/ 2>/dev/null || true)"
+        if [ "${legacy_webtui_status}" = 401 ]; then
+            legacy_webtui_ready=1
+            break
+        fi
+        kill -0 "${legacy_webtui_pid}" 2>/dev/null || break
+        sleep 0.1
+    done
+    if [ "${legacy_webtui_ready}" -ne 1 ]; then
+        kill -KILL "${legacy_webtui_pid}" 2>/dev/null || true
+        wait "${legacy_webtui_pid}" 2>/dev/null || true
+        return 1
+    fi
 }
 
 load_state_contract() {
@@ -2042,7 +2340,7 @@ seed_generated_runtime_artifacts() {
         printf '%s \n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
         printf '%s\n' '17  * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
         printf '*/30\t* * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1\n'
-        printf '%s\n' '23 * * * * /usr/local/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+        printf '%s\n' '23 * * * * /srv/operator/bin/syswarden-cli update-feeds >/dev/null 2>&1'
         printf ' \t \n'
     } > "${OPERATOR_CRON_FILE}"
     {
@@ -2053,12 +2351,21 @@ seed_generated_runtime_artifacts() {
 
 assert_generated_runtime_artifacts_absent() {
     label="$1"
+    if [ -s /tmp/syswarden-service-manager-calls ]; then
+        record fail "${PREFIX}.${label}.service_manager_calls" "offline removal invoked a service manager: $(tr '\n' ' ' < /tmp/syswarden-service-manager-calls)"
+    else
+        record pass "${PREFIX}.${label}.service_manager_calls" "offline removal invoked no service manager"
+    fi
     check_absent "${label}.generated.systemd_core" /etc/systemd/system/syswarden-core.service
     check_absent "${label}.generated.systemd_firewall" /etc/systemd/system/syswarden-firewall.service
     check_absent "${label}.generated.systemd_webtui" /etc/systemd/system/syswarden-webtui.service
     check_absent "${label}.generated.openrc_core" /etc/init.d/syswarden-core
     check_absent "${label}.generated.openrc_firewall" /etc/init.d/syswarden-firewall
     check_absent "${label}.generated.openrc_webtui" /etc/init.d/syswarden-webtui
+    check_absent "${label}.generated.systemd_core_enablement" /etc/systemd/system/multi-user.target.wants/syswarden-core.service
+    check_absent "${label}.generated.systemd_firewall_enablement" /etc/systemd/system/multi-user.target.wants/syswarden-firewall.service
+    check_absent "${label}.generated.openrc_core_enablement" /etc/runlevels/default/syswarden-core
+    check_absent "${label}.generated.openrc_firewall_enablement" /etc/runlevels/default/syswarden-firewall
     check_absent "${label}.generated.completion" /etc/bash_completion.d/syswarden
     check_absent "${label}.generated.rsyslog_siem" /etc/rsyslog.d/99-syswarden-siem.conf
     check_absent "${label}.generated.rsyslog_waf_bridge" /etc/rsyslog.d/99-syswarden-waf-bridge.conf
@@ -2148,7 +2455,11 @@ scenario_upgrade_rollback_initial() {
     fi
     seed_state
     assert_all_state_preserved previous
+    seed_legacy_webtui_upgrade_state || return
+    seed_live_legacy_webtui_process || return
+    seed_legacy_saas_monitor_state || return
 
+    install_service_manager_sentinels || return
     run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload candidate candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved candidate
@@ -2162,6 +2473,7 @@ scenario_upgrade_rollback_initial() {
 
 scenario_upgrade_rollback_restart_one() {
     load_state_contract || return
+    install_service_manager_sentinels || return
     probe_payload restart-one candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved restart-one
     printf '%s\n' restart-two > "${RESTART_STATE_FILE}"
@@ -2169,8 +2481,10 @@ scenario_upgrade_rollback_restart_one() {
 
 scenario_upgrade_rollback_restart_two() {
     load_state_contract || return
+    install_service_manager_sentinels || return
     probe_payload restart-two candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved restart-two
+    remove_service_manager_sentinels
     run_install_step rollback.previous "${PREVIOUS_PACKAGE}" || return
     if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
         probe_forward_only_apk_payload rollback
@@ -2178,6 +2492,7 @@ scenario_upgrade_rollback_restart_two() {
         probe_payload rollback previous "${EXPECTED_PREVIOUS_VERSION}"
     fi
     assert_all_state_preserved rollback
+    install_service_manager_sentinels || return
     run_install_step recovery.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload recovery candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved recovery
@@ -2187,6 +2502,7 @@ scenario_upgrade_rollback_restart_two() {
 scenario_remove() {
     prepare_expected_payloads || return
     seed_state
+    install_service_manager_sentinels || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
@@ -2220,6 +2536,7 @@ scenario_remove() {
 scenario_purge() {
     prepare_expected_payloads || return
     seed_state
+    install_service_manager_sentinels || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
@@ -4028,13 +4345,6 @@ def run_lab(
                 "checksum-verified previous artifact; this is not a SysWarden "
                 "product rollback feature"
             ),
-            "freebsd": {
-                "status": "vm_required",
-                "reason": (
-                    "A real FreeBSD VM is required for pkg, rc.d, PF, service "
-                    "startup, signature loading, and runtime-path validation."
-                ),
-            },
         },
         "engine": {
             "name": "podman",
@@ -4425,13 +4735,6 @@ def _aggregate_matrix_summary(
             "checksum-verified previous artifact; this is not a SysWarden "
             "product rollback feature"
         ),
-        "freebsd": {
-            "status": "vm_required",
-            "reason": (
-                "A real FreeBSD VM is required for pkg, rc.d, PF, service "
-                "startup, signature loading, and runtime-path validation."
-            ),
-        },
     }
     return status, classification, scope
 

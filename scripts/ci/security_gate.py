@@ -27,6 +27,33 @@ GOSEC_FATAL_LOG = re.compile(
     r"(?i)(error building the ssa representation|package has type errors|failed to build package|panic:)"
 )
 GOSEC_CHECKING_FILE = re.compile(r"Checking file:\s+(.+?)\s*$", re.MULTILINE)
+GOSEC_RETIRED_SCAN_TRANSITION_ID = "v4.03.0-linux-only"
+GOSEC_RETIRED_SCAN_IDENTITIES = {
+    "freebsd-cli": {
+        "goos": "freebsd",
+        "goarch": "amd64",
+        "cgo_enabled": "0",
+        "module": "src/core/syswarden-cli",
+    },
+    "freebsd-core": {
+        "goos": "freebsd",
+        "goarch": "amd64",
+        "cgo_enabled": "0",
+        "module": "src/core/syswarden-core",
+    },
+    "freebsd-tui": {
+        "goos": "freebsd",
+        "goarch": "amd64",
+        "cgo_enabled": "0",
+        "module": "src/core/syswarden-tui",
+    },
+    "freebsd-versionctl": {
+        "goos": "freebsd",
+        "goarch": "amd64",
+        "cgo_enabled": "0",
+        "module": "scripts/versionctl",
+    },
+}
 
 
 def read_json(path: Path) -> Any:
@@ -363,9 +390,44 @@ def validate_gosec_evolution(current: dict[str, Any], previous: dict[str, Any] |
     previous_scans = previous.get("scans")
     if not isinstance(current_scans, dict) or not isinstance(previous_scans, dict):
         raise ValueError("gosec baselines must contain scan objects")
-    if set(current_scans) != set(previous_scans):
-        raise ValueError("gosec baseline scan inventory cannot change after introduction")
-    for name, old_scan in previous_scans.items():
+
+    current_transition = current.get("retired_scan_transition")
+    previous_transition = previous.get("retired_scan_transition")
+    for transition in (current_transition, previous_transition):
+        if transition is not None and transition != GOSEC_RETIRED_SCAN_TRANSITION_ID:
+            raise ValueError("gosec baseline contains an unknown retired-scan transition")
+
+    current_names = set(current_scans)
+    previous_names = set(previous_scans)
+    added_scans = current_names - previous_names
+    removed_scans = previous_names - current_names
+    if added_scans:
+        raise ValueError("gosec baseline scan inventory cannot add or rename scans")
+    if removed_scans:
+        expected_removed = set(GOSEC_RETIRED_SCAN_IDENTITIES)
+        if previous_transition is not None or current_transition != GOSEC_RETIRED_SCAN_TRANSITION_ID:
+            raise ValueError("gosec scan retirement requires the one-time v4.03.0 Linux-only transition")
+        if removed_scans != expected_removed:
+            raise ValueError("gosec scan retirement must remove exactly the four reviewed FreeBSD scans")
+        for name, expected_identity in GOSEC_RETIRED_SCAN_IDENTITIES.items():
+            old_scan = previous_scans.get(name)
+            if not isinstance(old_scan, dict) or any(
+                old_scan.get(field) != value
+                for field, value in expected_identity.items()
+            ):
+                raise ValueError(f"gosec retired scan {name!r} identity changed")
+        if any(scan.get("goos") != "linux" for scan in current_scans.values()):
+            raise ValueError("gosec v4.03.0 retained scan inventory must be Linux-only")
+        for name in current_names:
+            if issue_counter(current_scans[name]) != issue_counter(previous_scans[name]):
+                raise ValueError(
+                    f"gosec retained scan {name!r} findings must remain exact during platform retirement"
+                )
+    elif current_transition != previous_transition:
+        raise ValueError("gosec retired-scan transition cannot change without the exact scan retirement")
+
+    for name in sorted(current_names):
+        old_scan = previous_scans[name]
         new_scan = current_scans[name]
         for field in ("goos", "goarch", "cgo_enabled", "module"):
             if new_scan.get(field) != old_scan.get(field):

@@ -651,7 +651,7 @@
     {
       "id": "syswarden-l4-protect",
       "type": "regex",
-      "pattern": "\\[CATCH-ALL\\] .*? SRC=<HOST> .*? PROTO=TCP .*? DPT=(?:62026|62027)\\b",
+      "pattern": "\\[CATCH-ALL\\] .*? SRC=<HOST> .*? PROTO=TCP .*? DPT=62026\\b",
       "service": "kernel",
       "action": "track",
       "threshold": 3,

@@ -30,6 +30,9 @@ func TestIsValidIPCompatibility(t *testing.T) {
 		{input: "192.0.2.1/33"},
 		{input: "999.0.2.1"},
 		{input: "example.com"},
+		{input: " 192.0.2.1"},
+		{input: "192.0.2.1 "},
+		{input: "\t2001:db8::1"},
 		{input: ""},
 	}
 

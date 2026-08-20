@@ -2,13 +2,42 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestChangelogHistoryResetIsSingleUseAndDigestBound(t *testing.T) {
+	t.Parallel()
+	base := validChangelog("v4.02.14")
+	previous, _ := parseVersion("v4.02.14")
+	next, _ := parseVersion("v4.03.0")
+	digest := fmt.Sprintf("%x", sha256.Sum256(base))
+	suffix := "Archived test changelog SHA-256: " + digest + "\n"
+	candidate := []byte("# Release v4.03.0\n\n### CHANGED\n- Reset the public changelog after a sealed archive.\n\n---\n\n" + suffix)
+	policy := changelogResetPolicy{From: previous.String(), To: next.String(), BaseSHA256: digest, ArchiveSuffix: suffix}
+	if err := validateChangelogHistoryTransitionWithPolicy(base, candidate, previous, next, policy); err != nil {
+		t.Fatalf("approved reset rejected: %v", err)
+	}
+	wrongBase := append([]byte(nil), base...)
+	wrongBase = append(wrongBase, '\n')
+	if err := validateChangelogHistoryTransitionWithPolicy(wrongBase, candidate, previous, next, policy); err == nil {
+		t.Fatal("reset accepted a different baseline digest")
+	}
+	wrongSuffix := bytes.Replace(candidate, []byte(digest), []byte(strings.Repeat("0", 64)), 1)
+	if err := validateChangelogHistoryTransitionWithPolicy(base, wrongSuffix, previous, next, policy); err == nil {
+		t.Fatal("reset accepted a different archive suffix")
+	}
+	otherNext, _ := parseVersion("v4.04.0")
+	if err := validateChangelogHistoryTransitionWithPolicy(base, candidate, previous, otherNext, policy); err == nil {
+		t.Fatal("reset policy was reusable for another transition")
+	}
+}
 
 func fixtureSnapshot(version string) snapshot {
 	contents := make(snapshot, len(versionTargets))

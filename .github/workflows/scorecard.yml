@@ -5,7 +5,7 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  # Recommandé par l'OSSF : un scan hebdomadaire automatisé
+  # Recommended by OSSF: run an automated weekly scan.
   schedule:
     - cron: '30 2 * * 1'
 

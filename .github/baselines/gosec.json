@@ -2,6 +2,7 @@
   "schema_version": 3,
   "baseline_commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
   "gosec_version": "v2.28.0",
+  "retired_scan_transition": "v4.03.0-linux-only",
   "policy": "The reviewed baseline is empty. Any unsuppressed reported physical occurrence, fingerprint, partial scan or Go loading error fails; byte-identical scanner re-emissions at one physical location are deduplicated.",
   "scans": {
     "linux-cli": {
@@ -12,7 +13,6 @@
       "tracking": [
         "SW-LIST-001",
         "SW-UPD-002",
-        "SW-WEB-001",
         "SW-NOSEC-001"
       ],
       "issues": []
@@ -37,51 +37,8 @@
       ],
       "issues": []
     },
-    "freebsd-cli": {
-      "goos": "freebsd",
-      "module": "src/core/syswarden-cli",
-      "goarch": "amd64",
-      "cgo_enabled": "0",
-      "tracking": [
-        "SW-BSD-001",
-        "SW-LIST-001",
-        "SW-WEB-001",
-        "SW-NOSEC-001"
-      ],
-      "issues": []
-    },
-    "freebsd-core": {
-      "goos": "freebsd",
-      "module": "src/core/syswarden-core",
-      "goarch": "amd64",
-      "cgo_enabled": "0",
-      "tracking": [
-        "SW-HA-003"
-      ],
-      "issues": []
-    },
-    "freebsd-tui": {
-      "goos": "freebsd",
-      "module": "src/core/syswarden-tui",
-      "goarch": "amd64",
-      "cgo_enabled": "0",
-      "tracking": [
-        "SW-HA-001"
-      ],
-      "issues": []
-    },
     "linux-versionctl": {
       "goos": "linux",
-      "goarch": "amd64",
-      "cgo_enabled": "0",
-      "module": "scripts/versionctl",
-      "tracking": [
-        "SW-REL-001"
-      ],
-      "issues": []
-    },
-    "freebsd-versionctl": {
-      "goos": "freebsd",
       "goarch": "amd64",
       "cgo_enabled": "0",
       "module": "scripts/versionctl",

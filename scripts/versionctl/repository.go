@@ -40,6 +40,27 @@ var versionTargets = []target{
 
 const changelogPath = "changelog.md"
 
+const (
+	approvedChangelogResetFrom   = "v4.02.14"
+	approvedChangelogResetTo     = "v4.03.0"
+	approvedChangelogArchiveHash = "a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5"
+	approvedChangelogArchiveLine = "Archived pre-v4.03.0 changelog SHA-256: " + approvedChangelogArchiveHash + "\n"
+)
+
+type changelogResetPolicy struct {
+	From          string
+	To            string
+	BaseSHA256    string
+	ArchiveSuffix string
+}
+
+var approvedChangelogReset = changelogResetPolicy{
+	From:          approvedChangelogResetFrom,
+	To:            approvedChangelogResetTo,
+	BaseSHA256:    approvedChangelogArchiveHash,
+	ArchiveSuffix: approvedChangelogArchiveLine,
+}
+
 type snapshot map[string][]byte
 
 func snapshotEqual(left, right snapshot) bool {
@@ -261,6 +282,31 @@ func changelogHistory(data []byte) ([]byte, error) {
 		lineStart = nextLine
 	}
 	return nil, errors.New("changelog first release block has no exact --- separator")
+}
+
+func validateChangelogHistoryTransition(base, candidate []byte, previous, next Version) error {
+	return validateChangelogHistoryTransitionWithPolicy(base, candidate, previous, next, approvedChangelogReset)
+}
+
+func validateChangelogHistoryTransitionWithPolicy(base, candidate []byte, previous, next Version, policy changelogResetPolicy) error {
+	history, err := changelogHistory(candidate)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(history, base) {
+		return nil
+	}
+	if previous.String() != policy.From || next.String() != policy.To {
+		return errors.New("candidate changelog must preserve the complete baseline changelog byte-for-byte after the new release separator")
+	}
+	digest := sha256.Sum256(base)
+	if hex.EncodeToString(digest[:]) != policy.BaseSHA256 {
+		return errors.New("approved changelog reset baseline digest does not match")
+	}
+	if !bytes.Equal(history, []byte(policy.ArchiveSuffix)) {
+		return errors.New("approved changelog reset must contain only the exact archived-history digest line after the release separator")
+	}
+	return nil
 }
 
 func readAndValidateChangelog(repo string, expected Version) error {

@@ -57,6 +57,7 @@ const (
 	maxHASyncIPsPerRequest     = 1024
 	maxHAResponseBytes         = 1024 * 1024
 	defaultHASyncStatusFile    = "/var/lib/syswarden/ha/sync-status.json"
+	defaultHAFenceDirectory    = "/var/lib/syswarden/ha/fence"
 	defaultHACAFile            = "/etc/syswarden/ha-ca.pem"
 	defaultHABlacklistIPv4File = "/etc/syswarden/lists/syswarden_blacklist.ipv4"
 	defaultHABlacklistIPv6File = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
@@ -72,6 +73,7 @@ type haSyncOptions struct {
 	statusOwnerUID int
 	blacklistIPv4  string
 	blacklistIPv6  string
+	legacyFence    *haLegacyWriterFence
 	now            func() time.Time
 }
 
@@ -105,6 +107,7 @@ func defaultHASyncOptions() (haSyncOptions, error) {
 		statusOwnerUID: 0,
 		blacklistIPv4:  defaultHABlacklistIPv4File,
 		blacklistIPv6:  defaultHABlacklistIPv6File,
+		legacyFence:    newHALegacyWriterFence(defaultHAFenceDirectory, 0),
 		now:            time.Now,
 	}, nil
 }
@@ -354,6 +357,11 @@ func syncHAPeers(ctx context.Context, cfg *config.Config, options haSyncOptions)
 	if err := validateHASyncOptions(options); err != nil {
 		return err
 	}
+	releaseFence, err := acquireHALegacyWriterLease(options.legacyFence)
+	if err != nil {
+		return err
+	}
+	defer releaseFence()
 
 	localIPv4, ipv4Err := getLocalBlocklist(options.blacklistIPv4)
 	localIPv6, ipv6Err := getLocalBlocklist(options.blacklistIPv6)
@@ -506,6 +514,11 @@ func syncHAUnban(ctx context.Context, cfg *config.Config, ips []string, options 
 	if err := validateHASyncOptions(options); err != nil {
 		return err
 	}
+	releaseFence, err := acquireHALegacyWriterLease(options.legacyFence)
+	if err != nil {
+		return err
+	}
+	defer releaseFence()
 	canonicalIPs, err := canonicalHAIPList(ips)
 	if err != nil {
 		return err

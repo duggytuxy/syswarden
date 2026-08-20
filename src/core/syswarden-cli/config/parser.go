@@ -166,8 +166,6 @@ func loadOldConfig(path string) (loadErr error) {
 			candidate.LANMode = parseBool(val)
 		case "SYSWARDEN_LAN_SUBNETS":
 			candidate.LANSubnets = val
-		case "SYSWARDEN_WEB_TOKEN":
-			candidate.WebTUIPassword = val
 		}
 	}
 
@@ -268,7 +266,85 @@ func validateLegacyConfig(candidate *Config) error {
 	} else if duration, durationErr := time.ParseDuration(candidate.BruteforceWindow); durationErr != nil || duration <= 0 {
 		return fmt.Errorf("invalid legacy brute-force window %q", candidate.BruteforceWindow)
 	}
+	modular, err := legacyConfigForPolicyValidation(candidate)
+	if err != nil {
+		return err
+	}
+	if err := validateConfig(modular); err != nil {
+		return fmt.Errorf("invalid legacy policy value: %w", err)
+	}
 	return nil
+}
+
+func legacyConfigForPolicyValidation(candidate *Config) (*ModularConfig, error) {
+	threshold, err := strconv.Atoi(candidate.BruteforceThreshold)
+	if err != nil {
+		return nil, fmt.Errorf("invalid legacy brute-force threshold %q", candidate.BruteforceThreshold)
+	}
+	windowSeconds := 0
+	if parsed, parseErr := strconv.Atoi(candidate.BruteforceWindow); parseErr == nil {
+		windowSeconds = parsed
+	} else {
+		duration, durationErr := time.ParseDuration(candidate.BruteforceWindow)
+		if durationErr != nil || duration%time.Second != 0 {
+			return nil, fmt.Errorf("invalid legacy brute-force window %q", candidate.BruteforceWindow)
+		}
+		windowSeconds = int(duration / time.Second)
+	}
+	split := func(value string) []string {
+		return strings.Fields(strings.ReplaceAll(value, ",", " "))
+	}
+	return &ModularConfig{
+		Core: CoreConfig{
+			ConfigDir:       "/etc/syswarden/config/modules",
+			EnterpriseMode:  candidate.EnterpriseMode,
+			LogLevel:        "INFO",
+			FirewallBackend: candidate.FirewallBackend,
+			Hardening:       candidate.Hardening,
+			CISL2Hardening:  candidate.CISL2Hardening,
+			SecureWipeConf:  candidate.SecureWipeConf,
+			SSHPort:         candidate.SSHPort,
+		},
+		Network: NetworkConfig{
+			WhitelistInfra: candidate.WhitelistInfra,
+			LanSubnets:     split(candidate.LANSubnets),
+			WhitelistIPs:   split(candidate.WhitelistIPs),
+			Geo:            GeoConfig{Enabled: candidate.EnableGeo, BlockedCountries: split(candidate.GeoCodes), AllowedCountries: split(candidate.GeoAllowed)},
+			ASN:            ASNConfig{Enabled: candidate.EnableASN, BlockedASNs: split(candidate.ASNList), AllowedASNs: split(candidate.ASNAllowed)},
+			Saas:           SaasConfig{AllowMonitors: candidate.AllowSaaSMonitors},
+			Wireguard:      WGConfig{Enabled: candidate.EnableWG, Port: candidate.WGPort, Subnet: candidate.WGSubnet},
+			Interfaces:     candidate.Interfaces,
+			Blocklists: BlocklistsConfig{
+				ListChoice: candidate.ListChoice, CustomURL: candidate.CustomURL, CustomURL6: candidate.CustomURLIPv6,
+				CustomHash: candidate.CustomHash, CustomHash6: candidate.CustomHashIPv6, UseSpamhaus: candidate.UseSpamhaus,
+			},
+		},
+		Security: SecurityConfig{
+			Honeyports: split(candidate.HoneyPorts),
+			L2:         L2Config{EnableL2: candidate.EnableL2, ARPProtect: candidate.ArpProtect, LanMode: candidate.LANMode},
+			Compliance: ComplianceConfig{CheckInterval: "24h"},
+		},
+		WAAP: WAAPConfig{
+			EnforcementMode: candidate.EnforcementMode, BruteforceLogs: candidate.BruteforceLogs,
+			BruteforceThreshold: threshold, BruteforceWindowSeconds: windowSeconds, ModsecLogs: candidate.ModsecLogs,
+		},
+		Integrations: IntegrationsConfig{
+			HA:        HAConfig{Enabled: candidate.HAEnabled, PeerIPs: split(candidate.HAPeerIP), PeerPort: mustLegacyInt(candidate.HAPeerPort), Token: candidate.HAToken},
+			SIEM:      SIEMConfig{Enabled: candidate.SiemEnabled, IP: candidate.SiemIP, Port: candidate.SiemPort, Protocol: candidate.SiemProto, TLSCA: candidate.SiemTLSCA},
+			AbuseIPDB: AbuseIPDBConfig{Enabled: candidate.EnableAbuse, APIKey: candidate.AbuseAPIKey},
+			Webhooks:  WebhooksConfig{Enabled: candidate.EnableWebhook, DiscordURL: candidate.WebhookURLDiscord, TeamsURL: candidate.WebhookURLTeams, SlackURL: candidate.WebhookURLSlack},
+			BunkerWeb: BunkerWebConfig{Enabled: candidate.BunkerWebEnabled},
+			Wazuh: WazuhConfig{
+				Enabled: candidate.EnableWazuh, IP: candidate.WazuhIP, Name: candidate.WazuhName, Group: candidate.WazuhGroup,
+				CommPort: candidate.WazuhCommPort, EnrollPort: candidate.WazuhEnrollPort,
+			},
+		},
+	}, nil
+}
+
+func mustLegacyInt(value string) int {
+	parsed, _ := strconv.Atoi(value)
+	return parsed
 }
 
 // normalizeHistoricalLegacyHA preserves the exact v4.02.8 default contract:

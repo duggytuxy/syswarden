@@ -42,13 +42,6 @@ $Targets = @(
         GOARCH = 'arm64'
         BuildMode = 'pie'
         OutputDir = Join-Path $DistDir 'linux-arm64/bin'
-    },
-    [PSCustomObject]@{
-        Name = 'FreeBSD AMD64'
-        GOOS = 'freebsd'
-        GOARCH = 'amd64'
-        BuildMode = $null
-        OutputDir = Join-Path $DistDir 'freebsd/bin'
     }
 )
 
@@ -190,9 +183,6 @@ function Assert-ExactDistInventory {
         'bin/syswarden-cli'
         'bin/syswarden-core'
         'bin/syswarden-tui'
-        'freebsd/bin/syswarden-cli'
-        'freebsd/bin/syswarden-core'
-        'freebsd/bin/syswarden-tui'
         'linux-arm64/bin/syswarden-cli'
         'linux-arm64/bin/syswarden-core'
         'linux-arm64/bin/syswarden-tui'
@@ -201,8 +191,6 @@ function Assert-ExactDistInventory {
     ) | Sort-Object
     $ExpectedDirectories = @(
         'bin'
-        'freebsd'
-        'freebsd/bin'
         'linux-arm64'
         'linux-arm64/bin'
     ) | Sort-Object
@@ -313,10 +301,10 @@ foreach ($Target in $Targets) {
     }
 }
 
-if ($VerifiedArtifactCount -ne 9) {
-    throw "Build verification expected 9 binaries but verified $VerifiedArtifactCount."
+if ($VerifiedArtifactCount -ne 6) {
+    throw "Build verification expected 6 binaries but verified $VerifiedArtifactCount."
 }
 
 Assert-ExactDistInventory
 
-Write-Host "[+] Build complete. Verified all $VerifiedArtifactCount native binaries and the exact 11-file distribution inventory." -ForegroundColor Green
+Write-Host "[+] Build complete. Verified all $VerifiedArtifactCount native binaries and the exact 8-file distribution inventory." -ForegroundColor Green

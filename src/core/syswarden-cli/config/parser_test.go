@@ -179,6 +179,17 @@ func TestLegacyHAAndTypedValidationMatchesModularFailClosedContract_SW_CFG_001(t
 			name:    "invalid BunkerWeb boolean",
 			content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_BUNKERWEB_ENABLED=automatic\n",
 		},
+		{name: "LAN subnet with host bits", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_LAN_SUBNETS=10.0.0.1/8\n"},
+		{name: "whitelist policy injection", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_WHITELIST_IPS='192.0.2.1;flush'\n"},
+		{name: "invalid country", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_GEO_CODES=BEL\n"},
+		{name: "negative ASN", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_ASN_LIST=AS-1\n"},
+		{name: "interface policy injection", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_INTERFACES='eth0;flush ruleset'\n"},
+		{name: "WireGuard subnet with host bits", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_ENABLE_WG=y\nSYSWARDEN_WG_SUBNET=10.66.66.1/24\n"},
+		{name: "relative log path", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_MODSEC_LOGS=../../etc/passwd\n"},
+		{name: "insecure custom blocklist URL", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_LIST_CHOICE=3\nSYSWARDEN_CUSTOM_URL=http://example.invalid/list\n"},
+		{name: "invalid custom blocklist digest", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_LIST_CHOICE=3\nSYSWARDEN_CUSTOM_URL=https://example.invalid/list\nSYSWARDEN_CUSTOM_HASH=abcd\n"},
+		{name: "invalid SIEM protocol", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_SIEM_ENABLED=y\nSYSWARDEN_SIEM_IP=192.0.2.10\nSYSWARDEN_SIEM_PORT=6514\nSYSWARDEN_SIEM_PROTO=exec\n"},
+		{name: "insecure webhook URL", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_ENABLE_WEBHOOK=y\nSYSWARDEN_WEBHOOK_URL_SLACK=http://example.invalid/hook\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

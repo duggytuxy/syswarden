@@ -8,27 +8,10 @@ import (
 	"testing"
 )
 
-func TestInstallRootForUsesNativePackagePrefixes_SW_PKG_001(t *testing.T) {
+func TestInstallRootUsesLinuxPackagePrefix_SW_PKG_001(t *testing.T) {
 	t.Parallel()
-	tests := map[string]string{
-		"linux":   "/opt/syswarden",
-		"freebsd": "/usr/local/syswarden",
-	}
-	for goos, want := range tests {
-		goos, want := goos, want
-		t.Run(goos, func(t *testing.T) {
-			t.Parallel()
-			if got := InstallRootFor(goos); got != want {
-				t.Fatalf("InstallRootFor(%q) = %q, want %q", goos, got, want)
-			}
-		})
-	}
-}
-
-func TestUnknownTargetKeepsLinuxCompatibility_SW_PKG_001(t *testing.T) {
-	t.Parallel()
-	if got := InstallRootFor("unknown"); got != "/opt/syswarden" {
-		t.Fatalf("InstallRootFor(unknown) = %q, want Linux-compatible prefix", got)
+	if got := InstallRoot(); got != "/opt/syswarden" {
+		t.Fatalf("InstallRoot() = %q, want Linux package prefix", got)
 	}
 }
 
@@ -60,17 +43,12 @@ func TestComplianceAuditUsesPackagedNativeCLI_SW_PKG_001(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	tests := map[string]string{
-		"compliance_default.go": `/opt/syswarden/bin/syswarden-cli`,
-		"compliance_freebsd.go": `/usr/local/syswarden/bin/syswarden-cli`,
+	content, err := root.ReadFile("compliance_default.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for filename, packagedCLI := range tests {
-		content, err := root.ReadFile(filename)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(content), packagedCLI) {
-			t.Fatalf("%s lacks packaged CLI path %q", filename, packagedCLI)
-		}
+	const packagedCLI = `/opt/syswarden/bin/syswarden-cli`
+	if !strings.Contains(string(content), packagedCLI) {
+		t.Fatalf("Linux compliance implementation lacks packaged CLI path %q", packagedCLI)
 	}
 }
