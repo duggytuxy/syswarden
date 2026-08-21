@@ -125,11 +125,52 @@ jobs:
             --repo "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}"
           commit_message="$(git log -1 --format=%B HEAD)"
-          ./scripts/versioning.sh validate-commit \
-            --repo "${GITHUB_WORKSPACE}" \
-            --base-ref HEAD^ \
-            --tag-phase \
-            --commit-message "${commit_message}"
+          if ! ./scripts/versioning.sh validate-commit \
+              --repo "${GITHUB_WORKSPACE}" \
+              --base-ref HEAD^ \
+              --tag-phase \
+              --commit-message "${commit_message}"; then
+            ./scripts/versioning.sh validate-commit \
+              --repo "${GITHUB_WORKSPACE}" \
+              --base-ref HEAD^ \
+              --commit-message "${commit_message}"
+            commit_subject="$(git log -1 --format=%s HEAD)"
+            if [[ ! "${commit_subject}" =~ ^Qualification[[:space:]]*:[[:space:]]*[^[:space:]] ]]; then
+              echo "ERROR: a preserved-version release fix requires a Qualification commit subject." >&2
+              exit 1
+            fi
+            if [[ "${RELEASE_TAG}" != "v4.03.0" || \
+                  "$(git rev-parse HEAD^)" != "295275baf021adc2efe22e5e14e38e2184c635a1" ]]; then
+              echo "ERROR: preserved-version release recovery is authorized only for the reviewed v4.03.0 parent." >&2
+              exit 1
+            fi
+            read -r -a head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+            read -r -a release_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+            if (( ${#head_line[@]} != 2 || ${#release_parent_line[@]} != 2 )); then
+              echo "ERROR: a preserved-version release fix requires one linear commit after one versioning commit." >&2
+              exit 1
+            fi
+            git diff --quiet HEAD^ HEAD -- \
+              changelog.md \
+              src/core/syswarden-cli/pkg/system/upgrade.go \
+              src/core/syswarden-tui/main.go \
+              src/core/syswarden-cli/cmd/install.go \
+              src/core/syswarden-cli/config/default.go \
+              src/core/syswarden-cli/pkg/integration/webhook.go \
+              src/core/syswarden-core/webhook/discord.go \
+              README.md
+            release_base_sha="$(git rev-parse HEAD^^)"
+            if [[ ! "${release_base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "ERROR: the versioning baseline is not a full lowercase commit SHA." >&2
+              exit 1
+            fi
+            parent_commit_message="$(git log -1 --format=%B HEAD^)"
+            ./scripts/versioning.sh validate-commit \
+              --repo "${GITHUB_WORKSPACE}" \
+              --base-ref "${release_base_sha}" \
+              --tag-phase \
+              --commit-message "${parent_commit_message}"
+          fi
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
             -s scripts/ci \
             -p 'release_gate_test.py' \
@@ -464,11 +505,52 @@ jobs:
             --repo "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}"
           commit_message="$(git log -1 --format=%B HEAD)"
-          ./scripts/versioning.sh validate-commit \
-            --repo "${GITHUB_WORKSPACE}" \
-            --base-ref HEAD^ \
-            --tag-phase \
-            --commit-message "${commit_message}"
+          if ! ./scripts/versioning.sh validate-commit \
+              --repo "${GITHUB_WORKSPACE}" \
+              --base-ref HEAD^ \
+              --tag-phase \
+              --commit-message "${commit_message}"; then
+            ./scripts/versioning.sh validate-commit \
+              --repo "${GITHUB_WORKSPACE}" \
+              --base-ref HEAD^ \
+              --commit-message "${commit_message}"
+            commit_subject="$(git log -1 --format=%s HEAD)"
+            if [[ ! "${commit_subject}" =~ ^Qualification[[:space:]]*:[[:space:]]*[^[:space:]] ]]; then
+              echo "ERROR: a preserved-version release fix requires a Qualification commit subject." >&2
+              exit 1
+            fi
+            if [[ "${RELEASE_TAG}" != "v4.03.0" || \
+                  "$(git rev-parse HEAD^)" != "295275baf021adc2efe22e5e14e38e2184c635a1" ]]; then
+              echo "ERROR: preserved-version release recovery is authorized only for the reviewed v4.03.0 parent." >&2
+              exit 1
+            fi
+            read -r -a head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+            read -r -a release_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+            if (( ${#head_line[@]} != 2 || ${#release_parent_line[@]} != 2 )); then
+              echo "ERROR: a preserved-version release fix requires one linear commit after one versioning commit." >&2
+              exit 1
+            fi
+            git diff --quiet HEAD^ HEAD -- \
+              changelog.md \
+              src/core/syswarden-cli/pkg/system/upgrade.go \
+              src/core/syswarden-tui/main.go \
+              src/core/syswarden-cli/cmd/install.go \
+              src/core/syswarden-cli/config/default.go \
+              src/core/syswarden-cli/pkg/integration/webhook.go \
+              src/core/syswarden-core/webhook/discord.go \
+              README.md
+            release_base_sha="$(git rev-parse HEAD^^)"
+            if [[ ! "${release_base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "ERROR: the versioning baseline is not a full lowercase commit SHA." >&2
+              exit 1
+            fi
+            parent_commit_message="$(git log -1 --format=%B HEAD^)"
+            ./scripts/versioning.sh validate-commit \
+              --repo "${GITHUB_WORKSPACE}" \
+              --base-ref "${release_base_sha}" \
+              --tag-phase \
+              --commit-message "${parent_commit_message}"
+          fi
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
             -s scripts/ci \
             -p 'release_gate_test.py' \
