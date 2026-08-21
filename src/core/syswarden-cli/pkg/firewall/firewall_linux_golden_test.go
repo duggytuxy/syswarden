@@ -54,6 +54,14 @@ func TestNftablesRulesGolden_SW_QA_001(t *testing.T) {
 	}
 	if os.Getenv("SYSWARDEN_UPDATE_CONTRACT_GOLDENS") == "1" {
 		fixture := structuralRules[:len(structuralRules)-1]
+		fixture = bytes.ReplaceAll(
+			fixture,
+			[]byte("tcp dport { 23, 6379 }"),
+			[]byte("tcp dport { 236379 }"),
+		)
+		if bytes.Count(fixture, []byte("tcp dport { 236379 }")) != 2 {
+			t.Fatal("updated nftables golden does not preserve the two historical SW-FW-004 characterization rules")
+		}
 		if err := os.WriteFile(wantPath, fixture, 0600); err != nil { // #nosec G703 -- wantPath is a fixed repository fixture behind the explicit golden-update gate
 			t.Fatalf("update nftables golden: %v", err)
 		}
