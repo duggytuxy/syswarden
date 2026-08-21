@@ -38,6 +38,20 @@ def workflow_step_script(workflow: str, step_name: str) -> str:
     return textwrap.dedent(step.split(run_marker, 1)[1])
 
 
+def workflow_step_scripts(workflow: str, step_name: str) -> list[str]:
+    marker = f"      - name: {step_name}\n"
+    scripts = []
+    for remainder in workflow.split(marker)[1:]:
+        step = remainder.split("\n      - name:", 1)[0]
+        run_marker = "        run: |\n"
+        if step.count(run_marker) != 1:
+            raise AssertionError(f"expected one shell body for workflow step {step_name}")
+        scripts.append(textwrap.dedent(step.split(run_marker, 1)[1]))
+    if not scripts:
+        raise AssertionError(f"workflow step {step_name} is missing")
+    return scripts
+
+
 def run_environment_gate(
     script: str,
     environment: dict[str, object],
@@ -690,21 +704,38 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual(workflow.count("jq -j '.body'"), 2)
         self.assertNotIn("jq -r '.body'", workflow)
 
-    def test_release_manager_bounds_preserved_version_fix_to_one_linear_commit(self) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[2]
-            / ".github"
-            / "workflows"
-            / "release-manager.yml"
-        ).read_text(encoding="utf-8")
+    def assert_preserved_version_recovery_contract(self, workflow: str) -> None:
+        scripts = workflow_step_scripts(
+            workflow, "Validate Tag, Source, Changelog, and Main Ancestry"
+        )
+        self.assertEqual(len(scripts), 2)
+        self.assertEqual(scripts[0], scripts[1])
         self.assertEqual(
             workflow.count("if ! ./scripts/versioning.sh validate-commit"), 2
         )
-        self.assertNotIn("--base-ref HEAD^^", workflow)
+        self.assertEqual(
+            workflow.count('if [[ "${RELEASE_TAG}" != "v4.03.0" ]]'), 2
+        )
+        self.assertEqual(
+            workflow.count('case "${current_parent_sha}" in'), 2
+        )
+        self.assertEqual(
+            workflow.count("295275baf021adc2efe22e5e14e38e2184c635a1)"), 2
+        )
+        self.assertEqual(
+            workflow.count("10af4a7b754e1007fa8167e8c5222ac183cb288a)"), 2
+        )
         self.assertEqual(
             workflow.count('release_base_sha="$(git rev-parse HEAD^^)"'), 2
         )
-        self.assertEqual(workflow.count('--base-ref "${release_base_sha}"'), 2)
+        self.assertEqual(
+            workflow.count('release_base_sha="$(git rev-parse HEAD^^^)"'), 2
+        )
+        self.assertEqual(workflow.count('--base-ref "${release_base_sha}"'), 4)
+        self.assertNotIn("--base-ref HEAD^^", workflow)
+        self.assertEqual(
+            workflow.count('--base-ref "${previous_fix_parent_sha}"'), 2
+        )
         self.assertEqual(
             workflow.count(
                 "a preserved-version release fix requires a Qualification "
@@ -712,26 +743,43 @@ class ReleaseGateTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertEqual(workflow.count('"${RELEASE_TAG}" != "v4.03.0"'), 2)
         self.assertEqual(
             workflow.count(
-                '"$(git rev-parse HEAD^)" != '
+                "second_fix_subject_pattern='^Qualification : isolate nft "
+                "golden helper TMPDIR \\(#[1-9][0-9]*\\)$'"
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                '[[ ! "${commit_subject}" =~ ${second_fix_subject_pattern} ]]'
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                'previous_fix_parent_sha="$(git rev-parse HEAD^^)"'
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                '"${previous_fix_parent_sha}" != '
                 '"295275baf021adc2efe22e5e14e38e2184c635a1"'
             ),
             2,
         )
         self.assertEqual(
+            workflow.count("git rev-list --parents -n 1 HEAD)"), 4
+        )
+        self.assertEqual(
+            workflow.count("git rev-list --parents -n 1 HEAD^)"), 4
+        )
+        self.assertEqual(
             workflow.count(
-                "preserved-version release recovery is authorized only for "
-                "the reviewed v4.03.0 parent"
+                'previous_fix_line <<< "$(git rev-list --parents -n 1 HEAD^)"'
             ),
             2,
-        )
-        self.assertEqual(
-            workflow.count("git rev-list --parents -n 1 HEAD)"), 2
-        )
-        self.assertEqual(
-            workflow.count("git rev-list --parents -n 1 HEAD^)"), 2
         )
         self.assertEqual(
             workflow.count(
@@ -740,11 +788,236 @@ class ReleaseGateTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertEqual(workflow.count("git diff --quiet HEAD^ HEAD --"), 2)
+        self.assertEqual(workflow.count("git diff --quiet HEAD^ HEAD --"), 4)
         self.assertEqual(
             workflow.count('parent_commit_message="$(git log -1 --format=%B HEAD^)"'),
             2,
         )
+        self.assertEqual(
+            workflow.count('previous_fix_message="$(git log -1 --format=%B HEAD^)"'),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                'versioning_commit_message="$(git log -1 --format=%B HEAD^^)"'
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                '"${release_base_sha}" != '
+                '"dfb8dfcf52bd1f82dcd2cd3b311119f01270af1e"'
+            ),
+            2,
+        )
+        for script in scripts:
+            self.assertEqual(script.count("--tag-phase"), 3)
+            self.assertEqual(script.count("./scripts/versioning.sh validate-commit"), 5)
+            self.assertEqual(
+                script.count("# BEGIN exact second preserved-version fix diff contract"),
+                1,
+            )
+            self.assertEqual(
+                script.count("# END exact second preserved-version fix diff contract"),
+                1,
+            )
+            self.assertEqual(
+                script.count(
+                    "git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD"
+                ),
+                1,
+            )
+            self.assertEqual(script.count('for tree_ref in HEAD^ HEAD; do'), 1)
+            self.assertEqual(
+                script.count('tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'),
+                1,
+            )
+            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 1)
+            self.assertEqual(script.count('"${tree_type}" != "blob"'), 1)
+            for path in (
+                ".github/workflows/release-manager.yml",
+                "scripts/ci/release_gate_test.py",
+                "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go",
+            ):
+                self.assertEqual(script.count(f'"{path}"'), 2)
+
+    def exact_second_fix_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        script = workflow_step_scripts(
+            workflow, "Validate Tag, Source, Changelog, and Main Ancestry"
+        )[0]
+        begin = "# BEGIN exact second preserved-version fix diff contract\n"
+        end = "# END exact second preserved-version fix diff contract"
+        self.assertEqual(script.count(begin), 1)
+        self.assertEqual(script.count(end), 1)
+        return "set -euo pipefail\n" + script.split(begin, 1)[1].split(end, 1)[0]
+
+    def second_fix_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        script = workflow_step_scripts(
+            workflow, "Validate Tag, Source, Changelog, and Main Ancestry"
+        )[0]
+        start = "second_fix_subject_pattern="
+        end = 'previous_fix_parent_sha="$(git rev-parse HEAD^^)"'
+        self.assertEqual(script.count(start), 1)
+        self.assertEqual(script.count(end), 1)
+        fragment = start + script.split(start, 1)[1].split(end, 1)[0]
+        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+
+    def make_second_fix_diff_repository(self, name: str, mutation: str | None) -> Path:
+        repository = self.root / name
+        repository.mkdir()
+        subprocess.run(["git", "init", "-q", repository], check=True)
+        subprocess.run(
+            ["git", "-C", repository, "config", "user.name", "Release Gate Test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", repository, "config", "user.email", "release-gate@example.invalid"],
+            check=True,
+        )
+        paths = [
+            repository / ".github/workflows/release-manager.yml",
+            repository / "scripts/ci/release_gate_test.py",
+            repository
+            / "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go",
+        ]
+        for path in paths:
+            self.write_file(path, b"reviewed parent\n")
+        subprocess.run(["git", "-C", repository, "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", repository, "commit", "-q", "-m", "reviewed parent"],
+            check=True,
+        )
+        for path in paths:
+            path.write_bytes(b"reviewed follow-up\n")
+        if mutation == "extra file":
+            self.write_file(repository / "unauthorized.txt", b"unexpected\n")
+        elif mutation == "mode":
+            paths[0].chmod(0o755)
+        elif mutation == "symlink":
+            paths[1].unlink()
+            paths[1].symlink_to("unauthorized-target")
+        elif mutation == "rename":
+            paths[2].rename(paths[2].with_name("renamed_golden_test.go"))
+        subprocess.run(["git", "-C", repository, "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", repository, "commit", "-q", "-m", "reviewed fix"],
+            check=True,
+        )
+        return repository
+
+    def test_release_manager_bounds_two_preserved_version_fixes_to_exact_chain(
+        self,
+    ) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        self.assert_preserved_version_recovery_contract(workflow)
+
+    def test_release_manager_second_followup_contract_rejects_mutations(self) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        mutations = {
+            "release tag": workflow.replace('"v4.03.0" ]]', '"v4.03.1" ]]'),
+            "exact parent": workflow.replace(
+                "10af4a7b754e1007fa8167e8c5222ac183cb288a)",
+                "20af4a7b754e1007fa8167e8c5222ac183cb288a)",
+            ),
+            "canonical subject": workflow.replace(
+                "Qualification : isolate nft golden helper TMPDIR",
+                "Qualification : arbitrary follow-up",
+            ),
+            "linear history": workflow.replace(
+                'previous_fix_line <<< "$(git rev-list --parents -n 1 HEAD^)"',
+                'previous_fix_line <<< "$(git rev-list --parents -n 1 HEAD^^)"',
+            ),
+            "byte identity": workflow.replace(
+                "git diff --quiet HEAD^ HEAD --", "git diff --quiet HEAD^^ HEAD --"
+            ),
+            "ordinary prior fix": workflow.replace(
+                '--base-ref "${previous_fix_parent_sha}"',
+                '--base-ref "${release_base_sha}"',
+            ),
+            "original bump": workflow.replace(
+                'versioning_commit_message="$(git log -1 --format=%B HEAD^^)"',
+                'versioning_commit_message="$(git log -1 --format=%B HEAD^)"',
+            ),
+            "pinned bump parent": workflow.replace(
+                "dfb8dfcf52bd1f82dcd2cd3b311119f01270af1e",
+                "efb8dfcf52bd1f82dcd2cd3b311119f01270af1e",
+            ),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self.assert_preserved_version_recovery_contract(mutation)
+
+    def test_release_manager_second_followup_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        script = self.second_fix_subject_gate_script()
+        cases = {
+            "valid": ("Qualification : isolate nft golden helper TMPDIR (#91)", True),
+            "bare": ("Qualification : isolate nft golden helper TMPDIR", False),
+            "zero": ("Qualification : isolate nft golden helper TMPDIR (#0)", False),
+            "non-numeric": (
+                "Qualification : isolate nft golden helper TMPDIR (#PR)",
+                False,
+            ),
+            "numeric prefix with suffix": (
+                "Qualification : isolate nft golden helper TMPDIR (#91a)",
+                False,
+            ),
+            "double space": (
+                "Qualification : isolate nft golden helper TMPDIR  (#91)",
+                False,
+            ),
+            "trailing space": (
+                "Qualification : isolate nft golden helper TMPDIR (#91) ",
+                False,
+            ),
+            "leading zero": (
+                "Qualification : isolate nft golden helper TMPDIR (#091)",
+                False,
+            ),
+            "extra text": (
+                "Qualification : isolate nft golden helper TMPDIR (#91) extra",
+                False,
+            ),
+        }
+        for name, (subject, accepted) in cases.items():
+            with self.subTest(name=name):
+                environment = dict(os.environ)
+                environment["COMMIT_SUBJECT"] = subject
+                result = subprocess.run(
+                    ["/bin/bash", "-c", script],
+                    cwd=REPOSITORY,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
+    def test_release_manager_exact_fix_diff_gate_rejects_git_shape_mutations(
+        self,
+    ) -> None:
+        script = self.exact_second_fix_diff_script()
+        for index, mutation in enumerate((None, "extra file", "mode", "symlink", "rename")):
+            with self.subTest(mutation=mutation or "exact"):
+                repository = self.make_second_fix_diff_repository(
+                    f"fix-diff-{index}", mutation
+                )
+                result = subprocess.run(
+                    ["/bin/bash", "-c", script],
+                    cwd=repository,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if mutation is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_qualification_signer_compiles_before_protected_secret_exposure(self) -> None:
         workflow = (
