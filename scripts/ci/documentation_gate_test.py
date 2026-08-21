@@ -16,7 +16,7 @@ import release_gate
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REPORT = REPO_ROOT / "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.0.md"
+REPORT = REPO_ROOT / "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.1.md"
 ARCHIVE_DIGEST = "a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5"
 
 
@@ -27,12 +27,12 @@ class DocumentationGateTest(unittest.TestCase):
         self.assertEqual([record.path for record in records], ["README.md"])
 
     def test_current_version_and_candidate_status_are_explicit(self) -> None:
-        self.assertEqual(documentation_gate.source_version(REPO_ROOT), "v4.03.0")
+        self.assertEqual(documentation_gate.source_version(REPO_ROOT), "v4.03.1")
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
         report = REPORT.read_text(encoding="utf-8")
-        self.assertIn("Current source version: **v4.03.0**.", readme)
-        self.assertIn("does not claim that v4.03.0 is qualified", readme)
+        self.assertIn("Current source version: **v4.03.1**.", readme)
+        self.assertIn("does not claim that v4.03.1 is qualified", readme)
         self.assertIn(
             "does not authorize a tag or publication",
             documentation_gate.normalized(changelog),
@@ -43,7 +43,8 @@ class DocumentationGateTest(unittest.TestCase):
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
         pointer = f"Archived pre-v4.03.0 changelog SHA-256: {ARCHIVE_DIGEST}"
         self.assertTrue(changelog.endswith("\n---\n" + pointer + "\n"))
-        self.assertEqual(changelog.count("\n---\n"), 1)
+        self.assertEqual(changelog.count(pointer), 1)
+        self.assertEqual(changelog.count("\n---\n" + pointer + "\n"), 1)
 
     def test_current_public_report_inventory_is_exact(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
@@ -63,15 +64,15 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                "v4.03.0",
+                "v4.03.1",
             ),
             [],
         )
 
     def test_public_release_contract_is_six_packages_and_thirteen_assets(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
-        expected_packages = release_gate.package_names("4.03.0")
-        expected_assets = release_gate.expected_release_assets("v4.03.0")
+        expected_packages = release_gate.package_names("4.03.1")
+        expected_assets = release_gate.expected_release_assets("v4.03.1")
         self.assertEqual(len(expected_packages), 6)
         self.assertEqual(len(expected_assets), 13)
         self.assertEqual(
@@ -105,7 +106,7 @@ class DocumentationGateTest(unittest.TestCase):
             documentation_gate.cobra_commands(REPO_ROOT),
             documentation_gate.config_schema(REPO_ROOT),
             changed["forbidden_phrases"],
-            "v4.03.0",
+            "v4.03.1",
         )
         self.assertTrue(any("exact release gate" in error for error in errors))
 
@@ -170,7 +171,7 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                "v4.03.0",
+                "v4.03.1",
             )
         self.assertTrue(any("retired platform" in error for error in errors))
 
@@ -355,6 +356,8 @@ class DocumentationGateTest(unittest.TestCase):
                     if attribute.rsplit("}", 1)[-1].casefold() in {"href", "src"}:
                         self.assertNotIn(":", value)
             self.assertIn("Linux", text)
+            if name == "syswarden_architecture.svg":
+                self.assertIn("SysWarden v4.03.1 candidate architecture", text)
 
     def test_source_assertions_remain_bound_to_runtime(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
@@ -377,7 +380,7 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 [],
-                "v4.03.0",
+                "v4.03.1",
                 None,
             )
         self.assertTrue(any("unclosed Markdown fence" in error for error in errors))

@@ -846,7 +846,7 @@ def validate_active_public_surfaces(
             errors.extend(require_phrases(report, required, version, report_relative))
 
         expected_assets = report_contract.get("expected_assets")
-        release_assets = release_gate.expected_release_assets("v4.03.0")
+        release_assets = release_gate.expected_release_assets(version)
         if not isinstance(expected_assets, list) or not all(
             isinstance(asset, str) and asset for asset in expected_assets
         ):
@@ -922,9 +922,10 @@ def validate_active_public_surfaces(
 
     package_count = surface.get("package_count")
     asset_count = surface.get("public_asset_count")
-    if package_count != 6 or len(release_gate.package_names("4.03.0")) != 6:
+    release_version = version.removeprefix("v")
+    if package_count != 6 or len(release_gate.package_names(release_version)) != 6:
         errors.append("active surface package count must equal the six-package release gate")
-    if asset_count != 13 or len(release_gate.expected_release_assets("v4.03.0")) != 13:
+    if asset_count != 13 or len(release_gate.expected_release_assets(version)) != 13:
         errors.append("active surface asset count must equal the thirteen-asset release gate")
     return errors
 

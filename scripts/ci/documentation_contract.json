@@ -48,9 +48,9 @@
   ],
   "required_readme_phrases": [
     "Current source version: **{version}**.",
-    "Target candidate: **v4.03.0**.",
+    "Target candidate: **v4.03.1**.",
     "The package workflow is configured to generate two DEB, two RPM and two APK packages plus `SHA256SUMS.txt`.",
-    "A qualified v4.03.0 Release contains exactly thirteen public assets:",
+    "A qualified v4.03.1 Release contains exactly thirteen public assets:",
     "The TUI reads local telemetry and HA status. It runs inside the invoking terminal and opens no listening socket.",
     "SysWarden owns no listener and no generated firewall permission on TCP 62027.",
     "`DELETE {{\"bans\": [...]}}` removes provenance ledger entries only",
@@ -110,7 +110,7 @@
       "stream": "stdout",
       "reason": "Advance the minor version while preserving the bounded built-in operator reference.",
       "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
-      "after": "SYSWARDEN v4.03.0 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+      "after": "SYSWARDEN v4.03.1 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
     },
     {
       "case": "help:syswarden",
@@ -628,32 +628,32 @@
         "rows": [
           [
             "Debian or Ubuntu amd64",
-            "`syswarden_4.03.0_amd64.deb`",
+            "`syswarden_4.03.1_amd64.deb`",
             "Native install, upgrade, restart, removal and rollback lifecycle"
           ],
           [
             "Debian or Ubuntu arm64",
-            "`syswarden_4.03.0_arm64.deb`",
+            "`syswarden_4.03.1_arm64.deb`",
             "Native ARM64 lifecycle on the exact candidate package"
           ],
           [
             "RHEL-family x86_64",
-            "`syswarden-4.03.0-1.x86_64.rpm`",
+            "`syswarden-4.03.1-1.x86_64.rpm`",
             "Native install, upgrade, restart, removal and rollback lifecycle"
           ],
           [
             "RHEL-family aarch64",
-            "`syswarden-4.03.0-1.aarch64.rpm`",
+            "`syswarden-4.03.1-1.aarch64.rpm`",
             "Native ARM64 lifecycle on the exact candidate package"
           ],
           [
             "Alpine x86_64",
-            "`syswarden_4.03.0_x86_64.apk`",
+            "`syswarden_4.03.1_x86_64.apk`",
             "Native OpenRC lifecycle with the dedicated CGO-free executable"
           ],
           [
             "Alpine aarch64",
-            "`syswarden_4.03.0_aarch64.apk`",
+            "`syswarden_4.03.1_aarch64.apk`",
             "Native ARM64 OpenRC lifecycle with the dedicated CGO-free executable"
           ]
         ]
@@ -661,9 +661,9 @@
     }
   },
   "public_report_contract": {
-    "path": "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.0.md",
+    "path": "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.1.md",
     "required_phrases": [
-      "| Candidate | v4.03.0 |",
+      "| Candidate | v4.03.1 |",
       "| Distribution boundary | Linux packages only |",
       "| Public package count | 6 |",
       "| Public release asset count | 13 |",
@@ -689,15 +689,15 @@
       "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars",
       "SSH/HA port separation while WireGuard is enabled.",
       "Written partner freeze confirmation was received on 20 August 2026",
-      "The v4.03.0 candidate remains NO-GO"
+      "The v4.03.1 candidate remains NO-GO"
     ],
     "expected_assets": [
-      "syswarden_4.03.0_amd64.deb",
-      "syswarden_4.03.0_arm64.deb",
-      "syswarden-4.03.0-1.x86_64.rpm",
-      "syswarden-4.03.0-1.aarch64.rpm",
-      "syswarden_4.03.0_x86_64.apk",
-      "syswarden_4.03.0_aarch64.apk",
+      "syswarden_4.03.1_amd64.deb",
+      "syswarden_4.03.1_arm64.deb",
+      "syswarden-4.03.1-1.x86_64.rpm",
+      "syswarden-4.03.1-1.aarch64.rpm",
+      "syswarden_4.03.1_x86_64.apk",
+      "syswarden_4.03.1_aarch64.apk",
       "SHA256SUMS.txt",
       "RELEASE_SHA256SUMS.txt",
       "syswarden-release.tar.gz",
@@ -716,7 +716,7 @@
     "documents": [
       "README.md",
       "changelog.md",
-      "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.0.md",
+      "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.1.md",
       "assets/syswarden_hero.svg",
       "assets/syswarden_architecture.svg"
     ],

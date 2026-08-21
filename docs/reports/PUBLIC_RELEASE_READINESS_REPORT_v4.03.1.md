@@ -1,23 +1,23 @@
-# SysWarden v4.03.0 Public Release Readiness Report
+# SysWarden v4.03.1 Public Release Readiness Report
 
 ## Document status
 
 | Field | Value |
 |---|---|
-| Candidate | v4.03.0 |
+| Candidate | v4.03.1 |
 | Distribution boundary | Linux packages only |
 | Public package count | 6 |
 | Public release asset count | 13 |
 | Decision | NO-GO until protected qualification passes on the exact merged SHA |
 | Scope | Source, package, firewall, HA migration, documentation and release governance |
 
-This report describes the intended v4.03.0 candidate contract. It is not a
+This report describes the intended v4.03.1 candidate contract. It is not a
 release authorization, does not assert that final qualification has passed and
 does not authorize a tag or public Release.
 
 ## Executive summary
 
-v4.03.0 narrows the supported distribution surface to six Linux packages,
+v4.03.1 narrows the supported distribution surface to six Linux packages,
 removes the network-facing browser terminal while retaining the native local
 TUI, and introduces a verifiable HA migration fence for the BunkerWeb partner
 handoff from historical static ownership to provenance-aware ownership.
@@ -31,26 +31,26 @@ the immutable thirteen-asset publisher.
 
 | Package family | Architecture | Expected asset |
 |---|---|---|
-| DEB | amd64 | `syswarden_4.03.0_amd64.deb` |
-| DEB | arm64 | `syswarden_4.03.0_arm64.deb` |
-| RPM | x86_64 | `syswarden-4.03.0-1.x86_64.rpm` |
-| RPM | aarch64 | `syswarden-4.03.0-1.aarch64.rpm` |
-| APK | x86_64 | `syswarden_4.03.0_x86_64.apk` |
-| APK | aarch64 | `syswarden_4.03.0_aarch64.apk` |
+| DEB | amd64 | `syswarden_4.03.1_amd64.deb` |
+| DEB | arm64 | `syswarden_4.03.1_arm64.deb` |
+| RPM | x86_64 | `syswarden-4.03.1-1.x86_64.rpm` |
+| RPM | aarch64 | `syswarden-4.03.1-1.aarch64.rpm` |
+| APK | x86_64 | `syswarden_4.03.1_x86_64.apk` |
+| APK | aarch64 | `syswarden_4.03.1_aarch64.apk` |
 
 No current package or updater route exists outside this matrix. ARM64 package
 qualification runs on a native ARM64 runner rather than through emulation.
 
 ## Exact public release inventory
 
-A qualified v4.03.0 Release must contain exactly these thirteen assets:
+A qualified v4.03.1 Release must contain exactly these thirteen assets:
 
-1. `syswarden_4.03.0_amd64.deb`
-2. `syswarden_4.03.0_arm64.deb`
-3. `syswarden-4.03.0-1.x86_64.rpm`
-4. `syswarden-4.03.0-1.aarch64.rpm`
-5. `syswarden_4.03.0_x86_64.apk`
-6. `syswarden_4.03.0_aarch64.apk`
+1. `syswarden_4.03.1_amd64.deb`
+2. `syswarden_4.03.1_arm64.deb`
+3. `syswarden-4.03.1-1.x86_64.rpm`
+4. `syswarden-4.03.1-1.aarch64.rpm`
+5. `syswarden_4.03.1_x86_64.apk`
+6. `syswarden_4.03.1_aarch64.apk`
 7. `SHA256SUMS.txt`
 8. `RELEASE_SHA256SUMS.txt`
 9. `syswarden-release.tar.gz`
@@ -224,7 +224,7 @@ Written partner freeze confirmation was received on 20 August 2026. This
 closes the written partner-confirmation gate only; the technical residue-free
 migration evidence remains pending.
 
-The v4.03.0 candidate remains NO-GO until all required gates pass on the exact
+The v4.03.1 candidate remains NO-GO until all required gates pass on the exact
 merged commit, no unexplained partner-attributable static residue remains, and
 the publisher verifies exactly thirteen public assets. Only then may the
 maintainer authorize the immutable tag and public Release.

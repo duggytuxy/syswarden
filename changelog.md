@@ -1,3 +1,43 @@
+# Release v4.03.1
+
+> Release status: v4.03.1 supersedes the unpublished v4.03.0 candidate. The
+> signed v4.03.0 tag remains immutable and was not moved or published.
+
+### RELEASE RECOVERY
+
+- **Unpublished v4.03.0:** The v4.03.0 publisher stopped before asset staging
+  or publication. Its byte-exact gate correctly rejected DEB, RPM and APK
+  archives rebuilt from the same commit because their build timestamps, build
+  host data and archive metadata were not reproducible.
+- **Reproducible packages:** Generate the six Linux packages from a deterministic
+  release epoch with normalized package metadata so independent qualification
+  and signed-tag builds produce the same bytes.
+- **Fail-closed publication:** Keep the exact pre-tag-to-tag byte comparison.
+  v4.03.1 fixes package production rather than weakening the release gate or
+  accepting payload-only equivalence.
+
+### INCLUDED PRODUCT SCOPE
+
+- **Complete candidate content:** Carry forward the complete intended v4.03.0
+  product and security scope into v4.03.1. This includes the Linux-only DEB,
+  RPM and APK matrix, removal of the network-facing browser terminal, the local
+  terminal dashboard, HA migration fencing, challenge-bound attestations and
+  strict partner cleanup conditions.
+- **Configuration and lists:** Retain read-only modular configuration
+  validation, transactional migration, authoritative SaaS monitor settings,
+  canonical persistent lists and typed WAAP log inputs.
+- **Security hardening:** Retain owner-only fence state, race-safe conditional
+  cleanup, fail-closed list application, bounded feed publication and
+  destination-specific configuration encoding.
+
+### RELEASE GATE
+
+- v4.03.1 still requires a fresh protected qualification and signed-tag gate on
+  one immutable commit. Publication remains limited to the exact six packages
+  and thirteen public assets only after every existing release check passes.
+
+---
+
 # Release v4.03.0
 
 > Candidate status: this block describes the intended v4.03.0 release. It does not authorize a tag or publication. The exact merged commit must pass every protected qualification and release-governance gate first.
