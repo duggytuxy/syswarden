@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	actContainerIsolationEnvironment = "SYSWARDEN_ACT_CONTAINER_ISOLATION"
-	actContainerIsolationMarker      = "security-audit-v1"
-	linuxFirewallHelperEnvironment   = "SYSWARDEN_LINUX_FIREWALL_GOLDEN_HELPER"
-	linuxFirewallTargetDirectory     = "/etc/syswarden"
-	linuxFirewallTargetFile          = "/etc/syswarden/syswarden.nft"
+	actContainerIsolationEnvironment   = "SYSWARDEN_ACT_CONTAINER_ISOLATION"
+	actContainerIsolationMarker        = "security-audit-v1"
+	bubblewrapTempDirHelperEnvironment = "SYSWARDEN_BUBBLEWRAP_TMPDIR_HELPER"
+	linuxFirewallHelperEnvironment     = "SYSWARDEN_LINUX_FIREWALL_GOLDEN_HELPER"
+	linuxFirewallTargetDirectory       = "/etc/syswarden"
+	linuxFirewallTargetFile            = "/etc/syswarden/syswarden.nft"
 )
 
 func TestNftablesRulesGolden_SW_QA_001(t *testing.T) {
@@ -102,15 +103,7 @@ func runBubblewrapFirewallGolden(t *testing.T) []byte {
 
 	command := exec.Command( // #nosec G204 G702 -- bwrap is resolved by LookPath and every command argument is a controlled test fixture
 		bwrap,
-		"--ro-bind", "/", "/",
-		"--dev", "/dev",
-		"--bind", etcDir, "/etc",
-		"--tmpfs", "/tmp",
-		"--ro-bind", os.Args[0], "/tmp/syswarden-firewall.test",
-		"--ro-bind", toolDir, "/tmp/test-tools",
-		"--setenv", "PATH", "/tmp/test-tools",
-		"--setenv", linuxFirewallHelperEnvironment, "1",
-		"--", "/tmp/syswarden-firewall.test", "-test.run=^TestNftablesRulesGolden_SW_QA_001$",
+		bubblewrapFirewallGoldenArguments(etcDir, toolDir)...,
 	)
 	if output, err := command.CombinedOutput(); err != nil {
 		requireOrSkipFirewallSandbox(t, string(output))
@@ -123,6 +116,87 @@ func runBubblewrapFirewallGolden(t *testing.T) []byte {
 		t.Fatalf("read isolated nftables output: %v", err)
 	}
 	return got
+}
+
+func bubblewrapFirewallGoldenArguments(etcDir, toolDir string) []string {
+	return bubblewrapFirewallHelperArguments(
+		etcDir,
+		toolDir,
+		linuxFirewallHelperEnvironment,
+		"^TestNftablesRulesGolden_SW_QA_001$",
+	)
+}
+
+func bubblewrapFirewallHelperArguments(etcDir, toolDir, helperEnvironment, testPattern string) []string {
+	// TestMain runs again in the helper. Keep its temporary state in the private
+	// writable tmpfs instead of an inherited runner path under the read-only root.
+	return []string{
+		"--ro-bind", "/", "/",
+		"--dev", "/dev",
+		"--bind", etcDir, "/etc",
+		"--tmpfs", "/tmp",
+		"--ro-bind", os.Args[0], "/tmp/syswarden-firewall.test",
+		"--ro-bind", toolDir, "/tmp/test-tools",
+		"--setenv", "TMPDIR", "/tmp",
+		"--setenv", "GOTMPDIR", "/tmp",
+		"--setenv", "PATH", "/tmp/test-tools",
+		"--setenv", helperEnvironment, "1",
+		"--", "/tmp/syswarden-firewall.test", "-test.run=" + testPattern,
+	}
+}
+
+func TestBubblewrapFirewallGoldenTemporaryDirectoryContract_SW_QA_001(t *testing.T) {
+	if os.Getenv(bubblewrapTempDirHelperEnvironment) == "1" {
+		if got := os.Getenv("TMPDIR"); got != "/tmp" {
+			t.Fatalf("bubblewrap helper TMPDIR = %q, want /tmp", got)
+		}
+		if got := os.Getenv("GOTMPDIR"); got != "/tmp" {
+			t.Fatalf("bubblewrap helper GOTMPDIR = %q, want /tmp", got)
+		}
+		writeProbe := func(directory string) {
+			t.Helper()
+			path := filepath.Join(directory, "write-probe")
+			if err := os.WriteFile(path, []byte("ok\n"), 0600); err != nil {
+				t.Fatalf("write bubblewrap temporary-directory probe: %v", err)
+			}
+		}
+		writeProbe(t.TempDir())
+		directory, err := os.MkdirTemp("", "syswarden-bubblewrap-mkdir-")
+		if err != nil {
+			t.Fatalf("create bubblewrap temporary directory: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(directory) })
+		writeProbe(directory)
+		return
+	}
+
+	bwrap, err := exec.LookPath("bwrap")
+	if err != nil {
+		t.Fatalf("bubblewrap temporary-directory regression test requires bwrap: %v", err)
+	}
+	root := t.TempDir()
+	etcDir := filepath.Join(root, "etc")
+	toolDir := filepath.Join(root, "tools")
+	if err := os.MkdirAll(etcDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(toolDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", "/proc/sys")
+	t.Setenv("GOTMPDIR", "/sys")
+	command := exec.Command( // #nosec G204 G702 -- bwrap is resolved by LookPath and every command argument is a controlled test fixture
+		bwrap,
+		bubblewrapFirewallHelperArguments(
+			etcDir,
+			toolDir,
+			bubblewrapTempDirHelperEnvironment,
+			"^TestBubblewrapFirewallGoldenTemporaryDirectoryContract_SW_QA_001$",
+		)...,
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("bubblewrap temporary-directory regression helper failed: %v\n%s", err, string(output))
+	}
 }
 
 func runActContainerFirewallGolden(t *testing.T) []byte {
