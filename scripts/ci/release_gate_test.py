@@ -745,8 +745,14 @@ class ReleaseGateTests(unittest.TestCase):
         )
         self.assertEqual(
             workflow.count(
-                '"${commit_subject}" != '
-                '"Qualification : isolate nft golden helper TMPDIR"'
+                "second_fix_subject_pattern='^Qualification : isolate nft "
+                "golden helper TMPDIR \\(#[1-9][0-9]*\\)$'"
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                '[[ ! "${commit_subject}" =~ ${second_fix_subject_pattern} ]]'
             ),
             2,
         )
@@ -846,6 +852,18 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual(script.count(end), 1)
         return "set -euo pipefail\n" + script.split(begin, 1)[1].split(end, 1)[0]
 
+    def second_fix_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        script = workflow_step_scripts(
+            workflow, "Validate Tag, Source, Changelog, and Main Ancestry"
+        )[0]
+        start = "second_fix_subject_pattern="
+        end = 'previous_fix_parent_sha="$(git rev-parse HEAD^^)"'
+        self.assertEqual(script.count(start), 1)
+        self.assertEqual(script.count(end), 1)
+        fragment = start + script.split(start, 1)[1].split(end, 1)[0]
+        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+
     def make_second_fix_diff_repository(self, name: str, mutation: str | None) -> Path:
         repository = self.root / name
         repository.mkdir()
@@ -930,6 +948,54 @@ class ReleaseGateTests(unittest.TestCase):
         for name, mutation in mutations.items():
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 self.assert_preserved_version_recovery_contract(mutation)
+
+    def test_release_manager_second_followup_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        script = self.second_fix_subject_gate_script()
+        cases = {
+            "valid": ("Qualification : isolate nft golden helper TMPDIR (#91)", True),
+            "bare": ("Qualification : isolate nft golden helper TMPDIR", False),
+            "zero": ("Qualification : isolate nft golden helper TMPDIR (#0)", False),
+            "non-numeric": (
+                "Qualification : isolate nft golden helper TMPDIR (#PR)",
+                False,
+            ),
+            "numeric prefix with suffix": (
+                "Qualification : isolate nft golden helper TMPDIR (#91a)",
+                False,
+            ),
+            "double space": (
+                "Qualification : isolate nft golden helper TMPDIR  (#91)",
+                False,
+            ),
+            "trailing space": (
+                "Qualification : isolate nft golden helper TMPDIR (#91) ",
+                False,
+            ),
+            "leading zero": (
+                "Qualification : isolate nft golden helper TMPDIR (#091)",
+                False,
+            ),
+            "extra text": (
+                "Qualification : isolate nft golden helper TMPDIR (#91) extra",
+                False,
+            ),
+        }
+        for name, (subject, accepted) in cases.items():
+            with self.subTest(name=name):
+                environment = dict(os.environ)
+                environment["COMMIT_SUBJECT"] = subject
+                result = subprocess.run(
+                    ["/bin/bash", "-c", script],
+                    cwd=REPOSITORY,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
 
     def test_release_manager_exact_fix_diff_gate_rejects_git_shape_mutations(
         self,
