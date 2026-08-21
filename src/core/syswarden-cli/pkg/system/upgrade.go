@@ -13,10 +13,11 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"syswarden-cli/config"
 	"time"
 )
 
-var Version = "v4.02.14"
+var Version = "v4.03.0"
 
 const (
 	latestReleaseAPI             = "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
@@ -58,6 +59,7 @@ type updater struct {
 	metadataTimeout time.Duration
 	packageTimeout  time.Duration
 	installTimeout  time.Duration
+	retireWebTUI    func() error
 }
 
 func productionHTTPClient() *http.Client {
@@ -106,14 +108,8 @@ func runExternalCommand(ctx context.Context, name string, args ...string) error 
 		cmd = exec.CommandContext(ctx, "/sbin/apk")
 	case "/usr/sbin/apk":
 		cmd = exec.CommandContext(ctx, "/usr/sbin/apk")
-	case "/usr/sbin/pkg":
-		cmd = exec.CommandContext(ctx, "/usr/sbin/pkg")
-	case "/usr/local/sbin/pkg":
-		cmd = exec.CommandContext(ctx, "/usr/local/sbin/pkg")
 	case "/opt/syswarden/bin/syswarden-cli":
 		cmd = exec.CommandContext(ctx, "/opt/syswarden/bin/syswarden-cli")
-	case "/usr/local/syswarden/bin/syswarden-cli":
-		cmd = exec.CommandContext(ctx, "/usr/local/syswarden/bin/syswarden-cli")
 	case "/sbin/rc-service":
 		cmd = exec.CommandContext(ctx, "/sbin/rc-service")
 	case "/usr/sbin/rc-service":
@@ -122,8 +118,6 @@ func runExternalCommand(ctx context.Context, name string, args ...string) error 
 		cmd = exec.CommandContext(ctx, "/bin/systemctl")
 	case "/usr/bin/systemctl":
 		cmd = exec.CommandContext(ctx, "/usr/bin/systemctl")
-	case "/usr/sbin/service":
-		cmd = exec.CommandContext(ctx, "/usr/sbin/service")
 	default:
 		return fmt.Errorf("refusing untrusted executable path %q", name)
 	}
@@ -143,28 +137,15 @@ func validateExternalCommand(name string, args []string) error {
 		if len(args) == 3 && args[0] == "add" && args[1] == "--allow-untrusted" && validSecurePackageArgument(args[2]) {
 			return nil
 		}
-	case "/usr/sbin/pkg", "/usr/local/sbin/pkg":
-		if len(args) == 3 && args[0] == "add" && args[1] == "-f" && validSecurePackageArgument(args[2]) {
-			return nil
-		}
-	case "/opt/syswarden/bin/syswarden-cli", "/usr/local/syswarden/bin/syswarden-cli":
-		if len(args) == 1 && args[0] == "web-token" {
-			return nil
-		}
 	case "/sbin/rc-service", "/usr/sbin/rc-service":
-		if len(args) == 2 && args[1] == "restart" && (args[0] == "syswarden-core" || args[0] == "syswarden-webtui") {
+		if len(args) == 2 && args[0] == "syswarden-core" && args[1] == "restart" {
 			return nil
 		}
 	case "/bin/systemctl", "/usr/bin/systemctl":
 		if len(args) == 1 && args[0] == "daemon-reload" {
 			return nil
 		}
-		if len(args) == 2 && args[0] == "restart" && (args[1] == "syswarden-core" || args[1] == "syswarden-webtui") {
-			return nil
-		}
-	case "/usr/sbin/service":
-		if len(args) == 2 && (args[1] == "restart" || args[1] == "onestatus") &&
-			(args[0] == "syswarden" || args[0] == "syswardenwebtui") {
+		if len(args) == 2 && args[0] == "restart" && args[1] == "syswarden-core" {
 			return nil
 		}
 	}
@@ -203,6 +184,9 @@ func newProductionUpdater() (*updater, error) {
 		metadataTimeout: metadataDownloadTimeout,
 		packageTimeout:  packageDownloadTimeout,
 		installTimeout:  packageInstallationTimeout,
+		retireWebTUI: func() error {
+			return config.RemoveRetiredWebTUIConfiguration("/etc/syswarden/config")
+		},
 	}, nil
 }
 
@@ -411,42 +395,19 @@ func releaseAssetURL(baseURL, version, assetName string) (string, error) {
 }
 
 func (u *updater) finishUpgrade(ctx context.Context, target packageTarget) error {
-	if (target.os == "freebsd") != (target.format == packageFormatTXZ) {
-		return errors.New("package target operating system and format are inconsistent")
+	if target.os != "linux" {
+		return errors.New("package target operating system is not supported")
 	}
-	fmt.Fprintln(u.stdout, "\n[INFO] Upgrading SysWarden: Initializing Web-TUI...")
-	activationCLI := "/opt/syswarden/bin/syswarden-cli"
-	if target.os == "freebsd" {
-		activationCLI = "/usr/local/syswarden/bin/syswarden-cli"
-	}
-	commandCtx, cancel := context.WithTimeout(ctx, postInstallationCommandLimit)
-	webTokenErr := u.runCommand(commandCtx, activationCLI, "web-token")
-	cancel()
-
 	fmt.Fprintln(u.stdout, "[INFO] Restarting services to apply the new version...")
-	errorsFound := make([]error, 0, 6)
-	if webTokenErr != nil {
-		errorsFound = append(errorsFound, fmt.Errorf("initialize Web-TUI token: %w", webTokenErr))
+	errorsFound := make([]error, 0, 3)
+	if u.retireWebTUI != nil {
+		if err := u.retireWebTUI(); err != nil {
+			errorsFound = append(errorsFound, fmt.Errorf("retire Web-TUI configuration: %w", err))
+		}
 	}
-	if target.os == "freebsd" {
-		if err := u.runResolvedCommand(ctx, "service", "syswarden", "restart"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("restart syswarden: %w", err))
-		}
-		if err := u.runResolvedCommand(ctx, "service", "syswarden", "onestatus"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("verify syswarden status: %w", err))
-		}
-		if err := u.runResolvedCommand(ctx, "service", "syswardenwebtui", "restart"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("restart syswardenwebtui: %w", err))
-		}
-		if err := u.runResolvedCommand(ctx, "service", "syswardenwebtui", "onestatus"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("verify syswardenwebtui status: %w", err))
-		}
-	} else if target.format == packageFormatAPK {
+	if target.format == packageFormatAPK {
 		if err := u.runResolvedCommand(ctx, "rc-service", "syswarden-core", "restart"); err != nil {
 			errorsFound = append(errorsFound, fmt.Errorf("restart syswarden-core: %w", err))
-		}
-		if err := u.runResolvedCommand(ctx, "rc-service", "syswarden-webtui", "restart"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("restart syswarden-webtui: %w", err))
 		}
 	} else {
 		if err := u.runResolvedCommand(ctx, "systemctl", "daemon-reload"); err != nil {
@@ -454,9 +415,6 @@ func (u *updater) finishUpgrade(ctx context.Context, target packageTarget) error
 		}
 		if err := u.runResolvedCommand(ctx, "systemctl", "restart", "syswarden-core"); err != nil {
 			errorsFound = append(errorsFound, fmt.Errorf("restart syswarden-core: %w", err))
-		}
-		if err := u.runResolvedCommand(ctx, "systemctl", "restart", "syswarden-webtui"); err != nil {
-			errorsFound = append(errorsFound, fmt.Errorf("restart syswarden-webtui: %w", err))
 		}
 	}
 	if err := errors.Join(errorsFound...); err != nil {

@@ -8,13 +8,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
+	"syswarden-cli/config"
 	"syswarden-cli/pkg/network"
 	"syswarden-cli/pkg/system"
 )
@@ -461,10 +460,17 @@ func removeFromListFileAt(target approvedListFile, line string) error {
 	}
 	lines := strings.Split(string(content), "\n")
 	var newLines []string
+	requested, requestedErr := parseCanonicalListEntry(line, true)
 	for _, existing := range lines {
-		if strings.TrimSpace(existing) != "" && strings.TrimSpace(existing) != line {
-			newLines = append(newLines, existing)
+		cleanExisting := strings.TrimSpace(existing)
+		if cleanExisting == "" {
+			continue
 		}
+		parsedExisting, parseErr := parseCanonicalListEntry(cleanExisting, true)
+		if cleanExisting == line || requestedErr == nil && parseErr == nil && sameListEntry(parsedExisting, requested) {
+			continue
+		}
+		newLines = append(newLines, existing)
 	}
 	return writeListFileInDirectoryFromSnapshot(directory, target, []byte(strings.Join(newLines, "\n")+"\n"), content)
 }
@@ -484,8 +490,14 @@ func addToListFileAt(target approvedListFile, line string) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	requested, requestedErr := parseCanonicalListEntry(line, true)
 	for _, existing := range strings.Split(string(content), "\n") {
-		if strings.TrimSpace(existing) == line {
+		cleanExisting := strings.TrimSpace(existing)
+		if cleanExisting == line {
+			return nil
+		}
+		parsedExisting, parseErr := parseCanonicalListEntry(cleanExisting, true)
+		if requestedErr == nil && parseErr == nil && sameListEntry(parsedExisting, requested) {
 			return nil
 		}
 	}
@@ -531,21 +543,13 @@ const (
 	SSHBypass   = "/etc/syswarden/ssh_whitelist.txt" // #nosec
 )
 
-// IsValidIP checks if a string is a valid IPv4 or IPv6 or a valid CIDR subnet
+// IsValidIP checks whether a string is a canonicalizable IPv4, IPv6, or CIDR value.
 func IsValidIP(ip string) (bool, bool) {
-	// 1. Check if it's a standard single IP
-	parsedIP := net.ParseIP(ip)
-	if parsedIP != nil {
-		return true, parsedIP.To4() != nil
+	if strings.TrimSpace(ip) != ip {
+		return false, false
 	}
-
-	// 2. Check if it's a CIDR block (ex: 10.0.0.0/24)
-	parsedIP, _, err := net.ParseCIDR(ip)
-	if err == nil && parsedIP != nil {
-		return true, parsedIP.To4() != nil
-	}
-
-	return false, false
+	entry, err := parseCanonicalListEntry(ip, false)
+	return err == nil, err == nil && entry.isIPv4
 }
 
 // addToFile safely appends a line to a file if it doesn't already exist
@@ -568,54 +572,50 @@ func removeFromFile(path, line string) error {
 
 // AddToWhitelist appends an IP securely to the whitelist and reloads
 func AddToWhitelist(ip string, port string) error {
-	valid, isIPv4 := IsValidIP(ip)
-	if !valid {
-		return fmt.Errorf("invalid IP address: %s", ip)
+	entry, err := newCanonicalListEntry(ip, port)
+	if err != nil {
+		return fmt.Errorf("invalid whitelist entry: %w", err)
 	}
-
-	entry := formatListEntry(ip, port)
 
 	// Remove from blocklist just in case
 	fileToRemove := BlocklistV6
-	if isIPv4 {
+	if entry.isIPv4 {
 		fileToRemove = BlocklistV4
 	}
-	if err := removeFromFile(fileToRemove, ip); err != nil {
+	if err := removeFromFile(fileToRemove, entry.network); err != nil {
 		return fmt.Errorf("remove IP from blocklist before whitelisting: %w", err)
 	}
 
 	file := WhitelistV6
-	if isIPv4 {
+	if entry.isIPv4 {
 		file = WhitelistV4
 	}
 
-	if err := addToFile(file, entry); err != nil {
+	if err := addToFile(file, entry.String()); err != nil {
 		return err
 	}
 	if err := ApplyPolicies(); err != nil {
 		return err
 	}
-	fmt.Printf("[SUCCESS] IP %s safely whitelisted.\n", entry)
+	fmt.Printf("[SUCCESS] IP %s safely whitelisted.\n", entry.String())
 	return nil
 }
 
 // RemoveFromWhitelist removes an IP from the whitelist
 func RemoveFromWhitelist(ip string) error {
-	valid, isIPv4 := IsValidIP(ip)
-	if !valid {
-		return fmt.Errorf("invalid IP address: %s", ip)
+	entry, err := parseCanonicalListEntry(ip, false)
+	if err != nil {
+		return fmt.Errorf("invalid IP address: %w", err)
 	}
 	file := WhitelistV6
-	if isIPv4 {
+	if entry.isIPv4 {
 		file = WhitelistV4
 	}
-	// Note: We might need to iterate and remove even if it has a port.
-	// For simplicity, we'll try to remove exact IP, but we should handle IP:PORT stripping.
 	target, err := approvedListFileForPath(file)
 	if err != nil {
 		return err
 	}
-	found, err := removeIPFromListFileAt(target, ip)
+	found, err := removeIPFromListFileAt(target, entry.network)
 	if err != nil {
 		return fmt.Errorf("remove IP from whitelist: %w", err)
 	}
@@ -632,22 +632,18 @@ func RemoveFromWhitelist(ip string) error {
 
 // AddToBlocklist appends an IP securely to the blocklist and reloads
 func AddToBlocklist(ip string) error {
-	valid, isIPv4 := IsValidIP(ip)
-	if !valid {
-		return fmt.Errorf("invalid IP address: %s", ip)
+	entry, err := parseCanonicalListEntry(ip, false)
+	if err != nil {
+		return fmt.Errorf("invalid IP address: %w", err)
 	}
 
 	file := BlocklistV6
-	if isIPv4 {
+	if entry.isIPv4 {
 		file = BlocklistV4
 	}
 
-	if err := addToFile(file, ip); err != nil {
+	if err := addToFile(file, entry.network); err != nil {
 		return err
-	}
-
-	if runtime.GOOS == "freebsd" {
-		_ = exec.Command("pfctl", "-k", ip).Run() // #nosec
 	}
 
 	if err := ApplyPolicies(); err != nil {
@@ -679,50 +675,57 @@ func completeBlocklistRemoval(
 
 // RemoveFromBlocklist removes an IP from the blocklist
 func RemoveFromBlocklist(ip string) error {
-	valid, isIPv4 := IsValidIP(ip)
-	if !valid {
-		return fmt.Errorf("invalid IP address: %s", ip)
+	entry, err := parseCanonicalListEntry(ip, false)
+	if err != nil {
+		return fmt.Errorf("invalid IP address: %w", err)
 	}
 
 	file := BlocklistV6
-	if isIPv4 {
+	if entry.isIPv4 {
 		file = BlocklistV4
 	}
 
-	if err := removeFromFile(file, ip); err != nil {
+	if err := removeFromFile(file, entry.network); err != nil {
 		return err
 	}
-	return completeBlocklistRemoval(ip, os.Stdout, ApplyPolicies, network.SyncHAUnban)
+	return completeBlocklistRemoval(entry.network, os.Stdout, ApplyPolicies, network.SyncHAUnban)
 }
 
 // AllowSSH adds an IP to the SSH bypass list
 func AllowSSH(ip string, port string) error {
-	valid, _ := IsValidIP(ip)
-	if !valid {
-		return fmt.Errorf("invalid IP address: %s", ip)
+	configuredPort := ""
+	if config.GlobalConfig != nil {
+		configuredPort = config.GlobalConfig.SSHPort
 	}
-	entry := formatListEntry(ip, port)
-	if err := addToFile(SSHBypass, entry); err != nil {
+	effectivePort, err := effectiveSSHPort(configuredPort)
+	if err != nil {
+		return err
+	}
+	entry, err := newCanonicalSSHBypassEntry(ip, port, effectivePort)
+	if err != nil {
+		return fmt.Errorf("invalid SSH bypass entry: %w", err)
+	}
+	if err := addToFile(SSHBypass, entry.String()); err != nil {
 		return err
 	}
 	if err := ApplyPolicies(); err != nil {
 		return err
 	}
-	fmt.Printf("[SUCCESS] SSH Bypass granted for %s.\n", entry)
+	fmt.Printf("[SUCCESS] SSH Bypass granted for %s.\n", entry.String())
 	return nil
 }
 
 // RevokeSSH removes an IP from the SSH bypass list
 func RevokeSSH(ip string) error {
-	valid, _ := IsValidIP(ip)
-	if !valid {
-		return fmt.Errorf("invalid IP address: %s", ip)
+	entry, err := parseCanonicalListEntry(ip, false)
+	if err != nil {
+		return fmt.Errorf("invalid IP address: %w", err)
 	}
 	target, err := approvedListFileForPath(SSHBypass)
 	if err != nil {
 		return err
 	}
-	found, err := removeIPFromListFileAt(target, ip)
+	found, err := removeIPFromListFileAt(target, entry.network)
 	if err != nil {
 		return fmt.Errorf("remove IP from SSH bypass list: %w", err)
 	}
@@ -738,26 +741,30 @@ func RevokeSSH(ip string) error {
 }
 
 func listEntryIP(entry string) string {
-	if host, _, err := net.SplitHostPort(entry); err == nil {
-		return strings.Trim(host, "[]")
+	parsed, err := parseCanonicalListEntry(entry, true)
+	if err != nil {
+		return ""
 	}
-	return strings.Trim(entry, "[]")
+	return parsed.network
 }
 
 func formatListEntry(ip, port string) string {
-	if port == "" {
-		return ip
+	entry, err := newCanonicalListEntry(ip, port)
+	if err != nil {
+		return ""
 	}
-	return net.JoinHostPort(ip, port)
+	return entry.String()
 }
 
 func removeListEntriesForIP(content []byte, ip string) ([]byte, bool) {
+	target, targetErr := parseCanonicalListEntry(ip, false)
 	lines := strings.Split(string(content), "\n")
 	newLines := make([]string, 0, len(lines))
 	found := false
 	for _, line := range lines {
 		cleanLine := strings.TrimSpace(line)
-		if listEntryIP(cleanLine) == ip {
+		entry, entryErr := parseCanonicalListEntry(cleanLine, true)
+		if targetErr == nil && entryErr == nil && sameListNetwork(entry, target) {
 			found = true
 			continue
 		}
@@ -819,8 +826,11 @@ func WhitelistInfra() error {
 		valid, isIPv4 := IsValidIP(ip)
 		if valid && isIPv4 {
 			content, _ := os.ReadFile(WhitelistV4) // #nosec
-			if !strings.Contains(string(content), ip+"\n") {
-				_ = addToFile(WhitelistV4, ip)
+			entry, parseErr := parseCanonicalListEntry(ip, false)
+			if parseErr == nil && !listContentContainsNetwork(content, entry) {
+				if err := addToFile(WhitelistV4, entry.network); err != nil {
+					return fmt.Errorf("persist infrastructure whitelist entry %s: %w", entry.network, err)
+				}
 				fmt.Printf("[+] Auto-whitelisted: %s\n", ip)
 				added = true
 			}
@@ -836,8 +846,8 @@ func WhitelistInfra() error {
 
 // CheckIP performs a global diagnostic on an IP
 func CheckIP(ip string) {
-	valid, _ := IsValidIP(ip)
-	if !valid {
+	target, err := parseCanonicalListEntry(ip, false)
+	if err != nil {
 		fmt.Printf("[ERROR] Invalid IP address: %s\n", ip)
 		return
 	}
@@ -847,7 +857,7 @@ func CheckIP(ip string) {
 	checkFile := func(filepath, name string) {
 		fmt.Printf("[Storage] %-20s : ", name)
 		content, err := os.ReadFile(filepath) // #nosec
-		if err == nil && strings.Contains(string(content), ip) {
+		if err == nil && listContentContainsNetwork(content, target) {
 			fmt.Println("PRESENT")
 		} else {
 			fmt.Println("Not Found")
@@ -862,7 +872,7 @@ func CheckIP(ip string) {
 
 	fmt.Printf("[Kernel]  Active Nftables      : ")
 	out, err := exec.Command("nft", "list", "ruleset").Output() // #nosec
-	if err == nil && strings.Contains(string(out), ip) {
+	if err == nil && nftRulesetContainsExactNetwork(out, target) {
 		fmt.Println("FOUND in active memory")
 	} else {
 		fmt.Println("Not found in active memory")

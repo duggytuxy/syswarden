@@ -53,35 +53,6 @@ LINUX_ENTRIES = {
     ),
 }
 
-FREEBSD_ENTRIES = {
-    ".": DIRECTORY,
-    "usr": DIRECTORY,
-    "usr/local": DIRECTORY,
-    "usr/local/etc": DIRECTORY,
-    "usr/local/etc/rc.d": DIRECTORY,
-    "usr/local/etc/rc.d/syswarden": ExpectedEntry(
-        "file", mode=0o755, nonempty=True
-    ),
-    "usr/local/etc/rc.d/syswardenwebtui": ExpectedEntry(
-        "file", mode=0o755, nonempty=True
-    ),
-    "usr/local/syswarden": DIRECTORY,
-    "usr/local/syswarden/bin": DIRECTORY,
-    "usr/local/syswarden/bin/syswarden-cli": ExpectedEntry(
-        "file", mode=0o750, nonempty=True
-    ),
-    "usr/local/syswarden/bin/syswarden-core": ExpectedEntry(
-        "file", mode=0o750, nonempty=True
-    ),
-    "usr/local/syswarden/bin/syswarden-tui": ExpectedEntry(
-        "file", mode=0o750, nonempty=True
-    ),
-    "usr/local/syswarden/signatures.json": ExpectedEntry(
-        "file", mode=0o640, nonempty=True
-    ),
-}
-
-
 def entry_kind(metadata: os.stat_result) -> str:
     if stat.S_ISDIR(metadata.st_mode):
         return "directory"
@@ -179,18 +150,15 @@ def validate(root: Path, expected: dict[str, ExpectedEntry]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="platform", required=True)
-    for platform in ("linux", "freebsd"):
-        platform_parser = subparsers.add_parser(platform)
-        platform_parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("platform", choices=("linux",))
+    parser.add_argument("--root", type=Path, required=True)
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    expected = LINUX_ENTRIES if args.platform == "linux" else FREEBSD_ENTRIES
     try:
-        validate(args.root, expected)
+        validate(args.root, LINUX_ENTRIES)
     except PackageStageError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

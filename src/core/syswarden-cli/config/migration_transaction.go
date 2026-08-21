@@ -201,11 +201,25 @@ func (snapshot *legacySourceSnapshot) matchesContentAndIdentity(content []byte, 
 }
 
 func fileOwnerUID(info os.FileInfo) (uint32, bool) {
+	if info == nil {
+		return 0, false
+	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return 0, false
 	}
 	return stat.Uid, true
+}
+
+func fileOwnerUIDGID(info os.FileInfo) (uint32, uint32, bool) {
+	if info == nil {
+		return 0, 0, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, false
+	}
+	return stat.Uid, stat.Gid, true
 }
 
 func fileDeviceInode(info os.FileInfo) (uint64, uint64, bool) {

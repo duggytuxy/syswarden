@@ -101,6 +101,38 @@ class CLIProcessCompatibilityTest(unittest.TestCase):
             },
         )
 
+    def test_command_set_transition_requires_exact_approved_additions_and_removals(self) -> None:
+        baseline = {
+            "syswarden": record("syswarden"),
+            "syswarden retired": record("syswarden retired"),
+        }
+        candidate = {
+            "syswarden": record("syswarden"),
+            "syswarden replacement": record("syswarden replacement"),
+        }
+        approvals = [
+            {
+                "path": "syswarden retired",
+                "field": "command",
+                "before": "present",
+                "after": None,
+                "reason": "Retire network exposure.",
+            },
+            {
+                "path": "syswarden replacement",
+                "field": "command",
+                "before": None,
+                "after": "added",
+                "reason": "Add local administration.",
+            },
+        ]
+        self.assertEqual(
+            gate.approved_common_command_paths(baseline, candidate, approvals),
+            {"syswarden"},
+        )
+        with self.assertRaisesRegex(gate.CompatibilityError, "do not match"):
+            gate.approved_common_command_paths(baseline, candidate, approvals[:1])
+
     def test_help_change_is_reduced_only_to_approved_public_text(self) -> None:
         baseline = {
             "syswarden": record("syswarden", long="old root"),
@@ -175,6 +207,60 @@ class CLIProcessCompatibilityTest(unittest.TestCase):
                 [],
                 [{**approval[0], "after": "unexpected\n"}],
             )
+
+    def test_exact_process_approval_precedes_flag_canonicalization(self) -> None:
+        baseline = {
+            "syswarden whitelist": record(
+                "syswarden whitelist",
+                flags=[{"name": "help", "usage": "help"}],
+            )
+        }
+        candidate = {
+            "syswarden whitelist": record(
+                "syswarden whitelist",
+                flags=[
+                    {"name": "help", "usage": "help"},
+                    {"name": "port", "usage": "service port"},
+                ],
+            )
+        }
+        case = gate.ProcessCase(
+            "help:syswarden whitelist",
+            "help",
+            "syswarden whitelist",
+            ("whitelist", "--help"),
+        )
+        before = gate.ProcessResult(0, "old help\n", "")
+        after = gate.ProcessResult(0, "new help with --port\n", "")
+        approval = [
+            {
+                "case": case.case_id,
+                "stream": "stdout",
+                "reason": "Approve the exact flag transition.",
+                "before": before.stdout,
+                "after": after.stdout,
+            }
+        ]
+        classification = gate.classify_process_result(
+            case,
+            before,
+            after,
+            baseline,
+            candidate,
+            [
+                {
+                    "path": case.path,
+                    "field": "flags",
+                    "reason": "Add the service-scoped flag.",
+                    "before": baseline[case.path]["flags"],
+                    "after": candidate[case.path]["flags"],
+                }
+            ],
+            approval,
+        )
+        self.assertEqual(
+            classification["streams"]["stdout"], "exact-process-approval"
+        )
 
     def test_stale_process_approval_is_rejected(self) -> None:
         case = gate.ProcessCase("root", "root", "syswarden", ())

@@ -75,15 +75,6 @@ func openSecurityDirectory(target securityFileTarget) (*os.Root, error) {
 	return currentRoot, nil
 }
 
-func rewriteSecurityFileFromSnapshot(path string, content, snapshot []byte) error {
-	target, err := securityFileTargetForPath(path)
-	if err != nil {
-		return err
-	}
-	digest := sha256.Sum256(snapshot)
-	return rewriteSecurityTargetExpected(target, content, &digest, nil)
-}
-
 type securityFileIdentity struct {
 	info       fs.FileInfo
 	digest     [sha256.Size]byte
@@ -239,6 +230,26 @@ func rewriteSecurityTargetBeforeRename(target securityFileTarget, content []byte
 }
 
 func rewriteSecurityTargetExpected(target securityFileTarget, content []byte, expectedDigest *[sha256.Size]byte, beforeRename func() error) error {
+	return rewriteSecurityTargetExpectedMode(target, content, 0600, expectedDigest, beforeRename)
+}
+
+func rewriteSecurityTargetExpectedMode(target securityFileTarget, content []byte, mode fs.FileMode, expectedDigest *[sha256.Size]byte, beforeRename func() error) error {
+	return rewriteSecurityTargetExpectedState(target, content, mode, expectedDigest, nil, nil, beforeRename)
+}
+
+func rewriteSecurityTargetExpectedState(target securityFileTarget, content []byte, mode fs.FileMode, expectedDigest *[sha256.Size]byte, expectedIdentity *securityFileIdentity, expectedExists *bool, beforeRename func() error) error {
+	return rewriteSecurityTargetExpectedStateOwned(target, content, mode, expectedDigest, expectedIdentity, expectedExists, nil, beforeRename)
+}
+
+type securityFileOwner struct {
+	uid int
+	gid int
+}
+
+func rewriteSecurityTargetExpectedStateOwned(target securityFileTarget, content []byte, mode fs.FileMode, expectedDigest *[sha256.Size]byte, expectedIdentity *securityFileIdentity, expectedExists *bool, desiredOwner *securityFileOwner, beforeRename func() error) error {
+	if mode.Perm() == 0 || mode != mode.Perm() {
+		return fmt.Errorf("security file mode must contain permissions only: %v", mode)
+	}
 	root, err := openSecurityDirectory(target)
 	if err != nil {
 		return err
@@ -248,8 +259,14 @@ func rewriteSecurityTargetExpected(target securityFileTarget, content []byte, ex
 	if err != nil {
 		return fmt.Errorf("inspect security file %s: %w", target.name, err)
 	}
+	if expectedExists != nil && existed != *expectedExists {
+		return fmt.Errorf("security file existence changed after it was inspected: %s", target.name)
+	}
 	if expectedDigest != nil && (!existed || identity.digest != *expectedDigest) {
 		return fmt.Errorf("security file changed after it was read: %s", target.name)
+	}
+	if expectedIdentity != nil && (!existed || !sameSecurityFileState(*expectedIdentity, identity.info, identity.digest)) {
+		return fmt.Errorf("security file identity or metadata changed after it was inspected: %s", target.name)
 	}
 	file, stagingName, err := createSecurityStagingFile(root, target)
 	if err != nil {
@@ -263,12 +280,19 @@ func rewriteSecurityTargetExpected(target securityFileTarget, content []byte, ex
 			_ = root.Remove(stagingName)
 		}
 	}()
-	if identity.ownerKnown {
+	if desiredOwner != nil {
+		if desiredOwner.uid < 0 || desiredOwner.gid < 0 {
+			return fmt.Errorf("security file owner must be non-negative")
+		}
+		if err := file.Chown(desiredOwner.uid, desiredOwner.gid); err != nil {
+			return fmt.Errorf("set security file owner %s: %w", target.name, err)
+		}
+	} else if identity.ownerKnown {
 		if err := file.Chown(identity.uid, identity.gid); err != nil {
 			return fmt.Errorf("preserve security file owner %s: %w", target.name, err)
 		}
 	}
-	if err := file.Chmod(0600); err != nil {
+	if err := file.Chmod(mode); err != nil {
 		return fmt.Errorf("restrict security staging file for %s: %w", target.name, err)
 	}
 	if written, err := file.Write(content); err != nil {

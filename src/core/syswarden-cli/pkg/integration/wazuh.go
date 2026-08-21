@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"strings"
 	"syscall"
 	"syswarden-cli/config"
@@ -104,20 +103,21 @@ func SetupWazuh() error {
 		}
 		fmt.Println("[INFO] SYSWARDEN logs successfully injected into Wazuh agent.")
 
-		// Restart Wazuh Agent
 		fmt.Println("[INFO] Restarting wazuh-agent service...")
-		if system.IsAlpine() {
-			_ = exec.Command("rc-service", "wazuh-agent", "restart").Run() // #nosec
-		} else {
-			cmd := exec.Command("systemctl", "restart", "wazuh-agent") // #nosec
-			if err := cmd.Run(); err != nil {
-				// Fallback for FreeBSD or non-systemd
-				_ = exec.Command("service", "wazuh-agent", "restart").Run() // #nosec
-			}
+		if err := restartManagedService("wazuh-agent"); err != nil {
+			return fmt.Errorf("activate Wazuh agent configuration: %w", err)
 		}
 	}
 
-	fmt.Printf("[SUCCESS] Wazuh Agent integration active (Manager: %s)\n", ip)
+	managerState, err := system.ServiceManagerRuntimeState()
+	if err != nil {
+		return fmt.Errorf("attest Wazuh runtime state: %w", err)
+	}
+	if managerState == "OFFLINE" {
+		fmt.Printf("[SUCCESS] Wazuh Agent integration configured; activation is deferred to boot (Manager: %s)\n", ip)
+		return nil
+	}
+	fmt.Printf("[SUCCESS] Wazuh Agent integration configured (Manager: %s)\n", ip)
 	return nil
 }
 

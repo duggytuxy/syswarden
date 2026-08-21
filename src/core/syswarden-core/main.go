@@ -73,7 +73,7 @@ func main() {
 
 	// Start L7 WAAP Analytics Engine (Log Forwarder)
 	waapEngine := network.NewWAAPEngine(fwManager, telemetryLogger, threatEngine)
-	waapEngine.Start()
+	waapEngine.StartContext(ctx)
 
 	// Start HA P2P Server (Zero-Touch TLS)
 	network.StartHAServer(fwManager)
@@ -91,5 +91,6 @@ func main() {
 	cancel()
 	udsServer.Stop()
 	wg.Wait()
+	waapEngine.Wait()
 	telemetryLogger.Close()
 }

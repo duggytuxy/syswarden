@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestReloadServiceUsesNativePlatformManager_SW_PKG_001(t *testing.T) {
+func TestReloadServiceUsesLinuxServiceManager_SW_PKG_001(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve test source path")
@@ -18,26 +18,17 @@ func TestReloadServiceUsesNativePlatformManager_SW_PKG_001(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	tests := map[string][]string{
-		"reload_service_default.go": {
-			`coreServiceRestartCommand(system.IsAlpine()).Run()`,
-			`exec.Command("rc-service", "syswarden-core", "restart")`,
-			`exec.Command("systemctl", "restart", "syswarden-core.service")`,
-		},
-		"reload_service_freebsd.go": {
-			`exec.Command("service", "syswarden", "restart")`,
-			`exec.Command("service", "syswarden", "onestatus")`,
-		},
+	content, err := root.ReadFile("reload_service_default.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for filename, requiredFragments := range tests {
-		content, err := root.ReadFile(filename)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, required := range requiredFragments {
-			if !strings.Contains(string(content), required) {
-				t.Fatalf("%s lacks %q", filename, required)
-			}
+	for _, required := range []string{
+		`coreServiceRestartCommand(system.IsAlpine()).Run()`,
+		`exec.Command("rc-service", "syswarden-core", "restart")`,
+		`exec.Command("systemctl", "restart", "syswarden-core.service")`,
+	} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("Linux reload service implementation lacks %q", required)
 		}
 	}
 	reloadSource, err := root.ReadFile("reload.go")

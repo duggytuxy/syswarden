@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/viper"
 )
 
@@ -27,6 +28,13 @@ func (m *Migrator) Run() error {
 	marker, err := readMigrationMarker(m.OutputDir)
 	if err != nil {
 		return fmt.Errorf("read migration transaction: %w", err)
+	}
+	// A dry run is an observation-only operation. In particular, it must not
+	// resume a published retention or secure-wipe transaction, because every
+	// recovery path can rename, overwrite, unlink, or update the durable marker.
+	// Reject an in-progress transaction before opening or recovering its source.
+	if m.DryRun && marker != nil {
+		return fmt.Errorf("dry-run cannot resume an in-progress migration transaction")
 	}
 	snapshot, sourceErr := openLegacySourceSnapshot(m.SourcePath)
 	if sourceErr != nil {
@@ -76,21 +84,15 @@ func (m *Migrator) Run() error {
 	if err := m.validateRenderedMigration(master, modules); err != nil {
 		return fmt.Errorf("validate migrated configuration: %w", err)
 	}
+	if m.DryRun {
+		return nil
+	}
 
 	if err := ensureConfigDirectory(m.OutputDir, 0750); err != nil {
 		return err
 	}
 	if err := ensureConfigDirectory(filepath.Join(m.OutputDir, "modules"), 0750); err != nil {
 		return err
-	}
-	if m.DryRun {
-		if marker != nil {
-			return fmt.Errorf("dry-run cannot resume an in-progress migration transaction")
-		}
-		if err := m.generateAllModules(oldConfig); err != nil {
-			return err
-		}
-		return m.generateMasterConfig(oldConfig)
 	}
 
 	artifacts, preserveUser, err := m.migrationArtifacts(master, modules, marker)
@@ -235,6 +237,18 @@ func (m *Migrator) runSecureWipe(snapshot *legacySourceSnapshot, marker *migrati
 	})
 }
 
+func (m *Migrator) freshDefaultConfigData() (map[string]string, error) {
+	configData, err := m.ParseFromMemory(DefaultConfig)
+	if err != nil {
+		return nil, err
+	}
+	// DefaultConfig is a byte-pinned v4.02.8 compatibility input whose SaaS
+	// default was enabled. New modular installations must remain opt-in without
+	// rewriting that historical fixture or changing migration of operator data.
+	configData["SYSWARDEN_ALLOW_SAAS_MONITORS"] = "n"
+	return configData, nil
+}
+
 // InitializeDefaults initializes the default modular configuration from the hardcoded DefaultConfig memory string.
 func InitializeDefaults(outputDir string) error {
 	if err := ensureConfigDirectory(outputDir, 0750); err != nil {
@@ -248,7 +262,7 @@ func InitializeDefaults(outputDir string) error {
 		DryRun:    false,
 	}
 
-	configData, err := m.ParseFromMemory(DefaultConfig)
+	configData, err := m.freshDefaultConfigData()
 	if err != nil {
 		return err
 	}
@@ -280,7 +294,7 @@ func EnsureDefaults(outputDir string) error {
 	}
 
 	m := &Migrator{OutputDir: outputDir}
-	configData, err := m.ParseFromMemory(DefaultConfig)
+	configData, err := m.freshDefaultConfigData()
 	if err != nil {
 		return err
 	}
@@ -465,10 +479,16 @@ func (m *Migrator) validateRenderedMigration(master string, modules []renderedMo
 	v := viper.New()
 	v.SetConfigType("toml")
 	setDefaults(v, m.OutputDir)
+	if _, err := parseTOMLDocument([]byte(master), "config.toml"); err != nil {
+		return err
+	}
 	if err := v.MergeConfig(strings.NewReader(master)); err != nil {
 		return fmt.Errorf("parse rendered master configuration: %w", err)
 	}
 	for _, module := range modules {
+		if _, err := parseTOMLDocument([]byte(module.content), filepath.ToSlash(filepath.Join("modules", module.name))); err != nil {
+			return err
+		}
 		if err := v.MergeConfig(strings.NewReader(module.content)); err != nil {
 			return fmt.Errorf("parse rendered module %s: %w", module.name, err)
 		}
@@ -528,28 +548,45 @@ func (m *Migrator) masterConfigContent(oldConfig map[string]string) (string, err
 	if err != nil {
 		return "", err
 	}
-	return `# SYSWARDEN MODULAR CONFIGURATION
+	content := `# SYSWARDEN MODULAR CONFIGURATION
 # Load order: 00-*.toml -> 99-*.toml
 # Environment variables override: SYSWARDEN_<SECTION>_<KEY>
+
+schema_version = 1
 
 [core]
 config_dir = ` + quoteTOML(filepath.Join(m.OutputDir, "modules")) + `
 enterprise_mode = ` + enterpriseMode + `
 log_level = "INFO"
-`, nil
+`
+	return canonicalizeGeneratedTOML(content)
 }
 
 func writeSecureFileAtomically(directory, name string, content []byte) error {
 	if name == "" || filepath.Base(name) != name {
 		return fmt.Errorf("invalid configuration filename %q", name)
 	}
-
 	root, err := openConfigDirectory(directory, false, 0)
 	if err != nil {
 		return fmt.Errorf("open configuration directory: %w", err)
 	}
-	defer func() { _ = root.Close() }()
+	if info, statErr := root.Lstat(name); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		err := replaceSymlinkWithSecureFile(root, name, content)
+		_ = root.Close()
+		return err
+	}
+	expected, err := readOptionalSecureFileIdentity(root, name, filepath.Join(directory, name))
+	_ = root.Close()
+	if err != nil {
+		return fmt.Errorf("inspect existing configuration file: %w", err)
+	}
+	if err := replaceSecureFileAtomicallyIfUnchanged(directory, name, content, expected); err != nil {
+		return fmt.Errorf("replace configuration file atomically: %w", err)
+	}
+	return nil
+}
 
+func replaceSymlinkWithSecureFile(root *os.Root, name string, content []byte) error {
 	randomSuffix := make([]byte, 16)
 	if _, err := rand.Read(randomSuffix); err != nil {
 		return fmt.Errorf("generate temporary filename: %w", err)
@@ -566,7 +603,6 @@ func writeSecureFileAtomically(directory, name string, content []byte) error {
 		}
 		_ = root.Remove(temporaryName)
 	}()
-
 	if _, err := temporary.Write(content); err != nil {
 		return fmt.Errorf("write temporary configuration file: %w", err)
 	}
@@ -577,19 +613,14 @@ func writeSecureFileAtomically(directory, name string, content []byte) error {
 		return fmt.Errorf("close temporary configuration file: %w", err)
 	}
 	temporaryOpen = false
+	current, err := root.Lstat(name)
+	if err != nil || current.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("destination symlink changed before atomic replacement")
+	}
 	if err := root.Rename(temporaryName, name); err != nil {
-		return fmt.Errorf("replace configuration file atomically: %w", err)
+		return fmt.Errorf("replace destination symlink atomically: %w", err)
 	}
-
-	directoryFile, err := root.Open(".")
-	if err != nil {
-		return fmt.Errorf("open configuration directory for sync: %w", err)
-	}
-	defer func() { _ = directoryFile.Close() }()
-	if err := directoryFile.Sync(); err != nil {
-		return fmt.Errorf("sync configuration directory: %w", err)
-	}
-	return nil
+	return syncRootDirectory(root)
 }
 
 func writeMissingSecureFile(directory, name string, content []byte) error {
@@ -823,6 +854,22 @@ func legacySliceText(value string) string {
 	return strings.Join(valid, ", ")
 }
 
+// canonicalizeGeneratedTOML makes the TOML library the final serializer for
+// every migrated document containing operator-controlled values. Templates
+// define only the fixed schema; values are quoted before parsing and are then
+// emitted from the parsed representation rather than written by concatenation.
+func canonicalizeGeneratedTOML(content string) (string, error) {
+	var document map[string]any
+	if err := toml.Unmarshal([]byte(content), &document); err != nil {
+		return "", fmt.Errorf("parse generated TOML: %w", err)
+	}
+	encoded, err := toml.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("serialize generated TOML: %w", err)
+	}
+	return string(encoded), nil
+}
+
 func (m *Migrator) generateCore(oldConfig map[string]string) (string, error) {
 	hardening, err := legacyBoolText(oldConfig, "SYSWARDEN_HARDENING", false)
 	if err != nil {
@@ -840,7 +887,7 @@ func (m *Migrator) generateCore(oldConfig map[string]string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return `# [00] CORE SYSTEM CONFIGURATION
+	content := `# [00] CORE SYSTEM CONFIGURATION
 # Priority: 00 (loaded first, lowest precedence)
 
 [core]
@@ -854,7 +901,8 @@ secure_wipe_conf = ` + secureWipe + `
 
 # SSH Port string (e.g. "2222")
 ssh_port = ` + quoteTOML(sshPort) + `
-`, nil
+`
+	return canonicalizeGeneratedTOML(content)
 }
 
 func (m *Migrator) generateNetwork(oldConfig map[string]string) (string, error) {
@@ -894,7 +942,7 @@ func (m *Migrator) generateNetwork(oldConfig map[string]string) (string, error) 
 	lanListStr := legacySliceText(legacyValue(oldConfig, "SYSWARDEN_LAN_SUBNETS", ""))
 	whitelistIPsStr := legacySliceText(legacyValue(oldConfig, "SYSWARDEN_WHITELIST_IPS", ""))
 
-	return `# [10] NETWORK & THREAT INTELLIGENCE
+	content := `# [10] NETWORK & THREAT INTELLIGENCE
 # Priority: 10
 
 [network]
@@ -938,7 +986,8 @@ use_spamhaus = ` + useSpamhaus + `
 enabled = ` + wireguardEnabled + `
 port = ` + quoteTOML(wireguardPort) + `
 subnet = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_WG_SUBNET", "")) + `
-`, nil
+`
+	return canonicalizeGeneratedTOML(content)
 }
 
 func (m *Migrator) generateSecurity(oldConfig map[string]string) (string, error) {
@@ -956,7 +1005,7 @@ func (m *Migrator) generateSecurity(oldConfig map[string]string) (string, error)
 	}
 	honeyPortsStr := legacySliceText(legacyValue(oldConfig, "SYSWARDEN_HONEYPORTS", ""))
 
-	return `# [20] SECURITY & COMPLIANCE
+	content := `# [20] SECURITY & COMPLIANCE
 # Priority: 20
 
 [security]
@@ -971,7 +1020,8 @@ lan_mode = ` + lanMode + `
 [security.compliance]
 enable_watchdog = true
 check_interval = "24h"
-`, nil
+`
+	return canonicalizeGeneratedTOML(content)
 }
 
 func (m *Migrator) generateWAAP(oldConfig map[string]string) (string, error) {
@@ -988,7 +1038,7 @@ func (m *Migrator) generateWAAP(oldConfig map[string]string) (string, error) {
 		return "", err
 	}
 
-	return `# [30] WAAP (Web Application & API Protection)
+	content := `# [30] WAAP (Web Application & API Protection)
 # Priority: 30
 
 [waap]
@@ -998,7 +1048,8 @@ bruteforce_logs = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_BRUTEFORCE_LOG
 bruteforce_threshold = ` + threshold + `
 bruteforce_window_seconds = ` + window + `
 modsec_logs = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_MODSEC_LOGS", "")) + `
-`, nil
+`
+	return canonicalizeGeneratedTOML(content)
 }
 
 func (m *Migrator) generateIntegrations(oldConfig map[string]string) (string, error) {
@@ -1045,7 +1096,7 @@ func (m *Migrator) generateIntegrations(oldConfig map[string]string) (string, er
 
 	peerIPsStr := legacySliceText(legacyValue(oldConfig, "SYSWARDEN_HA_PEER_IP", ""))
 
-	return `# [40] INTEGRATIONS & NOTIFICATIONS
+	content := `# [40] INTEGRATIONS & NOTIFICATIONS
 # Priority: 40
 
 [integrations.ha]
@@ -1087,11 +1138,11 @@ name = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_WAZUH_NAME", "")) + `
 group = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_WAZUH_GROUP", "default")) + `
 comm_port = ` + quoteTOML(wazuhCommPort) + `
 enroll_port = ` + quoteTOML(wazuhEnrollPort) + `
-`, nil
+`
+	return canonicalizeGeneratedTOML(content)
 }
 
 func (m *Migrator) generateUser(oldConfig map[string]string) (string, error) {
-	webToken := legacyValue(oldConfig, "SYSWARDEN_WEB_TOKEN", "")
 	return `# [99] USER CUSTOM OVERRIDES
 # Priority: 99 (highest - overrides all other modules)
 # 
@@ -1109,8 +1160,5 @@ func (m *Migrator) generateUser(oldConfig map[string]string) (string, error) {
 #
 # [waap]
 # bruteforce_threshold = 3
-
-[user]
-webtui_password = ` + quoteTOML(webToken) + `
 `, nil
 }

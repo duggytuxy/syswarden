@@ -56,7 +56,7 @@ func TestValidatedUserModulePublishFailureLeavesOldInodeAndContent_SW_CFG_002(t 
 		return errors.New("injected atomic publish failure")
 	}
 	t.Cleanup(func() { publishValidatedUserModule = previous })
-	err = WriteValidatedUserModule(root, []byte("[user]\nwebtui_password = \"replacement\"\n"))
+	err = WriteValidatedUserModule(root, []byte("[user]\nprofile_name = \"replacement\"\n"))
 	if err == nil || !strings.Contains(err.Error(), "injected atomic publish failure") {
 		t.Fatalf("publish error = %v", err)
 	}
@@ -72,7 +72,7 @@ func TestValidatedUserModulePublishFailureLeavesOldInodeAndContent_SW_CFG_002(t 
 
 func TestValidatedProfileRejectsConcurrentUserModuleMutation_SW_CFG_002(t *testing.T) {
 	root, userPath := initializedUserModule(t)
-	const concurrent = "# concurrent operator update\n[user]\nwebtui_password = \"must-survive\"\n"
+	const concurrent = "# concurrent operator update\n[user]\nprofile_name = \"must-survive\"\n"
 	previous := publishValidatedUserModule
 	publishValidatedUserModule = func(directory, name string, content []byte, expected *secureFileIdentity, preCommit, prePublish, postCommit func() error) error {
 		if err := writeSecureFileAtomically(directory, name, []byte(concurrent)); err != nil {
@@ -135,7 +135,7 @@ func TestValidatedUserModuleCASIncludesMasterEveryReadModuleAndInventory_SW_CFG_
 			}
 			t.Cleanup(func() { publishValidatedUserModule = previous })
 
-			err = WriteValidatedUserModule(root, []byte("[user]\nwebtui_password = \"candidate\"\n"))
+			err = WriteValidatedUserModule(root, []byte("[user]\nprofile_name = \"candidate\"\n"))
 			if err == nil || !strings.Contains(err.Error(), "configuration CAS") {
 				t.Fatalf("concurrent %s mutation error = %v", test.name, err)
 			}
@@ -204,7 +204,7 @@ func TestValidatedUserModuleCASIncludesMigrationMarkerThroughPublication_SW_CFG_
 			}
 			t.Cleanup(func() { publishValidatedUserModule = previous })
 
-			err = WriteValidatedUserModule(root, []byte("[user]\nwebtui_password = \"candidate\"\n"))
+			err = WriteValidatedUserModule(root, []byte("[user]\nprofile_name = \"candidate\"\n"))
 			if err == nil || !strings.Contains(err.Error(), "configuration CAS") {
 				t.Fatalf("migration-marker interleaving error = %v", err)
 			}
@@ -225,7 +225,7 @@ func TestValidatedUserModuleCASIncludesMigrationMarkerThroughPublication_SW_CFG_
 
 func TestValidatedUserModuleRestoresPreviousInodeWhenMigrationWinsAfterPrePublish_SW_CFG_002(t *testing.T) {
 	root, userPath := initializedUserModule(t)
-	const previousUser = "# authoritative operator state\n[user]\nwebtui_password = \"must-remain-effective\"\n"
+	const previousUser = "# authoritative operator state\n[user]\nprofile_name = \"must-remain-effective\"\n"
 	if err := WriteValidatedUserModule(root, []byte(previousUser)); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestValidatedUserModuleRestoresPreviousInodeWhenMigrationWinsAfterPrePublis
 	}
 	t.Cleanup(func() { publishValidatedUserModule = previousPublisher })
 
-	err = WriteValidatedUserModule(root, []byte("[user]\nwebtui_password = \"candidate\"\n"))
+	err = WriteValidatedUserModule(root, []byte("[user]\nprofile_name = \"candidate\"\n"))
 	if err == nil || !strings.Contains(err.Error(), "publish operator module without replacement") {
 		t.Fatalf("writer/migration publication conflict error = %v", err)
 	}
@@ -338,7 +338,7 @@ func TestValidatedUserModulePostCommitMutationRollsBackPublishedInode_SW_CFG_002
 	}
 	t.Cleanup(func() { publishValidatedUserModule = previous })
 
-	err = WriteValidatedUserModule(root, []byte("[user]\nwebtui_password = \"candidate\"\n"))
+	err = WriteValidatedUserModule(root, []byte("[user]\nprofile_name = \"candidate\"\n"))
 	if err == nil || !strings.Contains(err.Error(), "post-commit configuration CAS") {
 		t.Fatalf("post-commit mutation error = %v", err)
 	}
@@ -354,7 +354,7 @@ func TestValidatedUserModulePostCommitMutationRollsBackPublishedInode_SW_CFG_002
 
 func TestValidatedUserModuleDetectsSameBytePostCommitInodeSubstitution_SW_CFG_002(t *testing.T) {
 	root, userPath := initializedUserModule(t)
-	const candidate = "[user]\nwebtui_password = \"same-bytes-new-inode\"\n"
+	const candidate = "[user]\nprofile_name = \"same-bytes-new-inode\"\n"
 	var concurrentInfo os.FileInfo
 	previous := publishValidatedUserModule
 	publishValidatedUserModule = func(directory, name string, content []byte, expected *secureFileIdentity, preCommit, prePublish, postCommit func() error) error {
@@ -400,7 +400,7 @@ func TestValidatedUserModuleRejectsDestinationAndImportSymlinks_SW_CFG_002(t *te
 		if err := os.Symlink(victim, userPath); err != nil {
 			t.Fatal(err)
 		}
-		if err := WriteValidatedUserModule(root, []byte("[user]\nwebtui_password = \"replacement\"\n")); err == nil {
+		if err := WriteValidatedUserModule(root, []byte("[user]\nprofile_name = \"replacement\"\n")); err == nil {
 			t.Fatal("symlinked user module was accepted")
 		}
 		assertFileContent(t, victim, "preserve\n")
@@ -413,7 +413,7 @@ func TestValidatedUserModuleRejectsDestinationAndImportSymlinks_SW_CFG_002(t *te
 			t.Fatal(err)
 		}
 		realSource := filepath.Join(t.TempDir(), "real.toml")
-		if err := os.WriteFile(realSource, []byte("[user]\nwebtui_password = \"imported\"\n"), 0600); err != nil {
+		if err := os.WriteFile(realSource, []byte("[user]\nprofile_name = \"imported\"\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
 		symlink := filepath.Join(filepath.Dir(realSource), "source-link.toml")
@@ -452,7 +452,7 @@ func TestValidatedProfileAndImportUseAtomicMergedValidation_SW_CFG_002(t *testin
 	}
 
 	source := filepath.Join(t.TempDir(), "import.toml")
-	const imported = "# imported operator bytes\n[user]\nwebtui_password = \"import-token\"\n"
+	const imported = "# imported operator bytes\n[user]\nprofile_name = \"import-profile\"\n"
 	if err := os.WriteFile(source, []byte(imported), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -466,5 +466,68 @@ func TestValidatedProfileAndImportUseAtomicMergedValidation_SW_CFG_002(t *testin
 	}
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("imported user module mode = %#o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestAtomicSecureReplacementPreservesOwnerGroupAndMode_SW_CFG_002(t *testing.T) {
+	root, userPath := initializedUserModule(t)
+	if err := os.Chmod(userPath, 0640); err != nil { // #nosec G302 -- deliberate fixture mode verifies exact owner/group preservation
+		t.Fatal(err)
+	}
+	before, err := os.Lstat(userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantUID, wantGID, ok := fileOwnerUIDGID(before)
+	if !ok {
+		t.Fatal("file ownership is unavailable")
+	}
+
+	if err := SetValidatedProfileName(root, "ownership"); err != nil {
+		t.Fatalf("SetValidatedProfileName() error = %v", err)
+	}
+	after, err := os.Lstat(userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotUID, gotGID, ok := fileOwnerUIDGID(after)
+	if !ok {
+		t.Fatal("replacement ownership is unavailable")
+	}
+	if gotUID != wantUID || gotGID != wantGID || after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("replacement identity = uid %d gid %d mode %#o, want uid %d gid %d mode %#o", gotUID, gotGID, after.Mode().Perm(), wantUID, wantGID, before.Mode().Perm())
+	}
+}
+
+func TestAtomicSecureReplacementFailsClosedWhenOwnershipCannotBePreserved_SW_CFG_002(t *testing.T) {
+	root, userPath := initializedUserModule(t)
+	before, err := os.Lstat(userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeContent, err := os.ReadFile(userPath) // #nosec G304 -- userPath is rooted in t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	original := applySecureFileOwnership
+	applySecureFileOwnership = func(*os.File, int, int) error { return errors.New("injected ownership failure") }
+	t.Cleanup(func() { applySecureFileOwnership = original })
+	if err := SetValidatedProfileName(root, "rejected"); err == nil || !strings.Contains(err.Error(), "preserve existing secure file ownership") {
+		t.Fatalf("SetValidatedProfileName() error = %v, want ownership failure", err)
+	}
+	after, err := os.Lstat(userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("ownership failure replaced the destination inode")
+	}
+	afterContent, err := os.ReadFile(userPath) // #nosec G304 -- userPath is rooted in t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterContent) != string(beforeContent) {
+		t.Fatal("ownership failure changed the destination content")
 	}
 }

@@ -99,9 +99,18 @@ type nftListSource struct {
 }
 
 type nftSetPopulation struct {
-	name    string
-	entries []string
+	name     string
+	entries  []string
+	kind     nftSetPopulationKind
+	inetOnly bool
 }
+
+type nftSetPopulationKind uint8
+
+const (
+	nftAddressPopulation nftSetPopulationKind = iota
+	nftAddressPortPopulation
+)
 
 type nftObjectKey struct {
 	family string
@@ -538,6 +547,178 @@ func populateSet(ctx context.Context, sources []nftListSource, setName string) (
 	return population, errors.Join(errs...)
 }
 
+func populateWhitelistSets(ctx context.Context, sources []nftListSource, addressSetName, portSetName string) (nftSetPopulation, nftSetPopulation, error) {
+	addresses := nftSetPopulation{name: addressSetName}
+	ports := nftSetPopulation{name: portSetName, kind: nftAddressPortPopulation}
+	if !nftSetNameRE.MatchString(addressSetName) || !nftSetNameRE.MatchString(portSetName) {
+		return addresses, ports, fmt.Errorf("invalid nftables whitelist set name")
+	}
+	wantIPv6 := strings.HasSuffix(addressSetName, "6")
+	seenAddresses := make(map[string]struct{})
+	seenPorts := make(map[string]struct{})
+	var errs []error
+	for _, source := range sources {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		content, err := readRootedNFTFile(source.path)
+		if errors.Is(err, fs.ErrNotExist) && !source.required {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: read %s: %w", addressSetName, source.path, err))
+			continue
+		}
+		validInFile := 0
+		for lineNumber, rawLine := range strings.Split(string(content), "\n") {
+			line := strings.TrimSpace(rawLine)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			entry, parseErr := parseCanonicalListEntry(line, true)
+			if parseErr != nil {
+				errs = append(errs, fmt.Errorf("%s: %s:%d: %w", addressSetName, source.path, lineNumber+1, parseErr))
+				continue
+			}
+			if wantIPv6 == entry.isIPv4 {
+				errs = append(errs, fmt.Errorf("%s: %s:%d: address family does not match the destination set", addressSetName, source.path, lineNumber+1))
+				continue
+			}
+			validInFile++
+			if entry.port == "" {
+				if _, duplicate := seenAddresses[entry.network]; !duplicate {
+					seenAddresses[entry.network] = struct{}{}
+					addresses.entries = append(addresses.entries, entry.network)
+				}
+				continue
+			}
+			expression := entry.network + " . " + entry.port
+			if _, duplicate := seenPorts[expression]; !duplicate {
+				seenPorts[expression] = struct{}{}
+				ports.entries = append(ports.entries, expression)
+			}
+		}
+		if source.required && validInFile == 0 {
+			errs = append(errs, fmt.Errorf("%s: required list %s contains no valid entries", addressSetName, source.path))
+		}
+	}
+	normalized, err := normalizeNFTIntervals(addressSetName, addresses.entries)
+	if err != nil {
+		errs = append(errs, err)
+	} else {
+		addresses.entries = normalized
+	}
+	normalizedPorts, normalizePortsErr := normalizeNFTAddressPortEntries(portSetName, ports.entries)
+	if normalizePortsErr != nil {
+		errs = append(errs, normalizePortsErr)
+	} else {
+		ports.entries = normalizedPorts
+	}
+	return addresses, ports, errors.Join(errs...)
+}
+
+func normalizeNFTAddressPortEntries(setName string, entries []string) ([]string, error) {
+	byPort := make(map[string][]string)
+	for _, value := range entries {
+		parts := strings.Split(value, " . ")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("%s: invalid address and port expression %q", setName, value)
+		}
+		network, _, err := canonicalIPOrPrefix(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", setName, err)
+		}
+		port, err := canonicalPort(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", setName, err)
+		}
+		byPort[port] = append(byPort[port], network)
+	}
+
+	ports := make([]string, 0, len(byPort))
+	for port := range byPort {
+		ports = append(ports, port)
+	}
+	sort.Strings(ports)
+	normalized := make([]string, 0, len(entries))
+	for _, port := range ports {
+		networks, err := normalizeNFTIntervals(setName+" port "+port, byPort[port])
+		if err != nil {
+			return nil, err
+		}
+		for _, network := range networks {
+			normalized = append(normalized, network+" . "+port)
+		}
+	}
+	sort.Strings(normalized)
+	return normalized, nil
+}
+
+func populateSSHBypassSets(ctx context.Context, source nftListSource, effectivePort string) (nftSetPopulation, nftSetPopulation, error) {
+	ipv4 := nftSetPopulation{name: "syswarden_ssh_bypass", inetOnly: true}
+	ipv6 := nftSetPopulation{name: "syswarden_ssh_bypass6", inetOnly: true}
+	canonicalEffectivePort, err := canonicalPort(effectivePort)
+	if err != nil {
+		return ipv4, ipv6, fmt.Errorf("invalid effective SSH port: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return ipv4, ipv6, err
+	}
+	content, err := readRootedNFTFile(source.path)
+	if errors.Is(err, fs.ErrNotExist) && !source.required {
+		return ipv4, ipv6, nil
+	}
+	if err != nil {
+		return ipv4, ipv6, fmt.Errorf("read SSH bypass list %s: %w", source.path, err)
+	}
+	seenIPv4 := make(map[string]struct{})
+	seenIPv6 := make(map[string]struct{})
+	var errs []error
+	valid := 0
+	for lineNumber, rawLine := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		entry, parseErr := parseCanonicalListEntry(line, true)
+		if parseErr != nil {
+			errs = append(errs, fmt.Errorf("SSH bypass list %s:%d: %w", source.path, lineNumber+1, parseErr))
+			continue
+		}
+		if entry.port != "" && entry.port != canonicalEffectivePort {
+			errs = append(errs, fmt.Errorf("SSH bypass list %s:%d: port %s does not match the effective SSH port %s", source.path, lineNumber+1, entry.port, canonicalEffectivePort))
+			continue
+		}
+		valid++
+		if entry.isIPv4 {
+			if _, duplicate := seenIPv4[entry.network]; !duplicate {
+				seenIPv4[entry.network] = struct{}{}
+				ipv4.entries = append(ipv4.entries, entry.network)
+			}
+		} else if _, duplicate := seenIPv6[entry.network]; !duplicate {
+			seenIPv6[entry.network] = struct{}{}
+			ipv6.entries = append(ipv6.entries, entry.network)
+		}
+	}
+	if source.required && valid == 0 {
+		errs = append(errs, fmt.Errorf("required SSH bypass list %s contains no valid entries", source.path))
+	}
+	normalizedIPv4, normalizeIPv4Err := normalizeNFTIntervals(ipv4.name, ipv4.entries)
+	if normalizeIPv4Err != nil {
+		errs = append(errs, normalizeIPv4Err)
+	} else {
+		ipv4.entries = normalizedIPv4
+	}
+	normalizedIPv6, normalizeIPv6Err := normalizeNFTIntervals(ipv6.name, ipv6.entries)
+	if normalizeIPv6Err != nil {
+		errs = append(errs, normalizeIPv6Err)
+	} else {
+		ipv6.entries = normalizedIPv6
+	}
+	return ipv4, ipv6, errors.Join(errs...)
+}
+
 type nftAddressInterval struct {
 	text  string
 	start netip.Addr
@@ -646,6 +827,11 @@ func canonicalNFTIntervalExpression(value string) (string, error) {
 }
 
 func applyChunk(builder *strings.Builder, setName string, chunk []string) error {
+	return applyPopulationChunk(builder, nftSetPopulation{name: setName}, chunk)
+}
+
+func applyPopulationChunk(builder *strings.Builder, population nftSetPopulation, chunk []string) error {
+	setName := population.name
 	if !nftSetNameRE.MatchString(setName) {
 		return fmt.Errorf("invalid nftables set name %q", setName)
 	}
@@ -654,16 +840,43 @@ func applyChunk(builder *strings.Builder, setName string, chunk []string) error 
 	}
 	canonical := make([]string, 0, len(chunk))
 	for _, entry := range chunk {
-		expression, err := canonicalNFTIntervalExpression(entry)
+		var expression string
+		var err error
+		switch population.kind {
+		case nftAddressPopulation:
+			expression, err = canonicalNFTIntervalExpression(entry)
+		case nftAddressPortPopulation:
+			expression, err = canonicalNFTAddressPortExpression(entry)
+		default:
+			err = fmt.Errorf("unsupported nftables population kind %d", population.kind)
+		}
 		if err != nil {
 			return fmt.Errorf("%s: %w", setName, err)
 		}
 		canonical = append(canonical, expression)
 	}
 	serialized := strings.Join(canonical, ", ")
-	_, _ = fmt.Fprintf(builder, "add element netdev syswarden_hw_drop %s { %s }\n", setName, serialized)
+	if !population.inetOnly {
+		_, _ = fmt.Fprintf(builder, "add element netdev syswarden_hw_drop %s { %s }\n", setName, serialized)
+	}
 	_, _ = fmt.Fprintf(builder, "add element inet syswarden %s { %s }\n", setName, serialized)
 	return nil
+}
+
+func canonicalNFTAddressPortExpression(value string) (string, error) {
+	parts := strings.Split(value, " . ")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid nftables address and port expression %q", value)
+	}
+	network, err := canonicalNFTIntervalExpression(parts[0])
+	if err != nil {
+		return "", err
+	}
+	port, err := canonicalPort(parts[1])
+	if err != nil {
+		return "", err
+	}
+	return network + " . " + port, nil
 }
 
 func buildPopulationRules(populations []nftSetPopulation) (string, error) {
@@ -676,7 +889,7 @@ func buildPopulationRules(populations []nftSetPopulation) (string, error) {
 			if end > len(population.entries) {
 				end = len(population.entries)
 			}
-			if err := applyChunk(&builder, population.name, population.entries[start:end]); err != nil {
+			if err := applyPopulationChunk(&builder, population, population.entries[start:end]); err != nil {
 				errs = append(errs, fmt.Errorf("prepare %s population: %w", population.name, err))
 			}
 		}

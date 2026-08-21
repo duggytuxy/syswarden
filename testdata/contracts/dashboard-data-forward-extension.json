@@ -13,7 +13,7 @@
     "disk_total_mb": 8192,
     "cores": "8",
     "arch": "arm64",
-    "os": "freebsd",
+    "os": "futureos",
     "cpu_model": "Forward fixture CPU",
     "server_ip": "2001:db8::30",
     "services": [],

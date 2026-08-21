@@ -246,7 +246,7 @@ func TestV4028ModularHADefaultNormalizesAtomicallyAndPreservesOtherBytes_SW_CFG_
 		t.Fatal(err)
 	}
 	userPath := filepath.Join(root, "modules", "99-user.toml")
-	const userContent = "# operator bytes must survive\n[user]\nwebtui_password = \"operator-token\"\n"
+	const userContent = "# operator bytes must survive\n[user]\nprofile_name = \"operator-profile\"\n"
 	if err := os.WriteFile(userPath, []byte(userContent), 0600); err != nil {
 		t.Fatal(err)
 	}

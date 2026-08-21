@@ -100,29 +100,13 @@ var installCmd = &cobra.Command{
 			return installStageError("HA cluster setup failed", err)
 		}
 
-		// Web-TUI Initialization (Must run before Phase 5 to prevent Web-TUI crashes on minimal OS)
-		token := readConfigToken()
-		if token == "" {
-			token = generateSecureToken(32)
-			if err := updateConfigToken(token); err != nil {
-				return installStageError("failed to save Web-TUI token", err)
-			}
-		}
-
 		// Phase 5: Deployment Orchestration
 		fmt.Println("[SYSWARDEN] Starting Systemd Orchestration...")
 		if err := system.SetupService(); err != nil {
 			return installStageError("service setup failed", err)
 		}
 
-		ip := getPublicIP()
-		fmt.Printf("\n======================================================\n")
-		fmt.Printf("[+] Web-TUI Client Access URL: https://%s:%s/\n", ip, webtuiPort)
-		fmt.Printf("    Username: admin\n")
-		fmt.Printf("    Password: %s\n", token)
-		fmt.Printf("======================================================\n\n")
-
-		fmt.Println("[SYSWARDEN] v4.02.14 Native Installation Complete.")
+		fmt.Println("[SYSWARDEN] v4.03.0 native installation complete.")
 		return nil
 	},
 }
@@ -134,6 +118,9 @@ func installStageError(stage string, err error) error {
 }
 
 func prepareInstallConfiguration(configRoot string) error {
+	if err := config.RemoveRetiredWebTUIConfiguration(configRoot); err != nil {
+		return fmt.Errorf("remove retired Web-TUI configuration: %w", err)
+	}
 	if err := config.EnsureDefaults(configRoot); err != nil {
 		return fmt.Errorf("complete missing modular defaults: %w", err)
 	}

@@ -18,10 +18,10 @@ type HAConfig struct {
 
 type SIEMConfig struct {
 	Enabled  bool   `mapstructure:"enabled"`
-	IP       string `mapstructure:"ip"`
+	IP       string `mapstructure:"ip" validate:"ip"`
 	Port     string `mapstructure:"port" validate:"port"`
-	Protocol string `mapstructure:"protocol"`
-	TLSCA    string `mapstructure:"tls_ca"`
+	Protocol string `mapstructure:"protocol" validate:"omitempty,oneof=tls tcp udp"`
+	TLSCA    string `mapstructure:"tls_ca" validate:"absolute_path_optional"`
 }
 
 type AbuseIPDBConfig struct {
@@ -31,9 +31,9 @@ type AbuseIPDBConfig struct {
 
 type WebhooksConfig struct {
 	Enabled    bool   `mapstructure:"enabled"`
-	DiscordURL string `mapstructure:"discord_url"`
-	TeamsURL   string `mapstructure:"teams_url"`
-	SlackURL   string `mapstructure:"slack_url"`
+	DiscordURL string `mapstructure:"discord_url" validate:"https_url_optional"`
+	TeamsURL   string `mapstructure:"teams_url" validate:"https_url_optional"`
+	SlackURL   string `mapstructure:"slack_url" validate:"https_url_optional"`
 }
 
 type BunkerWebConfig struct {
@@ -42,7 +42,7 @@ type BunkerWebConfig struct {
 
 type WazuhConfig struct {
 	Enabled    bool   `mapstructure:"enabled"`
-	IP         string `mapstructure:"ip"`
+	IP         string `mapstructure:"ip" validate:"ip"`
 	Name       string `mapstructure:"name"`
 	Group      string `mapstructure:"group"`
 	CommPort   string `mapstructure:"comm_port" validate:"port"`

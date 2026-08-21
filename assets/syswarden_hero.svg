@@ -1,303 +1,136 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800" viewBox="0 0 1600 800" role="img" aria-labelledby="title description">
-  <title id="title">SysWarden active defense platform</title>
-  <desc id="description">SysWarden hero showing local HIDS, HIPS and WAAP security signals flowing into a host-local decision engine and nftables or PF enforcement. Recognized package targets are Debian, Ubuntu, RHEL, Fedora, CentOS, AlmaLinux, Rocky Linux, Alpine and FreeBSD 14.</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="720" viewBox="0 0 1600 720" role="img" aria-labelledby="title description">
+  <title id="title">SysWarden Linux host defense</title>
+  <desc id="description">Linux security signals flow through the SysWarden decision engine into nftables enforcement, local terminal operations and an authenticated HA migration fence. Six Linux packages produce an exact thirteen-asset Release.</desc>
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0D1117"/>
-      <stop offset="0.55" stop-color="#111820"/>
-      <stop offset="1" stop-color="#0B1017"/>
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.52" stop-color="#0b2033"/>
+      <stop offset="1" stop-color="#081727"/>
     </linearGradient>
-    <linearGradient id="brand-gradient" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#00E676"/>
-      <stop offset="0.42" stop-color="#00A3FF"/>
-      <stop offset="1" stop-color="#A371F7"/>
+    <linearGradient id="shield" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#38bdf8"/>
     </linearGradient>
-    <linearGradient id="shield-gradient" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#00A3FF"/>
-      <stop offset="1" stop-color="#0055FF"/>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#112c42" stop-opacity="0.98"/>
+      <stop offset="1" stop-color="#0c1e31" stop-opacity="0.98"/>
     </linearGradient>
-    <linearGradient id="panel-line" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#00E676" stop-opacity="0"/>
-      <stop offset="0.5" stop-color="#00A3FF" stop-opacity="0.85"/>
-      <stop offset="1" stop-color="#A371F7" stop-opacity="0"/>
-    </linearGradient>
-    <radialGradient id="blue-aura">
-      <stop offset="0" stop-color="#00A3FF" stop-opacity="0.2"/>
-      <stop offset="1" stop-color="#00A3FF" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="green-aura">
-      <stop offset="0" stop-color="#00E676" stop-opacity="0.14"/>
-      <stop offset="1" stop-color="#00E676" stop-opacity="0"/>
-    </radialGradient>
-    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
-      <path d="M48 0H0V48" fill="none" stroke="#8B949E" stroke-width="1" opacity="0.075"/>
-      <circle cx="0" cy="0" r="1.5" fill="#00A3FF" opacity="0.12"/>
-    </pattern>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000000" flood-opacity="0.38"/>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#020617" flood-opacity="0.55"/>
     </filter>
-    <filter id="blue-glow" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="8" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="22"/>
     </filter>
-    <filter id="soft-glow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="18"/>
-    </filter>
-    <marker id="arrow-cyan" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0L10 5L0 10Z" fill="#00A3FF"/>
-    </marker>
-    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0L10 5L0 10Z" fill="#00E676"/>
-    </marker>
-    <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0L10 5L0 10Z" fill="#F44336"/>
-    </marker>
     <style>
-      .sans { font-family: Inter, "Segoe UI", Arial, sans-serif; }
-      .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
-      .panel { fill: #161B22; stroke: #30363D; stroke-width: 2; }
-      .muted { fill: #8B949E; }
-      .body { fill: #C9D1D9; }
-      .white { fill: #F0F6FC; }
-      .eyebrow { font-size: 15px; font-weight: 700; letter-spacing: 3px; }
-      .panel-title { font-size: 16px; font-weight: 800; letter-spacing: 1.8px; }
-      .small { font-size: 13px; }
-      .os-name { font-size: 16px; font-weight: 750; }
-      .package { font-size: 12px; font-weight: 700; letter-spacing: 1.4px; }
+      .label { font: 700 18px Inter,Segoe UI,Arial,sans-serif; fill: #f8fafc; }
+      .small { font: 500 14px Inter,Segoe UI,Arial,sans-serif; fill: #a8bed0; }
+      .mono { font: 700 14px ui-monospace,SFMono-Regular,Consolas,monospace; fill: #d8f6ff; letter-spacing: .4px; }
+      .chip { fill: #102c42; stroke: #2d5872; stroke-width: 1.5; }
     </style>
   </defs>
 
-  <rect width="1600" height="800" fill="url(#background)"/>
-  <rect width="1600" height="800" fill="url(#grid)"/>
-  <ellipse cx="1230" cy="90" rx="390" ry="250" fill="url(#blue-aura)"/>
-  <ellipse cx="260" cy="500" rx="360" ry="300" fill="url(#green-aura)"/>
-  <rect x="20" y="20" width="1560" height="760" rx="30" fill="none" stroke="#30363D" stroke-width="2"/>
-  <rect x="21" y="21" width="1558" height="4" rx="2" fill="url(#brand-gradient)" opacity="0.9"/>
+  <rect width="1600" height="720" rx="30" fill="url(#background)"/>
+  <circle cx="1345" cy="82" r="190" fill="#0ea5e9" opacity="0.09" filter="url(#glow)"/>
+  <circle cx="230" cy="650" r="210" fill="#14b8a6" opacity="0.08" filter="url(#glow)"/>
+  <path d="M0 560 C260 500 420 650 700 585 S1190 500 1600 590 V720 H0 Z" fill="#0a1b2c" opacity="0.72"/>
 
-  <!-- Brand shield -->
-  <g transform="translate(70 60)" filter="url(#shadow)">
-    <path d="M62 0L124 25V74C124 113 94 139 62 151C30 139 0 113 0 74V25Z" fill="#111820" stroke="url(#shield-gradient)" stroke-width="4"/>
-    <path d="M62 18L105 35V70C105 96 84 115 62 126C40 115 19 96 19 70V35Z" fill="none" stroke="#00A3FF" stroke-width="2" opacity="0.55"/>
-    <path d="M43 53L60 70L43 87" fill="none" stroke="#F0F6FC" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M69 87H88" fill="none" stroke="#00E676" stroke-width="6" stroke-linecap="round" filter="url(#blue-glow)"/>
+  <g transform="translate(90 78)">
+    <g transform="translate(0 7)" filter="url(#shadow)">
+      <path d="M62 0 L118 20 V72 C118 119 91 151 62 170 C33 151 6 119 6 72 V20 Z" fill="url(#shield)"/>
+      <path d="M62 25 L94 37 V72 C94 98 80 118 62 132 C44 118 30 98 30 72 V37 Z" fill="#082032" opacity="0.92"/>
+      <path d="M45 73 L57 85 L82 56" fill="none" stroke="#d9fffb" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <text x="156" y="68" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="70" font-weight="800" fill="#f8fafc" letter-spacing="-2">SysWarden</text>
+    <text x="159" y="108" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="23" font-weight="600" fill="#5eead4" letter-spacing="2">LINUX HOST DEFENSE</text>
+    <text x="159" y="145" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="500" fill="#a8bed0">Local enforcement | authenticated HA | fail-closed release gates</text>
   </g>
 
-  <!-- Hero copy -->
-  <g class="sans">
-    <text x="230" y="78" class="eyebrow" fill="#00E676">ACTIVE DEFENSE / HIDS / HIPS / WAAP</text>
-    <text x="224" y="166" font-size="86" font-weight="850" letter-spacing="-3" fill="url(#brand-gradient)">SYSWARDEN</text>
-    <text x="230" y="208" font-size="23" font-weight="650" class="white">Active Defense and HIDS/HIPS Orchestration</text>
-    <text x="230" y="241" font-size="19" font-weight="500" class="body">for Critical Linux &amp; FreeBSD Infrastructure</text>
-  </g>
-
-  <!-- Capability rail -->
-  <g class="sans" transform="translate(1040 65)">
-    <rect width="470" height="166" rx="20" fill="#111820" stroke="#30363D" stroke-width="2"/>
-    <text x="26" y="35" class="panel-title" fill="#00A3FF">HOST-LOCAL SECURITY CONTROL PLANE</text>
-    <line x1="26" y1="52" x2="444" y2="52" stroke="url(#panel-line)" stroke-width="2"/>
-    <g transform="translate(26 76)">
-      <circle cx="9" cy="9" r="9" fill="#00E676" opacity="0.18"/>
-      <circle cx="9" cy="9" r="4" fill="#00E676"/>
-      <text x="28" y="14" font-size="15" font-weight="650" class="body">Out-of-band log analysis</text>
+  <g transform="translate(90 292)" filter="url(#shadow)">
+    <rect width="320" height="214" rx="22" fill="url(#panel)" stroke="#22455e" stroke-width="2"/>
+    <text x="26" y="40" class="small" fill="#5eead4">SECURITY INPUTS</text>
+    <g transform="translate(24 64)">
+      <rect width="272" height="38" rx="10" class="chip"/>
+      <circle cx="22" cy="19" r="6" fill="#38bdf8"/>
+      <text x="40" y="24" class="label" font-size="16">HIDS and host telemetry</text>
     </g>
-    <g transform="translate(244 76)">
-      <circle cx="9" cy="9" r="9" fill="#00A3FF" opacity="0.18"/>
-      <circle cx="9" cy="9" r="4" fill="#00A3FF"/>
-      <text x="28" y="14" font-size="15" font-weight="650" class="body">Fail-closed controls</text>
+    <g transform="translate(24 112)">
+      <rect width="272" height="38" rx="10" class="chip"/>
+      <circle cx="22" cy="19" r="6" fill="#2dd4bf"/>
+      <text x="40" y="24" class="label" font-size="16">WAAP logs, out of band</text>
     </g>
-    <g transform="translate(26 116)">
-      <circle cx="9" cy="9" r="9" fill="#A371F7" opacity="0.18"/>
-      <circle cx="9" cy="9" r="4" fill="#A371F7"/>
-      <text x="28" y="14" font-size="15" font-weight="650" class="body">IPv4 + IPv6 policy</text>
-    </g>
-    <g transform="translate(244 116)">
-      <circle cx="9" cy="9" r="9" fill="#FFB000" opacity="0.18"/>
-      <circle cx="9" cy="9" r="4" fill="#FFB000"/>
-      <text x="28" y="14" font-size="15" font-weight="650" class="body">Kernel enforcement</text>
+    <g transform="translate(24 160)">
+      <rect width="272" height="38" rx="10" class="chip"/>
+      <circle cx="22" cy="19" r="6" fill="#f59e0b"/>
+      <text x="40" y="24" class="label" font-size="16">Threat-intelligence feeds</text>
     </g>
   </g>
 
-  <!-- Main architecture panels -->
-  <g filter="url(#shadow)">
-    <rect x="70" y="292" width="430" height="248" rx="22" class="panel"/>
-    <rect x="1100" y="292" width="430" height="248" rx="22" class="panel"/>
+  <g transform="translate(492 255)" filter="url(#shadow)">
+    <rect width="426" height="288" rx="28" fill="#0d293e" stroke="#2dd4bf" stroke-width="2.5"/>
+    <rect x="20" y="20" width="386" height="248" rx="20" fill="#091d2f" stroke="#24506a"/>
+    <text x="213" y="64" text-anchor="middle" class="small" fill="#5eead4">HOST-LOCAL DECISION ENGINE</text>
+    <text x="213" y="111" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="31" font-weight="800" fill="#f8fafc">Policy and provenance</text>
+    <path d="M79 150 H347" stroke="#284a61" stroke-width="2"/>
+    <g transform="translate(48 173)">
+      <rect width="150" height="58" rx="14" fill="#102e43"/>
+      <text x="75" y="25" text-anchor="middle" class="mono">CLI + CORE</text>
+      <text x="75" y="44" text-anchor="middle" class="small">validated config</text>
+    </g>
+    <g transform="translate(228 173)">
+      <rect width="150" height="58" rx="14" fill="#102e43"/>
+      <text x="75" y="25" text-anchor="middle" class="mono">LOCAL TUI</text>
+      <text x="75" y="44" text-anchor="middle" class="small">no listener</text>
+    </g>
   </g>
 
-  <!-- Security signals -->
-  <g class="sans">
-    <circle cx="99" cy="321" r="5" fill="#F44336"/>
-    <circle cx="117" cy="321" r="5" fill="#FFB000"/>
-    <circle cx="135" cy="321" r="5" fill="#00E676"/>
-    <text x="161" y="327" class="panel-title" fill="#F0F6FC">SECURITY SIGNALS</text>
-    <text x="465" y="343" class="small muted" text-anchor="end">LOGS ALREADY WRITTEN</text>
-    <line x1="94" y1="355" x2="476" y2="355" stroke="#30363D" stroke-width="1.5"/>
+  <path d="M410 399 H472" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"/>
+  <path d="M460 389 L476 399 L460 409" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <g transform="translate(96 367)">
-      <rect width="378" height="35" rx="9" fill="#0D1117" stroke="#253140"/>
-      <circle cx="19" cy="17.5" r="6" fill="#00E676" opacity="0.25"/>
-      <circle cx="19" cy="17.5" r="2.5" fill="#00E676"/>
-      <text x="37" y="22" class="mono body" font-size="14">authentication and brute-force events</text>
+  <g transform="translate(1000 292)" filter="url(#shadow)">
+    <rect width="510" height="214" rx="22" fill="url(#panel)" stroke="#22455e" stroke-width="2"/>
+    <text x="26" y="40" class="small" fill="#5eead4">VERIFIED OUTPUTS</text>
+    <g transform="translate(24 64)">
+      <rect width="222" height="62" rx="13" class="chip"/>
+      <text x="18" y="27" class="mono">NFTABLES</text>
+      <text x="18" y="48" class="small">atomic Linux policy</text>
     </g>
-    <g transform="translate(96 412)">
-      <rect width="378" height="35" rx="9" fill="#0D1117" stroke="#253140"/>
-      <circle cx="19" cy="17.5" r="6" fill="#A371F7" opacity="0.25"/>
-      <circle cx="19" cy="17.5" r="2.5" fill="#A371F7"/>
-      <text x="37" y="22" class="mono body" font-size="14">reverse-proxy and WAAP detections</text>
+    <g transform="translate(264 64)">
+      <rect width="222" height="62" rx="13" class="chip"/>
+      <text x="18" y="27" class="mono">HA API : 62026</text>
+      <text x="18" y="48" class="small">TLS 1.3 + bearer</text>
     </g>
-    <g transform="translate(96 457)">
-      <rect width="378" height="35" rx="9" fill="#0D1117" stroke="#253140"/>
-      <circle cx="19" cy="17.5" r="6" fill="#00A3FF" opacity="0.25"/>
-      <circle cx="19" cy="17.5" r="2.5" fill="#00A3FF"/>
-      <text x="37" y="22" class="mono body" font-size="14">security logs and policy inputs</text>
+    <g transform="translate(24 142)">
+      <rect width="462" height="48" rx="12" fill="#0e3548" stroke="#2dd4bf" stroke-width="1.5"/>
+      <text x="20" y="21" class="mono">MIGRATION FENCE</text>
+      <text x="190" y="21" class="small">challenge + condition bound</text>
+      <text x="20" y="40" class="small">Opaque epoch and digest equality | peer scoped</text>
     </g>
-    <text x="96" y="518" class="small muted">Observe locally / decide locally / enforce at the host edge</text>
   </g>
 
-  <!-- Local decision engine -->
-  <g>
-    <circle cx="800" cy="411" r="151" fill="#00A3FF" opacity="0.04"/>
-    <circle cx="800" cy="411" r="126" fill="none" stroke="#00A3FF" stroke-width="2" opacity="0.18"/>
-    <circle cx="800" cy="411" r="99" fill="#111820" stroke="#30363D" stroke-width="2"/>
-    <circle cx="800" cy="411" r="86" fill="none" stroke="url(#brand-gradient)" stroke-width="2.5" opacity="0.9"/>
-    <circle cx="800" cy="411" r="72" fill="#0D1117"/>
-    <path d="M800 346L853 367V409C853 443 827 466 800 476C773 466 747 443 747 409V367Z" fill="#111820" stroke="url(#shield-gradient)" stroke-width="4" filter="url(#blue-glow)"/>
-    <path d="M781 391L797 407L781 423" fill="none" stroke="#F0F6FC" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M806 423H824" stroke="#00E676" stroke-width="5" stroke-linecap="round"/>
-    <text x="800" y="309" class="sans eyebrow" fill="#00A3FF" text-anchor="middle">LOCAL DECISION ENGINE</text>
-    <text x="800" y="512" class="sans" font-size="15" font-weight="750" fill="#F0F6FC" text-anchor="middle">DETECT / DECIDE / ENFORCE</text>
+  <path d="M920 399 H980" stroke="#2dd4bf" stroke-width="4" stroke-linecap="round"/>
+  <path d="M968 389 L984 399 L968 409" fill="none" stroke="#2dd4bf" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <path d="M500 411H652" fill="none" stroke="#00A3FF" stroke-width="3" marker-end="url(#arrow-cyan)"/>
-    <path d="M948 411H1100" fill="none" stroke="#00A3FF" stroke-width="3" marker-end="url(#arrow-cyan)"/>
-    <circle cx="575" cy="411" r="5" fill="#00A3FF"/>
-    <circle cx="1025" cy="411" r="5" fill="#00A3FF"/>
-  </g>
-
-  <!-- Host enforcement -->
-  <g class="sans">
-    <circle cx="1129" cy="321" r="5" fill="#F44336"/>
-    <circle cx="1147" cy="321" r="5" fill="#FFB000"/>
-    <circle cx="1165" cy="321" r="5" fill="#00E676"/>
-    <text x="1191" y="327" class="panel-title" fill="#F0F6FC">HOST ENFORCEMENT</text>
-    <text x="1500" y="343" class="small muted" text-anchor="end">KERNEL EDGE</text>
-    <line x1="1124" y1="355" x2="1506" y2="355" stroke="#30363D" stroke-width="1.5"/>
-
-    <rect x="1130" y="372" width="160" height="114" rx="14" fill="#0D1117" stroke="#00A3FF" stroke-width="2"/>
-    <path d="M1160 399H1260M1160 420H1260M1160 441H1260M1160 462H1260" stroke="#30363D" stroke-width="7" stroke-linecap="round"/>
-    <circle cx="1171" cy="399" r="4" fill="#00E676"/>
-    <circle cx="1171" cy="420" r="4" fill="#00A3FF"/>
-    <circle cx="1171" cy="441" r="4" fill="#A371F7"/>
-    <circle cx="1171" cy="462" r="4" fill="#FFB000"/>
-    <text x="1210" y="513" font-size="15" font-weight="750" class="white" text-anchor="middle">nftables / PF</text>
-
-    <path d="M1290 408H1338V389H1370" fill="none" stroke="#00E676" stroke-width="3" marker-end="url(#arrow-green)"/>
-    <rect x="1370" y="365" width="126" height="48" rx="12" fill="#00E676" opacity="0.1" stroke="#00E676" stroke-width="1.5"/>
-    <path d="M1390 389L1400 399L1418 378" fill="none" stroke="#00E676" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="1458" y="395" font-size="14" font-weight="750" fill="#00E676" text-anchor="middle">ALLOWED</text>
-
-    <path d="M1290 450H1338V469H1370" fill="none" stroke="#F44336" stroke-width="3" marker-end="url(#arrow-red)"/>
-    <rect x="1370" y="445" width="126" height="48" rx="12" fill="#F44336" opacity="0.1" stroke="#F44336" stroke-width="1.5"/>
-    <path d="M1390 462L1410 482M1410 462L1390 482" stroke="#F44336" stroke-width="4" stroke-linecap="round"/>
-    <text x="1458" y="476" font-size="14" font-weight="750" fill="#F44336" text-anchor="middle">BLOCKED</text>
-
-    <text x="1370" y="522" class="small muted">IPv4 + IPv6 / state reconciled</text>
-  </g>
-
-  <!-- Supported operating systems -->
-  <g class="sans">
-    <text x="80" y="607" class="eyebrow" fill="#00E676">RECOGNIZED PACKAGE TARGETS</text>
-    <text x="1520" y="607" class="small muted" text-anchor="end">DEB / RPM / APK / TXZ | amd64 + arm64 | FreeBSD amd64</text>
-    <line x1="80" y1="621" x2="1520" y2="621" stroke="url(#panel-line)" stroke-width="2"/>
-
-    <!-- Debian -->
-    <g transform="translate(80 642)">
-      <rect width="144" height="94" rx="15" class="panel"/>
-      <circle cx="30" cy="35" r="18" fill="#A371F7" opacity="0.15"/>
-      <path d="M34 25C23 20 16 30 21 39C25 46 37 44 40 36C42 31 39 27 34 25ZM34 29C39 31 38 38 34 41C29 45 22 41 23 35C24 30 29 27 34 29Z" fill="#A371F7"/>
-      <text x="56" y="40" class="os-name white">Debian</text>
-      <text x="72" y="76" class="package muted" text-anchor="middle">DEB</text>
+  <g transform="translate(90 586)">
+    <text x="0" y="18" class="small" fill="#5eead4">QUALIFIED RELEASE CONTRACT</text>
+    <g transform="translate(0 34)">
+      <rect width="218" height="48" rx="12" class="chip"/>
+      <text x="109" y="29" text-anchor="middle" class="mono">DEB | amd64 + arm64</text>
     </g>
-
-    <!-- Ubuntu -->
-    <g transform="translate(240 642)">
-      <rect width="144" height="94" rx="15" class="panel"/>
-      <circle cx="30" cy="35" r="15" fill="none" stroke="#FFB000" stroke-width="4"/>
-      <circle cx="30" cy="17" r="4" fill="#FFB000"/>
-      <circle cx="15" cy="43" r="4" fill="#FFB000"/>
-      <circle cx="45" cy="43" r="4" fill="#FFB000"/>
-      <text x="56" y="40" class="os-name white">Ubuntu</text>
-      <text x="72" y="76" class="package muted" text-anchor="middle">DEB</text>
+    <g transform="translate(232 34)">
+      <rect width="234" height="48" rx="12" class="chip"/>
+      <text x="117" y="29" text-anchor="middle" class="mono">RPM | x86_64 + aarch64</text>
     </g>
-
-    <!-- RHEL -->
-    <g transform="translate(400 642)">
-      <rect width="144" height="94" rx="15" class="panel"/>
-      <circle cx="30" cy="35" r="18" fill="#F44336" opacity="0.14"/>
-      <path d="M16 38H44L39 29H34L31 23H24L21 29H18Z" fill="#F44336"/>
-      <text x="58" y="40" class="os-name white">RHEL</text>
-      <text x="72" y="76" class="package muted" text-anchor="middle">RPM</text>
+    <g transform="translate(480 34)">
+      <rect width="234" height="48" rx="12" class="chip"/>
+      <text x="117" y="29" text-anchor="middle" class="mono">APK | x86_64 + aarch64</text>
     </g>
-
-    <!-- Fedora -->
-    <g transform="translate(560 642)">
-      <rect width="144" height="94" rx="15" class="panel"/>
-      <circle cx="30" cy="35" r="18" fill="#00A3FF" opacity="0.16"/>
-      <path d="M33 21C24 21 20 27 20 35V49H28V37H38V31H28V29C28 27 30 26 33 26H40V21Z" fill="#00A3FF"/>
-      <text x="56" y="40" class="os-name white">Fedora</text>
-      <text x="72" y="76" class="package muted" text-anchor="middle">RPM</text>
+    <g transform="translate(728 34)">
+      <rect width="260" height="48" rx="12" fill="#103446" stroke="#2dd4bf" stroke-width="1.5"/>
+      <text x="130" y="29" text-anchor="middle" class="mono">6 PACKAGES | 13 ASSETS</text>
     </g>
-
-    <!-- CentOS -->
-    <g transform="translate(720 642)">
-      <rect width="144" height="94" rx="15" class="panel"/>
-      <circle cx="30" cy="35" r="18" fill="#A371F7" opacity="0.15"/>
-      <path d="M20 25H40V45H20Z" fill="none" stroke="#A371F7" stroke-width="3"/>
-      <path d="M20 25L40 45M40 25L20 45" stroke="#A371F7" stroke-width="3"/>
-      <text x="56" y="40" class="os-name white">CentOS</text>
-      <text x="72" y="76" class="package muted" text-anchor="middle">RPM</text>
-    </g>
-
-    <!-- AlmaLinux -->
-    <g transform="translate(880 642)">
-      <rect width="144" height="94" rx="15" class="panel"/>
-      <circle cx="30" cy="35" r="18" fill="#00E676" opacity="0.14"/>
-      <circle cx="30" cy="35" r="10" fill="none" stroke="#00E676" stroke-width="3"/>
-      <circle cx="30" cy="35" r="3" fill="#00E676"/>
-      <text x="54" y="36" class="os-name white" font-size="15">Alma</text>
-      <text x="54" y="52" class="small muted">Linux</text>
-      <text x="72" y="76" class="package muted" text-anchor="middle">RPM</text>
-    </g>
-
-    <!-- Rocky Linux -->
-    <g transform="translate(1040 642)">
-      <rect width="144" height="94" rx="15" class="panel"/>
-      <circle cx="30" cy="35" r="18" fill="#00E676" opacity="0.14"/>
-      <path d="M15 46L28 24L35 34L40 28L47 46Z" fill="#00E676"/>
-      <text x="55" y="36" class="os-name white" font-size="15">Rocky</text>
-      <text x="55" y="52" class="small muted">Linux</text>
-      <text x="72" y="76" class="package muted" text-anchor="middle">RPM</text>
-    </g>
-
-    <!-- Alpine -->
-    <g transform="translate(1200 642)">
-      <rect width="144" height="94" rx="15" class="panel"/>
-      <circle cx="30" cy="35" r="18" fill="#00A3FF" opacity="0.16"/>
-      <path d="M14 47L28 23L35 35L40 29L48 47H39L34 40L30 47Z" fill="#00A3FF"/>
-      <text x="55" y="40" class="os-name white">Alpine</text>
-      <text x="72" y="76" class="package muted" text-anchor="middle">APK</text>
-    </g>
-
-    <!-- FreeBSD -->
-    <g transform="translate(1360 642)">
-      <rect width="160" height="94" rx="15" class="panel"/>
-      <circle cx="30" cy="35" r="18" fill="#F44336" opacity="0.14"/>
-      <path d="M30 20V47M21 27L30 20L39 27M23 39L30 47L37 39" fill="none" stroke="#F44336" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="56" y="36" class="os-name white">FreeBSD</text>
-      <text x="56" y="52" class="small muted">14</text>
-      <text x="80" y="76" class="package muted" text-anchor="middle">TXZ</text>
+    <g transform="translate(1002 34)">
+      <rect width="418" height="48" rx="12" class="chip"/>
+      <text x="209" y="29" text-anchor="middle" class="mono">NATIVE ARM64 | ED25519 | EXACT SHA</text>
     </g>
   </g>
 </svg>

@@ -101,15 +101,18 @@ jobs:
           candidate_packages="${shard_root}/packages/candidate"
           previous_packages="${shard_root}/packages/previous"
           evidence_dir="${shard_root}/evidence"
+          transition_dir="${shard_root}/historical-transition"
           install -d -m 0700 \
             "${candidate_packages}" \
             "${previous_packages}" \
-            "${evidence_dir}"
+            "${evidence_dir}" \
+            "${transition_dir}"
           {
             printf 'SHARD_ROOT=%s\n' "${shard_root}"
             printf 'ARM_CANDIDATE_PACKAGES_DIR=%s\n' "${candidate_packages}"
             printf 'ARM_PREVIOUS_PACKAGES_DIR=%s\n' "${previous_packages}"
             printf 'ARM_EVIDENCE_DIR=%s\n' "${evidence_dir}"
+            printf 'ARM_TRANSITION_DIR=%s\n' "${transition_dir}"
           } >> "${GITHUB_ENV}"
           {
             printf 'candidate_packages_dir=%s\n' "${candidate_packages}"
@@ -223,6 +226,16 @@ jobs:
           assets_json="$(gh api --paginate --slurp --method GET \
             "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
             -f per_page=100)"
+          transition_required=false
+          transition_metadata="${ARM_TRANSITION_DIR}/public-release-assets.json"
+          transition_source_manifest="${ARM_TRANSITION_DIR}/public-SHA256SUMS.txt"
+          transition_provenance="${ARM_TRANSITION_DIR}/v4.02.8-linux-transition.json"
+          if [[ "${PREVIOUS_TAG}" == "v4.02.8" ]]; then
+            transition_required=true
+            jq -cS '[.[] | .[] | {digest, id, name, size, state}]' \
+              <<< "${assets_json}" > "${transition_metadata}"
+            chmod 0600 "${transition_metadata}"
+          fi
           expected_assets=(
             "syswarden_${previous_version}_amd64.deb"
             "syswarden_${previous_version}_arm64.deb"
@@ -230,7 +243,6 @@ jobs:
             "syswarden-${previous_version}-1.aarch64.rpm"
             "syswarden_${previous_version}_x86_64.apk"
             "syswarden_${previous_version}_aarch64.apk"
-            "syswarden-${previous_version}.txz"
             "SHA256SUMS.txt"
           )
           for asset_name in "${expected_assets[@]}"; do
@@ -251,6 +263,10 @@ jobs:
               exit 1
             fi
             destination="${ARM_PREVIOUS_PACKAGES_DIR}/${asset_name}"
+            if [[ "${transition_required}" == "true" && \
+                  "${asset_name}" == "SHA256SUMS.txt" ]]; then
+              destination="${transition_source_manifest}"
+            fi
             gh api --method GET \
               -H 'Accept: application/octet-stream' \
               "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
@@ -261,6 +277,20 @@ jobs:
             chmod 0600 "${destination}"
           done
           printf 'release_id=%s\n' "${release_id}" >> "${GITHUB_OUTPUT}"
+          if [[ "${transition_required}" == "true" ]]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+              normalize-v4028-linux-packages \
+              --repository "${GITHUB_REPOSITORY}" \
+              --release-id "${release_id}" \
+              --tag "${PREVIOUS_TAG}" \
+              --source-manifest "${transition_source_manifest}" \
+              --asset-metadata "${transition_metadata}" \
+              --packages "${ARM_PREVIOUS_PACKAGES_DIR}" \
+              --output-manifest "${ARM_PREVIOUS_PACKAGES_DIR}/SHA256SUMS.txt" \
+              --provenance-output "${transition_provenance}"
+            cat "${transition_provenance}"
+            sha256sum "${transition_provenance}"
+          fi
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
             verify-packages \
             --tag "${PREVIOUS_TAG}" \
@@ -532,10 +562,8 @@ jobs:
             mktemp
             podman
             python3
-            scp
             sed
             sha256sum
-            ssh
             stat
           )
           for tool in "${required_tools[@]}"; do
@@ -549,16 +577,20 @@ jobs:
           test ! -L "${RUNNER_TEMP}"
           qualification_root="$(mktemp -d \
             "${RUNNER_TEMP%/}/syswarden-release-qualification.XXXXXX")"
+          test -d "${qualification_root}"
+          test ! -L "${qualification_root}"
+          [[ -O "${qualification_root}" ]]
+          test "$(stat -c '%a' "${qualification_root}")" = "700"
           artifact_root="${qualification_root}/artifact"
           candidate_packages="${artifact_root}/packages/candidate"
           previous_packages="${artifact_root}/packages/previous"
           raw_dir="${artifact_root}/raw"
           bound_dir="${artifact_root}/bound"
           aggregate_dir="${artifact_root}/aggregate"
-          tools_dir="${artifact_root}/tools"
           status_dir="${qualification_root}/status-internal"
-          secrets_dir="${qualification_root}/secrets"
           signing_tool_dir="${qualification_root}/signing-tool"
+          nftables_tmp_dir="${qualification_root}/nftables-tmp"
+          transition_dir="${qualification_root}/historical-transition"
           install -d -m 0700 \
             "${artifact_root}" \
             "${candidate_packages}" \
@@ -568,8 +600,19 @@ jobs:
             "${aggregate_dir}" \
             "${artifact_root}/status" \
             "${status_dir}" \
-            "${secrets_dir}" \
-            "${signing_tool_dir}"
+            "${signing_tool_dir}" \
+            "${nftables_tmp_dir}" \
+            "${transition_dir}"
+          test -d "${nftables_tmp_dir}"
+          test ! -L "${nftables_tmp_dir}"
+          [[ -O "${nftables_tmp_dir}" ]]
+          test "$(stat -c '%a' "${nftables_tmp_dir}")" = "700"
+          nftables_tmp_probe="$(mktemp \
+            "${nftables_tmp_dir}/.write-probe.XXXXXX")"
+          test -f "${nftables_tmp_probe}"
+          test ! -L "${nftables_tmp_probe}"
+          rm -f -- "${nftables_tmp_probe}"
+          test ! -e "${nftables_tmp_probe}"
 
           {
             printf 'QUALIFICATION_ROOT=%s\n' "${qualification_root}"
@@ -579,10 +622,10 @@ jobs:
             printf 'RAW_DIR=%s\n' "${raw_dir}"
             printf 'BOUND_DIR=%s\n' "${bound_dir}"
             printf 'AGGREGATE_DIR=%s\n' "${aggregate_dir}"
-            printf 'TOOLS_DIR=%s\n' "${tools_dir}"
             printf 'STATUS_DIR=%s\n' "${status_dir}"
-            printf 'SECRETS_DIR=%s\n' "${secrets_dir}"
             printf 'SIGNING_TOOL_DIR=%s\n' "${signing_tool_dir}"
+            printf 'NFTABLES_TMP_DIR=%s\n' "${nftables_tmp_dir}"
+            printf 'TRANSITION_DIR=%s\n' "${transition_dir}"
           } >> "${GITHUB_ENV}"
           {
             printf 'qualification_root=%s\n' "${qualification_root}"
@@ -715,36 +758,6 @@ jobs:
           [[ "${tool_sha256}" =~ ^[0-9a-f]{64}$ ]]
           echo "sha256=${tool_sha256}" >> "${GITHUB_OUTPUT}"
 
-      - name: Build Exact FreeBSD Signed Updater Qualification Binary
-        if: ${{ steps.update_contract.outputs.required == 'true' }}
-        shell: bash
-        env:
-          RELEASE_SHA: ${{ inputs.release_sha }}
-        run: |
-          set -euo pipefail
-          test "$(go env GOVERSION)" = "go1.26.6"
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          install -d -m 0700 "${TOOLS_DIR}"
-          test_binary="${TOOLS_DIR}/syswarden-updater-freebsd.test"
-          env \
-            GOARCH=amd64 \
-            GOENV=off \
-            GOFLAGS=-mod=readonly \
-            GOOS=freebsd \
-            GOAMD64=v1 \
-            GOTOOLCHAIN=local \
-            CGO_ENABLED=0 \
-            go -C src/core/syswarden-cli test \
-              -c \
-              -buildvcs=true \
-              -ldflags="-X=syswarden-cli/pkg/system.freeBSDUpdaterQualificationSourceSHA=${RELEASE_SHA}" \
-              -o "${test_binary}" \
-              ./pkg/system
-          chmod 0700 "${test_binary}"
-          test -f "${test_binary}"
-          test ! -L "${test_binary}"
-          test -x "${test_binary}"
-
       - name: Download Latest Public Previous Packages by Asset ID
         id: previous
         shell: bash
@@ -769,6 +782,16 @@ jobs:
           assets_json="$(gh api --paginate --slurp --method GET \
             "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
             -f per_page=100)"
+          transition_required=false
+          transition_metadata="${TRANSITION_DIR}/public-release-assets.json"
+          transition_source_manifest="${TRANSITION_DIR}/public-SHA256SUMS.txt"
+          transition_provenance="${TRANSITION_DIR}/v4.02.8-linux-transition.json"
+          if [[ "${PREVIOUS_TAG}" == "v4.02.8" ]]; then
+            transition_required=true
+            jq -cS '[.[] | .[] | {digest, id, name, size, state}]' \
+              <<< "${assets_json}" > "${transition_metadata}"
+            chmod 0600 "${transition_metadata}"
+          fi
 
           expected_assets=(
             "syswarden_${previous_version}_amd64.deb"
@@ -777,7 +800,6 @@ jobs:
             "syswarden-${previous_version}-1.aarch64.rpm"
             "syswarden_${previous_version}_x86_64.apk"
             "syswarden_${previous_version}_aarch64.apk"
-            "syswarden-${previous_version}.txz"
             "SHA256SUMS.txt"
           )
           asset_records='[]'
@@ -799,6 +821,10 @@ jobs:
               exit 1
             fi
             destination="${PREVIOUS_PACKAGES_DIR}/${asset_name}"
+            if [[ "${transition_required}" == "true" && \
+                  "${asset_name}" == "SHA256SUMS.txt" ]]; then
+              destination="${transition_source_manifest}"
+            fi
             gh api --method GET \
               -H 'Accept: application/octet-stream' \
               "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
@@ -817,6 +843,20 @@ jobs:
           printf 'asset_ids=%s\n' "$(jq -c -S . <<< "${asset_records}")" \
             >> "${GITHUB_OUTPUT}"
 
+          if [[ "${transition_required}" == "true" ]]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+              normalize-v4028-linux-packages \
+              --repository "${GITHUB_REPOSITORY}" \
+              --release-id "${release_id}" \
+              --tag "${PREVIOUS_TAG}" \
+              --source-manifest "${transition_source_manifest}" \
+              --asset-metadata "${transition_metadata}" \
+              --packages "${PREVIOUS_PACKAGES_DIR}" \
+              --output-manifest "${PREVIOUS_PACKAGES_DIR}/SHA256SUMS.txt" \
+              --provenance-output "${transition_provenance}"
+            cat "${transition_provenance}"
+            sha256sum "${transition_provenance}"
+          fi
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
             verify-packages \
             --tag "${PREVIOUS_TAG}" \
@@ -965,72 +1005,30 @@ jobs:
             "${STATUS_DIR}/package-lab-arm64.rc" \
             "${STATUS_DIR}/package-lab.rc"
 
-      - name: Prepare Ephemeral FreeBSD Transport Secrets
-        shell: bash
-        env:
-          FREEBSD_IDENTITY: ${{ secrets.SYSWARDEN_FREEBSD_SSH_PRIVATE_KEY }}
-          FREEBSD_KNOWN_HOSTS: ${{ secrets.SYSWARDEN_FREEBSD_KNOWN_HOSTS }}
-          FREEBSD_MARKER_TOKEN: ${{ secrets.SYSWARDEN_FREEBSD_VM_MARKER_TOKEN }}
-          FREEBSD_SSH_PORT: ${{ vars.SYSWARDEN_FREEBSD_SSH_PORT }}
-          FREEBSD_SSH_USER: ${{ vars.SYSWARDEN_FREEBSD_SSH_USER }}
-        run: |
-          set -euo pipefail
-          umask 077
-          if [[ -z "${FREEBSD_IDENTITY}" || \
-                -z "${FREEBSD_KNOWN_HOSTS}" || \
-                ! "${FREEBSD_MARKER_TOKEN}" =~ ^[0-9a-fA-F]{32,128}$ || \
-                ! "${FREEBSD_SSH_PORT}" =~ ^[0-9]+$ || \
-                "${FREEBSD_SSH_PORT}" -lt 1 || \
-                "${FREEBSD_SSH_PORT}" -gt 65535 || \
-                ! "${FREEBSD_SSH_USER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
-            echo "ERROR: the protected FreeBSD transport configuration is incomplete or invalid." >&2
-            exit 1
-          fi
-          identity_file="${SECRETS_DIR}/freebsd-identity"
-          known_hosts_file="${SECRETS_DIR}/freebsd-known-hosts"
-          marker_token_file="${SECRETS_DIR}/freebsd-marker-token"
-          printf '%s\n' "${FREEBSD_IDENTITY}" > "${identity_file}"
-          printf '%s\n' "${FREEBSD_KNOWN_HOSTS}" > "${known_hosts_file}"
-          printf '%s\n' "${FREEBSD_MARKER_TOKEN}" > "${marker_token_file}"
-          chmod 0600 "${identity_file}" "${known_hosts_file}" "${marker_token_file}"
-          test "$(stat -c '%a' "${identity_file}")" = "600"
-          test "$(stat -c '%a' "${known_hosts_file}")" = "600"
-          test "$(stat -c '%a' "${marker_token_file}")" = "600"
-          {
-            printf 'FREEBSD_IDENTITY_FILE=%s\n' "${identity_file}"
-            printf 'FREEBSD_KNOWN_HOSTS_FILE=%s\n' "${known_hosts_file}"
-            printf 'FREEBSD_MARKER_TOKEN_FILE=%s\n' "${marker_token_file}"
-            printf 'FREEBSD_SSH_PORT=%s\n' "${FREEBSD_SSH_PORT}"
-            printf 'FREEBSD_SSH_USER=%s\n' "${FREEBSD_SSH_USER}"
-          } >> "${GITHUB_ENV}"
-
-      - name: Run Real FreeBSD VM Laboratory
-        shell: bash
-        run: |
-          set -euo pipefail
-          set +e
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_vm_lab.py \
-            --repo-root "${GITHUB_WORKSPACE}" \
-            --packages-dir "${CANDIDATE_PACKAGES_DIR}" \
-            --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}" \
-            --ssh-host 127.0.0.1 \
-            --ssh-port "${FREEBSD_SSH_PORT}" \
-            --ssh-user "${FREEBSD_SSH_USER}" \
-            --identity-file "${FREEBSD_IDENTITY_FILE}" \
-            --known-hosts-file "${FREEBSD_KNOWN_HOSTS_FILE}" \
-            --vm-marker-token-file "${FREEBSD_MARKER_TOKEN_FILE}" \
-            --output "${RAW_DIR}/freebsd-vm-raw.json" \
-            --pretty
-          laboratory_rc=$?
-          set -e
-          printf '%s\n' "${laboratory_rc}" > "${STATUS_DIR}/freebsd-lab.rc"
-          chmod 0600 "${STATUS_DIR}/freebsd-lab.rc"
-
       - name: Run Isolated nftables Kernel Laboratory
         shell: bash
         run: |
           set -euo pipefail
+          umask 077
+          test -n "${NFTABLES_TMP_DIR:-}"
+          test "${NFTABLES_TMP_DIR}" = "${QUALIFICATION_ROOT}/nftables-tmp"
+          test -d "${QUALIFICATION_ROOT}"
+          test ! -L "${QUALIFICATION_ROOT}"
+          [[ -O "${QUALIFICATION_ROOT}" ]]
+          test "$(stat -c '%a' "${QUALIFICATION_ROOT}")" = "700"
+          test -d "${NFTABLES_TMP_DIR}"
+          test ! -L "${NFTABLES_TMP_DIR}"
+          [[ -O "${NFTABLES_TMP_DIR}" ]]
+          test "$(stat -c '%a' "${NFTABLES_TMP_DIR}")" = "700"
+          nftables_tmp_probe="$(mktemp \
+            "${NFTABLES_TMP_DIR}/.write-probe.XXXXXX")"
+          test -f "${nftables_tmp_probe}"
+          test ! -L "${nftables_tmp_probe}"
+          rm -f -- "${nftables_tmp_probe}"
+          test ! -e "${nftables_tmp_probe}"
           set +e
+          TMPDIR="${NFTABLES_TMP_DIR}" \
+          GOTMPDIR="${NFTABLES_TMP_DIR}" \
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/nftables_kernel_lab.py \
             --repo-root "${GITHUB_WORKSPACE}" \
             --pull-policy never \
@@ -1061,7 +1059,6 @@ jobs:
             --package-raw "${RAW_DIR}/package-lifecycle-raw.json"
             --package-amd64-shard "${RAW_DIR}/package-lifecycle-amd64.json"
             --package-arm64-shard "${RAW_DIR}/package-lifecycle-arm64.json"
-            --freebsd-raw "${RAW_DIR}/freebsd-vm-raw.json"
             --expected-repository "${GITHUB_REPOSITORY}"
             --expected-workflow-run-id "${GITHUB_RUN_ID}"
             --expected-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}"
@@ -1076,14 +1073,12 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_adapter.py \
             build "${common_arguments[@]}" \
             --nft-output "${BOUND_DIR}/nftables-bound.json" \
-            --package-output "${BOUND_DIR}/package-lifecycle-bound.json" \
-            --freebsd-output "${BOUND_DIR}/freebsd-vm-bound.json"
+            --package-output "${BOUND_DIR}/package-lifecycle-bound.json"
           build_rc=$?
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_adapter.py \
             verify "${common_arguments[@]}" \
             --nft-envelope "${BOUND_DIR}/nftables-bound.json" \
-            --package-envelope "${BOUND_DIR}/package-lifecycle-bound.json" \
-            --freebsd-envelope "${BOUND_DIR}/freebsd-vm-bound.json"
+            --package-envelope "${BOUND_DIR}/package-lifecycle-bound.json"
           verify_rc=$?
           set -e
           printf '%s\n' "${build_rc}" > "${STATUS_DIR}/adapter-build.rc"
@@ -1104,7 +1099,6 @@ jobs:
             --candidate-packages-dir "${CANDIDATE_PACKAGES_DIR}"
             --nft-report "${BOUND_DIR}/nftables-bound.json"
             --package-report "${BOUND_DIR}/package-lifecycle-bound.json"
-            --freebsd-report "${BOUND_DIR}/freebsd-vm-bound.json"
             --max-age-seconds 172800
             --max-report-skew-seconds 0
           )
@@ -1131,23 +1125,38 @@ jobs:
           set -euo pipefail
           status_files=(
             package-lab.rc
-            freebsd-lab.rc
             nftables-lab.rc
             adapter-build.rc
             adapter-verify.rc
             gate-generate.rc
             gate-verify.rc
           )
+          failed_statuses=()
+          invalid_statuses=()
           for status_file in "${status_files[@]}"; do
             status_path="${STATUS_DIR}/${status_file}"
-            test -f "${status_path}"
-            test ! -L "${status_path}"
+            if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+              invalid_statuses+=("${status_file}")
+              continue
+            fi
             status="$(cat "${status_path}")"
-            if [[ "${status}" != "0" ]]; then
-              echo "ERROR: refusing to sign because ${status_file} returned ${status}." >&2
-              exit 1
+            if [[ ! "${status}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || \
+               (( 10#${status} > 255 )); then
+              invalid_statuses+=("${status_file}")
+            elif [[ "${status}" != "0" ]]; then
+              failed_statuses+=("${status_file}=${status}")
             fi
           done
+          for invalid_status in "${invalid_statuses[@]}"; do
+            echo "ERROR: qualification status ${invalid_status}=invalid." >&2
+          done
+          for failed_status in "${failed_statuses[@]}"; do
+            echo "ERROR: qualification status ${failed_status}." >&2
+          done
+          if (( ${#invalid_statuses[@]} > 0 || ${#failed_statuses[@]} > 0 )); then
+            echo "ERROR: refusing to sign because qualification status is not uniformly zero." >&2
+            exit 1
+          fi
           echo "qualified=true" >> "${GITHUB_OUTPUT}"
 
       - name: Revalidate Manifest Tool Before Secret Exposure
@@ -1224,47 +1233,6 @@ jobs:
           signing_complete=true
           trap - EXIT HUP INT TERM
 
-      - name: Run and Recompute Signed FreeBSD Updater Transition
-        if: >-
-          ${{ steps.update_contract.outputs.required == 'true' &&
-              steps.signed_update.outcome == 'success' }}
-        shell: bash
-        env:
-          RELEASE_SHA: ${{ inputs.release_sha }}
-        run: |
-          set -euo pipefail
-          common_arguments=(
-            --packages-dir "${CANDIDATE_PACKAGES_DIR}"
-            --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}"
-            --manifest "${ARTIFACT_ROOT}/update/syswarden-update-manifest-v1.json"
-            --signature "${ARTIFACT_ROOT}/update/syswarden-update-manifest-v1.json.sig"
-            --test-binary "${TOOLS_DIR}/syswarden-updater-freebsd.test"
-            --release-sha "${RELEASE_SHA}"
-          )
-          report="${RAW_DIR}/freebsd-updater-raw.json"
-          set +e
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_updater_vm_probe.py \
-            run "${common_arguments[@]}" \
-            --ssh-host 127.0.0.1 \
-            --ssh-port "${FREEBSD_SSH_PORT}" \
-            --ssh-user "${FREEBSD_SSH_USER}" \
-            --identity-file "${FREEBSD_IDENTITY_FILE}" \
-            --known-hosts-file "${FREEBSD_KNOWN_HOSTS_FILE}" \
-            --vm-marker-token-file "${FREEBSD_MARKER_TOKEN_FILE}" \
-            --output "${report}" \
-            --pretty
-          updater_rc=$?
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/freebsd_updater_vm_probe.py \
-            verify "${common_arguments[@]}" \
-            --report "${report}"
-          updater_verify_rc=$?
-          set -e
-          printf '%s\n' "${updater_rc}" > "${STATUS_DIR}/freebsd-updater.rc"
-          printf '%s\n' "${updater_verify_rc}" > "${STATUS_DIR}/freebsd-updater-verify.rc"
-          chmod 0600 \
-            "${STATUS_DIR}/freebsd-updater.rc" \
-            "${STATUS_DIR}/freebsd-updater-verify.rc"
-
       - name: Seal Exact Qualification Evidence Inventory
         id: inventory
         shell: bash
@@ -1284,48 +1252,34 @@ jobs:
             [[ "${value}" =~ ^[0-9]+$ ]] || return 1
             printf '%s' "${value}"
           }
-          freebsd_updater=0
-          freebsd_updater_verify=0
-          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            freebsd_updater="$(read_rc "${STATUS_DIR}/freebsd-updater.rc")"
-            freebsd_updater_verify="$(read_rc "${STATUS_DIR}/freebsd-updater-verify.rc")"
-          elif [[ "${SIGNED_UPDATE_REQUIRED}" != "false" ]]; then
+          if [[ "${SIGNED_UPDATE_REQUIRED}" != "true" && \
+                "${SIGNED_UPDATE_REQUIRED}" != "false" ]]; then
             echo "ERROR: signed update requirement is not a canonical boolean." >&2
             exit 1
           fi
           jq -n -S \
-            --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" \
             --argjson package_lab "$(read_rc "${STATUS_DIR}/package-lab.rc")" \
-            --argjson freebsd_lab "$(read_rc "${STATUS_DIR}/freebsd-lab.rc")" \
-            --argjson freebsd_updater "${freebsd_updater}" \
-            --argjson freebsd_updater_verify "${freebsd_updater_verify}" \
             --argjson nftables_lab "$(read_rc "${STATUS_DIR}/nftables-lab.rc")" \
             --argjson adapter_build "$(read_rc "${STATUS_DIR}/adapter-build.rc")" \
             --argjson adapter_verify "$(read_rc "${STATUS_DIR}/adapter-verify.rc")" \
             --argjson gate_generate "$(read_rc "${STATUS_DIR}/gate-generate.rc")" \
             --argjson gate_verify "$(read_rc "${STATUS_DIR}/gate-verify.rc")" \
-            '({
+            '{
               package_lab: $package_lab,
-              freebsd_lab: $freebsd_lab,
               nftables_lab: $nftables_lab,
               adapter_build: $adapter_build,
               adapter_verify: $adapter_verify,
               gate_generate: $gate_generate,
               gate_verify: $gate_verify
-            } + if $signed_update_required then {
-              freebsd_updater: $freebsd_updater,
-              freebsd_updater_verify: $freebsd_updater_verify
-            } else {} end)' > "${ARTIFACT_ROOT}/status/qualification-exit-codes.json"
+            }' > "${ARTIFACT_ROOT}/status/qualification-exit-codes.json"
 
           expected=(
             "aggregate/release-qualification.json"
-            "bound/freebsd-vm-bound.json"
             "bound/nftables-bound.json"
             "bound/package-lifecycle-bound.json"
             "packages/candidate/SHA256SUMS.txt"
             "packages/candidate/syswarden-${candidate_version}-1.aarch64.rpm"
             "packages/candidate/syswarden-${candidate_version}-1.x86_64.rpm"
-            "packages/candidate/syswarden-${candidate_version}.txz"
             "packages/candidate/syswarden_${candidate_version}_aarch64.apk"
             "packages/candidate/syswarden_${candidate_version}_amd64.deb"
             "packages/candidate/syswarden_${candidate_version}_arm64.deb"
@@ -1333,13 +1287,11 @@ jobs:
             "packages/previous/SHA256SUMS.txt"
             "packages/previous/syswarden-${previous_version}-1.aarch64.rpm"
             "packages/previous/syswarden-${previous_version}-1.x86_64.rpm"
-            "packages/previous/syswarden-${previous_version}.txz"
             "packages/previous/syswarden_${previous_version}_aarch64.apk"
             "packages/previous/syswarden_${previous_version}_amd64.deb"
             "packages/previous/syswarden_${previous_version}_arm64.deb"
             "packages/previous/syswarden_${previous_version}_x86_64.apk"
             "qualification-context.json"
-            "raw/freebsd-vm-raw.json"
             "raw/nftables-raw.json"
             "raw/package-lifecycle-amd64.json"
             "raw/package-lifecycle-arm64.json"
@@ -1357,14 +1309,10 @@ jobs:
           )
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
             expected+=(
-              "raw/freebsd-updater-raw.json"
-              "tools/syswarden-updater-freebsd.test"
               "update/syswarden-update-manifest-v1.json"
               "update/syswarden-update-manifest-v1.json.sig"
             )
-            expected_directories+=(tools update)
-            test "$(stat -c '%u' "${TOOLS_DIR}/syswarden-updater-freebsd.test")" = "$(id -u)"
-            test "$(stat -c '%a' "${TOOLS_DIR}/syswarden-updater-freebsd.test")" = "700"
+            expected_directories+=(update)
           fi
           mapfile -t sorted_expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
           mapfile -t actual_before_manifest < <(
@@ -1419,17 +1367,46 @@ jobs:
           retention-days: 30
           compression-level: 0
 
-      - name: Remove Ephemeral Transport Secrets
+      - name: Remove Ephemeral Signing Material
         if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${SECRETS_DIR:-}" && \
-                "${SECRETS_DIR}" == "${RUNNER_TEMP%/}"/syswarden-release-qualification.*/secrets ]]; then
-            rm -f \
-              "${SECRETS_DIR}/freebsd-identity" \
-              "${SECRETS_DIR}/freebsd-known-hosts" \
-              "${SECRETS_DIR}/freebsd-marker-token"
+          if [[ -n "${NFTABLES_TMP_DIR:-}" ]]; then
+            if [[ -z "${QUALIFICATION_ROOT:-}" || \
+                  "${QUALIFICATION_ROOT}" != "${RUNNER_TEMP%/}"/syswarden-release-qualification.* || \
+                  "${NFTABLES_TMP_DIR}" != "${QUALIFICATION_ROOT}/nftables-tmp" ]]; then
+              echo "ERROR: refusing unsafe nftables temporary-directory cleanup." >&2
+              exit 1
+            fi
+            test -d "${QUALIFICATION_ROOT}"
+            test ! -L "${QUALIFICATION_ROOT}"
+            [[ -O "${QUALIFICATION_ROOT}" ]]
+            test "$(stat -c '%a' "${QUALIFICATION_ROOT}")" = "700"
+            test -d "${NFTABLES_TMP_DIR}"
+            test ! -L "${NFTABLES_TMP_DIR}"
+            [[ -O "${NFTABLES_TMP_DIR}" ]]
+            test "$(stat -c '%a' "${NFTABLES_TMP_DIR}")" = "700"
+            find -P "${NFTABLES_TMP_DIR}" -xdev -mindepth 1 -delete
+            rmdir -- "${NFTABLES_TMP_DIR}"
+            test ! -e "${NFTABLES_TMP_DIR}"
+            test ! -L "${NFTABLES_TMP_DIR}"
+          fi
+          if [[ -n "${TRANSITION_DIR:-}" ]]; then
+            if [[ -z "${QUALIFICATION_ROOT:-}" || \
+                  "${QUALIFICATION_ROOT}" != "${RUNNER_TEMP%/}"/syswarden-release-qualification.* || \
+                  "${TRANSITION_DIR}" != "${QUALIFICATION_ROOT}/historical-transition" ]]; then
+              echo "ERROR: refusing unsafe historical-transition cleanup." >&2
+              exit 1
+            fi
+            test -d "${TRANSITION_DIR}"
+            test ! -L "${TRANSITION_DIR}"
+            [[ -O "${TRANSITION_DIR}" ]]
+            test "$(stat -c '%a' "${TRANSITION_DIR}")" = "700"
+            find -P "${TRANSITION_DIR}" -xdev -mindepth 1 -delete
+            rmdir -- "${TRANSITION_DIR}"
+            test ! -e "${TRANSITION_DIR}"
+            test ! -L "${TRANSITION_DIR}"
           fi
           update_dir="${ARTIFACT_ROOT:-}/update"
           if [[ -n "${ARTIFACT_ROOT:-}" && \
@@ -1443,11 +1420,6 @@ jobs:
                 "${SIGNING_TOOL_DIR}" == "${RUNNER_TEMP%/}"/syswarden-release-qualification.*/signing-tool ]]; then
             rm -f -- "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
             rmdir -- "${SIGNING_TOOL_DIR}" 2>/dev/null || true
-          fi
-          if [[ -n "${TOOLS_DIR:-}" && \
-                "${TOOLS_DIR}" == "${RUNNER_TEMP%/}"/syswarden-release-qualification.*/artifact/tools ]]; then
-            rm -f -- "${TOOLS_DIR}/syswarden-updater-freebsd.test"
-            rmdir -- "${TOOLS_DIR}" 2>/dev/null || true
           fi
 
       - name: Enforce Final Release Qualification Verdict
@@ -1465,6 +1437,126 @@ jobs:
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
         run: |
           set -euo pipefail
+          summarize_raw_report() {
+            local label="$1"
+            local path="$2"
+            local size
+            local summary
+            if [[ ! -f "${path}" || -L "${path}" ]]; then
+              jq -cnS --arg label "${label}" \
+                '{label: $label, parse_status: "unavailable"}'
+              return
+            fi
+            size="$(stat -c '%s' "${path}" 2>/dev/null || true)"
+            if [[ ! "${size}" =~ ^[0-9]+$ ]] || (( 10#${size} > 67108864 )); then
+              jq -cnS --arg label "${label}" \
+                '{label: $label, parse_status: "invalid"}'
+              return
+            fi
+            if ! summary="$(jq -cS --arg label "${label}" '
+              if type != "object" then error("report is not an object") else . end
+              | . as $report
+              | {
+                  label: $label,
+                  parse_status: "valid",
+                  schema_version: (
+                    if (($report.schema_version | type) == "number" and
+                        ($report.schema_version | floor) == $report.schema_version and
+                        $report.schema_version >= 0 and
+                        $report.schema_version <= 100)
+                    then $report.schema_version else null end
+                  ),
+                  status: (
+                    if (($report.status | type) == "string" and
+                        (["pass", "fail", "incomplete"] | index($report.status)) != null)
+                    then $report.status else null end
+                  ),
+                  release_ready: (
+                    if ($report.release_ready | type) == "boolean"
+                    then $report.release_ready else null end
+                  ),
+                  blocker_count: (
+                    if ($report.blocker_ids | type) == "array"
+                    then ($report.blocker_ids | length) else null end
+                  ),
+                  error_present: (
+                    ($report.error | type) == "string" and
+                    ($report.error | length) > 0
+                  )
+                }
+            ' "${path}" 2>/dev/null)"; then
+              jq -cnS --arg label "${label}" \
+                '{label: $label, parse_status: "invalid"}'
+              return
+            fi
+            printf '%s\n' "${summary}"
+          }
+
+          status_files=(
+            package-lab.rc
+            nftables-lab.rc
+            adapter-build.rc
+            adapter-verify.rc
+            gate-generate.rc
+            gate-verify.rc
+          )
+          failed_statuses=()
+          invalid_statuses=()
+          raw_summaries=()
+          summarized_raws=()
+          if [[ -n "${STATUS_DIR:-}" && -d "${STATUS_DIR}" && \
+                ! -L "${STATUS_DIR}" ]]; then
+            for status_file in "${status_files[@]}"; do
+              status_path="${STATUS_DIR}/${status_file}"
+              if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
+                invalid_statuses+=("${status_file}")
+                continue
+              fi
+              status="$(cat "${status_path}")"
+              if [[ ! "${status}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || \
+                 (( 10#${status} > 255 )); then
+                invalid_statuses+=("${status_file}")
+                continue
+              fi
+              if [[ "${status}" == "0" ]]; then
+                continue
+              fi
+              failed_statuses+=("${status_file}=${status}")
+              raw_label=""
+              raw_path=""
+              case "${status_file}" in
+                package-lab.rc)
+                  raw_label="package-lifecycle"
+                  raw_path="${RAW_DIR:-}/package-lifecycle-raw.json"
+                  ;;
+                nftables-lab.rc)
+                  raw_label="nftables"
+                  raw_path="${RAW_DIR:-}/nftables-raw.json"
+                  ;;
+              esac
+              if [[ -n "${raw_label}" && \
+                    " ${summarized_raws[*]} " != *" ${raw_label} "* ]]; then
+                summarized_raws+=("${raw_label}")
+                raw_summaries+=("$(summarize_raw_report "${raw_label}" "${raw_path}")")
+              fi
+            done
+          else
+            invalid_statuses+=(status-directory)
+          fi
+          for invalid_status in "${invalid_statuses[@]}"; do
+            echo "ERROR: qualification status ${invalid_status}=invalid." >&2
+          done
+          for failed_status in "${failed_statuses[@]}"; do
+            echo "ERROR: qualification status ${failed_status}." >&2
+          done
+          if (( ${#raw_summaries[@]} > 0 )); then
+            printf '%s\n' "${raw_summaries[@]}" | \
+              jq -csS '{qualification_raw_failure_summaries: .}' >&2
+          fi
+          if (( ${#invalid_statuses[@]} > 0 || ${#failed_statuses[@]} > 0 )); then
+            echo "ERROR: release qualification status is not uniformly zero." >&2
+            exit 1
+          fi
           if [[ "${INVENTORY_OUTCOME}" != "success" || \
                 "${UPLOAD_OUTCOME}" != "success" ]]; then
             echo "ERROR: exact qualification evidence was not sealed and uploaded." >&2
@@ -1481,7 +1573,6 @@ jobs:
             --package-raw "${RAW_DIR}/package-lifecycle-raw.json" \
             --package-amd64-shard "${RAW_DIR}/package-lifecycle-amd64.json" \
             --package-arm64-shard "${RAW_DIR}/package-lifecycle-arm64.json" \
-            --freebsd-raw "${RAW_DIR}/freebsd-vm-raw.json" \
             --expected-repository "${GITHUB_REPOSITORY}" \
             --expected-workflow-run-id "${GITHUB_RUN_ID}" \
             --expected-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
@@ -1492,8 +1583,7 @@ jobs:
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --nft-envelope "${BOUND_DIR}/nftables-bound.json" \
-            --package-envelope "${BOUND_DIR}/package-lifecycle-bound.json" \
-            --freebsd-envelope "${BOUND_DIR}/freebsd-vm-bound.json"
+            --package-envelope "${BOUND_DIR}/package-lifecycle-bound.json"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_gate.py \
             verify \
             --repo-root "${GITHUB_WORKSPACE}" \
@@ -1502,7 +1592,6 @@ jobs:
             --candidate-packages-dir "${CANDIDATE_PACKAGES_DIR}" \
             --nft-report "${BOUND_DIR}/nftables-bound.json" \
             --package-report "${BOUND_DIR}/package-lifecycle-bound.json" \
-            --freebsd-report "${BOUND_DIR}/freebsd-vm-bound.json" \
             --max-age-seconds 172800 \
             --max-report-skew-seconds 0 \
             --aggregate "${AGGREGATE_DIR}/release-qualification.json"
@@ -1511,17 +1600,13 @@ jobs:
             echo "ERROR: signed update requirement is not a canonical boolean." >&2
             exit 1
           fi
-          jq --argjson signed_update_required "${SIGNED_UPDATE_REQUIRED}" --exit-status '
-            (keys | sort) == (([
+          jq --exit-status '
+            (keys | sort) == ([
               "adapter_build",
               "adapter_verify",
-              "freebsd_lab",
               "gate_generate",
               "gate_verify",
               "nftables_lab",
               "package_lab"
-            ] + (if $signed_update_required then [
-              "freebsd_updater",
-              "freebsd_updater_verify"
-            ] else [] end)) | sort) and all(.[]; . == 0)
+            ] | sort) and all(.[]; . == 0)
           ' "${ARTIFACT_ROOT}/status/qualification-exit-codes.json"

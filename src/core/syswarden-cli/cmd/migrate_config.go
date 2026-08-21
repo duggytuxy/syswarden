@@ -16,54 +16,70 @@ var migrateConfigCmd = &cobra.Command{
 to the new modular TOML format. This creates a new directory structure
 with separated configuration files for each domain.
 
-With --dry-run, migrated file contents are not written and the source is not
-renamed or wiped, but the output directory and modules subdirectory may be created.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		source, err := cmd.Flags().GetString("source")
-		if err != nil {
-			return err
-		}
-		output, err := cmd.Flags().GetString("output")
-		if err != nil {
-			return err
-		}
-		dryRun, err := cmd.Flags().GetBool("dry-run")
-		if err != nil {
-			return err
-		}
+With --dry-run, migrated file contents are not written and the source and
+destination filesystem are not modified.`,
+	RunE: runConfigMigration,
+	Args: cobra.NoArgs,
+}
 
-		if source == "" {
-			source = platformpaths.LegacyConfig
-		}
-		if output == "" {
-			output = "/etc/syswarden/config"
-		}
+var configMigrateCmd = &cobra.Command{
+	Use:   "migrate",
+	Short: "Migrate the historical configuration to modular TOML",
+	Long:  "Migrate the historical configuration to modular TOML. With --dry-run, neither the source nor destination filesystem is modified.",
+	RunE:  runConfigMigration,
+	Args:  cobra.NoArgs,
+}
 
-		migrator := &config.Migrator{
-			SourcePath: source,
-			OutputDir:  output,
-			DryRun:     dryRun,
-		}
+func runConfigMigration(cmd *cobra.Command, args []string) error {
+	source, err := cmd.Flags().GetString("source")
+	if err != nil {
+		return err
+	}
+	output, err := cmd.Flags().GetString("output")
+	if err != nil {
+		return err
+	}
+	dryRun, err := cmd.Flags().GetBool("dry-run")
+	if err != nil {
+		return err
+	}
 
-		if dryRun {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "[DRY RUN] Migrated file contents will not be written and the source will not be renamed or wiped; the output directory and modules subdirectory may be created.")
-		}
+	if source == "" {
+		source = platformpaths.LegacyConfig
+	}
+	if output == "" {
+		output = "/etc/syswarden/config"
+	}
 
-		if err := migrator.Run(); err != nil {
-			return fmt.Errorf("[ERROR] migration failed: %w", err)
-		}
+	migrator := &config.Migrator{
+		SourcePath: source,
+		OutputDir:  output,
+		DryRun:     dryRun,
+	}
 
-		if !dryRun {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nConfiguration migrated successfully.")
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "New configuration: %s\n", output)
-		}
-		return nil
-	},
+	if dryRun {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "[DRY RUN] Validating migration without filesystem changes.")
+	}
+
+	if err := migrator.Run(); err != nil {
+		return fmt.Errorf("[ERROR] migration failed: %w", err)
+	}
+
+	if !dryRun {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nConfiguration migrated successfully.")
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "New configuration: %s\n", output)
+	} else {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "[DRY RUN] Migration is valid; no source or destination file was modified.")
+	}
+	return nil
 }
 
 func init() {
 	rootCmd.AddCommand(migrateConfigCmd)
-	migrateConfigCmd.Flags().StringP("source", "s", "", "Source config file path")
-	migrateConfigCmd.Flags().StringP("output", "o", "", "Output directory")
-	migrateConfigCmd.Flags().Bool("dry-run", false, "Do not write migrated file contents; output directories may be created")
+	configCmd.AddCommand(configMigrateCmd)
+	for _, command := range []*cobra.Command{migrateConfigCmd, configMigrateCmd} {
+		command.Flags().StringP("source", "s", "", "Source config file path")
+		command.Flags().StringP("output", "o", "", "Output directory")
+		command.Flags().Bool("dry-run", false, "Validate migration without modifying source or destination files")
+	}
 }

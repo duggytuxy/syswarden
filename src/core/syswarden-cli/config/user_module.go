@@ -29,6 +29,9 @@ type validatedUserModulePublisher func(
 var (
 	userModuleWriteMu          sync.Mutex
 	publishValidatedUserModule validatedUserModulePublisher = replaceSecureFileAtomicallyIfUnchangedValidated
+	applySecureFileOwnership                                = func(file *os.File, uid, gid int) error {
+		return file.Chown(uid, gid)
+	}
 )
 
 type mergedConfigSnapshot struct {
@@ -151,6 +154,9 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 		if readErr != nil {
 			return nil, readErr
 		}
+		if _, err := parseTOMLDocument(content, "config.toml"); err != nil {
+			return nil, err
+		}
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return nil, err
 		}
@@ -206,6 +212,9 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 		} else {
 			snapshot.modules[entry.Name()] = identity
 		}
+		if _, err := parseTOMLDocument(content, filepath.ToSlash(filepath.Join("modules", entry.Name()))); err != nil {
+			return nil, err
+		}
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return nil, fmt.Errorf("merge module %s: %w", entry.Name(), err)
 		}
@@ -213,6 +222,9 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 	if !mergedUser {
 		if expectedUser != nil {
 			return nil, fmt.Errorf("operator user module disappeared before merged validation")
+		}
+		if _, err := parseTOMLDocument(userContent, filepath.ToSlash(filepath.Join("modules", userModuleName))); err != nil {
+			return nil, err
 		}
 		if err := v.MergeConfig(bytes.NewReader(userContent)); err != nil {
 			return nil, fmt.Errorf("merge new operator module: %w", err)
@@ -403,6 +415,20 @@ func replaceSecureFileAtomicallyIfUnchangedValidated(
 			_ = root.Remove(backupName)
 		}
 	}()
+	if expected != nil && expected.info != nil {
+		uid, gid, ok := fileOwnerUIDGID(expected.info)
+		if !ok {
+			return fmt.Errorf("capture existing secure file ownership")
+		}
+		if err := applySecureFileOwnership(temporary, int(uid), int(gid)); err != nil {
+			return fmt.Errorf("preserve existing secure file ownership: %w", err)
+		}
+		// Apply the mode after chown because some kernels clear special mode bits
+		// when ownership changes.
+		if err := temporary.Chmod(expected.info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
 	if _, err := temporary.Write(content); err != nil {
 		return err
 	}
@@ -579,7 +605,10 @@ func replaceSecureFileAtomicallyIfUnchangedValidated(
 	}
 	revalidatePublishedInode := func() error {
 		current, err := root.Lstat(name)
-		if err != nil || !os.SameFile(temporaryInfo, current) || current.Mode() != temporaryInfo.Mode() {
+		temporaryUID, temporaryGID, temporaryOwnerOK := fileOwnerUIDGID(temporaryInfo)
+		currentUID, currentGID, currentOwnerOK := fileOwnerUIDGID(current)
+		if err != nil || !os.SameFile(temporaryInfo, current) || current.Mode() != temporaryInfo.Mode() ||
+			!temporaryOwnerOK || !currentOwnerOK || temporaryUID != currentUID || temporaryGID != currentGID {
 			return fmt.Errorf("published operator-module inode changed during commit")
 		}
 		return nil

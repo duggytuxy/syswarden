@@ -15,6 +15,7 @@ func TestTopLevelCommandContract(t *testing.T) {
 		"check",
 		"config",
 		"config-get",
+		"ha-fence",
 		"ha-sync",
 		"install",
 		"list",
@@ -28,8 +29,6 @@ func TestTopLevelCommandContract(t *testing.T) {
 		"unwhitelist",
 		"update",
 		"update-feeds",
-		"web-token",
-		"web-tui",
 		"whitelist",
 		"whitelist-infra",
 	}
@@ -59,17 +58,18 @@ func TestOperatorClaimContracts_SW_DOC_001(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	normalizedMigrationHelp := strings.Join(strings.Fields(migrate.Long), " ")
 	for _, phrase := range []string{
 		"migrated file contents are not written",
-		"output directory and modules subdirectory may be created",
+		"source and destination filesystem are not modified",
 	} {
-		if !strings.Contains(migrate.Long, phrase) {
+		if !strings.Contains(normalizedMigrationHelp, phrase) {
 			t.Fatalf("migrate-config help omits %q: %s", phrase, migrate.Long)
 		}
 	}
 	dryRun := migrate.Flags().Lookup("dry-run")
-	if dryRun == nil || !strings.Contains(dryRun.Usage, "output directories may be created") {
-		t.Fatalf("--dry-run usage does not disclose directory creation: %#v", dryRun)
+	if dryRun == nil || dryRun.Usage != "Validate migration without modifying source or destination files" {
+		t.Fatalf("--dry-run usage does not guarantee non-mutation: %#v", dryRun)
 	}
 
 	for _, test := range []struct {
@@ -105,21 +105,6 @@ func TestCriticalFlagContract(t *testing.T) {
 				"no-restart": "false",
 			},
 		},
-		{
-			command: "web-tui",
-			// SW-WEB-001: this compatibility assertion tracks the legacy
-			// all-interface bind until the opt-in transition is implemented.
-			flags: map[string]string{
-				"bind":  "0.0.0.0:62027",
-				"token": "",
-			},
-		},
-		{
-			command: "web-token",
-			flags: map[string]string{
-				"rotate": "false",
-			},
-		},
 	}
 
 	for _, test := range tests {
@@ -140,6 +125,16 @@ func TestCriticalFlagContract(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRetiredWebTUICommandsAreNotRegistered(t *testing.T) {
+	for _, name := range []string{"web-token", "web-tui"} {
+		for _, command := range rootCmd.Commands() {
+			if command.Name() == name {
+				t.Fatalf("retired command %q remains registered", name)
+			}
+		}
 	}
 }
 

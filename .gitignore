@@ -32,6 +32,7 @@ staging/
 *.log
 *.out
 tmp/
+output/
 __pycache__/
 *.py[cod]
 

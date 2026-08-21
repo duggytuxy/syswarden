@@ -454,8 +454,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             pair = package_lifecycle_lab.PackagePair(
                 candidate=package_lifecycle_lab.PackageArtifact(
                     self.candidate
-                    / f"syswarden_4.02.14_{spec.package_architecture}.apk",
-                    "4.02.14",
+                    / f"syswarden_4.03.0_{spec.package_architecture}.apk",
+                    "4.03.0",
                     "a" * 64,
                 ),
                 previous=package_lifecycle_lab.PackageArtifact(
@@ -1056,8 +1056,13 @@ class PackageLifecycleLabTests(unittest.TestCase):
                     )
                 )
         self.assertIn("list_ipv6", package_lifecycle_lab.OPERATOR_STATE_KEYS)
-        self.assertIn("'[network]' 'interfaces = \"lo\"'", seed)
-        self.assertNotIn('interfaces = "eth0"', seed)
+        token_writer = source[
+            source.index("write_seeded_operator_token() {") : source.index(
+                "\nseed_state() {"
+            )
+        ]
+        self.assertIn("'[network]' 'interfaces = \"lo\"'", token_writer)
+        self.assertNotIn('interfaces = "eth0"', token_writer)
 
     def test_previous_package_is_installed_and_probed_before_operator_seed(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -1111,7 +1116,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
         previous_path = self.root / "syswarden_4.02.8_x86_64.apk"
         previous_path.write_bytes(b"exact historical APK fixture")
         previous = str(previous_path)
-        candidate_path = self.root / "syswarden_4.02.14_x86_64.apk"
+        candidate_path = self.root / "syswarden_4.03.0_x86_64.apk"
         candidate_path.write_bytes(b"candidate APK fixture")
         candidate = str(candidate_path)
         previous_sha256 = hashlib.sha256(previous_path.read_bytes()).hexdigest()
@@ -1205,14 +1210,19 @@ class PackageLifecycleLabTests(unittest.TestCase):
             f'CALLS="{calls}"\n'
             f'RESTART_STATE_FILE="{restart}"\n'
             'PREVIOUS_PACKAGE="/previous/exact-v4.02.8.apk"\n'
-            'CANDIDATE_PACKAGE="/candidate/v4.02.14.apk"\n'
+            'CANDIDATE_PACKAGE="/candidate/v4.03.0.apk"\n'
             'PREVIOUS_VERSION="4.02.8"\n'
-            'CANDIDATE_VERSION="4.02.14"\n'
+            'CANDIDATE_VERSION="4.03.0"\n'
             'EXPECTED_PREVIOUS_VERSION="4.02.8"\n'
-            'EXPECTED_CANDIDATE_VERSION="4.02.14"\n'
+            'EXPECTED_CANDIDATE_VERSION="4.03.0"\n'
             'FORWARD_ONLY_APK_TRANSITION="1"\n'
             "prepare_expected_payloads() { return 0; }\n"
             "seed_state() { :; }\n"
+            "seed_legacy_webtui_upgrade_state() { :; }\n"
+            "seed_live_legacy_webtui_process() { :; }\n"
+            "seed_legacy_saas_monitor_state() { :; }\n"
+            "install_service_manager_sentinels() { :; }\n"
+            "remove_service_manager_sentinels() { :; }\n"
             "load_state_contract() { return 0; }\n"
             'run_install_step() { printf "%s\\n" "$1" >> "${CALLS}"; }\n'
             "probe_forward_only_apk_payload() { :; }\n"
@@ -1459,7 +1469,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
     def test_parses_machine_readable_events_and_rejects_invalid_data(self) -> None:
         event_file = self.root / "events.tsv"
         event_file.write_text(
-            "pass\tinstall.payload\tmatched\ninfo\tfreebsd\tvm required\n",
+            "pass\tinstall.payload\tmatched\ninfo\tcontainer\trootless\n",
             encoding="utf-8",
         )
         events = package_lifecycle_lab.parse_events(event_file)
@@ -1508,7 +1518,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
                         adversarial, "deb", "upgrade-rollback"
                     )
 
-    def test_fake_rootless_run_reports_container_scope_and_freebsd_gap(self) -> None:
+    def test_fake_rootless_run_reports_linux_container_scope(self) -> None:
         runner = FakePodmanRunner()
         report = package_lifecycle_lab.run_lab(self.args(), runner=runner)
         self.assertEqual(report["status"], "pass")
@@ -1544,7 +1554,6 @@ class PackageLifecycleLabTests(unittest.TestCase):
             str(self.emulator),
         )
         self.assertIn("F", report["engine"]["arm64_binfmt"]["flags"])
-        self.assertEqual(report["scope"]["freebsd"]["status"], "vm_required")
         self.assertEqual(
             {item["distribution"] for item in report["platforms"]},
             {"debian", "ubuntu", "fedora", "almalinux", "alpine"},
@@ -2004,11 +2013,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 architecture
             ]
             platform_result.update(
-                candidate_version="4.02.14",
+                candidate_version="4.03.0",
                 previous_version="4.02.8",
                 candidate={
-                    "filename": f"syswarden_4.02.14_{architecture}.apk",
-                    "version": "4.02.14",
+                    "filename": f"syswarden_4.03.0_{architecture}.apk",
+                    "version": "4.03.0",
                     "sha256": "c" * 64,
                 },
                 previous={
@@ -2197,6 +2206,13 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertIn("remove.final-removal", checks)
         self.assertIn("remove.final-removal.purge-equivalent", checks)
         self.assertIn("remove.final-removal.generated.systemd_core", checks)
+        self.assertIn(
+            "remove.final-removal.generated.systemd_core_enablement", checks
+        )
+        self.assertIn(
+            "remove.final-removal.generated.openrc_firewall_enablement", checks
+        )
+        self.assertIn("remove.final-removal.service_manager_calls", checks)
         self.assertIn("remove.final-removal.generated.openrc_webtui", checks)
         self.assertIn("remove.final-removal.generated.completion", checks)
         self.assertIn("remove.final-removal.generated.cron_reference", checks)
@@ -2223,6 +2239,111 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertIn("seed_generated_runtime_artifacts", script)
         self.assertIn("assert_generated_runtime_artifacts_absent", script)
         self.assertIn("/etc/systemd/system/syswarden-firewall.service", script)
+
+    def test_systemd_enablement_target_depends_on_scenario_provenance(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("expected_systemd_enablement_prefix() {")
+        end = source.index("\nprobe_postinstall_contract() {", start)
+        function = source[start:end]
+        cases = {
+            **{
+                ("upgrade-rollback", label): "/etc/systemd/system"
+                for label in (
+                    "previous",
+                    "candidate",
+                    "reinstall",
+                    "restart-one",
+                    "restart-two",
+                    "rollback",
+                    "recovery",
+                )
+            },
+            ("remove", "fresh"): "..",
+            ("purge", "fresh"): "..",
+        }
+        for (scenario, label), expected in cases.items():
+            with self.subTest(scenario=scenario, label=label):
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        function
+                        + '\nSCENARIO="$1"; expected_systemd_enablement_prefix "$2"',
+                        "probe",
+                        scenario,
+                        label,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result)
+                self.assertEqual(result.stdout.strip(), expected)
+
+        rejected = subprocess.run(
+            [
+                "/bin/sh",
+                "-c",
+                function
+                + '\nSCENARIO="$1"; expected_systemd_enablement_prefix "$2"',
+                "probe",
+                "remove",
+                "candidate",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(rejected.returncode, 0, rejected)
+
+    def test_cleanup_shell_events_match_declared_contract_exactly(self) -> None:
+        script = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = script.index("assert_generated_runtime_artifacts_absent() {")
+        end = script.index("\nprepare_expected_payloads() {", start)
+        emitted = list(
+            dict.fromkeys(
+                re.findall(r"\$\{label\}\.([a-z0-9_.-]+)", script[start:end])
+            )
+        )
+        declared = [
+            check.removeprefix("remove.remove.")
+            for check in package_lifecycle_lab.expected_event_checks("deb", "remove")
+            if check.startswith("remove.remove.generated.")
+            or check == "remove.remove.service_manager_calls"
+        ]
+        self.assertEqual(emitted, declared)
+
+    def test_offline_package_lab_enforces_manager_sentinels_and_boot_links(self) -> None:
+        script = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        self.assertIn("install_service_manager_sentinels", script)
+        self.assertIn("/tmp/syswarden-service-manager-calls", script)
+        self.assertIn("/tmp/syswarden-manager-original-path", script)
+        self.assertIn('PATH="${SYSWARDEN_MANAGER_ORIGINAL_PATH:-${PATH}}"', script)
+        self.assertIn(
+            'record fail "${PREFIX}.${label}.service_manager_calls"', script
+        )
+        self.assertIn(
+            "scenario_upgrade_rollback_restart_one() {\n"
+            "    load_state_contract || return\n"
+            "    install_service_manager_sentinels || return",
+            script,
+        )
+        self.assertIn(
+            "scenario_upgrade_rollback_restart_two() {\n"
+            "    load_state_contract || return\n"
+            "    install_service_manager_sentinels || return",
+            script,
+        )
+        for command in ("systemctl", "rc-service", "rc-update", "service"):
+            self.assertIn(command, script)
+        self.assertIn("[ -s /tmp/syswarden-service-manager-calls ]", script)
+        for link in (
+            "/etc/systemd/system/multi-user.target.wants/syswarden-core.service",
+            "/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service",
+            "/etc/runlevels/default/syswarden-core",
+            "/etc/runlevels/default/syswarden-firewall",
+        ):
+            self.assertIn(link, script)
         self.assertIn("/etc/init.d/syswarden-firewall", script)
         self.assertIn("/etc/bash_completion.d/syswarden", script)
         self.assertIn("/etc/rsyslog.d/99-syswarden-siem.conf", script)
@@ -2236,7 +2357,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
             " */30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1",
             "17  * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1",
             "*/30\\t* * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1",
-            "23 * * * * /usr/local/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1",
+            "23 * * * * /srv/operator/bin/syswarden-cli update-feeds >/dev/null 2>&1",
         ):
             with self.subTest(adversarial=adversarial):
                 self.assertIn(adversarial, script)
@@ -2275,7 +2396,31 @@ class PackageLifecycleLabTests(unittest.TestCase):
             with self.subTest(family=family, scenario=scenario):
                 checks = package_lifecycle_lab.expected_event_checks(family, scenario)
                 generated = [check for check in checks if ".generated." in check]
-                self.assertEqual(len(generated), 11)
+                label = "final-removal" if family == "rpm" else scenario
+                expected_generated = [
+                    f"{scenario}.{label}.generated.{key}"
+                    for key in (
+                        "systemd_core",
+                        "systemd_firewall",
+                        "systemd_webtui",
+                        "openrc_core",
+                        "openrc_firewall",
+                        "openrc_webtui",
+                        "systemd_core_enablement",
+                        "systemd_firewall_enablement",
+                        "openrc_core_enablement",
+                        "openrc_firewall_enablement",
+                        "completion",
+                        "rsyslog_siem",
+                        "rsyslog_waf_bridge",
+                        "cron_reference",
+                        "cron_unrelated",
+                    )
+                ]
+                self.assertEqual(generated, expected_generated)
+                self.assertIn(
+                    f"{scenario}.{label}.service_manager_calls", checks
+                )
 
     def test_candidate_dependency_and_postinstall_events_are_mandatory(self) -> None:
         for family, scenarios in package_lifecycle_lab.EXPECTED_SCENARIOS.items():
@@ -2313,6 +2458,481 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 package_lifecycle_lab.expected_event_checks("apk", scenario),
             )
 
+    def test_candidate_nft_runtime_is_not_required_after_container_restart(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("candidate_nft_runtime_required() {")
+        end = source.index("\noperator_listener_process_identity() {", start)
+        function = source[start:end]
+        cases = {
+            ("upgrade-rollback", "candidate"): 0,
+            ("upgrade-rollback", "reinstall"): 0,
+            ("upgrade-rollback", "recovery"): 0,
+            ("remove", "fresh"): 0,
+            ("purge", "fresh"): 0,
+            ("upgrade-rollback", "restart-one"): 1,
+            ("upgrade-rollback", "restart-two"): 1,
+        }
+        for (scenario, label), expected in cases.items():
+            with self.subTest(scenario=scenario, label=label):
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        function
+                        + '\nSCENARIO="$1"; candidate_nft_runtime_required "$2"',
+                        "probe",
+                        scenario,
+                        label,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+
+    def test_seed_scopes_legacy_saas_adoption_to_upgrade_rollback(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        writer_start = source.index("write_seeded_operator_token() {")
+        writer_end = source.index("\nseed_state() {", writer_start)
+        writer = source[writer_start:writer_end]
+        token = self.root / "seeded-operator-token.toml"
+        base_fixture = (
+            b'[network]\ninterfaces = "lo"\n\n'
+            b'[user]\nprofile_name = "lifecycle-operator"\n'
+        )
+        upgrade_fixture = (
+            b'[network]\ninterfaces = "lo"\n\n'
+            b'[network.saas]\nallow_monitors = true\n\n'
+            b'[user]\nprofile_name = "lifecycle-operator"\n'
+        )
+        for scenario, expected in (
+            ("upgrade-rollback", upgrade_fixture),
+            ("remove", base_fixture),
+            ("purge", base_fixture),
+        ):
+            with self.subTest(scenario=scenario):
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        writer
+                        + '\nSCENARIO="$1"; write_seeded_operator_token "$2"',
+                        "seed",
+                        scenario,
+                        str(token),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(token.read_bytes(), expected)
+
+        seed_start = source.index("seed_state() {")
+        seed_end = source.index("\nseed_legacy_webtui_upgrade_state() {", seed_start)
+        seed = source[seed_start:seed_end]
+        self.assertIn(
+            "write_seeded_operator_token /etc/syswarden/config/modules/99-user.toml",
+            seed,
+        )
+        self.assertIn("STATE_TOKEN_HASH=", seed)
+        self.assertLess(
+            seed.index("write_seeded_operator_token"),
+            seed.index("STATE_TOKEN_HASH="),
+        )
+        self.assertLess(
+            source.index("seed_state\n", source.index("scenario_upgrade_rollback_initial() {")),
+            source.index("seed_legacy_saas_monitor_state || return"),
+        )
+
+    def test_postinstall_failure_detail_codes_keep_existing_event_ids(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        probe_start = source.index("probe_postinstall_contract() {")
+        probe_end = source.index("\nverify_installed_inventory() {", probe_start)
+        probe = source[probe_start:probe_end]
+        self.assertIn('mark_postinstall_failure legacy-saas-ipv6', probe)
+        self.assertIn('mark_postinstall_failure nft-runtime', probe)
+        self.assertIn('mark_postinstall_failure operator-listener', probe)
+        self.assertIn(
+            'record fail "${PREFIX}.${label}.postinstall_contract"', probe
+        )
+
+    def test_historical_rollback_token_exception_is_exact_and_recovery_is_strict(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("sanitize_historical_rollback_token() {")
+        end = source.index("\nassert_package_absent() {", start)
+        contract = source[start:end]
+        self.assertIn('/^webtui_password = "[0-9a-f]+"$/', contract)
+        self.assertIn('length(secret) != 32', contract)
+        self.assertIn('credentials != 1', contract)
+        self.assertIn('! grep -Fq "${rollback_secret}" "${COMMAND_LOG}"', contract)
+        self.assertIn('upgrade-rollback:rollback:deb', contract)
+        self.assertIn('upgrade-rollback:rollback:rpm', contract)
+        self.assertIn(
+            'assert_preserved "${label}" token /etc/syswarden/config/modules/99-user.toml',
+            contract,
+        )
+        self.assertIn('[REDACTED]', source)
+
+    def test_historical_rollback_token_sanitizer_restores_exact_seed_bytes(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("sanitize_historical_rollback_token() {")
+        end = source.index("\nassert_historical_rollback_token() {", start)
+        function = source[start:end]
+        fixture = (
+            b'[network]\ninterfaces = "lo"\n\n'
+            b'[network.saas]\nallow_monitors = true\n\n'
+            b'[user]\nprofile_name = "lifecycle-operator"\n'
+        )
+        secret = b"0123456789abcdef0123456789abcdef"
+        token = self.root / "rollback-token.toml"
+        sanitized = self.root / "rollback-token.sanitized"
+        secret_file = self.root / "rollback-token.secret"
+        command = function + '\nsanitize_historical_rollback_token "$1" "$2" "$3"'
+
+        token.write_bytes(
+            fixture + b'\nwebtui_password = "' + secret + b'"'
+        )
+        result = subprocess.run(
+            [
+                "/bin/sh",
+                "-c",
+                command,
+                "sanitize",
+                str(token),
+                str(sanitized),
+                str(secret_file),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sanitized.read_bytes(), fixture)
+        self.assertEqual(secret_file.read_bytes(), secret + b"\n")
+        self.assertEqual(sanitized.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(secret_file.stat().st_mode & 0o777, 0o600)
+
+        for suffix in (
+            b'webtui_password = "' + secret + b'"',
+            b'\nwebtui_password = "' + secret + b'"\n',
+        ):
+            with self.subTest(suffix=suffix):
+                sanitized.unlink(missing_ok=True)
+                secret_file.unlink(missing_ok=True)
+                token.write_bytes(fixture + suffix)
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        command,
+                        "sanitize",
+                        str(token),
+                        str(sanitized),
+                        str(secret_file),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_upgrade_seeds_and_proves_exact_browser_retirement_with_port_isolation(self) -> None:
+        script = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        syntax = subprocess.run(
+            ["/bin/sh", "-n"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        self.assertIn("seed_legacy_webtui_upgrade_state", script)
+        self.assertIn("seed_live_legacy_webtui_process", script)
+        self.assertLess(
+            script.index("seed_legacy_webtui_upgrade_state || return"),
+            script.index('run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}"'),
+        )
+        self.assertIn("Description=SYSWARDEN Web-TUI (WebTTY)", script)
+        self.assertIn("ExecStart=/opt/syswarden/bin/syswarden-cli web-tui", script)
+        self.assertIn('command_args="web-tui"', script)
+        self.assertIn('webtui_password = "lot0-lifecycle-retired-token"', script)
+        self.assertIn("/run/syswarden-webtui.pid", script)
+        self.assertIn("TCP-LISTEN:62027,bind=127.0.0.1", script)
+        self.assertIn("TCP:127.0.0.1:62027", script)
+        self.assertIn("syswarden-operator-62027", script)
+        self.assertIn("--bind=127.0.0.1:62028", script)
+        self.assertIn("https://127.0.0.1:62028/", script)
+        self.assertIn("syswarden-legacy-webtui-process.pid", script)
+        self.assertIn("007765622d74756900", script)
+        self.assertIn('tcp dport 62027 accept comment "syswarden legacy Web-TUI"', script)
+        self.assertIn("nft list table inet syswarden", script)
+        self.assertIn("/opt/syswarden/bin/syswarden-tui", script)
+        self.assertIn("/usr/local/bin/syswarden-tui", script)
+        self.assertIn("syswarden-webtui.service.syswarden-retiring", script)
+        self.assertIn(
+            "legacy_webtui_runtime_absent / || mark_postinstall_failure legacy-webtui-runtime",
+            script,
+        )
+        seed_function = script.split("seed_legacy_webtui_upgrade_state() {", 1)[1].split(
+            "\n}\n\nseed_legacy_saas_monitor_state() {", 1
+        )[0]
+        self.assertIn("[ ! -e /run/openrc ] && [ ! -L /run/openrc ] || return 1", seed_function)
+        self.assertNotIn("rc-service", seed_function)
+        self.assertNotIn("rc-update", seed_function)
+        for retired_override in (
+            "/etc/systemd/system/syswarden-webtui.service.d",
+            "/run/systemd/system/syswarden-webtui.service",
+            "/run/systemd/system/syswarden-webtui.service.d",
+            "/etc/conf.d/syswarden-webtui",
+        ):
+            self.assertIn(retired_override, script)
+        openrc_marker = (
+            "cat > /etc/init.d/syswarden-webtui "
+            "<<'SYSWARDEN_OPENRC_WEBTUI'\n"
+        )
+        openrc_payload = script.split(openrc_marker, 1)[1].split(
+            "\nSYSWARDEN_OPENRC_WEBTUI\n", 1
+        )[0]
+        self.assertNotIn("seed_", openrc_payload)
+        self.assertEqual(
+            openrc_payload,
+            "#!/sbin/openrc-run\n\n"
+            'name="syswarden-webtui"\n'
+            'description="SYSWARDEN Web-TUI (WebTTY)"\n'
+            'command="/opt/syswarden/bin/syswarden-cli"\n'
+            'command_args="web-tui"\n'
+            "command_background=true\n"
+            'pidfile="/run/syswarden-webtui.pid"\n'
+            'retry="TERM/5/KILL/5"\n\n'
+            "depend() {\n\tneed net\n}",
+        )
+        self.assertIn(
+            '[ "${operator_listener_ready}" -eq 1 ] || return 1',
+            seed_function,
+        )
+        self.assertIn(
+            'SEEDED_OPERATOR_LISTENER_PID="${operator_listener_pid}"',
+            seed_function,
+        )
+        self.assertIn("operator_listener_process_identity", seed_function)
+        self.assertEqual(script.count("seed_legacy_saas_monitor_state() {"), 1)
+        self.assertEqual(script.count("seed_live_legacy_webtui_process() {"), 1)
+        self.assertIn("seed_legacy_saas_monitor_state", script)
+        self.assertLess(
+            script.index("seed_legacy_saas_monitor_state || return"),
+            script.index('run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}"'),
+        )
+        self.assertIn(
+            "printf '%s\\n%s' '192.0.2.10' '198.51.100.0/24'",
+            script,
+        )
+        self.assertIn("syswarden_saas_monitors.ipv4", script)
+        self.assertIn("syswarden_saas_monitors.ipv6", script)
+        self.assertIn("syswarden_saas_monitors.pair", script)
+        self.assertIn("syswarden-saas-pair-v1", script)
+        self.assertIn(
+            "daf3972b7d1f162ae7c9b5da4a53efed5ab9cb8fb4a2385139931c37287f440c",
+            script,
+        )
+        self.assertIn(
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            script,
+        )
+        probe = script[
+            script.index("operator_listener_preservation_required() {") : script.index(
+                "\nverify_installed_inventory() {"
+            )
+        ]
+        self.assertIn(
+            'upgrade-rollback:candidate|upgrade-rollback:reinstall)',
+            probe,
+        )
+        listener_requirement = script[
+            script.index("operator_listener_preservation_required() {") : script.index(
+                "\ncandidate_nft_runtime_required() {"
+            )
+        ]
+        self.assertIn(
+            'probe_seeded_operator_listener_preservation "${label}" || mark_postinstall_failure operator-listener',
+            probe,
+        )
+        self.assertIn(
+            'operator_listener_pid_path=/tmp/syswarden-operator-62027.pid',
+            probe,
+        )
+        self.assertIn("0:0:600", probe)
+        self.assertIn('kill -0 "${operator_listener_pid}"', probe)
+        self.assertIn("TCP:127.0.0.1:62027", probe)
+        self.assertNotIn("upgrade-rollback:restart-one", listener_requirement)
+        self.assertNotIn("upgrade-rollback:restart-two", listener_requirement)
+        self.assertNotIn("upgrade-rollback:recovery", listener_requirement)
+        self.assertNotIn("remove:fresh", listener_requirement)
+        self.assertNotIn("purge:fresh", listener_requirement)
+        self.assertIn(
+            "(umask 077 && printf '%s\\n' \"${operator_listener_pid}\" > "
+            "/tmp/syswarden-operator-62027.pid)",
+            script,
+        )
+        self.assertIn(
+            'SEEDED_OPERATOR_LISTENER_PID="${operator_listener_pid}"',
+            script,
+        )
+        self.assertIn("SEEDED_OPERATOR_LISTENER_PROCESS_IDENTITY", script)
+        self.assertIn("SEEDED_OPERATOR_LISTENER_PIDFILE_IDENTITY", script)
+        self.assertIn("/proc/${operator_identity_pid}/stat", probe)
+        self.assertIn("/proc/${operator_identity_pid}/exe", probe)
+        self.assertIn("operator_listener_matches_seeded_proof", probe)
+        self.assertNotIn("export SEEDED_OPERATOR_LISTENER", script)
+        self.assertNotIn("pkill", script)
+        self.assertNotIn("killall", script)
+        for bootstrap in (
+            package_lifecycle_lab.DEB_BOOTSTRAP,
+            package_lifecycle_lab.RPM_BOOTSTRAP,
+            package_lifecycle_lab.APK_BOOTSTRAP,
+        ):
+            self.assertRegex(bootstrap, r"(?:^|\s)socat(?:\s|$)")
+
+    def test_operator_listener_preservation_scope_matches_seed_lifetime(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("operator_listener_preservation_required() {")
+        end = source.index("\n}\n\noperator_listener_process_identity() {", start)
+        function = source[start : end + len("\n}\n")]
+        shell = self.root / "operator-listener-scope.sh"
+        shell.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            + function
+            + "\n"
+            + "assert_scope() {\n"
+            + "    SCENARIO=\"$1\"\n"
+            + "    label=\"$2\"\n"
+            + "    expected=\"$3\"\n"
+            + "    if operator_listener_preservation_required \"${label}\"; then\n"
+            + "        actual=required\n"
+            + "    else\n"
+            + "        actual=skipped\n"
+            + "    fi\n"
+            + "    [ \"${actual}\" = \"${expected}\" ]\n"
+            + "}\n"
+            + "assert_scope upgrade-rollback candidate required\n"
+            + "assert_scope upgrade-rollback reinstall required\n"
+            + "assert_scope upgrade-rollback restart-one skipped\n"
+            + "assert_scope upgrade-rollback restart-two skipped\n"
+            + "assert_scope upgrade-rollback recovery skipped\n"
+            + "assert_scope remove fresh skipped\n"
+            + "assert_scope purge fresh skipped\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ("/bin/sh", str(shell)),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_operator_listener_proof_rejects_post_hook_substitution(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("operator_listener_matches_seeded_proof() {")
+        end = source.index(
+            "\n}\n\nprobe_seeded_operator_listener_preservation() {", start
+        )
+        function = source[start : end + len("\n}\n")]
+        result = subprocess.run(
+            [
+                "/bin/sh",
+                "-c",
+                function
+                + "\nset -eu\n"
+                + "SEEDED_OPERATOR_LISTENER_PID=101\n"
+                + "SEEDED_OPERATOR_LISTENER_PROCESS_IDENTITY=process-a\n"
+                + "SEEDED_OPERATOR_LISTENER_PIDFILE_IDENTITY=pidfile-a\n"
+                + "operator_listener_matches_seeded_proof 101 process-a pidfile-a\n"
+                + "if operator_listener_matches_seeded_proof 202 process-b pidfile-b; then exit 11; fi\n"
+                + "if operator_listener_matches_seeded_proof 101 process-b pidfile-a; then exit 12; fi\n"
+                + "if operator_listener_matches_seeded_proof 101 process-a pidfile-b; then exit 13; fi\n"
+                + "unset SEEDED_OPERATOR_LISTENER_PID\n"
+                + "if operator_listener_matches_seeded_proof 101 process-a pidfile-a; then exit 14; fi\n",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result)
+
+    def test_lab_webtui_runtime_probe_rejects_override_and_dangling_surfaces(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("legacy_webtui_runtime_absent() {")
+        end = source.index("\n}\n", start) + len("\n}\n")
+        function = source[start:end]
+        surfaces = (
+            "etc/systemd/system/syswarden-webtui.service.d",
+            "run/systemd/system/syswarden-webtui.service",
+            "run/systemd/system/syswarden-webtui.service.d",
+            "etc/conf.d/syswarden-webtui",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "root"
+            root.mkdir()
+            clean = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    function + '\nlegacy_webtui_runtime_absent "$1"',
+                    "probe",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(clean.returncode, 0, clean)
+
+        for relative in surfaces:
+            with self.subTest(surface=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "root"
+                residue = root / relative
+                residue.parent.mkdir(parents=True)
+                residue.write_text("operator-owned override\n", encoding="utf-8")
+                rejected = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        function + '\nlegacy_webtui_runtime_absent "$1"',
+                        "probe",
+                        str(root),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(rejected.returncode, 0, rejected)
+                self.assertEqual(
+                    residue.read_text(encoding="utf-8"),
+                    "operator-owned override\n",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "root"
+            residue = root / "etc/conf.d/syswarden-webtui"
+            residue.parent.mkdir(parents=True)
+            residue.symlink_to("/srv/operator/missing")
+            rejected = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    function + '\nlegacy_webtui_runtime_absent "$1"',
+                    "probe",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0, rejected)
+            self.assertTrue(residue.is_symlink())
+
     def test_bootstrap_preinstalls_every_declared_runtime_dependency(self) -> None:
         expected = {
             "deb": (
@@ -2320,6 +2940,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 {
                     "nftables", "ipset", "curl", "wget", "rsyslog", "cron",
                     "bash-completion", "wireguard-tools", "qrencode", "jq",
+                    "unattended-upgrades", "apt-listchanges", "procps",
+                    "e2fsprogs",
                 },
             ),
             "rpm": (
@@ -2328,6 +2950,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
                     "nftables", "ipset", "wget", "rsyslog", "cronie",
                     "bash-completion", "wireguard-tools", "qrencode", "jq",
                     "checkpolicy", "policycoreutils-python-utils",
+                    "dnf-automatic", "procps-ng",
+                    "e2fsprogs",
                 },
             ),
             "apk": (
@@ -2336,6 +2960,9 @@ class PackageLifecycleLabTests(unittest.TestCase):
                     "nftables", "curl", "wget", "rsyslog", "rsyslog-uxsock",
                     "bash-completion", "wireguard-tools", "libqrencode-tools", "jq",
                     "openrc",
+                    "procps-ng",
+                    "e2fsprogs-extra",
+                    "shadow",
                 },
             ),
         }
@@ -2347,6 +2974,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
                         rf"(?:^|\s){re.escape(dependency)}(?:\s|$)",
                     )
         self.assertIn("epel-release", package_lifecycle_lab.RPM_BOOTSTRAP)
+        self.assertIn("test -x /usr/bin/gpasswd", package_lifecycle_lab.APK_BOOTSTRAP)
 
     def test_failed_event_fails_platform_and_overall_report(self) -> None:
         runner = FakePodmanRunner(event_status="fail")

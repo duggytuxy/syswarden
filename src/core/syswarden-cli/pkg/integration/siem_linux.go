@@ -5,10 +5,47 @@ package integration
 import (
 	"fmt"
 	"os"
-	"os/exec"
+	"strings"
 	"syswarden-cli/config"
-	"syswarden-cli/pkg/system"
 )
+
+func renderSIEMRsyslogConfig(ip, port, protocol, tlsCA string) (string, error) {
+	target, err := rsyslogTarget(ip, port)
+	if err != nil {
+		return "", err
+	}
+	var rendered strings.Builder
+	switch protocol {
+	case "udp":
+		fmt.Fprintf(&rendered, "*.* @%s\n", target)
+	case "tcp":
+		fmt.Fprintf(&rendered, "*.* @@%s\n", target)
+	case "tls":
+		if tlsCA == "" {
+			return "", fmt.Errorf("TLS rsyslog forwarding requires a CA path")
+		}
+		quotedCA, err := quoteRsyslogString(tlsCA)
+		if err != nil {
+			return "", fmt.Errorf("encode rsyslog CA path: %w", err)
+		}
+		fmt.Fprintf(&rendered, "$DefaultNetstreamDriverCAFile %s\n", quotedCA)
+		rendered.WriteString("$ActionSendStreamDriver gtls\n")
+		rendered.WriteString("$ActionSendStreamDriverMode 1\n")
+		rendered.WriteString("$ActionSendStreamDriverAuthMode anon\n")
+		fmt.Fprintf(&rendered, "*.* @@%s\n", target)
+	default:
+		return "", fmt.Errorf("unsupported rsyslog transport %q", protocol)
+	}
+
+	rendered.WriteString("\n# SYSWARDEN WAAP Native JSON Telemetry\n")
+	rendered.WriteString("module(load=\"imfile\" PollingInterval=\"10\")\n")
+	rendered.WriteString("input(type=\"imfile\"\n")
+	rendered.WriteString("      File=\"/var/log/syswarden/waf.json\"\n")
+	rendered.WriteString("      Tag=\"syswarden-waf-json\"\n")
+	rendered.WriteString("      Severity=\"alert\"\n")
+	rendered.WriteString("      Facility=\"local7\")\n")
+	return rendered.String(), nil
+}
 
 // SetupSIEM configures Syslog forwarding natively
 func SetupSIEM() error {
@@ -31,48 +68,18 @@ func SetupSIEM() error {
 	// 1. We write the rsyslog configuration natively
 	confPath := "/etc/rsyslog.d/99-syswarden-siem.conf"
 
-	// Secure formatting (CWE-117)
-	var rsyslogConf string
-	if proto == "udp" {
-		rsyslogConf = fmt.Sprintf("*.* @%s:%s\n", ip, port)
-	} else {
-		// TCP
-		if tlsCA != "" {
-			// TLS Configuration using anon mode for robust encryption without domain-match breakage
-			rsyslogConf = fmt.Sprintf("$DefaultNetstreamDriverCAFile %s\n", tlsCA)
-			rsyslogConf += "$ActionSendStreamDriver gtls\n"
-			rsyslogConf += "$ActionSendStreamDriverMode 1\n"
-			rsyslogConf += "$ActionSendStreamDriverAuthMode anon\n"
-			rsyslogConf += fmt.Sprintf("*.* @@%s:%s\n", ip, port)
-		} else {
-			// Cleartext TCP
-			rsyslogConf = fmt.Sprintf("*.* @@%s:%s\n", ip, port)
-		}
+	rsyslogConf, err := renderSIEMRsyslogConfig(ip, port, proto, tlsCA)
+	if err != nil {
+		return fmt.Errorf("render rsyslog SIEM config: %w", err)
 	}
-
-	// Add native JSON WAAP telemetry forwarding via imfile
-	rsyslogConf += "\n# SYSWARDEN WAAP Native JSON Telemetry\n"
-	rsyslogConf += "module(load=\"imfile\" PollingInterval=\"10\")\n"
-	rsyslogConf += "input(type=\"imfile\"\n"
-	rsyslogConf += "      File=\"/var/log/syswarden/waf.json\"\n"
-	rsyslogConf += "      Tag=\"syswarden-waf-json\"\n"
-	rsyslogConf += "      Severity=\"alert\"\n"
-	rsyslogConf += "      Facility=\"local7\")\n"
 
 	_ = os.MkdirAll("/etc/rsyslog.d", 0750)
 	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0600); err != nil {
 		return fmt.Errorf("failed to write rsyslog SIEM config: %w", err)
 	}
 
-	// 2. Restart Rsyslog safely
-	if system.IsAlpine() {
-		if err := exec.Command("rc-service", "rsyslog", "restart").Run(); err != nil { // #nosec
-			fmt.Printf("[WARN] Failed to restart rsyslog (rc-service): %v\n", err)
-		}
-	} else {
-		if err := exec.Command("systemctl", "restart", "rsyslog").Run(); err != nil { // #nosec
-			fmt.Printf("[WARN] Failed to restart rsyslog: %v\n", err)
-		}
+	if err := restartManagedService("rsyslog"); err != nil {
+		return fmt.Errorf("activate SIEM rsyslog configuration: %w", err)
 	}
 
 	fmt.Printf("[+] SIEM Forwarder successfully configured (%s:%s/%s)\n", ip, port, proto)

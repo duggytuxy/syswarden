@@ -5,10 +5,3 @@ useDefault = true
 
 [[rules]]
 id = "generic-api-key"
-
-[[rules.allowlists]]
-description = "Ignore the vendored xterm FourKeyMap assignment false positive"
-condition = "AND"
-regexTarget = "match"
-regexes = ['''^t\.FourKeyMap=t\.TwoKeyMap=void $''']
-paths = ['''^src/core/syswarden-cli/cmd/ui/assets/xterm\.js$''']

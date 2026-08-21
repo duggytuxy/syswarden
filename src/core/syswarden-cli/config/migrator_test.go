@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const migrationFixture = `
@@ -35,9 +37,9 @@ SYSWARDEN_ASN_ALLOWED="AS64496"
 SYSWARDEN_LIST_CHOICE="3"
 SYSWARDEN_USE_SPAMHAUS="y"
 SYSWARDEN_CUSTOM_URL="https://example.invalid/ipv4.txt"
-SYSWARDEN_CUSTOM_HASH="sha256:ipv4"
+SYSWARDEN_CUSTOM_HASH="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SYSWARDEN_CUSTOM_URL_IPV6="https://example.invalid/ipv6.txt"
-SYSWARDEN_CUSTOM_HASH_IPV6="sha256:ipv6"
+SYSWARDEN_CUSTOM_HASH_IPV6="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 SYSWARDEN_ENABLE_WG="y"
 SYSWARDEN_WG_PORT="51820"
 SYSWARDEN_WG_SUBNET="10.66.66.0/24"
@@ -138,7 +140,6 @@ var runtimeLegacyMigrationKeys = []string{
 	"SYSWARDEN_WAZUH_ENROLL_PORT",
 	"SYSWARDEN_CIS_L2",
 	"SYSWARDEN_ALLOW_MONITORS",
-	"SYSWARDEN_WEB_TOKEN",
 }
 
 var runtimeLegacyAliases = map[string]string{
@@ -217,6 +218,94 @@ func runtimeLegacyParserKeys(t *testing.T) []string {
 	})
 	sort.Strings(keys)
 	return keys
+}
+
+func readModularSaaSAllowance(t *testing.T, root string) bool {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(root, "modules", "10-network.toml")) // #nosec G304 -- root is a test temporary directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := toml.Unmarshal(content, &document); err != nil {
+		t.Fatalf("parse generated network module: %v", err)
+	}
+	network, ok := document["network"].(map[string]any)
+	if !ok {
+		t.Fatalf("generated network table = %#v", document["network"])
+	}
+	saas, ok := network["saas"].(map[string]any)
+	if !ok {
+		t.Fatalf("generated network.saas table = %#v", network["saas"])
+	}
+	allowed, ok := saas["allow_monitors"].(bool)
+	if !ok {
+		t.Fatalf("generated network.saas.allow_monitors = %#v", saas["allow_monitors"])
+	}
+	return allowed
+}
+
+func TestFreshDefaultPathsDisableSaaSWithoutChangingPinnedLegacyInput_SW_SAAS_001(t *testing.T) {
+	parsed, err := (&Migrator{}).ParseFromMemory(DefaultConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed["SYSWARDEN_ALLOW_SAAS_MONITORS"] != "y" {
+		t.Fatalf("pinned historical default changed to %q", parsed["SYSWARDEN_ALLOW_SAAS_MONITORS"])
+	}
+
+	tests := []struct {
+		name       string
+		initialize func(string) error
+	}{
+		{name: "InitializeDefaults", initialize: InitializeDefaults},
+		{name: "EnsureDefaults", initialize: EnsureDefaults},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "config")
+			if err := test.initialize(root); err != nil {
+				t.Fatalf("%s() error = %v", test.name, err)
+			}
+			if readModularSaaSAllowance(t, root) {
+				t.Fatalf("%s() enabled SaaS monitors on a fresh modular installation", test.name)
+			}
+		})
+	}
+}
+
+func TestMigrationPreservesLegacySaaSIntent_SW_SAAS_001(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture string
+		want    bool
+	}{
+		{
+			name:    "absent remains disabled",
+			fixture: strings.Replace(migrationFixture, "SYSWARDEN_ALLOW_SAAS_MONITORS=\"y\"\n", "", 1),
+		},
+		{
+			name:    "explicit true remains enabled",
+			fixture: migrationFixture,
+			want:    true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			source := filepath.Join(root, "legacy.conf")
+			if err := os.WriteFile(source, []byte(test.fixture), 0600); err != nil {
+				t.Fatal(err)
+			}
+			output := filepath.Join(root, "config")
+			if err := (&Migrator{SourcePath: source, OutputDir: output}).Run(); err != nil {
+				t.Fatalf("Migrator.Run() error = %v", err)
+			}
+			if got := readModularSaaSAllowance(t, output); got != test.want {
+				t.Fatalf("migrated allow_monitors = %t, want %t", got, test.want)
+			}
+		})
+	}
 }
 
 func TestLegacyMigrationMapsHistoricalAliases_SW_CFG_002(t *testing.T) {
@@ -306,6 +395,59 @@ INVALID
 	if _, exists := parsed["INVALID"]; exists {
 		t.Error("malformed line was accepted")
 	}
+}
+
+func TestMigrationTOMLSerializerContainsOperatorValuesWithoutStructureInjection_SW_CFG_002(t *testing.T) {
+	t.Parallel()
+	payload := "eth0\"\n[future]\nenabled = true\n#"
+	content, err := (&Migrator{}).generateNetwork(map[string]string{
+		"SYSWARDEN_INTERFACES": payload,
+	})
+	if err != nil {
+		t.Fatalf("generateNetwork() error = %v", err)
+	}
+	var document map[string]any
+	if err := toml.Unmarshal([]byte(content), &document); err != nil {
+		t.Fatalf("generated document is invalid TOML: %v", err)
+	}
+	if _, injected := document["future"]; injected {
+		t.Fatal("operator string created an injected TOML table")
+	}
+	network, ok := document["network"].(map[string]any)
+	if !ok || network["interfaces"] != payload {
+		t.Fatalf("network.interfaces = %#v, want exact operator value", network["interfaces"])
+	}
+}
+
+func TestMigrationAtomicPublicationPreservesOwnerGroupAndMode_SW_CFG_002(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "config.toml")
+	if err := os.WriteFile(path, []byte("before\n"), 0640); err != nil { // #nosec G306 -- deliberate fixture mode verifies exact owner/group preservation
+		t.Fatal(err)
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantUID, wantGID, ok := fileOwnerUIDGID(before)
+	if !ok {
+		t.Fatal("file ownership is unavailable")
+	}
+	if err := writeSecureFileAtomically(directory, "config.toml", []byte("after\n")); err != nil {
+		t.Fatalf("writeSecureFileAtomically() error = %v", err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotUID, gotGID, ok := fileOwnerUIDGID(after)
+	if !ok {
+		t.Fatal("replacement ownership is unavailable")
+	}
+	if gotUID != wantUID || gotGID != wantGID || after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("replacement identity = uid %d gid %d mode %#o, want uid %d gid %d mode %#o", gotUID, gotGID, after.Mode().Perm(), wantUID, wantGID, before.Mode().Perm())
+	}
+	assertFileContent(t, path, "after\n")
 }
 
 func TestMigratorIsRepeatableAndPreservesUserModule(t *testing.T) {
@@ -428,20 +570,162 @@ func TestMigratorDryRunLegacyDirectorySideEffect_SW_CFG_002(t *testing.T) {
 	if err := os.WriteFile(source, []byte(migrationFixture), 0600); err != nil {
 		t.Fatal(err)
 	}
+	beforeSource, err := os.Lstat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	migrator := &Migrator{SourcePath: source, OutputDir: output, DryRun: true}
 	if err := migrator.Run(); err != nil {
 		t.Fatalf("Migrator.Run() dry-run error = %v", err)
 	}
-	entries, err := os.ReadDir(filepath.Join(output, "modules"))
+	if _, err := os.Lstat(output); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created destination state: %v", err)
+	}
+	afterSource, err := os.Lstat(source)
 	if err != nil {
+		t.Fatalf("dry-run changed source file: %v", err)
+	}
+	if !os.SameFile(beforeSource, afterSource) || beforeSource.Mode() != afterSource.Mode() {
+		t.Fatal("dry-run changed source identity or mode")
+	}
+	assertFileContent(t, source, migrationFixture)
+
+	if err := os.MkdirAll(filepath.Join(output, "modules"), 0750); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("dry-run created %d module files", len(entries))
+	sentinel := filepath.Join(output, "modules", "operator.keep")
+	if err := os.WriteFile(sentinel, []byte("preserve\n"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(source); err != nil {
-		t.Fatalf("dry-run changed source file: %v", err)
+	beforeOutput := directoryDigest(t, output)
+	if err := migrator.Run(); err != nil {
+		t.Fatalf("Migrator.Run() dry-run against existing destination error = %v", err)
+	}
+	if afterOutput := directoryDigest(t, output); !reflect.DeepEqual(afterOutput, beforeOutput) {
+		t.Fatalf("dry-run changed existing destination: got %s want %s", afterOutput, beforeOutput)
+	}
+}
+
+func TestMigratorDryRunNeverRecoversOrMutatesInterruptedTransactions_SW_CFG_002(t *testing.T) {
+	tests := []struct {
+		name      string
+		wantState string
+		prepare   func(*testing.T, string, string) error
+	}{
+		{
+			name:      "publishing",
+			wantState: migrationPublishing,
+			prepare: func(t *testing.T, source, output string) error {
+				previous := publishMigrationFile
+				publishMigrationFile = func(string, string, []byte, bool) error {
+					return errors.New("stop in publishing")
+				}
+				defer func() { publishMigrationFile = previous }()
+				return (&Migrator{SourcePath: source, OutputDir: output}).Run()
+			},
+		},
+		{
+			name:      "published before retention",
+			wantState: migrationPublished,
+			prepare: func(t *testing.T, source, output string) error {
+				previous := renameLegacyFile
+				renameLegacyFile = func(*legacySourceSnapshot) error {
+					return errors.New("stop before retention")
+				}
+				defer func() { renameLegacyFile = previous }()
+				return (&Migrator{SourcePath: source, OutputDir: output}).Run()
+			},
+		},
+		{
+			name:      "published after retention response loss",
+			wantState: migrationPublished,
+			prepare: func(t *testing.T, source, output string) error {
+				previous := renameLegacyFile
+				renameLegacyFile = func(snapshot *legacySourceSnapshot) error {
+					if err := secureRenameLegacySource(snapshot); err != nil {
+						return err
+					}
+					return errors.New("stop after retention")
+				}
+				defer func() { renameLegacyFile = previous }()
+				return (&Migrator{SourcePath: source, OutputDir: output}).Run()
+			},
+		},
+		{
+			name:      "published before secure wipe",
+			wantState: migrationPublished,
+			prepare: func(t *testing.T, source, output string) error {
+				previous := shredLegacyFile
+				shredLegacyFile = func(*legacySourceSnapshot, func(string) error) error {
+					return errors.New("stop before secure wipe")
+				}
+				defer func() { shredLegacyFile = previous }()
+				return (&Migrator{SourcePath: source, OutputDir: output}).Run()
+			},
+		},
+		{
+			name:      "published with durable wipe staging",
+			wantState: migrationPublished,
+			prepare: func(t *testing.T, source, output string) error {
+				previous := secureWipeCheckpoint
+				secureWipeCheckpoint = func(phase int) error {
+					if phase == 6 {
+						return errors.New("stop after durable wipe staging")
+					}
+					return nil
+				}
+				defer func() { secureWipeCheckpoint = previous }()
+				return (&Migrator{SourcePath: source, OutputDir: output}).Run()
+			},
+		},
+		{
+			name:      "wipe staged after removal",
+			wantState: migrationWipeStaged,
+			prepare: func(t *testing.T, source, output string) error {
+				previous := secureWipeCheckpoint
+				secureWipeCheckpoint = func(phase int) error {
+					if phase == 7 {
+						return errors.New("stop after wipe removal")
+					}
+					return nil
+				}
+				defer func() { secureWipeCheckpoint = previous }()
+				return (&Migrator{SourcePath: source, OutputDir: output}).Run()
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			source := filepath.Join(root, "legacy.conf")
+			output := filepath.Join(root, "config")
+			fixture := migrationFixture
+			if strings.Contains(test.name, "wipe") || strings.Contains(test.name, "secure") {
+				fixture = strings.Replace(fixture, `SYSWARDEN_SECURE_WIPE_CONF="n"`, `SYSWARDEN_SECURE_WIPE_CONF="y"`, 1)
+			}
+			if err := os.WriteFile(source, []byte(fixture), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.prepare(t, source, output); err == nil {
+				t.Fatal("test setup did not interrupt the migration")
+			}
+			marker, err := readMigrationMarker(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if marker == nil || marker.State != test.wantState {
+				t.Fatalf("interrupted marker = %#v, want state %s", marker, test.wantState)
+			}
+			before := directoryDigest(t, root)
+			err = (&Migrator{SourcePath: source, OutputDir: output, DryRun: true}).Run()
+			if err == nil || !strings.Contains(err.Error(), "dry-run cannot resume") {
+				t.Fatalf("dry-run recovery error = %v", err)
+			}
+			if after := directoryDigest(t, root); !reflect.DeepEqual(after, before) {
+				t.Fatalf("dry-run mutated interrupted transaction: before=%v after=%v", before, after)
+			}
+		})
 	}
 }
 
@@ -492,9 +776,6 @@ func TestLegacyMigrationToGlobalConfigContract_SW_CFG_002(t *testing.T) {
 	}
 	if !migrated.SiemEnabled || migrated.SiemIP != "192.0.2.30" || migrated.SiemPort != "6514" || migrated.SiemProto != "tls" {
 		t.Fatalf("SIEM contract changed: enabled=%t endpoint=%s:%s protocol=%q", migrated.SiemEnabled, migrated.SiemIP, migrated.SiemPort, migrated.SiemProto)
-	}
-	if migrated.WebTUIPassword != "existing-user-token" {
-		t.Fatalf("user override token changed: %q", migrated.WebTUIPassword)
 	}
 	if !legacy.CISL2Hardening || !migrated.CISL2Hardening {
 		t.Fatalf("CIS L2 setting was not preserved: legacy=%t migrated=%t", legacy.CISL2Hardening, migrated.CISL2Hardening)
@@ -711,7 +992,7 @@ func TestMigrationUserModuleNoReplaceInterleavingPreservesConcurrentInodeAndRetr
 		t.Fatal(err)
 	}
 
-	const concurrent = "# concurrent validated operator state\n[user]\nwebtui_password = \"must-survive-migration\"\n"
+	const concurrent = "# concurrent validated operator state\n[user]\nprofile_name = \"must-survive-migration\"\n"
 	previousPublisher := publishMigrationFile
 	injected := false
 	var concurrentInfo os.FileInfo
@@ -778,7 +1059,7 @@ func TestMigrationUserModuleNoReplaceInterleavingPreservesConcurrentInodeAndRetr
 	if err := loadModularConfig(output); err != nil {
 		t.Fatalf("retried migration is not loadable: %v", err)
 	}
-	if GlobalConfig.WebTUIPassword != "must-survive-migration" || !GlobalConfig.BunkerWebEnabled {
+	if !GlobalConfig.BunkerWebEnabled {
 		t.Fatalf("retried configuration lost operator/BunkerWeb state: %#v", GlobalConfig)
 	}
 }

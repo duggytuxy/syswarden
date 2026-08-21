@@ -1,9 +1,11 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -38,7 +40,6 @@ unknown_key = "must remain on disk" # unknown inline comment
 `
 	moduleContent := `# Operator-owned extension and comment.
 [user]
-webtui_password = "existing-token"
 profile_name = "production"
 
 [future_module]
@@ -59,8 +60,8 @@ future_key = 42
 	if GlobalConfig == nil {
 		t.Fatal("loadModularConfig() left GlobalConfig nil")
 	}
-	if GlobalConfig.SSHPort != "2222" || GlobalConfig.WebTUIPassword != "existing-token" {
-		t.Fatalf("mapped configuration changed: SSH=%q token=%q", GlobalConfig.SSHPort, GlobalConfig.WebTUIPassword)
+	if GlobalConfig.SSHPort != "2222" {
+		t.Fatalf("mapped configuration changed: SSH=%q", GlobalConfig.SSHPort)
 	}
 	assertFileContent(t, master, masterContent)
 	assertFileContent(t, module, moduleContent)
@@ -145,7 +146,7 @@ enabled = true
 ssh_port = "2222"
 
 [user]
-webtui_password = "operator-token"
+profile_name = "production"
 `
 	if err := os.WriteFile(filepath.Join(modules, "10-network.toml"), []byte(lowPriority), 0600); err != nil {
 		t.Fatal(err)
@@ -165,14 +166,97 @@ webtui_password = "operator-token"
 	if GlobalConfig.HAPeerIP != "192.0.2.20 2001:db8::20" || GlobalConfig.HAToken != "cluster-token" {
 		t.Fatalf("HA mapping changed: peers=%q token=%q", GlobalConfig.HAPeerIP, GlobalConfig.HAToken)
 	}
-	if GlobalConfig.WebTUIPassword != "operator-token" {
-		t.Fatalf("user override changed: %q", GlobalConfig.WebTUIPassword)
-	}
 	if !GlobalConfig.BunkerWebEnabled {
 		t.Fatal("operator BunkerWeb feature-gate override was lost")
 	}
 	if GlobalConfig.LANSubnets != "10.0.0.0/8 2001:db8::/32" || GlobalConfig.HoneyPorts != "23 6379" {
 		t.Fatalf("slice mapping changed: LAN=%q honeyports=%q", GlobalConfig.LANSubnets, GlobalConfig.HoneyPorts)
+	}
+}
+
+func boolValue(value bool) *bool {
+	return &value
+}
+
+func setOptionalBooleanEnvironment(t *testing.T, key string, value *bool) {
+	t.Helper()
+	previous, existed := os.LookupEnv(key)
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv(key, previous)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+	if value == nil {
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if err := os.Setenv(key, strconv.FormatBool(*value)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCLISaaSAliasPrecedenceMatchesRuntime_SW_SAAS_001(t *testing.T) {
+	tests := []struct {
+		name         string
+		officialFile *bool
+		legacyFile   *bool
+		officialEnv  *bool
+		legacyEnv    *bool
+		want         bool
+	}{
+		{name: "absent defaults false"},
+		{name: "legacy file true", legacyFile: boolValue(true), want: true},
+		{name: "legacy environment true", legacyEnv: boolValue(true), want: true},
+		{name: "legacy environment overrides legacy file", legacyFile: boolValue(true), legacyEnv: boolValue(false)},
+		{name: "official file false overrides legacy file", officialFile: boolValue(false), legacyFile: boolValue(true)},
+		{name: "official environment false overrides legacy file", officialEnv: boolValue(false), legacyFile: boolValue(true)},
+		{name: "official environment overrides official file", officialFile: boolValue(true), officialEnv: boolValue(false)},
+		{name: "official true overrides legacy false", officialFile: boolValue(true), legacyEnv: boolValue(false), want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setOptionalBooleanEnvironment(t, "SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS", test.officialEnv)
+			setOptionalBooleanEnvironment(t, "SYSWARDEN_INTEGRATIONS_SAAS_ENABLED", test.legacyEnv)
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(minimalModularConfig), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var module strings.Builder
+			if test.officialFile != nil {
+				fmt.Fprintf(&module, "[network.saas]\nallow_monitors = %t\n", *test.officialFile)
+			}
+			if test.legacyFile != nil {
+				fmt.Fprintf(&module, "[integrations.saas]\nenabled = %t\n", *test.legacyFile)
+			}
+			if module.Len() > 0 {
+				modules := filepath.Join(root, "modules")
+				if err := os.Mkdir(modules, 0750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(modules, "99-saas.toml"), []byte(module.String()), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			previous := GlobalConfig
+			previousState := CurrentLoadState()
+			t.Cleanup(func() {
+				GlobalConfig = previous
+				loadStateMu.Lock()
+				loadState = previousState
+				loadStateMu.Unlock()
+			})
+			if err := loadModularConfig(root); err != nil {
+				t.Fatalf("loadModularConfig() error = %v", err)
+			}
+			if GlobalConfig.AllowSaaSMonitors != test.want {
+				t.Fatalf("AllowSaaSMonitors = %t, want %t", GlobalConfig.AllowSaaSMonitors, test.want)
+			}
+		})
 	}
 }
 
@@ -349,7 +433,7 @@ func TestEnsureDefaultsCompletesPartialConfigWithoutOverwritingOperatorState_SW_
 		t.Fatal(err)
 	}
 	userPath := filepath.Join(modules, "99-user.toml")
-	const userContent = "# operator-owned\n[user]\nwebtui_password = \"preserve-exactly\"\n"
+	const userContent = "# operator-owned\n[user]\nprofile_name = \"preserve-exactly\"\n"
 	modulesRoot, err := os.OpenRoot(modules)
 	if err != nil {
 		t.Fatal(err)
@@ -408,8 +492,8 @@ func TestEnsureDefaultsCompletesPartialConfigWithoutOverwritingOperatorState_SW_
 	if err := ParseConfig(root); err != nil {
 		t.Fatalf("ParseConfig() after partial bootstrap = %v", err)
 	}
-	if GlobalConfig == nil || GlobalConfig.WebTUIPassword != "preserve-exactly" {
-		t.Fatalf("completed config did not preserve the operator token: %#v", GlobalConfig)
+	if GlobalConfig == nil {
+		t.Fatalf("completed config is unavailable: %#v", GlobalConfig)
 	}
 	if state := CurrentLoadState(); state.Degraded || state.Source != root {
 		t.Fatalf("load state = %#v, want validated modular source", state)

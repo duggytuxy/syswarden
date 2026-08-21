@@ -1,19 +1,23 @@
 package network
 
 import (
-	"io"
+	"context"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
 
 	"syswarden-core/engine"
 	"syswarden-core/firewall"
 	"syswarden-core/logger"
 	"syswarden-core/utils"
 
-	"github.com/nxadm/tail"
 	"github.com/spf13/viper"
 )
 
@@ -29,6 +33,7 @@ type WAAPEngine struct {
 	fw     firewall.Manager
 	logger *logger.Logger
 	engine *engine.Engine
+	wg     sync.WaitGroup
 }
 
 func loadWAAPConfig() WAAPConfig {
@@ -103,60 +108,107 @@ func NewWAAPEngine(fw firewall.Manager, l *logger.Logger, e *engine.Engine) *WAA
 	}
 }
 
-func (w *WAAPEngine) Start() {
+// StartContext starts the log followers and stops them when ctx is cancelled.
+func (w *WAAPEngine) StartContext(ctx context.Context) {
+	if ctx == nil {
+		log.Println("[WAAP Engine] Disabled (No lifecycle context provided).")
+		return
+	}
 	if len(w.config.Logs) == 0 {
 		log.Println("[WAAP Engine] Disabled (No logs configured).")
 		return
 	}
 
-	log.Printf("[WAAP Engine] Initializing Log Collector forwarding to Engine. Monitoring %d patterns", len(w.config.Logs))
-
-	var filesToTail []string
-	for _, pattern := range w.config.Logs {
-		matches, err := filepath.Glob(pattern)
-		if err == nil && len(matches) > 0 {
-			filesToTail = append(filesToTail, matches...)
-		} else {
-			filesToTail = append(filesToTail, pattern)
-		}
+	uniqueFiles, rejected := resolveWAAPLogFiles(w.config.Logs)
+	for _, err := range rejected {
+		log.Printf("[WAAP Engine] Rejecting log input: %v", err)
 	}
-
-	// Deduplicate
-	dedup := make(map[string]bool)
-	var uniqueFiles []string
-	for _, f := range filesToTail {
-		if !dedup[f] {
-			dedup[f] = true
-			uniqueFiles = append(uniqueFiles, f)
-		}
+	if len(uniqueFiles) == 0 {
+		log.Println("[WAAP Engine] Disabled (No configured pattern resolved to a real regular file).")
+		return
 	}
+	log.Printf("[WAAP Engine] Initializing Log Collector forwarding to Engine. Monitoring %d verified files", len(uniqueFiles))
 
 	for _, file := range uniqueFiles {
-		go w.tailFile(file)
+		w.wg.Add(1)
+		go func(path string) {
+			defer w.wg.Done()
+			w.tailFile(ctx, path)
+		}(file)
 	}
 }
 
-func (w *WAAPEngine) tailFile(filepath string) {
-	if _, err := os.Stat(filepath); os.IsNotExist(err) {
-		_ = os.WriteFile(filepath, []byte{}, 0600)
-	}
+// Wait blocks until all log followers have observed cancellation and exited.
+func (w *WAAPEngine) Wait() {
+	w.wg.Wait()
+}
 
-	t, err := tail.TailFile(filepath, tail.Config{
-		Follow:    true,
-		ReOpen:    true,
-		MustExist: false,
-		Location:  &tail.SeekInfo{Offset: 0, Whence: io.SeekEnd},
-		Logger:    tail.DiscardingLogger,
-	})
+func resolveWAAPLogFiles(patterns []string) ([]string, []error) {
+	files := make(map[string]struct{})
+	var rejected []error
+	for _, pattern := range patterns {
+		if !filepath.IsAbs(pattern) || filepath.Clean(pattern) != pattern || strings.IndexFunc(pattern, unicode.IsControl) >= 0 {
+			rejected = append(rejected, fmt.Errorf("pattern %q is not an absolute canonical path", pattern))
+			continue
+		}
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			rejected = append(rejected, fmt.Errorf("pattern %q is invalid: %w", pattern, err))
+			continue
+		}
+		if len(matches) == 0 {
+			rejected = append(rejected, fmt.Errorf("pattern %q has no existing match", pattern))
+			continue
+		}
+		for _, match := range matches {
+			if err := verifyWAAPLogFile(match); err != nil {
+				rejected = append(rejected, err)
+				continue
+			}
+			files[match] = struct{}{}
+		}
+	}
+	resolved := make([]string, 0, len(files))
+	for file := range files {
+		resolved = append(resolved, file)
+	}
+	sort.Strings(resolved)
+	return resolved, rejected
+}
+
+func verifyWAAPLogFile(path string) error {
+	follower, err := newSecureWAAPLogFollower(path, false)
 	if err != nil {
-		log.Printf("[WAAP Engine] Failed to tail %s: %v", filepath, err)
+		return err
+	}
+	if closeErr := follower.Close(); closeErr != nil {
+		return fmt.Errorf("close WAAP log %q: %w", path, closeErr)
+	}
+	return nil
+}
+
+func (w *WAAPEngine) tailFile(ctx context.Context, path string) {
+	follower, err := newSecureWAAPLogFollower(path, true)
+	if err != nil {
+		log.Printf("[WAAP Engine] Refusing to tail unverified log: %v", err)
 		return
 	}
+	defer func() {
+		if err := follower.Close(); err != nil {
+			log.Printf("[WAAP Engine] Failed to close %s: %v", path, err)
+		}
+	}()
 
-	log.Printf("[WAAP Engine] Actively tailing %s", filepath)
+	log.Printf("[WAAP Engine] Actively tailing %s", path)
 
-	for line := range t.Lines {
-		text := line.Text
+	for {
+		text, err := follower.Next(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				log.Printf("[WAAP Engine] Stopped tailing %s: %v", path, err)
+			}
+			return
+		}
 
 		// Prevent recursive scanning of our own logs (infinite loops on Rocky Linux /var/log/messages)
 		if strings.Contains(text, "[SYSWARDEN-BLOCK] IP=") ||

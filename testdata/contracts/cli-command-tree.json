@@ -357,6 +357,92 @@
     }
   },
   {
+    "path": "syswarden config migrate",
+    "use": "migrate",
+    "short": "Migrate the historical configuration to modular TOML",
+    "long": "Migrate the historical configuration to modular TOML. With --dry-run, neither the source nor destination filesystem is modified.",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "Validate migration without modifying source or destination files"
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for migrate"
+      },
+      {
+        "name": "output",
+        "shorthand": "o",
+        "type": "string",
+        "default": "",
+        "usage": "Output directory"
+      },
+      {
+        "name": "source",
+        "shorthand": "s",
+        "type": "string",
+        "default": "",
+        "usage": "Source config file path"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden config migrate\"",
+      "2": "unknown command \"arg-1\" for \"syswarden config migrate\"",
+      "3": "unknown command \"arg-1\" for \"syswarden config migrate\"",
+      "4": "unknown command \"arg-1\" for \"syswarden config migrate\""
+    }
+  },
+  {
+    "path": "syswarden config validate",
+    "use": "validate",
+    "short": "Validate modular configuration without modifying it",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for validate"
+      },
+      {
+        "name": "path",
+        "type": "string",
+        "default": "/etc/syswarden/config",
+        "usage": "Modular configuration root"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden config validate\"",
+      "2": "unknown command \"arg-1\" for \"syswarden config validate\"",
+      "3": "unknown command \"arg-1\" for \"syswarden config validate\"",
+      "4": "unknown command \"arg-1\" for \"syswarden config validate\""
+    }
+  },
+  {
     "path": "syswarden config-get",
     "use": "config-get \u003ckey\u003e",
     "short": "Get a configuration value by key",
@@ -384,6 +470,294 @@
       "2": "accepts 1 arg(s), received 2",
       "3": "accepts 1 arg(s), received 3",
       "4": "accepts 1 arg(s), received 4"
+    }
+  },
+  {
+    "path": "syswarden ha-fence",
+    "use": "ha-fence",
+    "short": "Administer the native-sync migration fence",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for ha-fence"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ha-fence\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ha-fence\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ha-fence\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ha-fence\""
+    }
+  },
+  {
+    "path": "syswarden ha-fence engage",
+    "use": "engage",
+    "short": "Engage and drain a local native-sync fence",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for engage"
+      },
+      {
+        "name": "manifest",
+        "type": "string",
+        "default": "",
+        "usage": "absolute path to the protected canonical manifest"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ha-fence engage\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ha-fence engage\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ha-fence engage\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ha-fence engage\""
+    }
+  },
+  {
+    "path": "syswarden ha-fence manifest",
+    "use": "manifest",
+    "short": "Create and verify HA fence manifests",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for manifest"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ha-fence manifest\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ha-fence manifest\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ha-fence manifest\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ha-fence manifest\""
+    }
+  },
+  {
+    "path": "syswarden ha-fence manifest create",
+    "use": "create",
+    "short": "Create a verified canonical HA fence manifest",
+    "flags": [
+      {
+        "name": "assert-complete",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "attest that the node and legacy-writer inventories are complete"
+      },
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for create"
+      },
+      {
+        "name": "inventory",
+        "type": "string",
+        "default": "",
+        "usage": "absolute path to the protected operator inventory"
+      },
+      {
+        "name": "output",
+        "type": "string",
+        "default": "",
+        "usage": "absolute path for the new protected canonical manifest"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ha-fence manifest create\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ha-fence manifest create\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ha-fence manifest create\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ha-fence manifest create\""
+    }
+  },
+  {
+    "path": "syswarden ha-fence manifest verify",
+    "use": "verify",
+    "short": "Verify a canonical HA fence manifest and both digests",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for verify"
+      },
+      {
+        "name": "manifest",
+        "type": "string",
+        "default": "",
+        "usage": "absolute path to the protected canonical manifest"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ha-fence manifest verify\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ha-fence manifest verify\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ha-fence manifest verify\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ha-fence manifest verify\""
+    }
+  },
+  {
+    "path": "syswarden ha-fence recover",
+    "use": "recover",
+    "short": "Recover and re-drain an interrupted HA fence campaign",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for recover"
+      },
+      {
+        "name": "manifest",
+        "type": "string",
+        "default": "",
+        "usage": "absolute path to the protected canonical manifest"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ha-fence recover\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ha-fence recover\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ha-fence recover\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ha-fence recover\""
+    }
+  },
+  {
+    "path": "syswarden ha-fence release",
+    "use": "release",
+    "short": "Release a drained HA fence after durable writer closure",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for release"
+      },
+      {
+        "name": "manifest",
+        "type": "string",
+        "default": "",
+        "usage": "absolute path to the protected canonical manifest"
+      },
+      {
+        "name": "writer-closure",
+        "type": "string",
+        "default": "",
+        "usage": "absolute path to the protected canonical writer closure"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ha-fence release\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ha-fence release\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ha-fence release\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ha-fence release\""
+    }
+  },
+  {
+    "path": "syswarden ha-fence status",
+    "use": "status",
+    "short": "Report the local HA fence state",
+    "flags": [
+      {
+        "name": "config",
+        "type": "string",
+        "default": "/opt/syswarden/syswarden-auto.conf",
+        "usage": "config file",
+        "persistent": true
+      },
+      {
+        "name": "help",
+        "shorthand": "h",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "help for status"
+      },
+      {
+        "name": "json",
+        "type": "bool",
+        "default": "false",
+        "no_option": "true",
+        "usage": "emit the local fence state as JSON"
+      }
+    ],
+    "arg_outcomes": {
+      "0": "ok",
+      "1": "unknown command \"arg-1\" for \"syswarden ha-fence status\"",
+      "2": "unknown command \"arg-1\" for \"syswarden ha-fence status\"",
+      "3": "unknown command \"arg-1\" for \"syswarden ha-fence status\"",
+      "4": "unknown command \"arg-1\" for \"syswarden ha-fence status\""
     }
   },
   {
@@ -539,7 +913,7 @@
     "path": "syswarden migrate-config",
     "use": "migrate-config",
     "short": "Migrate from old config format to modular TOML format",
-    "long": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.\n\nWith --dry-run, migrated file contents are not written and the source is not\nrenamed or wiped, but the output directory and modules subdirectory may be created.",
+    "long": "Migrate your existing syswarden-auto.conf configuration file\nto the new modular TOML format. This creates a new directory structure\nwith separated configuration files for each domain.\n\nWith --dry-run, migrated file contents are not written and the source and\ndestination filesystem are not modified.",
     "flags": [
       {
         "name": "config",
@@ -553,7 +927,7 @@
         "type": "bool",
         "default": "false",
         "no_option": "true",
-        "usage": "Do not write migrated file contents; output directories may be created"
+        "usage": "Validate migration without modifying source or destination files"
       },
       {
         "name": "help",
@@ -580,10 +954,10 @@
     ],
     "arg_outcomes": {
       "0": "ok",
-      "1": "ok",
-      "2": "ok",
-      "3": "ok",
-      "4": "ok"
+      "1": "unknown command \"arg-1\" for \"syswarden migrate-config\"",
+      "2": "unknown command \"arg-1\" for \"syswarden migrate-config\"",
+      "3": "unknown command \"arg-1\" for \"syswarden migrate-config\"",
+      "4": "unknown command \"arg-1\" for \"syswarden migrate-config\""
     }
   },
   {
@@ -828,90 +1202,10 @@
     }
   },
   {
-    "path": "syswarden web-token",
-    "use": "web-token",
-    "short": "Display or rotate the Web-TUI access token",
-    "long": "Displays the configured Web-TUI access token. If no token exists, an invocation without --rotate generates and persists one, then attempts to restart syswarden-webtui.service. --rotate always replaces the persisted token and makes the same restart attempt. If that attempt fails, a running Web-TUI process may continue accepting its previous token.",
-    "flags": [
-      {
-        "name": "config",
-        "type": "string",
-        "default": "/opt/syswarden/syswarden-auto.conf",
-        "usage": "config file",
-        "persistent": true
-      },
-      {
-        "name": "help",
-        "shorthand": "h",
-        "type": "bool",
-        "default": "false",
-        "no_option": "true",
-        "usage": "help for web-token"
-      },
-      {
-        "name": "rotate",
-        "shorthand": "r",
-        "type": "bool",
-        "default": "false",
-        "no_option": "true",
-        "usage": "Persist a replacement token and request a Web-TUI service restart"
-      }
-    ],
-    "arg_outcomes": {
-      "0": "ok",
-      "1": "ok",
-      "2": "ok",
-      "3": "ok",
-      "4": "ok"
-    }
-  },
-  {
-    "path": "syswarden web-tui",
-    "use": "web-tui",
-    "short": "Start the Web-TUI HTTPS listener",
-    "long": "Starts an HTTPS Web-TUI listener. The default bind is 0.0.0.0:62027 and the server uses an in-memory self-signed certificate.",
-    "flags": [
-      {
-        "name": "bind",
-        "type": "string",
-        "default": "0.0.0.0:62027",
-        "usage": "IP:Port to bind the Web-TUI server"
-      },
-      {
-        "name": "config",
-        "type": "string",
-        "default": "/opt/syswarden/syswarden-auto.conf",
-        "usage": "config file",
-        "persistent": true
-      },
-      {
-        "name": "help",
-        "shorthand": "h",
-        "type": "bool",
-        "default": "false",
-        "no_option": "true",
-        "usage": "help for web-tui"
-      },
-      {
-        "name": "token",
-        "type": "string",
-        "default": "",
-        "usage": "Web-TUI access token; falls back to configuration or generates one when omitted"
-      }
-    ],
-    "arg_outcomes": {
-      "0": "ok",
-      "1": "ok",
-      "2": "ok",
-      "3": "ok",
-      "4": "ok"
-    }
-  },
-  {
     "path": "syswarden whitelist",
-    "use": "whitelist \u003cIP\u003e... [PORT]",
+    "use": "whitelist \u003cIP|CIDR\u003e... [PORT]",
     "short": "Add addresses or CIDRs to the persistent whitelist",
-    "long": "Records each entry in the persistent whitelist and reapplies firewall policy. Verify the resulting kernel rule before relying on the entry.",
+    "long": "Records each entry in the persistent whitelist and reapplies firewall policy. Use --port for a TCP service-scoped entry. A single final positional [PORT] remains temporarily accepted for compatibility. Verify the resulting kernel rule before relying on the entry.",
     "flags": [
       {
         "name": "config",
@@ -927,6 +1221,12 @@
         "default": "false",
         "no_option": "true",
         "usage": "help for whitelist"
+      },
+      {
+        "name": "port",
+        "type": "string",
+        "default": "",
+        "usage": "Scope every whitelist entry to this TCP destination port"
       }
     ],
     "arg_outcomes": {

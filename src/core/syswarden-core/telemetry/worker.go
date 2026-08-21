@@ -324,17 +324,6 @@ func monitorKernelDrops(ctx context.Context, fwManager FirewallManager, logBan f
 				ip = "Unknown-ARP-Attacker"
 			}
 			logBan(ip, "L2-ARP-FLOOD", line)
-		} else if runtime.GOOS == "freebsd" && strings.Contains(line, "arp: ") && (strings.Contains(line, "moved from") || strings.Contains(line, "wrong iface")) {
-			// Parse FreeBSD native arp warning
-			parts := strings.Fields(line)
-			ip := "Unknown-ARP-Attacker"
-			for i, p := range parts {
-				if p == "arp:" && i+1 < len(parts) {
-					ip = parts[i+1]
-					break
-				}
-			}
-			logBan(ip, "L2-ARP-FLOOD", "[SYSWARDEN-ARP-FLOOD] "+line)
 		}
 	}
 	_ = cmd.Wait()

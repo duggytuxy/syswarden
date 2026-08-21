@@ -1,10 +1,12 @@
 table netdev syswarden_hw_drop {
 	set syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }
 	set syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }
+	set syswarden_whitelist_ports { type ipv4_addr . inet_service; flags interval; }
+	set syswarden_whitelist_ports6 { type ipv6_addr . inet_service; flags interval; }
 	set syswarden_zt_allowed { type ipv4_addr; flags interval; auto-merge; }
 	set syswarden_zt_allowed6 { type ipv6_addr; flags interval; auto-merge; }
-	set banned_ips { type ipv4_addr; flags timeout; }
-	set banned_ips6 { type ipv6_addr; flags timeout; }
+	set banned_ips { type ipv4_addr; flags interval,timeout; }
+	set banned_ips6 { type ipv6_addr; flags interval,timeout; }
 	set syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }
 	set syswarden_blacklist6 { type ipv6_addr; flags interval; auto-merge; }
 	set syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }
@@ -15,6 +17,8 @@ table netdev syswarden_hw_drop {
 		type filter hook ingress devices = { "eth-test0", "eth-test1" } priority -500; policy accept;
 		ip saddr @syswarden_whitelist accept
 		ip6 saddr @syswarden_whitelist6 accept
+		ip saddr . tcp dport @syswarden_whitelist_ports accept
+		ip6 saddr . tcp dport @syswarden_whitelist_ports6 accept
 		ip saddr @banned_ips limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-WAF-BLOCK] "
 		ip saddr @banned_ips drop
 		ip6 saddr @banned_ips6 limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-WAF-BLOCK] "
@@ -41,10 +45,14 @@ table netdev syswarden_hw_drop {
 table inet syswarden {
 	set syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }
 	set syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }
+	set syswarden_whitelist_ports { type ipv4_addr . inet_service; flags interval; }
+	set syswarden_whitelist_ports6 { type ipv6_addr . inet_service; flags interval; }
+	set syswarden_ssh_bypass { type ipv4_addr; flags interval; auto-merge; }
+	set syswarden_ssh_bypass6 { type ipv6_addr; flags interval; auto-merge; }
 	set syswarden_zt_allowed { type ipv4_addr; flags interval; auto-merge; }
 	set syswarden_zt_allowed6 { type ipv6_addr; flags interval; auto-merge; }
-	set banned_ips { type ipv4_addr; flags timeout; }
-	set banned_ips6 { type ipv6_addr; flags timeout; }
+	set banned_ips { type ipv4_addr; flags interval,timeout; }
+	set banned_ips6 { type ipv6_addr; flags interval,timeout; }
 	set syswarden_blacklist { type ipv4_addr; flags interval; auto-merge; }
 	set syswarden_blacklist6 { type ipv6_addr; flags interval; auto-merge; }
 	set syswarden_geoip { type ipv4_addr; flags interval; auto-merge; }
@@ -56,6 +64,8 @@ table inet syswarden {
 		iifname "lo" accept
 		ip saddr @syswarden_whitelist accept
 		ip6 saddr @syswarden_whitelist6 accept
+		ip saddr . tcp dport @syswarden_whitelist_ports accept
+		ip6 saddr . tcp dport @syswarden_whitelist_ports6 accept
 		ip saddr @banned_ips counter drop
 		ip6 saddr @banned_ips6 counter drop
 		ip saddr @syswarden_blacklist counter drop
@@ -71,15 +81,17 @@ table inet syswarden {
 		ip saddr != @syswarden_zt_allowed drop
 		ip6 saddr != @syswarden_zt_allowed6 limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-ZERO-TRUST] "
 		ip6 saddr != @syswarden_zt_allowed6 drop
-		ct state new tcp dport { 443, 62027, 62026 } accept
+		ct state new tcp dport { 443, 62026 } accept
 		ct state new udp dport { 53 } accept
+		ip saddr @syswarden_ssh_bypass tcp dport 2222 accept
+		ip6 saddr @syswarden_ssh_bypass6 tcp dport 2222 accept
 		# SSH Cloaking (Strict WG VPN Only)
 		ip saddr @syswarden_whitelist tcp dport 2222 accept
 		ip6 saddr @syswarden_whitelist6 tcp dport 2222 accept
 		ip saddr 10.66.66.0/24 tcp dport 2222 accept
 		tcp dport 2222 counter drop
-		ct state new tcp dport { 236379 } limit rate 5/second burst 10 packets log prefix "[SYSWARDEN-HONEYPORT] "
-		ct state new tcp dport { 236379 } counter drop
+		ct state new tcp dport { 23, 6379 } limit rate 5/second burst 10 packets log prefix "[SYSWARDEN-HONEYPORT] "
+		ct state new tcp dport { 23, 6379 } counter drop
 		# Explicitly trust internal enterprise subnets (Bypass Catch-All)
 		ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 203.0.113.0/24 } accept
 		ct state new limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-BLOCK] [CATCH-ALL] "
@@ -96,6 +108,8 @@ table inet syswarden {
 		type filter hook forward priority -10; policy accept;
 		ip saddr @syswarden_whitelist accept
 		ip6 saddr @syswarden_whitelist6 accept
+		ip saddr . tcp dport @syswarden_whitelist_ports accept
+		ip6 saddr . tcp dport @syswarden_whitelist_ports6 accept
 		ip saddr @banned_ips counter drop
 		ip daddr @banned_ips counter drop
 		ip6 saddr @banned_ips6 counter drop

@@ -48,6 +48,7 @@ var initConfigHook = initConfig
 var degradedConfigAllowlist = map[string]struct{}{
 	"completion":     {},
 	"config":         {},
+	"ha-fence":       {},
 	"help":           {},
 	"install":        {},
 	"manual":         {},

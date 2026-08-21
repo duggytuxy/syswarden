@@ -14,6 +14,9 @@ func UninstallSystem() error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("uninstall must be executed as root")
 	}
+	if err := retireLegacyWebTUIService(IsAlpine()); err != nil {
+		return fmt.Errorf("retire legacy Web-TUI service: %w", err)
+	}
 
 	fmt.Println("[WARN] Starting Deep Clean Uninstallation (Scorched Earth)...")
 
@@ -45,16 +48,8 @@ func UninstallSystem() error {
 		_ = exec.Command("systemctl", "disable", "syswarden-reporter").Run() // #nosec
 		_ = os.Remove("/etc/systemd/system/syswarden-reporter.service")
 
-		_ = exec.Command("systemctl", "stop", "syswarden-webtui.service").Run()    // #nosec
-		_ = exec.Command("systemctl", "disable", "syswarden-webtui.service").Run() // #nosec
-		_ = os.Remove("/etc/systemd/system/syswarden-webtui.service")
-
 		_ = exec.Command("systemctl", "daemon-reload").Run() // #nosec
 	}
-
-	// 2. Kill orphan processes
-	_ = exec.Command("pkill", "-9", "-f", "syswarden-core").Run()   // #nosec
-	_ = exec.Command("pkill", "-9", "-f", "syswarden-webtui").Run() // #nosec
 
 	// 3. Remove WireGuard
 	if _, err := os.Stat("/etc/wireguard/wg-syswarden.conf"); err == nil {

@@ -63,9 +63,12 @@ func loadModularConfig(configDir string) (loadErr error) {
 	v.AutomaticEnv()
 	v.SetEnvPrefix("SYSWARDEN")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+	_ = v.BindEnv("network.saas.allow_monitors")
+	_ = v.BindEnv("integrations.saas.enabled")
 
 	setDefaults(v, configDir)
 	var sources []modularConfigSource
+	observed := make(map[string]struct{})
 
 	// Load master config
 	masterConfig := filepath.Join(configDir, "config.toml")
@@ -74,6 +77,11 @@ func loadModularConfig(configDir string) (loadErr error) {
 		if readErr != nil {
 			return readErr
 		}
+		document, err := parseTOMLDocument(content, "config.toml")
+		if err != nil {
+			return err
+		}
+		flattenTOMLKeys("", document, observed)
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return fmt.Errorf("failed to load master config: %w", err)
 		}
@@ -114,6 +122,11 @@ func loadModularConfig(configDir string) (loadErr error) {
 			if readErr != nil {
 				return readErr
 			}
+			document, err := parseTOMLDocument(content, filepath.ToSlash(filepath.Join("modules", entry.Name())))
+			if err != nil {
+				return err
+			}
+			flattenTOMLKeys("", document, observed)
 			if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 				return fmt.Errorf("failed to load module %s: %w", file, err)
 			}
@@ -127,6 +140,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("inspect modules directory: %w", err)
 	}
+	resolveModularSaaSAlias(v, observed)
 
 	var modConfig ModularConfig
 	if err := v.Unmarshal(&modConfig); err != nil {
@@ -161,6 +175,22 @@ func setDefaults(v *viper.Viper, configDir string) {
 	v.SetDefault("security.compliance.check_interval", "24h")
 	v.SetDefault("integrations.ha.peer_port", 62026)
 	v.SetDefault("integrations.bunkerweb.enabled", false)
+}
+
+func resolveModularSaaSAlias(v *viper.Viper, observed map[string]struct{}) {
+	_, officialFile := observed["network.saas.allow_monitors"]
+	_, legacyFile := observed["integrations.saas.enabled"]
+	_, officialEnv := os.LookupEnv("SYSWARDEN_NETWORK_SAAS_ALLOW_MONITORS")
+	_, legacyEnv := os.LookupEnv("SYSWARDEN_INTEGRATIONS_SAAS_ENABLED")
+	if officialFile || officialEnv {
+		v.Set("network.saas.allow_monitors", v.GetBool("network.saas.allow_monitors"))
+		return
+	}
+	if legacyFile || legacyEnv {
+		v.Set("network.saas.allow_monitors", v.GetBool("integrations.saas.enabled"))
+		return
+	}
+	v.Set("network.saas.allow_monitors", false)
 }
 
 // mapToGlobalConfig maps the new modular struct back to the legacy flat struct
@@ -235,7 +265,6 @@ func mapModularToLegacy(m *ModularConfig) *Config {
 	candidate.EnableL2 = m.Security.L2.EnableL2
 	candidate.ArpProtect = m.Security.L2.ARPProtect
 	candidate.LANMode = m.Security.L2.LanMode
-	candidate.WebTUIPassword = m.User.WebTUIPassword
 	candidate.LANSubnets = strings.Join(m.Network.LanSubnets, " ")
 	return candidate
 }

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "baseline_commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
-  "policy": "The 196 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
+  "policy": "The 83 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
   "legacy": [
     {
       "count": 2,
@@ -14,20 +14,12 @@
       "source_sha256": "c2659969fae281a07b4661d4451cb2707324cb9323dd132bbe4bd5bc1540c06d"
     },
     {
-      "file": "src/core/syswarden-cli/cmd/alerts_freebsd.go",
-      "source_sha256": "97c83aea32f102f0c5bea92ba481aa51bce972083a9548d61742f5ddae666665"
-    },
-    {
       "file": "src/core/syswarden-cli/cmd/alerts_linux.go",
       "source_sha256": "55c1d03977d98ce91ec2bca700c0555f3070de6cfc42ee44e0f82e2507259ff6"
     },
     {
       "file": "src/core/syswarden-cli/cmd/alerts_linux.go",
       "source_sha256": "ff23e75e221e747d8a304488e0d8e92b1332a4575ab3b515755f36edb1d8b35d"
-    },
-    {
-      "file": "src/core/syswarden-cli/cmd/web_tui.go",
-      "source_sha256": "e5a67680d85700953f8af8aff4825d14d05e93a7a63b495d24c2a8a6d214cd16"
     },
     {
       "file": "src/core/syswarden-cli/pkg/firewall/auto_whitelist.go",
@@ -46,26 +38,6 @@
       "source_sha256": "fd8c567c8d22a62735ce6d8fe1369be52482aa51ec9a1d7a80dfe0eb0b5a5769"
     },
     {
-      "file": "src/core/syswarden-cli/pkg/firewall/firewall_freebsd.go",
-      "source_sha256": "10a086876b0ecf6fe850a82d2cb5b1ad6c2f92441842a829121aede1468a6cfe"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/firewall_freebsd.go",
-      "source_sha256": "a54721d84177a0da3c4f700584abdc4428d1d0a79fbbffabd81942f2bd2f2efb"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/firewall_freebsd.go",
-      "source_sha256": "c7a67a295733d3b6c8cef3e9df6662a2150d03a70a5f2a077a9e2314d808c8ad"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/firewall_freebsd.go",
-      "source_sha256": "daa14229c42632c31d426432bb29580913b1bf51d87e8e9f5db8d836e23b0125"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/firewall_freebsd.go",
-      "source_sha256": "e3ea2639f6f5dfece89b5b5284a9733a6c097a9733bb647887079bd4d284eac2"
-    },
-    {
       "file": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
       "source_sha256": "1ec8f45115f957c3c629ef5a09d34b1db96e855e62dbfc2f22246311eeb2269b"
     },
@@ -82,10 +54,6 @@
       "source_sha256": "6cfeb8510a915a05caf83277397091a4b137106c3efa94ed1a51eb2d7101ed16"
     },
     {
-      "file": "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
-      "source_sha256": "e3ea2639f6f5dfece89b5b5284a9733a6c097a9733bb647887079bd4d284eac2"
-    },
-    {
       "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
       "source_sha256": "01d9b6c0779a97bfaaa8a9279a8ed1491e07f3efc0454f13b5a507162116a333"
     },
@@ -96,10 +64,6 @@
     {
       "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
       "source_sha256": "3356add0bc77a4cf45e5a550b93e5631dcaa1d836f5d32cb243a3146de3dfe0d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
-      "source_sha256": "4df95e2d8f55b89a9c1a635bc00151422a26372f485334dbf797cb8df30426fd"
     },
     {
       "file": "src/core/syswarden-cli/pkg/firewall/lists.go",
@@ -115,284 +79,12 @@
       "source_sha256": "f7d39535e61261c52e5dba1b61fb63b9fa17255e5edeacc3d357f315ca3b8c32"
     },
     {
-      "file": "src/core/syswarden-cli/pkg/integration/siem_linux.go",
-      "source_sha256": "3c99fcdea71a476e585344b4677658672398d11cde5c2e983c4b2f922c92c914"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/integration/siem_linux.go",
-      "source_sha256": "bed2092e1e820cb99468771cb115bf6adc993f9c66edeec3c139c1f453ec9d53"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
-      "source_sha256": "3c99fcdea71a476e585344b4677658672398d11cde5c2e983c4b2f922c92c914"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
-      "source_sha256": "bed2092e1e820cb99468771cb115bf6adc993f9c66edeec3c139c1f453ec9d53"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/integration/wazuh.go",
-      "source_sha256": "5e95aaf7c9f5303da59fb33eb5ccb9c941641f1b8b3060166b9b56e93cc94616"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/integration/wazuh.go",
-      "source_sha256": "7b4de615c4dbc75c9900f37791930d6329336a460b73e5b4951ce57ba0f526ce"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/integration/wazuh.go",
-      "source_sha256": "cc4c13ce911c7059437d462c216d2afab86e28313a1822e67a7a06996658e275"
-    },
-    {
       "file": "src/core/syswarden-cli/pkg/integration/webhook.go",
       "source_sha256": "e1d2a2508de003fdd398945bdc32f5a49c6f22b1538fc841e571b2b431350ba3"
     },
     {
       "file": "src/core/syswarden-cli/pkg/network/downloader.go",
       "source_sha256": "d6a11e4f544492764ebf2584590ada9b3a69a04e27db8a02aaa9395d2ae9cebd"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "0586c9f8efba319c0d96afc2aff9b9acf37a4c29a8bc0097494be5464f0691eb"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "1396e43093f3ec28366f8744f5a2c76d55558eb4328a123e18db8543399a2732"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "1d2de11ff9ff35d6c7ce1235391a99c1b5dfb94043335db93062d93ee47bfac2"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "2622904f268d2b12d718708d5ad2ee5cf2617cce2420426e02e7da6be2634fa0"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "26c500f6e5019d9ad4a4eac03b8c5ec8c311d064f0b873646fb555b04be4f61d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "367c3ecb1303317d4d30d0eadb98c1c741440bc440f7c86da8fcc2e6eb5fee3f"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "3c3bc6598bfa50329f97b3475aa432c9bed96f9e8a0891a3493f0dad07a2b8d2"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "4bef00319766cf01b203afe21117b5732c4583bce80b1f1369c8b3de72a02de8"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "5343fa7b311e5dbc13aadea519a712b22915bbb8ab3c6077ef700cb2ff9d20f5"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "75b533ecfd9eef2bac17d842d1ca6a446f260b0f2a6390bad7ae5522f5d9bf1d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "ada2b1f1343e15e1df284238bc4c10da243ab97daecc7b4d8f158f6ebe5d987c"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "b7591622eca2077b9ff354dafbef7795e9afded6fff0706f35fb48e29d704e6b"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "db0386b9d0323ca53159659f5b9a86a3ac17fe1f75476f30cb1861b154049e49"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/network/wireguard_linux.go",
-      "source_sha256": "ea8f51653e70147fce4ab616b45e07aabc1c2167a5dca67c1cecf2d1a310ba98"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_freebsd.go",
-      "source_sha256": "3e1fb5ea8e10826f674cf2f24731fd4b030b6e784cd7209f35cc9d182038a545"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_freebsd.go",
-      "source_sha256": "c75b39bf31bdd4b82b0496fa6c22728e20da6b91edc481684e7fd1d6bdc05b8c"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_freebsd.go",
-      "source_sha256": "d895f2d65ed47085a08843b4bfe5a2446f247922742439fa92daed1cfa6b8b4b"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_freebsd.go",
-      "source_sha256": "db3daaa0c8b2efb60d428990f19b0ef3749577aeffe451393a4acc2345afb79b"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "124a361c02534d402865dd9055fcb3268f7d9d9f3ece35cbd43f9d4301bc6e10"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "196e5f821df9b7b93b46e1bd4ad28e599d2b3fdc6560ed67f354f05e81abe88f"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "20cbab77eda70e96fd728659676541154712b0e181bf6e1b536ad4826ec7d68e"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "2505bded56a398f03530ea55203f176c07ceeaa87007fe31b3e948446a425654"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "28e7789352f4a7abef9f1c8b558da7b760efbce1b913cbf7c4b5fb58c72e0fcf"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "3cce392e1ea4da111546afabb4fcac50d35a58312c27f8da65278c0fb378c16c"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "4078c03808765686072d0afb3fe14b1665d4ad2976cdf8d2f8870cff6149396e"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "45b407ce9b5ffd35a7f88e2267d04492b4121a91bb28c4be56a3e9606cd91ce7"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "72748b4712ff5908caf3ddc1c72337e66ce9dfabc0d066a636ef2b0a1062046d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "74c0b835958de32d89d3d54bb3fe664191aa299831dcffc5535c6283ddda8f77"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "827c2cf6225d891a8fd1565f2a5f41e8f30878fecd00e603899c73d0f6559d0e"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "8d22c66866304cb2517833a2160ea071c0b5d6ec5a6043ba32689c45855ee036"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "aa24c77bf5e2f21165feb17a040de8277a45e9096c5cc0f0239d4a9d72ec0aad"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "cc01b2ed2abfd31a7eec1f8b6b2f83b432bdd3963bd76677b2d3e631b3ecd262"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "cf3234b2084661c267bb57611b2526d96e58119a4ad70dc4a8aac4648a8c1af0"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "d327d1813d8a0d23636bace473dc6a9ef6307d6edf8062a240369369b29efe62"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "df9e66a5f1def57a8d01cf152cc16089d5f94222491ed481b675f7591a8a3010"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "e00e353a5b9c90a3efd479189327b9e729bc8542bf8db02ea53b55978294327f"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "e6d28a7785bb17d6d2678c5702f1622655b7a98fb5d07ad4f13064e523767535"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/cis_linux.go",
-      "source_sha256": "f210e576236e201190c5b8ef0b0dd65d129769697408e9aa958576bbad53f2de"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_freebsd.go",
-      "source_sha256": "012018c9f6b7e75818878c611867040aac8c4ac84d742f9be5110d193c95875d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_freebsd.go",
-      "source_sha256": "52da840a52bf50a68de0ac5f740ffaa55cde69ece280d335bd1a041a0960b7f9"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_freebsd.go",
-      "source_sha256": "72014f889981dcb33af08eaa3cc19969f1aa0004389f08fcf66e746b8cf75bf8"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_freebsd.go",
-      "source_sha256": "7ff5f6773378a16f67b32398981a8217e1c884248d09dbeb59049e737c6cb3e8"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_freebsd.go",
-      "source_sha256": "9f98aa2553ebcbee2e43a62b1a2f7a27ff3e2ba10578fa674162cd8dcf19b09c"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_freebsd.go",
-      "source_sha256": "ab02901c19adc20f8d8d3ef7624d1ce52786261ed34f8bed6eb997addca481d3"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "249c07da64d676c2d0e559438c750f62d21dbb1b97c1b4e1776a9adf9b3705d1"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "2fe324d4d1245d5bc46399012ee427cc47bf1b16c40da1c45fa90a9aff8de879"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "30038f8d0cd8ffbe9763c1b14073e04777d52ec12d53c205cacfddc0c6e9bbad"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "4156186dbc2133e108e8bac58044aff167ff66e9c16a1606e97bb325e4c2e7c9"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "45ce7c0a71dcdd1eefe0b2ddf3c4509d6f8df17da957f22d4e904b23f95333f8"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "629e3921915b9ae651711994428ad2c07cda415a2ce98c4e6631ea77b1e66d58"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "66fb75c10dcbd9eef30a3bee7c93fee30bf3cdb332c9bf88ea20f26f0f0b0e3e"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "9e764525ee3f4f05caf58737deed7d6c15fd9ce79cceaf45ee51b63879bd2f43"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "a66b597c2d089d9defc7c8e7f0a8470bc89cf4a2e8ca0afab1986531789e6088"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "bb8df6a5c32d1449fdc4b0f25a1c840fa9afc984865f3f83781f3f00c57b9ee8"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "c4a8b35a24d193a7a05618e718fb54f36c118ffcd08c4cdb03ec360ee730f1ce"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "d1cf851638c3f34b8ebca0f0d41f5b099e5f5268012d9455a0851500981b902d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "d550714e5d2683374ebafb1dac629e5b5a486f93cd3968bbcee3a502673de43b"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
-      "source_sha256": "f293b6d7965e5d671cf9558fbfe37908c67e2bb3795f332af6785e8f934a664a"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/audit_freebsd.go",
-      "source_sha256": "10841127f23d35cd5f900f7594ac43fa7d58b97ca6f49999622f17a050e951ed"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/audit_freebsd.go",
-      "source_sha256": "31fd68851b2f277f4f857c8bd849b09048e23b69bcf9f2eb35e28b7a828f13a1"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/audit_freebsd.go",
-      "source_sha256": "b71f5d7bf6863df5f4f4cbd728ebec526b33705bcf7325d7d49e5367b4547f87"
     },
     {
       "file": "src/core/syswarden-cli/pkg/system/audit_linux.go",
@@ -447,135 +139,6 @@
       "source_sha256": "c575714b1e9619ada46d91ceda2505a180bcf75f13dadc56f36b6e61df8d5d4a"
     },
     {
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "06a87f21f9af54e0c8c5a12ce113325816483b2980584a7581964ea91a3f7bb9"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "0ccc1661b221dc287412d42b0eddc15dd2830eae2b64714b978f4c459254e494"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "115b8454e5cf68f8165bb842d8ebbda0707bb3399458cf4c78fb1388c5b8d153"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "7ff9961cd3b0ef56dc2a1cb3e1fe73f79c5c9a66968d67b3546003cb1ff77c1d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "95397caf45de3b58caef7027b5861a8e2761baef583d11974b1199bd49c09d52"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "a0576e9a76eec10fee56e88f61ce78abb796707f250205eb723a495b228dfa2c"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "d8114afe9723736d207ee77b9d0e1e21b359dcc63ea303a2f796ec0d0ed28447"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "e25624bafcde526935ae2456465a1cae61ce04f4f66e9fb8e8b275e1cae1efef"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "e34f0773471c1751e8422f66f1ea9b19f0eae0708eb6254b69e3abea7e356dca"
-    },
-    {
-      "count": 2,
-      "file": "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
-      "source_sha256": "eeb70fddf03132e317de8971f05022babeeecd946ace54b80d20182be9491f33"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "017672f3de0e3cdd3778340082bf258aa3e0db39dec887358b3225fa3d078fd8"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "1a78b5f13069d49e4c879f85ac345d87abd730e27395c2e783b38bfa5a4882aa"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "35da69406db606dadee331c2b5ab58b716a4a4146f4899354352ff792a62fbd1"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "50703dc99a79510ae5fd29e2aa288aef3245bd3d69273ce776632e9b74cd901d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "7e8a2b5147b79e69834409a294f28b408c2c7d5ceb97aab73984134510d082a2"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "80616ecfc05df01791972c11acedd6c6bc348575698b3498a068d17d59b2748c"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "93ea234432846c27df2f762353de4ce39bc97a20063e0e9845e2312d0724c986"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "a21f0cee31f384bfe80ee286dcdc2b7bd989aad53760ce5137cc093a7b6c6a40"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "a3e928a4e988cc8a1211a5acef1bb43b07ddeb58286a945e062d96a488e23637"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "ace6095d74eb80c1bc23b940f14b7d951c0f327a414bd52293a15c386d5f5e11"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "c0a89b3f68d0b2685e494268e75bb0bf9811096255cc8a1644ca3eafbe8f0a84"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "c2d438ebf0564c55e802cfecfb64a82a83d0cbf095605addb2984ee8f1984d9d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "dbc642f071f3ff9078923683d38b05df37159cf63c5c5c49d96a6b6e4b3fadab"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "ee17615730dfb4df779369cccb71d6932e8d8f3efb4d71bea79429e5fad41681"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "f46a64a109a163a79c2a3c13610552c4c3176db46233978d79cc6ac3035d1b8e"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/service_linux.go",
-      "source_sha256": "fd2456db215a10f7cb30fa351bb2d3b165b6e71bd62a69d50a996f506e6797e9"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/ssh.go",
-      "source_sha256": "38d28aef1193676290acb46df77bfa51eebfc6d83713c91adf44e99202cb5e04"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/ssh.go",
-      "source_sha256": "800a563d8b6d867697e63602a16070f9cf6e6e9c55ac21b8bfee8b64e788dcc1"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/ssh.go",
-      "source_sha256": "e3ea2639f6f5dfece89b5b5284a9733a6c097a9733bb647887079bd4d284eac2"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/ssh.go",
-      "source_sha256": "e48083343762db8f18c8aea5089485a7e97c17b4fe918bece920486d2f8ede95"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/ssh.go",
-      "source_sha256": "f8e268c7d9678150a65ee0892cfb5dd94d4ecd9378470251eca66a27bd834e03"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "15e553de0649622e2ac5776f9b147a4ed1f33ef659f70ca24e9ce084f958c355"
-    },
-    {
       "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
       "source_sha256": "19e6615705009f0fd52bb3e4e9e1064153df7c6db9ecb5430a401bc49a7dbae5"
     },
@@ -598,10 +161,6 @@
     {
       "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
       "source_sha256": "4f3cf876296807302c59b960758d46e5aa5fb8dcec5d52502a0315d8b3512d8c"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "501abb2ccf8e73d29d65978af9a02af5f119e15de5273a5223ab10387a39db77"
     },
     {
       "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
@@ -633,10 +192,6 @@
     },
     {
       "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "7bced32793c3e78c570600ff452bd7df9945eea4ec445cde6526ff1434e4e157"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
       "source_sha256": "83840fe3342b4b6a8e505a11eef93cbb99177b6e1284848233d0968995350ed7"
     },
     {
@@ -646,10 +201,6 @@
     {
       "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
       "source_sha256": "8651cab2cf266ea4f8d08d9150a4832d449e99f02473517b26066e935e66a15e"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "8981ca99bdde772e2d98ca03f7d992bc20182aad0bf7ec1f5ced964ea6b2208a"
     },
     {
       "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",

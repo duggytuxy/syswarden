@@ -111,6 +111,34 @@ var configCmd = &cobra.Command{
 	},
 }
 
+var configValidateCmd = &cobra.Command{
+	Use:   "validate",
+	Short: "Validate modular configuration without modifying it",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := cmd.Flags().GetString("path")
+		if err != nil {
+			return err
+		}
+		report, err := config.ValidateModularConfig(path)
+		if err != nil {
+			return fmt.Errorf("configuration validation failed: %w", err)
+		}
+		schema := strconv.Itoa(report.SchemaVersion)
+		if report.Historical {
+			schema = "historical"
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Configuration is valid (schema: %s).\n", schema)
+		for _, key := range report.DeprecatedKeys {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Deprecated key: %s\n", key)
+		}
+		for _, key := range report.UnknownKeys {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Unknown key: %s\n", key)
+		}
+		return nil
+	},
+}
+
 var configEditorRoot = "/etc/syswarden/config"
 
 var launchConfigEditor = func(editor, targetPath string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -185,4 +213,6 @@ func importConfiguration(reader *bufio.Reader, output io.Writer, configRoot stri
 
 func init() {
 	rootCmd.AddCommand(configCmd)
+	configCmd.AddCommand(configValidateCmd)
+	configValidateCmd.Flags().String("path", configEditorRoot, "Modular configuration root")
 }

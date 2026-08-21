@@ -359,7 +359,7 @@ class GosecGateTests(unittest.TestCase):
                     self.scan_name,
                     self.tool_binary,
                     self.base_ref,
-                    "freebsd",
+                    "darwin",
                     "amd64",
                     "0",
                     "src",
@@ -401,6 +401,82 @@ class GosecGateTests(unittest.TestCase):
         ]
         with self.assertRaises(ValueError):
             security_gate.validate_gosec_evolution(current, previous)
+
+    def retirement_baselines(self) -> tuple[dict[str, object], dict[str, object]]:
+        retained_issue = security_gate.issue_record(self.issue(), self.root)
+        previous: dict[str, object] = {
+            "schema_version": 3,
+            "baseline_commit": "0" * 40,
+            "gosec_version": self.tool_version,
+            "scans": {
+                self.scan_name: {
+                    "module": "src",
+                    "goos": "linux",
+                    "goarch": "amd64",
+                    "cgo_enabled": "0",
+                    "issues": [retained_issue],
+                },
+                **{
+                    name: {**identity, "issues": []}
+                    for name, identity in security_gate.GOSEC_RETIRED_SCAN_IDENTITIES.items()
+                },
+            },
+        }
+        current = json.loads(json.dumps(previous))
+        for name in security_gate.GOSEC_RETIRED_SCAN_IDENTITIES:
+            del current["scans"][name]
+        current["retired_scan_transition"] = (
+            security_gate.GOSEC_RETIRED_SCAN_TRANSITION_ID
+        )
+        return previous, current
+
+    def test_exact_v4030_linux_only_scan_retirement_passes(self) -> None:
+        previous, current = self.retirement_baselines()
+        security_gate.validate_gosec_evolution(current, previous)
+
+    def test_v4030_scan_retirement_mutations_fail_closed(self) -> None:
+        previous, current = self.retirement_baselines()
+        missing_transition = json.loads(json.dumps(current))
+        missing_transition.pop("retired_scan_transition")
+
+        partial_retirement = json.loads(json.dumps(current))
+        partial_retirement["scans"]["freebsd-cli"] = previous["scans"][
+            "freebsd-cli"
+        ]
+
+        renamed_scan = json.loads(json.dumps(current))
+        renamed_scan["scans"]["linux-renamed"] = renamed_scan["scans"].pop(
+            self.scan_name
+        )
+
+        extra_previous_scan = json.loads(json.dumps(previous))
+        extra_previous_scan["scans"]["linux-extra"] = {
+            "module": "src/extra",
+            "goos": "linux",
+            "goarch": "amd64",
+            "cgo_enabled": "0",
+            "issues": [],
+        }
+
+        fingerprint_drift = json.loads(json.dumps(current))
+        fingerprint_drift["scans"][self.scan_name]["issues"][0][
+            "code_sha256"
+        ] = "f" * 64
+
+        identity_previous = json.loads(json.dumps(previous))
+        identity_previous["scans"]["freebsd-cli"]["goos"] = "linux"
+
+        mutations = (
+            ("missing transition", previous, missing_transition),
+            ("partial retirement", previous, partial_retirement),
+            ("renamed retained scan", previous, renamed_scan),
+            ("extra removed scan", extra_previous_scan, current),
+            ("retained fingerprint drift", previous, fingerprint_drift),
+            ("retired identity drift", identity_previous, current),
+        )
+        for name, old, candidate in mutations:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                security_gate.validate_gosec_evolution(candidate, old)
 
 
 class NosecGateTests(unittest.TestCase):
@@ -827,17 +903,7 @@ class GitleaksContractTests(unittest.TestCase):
         self.assertEqual(len(rules), 1)
         self.assertEqual(rules[0].get("id"), "generic-api-key")
         allowlists = rules[0].get("allowlists", [])
-        self.assertEqual(len(allowlists), 1)
-        self.assertEqual(allowlists[0].get("condition"), "AND")
-        self.assertEqual(allowlists[0].get("regexTarget"), "match")
-        self.assertEqual(
-            allowlists[0].get("paths"),
-            [r"^src/core/syswarden-cli/cmd/ui/assets/xterm\.js$"],
-        )
-        self.assertEqual(
-            allowlists[0].get("regexes"),
-            [r"^t\.FourKeyMap=t\.TwoKeyMap=void $"],
-        )
+        self.assertEqual(allowlists, [])
 
     def test_workflow_uses_pinned_binary_and_explicit_policies(self) -> None:
         workflow = (

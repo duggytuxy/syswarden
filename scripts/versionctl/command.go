@@ -205,12 +205,8 @@ func (app application) runPrepare(mode string, args []string, stderr io.Writer) 
 	if err != nil {
 		return fmt.Errorf("read %s: %w", changelogPath, err)
 	}
-	history, err := changelogHistory(candidateChangelog)
-	if err != nil {
+	if err := validateChangelogHistoryTransition(headChangelog, candidateChangelog, headVersion, next); err != nil {
 		return err
-	}
-	if !bytes.Equal(history, headChangelog) {
-		return errors.New("candidate changelog must preserve the complete HEAD changelog byte-for-byte after the new release separator")
 	}
 	exists, err := app.git.tagExists(repo, next.String())
 	if err != nil {
@@ -387,12 +383,8 @@ func (app application) runValidateCommit(args []string, stderr io.Writer) error 
 	if err := validateChangelog(candidateChangelog, expected); err != nil {
 		return err
 	}
-	history, err := changelogHistory(candidateChangelog)
-	if err != nil {
+	if err := validateChangelogHistoryTransition(baseChangelog, candidateChangelog, previous, expected); err != nil {
 		return err
-	}
-	if !bytes.Equal(history, baseChangelog) {
-		return errors.New("versioning commit must preserve the complete baseline changelog byte-for-byte after the new release separator")
 	}
 	exists, err := app.git.tagExists(repo, expected.String())
 	if err != nil {

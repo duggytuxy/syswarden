@@ -20,7 +20,12 @@ func newSecureFileIdentity(content []byte, info os.FileInfo) *secureFileIdentity
 }
 
 func (identity *secureFileIdentity) matches(content []byte, info os.FileInfo) bool {
-	return identity != nil && identity.info != nil && info != nil &&
+	if identity == nil || identity.info == nil || info == nil {
+		return false
+	}
+	expectedUID, expectedGID, expectedOK := fileOwnerUIDGID(identity.info)
+	currentUID, currentGID, currentOK := fileOwnerUIDGID(info)
+	return expectedOK && currentOK && expectedUID == currentUID && expectedGID == currentGID &&
 		os.SameFile(identity.info, info) && identity.info.Mode() == info.Mode() &&
 		identity.digest == sha256.Sum256(content)
 }

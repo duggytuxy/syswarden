@@ -3,7 +3,9 @@
 package firewall
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +22,14 @@ import (
 )
 
 const linuxWrapperStateVersion = "syswarden-firewall-wrappers-v1"
+
+const (
+	saasPairManifestFile          = "syswarden_saas_monitors.pair"
+	saasPairManifestV1            = "syswarden-saas-pair-v1"
+	maximumSaaSListBytes          = 1 << 20
+	maximumLegacySaaSListEntries  = 10000
+	saasLegacyAdoptionEnvironment = "SYSWARDEN_PKG_INSTALL"
+)
 
 var linuxWrapperStateFile = filepath.Join(nftStateDirectory, "firewall-wrappers.state")
 
@@ -60,6 +70,8 @@ func ApplyPolicies() error {
 	_, _ = nftRules.WriteString("table netdev syswarden_hw_drop {\n")
 	_, _ = nftRules.WriteString("\tset syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }\n")
+	_, _ = nftRules.WriteString("\tset syswarden_whitelist_ports { type ipv4_addr . inet_service; flags interval; }\n")
+	_, _ = nftRules.WriteString("\tset syswarden_whitelist_ports6 { type ipv6_addr . inet_service; flags interval; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_zt_allowed { type ipv4_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_zt_allowed6 { type ipv6_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags interval,timeout; }\n")
@@ -91,6 +103,8 @@ func ApplyPolicies() error {
 	// 1. Infra Whitelist (Absolute Priority - Bypasses everything)
 	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_whitelist accept\n")
 	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_whitelist6 accept\n")
+	_, _ = nftRules.WriteString("\t\tip saddr . tcp dport @syswarden_whitelist_ports accept\n")
+	_, _ = nftRules.WriteString("\t\tip6 saddr . tcp dport @syswarden_whitelist_ports6 accept\n")
 
 	// 2. Layer 7 WAF Dynamic Bans
 	_, _ = nftRules.WriteString("\t\tip saddr @banned_ips limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-WAF-BLOCK] \"\n")
@@ -128,6 +142,10 @@ func ApplyPolicies() error {
 	_, _ = nftRules.WriteString("table inet syswarden {\n")
 	_, _ = nftRules.WriteString("\tset syswarden_whitelist { type ipv4_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_whitelist6 { type ipv6_addr; flags interval; auto-merge; }\n")
+	_, _ = nftRules.WriteString("\tset syswarden_whitelist_ports { type ipv4_addr . inet_service; flags interval; }\n")
+	_, _ = nftRules.WriteString("\tset syswarden_whitelist_ports6 { type ipv6_addr . inet_service; flags interval; }\n")
+	_, _ = nftRules.WriteString("\tset syswarden_ssh_bypass { type ipv4_addr; flags interval; auto-merge; }\n")
+	_, _ = nftRules.WriteString("\tset syswarden_ssh_bypass6 { type ipv6_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_zt_allowed { type ipv4_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset syswarden_zt_allowed6 { type ipv6_addr; flags interval; auto-merge; }\n")
 	_, _ = nftRules.WriteString("\tset banned_ips { type ipv4_addr; flags interval,timeout; }\n")
@@ -161,6 +179,8 @@ func ApplyPolicies() error {
 	_, _ = nftRules.WriteString("\t\tiifname \"lo\" accept\n")
 	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_whitelist accept\n")
 	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_whitelist6 accept\n")
+	_, _ = nftRules.WriteString("\t\tip saddr . tcp dport @syswarden_whitelist_ports accept\n")
+	_, _ = nftRules.WriteString("\t\tip6 saddr . tcp dport @syswarden_whitelist_ports6 accept\n")
 
 	// Enforce blacklists BEFORE established state to instantly sever active attacker sessions
 	_, _ = nftRules.WriteString("\t\tip saddr @banned_ips counter drop\n")
@@ -192,6 +212,20 @@ func ApplyPolicies() error {
 		_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ZERO-TRUST] \"\n")
 		_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 drop\n")
 	}
+	sshPort, err := effectiveSSHPort(config.GlobalConfig.SSHPort)
+	if err != nil {
+		return err
+	}
+	haPort := ""
+	if config.GlobalConfig.HAEnabled && config.GlobalConfig.HAPeerPort != "" {
+		haPort, err = canonicalPort(config.GlobalConfig.HAPeerPort)
+		if err != nil {
+			return fmt.Errorf("invalid HA peer port: %w", err)
+		}
+		if config.GlobalConfig.EnableWG && haPort == sshPort {
+			return fmt.Errorf("HA peer port must differ from the effective SSH port while WireGuard cloaking is enabled")
+		}
+	}
 
 	// Dynamically allow explicitly opened ports
 	detectedTCPPorts, detectedUDPPorts := GetOpenPorts()
@@ -204,19 +238,20 @@ func ApplyPolicies() error {
 		return err
 	}
 
-	// Ensure Web-TUI port is always explicitly opened
-	webTuiPort := "62027"
-	if !contains(tcpPorts, webTuiPort) {
-		tcpPorts = append(tcpPorts, webTuiPort)
+	// Port 62027 belonged to the retired Web-TUI. Never adopt a listener on
+	// that port into SysWarden policy; an unrelated local service owns its own
+	// exposure decision.
+	filteredTCPPorts := tcpPorts[:0]
+	for _, port := range tcpPorts {
+		if port != "62027" && port != sshPort {
+			filteredTCPPorts = append(filteredTCPPorts, port)
+		}
 	}
+	tcpPorts = filteredTCPPorts
 
 	// Ensure HA Peer Port is always explicitly opened if HA is enabled
-	wrapperPorts := []string{webTuiPort}
-	if config.GlobalConfig.HAEnabled && config.GlobalConfig.HAPeerPort != "" {
-		haPort, portErr := canonicalPort(config.GlobalConfig.HAPeerPort)
-		if portErr != nil {
-			return fmt.Errorf("invalid HA peer port: %w", portErr)
-		}
+	var wrapperPorts []string
+	if haPort != "" {
 		if !contains(tcpPorts, haPort) {
 			tcpPorts = append(tcpPorts, haPort)
 		}
@@ -232,24 +267,8 @@ func ApplyPolicies() error {
 		fmt.Fprintf(&nftRules, "\t\tct state new udp dport { %s } accept\n", strings.Join(udpPorts, ", "))
 	}
 
-	sshPort := config.GlobalConfig.SSHPort
-	if sshPort == "" {
-		// Dynamically query sshd for its effective configuration
-		if out, err := exec.Command("sh", "-c", "sshd -T 2>/dev/null | grep -i '^port '").Output(); err == nil && len(out) > 0 { // #nosec
-			fields := strings.Fields(string(out))
-			if len(fields) >= 2 {
-				sshPort = fields[1]
-			}
-		}
-		// Absolute fail-safe
-		if sshPort == "" {
-			sshPort = "22"
-		}
-	}
-	sshPort, err = canonicalPort(sshPort)
-	if err != nil {
-		return fmt.Errorf("invalid SSH port: %w", err)
-	}
+	_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr @syswarden_ssh_bypass tcp dport %s accept\n", sshPort)
+	_, _ = fmt.Fprintf(&nftRules, "\t\tip6 saddr @syswarden_ssh_bypass6 tcp dport %s accept\n", sshPort)
 
 	// SSH Cloaking (WireGuard VPN Only) vs Standard SSH
 	if config.GlobalConfig.EnableWG {
@@ -306,6 +325,8 @@ func ApplyPolicies() error {
 	_, _ = nftRules.WriteString("\tchain docker_protect {\n\t\ttype filter hook forward priority -10; policy accept;\n")
 	_, _ = nftRules.WriteString("\t\tip saddr @syswarden_whitelist accept\n")
 	_, _ = nftRules.WriteString("\t\tip6 saddr @syswarden_whitelist6 accept\n")
+	_, _ = nftRules.WriteString("\t\tip saddr . tcp dport @syswarden_whitelist_ports accept\n")
+	_, _ = nftRules.WriteString("\t\tip6 saddr . tcp dport @syswarden_whitelist_ports6 accept\n")
 	_, _ = nftRules.WriteString("\t\tip saddr @banned_ips counter drop\n")
 	_, _ = nftRules.WriteString("\t\tip daddr @banned_ips counter drop\n")
 	_, _ = nftRules.WriteString("\t\tip6 saddr @banned_ips6 counter drop\n")
@@ -352,7 +373,7 @@ func ApplyPolicies() error {
 	// wrapper state has been mutated when this phase returns an error.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	populations, err := prepareNftSetPopulations(ctx)
+	populations, err := prepareNftSetPopulations(ctx, sshPort)
 	if err != nil {
 		return fmt.Errorf("failed to prepare nftables sets: %w", err)
 	}
@@ -374,6 +395,32 @@ func ApplyPolicies() error {
 
 	fmt.Printf("[INFO] Nftables transaction %s applied and verified successfully.\n", transactionID)
 	return nil
+}
+
+func effectiveSSHPort(configured string) (string, error) {
+	port := configured
+	if port == "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if output, err := exec.CommandContext(ctx, "sshd", "-T").Output(); err == nil { // #nosec G204 -- sshd is a fixed executable name and receives a fixed argument
+			lines := strings.Split(string(output), "\n")
+			for _, line := range lines {
+				fields := strings.Fields(line)
+				if len(fields) == 2 && strings.EqualFold(fields[0], "port") {
+					port = fields[1]
+					break
+				}
+			}
+		}
+	}
+	if port == "" {
+		port = "22"
+	}
+	canonical, err := canonicalPort(port)
+	if err != nil {
+		return "", fmt.Errorf("invalid SSH port: %w", err)
+	}
+	return canonical, nil
 }
 
 func applyNftablesPolicyWithWrappers(ctx context.Context, runner nftCommandRunner, stateDirectory, baseRules string, populations []nftSetPopulation, verification nftVerificationPlan, reconcileWrappers func() error) (string, error) {
@@ -495,28 +542,43 @@ func contains(slice []string, val string) bool {
 	return false
 }
 
-func prepareNftSetPopulations(ctx context.Context) ([]nftSetPopulation, error) {
+func prepareNftSetPopulations(ctx context.Context, effectiveSSHPort string) ([]nftSetPopulation, error) {
 	const listDirectory = "/etc/syswarden/lists"
+	if _, err := maybeAdoptLegacySaaSListPair(listDirectory, config.GlobalConfig.AllowSaaSMonitors); err != nil {
+		return nil, fmt.Errorf("adopt the legacy SaaS monitor lists: %w", err)
+	}
+	listSnapshotLock, err := lockNftListSnapshot(listDirectory)
+	if err != nil {
+		return nil, err
+	}
+	if listSnapshotLock != nil {
+		defer unlockNftListSnapshot(listSnapshotLock)
+	}
 	optional := func(name string) nftListSource {
 		return nftListSource{path: filepath.Join(listDirectory, name)}
 	}
 
-	whitelist4 := []nftListSource{optional("syswarden_whitelist.ipv4"), optional("syswarden_saas_monitors.ipv4")}
-	whitelist6 := []nftListSource{optional("syswarden_whitelist.ipv6"), optional("syswarden_saas_monitors.ipv6")}
+	includeSaaSPair := false
+	var saasPairErr error
+	if config.GlobalConfig.AllowSaaSMonitors {
+		includeSaaSPair, saasPairErr = validateSaaSListPair(listDirectory)
+	}
+	whitelist4, whitelist6 := whitelistNftSources(listDirectory, includeSaaSPair)
 	blacklist4 := []nftListSource{optional("syswarden_blacklist.ipv4"), optional("syswarden_threatintel.ipv4")}
 	blacklist6 := []nftListSource{optional("syswarden_blacklist.ipv6"), optional("syswarden_threatintel.ipv6")}
 
 	zt4, zt6, ztErr := configuredNftSources(listDirectory, config.GlobalConfig.GeoAllowed, config.GlobalConfig.ASNAllowed, true)
 	geo4, geo6, geoErr := configuredNftSources(listDirectory, config.GlobalConfig.GeoCodes, "", false)
 	asn4, asn6, asnErr := configuredNftSources(listDirectory, "", config.GlobalConfig.ASNList, false)
+	whitelistAddress4, whitelistPorts4, whitelist4Err := populateWhitelistSets(ctx, whitelist4, "syswarden_whitelist", "syswarden_whitelist_ports")
+	whitelistAddress6, whitelistPorts6, whitelist6Err := populateWhitelistSets(ctx, whitelist6, "syswarden_whitelist6", "syswarden_whitelist_ports6")
+	sshBypass4, sshBypass6, sshBypassErr := populateSSHBypassSets(ctx, nftListSource{path: SSHBypass}, effectiveSSHPort)
 
 	requests := []struct {
 		name    string
 		sources []nftListSource
 		enabled bool
 	}{
-		{name: "syswarden_whitelist", sources: whitelist4, enabled: true},
-		{name: "syswarden_whitelist6", sources: whitelist6, enabled: true},
 		{name: "syswarden_zt_allowed", sources: zt4, enabled: true},
 		{name: "syswarden_zt_allowed6", sources: zt6, enabled: true},
 		{name: "syswarden_blacklist", sources: blacklist4, enabled: true},
@@ -527,8 +589,15 @@ func prepareNftSetPopulations(ctx context.Context) ([]nftSetPopulation, error) {
 		{name: "syswarden_asn6", sources: asn6, enabled: config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != ""},
 	}
 
-	populations := make([]nftSetPopulation, 0, len(requests))
-	errs := []error{ztErr, geoErr, asnErr}
+	populations := []nftSetPopulation{
+		whitelistAddress4,
+		whitelistAddress6,
+		whitelistPorts4,
+		whitelistPorts6,
+		sshBypass4,
+		sshBypass6,
+	}
+	errs := []error{ztErr, geoErr, asnErr, saasPairErr, whitelist4Err, whitelist6Err, sshBypassErr}
 	for _, request := range requests {
 		if !request.enabled {
 			continue
@@ -540,6 +609,251 @@ func prepareNftSetPopulations(ctx context.Context) ([]nftSetPopulation, error) {
 		}
 	}
 	return populations, errors.Join(errs...)
+}
+
+func whitelistNftSources(directory string, allowSaaSMonitors bool) ([]nftListSource, []nftListSource) {
+	ipv4 := []nftListSource{{path: filepath.Join(directory, "syswarden_whitelist.ipv4")}}
+	ipv6 := []nftListSource{{path: filepath.Join(directory, "syswarden_whitelist.ipv6")}}
+	if allowSaaSMonitors {
+		ipv4 = append(ipv4, nftListSource{path: filepath.Join(directory, "syswarden_saas_monitors.ipv4")})
+		ipv6 = append(ipv6, nftListSource{path: filepath.Join(directory, "syswarden_saas_monitors.ipv6")})
+	}
+	return ipv4, ipv6
+}
+
+func maybeAdoptLegacySaaSListPair(directory string, enabled bool) (bool, error) {
+	if !enabled || os.Getenv(saasLegacyAdoptionEnvironment) != "1" {
+		return false, nil
+	}
+	return adoptLegacySaaSListPair(directory)
+}
+
+func verifyLegacySaaSDirectory(directory *os.Root) error {
+	info, err := directory.Stat(".")
+	if err != nil {
+		return fmt.Errorf("inspect legacy SaaS list directory: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("legacy SaaS list directory is not a private real directory")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return fmt.Errorf("legacy SaaS list directory is not owned by the effective user")
+	}
+	return nil
+}
+
+func readLegacySaaSListComponent(directory *os.Root, target approvedListFile, wantIPv4 bool) ([]byte, bool, int, error) {
+	pathInfo, err := directory.Lstat(target.name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, 0, nil
+	}
+	if err != nil {
+		return nil, false, 0, fmt.Errorf("inspect legacy SaaS list %s: %w", target.name, err)
+	}
+	if !pathInfo.Mode().IsRegular() || pathInfo.Mode().Perm() != 0600 {
+		return nil, false, 0, fmt.Errorf("legacy SaaS list %s must be a private regular file", target.name)
+	}
+	file, _, err := openListFileInRoot(directory, target, os.O_RDONLY, false)
+	if err != nil {
+		return nil, false, 0, fmt.Errorf("open legacy SaaS list %s: %w", target.name, err)
+	}
+	defer func() { _ = file.Close() }()
+	before, err := file.Stat()
+	if err != nil {
+		return nil, false, 0, fmt.Errorf("inspect opened legacy SaaS list %s: %w", target.name, err)
+	}
+	stat, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return nil, false, 0, fmt.Errorf("legacy SaaS list %s is not owned by the effective user", target.name)
+	}
+	content, err := io.ReadAll(io.LimitReader(file, maximumSaaSListBytes+1))
+	if err != nil {
+		return nil, false, 0, fmt.Errorf("read legacy SaaS list %s: %w", target.name, err)
+	}
+	if len(content) > maximumSaaSListBytes {
+		return nil, false, 0, fmt.Errorf("legacy SaaS list %s exceeds %d bytes", target.name, maximumSaaSListBytes)
+	}
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		return nil, false, 0, fmt.Errorf("legacy SaaS list %s changed while it was read", target.name)
+	}
+	entries, err := validateCanonicalLegacySaaSList(target.name, content, wantIPv4)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	return content, true, entries, nil
+}
+
+func validateCanonicalLegacySaaSList(name string, content []byte, wantIPv4 bool) (int, error) {
+	lines := strings.Split(string(content), "\n")
+	entries := 0
+	for index, line := range lines {
+		if line == "" && index == len(lines)-1 {
+			continue
+		}
+		if line == "" || strings.TrimSpace(line) != line || strings.HasPrefix(line, "#") {
+			return 0, fmt.Errorf("legacy SaaS list %s:%d is not in canonical one-entry-per-line form", name, index+1)
+		}
+		canonical, isIPv4, err := canonicalIPOrPrefix(line)
+		if err != nil {
+			return 0, fmt.Errorf("legacy SaaS list %s:%d: %w", name, index+1, err)
+		}
+		if canonical != line {
+			return 0, fmt.Errorf("legacy SaaS list %s:%d is not canonical", name, index+1)
+		}
+		if isIPv4 != wantIPv4 {
+			return 0, fmt.Errorf("legacy SaaS list %s:%d has the wrong address family", name, index+1)
+		}
+		entries++
+		if entries > maximumLegacySaaSListEntries {
+			return 0, fmt.Errorf("legacy SaaS list %s exceeds %d entries", name, maximumLegacySaaSListEntries)
+		}
+	}
+	return entries, nil
+}
+
+func renderSaaSPairManifest(ipv4Content, ipv6Content []byte) []byte {
+	ipv4Digest := sha256.Sum256(ipv4Content)
+	ipv6Digest := sha256.Sum256(ipv6Content)
+	return []byte(fmt.Sprintf(
+		"%s\nipv4_sha256=%x\nipv6_sha256=%x\n",
+		saasPairManifestV1,
+		ipv4Digest,
+		ipv6Digest,
+	))
+}
+
+func adoptLegacySaaSListPair(directoryPath string) (bool, error) {
+	ipv4Target := approvedListFile{directory: directoryPath, name: "syswarden_saas_monitors.ipv4"}
+	ipv6Target := approvedListFile{directory: directoryPath, name: "syswarden_saas_monitors.ipv6"}
+	manifestTarget := approvedListFile{directory: directoryPath, name: saasPairManifestFile}
+	for _, target := range []approvedListFile{ipv4Target, ipv6Target, manifestTarget} {
+		if err := validateListFileTarget(target); err != nil {
+			return false, err
+		}
+	}
+
+	directory, err := openListDirectory(ipv4Target, false)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = directory.Close() }()
+	if err := verifyLegacySaaSDirectory(directory); err != nil {
+		return false, err
+	}
+	lockFile, err := lockListDirectory(directory)
+	if err != nil {
+		return false, err
+	}
+	defer unlockListDirectory(lockFile)
+
+	manifestInfo, manifestErr := directory.Lstat(manifestTarget.name)
+	if manifestErr == nil {
+		if !manifestInfo.Mode().IsRegular() {
+			return false, fmt.Errorf("SaaS pair manifest is not a regular file")
+		}
+		return false, nil
+	}
+	if !errors.Is(manifestErr, fs.ErrNotExist) {
+		return false, fmt.Errorf("inspect SaaS pair manifest before adoption: %w", manifestErr)
+	}
+
+	ipv4Content, ipv4Exists, ipv4Entries, err := readLegacySaaSListComponent(directory, ipv4Target, true)
+	if err != nil {
+		return false, err
+	}
+	if !ipv4Exists {
+		return false, fmt.Errorf("legacy SaaS adoption requires the historical IPv4 list")
+	}
+	ipv6Content, ipv6Exists, ipv6Entries, err := readLegacySaaSListComponent(directory, ipv6Target, false)
+	if err != nil {
+		return false, err
+	}
+	if ipv4Entries+ipv6Entries == 0 {
+		return false, fmt.Errorf("legacy SaaS lists contain no monitor address")
+	}
+	if !ipv6Exists {
+		if err := writeListFileInDirectoryBeforeRename(directory, ipv6Target, nil, nil); err != nil {
+			return false, fmt.Errorf("create the empty IPv6 half of the legacy SaaS pair: %w", err)
+		}
+		ipv6Content = nil
+	}
+	manifest := renderSaaSPairManifest(ipv4Content, ipv6Content)
+	if err := writeListFileInDirectoryBeforeRename(directory, manifestTarget, manifest, nil); err != nil {
+		return false, fmt.Errorf("publish the adopted SaaS pair manifest: %w", err)
+	}
+	return true, nil
+}
+
+func validateSaaSListPair(directory string) (bool, error) {
+	paths := []string{
+		filepath.Join(directory, "syswarden_saas_monitors.ipv4"),
+		filepath.Join(directory, "syswarden_saas_monitors.ipv6"),
+		filepath.Join(directory, saasPairManifestFile),
+	}
+	contents := make([][]byte, len(paths))
+	present := 0
+	for index, path := range paths {
+		content, err := readRootedNFTFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("read SaaS pair component %s: %w", path, err)
+		}
+		if len(content) > maximumSaaSListBytes {
+			return false, fmt.Errorf("SaaS pair component %s exceeds %d bytes", path, maximumSaaSListBytes)
+		}
+		contents[index] = content
+		present++
+	}
+	if present == 0 {
+		return false, nil
+	}
+	if present != len(paths) {
+		return false, fmt.Errorf("SaaS monitor pair is incomplete; preserve the active firewall policy")
+	}
+	expected := renderSaaSPairManifest(contents[0], contents[1])
+	if !bytes.Equal(contents[2], expected) {
+		return false, fmt.Errorf("SaaS monitor pair manifest does not match both list files; preserve the active firewall policy")
+	}
+	return true, nil
+}
+
+func lockNftListSnapshot(directory string) (*os.File, error) {
+	info, err := os.Lstat(directory)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect nftables list directory: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("nftables list directory must be a real directory")
+	}
+	file, err := os.Open(directory) // #nosec G304 -- directory is a fixed internal path
+	if err != nil {
+		return nil, fmt.Errorf("open nftables list directory snapshot lock: %w", err)
+	}
+	openedInfo, err := file.Stat()
+	if err != nil || !os.SameFile(info, openedInfo) {
+		_ = file.Close()
+		return nil, fmt.Errorf("nftables list directory changed while opening")
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock nftables list snapshot: %w", err)
+	}
+	return file, nil
+}
+
+func unlockNftListSnapshot(file *os.File) {
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = file.Close()
 }
 
 func configuredNftSources(directory, countries, asns string, allowed bool) ([]nftListSource, []nftListSource, error) {
@@ -631,7 +945,9 @@ func buildNftVerificationPlan(populations []nftSetPopulation, arpProtect bool) n
 	for _, population := range populations {
 		count := len(population.entries)
 		plan.sets[nftObjectKey{family: "inet", table: "syswarden", name: population.name}] = count
-		plan.sets[nftObjectKey{family: "netdev", table: "syswarden_hw_drop", name: population.name}] = count
+		if !population.inetOnly {
+			plan.sets[nftObjectKey{family: "netdev", table: "syswarden_hw_drop", name: population.name}] = count
+		}
 	}
 	return plan
 }

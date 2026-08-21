@@ -45,10 +45,6 @@ class PackageStageGateTests(unittest.TestCase):
         self.create_stage(package_stage_gate.LINUX_ENTRIES)
         package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
 
-    def test_accepts_exact_freebsd_stage(self) -> None:
-        self.create_stage(package_stage_gate.FREEBSD_ENTRIES)
-        package_stage_gate.validate(self.root, package_stage_gate.FREEBSD_ENTRIES)
-
     def test_rejects_unexpected_stale_file(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)
         (self.root / "opt/syswarden/stale.conf").write_text(
@@ -64,10 +60,10 @@ class PackageStageGateTests(unittest.TestCase):
             package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
 
     def test_rejects_empty_payload(self) -> None:
-        self.create_stage(package_stage_gate.FREEBSD_ENTRIES)
-        (self.root / "usr/local/syswarden/signatures.json").write_bytes(b"")
+        self.create_stage(package_stage_gate.LINUX_ENTRIES)
+        (self.root / "opt/syswarden/signatures.json").write_bytes(b"")
         with self.assertRaisesRegex(package_stage_gate.PackageStageError, "non-empty"):
-            package_stage_gate.validate(self.root, package_stage_gate.FREEBSD_ENTRIES)
+            package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
 
     def test_rejects_incorrect_file_mode(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)
@@ -90,12 +86,12 @@ class PackageStageGateTests(unittest.TestCase):
             package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
 
     def test_rejects_symlink_instead_of_regular_file(self) -> None:
-        self.create_stage(package_stage_gate.FREEBSD_ENTRIES)
-        payload = self.root / "usr/local/syswarden/bin/syswarden-cli"
+        self.create_stage(package_stage_gate.LINUX_ENTRIES)
+        payload = self.root / "opt/syswarden/bin/syswarden-cli"
         payload.unlink()
         payload.symlink_to("/tmp/external-payload")
         with self.assertRaisesRegex(package_stage_gate.PackageStageError, "expected file"):
-            package_stage_gate.validate(self.root, package_stage_gate.FREEBSD_ENTRIES)
+            package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
 
     def test_rejects_symlink_as_staging_root(self) -> None:
         real_root = Path(self.temporary_directory.name) / "real-stage"
@@ -113,12 +109,12 @@ class PackageStageGateTests(unittest.TestCase):
             package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
 
     def test_rejects_fifo_instead_of_regular_file(self) -> None:
-        self.create_stage(package_stage_gate.FREEBSD_ENTRIES)
-        payload = self.root / "usr/local/syswarden/signatures.json"
+        self.create_stage(package_stage_gate.LINUX_ENTRIES)
+        payload = self.root / "opt/syswarden/signatures.json"
         payload.unlink()
         os.mkfifo(payload, mode=0o640)
         with self.assertRaisesRegex(package_stage_gate.PackageStageError, "unsupported"):
-            package_stage_gate.validate(self.root, package_stage_gate.FREEBSD_ENTRIES)
+            package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
 
     def test_rejects_unix_socket_instead_of_regular_file(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)

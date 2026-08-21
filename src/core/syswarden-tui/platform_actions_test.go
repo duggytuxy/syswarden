@@ -23,29 +23,6 @@ func TestRunSyswardenIPActionRejectsUntrustedInputs(t *testing.T) {
 	}
 }
 
-func TestFreeBSDActionsUseNativePackagedCLI_SW_PKG_001(t *testing.T) {
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test source path")
-	}
-	root, err := os.OpenRoot(filepath.Dir(currentFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = root.Close() }()
-	content, err := root.ReadFile("platform_freebsd.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := string(content)
-	if strings.Count(source, "/usr/local/syswarden/bin/syswarden-cli") != 3 {
-		t.Fatal("each FreeBSD action must execute the native packaged CLI path")
-	}
-	if strings.Contains(source, "/opt/syswarden") {
-		t.Fatal("FreeBSD TUI actions must not use the Linux installation prefix")
-	}
-}
-
 func TestWhitelistActionsUseTheExactCLIArguments(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -56,7 +33,7 @@ func TestWhitelistActionsUseTheExactCLIArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	for _, sourceName := range []string{"platform_default.go", "platform_freebsd.go"} {
+	for _, sourceName := range []string{"platform_default.go"} {
 		content, err := root.ReadFile(sourceName)
 		if err != nil {
 			t.Fatal(err)

@@ -64,7 +64,8 @@ func TestPrepareInstallConfigurationCompletesPartialConfig_SW_CFG_001(t *testing
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	const userConfig = "# operator-owned\n[user]\nwebtui_password = \"preserve-exactly\"\n"
+	const userConfig = "# operator-owned\n[user]\nwebtui_password = \"remove-this-secret\"\nprofile_name = \"preserve-exactly\"\n"
+	const cleanedUserConfig = "# operator-owned\n[user]\nprofile_name = \"preserve-exactly\"\n"
 	if err := root.WriteFile("99-user.toml", []byte(userConfig), 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +79,8 @@ func TestPrepareInstallConfigurationCompletesPartialConfig_SW_CFG_001(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(content) != userConfig {
-		t.Fatalf("operator module changed: got %q, want %q", content, userConfig)
+	if string(content) != cleanedUserConfig {
+		t.Fatalf("retired secret cleanup = %q, want %q", content, cleanedUserConfig)
 	}
 	info, err := root.Lstat("99-user.toml")
 	if err != nil {
@@ -88,7 +89,7 @@ func TestPrepareInstallConfigurationCompletesPartialConfig_SW_CFG_001(t *testing
 	if info.Mode().Perm() != 0640 {
 		t.Fatalf("operator module mode = %#o, want 0640", info.Mode().Perm())
 	}
-	if config.GlobalConfig == nil || config.GlobalConfig.WebTUIPassword != "preserve-exactly" {
+	if config.GlobalConfig == nil {
 		t.Fatalf("validated config = %#v", config.GlobalConfig)
 	}
 	if state := config.CurrentLoadState(); state.Degraded || state.Source != configRoot {

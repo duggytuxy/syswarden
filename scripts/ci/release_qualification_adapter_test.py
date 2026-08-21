@@ -18,11 +18,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import freebsd_vm_lab
 import package_lifecycle_lab
 import release_qualification_adapter as adapter
 import release_qualification_gate as gate
-from freebsd_vm_lab_test import PF_FIXTURE_TEXT, passing_evidence
 from package_lifecycle_lab_test import FakePodmanRunner
 
 
@@ -124,21 +122,14 @@ class AdapterFixture:
         golden.write_text(
             "tcp dport { 236379 }\ntcp dport { 236379 }\n", encoding="utf-8"
         )
-        pf_fixture = self.repo / "testdata/firewall/pf-v4.02.8.conf"
-        pf_fixture.write_text(PF_FIXTURE_TEXT, encoding="utf-8")
         loader = self.repo / "src/core/syswarden-cli/config/config_loader.go"
         loader.parent.mkdir(parents=True, exist_ok=True)
         loader.write_text(
             'strings.Join(m.Security.Honeyports, " ")\n', encoding="utf-8"
         )
         linux = self.repo / "src/core/syswarden-cli/pkg/firewall/firewall_linux.go"
-        freebsd = self.repo / "src/core/syswarden-cli/pkg/firewall/firewall_freebsd.go"
         linux.parent.mkdir(parents=True, exist_ok=True)
         linux.write_text(
-            "canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)\n",
-            encoding="utf-8",
-        )
-        freebsd.write_text(
             "canonicalHoneyPorts(config.GlobalConfig.HoneyPorts)\n",
             encoding="utf-8",
         )
@@ -228,32 +219,6 @@ class AdapterFixture:
         )
         package_report["generated_at"] = (self.now + timedelta(seconds=11)).isoformat()
 
-        candidate_txz = self.candidate / "syswarden-4.02.8.txz"
-        previous_txz = self.previous / "syswarden-4.02.7.txz"
-        evidence = passing_evidence()
-        evidence["CANDIDATE_PACKAGE_SHA256"] = self._digest(candidate_txz)
-        evidence["PREVIOUS_PACKAGE_SHA256"] = self._digest(previous_txz)
-        fixture = self.repo / "testdata/firewall/pf-v4.02.8.conf"
-        fixture_sha = self._digest(fixture)
-        evidence["PF_FIXTURE_SHA256"] = fixture_sha
-        evidence["PF_FIXTURE_SHA_MATCH"] = "1"
-        freebsd_report = freebsd_vm_lab.build_report(
-            evidence,
-            freebsd_vm_lab.PackageArtifact(
-                candidate_txz, "4.02.8", self._digest(candidate_txz)
-            ),
-            freebsd_vm_lab.PackageArtifact(
-                previous_txz, "4.02.7", self._digest(previous_txz)
-            ),
-            freebsd_vm_lab.ProductAssets(
-                self.repo, fixture, fixture_sha, False
-            ),
-            "127.0.0.1",
-            2222,
-            evidence["PF_ANCHOR_NAME"],
-        )
-        freebsd_report["generated_at"] = (self.now + timedelta(seconds=29)).isoformat()
-
         nft_report = {
             "schema_version": 1,
             "generated_at": self.now.isoformat(),
@@ -288,38 +253,11 @@ class AdapterFixture:
         for name, report in (
             ("nftables-raw.json", nft_report),
             ("package-lifecycle-raw.json", package_report),
-            ("freebsd-vm-raw.json", freebsd_report),
         ):
             (self.raw / name).write_text(
                 json.dumps(report, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-
-    def write_freebsd_evidence(self, evidence: dict[str, str]) -> None:
-        candidate_txz = self.candidate / "syswarden-4.02.8.txz"
-        previous_txz = self.previous / "syswarden-4.02.7.txz"
-        evidence = dict(evidence)
-        evidence["CANDIDATE_PACKAGE_SHA256"] = self._digest(candidate_txz)
-        evidence["PREVIOUS_PACKAGE_SHA256"] = self._digest(previous_txz)
-        fixture = self.repo / "testdata/firewall/pf-v4.02.8.conf"
-        fixture_sha = self._digest(fixture)
-        evidence["PF_FIXTURE_SHA256"] = fixture_sha
-        evidence["PF_FIXTURE_SHA_MATCH"] = "1"
-        report = freebsd_vm_lab.build_report(
-            evidence,
-            freebsd_vm_lab.PackageArtifact(
-                candidate_txz, "4.02.8", self._digest(candidate_txz)
-            ),
-            freebsd_vm_lab.PackageArtifact(
-                previous_txz, "4.02.7", self._digest(previous_txz)
-            ),
-            freebsd_vm_lab.ProductAssets(self.repo, fixture, fixture_sha, False),
-            "127.0.0.1",
-            2222,
-            evidence["PF_ANCHOR_NAME"],
-        )
-        report["generated_at"] = (self.now + timedelta(seconds=29)).isoformat()
-        self.save_raw("freebsd-vm-raw.json", report)
 
     def args(self, command: str = "build", **overrides: object) -> argparse.Namespace:
         values: dict[str, object] = {
@@ -333,7 +271,6 @@ class AdapterFixture:
             "package_raw": self.raw / "package-lifecycle-raw.json",
             "package_amd64_shard": self.raw / "package-lifecycle-amd64.json",
             "package_arm64_shard": self.raw / "package-lifecycle-arm64.json",
-            "freebsd_raw": self.raw / "freebsd-vm-raw.json",
             "expected_repository": self.repository,
             "expected_workflow_run_id": self.workflow_run_id,
             "expected_workflow_run_attempt": self.workflow_run_attempt,
@@ -345,10 +282,8 @@ class AdapterFixture:
             "max_report_skew_seconds": 0,
             "nft_output": self.bound / "nftables-bound.json",
             "package_output": self.bound / "package-lifecycle-bound.json",
-            "freebsd_output": self.bound / "freebsd-vm-bound.json",
             "nft_envelope": self.bound / "nftables-bound.json",
             "package_envelope": self.bound / "package-lifecycle-bound.json",
-            "freebsd_envelope": self.bound / "freebsd-vm-bound.json",
         }
         values.update(overrides)
         return argparse.Namespace(**values)
@@ -398,10 +333,8 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             package_raw=relocated / "raw/package-lifecycle-raw.json",
             package_amd64_shard=relocated / "raw/package-lifecycle-amd64.json",
             package_arm64_shard=relocated / "raw/package-lifecycle-arm64.json",
-            freebsd_raw=relocated / "raw/freebsd-vm-raw.json",
             nft_envelope=relocated / "bound/nftables-bound.json",
             package_envelope=relocated / "bound/package-lifecycle-bound.json",
-            freebsd_envelope=relocated / "bound/freebsd-vm-bound.json",
         )
         adapter.run_verify(args)
 
@@ -506,117 +439,6 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("package-lifecycle-raw.json", combined)
         self.assertAdapterError(self.fixture.args())
 
-    def test_freebsd_product_failures_are_never_waived(self) -> None:
-        evidence = passing_evidence()
-        evidence.update(
-            {
-                "SIGNATURE_RUNTIME_PATH": "0",
-                "RC_CORE_PRESENT": "0",
-                "RC_WEB_PRESENT": "0",
-                "RC_CORE_MODE": "",
-                "RC_WEB_MODE": "",
-                "RC_CORE_COMMAND": "",
-                "RC_WEB_COMMAND": "",
-                "RC_CORE_ENABLED": "",
-                "RC_WEB_ENABLED": "",
-                "CANDIDATE_RESTART_IDEMPOTENCE_OPERATION_RC": "1",
-            }
-        )
-        for key in (
-            "RC_CORE_START_RC",
-            "RC_CORE_STATUS_RC",
-            "RC_CORE_RESTART_ONE_RC",
-            "RC_CORE_RESTART_ONE_STATUS_RC",
-            "RC_CORE_RESTART_TWO_RC",
-            "RC_CORE_RESTART_TWO_STATUS_RC",
-            "RC_WEB_START_RC",
-            "RC_WEB_STATUS_RC",
-            "RC_WEB_RESTART_ONE_RC",
-            "RC_WEB_RESTART_ONE_STATUS_RC",
-            "RC_WEB_RESTART_TWO_RC",
-            "RC_WEB_RESTART_TWO_STATUS_RC",
-        ):
-            evidence[key] = "1"
-        for phase in freebsd_vm_lab.LIFECYCLE_PHASES:
-            evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"
-        for phase in ("PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"):
-            evidence[f"{phase}_ELF_CORE_ARCH"] = "arm64"
-            evidence[f"{phase}_ELF_TUI_ARCH"] = "arm64"
-            evidence[f"{phase}_SIGNATURE_ENGINE_COUNT"] = ""
-            evidence[f"{phase}_SIGNATURE_PROBE_RC"] = "2"
-        self.fixture.write_freebsd_evidence(evidence)
-        self.assertAdapterError(self.fixture.args())
-
-        self.fixture._make_raw_reports()
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        honey = next(
-            item
-            for item in report["checks"]
-            if item["id"] == "SW-PF-FBSD-HONEYPORT-001"
-        )
-        honey["observed"]["exact_port_value"] = "236380"
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-
-    def test_freebsd_forward_only_v40214_contract_is_exercised(self) -> None:
-        evidence = passing_evidence()
-        evidence["PF_SNAPSHOT_PROVENANCE"] = "legacy_derived"
-        evidence["PREVIOUS_PACKAGE_SHA256"] = (
-            freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_SHA256
-        )
-        for phase in (
-            "CANDIDATE_UPGRADE",
-            "CANDIDATE_REINSTALL",
-            "CANDIDATE_RESTART_IDEMPOTENCE",
-        ):
-            evidence[f"{phase}_PKG_VERSION"] = "4.02.14"
-        for phase in ("PREVIOUS_INSTALL", "PREVIOUS_ROLLBACK"):
-            evidence[f"{phase}_PKG_VERSION"] = "4.02.8"
-            evidence[f"{phase}_PKG_ARCH"] = "FreeBSD:13:amd64"
-            evidence[f"{phase}_ELF_CORE_ARCH"] = "arm64"
-            evidence[f"{phase}_ELF_TUI_ARCH"] = "arm64"
-            evidence[f"{phase}_PKG_INVENTORY"] = "\n".join(
-                sorted(freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_INVENTORY)
-            )
-            evidence[f"{phase}_SIGNATURE_ENGINE_COUNT"] = ""
-            evidence[f"{phase}_SIGNATURE_PROBE_RC"] = "2"
-
-        pf_fixture = self.fixture.repo / "testdata/firewall/pf-v4.02.8.conf"
-        report = freebsd_vm_lab.build_report(
-            evidence,
-            freebsd_vm_lab.PackageArtifact(
-                self.fixture.root / "syswarden-4.02.14.txz",
-                "4.02.14",
-                evidence["CANDIDATE_PACKAGE_SHA256"],
-            ),
-            freebsd_vm_lab.PackageArtifact(
-                self.fixture.root / freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_PACKAGE,
-                freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_VERSION,
-                freebsd_vm_lab.FORWARD_ONLY_PREVIOUS_SHA256,
-            ),
-            freebsd_vm_lab.ProductAssets(
-                self.fixture.repo,
-                pf_fixture,
-                self.fixture._digest(pf_fixture),
-                False,
-            ),
-            "127.0.0.1",
-            2222,
-            evidence["PF_ANCHOR_NAME"],
-        )
-        self.assertTrue(report["release_ready"])
-
-        with mock.patch.object(
-            adapter,
-            "_freebsd_check_passes",
-            wraps=adapter._freebsd_check_passes,
-        ) as check_passes:
-            _, _, failed = adapter._validate_freebsd_schema(report)
-        self.assertEqual(failed, [])
-        self.assertTrue(
-            any(call.args[2]["forward_only"] is True for call in check_passes.call_args_list)
-        )
-
     def test_duplicate_json_key_and_unknown_schema_key_are_rejected(self) -> None:
         path = self.fixture.raw / "nftables-raw.json"
         path.write_text(
@@ -717,113 +539,10 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
-    def test_freebsd_top_level_and_check_status_tampering_are_rejected(self) -> None:
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        report["release_ready"] = False
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-
-    def test_freebsd_phase_cannot_diverge_from_passing_check_evidence(self) -> None:
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        phase = report["lifecycle_phases"]["candidate_upgrade"]
-        phase["operation_return_code"] = "99"
-        phase["package"].update(
-            installed=False,
-            name="",
-            version="",
-            architecture="",
-            inventory=[],
-        )
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-
-    def test_freebsd_restart_and_rcd_observation_keys_are_exact(self) -> None:
-        cases = (
-            (
-                "SW-PKG-FBSD-RESTART-CORE-001",
-                "RC_CORE_RESTART_ONE_RC",
-            ),
-            (
-                "SW-PKG-FBSD-RESTART-WEB-001",
-                "RC_WEB_RESTART_ONE_RC",
-            ),
-            (
-                "SW-PKG-FBSD-RCD-CLEANUP-001",
-                "REMOVE_RC_CORE_ABSENT",
-            ),
-        )
-        for check_id, original_key in cases:
-            with self.subTest(check_id=check_id):
-                self.fixture._make_raw_reports()
-                report = self.fixture.load_raw("freebsd-vm-raw.json")
-                check = next(
-                    item for item in report["checks"] if item["id"] == check_id
-                )
-                check["observed"]["RENAMED_UNTRUSTED_KEY"] = check["observed"].pop(
-                    original_key
-                )
-                self.fixture.save_raw("freebsd-vm-raw.json", report)
-                self.assertAdapterError(self.fixture.args())
-
-    def test_freebsd_pf_environment_cannot_contradict_harness_conditions(self) -> None:
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        report["environment"]["pf_initial_status"] = "Enabled"
-        report["environment"]["pf_snapshot_sha256"] = "0" * 64
-        self.assertTrue(
-            report["harness_conditions"]["clean disposable snapshot"]
-        )
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-
-        self.fixture._make_raw_reports()
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        del report["environment"]["pf_final_status"]
-        self.assertTrue(report["harness_conditions"]["PF snapshot restored"])
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-
-        self.fixture._make_raw_reports()
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        report["environment"]["pf_final_status"] = "Enabled"
-        self.assertTrue(report["harness_conditions"]["PF snapshot restored"])
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-
-        self.fixture._make_raw_reports()
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        report["inputs"]["pf_fixture_guest_sha256"] = "0" * 64
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-
-        self.fixture._make_raw_reports()
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        report["lifecycle_phases"]["remove"]["package_absent"] = False
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-        self.fixture._make_raw_reports()
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        report["checks"][0]["status"] = "blocker"
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-
     def test_package_digest_and_previous_version_binding_are_rejected(self) -> None:
         report = self.fixture.load_raw("package-lifecycle-raw.json")
         report["platforms"][0]["candidate"]["sha256"] = "0" * 64
         self.fixture.save_raw("package-lifecycle-raw.json", report)
-        self.assertAdapterError(self.fixture.args())
-
-    def test_freebsd_pf_provenance_cannot_be_relabelled(self) -> None:
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        report["environment"]["pf_snapshot_provenance"] = "legacy_derived"
-        check = next(
-            item
-            for item in report["checks"]
-            if item["id"] == "SW-PKG-FBSD-PF-PROVENANCE-001"
-        )
-        check["observed"] = "legacy_derived"
-        check["status"] = "pass"
-        report["harness_conditions"]["PF snapshot provenance recorded"] = True
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
     def test_raw_symlink_hardlink_alias_and_in_repo_output_are_rejected(self) -> None:
@@ -861,9 +580,9 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture.save_raw("nftables-raw.json", report)
         self.assertAdapterError(self.fixture.args())
         self.fixture._make_raw_reports()
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
-        report["environment"]["unknown"] = "value"
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
+        report = self.fixture.load_raw("nftables-raw.json")
+        report["engine"]["unknown"] = "value"
+        self.fixture.save_raw("nftables-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
     def test_toctou_raw_change_is_detected_before_output(self) -> None:
@@ -897,11 +616,11 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             self.assertAdapterError(self.fixture.args())
 
     def test_raw_collection_window_is_bounded_but_zero_normalized_skew_is_valid(self) -> None:
-        report = self.fixture.load_raw("freebsd-vm-raw.json")
+        report = self.fixture.load_raw("package-lifecycle-raw.json")
         report["generated_at"] = (
             self.fixture.now + timedelta(seconds=adapter.RAW_REPORT_MAX_SKEW_SECONDS + 1)
         ).isoformat()
-        self.fixture.save_raw("freebsd-vm-raw.json", report)
+        self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
 
