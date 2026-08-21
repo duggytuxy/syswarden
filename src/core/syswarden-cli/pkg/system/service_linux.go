@@ -3,6 +3,8 @@
 package system
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -432,7 +434,7 @@ func readAttestedServiceFile(root *os.Root, name string, before os.FileInfo) ([]
 	return content, nil
 }
 
-func publishExactServiceFile(path, content string, mode os.FileMode) (bool, error) {
+func publishExactServiceFile(path, content string, mode os.FileMode) (created bool, returnErr error) {
 	directory := filepath.Dir(path)
 	pinned, err := openPinnedServiceDirectory(directory)
 	if err != nil {
@@ -456,20 +458,31 @@ func publishExactServiceFile(path, content string, mode os.FileMode) (bool, erro
 		return false, fmt.Errorf("inspect service file %s: %w", path, err)
 	}
 
-	temporary, err := os.CreateTemp(directory, ".syswarden-service-*")
+	temporaryName, temporary, temporaryIdentity, err := createTemporaryServiceFile(pinned)
 	if err != nil {
 		return false, fmt.Errorf("create temporary service file for %s: %w", path, err)
 	}
-	temporaryPath := temporary.Name()
 	keepTemporary := true
 	defer func() {
 		if keepTemporary {
-			_ = temporary.Close()
-			_ = pinned.root.Remove(filepath.Base(temporaryPath))
+			closeErr := temporary.Close()
+			cleanupErr := quarantineAndRemoveServiceArtifact(
+				pinned,
+				temporaryName,
+				true,
+				func(directory *pinnedServiceDirectory, name string) (os.FileInfo, error) {
+					return inspectServiceArtifactIdentity(directory, name, temporaryIdentity)
+				},
+			)
+			returnErr = errors.Join(returnErr, closeErr, cleanupErr)
 		}
 	}()
 	if err := temporary.Chmod(mode); err != nil {
 		return false, fmt.Errorf("set service file mode for %s: %w", path, err)
+	}
+	temporaryIdentity, err = temporary.Stat()
+	if err != nil {
+		return false, fmt.Errorf("attest temporary service file for %s: %w", path, err)
 	}
 	if _, err := temporary.WriteString(content); err != nil {
 		return false, fmt.Errorf("write service file %s: %w", path, err)
@@ -480,7 +493,7 @@ func publishExactServiceFile(path, content string, mode os.FileMode) (bool, erro
 	if err := temporary.Close(); err != nil {
 		return false, fmt.Errorf("close service file %s: %w", path, err)
 	}
-	if err := unix.Renameat2(pinned.fd, filepath.Base(temporaryPath), pinned.fd, name, unix.RENAME_NOREPLACE); err != nil {
+	if err := unix.Renameat2(pinned.fd, temporaryName, pinned.fd, name, unix.RENAME_NOREPLACE); err != nil {
 		return false, fmt.Errorf("publish service file %s without replacement: %w", path, err)
 	}
 	keepTemporary = false
@@ -495,11 +508,8 @@ func publishExactServiceEnablement(path, target string) (bool, error) {
 	}
 	defer pinned.close()
 	name := filepath.Base(path)
-	if info, err := pinned.root.Lstat(name); err == nil {
-		if info.Mode()&os.ModeSymlink == 0 {
-			return false, fmt.Errorf("refusing non-symlink service enablement %s", path)
-		}
-		actualTarget, readErr := pinned.root.Readlink(name)
+	if _, err := pinned.root.Lstat(name); err == nil {
+		actualTarget, readErr := readAttestedServiceEnablement(pinned, name)
 		if readErr != nil || actualTarget != target {
 			return false, fmt.Errorf("refusing modified service enablement %s", path)
 		}
@@ -508,99 +518,429 @@ func publishExactServiceEnablement(path, target string) (bool, error) {
 		return false, fmt.Errorf("inspect service enablement %s: %w", path, err)
 	}
 
-	temporary, err := os.CreateTemp(directory, ".syswarden-enable-*")
+	temporaryName, err := createTemporaryServiceEnablement(pinned, target)
 	if err != nil {
-		return false, fmt.Errorf("reserve service enablement name for %s: %w", path, err)
+		return false, fmt.Errorf("prepare service enablement %s: %w", path, err)
 	}
-	temporaryPath := temporary.Name()
-	if closeErr := temporary.Close(); closeErr != nil {
-		_ = os.Remove(temporaryPath)
-		return false, fmt.Errorf("close service enablement reservation for %s: %w", path, closeErr)
+	temporary, err := inspectAttestedServiceEnablement(pinned, temporaryName)
+	if err != nil {
+		return false, fmt.Errorf("attest temporary service enablement %s: %w", path, err)
 	}
-	temporaryName := filepath.Base(temporaryPath)
-	if err := pinned.root.Remove(temporaryName); err != nil {
-		return false, fmt.Errorf("remove service enablement reservation for %s: %w", path, err)
-	}
-	if err := pinned.root.Symlink(target, temporaryName); err != nil {
-		return false, fmt.Errorf("create temporary service enablement for %s: %w", path, err)
-	}
-	keepTemporary := true
-	defer func() {
-		if keepTemporary {
-			_ = pinned.root.Remove(temporaryName)
-		}
-	}()
 	if err := unix.Renameat2(pinned.fd, temporaryName, pinned.fd, name, unix.RENAME_NOREPLACE); err != nil {
-		return false, fmt.Errorf("publish service enablement %s without replacement: %w", path, err)
+		cleanupErr := removeAttestedServiceEnablement(pinned, temporaryName, temporary)
+		return false, errors.Join(
+			fmt.Errorf("publish service enablement %s without replacement: %w", path, err),
+			cleanupErr,
+		)
 	}
-	keepTemporary = false
 	return true, pinned.sync()
 }
 
-type serviceArtifact struct {
-	path    string
-	content string
-	target  string
-	mode    os.FileMode
+type attestedServiceEnablement struct {
+	identity os.FileInfo
+	target   string
 }
 
-func removeCreatedServiceArtifact(artifact serviceArtifact) error {
+func inspectAttestedServiceEnablement(directory *pinnedServiceDirectory, name string) (attestedServiceEnablement, error) {
+	before, err := directory.root.Lstat(name)
+	if err != nil {
+		return attestedServiceEnablement{}, err
+	}
+	if before.Mode()&os.ModeSymlink == 0 {
+		return attestedServiceEnablement{identity: before}, fmt.Errorf("service enablement is not a symlink")
+	}
+	target, err := directory.root.Readlink(name)
+	if err != nil {
+		return attestedServiceEnablement{identity: before}, err
+	}
+	after, err := directory.root.Lstat(name)
+	if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+		return attestedServiceEnablement{identity: before, target: target}, fmt.Errorf("service enablement changed while reading")
+	}
+	return attestedServiceEnablement{identity: after, target: target}, nil
+}
+
+func readAttestedServiceEnablement(directory *pinnedServiceDirectory, name string) (string, error) {
+	enablement, err := inspectAttestedServiceEnablement(directory, name)
+	return enablement.target, err
+}
+
+func sameServiceArtifactIdentity(expected os.FileInfo, actual os.FileInfo) bool {
+	return expected != nil && actual != nil && os.SameFile(expected, actual) && expected.Mode() == actual.Mode()
+}
+
+func randomServiceArtifactName(prefix string) (string, error) {
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	return prefix + hex.EncodeToString(random), nil
+}
+
+func createTemporaryServiceEnablement(directory *pinnedServiceDirectory, target string) (string, error) {
+	for attempt := 0; attempt < 16; attempt++ {
+		name, err := randomServiceArtifactName(".syswarden-enable-")
+		if err != nil {
+			return "", fmt.Errorf("generate service enablement reservation: %w", err)
+		}
+		if err := directory.root.Symlink(target, name); err == nil {
+			return name, nil
+		} else if !errors.Is(err, os.ErrExist) {
+			return "", fmt.Errorf("create temporary service enablement: %w", err)
+		}
+	}
+	return "", fmt.Errorf("reserve a unique service enablement name")
+}
+
+func createTemporaryServiceFile(
+	directory *pinnedServiceDirectory,
+) (string, *os.File, os.FileInfo, error) {
+	for attempt := 0; attempt < 16; attempt++ {
+		name, err := randomServiceArtifactName(".syswarden-service-")
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("generate service file reservation: %w", err)
+		}
+		file, err := directory.root.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("create temporary service file: %w", err)
+		}
+		identity, statErr := file.Stat()
+		if statErr != nil {
+			_ = file.Close()
+			return "", nil, nil, fmt.Errorf("attest temporary service file: %w", statErr)
+		}
+		return name, file, identity, nil
+	}
+	return "", nil, nil, fmt.Errorf("reserve a unique service file name")
+}
+
+type serviceArtifactAttestor func(*pinnedServiceDirectory, string) (os.FileInfo, error)
+type serviceArtifactRename func(int, string, int, string, uint) error
+
+func inspectServiceArtifactIdentity(
+	directory *pinnedServiceDirectory,
+	name string,
+	expected os.FileInfo,
+) (os.FileInfo, error) {
+	current, err := directory.root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !sameServiceArtifactIdentity(expected, current) {
+		return current, fmt.Errorf("service artifact identity changed")
+	}
+	return current, nil
+}
+
+func restoreQuarantinedServiceArtifact(
+	directory *pinnedServiceDirectory,
+	name string,
+	quarantineName string,
+	rename serviceArtifactRename,
+) error {
+	quarantined, err := directory.root.Lstat(quarantineName)
+	if err != nil {
+		return fmt.Errorf("inspect quarantined service artifact %s: %w", quarantineName, err)
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		err = rename(directory.fd, quarantineName, directory.fd, name, unix.RENAME_NOREPLACE)
+		if err == nil {
+			restored, inspectErr := directory.root.Lstat(name)
+			syncErr := directory.sync()
+			if inspectErr != nil || !sameServiceArtifactIdentity(quarantined, restored) || syncErr != nil {
+				return errors.Join(
+					fmt.Errorf("quarantined service artifact %s was not exactly restored", name),
+					inspectErr,
+					syncErr,
+				)
+			}
+			return nil
+		}
+		if !errors.Is(err, unix.EEXIST) {
+			return fmt.Errorf("restore quarantined service artifact %s without replacement: %w", name, err)
+		}
+		err = rename(directory.fd, quarantineName, directory.fd, name, unix.RENAME_EXCHANGE)
+		if errors.Is(err, unix.ENOENT) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("restore quarantined service artifact %s by exchange: %w", name, err)
+		}
+		restored, inspectErr := directory.root.Lstat(name)
+		displaced, displacedErr := directory.root.Lstat(quarantineName)
+		syncErr := directory.sync()
+		if inspectErr != nil || !sameServiceArtifactIdentity(quarantined, restored) || displacedErr != nil ||
+			displaced == nil || syncErr != nil {
+			return errors.Join(
+				fmt.Errorf("quarantined service artifact %s was not exactly restored by exchange", name),
+				inspectErr,
+				displacedErr,
+				syncErr,
+			)
+		}
+		return nil
+	}
+	return fmt.Errorf("restore quarantined service artifact %s after concurrent changes", name)
+}
+
+func quarantineAndRemoveServiceArtifactUsing(
+	directory *pinnedServiceDirectory,
+	name string,
+	missingOK bool,
+	attest serviceArtifactAttestor,
+	rename serviceArtifactRename,
+) error {
+	expected, err := attest(directory, name)
+	if missingOK && errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("attest service artifact %s before quarantine: %w", name, err)
+	}
+
+	var quarantineName string
+	for attempt := 0; attempt < 16; attempt++ {
+		quarantineName, err = randomServiceArtifactName(".syswarden-quarantine-")
+		if err != nil {
+			return fmt.Errorf("generate service artifact quarantine: %w", err)
+		}
+		err = rename(directory.fd, name, directory.fd, quarantineName, unix.RENAME_NOREPLACE)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("quarantine service artifact %s atomically: %w", name, err)
+		}
+		break
+	}
+	if err != nil {
+		return fmt.Errorf("reserve a unique quarantine for service artifact %s", name)
+	}
+
+	moved, attestErr := attest(directory, quarantineName)
+	syncErr := directory.sync()
+	if attestErr != nil || !sameServiceArtifactIdentity(expected, moved) || syncErr != nil {
+		restoreErr := restoreQuarantinedServiceArtifact(directory, name, quarantineName, rename)
+		return errors.Join(
+			fmt.Errorf("service artifact %s changed before atomic quarantine", name),
+			attestErr,
+			syncErr,
+			restoreErr,
+		)
+	}
+	if err := unix.Unlinkat(directory.fd, quarantineName, 0); err != nil {
+		restoreErr := restoreQuarantinedServiceArtifact(directory, name, quarantineName, rename)
+		return errors.Join(
+			fmt.Errorf("remove quarantined service artifact %s: %w", name, err),
+			restoreErr,
+		)
+	}
+	if err := directory.sync(); err != nil {
+		return fmt.Errorf("sync removal of quarantined service artifact %s: %w", name, err)
+	}
+	return nil
+}
+
+func quarantineAndRemoveServiceArtifact(
+	directory *pinnedServiceDirectory,
+	name string,
+	missingOK bool,
+	attest serviceArtifactAttestor,
+) error {
+	return quarantineAndRemoveServiceArtifactUsing(directory, name, missingOK, attest, unix.Renameat2)
+}
+
+func removeAttestedServiceEnablement(
+	directory *pinnedServiceDirectory,
+	name string,
+	expected attestedServiceEnablement,
+) error {
+	return quarantineAndRemoveServiceArtifact(
+		directory,
+		name,
+		true,
+		func(directory *pinnedServiceDirectory, candidate string) (os.FileInfo, error) {
+			current, err := inspectAttestedServiceEnablement(directory, candidate)
+			if err != nil {
+				return current.identity, err
+			}
+			if !sameServiceArtifactIdentity(expected.identity, current.identity) || current.target != expected.target {
+				return current.identity, fmt.Errorf("temporary service enablement changed")
+			}
+			return current.identity, nil
+		},
+	)
+}
+
+func attestExactServiceFile(path, content string, mode os.FileMode) error {
+	directory, err := openPinnedServiceDirectory(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer directory.close()
+	name := filepath.Base(path)
+	_, err = inspectExactServiceFile(directory, name, content, mode)
+	if err != nil {
+		return fmt.Errorf("attest service file %s: %w", path, err)
+	}
+	return directory.sync()
+}
+
+func inspectExactServiceFile(
+	directory *pinnedServiceDirectory,
+	name string,
+	content string,
+	mode os.FileMode,
+) (os.FileInfo, error) {
+	info, err := directory.root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
+		!serviceFileOwnedByCurrentUser(info) || info.Mode().Perm() != mode {
+		return info, fmt.Errorf("refusing unsafe service file")
+	}
+	actual, err := readAttestedServiceFile(directory.root, name, info)
+	if err != nil {
+		return info, err
+	}
+	if string(actual) != content {
+		return info, fmt.Errorf("refusing modified service file")
+	}
+	return info, nil
+}
+
+func containsExactString(values []string, candidate string) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func publishMigratableServiceEnablement(artifact serviceArtifact) (bool, error) {
+	directory, err := openPinnedServiceDirectory(filepath.Dir(artifact.path))
+	if err != nil {
+		return false, err
+	}
+	defer directory.close()
+	name := filepath.Base(artifact.path)
+	actualTarget, err := readAttestedServiceEnablement(directory, name)
+	if errors.Is(err, os.ErrNotExist) {
+		created, publishErr := publishExactServiceEnablement(artifact.path, artifact.target)
+		return created, publishErr
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect service enablement %s: %w", artifact.path, err)
+	}
+	if actualTarget == artifact.target {
+		return false, directory.sync()
+	}
+	if !containsExactString(artifact.legacyTargets, actualTarget) {
+		return false, fmt.Errorf("refusing modified service enablement %s", artifact.path)
+	}
+	if err := attestExactServiceFile(artifact.attestedFilePath, artifact.attestedFileContent, artifact.attestedFileMode); err != nil {
+		return false, fmt.Errorf("attest legacy service enablement %s: %w", artifact.path, err)
+	}
+	recheckedTarget, err := readAttestedServiceEnablement(directory, name)
+	if err != nil || recheckedTarget != actualTarget {
+		return false, errors.Join(
+			fmt.Errorf("legacy service enablement %s changed while attesting", artifact.path),
+			err,
+		)
+	}
+	if err := attestExactServiceFile(artifact.attestedFilePath, artifact.attestedFileContent, artifact.attestedFileMode); err != nil {
+		return false, fmt.Errorf("reattest legacy service enablement %s: %w", artifact.path, err)
+	}
+	return false, directory.sync()
+}
+
+type serviceArtifact struct {
+	path                string
+	content             string
+	target              string
+	mode                os.FileMode
+	legacyTargets       []string
+	attestedFilePath    string
+	attestedFileContent string
+	attestedFileMode    os.FileMode
+}
+
+type serviceArtifactChange struct {
+	artifact serviceArtifact
+	created  bool
+}
+
+func removeCreatedServiceArtifactUsing(artifact serviceArtifact, rename serviceArtifactRename) error {
 	directory, err := openPinnedServiceDirectory(filepath.Dir(artifact.path))
 	if err != nil {
 		return err
 	}
 	defer directory.close()
 	name := filepath.Base(artifact.path)
-	info, err := directory.root.Lstat(name)
-	if err != nil {
-		return fmt.Errorf("inspect created service artifact %s during rollback: %w", artifact.path, err)
-	}
+	var attest serviceArtifactAttestor
 	if artifact.target != "" {
-		if info.Mode()&os.ModeSymlink == 0 {
-			return fmt.Errorf("refusing changed service enablement %s during rollback", artifact.path)
-		}
-		target, err := directory.root.Readlink(name)
-		if err != nil || target != artifact.target {
-			return fmt.Errorf("refusing changed service enablement %s during rollback", artifact.path)
+		attest = func(directory *pinnedServiceDirectory, candidate string) (os.FileInfo, error) {
+			enablement, inspectErr := inspectAttestedServiceEnablement(directory, candidate)
+			if inspectErr != nil {
+				return enablement.identity, inspectErr
+			}
+			if enablement.target != artifact.target {
+				return enablement.identity, fmt.Errorf("refusing changed service enablement")
+			}
+			return enablement.identity, nil
 		}
 	} else {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
-			!serviceFileOwnedByCurrentUser(info) || info.Mode().Perm() != artifact.mode {
-			return fmt.Errorf("refusing changed service file %s during rollback", artifact.path)
-		}
-		content, err := readAttestedServiceFile(directory.root, name, info)
-		if err != nil || string(content) != artifact.content {
-			return fmt.Errorf("refusing changed service file %s during rollback", artifact.path)
+		attest = func(directory *pinnedServiceDirectory, candidate string) (os.FileInfo, error) {
+			return inspectExactServiceFile(directory, candidate, artifact.content, artifact.mode)
 		}
 	}
-	if err := directory.root.Remove(name); err != nil {
+	if err := quarantineAndRemoveServiceArtifactUsing(directory, name, false, attest, rename); err != nil {
 		return fmt.Errorf("remove created service artifact %s during rollback: %w", artifact.path, err)
 	}
-	if err := directory.sync(); err != nil {
-		return fmt.Errorf("sync service artifact rollback for %s: %w", artifact.path, err)
+	return nil
+}
+
+func removeCreatedServiceArtifact(artifact serviceArtifact) error {
+	return removeCreatedServiceArtifactUsing(artifact, unix.Renameat2)
+}
+
+func rollbackServiceArtifactChange(change serviceArtifactChange) error {
+	if change.created {
+		return removeCreatedServiceArtifact(change.artifact)
 	}
 	return nil
 }
 
 func publishServiceArtifacts(artifacts []serviceArtifact) error {
-	created := make([]serviceArtifact, 0, len(artifacts))
+	changes := make([]serviceArtifactChange, 0, len(artifacts))
 	for _, artifact := range artifacts {
 		var wasCreated bool
 		var err error
 		if artifact.target != "" {
-			wasCreated, err = publishExactServiceEnablement(artifact.path, artifact.target)
+			if len(artifact.legacyTargets) == 0 {
+				wasCreated, err = publishExactServiceEnablement(artifact.path, artifact.target)
+			} else {
+				wasCreated, err = publishMigratableServiceEnablement(artifact)
+			}
 		} else {
 			wasCreated, err = publishExactServiceFile(artifact.path, artifact.content, artifact.mode)
 		}
 		if wasCreated {
-			created = append(created, artifact)
+			changes = append(changes, serviceArtifactChange{
+				artifact: artifact, created: true,
+			})
 		}
 		if err == nil {
 			continue
 		}
 		rollbackErrors := []error{err}
-		for index := len(created) - 1; index >= 0; index-- {
-			if rollbackErr := removeCreatedServiceArtifact(created[index]); rollbackErr != nil {
+		for index := len(changes) - 1; index >= 0; index-- {
+			if rollbackErr := rollbackServiceArtifactChange(changes[index]); rollbackErr != nil {
 				rollbackErrors = append(rollbackErrors, rollbackErr)
 			}
 		}
@@ -619,11 +959,21 @@ func publishOpenRCServices() error {
 }
 
 func publishSystemdServices() error {
+	coreUnitPath := filepath.Join(serviceSystemdUnitDir, "syswarden-core.service")
+	firewallUnitPath := filepath.Join(serviceSystemdUnitDir, "syswarden-firewall.service")
 	return publishServiceArtifacts([]serviceArtifact{
-		{path: filepath.Join(serviceSystemdUnitDir, "syswarden-core.service"), content: systemdCoreService, mode: 0600},
-		{path: filepath.Join(serviceSystemdUnitDir, "syswarden-firewall.service"), content: systemdFirewallService, mode: 0600},
-		{path: filepath.Join(serviceSystemdWantsDir, "syswarden-core.service"), target: "../syswarden-core.service"},
-		{path: filepath.Join(serviceSystemdWantsDir, "syswarden-firewall.service"), target: "../syswarden-firewall.service"},
+		{path: coreUnitPath, content: systemdCoreService, mode: 0600},
+		{path: firewallUnitPath, content: systemdFirewallService, mode: 0600},
+		{
+			path: filepath.Join(serviceSystemdWantsDir, "syswarden-core.service"), target: "../syswarden-core.service",
+			legacyTargets:    []string{"/etc/systemd/system/syswarden-core.service"},
+			attestedFilePath: coreUnitPath, attestedFileContent: systemdCoreService, attestedFileMode: 0600,
+		},
+		{
+			path: filepath.Join(serviceSystemdWantsDir, "syswarden-firewall.service"), target: "../syswarden-firewall.service",
+			legacyTargets:    []string{"/etc/systemd/system/syswarden-firewall.service"},
+			attestedFilePath: firewallUnitPath, attestedFileContent: systemdFirewallService, attestedFileMode: 0600,
+		},
 	})
 }
 

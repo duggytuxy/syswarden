@@ -291,7 +291,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertNotIn("v2.43.0", source)
         self.assertNotIn("sudo ", source)
         self.assertNotIn("https://go.dev/dl/", source)
-        self.assertEqual(source.count('"${GO_BIN}" -C'), 2)
+        self.assertEqual(source.count('"${GO_BIN}" -C'), 3)
         self.assertIn("export GOWORK=off", source)
         self.assertIn("mod download", source)
         self.assertIn("-mod=readonly -buildmode=pie", source)
@@ -324,6 +324,143 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertLess(publication, verify)
         self.assertIn("trap cleanup_package_workspace EXIT", source)
         self.assertIn("PACKAGE_STATE_VERIFIED=1", source)
+
+    def test_local_builder_closes_deb_mode_and_rpm_build_id_parity(self) -> None:
+        source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        deb_block = source.split("# Generate DEB", 1)[1].split(
+            "# Generate RPM", 1
+        )[0]
+        rpm_block = source.split("# Generate RPM", 1)[1].split(
+            "# Generate Alpine APK", 1
+        )[0]
+
+        self.assertEqual(deb_block.count("umask 022"), 1)
+        self.assertIn("(\n", deb_block)
+        self.assertIn("\n    umask 022\n", deb_block)
+        self.assertIn("\n    fpm -f -s dir -t deb", deb_block)
+        self.assertTrue(deb_block.rstrip().endswith(")"))
+        self.assertIn("validate_local_deb_changelog()", source)
+        self.assertIn(
+            '$1 == "-rw-r--r--" && $2 == "0/0"', source
+        )
+        self.assertIn(
+            '$6 == "./usr/share/doc/syswarden/changelog.gz"', source
+        )
+
+        self.assertIn("prepare_rpm_build_id_links()", source)
+        self.assertIn("LC_ALL=C readelf --notes", source)
+        self.assertIn("^[0-9a-f]{40}$", source)
+        self.assertIn(
+            '"../../../../opt/syswarden/bin/$(basename -- "${rpm_binary}")"',
+            source,
+        )
+        self.assertIn(
+            '--rpm-rpmbuild-define "_build_id_links none"', rpm_block
+        )
+        self.assertEqual(rpm_block.count("umask 022"), 1)
+        self.assertIn("\n    fpm -f -s dir -t rpm", rpm_block)
+        self.assertTrue(rpm_block.rstrip().endswith(")"))
+        self.assertIn("--directories /usr/lib/.build-id", rpm_block)
+        self.assertIn("-C staging-rpm .", rpm_block)
+        self.assertNotIn("-C staging .", rpm_block)
+        self.assertIn("validate_local_rpm_build_ids()", source)
+        for target in (
+            "../../../../opt/syswarden/bin/syswarden-cli",
+            "../../../../opt/syswarden/bin/syswarden-core",
+            "../../../../opt/syswarden/bin/syswarden-tui",
+        ):
+            self.assertEqual(source.count(target), 1, target)
+
+    def test_local_builder_rpm_build_id_preparation_is_exact_and_fail_closed(
+        self,
+    ) -> None:
+        source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        start = source.index("prepare_rpm_build_id_links() {")
+        end = source.index("\ninstall -d -m 0755 staging-rpm", start)
+        function = source[start:end]
+        build_ids = {
+            "syswarden-cli": "11" + "1" * 38,
+            "syswarden-core": "22" + "2" * 38,
+            "syswarden-tui": "33" + "3" * 38,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            readelf = fake_bin / "readelf"
+            readelf.write_text(
+                "#!/bin/sh\n"
+                "name=${2##*/}\n"
+                "if [ \"${COLLIDE:-0}\" = 1 ]; then\n"
+                f"  id={'4' * 40}\n"
+                "else\n"
+                "  case \"${name}\" in\n"
+                + "".join(
+                    f"    {name}) id={build_id} ;;\n"
+                    for name, build_id in build_ids.items()
+                )
+                + "    *) exit 1 ;;\n"
+                "  esac\n"
+                "fi\n"
+                "printf '  Build ID: %s\\n' \"${id}\"\n",
+                encoding="utf-8",
+            )
+            readelf.chmod(0o700)
+            artifacts = []
+            for name in build_ids:
+                artifact = root / name
+                artifact.write_bytes(b"fixture")
+                artifacts.append(artifact)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}:/usr/bin:/bin",
+            }
+
+            staging = root / "staging"
+            result = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    function
+                    + '\nprepare_rpm_build_id_links "$1" "$2" "$3" "$4"',
+                    "rpm-build-id-contract",
+                    str(staging),
+                    *(str(path) for path in artifacts),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result)
+            build_id_root = staging / "usr/lib/.build-id"
+            self.assertEqual(build_id_root.stat().st_mode & 0o777, 0o755)
+            for name, build_id in build_ids.items():
+                link = build_id_root / build_id[:2] / build_id[2:]
+                self.assertTrue(link.is_symlink(), link)
+                self.assertEqual(
+                    os.readlink(link),
+                    f"../../../../opt/syswarden/bin/{name}",
+                )
+                self.assertEqual(link.parent.stat().st_mode & 0o777, 0o755)
+
+            collision = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    function
+                    + '\nprepare_rpm_build_id_links "$1" "$2" "$3" "$4"',
+                    "rpm-build-id-collision",
+                    str(root / "collision"),
+                    *(str(path) for path in artifacts),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**environment, "COLLIDE": "1"},
+            )
+            self.assertNotEqual(collision.returncode, 0, collision)
+            self.assertIn("share a GNU build-id", collision.stderr)
 
     def test_local_builder_exit_guard_detects_repository_mutation(self) -> None:
         source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
@@ -477,6 +614,38 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 self.assertNotEqual(rejected.returncode, 0, rejected)
                 self.assertIn("Refusing unsafe SysWarden directory", rejected.stderr)
                 self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+
+    def test_product_service_enablement_cleanup_accepts_only_exact_release_targets(self) -> None:
+        allowed_targets = (
+            "../syswarden-core.service",
+            "/etc/systemd/system/syswarden-core.service",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index, target in enumerate((*allowed_targets, "../operator.service")):
+                link = root / f"syswarden-core-{index}.service"
+                link.symlink_to(target)
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        '. "$1"; shift; syswarden_remove_exact_service_enablement "$@"',
+                        "probe",
+                        str(WEBTUI_RETIREMENT_HELPER),
+                        str(link),
+                        *allowed_targets,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if target in allowed_targets:
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertFalse(link.exists() or link.is_symlink())
+                else:
+                    self.assertNotEqual(result.returncode, 0, result)
+                    self.assertTrue(link.is_symlink())
+                    self.assertEqual(os.readlink(link), target)
 
     def test_legacy_webtui_package_retirement_is_exact_and_fail_closed(self) -> None:
         helper = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
@@ -1701,10 +1870,147 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         self.assertLess(
             workflow_preremove.index("syswarden_retire_legacy_webtui / || exit 1"),
-            workflow_preremove.index("# RPM Uninstall"),
+            workflow_preremove.index(
+                "if [ -f /etc/alpine-release ]; then manager=openrc"
+            ),
+        )
+        self.assertLess(
+            workflow_preremove.index(
+                'case "${APK_PACKAGE:-}:${APK_SCRIPT:-}:${1:-}" in'
+            ),
+            workflow_preremove.index("syswarden_retire_legacy_webtui / || exit 1"),
         )
         for source in (self.workflow, LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")):
             self.assertIn("scripts/ci/package_webtui_retirement.sh", source)
+
+    def test_preremove_argument_matrix_retires_only_true_deletion(self) -> None:
+        scripts = (
+            ("workflow", self.script("prerm.sh")),
+            ("local", self.local_build_script("prerm.sh")),
+        )
+        matrix = (
+            ("rpm-final-erase", "0", None, None, 0, "retired\n"),
+            ("rpm-upgrade", "1", None, None, 0, ""),
+            ("rpm-downgrade", "1", None, None, 0, ""),
+            ("rpm-multiple-installed", "2", None, None, 0, ""),
+            ("rpm-malformed-count", "1x", None, None, 1, ""),
+            ("rpm-negative-count", "-1", None, None, 1, ""),
+            ("rpm-missing-count", "", None, None, 1, ""),
+            ("deb-remove", "remove", None, None, 0, "retired\n"),
+            ("deb-purge", "purge", None, None, 0, "retired\n"),
+            ("deb-upgrade", "upgrade", None, None, 0, ""),
+            ("deb-downgrade", "downgrade", None, None, 0, ""),
+            ("deb-failed-upgrade", "failed-upgrade", None, None, 0, ""),
+            ("deb-reinstall", "reinstall", None, None, 0, ""),
+            ("deb-deconfigure", "deconfigure", None, None, 0, ""),
+            ("deb-ambiguous", "ambiguous", None, None, 1, ""),
+            ("ambiguous-canonical-version", "4.3.0", None, None, 1, ""),
+            (
+                "apk-legacy-pre-deinstall-version",
+                "4.3.0",
+                None,
+                None,
+                0,
+                "retired\n",
+            ),
+            (
+                "apk-pre-deinstall-version",
+                "4.3.0",
+                "syswarden",
+                "pre-deinstall",
+                0,
+                "retired\n",
+            ),
+            (
+                "apk-pre-deinstall-later-version",
+                "10.0.14",
+                "syswarden",
+                "pre-deinstall",
+                0,
+                "retired\n",
+            ),
+            ("apk-missing-version", "", "syswarden", "pre-deinstall", 1, ""),
+            (
+                "apk-leading-zero-version",
+                "4.03.0",
+                "syswarden",
+                "pre-deinstall",
+                1,
+                "",
+            ),
+            (
+                "apk-release-suffix",
+                "4.3.0-r0",
+                "syswarden",
+                "pre-deinstall",
+                1,
+                "",
+            ),
+            (
+                "apk-multiline-version",
+                "4.3.0\nambiguous",
+                "syswarden",
+                "pre-deinstall",
+                1,
+                "",
+            ),
+            (
+                "apk-wrong-package",
+                "4.3.0",
+                "not-syswarden",
+                "pre-deinstall",
+                1,
+                "",
+            ),
+            (
+                "apk-transition-hook",
+                "4.3.0",
+                "syswarden",
+                "pre-upgrade",
+                1,
+                "",
+            ),
+        )
+        for source_name, script in scripts:
+            start = script.index(
+                'case "${APK_PACKAGE:-}:${APK_SCRIPT:-}:${1:-}" in'
+            )
+            end = script.index("\nsyswarden_managed_cron_line() {", start)
+            gate = script[start:end].replace(
+                "[ -f /etc/alpine-release ]",
+                '[ "${SYSWARDEN_TEST_ALPINE:-}" = 1 ]',
+            )
+            for case_name, action, apk_package, apk_script, returncode, stdout in matrix:
+                with self.subTest(source=source_name, case=case_name):
+                    environment = {**os.environ}
+                    environment.pop("APK_PACKAGE", None)
+                    environment.pop("APK_SCRIPT", None)
+                    if apk_package is not None:
+                        environment["APK_PACKAGE"] = apk_package
+                    if apk_script is not None:
+                        environment["APK_SCRIPT"] = apk_script
+                    if case_name.startswith("apk-legacy-"):
+                        environment["SYSWARDEN_TEST_ALPINE"] = "1"
+                    else:
+                        environment.pop("SYSWARDEN_TEST_ALPINE", None)
+                    result = subprocess.run(
+                        [
+                            "/bin/sh",
+                            "-c",
+                            "set -u\n"
+                            "syswarden_retire_legacy_webtui() { "
+                            "printf '%s\\n' retired; }\n"
+                            + gate,
+                            "prerm-argument-contract",
+                            action,
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                    )
+                    self.assertEqual(result.returncode, returncode, result)
+                    self.assertEqual(result.stdout, stdout, result)
 
     def test_workflow_and_local_maintainer_hooks_are_byte_and_order_identical(self) -> None:
         for name in ("preinst.sh", "postinst.sh", "prerm.sh", "postrm.sh"):
@@ -1748,8 +2054,17 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         self.assertNotIn("grep -v 'syswarden-cli'", preremove)
         postremove = self.script("postrm.sh")
-        for state in ('"0"', '"remove"', '"purge"'):
-            self.assertIn(f'[ "$1" = {state} ]', preremove)
+        gate = preremove[
+            preremove.index(
+                'case "${APK_PACKAGE:-}:${APK_SCRIPT:-}:${1:-}" in'
+            ) : preremove.index("\nsyswarden_managed_cron_line() {")
+        ]
+        self.assertIn("::0|::remove|::purge)", gate)
+        self.assertIn("::*grade|::reinstall|::deconfigure) exit;;", gate)
+        self.assertIn("syswarden:pre-deinstall:*|::*.*.*)", gate)
+        self.assertIn("^[1-9][0-9]*", gate)
+        self.assertIn("*) exit 1;;", gate)
+        self.assertIn("[ -f /etc/alpine-release ]", gate)
         for service in (
             "syswarden-core.service",
             "syswarden-firewall.service",
@@ -1761,7 +2076,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "rc-service syswarden-webtui stop",
             "rc-update del syswarden-webtui default",
         ):
-            native_removal = preremove[preremove.index("# RPM Uninstall") :]
+            native_removal = preremove[
+                preremove.index(
+                    "if [ -f /etc/alpine-release ]; then manager=openrc"
+                ) :
+            ]
             self.assertNotIn(broad_retired_manager_action, native_removal)
         for table in (
             "netdev syswarden_hw_drop",
@@ -2478,6 +2797,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
             self.assertEqual(local.count(f'-d "{dependency}"'), 1, dependency)
         self.assertEqual(self.workflow.count("            - procps-ng\n"), 2)
         self.assertEqual(local.count("  - procps-ng\n"), 1)
+        self.assertEqual(self.workflow.count("            - shadow\n"), 2)
+        self.assertEqual(local.count("  - shadow\n"), 1)
 
     def test_runtime_dependency_sets_match_all_package_generators_and_lab(self) -> None:
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
@@ -2857,6 +3178,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
 
     def test_package_formats_use_their_exact_linux_binary_variants(self) -> None:
         build_script = BUILD_SCRIPT.read_text(encoding="utf-8")
+        local_builder = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("BuildMode = 'pie'", build_script)
         self.assertNotIn("-ldflags=-s -w -d", build_script)
         self.assertIn("validate_linux_pie", self.workflow)
@@ -2884,6 +3206,23 @@ class PackageLifecycleContractTests(unittest.TestCase):
         for apk_root in ("STAGING_APK_AMD64", "STAGING_APK_ARM64"):
             with self.subTest(apk_root=apk_root):
                 self.assertIn(f'- src: "${{{apk_root}}}/opt"', self.workflow)
+
+        static_build = local_builder[
+            local_builder.index('echo " -> Compiling static Alpine ${module}..."') :
+            local_builder.index("\ndone\n", local_builder.index('echo " -> Compiling static Alpine ${module}..."'))
+        ]
+        self.assertIn('dist/bin-apk/${module}', static_build)
+        self.assertIn("-mod=readonly -ldflags", static_build)
+        self.assertNotIn("-buildmode=pie", static_build)
+        self.assertIn("validate_static_apk_binary()", local_builder)
+        self.assertIn('[ "${elf_type}" = "EXEC" ]', local_builder)
+        self.assertIn("CGO_ENABLED=0", local_builder)
+        self.assertIn("staging-apk/opt/syswarden/bin/syswarden-cli --help", local_builder)
+        self.assertEqual(local_builder.count("package_stage_gate.py"), 2)
+        self.assertIn("linux --root staging-apk", local_builder)
+        self.assertIn('- src: "./staging-apk/opt"', local_builder)
+        self.assertIn('- src: "./staging-apk/usr"', local_builder)
+        self.assertNotIn('- src: "./staging/opt"\n    dst: "/opt"', local_builder)
 
     def test_universal_build_inventory_matches_linux_only_matrix(self) -> None:
         build_script = BUILD_SCRIPT.read_text(encoding="utf-8")

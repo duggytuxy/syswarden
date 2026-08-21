@@ -465,6 +465,28 @@ func applySSHHardeningOn(host hardeningHost) error {
 }
 
 func cisSSHSignalPresent(host hardeningHost, logical string) (bool, error) {
+	if logical == "/sbin/sshd" || logical == "/usr/sbin/sshd" ||
+		logical == "/usr/local/sbin/sshd" || strings.HasPrefix(logical, "/lib/") {
+		resolved, name, exists, err := resolveCISSSHSignalDirectory(host, logical)
+		if err != nil || !exists {
+			return false, err
+		}
+		present, probeErr := cisSSHSignalEntryPresent(host, resolved.logical, name)
+		aliasErr := reattestCISSSHDirectoryAliases(host, resolved)
+		if probeErr != nil || aliasErr != nil {
+			return false, errors.Join(probeErr, aliasErr)
+		}
+		after, probeErr := cisSSHSignalEntryPresent(host, resolved.logical, name)
+		aliasErr = reattestCISSSHDirectoryAliases(host, resolved)
+		if probeErr != nil || aliasErr != nil || after != present {
+			return false, errors.Join(
+				fmt.Errorf("SSH signal changed while reattesting merged-usr aliases: %s", logical),
+				probeErr,
+				aliasErr,
+			)
+		}
+		return present, nil
+	}
 	if logical != "/etc/ssh/sshd_config.d" {
 		return host.pathEntryExists(logical)
 	}
@@ -520,6 +542,191 @@ func cisSSHSignalPresent(host hardeningHost, logical string) (bool, error) {
 		return false, fmt.Errorf("SSH drop-in directory changed while inspecting")
 	}
 	return len(names) != 0, nil
+}
+
+func resolveCISSSHSignalDirectory(host hardeningHost, logical string) (cisSSHDirectoryResolution, string, bool, error) {
+	directory := filepath.Dir(logical)
+	name := filepath.Base(logical)
+	aliasRoot := directory
+	remainder := ""
+	if strings.HasPrefix(logical, "/lib/") {
+		aliasRoot = "/lib"
+		remainder = strings.TrimPrefix(directory, "/lib")
+	}
+	resolved, exists, err := resolveCISSSHMergedUsrDirectory(host, aliasRoot)
+	if err != nil || !exists {
+		return cisSSHDirectoryResolution{}, "", false, err
+	}
+	if remainder != "" {
+		resolved.logical = filepath.Join(resolved.logical, strings.TrimPrefix(remainder, "/"))
+	}
+	return resolved, name, true, nil
+}
+
+func reattestCISSSHDirectoryAliases(host hardeningHost, resolved cisSSHDirectoryResolution) error {
+	for _, alias := range resolved.aliases {
+		current, err := inspectCISSSHDirectoryNode(host, alias.logical)
+		if err != nil {
+			return err
+		}
+		if !current.exists || current.real || current.identity == nil ||
+			!os.SameFile(alias.identity, current.identity) || current.identity.Mode() != alias.identity.Mode() ||
+			current.symlinkPath != alias.target {
+			return fmt.Errorf("SSH merged-usr alias changed after signal inspection: %s", alias.logical)
+		}
+	}
+	return nil
+}
+
+type cisSSHDirectoryNode struct {
+	exists      bool
+	real        bool
+	symlinkPath string
+	identity    fs.FileInfo
+}
+
+func inspectCISSSHDirectoryNode(host hardeningHost, logical string) (cisSSHDirectoryNode, error) {
+	physical, err := host.path(logical)
+	if err != nil {
+		return cisSSHDirectoryNode{}, err
+	}
+	if err := host.verifyHardeningDirectoryChain(filepath.Dir(physical)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return cisSSHDirectoryNode{}, nil
+		}
+		return cisSSHDirectoryNode{}, err
+	}
+	info, err := os.Lstat(physical)
+	if errors.Is(err, fs.ErrNotExist) {
+		return cisSSHDirectoryNode{}, nil
+	}
+	if err != nil {
+		return cisSSHDirectoryNode{}, err
+	}
+	if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+		if err := validateHardeningDirectoryInfo(physical, info, host.expectedRootUID, host.expectedRootGID); err != nil {
+			return cisSSHDirectoryNode{}, err
+		}
+		root, err := os.OpenRoot(physical)
+		if err != nil {
+			return cisSSHDirectoryNode{}, err
+		}
+		opened, statErr := root.Stat(".")
+		closeErr := root.Close()
+		if statErr != nil || !os.SameFile(info, opened) || opened.Mode() != info.Mode() {
+			return cisSSHDirectoryNode{}, errors.Join(fmt.Errorf("SSH merged-usr directory changed while opening: %s", logical), statErr, closeErr)
+		}
+		if closeErr != nil {
+			return cisSSHDirectoryNode{}, closeErr
+		}
+		return cisSSHDirectoryNode{exists: true, real: true}, nil
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return cisSSHDirectoryNode{}, fmt.Errorf("SSH merged-usr path is neither a real directory nor an approved alias: %s", logical)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 || int(stat.Uid) != host.expectedRootUID || int(stat.Gid) != host.expectedRootGID {
+		return cisSSHDirectoryNode{}, fmt.Errorf("SSH merged-usr alias has unsafe ownership or links: %s", logical)
+	}
+	target, err := os.Readlink(physical)
+	if err != nil {
+		return cisSSHDirectoryNode{}, err
+	}
+	after, err := os.Lstat(physical)
+	if err != nil || !os.SameFile(info, after) || after.Mode() != info.Mode() {
+		return cisSSHDirectoryNode{}, errors.Join(fmt.Errorf("SSH merged-usr alias changed during attestation: %s", logical), err)
+	}
+	afterTarget, err := os.Readlink(physical)
+	if err != nil || afterTarget != target {
+		return cisSSHDirectoryNode{}, errors.Join(fmt.Errorf("SSH merged-usr alias target changed during attestation: %s", logical), err)
+	}
+	return cisSSHDirectoryNode{exists: true, symlinkPath: target, identity: info}, nil
+}
+
+type cisSSHDirectoryAlias struct {
+	logical  string
+	target   string
+	identity fs.FileInfo
+}
+
+type cisSSHDirectoryResolution struct {
+	logical string
+	aliases []cisSSHDirectoryAlias
+}
+
+func resolveCISSSHMergedUsrDirectory(host hardeningHost, logical string) (cisSSHDirectoryResolution, bool, error) {
+	node, err := inspectCISSSHDirectoryNode(host, logical)
+	if err != nil || !node.exists {
+		return cisSSHDirectoryResolution{}, false, err
+	}
+	if node.real {
+		return cisSSHDirectoryResolution{logical: logical}, true, nil
+	}
+	alias := cisSSHDirectoryAlias{logical: logical, target: node.symlinkPath, identity: node.identity}
+	var next string
+	switch logical {
+	case "/lib":
+		if node.symlinkPath != "usr/lib" && node.symlinkPath != "/usr/lib" {
+			return cisSSHDirectoryResolution{}, false, fmt.Errorf("/lib has untrusted merged-usr alias target %q", node.symlinkPath)
+		}
+		next = "/usr/lib"
+	case "/sbin":
+		if node.symlinkPath != "usr/sbin" && node.symlinkPath != "/usr/sbin" {
+			return cisSSHDirectoryResolution{}, false, fmt.Errorf("/sbin has untrusted merged-usr alias target %q", node.symlinkPath)
+		}
+		next = "/usr/sbin"
+	case "/usr/sbin":
+		if node.symlinkPath != "bin" {
+			return cisSSHDirectoryResolution{}, false, fmt.Errorf("/usr/sbin has untrusted Fedora alias target %q", node.symlinkPath)
+		}
+		next = "/usr/bin"
+	case "/usr/local/sbin":
+		if node.symlinkPath != "bin" {
+			return cisSSHDirectoryResolution{}, false, fmt.Errorf("/usr/local/sbin has untrusted Fedora alias target %q", node.symlinkPath)
+		}
+		next = "/usr/local/bin"
+	default:
+		return cisSSHDirectoryResolution{}, false, fmt.Errorf("SSH directory alias is not approved: %s", logical)
+	}
+	resolved, exists, err := resolveCISSSHMergedUsrDirectory(host, next)
+	if err != nil || !exists {
+		return cisSSHDirectoryResolution{}, exists, err
+	}
+	resolved.aliases = append([]cisSSHDirectoryAlias{alias}, resolved.aliases...)
+	return resolved, true, nil
+}
+
+func cisSSHSignalEntryPresent(host hardeningHost, directoryLogical, name string) (bool, error) {
+	if name == "" || filepath.Base(name) != name || strings.ContainsAny(name, `/\`) {
+		return false, fmt.Errorf("SSH signal name is invalid")
+	}
+	physical, err := host.path(directoryLogical)
+	if err != nil {
+		return false, err
+	}
+	if err := host.verifyHardeningDirectoryChain(physical); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	root, err := os.OpenRoot(physical)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = root.Close() }()
+	before, err := root.Lstat(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	after, err := root.Lstat(name)
+	if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+		return false, errors.Join(fmt.Errorf("SSH signal changed during attestation: %s/%s", directoryLogical, name), err)
+	}
+	return true, nil
 }
 
 func normalizeCISSSHConfiguration(content string) (string, error) {
@@ -820,14 +1027,16 @@ func applyAutomaticUpdatePolicy(
 }
 
 type offlineAutomaticUpdateTimerSnapshot struct {
-	name           string
-	sourceLogical  string
-	sourceSnapshot hardeningFileSnapshot
-	linkLogical    string
-	linkTarget     string
-	linkExisted    bool
-	linkCreated    bool
-	publishedLink  fs.FileInfo
+	name                 string
+	sourceLogical        string
+	sourceSnapshot       hardeningFileSnapshot
+	linkLogical          string
+	linkTarget           string
+	equivalentLinkTarget string
+	libAliasIdentity     fs.FileInfo
+	linkExisted          bool
+	linkCreated          bool
+	publishedLink        fs.FileInfo
 }
 
 func offlineAutomaticUpdateUnitAt(host hardeningHost, logical string) (hardeningFileSnapshot, bool, error) {
@@ -845,44 +1054,65 @@ func offlineAutomaticUpdateUnitAt(host hardeningHost, logical string) (hardening
 	return snapshot, true, nil
 }
 
-func trustedLibAliasToUsr(host hardeningHost) (bool, bool, error) {
+type trustedLibLayout struct {
+	real     bool
+	alias    bool
+	identity fs.FileInfo
+}
+
+func trustedLibAliasToUsr(host hardeningHost) (trustedLibLayout, error) {
 	physical, err := host.path("/lib")
 	if err != nil {
-		return false, false, err
+		return trustedLibLayout{}, err
 	}
 	if err := host.verifyHardeningDirectoryChain(filepath.Dir(physical)); err != nil {
-		return false, false, err
+		return trustedLibLayout{}, err
 	}
 	info, err := os.Lstat(physical)
 	if errors.Is(err, fs.ErrNotExist) {
-		return false, false, nil
+		return trustedLibLayout{}, nil
 	}
 	if err != nil {
-		return false, false, err
+		return trustedLibLayout{}, err
 	}
 	if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-		return true, false, nil
+		if err := validateHardeningDirectoryInfo(physical, info, host.expectedRootUID, host.expectedRootGID); err != nil {
+			return trustedLibLayout{}, err
+		}
+		root, err := os.OpenRoot(physical)
+		if err != nil {
+			return trustedLibLayout{}, err
+		}
+		opened, statErr := root.Stat(".")
+		closeErr := root.Close()
+		if statErr != nil || !os.SameFile(info, opened) || opened.Mode() != info.Mode() {
+			return trustedLibLayout{}, errors.Join(fmt.Errorf("/lib changed while opening"), statErr, closeErr)
+		}
+		if closeErr != nil {
+			return trustedLibLayout{}, closeErr
+		}
+		return trustedLibLayout{real: true, identity: info}, nil
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		return false, false, fmt.Errorf("/lib is neither a real directory nor the trusted usr/lib alias")
+		return trustedLibLayout{}, fmt.Errorf("/lib is neither a real directory nor the trusted usr/lib alias")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Nlink != 1 || int(stat.Uid) != host.expectedRootUID || int(stat.Gid) != host.expectedRootGID {
-		return false, false, fmt.Errorf("/lib alias has unsafe ownership or links")
+		return trustedLibLayout{}, fmt.Errorf("/lib alias has unsafe ownership or links")
 	}
 	target, err := os.Readlink(physical)
 	if err != nil || (target != "usr/lib" && target != "/usr/lib") {
-		return false, false, fmt.Errorf("/lib has an untrusted symlink target %q", target)
+		return trustedLibLayout{}, fmt.Errorf("/lib has an untrusted symlink target %q", target)
 	}
 	after, err := os.Lstat(physical)
 	if err != nil || !os.SameFile(info, after) || after.Mode() != info.Mode() {
-		return false, false, fmt.Errorf("/lib alias changed during attestation")
+		return trustedLibLayout{}, fmt.Errorf("/lib alias changed during attestation")
 	}
 	afterTarget, err := os.Readlink(physical)
 	if err != nil || afterTarget != target {
-		return false, false, fmt.Errorf("/lib alias target changed during attestation")
+		return trustedLibLayout{}, fmt.Errorf("/lib alias target changed during attestation")
 	}
-	return false, true, nil
+	return trustedLibLayout{alias: true, identity: info}, nil
 }
 
 func resolveOfflineAutomaticUpdateTimer(host hardeningHost, timer string) (offlineAutomaticUpdateTimerSnapshot, error) {
@@ -894,20 +1124,20 @@ func resolveOfflineAutomaticUpdateTimer(host hardeningHost, timer string) (offli
 	if err != nil {
 		return offlineAutomaticUpdateTimerSnapshot{}, err
 	}
-	libReal, libAlias, err := trustedLibAliasToUsr(host)
+	libLayout, err := trustedLibAliasToUsr(host)
 	if err != nil {
 		return offlineAutomaticUpdateTimerSnapshot{}, err
 	}
 	libLogical := "/lib/systemd/system/" + timer
 	var libSnapshot hardeningFileSnapshot
 	libExists := false
-	if libReal {
+	if libLayout.real {
 		libSnapshot, libExists, err = offlineAutomaticUpdateUnitAt(host, libLogical)
 		if err != nil {
 			return offlineAutomaticUpdateTimerSnapshot{}, err
 		}
 	}
-	if libAlias && !usrExists {
+	if libLayout.alias && !usrExists {
 		return offlineAutomaticUpdateTimerSnapshot{}, fmt.Errorf("automatic-update timer source is absent through the trusted /lib alias: %s", timer)
 	}
 	if usrExists && libExists && !os.SameFile(usrSnapshot.identity.info, libSnapshot.identity.info) {
@@ -922,13 +1152,63 @@ func resolveOfflineAutomaticUpdateTimer(host hardeningHost, timer string) (offli
 	if !usrExists && !libExists {
 		return offlineAutomaticUpdateTimerSnapshot{}, fmt.Errorf("automatic-update timer source unit is absent: %s", timer)
 	}
-	return offlineAutomaticUpdateTimerSnapshot{
+	result := offlineAutomaticUpdateTimerSnapshot{
 		name:           timer,
 		sourceLogical:  sourceLogical,
 		sourceSnapshot: sourceSnapshot,
 		linkLogical:    "/etc/systemd/system/timers.target.wants/" + timer,
 		linkTarget:     sourceLogical,
-	}, nil
+	}
+	if libLayout.alias {
+		result.equivalentLinkTarget = libLogical
+		result.libAliasIdentity = libLayout.identity
+		if err := attestOfflineAutomaticUpdateEquivalentTarget(host, result); err != nil {
+			return offlineAutomaticUpdateTimerSnapshot{}, err
+		}
+	}
+	return result, nil
+}
+
+func attestOfflineAutomaticUpdateEquivalentTarget(host hardeningHost, snapshot offlineAutomaticUpdateTimerSnapshot) error {
+	if snapshot.equivalentLinkTarget == "" || snapshot.libAliasIdentity == nil {
+		return fmt.Errorf("automatic-update equivalent /lib target lacks an attested alias")
+	}
+	before, err := trustedLibAliasToUsr(host)
+	if err != nil {
+		return err
+	}
+	if !before.alias || before.identity == nil || !os.SameFile(snapshot.libAliasIdentity, before.identity) {
+		return fmt.Errorf("automatic-update /lib alias changed after source resolution")
+	}
+	root, err := os.OpenRoot(host.root)
+	if err != nil {
+		return err
+	}
+	resolvedAliasTarget := "/usr/lib/" + strings.TrimPrefix(snapshot.equivalentLinkTarget, "/lib/")
+	libInfo, statErr := root.Stat(strings.TrimPrefix(resolvedAliasTarget, "/"))
+	closeErr := root.Close()
+	if statErr != nil {
+		return errors.Join(fmt.Errorf("inspect automatic-update unit through /lib alias: %w", statErr), closeErr)
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	current, err := host.snapshot(snapshot.sourceLogical)
+	if err != nil {
+		return err
+	}
+	if !current.existed || !sameSecurityFileState(snapshot.sourceSnapshot.identity, current.identity.info, current.identity.digest) ||
+		!os.SameFile(libInfo, current.identity.info) {
+		return fmt.Errorf("automatic-update /lib and /usr/lib unit sources are not the same inode")
+	}
+	after, err := trustedLibAliasToUsr(host)
+	if err != nil {
+		return err
+	}
+	if !after.alias || after.identity == nil || !os.SameFile(before.identity, after.identity) {
+		return fmt.Errorf("automatic-update /lib alias changed during source attestation")
+	}
+	return nil
 }
 
 func attestOfflineAutomaticUpdateSource(host hardeningHost, snapshot offlineAutomaticUpdateTimerSnapshot) error {
@@ -1042,7 +1322,11 @@ func prepareOfflineAutomaticUpdateLinkParent(host hardeningHost, logical string)
 	return created, nil
 }
 
-func removeCreatedAutomaticUpdateDirectories(host hardeningHost, created []offlineAutomaticUpdateCreatedDirectory) error {
+func removeCreatedAutomaticUpdateDirectoriesUsing(
+	host hardeningHost,
+	created []offlineAutomaticUpdateCreatedDirectory,
+	rename hardeningArtifactRename,
+) error {
 	var failures []error
 	for index := len(created) - 1; index >= 0; index-- {
 		record := created[index]
@@ -1055,32 +1339,36 @@ func removeCreatedAutomaticUpdateDirectories(host hardeningHost, created []offli
 			failures = append(failures, fmt.Errorf("open automatic-update directory parent %s: %w", record.parentPhysical, err))
 			continue
 		}
-		info, inspectErr := root.Lstat(record.name)
-		if errors.Is(inspectErr, fs.ErrNotExist) {
-			_ = root.Close()
-			continue
+		attest := func(root *os.Root, name string) (fs.FileInfo, error) {
+			info, inspectErr := root.Lstat(name)
+			if inspectErr != nil {
+				return nil, inspectErr
+			}
+			if !sameHardeningDirectoryIdentity(record.identity, info) {
+				return info, fmt.Errorf("created automatic-update directory identity changed: %s", filepath.Join(record.parentPhysical, record.name))
+			}
+			return info, nil
 		}
-		if inspectErr != nil || !os.SameFile(record.identity, info) || !info.IsDir() {
-			failures = append(failures, errors.Join(fmt.Errorf("created automatic-update directory identity changed: %s", filepath.Join(record.parentPhysical, record.name)), inspectErr))
-			_ = root.Close()
-			continue
-		}
-		if err := root.Remove(record.name); err != nil {
-			failures = append(failures, fmt.Errorf("remove automatic-update directory %s: %w", filepath.Join(record.parentPhysical, record.name), err))
-			_ = root.Close()
-			continue
-		}
-		if host.directorySync == nil {
-			err = fmt.Errorf("directory sync operation is unavailable")
-		} else {
-			err = host.directorySync(root)
-		}
+		err = quarantineAndRemoveHardeningArtifactUsing(
+			root, record.name, true, unix.AT_REMOVEDIR, attest, rename, host.directorySync,
+		)
 		closeErr := root.Close()
 		if err != nil || closeErr != nil {
-			failures = append(failures, errors.Join(err, closeErr))
+			var removalErr error
+			if err != nil {
+				removalErr = fmt.Errorf("remove automatic-update directory %s: %w", filepath.Join(record.parentPhysical, record.name), err)
+			}
+			failures = append(failures, errors.Join(
+				removalErr,
+				closeErr,
+			))
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func removeCreatedAutomaticUpdateDirectories(host hardeningHost, created []offlineAutomaticUpdateCreatedDirectory) error {
+	return removeCreatedAutomaticUpdateDirectoriesUsing(host, created, unix.Renameat2)
 }
 
 func inspectOfflineAutomaticUpdateLink(host hardeningHost, snapshot offlineAutomaticUpdateTimerSnapshot) (bool, error) {
@@ -1096,31 +1384,49 @@ func inspectOfflineAutomaticUpdateLink(host hardeningHost, snapshot offlineAutom
 		return false, err
 	}
 	defer func() { _ = root.Close() }()
-	info, err := root.Lstat(target.name)
+	_, err = inspectOfflineAutomaticUpdateLinkEntry(host, snapshot, root, target.name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	return true, nil
+}
+
+func inspectOfflineAutomaticUpdateLinkEntry(
+	host hardeningHost,
+	snapshot offlineAutomaticUpdateTimerSnapshot,
+	root *os.Root,
+	name string,
+) (fs.FileInfo, error) {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if info.Mode()&os.ModeSymlink == 0 || !ok || stat.Nlink != 1 ||
 		int(stat.Uid) != host.expectedRootUID || int(stat.Gid) != host.expectedRootGID {
-		return false, fmt.Errorf("automatic-update enablement link has unsafe metadata: %s", snapshot.linkLogical)
+		return info, fmt.Errorf("automatic-update enablement link has unsafe metadata: %s", snapshot.linkLogical)
 	}
-	linkTarget, err := root.Readlink(target.name)
-	if err != nil || linkTarget != snapshot.linkTarget {
-		return false, fmt.Errorf("automatic-update enablement link has unexpected target %q: %s", linkTarget, snapshot.linkLogical)
+	linkTarget, err := root.Readlink(name)
+	if err != nil || (linkTarget != snapshot.linkTarget && linkTarget != snapshot.equivalentLinkTarget) {
+		return info, fmt.Errorf("automatic-update enablement link has unexpected target %q: %s", linkTarget, snapshot.linkLogical)
 	}
-	after, err := root.Lstat(target.name)
+	after, err := root.Lstat(name)
 	if err != nil || !os.SameFile(info, after) || after.Mode() != info.Mode() {
-		return false, fmt.Errorf("automatic-update enablement link changed during attestation: %s", snapshot.linkLogical)
+		return info, fmt.Errorf("automatic-update enablement link changed during attestation: %s", snapshot.linkLogical)
 	}
-	afterTarget, err := root.Readlink(target.name)
+	afterTarget, err := root.Readlink(name)
 	if err != nil || afterTarget != linkTarget {
-		return false, fmt.Errorf("automatic-update enablement link target changed during attestation: %s", snapshot.linkLogical)
+		return after, fmt.Errorf("automatic-update enablement link target changed during attestation: %s", snapshot.linkLogical)
 	}
-	return true, nil
+	if linkTarget == snapshot.equivalentLinkTarget {
+		if err := attestOfflineAutomaticUpdateEquivalentTarget(host, snapshot); err != nil {
+			return after, err
+		}
+	}
+	return after, nil
 }
 
 func publishOfflineAutomaticUpdateLink(host hardeningHost, snapshot *offlineAutomaticUpdateTimerSnapshot) error {
@@ -1189,7 +1495,11 @@ func publishOfflineAutomaticUpdateLink(host hardeningHost, snapshot *offlineAuto
 	return attestOfflineAutomaticUpdateSource(host, *snapshot)
 }
 
-func restoreOfflineAutomaticUpdateLink(host hardeningHost, snapshot offlineAutomaticUpdateTimerSnapshot) error {
+func restoreOfflineAutomaticUpdateLinkUsing(
+	host hardeningHost,
+	snapshot offlineAutomaticUpdateTimerSnapshot,
+	rename hardeningArtifactRename,
+) error {
 	exists, err := inspectOfflineAutomaticUpdateLink(host, snapshot)
 	if err != nil {
 		return err
@@ -1215,27 +1525,30 @@ func restoreOfflineAutomaticUpdateLink(host hardeningHost, snapshot offlineAutom
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	current, err := root.Lstat(target.name)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
+	attest := func(root *os.Root, name string) (fs.FileInfo, error) {
+		current, inspectErr := inspectOfflineAutomaticUpdateLinkEntry(host, snapshot, root, name)
+		if inspectErr != nil {
+			return current, inspectErr
+		}
+		if snapshot.publishedLink != nil && !sameHardeningArtifactIdentity(snapshot.publishedLink, current) {
+			return current, fmt.Errorf("automatic-update enablement link identity changed before rollback: %s", snapshot.linkLogical)
+		}
+		return current, nil
 	}
-	if err != nil || (snapshot.publishedLink != nil && !os.SameFile(snapshot.publishedLink, current)) {
-		return errors.Join(fmt.Errorf("automatic-update enablement link identity changed before rollback: %s", snapshot.linkLogical), err)
-	}
-	if err := root.Remove(target.name); err != nil {
+	if err := quarantineAndRemoveHardeningArtifactUsing(
+		root, target.name, true, 0, attest, rename, host.directorySync,
+	); err != nil {
 		return fmt.Errorf("remove automatic-update enablement link: %w", err)
-	}
-	if host.directorySync == nil {
-		return fmt.Errorf("directory sync operation is unavailable")
-	}
-	if err := host.directorySync(root); err != nil {
-		return fmt.Errorf("sync automatic-update enablement rollback: %w", err)
 	}
 	exists, err = inspectOfflineAutomaticUpdateLink(host, snapshot)
 	if err != nil || exists {
 		return errors.Join(fmt.Errorf("automatic-update enablement rollback attestation failed: %s", snapshot.linkLogical), err)
 	}
 	return nil
+}
+
+func restoreOfflineAutomaticUpdateLink(host hardeningHost, snapshot offlineAutomaticUpdateTimerSnapshot) error {
+	return restoreOfflineAutomaticUpdateLinkUsing(host, snapshot, unix.Renameat2)
 }
 
 func applyOfflineAutomaticUpdatePolicy(host hardeningHost, logical string, configSnapshot hardeningFileSnapshot, content []byte, timers ...string) error {

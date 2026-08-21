@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func withServiceRuntimeTestState(t *testing.T, packageInstall string) string {
@@ -252,6 +254,274 @@ func TestPublishServiceArtifactsRollsBackOnlyNewArtifacts(t *testing.T) {
 	content := mustReadTestFile(t, modified)
 	if string(content) != "operator content\n" {
 		t.Fatalf("pre-existing modified artifact changed: %q", content)
+	}
+}
+
+func withSystemdPublicationTestPaths(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	unitDirectory := filepath.Join(root, "system")
+	wantsDirectory := filepath.Join(root, "multi-user.target.wants")
+	oldUnitDirectory := serviceSystemdUnitDir
+	oldWantsDirectory := serviceSystemdWantsDir
+	serviceSystemdUnitDir = unitDirectory
+	serviceSystemdWantsDir = wantsDirectory
+	t.Cleanup(func() {
+		serviceSystemdUnitDir = oldUnitDirectory
+		serviceSystemdWantsDir = oldWantsDirectory
+	})
+	return unitDirectory, wantsDirectory
+}
+
+func seedLegacySystemdPublication(t *testing.T, unitDirectory, wantsDirectory string) {
+	t.Helper()
+	mustWriteFile(t, filepath.Join(unitDirectory, "syswarden-core.service"), systemdCoreService)
+	mustWriteFile(t, filepath.Join(unitDirectory, "syswarden-firewall.service"), systemdFirewallService)
+	mustMkdirAll(t, wantsDirectory)
+	if err := os.Symlink(
+		"/etc/systemd/system/syswarden-core.service",
+		filepath.Join(wantsDirectory, "syswarden-core.service"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(
+		"/etc/systemd/system/syswarden-firewall.service",
+		filepath.Join(wantsDirectory, "syswarden-firewall.service"),
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertServiceEnablementTarget(t *testing.T, path, expected string) {
+	t.Helper()
+	target, err := os.Readlink(path)
+	if err != nil || target != expected {
+		t.Fatalf("service enablement %s = %q, %v; want %q", path, target, err, expected)
+	}
+}
+
+func TestPublishSystemdServicesPreservesExactV4028Enablements(t *testing.T) {
+	unitDirectory, wantsDirectory := withSystemdPublicationTestPaths(t)
+	seedLegacySystemdPublication(t, unitDirectory, wantsDirectory)
+	corePath := filepath.Join(wantsDirectory, "syswarden-core.service")
+	firewallPath := filepath.Join(wantsDirectory, "syswarden-firewall.service")
+	coreBefore, err := os.Lstat(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firewallBefore, err := os.Lstat(firewallPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := publishSystemdServices(); err != nil {
+		t.Fatal(err)
+	}
+	assertServiceEnablementTarget(t, corePath, "/etc/systemd/system/syswarden-core.service")
+	assertServiceEnablementTarget(t, firewallPath, "/etc/systemd/system/syswarden-firewall.service")
+	coreAfter, err := os.Lstat(corePath)
+	if err != nil || !os.SameFile(coreBefore, coreAfter) {
+		t.Fatalf("legacy core enablement was mutated: %v", err)
+	}
+	firewallAfter, err := os.Lstat(firewallPath)
+	if err != nil || !os.SameFile(firewallBefore, firewallAfter) {
+		t.Fatalf("legacy firewall enablement was mutated: %v", err)
+	}
+	entries, err := os.ReadDir(wantsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("migration left unexpected enablement artifacts: %v", entries)
+	}
+}
+
+func TestPublishSystemdServicesCreatesCanonicalRelativeEnablements(t *testing.T) {
+	_, wantsDirectory := withSystemdPublicationTestPaths(t)
+	if err := publishSystemdServices(); err != nil {
+		t.Fatal(err)
+	}
+	assertServiceEnablementTarget(t, filepath.Join(wantsDirectory, "syswarden-core.service"), "../syswarden-core.service")
+	assertServiceEnablementTarget(t, filepath.Join(wantsDirectory, "syswarden-firewall.service"), "../syswarden-firewall.service")
+}
+
+func TestPublishSystemdServicesRefusesOperatorEnablement(t *testing.T) {
+	unitDirectory, wantsDirectory := withSystemdPublicationTestPaths(t)
+	seedLegacySystemdPublication(t, unitDirectory, wantsDirectory)
+	coreEnablement := filepath.Join(wantsDirectory, "syswarden-core.service")
+	if err := os.Remove(coreEnablement); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../operator.service", coreEnablement); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := publishSystemdServices(); err == nil {
+		t.Fatal("operator-controlled systemd enablement was accepted")
+	}
+	assertServiceEnablementTarget(t, coreEnablement, "../operator.service")
+	assertServiceEnablementTarget(
+		t,
+		filepath.Join(wantsDirectory, "syswarden-firewall.service"),
+		"/etc/systemd/system/syswarden-firewall.service",
+	)
+}
+
+func TestPublishSystemdServicesRequiresExactLegacyUnit(t *testing.T) {
+	unitDirectory, wantsDirectory := withSystemdPublicationTestPaths(t)
+	seedLegacySystemdPublication(t, unitDirectory, wantsDirectory)
+	coreUnit := filepath.Join(unitDirectory, "syswarden-core.service")
+	if err := os.WriteFile(coreUnit, []byte("operator content\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := publishSystemdServices(); err == nil {
+		t.Fatal("legacy systemd enablement with a modified unit was accepted")
+	}
+	if content := string(mustReadTestFile(t, coreUnit)); content != "operator content\n" {
+		t.Fatalf("modified unit changed: %q", content)
+	}
+	assertServiceEnablementTarget(
+		t,
+		filepath.Join(wantsDirectory, "syswarden-core.service"),
+		"/etc/systemd/system/syswarden-core.service",
+	)
+}
+
+func TestPublishSystemdServicesRollsBackLegacyMigration(t *testing.T) {
+	unitDirectory, wantsDirectory := withSystemdPublicationTestPaths(t)
+	seedLegacySystemdPublication(t, unitDirectory, wantsDirectory)
+	firewallEnablement := filepath.Join(wantsDirectory, "syswarden-firewall.service")
+	if err := os.Remove(firewallEnablement); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../operator.service", firewallEnablement); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := publishSystemdServices(); err == nil {
+		t.Fatal("expected the second enablement to fail publication")
+	}
+	assertServiceEnablementTarget(
+		t,
+		filepath.Join(wantsDirectory, "syswarden-core.service"),
+		"/etc/systemd/system/syswarden-core.service",
+	)
+	assertServiceEnablementTarget(t, firewallEnablement, "../operator.service")
+}
+
+func TestRemoveCreatedServiceEnablementRestoresConcurrentSubstitution(t *testing.T) {
+	root := t.TempDir()
+	enablement := filepath.Join(root, "syswarden-core.service")
+	expectedTarget := "../syswarden-core.service"
+	operatorTarget := "../operator.service"
+	if err := os.Symlink(expectedTarget, enablement); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		calls++
+		if calls == 1 {
+			if err := os.Remove(enablement); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(operatorTarget, enablement); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+	}
+	err := removeCreatedServiceArtifactUsing(serviceArtifact{path: enablement, target: expectedTarget}, rename)
+	if err == nil {
+		t.Fatal("concurrent substitution was accepted")
+	}
+	assertServiceEnablementTarget(t, enablement, operatorTarget)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(enablement) {
+		t.Fatalf("concurrent substitution cleanup changed operator state: %v", entries)
+	}
+}
+
+func TestRemoveCreatedServiceFileRestoresConcurrentSubstitution(t *testing.T) {
+	root := t.TempDir()
+	unit := filepath.Join(root, "syswarden-core.service")
+	mustWriteFile(t, unit, systemdCoreService)
+	calls := 0
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		calls++
+		if calls == 1 {
+			if err := os.Remove(unit); err != nil {
+				t.Fatal(err)
+			}
+			mustWriteFile(t, unit, "operator content\n")
+		}
+		return unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+	}
+	err := removeCreatedServiceArtifactUsing(
+		serviceArtifact{path: unit, content: systemdCoreService, mode: 0600},
+		rename,
+	)
+	if err == nil {
+		t.Fatal("concurrent substitution was accepted")
+	}
+	if content := string(mustReadTestFile(t, unit)); content != "operator content\n" {
+		t.Fatalf("operator service file was not restored: %q", content)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(unit) {
+		t.Fatalf("concurrent substitution cleanup changed operator state: %v", entries)
+	}
+}
+
+func TestRemoveCreatedServiceArtifactNeverDeletesQuarantinedOperatorOnRestoreFailure(t *testing.T) {
+	root := t.TempDir()
+	enablement := filepath.Join(root, "syswarden-core.service")
+	expectedTarget := "../syswarden-core.service"
+	operatorTarget := "../operator.service"
+	if err := os.Symlink(expectedTarget, enablement); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected quarantine restoration failure")
+	calls := 0
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		calls++
+		if calls == 1 {
+			if err := os.Remove(enablement); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(operatorTarget, enablement); err != nil {
+				t.Fatal(err)
+			}
+			return unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+		}
+		return injected
+	}
+	err := removeCreatedServiceArtifactUsing(serviceArtifact{path: enablement, target: expectedTarget}, rename)
+	if !errors.Is(err, injected) {
+		t.Fatalf("restoration failure was not propagated: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatorPreserved := false
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".syswarden-quarantine-") {
+			continue
+		}
+		target, readErr := os.Readlink(filepath.Join(root, entry.Name()))
+		if readErr == nil && target == operatorTarget {
+			operatorPreserved = true
+		}
+	}
+	if !operatorPreserved {
+		t.Fatalf("quarantined operator dentry was deleted: %v", entries)
 	}
 }
 

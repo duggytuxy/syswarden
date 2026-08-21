@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 type automaticUpdateStatusResult struct {
@@ -1811,6 +1813,585 @@ func TestCISSSHAbsenceAllowsOnlyTrustedEmptyDropIn(t *testing.T) {
 			t.Fatal("symlink drop-in was accepted")
 		}
 	})
+}
+
+func TestCISSSHMergedUsrAliases(t *testing.T) {
+	makeDirectory := func(t *testing.T, host hardeningHost, logical string) string {
+		t.Helper()
+		physical, err := host.path(logical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(physical, 0750); err != nil {
+			t.Fatal(err)
+		}
+		return physical
+	}
+	makeAlias := func(t *testing.T, host hardeningHost, logical, target string) {
+		t.Helper()
+		physical, err := host.path(logical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, physical); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("Debian merged usr without sshd is not applicable", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		makeDirectory(t, host, "/usr/sbin")
+		makeDirectory(t, host, "/usr/lib/systemd/system")
+		makeAlias(t, host, "/sbin", "usr/sbin")
+		makeAlias(t, host, "/lib", "usr/lib")
+		if err := applySSHHardeningOn(host); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("Alma merged usr without sshd is not applicable", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		makeDirectory(t, host, "/usr/sbin")
+		makeDirectory(t, host, "/usr/lib/systemd/system")
+		makeAlias(t, host, "/sbin", "usr/sbin")
+		makeAlias(t, host, "/lib", "/usr/lib")
+		if err := applySSHHardeningOn(host); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("Fedora double alias without sshd is not applicable", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		makeDirectory(t, host, "/usr/bin")
+		makeDirectory(t, host, "/usr/local/bin")
+		makeDirectory(t, host, "/usr/lib/systemd/system")
+		makeAlias(t, host, "/usr/sbin", "bin")
+		makeAlias(t, host, "/sbin", "usr/sbin")
+		makeAlias(t, host, "/usr/local/sbin", "bin")
+		makeAlias(t, host, "/lib", "usr/lib")
+		if err := applySSHHardeningOn(host); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("Fedora alias still reports an existing sshd", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		bin := makeDirectory(t, host, "/usr/bin")
+		if err := writeHardeningFixtureFile(filepath.Join(bin, "sshd"), []byte("fixture\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		makeAlias(t, host, "/usr/sbin", "bin")
+		makeAlias(t, host, "/sbin", "usr/sbin")
+		if err := applySSHHardeningOn(host); err == nil || !strings.Contains(err.Error(), "exists but") {
+			t.Fatalf("existing sshd signal result: %v", err)
+		}
+	})
+
+	t.Run("Fedora local sbin alias still reports an existing sshd", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		makeDirectory(t, host, "/usr/bin")
+		localBin := makeDirectory(t, host, "/usr/local/bin")
+		if err := writeHardeningFixtureFile(filepath.Join(localBin, "sshd"), []byte("fixture\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		makeAlias(t, host, "/usr/sbin", "bin")
+		makeAlias(t, host, "/sbin", "usr/sbin")
+		makeAlias(t, host, "/usr/local/sbin", "bin")
+		if err := applySSHHardeningOn(host); err == nil || !strings.Contains(err.Error(), "exists but") {
+			t.Fatalf("existing local sshd signal result: %v", err)
+		}
+	})
+
+	t.Run("merged lib alias still reports an existing systemd unit", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		systemd := makeDirectory(t, host, "/usr/lib/systemd/system")
+		if err := writeHardeningFixtureFile(filepath.Join(systemd, "ssh.service"), []byte("[Service]\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		makeAlias(t, host, "/lib", "usr/lib")
+		if err := applySSHHardeningOn(host); err == nil || !strings.Contains(err.Error(), "exists but") {
+			t.Fatalf("existing merged-lib SSH unit result: %v", err)
+		}
+	})
+
+	t.Run("merged lib alias replacement is rejected on re-attestation", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		makeDirectory(t, host, "/usr/lib/systemd/system")
+		makeAlias(t, host, "/lib", "usr/lib")
+		resolved, _, exists, err := resolveCISSSHSignalDirectory(host, "/lib/systemd/system/ssh.service")
+		if err != nil || !exists {
+			t.Fatalf("resolve merged-lib signal: exists=%t error=%v", exists, err)
+		}
+		lib, _ := host.path("/lib")
+		if err := os.Remove(lib); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("/usr/lib", lib); err != nil {
+			t.Fatal(err)
+		}
+		if err := reattestCISSSHDirectoryAliases(host, resolved); err == nil {
+			t.Fatal("replaced merged-lib alias was accepted on re-attestation")
+		}
+	})
+
+	t.Run("multiply linked merged lib alias is rejected", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		makeDirectory(t, host, "/usr/lib")
+		makeAlias(t, host, "/lib", "usr/lib")
+		lib, _ := host.path("/lib")
+		shadow, _ := host.path("/lib-shadow")
+		if err := os.Link(lib, shadow); err != nil {
+			t.Fatal(err)
+		}
+		if err := applySSHHardeningOn(host); err == nil {
+			t.Fatal("multiply linked merged-lib alias was accepted")
+		}
+	})
+
+	for name, fixture := range map[string]func(*testing.T, hardeningHost){
+		"arbitrary sbin target": func(t *testing.T, host hardeningHost) {
+			makeDirectory(t, host, "/tmp")
+			makeAlias(t, host, "/sbin", "tmp")
+		},
+		"arbitrary Fedora target": func(t *testing.T, host hardeningHost) {
+			makeDirectory(t, host, "/usr/tmp")
+			makeAlias(t, host, "/usr/sbin", "tmp")
+		},
+		"writable resolved directory": func(t *testing.T, host hardeningHost) {
+			bin := makeDirectory(t, host, "/usr/bin")
+			if err := chmodHardeningFixture(bin, 0770); err != nil {
+				t.Fatal(err)
+			}
+			makeAlias(t, host, "/usr/sbin", "bin")
+		},
+		"arbitrary lib target": func(t *testing.T, host hardeningHost) {
+			makeDirectory(t, host, "/tmp")
+			makeAlias(t, host, "/lib", "tmp")
+		},
+		"arbitrary Fedora local sbin target": func(t *testing.T, host hardeningHost) {
+			makeDirectory(t, host, "/usr/local/tmp")
+			makeAlias(t, host, "/usr/local/sbin", "tmp")
+		},
+		"writable merged lib target": func(t *testing.T, host hardeningHost) {
+			lib := makeDirectory(t, host, "/usr/lib")
+			if err := chmodHardeningFixture(lib, 0770); err != nil {
+				t.Fatal(err)
+			}
+			makeAlias(t, host, "/lib", "usr/lib")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			host := hardeningTestHost(t, hardeningExecutor{})
+			fixture(t, host)
+			if err := applySSHHardeningOn(host); err == nil {
+				t.Fatal("hostile merged-usr alias was accepted")
+			}
+		})
+	}
+}
+
+func TestOfflineAutomaticUpdateTrustedLibAliasCompatibility(t *testing.T) {
+	timersByDistribution := map[string][]string{
+		"debian":    {"apt-daily.timer", "apt-daily-upgrade.timer"},
+		"ubuntu":    {"apt-daily.timer", "apt-daily-upgrade.timer"},
+		"fedora":    {"dnf5-automatic.timer"},
+		"almalinux": {"dnf-automatic.timer"},
+	}
+	for distribution, timers := range timersByDistribution {
+		t.Run(distribution, func(t *testing.T) {
+			host := hardeningTestHost(t, hardeningExecutor{
+				run: func(name string, args ...string) error {
+					t.Fatalf("offline executor call: %s %v", name, args)
+					return nil
+				},
+				status: func(name string, args ...string) ([]byte, int, error) {
+					t.Fatalf("offline executor status call: %s %v", name, args)
+					return nil, 0, nil
+				},
+			})
+			writeOSReleaseFixture(t, host, distribution)
+			unitDirectory, _ := host.path("/usr/lib/systemd/system")
+			if err := os.MkdirAll(unitDirectory, 0750); err != nil {
+				t.Fatal(err)
+			}
+			for _, timer := range timers {
+				if err := writeHardeningFixtureFile(filepath.Join(unitDirectory, timer), []byte("[Timer]\nOnCalendar=daily\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lib, _ := host.path("/lib")
+			libTarget := "usr/lib"
+			if distribution == "ubuntu" {
+				libTarget = "/usr/lib"
+			}
+			if err := os.Symlink(libTarget, lib); err != nil {
+				t.Fatal(err)
+			}
+			wants, _ := host.path("/etc/systemd/system/timers.target.wants")
+			if err := os.MkdirAll(wants, 0750); err != nil {
+				t.Fatal(err)
+			}
+			for _, timer := range timers {
+				if err := os.Symlink("/lib/systemd/system/"+timer, filepath.Join(wants, timer)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			configuration, _ := host.path("/etc/syswarden-test/automatic.conf")
+			if err := os.MkdirAll(filepath.Dir(configuration), 0750); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := host.snapshot("/etc/syswarden-test/automatic.conf")
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision := hardeningExecutionDecision{state: hardeningExecutionNotApplicable, packageInstall: true}
+			if err := applyAutomaticUpdatePolicy(host, "/etc/syswarden-test/automatic.conf", snapshot, []byte("enabled\n"), decision, timers...); err != nil {
+				t.Fatal(err)
+			}
+			for _, timer := range timers {
+				target, err := os.Readlink(filepath.Join(wants, timer))
+				if err != nil || target != "/lib/systemd/system/"+timer {
+					t.Fatalf("preserved timer %s target=%q error=%v", timer, target, err)
+				}
+			}
+		})
+	}
+}
+
+func TestOfflineAutomaticUpdateRejectsUntrustedEquivalentTargets(t *testing.T) {
+	const timer = "fixture.timer"
+	newFixture := func(t *testing.T) (hardeningHost, offlineAutomaticUpdateTimerSnapshot, string) {
+		t.Helper()
+		host := hardeningTestHost(t, hardeningExecutor{})
+		unit, _ := host.path("/usr/lib/systemd/system/" + timer)
+		if err := os.MkdirAll(filepath.Dir(unit), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeHardeningFixtureFile(unit, []byte("[Timer]\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		lib, _ := host.path("/lib")
+		if err := os.Symlink("usr/lib", lib); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := resolveOfflineAutomaticUpdateTimer(host, timer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wants, _ := host.path("/etc/systemd/system/timers.target.wants")
+		if err := os.MkdirAll(wants, 0750); err != nil {
+			t.Fatal(err)
+		}
+		return host, snapshot, wants
+	}
+
+	t.Run("unknown target", func(t *testing.T) {
+		host, snapshot, wants := newFixture(t)
+		if err := os.Symlink("/opt/fixture.timer", filepath.Join(wants, timer)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := inspectOfflineAutomaticUpdateLink(host, snapshot); err == nil || !strings.Contains(err.Error(), "unexpected target") {
+			t.Fatalf("unknown timer target result: %v", err)
+		}
+	})
+
+	t.Run("real lib hardlink is not an alias", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		usrUnit, _ := host.path("/usr/lib/systemd/system/" + timer)
+		if err := os.MkdirAll(filepath.Dir(usrUnit), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeHardeningFixtureFile(usrUnit, []byte("[Timer]\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		libUnit, _ := host.path("/lib/systemd/system/" + timer)
+		if err := os.MkdirAll(filepath.Dir(libUnit), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(usrUnit, libUnit); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := resolveOfflineAutomaticUpdateTimer(host, timer); err == nil || !strings.Contains(err.Error(), "unsafe metadata") {
+			t.Fatalf("real /lib equivalence result: %v", err)
+		}
+	})
+
+	t.Run("alias changed after resolution", func(t *testing.T) {
+		host, snapshot, wants := newFixture(t)
+		lib, _ := host.path("/lib")
+		if err := os.Remove(lib); err != nil {
+			t.Fatal(err)
+		}
+		libUnit := filepath.Join(lib, "systemd/system", timer)
+		if err := os.MkdirAll(filepath.Dir(libUnit), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeHardeningFixtureFile(libUnit, []byte("[Timer]\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("/lib/systemd/system/"+timer, filepath.Join(wants, timer)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := inspectOfflineAutomaticUpdateLink(host, snapshot); err == nil || !strings.Contains(err.Error(), "alias changed") {
+			t.Fatalf("changed /lib alias result: %v", err)
+		}
+	})
+
+	t.Run("arbitrary lib alias", func(t *testing.T) {
+		host := hardeningTestHost(t, hardeningExecutor{})
+		usrLib, _ := host.path("/usr/lib/systemd/system")
+		if err := os.MkdirAll(usrLib, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeHardeningFixtureFile(filepath.Join(usrLib, timer), []byte("[Timer]\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		lib, _ := host.path("/lib")
+		if err := os.Symlink("tmp", lib); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := resolveOfflineAutomaticUpdateTimer(host, timer); err == nil || !strings.Contains(err.Error(), "untrusted") {
+			t.Fatalf("arbitrary /lib alias result: %v", err)
+		}
+	})
+}
+
+func TestHardeningFileRemovalRestoresConcurrentSubstitution(t *testing.T) {
+	host := hardeningTestHost(t, hardeningExecutor{})
+	logical := "/etc/syswarden-test/remove.conf"
+	physical, err := host.path(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(physical), 0750); err != nil {
+		t.Fatal(err)
+	}
+	expected := []byte("managed\n")
+	if err := writeHardeningFixtureFile(physical, expected, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var operatorIdentity os.FileInfo
+	calls := 0
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		calls++
+		if calls == 1 {
+			if err := os.Remove(physical); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeHardeningFixtureFile(physical, expected, 0600); err != nil {
+				t.Fatal(err)
+			}
+			operatorIdentity, err = os.Lstat(physical)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		return unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+	}
+	if err := host.removeExpectedUsing(logical, expected, rename); err == nil {
+		t.Fatal("concurrent hardening file substitution was accepted")
+	}
+	restored, err := os.Lstat(physical)
+	if err != nil || !os.SameFile(operatorIdentity, restored) {
+		t.Fatalf("operator hardening file was not restored: info=%v error=%v", restored, err)
+	}
+	content, err := readHardeningFixtureFile(physical)
+	if err != nil || string(content) != string(expected) {
+		t.Fatalf("operator hardening file content=%q error=%v", content, err)
+	}
+}
+
+func TestHardeningQuarantineNeverDeletesSubstitutionWhenRestoreFails(t *testing.T) {
+	host := hardeningTestHost(t, hardeningExecutor{})
+	logical := "/etc/syswarden-test/remove-failure.conf"
+	physical, err := host.path(logical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Dir(physical)
+	if err := os.MkdirAll(parent, 0750); err != nil {
+		t.Fatal(err)
+	}
+	expected := []byte("managed\n")
+	if err := writeHardeningFixtureFile(physical, expected, 0600); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected hardening quarantine restoration failure")
+	var operatorIdentity os.FileInfo
+	calls := 0
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		calls++
+		if calls == 1 {
+			if err := os.Remove(physical); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeHardeningFixtureFile(physical, expected, 0600); err != nil {
+				t.Fatal(err)
+			}
+			operatorIdentity, err = os.Lstat(physical)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+		}
+		return injected
+	}
+	if err := host.removeExpectedUsing(logical, expected, rename); !errors.Is(err, injected) {
+		t.Fatalf("quarantine restoration failure was not propagated: %v", err)
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preserved := false
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".syswarden-quarantine-") {
+			continue
+		}
+		candidate := filepath.Join(parent, entry.Name())
+		info, statErr := os.Lstat(candidate)
+		if statErr == nil && os.SameFile(operatorIdentity, info) {
+			preserved = true
+		}
+	}
+	if !preserved {
+		t.Fatalf("substituted hardening file was deleted after restore failure: %v", entries)
+	}
+}
+
+func TestAutomaticUpdateLinkRollbackRestoresConcurrentSubstitution(t *testing.T) {
+	host := hardeningTestHost(t, hardeningExecutor{})
+	const timer = "fixture.timer"
+	unit, _ := host.path("/usr/lib/systemd/system/" + timer)
+	if err := os.MkdirAll(filepath.Dir(unit), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeHardeningFixtureFile(unit, []byte("[Timer]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := resolveOfflineAutomaticUpdateTimer(host, timer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wants, _ := host.path("/etc/systemd/system/timers.target.wants")
+	if err := os.MkdirAll(wants, 0750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(wants, timer)
+	if err := os.Symlink(snapshot.linkTarget, link); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.linkCreated = true
+	snapshot.publishedLink, err = os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const operatorTarget = "/opt/operator.timer"
+	var operatorIdentity os.FileInfo
+	calls := 0
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		calls++
+		if calls == 1 {
+			if err := os.Remove(link); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(operatorTarget, link); err != nil {
+				t.Fatal(err)
+			}
+			operatorIdentity, err = os.Lstat(link)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		return unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+	}
+	if err := restoreOfflineAutomaticUpdateLinkUsing(host, snapshot, rename); err == nil {
+		t.Fatal("concurrent automatic-update link substitution was accepted")
+	}
+	restored, err := os.Lstat(link)
+	if err != nil || !os.SameFile(operatorIdentity, restored) {
+		t.Fatalf("operator automatic-update link was not restored: info=%v error=%v", restored, err)
+	}
+	target, err := os.Readlink(link)
+	if err != nil || target != operatorTarget {
+		t.Fatalf("operator automatic-update target=%q error=%v", target, err)
+	}
+}
+
+func TestAutomaticUpdateDirectoryRollbackRestoresConcurrentSubstitution(t *testing.T) {
+	host := hardeningTestHost(t, hardeningExecutor{})
+	parent, _ := host.path("/etc/systemd/system")
+	if err := os.MkdirAll(parent, 0750); err != nil {
+		t.Fatal(err)
+	}
+	const name = "timers.target.wants"
+	directory := filepath.Join(parent, name)
+	if err := os.Mkdir(directory, 0750); err != nil {
+		t.Fatal(err)
+	}
+	createdIdentity, err := os.Lstat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := offlineAutomaticUpdateCreatedDirectory{
+		parentPhysical: parent,
+		name:           name,
+		identity:       createdIdentity,
+	}
+	marker := filepath.Join(directory, "operator.marker")
+	var operatorIdentity os.FileInfo
+	calls := 0
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		calls++
+		if calls == 1 {
+			if err := os.Remove(directory); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(directory, 0750); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeHardeningFixtureFile(marker, []byte("operator\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			operatorIdentity, err = os.Lstat(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		return unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+	}
+	if err := removeCreatedAutomaticUpdateDirectoriesUsing(host, []offlineAutomaticUpdateCreatedDirectory{record}, rename); err == nil {
+		t.Fatal("concurrent automatic-update directory substitution was accepted")
+	}
+	restored, err := os.Lstat(directory)
+	if err != nil || !os.SameFile(operatorIdentity, restored) {
+		t.Fatalf("operator automatic-update directory was not restored: info=%v error=%v", restored, err)
+	}
+	content, err := readHardeningFixtureFile(marker)
+	if err != nil || string(content) != "operator\n" {
+		t.Fatalf("operator directory marker=%q error=%v", content, err)
+	}
+}
+
+func TestAutomaticUpdateNestedDirectoryRollbackUsesStableIdentity(t *testing.T) {
+	host := hardeningTestHost(t, hardeningExecutor{})
+	const link = "/etc/systemd/system/timers.target.wants/fixture.timer"
+	created, err := prepareOfflineAutomaticUpdateLinkParent(host, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created) < 2 {
+		t.Fatalf("nested fixture created only %d directories", len(created))
+	}
+	if err := removeCreatedAutomaticUpdateDirectories(host, created); err != nil {
+		t.Fatalf("remove nested automatic-update directories: %v", err)
+	}
+	for _, record := range created {
+		path := filepath.Join(record.parentPhysical, record.name)
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("created automatic-update directory remains at %s: %v", path, err)
+		}
+	}
 }
 
 func TestCISSSHOfflinePackageHookNeverContactsServiceManager(t *testing.T) {

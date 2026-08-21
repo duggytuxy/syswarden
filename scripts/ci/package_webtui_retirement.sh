@@ -136,10 +136,21 @@ syswarden_require_offline_service_manager() {
 
 syswarden_remove_exact_service_enablement() {
     syswarden_service_link="$1"
-    syswarden_service_target="$2"
+    shift
     [ -e "${syswarden_service_link}" ] || [ -L "${syswarden_service_link}" ] || return 0
-    if [ ! -L "${syswarden_service_link}" ] || \
-       [ "$(readlink "${syswarden_service_link}" 2>/dev/null || true)" != "${syswarden_service_target}" ]; then
+    [ -L "${syswarden_service_link}" ] || {
+        printf 'Refusing modified SysWarden service enablement: %s\n' "${syswarden_service_link}" >&2
+        return 1
+    }
+    syswarden_service_actual_target="$(readlink "${syswarden_service_link}" 2>/dev/null || true)"
+    syswarden_service_target_allowed=0
+    for syswarden_service_target in "$@"; do
+        if [ "${syswarden_service_actual_target}" = "${syswarden_service_target}" ]; then
+            syswarden_service_target_allowed=1
+            break
+        fi
+    done
+    if [ "${syswarden_service_target_allowed}" -ne 1 ]; then
         printf 'Refusing modified SysWarden service enablement: %s\n' "${syswarden_service_link}" >&2
         return 1
     fi
@@ -168,10 +179,12 @@ syswarden_remove_exact_product_services() {
         systemd)
             syswarden_remove_exact_service_enablement \
                 /etc/systemd/system/multi-user.target.wants/syswarden-core.service \
-                ../syswarden-core.service || return 1
+                ../syswarden-core.service \
+                /etc/systemd/system/syswarden-core.service || return 1
             syswarden_remove_exact_service_enablement \
                 /etc/systemd/system/multi-user.target.wants/syswarden-firewall.service \
-                ../syswarden-firewall.service || return 1
+                ../syswarden-firewall.service \
+                /etc/systemd/system/syswarden-firewall.service || return 1
             syswarden_remove_exact_service_file \
                 /etc/systemd/system/syswarden-core.service \
                 0079096c0a92f17e3aafb6c76ad89a0fdac03c2977732a15776be01220d81768 600 || return 1

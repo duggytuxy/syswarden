@@ -16,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const hardeningMaximumFileSize = 4 << 20
@@ -860,7 +862,11 @@ func hardeningSnapshotMatches(snapshot hardeningFileSnapshot, content []byte, mo
 		snapshot.identity.ownerKnown && snapshot.identity.uid == uid && snapshot.identity.gid == gid
 }
 
-func (host hardeningHost) removeExpected(logical string, expected []byte) error {
+func (host hardeningHost) removeExpectedUsing(
+	logical string,
+	expected []byte,
+	rename hardeningArtifactRename,
+) error {
 	if err := host.verifyHardeningPolicyParent(logical); err != nil {
 		return err
 	}
@@ -873,20 +879,32 @@ func (host hardeningHost) removeExpected(logical string, expected []byte) error 
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	identity, existed, err := inspectSecurityDestination(root, target)
-	if err != nil {
-		return fmt.Errorf("inspect hardening file before removal: %w", err)
+	expectedDigest := sha256.Sum256(expected)
+	attest := func(root *os.Root, name string) (fs.FileInfo, error) {
+		candidate := target
+		candidate.name = name
+		identity, existed, inspectErr := inspectSecurityDestination(root, candidate)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		if !existed {
+			return nil, fs.ErrNotExist
+		}
+		if identity.digest != expectedDigest {
+			return identity.info, fmt.Errorf("hardening file changed before removal: %s", logical)
+		}
+		return identity.info, nil
 	}
-	if !existed {
-		return nil
-	}
-	if identity.digest != sha256.Sum256(expected) {
-		return fmt.Errorf("hardening file changed before removal: %s", logical)
-	}
-	if err := root.Remove(target.name); err != nil {
+	if err := quarantineAndRemoveHardeningArtifactUsing(
+		root, target.name, true, 0, attest, rename, syncSecurityDirectory,
+	); err != nil {
 		return fmt.Errorf("remove hardening file %s: %w", logical, err)
 	}
-	return syncSecurityDirectory(root)
+	return nil
+}
+
+func (host hardeningHost) removeExpected(logical string, expected []byte) error {
+	return host.removeExpectedUsing(logical, expected, unix.Renameat2)
 }
 
 func (host hardeningHost) restore(logical string, snapshot hardeningFileSnapshot, expectedCurrent []byte) error {
