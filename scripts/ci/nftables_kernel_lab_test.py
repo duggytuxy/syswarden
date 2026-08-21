@@ -133,6 +133,13 @@ class NftablesKernelLabTests(unittest.TestCase):
         ):
             nftables_kernel_lab.verify_corrected_source_contract(self.root, golden)
 
+    def test_repository_golden_preserves_frozen_regression_baseline(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        golden = repository / "testdata/firewall/nftables-v4.02.8.nft"
+        text = golden.read_text(encoding="utf-8")
+        self.assertEqual(text.count("tcp dport { 236379 }"), 2)
+        self.assertNotIn("tcp dport { 23, 6379 }", text)
+
     def test_rejects_non_isolated_or_partial_kernel_evidence(self) -> None:
         output = "\n".join(
             (

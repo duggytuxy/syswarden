@@ -690,6 +690,62 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual(workflow.count("jq -j '.body'"), 2)
         self.assertNotIn("jq -r '.body'", workflow)
 
+    def test_release_manager_bounds_preserved_version_fix_to_one_linear_commit(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[2]
+            / ".github"
+            / "workflows"
+            / "release-manager.yml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            workflow.count("if ! ./scripts/versioning.sh validate-commit"), 2
+        )
+        self.assertNotIn("--base-ref HEAD^^", workflow)
+        self.assertEqual(
+            workflow.count('release_base_sha="$(git rev-parse HEAD^^)"'), 2
+        )
+        self.assertEqual(workflow.count('--base-ref "${release_base_sha}"'), 2)
+        self.assertEqual(
+            workflow.count(
+                "a preserved-version release fix requires a Qualification "
+                "commit subject"
+            ),
+            2,
+        )
+        self.assertEqual(workflow.count('"${RELEASE_TAG}" != "v4.03.0"'), 2)
+        self.assertEqual(
+            workflow.count(
+                '"$(git rev-parse HEAD^)" != '
+                '"295275baf021adc2efe22e5e14e38e2184c635a1"'
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                "preserved-version release recovery is authorized only for "
+                "the reviewed v4.03.0 parent"
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count("git rev-list --parents -n 1 HEAD)"), 2
+        )
+        self.assertEqual(
+            workflow.count("git rev-list --parents -n 1 HEAD^)"), 2
+        )
+        self.assertEqual(
+            workflow.count(
+                "a preserved-version release fix requires one linear commit "
+                "after one versioning commit"
+            ),
+            2,
+        )
+        self.assertEqual(workflow.count("git diff --quiet HEAD^ HEAD --"), 2)
+        self.assertEqual(
+            workflow.count('parent_commit_message="$(git log -1 --format=%B HEAD^)"'),
+            2,
+        )
+
     def test_qualification_signer_compiles_before_protected_secret_exposure(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[2]
