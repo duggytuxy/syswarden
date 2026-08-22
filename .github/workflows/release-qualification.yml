@@ -54,17 +54,25 @@ jobs:
       - name: Validate Native ARM64 Shard Context
         shell: bash
         env:
+          EVENT_ACTOR: ${{ github.actor }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_REF: ${{ github.ref }}
           EVENT_REF_NAME: ${{ github.ref_name }}
           EVENT_REF_TYPE: ${{ github.ref_type }}
           EVENT_SHA: ${{ github.sha }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           PREVIOUS_TAG: ${{ inputs.previous_tag }}
           RELEASE_SHA: ${{ inputs.release_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          if [[ "${EVENT_NAME}" != "workflow_dispatch" || \
+          if [[ -z "${REPOSITORY_OWNER}" || \
+                "${EVENT_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${EVENT_TRIGGERING_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${RUN_ATTEMPT}" != "1" || \
+                "${EVENT_NAME}" != "workflow_dispatch" || \
                 "${EVENT_REF_TYPE}" != "branch" || \
                 "${EVENT_REF_NAME}" != "main" || \
                 "${EVENT_REF}" != "refs/heads/main" || \
@@ -375,90 +383,105 @@ jobs:
   qualify-release:
     name: Qualify Exact Pre-Tag Commit
     needs: package-lifecycle-arm64
+    outputs:
+      candidate_artifact_id: ${{ steps.candidate.outputs.artifact_id }}
+      candidate_artifact_name: ${{ steps.candidate.outputs.artifact_name }}
+      candidate_run_id: ${{ steps.candidate.outputs.run_id }}
+      previous_release_id: ${{ steps.previous.outputs.release_id }}
+      signed_update_required: ${{ steps.update_contract.outputs.required }}
+      unsigned_artifact_name: ${{ steps.inventory.outputs.artifact_name }}
     runs-on:
       - self-hosted
       - linux
       - x64
       - ${{ 'syswarden-release-lab' }}
     timeout-minutes: 360
-    environment:
-      name: syswarden-release-qualification
     permissions:
       actions: read
       contents: read
 
     steps:
-      - name: Require Restricted Automatic Qualification Environment
+      - name: Validate Dedicated Ephemeral Qualification Runner
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          RUNNER_ARCH_CONTEXT: ${{ runner.arch }}
+          RUNNER_NAME_CONTEXT: ${{ runner.name }}
+          RUNNER_OS_CONTEXT: ${{ runner.os }}
         run: |
           set -euo pipefail
-          command -v gh >/dev/null
+          command -v id >/dev/null
           command -v jq >/dev/null
-          environment_json="$(gh api --method GET \
-            "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-qualification")"
-          required_environment_boolean() {
-            local field="${1:?environment boolean field is required}"
-            jq -er --arg field "${field}" '
-              .deployment_branch_policy[$field] |
-              if type == "boolean" then
-                tostring
-              else
-                error("deployment_branch_policy." + $field + " must be boolean")
-              end
-            ' <<< "${environment_json}"
-          }
-          required_top_level_environment_boolean() {
-            local field="${1:?environment boolean field is required}"
-            jq -er --arg field "${field}" '
-              .[$field] |
-              if type == "boolean" then
-                tostring
-              else
-                error($field + " must be boolean")
-              end
-            ' <<< "${environment_json}"
-          }
-          environment_name="$(jq -r '.name // ""' <<< "${environment_json}")"
-          reviewer_rule_count="$(jq '[
-            .protection_rules[]? | select(.type == "required_reviewers")
-          ] | length' <<< "${environment_json}")"
-          branch_policy_rule_count="$(jq '[
-            .protection_rules[]? | select(.type == "branch_policy")
-          ] | length' <<< "${environment_json}")"
-          protection_rule_count="$(jq '[.protection_rules[]?] | length' \
-            <<< "${environment_json}")"
-          protected_branches="$(required_environment_boolean \
-            "protected_branches")"
-          custom_branch_policies="$(required_environment_boolean \
-            "custom_branch_policies")"
-          can_admins_bypass="$(required_top_level_environment_boolean \
-            "can_admins_bypass")"
-          if [[ "${environment_name}" != "syswarden-release-qualification" || \
-                "${reviewer_rule_count}" != "0" || \
-                "${branch_policy_rule_count}" != "1" || \
-                "${protection_rule_count}" != "1" || \
-                "${protected_branches}" != "false" || \
-                "${custom_branch_policies}" != "true" || \
-                "${can_admins_bypass}" != "false" ]]; then
-            echo "ERROR: the qualification environment must require no reviewer or wait gate, forbid administrator bypass, and have exactly one custom branch policy." >&2
+          command -v realpath >/dev/null
+          command -v stat >/dev/null
+          if [[ -z "${REPOSITORY_OWNER}" || \
+                "${EVENT_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${EVENT_TRIGGERING_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${RUN_ATTEMPT}" != "1" || \
+                ! "${RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: qualification must be dispatched once by the repository owner." >&2
             exit 1
           fi
 
-          policies_json="$(gh api --paginate --slurp --method GET \
-            "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-qualification/deployment-branch-policies" \
-            -f per_page=100)"
-          declared_policy_count="$(jq -r '.[0].total_count' <<< "${policies_json}")"
-          policy_count="$(jq '[.[] | .branch_policies[]?] | length' <<< "${policies_json}")"
-          main_policy_count="$(jq '[
-            .[] | .branch_policies[]? |
-            select(.name == "main" and .type == "branch")
-          ] | length' <<< "${policies_json}")"
-          if [[ "${declared_policy_count}" != "1" || \
-                "${policy_count}" != "1" || \
-                "${main_policy_count}" != "1" ]]; then
-            echo "ERROR: the qualification environment must allow deployments from main only." >&2
+          expected_runner_name="syswarden-release-lab-${RUN_ID}-a${RUN_ATTEMPT}"
+          if [[ "${RUNNER_NAME_CONTEXT}" != "${expected_runner_name}" || \
+                "${RUNNER_OS_CONTEXT}" != "Linux" || \
+                "${RUNNER_ARCH_CONTEXT}" != "X64" ]]; then
+            echo "ERROR: qualification requires the exact run-bound Linux X64 ephemeral runner." >&2
+            exit 1
+          fi
+          if [[ -z "${RUNNER_TEMP:-}" || "${RUNNER_TEMP}" != /* || \
+                "${RUNNER_TEMP%/}" != */_work/_temp ]]; then
+            echo "ERROR: runner temporary storage is not an exact private runner work path." >&2
+            exit 1
+          fi
+          runner_temp="${RUNNER_TEMP%/}"
+          if [[ "$(realpath -e "${runner_temp}")" != "${runner_temp}" ]]; then
+            echo "ERROR: runner temporary storage must not traverse aliases or symbolic links." >&2
+            exit 1
+          fi
+          runner_work="${runner_temp%/_temp}"
+          runner_root="${runner_work%/_work}"
+          if [[ -z "${runner_root}" || "${runner_root}" == "${runner_work}" || \
+                "${runner_work}" == "${runner_temp}" ]]; then
+            echo "ERROR: runner root could not be derived from RUNNER_TEMP." >&2
+            exit 1
+          fi
+          current_uid="$(id -u)"
+          for directory in "${runner_root}" "${runner_work}" "${runner_temp}"; do
+            if [[ ! -d "${directory}" || -L "${directory}" || \
+                  "$(stat -c '%u' "${directory}")" != "${current_uid}" || \
+                  "$(stat -c '%a' "${directory}")" != "700" ]]; then
+              echo "ERROR: runner directories must be private real directories owned by the runner account." >&2
+              exit 1
+            fi
+          done
+          for identity_file in .runner .credentials .credentials_rsaparams; do
+            identity_path="${runner_root}/${identity_file}"
+            if [[ ! -f "${identity_path}" || -L "${identity_path}" || \
+                  "$(stat -c '%u' "${identity_path}")" != "${current_uid}" || \
+                  "$(stat -c '%a' "${identity_path}")" != "600" ]]; then
+              echo "ERROR: runner identity files must be private regular files owned by the runner account." >&2
+              exit 1
+            fi
+          done
+          runner_config="${runner_root}/.runner"
+          if ! jq -e \
+            --arg expected_name "${expected_runner_name}" \
+            --arg expected_url "https://github.com/${GITHUB_REPOSITORY}" '
+              .AgentName == $expected_name and
+              .DisableUpdate == true and
+              .Ephemeral == true and
+              .GitHubUrl == $expected_url and
+              .WorkFolder == "_work" and
+              .PoolName == "Default" and
+              (.AgentId | type == "number" and . > 0 and floor == .)
+            ' "${runner_config}" >/dev/null; then
+            echo "ERROR: runner identity is not the exact ephemeral qualification configuration." >&2
             exit 1
           fi
 
@@ -546,6 +569,16 @@ jobs:
           git merge-base --is-ancestor "${previous_sha}" "${RELEASE_SHA}"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
+      - name: Qualify Optional RHEL Image Extension Offline Contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v unshare >/dev/null
+          bash -n \
+            extensions/rhel-image/stage-syswarden-rhel-image.sh \
+            extensions/rhel-image/tests/test-stage.sh
+          extensions/rhel-image/tests/test-stage.sh
+
       - name: Create Isolated Qualification Workspace
         id: workspace
         shell: bash
@@ -588,7 +621,6 @@ jobs:
           bound_dir="${artifact_root}/bound"
           aggregate_dir="${artifact_root}/aggregate"
           status_dir="${qualification_root}/status-internal"
-          signing_tool_dir="${qualification_root}/signing-tool"
           nftables_tmp_dir="${qualification_root}/nftables-tmp"
           transition_dir="${qualification_root}/historical-transition"
           install -d -m 0700 \
@@ -600,7 +632,6 @@ jobs:
             "${aggregate_dir}" \
             "${artifact_root}/status" \
             "${status_dir}" \
-            "${signing_tool_dir}" \
             "${nftables_tmp_dir}" \
             "${transition_dir}"
           test -d "${nftables_tmp_dir}"
@@ -623,7 +654,6 @@ jobs:
             printf 'BOUND_DIR=%s\n' "${bound_dir}"
             printf 'AGGREGATE_DIR=%s\n' "${aggregate_dir}"
             printf 'STATUS_DIR=%s\n' "${status_dir}"
-            printf 'SIGNING_TOOL_DIR=%s\n' "${signing_tool_dir}"
             printf 'NFTABLES_TMP_DIR=%s\n' "${nftables_tmp_dir}"
             printf 'TRANSITION_DIR=%s\n' "${transition_dir}"
           } >> "${GITHUB_ENV}"
@@ -736,27 +766,6 @@ jobs:
             exit 1
           fi
           echo "required=${required}" >> "${GITHUB_OUTPUT}"
-
-      - name: Build and Test Signed Update Manifest Tool
-        id: manifest_tool
-        if: ${{ steps.update_contract.outputs.required == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          GOFLAGS=-mod=readonly go test \
-            ./scripts/ci/update_manifest.go \
-            ./scripts/ci/update_manifest_test.go
-          GOFLAGS=-mod=readonly go build \
-            -o "${SIGNING_TOOL_DIR}/syswarden-update-manifest" \
-            ./scripts/ci/update_manifest.go
-          chmod 0700 "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
-          test -f "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
-          test ! -L "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
-          test -x "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
-          tool_sha256="$(sha256sum "${SIGNING_TOOL_DIR}/syswarden-update-manifest")"
-          tool_sha256="${tool_sha256%% *}"
-          [[ "${tool_sha256}" =~ ^[0-9a-f]{64}$ ]]
-          echo "sha256=${tool_sha256}" >> "${GITHUB_OUTPUT}"
 
       - name: Download Latest Public Previous Packages by Asset ID
         id: previous
@@ -1117,123 +1126,7 @@ jobs:
           printf '%s\n' "${verify_rc}" > "${STATUS_DIR}/gate-verify.rc"
           chmod 0600 "${STATUS_DIR}/gate-generate.rc" "${STATUS_DIR}/gate-verify.rc"
 
-      - name: Require Successful Qualification Before Release Signing
-        id: signing_gate
-        if: ${{ steps.update_contract.outputs.required == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          status_files=(
-            package-lab.rc
-            nftables-lab.rc
-            adapter-build.rc
-            adapter-verify.rc
-            gate-generate.rc
-            gate-verify.rc
-          )
-          failed_statuses=()
-          invalid_statuses=()
-          for status_file in "${status_files[@]}"; do
-            status_path="${STATUS_DIR}/${status_file}"
-            if [[ ! -f "${status_path}" || -L "${status_path}" ]]; then
-              invalid_statuses+=("${status_file}")
-              continue
-            fi
-            status="$(cat "${status_path}")"
-            if [[ ! "${status}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || \
-               (( 10#${status} > 255 )); then
-              invalid_statuses+=("${status_file}")
-            elif [[ "${status}" != "0" ]]; then
-              failed_statuses+=("${status_file}=${status}")
-            fi
-          done
-          for invalid_status in "${invalid_statuses[@]}"; do
-            echo "ERROR: qualification status ${invalid_status}=invalid." >&2
-          done
-          for failed_status in "${failed_statuses[@]}"; do
-            echo "ERROR: qualification status ${failed_status}." >&2
-          done
-          if (( ${#invalid_statuses[@]} > 0 || ${#failed_statuses[@]} > 0 )); then
-            echo "ERROR: refusing to sign because qualification status is not uniformly zero." >&2
-            exit 1
-          fi
-          echo "qualified=true" >> "${GITHUB_OUTPUT}"
-
-      - name: Revalidate Manifest Tool Before Secret Exposure
-        id: verified_manifest_tool
-        if: >-
-          ${{ steps.update_contract.outputs.required == 'true' &&
-              steps.signing_gate.outputs.qualified == 'true' }}
-        shell: bash
-        env:
-          EXPECTED_MANIFEST_TOOL_SHA256: ${{ steps.manifest_tool.outputs.sha256 }}
-        run: |
-          set -euo pipefail
-          manifest_tool="${SIGNING_TOOL_DIR}/syswarden-update-manifest"
-          test -f "${manifest_tool}"
-          test ! -L "${manifest_tool}"
-          test -x "${manifest_tool}"
-          test "$(stat -c '%u' "${manifest_tool}")" = "$(id -u)"
-          test "$(stat -c '%a' "${manifest_tool}")" = "700"
-          actual_tool_sha256="$(sha256sum "${manifest_tool}")"
-          actual_tool_sha256="${actual_tool_sha256%% *}"
-          if [[ ! "${EXPECTED_MANIFEST_TOOL_SHA256}" =~ ^[0-9a-f]{64}$ || \
-                "${actual_tool_sha256}" != "${EXPECTED_MANIFEST_TOOL_SHA256}" ]]; then
-            echo "ERROR: the manifest tool changed after its validated build." >&2
-            exit 1
-          fi
-          echo "verified=true" >> "${GITHUB_OUTPUT}"
-
-      - name: Generate and Verify Signed Update Manifest
-        id: signed_update
-        if: >-
-          ${{ steps.update_contract.outputs.required == 'true' &&
-              steps.signing_gate.outputs.qualified == 'true' &&
-              steps.verified_manifest_tool.outputs.verified == 'true' }}
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY: ${{ secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          umask 077
-          manifest_dir="${ARTIFACT_ROOT}/update"
-          manifest_path="${manifest_dir}/syswarden-update-manifest-v1.json"
-          signature_path="${manifest_path}.sig"
-          signing_complete=false
-          clear_signing_material() {
-            unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
-            if [[ "${signing_complete}" != "true" ]]; then
-              rm -f -- "${manifest_path}" "${signature_path}"
-              rmdir -- "${manifest_dir}" 2>/dev/null || true
-            fi
-          }
-          trap clear_signing_material EXIT HUP INT TERM
-          if [[ -z "${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}" ]]; then
-            echo "ERROR: the protected Ed25519 release-signing secret is required." >&2
-            exit 1
-          fi
-          manifest_tool="${SIGNING_TOOL_DIR}/syswarden-update-manifest"
-          test -f "${manifest_tool}"
-          test ! -L "${manifest_tool}"
-          test -x "${manifest_tool}"
-          "${manifest_tool}" generate \
-            --repository "${GITHUB_WORKSPACE}" \
-            --tag "${RELEASE_TAG}" \
-            --packages "${CANDIDATE_PACKAGES_DIR}" \
-            --output "${manifest_dir}"
-          unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
-          env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY \
-            "${manifest_tool}" verify \
-              --repository "${GITHUB_WORKSPACE}" \
-              --tag "${RELEASE_TAG}" \
-              --packages "${CANDIDATE_PACKAGES_DIR}" \
-              --manifest "${manifest_path}" \
-              --signature "${signature_path}"
-          signing_complete=true
-          trap - EXIT HUP INT TERM
-
-      - name: Seal Exact Qualification Evidence Inventory
+      - name: Seal Exact Unsigned Qualification Evidence Inventory
         id: inventory
         shell: bash
         env:
@@ -1307,13 +1200,6 @@ jobs:
             raw
             status
           )
-          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
-            expected+=(
-              "update/syswarden-update-manifest-v1.json"
-              "update/syswarden-update-manifest-v1.json.sig"
-            )
-            expected_directories+=(update)
-          fi
           mapfile -t sorted_expected < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
           mapfile -t actual_before_manifest < <(
             find -P "${ARTIFACT_ROOT}" -type f -printf '%P\n' | LC_ALL=C sort
@@ -1355,19 +1241,21 @@ jobs:
           )
           test "$(find -P "${ARTIFACT_ROOT}" -type f | wc -l)" \
             -eq "$(( ${#sorted_expected[@]} + 1 ))"
+          artifact_name="syswarden-release-qualification-unsigned-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
+          printf 'artifact_name=%s\n' "${artifact_name}" >> "${GITHUB_OUTPUT}"
 
-      - name: Upload Exact Qualification Evidence
+      - name: Upload Exact Unsigned Qualification Evidence
         id: upload
         if: ${{ always() && steps.inventory.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: syswarden-release-qualification
+          name: ${{ steps.inventory.outputs.artifact_name }}
           path: ${{ steps.workspace.outputs.artifact_root }}
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
           compression-level: 0
 
-      - name: Remove Ephemeral Signing Material
+      - name: Remove Ephemeral Qualification Material
         if: ${{ always() }}
         shell: bash
         run: |
@@ -1407,19 +1295,6 @@ jobs:
             rmdir -- "${TRANSITION_DIR}"
             test ! -e "${TRANSITION_DIR}"
             test ! -L "${TRANSITION_DIR}"
-          fi
-          update_dir="${ARTIFACT_ROOT:-}/update"
-          if [[ -n "${ARTIFACT_ROOT:-}" && \
-                "${update_dir}" == "${RUNNER_TEMP%/}"/syswarden-release-qualification.*/artifact/update ]]; then
-            rm -f -- \
-              "${update_dir}/syswarden-update-manifest-v1.json" \
-              "${update_dir}/syswarden-update-manifest-v1.json.sig"
-            rmdir -- "${update_dir}" 2>/dev/null || true
-          fi
-          if [[ -n "${SIGNING_TOOL_DIR:-}" && \
-                "${SIGNING_TOOL_DIR}" == "${RUNNER_TEMP%/}"/syswarden-release-qualification.*/signing-tool ]]; then
-            rm -f -- "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
-            rmdir -- "${SIGNING_TOOL_DIR}" 2>/dev/null || true
           fi
 
       - name: Enforce Final Release Qualification Verdict
@@ -1610,3 +1485,916 @@ jobs:
               "package_lab"
             ] | sort) and all(.[]; . == 0)
           ' "${ARTIFACT_ROOT}/status/qualification-exit-codes.json"
+
+  seal-release:
+    name: Seal Qualified Evidence on GitHub Hosted Runner
+    needs: qualify-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: syswarden-release-qualification
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Validate Protected Hosted Signing Context
+        shell: bash
+        env:
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          EVENT_REF_TYPE: ${{ github.ref_type }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUNNER_ARCH_CONTEXT: ${{ runner.arch }}
+          RUNNER_ENVIRONMENT_CONTEXT: ${{ runner.environment }}
+          RUNNER_OS_CONTEXT: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          command -v gh >/dev/null
+          command -v jq >/dev/null
+          if [[ -z "${REPOSITORY_OWNER}" || \
+                "${EVENT_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${EVENT_TRIGGERING_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${RUN_ATTEMPT}" != "1" || \
+                "${EVENT_NAME}" != "workflow_dispatch" || \
+                "${EVENT_REF_TYPE}" != "branch" || \
+                "${EVENT_REF_NAME}" != "main" || \
+                "${EVENT_REF}" != "refs/heads/main" || \
+                "${EVENT_SHA}" != "${RELEASE_SHA}" || \
+                ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
+                ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]{2}\.[0-9]+$ || \
+                "${RUNNER_ENVIRONMENT_CONTEXT}" != "github-hosted" || \
+                "${RUNNER_OS_CONTEXT}" != "Linux" || \
+                "${RUNNER_ARCH_CONTEXT}" != "X64" ]]; then
+            echo "ERROR: signing requires the exact owner-dispatched main context on GitHub-hosted Linux X64." >&2
+            exit 1
+          fi
+
+          environment_json="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-qualification")"
+          required_environment_boolean() {
+            local field="${1:?environment boolean field is required}"
+            jq -er --arg field "${field}" '
+              .deployment_branch_policy[$field] |
+              if type == "boolean" then
+                tostring
+              else
+                error("deployment_branch_policy." + $field + " must be boolean")
+              end
+            ' <<< "${environment_json}"
+          }
+          required_top_level_environment_boolean() {
+            local field="${1:?environment boolean field is required}"
+            jq -er --arg field "${field}" '
+              .[$field] |
+              if type == "boolean" then
+                tostring
+              else
+                error($field + " must be boolean")
+              end
+            ' <<< "${environment_json}"
+          }
+          environment_name="$(jq -r '.name // ""' <<< "${environment_json}")"
+          reviewer_rule_count="$(jq '[
+            .protection_rules[]? | select(.type == "required_reviewers")
+          ] | length' <<< "${environment_json}")"
+          reviewer_entry_count="$(jq '[
+            .protection_rules[]? | select(.type == "required_reviewers") |
+            .reviewers[]?
+          ] | length' <<< "${environment_json}")"
+          owner_reviewer_count="$(jq --arg owner "${REPOSITORY_OWNER}" '[
+            .protection_rules[]? | select(.type == "required_reviewers") |
+            .reviewers[]? |
+            select(.type == "User" and .reviewer.login == $owner)
+          ] | length' <<< "${environment_json}")"
+          prevent_self_review="$(jq -er '
+            [
+              .protection_rules[]? |
+              select(.type == "required_reviewers") |
+              .prevent_self_review
+            ] |
+            if length == 1 and .[0] == false then
+              "false"
+            else
+              error("the reviewer rule must explicitly allow repository-owner approval")
+            end
+          ' <<< "${environment_json}")"
+          branch_policy_rule_count="$(jq '[
+            .protection_rules[]? | select(.type == "branch_policy")
+          ] | length' <<< "${environment_json}")"
+          protection_rule_count="$(jq '[.protection_rules[]?] | length' \
+            <<< "${environment_json}")"
+          protected_branches="$(required_environment_boolean \
+            "protected_branches")"
+          custom_branch_policies="$(required_environment_boolean \
+            "custom_branch_policies")"
+          can_admins_bypass="$(required_top_level_environment_boolean \
+            "can_admins_bypass")"
+          if [[ "${environment_name}" != "syswarden-release-qualification" || \
+                "${reviewer_rule_count}" != "1" || \
+                "${reviewer_entry_count}" != "1" || \
+                "${owner_reviewer_count}" != "1" || \
+                "${prevent_self_review}" != "false" || \
+                "${branch_policy_rule_count}" != "1" || \
+                "${protection_rule_count}" != "2" || \
+                "${protected_branches}" != "false" || \
+                "${custom_branch_policies}" != "true" || \
+                "${can_admins_bypass}" != "false" ]]; then
+            echo "ERROR: the signing environment must require explicit repository-owner approval, forbid administrator bypass, and have exactly one custom branch policy." >&2
+            exit 1
+          fi
+
+          policies_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/environments/syswarden-release-qualification/deployment-branch-policies" \
+            -f per_page=100)"
+          declared_policy_count="$(jq -r '.[0].total_count' <<< "${policies_json}")"
+          policy_count="$(jq '[.[] | .branch_policies[]?] | length' <<< "${policies_json}")"
+          main_policy_count="$(jq '[
+            .[] | .branch_policies[]? |
+            select(.name == "main" and .type == "branch")
+          ] | length' <<< "${policies_json}")"
+          if [[ "${declared_policy_count}" != "1" || \
+                "${policy_count}" != "1" || \
+                "${main_policy_count}" != "1" ]]; then
+            echo "ERROR: the signing environment must allow deployments from main only." >&2
+            exit 1
+          fi
+
+      - name: Checkout Exact Hosted Signing Commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+
+      - name: Set Up Go for Hosted Signing
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Revalidate Exact Hosted Candidate Commit
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${RELEASE_SHA}"
+          git merge-base --is-ancestor "${RELEASE_SHA}" origin/main
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")" = \
+            "${RELEASE_TAG}"
+          commit_message="$(git log -1 --format=%B HEAD)"
+          ./scripts/versioning.sh validate-commit \
+            --repo "${GITHUB_WORKSPACE}" \
+            --base-ref HEAD^ \
+            --commit-message "${commit_message}"
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "ERROR: hosted signing candidate tag already exists locally." >&2
+            exit 1
+          fi
+          remote_error="${RUNNER_TEMP%/}/syswarden-hosted-release-tag-query.err"
+          set +e
+          remote_tag="$(git ls-remote --exit-code --refs origin \
+            "refs/tags/${RELEASE_TAG}" 2> "${remote_error}")"
+          remote_rc=$?
+          set -e
+          if [[ "${remote_rc}" -eq 0 && -n "${remote_tag}" ]]; then
+            echo "ERROR: hosted signing candidate tag already exists remotely." >&2
+            exit 1
+          fi
+          if [[ "${remote_rc}" -ne 2 || -n "${remote_tag}" ]]; then
+            echo "ERROR: hosted signing could not prove candidate-tag absence." >&2
+            exit 1
+          fi
+          rm -f -- "${remote_error}"
+          previous_sha="$(git rev-parse --verify "refs/tags/${PREVIOUS_TAG}^{commit}")"
+          git merge-base --is-ancestor "${previous_sha}" "${RELEASE_SHA}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Create Isolated Hosted Signing Workspace
+        id: signing_workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          required_tools=(
+            cmp
+            diff
+            find
+            git
+            go
+            gh
+            jq
+            mktemp
+            python3
+            sha256sum
+            stat
+          )
+          for tool in "${required_tools[@]}"; do
+            command -v "${tool}" >/dev/null || {
+              echo "ERROR: hosted signing runner is missing ${tool}." >&2
+              exit 1
+            }
+          done
+          signing_root="$(mktemp -d \
+            "${RUNNER_TEMP%/}/syswarden-hosted-signing.XXXXXX")"
+          test -d "${signing_root}"
+          test ! -L "${signing_root}"
+          [[ -O "${signing_root}" ]]
+          test "$(stat -c '%a' "${signing_root}")" = "700"
+          unsigned_root="${signing_root}/unsigned-evidence"
+          package_source_dir="${signing_root}/package-main-source"
+          signing_tool_dir="${signing_root}/signing-tool"
+          install -d -m 0700 \
+            "${unsigned_root}" \
+            "${package_source_dir}" \
+            "${signing_tool_dir}"
+          {
+            printf 'HOSTED_SIGNING_ROOT=%s\n' "${signing_root}"
+            printf 'UNSIGNED_EVIDENCE_ROOT=%s\n' "${unsigned_root}"
+            printf 'PACKAGE_MAIN_SOURCE_DIR=%s\n' "${package_source_dir}"
+            printf 'SIGNING_TOOL_DIR=%s\n' "${signing_tool_dir}"
+          } >> "${GITHUB_ENV}"
+          {
+            printf 'unsigned_root=%s\n' "${unsigned_root}"
+            printf 'package_source_dir=%s\n' "${package_source_dir}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve Exact Unsigned Qualification Artifact
+        id: unsigned_artifact
+        shell: bash
+        env:
+          EXPECTED_UNSIGNED_ARTIFACT_NAME: ${{ needs.qualify-release.outputs.unsigned_artifact_name }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RUN_ID}" =~ ^[1-9][0-9]*$ || \
+                "${RUN_ATTEMPT}" != "1" || \
+                ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: unsigned artifact resolution context is invalid." >&2
+            exit 1
+          fi
+          expected_name="syswarden-release-qualification-unsigned-${RUN_ID}-${RUN_ATTEMPT}-${RELEASE_SHA}"
+          if [[ "${EXPECTED_UNSIGNED_ARTIFACT_NAME}" != "${expected_name}" ]]; then
+            echo "ERROR: unsigned artifact name is not bound to the exact run context." >&2
+            exit 1
+          fi
+          artifacts_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            -f per_page=100)"
+          artifact_matches="$(jq \
+            --arg name "${expected_name}" \
+            --arg sha "${RELEASE_SHA}" \
+            --argjson run_id "${RUN_ID}" '[
+              .[] | .artifacts[]? |
+              select(
+                .name == $name and
+                .workflow_run.id == $run_id and
+                .workflow_run.head_sha == $sha
+              )
+            ]' <<< "${artifacts_json}")"
+          if [[ "$(jq 'length' <<< "${artifact_matches}")" != "1" ]]; then
+            echo "ERROR: exact unsigned qualification artifact is absent or ambiguous." >&2
+            exit 1
+          fi
+          artifact_id="$(jq -r '.[0].id' <<< "${artifact_matches}")"
+          expired="$(jq -r '.[0].expired' <<< "${artifact_matches}")"
+          size="$(jq -r '.[0].size_in_bytes' <<< "${artifact_matches}")"
+          if [[ ! "${artifact_id}" =~ ^[1-9][0-9]*$ || \
+                "${expired}" != "false" || \
+                ! "${size}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: exact unsigned qualification artifact is unusable." >&2
+            exit 1
+          fi
+          {
+            printf 'artifact_id=%s\n' "${artifact_id}"
+            printf 'artifact_name=%s\n' "${expected_name}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Download Exact Unsigned Qualification Evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.unsigned_artifact.outputs.artifact_id }}
+          path: ${{ steps.signing_workspace.outputs.unsigned_root }}
+          merge-multiple: true
+
+      - name: Resolve Exact Package Main Artifact for Hosted Signing
+        id: hosted_candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          runs_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/package.yml/runs" \
+            -f event=push \
+            -f head_sha="${RELEASE_SHA}" \
+            -f per_page=100)"
+          matches="$(jq --arg sha "${RELEASE_SHA}" '[
+            .[] | .workflow_runs[]? |
+            select(
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "push"
+            )
+          ]' <<< "${runs_json}")"
+          if [[ "$(jq 'length' <<< "${matches}")" != "1" ]]; then
+            echo "ERROR: hosted signing expected one exact package.yml main push run." >&2
+            exit 1
+          fi
+          run_id="$(jq -r '.[0].id' <<< "${matches}")"
+          run_status="$(jq -r '.[0].status' <<< "${matches}")"
+          run_conclusion="$(jq -r '.[0].conclusion // ""' <<< "${matches}")"
+          if [[ ! "${run_id}" =~ ^[0-9]+$ || \
+                "${run_status}" != "completed" || \
+                "${run_conclusion}" != "success" ]]; then
+            echo "ERROR: hosted signing package.yml run is not a completed success." >&2
+            exit 1
+          fi
+          artifact_name="syswarden-packages-${version}"
+          artifacts_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+            -f per_page=100)"
+          artifact_matches="$(jq --arg name "${artifact_name}" '[
+            .[] | .artifacts[]? | select(.name == $name)
+          ]' <<< "${artifacts_json}")"
+          if [[ "$(jq 'length' <<< "${artifact_matches}")" != "1" ]]; then
+            echo "ERROR: hosted signing package artifact is absent or ambiguous." >&2
+            exit 1
+          fi
+          artifact_id="$(jq -r '.[0].id' <<< "${artifact_matches}")"
+          expired="$(jq -r '.[0].expired' <<< "${artifact_matches}")"
+          size="$(jq -r '.[0].size_in_bytes' <<< "${artifact_matches}")"
+          if [[ ! "${artifact_id}" =~ ^[0-9]+$ || \
+                "${expired}" != "false" || \
+                ! "${size}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: hosted signing package artifact is unusable." >&2
+            exit 1
+          fi
+          {
+            printf 'run_id=%s\n' "${run_id}"
+            printf 'artifact_id=%s\n' "${artifact_id}"
+            printf 'artifact_name=%s\n' "${artifact_name}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Download Exact Package Main Bytes for Hosted Signing
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.hosted_candidate.outputs.artifact_name }}
+          path: ${{ steps.signing_workspace.outputs.package_source_dir }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.hosted_candidate.outputs.run_id }}
+
+      - name: Require Successful Qualification Before Release Signing
+        id: update_contract
+        shell: bash
+        env:
+          CANDIDATE_ARTIFACT_ID: ${{ steps.hosted_candidate.outputs.artifact_id }}
+          CANDIDATE_ARTIFACT_NAME: ${{ steps.hosted_candidate.outputs.artifact_name }}
+          CANDIDATE_RUN_ID: ${{ steps.hosted_candidate.outputs.run_id }}
+          EXPECTED_CANDIDATE_ARTIFACT_ID: ${{ needs.qualify-release.outputs.candidate_artifact_id }}
+          EXPECTED_CANDIDATE_ARTIFACT_NAME: ${{ needs.qualify-release.outputs.candidate_artifact_name }}
+          EXPECTED_CANDIDATE_RUN_ID: ${{ needs.qualify-release.outputs.candidate_run_id }}
+          EXPECTED_PREVIOUS_RELEASE_ID: ${{ needs.qualify-release.outputs.previous_release_id }}
+          EXPECTED_SIGNED_UPDATE_REQUIRED: ${{ needs.qualify-release.outputs.signed_update_required }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          candidate_version="${RELEASE_TAG#v}"
+          previous_version="${PREVIOUS_TAG#v}"
+          expected_unsigned_files=(
+            "EVIDENCE_SHA256SUMS.txt"
+            "aggregate/release-qualification.json"
+            "bound/nftables-bound.json"
+            "bound/package-lifecycle-bound.json"
+            "packages/candidate/SHA256SUMS.txt"
+            "packages/candidate/syswarden-${candidate_version}-1.aarch64.rpm"
+            "packages/candidate/syswarden-${candidate_version}-1.x86_64.rpm"
+            "packages/candidate/syswarden_${candidate_version}_aarch64.apk"
+            "packages/candidate/syswarden_${candidate_version}_amd64.deb"
+            "packages/candidate/syswarden_${candidate_version}_arm64.deb"
+            "packages/candidate/syswarden_${candidate_version}_x86_64.apk"
+            "packages/previous/SHA256SUMS.txt"
+            "packages/previous/syswarden-${previous_version}-1.aarch64.rpm"
+            "packages/previous/syswarden-${previous_version}-1.x86_64.rpm"
+            "packages/previous/syswarden_${previous_version}_aarch64.apk"
+            "packages/previous/syswarden_${previous_version}_amd64.deb"
+            "packages/previous/syswarden_${previous_version}_arm64.deb"
+            "packages/previous/syswarden_${previous_version}_x86_64.apk"
+            "qualification-context.json"
+            "raw/nftables-raw.json"
+            "raw/package-lifecycle-amd64.json"
+            "raw/package-lifecycle-arm64.json"
+            "raw/package-lifecycle-raw.json"
+            "status/qualification-exit-codes.json"
+          )
+          expected_unsigned_directories=(
+            aggregate
+            bound
+            packages
+            packages/candidate
+            packages/previous
+            raw
+            status
+          )
+          mapfile -t sorted_expected_unsigned < <(
+            printf '%s\n' "${expected_unsigned_files[@]}" | LC_ALL=C sort
+          )
+          mapfile -t actual_unsigned_files < <(
+            find -P "${UNSIGNED_EVIDENCE_ROOT}" -type f -printf '%P\n' |
+              LC_ALL=C sort
+          )
+          if [[ "${sorted_expected_unsigned[*]}" != "${actual_unsigned_files[*]}" ]]; then
+            echo "ERROR: unsigned qualification artifact inventory is not exact." >&2
+            exit 1
+          fi
+          mapfile -t sorted_expected_unsigned_directories < <(
+            printf '%s\n' "${expected_unsigned_directories[@]}" | LC_ALL=C sort
+          )
+          mapfile -t actual_unsigned_directories < <(
+            find -P "${UNSIGNED_EVIDENCE_ROOT}" -mindepth 1 -type d -printf '%P\n' |
+              LC_ALL=C sort
+          )
+          if [[ "${sorted_expected_unsigned_directories[*]}" != \
+                "${actual_unsigned_directories[*]}" ]]; then
+            echo "ERROR: unsigned qualification artifact directories are not exact." >&2
+            exit 1
+          fi
+          while IFS= read -r -d '' entry; do
+            if [[ (-d "${entry}" || -f "${entry}") && ! -L "${entry}" ]]; then
+              continue
+            fi
+            echo "ERROR: unsigned qualification artifact has an unsafe filesystem entry." >&2
+            exit 1
+          done < <(find -P "${UNSIGNED_EVIDENCE_ROOT}" -mindepth 1 -print0)
+          expected_manifest_files=()
+          for relative in "${expected_unsigned_files[@]}"; do
+            if [[ "${relative}" != "EVIDENCE_SHA256SUMS.txt" ]]; then
+              expected_manifest_files+=("${relative}")
+            fi
+          done
+          mapfile -t sorted_expected_manifest_files < <(
+            printf '%s\n' "${expected_manifest_files[@]}" | LC_ALL=C sort
+          )
+          manifest_path="${UNSIGNED_EVIDENCE_ROOT}/EVIDENCE_SHA256SUMS.txt"
+          mapfile -t manifest_files < <(
+            sed -nE 's/^[0-9a-f]{64}  ([A-Za-z0-9._\/-]+)$/\1/p' \
+              "${manifest_path}" |
+              LC_ALL=C sort
+          )
+          manifest_line_count="$(wc -l < "${manifest_path}")"
+          if [[ ! "${manifest_line_count}" =~ ^[0-9]+$ || \
+                "${manifest_line_count}" -ne "${#manifest_files[@]}" || \
+                "${sorted_expected_manifest_files[*]}" != "${manifest_files[*]}" ]]; then
+            echo "ERROR: unsigned qualification checksum coverage is not exact." >&2
+            exit 1
+          fi
+          (
+            cd "${UNSIGNED_EVIDENCE_ROOT}"
+            sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
+          )
+          if [[ "${EXPECTED_SIGNED_UPDATE_REQUIRED}" != "true" && \
+                "${EXPECTED_SIGNED_UPDATE_REQUIRED}" != "false" ]]; then
+            echo "ERROR: unsigned evidence has an invalid signed update contract." >&2
+            exit 1
+          fi
+          independently_required="$(PYTHONDONTWRITEBYTECODE=1 \
+            python3 scripts/ci/release_gate.py \
+              requires-signed-update --tag "${RELEASE_TAG}")"
+          if [[ "${independently_required}" != "${EXPECTED_SIGNED_UPDATE_REQUIRED}" ]]; then
+            echo "ERROR: hosted signing disagrees with the unsigned signed-update contract." >&2
+            exit 1
+          fi
+          if ! jq -e \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg release_tag "${RELEASE_TAG}" \
+            --arg release_sha "${RELEASE_SHA}" \
+            --arg previous_tag "${PREVIOUS_TAG}" \
+            --arg candidate_artifact_name "${CANDIDATE_ARTIFACT_NAME}" \
+            --argjson candidate_run_id "${CANDIDATE_RUN_ID}" \
+            --argjson candidate_artifact_id "${CANDIDATE_ARTIFACT_ID}" \
+            --argjson previous_release_id "${EXPECTED_PREVIOUS_RELEASE_ID}" '
+              (keys | sort) == ([
+                "candidate_package_artifact_id",
+                "candidate_package_artifact_name",
+                "candidate_package_run_id",
+                "candidate_package_workflow",
+                "previous_package_asset_ids",
+                "previous_release_id",
+                "previous_tag",
+                "release_sha",
+                "release_tag",
+                "repository",
+                "schema_version"
+              ] | sort) and
+              .schema_version == 1 and
+              .repository == $repository and
+              .release_tag == $release_tag and
+              .release_sha == $release_sha and
+              .previous_tag == $previous_tag and
+              .candidate_package_workflow == "package.yml" and
+              .candidate_package_run_id == $candidate_run_id and
+              .candidate_package_artifact_id == $candidate_artifact_id and
+              .candidate_package_artifact_name == $candidate_artifact_name and
+              .previous_release_id == $previous_release_id and
+              (.previous_package_asset_ids | type == "array" and length == 7) and
+              ([.previous_package_asset_ids[].name] | unique | length) == 7 and
+              all(.previous_package_asset_ids[];
+                (.id | type == "number" and . > 0 and floor == .) and
+                (.name | type == "string" and length > 0))
+            ' "${UNSIGNED_EVIDENCE_ROOT}/qualification-context.json" >/dev/null; then
+            echo "ERROR: unsigned qualification context is not bound to hosted signing inputs." >&2
+            exit 1
+          fi
+          if [[ "${CANDIDATE_RUN_ID}" != "${EXPECTED_CANDIDATE_RUN_ID}" || \
+                "${CANDIDATE_ARTIFACT_ID}" != "${EXPECTED_CANDIDATE_ARTIFACT_ID}" || \
+                "${CANDIDATE_ARTIFACT_NAME}" != "${EXPECTED_CANDIDATE_ARTIFACT_NAME}" ]]; then
+            echo "ERROR: hosted Package main resolution differs from x64 qualification outputs." >&2
+            exit 1
+          fi
+          mapfile -t failed_statuses < <(
+            jq -r 'to_entries[] | select(.value != 0) |
+              (.key + "=" + (.value | tostring))' \
+              "${UNSIGNED_EVIDENCE_ROOT}/status/qualification-exit-codes.json"
+          )
+          for failed_status in "${failed_statuses[@]}"; do
+            echo "ERROR: qualification status ${failed_status}." >&2
+          done
+          if (( ${#failed_statuses[@]} > 0 )); then
+            echo "ERROR: refusing to sign because qualification status is not uniformly zero." >&2
+            exit 1
+          fi
+          jq --exit-status '
+            (keys | sort) == ([
+              "adapter_build",
+              "adapter_verify",
+              "gate_generate",
+              "gate_verify",
+              "nftables_lab",
+              "package_lab"
+            ] | sort) and all(.[]; . == 0)
+          ' "${UNSIGNED_EVIDENCE_ROOT}/status/qualification-exit-codes.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+            verify-packages \
+            --tag "${RELEASE_TAG}" \
+            --packages "${PACKAGE_MAIN_SOURCE_DIR}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py \
+            verify-packages \
+            --tag "${RELEASE_TAG}" \
+            --packages "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate"
+          mapfile -t source_package_files < <(
+            find -P "${PACKAGE_MAIN_SOURCE_DIR}" -mindepth 1 -maxdepth 1 \
+              -type f -printf '%f\n' | LC_ALL=C sort
+          )
+          mapfile -t evidence_package_files < <(
+            find -P "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate" \
+              -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort
+          )
+          if [[ "${source_package_files[*]}" != "${evidence_package_files[*]}" ]]; then
+            echo "ERROR: Package main and unsigned package inventories differ." >&2
+            exit 1
+          fi
+          for package_file in "${source_package_files[@]}"; do
+            cmp -s \
+              "${PACKAGE_MAIN_SOURCE_DIR}/${package_file}" \
+              "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate/${package_file}" || {
+                echo "ERROR: unsigned package bytes differ from exact Package main bytes." >&2
+                exit 1
+              }
+          done
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_adapter.py \
+            verify \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --expected-sha "${RELEASE_SHA}" \
+            --expected-version "${RELEASE_TAG}" \
+            --candidate-packages-dir "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate" \
+            --previous-packages-dir "${UNSIGNED_EVIDENCE_ROOT}/packages/previous" \
+            --nft-raw "${UNSIGNED_EVIDENCE_ROOT}/raw/nftables-raw.json" \
+            --package-raw "${UNSIGNED_EVIDENCE_ROOT}/raw/package-lifecycle-raw.json" \
+            --package-amd64-shard "${UNSIGNED_EVIDENCE_ROOT}/raw/package-lifecycle-amd64.json" \
+            --package-arm64-shard "${UNSIGNED_EVIDENCE_ROOT}/raw/package-lifecycle-arm64.json" \
+            --expected-repository "${GITHUB_REPOSITORY}" \
+            --expected-workflow-run-id "${GITHUB_RUN_ID}" \
+            --expected-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --expected-candidate-run-id "${CANDIDATE_RUN_ID}" \
+            --expected-candidate-artifact-id "${CANDIDATE_ARTIFACT_ID}" \
+            --expected-candidate-artifact-name "${CANDIDATE_ARTIFACT_NAME}" \
+            --expected-previous-release-id "${EXPECTED_PREVIOUS_RELEASE_ID}" \
+            --max-age-seconds 172800 \
+            --max-report-skew-seconds 0 \
+            --nft-envelope "${UNSIGNED_EVIDENCE_ROOT}/bound/nftables-bound.json" \
+            --package-envelope "${UNSIGNED_EVIDENCE_ROOT}/bound/package-lifecycle-bound.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_qualification_gate.py \
+            verify \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --expected-sha "${RELEASE_SHA}" \
+            --expected-version "${RELEASE_TAG}" \
+            --candidate-packages-dir "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate" \
+            --nft-report "${UNSIGNED_EVIDENCE_ROOT}/bound/nftables-bound.json" \
+            --package-report "${UNSIGNED_EVIDENCE_ROOT}/bound/package-lifecycle-bound.json" \
+            --max-age-seconds 172800 \
+            --max-report-skew-seconds 0 \
+            --aggregate "${UNSIGNED_EVIDENCE_ROOT}/aggregate/release-qualification.json"
+          {
+            printf 'required=%s\n' "${independently_required}"
+            printf 'verified=true\n'
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and Test Signed Update Manifest Tool
+        id: hosted_manifest_tool
+        if: ${{ steps.update_contract.outputs.required == 'true' }}
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${RELEASE_SHA}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          GOFLAGS=-mod=readonly go test \
+            ./scripts/ci/update_manifest.go \
+            ./scripts/ci/update_manifest_test.go
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${RELEASE_SHA}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          GOFLAGS=-mod=readonly go build \
+            -o "${SIGNING_TOOL_DIR}/syswarden-update-manifest" \
+            ./scripts/ci/update_manifest.go
+          chmod 0700 "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test -f "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test ! -L "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test -x "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          tool_sha256="$(sha256sum \
+            "${SIGNING_TOOL_DIR}/syswarden-update-manifest")"
+          tool_sha256="${tool_sha256%% *}"
+          [[ "${tool_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          printf 'sha256=%s\n' "${tool_sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Revalidate Hosted Signing Tool Before Secret Exposure
+        id: verified_hosted_manifest_tool
+        if: ${{ steps.hosted_manifest_tool.outcome == 'success' }}
+        shell: bash
+        env:
+          EXPECTED_MANIFEST_TOOL_SHA256: ${{ steps.hosted_manifest_tool.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          manifest_tool="${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test -f "${manifest_tool}"
+          test ! -L "${manifest_tool}"
+          test -x "${manifest_tool}"
+          test "$(stat -c '%u' "${manifest_tool}")" = "$(id -u)"
+          test "$(stat -c '%a' "${manifest_tool}")" = "700"
+          actual_tool_sha256="$(sha256sum "${manifest_tool}")"
+          actual_tool_sha256="${actual_tool_sha256%% *}"
+          if [[ ! "${EXPECTED_MANIFEST_TOOL_SHA256}" =~ ^[0-9a-f]{64}$ || \
+                "${actual_tool_sha256}" != "${EXPECTED_MANIFEST_TOOL_SHA256}" ]]; then
+            echo "ERROR: hosted signing tool changed after its validated build." >&2
+            exit 1
+          fi
+          echo "verified=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate and Verify Signed Update Manifest
+        id: signed_update
+        if: >-
+          ${{ needs.qualify-release.outputs.signed_update_required == 'true' &&
+              steps.update_contract.outputs.verified == 'true' &&
+              steps.verified_hosted_manifest_tool.outputs.verified == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY: ${{ secrets.SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          manifest_dir="${UNSIGNED_EVIDENCE_ROOT}/update"
+          manifest_path="${manifest_dir}/syswarden-update-manifest-v1.json"
+          signature_path="${manifest_path}.sig"
+          signing_complete=false
+          clear_signing_material() {
+            unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
+            if [[ "${signing_complete}" != "true" ]]; then
+              rm -f -- "${manifest_path}" "${signature_path}"
+              rmdir -- "${manifest_dir}" 2>/dev/null || true
+            fi
+          }
+          trap clear_signing_material EXIT HUP INT TERM
+          if [[ -z "${SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY}" ]]; then
+            echo "ERROR: the protected Ed25519 release-signing secret is required." >&2
+            exit 1
+          fi
+          manifest_tool="${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          test -f "${manifest_tool}"
+          test ! -L "${manifest_tool}"
+          test -x "${manifest_tool}"
+          "${manifest_tool}" generate \
+            --repository "${GITHUB_WORKSPACE}" \
+            --tag "${RELEASE_TAG}" \
+            --packages "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate" \
+            --output "${manifest_dir}"
+          unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
+          env -u SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY \
+            "${manifest_tool}" verify \
+              --repository "${GITHUB_WORKSPACE}" \
+              --tag "${RELEASE_TAG}" \
+              --packages "${UNSIGNED_EVIDENCE_ROOT}/packages/candidate" \
+              --manifest "${manifest_path}" \
+              --signature "${signature_path}"
+          signing_complete=true
+          trap - EXIT HUP INT TERM
+
+      - name: Seal Exact Qualification Evidence Inventory
+        id: final_inventory
+        if: >-
+          ${{ steps.update_contract.outputs.verified == 'true' &&
+              (needs.qualify-release.outputs.signed_update_required == 'false' ||
+               steps.signed_update.outcome == 'success') }}
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SIGNED_UPDATE_REQUIRED: ${{ needs.qualify-release.outputs.signed_update_required }}
+        run: |
+          set -euo pipefail
+          umask 077
+          candidate_version="${RELEASE_TAG#v}"
+          previous_version="${PREVIOUS_TAG#v}"
+          rm -f -- "${UNSIGNED_EVIDENCE_ROOT}/EVIDENCE_SHA256SUMS.txt"
+          expected=(
+            "aggregate/release-qualification.json"
+            "bound/nftables-bound.json"
+            "bound/package-lifecycle-bound.json"
+            "packages/candidate/SHA256SUMS.txt"
+            "packages/candidate/syswarden-${candidate_version}-1.aarch64.rpm"
+            "packages/candidate/syswarden-${candidate_version}-1.x86_64.rpm"
+            "packages/candidate/syswarden_${candidate_version}_aarch64.apk"
+            "packages/candidate/syswarden_${candidate_version}_amd64.deb"
+            "packages/candidate/syswarden_${candidate_version}_arm64.deb"
+            "packages/candidate/syswarden_${candidate_version}_x86_64.apk"
+            "packages/previous/SHA256SUMS.txt"
+            "packages/previous/syswarden-${previous_version}-1.aarch64.rpm"
+            "packages/previous/syswarden-${previous_version}-1.x86_64.rpm"
+            "packages/previous/syswarden_${previous_version}_aarch64.apk"
+            "packages/previous/syswarden_${previous_version}_amd64.deb"
+            "packages/previous/syswarden_${previous_version}_arm64.deb"
+            "packages/previous/syswarden_${previous_version}_x86_64.apk"
+            "qualification-context.json"
+            "raw/nftables-raw.json"
+            "raw/package-lifecycle-amd64.json"
+            "raw/package-lifecycle-arm64.json"
+            "raw/package-lifecycle-raw.json"
+            "status/qualification-exit-codes.json"
+          )
+          expected_directories=(
+            aggregate
+            bound
+            packages
+            packages/candidate
+            packages/previous
+            raw
+            status
+          )
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
+            expected+=(
+              "update/syswarden-update-manifest-v1.json"
+              "update/syswarden-update-manifest-v1.json.sig"
+            )
+            expected_directories+=(update)
+          elif [[ "${SIGNED_UPDATE_REQUIRED}" != "false" ]]; then
+            echo "ERROR: final signed update requirement is not canonical." >&2
+            exit 1
+          fi
+          mapfile -t sorted_expected < <(
+            printf '%s\n' "${expected[@]}" | LC_ALL=C sort
+          )
+          mapfile -t actual_files < <(
+            find -P "${UNSIGNED_EVIDENCE_ROOT}" -type f -printf '%P\n' |
+              LC_ALL=C sort
+          )
+          if [[ "${sorted_expected[*]}" != "${actual_files[*]}" ]]; then
+            echo "ERROR: final qualification evidence inventory is not exact." >&2
+            exit 1
+          fi
+          mapfile -t sorted_expected_directories < <(
+            printf '%s\n' "${expected_directories[@]}" | LC_ALL=C sort
+          )
+          mapfile -t actual_directories < <(
+            find -P "${UNSIGNED_EVIDENCE_ROOT}" -mindepth 1 -type d -printf '%P\n' |
+              LC_ALL=C sort
+          )
+          if [[ "${sorted_expected_directories[*]}" != "${actual_directories[*]}" ]]; then
+            echo "ERROR: final qualification evidence directories are not exact." >&2
+            exit 1
+          fi
+          while IFS= read -r -d '' entry; do
+            if [[ (-d "${entry}" || -f "${entry}") && ! -L "${entry}" ]]; then
+              continue
+            fi
+            echo "ERROR: final qualification evidence has an unsafe entry." >&2
+            exit 1
+          done < <(find -P "${UNSIGNED_EVIDENCE_ROOT}" -mindepth 1 -print0)
+          for relative in "${sorted_expected[@]}"; do
+            test -s "${UNSIGNED_EVIDENCE_ROOT}/${relative}"
+            test -f "${UNSIGNED_EVIDENCE_ROOT}/${relative}"
+            test ! -L "${UNSIGNED_EVIDENCE_ROOT}/${relative}"
+          done
+          chmod -R go-rwx "${UNSIGNED_EVIDENCE_ROOT}"
+          (
+            cd "${UNSIGNED_EVIDENCE_ROOT}"
+            sha256sum "${sorted_expected[@]}" > EVIDENCE_SHA256SUMS.txt
+            sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
+          )
+          test "$(find -P "${UNSIGNED_EVIDENCE_ROOT}" -type f | wc -l)" \
+            -eq "$(( ${#sorted_expected[@]} + 1 ))"
+
+      - name: Upload Exact Final Qualification Evidence
+        id: final_upload
+        if: ${{ steps.final_inventory.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: syswarden-release-qualification
+          path: ${{ steps.signing_workspace.outputs.unsigned_root }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Remove Ephemeral Signing Material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY
+          if [[ -z "${HOSTED_SIGNING_ROOT:-}" || \
+                "${HOSTED_SIGNING_ROOT}" != "${RUNNER_TEMP%/}"/syswarden-hosted-signing.* || \
+                -z "${UNSIGNED_EVIDENCE_ROOT:-}" || \
+                "${UNSIGNED_EVIDENCE_ROOT}" != "${HOSTED_SIGNING_ROOT}/unsigned-evidence" || \
+                -z "${SIGNING_TOOL_DIR:-}" || \
+                "${SIGNING_TOOL_DIR}" != "${HOSTED_SIGNING_ROOT}/signing-tool" ]]; then
+            echo "ERROR: refusing unsafe hosted signing cleanup." >&2
+            exit 1
+          fi
+          test -d "${HOSTED_SIGNING_ROOT}"
+          test ! -L "${HOSTED_SIGNING_ROOT}"
+          [[ -O "${HOSTED_SIGNING_ROOT}" ]]
+          test "$(stat -c '%a' "${HOSTED_SIGNING_ROOT}")" = "700"
+          update_dir="${UNSIGNED_EVIDENCE_ROOT}/update"
+          if [[ -e "${update_dir}" ]]; then
+            test -d "${update_dir}"
+            test ! -L "${update_dir}"
+            [[ -O "${update_dir}" ]]
+          fi
+          test -d "${SIGNING_TOOL_DIR}"
+          test ! -L "${SIGNING_TOOL_DIR}"
+          [[ -O "${SIGNING_TOOL_DIR}" ]]
+          test "$(stat -c '%a' "${SIGNING_TOOL_DIR}")" = "700"
+          rm -f -- \
+            "${update_dir}/syswarden-update-manifest-v1.json" \
+            "${update_dir}/syswarden-update-manifest-v1.json.sig"
+          rmdir -- "${update_dir}" 2>/dev/null || true
+          rm -f -- "${SIGNING_TOOL_DIR}/syswarden-update-manifest"
+          rmdir -- "${SIGNING_TOOL_DIR}" 2>/dev/null || true
+
+      - name: Enforce Hosted Qualification Seal Verdict
+        if: ${{ always() }}
+        shell: bash
+        env:
+          FINAL_INVENTORY_OUTCOME: ${{ steps.final_inventory.outcome }}
+          FINAL_UPLOAD_OUTCOME: ${{ steps.final_upload.outcome }}
+          PACKAGE_BYTES_GATE_OUTCOME: ${{ steps.update_contract.outcome }}
+          SIGNED_UPDATE_OUTCOME: ${{ steps.signed_update.outcome }}
+          SIGNED_UPDATE_REQUIRED: ${{ needs.qualify-release.outputs.signed_update_required }}
+        run: |
+          set -euo pipefail
+          if [[ "${PACKAGE_BYTES_GATE_OUTCOME}" != "success" || \
+                "${FINAL_INVENTORY_OUTCOME}" != "success" || \
+                "${FINAL_UPLOAD_OUTCOME}" != "success" ]]; then
+            echo "ERROR: hosted qualification evidence was not independently gated, sealed, and uploaded." >&2
+            exit 1
+          fi
+          if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" && \
+                "${SIGNED_UPDATE_OUTCOME}" != "success" ]]; then
+            echo "ERROR: hosted qualification required signing but signing did not succeed." >&2
+            exit 1
+          fi
+          if [[ "${SIGNED_UPDATE_REQUIRED}" != "true" && \
+                "${SIGNED_UPDATE_REQUIRED}" != "false" ]]; then
+            echo "ERROR: hosted qualification signed update requirement is invalid." >&2
+            exit 1
+          fi

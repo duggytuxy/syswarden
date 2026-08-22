@@ -82,6 +82,37 @@ func TestLoadConfigDirectoryCurrentAndHistorical(t *testing.T) {
 	}
 }
 
+func TestFirewallBackendForMutationRejectsCompatibilityOnlyIptables_SW2_FWBACKEND_001(t *testing.T) {
+	tests := []struct {
+		backend string
+		wantErr string
+	}{
+		{backend: "keep"},
+		{backend: "nftables"},
+		{backend: "iptables", wantErr: "accepted for configuration compatibility but refused"},
+	}
+	for _, test := range tests {
+		t.Run(test.backend, func(t *testing.T) {
+			t.Cleanup(viper.Reset)
+			content := strings.Replace(validMaster("schema_version = 1"), `firewall_backend = "keep"`, `firewall_backend = "`+test.backend+`"`, 1)
+			root := writeConfigFixture(t, content, nil)
+			if _, err := LoadConfigDirectory(root); err != nil {
+				t.Fatal(err)
+			}
+			backend, err := FirewallBackendForMutation()
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("runtime backend error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil || backend != test.backend {
+				t.Fatalf("runtime backend = %q, error = %v", backend, err)
+			}
+		})
+	}
+}
+
 func TestLoadConfigDirectoryDiagnosticsAndPriority(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	root := writeConfigFixture(t, validMaster("schema_version = 1")+`
@@ -300,10 +331,11 @@ func TestCoreValidatorMatchesCLIParityContract_SW_CFG_002(t *testing.T) {
 		{name: "noncanonical log pattern spacing", module: "[waap]\nbruteforce_logs = \"/var/log/nginx/*.log  /var/log/auth.log\"\n", wantErr: true},
 		{name: "duplicate log pattern", module: "[waap]\nbruteforce_logs = \"/var/log/auth.log /var/log/auth.log\"\n", wantErr: true},
 		{name: "invalid log glob", module: "[waap]\nmodsec_logs = \"/var/log/modsec/[.log\"\n", wantErr: true},
-		{name: "canonical IPv4 WireGuard subnet", module: "[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n"},
-		{name: "IPv6 WireGuard subnet", module: "[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"2001:db8::/64\"\n", wantErr: true},
-		{name: "distinct SSH and HA ports with WireGuard", module: "[core]\nssh_port = \"2222\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n"},
-		{name: "HA port collides with SSH while WireGuard enabled", module: "[core]\nssh_port = \"62026\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n", wantErr: true},
+		{name: "canonical IPv4 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n"},
+		{name: "WireGuard with keep backend", module: "[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n", wantErr: true},
+		{name: "IPv6 WireGuard subnet", module: "[core]\nfirewall_backend = \"nftables\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"2001:db8::/64\"\n", wantErr: true},
+		{name: "distinct SSH and HA ports with WireGuard", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"2222\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n"},
+		{name: "HA port collides with SSH while WireGuard enabled", module: "[core]\nfirewall_backend = \"nftables\"\nssh_port = \"62026\"\n[network.wireguard]\nenabled = true\nport = \"51820\"\nsubnet = \"10.66.66.0/24\"\n[integrations.ha]\nenabled = true\npeer_ips = [\"192.0.2.10\"]\npeer_port = 62026\ntoken = \"shared-token\"\n", wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

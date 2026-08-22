@@ -200,7 +200,7 @@ func validateLegacyConfig(candidate *Config) error {
 		return fmt.Errorf("invalid legacy enforcement mode %q", candidate.EnforcementMode)
 	}
 	switch candidate.FirewallBackend {
-	case "nftables", "iptables", "keep":
+	case "nftables", "iptables", "keep", "firewalld":
 	default:
 		return fmt.Errorf("invalid legacy firewall backend %q", candidate.FirewallBackend)
 	}
@@ -294,12 +294,16 @@ func legacyConfigForPolicyValidation(candidate *Config) (*ModularConfig, error) 
 	split := func(value string) []string {
 		return strings.Fields(strings.ReplaceAll(value, ",", " "))
 	}
+	validationBackend := candidate.FirewallBackend
+	if validationBackend == "firewalld" {
+		validationBackend = "keep"
+	}
 	return &ModularConfig{
 		Core: CoreConfig{
 			ConfigDir:       "/etc/syswarden/config/modules",
 			EnterpriseMode:  candidate.EnterpriseMode,
 			LogLevel:        "INFO",
-			FirewallBackend: candidate.FirewallBackend,
+			FirewallBackend: validationBackend,
 			Hardening:       candidate.Hardening,
 			CISL2Hardening:  candidate.CISL2Hardening,
 			SecureWipeConf:  candidate.SecureWipeConf,

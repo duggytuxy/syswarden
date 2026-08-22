@@ -3,7 +3,8 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
-	"net"
+	"io"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -15,14 +16,15 @@ import (
 )
 
 type RuleDef struct {
-	ID        string   `json:"id"`
-	Type      string   `json:"type"`
-	Pattern   string   `json:"pattern,omitempty"`
-	Patterns  []string `json:"patterns,omitempty"`
-	Service   string   `json:"service"`
-	Action    string   `json:"action,omitempty"` // "ban" (default), "detect", or "track"
-	Threshold int      `json:"threshold,omitempty"`
-	Window    int      `json:"window,omitempty"`
+	ID                 string   `json:"id"`
+	Type               string   `json:"type"`
+	Pattern            string   `json:"pattern,omitempty"`
+	Patterns           []string `json:"patterns,omitempty"`
+	Service            string   `json:"service"`
+	Action             string   `json:"action,omitempty"` // "ban" (default), "detect", or "track"
+	Threshold          int      `json:"threshold,omitempty"`
+	Window             int      `json:"window,omitempty"`
+	TrustedHostCapture bool     `json:"trusted_host_capture,omitempty"`
 }
 
 type Config struct {
@@ -31,13 +33,14 @@ type Config struct {
 
 type Engine struct {
 	ahoMachine    *goahocorasick.Automaton
-	patternToRule map[string]RuleDef
+	patternToRule map[string][]RuleDef
 	regexRules    []compiledRegex
 
 	ahoCount         int
 	defaultThreshold int
 	defaultWindow    int
 	tracker          sync.Map
+	trackerMu        sync.Mutex
 }
 
 type compiledRegex struct {
@@ -52,6 +55,7 @@ type Match struct {
 	Action    string
 	Threshold int
 	Window    int
+	Host      netip.Addr
 }
 
 func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine, error) {
@@ -66,7 +70,7 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 	}
 
 	e := &Engine{
-		patternToRule:    make(map[string]RuleDef),
+		patternToRule:    make(map[string][]RuleDef),
 		defaultThreshold: defaultThreshold,
 		defaultWindow:    defaultWindow,
 	}
@@ -76,17 +80,34 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 	for _, rule := range config.Rules {
 		switch rule.Type {
 		case "aho-corasick":
+			if rule.TrustedHostCapture {
+				return nil, fmt.Errorf("rule %s cannot trust a host capture without a regex placeholder", rule.ID)
+			}
 			for _, pat := range rule.Patterns {
 				ahoBuilder.AddPattern([]byte(pat))
-				e.patternToRule[pat] = rule
+				e.patternToRule[pat] = append(e.patternToRule[pat], rule)
 				e.ahoCount++
 			}
 		case "regex":
+			if rule.TrustedHostCapture && (strings.Count(rule.Pattern, "<HOST>") != 1 || !strings.HasPrefix(rule.Pattern, "^")) {
+				return nil, fmt.Errorf("rule %s must be anchored and contain exactly one <HOST> placeholder for a trusted capture", rule.ID)
+			}
 			strictHostRegex := `(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-fA-F0-9:]+:[a-fA-F0-9:]+)`
 			safePattern := strings.ReplaceAll(rule.Pattern, "<HOST>", strictHostRegex)
 			re, err := regexp.Compile("(?i)" + safePattern)
 			if err != nil {
 				return nil, fmt.Errorf("invalid regex for rule %s: %w", rule.ID, err)
+			}
+			if rule.TrustedHostCapture {
+				hostCaptureCount := 0
+				for _, name := range re.SubexpNames() {
+					if name == "host" {
+						hostCaptureCount++
+					}
+				}
+				if hostCaptureCount != 1 {
+					return nil, fmt.Errorf("rule %s must compile to exactly one trusted host capture", rule.ID)
+				}
 			}
 			e.regexRules = append(e.regexRules, compiledRegex{def: rule, re: re})
 		}
@@ -111,61 +132,128 @@ func (e *Engine) RuleCount() int {
 }
 
 func (e *Engine) Scan(logLine string) *Match {
+	structuralHost := authoritativeRecordHost(logLine)
+	type regexCandidate struct {
+		match *Match
+		start int
+	}
+	regexCandidates := make([]regexCandidate, 0, len(e.regexRules))
 	for _, rr := range e.regexRules {
-		if match := rr.re.FindStringSubmatch(logLine); match != nil {
+		if indexes := rr.re.FindStringSubmatchIndex(logLine); indexes != nil {
 			hostIdx := rr.re.SubexpIndex("host")
-			if hostIdx >= 0 && hostIdx < len(match) {
-				matchedHost := match[hostIdx]
-				if matchedHost != "" && net.ParseIP(matchedHost) == nil {
+			host := structuralHost
+			if !host.IsValid() && hostIdx >= 0 && rr.def.TrustedHostCapture {
+				indexOffset := 2 * hostIdx
+				if indexOffset+1 >= len(indexes) || indexes[indexOffset] < 0 || indexes[indexOffset+1] < 0 {
+					continue
+				}
+				var ok bool
+				host, ok = canonicalSourceAddr(logLine[indexes[indexOffset]:indexes[indexOffset+1]])
+				if !ok {
 					continue
 				}
 			}
 
-			return &Match{
+			regexCandidates = append(regexCandidates, regexCandidate{match: &Match{
 				RuleID:    rr.def.ID,
 				Payload:   logLine,
 				Service:   rr.def.Service,
 				Action:    rr.def.Action,
 				Threshold: rr.def.Threshold,
 				Window:    rr.def.Window,
+				Host:      host,
+			}, start: indexes[0]})
+		}
+	}
+
+	// A syslog record does not have a structural leading or JSON address. In
+	// that case, bind the record to the host captured by the earliest matching
+	// signature. Later attacker-controlled text may match another service's
+	// signature, but it cannot replace that record-level authority.
+	var capturedAuthority netip.Addr
+	if !structuralHost.IsValid() {
+		authorityStart := len(logLine) + 1
+		for _, candidate := range regexCandidates {
+			if candidate.match.Host.IsValid() && candidate.start < authorityStart {
+				capturedAuthority = candidate.match.Host
+				authorityStart = candidate.start
 			}
 		}
 	}
 
-	if e.ahoMachine != nil {
-		// Scan raw line
-		if match, found := e.ahoMachine.Find([]byte(logLine), 0); found {
-			if rule, ok := e.patternToRule[string(e.ahoMachine.Pattern(match.PatternID))]; ok {
-				return &Match{
-					RuleID:    rule.ID,
-					Payload:   logLine,
-					Service:   rule.Service,
-					Action:    rule.Action,
-					Threshold: rule.Threshold,
-					Window:    rule.Window,
-				}
-			}
+	var best *Match
+	for _, candidate := range regexCandidates {
+		if capturedAuthority.IsValid() && candidate.match.Host.IsValid() && candidate.match.Host != capturedAuthority {
+			continue
 		}
+		best = preferHigherImpactMatch(best, candidate.match)
+	}
 
-		// Decode URL if possible to catch obfuscated payloads
-		decodedLine, err := url.QueryUnescape(logLine)
-		if err == nil && decodedLine != logLine {
-			if match, found := e.ahoMachine.Find([]byte(decodedLine), 0); found {
-				if rule, ok := e.patternToRule[string(e.ahoMachine.Pattern(match.PatternID))]; ok {
-					return &Match{
+	if e.ahoMachine != nil {
+		addMatches := func(content []byte) {
+			for _, ahoMatch := range e.ahoMachine.FindAllOverlapping(content) {
+				pattern := string(e.ahoMachine.Pattern(ahoMatch.PatternID))
+				for _, rule := range e.patternToRule[pattern] {
+					best = preferHigherImpactMatch(best, &Match{
 						RuleID:    rule.ID,
 						Payload:   logLine,
 						Service:   rule.Service,
 						Action:    rule.Action,
 						Threshold: rule.Threshold,
 						Window:    rule.Window,
-					}
+						Host:      structuralHost,
+					})
 				}
 			}
 		}
+
+		addMatches([]byte(logLine))
+		decodedLine, err := url.QueryUnescape(logLine)
+		if err == nil && decodedLine != logLine {
+			addMatches([]byte(decodedLine))
+		}
 	}
 
-	return nil
+	return best
+}
+
+func preferHigherImpactMatch(current, candidate *Match) *Match {
+	if current == nil {
+		return candidate
+	}
+	if candidate.Host.IsValid() != current.Host.IsValid() {
+		if candidate.Host.IsValid() {
+			return candidate
+		}
+		return current
+	}
+	if matchImpact(candidate.Action) > matchImpact(current.Action) {
+		return candidate
+	}
+	return current
+}
+
+func matchImpact(action string) int {
+	switch action {
+	case "detect":
+		return 1
+	case "track":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func authoritativeRecordHost(logLine string) netip.Addr {
+	value := ExtractIP(logLine)
+	if value == "" {
+		return netip.Addr{}
+	}
+	address, err := netip.ParseAddr(value)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return address.Unmap()
 }
 
 // EvaluateThreshold returns true if the IP has reached the limit and should be banned
@@ -185,6 +273,8 @@ func (e *Engine) EvaluateThreshold(ip string, ruleID string, customThreshold, cu
 
 	key := ip + ":" + ruleID
 	now := time.Now().Unix()
+	e.trackerMu.Lock()
+	defer e.trackerMu.Unlock()
 
 	var timestamps []int64
 	if val, ok := e.tracker.Load(key); ok {
@@ -217,6 +307,7 @@ func (e *Engine) GarbageCollector() {
 
 	for range ticker.C {
 		now := time.Now().Unix()
+		e.trackerMu.Lock()
 		e.tracker.Range(func(key, value interface{}) bool {
 			timestamps := value.([]int64)
 			var valid []int64
@@ -235,39 +326,106 @@ func (e *Engine) GarbageCollector() {
 			}
 			return true
 		})
+		e.trackerMu.Unlock()
 	}
 }
 
-var standardIpRegex = regexp.MustCompile(`^(?i)(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-f0-9:]+:[a-f0-9:]+)`)
-var jsonIpRegex = regexp.MustCompile(`\"(?:ClientHost|remote_ip|client_ip|ClientAddr)\"\s*:\s*\"(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-f0-9:]+:[a-f0-9:]+)\"`)
+var jsonIPFieldNames = map[string]struct{}{
+	"ClientHost": {},
+	"remote_ip":  {},
+	"remoteAddr": {},
+	"client_ip":  {},
+	"ClientAddr": {},
+}
 
 func ExtractIP(logLine string) string {
 	logLine = strings.TrimSpace(logLine)
-
-	// 1. Try standard JSON log format matching Traefik/Caddy
-	if strings.Contains(logLine, "{") && strings.Contains(logLine, "}") {
-		matches := jsonIpRegex.FindStringSubmatch(logLine)
-		if len(matches) > 1 {
-			return validateIPStr(matches[1])
-		}
+	if logLine == "" {
+		return ""
 	}
 
-	// 2. Try standard Apache/Nginx format (IP at the very beginning of the line)
-	matches := standardIpRegex.FindStringSubmatch(logLine)
-	if len(matches) > 1 {
-		return validateIPStr(matches[1])
+	// A leading address is authoritative for conventional access logs. Checking it
+	// first prevents attacker-controlled text later in the record from replacing it.
+	leadingEnd := strings.IndexAny(logLine, " \t\r\n")
+	if leadingEnd < 0 {
+		leadingEnd = len(logLine)
+	}
+	if addr, ok := canonicalSourceAddr(logLine[:leadingEnd]); ok {
+		return addr.String()
+	}
+
+	// Structured logs are accepted only when the complete record is one JSON
+	// object and an unambiguous supported field exists at its top level.
+	if addr, ok := extractTopLevelJSONAddr(logLine); ok {
+		return addr.String()
 	}
 
 	return ""
 }
 
-func validateIPStr(ipStr string) string {
-	// Ignore unroutable loopback and generic bind addresses from internal logs
-	if ipStr == "0.0.0.0" || ipStr == "127.0.0.1" || ipStr == "::1" || ipStr == "::" {
-		return ""
+func extractTopLevelJSONAddr(logLine string) (netip.Addr, bool) {
+	decoder := json.NewDecoder(strings.NewReader(logLine))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return netip.Addr{}, false
 	}
-	if net.ParseIP(ipStr) != nil {
-		return ipStr
+
+	seen := make(map[string]struct{})
+	var candidate netip.Addr
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return netip.Addr{}, false
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return netip.Addr{}, false
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return netip.Addr{}, false
+		}
+		seen[key] = struct{}{}
+
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return netip.Addr{}, false
+		}
+		if _, supported := jsonIPFieldNames[key]; !supported {
+			continue
+		}
+
+		var encodedAddr string
+		if err := json.Unmarshal(value, &encodedAddr); err != nil {
+			return netip.Addr{}, false
+		}
+		addr, valid := canonicalSourceAddr(encodedAddr)
+		if !valid {
+			return netip.Addr{}, false
+		}
+		if candidate.IsValid() && candidate != addr {
+			return netip.Addr{}, false
+		}
+		candidate = addr
 	}
-	return ""
+
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return netip.Addr{}, false
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return netip.Addr{}, false
+	}
+	return candidate, candidate.IsValid()
+}
+
+func canonicalSourceAddr(raw string) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	addr = addr.Unmap()
+	if addr.IsUnspecified() || addr.IsLoopback() {
+		return netip.Addr{}, false
+	}
+	return addr, true
 }

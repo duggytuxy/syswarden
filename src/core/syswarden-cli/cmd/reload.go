@@ -11,24 +11,38 @@ import (
 )
 
 var noRestart bool
+var applyPoliciesForReload = firewall.ApplyPolicies
+var setupWireGuardForReload = network.SetupWireguard
 
 var reloadCmd = &cobra.Command{
 	Use:   "reload",
 	Short: "Reapply policy and normally restart syswarden-core",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := preflightConfiguredCronScheduling(); err != nil {
+			return fmt.Errorf("cron scheduling preflight failed before reload mutation: %w", err)
+		}
+		if err := preflightConfiguredFirewallBackend(); err != nil {
+			return fmt.Errorf("firewall backend preflight failed before reload mutation: %w", err)
+		}
 		fmt.Println("[*] Reloading SYSWARDEN configuration from memory...")
 		var failures []error
 
 		// Re-apply Firewall and Whitelists based on new config
-		if err := firewall.ApplyPolicies(); err != nil {
+		firewallReady := true
+		if err := applyPoliciesForReload(); err != nil {
 			fmt.Printf("[ERROR] Firewall reload failed: %v\n", err)
 			failures = append(failures, fmt.Errorf("firewall reload: %w", err))
+			firewallReady = false
 		}
 
 		// Re-apply Wireguard if changed
-		if err := network.SetupWireguard(); err != nil {
-			fmt.Printf("[ERROR] Wireguard reload failed: %v\n", err)
-			failures = append(failures, fmt.Errorf("WireGuard reload: %w", err))
+		if firewallReady {
+			if err := setupWireGuardForReload(); err != nil {
+				fmt.Printf("[ERROR] Wireguard reload failed: %v\n", err)
+				failures = append(failures, fmt.Errorf("WireGuard reload: %w", err))
+			}
+		} else {
+			fmt.Println("[WARN] WireGuard reload skipped because the authoritative firewall transaction failed.")
 		}
 
 		// Re-apply WAF Log Bridge (Rsyslog)

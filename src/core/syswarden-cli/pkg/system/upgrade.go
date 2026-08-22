@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "v4.03.1"
+var Version = "v4.03.2"
 
 const (
 	latestReleaseAPI             = "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"

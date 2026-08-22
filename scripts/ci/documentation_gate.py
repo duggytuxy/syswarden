@@ -1039,6 +1039,85 @@ def validate_markdown(
                 errors.append(
                     f"{label}: unknown TOML configuration keys: {sorted(unknown)}"
                 )
+        if language == "bash" and '${IMAGE_ROOT}' in body and "sudo " in body:
+            recipe = body.lstrip()
+            stage_command = (
+                "sudo extensions/rhel-image/stage-syswarden-rhel-image.sh"
+            )
+            if not recipe.startswith("set -euo pipefail\n"):
+                errors.append(
+                    f"{label}: privileged image-root Bash fence lacks its own "
+                    "fail-closed shell options"
+                )
+            if "IMAGE_ROOT=/srv/image-root\n" not in recipe:
+                errors.append(
+                    f"{label}: privileged image-root Bash fence lacks its own "
+                    "explicit image root"
+                )
+            first_sudo = recipe.find("sudo ")
+            first_stage = recipe.find(stage_command)
+            if first_stage < 0 or first_sudo != first_stage:
+                errors.append(
+                    f"{label}: privileged image-root Bash fence must run the "
+                    "extension guard before any other sudo command"
+                )
+        if language == "bash" and "EXPECTED_POLICY_MANIFEST_SHA256" in body:
+            recipe = body.lstrip()
+            if not recipe.startswith("set -euo pipefail\numask 077\n"):
+                errors.append(
+                    f"{label}: policy publication fence lacks fail-closed root "
+                    "shell setup"
+                )
+            if 'if (( EUID != 0 )) || [[ "${GROUPS[0]}" != 0 ]]; then' not in recipe:
+                errors.append(
+                    f"{label}: policy publication fence lacks an explicit root "
+                    "identity guard"
+                )
+            if "sudo " in recipe:
+                errors.append(
+                    f"{label}: policy publication fence must not mix a root "
+                    "transaction with per-command sudo"
+                )
+            for absolute_command in (
+                "/usr/bin/install",
+                "/usr/bin/mv",
+                "/usr/bin/sha256sum",
+            ):
+                if absolute_command not in recipe:
+                    errors.append(
+                        f"{label}: policy publication fence lacks fixed command "
+                        f"{absolute_command}"
+                    )
+        if language == "bash" and 'CONFIG_STAGE="${IMAGE_ROOT}' in body:
+            recipe = body.lstrip()
+            if not recipe.startswith("set -euo pipefail\numask 077\n"):
+                errors.append(
+                    f"{label}: configuration publication fence lacks "
+                    "fail-closed root shell setup"
+                )
+            if 'if (( EUID != 0 )) || [[ "${GROUPS[0]}" != 0 ]]; then' not in recipe:
+                errors.append(
+                    f"{label}: configuration publication fence lacks an "
+                    "explicit root identity guard"
+                )
+            if "sudo " in recipe:
+                errors.append(
+                    f"{label}: configuration publication fence must not mix "
+                    "a root transaction with per-command sudo"
+                )
+            for required in (
+                "CONFIG_FILES=(config.toml modules/00-core.toml modules/10-network.toml)",
+                "extensions/rhel-image/stage-syswarden-rhel-image.sh",
+                "/usr/bin/install",
+                "/usr/bin/cmp",
+                "/usr/bin/mv",
+                "/usr/bin/stat",
+            ):
+                if required not in recipe:
+                    errors.append(
+                        f"{label}: configuration publication fence lacks "
+                        f"required boundary {required}"
+                    )
 
     for line_number, command in markdown_commands(text):
         if command not in known_commands:

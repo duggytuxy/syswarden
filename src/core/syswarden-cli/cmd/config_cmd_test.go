@@ -138,7 +138,7 @@ func TestConfigGetUsesValidatedDescriptorRootedLoader_SW_CFG_002(t *testing.T) {
 	if err := configGetCmd.RunE(configGetCmd, []string{"core.firewall_backend"}); err != nil {
 		t.Fatalf("config-get error = %v", err)
 	}
-	if strings.TrimSpace(output.String()) != "nftables" {
+	if strings.TrimSpace(output.String()) != "keep" {
 		t.Fatalf("config-get output = %q", output.String())
 	}
 	if err := configGetCmd.RunE(configGetCmd, []string{"missing.value"}); err == nil {

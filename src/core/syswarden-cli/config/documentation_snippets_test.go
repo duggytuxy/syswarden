@@ -11,7 +11,10 @@ import (
 
 func TestPublicTOMLSnippetsLoadWithApplicationParser_SW_DOC_001(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", "..", "..", ".."))
-	paths := []string{filepath.Join(repoRoot, "README.md")}
+	paths := []string{
+		filepath.Join(repoRoot, "README.md"),
+		filepath.Join(repoRoot, "extensions", "rhel-image", "README.md"),
+	}
 	if wikiRoot := os.Getenv("SYSWARDEN_WIKI_ROOT"); wikiRoot != "" {
 		info, err := os.Stat(wikiRoot) // #nosec G703 -- the maintainer explicitly supplies the separate local wiki checkout used only by this test
 		if err != nil || !info.IsDir() {
@@ -40,13 +43,24 @@ func TestPublicTOMLSnippetsLoadWithApplicationParser_SW_DOC_001(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(minimalModularConfig), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(modules, "99-documentation.toml"), []byte(block), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(modules, "99-documentation.toml"), []byte(block.content), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				previous := GlobalConfig
 				t.Cleanup(func() { GlobalConfig = previous })
-				if err := loadModularConfig(root); err != nil {
-					t.Fatalf("application parser rejected documented TOML from %s block %d: %v\n%s", path, index+1, err, block)
+				err := loadModularConfig(root)
+				if block.expectInvalidASN {
+					if err == nil {
+						t.Fatalf("application parser accepted the fail-closed ASN placeholder from %s block %d:\n%s", path, index+1, block.content)
+					}
+					diagnostic := err.Error()
+					if !strings.Contains(diagnostic, "BlockedASNs") || !strings.Contains(diagnostic, "asn_slice") {
+						t.Fatalf("application parser rejected the marked block for an unexpected reason from %s block %d: %v\n%s", path, index+1, err, block.content)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("application parser rejected documented TOML from %s block %d: %v\n%s", path, index+1, err, block.content)
 				}
 			})
 		}
@@ -56,7 +70,14 @@ func TestPublicTOMLSnippetsLoadWithApplicationParser_SW_DOC_001(t *testing.T) {
 	}
 }
 
-func documentationTOMLBlocks(t *testing.T, path string) []string {
+const documentationInvalidASNMarker = "<!-- syswarden-doc-toml-expect-invalid-asn -->"
+
+type documentationTOMLBlock struct {
+	content          string
+	expectInvalidASN bool
+}
+
+func documentationTOMLBlocks(t *testing.T, path string) []documentationTOMLBlock {
 	t.Helper()
 	file, err := os.Open(path) // #nosec G304 G703 -- path is the fixed README or a file discovered inside the explicit maintainer-controlled wiki root
 	if err != nil {
@@ -64,20 +85,39 @@ func documentationTOMLBlocks(t *testing.T, path string) []string {
 	}
 	defer file.Close()
 
-	var blocks []string
+	var blocks []documentationTOMLBlock
 	var current []string
 	inTOML := false
+	expectInvalidASN := false
+	currentExpectInvalidASN := false
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !inTOML && strings.TrimSpace(line) == "```toml" {
-			inTOML = true
-			current = nil
+		trimmed := strings.TrimSpace(line)
+		if !inTOML && trimmed == documentationInvalidASNMarker {
+			if expectInvalidASN {
+				t.Fatalf("duplicate expected-invalid ASN marker in %s", path)
+			}
+			expectInvalidASN = true
 			continue
 		}
-		if inTOML && strings.HasPrefix(strings.TrimSpace(line), "```") {
-			blocks = append(blocks, strings.Join(current, "\n")+"\n")
+		if !inTOML && trimmed == "```toml" {
+			inTOML = true
+			current = nil
+			currentExpectInvalidASN = expectInvalidASN
+			expectInvalidASN = false
+			continue
+		}
+		if !inTOML && expectInvalidASN {
+			t.Fatalf("expected-invalid ASN marker must be immediately followed by a TOML fence in %s", path)
+		}
+		if inTOML && strings.HasPrefix(trimmed, "```") {
+			blocks = append(blocks, documentationTOMLBlock{
+				content:          strings.Join(current, "\n") + "\n",
+				expectInvalidASN: currentExpectInvalidASN,
+			})
 			inTOML = false
+			currentExpectInvalidASN = false
 			continue
 		}
 		if inTOML {
@@ -89,6 +129,9 @@ func documentationTOMLBlocks(t *testing.T, path string) []string {
 	}
 	if inTOML {
 		t.Fatalf("unclosed TOML fence in %s", path)
+	}
+	if expectInvalidASN {
+		t.Fatalf("expected-invalid ASN marker is not followed by a TOML fence in %s", path)
 	}
 	return blocks
 }

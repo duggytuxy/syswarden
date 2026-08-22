@@ -1,3 +1,78 @@
+# Release v4.03.2
+
+> Candidate status: v4.03.2 is the Patch candidate that supersedes the
+> technically qualified but unpublished v4.03.1 candidate. v4.03.1 was
+> deliberately left untagged and no public Release was created. Requirements
+> recorded in the historical v4.03.1 block describe that candidate's original
+> gate and do not authorize or apply to v4.03.2.
+
+### SECURITY
+
+- **LOT 2 aggregate closure:** Assemble the completed Linux-only surface
+  reduction from LOT 2A, six-package reproducibility from LOT 2B and bounded
+  security remediation from LOT 2S. LOT 2 closes only on the exact merged
+  commit after the protected main and qualification gates pass. This closure
+  does not authorize a tag or public Release.
+- **LOT 2S audit closure:** Close the five high-severity findings and the
+  selected M1, M6, M9 and M13 medium-severity controls from security audit
+  BW-SW-2026-002. Retired network-terminal and non-Linux surfaces remain
+  outside this remediation scope.
+- **Log-derived enforcement authority:** Carry one validated source address
+  through the matching engine, reject ambiguous embedded JSON and untrusted
+  captures, arbitrate competing signatures deterministically and synchronize
+  threshold state before WAAP or UDS can request a firewall mutation.
+- **Internal-log recursion boundary:** Authenticate SysWarden internal security
+  records with a process-local HMAC, exclude raw attacker payloads and require
+  the authenticated grammar before WAAP or UDS suppresses an input record.
+- **Feed and SaaS integrity:** Bound downloads and stored inputs, reject
+  redirects and unsafe prefixes, require hashes for custom feeds, require
+  independent-origin agreement where supported and retain the last known good
+  state when authority cannot be established.
+- **Firewall and HA mutation policy:** Reject default routes, unsafe networks,
+  local interfaces, HA peers and strict-whitelist targets before WAAP, UDS or
+  HA can mutate enforcement state. Keep unsafe historical entries detectable
+  and removable without allowing them to be reintroduced.
+- **Firewall backend boundary:** Keep nftables as the single authoritative
+  policy engine. Default to a no-transition `keep` mode that refuses active or
+  enabled iptables compatibility services, treat `nftables` as an assertion of
+  an operator-prepared active service with no active or enabled compatibility
+  frontend, and reject the parseable `iptables` value before operational
+  firewall policy mutation changes persistent inputs or kernel state.
+- **WireGuard backend boundary:** Require the explicit `nftables` backend for
+  WireGuard. Do not infer WireGuard UDP or forwarding permissions from the
+  bounded firewalld or UFW compatibility path.
+- **Qualification signing isolation:** Remove the release-signing environment
+  and key from the self-hosted qualification job. Revalidate the exact unsigned
+  evidence and package bytes in a separate GitHub-hosted sealing job before the
+  protected signing step.
+
+### CHANGED
+
+- **Optional RHEL image staging extension:** Add a separate, opt-in module for
+  staging one checksum-bound local RPM into a fresh, unmounted RHEL-family 9 or
+  newer image root with package scripts, triggers and plugins disabled. Defer
+  all product, service, firewall and kernel activity to a marker-guarded
+  first-boot convergence. The extension is not invoked by the normal build,
+  package installation, update or reload paths.
+- **Forward-only release path:** Rebind the historical public v4.02.8 APK
+  transition to v4.03.2 because neither v4.03.0 nor v4.03.1 was published.
+- **Evidence boundary:** Retain the successful v4.03.1 qualification as
+  technical evidence only. v4.03.2 requires its own protected merge checks,
+  attempt-1 pre-tag qualification, immutable signed tag and byte-exact
+  thirteen-asset publisher gates.
+- **Residual risk tracking:** Keep remaining non-blocking and deferred findings
+  in later remediation lots. This Patch does not claim closure of findings
+  outside the explicit LOT 2S acceptance matrix.
+
+### RELEASE GATE
+
+- v4.03.2 remains NO-GO until the exact merged commit passes every protected
+  main and qualification gate, the qualification environment has the required
+  owner review rule, and the signed-tag rebuild matches the qualified packages
+  byte for byte. No v4.03.2 tag or public Release is authorized by this block.
+
+---
+
 # Release v4.03.1
 
 > Release status: v4.03.1 supersedes the unpublished v4.03.0 candidate. The

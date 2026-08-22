@@ -130,7 +130,8 @@ RPM_BOOTSTRAP = (
     "cpio diffutils file && dnf clean all"
 )
 APK_BOOTSTRAP = (
-    "apk add --no-cache nftables openrc curl wget rsyslog rsyslog-uxsock "
+    "apk add --no-cache openrc && "
+    "apk add --no-cache nftables cronie cronie-openrc curl wget rsyslog rsyslog-uxsock "
     "bash-completion wireguard-tools libqrencode-tools jq procps-ng "
     "e2fsprogs-extra shadow socat binutils file && test -x /usr/bin/gpasswd"
 )
@@ -389,7 +390,7 @@ PACKAGE_PAYLOAD_PATHS = (
     "/usr/local/bin/syswarden",
     "/usr/local/bin/syswarden-tui",
 )
-FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.03.1"
+FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.03.2"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
 FORWARD_ONLY_APK_PREVIOUS = {
     "x86_64": {
@@ -456,11 +457,14 @@ def _generated_cleanup_event_checks(scenario: str, label: str) -> tuple[str, ...
             "systemd_firewall_enablement",
             "openrc_core_enablement",
             "openrc_firewall_enablement",
-            "completion",
-            "rsyslog_siem",
-            "rsyslog_waf_bridge",
-            "cron_reference",
-            "cron_unrelated",
+            "runtime_socket",
+            "completion_residual",
+            "rsyslog_siem_residual",
+            "rsyslog_waf_bridge_residual",
+            "cron_d_owned",
+            "cron_d_pending",
+            "root_crontab_bytes",
+            "root_crontab_legacy_residual",
         )
     )
 
@@ -605,7 +609,7 @@ def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> boo
     if historical_binding_touched and not forward_only:
         raise LifecycleLabError(
             "historical APK transition must be the exact byte-bound "
-            "v4.02.8 -> v4.03.1 contract for "
+            "v4.02.8 -> v4.03.2 contract for "
             f"{spec.package_architecture}"
         )
     return forward_only
@@ -1295,7 +1299,7 @@ expected_runtime_dependencies() {
             printf '%s\n' bash-completion checkpolicy cronie curl dnf-automatic e2fsprogs ipset jq nftables policycoreutils-python-utils procps-ng qrencode rsyslog wget wireguard-tools
             ;;
         apk)
-            printf '%s\n' bash-completion curl e2fsprogs-extra jq libqrencode-tools nftables openrc procps-ng rsyslog rsyslog-uxsock shadow wget wireguard-tools
+            printf '%s\n' bash-completion cronie cronie-openrc curl e2fsprogs-extra jq libqrencode-tools nftables openrc procps-ng rsyslog rsyslog-uxsock shadow wget wireguard-tools
             ;;
         *)
             return 2
@@ -1806,6 +1810,134 @@ SYSWARDEN_MANAGER_SENTINEL
     export PATH
 }
 
+alpine_apk_owner_version() {
+    syswarden_owner_path="$1"
+    syswarden_owner_package="$2"
+    syswarden_owner_output="$(LC_ALL=C apk info --who-owns "${syswarden_owner_path}")" || return 1
+    printf '%s\n' "${syswarden_owner_output}" | LC_ALL=C awk \
+        -v path="${syswarden_owner_path}" \
+        -v package="${syswarden_owner_package}" '
+        BEGIN { prefix = path " is owned by " package "-" }
+        {
+            records++
+            if (records != 1 || index($0, prefix) != 1) {
+                invalid = 1
+            }
+            version = substr($0, length(prefix) + 1)
+            if (version !~ /^[0-9][A-Za-z0-9._+~:-]*$/) {
+                invalid = 1
+            }
+        }
+        END {
+            if (records != 1 || invalid) {
+                exit 1
+            }
+            print version
+        }
+    '
+}
+
+validate_alpine_cronie_runlevels() {
+    syswarden_runlevel_mode="$1"
+    LC_ALL=C awk -v mode="${syswarden_runlevel_mode}" '
+        $1 == "cronie" {
+            records++
+            if (NF != 3 || $2 != "|" || $3 != "default") {
+                invalid = 1
+            }
+        }
+        END {
+            if (invalid || mode == "required" && records != 1 ||
+                mode == "preparable" && records > 1 ||
+                mode != "required" && mode != "preparable") {
+                exit 1
+            }
+        }
+    '
+}
+
+capture_alpine_crond_package_snapshot() {
+    LC_ALL=C apk info --installed cronie || return 1
+    LC_ALL=C apk info --installed cronie-openrc || return 1
+    syswarden_crond_path="$(command -v crond)" || return 1
+    case "${syswarden_crond_path}" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "${syswarden_crond_path}" in
+        *[[:space:]]*) return 1 ;;
+    esac
+    syswarden_crond_target="$(readlink -f "${syswarden_crond_path}")" || return 1
+    case "${syswarden_crond_target}" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "${syswarden_crond_target}" in
+        *[[:space:]]*) return 1 ;;
+    esac
+    [ "${syswarden_crond_target##*/}" = crond ] || return 1
+    syswarden_crond_version="$(alpine_apk_owner_version "${syswarden_crond_target}" cronie)" || return 1
+    # Alpine names the OpenRC service "cronie" even though its daemon is crond.
+    syswarden_init_version="$(alpine_apk_owner_version /etc/init.d/cronie cronie-openrc)" || return 1
+    [ "${syswarden_crond_version}" = "${syswarden_init_version}" ] || return 1
+    printf '%s\n' \
+        "crond_path=${syswarden_crond_path}" \
+        "crond_target=${syswarden_crond_target}" \
+        "cronie_version=${syswarden_crond_version}" \
+        "openrc_service=cronie" \
+        "init_path=/etc/init.d/cronie" \
+        "cronie_openrc_version=${syswarden_init_version}"
+}
+
+capture_alpine_crond_provider_snapshot() {
+    syswarden_package_snapshot="$(capture_alpine_crond_package_snapshot)" || return 1
+    LC_ALL=C rc-service --exists cronie || return 1
+    syswarden_status_snapshot="$(LC_ALL=C rc-service cronie status 2>&1)" || return 1
+    syswarden_runlevel_snapshot="$(LC_ALL=C rc-update show)" || return 1
+    printf '%s\n' "${syswarden_runlevel_snapshot}" | validate_alpine_cronie_runlevels required || return 1
+    printf '%s\n' \
+        "${syswarden_package_snapshot}" \
+        "status_begin" \
+        "${syswarden_status_snapshot}" \
+        "status_end" \
+        "runlevels_begin" \
+        "${syswarden_runlevel_snapshot}" \
+        "runlevels_end"
+}
+
+attest_alpine_crond_provider() {
+    [ "${PACKAGE_FAMILY}" = apk ] || return 0
+    syswarden_provider_first="$(capture_alpine_crond_provider_snapshot)" || return 1
+    syswarden_provider_second="$(capture_alpine_crond_provider_snapshot)" || return 1
+    [ "${syswarden_provider_first}" = "${syswarden_provider_second}" ] || return 1
+}
+
+prepare_alpine_crond_provider() {
+    [ "${PACKAGE_FAMILY}" = apk ] || return 0
+    syswarden_package_first="$(capture_alpine_crond_package_snapshot)" || return 1
+    syswarden_package_second="$(capture_alpine_crond_package_snapshot)" || return 1
+    [ "${syswarden_package_first}" = "${syswarden_package_second}" ] || return 1
+    mkdir -p /run/openrc || return 1
+    : > /run/openrc/softlevel || return 1
+    syswarden_runlevels_before="$(LC_ALL=C rc-update show)" || return 1
+    printf '%s\n' "${syswarden_runlevels_before}" | validate_alpine_cronie_runlevels preparable || return 1
+    rc-update add cronie default || return 1
+    if ! rc-service cronie status >/dev/null 2>&1; then
+        rc-service cronie start || return 1
+    fi
+    attest_alpine_crond_provider
+}
+
+prepare_service_runtime_fixture() {
+    if [ "${PACKAGE_FAMILY}" = apk ]; then
+        remove_service_manager_sentinels
+        : > /tmp/syswarden-service-manager-calls
+        prepare_alpine_crond_provider
+        return
+    fi
+    install_service_manager_sentinels
+}
+
 remove_service_manager_sentinels() {
     manager_path_state=/tmp/syswarden-manager-original-path
     if [ -f "${manager_path_state}" ] && [ ! -L "${manager_path_state}" ] && \
@@ -1968,16 +2100,22 @@ probe_postinstall_contract() {
     if [ ! -s /etc/bash_completion.d/syswarden ] || [ -L /etc/bash_completion.d/syswarden ]; then
         mark_postinstall_failure completion
     fi
-    if cron_state="$(LC_ALL=C crontab -l 2>/tmp/syswarden-postinstall-cron.error)"; then
+    feed_cron_count=0
+    if [ -f /etc/cron.d/syswarden ] && [ ! -L /etc/cron.d/syswarden ] && \
+       [ "$(stat -c '%u:%g:%a:%h' /etc/cron.d/syswarden 2>/dev/null || true)" = 0:0:644:1 ]; then
+        feed_cron_count="$(awk '
+            $1 ~ /^([1-9]|[1-5][0-9])$/ &&
+                $0 == $1 " * * * * root /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1" { count++ }
+            END { print count + 0 }
+        ' /etc/cron.d/syswarden)"
+    elif cron_state="$(LC_ALL=C crontab -l 2>/tmp/syswarden-postinstall-cron.error)"; then
         feed_cron_count="$(printf '%s\n' "${cron_state}" | awk '
             $1 ~ /^([1-9]|[1-5][0-9])$/ &&
                 $0 == $1 " * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1" { count++ }
             END { print count + 0 }
         ')"
-        [ "${feed_cron_count}" -eq 1 ] || mark_postinstall_failure feed-cron
-    else
-        mark_postinstall_failure feed-cron
     fi
+    [ "${feed_cron_count}" -eq 1 ] || mark_postinstall_failure feed-cron
     case "${PACKAGE_FAMILY}" in
         deb|rpm)
             service_contract='systemd'
@@ -2590,8 +2728,20 @@ seed_generated_runtime_artifacts() {
         /etc/rsyslog.d/99-syswarden-waf-bridge.conf; do
         printf '%s\n' 'syswarden-lifecycle-generated-artifact' > "${path}"
     done
-    LC_ALL=C crontab -l > /tmp/syswarden-existing-cron 2>/tmp/syswarden-existing-cron.error || return 1
+    hash_file /etc/bash_completion.d/syswarden > /tmp/syswarden-completion-before || return 1
+    hash_file /etc/rsyslog.d/99-syswarden-siem.conf > /tmp/syswarden-rsyslog-siem-before || return 1
+    hash_file /etc/rsyslog.d/99-syswarden-waf-bridge.conf > /tmp/syswarden-rsyslog-waf-before || return 1
+    if LC_ALL=C crontab -l > /tmp/syswarden-existing-cron 2>/tmp/syswarden-existing-cron.error; then
+        :
+    elif [ ! -s /tmp/syswarden-existing-cron ] && grep -E -x -q \
+        "(no crontab for root|crontab: no crontab for root|crontab: can't open 'root': No such file or directory)" \
+        /tmp/syswarden-existing-cron.error; then
+        : > /tmp/syswarden-existing-cron
+    else
+        return 1
+    fi
     {
+        printf '%s\n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
         printf '%s\n' '# operator note mentioning syswarden-cli'
         printf '%s\n' '19 4 * * * /opt/syswarden/bin/syswarden-cli update-feeds --operator-option'
         printf '%s\n' ' */30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1'
@@ -2604,12 +2754,22 @@ seed_generated_runtime_artifacts() {
     {
         cat /tmp/syswarden-existing-cron
         cat "${OPERATOR_CRON_FILE}"
-    } | crontab -
+    } > /tmp/syswarden-root-cron-before
+    crontab - < /tmp/syswarden-root-cron-before || return 1
+    LC_ALL=C crontab -l > /tmp/syswarden-root-cron-confirmed 2>/tmp/syswarden-root-cron-confirmed.error || return 1
+    cmp -s /tmp/syswarden-root-cron-before /tmp/syswarden-root-cron-confirmed || return 1
+    [ -f /etc/cron.d/syswarden ] && [ ! -L /etc/cron.d/syswarden ] || return 1
+    printf '%s' '# Managed by' > /etc/cron.d/.syswarden.pending-v1 || return 1
+    chmod 0600 /etc/cron.d/.syswarden.pending-v1 || return 1
 }
 
-assert_generated_runtime_artifacts_absent() {
+assert_generated_runtime_artifact_contract() {
     label="$1"
-    if [ -s /tmp/syswarden-service-manager-calls ]; then
+    if [ "${PACKAGE_FAMILY}" = apk ] && attest_alpine_crond_provider; then
+        record pass "${PREFIX}.${label}.service_manager_calls" "active OpenRC and enabled cronie provider remain attestable"
+    elif [ "${PACKAGE_FAMILY}" = apk ]; then
+        record fail "${PREFIX}.${label}.service_manager_calls" "active OpenRC or enabled cronie provider became unavailable"
+    elif [ -s /tmp/syswarden-service-manager-calls ]; then
         record fail "${PREFIX}.${label}.service_manager_calls" "offline removal invoked a service manager: $(tr '\n' ' ' < /tmp/syswarden-service-manager-calls)"
     else
         record pass "${PREFIX}.${label}.service_manager_calls" "offline removal invoked no service manager"
@@ -2624,34 +2784,44 @@ assert_generated_runtime_artifacts_absent() {
     check_absent "${label}.generated.systemd_firewall_enablement" /etc/systemd/system/multi-user.target.wants/syswarden-firewall.service
     check_absent "${label}.generated.openrc_core_enablement" /etc/runlevels/default/syswarden-core
     check_absent "${label}.generated.openrc_firewall_enablement" /etc/runlevels/default/syswarden-firewall
-    check_absent "${label}.generated.completion" /etc/bash_completion.d/syswarden
-    check_absent "${label}.generated.rsyslog_siem" /etc/rsyslog.d/99-syswarden-siem.conf
-    check_absent "${label}.generated.rsyslog_waf_bridge" /etc/rsyslog.d/99-syswarden-waf-bridge.conf
-    if ! cron_state="$(LC_ALL=C crontab -l 2>/tmp/syswarden-remove-cron.error)"; then
-        record fail "${PREFIX}.${label}.generated.cron_reference" "root crontab could not be read after removal"
-        record fail "${PREFIX}.${label}.generated.cron_unrelated" "operator cron preservation could not be verified"
+    check_absent "${label}.generated.runtime_socket" /run/syswarden.sock
+    if [ -f /etc/bash_completion.d/syswarden ] && [ ! -L /etc/bash_completion.d/syswarden ] && \
+       [ "$(hash_file /etc/bash_completion.d/syswarden 2>/dev/null || true)" = "$(cat /tmp/syswarden-completion-before)" ]; then
+        record pass "${PREFIX}.${label}.generated.completion_residual" "ambiguous shell completion is preserved for manual recovery"
+    else
+        record fail "${PREFIX}.${label}.generated.completion_residual" "ambiguous shell completion changed during removal"
+    fi
+    if [ -f /etc/rsyslog.d/99-syswarden-siem.conf ] && [ ! -L /etc/rsyslog.d/99-syswarden-siem.conf ] && \
+       [ "$(hash_file /etc/rsyslog.d/99-syswarden-siem.conf 2>/dev/null || true)" = "$(cat /tmp/syswarden-rsyslog-siem-before)" ]; then
+        record pass "${PREFIX}.${label}.generated.rsyslog_siem_residual" "ambiguous rsyslog SIEM bridge is preserved for manual recovery"
+    else
+        record fail "${PREFIX}.${label}.generated.rsyslog_siem_residual" "ambiguous rsyslog SIEM bridge changed during removal"
+    fi
+    if [ -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf ] && [ ! -L /etc/rsyslog.d/99-syswarden-waf-bridge.conf ] && \
+       [ "$(hash_file /etc/rsyslog.d/99-syswarden-waf-bridge.conf 2>/dev/null || true)" = "$(cat /tmp/syswarden-rsyslog-waf-before)" ]; then
+        record pass "${PREFIX}.${label}.generated.rsyslog_waf_bridge_residual" "ambiguous rsyslog WAF bridge is preserved for manual recovery"
+    else
+        record fail "${PREFIX}.${label}.generated.rsyslog_waf_bridge_residual" "ambiguous rsyslog WAF bridge changed during removal"
+    fi
+    check_absent "${label}.generated.cron_d_owned" /etc/cron.d/syswarden
+    check_absent "${label}.generated.cron_d_pending" /etc/cron.d/.syswarden.pending-v1
+    if ! LC_ALL=C crontab -l > /tmp/syswarden-root-cron-after 2>/tmp/syswarden-remove-cron.error; then
+        record fail "${PREFIX}.${label}.generated.root_crontab_bytes" "root crontab could not be read after removal"
+        record fail "${PREFIX}.${label}.generated.root_crontab_legacy_residual" "legacy residual could not be verified"
         return
     fi
-    managed_cron="$(printf '%s\n' "${cron_state}" | awk '
-        $0 == "*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1" { print }
-        $1 ~ /^([1-9]|[1-5][0-9])$/ &&
-            $0 == $1 " * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1" { print }
-    ')"
-    if [ -n "${managed_cron}" ]; then
-        record fail "${PREFIX}.${label}.generated.cron_reference" "dead SysWarden cron reference remains"
+    cron_state="$(cat /tmp/syswarden-root-cron-after)"
+    if cmp -s /tmp/syswarden-root-cron-before /tmp/syswarden-root-cron-after; then
+        record pass "${PREFIX}.${label}.generated.root_crontab_bytes" "operator-controlled root crontab bytes are preserved exactly"
     else
-        record pass "${PREFIX}.${label}.generated.cron_reference" "SysWarden cron references are absent"
+        record fail "${PREFIX}.${label}.generated.root_crontab_bytes" "operator-controlled root crontab bytes changed"
     fi
-    operator_cron_ok=1
-    while IFS= read -r operator_cron_line || [ -n "${operator_cron_line}" ]; do
-        if ! printf '%s\n' "${cron_state}" | grep -F -x -q "${operator_cron_line}"; then
-            operator_cron_ok=0
-        fi
-    done < "${OPERATOR_CRON_FILE}"
-    if [ "${operator_cron_ok}" -eq 1 ]; then
-        record pass "${PREFIX}.${label}.generated.cron_unrelated" "unrelated cron entry is preserved"
+    legacy_count="$(printf '%s\n' "${cron_state}" | grep -F -x -c \
+        '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1' || true)"
+    if [ "${legacy_count}" -eq 1 ] && [ ! -e /opt/syswarden/bin/syswarden-cli ] && [ ! -L /opt/syswarden/bin/syswarden-cli ]; then
+        record pass "${PREFIX}.${label}.generated.root_crontab_legacy_residual" "one exact inert legacy record remains as a bounded residual"
     else
-        record fail "${PREFIX}.${label}.generated.cron_unrelated" "unrelated cron entry was removed"
+        record fail "${PREFIX}.${label}.generated.root_crontab_legacy_residual" "bounded inert legacy residual contract is not satisfied"
     fi
 }
 
@@ -2717,7 +2887,7 @@ scenario_upgrade_rollback_initial() {
     seed_live_legacy_webtui_process || return
     seed_legacy_saas_monitor_state || return
 
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload candidate candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved candidate
@@ -2731,7 +2901,7 @@ scenario_upgrade_rollback_initial() {
 
 scenario_upgrade_rollback_restart_one() {
     load_state_contract || return
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     probe_payload restart-one candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved restart-one
     printf '%s\n' restart-two > "${RESTART_STATE_FILE}"
@@ -2739,7 +2909,7 @@ scenario_upgrade_rollback_restart_one() {
 
 scenario_upgrade_rollback_restart_two() {
     load_state_contract || return
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     probe_payload restart-two candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved restart-two
     remove_service_manager_sentinels
@@ -2750,7 +2920,7 @@ scenario_upgrade_rollback_restart_two() {
         probe_payload rollback previous "${EXPECTED_PREVIOUS_VERSION}"
     fi
     assert_all_state_preserved rollback
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     run_install_step recovery.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload recovery candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved recovery
@@ -2760,7 +2930,7 @@ scenario_upgrade_rollback_restart_two() {
 scenario_remove() {
     prepare_expected_payloads || return
     seed_state
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
@@ -2769,13 +2939,13 @@ scenario_remove() {
         deb|apk)
             run_step remove remove_package || return
             assert_package_absent remove candidate
-            assert_generated_runtime_artifacts_absent remove
+            assert_generated_runtime_artifact_contract remove
             assert_all_state_preserved remove
             ;;
         rpm)
             run_step final-removal remove_package || return
             assert_package_absent final-removal candidate
-            assert_generated_runtime_artifacts_absent final-removal
+            assert_generated_runtime_artifact_contract final-removal
             check_absent final-removal.state.config /etc/syswarden/config/lifecycle-operator.conf
             check_absent final-removal.state.token /etc/syswarden/config/modules/99-user.toml
             check_absent final-removal.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
@@ -2794,14 +2964,14 @@ scenario_remove() {
 scenario_purge() {
     prepare_expected_payloads || return
     seed_state
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
     seed_generated_runtime_artifacts || return
     run_step purge purge_package || return
     assert_package_absent purge candidate
-    assert_generated_runtime_artifacts_absent purge
+    assert_generated_runtime_artifact_contract purge
     case "${PACKAGE_FAMILY}" in
         deb)
             check_absent purge.state.config /etc/syswarden/config/lifecycle-operator.conf

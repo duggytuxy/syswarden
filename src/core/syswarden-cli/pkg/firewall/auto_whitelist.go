@@ -9,6 +9,9 @@ import (
 
 // AutoWhitelistAdminAndInfra detects and safely whitelists the admin IP and critical infra IPs
 func AutoWhitelistAdminAndInfra() error {
+	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+		return fmt.Errorf("validate firewall backend before automatic whitelist mutation: %w", err)
+	}
 	fmt.Println("[INFO] Scanning and auto-whitelisting critical infrastructure & Admin IP...")
 
 	_ = os.MkdirAll("/etc/syswarden/lists", 0750)

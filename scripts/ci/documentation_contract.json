@@ -48,10 +48,13 @@
   ],
   "required_readme_phrases": [
     "Current source version: **{version}**.",
-    "Target candidate: **v4.03.1**.",
+    "Target candidate: **v4.03.2**.",
     "The package workflow is configured to generate two DEB, two RPM and two APK packages plus `SHA256SUMS.txt`.",
-    "A qualified v4.03.1 Release contains exactly thirteen public assets:",
+    "A qualified v4.03.2 Release contains exactly thirteen public assets:",
     "The TUI reads local telemetry and HA status. It runs inside the invoking terminal and opens no listening socket.",
+    "The current Linux package builds, validates and commits one authoritative nftables ruleset.",
+    "`core.firewall_backend = \"keep\"` is the fresh-install default",
+    "The `iptables` value remains parseable for configuration compatibility",
     "SysWarden owns no listener and no generated firewall permission on TCP 62027.",
     "`DELETE {{\"bans\": [...]}}` removes provenance ledger entries only",
     "`DELETE {{\"ips\": [...]}}` explicitly removes historical static entries",
@@ -71,6 +74,9 @@
     "`syswarden migrate-config` remains a compatibility alias",
     "`network.saas.allow_monitors` takes precedence over the deprecated `integrations.saas.enabled` alias; if neither is set, monitor allowlisting is disabled.",
     "Valid canonical IPv4 and IPv6 results are published as one lock-coordinated atomic pair with an SHA-256 pair manifest",
+    "Log-driven enforcement requires one validated authoritative source address.",
+    "SysWarden internal security records use process-local authentication",
+    "Feed and SaaS allowlist publication is bounded",
     "`--port` scopes a whitelist entry to one TCP service",
     "SSH exceptions are rendered only for the effective SSH port.",
     "a changed-port mismatch fails closed before candidate policy application",
@@ -78,10 +84,19 @@
     "operators must keep every parent directory protected against untrusted replacement",
     "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars",
     "SSH/HA port separation while WireGuard is enabled.",
+    "The [RHEL image staging extension](extensions/rhel-image/README.md) is an additive, opt-in path",
+    "Offline staging does not establish runtime readiness or widen the qualified package matrix.",
     "The report and this README remain candidate documentation until protected qualification passes"
   ],
   "required_manual_phrases": [
     "it is not a compliance certification",
+    "firewall_backend accepts keep, nftables or iptables; keep is the default and performs no operator-managed firewall service transition.",
+    "keep refuses policy mutation while an iptables-services or netfilter-persistent service is active or enabled.",
+    "Operational mutation requires an active, unambiguous supported service manager; offline package hooks defer install and reload.",
+    "nftables requires an active and enabled nftables service and refuses active or enabled firewalld, UFW, iptables-services or netfilter-persistent frontends.",
+    "iptables is parseable but refused by operational policy mutation paths in v4.03.2.",
+    "SysWarden commits authoritative nftables policy and may reconcile one already active firewalld or UFW compatibility frontend.",
+    "WireGuard requires the explicit nftables backend and is not opened through the firewalld or UFW compatibility path.",
     "Native TUI: no listening port.",
     "HA API: configurable TCP port, default 62026",
     "All HA routes require the bearer token",
@@ -103,14 +118,28 @@
     "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars.",
     "With WireGuard and HA enabled, the configured HA peer port must differ from the configured SSH port."
   ],
-  "required_wiki_phrases": {},
+  "required_wiki_phrases": {
+    "Home.md": [
+      "The optional RHEL-compatible image staging extension is additive",
+      "Offline staging is not runtime-readiness evidence."
+    ],
+    "Deployment-Tutorial.md": [
+      "## 5. Optional RHEL-compatible image staging",
+      "The extension installs that RPM with plugins, package scripts and triggers disabled.",
+      "Offline staging is not runtime-readiness evidence."
+    ],
+    "Use-cases.md": [
+      "## 9. Stage a fresh RHEL-compatible image root",
+      "No product binary, service manager, firewall tool, kernel-policy tool, cron command, network endpoint or process signal runs during offline staging."
+    ]
+  },
   "approved_cli_process_differences": [
     {
       "case": "root",
       "stream": "stdout",
       "reason": "Advance the minor version while preserving the bounded built-in operator reference.",
       "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
-      "after": "SYSWARDEN v4.03.1 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+      "after": "SYSWARDEN v4.03.2 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
     },
     {
       "case": "help:syswarden",
@@ -628,32 +657,32 @@
         "rows": [
           [
             "Debian or Ubuntu amd64",
-            "`syswarden_4.03.1_amd64.deb`",
+            "`syswarden_4.03.2_amd64.deb`",
             "Native install, upgrade, restart, removal and rollback lifecycle"
           ],
           [
             "Debian or Ubuntu arm64",
-            "`syswarden_4.03.1_arm64.deb`",
+            "`syswarden_4.03.2_arm64.deb`",
             "Native ARM64 lifecycle on the exact candidate package"
           ],
           [
-            "RHEL-family x86_64",
-            "`syswarden-4.03.1-1.x86_64.rpm`",
+            "Fedora or RHEL-family x86_64",
+            "`syswarden-4.03.2-1.x86_64.rpm`",
             "Native install, upgrade, restart, removal and rollback lifecycle"
           ],
           [
-            "RHEL-family aarch64",
-            "`syswarden-4.03.1-1.aarch64.rpm`",
+            "Fedora or RHEL-family aarch64",
+            "`syswarden-4.03.2-1.aarch64.rpm`",
             "Native ARM64 lifecycle on the exact candidate package"
           ],
           [
             "Alpine x86_64",
-            "`syswarden_4.03.1_x86_64.apk`",
+            "`syswarden_4.03.2_x86_64.apk`",
             "Native OpenRC lifecycle with the dedicated CGO-free executable"
           ],
           [
             "Alpine aarch64",
-            "`syswarden_4.03.1_aarch64.apk`",
+            "`syswarden_4.03.2_aarch64.apk`",
             "Native ARM64 OpenRC lifecycle with the dedicated CGO-free executable"
           ]
         ]
@@ -661,9 +690,9 @@
     }
   },
   "public_report_contract": {
-    "path": "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.1.md",
+    "path": "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.2.md",
     "required_phrases": [
-      "| Candidate | v4.03.1 |",
+      "| Candidate | v4.03.2 |",
       "| Distribution boundary | Linux packages only |",
       "| Public package count | 6 |",
       "| Public release asset count | 13 |",
@@ -684,20 +713,32 @@
       "`syswarden whitelist <IP-or-CIDR> --port <PORT>` limits an entry to that TCP service",
       "Every SSH exception is rendered only for the effective SSH port.",
       "candidate nftables application fails closed",
+      "## Firewall backend selection and compatibility",
+      "SysWarden v4.03.2 uses nftables as its single authoritative Linux policy engine.",
+      "Fresh configurations default to `core.firewall_backend = \"keep\"`",
+      "The `nftables` value is a validation-only assertion.",
+      "The `iptables` value remains parseable for configuration compatibility",
+      "does not qualify active firewalld, active UFW, iptables services or automatic service migration",
+      "## Optional RHEL-compatible image staging extension",
+      "It is not invoked by the normal build, package installation, update or reload workflows.",
+      "This extension stages an image filesystem only. It does not establish runtime readiness",
       "The core opens them descriptor-relative without following links and revalidates the file identity and type after every rotation",
       "operators must keep every parent directory protected against untrusted replacement",
       "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars",
       "SSH/HA port separation while WireGuard is enabled.",
       "Written partner freeze confirmation was received on 20 August 2026",
-      "The v4.03.1 candidate remains NO-GO"
+      "The bounded LOT 2S scope targets closure of H1 through H5",
+      "The self-hosted native qualification job has no release-signing environment",
+      "The remote qualification environment must require exactly one owner review",
+      "The v4.03.2 candidate remains NO-GO"
     ],
     "expected_assets": [
-      "syswarden_4.03.1_amd64.deb",
-      "syswarden_4.03.1_arm64.deb",
-      "syswarden-4.03.1-1.x86_64.rpm",
-      "syswarden-4.03.1-1.aarch64.rpm",
-      "syswarden_4.03.1_x86_64.apk",
-      "syswarden_4.03.1_aarch64.apk",
+      "syswarden_4.03.2_amd64.deb",
+      "syswarden_4.03.2_arm64.deb",
+      "syswarden-4.03.2-1.x86_64.rpm",
+      "syswarden-4.03.2-1.aarch64.rpm",
+      "syswarden_4.03.2_x86_64.apk",
+      "syswarden_4.03.2_aarch64.apk",
       "SHA256SUMS.txt",
       "RELEASE_SHA256SUMS.txt",
       "syswarden-release.tar.gz",
@@ -716,9 +757,10 @@
     "documents": [
       "README.md",
       "changelog.md",
-      "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.1.md",
+      "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.2.md",
       "assets/syswarden_hero.svg",
-      "assets/syswarden_architecture.svg"
+      "assets/syswarden_architecture.svg",
+      "extensions/rhel-image/README.md"
     ],
     "report_directory": "docs/reports",
     "archive_pointer": "Archived pre-v4.03.0 changelog SHA-256: a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5",

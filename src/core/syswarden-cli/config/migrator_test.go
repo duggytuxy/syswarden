@@ -21,7 +21,7 @@ import (
 const migrationFixture = `
 SYSWARDEN_ENTERPRISE_MODE="n"
 SYSWARDEN_ENFORCEMENT_MODE="audit"
-SYSWARDEN_FIREWALL_BACKEND="keep"
+SYSWARDEN_FIREWALL_BACKEND="nftables"
 SYSWARDEN_SSH_PORT="2222"
 SYSWARDEN_INTERFACES="eth0,eth1"
 SYSWARDEN_WHITELIST_INFRA="y"
@@ -79,6 +79,58 @@ SYSWARDEN_WAZUH_ENROLL_PORT="1515"
 SYSWARDEN_WEB_TOKEN="existing-user-token"
 UNKNOWN_USER_KEY="must-not-change-the-input-file"
 `
+
+func TestMigratedCoreDoesNotPublishObsoleteFirewallBackendClaim_SW2_FWBACKEND_001(t *testing.T) {
+	content, err := (&Migrator{}).generateCore(map[string]string{
+		"SYSWARDEN_FIREWALL_BACKEND": "keep",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(content, "RHEL/Alma/Fedora ONLY") {
+		t.Fatalf("migrated core configuration retains the obsolete backend claim:\n%s", content)
+	}
+	if !strings.Contains(content, "firewall_backend = 'keep'") {
+		t.Fatalf("migrated core configuration lost the backend value:\n%s", content)
+	}
+}
+
+func TestMigratedFirewallBackendMapsHistoricalFirewalldAndRejectsWireGuardMismatch_SW2_FWBACKEND_001(t *testing.T) {
+	for _, test := range []struct {
+		legacy string
+		want   string
+	}{
+		{legacy: "firewalld", want: "keep"},
+		{legacy: "keep", want: "keep"},
+		{legacy: "nftables", want: "nftables"},
+		{legacy: "iptables", want: "iptables"},
+	} {
+		t.Run(test.legacy, func(t *testing.T) {
+			got, err := migratedFirewallBackend(map[string]string{
+				"SYSWARDEN_FIREWALL_BACKEND": test.legacy,
+				"SYSWARDEN_ENABLE_WG":        "n",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("migrated backend = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	for _, backend := range []string{"firewalld", "keep", "iptables"} {
+		t.Run("wireguard-"+backend, func(t *testing.T) {
+			_, err := migratedFirewallBackend(map[string]string{
+				"SYSWARDEN_FIREWALL_BACKEND": backend,
+				"SYSWARDEN_ENABLE_WG":        "y",
+			})
+			if err == nil || !strings.Contains(err.Error(), "enabled WireGuard requires nftables") {
+				t.Fatalf("migration error = %v", err)
+			}
+		})
+	}
+}
 
 var runtimeLegacyMigrationKeys = []string{
 	"SYSWARDEN_ENTERPRISE_MODE",
