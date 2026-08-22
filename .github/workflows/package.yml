@@ -78,8 +78,17 @@ jobs:
               exit 1
             fi
           fi
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          if [[ ! "${SOURCE_DATE_EPOCH}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: unable to derive a reproducible source timestamp from HEAD." >&2
+            exit 1
+          fi
           echo "RELEASE_TAG=${SOURCE_TAG}" >> "${GITHUB_ENV}"
           echo "VERSION=${SOURCE_TAG#v}" >> "${GITHUB_ENV}"
+          echo "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" >> "${GITHUB_ENV}"
+          echo "LC_ALL=C" >> "${GITHUB_ENV}"
+          echo "LANG=C" >> "${GITHUB_ENV}"
+          echo "TZ=UTC" >> "${GITHUB_ENV}"
 
       - name: Capture Candidate Repository State
         shell: bash
@@ -864,6 +873,47 @@ jobs:
             "${PACKAGE_SCRIPTS}/postrm.sh" \
             "${PACKAGE_SCRIPTS}/prerm.sh"
 
+      - name: Normalize Package Input Timestamps
+        shell: bash
+        run: |
+          set -euo pipefail
+          prepare_rpm_changelog() {
+            local destination="$1"
+            local changelog_date
+            local changelog_day
+            changelog_day="$(date --utc --date="@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d')" || return 1
+            changelog_date="$(date --utc --date="@${SOURCE_DATE_EPOCH}" '+%a %b %e %Y')" || return 1
+            RPM_CHANGELOG_EPOCH="$(date --utc --date="${changelog_day} 12:00:00" '+%s')" || return 1
+            case "${RPM_CHANGELOG_EPOCH}" in
+              ''|0|*[!0-9]*) return 1 ;;
+            esac
+            printf '* %s SysWarden Engineering - %s-1\n- Package created with FPM\n' \
+              "${changelog_date}" "${VERSION}" > "${destination}"
+            chmod 0600 "${destination}"
+          }
+          normalize_package_mtimes() {
+            local target
+            for target in "$@"; do
+              if [ ! -e "${target}" ] && [ ! -L "${target}" ]; then
+                echo "ERROR: package timestamp target is missing: ${target}" >&2
+                return 1
+              fi
+              find "${target}" -depth -exec \
+                touch -h --date="@${SOURCE_DATE_EPOCH}" -- {} +
+            done
+          }
+          RPM_CHANGELOG="${PACKAGE_CONFIGS}/rpm-changelog"
+          prepare_rpm_changelog "${RPM_CHANGELOG}"
+          normalize_package_mtimes \
+            "${STAGING_AMD64}" \
+            "${STAGING_ARM64}" \
+            "${STAGING_APK_AMD64}" \
+            "${STAGING_APK_ARM64}" \
+            "${PACKAGE_SCRIPTS}" \
+            "${RPM_CHANGELOG}"
+          echo "RPM_CHANGELOG=${RPM_CHANGELOG}" >> "${GITHUB_ENV}"
+          echo "RPM_CHANGELOG_EPOCH=${RPM_CHANGELOG_EPOCH}" >> "${GITHUB_ENV}"
+
       - name: Build Debian Package (.deb)
         run: |
           set -euo pipefail
@@ -876,6 +926,7 @@ jobs:
             --description "SysWarden Host-based Security Orchestrator for Linux" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture amd64 \
+            --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
             -d "wireguard-tools" -d "qrencode" -d "jq" -d "unattended-upgrades" -d "apt-listchanges" -d "procps" -d "e2fsprogs" \
             --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
@@ -893,6 +944,7 @@ jobs:
             --description "SysWarden Host-based Security Orchestrator for Linux (ARM64)" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture arm64 \
+            --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
             -d "wireguard-tools" -d "qrencode" -d "jq" -d "unattended-upgrades" -d "apt-listchanges" -d "procps" -d "e2fsprogs" \
             --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
@@ -913,6 +965,11 @@ jobs:
             --description "SysWarden Host-based Security Orchestrator for Linux" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture x86_64 \
+            --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
+            --rpm-changelog "${RPM_CHANGELOG}" \
+            --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
+            --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
+            --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
             -d "wireguard-tools" -d "qrencode" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
             -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
@@ -931,6 +988,11 @@ jobs:
             --description "SysWarden Host-based Security Orchestrator for Linux (ARM64)" \
             --url "https://github.com/${{ github.repository }}" \
             --architecture aarch64 \
+            --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
+            --rpm-changelog "${RPM_CHANGELOG}" \
+            --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
+            --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
+            --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
             -d "wireguard-tools" -d "qrencode" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
             -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
@@ -1053,6 +1115,9 @@ jobs:
             local expected_cron_extraction
             [[ "$(rpm --query --package --queryformat '%{VERSION}' "${path}")" == "${VERSION}" ]]
             [[ "$(rpm --query --package --queryformat '%{ARCH}' "${path}")" == "${architecture}" ]]
+            [[ "$(rpm --query --package --queryformat '%{BUILDTIME}' "${path}")" == "${SOURCE_DATE_EPOCH}" ]]
+            [[ "$(rpm --query --package --queryformat '%{BUILDHOST}' "${path}")" == "syswarden-build.invalid" ]]
+            [[ "$(rpm --query --package --queryformat '%{CHANGELOGTIME}' "${path}")" == "${RPM_CHANGELOG_EPOCH}" ]]
             scriptlets="$(rpm --query --package --scripts "${path}")"
             expected_cron_extraction="syswarden_cron_minute=\"\$(printf '%s\\n' \"\${syswarden_cron_candidate}\" | awk 'NR == 1 { print \$1; exit }')\""
             [[ "$(grep --fixed-strings --count "${expected_cron_extraction}" <<< "${scriptlets}")" -eq 2 ]]

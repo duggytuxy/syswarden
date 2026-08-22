@@ -325,6 +325,241 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("trap cleanup_package_workspace EXIT", source)
         self.assertIn("PACKAGE_STATE_VERIFIED=1", source)
 
+    def test_workflow_and_local_packages_have_exact_reproducibility_contract(self) -> None:
+        local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        version_step = workflow_step_script(
+            self.workflow, "Validate and Export Version Contract"
+        )
+        normalization_step = workflow_step_script(
+            self.workflow, "Normalize Package Input Timestamps"
+        )
+        workflow_deb = workflow_step_script(
+            self.workflow, "Build Debian Package (.deb)"
+        )
+        workflow_rpm = workflow_step_script(
+            self.workflow, "Build RHEL Family Package (.rpm)"
+        )
+        workflow_validation = workflow_step_script(
+            self.workflow, "Validate Package Metadata"
+        )
+        local_deb = local.split("# Generate DEB", 1)[1].split(
+            "# Generate RPM", 1
+        )[0]
+        local_rpm = local.split("# Generate RPM", 1)[1].split(
+            "# Generate Alpine APK", 1
+        )[0]
+
+        self.assertIn(
+            'SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"', version_step
+        )
+        self.assertIn(
+            'SOURCE_DATE_EPOCH="$(git -C "${REPOSITORY_ROOT}" log -1 '
+            '--format=%ct HEAD)"',
+            local,
+        )
+        self.assertIn(
+            'if [[ ! "${SOURCE_DATE_EPOCH}" =~ ^[1-9][0-9]*$ ]]; then',
+            version_step,
+        )
+        self.assertIn('echo "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}"', version_step)
+        for assignment in ("LC_ALL=C", "LANG=C", "TZ=UTC"):
+            with self.subTest(environment=assignment):
+                self.assertIn(f'echo "{assignment}" >> "${{GITHUB_ENV}}"', version_step)
+                self.assertIn(f"export {assignment}", local)
+
+        workflow_changelog_start = normalization_step.index(
+            "prepare_rpm_changelog() {"
+        )
+        workflow_changelog_end = normalization_step.index(
+            "\n}\n", workflow_changelog_start
+        ) + len("\n}\n")
+        workflow_changelog = normalization_step[
+            workflow_changelog_start:workflow_changelog_end
+        ]
+        local_changelog_start = local.index("prepare_rpm_changelog() {")
+        local_changelog_end = local.index("\n}\n", local_changelog_start) + len(
+            "\n}\n"
+        )
+        local_changelog = local[local_changelog_start:local_changelog_end]
+        for changelog in (workflow_changelog, local_changelog):
+            self.assertIn('date --utc --date="@${SOURCE_DATE_EPOCH}"', changelog)
+            self.assertIn('date --utc --date="${changelog_day} 12:00:00"', changelog)
+            self.assertIn("SysWarden Engineering - %s-1", changelog)
+            self.assertIn('chmod 0600 "${destination}"', changelog)
+
+        workflow_normalizer_start = normalization_step.index(
+            "normalize_package_mtimes() {"
+        )
+        workflow_normalizer_end = normalization_step.index(
+            "\n}\n", workflow_normalizer_start
+        ) + len("\n}\n")
+        workflow_normalizer = normalization_step[
+            workflow_normalizer_start:workflow_normalizer_end
+        ]
+        local_normalizer_start = local.index("normalize_package_mtimes() {")
+        local_normalizer_end = local.index("\n}\n", local_normalizer_start) + len(
+            "\n}\n"
+        )
+        local_normalizer = local[local_normalizer_start:local_normalizer_end]
+        for normalizer in (workflow_normalizer, local_normalizer):
+            self.assertIn('find "${target}" -depth -exec', normalizer)
+            self.assertIn(
+                'touch -h --date="@${SOURCE_DATE_EPOCH}" -- {} +', normalizer
+            )
+            self.assertIn('[ ! -e "${target}" ] && [ ! -L "${target}" ]', normalizer)
+
+        for target in (
+            "STAGING_AMD64",
+            "STAGING_ARM64",
+            "STAGING_APK_AMD64",
+            "STAGING_APK_ARM64",
+            "PACKAGE_SCRIPTS",
+        ):
+            self.assertEqual(normalization_step.count(f'"${{{target}}}"'), 1, target)
+        self.assertIn('prepare_rpm_changelog "${RPM_CHANGELOG}"', normalization_step)
+        self.assertIn('"${RPM_CHANGELOG}"\n', normalization_step)
+        self.assertIn('echo "RPM_CHANGELOG=${RPM_CHANGELOG}"', normalization_step)
+        self.assertIn(
+            'echo "RPM_CHANGELOG_EPOCH=${RPM_CHANGELOG_EPOCH}"',
+            normalization_step,
+        )
+        local_targets = (
+            "staging",
+            "staging-rpm",
+            "staging-apk",
+            "preinst.sh",
+            "postinst.sh",
+            "prerm.sh",
+            "postrm.sh",
+            '"${RPM_CHANGELOG}"',
+        )
+        local_normalization_call = local[
+            local_normalizer_end : local.index("# 4. Generate Packages")
+        ]
+        for index, target in enumerate(local_targets):
+            suffix = " \\" if index < len(local_targets) - 1 else ""
+            self.assertIn(f"    {target}{suffix}\n", local_normalization_call)
+        self.assertLess(
+            self.workflow.index("Normalize Package Input Timestamps"),
+            self.workflow.index("Build Debian Package (.deb)"),
+        )
+        self.assertLess(local_normalizer_end, local.index("# Generate DEB"))
+
+        for block, count in (
+            (workflow_deb, 2),
+            (workflow_rpm, 2),
+            (local_deb, 1),
+            (local_rpm, 1),
+        ):
+            self.assertEqual(
+                block.count('--source-date-epoch-default "${SOURCE_DATE_EPOCH}"'),
+                count,
+            )
+        rpm_defines = (
+            "use_source_date_epoch_as_buildtime 1",
+            "clamp_mtime_to_source_date_epoch 1",
+            "_buildhost syswarden-build.invalid",
+        )
+        for definition in rpm_defines:
+            with self.subTest(rpm_definition=definition):
+                flag = f'--rpm-rpmbuild-define "{definition}"'
+                self.assertEqual(workflow_rpm.count(flag), 2)
+                self.assertEqual(local_rpm.count(flag), 1)
+        self.assertEqual(workflow_rpm.count('--rpm-changelog "${RPM_CHANGELOG}"'), 2)
+        self.assertEqual(local_rpm.count('--rpm-changelog "${RPM_CHANGELOG}"'), 1)
+        for query, expected in (
+            ("%{BUILDTIME}", "${SOURCE_DATE_EPOCH}"),
+            ("%{BUILDHOST}", "syswarden-build.invalid"),
+            ("%{CHANGELOGTIME}", "${RPM_CHANGELOG_EPOCH}"),
+        ):
+            self.assertIn(query, workflow_validation)
+            self.assertIn(expected, workflow_validation)
+            self.assertIn(query, local)
+            self.assertIn(expected, local)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root_path = Path(temporary)
+            changelog_epochs: list[int] = []
+            for index, (epoch, expected_date) in enumerate(
+                (
+                    (946684800, "Sat Jan  1 2000"),
+                    (946771200, "Sun Jan  2 2000"),
+                )
+            ):
+                destination = root_path / f"rpm-changelog-{index}"
+                generated = subprocess.run(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        local_changelog
+                        + '\nprepare_rpm_changelog "$1"\n'
+                        + 'printf "%s" "${RPM_CHANGELOG_EPOCH}"',
+                        "rpm-changelog-cross-day-contract",
+                        str(destination),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "LC_ALL": "C",
+                        "SOURCE_DATE_EPOCH": str(epoch),
+                        "TZ": "UTC",
+                        "VERSION": "4.03.1",
+                    },
+                )
+                self.assertEqual(generated.returncode, 0, generated)
+                changelog_epochs.append(int(generated.stdout))
+                self.assertEqual(
+                    destination.read_text(encoding="utf-8"),
+                    f"* {expected_date} SysWarden Engineering - 4.03.1-1\n"
+                    "- Package created with FPM\n",
+                )
+                self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(changelog_epochs[1] - changelog_epochs[0], 86400)
+
+            epoch = 946684800
+            root = Path(temporary) / "random workspace\nwith spaces"
+            nested = root / "nested"
+            nested.mkdir(parents=True)
+            payload = nested / "payload\nname"
+            payload.write_bytes(b"deterministic")
+            dangling = root / "dangling link"
+            dangling.symlink_to("missing-target")
+            result = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    local_normalizer + '\nnormalize_package_mtimes "$1"',
+                    "package-mtime-contract",
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "SOURCE_DATE_EPOCH": str(epoch)},
+            )
+            self.assertEqual(result.returncode, 0, result)
+            for path in (root, nested, payload, dangling):
+                with self.subTest(normalized_path=path):
+                    self.assertEqual(path.lstat().st_mtime_ns, epoch * 1_000_000_000)
+
+            missing = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    local_normalizer + '\nnormalize_package_mtimes "$1"',
+                    "package-mtime-missing-contract",
+                    str(root / "missing"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "SOURCE_DATE_EPOCH": str(epoch)},
+            )
+            self.assertNotEqual(missing.returncode, 0, missing)
+            self.assertIn("package timestamp target is missing", missing.stderr)
+
     def test_local_builder_closes_deb_mode_and_rpm_build_id_parity(self) -> None:
         source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         deb_block = source.split("# Generate DEB", 1)[1].split(
@@ -2286,6 +2521,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "case \"$4\" in\n"
                 "  '%{VERSION}') printf 4.02.14 ;;\n"
                 "  '%{ARCH}') printf x86_64 ;;\n"
+                "  '%{BUILDTIME}') printf '%s' \"${SOURCE_DATE_EPOCH}\" ;;\n"
+                "  '%{BUILDHOST}') printf syswarden-build.invalid ;;\n"
+                "  '%{CHANGELOGTIME}') printf '%s' \"${RPM_CHANGELOG_EPOCH}\" ;;\n"
                 "  *) exit 91 ;;\n"
                 "esac\n",
                 encoding="utf-8",
@@ -2295,6 +2533,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 **os.environ,
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
                 "RPM_SCRIPTLETS_FILE": str(scriptlets),
+                "SOURCE_DATE_EPOCH": "946684800",
+                "RPM_CHANGELOG_EPOCH": "946728000",
             }
 
             def validate(payload: str) -> subprocess.CompletedProcess[bytes]:

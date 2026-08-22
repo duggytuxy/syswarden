@@ -29,7 +29,7 @@ UPDATE_SIGNATURE_NAME = f"{UPDATE_MANIFEST_NAME}.sig"
 UPDATE_MANIFEST_TOOL = "scripts/ci/update_manifest.go"
 UPDATE_PRIVATE_KEY_ENV = "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"
 FIRST_SIGNED_UPDATE_TAG = "v4.02.9"
-# One-release bridge for qualifying v4.03.0 against its exact public predecessor.
+# One-release bridge for qualifying the current Linux release against its exact public predecessor.
 # Delete this bridge once v4.02.8 is no longer the qualification predecessor.
 HISTORICAL_LINUX_TRANSITION_TAG = "v4.02.8"
 HISTORICAL_LINUX_TRANSITION_REPOSITORY = "duggytuxy/syswarden"

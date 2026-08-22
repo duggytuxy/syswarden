@@ -53,7 +53,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for required_command in python3 git go fpm nfpm readelf file ar rpm tar; do
+for required_command in python3 git go fpm nfpm readelf file ar rpm tar touch date; do
     command -v "${required_command}" >/dev/null 2>&1 || {
         echo "[-] Required pinned build tool is unavailable: ${required_command}" >&2
         exit 1
@@ -152,14 +152,17 @@ chmod 0700 \
     "${PACKAGE_WORKSPACE}/dist" \
     "${PACKAGE_WORKSPACE}/dist/bin" \
     "${PACKAGE_WORKSPACE}/dist/bin-apk"
-SOURCE_DATE_EPOCH="$(git -C "${REPOSITORY_ROOT}" log -1 --format=%ct)"
-export SOURCE_DATE_EPOCH
+SOURCE_DATE_EPOCH="$(git -C "${REPOSITORY_ROOT}" log -1 --format=%ct HEAD)"
 case "${SOURCE_DATE_EPOCH}" in
-    ''|*[!0-9]*)
+    ''|0|*[!0-9]*)
         echo "[-] Unable to derive a reproducible source timestamp." >&2
         exit 1
         ;;
 esac
+export SOURCE_DATE_EPOCH
+export LC_ALL=C
+export LANG=C
+export TZ=UTC
 
 # Extract the version through the repository-wide version contract.
 SOURCE_TAG="$(PATH="${GO_TOOLCHAIN_ROOT}/bin:${PATH}" \
@@ -835,6 +838,43 @@ EOF
 
 chmod +x preinst.sh postinst.sh postrm.sh prerm.sh
 
+prepare_rpm_changelog() {
+    local destination="$1"
+    local changelog_date
+    local changelog_day
+    changelog_day="$(date --utc --date="@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d')" || return 1
+    changelog_date="$(date --utc --date="@${SOURCE_DATE_EPOCH}" '+%a %b %e %Y')" || return 1
+    RPM_CHANGELOG_EPOCH="$(date --utc --date="${changelog_day} 12:00:00" '+%s')" || return 1
+    case "${RPM_CHANGELOG_EPOCH}" in
+        ''|0|*[!0-9]*) return 1 ;;
+    esac
+    printf '* %s SysWarden Engineering - %s-1\n- Package created with FPM\n' \
+        "${changelog_date}" "${VERSION}" > "${destination}"
+    chmod 0600 "${destination}"
+}
+normalize_package_mtimes() {
+    local target
+    for target in "$@"; do
+        if [ ! -e "${target}" ] && [ ! -L "${target}" ]; then
+            echo "ERROR: package timestamp target is missing: ${target}" >&2
+            return 1
+        fi
+        find "${target}" -depth -exec \
+            touch -h --date="@${SOURCE_DATE_EPOCH}" -- {} +
+    done
+}
+RPM_CHANGELOG="${PACKAGE_WORKSPACE}/rpm-changelog"
+prepare_rpm_changelog "${RPM_CHANGELOG}"
+normalize_package_mtimes \
+    staging \
+    staging-rpm \
+    staging-apk \
+    preinst.sh \
+    postinst.sh \
+    prerm.sh \
+    postrm.sh \
+    "${RPM_CHANGELOG}"
+
 # 4. Generate Packages
 echo "[*] Generating .deb and .rpm packages via FPM..."
 
@@ -850,6 +890,7 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --vendor "SysWarden Security" \
         --maintainer "SysWarden Engineering" \
         --description "SysWarden Host-based Security Orchestrator for Linux" \
+        --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
         -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
         -d "wireguard-tools" -d "qrencode" -d "jq" -d "unattended-upgrades" -d "apt-listchanges" -d "procps" -d "e2fsprogs" \
         --before-install preinst.sh \
@@ -872,6 +913,8 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --vendor "SysWarden Security" \
         --maintainer "SysWarden Engineering" \
         --description "SysWarden Host-based Security Orchestrator for Linux" \
+        --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
+        --rpm-changelog "${RPM_CHANGELOG}" \
         -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
         -d "wireguard-tools" -d "qrencode" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
         -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
@@ -880,6 +923,9 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --before-remove prerm.sh \
         --after-remove postrm.sh \
         --rpm-rpmbuild-define "_build_id_links none" \
+        --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
+        --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
+        --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
         --directories /usr/lib/.build-id \
         -p "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" \
         -C staging-rpm .
@@ -958,6 +1004,9 @@ validate_local_rpm_build_ids() {
     declare -A rpm_build_id_targets=()
     local rpm_build_id_root_count=0
     local rpm_inventory rpm_pathname rpm_permissions rpm_owner rpm_target rpm_prefix
+    [ "$(rpm -qp --qf '%{BUILDTIME}' "${rpm_path}")" = "${SOURCE_DATE_EPOCH}" ] || return 1
+    [ "$(rpm -qp --qf '%{BUILDHOST}' "${rpm_path}")" = syswarden-build.invalid ] || return 1
+    [ "$(rpm -qp --qf '%{CHANGELOGTIME}' "${rpm_path}")" = "${RPM_CHANGELOG_EPOCH}" ] || return 1
     rpm_inventory="$(
         rpm -qp --qf \
             '[%{FILENAMES}\t%{FILEMODES:perms}\t%{FILEUSERNAME}:%{FILEGROUPNAME}\t%{FILELINKTOS}\n]' \

@@ -32,7 +32,7 @@
   </defs>
 
   <rect width="1600" height="940" rx="28" fill="url(#bg)"/>
-  <text x="70" y="68" class="h1">SysWarden v4.03.0 candidate architecture</text>
+  <text x="70" y="68" class="h1">SysWarden v4.03.1 candidate architecture</text>
   <text x="70" y="100" class="body">Linux-only host enforcement, local terminal operations and condition-bound HA migration</text>
 
   <g transform="translate(70 154)" filter="url(#shadow)">

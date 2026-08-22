@@ -12,10 +12,10 @@ terminal dashboard.
 It is not an inline HTTP proxy, a traffic sanitizer or a regulatory
 certification product.
 
-Current source version: **v4.03.0**.
+Current source version: **v4.03.1**.
 
-Target candidate: **v4.03.0**. This documentation describes the candidate
-contract. It does not claim that v4.03.0 is qualified, tagged or published.
+Target candidate: **v4.03.1**. This documentation describes the candidate
+contract. It does not claim that v4.03.1 is qualified, tagged or published.
 Publication remains blocked until every protected gate passes on one exact
 merged commit.
 
@@ -27,12 +27,12 @@ merged commit.
 
 | Target | Candidate artifact | Required release proof |
 | --- | --- | --- |
-| Debian or Ubuntu amd64 | `syswarden_4.03.0_amd64.deb` | Native install, upgrade, restart, removal and rollback lifecycle |
-| Debian or Ubuntu arm64 | `syswarden_4.03.0_arm64.deb` | Native ARM64 lifecycle on the exact candidate package |
-| RHEL-family x86_64 | `syswarden-4.03.0-1.x86_64.rpm` | Native install, upgrade, restart, removal and rollback lifecycle |
-| RHEL-family aarch64 | `syswarden-4.03.0-1.aarch64.rpm` | Native ARM64 lifecycle on the exact candidate package |
-| Alpine x86_64 | `syswarden_4.03.0_x86_64.apk` | Native OpenRC lifecycle with the dedicated CGO-free executable |
-| Alpine aarch64 | `syswarden_4.03.0_aarch64.apk` | Native ARM64 OpenRC lifecycle with the dedicated CGO-free executable |
+| Debian or Ubuntu amd64 | `syswarden_4.03.1_amd64.deb` | Native install, upgrade, restart, removal and rollback lifecycle |
+| Debian or Ubuntu arm64 | `syswarden_4.03.1_arm64.deb` | Native ARM64 lifecycle on the exact candidate package |
+| RHEL-family x86_64 | `syswarden-4.03.1-1.x86_64.rpm` | Native install, upgrade, restart, removal and rollback lifecycle |
+| RHEL-family aarch64 | `syswarden-4.03.1-1.aarch64.rpm` | Native ARM64 lifecycle on the exact candidate package |
+| Alpine x86_64 | `syswarden_4.03.1_x86_64.apk` | Native OpenRC lifecycle with the dedicated CGO-free executable |
+| Alpine aarch64 | `syswarden_4.03.1_aarch64.apk` | Native ARM64 OpenRC lifecycle with the dedicated CGO-free executable |
 
 The package workflow is configured to generate two DEB, two RPM and two APK
 packages plus `SHA256SUMS.txt`. No current package or updater route exists
@@ -41,14 +41,14 @@ emulation.
 
 ## Exact release inventory
 
-A qualified v4.03.0 Release contains exactly thirteen public assets:
+A qualified v4.03.1 Release contains exactly thirteen public assets:
 
-1. `syswarden_4.03.0_amd64.deb`
-2. `syswarden_4.03.0_arm64.deb`
-3. `syswarden-4.03.0-1.x86_64.rpm`
-4. `syswarden-4.03.0-1.aarch64.rpm`
-5. `syswarden_4.03.0_x86_64.apk`
-6. `syswarden_4.03.0_aarch64.apk`
+1. `syswarden_4.03.1_amd64.deb`
+2. `syswarden_4.03.1_arm64.deb`
+3. `syswarden-4.03.1-1.x86_64.rpm`
+4. `syswarden-4.03.1-1.aarch64.rpm`
+5. `syswarden_4.03.1_x86_64.apk`
+6. `syswarden_4.03.1_aarch64.apk`
 7. `SHA256SUMS.txt`
 8. `RELEASE_SHA256SUMS.txt`
 9. `syswarden-release.tar.gz`
@@ -99,7 +99,7 @@ Use only assets attached to the intended GitHub Release. Replace the example
 version only after that tag is public and its complete inventory is visible.
 
 ```console
-VERSION=4.03.0
+VERSION=4.03.1
 TAG="v${VERSION}"
 ```
 
@@ -114,9 +114,9 @@ Stop if the selected package is not reported as valid. Then use the matching
 native command:
 
 ```console
-sudo apt-get install -y ./syswarden_4.03.0_amd64.deb
-sudo dnf install -y ./syswarden-4.03.0-1.x86_64.rpm
-sudo apk add --allow-untrusted ./syswarden_4.03.0_x86_64.apk
+sudo apt-get install -y ./syswarden_4.03.1_amd64.deb
+sudo dnf install -y ./syswarden-4.03.1-1.x86_64.rpm
+sudo apk add --allow-untrusted ./syswarden_4.03.1_x86_64.apk
 ```
 
 Run only the command for the actual distribution and architecture. For APK,
@@ -428,7 +428,7 @@ enabled.
 
 ## Release evidence and report
 
-The [v4.03.0 public release readiness report](docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.0.md)
+The [v4.03.1 public release readiness report](docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.1.md)
 records the exact package and asset inventory, migration contract, security
 limits and remaining release gates.
 
