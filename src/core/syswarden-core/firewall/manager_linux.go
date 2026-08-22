@@ -758,10 +758,6 @@ func detectBackendWithLookup(lookup func(string) (string, error)) (string, strin
 	return "none", ""
 }
 
-func detectBackend() (string, string) {
-	return detectBackendWithLookup(exec.LookPath)
-}
-
 func newNftablesManager(factory nftablesConnectionFactory) (*NftablesManager, error) {
 	manager := &NftablesManager{newConn: factory, health: HealthUnavailable}
 	manager.mu.Lock()
@@ -770,19 +766,23 @@ func newNftablesManager(factory nftablesConnectionFactory) (*NftablesManager, er
 	return manager, err
 }
 
-func NewManager() (Manager, error) {
-	backend, path := detectBackend()
-	if backend == "nftables" {
-		manager, validationErr := newNftablesManager(func() nftablesConnection { return &nftables.Conn{} })
+func newManagerForConfiguredBackend(backend string, factory nftablesConnectionFactory) (Manager, error) {
+	switch backend {
+	case "keep", "nftables":
+		manager, validationErr := newNftablesManager(factory)
 		if validationErr != nil {
 			log.Printf("[Firewall-Netlink] Backend initialized in %s state: %v", manager.Health(), validationErr)
 		}
 		return manager, nil
+	case "iptables":
+		return nil, fmt.Errorf("iptables is accepted for configuration compatibility but refused for core firewall mutations")
+	default:
+		return nil, fmt.Errorf("unsupported core firewall backend %q", backend)
 	}
+}
 
-	if backend != "none" {
-		return &FallbackManager{backend: backend, cmdPath: path, health: HealthHealthy}, nil
-	}
-
-	return nil, fmt.Errorf("no supported firewall backend found on the system")
+// NewManager constructs only the authoritative nftables runtime manager for a
+// backend already accepted by the validated core configuration.
+func NewManager(backend string) (Manager, error) {
+	return newManagerForConfiguredBackend(backend, func() nftablesConnection { return &nftables.Conn{} })
 }

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tarfile
 import tempfile
@@ -38,6 +39,69 @@ def record(
 
 
 class CLIProcessCompatibilityTest(unittest.TestCase):
+    def test_root_help_padding_approval_keeps_hidden_command_absent_and_rejects_content_drift(
+        self,
+    ) -> None:
+        contract_path = Path(__file__).resolve().parent / "documentation_contract.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        approvals = [
+            item
+            for item in contract["approved_cli_process_differences"]
+            if item["case"] == "help:syswarden" and item["stream"] == "stdout"
+        ]
+        self.assertEqual(len(approvals), 1)
+        approval = approvals[0]
+        self.assertNotIn("prepare-package-removal", approval["after"])
+        self.assertIn("wider command-column padding", approval["reason"])
+
+        case = gate.ProcessCase(
+            "help:syswarden", "help", "syswarden", ("--help",)
+        )
+        baseline = {"syswarden": record("syswarden")}
+        candidate = {"syswarden": record("syswarden")}
+        before = gate.ProcessResult(0, approval["before"], "")
+        after = gate.ProcessResult(0, approval["after"], "")
+        classification = gate.classify_process_result(
+            case, before, after, baseline, candidate, [], approvals
+        )
+        self.assertEqual(
+            classification["streams"]["stdout"], "exact-process-approval"
+        )
+
+        changed = gate.ProcessResult(
+            0,
+            approval["after"].replace(
+                "Stream kernel and WAAP alert events",
+                "Changed public command description",
+            ),
+            "",
+        )
+        with self.assertRaisesRegex(gate.CompatibilityError, "values do not match"):
+            gate.classify_process_result(
+                case, before, changed, baseline, candidate, [], approvals
+            )
+
+    def test_snapshot_probe_filters_only_by_hidden_attribute_and_public_changes_remain_visible(
+        self,
+    ) -> None:
+        hidden_guard = "if command != rootCmd && command.Hidden { return }"
+        self.assertEqual(gate.SNAPSHOT_PROBE.count(hidden_guard), 1)
+        self.assertNotIn("prepare-package-removal", gate.SNAPSHOT_PROBE)
+
+        baseline = [record("syswarden", short="old root")]
+        candidate = [
+            record("syswarden", short="new root"),
+            record("syswarden public-addition"),
+        ]
+        changes = gate.public_differences(baseline, candidate)
+        self.assertEqual(
+            {(item["path"], item["field"]) for item in changes},
+            {
+                ("syswarden", "short"),
+                ("syswarden public-addition", "command"),
+            },
+        )
+
     def test_public_differences_require_exact_non_stale_approvals(self) -> None:
         baseline = [record("syswarden", long="old boundary")]
         candidate = [record("syswarden", long="new boundary")]

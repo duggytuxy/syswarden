@@ -35,7 +35,7 @@ func TestTopLevelCommandContract(t *testing.T) {
 
 	var got []string
 	for _, command := range rootCmd.Commands() {
-		if command.Name() == "completion" || command.Name() == "help" {
+		if command.Hidden || command.Name() == "completion" || command.Name() == "help" {
 			continue
 		}
 		got = append(got, command.Name())

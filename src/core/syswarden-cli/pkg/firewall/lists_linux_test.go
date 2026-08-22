@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -82,9 +83,67 @@ func TestPopulateSetNormalizesAutoMergeIntervals_SW_FW_002(t *testing.T) {
 	}
 }
 
+func TestPersistedListPopulationRejectsUnsafePolicy_SW_SEC_M1(t *testing.T) {
+	root := t.TempDir()
+	blocklist := filepath.Join(root, "blocklist.ipv4")
+	if err := os.WriteFile(blocklist, []byte("0.0.0.0/0\n8.8.8.8\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	population, err := populateSet(
+		context.Background(),
+		[]nftListSource{{path: blocklist, required: true}},
+		"syswarden_blacklist",
+	)
+	if err == nil || !strings.Contains(err.Error(), "broader than /24") {
+		t.Fatalf("persisted blocklist error = %v", err)
+	}
+	if want := []string{"8.8.8.8"}; !reflect.DeepEqual(population.entries, want) {
+		t.Fatalf("safe blocklist candidate = %#v, want %#v", population.entries, want)
+	}
+
+	whitelist := filepath.Join(root, "whitelist.ipv6")
+	if err := os.WriteFile(whitelist, []byte("[::/0]:443\n[2606:4700:4700::1]:443\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	addresses, ports, err := populateWhitelistSets(
+		context.Background(),
+		[]nftListSource{{path: whitelist, required: true}},
+		"syswarden_whitelist6",
+		"syswarden_whitelist_ports6",
+	)
+	if err == nil || !strings.Contains(err.Error(), "broader than /64") {
+		t.Fatalf("persisted whitelist error = %v", err)
+	}
+	if len(addresses.entries) != 0 {
+		t.Fatalf("unsafe whitelist address reached candidate: %#v", addresses.entries)
+	}
+	if want := []string{"2606:4700:4700::1 . 443"}; !reflect.DeepEqual(ports.entries, want) {
+		t.Fatalf("safe whitelist port candidate = %#v, want %#v", ports.entries, want)
+	}
+
+	sshBypass := filepath.Join(root, "ssh_whitelist.txt")
+	if err := os.WriteFile(sshBypass, []byte("0.0.0.0/0\n8.8.4.4\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ipv4, ipv6, err := populateSSHBypassSets(
+		context.Background(),
+		nftListSource{path: sshBypass, required: true},
+		"22",
+	)
+	if err == nil || !strings.Contains(err.Error(), "broader than /24") {
+		t.Fatalf("persisted SSH bypass error = %v", err)
+	}
+	if want := []string{"8.8.4.4"}; !reflect.DeepEqual(ipv4.entries, want) {
+		t.Fatalf("safe SSH bypass candidate = %#v, want %#v", ipv4.entries, want)
+	}
+	if len(ipv6.entries) != 0 {
+		t.Fatalf("unsafe SSH bypass reached IPv6 candidate: %#v", ipv6.entries)
+	}
+}
+
 func TestPopulateWhitelistPortSets_SW_LIST_001(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "whitelist.ipv4")
-	content := "192.0.2.1\n192.0.2.129/24:443\n192.0.2.0/24:0443\n192.0.2.42:443\n198.51.100.1:2222\n198.51.100.2:2222\n"
+	content := "192.0.2.1\n192.0.2.0/24:443\n192.0.2.0/24:0443\n192.0.2.42:443\n198.51.100.1:2222\n198.51.100.2:2222\n"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +194,7 @@ func TestPopulateWhitelistPortSetsNormalizesIPv6Overlap_SW_LIST_001(t *testing.T
 
 func TestPopulateHistoricalSSHBypassSets_SW_LIST_002(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ssh_whitelist.txt")
-	content := "192.0.2.129/24:2222\n192.0.2.0/24\n[2001:db8::10]:2222\n2001:db8::10\n"
+	content := "192.0.2.0/24:2222\n192.0.2.0/24\n[2001:db8::10]:2222\n2001:db8::10\n"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -305,18 +364,21 @@ func TestAdoptLegacySaaSIPv4OnlyPairDuringPackageUpgrade_SW_SAAS_001(t *testing.
 	ipv4Path := filepath.Join(directory, "syswarden_saas_monitors.ipv4")
 	ipv6Path := filepath.Join(directory, "syswarden_saas_monitors.ipv6")
 	manifestPath := filepath.Join(directory, saasPairManifestFile)
-	ipv4 := []byte("192.0.2.10\n198.51.100.0/24")
+	ipv4 := []byte("8.8.8.8\n1.1.1.0/24")
+	policyProvider := func() (legacySaaSNetworkPolicy, error) {
+		return legacySaaSNetworkPolicy{}, nil
+	}
 	if err := os.WriteFile(ipv4Path, ipv4, 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(saasLegacyAdoptionEnvironment, "")
-	adopted, err := maybeAdoptLegacySaaSListPair(directory, true)
+	adopted, err := maybeAdoptLegacySaaSListPairWithPolicy(directory, true, policyProvider)
 	if err != nil || adopted {
 		t.Fatalf("non-package SaaS adoption = (%t, %v), want (false, nil)", adopted, err)
 	}
 	t.Setenv(saasLegacyAdoptionEnvironment, "1")
 
-	adopted, err = maybeAdoptLegacySaaSListPair(directory, false)
+	adopted, err = maybeAdoptLegacySaaSListPairWithPolicy(directory, false, policyProvider)
 	if err != nil || adopted {
 		t.Fatalf("explicit SaaS false adoption = (%t, %v), want (false, nil)", adopted, err)
 	}
@@ -326,7 +388,7 @@ func TestAdoptLegacySaaSIPv4OnlyPairDuringPackageUpgrade_SW_SAAS_001(t *testing.
 		}
 	}
 
-	adopted, err = maybeAdoptLegacySaaSListPair(directory, true)
+	adopted, err = maybeAdoptLegacySaaSListPairWithPolicy(directory, true, policyProvider)
 	if err != nil || !adopted {
 		t.Fatalf("legacy SaaS adoption = (%t, %v), want (true, nil)", adopted, err)
 	}
@@ -357,7 +419,7 @@ func TestAdoptLegacySaaSIPv4OnlyPairDuringPackageUpgrade_SW_SAAS_001(t *testing.
 	if present, err := validateSaaSListPair(directory); err != nil || !present {
 		t.Fatalf("adopted pair validation = (%t, %v), want (true, nil)", present, err)
 	}
-	if adopted, err := maybeAdoptLegacySaaSListPair(directory, true); err != nil || adopted {
+	if adopted, err := maybeAdoptLegacySaaSListPairWithPolicy(directory, true, policyProvider); err != nil || adopted {
 		t.Fatalf("idempotent adoption = (%t, %v), want (false, nil)", adopted, err)
 	}
 }
@@ -371,7 +433,34 @@ func TestAdoptLegacySaaSListRejectsUnsafeOrNonCanonicalState_SW_SAAS_001(t *test
 			name: "non-canonical prefix",
 			setup: func(t *testing.T, directory string) {
 				t.Helper()
-				if err := os.WriteFile(filepath.Join(directory, "syswarden_saas_monitors.ipv4"), []byte("192.0.2.129/24"), 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(directory, "syswarden_saas_monitors.ipv4"), []byte("8.8.8.129/24"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "private IPv4 network",
+			setup: func(t *testing.T, directory string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(directory, "syswarden_saas_monitors.ipv4"), []byte("10.0.0.0/24"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "documentation IPv4 network",
+			setup: func(t *testing.T, directory string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(directory, "syswarden_saas_monitors.ipv4"), []byte("192.0.2.0/24"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "default IPv4 route",
+			setup: func(t *testing.T, directory string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(directory, "syswarden_saas_monitors.ipv4"), []byte("0.0.0.0/0"), 0600); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -380,7 +469,7 @@ func TestAdoptLegacySaaSListRejectsUnsafeOrNonCanonicalState_SW_SAAS_001(t *test
 			name: "unsafe mode",
 			setup: func(t *testing.T, directory string) {
 				t.Helper()
-				if err := os.WriteFile(filepath.Join(directory, "syswarden_saas_monitors.ipv4"), []byte("192.0.2.1"), 0644); err != nil { // #nosec G306 -- deliberately permissive fixture verifies fail-closed legacy adoption
+				if err := os.WriteFile(filepath.Join(directory, "syswarden_saas_monitors.ipv4"), []byte("8.8.8.8"), 0644); err != nil { // #nosec G306 -- deliberately permissive fixture verifies fail-closed legacy adoption
 					t.Fatal(err)
 				}
 			},
@@ -390,7 +479,7 @@ func TestAdoptLegacySaaSListRejectsUnsafeOrNonCanonicalState_SW_SAAS_001(t *test
 			setup: func(t *testing.T, directory string) {
 				t.Helper()
 				victim := filepath.Join(directory, "victim")
-				if err := os.WriteFile(victim, []byte("192.0.2.1"), 0600); err != nil {
+				if err := os.WriteFile(victim, []byte("8.8.8.8"), 0600); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.Symlink(victim, filepath.Join(directory, "syswarden_saas_monitors.ipv4")); err != nil {
@@ -403,7 +492,7 @@ func TestAdoptLegacySaaSListRejectsUnsafeOrNonCanonicalState_SW_SAAS_001(t *test
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
 			test.setup(t, directory)
-			if adopted, err := adoptLegacySaaSListPair(directory); err == nil || adopted {
+			if adopted, err := adoptLegacySaaSListPairWithPolicy(directory, legacySaaSNetworkPolicy{}); err == nil || adopted {
 				t.Fatalf("unsafe adoption = (%t, %v), want fail-closed error", adopted, err)
 			}
 			for _, name := range []string{"syswarden_saas_monitors.ipv6", saasPairManifestFile} {
@@ -412,5 +501,32 @@ func TestAdoptLegacySaaSListRejectsUnsafeOrNonCanonicalState_SW_SAAS_001(t *test
 				}
 			}
 		})
+	}
+}
+
+func TestLegacySaaSAdoptionRejectsLocalAndHAPeerNetworks_SW2_H4_M1(t *testing.T) {
+	policy := legacySaaSNetworkPolicy{
+		localAddresses:    []netip.Addr{netip.MustParseAddr("8.8.8.8")},
+		protectedPrefixes: []netip.Prefix{netip.MustParsePrefix("1.1.1.0/24")},
+	}
+	for _, content := range []string{"8.8.8.8\n", "1.1.1.0/24\n"} {
+		if _, err := validateCanonicalLegacySaaSList(
+			"syswarden_saas_monitors.ipv4",
+			[]byte(content),
+			true,
+			policy,
+		); err == nil {
+			t.Fatalf("legacy SaaS adoption accepted protected content %q", content)
+		}
+	}
+	for _, content := range []string{"fc00::/64\n", "2001:db8::/64\n", "::/0\n"} {
+		if _, err := validateCanonicalLegacySaaSList(
+			"syswarden_saas_monitors.ipv6",
+			[]byte(content),
+			false,
+			legacySaaSNetworkPolicy{},
+		); err == nil {
+			t.Fatalf("legacy SaaS adoption accepted unsafe IPv6 content %q", content)
+		}
 	}
 }

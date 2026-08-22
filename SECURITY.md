@@ -1,6 +1,6 @@
 # Security Policy
 
-Being at the heart of it, Cyber Security is very important to me (Laurent Minne A.K.A. Duggy Tuxy)
+Cyber security is central to SysWarden and to its maintainer.
 
 ## Supported Versions
 
@@ -10,8 +10,8 @@ I typically and primarily support the latest releases of my products for mainten
 
 If you discover any issue regarding security, please disclose the information responsibly by sending an email to security[at]syswarden[.]io and not by creating a GitHub issue. I'll get back to you ASAP and work with you to confirm and plan a fix for the issue.
 
-## Audit Report
+## Release Readiness
 
-- [SysWarden Solution Brief (EN), May 2026](security/SysWarden_Solution_Brief_EN.pdf)
+- [SysWarden v4.03.2 Public Release Readiness Report](docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.2.md)
 
 Please note that I do not currently offer a bug bounty program.

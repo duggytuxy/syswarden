@@ -4,6 +4,7 @@ package system
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -36,9 +37,25 @@ pidfile="/run/syswarden-core.pid"
 retry="TERM/5/KILL/5"
 
 depend() {
+	need net rsyslog syswarden-firewall
+}
+`
+
+	historicalV4028OpenRCCoreService = `#!/sbin/openrc-run
+
+name="syswarden-core"
+description="SYSWARDEN WAF and Core Engine"
+command="/opt/syswarden/bin/syswarden-core"
+command_background=true
+pidfile="/run/syswarden-core.pid"
+retry="TERM/5/KILL/5"
+
+depend() {
 	need net rsyslog
 }
 `
+	historicalV4028OpenRCCoreServiceLength = 242
+	historicalV4028OpenRCCoreServiceSHA256 = "89965a9e7d2784bc7e3119966e2564e17c5ec915dc2396986a98fe6ccfcb6247"
 
 	openRCFirewallService = `#!/sbin/openrc-run
 
@@ -57,6 +74,37 @@ start() {
 `
 
 	systemdCoreService = `[Unit]
+Description=SYSWARDEN WAF and Core Engine
+Requires=syswarden-firewall.service
+After=network.target rsyslog.service syswarden-firewall.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/syswarden/bin/syswarden-core
+Restart=on-failure
+RestartSec=5s
+
+# Security Hardening
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/syswarden /var/log/syswarden /run /opt/syswarden /etc/syswarden/lists
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_FOWNER
+
+[Install]
+WantedBy=multi-user.target
+`
+
+	historicalV4028SystemdCoreService = `[Unit]
 Description=SYSWARDEN WAF and Core Engine
 After=network.target rsyslog.service
 Wants=network-online.target
@@ -85,6 +133,8 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_FOWNER
 [Install]
 WantedBy=multi-user.target
 `
+	historicalV4028SystemdCoreServiceLength = 712
+	historicalV4028SystemdCoreServiceSHA256 = "0079096c0a92f17e3aafb6c76ad89a0fdac03c2977732a15776be01220d81768"
 
 	systemdFirewallService = `[Unit]
 Description=SYSWARDEN Firewall Persistence & Engine Loader
@@ -443,7 +493,8 @@ func publishExactServiceFile(path, content string, mode os.FileMode) (created bo
 	defer pinned.close()
 	name := filepath.Base(path)
 	if info, err := pinned.root.Lstat(name); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || !serviceFileOwnedByCurrentUser(info) || info.Mode().Perm() != mode {
+		if info.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 ||
+			!info.Mode().IsRegular() || !serviceFileOwnedByCurrentUser(info) || info.Mode().Perm() != mode {
 			return false, fmt.Errorf("refusing unsafe existing service file %s", path)
 		}
 		actual, readErr := readAttestedServiceFile(pinned.root, name, info)
@@ -799,7 +850,7 @@ func inspectExactServiceFile(
 	if err != nil {
 		return nil, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
+	if info.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || !info.Mode().IsRegular() ||
 		!serviceFileOwnedByCurrentUser(info) || info.Mode().Perm() != mode {
 		return info, fmt.Errorf("refusing unsafe service file")
 	}
@@ -811,6 +862,690 @@ func inspectExactServiceFile(
 		return info, fmt.Errorf("refusing modified service file")
 	}
 	return info, nil
+}
+
+func serviceFileHasSingleLink(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Nlink == 1
+}
+
+func sameServiceFileMetadata(expected, actual os.FileInfo) bool {
+	expectedStat, expectedOK := expected.Sys().(*syscall.Stat_t)
+	actualStat, actualOK := actual.Sys().(*syscall.Stat_t)
+	return expectedOK && actualOK && sameServiceArtifactIdentity(expected, actual) &&
+		expectedStat.Uid == actualStat.Uid && expectedStat.Gid == actualStat.Gid &&
+		expectedStat.Nlink == actualStat.Nlink
+}
+
+func inspectSingleLinkExactServiceFile(
+	directory *pinnedServiceDirectory,
+	name string,
+	content string,
+	mode os.FileMode,
+) (os.FileInfo, error) {
+	before, err := directory.root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if before.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || !before.Mode().IsRegular() ||
+		!serviceFileOwnedByCurrentUser(before) || before.Mode().Perm() != mode ||
+		!serviceFileHasSingleLink(before) {
+		return before, fmt.Errorf("refusing unsafe single-link service file")
+	}
+	actual, err := readAttestedServiceFile(directory.root, name, before)
+	if err != nil {
+		return before, err
+	}
+	if string(actual) != content {
+		return before, fmt.Errorf("refusing modified service file")
+	}
+	after, err := directory.root.Lstat(name)
+	if err != nil || !sameServiceFileMetadata(before, after) ||
+		!serviceFileOwnedByCurrentUser(after) || !serviceFileHasSingleLink(after) {
+		return before, errors.Join(fmt.Errorf("service file metadata changed while reading"), err)
+	}
+	return after, nil
+}
+
+func inspectAnchoredHistoricalServiceFile(
+	directory *pinnedServiceDirectory,
+	name string,
+	content string,
+	contentLength int,
+	contentSHA256 string,
+	mode os.FileMode,
+) (os.FileInfo, error) {
+	expected := []byte(content)
+	expectedDigest := sha256.Sum256(expected)
+	if len(expected) != contentLength || hex.EncodeToString(expectedDigest[:]) != contentSHA256 {
+		return nil, fmt.Errorf("historical service file anchor is internally inconsistent")
+	}
+	info, err := inspectSingleLinkExactServiceFile(directory, name, content, mode)
+	if err != nil {
+		return info, err
+	}
+	actual, err := readAttestedServiceFile(directory.root, name, info)
+	if err != nil {
+		return info, err
+	}
+	actualDigest := sha256.Sum256(actual)
+	if len(actual) != contentLength || hex.EncodeToString(actualDigest[:]) != contentSHA256 {
+		return info, fmt.Errorf("historical service file digest is not exact")
+	}
+	after, err := directory.root.Lstat(name)
+	if err != nil || !sameServiceFileMetadata(info, after) {
+		return info, errors.Join(fmt.Errorf("historical service file changed while anchoring"), err)
+	}
+	return after, nil
+}
+
+type migratedServiceFile struct {
+	artifact            serviceArtifact
+	directory           *pinnedServiceDirectory
+	name                string
+	quarantineName      string
+	historicalIdentity  os.FileInfo
+	replacementIdentity os.FileInfo
+	rename              serviceArtifactRename
+	closed              bool
+}
+
+func (migration *migratedServiceFile) close() {
+	if migration == nil || migration.closed {
+		return
+	}
+	migration.closed = true
+	migration.directory.close()
+}
+
+func inspectHistoricalServiceArtifact(
+	directory *pinnedServiceDirectory,
+	name string,
+	artifact serviceArtifact,
+) (os.FileInfo, error) {
+	return inspectAnchoredHistoricalServiceFile(
+		directory,
+		name,
+		artifact.historicalContent,
+		artifact.historicalContentLength,
+		artifact.historicalContentSHA256,
+		artifact.mode,
+	)
+}
+
+func removePinnedServiceArtifactByIdentity(
+	directory *pinnedServiceDirectory,
+	name string,
+	expected os.FileInfo,
+	rename serviceArtifactRename,
+) error {
+	return quarantineAndRemoveServiceArtifactUsing(
+		directory,
+		name,
+		true,
+		func(directory *pinnedServiceDirectory, candidate string) (os.FileInfo, error) {
+			return inspectServiceArtifactIdentity(directory, candidate, expected)
+		},
+		rename,
+	)
+}
+
+func removePinnedExactServiceFile(
+	directory *pinnedServiceDirectory,
+	name string,
+	content string,
+	mode os.FileMode,
+	expected os.FileInfo,
+	rename serviceArtifactRename,
+) error {
+	return quarantineAndRemoveServiceArtifactUsing(
+		directory,
+		name,
+		false,
+		func(directory *pinnedServiceDirectory, candidate string) (os.FileInfo, error) {
+			info, err := inspectSingleLinkExactServiceFile(directory, candidate, content, mode)
+			if err != nil {
+				return info, err
+			}
+			if !sameServiceFileMetadata(expected, info) {
+				return info, fmt.Errorf("service file identity changed")
+			}
+			return info, nil
+		},
+		rename,
+	)
+}
+
+func renamePinnedServiceArtifactToQuarantine(
+	directory *pinnedServiceDirectory,
+	name string,
+	rename serviceArtifactRename,
+) (string, error) {
+	for attempt := 0; attempt < 16; attempt++ {
+		quarantineName, err := randomServiceArtifactName(".syswarden-quarantine-")
+		if err != nil {
+			return "", fmt.Errorf("generate service migration quarantine: %w", err)
+		}
+		err = rename(directory.fd, name, directory.fd, quarantineName, unix.RENAME_NOREPLACE)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("quarantine migrated service file: %w", err)
+		}
+		return quarantineName, nil
+	}
+	return "", fmt.Errorf("reserve a unique service migration quarantine")
+}
+
+func preserveFailedServiceFileExchange(migration *migratedServiceFile) error {
+	directory := migration.directory
+	target, targetErr := inspectSingleLinkExactServiceFile(
+		directory,
+		migration.name,
+		migration.artifact.content,
+		migration.artifact.mode,
+	)
+	if targetErr != nil || !sameServiceFileMetadata(migration.replacementIdentity, target) {
+		return errors.Join(
+			fmt.Errorf("cannot preserve raced service file exchange with a changed replacement target"),
+			targetErr,
+		)
+	}
+	displaced, err := directory.root.Lstat(migration.quarantineName)
+	if err != nil {
+		return fmt.Errorf("inspect displaced service file after raced exchange: %w", err)
+	}
+	quarantineName, err := renamePinnedServiceArtifactToQuarantine(
+		directory,
+		migration.quarantineName,
+		migration.rename,
+	)
+	if err != nil {
+		return fmt.Errorf("preserve displaced service file after raced exchange: %w", err)
+	}
+	migration.quarantineName = quarantineName
+	preserved, preservedErr := directory.root.Lstat(quarantineName)
+	reattestedTarget, reattestErr := inspectSingleLinkExactServiceFile(
+		directory,
+		migration.name,
+		migration.artifact.content,
+		migration.artifact.mode,
+	)
+	syncErr := directory.sync()
+	if preservedErr != nil || !sameServiceFileMetadata(displaced, preserved) || reattestErr != nil ||
+		!sameServiceFileMetadata(migration.replacementIdentity, reattestedTarget) || syncErr != nil {
+		return errors.Join(
+			fmt.Errorf("raced service file exchange was not safely preserved"),
+			preservedErr,
+			reattestErr,
+			syncErr,
+		)
+	}
+	return nil
+}
+
+func ensureHistoricalServiceQuarantine(migration *migratedServiceFile) error {
+	if strings.HasPrefix(migration.quarantineName, ".syswarden-quarantine-") {
+		return nil
+	}
+	directory := migration.directory
+	historical, err := inspectHistoricalServiceArtifact(directory, migration.quarantineName, migration.artifact)
+	if err != nil || !sameServiceFileMetadata(migration.historicalIdentity, historical) {
+		return errors.Join(fmt.Errorf("refusing changed historical service temporary"), err)
+	}
+	quarantineName, err := renamePinnedServiceArtifactToQuarantine(
+		directory,
+		migration.quarantineName,
+		migration.rename,
+	)
+	if err != nil {
+		return err
+	}
+	migration.quarantineName = quarantineName
+	reattested, reattestErr := inspectHistoricalServiceArtifact(directory, quarantineName, migration.artifact)
+	syncErr := directory.sync()
+	if reattestErr != nil || !sameServiceFileMetadata(migration.historicalIdentity, reattested) || syncErr != nil {
+		return errors.Join(fmt.Errorf("historical service quarantine is not exact"), reattestErr, syncErr)
+	}
+	return nil
+}
+
+func reverseRacedServiceFileRollback(migration *migratedServiceFile, displaced os.FileInfo) error {
+	directory := migration.directory
+	restoredHistorical, historicalErr := inspectHistoricalServiceArtifact(
+		directory,
+		migration.name,
+		migration.artifact,
+	)
+	quarantinedConcurrent, concurrentErr := directory.root.Lstat(migration.quarantineName)
+	if historicalErr != nil || !sameServiceFileMetadata(migration.historicalIdentity, restoredHistorical) ||
+		concurrentErr != nil || !sameServiceFileMetadata(displaced, quarantinedConcurrent) {
+		return errors.Join(
+			fmt.Errorf("cannot reverse raced service rollback from unattested state"),
+			historicalErr,
+			concurrentErr,
+		)
+	}
+	if err := migration.rename(
+		directory.fd,
+		migration.quarantineName,
+		directory.fd,
+		migration.name,
+		unix.RENAME_EXCHANGE,
+	); err != nil {
+		return fmt.Errorf("reverse raced service rollback exchange: %w", err)
+	}
+	restoredConcurrent, restoredErr := directory.root.Lstat(migration.name)
+	quarantinedHistorical, quarantineErr := inspectHistoricalServiceArtifact(
+		directory,
+		migration.quarantineName,
+		migration.artifact,
+	)
+	syncErr := directory.sync()
+	if restoredErr != nil || !sameServiceFileMetadata(displaced, restoredConcurrent) ||
+		quarantineErr != nil || !sameServiceFileMetadata(migration.historicalIdentity, quarantinedHistorical) ||
+		syncErr != nil {
+		return errors.Join(
+			fmt.Errorf("raced service rollback was not exactly reversed"),
+			restoredErr,
+			quarantineErr,
+			syncErr,
+		)
+	}
+	return nil
+}
+
+func reverseInvalidHistoricalServiceRollback(migration *migratedServiceFile) error {
+	directory := migration.directory
+	suspectHistorical, suspectErr := directory.root.Lstat(migration.name)
+	quarantinedReplacement, replacementErr := inspectSingleLinkExactServiceFile(
+		directory,
+		migration.quarantineName,
+		migration.artifact.content,
+		migration.artifact.mode,
+	)
+	if suspectErr != nil || replacementErr != nil ||
+		!sameServiceFileMetadata(migration.replacementIdentity, quarantinedReplacement) {
+		return errors.Join(
+			fmt.Errorf("cannot reverse invalid historical service rollback from unattested replacement"),
+			suspectErr,
+			replacementErr,
+		)
+	}
+	if err := migration.rename(
+		directory.fd,
+		migration.quarantineName,
+		directory.fd,
+		migration.name,
+		unix.RENAME_EXCHANGE,
+	); err != nil {
+		return fmt.Errorf("reverse invalid historical service rollback exchange: %w", err)
+	}
+	restoredReplacement, restoredErr := inspectSingleLinkExactServiceFile(
+		directory,
+		migration.name,
+		migration.artifact.content,
+		migration.artifact.mode,
+	)
+	preservedSuspect, preservedErr := directory.root.Lstat(migration.quarantineName)
+	syncErr := directory.sync()
+	if restoredErr != nil || !sameServiceFileMetadata(migration.replacementIdentity, restoredReplacement) ||
+		preservedErr != nil || !sameServiceFileMetadata(suspectHistorical, preservedSuspect) || syncErr != nil {
+		return errors.Join(
+			fmt.Errorf("invalid historical service rollback was not exactly reversed"),
+			restoredErr,
+			preservedErr,
+			syncErr,
+		)
+	}
+	return nil
+}
+
+func rollbackMigratedServiceFile(migration *migratedServiceFile) error {
+	directory := migration.directory
+	historical, err := inspectHistoricalServiceArtifact(directory, migration.quarantineName, migration.artifact)
+	if err != nil || !sameServiceFileMetadata(migration.historicalIdentity, historical) {
+		return errors.Join(fmt.Errorf("refusing changed historical service quarantine"), err)
+	}
+
+	target, targetErr := inspectSingleLinkExactServiceFile(
+		directory,
+		migration.name,
+		migration.artifact.content,
+		migration.artifact.mode,
+	)
+	if errors.Is(targetErr, os.ErrNotExist) {
+		if err := migration.rename(
+			directory.fd,
+			migration.quarantineName,
+			directory.fd,
+			migration.name,
+			unix.RENAME_NOREPLACE,
+		); err != nil {
+			return fmt.Errorf("restore historical service file into missing target: %w", err)
+		}
+		restored, restoreErr := inspectHistoricalServiceArtifact(directory, migration.name, migration.artifact)
+		syncErr := directory.sync()
+		if restoreErr != nil || !sameServiceFileMetadata(migration.historicalIdentity, restored) || syncErr != nil {
+			return errors.Join(fmt.Errorf("historical service file was not exactly restored"), restoreErr, syncErr)
+		}
+		return fmt.Errorf("service target disappeared concurrently; historical file restored")
+	}
+	if targetErr != nil {
+		quarantineErr := ensureHistoricalServiceQuarantine(migration)
+		return errors.Join(fmt.Errorf("refusing changed service target before rollback: %w", targetErr), quarantineErr)
+	}
+	if !sameServiceFileMetadata(migration.replacementIdentity, target) {
+		quarantineErr := ensureHistoricalServiceQuarantine(migration)
+		return errors.Join(fmt.Errorf("refusing substituted service target before rollback"), quarantineErr)
+	}
+	if err := migration.rename(
+		directory.fd,
+		migration.quarantineName,
+		directory.fd,
+		migration.name,
+		unix.RENAME_EXCHANGE,
+	); err != nil {
+		return fmt.Errorf("restore historical service file by exchange: %w", err)
+	}
+	restored, restoreErr := inspectHistoricalServiceArtifact(directory, migration.name, migration.artifact)
+	displaced, displacedErr := directory.root.Lstat(migration.quarantineName)
+	syncErr := directory.sync()
+	if restoreErr != nil || !sameServiceFileMetadata(migration.historicalIdentity, restored) {
+		reverseErr := reverseInvalidHistoricalServiceRollback(migration)
+		return errors.Join(
+			fmt.Errorf("historical service file changed during rollback exchange"),
+			restoreErr,
+			syncErr,
+			reverseErr,
+		)
+	}
+	if displacedErr != nil {
+		return errors.Join(
+			fmt.Errorf("historical service file was not exactly restored by exchange"),
+			displacedErr,
+			syncErr,
+		)
+	}
+	if !sameServiceFileMetadata(target, displaced) {
+		reverseErr := reverseRacedServiceFileRollback(migration, displaced)
+		return errors.Join(fmt.Errorf("service target changed during rollback exchange"), syncErr, reverseErr)
+	}
+	if syncErr != nil {
+		return fmt.Errorf("sync restored historical service file: %w", syncErr)
+	}
+
+	quarantinedReplacement, replacementErr := inspectSingleLinkExactServiceFile(
+		directory,
+		migration.quarantineName,
+		migration.artifact.content,
+		migration.artifact.mode,
+	)
+	if replacementErr != nil || !sameServiceFileMetadata(migration.replacementIdentity, quarantinedReplacement) {
+		reverseErr := reverseRacedServiceFileRollback(migration, displaced)
+		return errors.Join(fmt.Errorf("service target changed during rollback exchange"), replacementErr, reverseErr)
+	}
+	return removePinnedExactServiceFile(
+		directory,
+		migration.quarantineName,
+		migration.artifact.content,
+		migration.artifact.mode,
+		migration.replacementIdentity,
+		migration.rename,
+	)
+}
+
+func commitMigratedServiceFileUsing(
+	migration *migratedServiceFile,
+	unlink func(int, string, int) error,
+	syncDirectory func() error,
+) (bool, error) {
+	directory := migration.directory
+	target, err := inspectSingleLinkExactServiceFile(
+		directory,
+		migration.name,
+		migration.artifact.content,
+		migration.artifact.mode,
+	)
+	if err != nil || !sameServiceFileMetadata(migration.replacementIdentity, target) {
+		return false, errors.Join(fmt.Errorf("refusing changed migrated service target"), err)
+	}
+	historical, err := inspectHistoricalServiceArtifact(directory, migration.quarantineName, migration.artifact)
+	if err != nil || !sameServiceFileMetadata(migration.historicalIdentity, historical) {
+		return false, errors.Join(fmt.Errorf("refusing changed historical service quarantine"), err)
+	}
+	quarantineName, err := renamePinnedServiceArtifactToQuarantine(
+		directory,
+		migration.quarantineName,
+		migration.rename,
+	)
+	if err != nil {
+		return false, fmt.Errorf("prepare committed historical service quarantine removal: %w", err)
+	}
+	migration.quarantineName = quarantineName
+	reattestedHistorical, historicalErr := inspectHistoricalServiceArtifact(
+		directory,
+		quarantineName,
+		migration.artifact,
+	)
+	if historicalErr != nil || !sameServiceFileMetadata(migration.historicalIdentity, reattestedHistorical) {
+		return false, errors.Join(fmt.Errorf("historical service quarantine changed before removal"), historicalErr)
+	}
+	if err := syncDirectory(); err != nil {
+		return false, fmt.Errorf("sync historical service quarantine before removal: %w", err)
+	}
+	reattestedTarget, targetErr := inspectSingleLinkExactServiceFile(
+		directory,
+		migration.name,
+		migration.artifact.content,
+		migration.artifact.mode,
+	)
+	if targetErr != nil || !sameServiceFileMetadata(migration.replacementIdentity, reattestedTarget) {
+		return false, errors.Join(fmt.Errorf("migrated service target changed before commit"), targetErr)
+	}
+	if err := unlink(directory.fd, quarantineName, 0); err != nil {
+		return false, fmt.Errorf("remove committed historical service quarantine: %w", err)
+	}
+
+	// From this point onward the historical inode has been destroyed. A later
+	// durability or reattestation error must be reported without pretending that
+	// the transaction can still restore that inode.
+	postSyncErr := syncDirectory()
+	committedTarget, committedTargetErr := inspectSingleLinkExactServiceFile(
+		directory,
+		migration.name,
+		migration.artifact.content,
+		migration.artifact.mode,
+	)
+	if postSyncErr != nil || committedTargetErr != nil ||
+		!sameServiceFileMetadata(migration.replacementIdentity, committedTarget) {
+		return true, errors.Join(
+			fmt.Errorf("service migration crossed its irreversible commit boundary"),
+			postSyncErr,
+			committedTargetErr,
+		)
+	}
+	return true, nil
+}
+
+func commitMigratedServiceFile(migration *migratedServiceFile) (bool, error) {
+	return commitMigratedServiceFileUsing(migration, unix.Unlinkat, migration.directory.sync)
+}
+
+func publishMigratableServiceFileUsing(
+	artifact serviceArtifact,
+	rename serviceArtifactRename,
+) (change serviceArtifactChange, returnErr error) {
+	directory, err := openPinnedServiceDirectory(filepath.Dir(artifact.path))
+	if err != nil {
+		return change, err
+	}
+	releaseDirectory := true
+	defer func() {
+		if releaseDirectory {
+			directory.close()
+		}
+	}()
+	name := filepath.Base(artifact.path)
+
+	if _, err := directory.root.Lstat(name); errors.Is(err, os.ErrNotExist) {
+		directory.close()
+		releaseDirectory = false
+		created, publishErr := publishExactServiceFile(artifact.path, artifact.content, artifact.mode)
+		return serviceArtifactChange{artifact: artifact, created: created}, publishErr
+	} else if err != nil {
+		return change, fmt.Errorf("inspect service file %s: %w", artifact.path, err)
+	}
+	if _, err := inspectSingleLinkExactServiceFile(directory, name, artifact.content, artifact.mode); err == nil {
+		return change, directory.sync()
+	}
+	historicalIdentity, err := inspectHistoricalServiceArtifact(directory, name, artifact)
+	if err != nil {
+		return change, fmt.Errorf("refusing non-exact historical service file %s: %w", artifact.path, err)
+	}
+
+	temporaryName, temporary, temporaryIdentity, err := createTemporaryServiceFile(directory)
+	if err != nil {
+		return change, fmt.Errorf("create replacement service file for %s: %w", artifact.path, err)
+	}
+	temporaryOpen := true
+	cleanupTemporary := func() error {
+		var closeErr error
+		if temporaryOpen {
+			closeErr = temporary.Close()
+			temporaryOpen = false
+		}
+		cleanupErr := removePinnedServiceArtifactByIdentity(directory, temporaryName, temporaryIdentity, rename)
+		return errors.Join(closeErr, cleanupErr)
+	}
+	if err := temporary.Chmod(artifact.mode); err != nil {
+		return change, errors.Join(
+			fmt.Errorf("set replacement service file mode for %s: %w", artifact.path, err),
+			cleanupTemporary(),
+		)
+	}
+	temporaryIdentity, err = temporary.Stat()
+	if err != nil {
+		return change, errors.Join(
+			fmt.Errorf("attest replacement service file for %s: %w", artifact.path, err),
+			cleanupTemporary(),
+		)
+	}
+	if _, err := temporary.WriteString(artifact.content); err != nil {
+		return change, errors.Join(
+			fmt.Errorf("write replacement service file %s: %w", artifact.path, err),
+			cleanupTemporary(),
+		)
+	}
+	if err := temporary.Sync(); err != nil {
+		return change, errors.Join(
+			fmt.Errorf("sync replacement service file %s: %w", artifact.path, err),
+			cleanupTemporary(),
+		)
+	}
+	if err := temporary.Close(); err != nil {
+		temporaryOpen = false
+		return change, errors.Join(
+			fmt.Errorf("close replacement service file %s: %w", artifact.path, err),
+			removePinnedServiceArtifactByIdentity(directory, temporaryName, temporaryIdentity, rename),
+		)
+	}
+	temporaryOpen = false
+	replacementIdentity, err := inspectSingleLinkExactServiceFile(
+		directory,
+		temporaryName,
+		artifact.content,
+		artifact.mode,
+	)
+	if err != nil || !sameServiceFileMetadata(temporaryIdentity, replacementIdentity) {
+		return change, errors.Join(
+			fmt.Errorf("replacement service file %s is not exact", artifact.path),
+			err,
+			removePinnedServiceArtifactByIdentity(directory, temporaryName, temporaryIdentity, rename),
+		)
+	}
+	revalidatedHistorical, err := inspectHistoricalServiceArtifact(directory, name, artifact)
+	if err != nil || !sameServiceFileMetadata(historicalIdentity, revalidatedHistorical) {
+		return change, errors.Join(
+			fmt.Errorf("historical service file %s changed before exchange", artifact.path),
+			err,
+			removePinnedExactServiceFile(
+				directory, temporaryName, artifact.content, artifact.mode, replacementIdentity, rename,
+			),
+		)
+	}
+
+	if err := rename(directory.fd, temporaryName, directory.fd, name, unix.RENAME_EXCHANGE); err != nil {
+		return change, errors.Join(
+			fmt.Errorf("exchange historical service file %s atomically: %w", artifact.path, err),
+			removePinnedExactServiceFile(
+				directory, temporaryName, artifact.content, artifact.mode, replacementIdentity, rename,
+			),
+		)
+	}
+	migration := &migratedServiceFile{
+		artifact:            artifact,
+		directory:           directory,
+		name:                name,
+		quarantineName:      temporaryName,
+		historicalIdentity:  historicalIdentity,
+		replacementIdentity: replacementIdentity,
+		rename:              rename,
+	}
+	published, publishErr := inspectSingleLinkExactServiceFile(directory, name, artifact.content, artifact.mode)
+	quarantinedHistorical, historicalErr := inspectHistoricalServiceArtifact(directory, temporaryName, artifact)
+	if historicalErr != nil || !sameServiceFileMetadata(historicalIdentity, quarantinedHistorical) {
+		preserveErr := preserveFailedServiceFileExchange(migration)
+		return change, errors.Join(
+			fmt.Errorf("historical service file %s changed during atomic exchange", artifact.path),
+			historicalErr,
+			preserveErr,
+		)
+	}
+	if publishErr != nil || !sameServiceFileMetadata(replacementIdentity, published) {
+		rollbackErr := rollbackMigratedServiceFile(migration)
+		return change, errors.Join(
+			fmt.Errorf("replacement service file %s changed during atomic exchange", artifact.path),
+			publishErr,
+			rollbackErr,
+		)
+	}
+	if err := directory.sync(); err != nil {
+		rollbackErr := rollbackMigratedServiceFile(migration)
+		return change, errors.Join(fmt.Errorf("sync migrated service file %s: %w", artifact.path, err), rollbackErr)
+	}
+	quarantineName, err := renamePinnedServiceArtifactToQuarantine(directory, temporaryName, rename)
+	if err != nil {
+		rollbackErr := rollbackMigratedServiceFile(migration)
+		return change, errors.Join(err, rollbackErr)
+	}
+	migration.quarantineName = quarantineName
+	if err := directory.sync(); err != nil {
+		rollbackErr := rollbackMigratedServiceFile(migration)
+		return change, errors.Join(fmt.Errorf("sync historical service quarantine: %w", err), rollbackErr)
+	}
+	revalidatedPublished, publishedErr := inspectSingleLinkExactServiceFile(
+		directory, name, artifact.content, artifact.mode,
+	)
+	revalidatedQuarantine, quarantineErr := inspectHistoricalServiceArtifact(directory, quarantineName, artifact)
+	if publishedErr != nil || !sameServiceFileMetadata(replacementIdentity, revalidatedPublished) ||
+		quarantineErr != nil || !sameServiceFileMetadata(historicalIdentity, revalidatedQuarantine) {
+		rollbackErr := rollbackMigratedServiceFile(migration)
+		return change, errors.Join(
+			fmt.Errorf("service migration changed during quarantine reattestation"),
+			publishedErr,
+			quarantineErr,
+			rollbackErr,
+		)
+	}
+
+	releaseDirectory = false
+	return serviceArtifactChange{artifact: artifact, migration: migration}, nil
+}
+
+func publishMigratableServiceFile(artifact serviceArtifact) (serviceArtifactChange, error) {
+	return publishMigratableServiceFileUsing(artifact, unix.Renameat2)
 }
 
 func containsExactString(values []string, candidate string) bool {
@@ -860,19 +1595,23 @@ func publishMigratableServiceEnablement(artifact serviceArtifact) (bool, error) 
 }
 
 type serviceArtifact struct {
-	path                string
-	content             string
-	target              string
-	mode                os.FileMode
-	legacyTargets       []string
-	attestedFilePath    string
-	attestedFileContent string
-	attestedFileMode    os.FileMode
+	path                    string
+	content                 string
+	target                  string
+	mode                    os.FileMode
+	legacyTargets           []string
+	attestedFilePath        string
+	attestedFileContent     string
+	attestedFileMode        os.FileMode
+	historicalContent       string
+	historicalContentLength int
+	historicalContentSHA256 string
 }
 
 type serviceArtifactChange struct {
-	artifact serviceArtifact
-	created  bool
+	artifact  serviceArtifact
+	created   bool
+	migration *migratedServiceFile
 }
 
 func removeCreatedServiceArtifactUsing(artifact serviceArtifact, rename serviceArtifactRename) error {
@@ -910,8 +1649,65 @@ func removeCreatedServiceArtifact(artifact serviceArtifact) error {
 }
 
 func rollbackServiceArtifactChange(change serviceArtifactChange) error {
+	if change.migration != nil {
+		defer change.migration.close()
+		return rollbackMigratedServiceFile(change.migration)
+	}
 	if change.created {
 		return removeCreatedServiceArtifact(change.artifact)
+	}
+	return nil
+}
+
+type serviceMigrationCommitter func(*migratedServiceFile) (bool, error)
+
+func commitServiceArtifactChange(
+	change serviceArtifactChange,
+	commit serviceMigrationCommitter,
+) (bool, error) {
+	if change.migration == nil {
+		return false, nil
+	}
+	irreversible, err := commit(change.migration)
+	if err != nil {
+		return irreversible, err
+	}
+	change.migration.close()
+	return irreversible, nil
+}
+
+func rollbackServiceArtifactChanges(changes []serviceArtifactChange, primary error) error {
+	errorsToJoin := []error{primary}
+	for index := len(changes) - 1; index >= 0; index-- {
+		if rollbackErr := rollbackServiceArtifactChange(changes[index]); rollbackErr != nil {
+			errorsToJoin = append(errorsToJoin, rollbackErr)
+		}
+	}
+	return errors.Join(errorsToJoin...)
+}
+
+func closeServiceArtifactChanges(changes []serviceArtifactChange) {
+	for _, change := range changes {
+		change.migration.close()
+	}
+}
+
+func commitServiceArtifactChangesUsing(
+	changes []serviceArtifactChange,
+	commit serviceMigrationCommitter,
+) error {
+	irreversible := false
+	for index := len(changes) - 1; index >= 0; index-- {
+		crossedBoundary, err := commitServiceArtifactChange(changes[index], commit)
+		irreversible = irreversible || crossedBoundary
+		if err == nil {
+			continue
+		}
+		if irreversible {
+			closeServiceArtifactChanges(changes)
+			return fmt.Errorf("service publication cannot roll back after irreversible migration commit: %w", err)
+		}
+		return rollbackServiceArtifactChanges(changes, err)
 	}
 	return nil
 }
@@ -919,39 +1715,40 @@ func rollbackServiceArtifactChange(change serviceArtifactChange) error {
 func publishServiceArtifacts(artifacts []serviceArtifact) error {
 	changes := make([]serviceArtifactChange, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		var wasCreated bool
+		var change serviceArtifactChange
 		var err error
 		if artifact.target != "" {
 			if len(artifact.legacyTargets) == 0 {
-				wasCreated, err = publishExactServiceEnablement(artifact.path, artifact.target)
+				change.created, err = publishExactServiceEnablement(artifact.path, artifact.target)
 			} else {
-				wasCreated, err = publishMigratableServiceEnablement(artifact)
+				change.created, err = publishMigratableServiceEnablement(artifact)
 			}
+			change.artifact = artifact
+		} else if artifact.historicalContent != "" {
+			change, err = publishMigratableServiceFile(artifact)
 		} else {
-			wasCreated, err = publishExactServiceFile(artifact.path, artifact.content, artifact.mode)
+			change.created, err = publishExactServiceFile(artifact.path, artifact.content, artifact.mode)
+			change.artifact = artifact
 		}
-		if wasCreated {
-			changes = append(changes, serviceArtifactChange{
-				artifact: artifact, created: true,
-			})
+		if change.created || change.migration != nil {
+			changes = append(changes, change)
 		}
 		if err == nil {
 			continue
 		}
-		rollbackErrors := []error{err}
-		for index := len(changes) - 1; index >= 0; index-- {
-			if rollbackErr := rollbackServiceArtifactChange(changes[index]); rollbackErr != nil {
-				rollbackErrors = append(rollbackErrors, rollbackErr)
-			}
-		}
-		return errors.Join(rollbackErrors...)
+		return rollbackServiceArtifactChanges(changes, err)
 	}
-	return nil
+	return commitServiceArtifactChangesUsing(changes, commitMigratedServiceFile)
 }
 
 func publishOpenRCServices() error {
 	return publishServiceArtifacts([]serviceArtifact{
-		{path: filepath.Join(serviceOpenRCUnitDir, "syswarden-core"), content: openRCCoreService, mode: 0755},
+		{
+			path: filepath.Join(serviceOpenRCUnitDir, "syswarden-core"), content: openRCCoreService, mode: 0755,
+			historicalContent:       historicalV4028OpenRCCoreService,
+			historicalContentLength: historicalV4028OpenRCCoreServiceLength,
+			historicalContentSHA256: historicalV4028OpenRCCoreServiceSHA256,
+		},
 		{path: filepath.Join(serviceOpenRCUnitDir, "syswarden-firewall"), content: openRCFirewallService, mode: 0755},
 		{path: filepath.Join(serviceOpenRCRunlevelDir, "syswarden-core"), target: "/etc/init.d/syswarden-core"},
 		{path: filepath.Join(serviceOpenRCRunlevelDir, "syswarden-firewall"), target: "/etc/init.d/syswarden-firewall"},
@@ -962,7 +1759,12 @@ func publishSystemdServices() error {
 	coreUnitPath := filepath.Join(serviceSystemdUnitDir, "syswarden-core.service")
 	firewallUnitPath := filepath.Join(serviceSystemdUnitDir, "syswarden-firewall.service")
 	return publishServiceArtifacts([]serviceArtifact{
-		{path: coreUnitPath, content: systemdCoreService, mode: 0600},
+		{
+			path: coreUnitPath, content: systemdCoreService, mode: 0600,
+			historicalContent:       historicalV4028SystemdCoreService,
+			historicalContentLength: historicalV4028SystemdCoreServiceLength,
+			historicalContentSHA256: historicalV4028SystemdCoreServiceSHA256,
+		},
 		{path: firewallUnitPath, content: systemdFirewallService, mode: 0600},
 		{
 			path: filepath.Join(serviceSystemdWantsDir, "syswarden-core.service"), target: "../syswarden-core.service",

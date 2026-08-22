@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/firewall"
@@ -19,8 +20,48 @@ var installCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
 
+		if err := preflightConfiguredCronScheduling(); err != nil {
+			return installStageError("cron scheduling preflight failed before configuration repair", err)
+		}
+		initialFirewallBackend := configuredFirewallBackend()
+		initialFirewallErr := hostFirewallBackendPreflight(initialFirewallBackend)
+		if initialFirewallErr != nil {
+			compatibilityClass, compatibilityEligible := classifyInstallFirewallCompatibilityError(initialFirewallErr)
+			if initialFirewallBackend != "nftables" || !compatibilityEligible {
+				return installStageError("firewall backend preflight failed before configuration repair", initialFirewallErr)
+			}
+			compatibility, err := inspectInstallFirewallCompatibility("/etc/syswarden/config")
+			if err != nil {
+				return installStageError("historical default firewall compatibility inspection failed before configuration repair", err)
+			}
+			if compatibility == nil {
+				return installStageError("firewall backend preflight failed before configuration repair", initialFirewallErr)
+			}
+			if err := hostFirewallBackendPreflight("keep"); err != nil {
+				return installStageError(
+					"historical default keep-mode preflight failed before configuration repair",
+					errors.Join(initialFirewallErr, err),
+				)
+			}
+			if err := applyInstallFirewallCompatibility(
+				compatibility,
+				func() error {
+					return revalidateInstallFirewallCompatibilityHost(compatibilityClass)
+				},
+			); err != nil {
+				return installStageError("firewall compatibility migration failed before configuration repair", err)
+			}
+			fmt.Println("[INFO] Migrated the historical default firewall byte family from nftables to keep after typed host-state attestation.")
+		}
+
 		if err := installConfigPreflight("/etc/syswarden/config"); err != nil {
 			return installStageError("configuration preflight failed before host mutation", err)
+		}
+		if err := preflightConfiguredCronScheduling(); err != nil {
+			return installStageError("cron scheduling preflight failed", err)
+		}
+		if err := preflightConfiguredFirewallBackend(); err != nil {
+			return installStageError("firewall backend preflight failed", err)
 		}
 
 		if err := system.InstallDependencies(); err != nil {
@@ -38,7 +79,7 @@ var installCmd = &cobra.Command{
 		// Phase 2: Network Intelligence
 		fmt.Println("[SYSWARDEN] Starting Network Intelligence Downloader...")
 		mirrorURL := config.GlobalConfig.CustomURL
-		if mirrorURL == "" {
+		if mirrorURL == "" && config.GlobalConfig.ListChoice != "3" {
 			mirrorURL = "https://codeberg.org/"
 		}
 		if err := network.DownloadFeeds(mirrorURL, config.GlobalConfig.CustomURLIPv6, config.GlobalConfig.CustomHash, config.GlobalConfig.CustomHashIPv6, config.GlobalConfig.ListChoice, config.GlobalConfig.GeoCodes, config.GlobalConfig.ASNList, config.GlobalConfig.GeoAllowed, config.GlobalConfig.ASNAllowed, config.GlobalConfig.LANMode, config.GlobalConfig.UseSpamhaus); err != nil {
@@ -106,12 +147,79 @@ var installCmd = &cobra.Command{
 			return installStageError("service setup failed", err)
 		}
 
-		fmt.Println("[SYSWARDEN] v4.03.1 native installation complete.")
+		fmt.Println("[SYSWARDEN] v4.03.2 native installation complete.")
 		return nil
 	},
 }
 
 var installConfigPreflight = prepareInstallConfiguration
+var hostFirewallBackendPreflight = system.PreflightHostFirewallBackend
+var inspectInstallFirewallCompatibility = config.InspectHistoricalDefaultFirewallCompatibility
+var applyInstallFirewallCompatibility = config.ApplyHistoricalDefaultFirewallCompatibility
+var hostCronSchedulingPreflight = func(haEnabled bool) error {
+	_, err := system.PreflightRuntimeCronScheduling(haEnabled)
+	return err
+}
+
+func preflightConfiguredCronScheduling() error {
+	haEnabled := config.GlobalConfig != nil && config.GlobalConfig.HAEnabled
+	return hostCronSchedulingPreflight(haEnabled)
+}
+
+func preflightConfiguredFirewallBackend() error {
+	return hostFirewallBackendPreflight(configuredFirewallBackend())
+}
+
+func configuredFirewallBackend() string {
+	backend := "keep"
+	if config.GlobalConfig != nil && config.GlobalConfig.FirewallBackend != "" {
+		backend = config.GlobalConfig.FirewallBackend
+	}
+	return backend
+}
+
+type installFirewallCompatibilityClass string
+
+const (
+	installFirewallCompatibilitySystemd installFirewallCompatibilityClass = "systemd"
+	installFirewallCompatibilityOpenRC  installFirewallCompatibilityClass = "openrc"
+)
+
+var installSystemdFirewallCompatibilityEligible = system.IsHistoricalDefaultSystemdFirewallCompatibilityEligible
+var installOpenRCFirewallCompatibilityEligible = system.IsHistoricalDefaultOpenRCFirewallCompatibilityEligible
+var classifyInstallFirewallCompatibilityError = classifyInstallFirewallCompatibility
+
+func classifyInstallFirewallCompatibility(err error) (installFirewallCompatibilityClass, bool) {
+	systemdEligible := installSystemdFirewallCompatibilityEligible(err)
+	openRCEligible := installOpenRCFirewallCompatibilityEligible(err)
+	if systemdEligible == openRCEligible {
+		return "", false
+	}
+	if systemdEligible {
+		return installFirewallCompatibilitySystemd, true
+	}
+	return installFirewallCompatibilityOpenRC, true
+}
+
+func revalidateInstallFirewallCompatibilityHost(wantClass installFirewallCompatibilityClass) error {
+	err := hostFirewallBackendPreflight("nftables")
+	if err == nil {
+		return fmt.Errorf("historical default firewall host state became strict-nftables ready during compatibility publication")
+	}
+	gotClass, eligible := classifyInstallFirewallCompatibilityError(err)
+	if !eligible {
+		return fmt.Errorf("historical default firewall host state changed during compatibility publication: %w", err)
+	}
+	if gotClass != wantClass {
+		return fmt.Errorf(
+			"historical default firewall service-manager class changed during compatibility publication from %s to %s: %w",
+			wantClass,
+			gotClass,
+			err,
+		)
+	}
+	return nil
+}
 
 func installStageError(stage string, err error) error {
 	return fmt.Errorf("[ERROR] %s: %w", stage, err)

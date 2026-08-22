@@ -58,7 +58,7 @@ func TestCleanCIDRListAtRoutesFamiliesAtomicallyWithOwnerOnlyModes(t *testing.T)
 	directory := t.TempDir()
 	v4Target := feedFileTarget{directory: directory, name: "feed.ipv4"}
 	v6Target := feedFileTarget{directory: directory, name: "feed.ipv6"}
-	if err := writeFeedFileAt(v4Target, ".ipv4", []byte("192.0.2.1\n2001:db8::1\ninvalid\n192.0.2.1\n")); err != nil {
+	if err := writeFeedFileAt(v4Target, ".ipv4", []byte("8.8.8.8\n2606:4700:4700::1111\ninvalid\n8.8.8.8\n")); err != nil {
 		t.Fatal(err)
 	}
 	root, err := os.OpenRoot(directory)
@@ -88,10 +88,10 @@ func TestCleanCIDRListAtRoutesFamiliesAtomicallyWithOwnerOnlyModes(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(v4) != "192.0.2.1/32\n" {
+	if string(v4) != "8.8.8.8/32\n" {
 		t.Fatalf("IPv4 output = %q", v4)
 	}
-	if string(v6) != "2001:db8::1/128\n" {
+	if string(v6) != "2606:4700:4700::1111/128\n" {
 		t.Fatalf("IPv6 output = %q", v6)
 	}
 	for _, name := range []string{"feed.ipv4", "feed.ipv6"} {
@@ -111,6 +111,62 @@ func TestCleanCIDRListAtRoutesFamiliesAtomicallyWithOwnerOnlyModes(t *testing.T)
 		if strings.Contains(entry.Name(), ".syswarden-") {
 			t.Fatalf("staging residue remains: %s", entry.Name())
 		}
+	}
+}
+
+func TestCleanCIDRListAtRemovesBroadAndSpecialUsePrefixes(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	content := []byte("0.0.0.0/0\n8.0.0.0/8\n8.8.0.0/16\n10.0.0.1\n8.8.8.0/24\n")
+	if err := writeFeedFileAt(target, ".ipv4", content); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanCIDRListAt(target); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err := readFeedFileAt(target, ".ipv4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(cleaned), "8.8.8.0/24\n"; got != want {
+		t.Fatalf("cleaned feed = %q, want %q", got, want)
+	}
+}
+
+func TestCleanCIDRListAtPreservesOversizedExistingFile(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	file, err := root.OpenFile(target.name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maximumPublishedBytes + 1); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := root.Lstat(target.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanCIDRListAt(target); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized cleaner error = %v", err)
+	}
+	after, err := root.Lstat(target.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) || after.Size() != maximumPublishedBytes+1 {
+		t.Fatalf("oversized LKG changed: before=%d after=%d", before.Size(), after.Size())
 	}
 }
 
@@ -181,7 +237,7 @@ func TestCleanCIDRListAtPropagatesSiblingSymlinkError(t *testing.T) {
 	}
 	defer func() { _ = root.Close() }()
 	target := feedFileTarget{directory: directory, name: "feed.ipv4"}
-	if err := writeFeedFileAt(target, ".ipv4", []byte("192.0.2.1\n2001:db8::1\n")); err != nil {
+	if err := writeFeedFileAt(target, ".ipv4", []byte("8.8.8.8\n2606:4700:4700::1111\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := root.WriteFile("outside", []byte("do-not-touch\n"), 0600); err != nil {
@@ -298,19 +354,19 @@ func TestFeedRewriteRejectsChangeAfterSourceRead(t *testing.T) {
 	if err := writeFeedFileAt(target, ".ipv4", []byte("192.0.2.1\n")); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := readFeedFileAt(target, ".ipv4")
-	if err != nil {
-		t.Fatal(err)
-	}
 	root, err := os.OpenRoot(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
+	_, snapshot, err := readFeedFileSnapshotInDirectory(root, target)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := root.WriteFile("feed.ipv4", []byte("198.51.100.1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFeedFileInDirectoryFromSnapshot(root, target, []byte("203.0.113.1\n"), snapshot); err == nil || !strings.Contains(err.Error(), "changed after it was read") {
+	if err := writeFeedFileInDirectoryFromIdentity(root, target, []byte("203.0.113.1\n"), snapshot); err == nil || !strings.Contains(err.Error(), "changed after it was read") {
 		t.Fatalf("stale feed rewrite error = %v", err)
 	}
 	content, err := root.ReadFile("feed.ipv4")
@@ -319,6 +375,55 @@ func TestFeedRewriteRejectsChangeAfterSourceRead(t *testing.T) {
 	}
 	if string(content) != "198.51.100.1\n" {
 		t.Fatalf("stale rewrite replaced newer feed content: %q", content)
+	}
+}
+
+func TestFeedRewriteRejectsSameBytesFromReplacementInode(t *testing.T) {
+	directory := t.TempDir()
+	target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	original := []byte("8.8.8.8/32\n")
+	if err := writeFeedFileAt(target, ".ipv4", original); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	_, identity, err := readFeedFileSnapshotInDirectory(root, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Remove(target.name); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.WriteFile(target.name, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFeedFileInDirectoryFromIdentity(root, target, []byte("1.1.1.1/32\n"), identity); err == nil || !strings.Contains(err.Error(), "changed after it was read") {
+		t.Fatalf("same-byte inode replacement error = %v", err)
+	}
+}
+
+func TestRemoveFeedTargetsIsLockedValidatedAndIdempotent(t *testing.T) {
+	directory := t.TempDir()
+	ipv4 := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	ipv6 := feedFileTarget{directory: directory, name: "feed.ipv6"}
+	if err := writeFeedFileAt(ipv4, ".ipv4", []byte("8.8.8.8/32\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFeedFileAt(ipv6, ".ipv6", []byte("2606:4700:4700::44/128\n")); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := removeFeedTargets(ipv4, ipv6); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, target := range []feedFileTarget{ipv4, ipv6} {
+		if _, err := os.Lstat(filepath.Join(target.directory, target.name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("removed target %s state = %v", target.name, err)
+		}
 	}
 }
 

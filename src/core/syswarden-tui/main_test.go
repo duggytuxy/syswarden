@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -21,7 +22,24 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+func checkedTUITestIdentity(t *testing.T, name string, value int) uint32 {
+	t.Helper()
+	wide := int64(value)
+	if wide < 0 || wide > math.MaxUint32 {
+		t.Fatalf("effective %s is outside uint32: %d", name, value)
+		return 0
+	}
+	return uint32(wide)
+}
+
+func tuiTestIdentity(t *testing.T) (uint32, uint32) {
+	t.Helper()
+	return checkedTUITestIdentity(t, "UID", os.Geteuid()), checkedTUITestIdentity(t, "GID", os.Getegid())
+}
 
 func newStrictTUIHATestCertificatePEM(t *testing.T, serial int64) []byte {
 	t.Helper()
@@ -38,6 +56,101 @@ func newStrictTUIHATestCertificatePEM(t *testing.T, serial int64) []byte {
 		t.Fatal(err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func TestTUIRemovalTombstoneStartupGuard_SW2_FWBACKEND_001(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "removal-in-progress-v1")
+	uid, gid := tuiTestIdentity(t)
+	present, err := inspectTUIRemovalTombstone(path, uid, gid)
+	if err != nil || present {
+		t.Fatalf("missing tombstone result = present %t, error %v", present, err)
+	}
+	if err := os.WriteFile(path, []byte(tuiRemovalTombstoneRecord), 0600); err != nil {
+		t.Fatal(err)
+	}
+	present, err = inspectTUIRemovalTombstone(path, uid, gid)
+	if err != nil || !present {
+		t.Fatalf("valid tombstone result = present %t, error %v", present, err)
+	}
+	if err := os.WriteFile(path, []byte("SYSWARDEN_REMOVAL_V1\nstate=modified\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if present, err = inspectTUIRemovalTombstone(path, uid, gid); err == nil || !present {
+		t.Fatalf("modified tombstone result = present %t, error %v", present, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(directory, "target")
+	if err := os.WriteFile(target, []byte(tuiRemovalTombstoneRecord), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if present, err = inspectTUIRemovalTombstone(path, uid, gid); err == nil || !present {
+		t.Fatalf("symlink tombstone result = present %t, error %v", present, err)
+	}
+}
+
+func TestTUIRemovalTombstoneRejectsUnsafeParentBeforeMissingFile_SW2_FWBACKEND_001(t *testing.T) {
+	uid, gid := tuiTestIdentity(t)
+
+	unsafeParent := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(unsafeParent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	unsafeParentFD, err := unix.Open(
+		unsafeParent,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := unix.Fchmod(unsafeParentFD, 0700); err != nil {
+			t.Errorf("restore unsafe parent mode: %v", err)
+		}
+		if err := unix.Close(unsafeParentFD); err != nil {
+			t.Errorf("close unsafe parent: %v", err)
+		}
+	})
+	if err := unix.Fchmod(unsafeParentFD, 0720); err != nil {
+		t.Fatal(err)
+	}
+	unsafePath := filepath.Join(unsafeParent, "removal-in-progress-v1")
+	if present, err := inspectTUIRemovalTombstone(unsafePath, uid, gid); err == nil || !present {
+		t.Fatalf("unsafe parent result = present %t, error %v", present, err)
+	}
+
+	root := t.TempDir()
+	realParent := filepath.Join(root, "real-state")
+	linkedParent := filepath.Join(root, "linked-state")
+	if err := os.Mkdir(realParent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Fatal(err)
+	}
+	linkedPath := filepath.Join(linkedParent, "removal-in-progress-v1")
+	if present, err := inspectTUIRemovalTombstone(linkedPath, uid, gid); err == nil || !present {
+		t.Fatalf("symlink parent result = present %t, error %v", present, err)
+	}
+}
+
+func TestTUIRemovalGuardRunsBeforeTerminalAndStateAccess_SW2_FWBACKEND_001(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(source)
+	guard := strings.Index(content, "inspectTUIRemovalTombstone(tuiRemovalTombstonePath")
+	terminal := strings.Index(content, "term.IsTerminal")
+	if guard < 0 || terminal < 0 || guard > terminal {
+		t.Fatalf("TUI removal guard is not the first startup boundary: guard=%d terminal=%d", guard, terminal)
+	}
 }
 
 func newTUIHALoopbackServerCertificate(t *testing.T, serial int64) tls.Certificate {
@@ -477,6 +590,29 @@ func TestBuildProgressBarCompatibility(t *testing.T) {
 	}
 	if got := buildProgressBar(200, 100, "RAM", "green"); !strings.Contains(got, "100.0%") {
 		t.Fatalf("over-capacity progress bar was not capped: %q", got)
+	}
+}
+
+func TestDashboardSnapshotTitleIsOperationalAndNeutral_SW_DOC_001(t *testing.T) {
+	lower := strings.ToLower(dashboardSnapshotTitle)
+	if !strings.Contains(lower, "local dashboard") {
+		t.Fatalf("dashboard snapshot title = %q", dashboardSnapshotTitle)
+	}
+	for _, forbidden := range []string{"enterprise", "compliant", "certified"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("dashboard snapshot title contains unsupported claim %q", forbidden)
+		}
+	}
+}
+
+func TestEmptyRegistryMessageDoesNotClaimSecurity_SW_DOC_001(t *testing.T) {
+	if emptyRegistryMessage != "Registry is empty. No active entries." {
+		t.Fatalf("empty registry message = %q", emptyRegistryMessage)
+	}
+	for _, forbidden := range []string{"secure", "safe", "compliant", "certified"} {
+		if strings.Contains(strings.ToLower(emptyRegistryMessage), forbidden) {
+			t.Fatalf("empty registry message contains unsupported claim %q", forbidden)
+		}
 	}
 }
 

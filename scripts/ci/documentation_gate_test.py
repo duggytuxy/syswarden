@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import shlex
+import subprocess
 import tempfile
+import textwrap
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -16,7 +20,7 @@ import release_gate
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REPORT = REPO_ROOT / "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.1.md"
+REPORT = REPO_ROOT / "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.2.md"
 ARCHIVE_DIGEST = "a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5"
 
 
@@ -27,12 +31,12 @@ class DocumentationGateTest(unittest.TestCase):
         self.assertEqual([record.path for record in records], ["README.md"])
 
     def test_current_version_and_candidate_status_are_explicit(self) -> None:
-        self.assertEqual(documentation_gate.source_version(REPO_ROOT), "v4.03.1")
+        self.assertEqual(documentation_gate.source_version(REPO_ROOT), "v4.03.2")
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
         report = REPORT.read_text(encoding="utf-8")
-        self.assertIn("Current source version: **v4.03.1**.", readme)
-        self.assertIn("does not claim that v4.03.1 is qualified", readme)
+        self.assertIn("Current source version: **v4.03.2**.", readme)
+        self.assertIn("does not claim that v4.03.2 is qualified", readme)
         self.assertIn(
             "does not authorize a tag or publication",
             documentation_gate.normalized(changelog),
@@ -64,15 +68,15 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                "v4.03.1",
+                "v4.03.2",
             ),
             [],
         )
 
     def test_public_release_contract_is_six_packages_and_thirteen_assets(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
-        expected_packages = release_gate.package_names("4.03.1")
-        expected_assets = release_gate.expected_release_assets("v4.03.1")
+        expected_packages = release_gate.package_names("4.03.2")
+        expected_assets = release_gate.expected_release_assets("v4.03.2")
         self.assertEqual(len(expected_packages), 6)
         self.assertEqual(len(expected_assets), 13)
         self.assertEqual(
@@ -83,6 +87,231 @@ class DocumentationGateTest(unittest.TestCase):
         self.assertEqual(
             contract["active_surface_contract"]["public_asset_count"], 13
         )
+
+    def test_optional_image_extension_is_active_and_bounded(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        relative = "extensions/rhel-image/README.md"
+        self.assertIn(relative, contract["active_surface_contract"]["documents"])
+        extension = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        normalized = " ".join(extension.split())
+        self.assertIn("optional, additive image-builder extension", normalized)
+        self.assertIn("Package scriptlets and triggers are disabled", normalized)
+        self.assertIn("does not enter the root, execute a product binary", normalized)
+        self.assertIn("nor establishes runtime qualification", normalized)
+
+    def test_local_release_preflight_is_active_and_non_authorizing(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        relative = "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md"
+        self.assertIn(relative, contract["active_surface_contract"]["documents"])
+        procedure = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        self.assertTrue(procedure.isascii())
+        for forbidden in ("\u2011", "\u2013", "\u2014"):
+            self.assertNotIn(forbidden, procedure)
+        normalized = " ".join(procedure.split())
+        self.assertIn("read-only with respect to GitHub and release state", normalized)
+        self.assertIn("must not create or update a remote branch, tag", normalized)
+        self.assertIn(
+            "Only the protected remote sequence may authorize a lot closure, tag or Release",
+            normalized,
+        )
+        self.assertIn("single `Patch :` transition commit", normalized)
+        self.assertIn("amend and re-sign the single `Patch :` candidate commit", normalized)
+        self.assertIn("complete mandatory pre-push gate", normalized)
+        self.assertIn("tracked `.github/act/push.json` fixture is test-only", normalized)
+        self.assertIn("Pass `--eventpath \"${SW_EVENT}\"` explicitly", normalized)
+        self.assertIn("git clone --no-hardlinks --local", normalized)
+        self.assertIn("--workflows .github/workflows/auto-versioning.yml", normalized)
+        self.assertIn("--bind", normalized)
+        self.assertIn("--pull=true", normalized)
+        self.assertNotIn("--pull=false", normalized)
+        self.assertIn("Never bind the maintainer's primary worktree", normalized)
+        actrc = (REPO_ROOT / ".actrc").read_text(encoding="ascii")
+        expected_act_image = (
+            "catthehacker/ubuntu:act-24.04@sha256:"
+            "b839c14c4410998529ec18f951262bdf87a2b23bc1467304d07b491b9455e074"
+        )
+        for runner_label in ("ubuntu-24.04", "ubuntu-latest"):
+            self.assertEqual(
+                [
+                    line
+                    for line in actrc.splitlines()
+                    if line.startswith(f"-P {runner_label}=")
+                ],
+                [f"-P {runner_label}={expected_act_image}"],
+            )
+        self.assertNotIn("--pull=false", actrc)
+        self.assertIn("Act's sandbox shortcut is not an AppArmor proof", normalized)
+        self.assertIn("AppArmor host proof may be marked `REMOTE-ONLY`", normalized)
+        self.assertIn("`PARTIAL-NO-NATIVE-ARM64`", normalized)
+        self.assertIn("evidence files are not byte-comparable", normalized)
+        self.assertIn("Compare evidence schemas, bindings, inventories", normalized)
+        self.assertIn("post-preflight action", normalized)
+        self.assertIn("user-approved merge", normalized)
+        actual_workflows = {
+            path.name for path in (REPO_ROOT / ".github/workflows").glob("*.yml")
+        }
+        documented_workflows = set(re.findall(r"`([a-z0-9-]+\.yml)`", procedure))
+        self.assertEqual(documented_workflows, actual_workflows)
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md", readme)
+
+    def test_optional_image_policy_manifest_set_is_exact_and_executable(self) -> None:
+        recipes: list[str] = []
+        for relative in ("README.md", "extensions/rhel-image/README.md"):
+            errors: list[str] = []
+            blocks = documentation_gate.extract_fenced_blocks(
+                (REPO_ROOT / relative).read_text(encoding="utf-8"),
+                relative,
+                errors,
+            )
+            self.assertEqual(errors, [])
+            matches = [
+                textwrap.dedent(body)
+                for language, body in blocks
+                if language == "bash"
+                and "EXPECTED_POLICY_MANIFEST_SHA256" in body
+            ]
+            self.assertEqual(len(matches), 1, relative)
+            recipe = matches[0]
+            self.assertIn("declare -A EXPECTED_POLICY_SET=()", recipe)
+            self.assertIn("declare -A MANIFEST_POLICY_SET=()", recipe)
+            self.assertIn(
+                'if (( EUID != 0 )) || [[ "${GROUPS[0]}" != 0 ]]; then',
+                recipe,
+            )
+            self.assertNotIn("sudo ", recipe)
+            self.assertNotIn("<(printf", recipe)
+            recipes.append(recipe)
+
+        marker = '\n(\n  cd "${POLICY_SOURCE}"'
+        segments: list[str] = []
+        for recipe in recipes:
+            start = recipe.index("POLICY_FILES=()")
+            end = recipe.index(marker, start)
+            segments.append(recipe[start:end])
+        self.assertEqual(segments[0], segments[1])
+
+        expected_files = [
+            "ru.ipv4",
+            "ru.ipv6",
+            "cn.ipv4",
+            "cn.ipv6",
+            "kp.ipv4",
+            "kp.ipv6",
+            "ir.ipv4",
+            "ir.ipv6",
+            "AS123.ipv4",
+            "AS123.ipv6",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            policy_source = Path(directory)
+            manifest = policy_source / "SHA256SUMS"
+            prefix = "\n".join(
+                (
+                    "set -euo pipefail",
+                    f"POLICY_SOURCE={shlex.quote(str(policy_source))}",
+                    "COUNTRY_CODES=(ru cn kp ir)",
+                    "APPROVED_ASNS=(AS123)",
+                    "",
+                )
+            )
+
+            def run_with_manifest(files: list[str]) -> subprocess.CompletedProcess[str]:
+                manifest.write_text(
+                    "".join(f"{'0' * 64}  {name}\n" for name in files),
+                    encoding="ascii",
+                )
+                return subprocess.run(
+                    ["bash", "-c", prefix + segments[0]],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+
+            self.assertEqual(run_with_manifest(expected_files).returncode, 0)
+            self.assertNotEqual(run_with_manifest(expected_files[:-1]).returncode, 0)
+            self.assertNotEqual(
+                run_with_manifest(expected_files + ["extra.ipv4"]).returncode,
+                0,
+            )
+            self.assertNotEqual(
+                run_with_manifest(expected_files + [expected_files[0]]).returncode,
+                0,
+            )
+
+    def test_optional_image_privileged_fences_guard_their_own_root(self) -> None:
+        checked = 0
+        stage_command = (
+            "sudo extensions/rhel-image/stage-syswarden-rhel-image.sh"
+        )
+        for relative in ("README.md", "extensions/rhel-image/README.md"):
+            errors: list[str] = []
+            blocks = documentation_gate.extract_fenced_blocks(
+                (REPO_ROOT / relative).read_text(encoding="utf-8"),
+                relative,
+                errors,
+            )
+            self.assertEqual(errors, [])
+            for language, body in blocks:
+                if (
+                    language != "bash"
+                    or '${IMAGE_ROOT}' not in body
+                    or "sudo " not in body
+                ):
+                    continue
+                checked += 1
+                recipe = textwrap.dedent(body)
+                self.assertTrue(
+                    recipe.startswith("set -euo pipefail\n"),
+                    relative,
+                )
+                self.assertIn("IMAGE_ROOT=/srv/image-root\n", recipe, relative)
+                self.assertIn(stage_command, recipe, relative)
+                self.assertEqual(
+                    recipe.index("sudo "),
+                    recipe.index(stage_command),
+                    relative,
+                )
+        self.assertGreaterEqual(checked, 4)
+
+    def test_optional_image_configuration_publication_is_exact(self) -> None:
+        recipes: list[str] = []
+        for relative in ("README.md", "extensions/rhel-image/README.md"):
+            errors: list[str] = []
+            blocks = documentation_gate.extract_fenced_blocks(
+                (REPO_ROOT / relative).read_text(encoding="utf-8"),
+                relative,
+                errors,
+            )
+            self.assertEqual(errors, [])
+            matches = [
+                textwrap.dedent(body)
+                for language, body in blocks
+                if language == "bash"
+                and 'CONFIG_STAGE="${IMAGE_ROOT}' in body
+            ]
+            self.assertEqual(len(matches), 1, relative)
+            recipe = matches[0]
+            self.assertTrue(recipe.startswith("set -euo pipefail\numask 077\n"))
+            self.assertIn(
+                'if (( EUID != 0 )) || [[ "${GROUPS[0]}" != 0 ]]; then',
+                recipe,
+            )
+            self.assertIn(
+                "CONFIG_FILES=(config.toml modules/00-core.toml modules/10-network.toml)",
+                recipe,
+            )
+            self.assertNotIn("sudo ", recipe)
+            for command in (
+                "/usr/bin/install",
+                "/usr/bin/cmp",
+                "/usr/bin/mv",
+                "/usr/bin/stat",
+            ):
+                self.assertIn(command, recipe)
+            recipes.append(recipe)
+        self.assertEqual(recipes[0], recipes[1])
 
     def test_report_numbered_asset_inventory_matches_release_gate_order(self) -> None:
         report = REPORT.read_text(encoding="utf-8")
@@ -106,7 +335,7 @@ class DocumentationGateTest(unittest.TestCase):
             documentation_gate.cobra_commands(REPO_ROOT),
             documentation_gate.config_schema(REPO_ROOT),
             changed["forbidden_phrases"],
-            "v4.03.1",
+            "v4.03.2",
         )
         self.assertTrue(any("exact release gate" in error for error in errors))
 
@@ -171,7 +400,7 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                "v4.03.1",
+                "v4.03.2",
             )
         self.assertTrue(any("retired platform" in error for error in errors))
 
@@ -357,7 +586,7 @@ class DocumentationGateTest(unittest.TestCase):
                         self.assertNotIn(":", value)
             self.assertIn("Linux", text)
             if name == "syswarden_architecture.svg":
-                self.assertIn("SysWarden v4.03.1 candidate architecture", text)
+                self.assertIn("SysWarden v4.03.2 candidate architecture", text)
 
     def test_source_assertions_remain_bound_to_runtime(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
@@ -380,7 +609,7 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 [],
-                "v4.03.1",
+                "v4.03.2",
                 None,
             )
         self.assertTrue(any("unclosed Markdown fence" in error for error in errors))

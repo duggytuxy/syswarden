@@ -23,7 +23,8 @@ func TestIsValidIPCompatibility(t *testing.T) {
 		{input: "192.0.2.1", valid: true, isIPv4: true},
 		{input: "2001:db8::1", valid: true},
 		{input: "192.0.2.0/24", valid: true, isIPv4: true},
-		{input: "2001:db8::/32", valid: true},
+		{input: "2001:db8::/64", valid: true},
+		{input: "2001:db8::/32"},
 		{input: "192.0.2.10:443"},
 		{input: "[2001:db8::10]:443"},
 		{input: "192.0.2.10 # operator comment"},
@@ -74,8 +75,8 @@ func TestWhitelistAndSSHRemovalRecognizeProducedIPv6PortEntries(t *testing.T) {
 	}
 	for _, operation := range []string{"RemoveFromWhitelist", "RevokeSSH"} {
 		t.Run(operation, func(t *testing.T) {
-			content, found := removeListEntriesForIP([]byte(entry+"\n2001:db8::20\n"), ip)
-			if !found {
+			content, found, changed := removeListEntriesForIP([]byte(entry+"\n2001:db8::20\n"), ip)
+			if !found || !changed {
 				t.Fatalf("%s removal logic did not recognize produced entry %q", operation, entry)
 			}
 			if string(content) != "2001:db8::20\n" {
@@ -181,6 +182,73 @@ func TestRemoveFromFileCanonicalizationContract_SW_LIST_001(t *testing.T) {
 	}
 	if strings.Contains(string(got), "192.0.2.10") {
 		t.Fatal("removed address remains in the list")
+	}
+}
+
+func TestAddToListFileRejectsUnsafeNewPolicy_SW_SEC_M1(t *testing.T) {
+	target := approvedListFile{directory: t.TempDir(), name: "list"}
+	for _, value := range []string{"0.0.0.0/0", "::/0", "8.8.0.0/16", "2606:4700::/48"} {
+		if err := addToListFileAt(target, value); err == nil {
+			t.Fatalf("addToListFileAt() accepted unsafe new policy %q", value)
+		}
+	}
+	if _, err := readListFileAt(target); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("rejected additions created list state: %v", err)
+	}
+}
+
+func TestRemoveFromListFileRecoversLegacyUnsafePolicy_SW_SEC_M1(t *testing.T) {
+	directory := t.TempDir()
+	target := approvedListFile{directory: directory, name: "list"}
+	content := []byte("# legacy recovery fixture\n0.0.0.0/0\n::/0\n8.8.8.8\n")
+	if err := writeListFileAt(target, content); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"0.0.0.0/0", "::/0"} {
+		if err := removeFromListFileAt(target, value); err != nil {
+			t.Fatalf("removeFromListFileAt(%q) error = %v", value, err)
+		}
+	}
+	got, err := readListFileAt(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# legacy recovery fixture\n8.8.8.8\n"
+	if string(got) != want {
+		t.Fatalf("legacy recovery output = %q, want %q", got, want)
+	}
+}
+
+func TestLegacyOperatorRecoverySanitizesEveryConfiguredListBeforeReload_SW2_M1(t *testing.T) {
+	directory := t.TempDir()
+	targets := []approvedListFile{
+		{directory: directory, name: "whitelist.ipv4"},
+		{directory: directory, name: "blocklist.ipv6"},
+		{directory: directory, name: "ssh-bypass"},
+	}
+	fixtures := [][]byte{
+		[]byte("0.0.0.0/0\n8.8.8.8\n"),
+		[]byte("::/0\n2606:4700:4700::1111\n"),
+		[]byte("malformed legacy entry\n1.1.1.1\n"),
+	}
+	for index, target := range targets {
+		if err := writeListFileAt(target, fixtures[index]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changed, err := sanitizeLegacyListTargets(targets)
+	if err != nil || !changed {
+		t.Fatalf("global legacy list cleanup = (%t, %v), want (true, nil)", changed, err)
+	}
+	want := []string{"8.8.8.8\n", "2606:4700:4700::1111\n", "1.1.1.1\n"}
+	for index, target := range targets {
+		content, err := readListFileAt(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != want[index] {
+			t.Fatalf("sanitized %s = %q, want %q", target.name, content, want[index])
+		}
 	}
 }
 

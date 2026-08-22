@@ -13,11 +13,30 @@ func TestCanonicalPolicyNetworksRejectsRuleInjection_SW_FW_001(t *testing.T) {
 		"::ffff:192.0.2.1",
 		"::ffff:192.0.2.1/120",
 		"example.invalid",
+		"0.0.0.0/0",
+		"::/0",
+		"0.0.0.0",
+		"::",
+		"169.254.0.0/16",
+		"fe80::/64",
+		"224.0.0.0/4",
+		"ff00::/8",
 	}
 	for _, value := range tests {
 		if _, err := canonicalPolicyNetworks(nil, value); err == nil {
 			t.Fatalf("canonicalPolicyNetworks() accepted %q", value)
 		}
+	}
+}
+
+func TestCanonicalPolicyNetworksPreservesBroadPrivateLANs_SW_SEC_M1(t *testing.T) {
+	got, err := canonicalPolicyNetworks(nil, "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fd00::/8 127.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fd00::/8", "127.0.0.0/8"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("canonicalPolicyNetworks() = %#v, want %#v", got, want)
 	}
 }
 
@@ -77,5 +96,8 @@ func TestPolicyIdentifiersRejectInjection_SW_FW_001(t *testing.T) {
 	}
 	if _, err := canonicalIPv4Network("2001:db8::/64", "WireGuard subnet"); err == nil {
 		t.Fatal("canonicalIPv4Network() accepted IPv6 for an IPv4 nftables expression")
+	}
+	if _, err := canonicalIPv4Network("0.0.0.0/0", "WireGuard subnet"); err == nil {
+		t.Fatal("canonicalIPv4Network() accepted the IPv4 default route")
 	}
 }

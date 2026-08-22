@@ -5,6 +5,7 @@ package integration
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -104,5 +105,49 @@ func TestRsyslogRenderersDoNotPermitContextBreakout_SW_CFG_002(t *testing.T) {
 	}
 	if _, err := renderSIEMRsyslogConfig("192.0.2.10", "6514", "unsupported", "/etc/ca.pem"); err == nil {
 		t.Fatal("SIEM renderer accepted an unsupported transport")
+	}
+}
+
+func TestWAFRsyslogBridgeStopsAllSysWardenOwnedMarkers_SW2_H2(t *testing.T) {
+	waf, active, err := renderWAFRsyslogConfig("")
+	if err != nil || active != 0 {
+		t.Fatalf("renderWAFRsyslogConfig() active=%d error=%v", active, err)
+	}
+	forwardIndex := strings.Index(waf, "*.* :omuxsock:;SYSWARDENRaw")
+	if forwardIndex < 0 {
+		t.Fatalf("WAF rsyslog config omitted its forwarding action:\n%s", waf)
+	}
+	trustedStop := `if $programname == "syswarden-core" and re_match($msg, '` + rsyslogDirectInternalLogPattern + `') then stop`
+	stopIndex := strings.Index(waf, trustedStop)
+	if stopIndex < 0 {
+		t.Fatalf("WAF rsyslog config omitted its process-identity record stop %q:\n%s", trustedStop, waf)
+	}
+	if stopIndex > forwardIndex {
+		t.Fatalf("process-identity record stop appears after forwarding action:\n%s", waf)
+	}
+	if strings.Contains(waf, `if $msg contains`) {
+		t.Fatalf("WAF rsyslog config retained a spoofable substring stop:\n%s", waf)
+	}
+	if strings.Contains(waf, `if re_match($msg`) || strings.Contains(waf, `if $programname == "syswarden-core" then stop`) {
+		t.Fatalf("WAF rsyslog config contains a record stop without trusted process identity:\n%s", waf)
+	}
+
+	directPattern := regexp.MustCompile(rsyslogDirectInternalLogPattern)
+	record := syswardenInternalLogMarker +
+		" action=DETECTED ip=203.0.113.77 scope=recursion-regression payload_sha256=" +
+		strings.Repeat("0", 64) + " payload_bytes=42 auth=" + strings.Repeat("1", 64)
+	if !directPattern.MatchString("2026/08/22 12:34:56 " + record) {
+		t.Fatal("direct product record does not satisfy the rendered rsyslog guard")
+	}
+	for _, attackerLine := range []string{
+		"198.51.100.42 attack from 198.51.100.42 request=" + syswardenInternalLogMarker,
+		"GET /?message=" + syswardenInternalLogMarker + " HTTP/1.1",
+		"198.51.100.42 payload=[SYSWARDEN-DETECTED] attack from 198.51.100.42",
+		"198.51.100.42 payload=[SOC-ALERT] attack from 198.51.100.42",
+		"2026/08/22 12:34:56 " + strings.TrimSuffix(record, strings.Repeat("1", 64)) + "not-an-authenticator",
+	} {
+		if directPattern.MatchString(attackerLine) {
+			t.Fatalf("attacker-controlled marker matched an rsyslog product guard: %q", attackerLine)
+		}
 	}
 }

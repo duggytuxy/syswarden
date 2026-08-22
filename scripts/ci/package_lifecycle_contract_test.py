@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import re
 import shutil
-import signal
 import socket
 import subprocess
 import tarfile
@@ -29,6 +29,7 @@ PACKAGE_WORKFLOW = REPOSITORY / ".github" / "workflows" / "package.yml"
 BUILD_SCRIPT = REPOSITORY / "build.ps1"
 LOCAL_BUILD_SCRIPT = REPOSITORY / "build_packages.sh"
 WEBTUI_RETIREMENT_HELPER = REPOSITORY / "scripts" / "ci" / "package_webtui_retirement.sh"
+SERVICE_SOURCE = REPOSITORY / "src" / "core" / "syswarden-cli" / "pkg" / "system" / "service_linux.go"
 
 
 def workflow_step_script(workflow: str, step_name: str) -> str:
@@ -121,6 +122,24 @@ class PackageLifecycleContractTests(unittest.TestCase):
             body = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8") + "\n" + body
         return body
 
+    def test_package_service_cleanup_hashes_match_runtime_service_sources(self) -> None:
+        source = SERVICE_SOURCE.read_text(encoding="utf-8")
+        helper = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
+        for constant, path, mode in (
+            ("systemdCoreService", "/etc/systemd/system/syswarden-core.service", "600"),
+            ("systemdFirewallService", "/etc/systemd/system/syswarden-firewall.service", "600"),
+            ("openRCCoreService", "/etc/init.d/syswarden-core", "755"),
+            ("openRCFirewallService", "/etc/init.d/syswarden-firewall", "755"),
+        ):
+            match = re.search(rf"\b{constant}\s*=\s*`(?P<body>.*?)`", source, re.DOTALL)
+            self.assertIsNotNone(match, constant)
+            digest = hashlib.sha256(match.group("body").encode("utf-8")).hexdigest()
+            self.assertRegex(
+                helper,
+                rf"{re.escape(path)}\s+\\\s+{digest}\s+{mode}\s+\|\| return 1",
+                constant,
+            )
+
     def test_every_package_workflow_run_command_fits_github_limit(self) -> None:
         commands = workflow_run_commands(self.workflow)
         self.assertGreater(len(commands), 0)
@@ -174,20 +193,6 @@ class PackageLifecycleContractTests(unittest.TestCase):
             executable.unlink()
         executable.symlink_to("/usr/lib/systemd/systemd")
 
-    def cron_functions(self, script: str) -> str:
-        start = script.index("syswarden_managed_cron_line() {")
-        cleanup = script.index("syswarden_cleanup_crontab() {", start)
-        end = script.index("\n}\n", cleanup) + len("\n}\n")
-        return script[start:end]
-
-    def cron_script_matrix(self) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
-        linux_paths = ("/opt/syswarden/bin/syswarden-cli",)
-        return (
-            ("workflow-prerm", self.script("prerm.sh"), linux_paths),
-            ("workflow-postrm", self.script("postrm.sh"), linux_paths),
-            ("local-build-prerm", self.local_build_script("prerm.sh"), linux_paths),
-        )
-
     def migration_state_machine(self, script_name: str) -> str:
         script = self.script(script_name)
         start = script.index("modular_config_complete() {")
@@ -227,6 +232,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             ("STAGING_APK_ARM64", "staging-apk-arm64"),
             ("PACKAGE_ASSETS", "assets"),
             ("PACKAGE_SCRIPTS", "scripts"),
+            ("PACKAGE_RPM_SCRIPTS", "rpm-scripts"),
             ("PACKAGE_CONFIGS", "configs"),
         ):
             with self.subTest(variable=variable):
@@ -339,8 +345,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
         workflow_rpm = workflow_step_script(
             self.workflow, "Build RHEL Family Package (.rpm)"
         )
+        workflow_apk = workflow_step_script(
+            self.workflow, "Build Alpine Package (.apk)"
+        )
         workflow_validation = workflow_step_script(
             self.workflow, "Validate Package Metadata"
+        )
+        workflow_script_preparation = workflow_step_script(
+            self.workflow, "Prepare Linux Maintainer Scripts"
         )
         local_deb = local.split("# Generate DEB", 1)[1].split(
             "# Generate RPM", 1
@@ -348,6 +360,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         local_rpm = local.split("# Generate RPM", 1)[1].split(
             "# Generate Alpine APK", 1
         )[0]
+        local_apk = local.split("# Generate Alpine APK", 1)[1]
 
         self.assertIn(
             'SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"', version_step
@@ -414,6 +427,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "STAGING_APK_AMD64",
             "STAGING_APK_ARM64",
             "PACKAGE_SCRIPTS",
+            "PACKAGE_RPM_SCRIPTS",
         ):
             self.assertEqual(normalization_step.count(f'"${{{target}}}"'), 1, target)
         self.assertIn('prepare_rpm_changelog "${RPM_CHANGELOG}"', normalization_step)
@@ -431,6 +445,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "postinst.sh",
             "prerm.sh",
             "postrm.sh",
+            '"${RPM_SCRIPTS}"',
             '"${RPM_CHANGELOG}"',
         )
         local_normalization_call = local[
@@ -467,6 +482,36 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 self.assertEqual(local_rpm.count(flag), 1)
         self.assertEqual(workflow_rpm.count('--rpm-changelog "${RPM_CHANGELOG}"'), 2)
         self.assertEqual(local_rpm.count('--rpm-changelog "${RPM_CHANGELOG}"'), 1)
+        self.assertIn("prepare_rpm_scriptlet() {", workflow_script_preparation)
+        self.assertIn("prepare_rpm_scriptlet() {", local)
+        for source in (workflow_script_preparation, local):
+            self.assertIn("sed 's/%/%%/g'", source)
+        for script_name in ("preinst.sh", "postinst.sh", "prerm.sh", "postrm.sh"):
+            with self.subTest(rpm_scriptlet=script_name):
+                self.assertIn(
+                    f'"${{PACKAGE_RPM_SCRIPTS}}/{script_name}"', workflow_rpm
+                )
+                self.assertNotIn(
+                    f'"${{PACKAGE_RPM_SCRIPTS}}/{script_name}"', workflow_deb
+                )
+                self.assertNotIn(
+                    f'"${{PACKAGE_RPM_SCRIPTS}}/{script_name}"', workflow_apk
+                )
+                self.assertIn(
+                    f'"${{PACKAGE_SCRIPTS}}/{script_name}"', workflow_deb
+                )
+                self.assertIn(
+                    f'"${{PACKAGE_SCRIPTS}}/{script_name}"', workflow_apk
+                )
+                self.assertIn(f'"${{RPM_SCRIPTS}}/{script_name}"', local_rpm)
+                self.assertNotIn(f'"${{RPM_SCRIPTS}}/{script_name}"', local_deb)
+                self.assertNotIn(f'"${{RPM_SCRIPTS}}/{script_name}"', local_apk)
+                self.assertIn(
+                    f'"${{PACKAGE_SCRIPTS}}/{script_name}"', workflow_validation
+                )
+                self.assertIn(
+                    f"validate_local_rpm_scriptlet \"${{rpm_path}}\" ", local
+                )
         for query, expected in (
             ("%{BUILDTIME}", "${SOURCE_DATE_EPOCH}"),
             ("%{BUILDHOST}", "syswarden-build.invalid"),
@@ -505,14 +550,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
                         "LC_ALL": "C",
                         "SOURCE_DATE_EPOCH": str(epoch),
                         "TZ": "UTC",
-                        "VERSION": "4.03.1",
+                        "VERSION": "4.03.2",
                     },
                 )
                 self.assertEqual(generated.returncode, 0, generated)
                 changelog_epochs.append(int(generated.stdout))
                 self.assertEqual(
                     destination.read_text(encoding="utf-8"),
-                    f"* {expected_date} SysWarden Engineering - 4.03.1-1\n"
+                    f"* {expected_date} SysWarden Engineering - 4.03.2-1\n"
                     "- Package created with FPM\n",
                 )
                 self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
@@ -799,7 +844,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn('[ "$1" = "2" ]', postinstall)
         self.assertIn('[ "$1" = "configure" ]', postinstall)
         self.assertIn("syswarden_classify_service_manager", postinstall)
-        self.assertIn("reload --no-restart", postinstall)
+        self.assertNotIn("reload --no-restart", postinstall)
+        self.assertIn(
+            "Service-manager runtime is offline; host configuration is deferred until an explicit online install.",
+            postinstall,
+        )
         self.assertIn('! modular_config_complete', postinstall)
         self.assertIn('marker=/etc/syswarden/config/.migration-in-progress', postinstall)
         self.assertIn('archive=/opt/syswarden/syswarden-auto.conf.bak', postinstall)
@@ -887,7 +936,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertNotIn("pkill", helper)
         self.assertNotIn("killall", helper)
         self.assertNotIn("62027", helper)
+        self.assertNotIn('${syswarden_retire_process%%:*}', helper)
         self.assertIn('kill -0 "${syswarden_retire_pid}"', helper)
+        self.assertIn(
+            "LC_ALL=C awk -F ':' 'NR == 1 { print $1; exit }'", helper
+        )
+        self.assertIn(
+            ')" || return 1\n        syswarden_retire_starttime=', helper
+        )
         self.assertIn("Description=SYSWARDEN Web-TUI (WebTTY)", helper)
         self.assertIn("ExecStart=/opt/syswarden/bin/syswarden-cli web-tui", helper)
         self.assertIn('command_args="web-tui"', helper)
@@ -1085,6 +1141,135 @@ class PackageLifecycleContractTests(unittest.TestCase):
             )
             self.assertEqual(openrc_result.returncode, 0, openrc_result)
             self.assertEqual(openrc_result.stdout.strip(), "ACTIVE")
+
+    def test_openrc_softlevel_encoding_and_metadata_are_fail_closed(self) -> None:
+        def seed_runtime(root: Path, content: bytes) -> tuple[Path, Path, str]:
+            runtime = root / "run/openrc"
+            runtime.mkdir(parents=True)
+            softlevel = runtime / "softlevel"
+            softlevel.write_bytes(content)
+            comm = root / "proc/1/comm"
+            comm.parent.mkdir(parents=True)
+            comm.write_text("openrc-init\n", encoding="ascii")
+            owner = f"{root.stat().st_uid}:{root.stat().st_gid}"
+            return runtime, softlevel, owner
+
+        def attest(
+            root: Path,
+            runtime: Path,
+            owner: str,
+            *,
+            environment: dict[str, str] | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '. "$1"; syswarden_attest_openrc_runtime "$2" "$3" "$4"',
+                    "probe",
+                    str(WEBTUI_RETIREMENT_HELPER),
+                    str(root),
+                    str(runtime),
+                    owner,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+        for label, content in (
+            ("no-terminal-newline", b"default"),
+            ("one-terminal-newline", b"default\n"),
+            ("maximum-size-without-newline", b"a" * 64),
+            ("maximum-token-with-newline", b"a" * 63 + b"\n"),
+        ):
+            with self.subTest(accepted=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "root"
+                runtime, _, owner = seed_runtime(root, content)
+                result = attest(root, runtime, owner)
+                self.assertEqual(result.returncode, 0, result)
+
+        rejected = (
+            ("empty", b""),
+            ("newline-only", b"\n"),
+            ("carriage-return", b"default\r"),
+            ("carriage-return-newline", b"default\r\n"),
+            ("embedded-newline", b"de\nfault"),
+            ("double-newline", b"default\n\n"),
+            ("newline-suffix", b"default\nsuffix"),
+            ("nul", b"default\x00"),
+            ("nul-only", b"\x00"),
+            ("space", b"default "),
+            ("oversized", b"a" * 65),
+            ("oversized-with-newline", b"a" * 64 + b"\n"),
+        )
+        for label, content in rejected:
+            with self.subTest(rejected=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "root"
+                runtime, _, owner = seed_runtime(root, content)
+                result = attest(root, runtime, owner)
+                self.assertNotEqual(result.returncode, 0, result)
+
+        for metadata in ("writable", "symlink", "owner"):
+            with self.subTest(metadata=metadata), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "root"
+                runtime, softlevel, owner = seed_runtime(root, b"default")
+                if metadata == "writable":
+                    softlevel.chmod(0o666)
+                elif metadata == "symlink":
+                    target = runtime / "operator-softlevel"
+                    target.write_bytes(b"default")
+                    softlevel.unlink()
+                    softlevel.symlink_to(target)
+                else:
+                    owner = "4294967294:4294967294"
+                result = attest(root, runtime, owner)
+                self.assertNotEqual(result.returncode, 0, result)
+
+        with self.subTest(metadata="replacement-race"), tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "root"
+            runtime, softlevel, owner = seed_runtime(root, b"default")
+            mock_bin = Path(temporary) / "bin"
+            mock_bin.mkdir()
+            stat_probe = mock_bin / "stat"
+            stat_probe.write_text(
+                "#!/bin/sh\n"
+                "last=\n"
+                "for last do :; done\n"
+                "if [ \"${last}\" = \"${TEST_SOFTLEVEL}\" ]; then\n"
+                "  count=$(cat \"${TEST_STAT_COUNT}\" 2>/dev/null || printf 0)\n"
+                "  count=$((count + 1))\n"
+                "  printf '%s\\n' \"${count}\" > \"${TEST_STAT_COUNT}\"\n"
+                "  \"${REAL_STAT}\" \"$@\"\n"
+                "  status=$?\n"
+                "  if [ \"${count}\" -eq 3 ]; then\n"
+                "    mv -- \"${TEST_SOFTLEVEL}\" \"${TEST_SOFTLEVEL}.before\" || exit 97\n"
+                "    printf '%s' changed > \"${TEST_SOFTLEVEL}\" || exit 97\n"
+                "    chmod 0644 \"${TEST_SOFTLEVEL}\" || exit 97\n"
+                "  fi\n"
+                "  exit \"${status}\"\n"
+                "fi\n"
+                "exec \"${REAL_STAT}\" \"$@\"\n",
+                encoding="ascii",
+            )
+            stat_probe.chmod(0o700)
+            real_stat = shutil.which("stat")
+            self.assertIsNotNone(real_stat)
+            stat_count = Path(temporary) / "stat-count"
+            environment = {
+                **os.environ,
+                "PATH": f"{mock_bin}:{os.environ['PATH']}",
+                "REAL_STAT": str(real_stat),
+                "TEST_SOFTLEVEL": str(softlevel),
+                "TEST_STAT_COUNT": str(stat_count),
+            }
+            result = attest(root, runtime, owner, environment=environment)
+            self.assertNotEqual(result.returncode, 0, result)
+            self.assertTrue(Path(f"{softlevel}.before").is_file())
+            self.assertGreaterEqual(
+                int(stat_count.read_text(encoding="ascii").strip()), 3
+            )
 
     def test_service_manager_classifier_rejects_dangling_runtime_links(self) -> None:
         for relative in ("run/systemd", "run/systemd/system", "run/openrc"):
@@ -1459,6 +1644,372 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 self.assertTrue(wants.is_symlink())
                 self.assertFalse(calls.exists(), "unsafe loaded unit triggered mutation")
                 self.assertNotIn("--operator", result.stderr)
+
+    def test_legacy_webtui_accepts_only_exact_vendor_systemd_dropin(self) -> None:
+        vendor_content = (
+            "# This file is part of the systemd package.\n"
+            "# See https://fedoraproject.org/wiki/Changes/Shorter_Shutdown_Timer.\n"
+            "#\n"
+            "# To facilitate debugging when a service fails to stop cleanly,\n"
+            '# TimeoutStopFailureMode=abort is set to "crash" services that fail to stop in\n'
+            "# the time allotted. This will cause the service to be terminated with SIGABRT\n"
+            "# and a coredump to be generated.\n"
+            "#\n"
+            "# To undo this configuration change, create a mask file:\n"
+            "#   sudo mkdir -p /etc/systemd/system/service.d\n"
+            "#   sudo ln -sv /dev/null /etc/systemd/system/service.d/10-timeout-abort.conf\n"
+            "\n"
+            "[Service]\n"
+            "TimeoutStopFailureMode=abort\n"
+        )
+        expected_digest = (
+            "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37"
+        )
+        self.assertEqual(
+            hashlib.sha256(vendor_content.encode("ascii")).hexdigest(),
+            expected_digest,
+        )
+        exact_exec = (
+            "{ path=/opt/syswarden/bin/syswarden-cli ; "
+            "argv[]=/opt/syswarden/bin/syswarden-cli web-tui ; "
+            "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; "
+            "pid=0 ; code=(null) ; status=0/0 }"
+        )
+        cases = (
+            "exact",
+            "operator-path",
+            "second-path",
+            "content",
+            "mode",
+            "nlink",
+            "parent-mode",
+            "parent-symlink",
+            "package",
+            "owner-fields",
+            "owner-lines",
+            "digest",
+            "drift",
+            "late-drift",
+            "rpm-path",
+            "rpm-mode",
+            "rpm-nlink",
+            "rpm-drift",
+            "temp-mode",
+            "temp-symlink",
+            "temp-nlink",
+        )
+        real_mktemp = shutil.which("mktemp")
+        self.assertIsNotNone(real_mktemp)
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "root"
+                root.mkdir(mode=0o755)
+                self.seed_systemd_runtime(root)
+                fragment = root / "etc/systemd/system/syswarden-webtui.service"
+                fragment.parent.mkdir(parents=True, exist_ok=True)
+                fragment.write_text("legacy unit fixture\n", encoding="ascii")
+                dropin = (
+                    root
+                    / "usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+                )
+                dropin.parent.mkdir(parents=True)
+                dropin.write_text(vendor_content, encoding="ascii")
+                dropin.chmod(0o644)
+                if case == "content":
+                    dropin.write_text(
+                        vendor_content.replace(
+                            "TimeoutStopFailureMode=abort\n",
+                            "TimeoutStopFailureMode=terminate\n",
+                        ),
+                        encoding="ascii",
+                    )
+                elif case == "mode":
+                    dropin.chmod(0o664)
+                elif case == "nlink":
+                    os.link(dropin, dropin.with_suffix(".operator"))
+                elif case == "parent-mode":
+                    dropin.parent.chmod(0o775)
+                elif case == "parent-symlink":
+                    real_parent = dropin.parent.with_name("service.d.real")
+                    dropin.parent.rename(real_parent)
+                    dropin.parent.symlink_to(real_parent.name, target_is_directory=True)
+
+                rooted_bin = root / "usr/bin"
+                rooted_bin.mkdir(parents=True, exist_ok=True)
+                rpm = rooted_bin / "rpm"
+                rpm.write_text(
+                    "#!/bin/sh\n"
+                    'printf "%s\\n" "$*" >> "$TEST_RPM_CALLS"\n'
+                    'call_count="$(wc -l < "$TEST_RPM_CALLS" | tr -d " ")"\n'
+                    'case "$5" in\n'
+                    "  '%{NAME}\\t%{EVR}\\t%{ARCH}\\t%{FILEDIGESTALGO}\\n')\n"
+                    '    if [ "$TEST_CASE" = package ]; then name=operator-package; else name=systemd; fi\n'
+                    '    if [ "$TEST_CASE" = owner-fields ]; then\n'
+                    '      printf "%s\\t259.5-1.fc44\\t%s\\n" "$name" "$(uname -m)"\n'
+                    '    elif [ "$TEST_CASE" = owner-lines ]; then\n'
+                    '      printf "%s\\t259.5-1.fc44\\t%s\\t8\\n" "$name" "$(uname -m)"\n'
+                    '      printf "%s\\t259.5-1.fc44\\t%s\\t8\\n" "$name" "$(uname -m)"\n'
+                    "    else\n"
+                    '      printf "%s\\t259.5-1.fc44\\t%s\\t8\\n" "$name" "$(uname -m)"\n'
+                    "    fi\n"
+                    "    ;;\n"
+                    "  '[%{FILENAMES}\\n]') printf '%s\\n' \"$TEST_DROPIN\" ;;\n"
+                    "  '[%{FILEDIGESTS}\\n]')\n"
+                    '    if [ "$TEST_CASE" = digest ]; then\n'
+                    "      printf '%064d\\n' 0\n"
+                    "    else\n"
+                    '      printf "%s\\n" "$TEST_DIGEST"\n'
+                    "    fi\n"
+                    '    if [ "$TEST_CASE" = drift ] && [ ! -e "$TEST_DRIFTED" ]; then\n'
+                    '      : > "$TEST_DRIFTED"\n'
+                    '      printf x >> "$TEST_DROPIN"\n'
+                    "    fi\n"
+                    '    if [ "$TEST_CASE" = late-drift ] && [ "$call_count" -eq 6 ]; then\n'
+                    '      printf x >> "$TEST_DROPIN"\n'
+                    "    fi\n"
+                    "    ;;\n"
+                    "  *) exit 91 ;;\n"
+                    "esac\n"
+                    'if [ "$TEST_CASE" = rpm-drift ] && [ "$call_count" -eq 6 ]; then\n'
+                    '  chmod 0775 "$0"\n'
+                    "fi\n",
+                    encoding="ascii",
+                )
+                rpm.chmod(0o755)
+                if case == "rpm-mode":
+                    rpm.chmod(0o775)
+                elif case == "rpm-nlink":
+                    os.link(rpm, rpm.with_suffix(".linked"))
+                mock_bin = Path(temporary) / "mock-bin"
+                mock_bin.mkdir()
+                systemctl = mock_bin / "systemctl"
+                systemctl.write_text(
+                    "#!/bin/sh\n"
+                    'case "$3" in\n'
+                    "  --property=LoadState) printf 'loaded\\n' ;;\n"
+                    '  --property=FragmentPath) printf "%s\\n" "$TEST_FRAGMENT" ;;\n'
+                    '  --property=DropInPaths) printf "%s\\n" "$TEST_DROPINS" ;;\n'
+                    '  --property=ExecStart) printf "%s\\n" "$TEST_EXEC" ;;\n'
+                    "  *) exit 92 ;;\n"
+                    "esac\n",
+                    encoding="ascii",
+                )
+                systemctl.chmod(0o755)
+                temporary_link_record = Path(temporary) / "temporary-link-record"
+                if case.startswith("temp-"):
+                    mock_mktemp = mock_bin / "mktemp"
+                    mock_mktemp.write_text(
+                        "#!/bin/sh\n"
+                        f'result="$("{real_mktemp}" "$@")" || exit 1\n'
+                        'case "$result" in\n'
+                        '  /tmp/syswarden-webtui-rpm-*)\n'
+                        '    case "$TEST_CASE" in\n'
+                        '      temp-mode) chmod 0644 "$result" ;;\n'
+                        '      temp-symlink) rm -f "$result"; ln -s "$TEST_DROPIN" "$result" ;;\n'
+                        '      temp-nlink)\n'
+                        '        if [ ! -e "$TEST_TEMP_LINK_RECORD" ]; then\n'
+                        '          link="${result}.operator-link"\n'
+                        '          ln "$result" "$link" || { rm -f -- "$result"; exit 1; }\n'
+                        '          printf "%s\\n" "$link" > "$TEST_TEMP_LINK_RECORD"\n'
+                        "        fi\n"
+                        "        ;;\n"
+                        "    esac\n"
+                        "    ;;\n"
+                        "esac\n"
+                        'printf "%s\\n" "$result"\n',
+                        encoding="ascii",
+                    )
+                    mock_mktemp.chmod(0o755)
+                rpm_calls = Path(temporary) / "rpm-calls"
+                dropins = str(dropin)
+                if case == "operator-path":
+                    dropins = str(
+                        root
+                        / "etc/systemd/system/syswarden-webtui.service.d/operator.conf"
+                    )
+                elif case == "second-path":
+                    dropins += " " + str(root / "etc/systemd/system/operator.conf")
+                path_entries = [str(mock_bin), str(rooted_bin), os.environ["PATH"]]
+                if case == "rpm-path":
+                    fake_rpm = mock_bin / "rpm"
+                    fake_rpm.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+                    fake_rpm.chmod(0o755)
+                    path_entries = [str(mock_bin), str(rooted_bin), os.environ["PATH"]]
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        '. "$1"; syswarden_attest_systemd_webtui_runtime "$2"',
+                        "probe",
+                        str(WEBTUI_RETIREMENT_HELPER),
+                        str(root),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": ":".join(path_entries),
+                        "TEST_CASE": case,
+                        "TEST_DIGEST": expected_digest,
+                        "TEST_DRIFTED": str(Path(temporary) / "drifted"),
+                        "TEST_DROPIN": str(dropin),
+                        "TEST_DROPINS": dropins,
+                        "TEST_EXEC": exact_exec,
+                        "TEST_FRAGMENT": str(fragment),
+                        "TEST_RPM_CALLS": str(rpm_calls),
+                        "TEST_TEMP_LINK_RECORD": str(temporary_link_record),
+                    },
+                )
+                if temporary_link_record.exists():
+                    temporary_link = Path(
+                        temporary_link_record.read_text(encoding="ascii").strip()
+                    )
+                    self.assertEqual(temporary_link.parent, Path("/tmp"))
+                    self.assertTrue(
+                        temporary_link.name.startswith("syswarden-webtui-rpm-")
+                    )
+                    self.assertTrue(temporary_link.name.endswith(".operator-link"))
+                    temporary_link.unlink(missing_ok=False)
+                if case == "exact":
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertEqual(
+                        len(rpm_calls.read_text(encoding="ascii").splitlines()),
+                        6,
+                    )
+                else:
+                    self.assertNotEqual(result.returncode, 0, result)
+
+    def test_legacy_webtui_systemd_root_normalization_is_exact_and_fail_closed(self) -> None:
+        exact_exec = (
+            "{ path=/opt/syswarden/bin/syswarden-cli ; "
+            "argv[]=/opt/syswarden/bin/syswarden-cli web-tui ; "
+            "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; "
+            "pid=0 ; code=(null) ; status=0/0 }"
+        )
+        probe = (
+            '. "$1"\n'
+            "syswarden_assert_no_webtui_manager_overrides() { return 0; }\n"
+            "syswarden_read_systemd_webtui_property() {\n"
+            '    printf "%s\\n" "$1" >> "$TEST_CALLS"\n'
+            '    if [ "$1" = LoadState ] && [ "${TEST_MUTATE_ROOT:-}" = 1 ] && '
+            '[ ! -e "${TEST_ROOT}.before" ]; then\n'
+            '        mv -- "$TEST_ROOT" "${TEST_ROOT}.before" || return 1\n'
+            '        mkdir -- "$TEST_ROOT" || return 1\n'
+            "    fi\n"
+            '    case "$1" in\n'
+            '        LoadState) printf "%s\\n" loaded ;;\n'
+            '        FragmentPath) printf "%s\\n" "$TEST_FRAGMENT" ;;\n'
+            '        DropInPaths) printf "\\n" ;;\n'
+            '        ExecStart) printf "%s\\n" "$TEST_EXEC" ;;\n'
+            "        *) return 1 ;;\n"
+            "    esac\n"
+            "}\n"
+            'syswarden_attest_systemd_webtui_runtime "$2"\n'
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+
+            def invoke(
+                root_argument: str,
+                fragment: str,
+                *,
+                root_path: Path,
+                mutate_root: bool = False,
+            ) -> tuple[subprocess.CompletedProcess[str], Path]:
+                calls = temporary_root / f"calls-{len(tuple(temporary_root.glob('calls-*')))}"
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        probe,
+                        "probe",
+                        str(WEBTUI_RETIREMENT_HELPER),
+                        root_argument,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "TEST_CALLS": str(calls),
+                        "TEST_EXEC": exact_exec,
+                        "TEST_FRAGMENT": fragment,
+                        "TEST_MUTATE_ROOT": "1" if mutate_root else "0",
+                        "TEST_ROOT": str(root_path),
+                    },
+                )
+                return result, calls
+
+            live_root = temporary_root / "root"
+            live_root.mkdir()
+            system_fragment = "/etc/systemd/system/syswarden-webtui.service"
+            rooted_fragment = str(
+                live_root / "etc/systemd/system/syswarden-webtui.service"
+            )
+
+            for root_argument, fragment, root_path in (
+                ("/", system_fragment, Path("/")),
+                (str(live_root), rooted_fragment, live_root),
+                (f"{live_root}/", rooted_fragment, live_root),
+            ):
+                with self.subTest(root=root_argument, outcome="exact"):
+                    result, calls = invoke(
+                        root_argument,
+                        fragment,
+                        root_path=root_path,
+                    )
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertEqual(
+                        calls.read_text(encoding="utf-8").splitlines(),
+                        ["LoadState", "FragmentPath", "DropInPaths", "ExecStart"],
+                    )
+
+            unexpected, _ = invoke(
+                str(live_root),
+                "/run/systemd/system/operator.service",
+                root_path=live_root,
+            )
+            self.assertNotEqual(unexpected.returncode, 0, unexpected)
+            self.assertIn("unexpected fragment", unexpected.stderr)
+
+            symlink_target = temporary_root / "symlink-target"
+            symlink_target.mkdir()
+            symlink_root = temporary_root / "symlink-root"
+            symlink_root.symlink_to(symlink_target, target_is_directory=True)
+            symlink_result, symlink_calls = invoke(
+                str(symlink_root),
+                str(symlink_root / "etc/systemd/system/syswarden-webtui.service"),
+                root_path=symlink_root,
+            )
+            self.assertNotEqual(symlink_result.returncode, 0, symlink_result)
+            self.assertFalse(symlink_calls.exists())
+
+            mutation_root = temporary_root / "mutation-root"
+            mutation_root.mkdir()
+            mutation_result, _ = invoke(
+                str(mutation_root),
+                str(mutation_root / "etc/systemd/system/syswarden-webtui.service"),
+                root_path=mutation_root,
+                mutate_root=True,
+            )
+            self.assertNotEqual(mutation_result.returncode, 0, mutation_result)
+            self.assertIn("root changed", mutation_result.stderr)
+
+            for unsafe_root in (
+                "relative/root",
+                f"{live_root}/../root",
+                f"{live_root}//",
+            ):
+                with self.subTest(root=unsafe_root, outcome="unsafe"):
+                    unsafe, unsafe_calls = invoke(
+                        unsafe_root,
+                        rooted_fragment,
+                        root_path=live_root,
+                    )
+                    self.assertNotEqual(unsafe.returncode, 0, unsafe)
+                    self.assertFalse(unsafe_calls.exists())
 
     def test_legacy_webtui_package_retirement_stops_cached_unit_before_reload(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1860,6 +2411,200 @@ class PackageLifecycleContractTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result)
             self.assertIn("symlinked SysWarden CLI", result.stderr)
 
+    def test_active_openrc_root_is_canonical_for_preinstall_retirement(self) -> None:
+        for name, preinstall in (
+            ("workflow", self.script("preinst.sh")),
+            ("local", self.local_build_script("preinst.sh")),
+        ):
+            with self.subTest(script=name):
+                self.assertEqual(
+                    preinstall.count("syswarden_retire_legacy_webtui / || exit 1"),
+                    1,
+                )
+
+        helper = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
+        function_start = helper.index("syswarden_openrc_runtime_available() {")
+        function_end = helper.index(
+            "\n}\n\nsyswarden_read_exact_webtui_unit()", function_start
+        ) + 2
+        openrc_function = helper[function_start:function_end]
+        absence_guard = (
+            'if [ ! -e "${syswarden_retire_runtime}" ] && '
+            '[ ! -L "${syswarden_retire_runtime}" ]; then'
+        )
+        self.assertEqual(openrc_function.count(absence_guard), 1)
+        openrc_function = openrc_function.replace(absence_guard, "if false; then")
+
+        probe = subprocess.run(
+            [
+                "/bin/sh",
+                "-c",
+                openrc_function
+                + "\n"
+                "stat() {\n"
+                "  case \"$*\" in\n"
+                "    '-c %u:%g /') printf '%s\\n' '0:0' ;;\n"
+                "    *) return 97 ;;\n"
+                "  esac\n"
+                "}\n"
+                "syswarden_safe_runtime_object() {\n"
+                "  printf 'safe:%s:%s:%s\\n' \"$1\" \"$2\" \"$3\"\n"
+                "}\n"
+                "syswarden_attest_openrc_runtime() {\n"
+                "  printf 'attest:%s:%s:%s\\n' \"$1\" \"$2\" \"$3\"\n"
+                "}\n"
+                'syswarden_openrc_runtime_available ""\n',
+                "active-openrc-root-probe",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(probe.returncode, 0, probe)
+        self.assertEqual(
+            probe.stdout,
+            "safe:/run:directory:0:0\nattest::/run/openrc:0:0\n",
+        )
+
+    def test_legacy_webtui_runtime_absence_verifier_accepts_removed_native_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            absence = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '. "$1"; syswarden_verify_legacy_webtui_runtime_absent "$2"',
+                    "probe",
+                    str(WEBTUI_RETIREMENT_HELPER),
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(absence.returncode, 0, absence)
+
+            complete = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '. "$1"; syswarden_verify_webtui_retirement "$2"',
+                    "probe",
+                    str(WEBTUI_RETIREMENT_HELPER),
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(complete.returncode, 0, complete)
+            self.assertIn("Native SysWarden TUI payload is missing", complete.stderr)
+
+            tui = root / "opt/syswarden/bin/syswarden-tui"
+            launcher = root / "usr/local/bin/syswarden-tui"
+            tui.parent.mkdir(parents=True)
+            launcher.parent.mkdir(parents=True)
+            tui.write_bytes(b"native-tui\n")
+            tui.chmod(0o750)
+            launcher.symlink_to("/opt/syswarden/bin/syswarden-tui")
+            complete = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '. "$1"; syswarden_verify_webtui_retirement "$2"',
+                    "probe",
+                    str(WEBTUI_RETIREMENT_HELPER),
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(complete.returncode, 0, complete)
+
+    def test_legacy_webtui_runtime_absence_verifier_rejects_every_residue(self) -> None:
+        residues = (
+            "etc/systemd/system/syswarden-webtui.service",
+            "etc/systemd/system/syswarden-webtui.service.syswarden-retiring",
+            "etc/systemd/system/syswarden-webtui.service.d",
+            "etc/systemd/system/multi-user.target.wants/syswarden-webtui.service",
+            "run/systemd/system/syswarden-webtui.service",
+            "run/systemd/system/syswarden-webtui.service.d",
+            "etc/init.d/syswarden-webtui",
+            "etc/conf.d/syswarden-webtui",
+            "etc/runlevels/default/syswarden-webtui",
+            "run/syswarden-webtui.pid",
+        )
+        for residue in residues:
+            with self.subTest(residue=residue), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                path = root / residue
+                path.parent.mkdir(parents=True)
+                path.write_bytes(b"legacy-runtime\n")
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        '. "$1"; syswarden_verify_legacy_webtui_runtime_absent "$2"',
+                        "probe",
+                        str(WEBTUI_RETIREMENT_HELPER),
+                        str(root),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0, result)
+                self.assertIn("runtime path remains", result.stderr)
+
+    def test_legacy_webtui_runtime_absence_verifier_rejects_deleted_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "opt/syswarden/bin/syswarden-cli"
+            executable.parent.mkdir(parents=True)
+            shutil.copy2(os.sys.executable, executable)
+            (root / "web-tui").write_text(
+                "import time\nwhile True: time.sleep(1)\n",
+                encoding="utf-8",
+            )
+            legacy = subprocess.Popen(
+                [str(executable), "web-tui"],
+                cwd=root,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.addCleanup(stop_test_process, legacy)
+            executable.unlink()
+            deleted_link = f"{executable} (deleted)"
+            deadline = time.monotonic() + 2
+            observed = ""
+            while time.monotonic() < deadline:
+                try:
+                    observed = os.readlink(f"/proc/{legacy.pid}/exe")
+                except OSError:
+                    observed = ""
+                if observed == deleted_link:
+                    break
+                time.sleep(0.02)
+            self.assertEqual(observed, deleted_link)
+
+            result = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '. "$1"; syswarden_verify_legacy_webtui_runtime_absent "$2"',
+                    "probe",
+                    str(WEBTUI_RETIREMENT_HELPER),
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0, result)
+            self.assertIsNone(legacy.poll(), "unattested deleted process was killed")
+            self.assertIn("cannot be identity-attested", result.stderr)
+
     def test_legacy_webtui_package_retirement_rejects_inline_toml_secret(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2085,7 +2830,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             self.assertIsNone(legacy.poll(), "unattested deleted process was killed")
             self.assertIn("cannot be identity-attested", result.stderr)
 
-    def test_package_hooks_inject_retirement_before_replacement_or_removal(self) -> None:
+    def test_package_hooks_publish_removal_barrier_before_retirement(self) -> None:
         workflow_preinstall = self.script("preinst.sh")
         workflow_preremove = self.script("prerm.sh")
         local_preinstall = self.local_build_script("preinst.sh")
@@ -2099,15 +2844,33 @@ class PackageLifecycleContractTests(unittest.TestCase):
             with self.subTest(script=name):
                 self.assertEqual(script.count("syswarden_retire_legacy_webtui / || exit 1"), 1)
                 self.assertIn("syswarden_retire_stale_webtui_pid", script)
+                if name.endswith("preremove"):
+                    self.assertEqual(
+                        script.count(
+                            "/opt/syswarden/bin/syswarden-cli "
+                            "prepare-package-removal || exit 1"
+                        ),
+                        1,
+                    )
+                    self.assertNotIn("nft delete table", script)
+                    self.assertNotIn("syswarden_cleanup_crontab", script)
+                    self.assertNotIn("syswarden_read_crontab", script)
+                    self.assertLess(
+                        script.index(
+                            "/opt/syswarden/bin/syswarden-cli "
+                            "prepare-package-removal || exit 1"
+                        ),
+                        script.index("syswarden_retire_legacy_webtui / || exit 1"),
+                    )
         self.assertLess(
             workflow_preinstall.index("syswarden_retire_legacy_webtui / || exit 1"),
             workflow_preinstall.index("mv /opt/syswarden/syswarden-auto.conf"),
         )
         self.assertLess(
-            workflow_preremove.index("syswarden_retire_legacy_webtui / || exit 1"),
             workflow_preremove.index(
-                "if [ -f /etc/alpine-release ]; then manager=openrc"
+                "/opt/syswarden/bin/syswarden-cli prepare-package-removal || exit 1"
             ),
+            workflow_preremove.index("syswarden_retire_legacy_webtui / || exit 1"),
         )
         self.assertLess(
             workflow_preremove.index(
@@ -2118,21 +2881,21 @@ class PackageLifecycleContractTests(unittest.TestCase):
         for source in (self.workflow, LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")):
             self.assertIn("scripts/ci/package_webtui_retirement.sh", source)
 
-    def test_preremove_argument_matrix_retires_only_true_deletion(self) -> None:
+    def test_preremove_argument_matrix_runs_barrier_before_retirement(self) -> None:
         scripts = (
             ("workflow", self.script("prerm.sh")),
             ("local", self.local_build_script("prerm.sh")),
         )
         matrix = (
-            ("rpm-final-erase", "0", None, None, 0, "retired\n"),
+            ("rpm-final-erase", "0", None, None, 0, "barrier\nretired\n"),
             ("rpm-upgrade", "1", None, None, 0, ""),
             ("rpm-downgrade", "1", None, None, 0, ""),
             ("rpm-multiple-installed", "2", None, None, 0, ""),
             ("rpm-malformed-count", "1x", None, None, 1, ""),
             ("rpm-negative-count", "-1", None, None, 1, ""),
             ("rpm-missing-count", "", None, None, 1, ""),
-            ("deb-remove", "remove", None, None, 0, "retired\n"),
-            ("deb-purge", "purge", None, None, 0, "retired\n"),
+            ("deb-remove", "remove", None, None, 0, "barrier\nretired\n"),
+            ("deb-purge", "purge", None, None, 0, "barrier\nretired\n"),
             ("deb-upgrade", "upgrade", None, None, 0, ""),
             ("deb-downgrade", "downgrade", None, None, 0, ""),
             ("deb-failed-upgrade", "failed-upgrade", None, None, 0, ""),
@@ -2146,7 +2909,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 None,
                 None,
                 0,
-                "retired\n",
+                "barrier\nretired\n",
             ),
             (
                 "apk-pre-deinstall-version",
@@ -2154,7 +2917,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "syswarden",
                 "pre-deinstall",
                 0,
-                "retired\n",
+                "barrier\nretired\n",
             ),
             (
                 "apk-pre-deinstall-later-version",
@@ -2162,7 +2925,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "syswarden",
                 "pre-deinstall",
                 0,
-                "retired\n",
+                "barrier\nretired\n",
             ),
             ("apk-missing-version", "", "syswarden", "pre-deinstall", 1, ""),
             (
@@ -2198,10 +2961,18 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "",
             ),
             (
-                "apk-transition-hook",
-                "4.3.0",
+                "apk-pre-upgrade-is-preinstall",
+                "4.2.8",
                 "syswarden",
                 "pre-upgrade",
+                1,
+                "",
+            ),
+            (
+                "apk-unknown-hook",
+                "4.2.8",
+                "syswarden",
+                "post-upgrade",
                 1,
                 "",
             ),
@@ -2210,10 +2981,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
             start = script.index(
                 'case "${APK_PACKAGE:-}:${APK_SCRIPT:-}:${1:-}" in'
             )
-            end = script.index("\nsyswarden_managed_cron_line() {", start)
+            retirement = "\nsyswarden_retire_legacy_webtui / || exit 1"
+            end = script.index(retirement, start) + len(retirement)
             gate = script[start:end].replace(
                 "[ -f /etc/alpine-release ]",
                 '[ "${SYSWARDEN_TEST_ALPINE:-}" = 1 ]',
+            ).replace(
+                "/opt/syswarden/bin/syswarden-cli prepare-package-removal",
+                "syswarden_prepare_removal_barrier",
             )
             for case_name, action, apk_package, apk_script, returncode, stdout in matrix:
                 with self.subTest(source=source_name, case=case_name):
@@ -2233,6 +3008,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                             "/bin/sh",
                             "-c",
                             "set -u\n"
+                            "syswarden_prepare_removal_barrier() { "
+                            "printf '%s\\n' barrier; }\n"
                             "syswarden_retire_legacy_webtui() { "
                             "printf '%s\\n' retired; }\n"
                             + gate,
@@ -2248,8 +3025,23 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     self.assertEqual(result.stdout, stdout, result)
 
     def test_workflow_and_local_maintainer_hooks_are_byte_and_order_identical(self) -> None:
+        local_source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         for name in ("preinst.sh", "postinst.sh", "prerm.sh", "postrm.sh"):
             with self.subTest(script=name):
+                self.assertEqual(
+                    self.workflow.count(
+                        "cat scripts/ci/package_webtui_retirement.sh > "
+                        f'"${{PACKAGE_SCRIPTS}}/{name}"'
+                    ),
+                    1,
+                )
+                self.assertEqual(
+                    local_source.count(
+                        'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                        f'package_webtui_retirement.sh" > {name}'
+                    ),
+                    1,
+                )
                 workflow = self.script(name).encode("utf-8")
                 local = self.local_build_script(name).encode("utf-8")
                 self.assertEqual(local, workflow)
@@ -2260,255 +3052,247 @@ class PackageLifecycleContractTests(unittest.TestCase):
                         1 if name != "postinst.sh" else 0,
                     )
 
-    def test_linux_remove_and_purge_contract(self) -> None:
-        preremove = self.script("prerm.sh")
-        self.assertNotIn("/tmp/sw_cron.bak", preremove)
-        self.assertIn("mktemp -d /var/tmp/syswarden-cron.XXXXXX", preremove)
-        self.assertIn("umask 077", preremove)
-        self.assertIn(
-            'cron_backup="${cron_work}/backup"',
-            preremove,
-        )
-        self.assertIn('cron_error="${cron_work}/error"', preremove)
-        self.assertIn('cron_filtered="${cron_work}/filtered"', preremove)
-        self.assertIn('chmod 0700 "${cron_work}"', preremove)
-        self.assertNotIn('${cron_backup}.error', preremove)
-        self.assertNotIn('${cron_backup}.filtered', preremove)
-        self.assertIn("syswarden_cleanup_crontab", preremove)
-        self.assertIn(
-            '"*/30 * * * * ${syswarden_cron_cli} ha-sync >/dev/null 2>&1"',
-            preremove,
-        )
-        self.assertIn(
-            '"${syswarden_cron_minute} * * * * ${syswarden_cron_cli} update-feeds >/dev/null 2>&1"',
-            preremove,
-        )
-        self.assertIn("/opt/syswarden/bin/syswarden-cli || exit 1", preremove)
-        self.assertNotIn(
-            "grep -F -v '/opt/syswarden/bin/syswarden-cli'", preremove
-        )
-        self.assertNotIn("grep -v 'syswarden-cli'", preremove)
-        postremove = self.script("postrm.sh")
-        gate = preremove[
-            preremove.index(
-                'case "${APK_PACKAGE:-}:${APK_SCRIPT:-}:${1:-}" in'
-            ) : preremove.index("\nsyswarden_managed_cron_line() {")
-        ]
-        self.assertIn("::0|::remove|::purge)", gate)
-        self.assertIn("::*grade|::reinstall|::deconfigure) exit;;", gate)
-        self.assertIn("syswarden:pre-deinstall:*|::*.*.*)", gate)
-        self.assertIn("^[1-9][0-9]*", gate)
-        self.assertIn("*) exit 1;;", gate)
-        self.assertIn("[ -f /etc/alpine-release ]", gate)
-        for service in (
-            "syswarden-core.service",
-            "syswarden-firewall.service",
+    def test_postremove_uses_runtime_absence_verifier_without_native_payload(self) -> None:
+        for name, postremove in (
+            ("workflow", self.script("postrm.sh")),
+            ("local", self.local_build_script("postrm.sh")),
         ):
-            self.assertIn(service, preremove)
-        for broad_retired_manager_action in (
-            "systemctl stop syswarden-webtui.service",
-            "systemctl disable syswarden-webtui.service",
-            "rc-service syswarden-webtui stop",
-            "rc-update del syswarden-webtui default",
-        ):
-            native_removal = preremove[
-                preremove.index(
-                    "if [ -f /etc/alpine-release ]; then manager=openrc"
-                ) :
-            ]
-            self.assertNotIn(broad_retired_manager_action, native_removal)
-        for table in (
-            "netdev syswarden_hw_drop",
-            "arp syswarden_arp",
-            "inet syswarden",
-        ):
-            self.assertIn(f"nft delete table {table}", preremove)
-        self.assertIn('[ "$1" = "0" ]', postremove)
-        self.assertIn('[ "$1" = "purge" ]', postremove)
-        self.assertIn('[ "$1" = "remove" ]', postremove)
-        self.assertIn("[ -f /etc/alpine-release ]", postremove)
-        self.assertIn("rm -rf /opt/syswarden", postremove)
-        self.assertIn("rm -rf /etc/syswarden", postremove)
-        self.assertIn("cleanup_generated_runtime_artifacts", postremove)
-        helper = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
-        self.assertIn('syswarden_remove_exact_product_services "${manager}"', postremove)
-        for generated in (
-            "/etc/systemd/system/syswarden-core.service",
-            "/etc/systemd/system/syswarden-firewall.service",
-            "/etc/init.d/syswarden-core",
-            "/etc/init.d/syswarden-firewall",
-        ):
-            self.assertIn(generated, helper)
-        for generated in (
-            "/etc/bash_completion.d/syswarden",
-            "/etc/rsyslog.d/99-syswarden-siem.conf",
-            "/etc/rsyslog.d/99-syswarden-waf-bridge.conf",
-        ):
-            self.assertIn(generated, postremove)
-        self.assertIn("syswarden_verify_webtui_retirement", postremove)
-        self.assertIn("syswarden_cleanup_crontab", postremove)
-        self.assertIn("cleanup_generated_runtime_artifacts || exit 1", postremove)
-        self.assertNotIn("grep -F -v '/opt/syswarden/bin/syswarden-cli'", postremove)
-        self.assertIn("syswarden_classify_service_manager", postremove)
-        self.assertIn("OFFLINE) : ;;", postremove)
-
-    def test_package_cron_filters_are_exact_and_preserve_operator_bytes(self) -> None:
-        for name, script, managed_paths in self.cron_script_matrix():
-            functions = self.cron_functions(script)
-            self.assertNotIn("syswarden_cron_candidate%", functions)
-            self.assertIn(
-                'printf \'%s\\n\' "${syswarden_cron_candidate}" | '
-                "awk 'NR == 1 { print $1; exit }'",
-                functions,
-            )
-            managed_lines = [
-                line
-                for path in managed_paths
-                for line in (
-                    f"*/30 * * * * {path} ha-sync >/dev/null 2>&1",
-                    f"17 * * * * {path} update-feeds >/dev/null 2>&1",
+            with self.subTest(script=name):
+                tail = postremove[postremove.rindex("export SYSWARDEN_PKG_INSTALL=1") :]
+                self.assertEqual(
+                    tail.count(
+                        "syswarden_verify_legacy_webtui_runtime_absent / || return 1"
+                    ),
+                    1,
                 )
-            ]
-            primary = managed_paths[0]
-            survivors = [
-                "# operator note mentioning syswarden-cli",
-                f"19 4 * * * {primary} update-feeds --operator-option",
-                " " + managed_lines[0],
-                managed_lines[1] + " ",
-                managed_lines[1].replace("17 *", "17  *", 1),
-                managed_lines[0].replace("*/30 *", "*/30\t*", 1),
-                " \t ",
-            ]
-            alternate = (
-                "23 * * * * /srv/operator/bin/syswarden-cli "
-                "update-feeds >/dev/null 2>&1"
-            )
-            if "/srv/operator/bin/syswarden-cli" not in managed_paths:
-                survivors.append(alternate)
-            input_lines = [survivors[0], *managed_lines, *survivors[1:]]
-            if alternate not in input_lines:
-                input_lines.append(alternate)
-            variants = (
-                ("source", functions),
-                ("rpm-scriptlet", functions.replace("%%", "%")),
-            )
-            for variant, executable_functions in variants:
-                for final_lf in (False, True):
-                    with self.subTest(
-                        script=name,
-                        variant=variant,
-                        final_lf=final_lf,
-                    ), tempfile.TemporaryDirectory() as temporary:
-                        root = Path(temporary)
-                        source = root / "input"
-                        destination = root / "output"
-                        source_bytes = "\n".join(input_lines).encode("utf-8")
-                        if final_lf:
-                            source_bytes += b"\n"
-                        managed_candidates = set(managed_lines)
-                        if "/srv/operator/bin/syswarden-cli" in managed_paths:
-                            managed_candidates.add(alternate)
-                        expected = b""
-                        for index, line in enumerate(input_lines):
-                            if line in managed_candidates:
-                                continue
-                            expected += line.encode("utf-8")
-                            if index < len(input_lines) - 1 or final_lf:
-                                expected += b"\n"
-                        source.write_bytes(source_bytes)
+                self.assertNotIn("syswarden_verify_webtui_retirement /", tail)
+
+        for name, postinstall in (
+            ("workflow", self.script("postinst.sh")),
+            ("local", self.local_build_script("postinst.sh")),
+        ):
+            with self.subTest(script=name):
+                tail = postinstall[postinstall.rindex("export SYSWARDEN_PKG_INSTALL=1") :]
+                self.assertEqual(tail.count("syswarden_verify_webtui_retirement /"), 1)
+
+    def test_postremove_payload_absent_reaches_socket_and_tombstone_matrix(self) -> None:
+        matrix = (
+            ("deb-remove", "remove", False, True),
+            ("rpm-final-erase", "0", False, False),
+            ("apk-post-deinstall", "4.3.2", True, True),
+        )
+        owner = f"{os.getuid()}:{os.getgid()}"
+        for source_name, postremove in (
+            ("workflow", self.script("postrm.sh")),
+            ("local", self.local_build_script("postrm.sh")),
+        ):
+            for case_name, argument, alpine, preserve_roots in matrix:
+                with (
+                    self.subTest(source=source_name, case=case_name),
+                    tempfile.TemporaryDirectory() as temporary,
+                    tempfile.TemporaryDirectory(
+                        prefix="sw-postrm-", dir="/tmp"
+                    ) as socket_temporary,
+                ):
+                    root = Path(temporary)
+                    opt_root = root / "opt/syswarden"
+                    etc_root = root / "etc/syswarden"
+                    local_bin = root / "usr/local/bin"
+                    runtime_socket = Path(socket_temporary) / "syswarden.sock"
+                    self.assertLess(len(os.fsencode(runtime_socket)), 108)
+                    state_root = root / "var/lib/syswarden"
+                    tombstone = state_root / "removal-in-progress-v1"
+                    for path in (opt_root, etc_root, local_bin, runtime_socket.parent):
+                        path.mkdir(parents=True, mode=0o755, exist_ok=True)
+                    state_root.mkdir(parents=True, mode=0o750)
+                    state_root.chmod(0o750)
+                    tombstone.write_bytes(
+                        b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n"
+                    )
+                    tombstone.chmod(0o600)
+
+                    tail = postremove[
+                        postremove.rindex("export SYSWARDEN_PKG_INSTALL=1") :
+                    ]
+                    tail = tail.replace(
+                        "[ -f /etc/alpine-release ]",
+                        '[ "${SYSWARDEN_TEST_ALPINE:-}" = 1 ]',
+                    )
+                    for source, destination in sorted(
+                        (
+                            ("/var/lib/syswarden", str(state_root)),
+                            ("/usr/local/bin", str(local_bin)),
+                            ("/opt/syswarden", str(opt_root)),
+                            ("/etc/syswarden", str(etc_root)),
+                            ("/run/syswarden.sock", str(runtime_socket)),
+                        ),
+                        key=lambda item: len(item[0]),
+                        reverse=True,
+                    ):
+                        tail = tail.replace(source, destination)
+                    tail = tail.replace(
+                        "0:0:700|0:0:750|0:0:755",
+                        f"{owner}:700|{owner}:750|{owner}:755",
+                    )
+                    tail = tail.replace("'0:0:600:1'", f"'{owner}:600:1'")
+                    tail = tail.replace("'0:0:1'", f"'{owner}:1'")
+
+                    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    try:
+                        listener.bind(str(runtime_socket))
+                        environment = {**os.environ}
+                        environment.pop("APK_PACKAGE", None)
+                        environment.pop("APK_SCRIPT", None)
+                        environment.pop("SYSWARDEN_TEST_ALPINE", None)
+                        if alpine:
+                            environment.update(
+                                {
+                                    "APK_PACKAGE": "syswarden",
+                                    "APK_SCRIPT": "post-deinstall",
+                                    "SYSWARDEN_TEST_ALPINE": "1",
+                                }
+                            )
                         result = subprocess.run(
                             [
                                 "/bin/sh",
                                 "-c",
-                                executable_functions
-                                + '\nsyswarden_cron_source="$1"\n'
-                                + 'syswarden_cron_destination="$2"\n'
-                                + "shift 2\n"
-                                + 'syswarden_filter_crontab "${syswarden_cron_source}" '
-                                + '"${syswarden_cron_destination}" "$@"',
-                                "cron-filter-contract",
-                                str(source),
-                                str(destination),
-                                *managed_paths,
+                                "syswarden_verify_legacy_webtui_runtime_absent() { "
+                                "printf 'verified:%s\\n' \"$1\"; }\n"
+                                + tail,
+                                "postremove-payload-absent",
+                                argument,
                             ],
                             check=False,
                             capture_output=True,
+                            text=True,
+                            env=environment,
                         )
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(destination.read_bytes(), expected)
+                    finally:
+                        listener.close()
 
-    def test_rpm_scriptlet_transform_rejects_percent_and_awk_mutations(self) -> None:
-        functions = self.cron_functions(self.script("prerm.sh"))
-        extraction = (
-            'syswarden_cron_minute="$(printf \'%s\\n\' '
-            '"${syswarden_cron_candidate}" | '
-            "awk 'NR == 1 { print $1; exit }')\""
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertEqual(result.stdout, "verified:/\n", result)
+                    self.assertIn("Preserving root crontab", result.stderr)
+                    self.assertFalse(runtime_socket.exists())
+                    self.assertFalse(runtime_socket.is_symlink())
+                    self.assertFalse(tombstone.exists())
+                    self.assertFalse(tombstone.is_symlink())
+                    self.assertEqual(opt_root.exists(), preserve_roots)
+                    self.assertEqual(etc_root.exists(), preserve_roots)
+
+    def test_linux_remove_and_purge_contract(self) -> None:
+        preremove = self.script("prerm.sh")
+        for forbidden in (
+            "syswarden_cleanup_crontab",
+            "syswarden_filter_crontab",
+            "syswarden_read_crontab",
+            "crontab -l",
+            "crontab -r",
+            "crontab - <",
+        ):
+            self.assertNotIn(forbidden, preremove)
+        self.assertIn(
+            "/opt/syswarden/bin/syswarden-cli prepare-package-removal || exit 1",
+            preremove,
         )
-        self.assertEqual(functions.count(extraction), 1)
+        self.assertIn("Root crontab bytes", preremove)
+        postremove = self.script("postrm.sh")
+        self.assertIn("syswarden_remove_dedicated_root /opt/syswarden", postremove)
+        self.assertIn("syswarden_remove_dedicated_root /etc/syswarden", postremove)
+        self.assertIn("syswarden_remove_exact_product_link", postremove)
+        self.assertIn("syswarden_remove_exact_runtime_socket", postremove)
+        self.assertIn("syswarden_remove_exact_runtime_socket /run/syswarden.sock", postremove)
+        self.assertIn("/var/lib/syswarden/removal-in-progress-v1", postremove)
+        self.assertIn("SYSWARDEN_REMOVAL_V1\\nstate=in-progress\\n", postremove)
+        self.assertIn("syswarden_finalize_removal_tombstone", postremove)
+        self.assertIn("0:0:600:1", postremove)
+        removal_tail = postremove[postremove.rindex("export SYSWARDEN_PKG_INSTALL=1") :]
+        for forbidden in (
+            "crontab -l",
+            "crontab -r",
+            "crontab - <",
+            "systemctl ",
+            "rc-service ",
+            "try-restart rsyslog",
+            "/etc/rsyslog.d/99-syswarden",
+        ):
+            self.assertNotIn(forbidden, removal_tail)
 
-        managed = (
-            "17 * * * * /opt/syswarden/bin/syswarden-cli "
-            "update-feeds >/dev/null 2>&1\n"
+    def test_package_removal_never_reads_filters_or_writes_root_crontab(self) -> None:
+        scripts = (
+            ("workflow-prerm", self.script("prerm.sh")),
+            ("workflow-postrm", self.script("postrm.sh")),
+            ("local-prerm", self.local_build_script("prerm.sh")),
+            ("local-postrm", self.local_build_script("postrm.sh")),
         )
+        for name, script in scripts:
+            with self.subTest(script=name):
+                for forbidden in (
+                    "syswarden_managed_cron_line",
+                    "syswarden_filter_crontab",
+                    "syswarden_read_crontab",
+                    "syswarden_cleanup_crontab",
+                    "crontab -l",
+                    "crontab -r",
+                    "crontab - <",
+                ):
+                    self.assertNotIn(forbidden, script)
+                self.assertIn("root crontab", script.lower())
 
-        def filtered_bytes(candidate_functions: str) -> bytes:
-            with tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                source = root / "input"
-                destination = root / "output"
-                source.write_bytes(managed.encode("utf-8"))
-                result = subprocess.run(
-                    [
-                        "/bin/sh",
-                        "-c",
-                        candidate_functions.replace("%%", "%")
-                        + '\nsyswarden_cron_source="$1"\n'
-                        + 'syswarden_cron_destination="$2"\n'
-                        + 'syswarden_filter_crontab "${syswarden_cron_source}" '
-                        + '"${syswarden_cron_destination}" '
-                        + '"/opt/syswarden/bin/syswarden-cli"',
-                        "rpm-scriptlet-contract",
-                        str(source),
-                        str(destination),
-                    ],
-                    check=False,
-                    capture_output=True,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                return destination.read_bytes()
+    def test_removal_tombstone_contract_is_identical_in_package_generators(self) -> None:
+        workflow = self.script("postrm.sh")
+        local = self.local_build_script("postrm.sh")
+        self.assertEqual(workflow, local)
+        for required in (
+            "/var/lib/syswarden/removal-in-progress-v1",
+            "SYSWARDEN_REMOVAL_V1\\nstate=in-progress\\n",
+            "syswarden_attest_removal_tombstone || return 1",
+            "syswarden_finalize_removal_tombstone || exit 1",
+            "0:0:600:1",
+            "= '39'",
+        ):
+            self.assertIn(required, workflow)
 
-        self.assertEqual(filtered_bytes(functions), b"")
-        legacy_percent = functions.replace(
-            extraction,
-            'syswarden_cron_minute="${syswarden_cron_candidate%% *}"',
-        )
-        wrong_awk_field = functions.replace("print $1; exit", "print $2; exit")
-        self.assertEqual(filtered_bytes(legacy_percent), managed.encode("utf-8"))
-        self.assertEqual(filtered_bytes(wrong_awk_field), managed.encode("utf-8"))
-
-    def test_rpm_artifact_gate_rejects_transformed_scriptlet_mutations(self) -> None:
+    def test_rpm_artifact_gate_requires_exact_scriptlet_bodies(self) -> None:
         validation_step = workflow_step_script(
             self.workflow, "Validate Package Metadata"
         )
-        function_start = validation_step.index("validate_rpm() {")
+        function_start = validation_step.index("validate_rpm_scriptlet() {")
         function_end = validation_step.index("\nvalidate_apk() {", function_start)
         validate_rpm = validation_step[function_start:function_end]
-        self.assertIn("rpm --query --package --scripts", validate_rpm)
-        self.assertIn("grep --fixed-strings --count", validate_rpm)
-        self.assertIn("'${syswarden_cron_candidate%'", validate_rpm)
-
-        expected = (
-            'syswarden_cron_minute="$(printf \'%s\\n\' '
-            '"${syswarden_cron_candidate}" | '
-            "awk 'NR == 1 { print $1; exit }')\""
+        for required in (
+            'actual="$(rpm --query --package --queryformat "%{${tag}}"',
+            'expected="$(cat "${expected_path}")"',
+            '"%{${tag}PROG}"',
+            '== "/bin/sh"',
+            'validate_rpm_scriptlet "${path}" PREIN "${PACKAGE_SCRIPTS}/preinst.sh"',
+            'validate_rpm_scriptlet "${path}" POSTIN "${PACKAGE_SCRIPTS}/postinst.sh"',
+            'validate_rpm_scriptlet "${path}" PREUN "${PACKAGE_SCRIPTS}/prerm.sh"',
+            'validate_rpm_scriptlet "${path}" POSTUN "${PACKAGE_SCRIPTS}/postrm.sh"',
+        ):
+            self.assertIn(required, validate_rpm)
+        forbidden_tokens = (
+            "syswarden_cron_candidate",
+            "syswarden_cron_minute",
+            "syswarden_managed_cron_line",
+            "syswarden_filter_crontab",
+            "syswarden_read_crontab",
+            "syswarden_cleanup_crontab",
+            "crontab -l",
+            "crontab -r",
+            "crontab - <",
         )
-        legacy = 'syswarden_cron_minute="${syswarden_cron_candidate% *}"'
-        wrong_awk = expected.replace("print $1; exit", "print $2; exit")
+        for forbidden in forbidden_tokens:
+            self.assertIn(forbidden, validate_rpm)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fake_bin = root / "bin"
             fake_bin.mkdir()
+            package_scripts = root / "package-scripts"
+            package_scripts.mkdir()
+            artifact_scripts = root / "artifact-scripts"
+            artifact_scripts.mkdir()
             scriptlets = root / "scriptlets"
             fake_rpm = fake_bin / "rpm"
             fake_rpm.write_text(
@@ -2519,11 +3303,19 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "fi\n"
                 "[ \"$3\" = --queryformat ] || exit 90\n"
                 "case \"$4\" in\n"
-                "  '%{VERSION}') printf 4.02.14 ;;\n"
-                "  '%{ARCH}') printf x86_64 ;;\n"
-                "  '%{BUILDTIME}') printf '%s' \"${SOURCE_DATE_EPOCH}\" ;;\n"
-                "  '%{BUILDHOST}') printf syswarden-build.invalid ;;\n"
-                "  '%{CHANGELOGTIME}') printf '%s' \"${RPM_CHANGELOG_EPOCH}\" ;;\n"
+                "  '%{VERSION}') printf 4.02.14; exit \"${RPM_VERSION_EXIT}\" ;;\n"
+                "  '%{ARCH}') printf x86_64; exit \"${RPM_ARCH_EXIT}\" ;;\n"
+                "  '%{BUILDTIME}') printf '%s' \"${SOURCE_DATE_EPOCH}\"; exit \"${RPM_BUILDTIME_EXIT}\" ;;\n"
+                "  '%{BUILDHOST}') printf syswarden-build.invalid; exit \"${RPM_BUILDHOST_EXIT}\" ;;\n"
+                "  '%{CHANGELOGTIME}') printf '%s' \"${RPM_CHANGELOG_EPOCH}\"; exit \"${RPM_CHANGELOGTIME_EXIT}\" ;;\n"
+                "  '%{PREIN}') cat \"${RPM_PREIN_FILE}\" ;;\n"
+                "  '%{POSTIN}') cat \"${RPM_POSTIN_FILE}\" ;;\n"
+                "  '%{PREUN}') cat \"${RPM_PREUN_FILE}\" ;;\n"
+                "  '%{POSTUN}') cat \"${RPM_POSTUN_FILE}\" ;;\n"
+                "  '%{PREINPROG}') printf '%s' \"${RPM_PREIN_PROG}\"; exit \"${RPM_PREIN_PROG_EXIT}\" ;;\n"
+                "  '%{POSTINPROG}') printf '%s' \"${RPM_POSTIN_PROG}\"; exit \"${RPM_POSTIN_PROG_EXIT}\" ;;\n"
+                "  '%{PREUNPROG}') printf '%s' \"${RPM_PREUN_PROG}\"; exit \"${RPM_PREUN_PROG_EXIT}\" ;;\n"
+                "  '%{POSTUNPROG}') printf '%s' \"${RPM_POSTUN_PROG}\"; exit \"${RPM_POSTUN_PROG_EXIT}\" ;;\n"
                 "  *) exit 91 ;;\n"
                 "esac\n",
                 encoding="utf-8",
@@ -2535,469 +3327,269 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "RPM_SCRIPTLETS_FILE": str(scriptlets),
                 "SOURCE_DATE_EPOCH": "946684800",
                 "RPM_CHANGELOG_EPOCH": "946728000",
+                "RPM_VERSION_EXIT": "0",
+                "RPM_ARCH_EXIT": "0",
+                "RPM_BUILDTIME_EXIT": "0",
+                "RPM_BUILDHOST_EXIT": "0",
+                "RPM_CHANGELOGTIME_EXIT": "0",
+            }
+            tag_to_name = {
+                "PREIN": "preinst.sh",
+                "POSTIN": "postinst.sh",
+                "PREUN": "prerm.sh",
+                "POSTUN": "postrm.sh",
+            }
+            canonical_bodies = {
+                "PREIN": (
+                    "#!/bin/sh\n"
+                    "set -eu\n"
+                    'record="123:456"\n'
+                    'pid="${record%%:*}"\n'
+                    "printf '%s\\n' \"${pid}\""
+                ),
+                "POSTIN": "#!/bin/sh\nset -eu\nprintf '%s\\n' postinst",
+                "PREUN": "#!/bin/sh\nset -eu\nprintf '%s\\n' prerm",
+                "POSTUN": "#!/bin/sh\nset -eu\nprintf '%s\\n' postrm",
             }
 
-            def validate(payload: str) -> subprocess.CompletedProcess[bytes]:
-                scriptlets.write_text(payload, encoding="utf-8")
+            def validate(
+                artifact_bodies: dict[str, str],
+                *,
+                source_bodies: dict[str, str] | None = None,
+                programs: dict[str, str] | None = None,
+                program_statuses: dict[str, str] | None = None,
+                metadata_statuses: dict[str, str] | None = None,
+                scriptlet_payload: str | None = None,
+            ) -> subprocess.CompletedProcess[bytes]:
+                sources = source_bodies or canonical_bodies
+                interpreters = programs or {tag: "/bin/sh" for tag in tag_to_name}
+                interpreter_statuses = program_statuses or {
+                    tag: "0" for tag in tag_to_name
+                }
+                case_environment = dict(environment)
+                for field, status in (metadata_statuses or {}).items():
+                    case_environment[f"RPM_{field}_EXIT"] = status
+                for tag, name in tag_to_name.items():
+                    (package_scripts / name).write_text(sources[tag], encoding="utf-8")
+                    artifact_path = artifact_scripts / name
+                    if tag in artifact_bodies:
+                        artifact_path.write_text(artifact_bodies[tag], encoding="utf-8")
+                    else:
+                        artifact_path.unlink(missing_ok=True)
+                    case_environment[f"RPM_{tag}_FILE"] = str(artifact_path)
+                    case_environment[f"RPM_{tag}_PROG"] = interpreters[tag]
+                    case_environment[f"RPM_{tag}_PROG_EXIT"] = interpreter_statuses[
+                        tag
+                    ]
+                if scriptlet_payload is None:
+                    scriptlet_payload = "\n".join(artifact_bodies.values())
+                scriptlets.write_text(scriptlet_payload, encoding="utf-8")
                 return subprocess.run(
                     [
                         "/bin/bash",
                         "-c",
-                        "set -euo pipefail\nVERSION=4.02.14\n"
+                        "set -euo pipefail\nVERSION=4.02.14\nPACKAGE_SCRIPTS=\"$2\"\n"
                         + validate_rpm
                         + '\nvalidate_rpm "$1" x86_64',
                         "rpm-artifact-contract",
                         str(root / "candidate.rpm"),
+                        str(package_scripts),
                     ],
                     check=False,
                     capture_output=True,
-                    env=environment,
+                    env=case_environment,
                 )
 
-            accepted = validate(f"{expected}\n{expected}\n")
+            accepted = validate(dict(canonical_bodies))
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
-            for name, payload in (
-                ("single-helper", f"{expected}\n"),
-                ("legacy-percent", f"{legacy}\n{legacy}\n"),
-                ("wrong-awk-field", f"{wrong_awk}\n{wrong_awk}\n"),
-            ):
-                with self.subTest(mutation=name):
-                    rejected = validate(payload)
+
+            trailing_newlines = {
+                tag: f"{body}\n\n" for tag, body in canonical_bodies.items()
+            }
+            accepted = validate(
+                trailing_newlines,
+                source_bodies=trailing_newlines,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+            for tag in tag_to_name:
+                with self.subTest(mutation="one-byte-drift", tag=tag):
+                    mutated = dict(canonical_bodies)
+                    mutated[tag] += "x"
+                    rejected = validate(mutated)
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
+                with self.subTest(mutation="missing-body", tag=tag):
+                    missing = dict(canonical_bodies)
+                    del missing[tag]
+                    rejected = validate(missing)
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
+                with self.subTest(mutation="empty-body", tag=tag):
+                    empty = dict(canonical_bodies)
+                    empty[tag] = ""
+                    rejected = validate(empty)
                     self.assertNotEqual(rejected.returncode, 0, rejected)
 
-    def test_package_cron_cleanup_distinguishes_absence_and_errors(self) -> None:
-        matrix = self.cron_script_matrix()
-        reference = self.cron_functions(matrix[0][1])
-        for name, script, _paths in matrix[1:]:
-            with self.subTest(shared_helper=name):
-                self.assertEqual(self.cron_functions(script), reference)
+            transformed = dict(canonical_bodies)
+            transformed["PREIN"] = transformed["PREIN"].replace("%%:*", "%:*")
+            rejected = validate(transformed)
+            self.assertNotEqual(rejected.returncode, 0, rejected)
 
+            for tag in tag_to_name:
+                with self.subTest(mutation="wrong-interpreter", tag=tag):
+                    wrong_programs = {name: "/bin/sh" for name in tag_to_name}
+                    wrong_programs[tag] = "/bin/bash"
+                    rejected = validate(
+                        dict(canonical_bodies), programs=wrong_programs
+                    )
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
+                with self.subTest(mutation="interpreter-query-failure", tag=tag):
+                    failing_statuses = {name: "0" for name in tag_to_name}
+                    failing_statuses[tag] = "92"
+                    rejected = validate(
+                        dict(canonical_bodies),
+                        program_statuses=failing_statuses,
+                    )
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
+
+            for field in (
+                "VERSION",
+                "ARCH",
+                "BUILDTIME",
+                "BUILDHOST",
+                "CHANGELOGTIME",
+            ):
+                with self.subTest(mutation="metadata-query-failure", field=field):
+                    rejected = validate(
+                        dict(canonical_bodies),
+                        metadata_statuses={field: "92"},
+                    )
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
+
+            for forbidden in forbidden_tokens:
+                with self.subTest(forbidden=forbidden):
+                    bodies = dict(canonical_bodies)
+                    bodies["POSTIN"] += f"\n{forbidden}"
+                    rejected = validate(
+                        bodies,
+                        source_bodies=bodies,
+                        scriptlet_payload="\n".join(bodies.values()),
+                    )
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
+
+    def test_package_removal_executes_barrier_without_touching_operator_cron(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fake_bin = root / "bin"
             fake_bin.mkdir()
+            calls = root / "cli-calls"
+            fake_cli = fake_bin / "syswarden-cli"
+            fake_cli.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$SYSWARDEN_TEST_CLI_CALLS\"\n",
+                encoding="ascii",
+            )
+            fake_cli.chmod(0o700)
+            cron_called = root / "crontab-called"
             fake_crontab = fake_bin / "crontab"
             fake_crontab.write_text(
-                "#!/bin/sh\n"
-                "record_cronie_backup() {\n"
-                "  [ \"${CRONTAB_CREATE_BACKUP:-0}\" -eq 1 ] || return 0\n"
-                "  [ -n \"${XDG_CACHE_HOME:-}\" ] || return 96\n"
-                "  mkdir -p \"${XDG_CACHE_HOME}/crontab\" || return 1\n"
-                "  printf 'previous cron\\n' > \"${XDG_CACHE_HOME}/crontab/crontab.bak\" || return 1\n"
-                "  printf '%s' \"${XDG_CACHE_HOME}\" > \"${CRONTAB_CACHE_PATH_OUTPUT}\" || return 1\n"
-                "}\n"
-                "case \"${1:-}\" in\n"
-                "  -l)\n"
-                "    if [ -e \"${CRONTAB_REMOVED_MARKER}\" ]; then\n"
-                "      printf '%s' \"${CRONTAB_VERIFY_STDOUT:-}\"\n"
-                "      printf '%s' \"${CRONTAB_VERIFY_STDERR:-}\" >&2\n"
-                "      exit \"${CRONTAB_VERIFY_RC:-1}\"\n"
-                "    fi\n"
-                "    printf '%s' \"${CRONTAB_STDOUT:-}\"\n"
-                "    printf '%s' \"${CRONTAB_STDERR:-}\" >&2\n"
-                "    exit \"${CRONTAB_READ_RC:-0}\"\n"
-                "    ;;\n"
-                "  -r)\n"
-                "    record_cronie_backup || exit $?\n"
-                "    crontab_remove_rc=${CRONTAB_REMOVE_RC:-0}\n"
-                "    if [ \"${crontab_remove_rc}\" -eq 0 ]; then\n"
-                "      : > \"${CRONTAB_REMOVED_MARKER}\"\n"
-                "      if [ \"${CRONTAB_REMOVE_SPOOL:-0}\" -eq 1 ] && "
-                "[ -n \"${SYSWARDEN_CRON_ABSENCE_SPOOL:-}\" ]; then\n"
-                "        rm -f -- \"${SYSWARDEN_CRON_ABSENCE_SPOOL}\"\n"
-                "      fi\n"
-                "    fi\n"
-                "    exit \"${crontab_remove_rc}\"\n"
-                "    ;;\n"
-                "  -)\n"
-                "    record_cronie_backup || exit $?\n"
-                "    cat > \"${CRONTAB_WRITE_OUTPUT}\"\n"
-                "    exit \"${CRONTAB_WRITE_RC:-0}\"\n"
-                "    ;;\n"
-                "  *) exit 97 ;;\n"
-                "esac\n",
-                encoding="utf-8",
+                "#!/bin/sh\n: > \"$SYSWARDEN_TEST_CRONTAB_CALLED\"\nexit 99\n",
+                encoding="ascii",
             )
             fake_crontab.chmod(0o700)
-            fake_cmp = fake_bin / "cmp"
-            real_cmp = shutil.which("cmp")
-            self.assertIsNotNone(real_cmp)
-            fake_cmp.write_text(
-                "#!/bin/sh\n"
-                "if [ -n \"${CMP_FORCE_RC:-}\" ]; then\n"
-                "  exit \"${CMP_FORCE_RC}\"\n"
-                "fi\n"
-                f'exec "{real_cmp}" "$@"\n',
-                encoding="utf-8",
-            )
-            fake_cmp.chmod(0o700)
-            fake_mktemp = fake_bin / "mktemp"
-            real_mktemp = shutil.which("mktemp")
-            self.assertIsNotNone(real_mktemp)
-            fake_mktemp.write_text(
-                "#!/bin/sh\n"
-                "[ \"$#\" -eq 2 ] || exit 95\n"
-                "[ \"$1\" = -d ] || exit 95\n"
-                "[ \"$2\" = /var/tmp/syswarden-cron.XXXXXX ] || exit 95\n"
-                "[ -n \"${SYSWARDEN_TEST_MKTEMP_ROOT:-}\" ] || exit 94\n"
-                f'exec "{real_mktemp}" -d '
-                '"${SYSWARDEN_TEST_MKTEMP_ROOT}/syswarden-cron.XXXXXX"\n',
-                encoding="utf-8",
-            )
-            fake_mktemp.chmod(0o700)
-            backup = root / "backup"
-            error = root / "error"
-            filtered = root / "filtered"
-            written = root / "written"
-            removed = root / "removed"
-            command = [
-                "/bin/sh",
-                "-c",
-                reference
-                + '\nsyswarden_cleanup_crontab "$1" "$2" "$3" "$4"',
-                "cron-cleanup-contract",
-                str(backup),
-                str(error),
-                str(filtered),
-                "/opt/syswarden/bin/syswarden-cli",
-            ]
-
-            def run_cleanup(**updates: str) -> subprocess.CompletedProcess[bytes]:
-                written.unlink(missing_ok=True)
-                removed.unlink(missing_ok=True)
-                environment = os.environ.copy()
-                environment.update(
-                    {
-                        "PATH": f"{fake_bin}:{environment.get('PATH', '')}",
-                        "CRONTAB_WRITE_OUTPUT": str(written),
-                        "CRONTAB_CACHE_PATH_OUTPUT": str(root / "cache-path"),
-                        "CRONTAB_CREATE_BACKUP": "0",
-                        "CRONTAB_REMOVED_MARKER": str(removed),
-                        "CRONTAB_READ_RC": "0",
-                        "CRONTAB_WRITE_RC": "0",
-                        "CRONTAB_REMOVE_RC": "0",
-                        "CRONTAB_REMOVE_SPOOL": "0",
-                        "CRONTAB_STDOUT": "",
-                        "CRONTAB_STDERR": "",
-                        "CRONTAB_VERIFY_RC": "1",
-                        "CRONTAB_VERIFY_STDOUT": "",
-                        "CRONTAB_VERIFY_STDERR": "no crontab for root\n",
-                        "CMP_FORCE_RC": "",
-                        "SYSWARDEN_CRON_ABSENCE_SPOOL": "",
-                        "SYSWARDEN_TEST_MKTEMP_ROOT": str(root),
-                        **updates,
+            operator_cron = root / "operator-cron"
+            operator_bytes = b"19 4 * * * /usr/local/bin/operator --exact  value\n"
+            operator_cron.write_bytes(operator_bytes)
+            for name, source in (
+                ("workflow", self.script("prerm.sh")),
+                ("local", self.local_build_script("prerm.sh")),
+            ):
+                with self.subTest(script=name):
+                    calls.unlink(missing_ok=True)
+                    cron_called.unlink(missing_ok=True)
+                    tail = source[source.rindex("export SYSWARDEN_PKG_INSTALL=1") :]
+                    tail = tail.replace(
+                        "/opt/syswarden/bin/syswarden-cli",
+                        str(fake_cli),
+                    )
+                    environment = {
+                        **os.environ,
+                        "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                        "SYSWARDEN_TEST_CLI_CALLS": str(calls),
+                        "SYSWARDEN_TEST_CRONTAB_CALLED": str(cron_called),
                     }
-                )
-                return subprocess.run(
-                    command,
-                    check=False,
-                    capture_output=True,
-                    env=environment,
-                )
-
-            for message in (
-                "no crontab for root",
-                "crontab: no crontab for root",
-                "crontab: can't open 'root': No such file or directory",
-            ):
-                for terminator in ("", "\n"):
-                    with self.subTest(absence=message, terminator=repr(terminator)):
-                        result = run_cleanup(
-                            CRONTAB_READ_RC="1",
-                            CRONTAB_STDERR=message + terminator,
-                        )
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertFalse(written.exists())
-                        self.assertFalse(removed.exists())
-
-            spool = root / "root-spool"
-            spool.write_text("operator cron\n", encoding="utf-8")
-            result = run_cleanup(
-                CRONTAB_READ_RC="1",
-                CRONTAB_STDERR="crontab: no crontab for root\n",
-                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(written.exists())
-            spool.unlink()
-            spool.symlink_to(root / "missing-spool-target")
-            result = run_cleanup(
-                CRONTAB_READ_RC="1",
-                CRONTAB_STDERR="crontab: no crontab for root\n",
-                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(written.exists())
-            spool.unlink()
-
-            for read_rc, stdout, message in (
-                ("1", "", "permission denied\n"),
-                ("1", "", "no crontab for root\nextra diagnostic\n"),
-                ("1", "", " no crontab for root\n"),
-                ("1", "", "no crontab for root \n"),
-                ("2", "", "no crontab for root\n"),
-                ("1", "partial stdout", "no crontab for root\n"),
-            ):
-                with self.subTest(read_rc=read_rc, stdout=stdout, read_error=message):
-                    result = run_cleanup(
-                        CRONTAB_READ_RC=read_rc,
-                        CRONTAB_STDOUT=stdout,
-                        CRONTAB_STDERR=message,
-                    )
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertFalse(written.exists())
-                    self.assertFalse(removed.exists())
-
-            managed = (
-                "17 * * * * /opt/syswarden/bin/syswarden-cli "
-                "update-feeds >/dev/null 2>&1"
-            )
-            operator = (
-                "19 4 * * * /opt/syswarden/bin/syswarden-cli "
-                "update-feeds --operator-option"
-            )
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n" + operator,
-                CRONTAB_STDERR="provider warning must not become cron input\n",
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(written.read_bytes(), operator.encode("utf-8"))
-
-            result = run_cleanup(CRONTAB_STDOUT=operator)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(written.exists(), "unchanged operator crontab was rewritten")
-            self.assertFalse(removed.exists(), "operator crontab was removed")
-
-            result = run_cleanup(CRONTAB_STDOUT="")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(written.exists(), "explicit empty crontab was rewritten")
-            self.assertFalse(removed.exists(), "explicit empty crontab was removed")
-
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n", CMP_FORCE_RC="2"
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(written.exists(), "cmp error reached crontab write")
-
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n", CRONTAB_WRITE_RC="23"
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(removed.exists(), "managed-only crontab was not removed")
-            self.assertFalse(written.exists(), "managed-only crontab was rewritten empty")
-
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n", CRONTAB_REMOVE_RC="23"
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(removed.exists())
-            self.assertFalse(written.exists())
-
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n", CRONTAB_VERIFY_RC="0"
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(removed.exists())
-            self.assertFalse(written.exists())
-
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n",
-                CRONTAB_VERIFY_RC="2",
-                CRONTAB_VERIFY_STDERR="permission denied\n",
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(removed.exists())
-            self.assertFalse(written.exists())
-
-            spool.write_text(managed + "\n", encoding="utf-8")
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n",
-                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(spool.exists())
-            spool.unlink()
-
-            spool.symlink_to(root / "missing-spool-target")
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n",
-                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(spool.is_symlink())
-            spool.unlink()
-
-            spool.write_text(managed + "\n", encoding="utf-8")
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n",
-                SYSWARDEN_CRON_ABSENCE_SPOOL=str(spool),
-                CRONTAB_REMOVE_SPOOL="1",
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(spool.exists())
-
-            result = run_cleanup(
-                CRONTAB_STDOUT=managed + "\n" + operator,
-                CRONTAB_WRITE_RC="23",
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(removed.exists())
-
-            cache_path_output = root / "cache-path"
-            prepared_command = [
-                "/bin/sh",
-                "-c",
-                reference
-                + "\numask 077\n"
-                + "SYSWARDEN_CRON_ABSENCE_SPOOL=\n"
-                + "cron_work=\n"
-                + "trap 'syswarden_cleanup_cron_work' 0\n"
-                + "trap 'syswarden_cleanup_cron_work; exit 129' 1\n"
-                + "trap 'syswarden_cleanup_cron_work; exit 130' 2\n"
-                + "trap 'syswarden_cleanup_cron_work; exit 143' 15\n"
-                + "syswarden_prepare_cron_work || exit 1\n"
-                + 'syswarden_cleanup_crontab "${cron_backup}" '
-                + '"${cron_error}" "${cron_filtered}" "$1" || exit 1\n'
-                + "syswarden_cleanup_cron_work || exit 1\n"
-                + "trap - 0 1 2 15\n",
-                "cronie-private-cache-contract",
-                "/opt/syswarden/bin/syswarden-cli",
-            ]
-            for write_rc in ("0", "23"):
-                with self.subTest(cronie_write_rc=write_rc):
-                    written.unlink(missing_ok=True)
-                    cache_path_output.unlink(missing_ok=True)
-                    environment = os.environ.copy()
-                    environment.update(
-                        {
-                            "PATH": f"{fake_bin}:{environment.get('PATH', '')}",
-                            "CRONTAB_WRITE_OUTPUT": str(written),
-                            "CRONTAB_CACHE_PATH_OUTPUT": str(cache_path_output),
-                            "CRONTAB_CREATE_BACKUP": "1",
-                            "CRONTAB_READ_RC": "0",
-                            "CRONTAB_STDOUT": managed + "\n" + operator,
-                            "CRONTAB_STDERR": "",
-                            "CRONTAB_WRITE_RC": write_rc,
-                            "SYSWARDEN_TEST_MKTEMP_ROOT": str(root),
-                        }
-                    )
                     result = subprocess.run(
-                        prepared_command,
+                        [
+                            "/bin/sh",
+                            "-c",
+                            "syswarden_retire_legacy_webtui() { :; }\n" + tail,
+                            "package-removal-cron-preservation",
+                            "remove",
+                        ],
                         check=False,
                         capture_output=True,
+                        text=True,
                         env=environment,
                     )
-                    if write_rc == "0":
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual(written.read_bytes(), operator.encode("utf-8"))
-                    else:
-                        self.assertNotEqual(result.returncode, 0)
-                    self.assertTrue(
-                        cache_path_output.exists(),
-                        "private Cronie cache setup did not reach crontab: "
-                        + result.stderr.decode("utf-8", errors="replace"),
-                    )
-                    cache_path = Path(
-                        cache_path_output.read_text(encoding="utf-8")
-                    )
-                    self.assertEqual(cache_path.name, "cache")
-                    self.assertTrue(cache_path.parent.name.startswith("syswarden-cron."))
-                    self.assertFalse(
-                        cache_path.parent.exists(),
-                        "private Cronie cache work directory remains",
-                    )
-                    self.assertFalse(
-                        (cache_path / "crontab" / "crontab.bak").exists(),
-                        "Cronie backup remains outside cleanup",
-                    )
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertEqual(calls.read_text(encoding="ascii"), "prepare-package-removal\n")
+                    self.assertFalse(cron_called.exists())
+                    self.assertEqual(operator_cron.read_bytes(), operator_bytes)
 
-    def test_active_local_package_builder_uses_exact_fail_closed_cron_cleanup(self) -> None:
-        preremove = self.local_build_script("prerm.sh")
-        self.assertIn("syswarden_cleanup_crontab", preremove)
-        self.assertIn("/opt/syswarden/bin/syswarden-cli || exit 1", preremove)
-        self.assertIn("mktemp -d /var/tmp/syswarden-cron.XXXXXX", preremove)
-        self.assertIn("LC_ALL=C crontab -r", preremove)
-        self.assertIn(
-            'syswarden_read_crontab "${syswarden_cron_backup}" '
-            '"${syswarden_cron_error}"',
-            preremove,
-        )
-        self.assertIn('chmod 0700 "${cron_work}"', preremove)
-        self.assertNotIn('${cron_backup}.error', preremove)
-        self.assertNotIn('${cron_backup}.filtered', preremove)
-        self.assertNotIn("grep -v 'syswarden-cli'", preremove)
-        self.assertNotIn("grep -F -v '/opt/syswarden/bin/syswarden-cli'", preremove)
-
-    def test_package_cron_signal_handlers_cleanup_and_never_succeed(self) -> None:
-        handlers = (
-            "trap 'syswarden_cleanup_cron_work' 0",
-            "trap 'syswarden_cleanup_cron_work; exit 129' 1",
-            "trap 'syswarden_cleanup_cron_work; exit 130' 2",
-            "trap 'syswarden_cleanup_cron_work; exit 143' 15",
-        )
-        matrix = self.cron_script_matrix()
-        for name, script, _paths in matrix:
-            with self.subTest(handler_contract=name):
-                for handler in handlers:
-                    self.assertIn(handler, script)
-                self.assertIn("mktemp -d", script)
-                self.assertIn("syswarden_prepare_cron_work", script)
-                self.assertIn('chmod 0700 "${cron_work}"', script)
-                self.assertIn('cron_cache="${cron_work}/cache"', script)
-                self.assertIn('chmod 0700 "${cron_cache}"', script)
-                self.assertIn('XDG_CACHE_HOME="${cron_cache}"', script)
-                self.assertIn("export XDG_CACHE_HOME", script)
-                self.assertIn("unset XDG_CACHE_HOME", script)
+    def test_active_package_builders_use_the_hidden_removal_barrier(self) -> None:
+        for name, preremove in (
+            ("workflow", self.script("prerm.sh")),
+            ("local", self.local_build_script("prerm.sh")),
+        ):
+            with self.subTest(script=name):
                 self.assertIn(
-                    "private cron work directory remains after cleanup",
-                    script,
+                    "/opt/syswarden/bin/syswarden-cli prepare-package-removal || exit 1",
+                    preremove,
                 )
-                self.assertIn('cron_backup="${cron_work}/backup"', script)
-                self.assertIn('cron_error="${cron_work}/error"', script)
-                self.assertIn('cron_filtered="${cron_work}/filtered"', script)
-                self.assertIn("LC_ALL=C crontab -r", script)
-                self.assertIn(
-                    "crontab -r returned success but the root crontab is still present",
-                    script,
+                self.assertNotIn("syswarden_cleanup_crontab", preremove)
+                self.assertNotIn("syswarden_read_crontab", preremove)
+                self.assertNotIn("LC_ALL=C crontab", preremove)
+                self.assertNotIn("grep -v 'syswarden-cli'", preremove)
+                self.assertNotIn(
+                    "grep -F -v '/opt/syswarden/bin/syswarden-cli'",
+                    preremove,
                 )
-                self.assertNotIn('${cron_backup}.error', script)
-                self.assertNotIn('${cron_backup}.filtered', script)
-                self.assertIn("SYSWARDEN_CRON_ABSENCE_SPOOL=\n", script)
 
-        functions = self.cron_functions(matrix[0][1])
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            work = root / "private-cron-work"
-            work.mkdir(mode=0o700)
-            (work / "backup").write_text("operator cron\n", encoding="utf-8")
-            ready = root / "ready"
-            code = (
-                functions
-                + '\ncron_work="$1"\n'
-                + "\n".join(handlers)
-                + '\nprintf ready > "$2"\n'
-                + "while :; do sleep 1; done\n"
-            )
-            process = subprocess.Popen(
-                [
-                    "/bin/sh",
-                    "-c",
-                    code,
-                    "cron-signal-contract",
-                    str(work),
-                    str(ready),
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            deadline = time.monotonic() + 5
-            while not ready.exists() and time.monotonic() < deadline:
-                time.sleep(0.01)
-            self.assertTrue(ready.exists(), "signal probe did not become ready")
-            process.send_signal(signal.SIGTERM)
-            stdout, stderr = process.communicate(timeout=5)
-            self.assertNotEqual(process.returncode, 0, (stdout, stderr))
-            self.assertFalse(work.exists(), "signal handler left private cron work")
+    def test_package_postremove_finalizes_the_exact_tombstone_last(self) -> None:
+        for name, postremove in (
+            ("workflow", self.script("postrm.sh")),
+            ("local", self.local_build_script("postrm.sh")),
+        ):
+            with self.subTest(script=name):
+                tail = postremove[postremove.rindex("export SYSWARDEN_PKG_INSTALL=1") :]
+                self.assertIn(
+                    "syswarden_finalize_removal_tombstone || exit 1",
+                    tail,
+                )
+                self.assertIn(
+                    "SYSWARDEN_REMOVAL_V1\\nstate=in-progress\\n",
+                    tail,
+                )
+                self.assertIn(
+                    "Preserving root crontab, ambiguous rsyslog bridges, shell completion, and legacy hardening artifacts for manual recovery.",
+                    tail,
+                )
+                self.assertNotIn("Removal completed", tail)
+                self.assertNotIn("SUCCESS", tail)
+                self.assertNotIn("syswarden_cleanup_crontab", tail)
+                self.assertNotIn("syswarden_read_crontab", tail)
+                self.assertNotIn("LC_ALL=C crontab", tail)
+                executable_check = tail.index(
+                    "for syswarden_binary in \\\n        /opt/syswarden/bin/syswarden-cli"
+                )
+                finalization = tail.index(
+                    "syswarden_finalize_removal_tombstone || exit 1"
+                )
+                self.assertLess(executable_check, finalization)
+                self.assertEqual(
+                    tail.count(
+                        "syswarden_finalize_removal_tombstone || exit 1"
+                    ),
+                    1,
+                )
 
     def test_linux_postinstall_does_not_treat_systemctl_presence_as_active_systemd(self) -> None:
         postinstall = self.script("postinst.sh")
@@ -3006,7 +3598,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("AMBIGUOUS", postinstall)
         self.assertIn("OFFLINE", postinstall)
         self.assertIn("/opt/syswarden/bin/syswarden-cli reload\n", postinstall)
-        self.assertIn("/opt/syswarden/bin/syswarden-cli reload --no-restart", postinstall)
+        self.assertNotIn("/opt/syswarden/bin/syswarden-cli reload --no-restart", postinstall)
+        active_branch = postinstall.index("ACTIVE)")
+        offline_branch = postinstall.index("OFFLINE)", active_branch)
+        install = postinstall.index("/opt/syswarden/bin/syswarden-cli install", active_branch)
+        reload = postinstall.index("/opt/syswarden/bin/syswarden-cli reload", install)
+        self.assertLess(active_branch, install)
+        self.assertLess(install, reload)
+        self.assertLess(reload, offline_branch)
 
     def test_linux_packages_declare_every_runtime_dependency(self) -> None:
         for dependency in (
@@ -3021,7 +3620,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
             )
         for dependency in ("checkpolicy", "policycoreutils-python-utils"):
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 2)
-        for dependency in ("wireguard-tools", "libqrencode-tools", "jq", "openrc"):
+        for dependency in (
+            "wireguard-tools",
+            "libqrencode-tools",
+            "jq",
+            "openrc",
+            "cronie",
+            "cronie-openrc",
+        ):
             self.assertGreaterEqual(
                 self.workflow.count(f"            - {dependency}\n"),
                 2,
@@ -3090,11 +3696,15 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertEqual(self.workflow.count(workflow_postupgrade), 2)
         self.assertEqual(self.workflow.count(workflow_apk_hook), 2)
         self.assertEqual(self.workflow.count("            - openrc\n"), 2)
+        self.assertEqual(self.workflow.count("            - cronie\n"), 2)
+        self.assertEqual(self.workflow.count("            - cronie-openrc\n"), 2)
         self.assertIn(".pre-install$/", self.workflow)
         self.assertIn(".pre-upgrade$/", self.workflow)
         self.assertIn(".post-install$/", self.workflow)
         self.assertIn(".post-upgrade$/", self.workflow)
         self.assertIn("^depend = openrc$", self.workflow)
+        self.assertIn("^depend = cronie$", self.workflow)
+        self.assertIn("^depend = cronie-openrc$", self.workflow)
         self.assertIn('"${preinstall_members[0]}"', self.workflow)
         self.assertIn('"${preupgrade_members[0]}"', self.workflow)
         self.assertIn('"${postinstall_members[0]}"', self.workflow)
@@ -3118,6 +3728,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
             1,
         )
         self.assertEqual(local.count("  - openrc\n"), 1)
+        self.assertEqual(local.count("  - cronie\n"), 1)
+        self.assertEqual(local.count("  - cronie-openrc\n"), 1)
 
     def test_apk_archive_hook_validation_rejects_missing_drift_and_arch_mismatch(
         self,
@@ -3149,6 +3761,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     "pkgver = 4.02.14\n"
                     f"arch = {architecture}\n"
                     "depend = openrc\n"
+                    "depend = cronie\n"
+                    "depend = cronie-openrc\n"
                 ).encode("utf-8"),
                 **archive_hooks,
             }

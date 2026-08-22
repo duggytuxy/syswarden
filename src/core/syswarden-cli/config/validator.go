@@ -29,6 +29,7 @@ func init() {
 	_ = validate.RegisterValidation("ip", validateIP)
 	_ = validate.RegisterValidation("ip_slice", validateIPSlice)
 	_ = validate.RegisterValidation("ip_or_cidr_slice", validateIPOrCIDRSlice)
+	_ = validate.RegisterValidation("ha_peer_slice", validateHAPeerSlice)
 	_ = validate.RegisterValidation("port", validatePort)
 	_ = validate.RegisterValidation("port_slice", validatePortSlice)
 	_ = validate.RegisterValidation("asn", validateASN)
@@ -61,17 +62,19 @@ func validateConfig(config *ModularConfig) error {
 	if config.Network.Wireguard.Enabled && (config.Network.Wireguard.Port == "" || config.Network.Wireguard.Subnet == "") {
 		return fmt.Errorf("network.wireguard.enabled requires a valid port and canonical subnet")
 	}
+	if config.Network.Wireguard.Enabled && config.Core.FirewallBackend != "nftables" {
+		return fmt.Errorf("network.wireguard.enabled requires core.firewall_backend=nftables")
+	}
 	if config.Network.Wireguard.Subnet != "" && !validCanonicalIPv4Prefix(config.Network.Wireguard.Subnet) {
 		return fmt.Errorf("network.wireguard.subnet must be a canonical IPv4 prefix")
 	}
-	if config.Network.Blocklists.ListChoice == "3" {
-		if config.Network.Blocklists.CustomURL == "" && config.Network.Blocklists.CustomURL6 == "" {
-			return fmt.Errorf("network.blocklists.list_choice=3 requires at least one custom HTTPS URL")
-		}
+	blocklists := config.Network.Blocklists
+	if blocklists.ListChoice == "3" && blocklists.CustomURL == "" && blocklists.CustomURL6 == "" {
+		return fmt.Errorf("network.blocklists.list_choice=3 requires at least one custom HTTPS URL")
 	}
-	if (config.Network.Blocklists.CustomHash != "" && config.Network.Blocklists.CustomURL == "") ||
-		(config.Network.Blocklists.CustomHash6 != "" && config.Network.Blocklists.CustomURL6 == "") {
-		return fmt.Errorf("network.blocklists SHA-256 values require their matching custom URL")
+	if (blocklists.CustomURL == "") != (blocklists.CustomHash == "") ||
+		(blocklists.CustomURL6 == "") != (blocklists.CustomHash6 == "") {
+		return fmt.Errorf("network.blocklists custom HTTPS URLs and SHA-256 values must be configured in matching pairs")
 	}
 	if config.Integrations.BunkerWeb.Enabled {
 		if !config.Integrations.HA.Enabled {
@@ -198,6 +201,50 @@ func validateIPOrCIDRSlice(fl validator.FieldLevel) bool {
 		}
 	}
 	return true
+}
+
+func validateHAPeerSlice(fl validator.FieldLevel) bool {
+	values, ok := fl.Field().Interface().([]string)
+	if !ok {
+		return false
+	}
+	for _, value := range values {
+		if _, err := CanonicalHAPeer(value); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// CanonicalHAPeer validates and canonicalizes one exact HA peer address or
+// inbound peer network. Network scopes are deliberately limited so a bypassed
+// configuration loader cannot turn HA trust into a broad network allowlist.
+func CanonicalHAPeer(value string) (string, error) {
+	if value == "" || strings.TrimSpace(value) != value {
+		return "", fmt.Errorf("HA peer must not be empty or whitespace padded")
+	}
+	if address, err := netip.ParseAddr(value); err == nil {
+		if address.Is4In6() || address.Zone() != "" {
+			return "", fmt.Errorf("HA peer must be an unmapped and unzoned address")
+		}
+		return address.String(), nil
+	}
+
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil || !prefix.IsValid() || prefix.Addr().Is4In6() || prefix.Addr().Zone() != "" {
+		return "", fmt.Errorf("HA peer must be an exact IP address or canonical CIDR")
+	}
+	if prefix != prefix.Masked() {
+		return "", fmt.Errorf("HA peer CIDR must not contain host bits")
+	}
+	minimumBits := 64
+	if prefix.Addr().Is4() {
+		minimumBits = 24
+	}
+	if prefix.Bits() < minimumBits {
+		return "", fmt.Errorf("HA peer CIDR is broader than /%d", minimumBits)
+	}
+	return prefix.String(), nil
 }
 
 func validatePort(fl validator.FieldLevel) bool {

@@ -370,6 +370,52 @@ PACKAGE_NATIVE_SHARD_RECORD_KEYS = frozenset(
         "report_sha256",
         "engine_name",
         "engine_version",
+        "rootless",
+        "cgroups_version",
+        "cgroup_manager",
+        "cgroup_delegation",
+        "cgroup_controllers",
+        "engine_host_architecture",
+        "service_is_remote",
+        "effective_uid",
+        "effective_gid",
+        "uid_map",
+        "gid_map",
+        "lifecycle_helper",
+    }
+)
+PACKAGE_ENGINE_KEYS = frozenset(
+    {
+        "name",
+        "version",
+        "rootless",
+        "cgroups_version",
+        "cgroup_manager",
+        "cgroup_delegation",
+        "cgroup_controllers",
+        "host_architecture",
+        "service_is_remote",
+        "effective_uid",
+        "effective_gid",
+        "uid_map",
+        "gid_map",
+        "lifecycle_helper",
+        "arm64_emulator",
+        "arm64_binfmt",
+    }
+)
+LIFECYCLE_HELPER_KEYS = frozenset(
+    {
+        "source",
+        "sha256",
+        "size_bytes",
+        "source_regular_file",
+        "source_symlink",
+        "snapshot_mode",
+        "snapshot_regular_file",
+        "snapshot_symlink",
+        "frozen_copy",
+        "revalidated_before_report",
     }
 )
 PACKAGE_NATIVE_SHARD_NAMES = {
@@ -395,18 +441,181 @@ PACKAGE_PLATFORM_KEYS = frozenset(
         "package_bytes_differ",
         "bootstrap_execution",
         "lifecycle_network",
+        "runtime_mode",
         "restart_contract",
         "scenarios",
         "architecture_probe",
+        "bootstrap_image_cleanup",
         "status",
     }
+)
+PACKAGE_SCENARIO_KEYS = frozenset(
+    {
+        "name",
+        "status",
+        "runtime_mode",
+        "container_create_exit_code",
+        "lifecycle_exec_exit_codes",
+        "restart_state",
+        "boots",
+        "isolation",
+        "cleanup",
+        "orchestration_error",
+        "events",
+        "inventory_evidence",
+        "log_tail",
+    }
+)
+RUNTIME_BOOT_KEYS = frozenset(
+    {
+        "invocation",
+        "boot_command_exit_code",
+        "restart",
+        "pre_exec",
+        "lifecycle_exec_security",
+        "script_exec_exit_code",
+        "restart_state",
+        "post_exec",
+    }
+)
+RUNTIME_RESTART_KEYS = frozenset(
+    {
+        "performed",
+        "command_exit_code",
+        "previous_pid1_starttime_ticks",
+        "distinct",
+    }
+)
+RUNTIME_SNAPSHOT_KEYS = frozenset(
+    {
+        "capture_count",
+        "pid1_comm",
+        "pid1_exe",
+        "pid1_starttime_ticks",
+        "pid1_process_security",
+        "attestation_process_security",
+        "pid1_uid_map",
+        "pid1_gid_map",
+        "setpriv",
+        "manager_state",
+        "manager_runtime",
+        "cron_enabled",
+        "cron_active",
+        "cron_main_pid",
+        "cron_executable_path",
+        "cron_executable_identity",
+        "cron_fragment_path",
+        "cron_fragment_identity",
+        "cron_dropin_paths",
+        "cron_package_name",
+        "cron_package_version",
+        "cron_package_architecture",
+        "cron_fragment_package_name",
+        "cron_fragment_package_version",
+        "cron_fragment_package_architecture",
+        "rsyslog_enabled",
+        "rsyslog_active",
+        "rsyslog_main_pid",
+        "dummy_interface",
+        "product_services",
+    }
+)
+PRODUCT_SERVICES_KEYS = frozenset(
+    {
+        "expectation",
+        "core_load_state",
+        "core_fragment_path",
+        "core_enabled_state",
+        "core_active_state",
+        "core_main_pid",
+        "core_executable_path",
+        "core_executable_identity",
+        "core_pidfile_identity",
+        "core_process_security",
+        "firewall_load_state",
+        "firewall_fragment_path",
+        "firewall_enabled_state",
+        "firewall_active_state",
+        "firewall_main_pid",
+    }
+)
+RUNTIME_ISOLATION_KEYS = frozenset(
+    {
+        "privileged",
+        "network_mode",
+        "pid_mode",
+        "ipc_mode",
+        "uts_mode",
+        "userns_mode",
+        "cgroup_mode",
+        "cap_add",
+        "cap_drop",
+        "lifecycle_exec_launcher",
+        "devices",
+        "security_opts",
+        "stop_signal",
+        "tmpfs",
+        "mounts",
+    }
+)
+RUNTIME_MOUNT_KEYS = frozenset({"role", "destination", "read_only"})
+RUNTIME_CLEANUP_KEYS = frozenset(
+    {"remove_exit_code", "exists_probe_exit_code", "absent_after_cleanup"}
+)
+PROCESS_SECURITY_KEYS = frozenset(
+    {
+        "cap_inheritable",
+        "cap_permitted",
+        "cap_effective",
+        "cap_bounding",
+        "cap_ambient",
+        "no_new_privileges",
+    }
+)
+ID_MAP_RANGE_KEYS = frozenset({"inside_id", "outside_id", "length"})
+SETPRIV_KEYS = frozenset(
+    {
+        "path",
+        "file_identity",
+        "sha256",
+        "package_name",
+        "package_version",
+        "package_architecture",
+    }
+)
+SYS_ADMIN_CAPABILITY_BIT = 21
+SYS_PTRACE_CAPABILITY_BIT = 19
+SYSTEMD_MANAGER_CAPABILITY_KEYS = frozenset(
+    {"cap_permitted", "cap_effective", "cap_bounding"}
+)
+SYSTEMD_LIFECYCLE_EXEC_LAUNCHER = (
+    "/usr/bin/setpriv",
+    "--bounding-set=-sys_admin",
+    "--inh-caps=-sys_admin",
+    "--ambient-caps=-sys_admin",
+    "--no-new-privs",
+    "/bin/sh",
+    "-ceu",
+)
+OPENRC_LIFECYCLE_EXEC_LAUNCHER = ("/bin/sh", "-ceu")
+LIFECYCLE_CLAIM_KEYS = (
+    "active_service_manager",
+    "active_postinstall",
+    "legacy_runtime_retirement",
+    "fresh_install",
+    "upgrade",
+    "reinstall",
+    "rollback",
+    "remove",
+    "purge",
+    "second_restart",
 )
 
 
 def _package_versions(document: dict[str, Any], expected_version: str) -> tuple[str, str]:
     _exact_keys(document, RAW_TOP_KEYS["package"], "package raw report")
-    if _integer(document["schema_version"], "package.schema_version") != 3:
-        _fail("package raw report schema version must be 3")
+    if _integer(document["schema_version"], "package.schema_version") != 4:
+        _fail("package raw report schema version must be 4")
     contract = _exact_keys(
         document["package_version_contract"], PACKAGE_CONTRACT_KEYS, "package.version_contract"
     )
@@ -463,6 +672,105 @@ def _validate_package_qualification_binding(
     return binding
 
 
+def _validate_lifecycle_helper(
+    value: Any,
+    label: str,
+    *,
+    aggregate: bool,
+) -> dict[str, Any]:
+    helper = _exact_keys(value, LIFECYCLE_HELPER_KEYS, label)
+    source = _string(helper["source"], f"{label}.source")
+    if aggregate:
+        if source != "native-shards-byte-bound":
+            _fail(f"{label}.source is not bound to the native shards")
+    elif not Path(source).is_absolute() or Path(source).name != (
+        "package_webtui_retirement.sh"
+    ):
+        _fail(f"{label}.source is not the absolute lifecycle helper path")
+    _sha256(helper["sha256"], f"{label}.sha256")
+    if _integer(helper["size_bytes"], f"{label}.size_bytes") <= 0:
+        _fail(f"{label}.size_bytes must be positive")
+    expected = {
+        "source_regular_file": True,
+        "source_symlink": False,
+        "snapshot_regular_file": True,
+        "snapshot_symlink": False,
+        "frozen_copy": True,
+        "revalidated_before_report": True,
+    }
+    if (
+        helper["snapshot_mode"] != "0600"
+        or any(
+            _boolean(helper[key], f"{label}.{key}") is not expected_value
+            for key, expected_value in expected.items()
+        )
+    ):
+        _fail(f"{label} does not prove a frozen regular-file helper snapshot")
+    return helper
+
+
+def _validate_cgroup_controllers(value: Any, label: str) -> list[str]:
+    controllers = _string_list(value, label, sorted_unique=True)
+    if not {"cpu", "io", "memory", "pids"}.issubset(controllers):
+        _fail(f"{label} lacks required cgroup v2 controllers")
+    return controllers
+
+
+def _validate_package_engine(
+    value: Any,
+    label: str,
+    *,
+    architecture: str,
+) -> dict[str, Any]:
+    engine = _exact_keys(value, PACKAGE_ENGINE_KEYS, label)
+    expected_delegation = (
+        "native-shards-rootless-systemd-v2"
+        if architecture == "native-shards"
+        else "rootless-systemd-v2"
+    )
+    if (
+        engine["name"] != "podman"
+        or not _string(engine["version"], f"{label}.version")
+        or _boolean(engine["rootless"], f"{label}.rootless") is not True
+        or engine["cgroups_version"] != "v2"
+        or engine["cgroup_manager"] != "systemd"
+        or engine["cgroup_delegation"] != expected_delegation
+        or engine["host_architecture"] != architecture
+        or _boolean(
+            engine["service_is_remote"], f"{label}.service_is_remote"
+        )
+        is not False
+        or engine["arm64_emulator"] is not None
+        or engine["arm64_binfmt"] is not None
+    ):
+        _fail(f"{label} lacks exact native rootless cgroup v2 evidence")
+    _validate_cgroup_controllers(
+        engine["cgroup_controllers"], f"{label}.cgroup_controllers"
+    )
+    identity_keys = ("effective_uid", "effective_gid", "uid_map", "gid_map")
+    if architecture == "native-shards":
+        if any(engine[key] is not None for key in identity_keys):
+            _fail(f"{label} fabricates a common native rootless identity map")
+    else:
+        effective_uid = _integer(engine["effective_uid"], f"{label}.effective_uid")
+        effective_gid = _integer(engine["effective_gid"], f"{label}.effective_gid")
+        uid_map = _validate_id_map(engine["uid_map"], f"{label}.uid_map")
+        gid_map = _validate_id_map(engine["gid_map"], f"{label}.gid_map")
+        if (
+            effective_uid <= 0
+            or effective_gid <= 0
+            or uid_map[0]["outside_id"] != effective_uid
+            or gid_map[0]["outside_id"] != effective_gid
+        ):
+            _fail(f"{label} does not bind its effective rootless IDs to its maps")
+    _validate_lifecycle_helper(
+        engine["lifecycle_helper"],
+        f"{label}.lifecycle_helper",
+        aggregate=architecture == "native-shards",
+    )
+    return engine
+
+
 def _validate_package_native_shards(value: Any) -> dict[str, dict[str, Any]]:
     native_shards = _exact_keys(
         value,
@@ -478,6 +786,7 @@ def _validate_package_native_shards(value: Any) -> dict[str, dict[str, Any]]:
         _fail("package native shard inventory must contain exactly two reports")
     by_architecture: dict[str, dict[str, Any]] = {}
     architecture_order: list[str] = []
+    helper_binding: tuple[Any, ...] | None = None
     for index, value in enumerate(reports):
         report = _exact_keys(
             value,
@@ -488,7 +797,15 @@ def _validate_package_native_shards(value: Any) -> dict[str, dict[str, Any]]:
             report["architecture"],
             f"package.native_shards.reports[{index}].architecture",
         )
-        for key in ("host_architecture", "engine_name", "engine_version"):
+        for key in (
+            "host_architecture",
+            "engine_name",
+            "engine_version",
+            "cgroups_version",
+            "cgroup_manager",
+            "cgroup_delegation",
+            "engine_host_architecture",
+        ):
             _string(
                 report[key],
                 f"package.native_shards.reports[{index}].{key}",
@@ -499,7 +816,53 @@ def _validate_package_native_shards(value: Any) -> dict[str, dict[str, Any]]:
         )
         if architecture in by_architecture or architecture not in {"amd64", "arm64"}:
             _fail("package native shard architecture is duplicate or unsupported")
-        if report["host_architecture"] != architecture or report["engine_name"] != "podman":
+        controllers = _validate_cgroup_controllers(
+            report["cgroup_controllers"],
+            f"package.native_shards.reports[{index}].cgroup_controllers",
+        )
+        effective_uid = _integer(
+            report["effective_uid"],
+            f"package.native_shards.reports[{index}].effective_uid",
+        )
+        effective_gid = _integer(
+            report["effective_gid"],
+            f"package.native_shards.reports[{index}].effective_gid",
+        )
+        uid_map = _validate_id_map(
+            report["uid_map"],
+            f"package.native_shards.reports[{index}].uid_map",
+        )
+        gid_map = _validate_id_map(
+            report["gid_map"],
+            f"package.native_shards.reports[{index}].gid_map",
+        )
+        helper = _validate_lifecycle_helper(
+            report["lifecycle_helper"],
+            f"package.native_shards.reports[{index}].lifecycle_helper",
+            aggregate=False,
+        )
+        binding = tuple(
+            helper[key] for key in sorted(LIFECYCLE_HELPER_KEYS - {"source"})
+        )
+        if helper_binding is None:
+            helper_binding = binding
+        elif helper_binding != binding:
+            _fail("package native shards used different lifecycle helper bytes")
+        if (
+            report["host_architecture"] != architecture
+            or report["engine_name"] != "podman"
+            or report["rootless"] is not True
+            or report["cgroups_version"] != "v2"
+            or report["cgroup_manager"] != "systemd"
+            or report["cgroup_delegation"] != "rootless-systemd-v2"
+            or report["engine_host_architecture"] != architecture
+            or report["service_is_remote"] is not False
+            or not {"cpu", "io", "memory", "pids"}.issubset(controllers)
+            or effective_uid <= 0
+            or effective_gid <= 0
+            or uid_map[0]["outside_id"] != effective_uid
+            or gid_map[0]["outside_id"] != effective_gid
+        ):
             _fail("package native shard host or engine identity is invalid")
         by_architecture[architecture] = report
         architecture_order.append(architecture)
@@ -540,8 +903,17 @@ def _validate_package_shard_binding(
             raise AdapterError(
                 f"invalid package {architecture} native shard evidence: {exc}"
             ) from exc
-        engine = raw.document["engine"]
+        engine = _validate_package_engine(
+            raw.document["engine"],
+            f"package.{architecture}.engine",
+            architecture=architecture,
+        )
         scope = raw.document["scope"]
+        shard_helper = _validate_lifecycle_helper(
+            engine["lifecycle_helper"],
+            f"package.{architecture}.engine.lifecycle_helper",
+            aggregate=False,
+        )
         if record != {
             "architecture": architecture,
             "host_architecture": package_lab.normalize_host_architecture(
@@ -550,6 +922,18 @@ def _validate_package_shard_binding(
             "report_sha256": raw.snapshot.sha256,
             "engine_name": engine["name"],
             "engine_version": engine["version"],
+            "rootless": engine["rootless"],
+            "cgroups_version": engine["cgroups_version"],
+            "cgroup_manager": engine["cgroup_manager"],
+            "cgroup_delegation": engine["cgroup_delegation"],
+            "cgroup_controllers": engine["cgroup_controllers"],
+            "engine_host_architecture": engine["host_architecture"],
+            "service_is_remote": engine["service_is_remote"],
+            "effective_uid": engine["effective_uid"],
+            "effective_gid": engine["effective_gid"],
+            "uid_map": engine["uid_map"],
+            "gid_map": engine["gid_map"],
+            "lifecycle_helper": shard_helper,
         }:
             _fail(f"package {architecture} shard metadata differs from its report")
     shard_platforms = [
@@ -614,9 +998,930 @@ def _validate_package_shard_binding(
         _fail("package aggregate engine version differs from native shard reports")
 
 
+def _nullable_integer(value: Any, label: str) -> int | None:
+    if value is None:
+        return None
+    return _integer(value, label)
+
+
+def _validate_cleanup_evidence(value: Any, label: str) -> dict[str, Any]:
+    cleanup = _exact_keys(value, RUNTIME_CLEANUP_KEYS, label)
+    if (
+        _integer(cleanup["remove_exit_code"], f"{label}.remove_exit_code") != 0
+        or _integer(
+            cleanup["exists_probe_exit_code"],
+            f"{label}.exists_probe_exit_code",
+        )
+        != 1
+        or _boolean(
+            cleanup["absent_after_cleanup"], f"{label}.absent_after_cleanup"
+        )
+        is not True
+    ):
+        _fail(f"{label} does not prove exact object removal")
+    return cleanup
+
+
+def _capability_has_sys_admin(value: Any, label: str) -> bool:
+    encoded = _string(value, label)
+    if re.fullmatch(r"[0-9a-f]{16}", encoded) is None:
+        _fail(f"{label} must be a canonical 64-bit capability mask")
+    return bool(int(encoded, 16) & (1 << SYS_ADMIN_CAPABILITY_BIT))
+
+
+def _capability_has_sys_ptrace(value: Any, label: str) -> bool:
+    encoded = _string(value, label)
+    if re.fullmatch(r"[0-9a-f]{16}", encoded) is None:
+        _fail(f"{label} must be a canonical 64-bit capability mask")
+    return bool(int(encoded, 16) & (1 << SYS_PTRACE_CAPABILITY_BIT))
+
+
+def _validate_process_security(
+    value: Any,
+    label: str,
+    *,
+    sys_admin_present: frozenset[str],
+    sys_ptrace_present: frozenset[str],
+) -> dict[str, Any]:
+    security = _exact_keys(value, PROCESS_SECURITY_KEYS, label)
+    capability_keys = (
+        "cap_inheritable",
+        "cap_permitted",
+        "cap_effective",
+        "cap_bounding",
+        "cap_ambient",
+    )
+    for capability_name, detector, expected_keys in (
+        ("SYS_ADMIN", _capability_has_sys_admin, sys_admin_present),
+        ("SYS_PTRACE", _capability_has_sys_ptrace, sys_ptrace_present),
+    ):
+        for key in capability_keys:
+            observed = detector(security[key], f"{label}.{key}")
+            if observed is not (key in expected_keys):
+                _fail(f"{label}.{key} has an unexpected {capability_name} state")
+    if (
+        _boolean(
+            security["no_new_privileges"],
+            f"{label}.no_new_privileges",
+        )
+        is not True
+    ):
+        _fail(f"{label} does not prove NoNewPrivs=1")
+    return security
+
+
+def _validate_id_map(value: Any, label: str) -> list[dict[str, Any]]:
+    records = _list(value, label)
+    if len(records) != 2:
+        _fail(f"{label} must contain the exact two-range rootless map")
+    parsed: list[dict[str, Any]] = []
+    for index, raw in enumerate(records):
+        record = _exact_keys(raw, ID_MAP_RANGE_KEYS, f"{label}[{index}]")
+        parsed_record = {
+            key: _integer(record[key], f"{label}[{index}].{key}")
+            for key in ID_MAP_RANGE_KEYS
+        }
+        inside = parsed_record["inside_id"]
+        outside = parsed_record["outside_id"]
+        length = parsed_record["length"]
+        if (
+            min(inside, outside) < 0
+            or length <= 0
+            or max(inside, outside, length) > 4_294_967_295
+            or inside + length > 4_294_967_296
+            or outside + length > 4_294_967_296
+        ):
+            _fail(f"{label}[{index}] contains an invalid ID range")
+        parsed.append(parsed_record)
+    first, subordinate = parsed
+    subordinate_start = subordinate["outside_id"]
+    subordinate_end = subordinate_start + subordinate["length"]
+    if (
+        first["inside_id"] != 0
+        or first["outside_id"] == 0
+        or first["length"] != 1
+        or subordinate["inside_id"] != 1
+        or subordinate_start == 0
+        or subordinate["length"] != 65_536
+        or subordinate_start
+        <= first["outside_id"]
+        < subordinate_end
+    ):
+        _fail(f"{label} is not the exact default rootless map shape")
+    return records
+
+
+def _validate_setpriv(
+    value: Any,
+    spec: package_lab.PlatformSpec,
+    label: str,
+) -> dict[str, Any] | None:
+    if spec.family == "apk":
+        if value is not None:
+            _fail(f"{label} must be null for OpenRC")
+        return None
+    provenance = _exact_keys(value, SETPRIV_KEYS, label)
+    for key in (
+        "path",
+        "file_identity",
+        "package_name",
+        "package_version",
+        "package_architecture",
+    ):
+        _string(provenance[key], f"{label}.{key}")
+    _sha256(provenance["sha256"], f"{label}.sha256")
+    if (
+        provenance["path"] != "/usr/bin/setpriv"
+        or re.fullmatch(
+            r"[0-9]+:[0-9]+:81ed:0:0",
+            provenance["file_identity"],
+        )
+        is None
+        or provenance["package_name"] != "util-linux"
+        or re.fullmatch(
+            r"[A-Za-z0-9.+:~_-]{1,128}",
+            provenance["package_version"],
+        )
+        is None
+        or provenance["package_architecture"] != spec.package_architecture
+    ):
+        _fail(f"{label} does not prove exact packaged setpriv provenance")
+    return provenance
+
+
+def _validate_product_services(
+    value: Any,
+    spec: package_lab.PlatformSpec,
+    expectation: str,
+    label: str,
+) -> dict[str, Any]:
+    services = _exact_keys(value, PRODUCT_SERVICES_KEYS, label)
+    for key in (
+        "expectation",
+        "core_load_state",
+        "core_enabled_state",
+        "core_active_state",
+        "firewall_load_state",
+        "firewall_enabled_state",
+        "firewall_active_state",
+    ):
+        _string(services[key], f"{label}.{key}")
+    for key in (
+        "core_fragment_path",
+        "core_executable_path",
+        "core_executable_identity",
+        "core_pidfile_identity",
+        "firewall_fragment_path",
+    ):
+        if services[key] is not None:
+            _string(services[key], f"{label}.{key}")
+    core_pid = _nullable_integer(services["core_main_pid"], f"{label}.core_main_pid")
+    firewall_pid = _nullable_integer(
+        services["firewall_main_pid"], f"{label}.firewall_main_pid"
+    )
+    if services["expectation"] != expectation:
+        _fail(f"{label}.expectation differs from the runtime phase")
+    manager = "openrc" if spec.family == "apk" else "systemd"
+    core_fragment = (
+        "/etc/init.d/syswarden-core"
+        if manager == "openrc"
+        else "/etc/systemd/system/syswarden-core.service"
+    )
+    firewall_fragment = (
+        "/etc/init.d/syswarden-firewall"
+        if manager == "openrc"
+        else "/etc/systemd/system/syswarden-firewall.service"
+    )
+    if expectation == "active":
+        _validate_process_security(
+            services["core_process_security"],
+            f"{label}.core_process_security",
+            sys_admin_present=frozenset(),
+            sys_ptrace_present=frozenset(),
+        )
+        expected = {
+            "core_load_state": "loaded",
+            "core_fragment_path": core_fragment,
+            "core_enabled_state": "enabled",
+            "core_active_state": "active",
+            "core_executable_path": "/opt/syswarden/bin/syswarden-core",
+            "firewall_load_state": "loaded",
+            "firewall_fragment_path": firewall_fragment,
+            "firewall_enabled_state": "enabled",
+            "firewall_active_state": "active",
+        }
+        if (
+            any(services[key] != expected_value for key, expected_value in expected.items())
+            or core_pid is None
+            or core_pid <= 1
+            or firewall_pid != 0
+            or re.fullmatch(
+                r"[0-9]+:[0-9]+:81e8:0:0\|[0-9a-f]{64}",
+                str(services["core_executable_identity"]),
+            )
+            is None
+            or (
+                spec.family == "apk"
+                and re.fullmatch(
+                    r"[0-9]+:[0-9]+:[0-9]+:0:0:644",
+                    str(services["core_pidfile_identity"]),
+                )
+                is None
+            )
+            or (
+                spec.family != "apk"
+                and services["core_pidfile_identity"] is not None
+            )
+        ):
+            _fail(f"{label} does not prove active product services")
+    elif expectation == "absent":
+        if services["core_process_security"] is not None:
+            _fail(f"{label}.core_process_security must be null when core is absent")
+        expected = {
+            "core_load_state": "absent",
+            "core_fragment_path": None,
+            "core_enabled_state": "disabled",
+            "core_active_state": "inactive",
+            "core_executable_path": None,
+            "core_executable_identity": None,
+            "core_pidfile_identity": None,
+            "firewall_load_state": "absent",
+            "firewall_fragment_path": None,
+            "firewall_enabled_state": "disabled",
+            "firewall_active_state": "inactive",
+        }
+        if (
+            any(services[key] != expected_value for key, expected_value in expected.items())
+            or core_pid is not None
+            or firewall_pid is not None
+        ):
+            _fail(f"{label} does not prove absent product services")
+    else:
+        _fail(f"{label} carries an unsupported product-service expectation")
+    return services
+
+
+def _validate_runtime_snapshot(
+    value: Any,
+    spec: package_lab.PlatformSpec,
+    expectation: str,
+    label: str,
+    *,
+    expected_uid_map: list[dict[str, Any]] | None = None,
+    expected_gid_map: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    snapshot = _exact_keys(value, RUNTIME_SNAPSHOT_KEYS, label)
+    if _integer(snapshot["capture_count"], f"{label}.capture_count") != 2:
+        _fail(f"{label} must prove two byte-identical runtime captures")
+    for key in (
+        "pid1_comm",
+        "pid1_exe",
+        "manager_state",
+        "manager_runtime",
+        "cron_executable_path",
+        "cron_executable_identity",
+        "cron_fragment_path",
+        "cron_fragment_identity",
+        "cron_package_name",
+        "cron_package_version",
+        "cron_package_architecture",
+        "cron_fragment_package_name",
+        "cron_fragment_package_version",
+        "cron_fragment_package_architecture",
+        "dummy_interface",
+    ):
+        _string(snapshot[key], f"{label}.{key}")
+    starttime = _integer(
+        snapshot["pid1_starttime_ticks"], f"{label}.pid1_starttime_ticks"
+    )
+    cron_pid = _integer(snapshot["cron_main_pid"], f"{label}.cron_main_pid")
+    rsyslog_pid = _integer(
+        snapshot["rsyslog_main_pid"], f"{label}.rsyslog_main_pid"
+    )
+    for key in (
+        "cron_enabled",
+        "cron_active",
+        "rsyslog_enabled",
+        "rsyslog_active",
+    ):
+        if _boolean(snapshot[key], f"{label}.{key}") is not True:
+            _fail(f"{label}.{key} must be true")
+    manager = "openrc" if spec.family == "apk" else "systemd"
+    pid1_systemd_capabilities = (
+        SYSTEMD_MANAGER_CAPABILITY_KEYS
+        if manager == "systemd"
+        else frozenset()
+    )
+    _validate_process_security(
+        snapshot["pid1_process_security"],
+        f"{label}.pid1_process_security",
+        sys_admin_present=pid1_systemd_capabilities,
+        sys_ptrace_present=pid1_systemd_capabilities,
+    )
+    _validate_process_security(
+        snapshot["attestation_process_security"],
+        f"{label}.attestation_process_security",
+        sys_admin_present=frozenset(),
+        sys_ptrace_present=pid1_systemd_capabilities,
+    )
+    uid_map = _validate_id_map(snapshot["pid1_uid_map"], f"{label}.pid1_uid_map")
+    gid_map = _validate_id_map(snapshot["pid1_gid_map"], f"{label}.pid1_gid_map")
+    if (expected_uid_map is None) is not (expected_gid_map is None):
+        _fail(f"{label} rootless map binding is internally incomplete")
+    if expected_uid_map is not None and (
+        uid_map != expected_uid_map or gid_map != expected_gid_map
+    ):
+        _fail(f"{label} rootless maps differ from the native engine shard")
+    _validate_setpriv(snapshot["setpriv"], spec, f"{label}.setpriv")
+    expected_pid1 = "openrc-init" if manager == "openrc" else "systemd"
+    expected_runtime = "default" if manager == "openrc" else "running"
+    valid_executable = (
+        snapshot["pid1_exe"] == "/sbin/openrc-init"
+        if manager == "openrc"
+        else snapshot["pid1_exe"]
+        in {"/usr/lib/systemd/systemd", "/lib/systemd/systemd"}
+    )
+    expected_cron_executable = package_lab.expected_cron_executable(spec)
+    expected_cron_fragments = (
+        {"/etc/init.d/cronie"}
+        if spec.family == "apk"
+        else {
+            "/lib/systemd/system/cron.service",
+            "/usr/lib/systemd/system/cron.service",
+        }
+        if spec.family == "deb"
+        else {"/usr/lib/systemd/system/crond.service"}
+    )
+    expected_cron_fragment_mode = "81ed" if spec.family == "apk" else "81a4"
+    expected_cron_dropin_paths = (
+        [package_lab.FEDORA_CRON_DROPIN_PATH]
+        if spec.distribution == "fedora"
+        else []
+    )
+    expected_cron_package = "cron" if spec.family == "deb" else "cronie"
+    expected_fragment_package = (
+        "cronie-openrc" if spec.family == "apk" else expected_cron_package
+    )
+    if (
+        snapshot["manager_state"] != "ACTIVE"
+        or snapshot["pid1_comm"] != expected_pid1
+        or not valid_executable
+        or snapshot["manager_runtime"] != expected_runtime
+        or snapshot["cron_executable_path"] != expected_cron_executable
+        or re.fullmatch(
+            r"[0-9]+:[0-9]+:81ed:0:0\|[0-9a-f]{64}",
+            snapshot["cron_executable_identity"],
+        )
+        is None
+        or snapshot["cron_fragment_path"] not in expected_cron_fragments
+        or re.fullmatch(
+            rf"[0-9]+:[0-9]+:{expected_cron_fragment_mode}:0:0\|[0-9a-f]{{64}}",
+            snapshot["cron_fragment_identity"],
+        )
+        is None
+        or snapshot["cron_dropin_paths"] != expected_cron_dropin_paths
+        or snapshot["cron_package_name"] != expected_cron_package
+        or re.fullmatch(
+            r"[A-Za-z0-9.+:~_-]{1,128}", snapshot["cron_package_version"]
+        )
+        is None
+        or snapshot["cron_package_architecture"] != spec.package_architecture
+        or snapshot["cron_fragment_package_name"] != expected_fragment_package
+        or snapshot["cron_fragment_package_version"]
+        != snapshot["cron_package_version"]
+        or snapshot["cron_fragment_package_architecture"]
+        != spec.package_architecture
+        or snapshot["dummy_interface"] != "eth0:dummy:up"
+        or min(starttime, cron_pid, rsyslog_pid) <= 1
+    ):
+        _fail(f"{label} does not prove an ACTIVE real-init runtime")
+    _validate_product_services(
+        snapshot["product_services"], spec, expectation, f"{label}.product_services"
+    )
+    return snapshot
+
+
+def _validate_runtime_isolation(
+    value: Any,
+    spec: package_lab.PlatformSpec,
+    label: str,
+) -> dict[str, Any]:
+    isolation = _exact_keys(value, RUNTIME_ISOLATION_KEYS, label)
+    expected_caps = (
+        ["CAP_NET_ADMIN", "CAP_SYS_BOOT"]
+        if spec.family == "apk"
+        else ["CAP_NET_ADMIN", "CAP_SYS_ADMIN", "CAP_SYS_PTRACE"]
+    )
+    expected_launcher = (
+        OPENRC_LIFECYCLE_EXEC_LAUNCHER
+        if spec.family == "apk"
+        else SYSTEMD_LIFECYCLE_EXEC_LAUNCHER
+    )
+    expected_stop = "SIGINT" if spec.family == "apk" else "SIGRTMIN+3"
+    scalar_contract = {
+        "network_mode": "none",
+        "pid_mode": "private",
+        "ipc_mode": "private",
+        "uts_mode": "private",
+        "userns_mode": "rootless-default",
+        "cgroup_mode": "private",
+        "cap_add": expected_caps,
+        "cap_drop": [],
+        "lifecycle_exec_launcher": list(expected_launcher),
+        "devices": [],
+        "security_opts": ["label=disable", "no-new-privileges"],
+        "stop_signal": expected_stop,
+    }
+    if (
+        _boolean(isolation["privileged"], f"{label}.privileged") is not False
+        or any(
+            isolation[key] != expected
+            for key, expected in scalar_contract.items()
+        )
+    ):
+        _fail(f"{label} namespace, capability, or device isolation is not exact")
+    tmpfs = _exact_keys(isolation["tmpfs"], {"/run", "/tmp"}, f"{label}.tmpfs")
+    expected_tmpfs = {
+        "/run": ["exec", "mode=755", "nodev", "nosuid", "rw", "size=64m"],
+        "/tmp": ["exec", "mode=1777", "nodev", "nosuid", "rw", "size=256m"],
+    }
+    if tmpfs != expected_tmpfs:
+        _fail(f"{label}.tmpfs differs from the bounded runtime contract")
+    mounts = _list(isolation["mounts"], f"{label}.mounts")
+    expected_mounts = [
+        {"role": "candidate", "destination": "/candidate", "read_only": True},
+        {"role": "previous", "destination": "/previous", "read_only": True},
+        {
+            "role": "script",
+            "destination": "/lab/package-lifecycle.sh",
+            "read_only": True,
+        },
+        {
+            "role": "helper",
+            "destination": "/lab/package-webtui-retirement.sh",
+            "read_only": True,
+        },
+        {"role": "results", "destination": "/results", "read_only": False},
+    ]
+    for index, mount in enumerate(mounts):
+        mount = _exact_keys(
+            mount, RUNTIME_MOUNT_KEYS, f"{label}.mounts[{index}]"
+        )
+        _boolean(mount["read_only"], f"{label}.mounts[{index}].read_only")
+    if mounts != expected_mounts:
+        _fail(f"{label}.mounts exposes an unexpected or writable host path")
+    return isolation
+
+
+def _validate_runtime_boots(
+    value: Any,
+    spec: package_lab.PlatformSpec,
+    scenario: str,
+    label: str,
+    *,
+    expected_uid_map: list[dict[str, Any]] | None = None,
+    expected_gid_map: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    boots = _list(value, label)
+    invocations = (
+        ("initial", "restart-one", "restart-two")
+        if scenario == "upgrade-rollback"
+        else ("initial",)
+    )
+    if len(boots) != len(invocations):
+        _fail(f"{label} does not contain the exact boot/restart count")
+    previous_post_starttime: int | None = None
+    previous_cron_provenance: tuple[Any, ...] | None = None
+    previous_rootless_provenance: tuple[Any, ...] | None = None
+    expected_restart_states = (
+        ("restart-one", "restart-two", "complete")
+        if scenario == "upgrade-rollback"
+        else (None,)
+    )
+    for index, (boot_value, invocation, restart_state) in enumerate(
+        zip(boots, invocations, expected_restart_states, strict=True)
+    ):
+        boot_label = f"{label}[{index}]"
+        boot = _exact_keys(boot_value, RUNTIME_BOOT_KEYS, boot_label)
+        if (
+            boot["invocation"] != invocation
+            or _integer(
+                boot["boot_command_exit_code"],
+                f"{boot_label}.boot_command_exit_code",
+            )
+            != 0
+            or _integer(
+                boot["script_exec_exit_code"],
+                f"{boot_label}.script_exec_exit_code",
+            )
+            != 0
+            or boot["restart_state"] != restart_state
+        ):
+            _fail(f"{boot_label} invocation or exit evidence is not exact")
+        lifecycle_exec_security = _validate_process_security(
+            boot["lifecycle_exec_security"],
+            f"{boot_label}.lifecycle_exec_security",
+            sys_admin_present=frozenset(),
+            sys_ptrace_present=(
+                SYSTEMD_MANAGER_CAPABILITY_KEYS
+                if spec.family != "apk"
+                else frozenset()
+            ),
+        )
+        restart = _exact_keys(
+            boot["restart"], RUNTIME_RESTART_KEYS, f"{boot_label}.restart"
+        )
+        if invocation == "initial":
+            if (
+                _boolean(
+                    restart["performed"], f"{boot_label}.restart.performed"
+                )
+                is not False
+                or restart["command_exit_code"] is not None
+                or restart["previous_pid1_starttime_ticks"] is not None
+                or restart["distinct"] is not None
+            ):
+                _fail(f"{boot_label} initial boot carries forged restart evidence")
+        else:
+            if (
+                restart["performed"] is not True
+                or _integer(
+                    restart["command_exit_code"],
+                    f"{boot_label}.restart.command_exit_code",
+                )
+                != 0
+                or _integer(
+                    restart["previous_pid1_starttime_ticks"],
+                    f"{boot_label}.restart.previous_pid1_starttime_ticks",
+                )
+                != previous_post_starttime
+                or restart["distinct"] is not True
+            ):
+                _fail(f"{boot_label} does not prove a real distinct PID1 restart")
+        pre_expectation = "absent" if invocation == "initial" else "active"
+        post_expectation = "active" if scenario == "upgrade-rollback" else "absent"
+        pre = _validate_runtime_snapshot(
+            boot["pre_exec"],
+            spec,
+            pre_expectation,
+            f"{boot_label}.pre_exec",
+            expected_uid_map=expected_uid_map,
+            expected_gid_map=expected_gid_map,
+        )
+        post = _validate_runtime_snapshot(
+            boot["post_exec"],
+            spec,
+            post_expectation,
+            f"{boot_label}.post_exec",
+            expected_uid_map=expected_uid_map,
+            expected_gid_map=expected_gid_map,
+        )
+        cron_provenance_keys = (
+            "cron_executable_path",
+            "cron_executable_identity",
+            "cron_fragment_path",
+            "cron_fragment_identity",
+            "cron_dropin_paths",
+            "cron_package_name",
+            "cron_package_version",
+            "cron_package_architecture",
+            "cron_fragment_package_name",
+            "cron_fragment_package_version",
+            "cron_fragment_package_architecture",
+        )
+        pre_cron_provenance = tuple(pre[key] for key in cron_provenance_keys)
+        post_cron_provenance = tuple(post[key] for key in cron_provenance_keys)
+        rootless_provenance_keys = (
+            "pid1_process_security",
+            "attestation_process_security",
+            "pid1_uid_map",
+            "pid1_gid_map",
+            "setpriv",
+        )
+        pre_rootless_provenance = tuple(
+            pre[key] for key in rootless_provenance_keys
+        )
+        post_rootless_provenance = tuple(
+            post[key] for key in rootless_provenance_keys
+        )
+        if (
+            pre["pid1_starttime_ticks"] != post["pid1_starttime_ticks"]
+            or pre["cron_main_pid"] != post["cron_main_pid"]
+            or pre_cron_provenance != post_cron_provenance
+            or pre_rootless_provenance != post_rootless_provenance
+            or lifecycle_exec_security != pre["attestation_process_security"]
+            or (
+                previous_cron_provenance is not None
+                and pre_cron_provenance != previous_cron_provenance
+            )
+            or (
+                previous_rootless_provenance is not None
+                and pre_rootless_provenance != previous_rootless_provenance
+            )
+            or (
+                invocation != "initial"
+                and pre["pid1_starttime_ticks"] == previous_post_starttime
+            )
+        ):
+            _fail(f"{boot_label} process continuity/restart evidence is inconsistent")
+        previous_post_starttime = post["pid1_starttime_ticks"]
+        previous_cron_provenance = post_cron_provenance
+        previous_rootless_provenance = post_rootless_provenance
+    return boots
+
+
+def _validate_runtime_scenario(
+    value: Any,
+    spec: package_lab.PlatformSpec,
+    scenario: str,
+    label: str,
+    *,
+    expected_uid_map: list[dict[str, Any]] | None = None,
+    expected_gid_map: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    result = _exact_keys(value, PACKAGE_SCENARIO_KEYS, label)
+    required_boots = 3 if scenario == "upgrade-rollback" else 1
+    exec_exit_codes = _list(
+        result["lifecycle_exec_exit_codes"], f"{label}.lifecycle_exec_exit_codes"
+    )
+    if (
+        result["name"] != scenario
+        or result["status"] != "pass"
+        or result["runtime_mode"] != "active-real-init"
+        or _integer(
+            result["container_create_exit_code"],
+            f"{label}.container_create_exit_code",
+        )
+        != 0
+        or len(exec_exit_codes) != required_boots
+        or any(
+            _integer(code, f"{label}.lifecycle_exec_exit_codes[{index}]") != 0
+            for index, code in enumerate(exec_exit_codes)
+        )
+        or result["restart_state"]
+        != ("complete" if scenario == "upgrade-rollback" else None)
+        or result["orchestration_error"] is not None
+    ):
+        _fail(f"{label} does not prove the ACTIVE lifecycle scenario")
+    _validate_runtime_isolation(result["isolation"], spec, f"{label}.isolation")
+    _validate_runtime_boots(
+        result["boots"],
+        spec,
+        scenario,
+        f"{label}.boots",
+        expected_uid_map=expected_uid_map,
+        expected_gid_map=expected_gid_map,
+    )
+    _validate_cleanup_evidence(result["cleanup"], f"{label}.cleanup")
+    events = _list(result["events"], f"{label}.events")
+    for event_index, event_value in enumerate(events):
+        event = _exact_keys(
+            event_value,
+            {"status", "check", "detail"},
+            f"{label}.events[{event_index}]",
+        )
+        if event["status"] != "pass":
+            _fail(f"{label} contains a non-passing lifecycle event")
+        _string(event["check"], f"{label}.events[{event_index}].check")
+        _string(
+            event["detail"], f"{label}.events[{event_index}].detail", empty=True
+        )
+    try:
+        package_lab.validate_event_contract(events, spec.family, scenario)
+    except package_lab.LifecycleLabError as exc:
+        raise AdapterError(f"{label} event contract is invalid: {exc}") from exc
+    _string(result["log_tail"], f"{label}.log_tail", empty=True)
+    return result
+
+
+def _passing_event(scenario: dict[str, Any], check: str) -> bool:
+    return any(
+        event.get("status") == "pass" and event.get("check") == check
+        for event in scenario["events"]
+        if isinstance(event, dict)
+    )
+
+
+def _derive_runtime_boundary_prerequisites(
+    platform: dict[str, Any],
+    spec: package_lab.PlatformSpec,
+) -> tuple[bool, bool]:
+    manager_complete = True
+    lifecycle_and_core_complete = True
+    active_core_count = 0
+    pid1_systemd_capabilities = (
+        frozenset()
+        if spec.family == "apk"
+        else SYSTEMD_MANAGER_CAPABILITY_KEYS
+    )
+    for scenario_index, scenario in enumerate(platform["scenarios"]):
+        label = f"derived.scenarios[{scenario_index}]"
+        try:
+            _validate_runtime_isolation(scenario["isolation"], spec, f"{label}.isolation")
+        except (AdapterError, KeyError, TypeError):
+            manager_complete = False
+            lifecycle_and_core_complete = False
+        for boot_index, boot in enumerate(scenario["boots"]):
+            boot_label = f"{label}.boots[{boot_index}]"
+            try:
+                lifecycle_security = _validate_process_security(
+                    boot["lifecycle_exec_security"],
+                    f"{boot_label}.lifecycle_exec_security",
+                    sys_admin_present=frozenset(),
+                    sys_ptrace_present=pid1_systemd_capabilities,
+                )
+            except (AdapterError, KeyError, TypeError):
+                lifecycle_and_core_complete = False
+                lifecycle_security = None
+            for phase in ("pre_exec", "post_exec"):
+                try:
+                    snapshot = boot[phase]
+                except (KeyError, TypeError):
+                    manager_complete = False
+                    lifecycle_and_core_complete = False
+                    continue
+                try:
+                    _validate_process_security(
+                        snapshot["pid1_process_security"],
+                        f"{boot_label}.{phase}.pid1_process_security",
+                        sys_admin_present=pid1_systemd_capabilities,
+                        sys_ptrace_present=pid1_systemd_capabilities,
+                    )
+                    _validate_id_map(
+                        snapshot["pid1_uid_map"],
+                        f"{boot_label}.{phase}.pid1_uid_map",
+                    )
+                    _validate_id_map(
+                        snapshot["pid1_gid_map"],
+                        f"{boot_label}.{phase}.pid1_gid_map",
+                    )
+                except (AdapterError, KeyError, TypeError):
+                    manager_complete = False
+                try:
+                    attestation_security = _validate_process_security(
+                        snapshot["attestation_process_security"],
+                        f"{boot_label}.{phase}.attestation_process_security",
+                        sys_admin_present=frozenset(),
+                        sys_ptrace_present=pid1_systemd_capabilities,
+                    )
+                    _validate_setpriv(
+                        snapshot["setpriv"],
+                        spec,
+                        f"{boot_label}.{phase}.setpriv",
+                    )
+                    if (
+                        lifecycle_security is not None
+                        and attestation_security != lifecycle_security
+                    ):
+                        lifecycle_and_core_complete = False
+                    core_security = snapshot["product_services"][
+                        "core_process_security"
+                    ]
+                    core_expected = (
+                        snapshot["product_services"]["expectation"] == "active"
+                    )
+                    if core_expected:
+                        if core_security is None:
+                            lifecycle_and_core_complete = False
+                        else:
+                            active_core_count += 1
+                            _validate_process_security(
+                                core_security,
+                                f"{boot_label}.{phase}.core_process_security",
+                                sys_admin_present=frozenset(),
+                                sys_ptrace_present=frozenset(),
+                            )
+                    elif core_security is not None:
+                        lifecycle_and_core_complete = False
+                except (AdapterError, KeyError, TypeError):
+                    lifecycle_and_core_complete = False
+    return manager_complete, lifecycle_and_core_complete and active_core_count > 0
+
+
+def _derive_platform_lifecycle_claims(
+    platform: dict[str, Any], spec: package_lab.PlatformSpec
+) -> dict[str, bool]:
+    scenarios = {item["name"]: item for item in platform["scenarios"]}
+    upgrade = scenarios["upgrade-rollback"]
+    remove = scenarios["remove"]
+    purge = scenarios.get("purge")
+    installed_postinstall_checks = [
+        "upgrade-rollback.candidate.postinstall_contract",
+        "upgrade-rollback.reinstall.postinstall_contract",
+        "upgrade-rollback.restart-one.postinstall_contract",
+        "upgrade-rollback.restart-two.postinstall_contract",
+        "upgrade-rollback.recovery.postinstall_contract",
+        "remove.fresh.postinstall_contract",
+    ]
+    if purge is not None:
+        installed_postinstall_checks.append("purge.fresh.postinstall_contract")
+    installed_scenarios = {
+        check: upgrade if check.startswith("upgrade-rollback.") else remove
+        if check.startswith("remove.")
+        else purge
+        for check in installed_postinstall_checks
+    }
+    runtime_snapshots = [
+        boot[phase]
+        for scenario in platform["scenarios"]
+        for boot in scenario["boots"]
+        for phase in ("pre_exec", "post_exec")
+    ]
+    cron_provenance = {
+        (
+            snapshot["cron_executable_path"],
+            snapshot["cron_executable_identity"],
+            snapshot["cron_fragment_path"],
+            snapshot["cron_fragment_identity"],
+            tuple(snapshot["cron_dropin_paths"]),
+            snapshot["cron_package_name"],
+            snapshot["cron_package_version"],
+            snapshot["cron_package_architecture"],
+            snapshot["cron_fragment_package_name"],
+            snapshot["cron_fragment_package_version"],
+            snapshot["cron_fragment_package_architecture"],
+        )
+        for snapshot in runtime_snapshots
+    }
+    removal_check = (
+        "remove.final-removal.purge-equivalent"
+        if spec.family == "rpm"
+        else "remove.remove"
+    )
+    purge_claim = (
+        _passing_event(remove, "remove.final-removal.purge-equivalent")
+        if spec.family == "rpm"
+        else purge is not None
+        and _passing_event(purge, "purge.purge")
+        and purge["boots"][-1]["post_exec"]["product_services"]["expectation"]
+        == "absent"
+    )
+    upgrade_boots = upgrade["boots"]
+    manager_boundary, postinstall_boundary = _derive_runtime_boundary_prerequisites(
+        platform, spec
+    )
+    return {
+        "active_service_manager": all(
+            snapshot["manager_state"] == "ACTIVE"
+            and snapshot["capture_count"] == 2
+            for snapshot in runtime_snapshots
+        )
+        and len(cron_provenance) == 1
+        and manager_boundary,
+        "active_postinstall": all(
+            scenario is not None and _passing_event(scenario, check)
+            for check, scenario in installed_scenarios.items()
+        )
+        and postinstall_boundary,
+        "legacy_runtime_retirement": all(
+            scenario is not None
+            and any(
+                event.get("status") == "pass"
+                and event.get("check") == check
+                and "browser-service retirement" in str(event.get("detail", ""))
+                for event in scenario["events"]
+            )
+            for check, scenario in installed_scenarios.items()
+        ),
+        "fresh_install": _passing_event(remove, "remove.install.candidate")
+        and _passing_event(remove, "remove.fresh.postinstall_contract"),
+        "upgrade": _passing_event(upgrade, "upgrade-rollback.upgrade.candidate")
+        and _passing_event(
+            upgrade, "upgrade-rollback.upgrade.candidate.maintainer_script"
+        )
+        and _passing_event(upgrade, "upgrade-rollback.candidate.postinstall_contract"),
+        "reinstall": _passing_event(upgrade, "upgrade-rollback.reinstall.candidate")
+        and _passing_event(
+            upgrade, "upgrade-rollback.reinstall.candidate.maintainer_script"
+        )
+        and _passing_event(upgrade, "upgrade-rollback.reinstall.postinstall_contract"),
+        "rollback": _passing_event(upgrade, "upgrade-rollback.rollback.previous")
+        and _passing_event(
+            upgrade, "upgrade-rollback.rollback.previous.maintainer_script"
+        )
+        and _passing_event(upgrade, "upgrade-rollback.rollback.postinstall_contract")
+        and _passing_event(upgrade, "upgrade-rollback.recovery.candidate")
+        and _passing_event(upgrade, "upgrade-rollback.recovery.postinstall_contract"),
+        "remove": _passing_event(remove, removal_check)
+        and remove["boots"][-1]["post_exec"]["product_services"]["expectation"]
+        == "absent",
+        "purge": bool(purge_claim),
+        "second_restart": upgrade["restart_state"] == "complete"
+        and [boot["invocation"] for boot in upgrade_boots]
+        == ["initial", "restart-one", "restart-two"]
+        and [boot["restart_state"] for boot in upgrade_boots]
+        == ["restart-one", "restart-two", "complete"]
+        and all(
+            boot["restart"]["performed"] is True
+            and boot["restart"]["distinct"] is True
+            for boot in upgrade_boots[1:]
+        ),
+    }
+
+
 def _validate_package_schema(document: dict[str, Any]) -> None:
     _validate_package_qualification_binding(document["qualification_binding"])
-    _validate_package_native_shards(document["native_shards"])
+    native_records = _validate_package_native_shards(document["native_shards"])
     contract = _exact_keys(
         document["package_version_contract"], PACKAGE_CONTRACT_KEYS, "package.version_contract"
     )
@@ -703,32 +2008,31 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
             _string(entry["distribution"], f"package.scope.{key}[{index}].distribution")
             _string(entry["architecture"], f"package.scope.{key}[{index}].architecture")
 
-    engine = _exact_keys(document["engine"], {"name", "version", "rootless", "arm64_emulator", "arm64_binfmt"}, "package.engine")
-    if engine["name"] != "podman" or not _string(engine["version"], "package.engine.version") or _boolean(engine["rootless"], "package.engine.rootless") is not True:
-        _fail("package raw report lacks rootless Podman evidence")
-    emulator = engine["arm64_emulator"]
-    if emulator is not None:
-        emulator = _exact_keys(emulator, {"path", "sha256", "regular_file", "executable", "symlink", "role"}, "package.engine.arm64_emulator")
-        _string(emulator["path"], "package.engine.arm64_emulator.path")
-        _sha256(emulator["sha256"], "package.engine.arm64_emulator.sha256")
-        if emulator["regular_file"] is not True or emulator["executable"] is not True or emulator["symlink"] is not False or emulator["role"] != "host binfmt interpreter":
-            _fail("package ARM64 emulator evidence is invalid")
-    binfmt = engine["arm64_binfmt"]
-    if binfmt is not None:
-        binfmt = _exact_keys(
-            binfmt,
-            {"path", "sha256", "interpreter", "flags"},
-            "package.engine.arm64_binfmt",
-        )
-        _string(binfmt["path"], "package.engine.arm64_binfmt.path")
-        _sha256(binfmt["sha256"], "package.engine.arm64_binfmt.sha256")
-        _string(binfmt["interpreter"], "package.engine.arm64_binfmt.interpreter")
-        if "F" not in _string(binfmt["flags"], "package.engine.arm64_binfmt.flags"):
-            _fail("package ARM64 binfmt evidence lacks the fix-binary flag")
-        if emulator is None or binfmt["interpreter"] != emulator["path"]:
-            _fail("package ARM64 binfmt interpreter does not match the emulator")
-    if emulator is not None or binfmt is not None:
-        _fail("package native shard qualification forbids ARM64 emulation")
+    engine = _validate_package_engine(
+        document["engine"], "package.engine", architecture="native-shards"
+    )
+    expected_engine_version = ";".join(
+        f"{architecture}={native_records[architecture]['engine_version']}"
+        for architecture in ("amd64", "arm64")
+    )
+    controller_intersection = sorted(
+        set(native_records["amd64"]["cgroup_controllers"])
+        & set(native_records["arm64"]["cgroup_controllers"])
+    )
+    helper_keys = sorted(LIFECYCLE_HELPER_KEYS - {"source"})
+    aggregate_helper_binding = tuple(
+        engine["lifecycle_helper"][key] for key in helper_keys
+    )
+    shard_helper_binding = tuple(
+        native_records["amd64"]["lifecycle_helper"][key]
+        for key in helper_keys
+    )
+    if (
+        engine["version"] != expected_engine_version
+        or engine["cgroup_controllers"] != controller_intersection
+        or aggregate_helper_binding != shard_helper_binding
+    ):
+        _fail("package aggregate engine dilutes native shard evidence")
 
     roots = _exact_keys(document["package_roots"], {"candidate", "previous", "mount_mode"}, "package.package_roots")
     _string(roots["candidate"], "package.package_roots.candidate")
@@ -743,7 +2047,7 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
     specs = {(item.distribution, item.architecture): item for item in package_lab.DEFAULT_PLATFORMS}
     for index, item in enumerate(platforms):
         platform = _exact_keys(item, PACKAGE_PLATFORM_KEYS, f"package.platforms[{index}]")
-        for key in ("name", "distribution", "family", "architecture", "architecture_id", "package_architecture", "podman_platform", "image", "purge_semantics", "candidate_version", "previous_version", "bootstrap_execution", "lifecycle_network", "restart_contract", "status"):
+        for key in ("name", "distribution", "family", "architecture", "architecture_id", "package_architecture", "podman_platform", "image", "purge_semantics", "candidate_version", "previous_version", "bootstrap_execution", "lifecycle_network", "runtime_mode", "restart_contract", "status"):
             _string(platform[key], f"package.platforms[{index}].{key}")
         coordinate = (platform["distribution"], platform["architecture_id"])
         if coordinate in seen or coordinate not in specs:
@@ -761,8 +2065,21 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
         }
         if any(platform[key] != value for key, value in expected.items()):
             _fail(f"package platform metadata differs from the pinned matrix at {coordinate}")
-        if platform["lifecycle_network"] != "disabled" or _boolean(platform["package_bytes_differ"], f"package.platforms[{index}].package_bytes_differ") is not True:
+        if (
+            platform["lifecycle_network"] != "disabled"
+            or platform["runtime_mode"] != "active-real-init"
+            or platform["restart_contract"] != package_lab.ACTIVE_RESTART_CONTRACT
+            or _boolean(
+                platform["package_bytes_differ"],
+                f"package.platforms[{index}].package_bytes_differ",
+            )
+            is not True
+        ):
             _fail(f"package lifecycle isolation/byte distinction is invalid at {coordinate}")
+        _validate_cleanup_evidence(
+            platform["bootstrap_image_cleanup"],
+            f"package.platforms[{index}].bootstrap_image_cleanup",
+        )
         for artifact_key in ("candidate", "previous"):
             artifact = _exact_keys(platform[artifact_key], {"filename", "version", "sha256"}, f"package.platforms[{index}].{artifact_key}")
             _string(artifact["filename"], f"package.platforms[{index}].{artifact_key}.filename")
@@ -846,22 +2163,24 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
                 f"{normalized_host_architecture!r} and has no approved cross-architecture mode"
             )
         scenarios = _list(platform["scenarios"], f"package.platforms[{index}].scenarios")
+        expected_scenarios = package_lab.EXPECTED_SCENARIOS[spec.family]
+        if [
+            item.get("name") if isinstance(item, dict) else None
+            for item in scenarios
+        ] != list(expected_scenarios):
+            _fail(f"package scenario inventory is not exact at {coordinate}")
         for scenario_index, scenario_value in enumerate(scenarios):
-            scenario = _exact_keys(scenario_value, {"name", "status", "container_exit_code", "container_start_exit_codes", "container_restart_count", "events", "inventory_evidence", "log_tail"}, f"package.platforms[{index}].scenarios[{scenario_index}]")
-            for key in ("name", "status", "log_tail"):
-                _string(scenario[key], f"package.platforms[{index}].scenarios[{scenario_index}].{key}", empty=key == "log_tail")
-            _integer(scenario["container_exit_code"], "package scenario exit code")
-            codes = _list(scenario["container_start_exit_codes"], "package scenario start exit codes")
-            if any(type(code) is not int for code in codes):
-                _fail("package scenario start exit codes must be integers")
-            _integer(scenario["container_restart_count"], "package scenario restart count")
-            events = _list(scenario["events"], "package scenario events")
-            for event_index, event_value in enumerate(events):
-                event = _exact_keys(event_value, {"status", "check", "detail"}, f"package scenario event[{event_index}]")
-                if event["status"] not in {"pass", "fail"}:
-                    _fail("package event status is invalid")
-                _string(event["check"], "package event check")
-                _string(event["detail"], "package event detail", empty=True)
+            scenario_label = (
+                f"package.platforms[{index}].scenarios[{scenario_index}]"
+            )
+            scenario = _validate_runtime_scenario(
+                scenario_value,
+                spec,
+                expected_scenarios[scenario_index],
+                scenario_label,
+                expected_uid_map=native_records[spec.architecture]["uid_map"],
+                expected_gid_map=native_records[spec.architecture]["gid_map"],
+            )
             inventory = _exact_keys(
                 scenario["inventory_evidence"],
                 set(package_lab.expected_inventory_phase_labels(scenario["name"])),
@@ -946,6 +2265,29 @@ def _validate_package(
                 _fail(f"package platform artifact binding is invalid at index {index}/{side}")
         if platform["candidate"]["sha256"] == platform["previous"]["sha256"]:
             _fail("package previous and candidate bytes are identical")
+    specs = {
+        (item.distribution, item.architecture): item
+        for item in package_lab.DEFAULT_PLATFORMS
+    }
+    coordinate_claims = [
+        _derive_platform_lifecycle_claims(
+            platform,
+            specs[(platform["distribution"], platform["architecture_id"])],
+        )
+        for platform in document["platforms"]
+    ]
+    derived_claims = {
+        claim: all(coordinate[claim] for coordinate in coordinate_claims)
+        for claim in LIFECYCLE_CLAIM_KEYS
+    }
+    if not all(derived_claims.values()):
+        missing = sorted(
+            claim for claim, complete in derived_claims.items() if not complete
+        )
+        _fail(f"package ACTIVE lifecycle claims are incomplete: {missing}")
+    runtime_modes = {platform["runtime_mode"] for platform in document["platforms"]}
+    if runtime_modes != {"active-real-init"}:
+        _fail("package lifecycle evidence is not exclusively ACTIVE real-init")
     coordinates = [
         {
             "platform": item["distribution"],
@@ -957,20 +2299,15 @@ def _validate_package(
     lifecycle = {
         "previous_version": "v" + previous_version,
         "candidate_version": "v" + candidate_version,
-        "fresh_install": True,
-        "upgrade": True,
-        "reinstall": True,
-        "rollback": True,
-        "remove": True,
-        "purge_semantics": True,
-        "second_restart": True,
+        "runtime_mode": next(iter(runtime_modes)),
+        **derived_claims,
         "previous_package_checksums": {
             name: digest
             for name, digest in previous.checksums.items()
         },
     }
     return {
-        "harness_complete": True,
+        "harness_complete": classification["harness_complete"],
         "release_ready": classification["release_ready"],
         "blocker_ids": blockers,
         "coordinates": coordinates,

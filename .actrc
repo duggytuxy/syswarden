@@ -1,4 +1,5 @@
 -P ubuntu-24.04=catthehacker/ubuntu:act-24.04@sha256:b839c14c4410998529ec18f951262bdf87a2b23bc1467304d07b491b9455e074
+-P ubuntu-latest=catthehacker/ubuntu:act-24.04@sha256:b839c14c4410998529ec18f951262bdf87a2b23bc1467304d07b491b9455e074
 --container-daemon-socket -
 --concurrent-jobs 1
 --no-cache-server

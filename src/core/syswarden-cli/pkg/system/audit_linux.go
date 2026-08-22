@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/cronstate"
 )
 
 func logHeader(title string) {
@@ -82,15 +83,31 @@ func RunAudit() {
 
 	// Phase 1
 	logHeader("Phase 1: Cron Orchestration")
-	cronCount, cronErr := inspectManagedFeedCron(exec.Command("crontab", "-l"))
+	providerEvidence, providerErr := InspectCronDProvider()
+	if providerErr != nil {
+		fail(fmt.Sprintf("Cron Daemon FAILED: /etc/cron.d is not backed by a fully attested provider: %v", providerErr))
+	} else if providerEvidence.Mode == CronDProviderRuntime {
+		pass(fmt.Sprintf("Cron Daemon VERIFIED: /etc/cron.d is served by active and persistently enabled %s unit %s.", providerEvidence.Manager, providerEvidence.Unit))
+	} else {
+		pass(fmt.Sprintf("Cron Provider OFFLINE VERIFIED: package and boot enablement evidence is complete for %s; no live daemon is claimed.", providerEvidence.Unit))
+	}
+	cronOptions := cronstate.DefaultOptions(ReadOnlyRootCrontabEvidence)
+	cronOptions.AttestCronDProvider = AttestCronDProvider
+	cronInspection, cronErr := cronstate.Inspect(cronOptions)
 	if cronErr != nil {
-		fail(fmt.Sprintf("Cron Orchestration FAILED: cannot read root crontab: %v", cronErr))
-	} else if cronCount == 1 {
-		pass("Cron Orchestration VERIFIED: 'syswarden-cli update-feeds' is actively scheduled.")
-	} else if cronCount > 1 {
-		fail(fmt.Sprintf("Cron Duplication FAILED: %d SYSWARDEN cron jobs detected! Idempotency violated.", cronCount))
+		fail(fmt.Sprintf("Cron Orchestration FAILED: scheduling state is not safely attestable: %v", cronErr))
+	} else if cronInspection.LegacyFeedCount == 1 {
+		pass("Cron Orchestration VERIFIED: feed updates use the read-only canonical legacy root record.")
+	} else if cronInspection.OwnedFeed {
+		pass("Cron Orchestration VERIFIED: feed updates use /etc/cron.d/syswarden.")
 	} else {
 		warn("Cron Orchestration: No automated SYSWARDEN background jobs found.")
+	}
+	haScheduled := cronInspection.LegacyHACount == 1 || cronInspection.OwnedHA
+	if cronErr == nil && !config.GlobalConfig.HAEnabled && haScheduled {
+		fail("Cron Orchestration FAILED: HA synchronization remains scheduled while HA is disabled.")
+	} else if cronErr == nil && haScheduled {
+		pass("Cron Orchestration VERIFIED: HA synchronization has one attested schedule.")
 	}
 
 	// Phase 2
@@ -239,5 +256,5 @@ func RunAudit() {
 		}
 	}
 
-	fmt.Printf("\n\033[1;32m[✔] SYSWARDEN local diagnostic completed; review each observation and warning.\033[0m\n")
+	fmt.Printf("\n\033[1;32m[OK] SYSWARDEN local diagnostic completed; review each observation and warning.\033[0m\n")
 }

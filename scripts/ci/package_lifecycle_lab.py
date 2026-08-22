@@ -11,15 +11,18 @@ is exposed to a test container.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
 import platform
 import re
+import shlex
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -27,9 +30,30 @@ from pathlib import Path
 from typing import Sequence
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 LOG_TAIL_LIMIT = 12_000
 MAX_VERSION_COMPONENT = 2_147_483_647
+SYS_ADMIN_CAPABILITY_BIT = 21
+SYS_PTRACE_CAPABILITY_BIT = 19
+SYSTEMD_MANAGER_CAPABILITY_FIELDS = frozenset(
+    {"permitted", "effective", "bounding"}
+)
+EXEC_SECURITY_MARKER = "SYSWARDEN_EXEC_SECURITY_V1"
+NAMESPACE_FAILURE_MARKER = "SYSWARDEN_NAMESPACE_FAILURE_V1"
+SNAPSHOT_FAILURE_MARKER = "SYSWARDEN_SNAPSHOT_FAILURE_V1"
+SEED_FAILURE_MARKER = "SYSWARDEN_LIFECYCLE_SEED_FAILURE_V1"
+FEDORA_CRON_DROPIN_PATH = (
+    "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+)
+SYSTEMD_EXEC_LAUNCHER = (
+    "/usr/bin/setpriv",
+    "--bounding-set=-sys_admin",
+    "--inh-caps=-sys_admin",
+    "--ambient-caps=-sys_admin",
+    "--no-new-privs",
+    "/bin/sh",
+    "-ceu",
+)
 VERSION_SCHEME = "canonical_syswarden_numeric_v1"
 VERSION_RELATION = "previous < candidate"
 ARM64_BINFMT_REGISTRATION = Path("/proc/sys/fs/binfmt_misc/qemu-aarch64")
@@ -102,6 +126,12 @@ EXPECTED_SCENARIOS = {
     "apk": ("upgrade-rollback", "remove", "purge"),
 }
 
+ACTIVE_RESTART_CONTRACT = (
+    "upgrade-rollback performs two consecutive container restarts from "
+    "a non-copy-up /run tmpfs and revalidates native and filesystem "
+    "inventories plus operator state"
+)
+
 OFFICIAL_REPOSITORIES = {
     "debian": "docker.io/library/debian",
     "ubuntu": "docker.io/library/ubuntu",
@@ -113,8 +143,8 @@ OFFICIAL_REPOSITORIES = {
 DEB_BOOTSTRAP = (
     "apt-get update && "
     "DEBIAN_FRONTEND=noninteractive apt-get install -y "
-    "--no-install-recommends nftables ipset curl wget rsyslog cron "
-    "bash-completion wireguard-tools qrencode jq unattended-upgrades "
+    "--no-install-recommends systemd systemd-sysv dbus iproute2 nftables ipset curl wget rsyslog cron "
+    "bash-completion wireguard-tools qrencode jq unattended-upgrades util-linux "
     "apt-listchanges procps e2fsprogs socat binutils file && "
     "if [ -f /etc/dpkg/dpkg.cfg.d/docker ]; then "
     "sed -i '\\|^path-exclude /usr/share/doc/\\*$|d' "
@@ -124,13 +154,14 @@ DEB_BOOTSTRAP = (
 RPM_BOOTSTRAP = (
     "if grep -Eq '^ID=\"?almalinux\"?$' /etc/os-release; then "
     "dnf -y install epel-release; fi && "
-    "dnf -y install nftables ipset curl-minimal wget rsyslog cronie "
+    "dnf -y install systemd iproute nftables ipset curl-minimal wget rsyslog cronie "
     "bash-completion wireguard-tools qrencode jq checkpolicy "
     "policycoreutils-python-utils dnf-automatic procps-ng e2fsprogs socat binutils "
-    "cpio diffutils file && dnf clean all"
+    "cpio diffutils file util-linux && dnf clean all"
 )
 APK_BOOTSTRAP = (
-    "apk add --no-cache nftables openrc curl wget rsyslog rsyslog-uxsock "
+    "apk add --no-cache openrc openrc-init && "
+    "apk add --no-cache iproute2 nftables cronie cronie-openrc curl wget rsyslog rsyslog-uxsock "
     "bash-completion wireguard-tools libqrencode-tools jq procps-ng "
     "e2fsprogs-extra shadow socat binutils file && test -x /usr/bin/gpasswd"
 )
@@ -146,6 +177,145 @@ APK_PURGE_SEMANTICS = (
     "apk --purge only purges package-managed configuration; the current package "
     "does not own generated /etc or /var state"
 )
+LAB_NETWORK_HELPER = """#!/bin/sh
+set -eu
+if ! ip link show dev eth0 >/dev/null 2>&1; then
+    ip link add eth0 type dummy
+fi
+ip link set dev eth0 up
+ip -d link show dev eth0 | grep -Eq '(^|[[:space:]])dummy([[:space:]]|$)'
+"""
+SYSTEMD_LAB_NETWORK_UNIT = """[Unit]
+Description=Isolated SysWarden lifecycle lab network provider
+After=local-fs.target
+Before=network.target network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/syswarden-lab-network
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
+ALPINE_LAB_NETWORK_PROVIDER = """#!/sbin/openrc-run
+name="syswarden-lab-net"
+description="Isolated SysWarden lifecycle lab network provider"
+
+depend() {
+    provide net
+}
+
+start() {
+    ebegin "Attesting isolated lifecycle dummy interface"
+    /usr/local/libexec/syswarden-lab-network || return 1
+    eend 0
+}
+
+stop() {
+    return 0
+}
+"""
+ALPINE_OPENRC_VERSION = "0.62.6-r0"
+ALPINE_OPENRC_SYS_ATTESTATION_HEX = (
+    "504f444d414e0a73797377617264656e2d6f70656e72632d72633d30"
+)
+ALPINE_RC_CONF_PRE_SHA256 = (
+    "87799a1b4fa5e3941276e695e8525fcd2c1a08f551d02d1c0b1bdfdd67a71dce"
+)
+ALPINE_RC_CONF_APPEND_BASE64 = (
+    "CnJjX3N5cz0icG9kbWFuIgpyY19jZ3JvdXBfbW9kZT0ibGVnYWN5Igo="
+)
+ALPINE_RC_CONF_APPEND_SHA256 = (
+    "6f9f3c8182fa0f7e1cde659cfda5b3a19f917ab222ee8d26ac87c5575b78c768"
+)
+ALPINE_RC_CONF_POST_SHA256 = (
+    "6653be4e72083b79317918a08493ad54671441f83b646555f56c30117a0c0b8f"
+)
+ALPINE_HOSTNAME_INIT_PRE_SHA256 = (
+    "29d467628434f1a56b37c0042463ee0253a12ce8743e42f65e9dcbc4ed34ff20"
+)
+ALPINE_HOSTNAME_INIT_POST_SHA256 = (
+    "11eb8ad952a72d82a63987faf51f8d0248acd765f8327f117436b45a378f4f91"
+)
+FEDORA_LAB_MASK_TARGETS = (
+    "systemd-oomd.service",
+    "systemd-oomd.socket",
+    "systemd-resolved-monitor.socket",
+    "systemd-resolved-varlink.socket",
+    "systemd-resolved.service",
+)
+FEDORA_LAB_MASKED_UNITS = tuple(
+    sorted(
+        (
+            "dbus-org.freedesktop.oom1.service",
+            "dbus-org.freedesktop.resolve1.service",
+            *FEDORA_LAB_MASK_TARGETS,
+        )
+    )
+)
+ALPINE_CGROUP_MOUNTINFO_AWK = (
+    '$5 == "/sys/fs/cgroup" { '
+    "count++; separator = 0; "
+    "for (field_number = 7; field_number <= NF; field_number++) "
+    'if ($field_number == "-") { separator = field_number; break } '
+    'if (!separator || $(separator + 1) != "cgroup2") bad = 1; '
+    'split($6, options, ","); readonly = 0; '
+    'for (option in options) if (options[option] == "ro") readonly = 1; '
+    "if (!readonly) bad = 1 "
+    "} END { exit !(count == 1 && !bad) }"
+)
+NAMESPACE_ATTESTATION_HELPERS = f"""set -eu
+syswarden_namespace_hex() {{
+    LC_ALL=C od -An -v -tx1 | tr -d ' \\n'
+}}
+syswarden_namespace_fail() {{
+    syswarden_namespace_predicate="$1"
+    syswarden_namespace_status="$2"
+    syswarden_namespace_actual="$3"
+    syswarden_namespace_expected="$4"
+    case "${{syswarden_namespace_predicate}}" in
+        NS[0-9][0-9]_*) ;;
+        *) exit 97 ;;
+    esac
+    case "${{syswarden_namespace_status}}" in
+        ''|*[!0-9]*) exit 97 ;;
+    esac
+    [ "${{syswarden_namespace_status}}" -le 255 ] || exit 97
+    syswarden_namespace_actual_hex="$(
+        printf '%s' "${{syswarden_namespace_actual}}" | syswarden_namespace_hex
+    )" || exit 97
+    syswarden_namespace_expected_hex="$(
+        printf '%s' "${{syswarden_namespace_expected}}" | syswarden_namespace_hex
+    )" || exit 97
+    printf '%s\\tpredicate=%s\\trc=%s\\tactual_hex=%s\\texpected_hex=%s\\n' \\
+        '{NAMESPACE_FAILURE_MARKER}' "${{syswarden_namespace_predicate}}" \\
+        "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual_hex}}" \\
+        "${{syswarden_namespace_expected_hex}}" >&2
+    exit 1
+}}
+syswarden_namespace_expect_equal() {{
+    syswarden_namespace_predicate="$1"
+    syswarden_namespace_status="$2"
+    syswarden_namespace_actual="$3"
+    syswarden_namespace_expected="$4"
+    if [ "${{syswarden_namespace_status}}" -ne 0 ] || \\
+       [ "${{syswarden_namespace_actual}}" != "${{syswarden_namespace_expected}}" ]; then
+        syswarden_namespace_fail "${{syswarden_namespace_predicate}}" \\
+            "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}" \\
+            "${{syswarden_namespace_expected}}"
+    fi
+}}
+syswarden_namespace_expect_status() {{
+    syswarden_namespace_predicate="$1"
+    syswarden_namespace_status="$2"
+    syswarden_namespace_actual="$3"
+    if [ "${{syswarden_namespace_status}}" -ne 0 ]; then
+        syswarden_namespace_fail "${{syswarden_namespace_predicate}}" \\
+            "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}" ''
+    fi
+}}
+"""
 
 
 DEFAULT_PLATFORMS = (
@@ -377,8 +547,16 @@ OPERATOR_STATE_KEYS = (
     "token",
     "list",
     "list_ipv6",
-    "data",
+    "operator_data",
     "certificate",
+)
+LIVE_TELEMETRY_STATE_KEY = "telemetry"
+LIVE_TELEMETRY_STATE_ATTRIBUTES = (
+    "type",
+    "mode",
+    "owner",
+    "json",
+    "schema",
 )
 
 PACKAGE_PAYLOAD_PATHS = (
@@ -389,7 +567,7 @@ PACKAGE_PAYLOAD_PATHS = (
     "/usr/local/bin/syswarden",
     "/usr/local/bin/syswarden-tui",
 )
-FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.03.1"
+FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.03.2"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
 FORWARD_ONLY_APK_PREVIOUS = {
     "x86_64": {
@@ -424,11 +602,16 @@ RPM_BUILD_ID_LINK_PATTERN = re.compile(
 
 
 def _state_event_checks(scenario: str, label: str) -> tuple[str, ...]:
-    return tuple(
+    operator_checks = tuple(
         f"{scenario}.{label}.state.{key}.{attribute}"
         for key in OPERATOR_STATE_KEYS
         for attribute in ("type", "hash", "mode", "owner")
     )
+    telemetry_checks = tuple(
+        f"{scenario}.{label}.state.{LIVE_TELEMETRY_STATE_KEY}.{attribute}"
+        for attribute in LIVE_TELEMETRY_STATE_ATTRIBUTES
+    )
+    return operator_checks + telemetry_checks
 
 
 def _installed_phase_event_checks(scenario: str, label: str) -> tuple[str, ...]:
@@ -456,11 +639,14 @@ def _generated_cleanup_event_checks(scenario: str, label: str) -> tuple[str, ...
             "systemd_firewall_enablement",
             "openrc_core_enablement",
             "openrc_firewall_enablement",
-            "completion",
-            "rsyslog_siem",
-            "rsyslog_waf_bridge",
-            "cron_reference",
-            "cron_unrelated",
+            "runtime_socket",
+            "completion_residual",
+            "rsyslog_siem_residual",
+            "rsyslog_waf_bridge_residual",
+            "cron_d_owned",
+            "cron_d_pending",
+            "root_crontab_bytes",
+            "root_crontab_legacy_residual",
         )
     )
 
@@ -546,21 +732,29 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
             f"{scenario}.{removal_label}.state.{key}"
             for key in ("config", "token", "list", "list_ipv6", "certificate")
         )
-        for key in ("data",):
+        for key in ("operator_data",):
             checks.extend(
                 f"{scenario}.{removal_label}.state.{key}.{attribute}"
                 for attribute in ("type", "hash", "mode", "owner")
             )
+        checks.extend(
+            f"{scenario}.{removal_label}.state.{LIVE_TELEMETRY_STATE_KEY}.{attribute}"
+            for attribute in LIVE_TELEMETRY_STATE_ATTRIBUTES
+        )
     elif family == "rpm":
         checks.extend(
             f"{scenario}.{removal_label}.state.{key}"
             for key in ("config", "token", "list", "list_ipv6", "certificate")
         )
-        for key in ("data",):
+        for key in ("operator_data",):
             checks.extend(
                 f"{scenario}.{removal_label}.state.{key}.{attribute}"
                 for attribute in ("type", "hash", "mode", "owner")
             )
+        checks.extend(
+            f"{scenario}.{removal_label}.state.{LIVE_TELEMETRY_STATE_KEY}.{attribute}"
+            for attribute in LIVE_TELEMETRY_STATE_ATTRIBUTES
+        )
         checks.append(f"{scenario}.{removal_label}.purge-equivalent")
     return tuple(checks)
 
@@ -605,7 +799,7 @@ def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> boo
     if historical_binding_touched and not forward_only:
         raise LifecycleLabError(
             "historical APK transition must be the exact byte-bound "
-            "v4.02.8 -> v4.03.1 contract for "
+            "v4.02.8 -> v4.03.2 contract for "
             f"{spec.package_architecture}"
         )
     return forward_only
@@ -631,6 +825,132 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True)
+class ProcessSecurityEvidence:
+    cap_inheritable: str
+    cap_permitted: str
+    cap_effective: str
+    cap_bounding: str
+    cap_ambient: str
+    no_new_privileges: bool
+
+
+@dataclass(frozen=True)
+class IDMapRange:
+    inside_id: int
+    outside_id: int
+    length: int
+
+
+@dataclass(frozen=True)
+class SetprivEvidence:
+    path: str
+    file_identity: str
+    sha256: str
+    package_name: str
+    package_version: str
+    package_architecture: str
+
+
+@dataclass(frozen=True)
+class ProductServicesEvidence:
+    expectation: str
+    core_load_state: str
+    core_fragment_path: str | None
+    core_enabled_state: str
+    core_active_state: str
+    core_main_pid: int | None
+    core_executable_path: str | None
+    core_executable_identity: str | None
+    core_pidfile_identity: str | None
+    core_process_security: ProcessSecurityEvidence | None
+    firewall_load_state: str
+    firewall_fragment_path: str | None
+    firewall_enabled_state: str
+    firewall_active_state: str
+    firewall_main_pid: int | None
+
+
+@dataclass(frozen=True)
+class RuntimeSnapshot:
+    capture_count: int
+    pid1_comm: str
+    pid1_exe: str
+    pid1_starttime_ticks: int
+    pid1_process_security: ProcessSecurityEvidence
+    attestation_process_security: ProcessSecurityEvidence
+    pid1_uid_map: tuple[IDMapRange, ...]
+    pid1_gid_map: tuple[IDMapRange, ...]
+    setpriv: SetprivEvidence | None
+    manager_state: str
+    manager_runtime: str
+    cron_enabled: bool
+    cron_active: bool
+    cron_main_pid: int
+    cron_executable_path: str
+    cron_executable_identity: str
+    cron_fragment_path: str
+    cron_fragment_identity: str
+    cron_dropin_paths: tuple[str, ...]
+    cron_package_name: str
+    cron_package_version: str
+    cron_package_architecture: str
+    cron_fragment_package_name: str
+    cron_fragment_package_version: str
+    cron_fragment_package_architecture: str
+    rsyslog_enabled: bool
+    rsyslog_active: bool
+    rsyslog_main_pid: int
+    dummy_interface: str
+    product_services: ProductServicesEvidence
+
+
+@dataclass(frozen=True)
+class RuntimeMountEvidence:
+    role: str
+    destination: str
+    read_only: bool
+
+
+@dataclass(frozen=True)
+class RuntimeIsolationEvidence:
+    privileged: bool
+    network_mode: str
+    pid_mode: str
+    ipc_mode: str
+    uts_mode: str
+    userns_mode: str
+    cgroup_mode: str
+    cap_add: tuple[str, ...]
+    cap_drop: tuple[str, ...]
+    lifecycle_exec_launcher: tuple[str, ...]
+    devices: tuple[str, ...]
+    security_opts: tuple[str, ...]
+    stop_signal: str
+    tmpfs: dict[str, tuple[str, ...]]
+    mounts: tuple[RuntimeMountEvidence, ...]
+
+
+@dataclass(frozen=True)
+class RuntimeRestartEvidence:
+    performed: bool
+    command_exit_code: int | None
+    previous_pid1_starttime_ticks: int | None
+    distinct: bool | None
+
+
+@dataclass(frozen=True)
+class RuntimeBootEvidence:
+    invocation: str
+    boot_command_exit_code: int
+    restart: RuntimeRestartEvidence
+    pre_exec: RuntimeSnapshot
+    lifecycle_exec_security: ProcessSecurityEvidence
+    script_exec_exit_code: int
+    restart_state: str | None
+    post_exec: RuntimeSnapshot
 
 
 class CommandRunner:
@@ -901,6 +1221,16 @@ def platform_slug(spec: PlatformSpec) -> str:
     return slug
 
 
+def expected_cron_executable(spec: PlatformSpec) -> str:
+    if spec.family == "deb":
+        return "/usr/sbin/cron"
+    if spec.distribution == "fedora":
+        if spec.family != "rpm":
+            raise LifecycleLabError("Fedora cron executable requires the RPM family")
+        return "/usr/bin/crond"
+    return "/usr/sbin/crond"
+
+
 def validate_platforms(platforms: Sequence[PlatformSpec]) -> None:
     if not platforms:
         raise LifecycleLabError("package lifecycle platform matrix is empty")
@@ -1093,10 +1423,116 @@ def validate_inputs(
 
 def build_containerfile(spec: PlatformSpec) -> str:
     validate_image_reference(spec.image)
+    helper_encoded = base64.b64encode(LAB_NETWORK_HELPER.encode("utf-8")).decode(
+        "ascii"
+    )
+    helper_step = (
+        "RUN install -d -m 0755 /usr/local/libexec && "
+        f"printf '%s' {shlex.quote(helper_encoded)} | base64 -d > "
+        "/usr/local/libexec/syswarden-lab-network && "
+        "chmod 0755 /usr/local/libexec/syswarden-lab-network\n"
+    )
+    if spec.family == "deb":
+        unit_encoded = base64.b64encode(
+            SYSTEMD_LAB_NETWORK_UNIT.encode("utf-8")
+        ).decode("ascii")
+        init_contract = (
+            helper_step
+            + f"RUN printf '%s' {shlex.quote(unit_encoded)} | base64 -d > "
+            "/etc/systemd/system/syswarden-lab-network.service && "
+            "chmod 0644 /etc/systemd/system/syswarden-lab-network.service\n"
+            "RUN systemctl enable syswarden-lab-network.service cron.service "
+            "rsyslog.service\n"
+            "STOPSIGNAL SIGRTMIN+3\n"
+            'CMD ["/sbin/init"]\n'
+        )
+    elif spec.family == "rpm":
+        unit_encoded = base64.b64encode(
+            SYSTEMD_LAB_NETWORK_UNIT.encode("utf-8")
+        ).decode("ascii")
+        fedora_masks = ""
+        if spec.distribution == "fedora":
+            fedora_masks = "RUN systemctl mask " + " ".join(
+                FEDORA_LAB_MASK_TARGETS
+            ) + "\n"
+        init_contract = (
+            helper_step
+            + f"RUN printf '%s' {shlex.quote(unit_encoded)} | base64 -d > "
+            "/etc/systemd/system/syswarden-lab-network.service && "
+            "chmod 0644 /etc/systemd/system/syswarden-lab-network.service\n"
+            "RUN systemctl enable syswarden-lab-network.service crond.service "
+            "rsyslog.service\n"
+            + fedora_masks
+            + "STOPSIGNAL SIGRTMIN+3\n"
+            + 'CMD ["/sbin/init"]\n'
+        )
+    elif spec.family == "apk":
+        try:
+            rc_conf_append = base64.b64decode(
+                ALPINE_RC_CONF_APPEND_BASE64, validate=True
+            )
+        except (ValueError, TypeError) as exc:
+            raise LifecycleLabError(
+                "Alpine OpenRC configuration payload is not canonical base64"
+            ) from exc
+        if (
+            rc_conf_append
+            != b'\nrc_sys="podman"\nrc_cgroup_mode="legacy"\n'
+            or hashlib.sha256(rc_conf_append).hexdigest()
+            != ALPINE_RC_CONF_APPEND_SHA256
+        ):
+            raise LifecycleLabError(
+                "Alpine OpenRC configuration payload is not exact"
+            )
+        provider_encoded = base64.b64encode(
+            ALPINE_LAB_NETWORK_PROVIDER.encode("utf-8")
+        ).decode("ascii")
+        init_contract = (
+            "RUN apk info -e 'openrc="
+            + ALPINE_OPENRC_VERSION
+            + "' && "
+            "test -f /etc/rc.conf && test ! -L /etc/rc.conf && "
+            "test \"$(sha256sum /etc/rc.conf | awk '{ print $1 }')\" = "
+            + ALPINE_RC_CONF_PRE_SHA256
+            + " && "
+            "test \"$(awk '/^[[:space:]]*rc_sys[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf)\" -eq 0 && "
+            "test \"$(awk '/^[[:space:]]*rc_cgroup_mode[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf)\" -eq 0 && "
+            "printf '%s' "
+            + ALPINE_RC_CONF_APPEND_BASE64
+            + " | base64 -d >> /etc/rc.conf && "
+            "test \"$(sha256sum /etc/rc.conf | awk '{ print $1 }')\" = "
+            + ALPINE_RC_CONF_POST_SHA256
+            + " && "
+            "test \"$(grep -Fxc 'rc_sys=\"podman\"' /etc/rc.conf)\" -eq 1 && "
+            "test \"$(grep -Fxc 'rc_cgroup_mode=\"legacy\"' /etc/rc.conf)\" -eq 1 && "
+            "test -f /etc/init.d/hostname && test ! -L /etc/init.d/hostname && "
+            "test \"$(sha256sum /etc/init.d/hostname | awk '{ print $1 }')\" = "
+            + ALPINE_HOSTNAME_INIT_PRE_SHA256
+            + " && "
+            "test \"$(grep -Ec '^[[:space:]]*keyword -prefix -lxc -docker$' /etc/init.d/hostname)\" -eq 1 && "
+            "sed -i 's/^\\([[:space:]]*keyword -prefix -lxc -docker\\)$/\\1 -podman/' /etc/init.d/hostname && "
+            "test \"$(sha256sum /etc/init.d/hostname | awk '{ print $1 }')\" = "
+            + ALPINE_HOSTNAME_INIT_POST_SHA256
+            + "\n"
+            + helper_step
+            + f"RUN printf '%s' {shlex.quote(provider_encoded)} | base64 -d > "
+            "/etc/init.d/syswarden-lab-net && "
+            "chmod 0755 /etc/init.d/syswarden-lab-net\n"
+            "RUN rc-update add syswarden-lab-net default && "
+            "rc-update add cronie default && rc-update add rsyslog default && "
+            "rc-update -u\n"
+            "STOPSIGNAL SIGINT\n"
+            'CMD ["/sbin/openrc-init"]\n'
+        )
+    else:
+        raise LifecycleLabError(
+            f"unsupported package family for real-init image: {spec.family!r}"
+        )
     return (
         f"FROM {spec.image}\n"
-        "ENV LANG=C.UTF-8 LC_ALL=C.UTF-8\n"
+        "ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 container=podman\n"
         f"RUN {spec.bootstrap_command}\n"
+        + init_contract
     )
 
 
@@ -1105,11 +1541,16 @@ LIFECYCLE_SCRIPT = r'''#!/bin/sh
 # shellcheck disable=SC2317
 set -u
 
+[ -r /lab/package-webtui-retirement.sh ] || exit 90
+# shellcheck source=package_webtui_retirement.sh
+. /lab/package-webtui-retirement.sh
+
 RESULT_FILE="/results/events.tsv"
 COMMAND_LOG="/results/commands.log"
 RESTART_STATE_FILE="/results/restart-state"
 OPERATOR_STATE_FILE="/results/operator-state"
 OPERATOR_CRON_FILE="/results/operator-cron-lines"
+PERSIST_ROOT="/results/runtime-state"
 FAILURES=0
 PREFIX="${SCENARIO}"
 INVOCATION="initial"
@@ -1120,8 +1561,11 @@ if [ "${SCENARIO}" = "upgrade-rollback" ] && [ -f "${RESTART_STATE_FILE}" ]; the
 else
     : > "${RESULT_FILE}"
     : > "${COMMAND_LOG}"
+    rm -rf "${PERSIST_ROOT}"
+    mkdir -m 0700 "${PERSIST_ROOT}" || exit 91
     rm -f "${RESTART_STATE_FILE}" "${OPERATOR_STATE_FILE}" "${OPERATOR_CRON_FILE}"
 fi
+[ -d "${PERSIST_ROOT}" ] && [ ! -L "${PERSIST_ROOT}" ] || exit 91
 
 record() {
     record_status="$1"
@@ -1295,7 +1739,7 @@ expected_runtime_dependencies() {
             printf '%s\n' bash-completion checkpolicy cronie curl dnf-automatic e2fsprogs ipset jq nftables policycoreutils-python-utils procps-ng qrencode rsyslog wget wireguard-tools
             ;;
         apk)
-            printf '%s\n' bash-completion curl e2fsprogs-extra jq libqrencode-tools nftables openrc procps-ng rsyslog rsyslog-uxsock shadow wget wireguard-tools
+            printf '%s\n' bash-completion cronie cronie-openrc curl e2fsprogs-extra jq libqrencode-tools nftables openrc procps-ng rsyslog rsyslog-uxsock shadow wget wireguard-tools
             ;;
         *)
             return 2
@@ -1688,8 +2132,8 @@ verify_package_artifact() {
     label="$1"
     package="$2"
     expected_root="$3"
-    manifest="/tmp/manifest-${label}"
-    inventory="/tmp/inventory-${label}"
+    manifest="${PERSIST_ROOT}/manifest-${label}"
+    inventory="${PERSIST_ROOT}/inventory-${label}"
     if package_manager_manifest "${package}" "${manifest}" && validate_manifest_contract "${manifest}"; then
         record pass "${PREFIX}.metadata.${label}.manager_manifest" "exact native package manifest sha256=$(hash_file "${manifest}")"
     else
@@ -1701,8 +2145,8 @@ verify_package_artifact() {
         record fail "${PREFIX}.metadata.${label}.payload_inventory" "payload type, mode, owner, link, or content inventory mismatch"
     fi
     if [ "${label}" = "candidate" ]; then
-        dependencies="/tmp/dependencies-${label}"
-        expected_dependencies="/tmp/dependencies-${label}.expected"
+        dependencies="${PERSIST_ROOT}/dependencies-${label}"
+        expected_dependencies="${PERSIST_ROOT}/dependencies-${label}.expected"
         expected_runtime_dependencies > "${expected_dependencies}"
         if package_runtime_dependencies "${package}" "${dependencies}" && \
            cmp -s "${expected_dependencies}" "${dependencies}"; then
@@ -1781,40 +2225,143 @@ legacy_webtui_runtime_absent() {
     done
 }
 
-install_service_manager_sentinels() {
-    manager_path_state=/tmp/syswarden-manager-original-path
-    if [ -f "${manager_path_state}" ] && [ ! -L "${manager_path_state}" ] && \
-       [ "$(stat -c '%u:%g:%a' "${manager_path_state}" 2>/dev/null || true)" = 0:0:600 ]; then
-        SYSWARDEN_MANAGER_ORIGINAL_PATH="$(cat "${manager_path_state}")" || return 1
-    else
-        [ ! -e "${manager_path_state}" ] && [ ! -L "${manager_path_state}" ] || return 1
-        SYSWARDEN_MANAGER_ORIGINAL_PATH="${SYSWARDEN_MANAGER_ORIGINAL_PATH:-${PATH}}"
-        (umask 077 && printf '%s\n' "${SYSWARDEN_MANAGER_ORIGINAL_PATH}" > "${manager_path_state}") || return 1
-    fi
-    export SYSWARDEN_MANAGER_ORIGINAL_PATH
-    mkdir -p /tmp/syswarden-manager-bin
-    : > /tmp/syswarden-service-manager-calls
-    for manager_command in systemctl rc-service rc-update service; do
-        cat > "/tmp/syswarden-manager-bin/${manager_command}" <<'SYSWARDEN_MANAGER_SENTINEL'
-#!/bin/sh
-printf '%s\n' "${0##*/} $*" >> /tmp/syswarden-service-manager-calls
-exit 97
-SYSWARDEN_MANAGER_SENTINEL
-        chmod 0755 "/tmp/syswarden-manager-bin/${manager_command}"
-    done
-    PATH="/tmp/syswarden-manager-bin:${SYSWARDEN_MANAGER_ORIGINAL_PATH}"
-    export PATH
+alpine_apk_owner_version() {
+    syswarden_owner_path="$1"
+    syswarden_owner_package="$2"
+    syswarden_owner_output="$(LC_ALL=C apk info --who-owns "${syswarden_owner_path}")" || return 1
+    printf '%s\n' "${syswarden_owner_output}" | LC_ALL=C awk \
+        -v path="${syswarden_owner_path}" \
+        -v package="${syswarden_owner_package}" '
+        BEGIN { prefix = path " is owned by " package "-" }
+        {
+            records++
+            if (records != 1 || index($0, prefix) != 1) {
+                invalid = 1
+            }
+            version = substr($0, length(prefix) + 1)
+            if (version !~ /^[0-9][A-Za-z0-9._+~:-]*$/) {
+                invalid = 1
+            }
+        }
+        END {
+            if (records != 1 || invalid) {
+                exit 1
+            }
+            print version
+        }
+    '
 }
 
-remove_service_manager_sentinels() {
-    manager_path_state=/tmp/syswarden-manager-original-path
-    if [ -f "${manager_path_state}" ] && [ ! -L "${manager_path_state}" ] && \
-       [ "$(stat -c '%u:%g:%a' "${manager_path_state}" 2>/dev/null || true)" = 0:0:600 ]; then
-        SYSWARDEN_MANAGER_ORIGINAL_PATH="$(cat "${manager_path_state}")" || return 1
-    fi
-    PATH="${SYSWARDEN_MANAGER_ORIGINAL_PATH:-${PATH}}"
-    export PATH
-    rm -rf /tmp/syswarden-manager-bin
+validate_alpine_cronie_runlevels() {
+    syswarden_runlevel_mode="$1"
+    LC_ALL=C awk -v mode="${syswarden_runlevel_mode}" '
+        $1 == "cronie" {
+            records++
+            if (NF != 3 || $2 != "|" || $3 != "default") {
+                invalid = 1
+            }
+        }
+        END {
+            if (invalid || mode == "required" && records != 1 ||
+                mode == "preparable" && records > 1 ||
+                mode != "required" && mode != "preparable") {
+                exit 1
+            }
+        }
+    '
+}
+
+capture_alpine_crond_package_snapshot() {
+    LC_ALL=C apk info --installed cronie || return 1
+    LC_ALL=C apk info --installed cronie-openrc || return 1
+    syswarden_crond_path="$(command -v crond)" || return 1
+    case "${syswarden_crond_path}" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "${syswarden_crond_path}" in
+        *[[:space:]]*) return 1 ;;
+    esac
+    syswarden_crond_target="$(readlink -f "${syswarden_crond_path}")" || return 1
+    case "${syswarden_crond_target}" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "${syswarden_crond_target}" in
+        *[[:space:]]*) return 1 ;;
+    esac
+    [ "${syswarden_crond_target##*/}" = crond ] || return 1
+    syswarden_crond_version="$(alpine_apk_owner_version "${syswarden_crond_target}" cronie)" || return 1
+    # Alpine names the OpenRC service "cronie" even though its daemon is crond.
+    syswarden_init_version="$(alpine_apk_owner_version /etc/init.d/cronie cronie-openrc)" || return 1
+    [ "${syswarden_crond_version}" = "${syswarden_init_version}" ] || return 1
+    printf '%s\n' \
+        "crond_path=${syswarden_crond_path}" \
+        "crond_target=${syswarden_crond_target}" \
+        "cronie_version=${syswarden_crond_version}" \
+        "openrc_service=cronie" \
+        "init_path=/etc/init.d/cronie" \
+        "cronie_openrc_version=${syswarden_init_version}"
+}
+
+capture_alpine_crond_provider_snapshot() {
+    syswarden_package_snapshot="$(capture_alpine_crond_package_snapshot)" || return 1
+    LC_ALL=C rc-service --exists cronie || return 1
+    syswarden_status_snapshot="$(LC_ALL=C rc-service cronie status 2>&1)" || return 1
+    syswarden_runlevel_snapshot="$(LC_ALL=C rc-update show)" || return 1
+    printf '%s\n' "${syswarden_runlevel_snapshot}" | validate_alpine_cronie_runlevels required || return 1
+    printf '%s\n' \
+        "${syswarden_package_snapshot}" \
+        "status_begin" \
+        "${syswarden_status_snapshot}" \
+        "status_end" \
+        "runlevels_begin" \
+        "${syswarden_runlevel_snapshot}" \
+        "runlevels_end"
+}
+
+attest_alpine_crond_provider() {
+    [ "${PACKAGE_FAMILY}" = apk ] || return 0
+    syswarden_provider_first="$(capture_alpine_crond_provider_snapshot)" || return 1
+    syswarden_provider_second="$(capture_alpine_crond_provider_snapshot)" || return 1
+    [ "${syswarden_provider_first}" = "${syswarden_provider_second}" ] || return 1
+}
+
+prepare_service_runtime_fixture() {
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm) syswarden_runtime_manager=systemd ;;
+        apk) syswarden_runtime_manager=openrc ;;
+        *) return 1 ;;
+    esac
+    [ "$(syswarden_classify_service_manager / "${syswarden_runtime_manager}")" = ACTIVE ] || return 1
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            [ "$(cat /proc/1/comm 2>/dev/null || true)" = systemd ] || return 1
+            case "$(readlink /proc/1/exe 2>/dev/null || true)" in
+                /usr/lib/systemd/systemd|/lib/systemd/systemd) ;;
+                *) return 1 ;;
+            esac
+            [ "$(systemctl is-system-running 2>/dev/null || true)" = running ] || return 1
+            [ "$(systemctl is-enabled cron.service 2>/dev/null || true)" = enabled ] || return 1
+            [ "$(systemctl is-active cron.service 2>/dev/null || true)" = active ] || return 1
+            ;;
+        rpm)
+            [ "$(cat /proc/1/comm 2>/dev/null || true)" = systemd ] || return 1
+            case "$(readlink /proc/1/exe 2>/dev/null || true)" in
+                /usr/lib/systemd/systemd|/lib/systemd/systemd) ;;
+                *) return 1 ;;
+            esac
+            [ "$(systemctl is-system-running 2>/dev/null || true)" = running ] || return 1
+            [ "$(systemctl is-enabled crond.service 2>/dev/null || true)" = enabled ] || return 1
+            [ "$(systemctl is-active crond.service 2>/dev/null || true)" = active ] || return 1
+            ;;
+        apk)
+            [ "$(cat /proc/1/comm 2>/dev/null || true)" = openrc-init ] || return 1
+            [ "$(readlink /proc/1/exe 2>/dev/null || true)" = /sbin/openrc-init ] || return 1
+            [ "$(rc-status --runlevel 2>/dev/null || true)" = default ] || return 1
+            attest_alpine_crond_provider || return 1
+            ;;
+    esac
 }
 
 expected_systemd_enablement_prefix() {
@@ -1888,18 +2435,46 @@ operator_listener_process_identity() {
         "${operator_identity_executable_stat}"
 }
 
+operator_listener_socket_identity() {
+    operator_socket_pid="$1"
+    case "${operator_socket_pid}" in ''|*[!0-9]*) return 1 ;; esac
+    operator_socket_inode="$(awk '
+        $2 == "0100007F:F24B" && $4 == "0A" { print $10 }
+    ' /proc/net/tcp)" || return 1
+    case "${operator_socket_inode}" in ''|*[!0-9]*|*' '*) return 1 ;; esac
+    operator_socket_fd=
+    operator_socket_matches=0
+    for operator_socket_candidate in "/proc/${operator_socket_pid}/fd"/*; do
+        [ -L "${operator_socket_candidate}" ] || continue
+        if [ "$(readlink "${operator_socket_candidate}" 2>/dev/null || true)" = "socket:[${operator_socket_inode}]" ]; then
+            operator_socket_fd="${operator_socket_candidate##*/}"
+            operator_socket_matches=$((operator_socket_matches + 1))
+        fi
+    done
+    [ "${operator_socket_matches}" -eq 1 ] || return 1
+    case "${operator_socket_fd}" in ''|*[!0-9]*) return 1 ;; esac
+    operator_socket_ss="$(ss -H -ltnp 'sport = :62027' 2>/dev/null || true)" || return 1
+    [ "$(printf '%s\n' "${operator_socket_ss}" | awk 'NF { count++ } END { print count + 0 }')" -eq 1 ] || return 1
+    printf '%s\n' "${operator_socket_ss}" | grep -Eq "pid=${operator_socket_pid},fd=${operator_socket_fd}([,)])" || return 1
+    printf '%s|%s\n' "${operator_socket_inode}" "${operator_socket_fd}"
+}
+
 operator_listener_matches_seeded_proof() {
     operator_proof_pid="$1"
     operator_proof_process_identity="$2"
     operator_proof_pidfile_identity="$3"
+    operator_proof_socket_identity="$4"
     [ -n "${SEEDED_OPERATOR_LISTENER_PID:-}" ] && \
         [ -n "${SEEDED_OPERATOR_LISTENER_PROCESS_IDENTITY:-}" ] && \
         [ -n "${SEEDED_OPERATOR_LISTENER_PIDFILE_IDENTITY:-}" ] && \
+        [ -n "${SEEDED_OPERATOR_LISTENER_SOCKET_IDENTITY:-}" ] && \
         [ "${operator_proof_pid}" = "${SEEDED_OPERATOR_LISTENER_PID}" ] && \
         [ "${operator_proof_process_identity}" = \
             "${SEEDED_OPERATOR_LISTENER_PROCESS_IDENTITY}" ] && \
         [ "${operator_proof_pidfile_identity}" = \
-            "${SEEDED_OPERATOR_LISTENER_PIDFILE_IDENTITY}" ]
+            "${SEEDED_OPERATOR_LISTENER_PIDFILE_IDENTITY}" ] && \
+        [ "${operator_proof_socket_identity}" = \
+            "${SEEDED_OPERATOR_LISTENER_SOCKET_IDENTITY}" ]
 }
 
 probe_seeded_operator_listener_preservation() {
@@ -1907,7 +2482,7 @@ probe_seeded_operator_listener_preservation() {
     if ! operator_listener_preservation_required "${label}"; then
         return 0
     fi
-    operator_listener_pid_path=/tmp/syswarden-operator-62027.pid
+    operator_listener_pid_path="${PERSIST_ROOT}/operator-62027.pid"
     [ -f "${operator_listener_pid_path}" ] && \
         [ ! -L "${operator_listener_pid_path}" ] && \
         [ "$(stat -c '%u:%g:%a' "${operator_listener_pid_path}" 2>/dev/null || true)" = 0:0:600 ] || return 1
@@ -1921,25 +2496,73 @@ probe_seeded_operator_listener_preservation() {
         "${operator_listener_pid}")" || return 1
     operator_listener_pidfile_identity_before="$(stat -c '%d:%i:%s:%u:%g:%a' \
         "${operator_listener_pid_path}" 2>/dev/null)" || return 1
+    operator_listener_socket_identity_before="$(operator_listener_socket_identity \
+        "${operator_listener_pid}")" || return 1
     operator_listener_matches_seeded_proof \
         "${operator_listener_pid}" \
         "${operator_listener_process_identity_before}" \
-        "${operator_listener_pidfile_identity_before}" || return 1
+        "${operator_listener_pidfile_identity_before}" \
+        "${operator_listener_socket_identity_before}" || return 1
     kill -0 "${operator_listener_pid}" 2>/dev/null || return 1
     operator_probe="$(printf '%s' 'syswarden-operator-62027' | \
-        socat -T 2 - TCP:127.0.0.1:62027 2>/dev/null || true)"
+        socat -T 2 - TCP4:127.0.0.1:62027 2>/dev/null || true)"
     [ "${operator_probe}" = 'syswarden-operator-62027' ] || return 1
     operator_listener_pid_after="$(cat "${operator_listener_pid_path}" 2>/dev/null)" || return 1
     operator_listener_process_identity_after="$(operator_listener_process_identity \
         "${operator_listener_pid_after}")" || return 1
     operator_listener_pidfile_identity_after="$(stat -c '%d:%i:%s:%u:%g:%a' \
         "${operator_listener_pid_path}" 2>/dev/null)" || return 1
+    operator_listener_socket_identity_after="$(operator_listener_socket_identity \
+        "${operator_listener_pid_after}")" || return 1
     operator_listener_matches_seeded_proof \
         "${operator_listener_pid_after}" \
         "${operator_listener_process_identity_after}" \
-        "${operator_listener_pidfile_identity_after}" && \
+        "${operator_listener_pidfile_identity_after}" \
+        "${operator_listener_socket_identity_after}" && \
         [ "$(stat -c '%u:%g:%a' "${operator_listener_pid_path}" 2>/dev/null || true)" = 0:0:600 ] && \
         kill -0 "${operator_listener_pid_after}" 2>/dev/null
+}
+
+attest_installed_core_process() {
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm)
+            [ "$(systemctl show syswarden-core.service -p LoadState --value 2>/dev/null || true)" = loaded ] || return 1
+            [ "$(systemctl show syswarden-core.service -p FragmentPath --value 2>/dev/null || true)" = /etc/systemd/system/syswarden-core.service ] || return 1
+            [ "$(systemctl show syswarden-core.service -p UnitFileState --value 2>/dev/null || true)" = enabled ] || return 1
+            [ "$(systemctl show syswarden-core.service -p ActiveState --value 2>/dev/null || true)" = active ] || return 1
+            core_runtime_pid="$(systemctl show syswarden-core.service -p MainPID --value 2>/dev/null || true)" || return 1
+            ;;
+        apk)
+            [ -f /etc/init.d/syswarden-core ] && [ ! -L /etc/init.d/syswarden-core ] || return 1
+            [ -L /etc/runlevels/default/syswarden-core ] && [ "$(readlink /etc/runlevels/default/syswarden-core)" = /etc/init.d/syswarden-core ] || return 1
+            rc-service syswarden-core status >/dev/null 2>&1 || return 1
+            [ -f /run/syswarden-core.pid ] && [ ! -L /run/syswarden-core.pid ] || return 1
+            [ "$(stat -c '%u:%g:%a' /run/syswarden-core.pid 2>/dev/null || true)" = 0:0:644 ] || return 1
+            [ "$(wc -c < /run/syswarden-core.pid | tr -d ' ')" -le 32 ] || return 1
+            core_runtime_pid="$(cat /run/syswarden-core.pid 2>/dev/null || true)" || return 1
+            [ "$(pgrep -x syswarden-core 2>/dev/null || true)" = "${core_runtime_pid}" ] || return 1
+            ;;
+        *) return 1 ;;
+    esac
+    case "${core_runtime_pid}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${core_runtime_pid}" -gt 1 ] && kill -0 "${core_runtime_pid}" 2>/dev/null || return 1
+    core_runtime_path="$(readlink "/proc/${core_runtime_pid}/exe" 2>/dev/null || true)" || return 1
+    [ "${core_runtime_path}" = /opt/syswarden/bin/syswarden-core ] || return 1
+    core_runtime_identity="$(stat -Lc '%d:%i:%f:%u:%g' "/proc/${core_runtime_pid}/exe" 2>/dev/null || true)" || return 1
+    core_installed_identity="$(stat -Lc '%d:%i:%f:%u:%g' /opt/syswarden/bin/syswarden-core 2>/dev/null || true)" || return 1
+    [ "$(stat -Lc '%f:%u:%g' /opt/syswarden/bin/syswarden-core 2>/dev/null || true)" = 81e8:0:0 ] || return 1
+    core_runtime_sha256="$(sha256sum "/proc/${core_runtime_pid}/exe" 2>/dev/null | awk '{ print $1 }')" || return 1
+    core_installed_sha256="$(sha256sum /opt/syswarden/bin/syswarden-core 2>/dev/null | awk '{ print $1 }')" || return 1
+    case "${core_installed_sha256}" in *[!0-9a-f]*|'') return 1 ;; esac
+    [ "${#core_installed_sha256}" -eq 64 ] && \
+        [ -n "${core_runtime_identity}" ] && \
+        [ "${core_runtime_identity}" = "${core_installed_identity}" ] && \
+        [ "${core_runtime_sha256}" = "${core_installed_sha256}" ] || return 1
+    [ "$(readlink "/proc/${core_runtime_pid}/exe" 2>/dev/null || true)" = "${core_runtime_path}" ] && \
+        [ "$(stat -Lc '%d:%i:%f:%u:%g' "/proc/${core_runtime_pid}/exe" 2>/dev/null || true)" = "${core_runtime_identity}" ] && \
+        [ "$(stat -Lc '%d:%i:%f:%u:%g' /opt/syswarden/bin/syswarden-core 2>/dev/null || true)" = "${core_installed_identity}" ] && \
+        [ "$(sha256sum "/proc/${core_runtime_pid}/exe" 2>/dev/null | awk '{ print $1 }')" = "${core_runtime_sha256}" ] && \
+        [ "$(sha256sum /opt/syswarden/bin/syswarden-core 2>/dev/null | awk '{ print $1 }')" = "${core_installed_sha256}" ]
 }
 
 probe_postinstall_contract() {
@@ -1968,16 +2591,22 @@ probe_postinstall_contract() {
     if [ ! -s /etc/bash_completion.d/syswarden ] || [ -L /etc/bash_completion.d/syswarden ]; then
         mark_postinstall_failure completion
     fi
-    if cron_state="$(LC_ALL=C crontab -l 2>/tmp/syswarden-postinstall-cron.error)"; then
+    feed_cron_count=0
+    if [ -f /etc/cron.d/syswarden ] && [ ! -L /etc/cron.d/syswarden ] && \
+       [ "$(stat -c '%u:%g:%a:%h' /etc/cron.d/syswarden 2>/dev/null || true)" = 0:0:644:1 ]; then
+        feed_cron_count="$(awk '
+            $1 ~ /^([1-9]|[1-5][0-9])$/ &&
+                $0 == $1 " * * * * root /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1" { count++ }
+            END { print count + 0 }
+        ' /etc/cron.d/syswarden)"
+    elif cron_state="$(LC_ALL=C crontab -l 2>/tmp/syswarden-postinstall-cron.error)"; then
         feed_cron_count="$(printf '%s\n' "${cron_state}" | awk '
             $1 ~ /^([1-9]|[1-5][0-9])$/ &&
                 $0 == $1 " * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1" { count++ }
             END { print count + 0 }
         ')"
-        [ "${feed_cron_count}" -eq 1 ] || mark_postinstall_failure feed-cron
-    else
-        mark_postinstall_failure feed-cron
     fi
+    [ "${feed_cron_count}" -eq 1 ] || mark_postinstall_failure feed-cron
     case "${PACKAGE_FAMILY}" in
         deb|rpm)
             service_contract='systemd'
@@ -2024,10 +2653,14 @@ probe_postinstall_contract() {
             mark_postinstall_failure package-family
             ;;
     esac
-    if [ -s /tmp/syswarden-service-manager-calls ]; then
-        mark_postinstall_failure service-manager-call
-    fi
+    prepare_service_runtime_fixture || mark_postinstall_failure service-manager-runtime
+    postinstall_core_digest=
     if [ "${actual_version}" = "${EXPECTED_CANDIDATE_VERSION}" ]; then
+        if attest_installed_core_process; then
+            postinstall_core_digest="${core_installed_sha256}"
+        else
+            mark_postinstall_failure core-process-identity
+        fi
         legacy_webtui_runtime_absent / || mark_postinstall_failure legacy-webtui-runtime
         if grep -Fq 'webtui_password' \
             /etc/syswarden/config/config.toml /etc/syswarden/config/modules/*.toml \
@@ -2042,8 +2675,8 @@ probe_postinstall_contract() {
                 mark_postinstall_failure retired-secret-log
             fi
         done
-        if [ -f /tmp/syswarden-legacy-webtui-process.pid ]; then
-            legacy_webtui_pid="$(cat /tmp/syswarden-legacy-webtui-process.pid)"
+        if [ -f "${PERSIST_ROOT}/legacy-webtui-process.pid" ]; then
+            legacy_webtui_pid="$(cat "${PERSIST_ROOT}/legacy-webtui-process.pid")"
             if [ -r "/proc/${legacy_webtui_pid}/cmdline" ] && \
                od -An -tx1 -v "/proc/${legacy_webtui_pid}/cmdline" 2>/dev/null | \
                    tr -d '[:space:]' | grep -Fq '007765622d74756900'; then
@@ -2051,9 +2684,9 @@ probe_postinstall_contract() {
                 kill -KILL "${legacy_webtui_pid}" 2>/dev/null || true
             fi
             wait "${legacy_webtui_pid}" 2>/dev/null || true
-            rm -f /tmp/syswarden-legacy-webtui-process.pid
+            rm -f "${PERSIST_ROOT}/legacy-webtui-process.pid"
         fi
-        if [ -f /tmp/syswarden-legacy-saas-seeded ]; then
+        if [ -f "${PERSIST_ROOT}/legacy-saas-seeded" ]; then
             legacy_saas_v4=/etc/syswarden/lists/syswarden_saas_monitors.ipv4
             legacy_saas_v6=/etc/syswarden/lists/syswarden_saas_monitors.ipv6
             legacy_saas_pair=/etc/syswarden/lists/syswarden_saas_monitors.pair
@@ -2061,7 +2694,7 @@ probe_postinstall_contract() {
                 [ "$(file_mode "${legacy_saas_v4}" 2>/dev/null || true)" = 600 ] && \
                 [ "$(stat -c '%u:%g' "${legacy_saas_v4}" 2>/dev/null || true)" = 0:0 ] && \
                 [ "$(hash_file "${legacy_saas_v4}" 2>/dev/null || true)" = \
-                    daf3972b7d1f162ae7c9b5da4a53efed5ab9cb8fb4a2385139931c37287f440c ] || mark_postinstall_failure legacy-saas-ipv4
+                    7337141ed136cb92b166db379d6bd2ceba3ddf64cef41583e469485e0048dedc ] || mark_postinstall_failure legacy-saas-ipv4
             [ -f "${legacy_saas_v6}" ] && [ ! -L "${legacy_saas_v6}" ] && \
                 [ ! -s "${legacy_saas_v6}" ] && \
                 [ "$(file_mode "${legacy_saas_v6}" 2>/dev/null || true)" = 600 ] && \
@@ -2072,7 +2705,7 @@ probe_postinstall_contract() {
             expected_saas_pair=/tmp/syswarden-expected-saas-pair
             printf '%s\n' \
                 'syswarden-saas-pair-v1' \
-                'ipv4_sha256=daf3972b7d1f162ae7c9b5da4a53efed5ab9cb8fb4a2385139931c37287f440c' \
+                'ipv4_sha256=7337141ed136cb92b166db379d6bd2ceba3ddf64cef41583e469485e0048dedc' \
                 'ipv6_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' \
                 > "${expected_saas_pair}"
             cmp -s "${expected_saas_pair}" "${legacy_saas_pair}" || mark_postinstall_failure legacy-saas-manifest
@@ -2106,7 +2739,11 @@ probe_postinstall_contract() {
         mark_postinstall_failure installed-version
     fi
     if [ "${postinstall_ok}" -eq 1 ]; then
-        record pass "${PREFIX}.${label}.postinstall_contract" "modular config, native TUI, ${service_contract} services, completion, feed cron, and browser-service retirement match the installed version"
+        if [ -n "${postinstall_core_digest}" ]; then
+            record pass "${PREFIX}.${label}.postinstall_contract" "modular config, native TUI, ${service_contract} services, completion, feed cron, browser-service retirement, and core process sha256=${postinstall_core_digest} match the installed version"
+        else
+            record pass "${PREFIX}.${label}.postinstall_contract" "modular config, native TUI, ${service_contract} services, completion, feed cron, and browser-service retirement match the installed version"
+        fi
     else
         postinstall_failure_codes="$(printf '%s' "${postinstall_failure_codes}" | sed 's/^ *//; s/  */,/g')"
         record fail "${PREFIX}.${label}.postinstall_contract" "postinstall output contract is incomplete: ${postinstall_failure_codes:-unclassified}"
@@ -2116,8 +2753,8 @@ probe_postinstall_contract() {
 verify_installed_inventory() {
     label="$1"
     expected_label="$2"
-    expected_manifest="/tmp/manifest-${expected_label}"
-    expected_inventory="/tmp/inventory-${expected_label}"
+    expected_manifest="${PERSIST_ROOT}/manifest-${expected_label}"
+    expected_inventory="${PERSIST_ROOT}/inventory-${expected_label}"
     actual_manifest="/tmp/manifest-installed-${label}"
     actual_inventory="/tmp/inventory-installed-${label}"
     mkdir -p /results/inventories
@@ -2205,6 +2842,16 @@ write_seeded_operator_token() {
         if [ "${SCENARIO}" = upgrade-rollback ]; then
             printf '%s\n' '[network.saas]' 'allow_monitors = true' ''
         fi
+        printf '%s\n' \
+            '# Lifecycle-only network-isolation override; production defaults remain list_choice = "1".' \
+            '[network.blocklists]' \
+            'list_choice = "4"' \
+            'custom_url = ""' \
+            'custom_url_ipv6 = ""' \
+            'custom_hash = ""' \
+            'custom_hash_ipv6 = ""' \
+            'use_spamhaus = false' \
+            ''
         printf '%s\n' '[user]' 'profile_name = "lifecycle-operator"'
     } > "${seeded_operator_token}"
 }
@@ -2216,12 +2863,14 @@ seed_state() {
     write_seeded_operator_token /etc/syswarden/config/modules/99-user.toml
     printf '%s\n' '198.51.100.42' > /etc/syswarden/lists/syswarden_blacklist.ipv4
     printf '%s\n' '2001:db8::42' > /etc/syswarden/lists/syswarden_blacklist.ipv6
-    printf '%s\n' '{"schema":1,"sentinel":"preserve-exactly"}' > /var/lib/syswarden/ui/data.json
+    printf '%s\n' '{"schema":1,"sentinel":"lifecycle-operator-preserve-exactly"}' > /var/lib/syswarden/ui/lifecycle-operator.json
+    printf '%s\n' '{"timestamp":"1970-01-01T00:00:00Z","github_stars":"","github_release":"","profile_name":"lifecycle-operator","system":{"hostname":"lifecycle-fixture","uptime":"","load_average":"","ram_used_mb":0,"ram_total_mb":0,"disk_used_mb":0,"disk_total_mb":0,"cores":"0","arch":"unknown","os":"unknown","cpu_model":"","server_ip":"127.0.0.1","services":[],"ports":[]},"layer3":{"global_blocked":0,"geoip_blocked":0,"asn_blocked":0,"l7_banned":0,"zero_trust_mode":false},"waf":{"total_banned":0,"total_detected":0,"active_signatures":0,"signatures_data":[],"targeted_ports":[],"banned_ips":[],"top_attackers":[],"risk_radar":[],"sparkline_24h":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"allowed_events":[]},"whitelist":{"active_ips":0,"ips":[]}}' > /var/lib/syswarden/ui/data.json
     printf '%s\n' '-----BEGIN CERTIFICATE-----' 'lot0-lifecycle-certificate' '-----END CERTIFICATE-----' > /etc/syswarden/tls/operator.pem
     chmod 0640 /etc/syswarden/config/lifecycle-operator.conf
     chmod 0640 /etc/syswarden/config/modules/99-user.toml
     chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv4
     chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv6
+    chmod 0600 /var/lib/syswarden/ui/lifecycle-operator.json
     chmod 0600 /var/lib/syswarden/ui/data.json
     chmod 0600 /etc/syswarden/tls/operator.pem
 
@@ -2229,20 +2878,241 @@ seed_state() {
     STATE_TOKEN_HASH="$(hash_file /etc/syswarden/config/modules/99-user.toml)"
     STATE_LIST_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv4)"
     STATE_LIST_IPV6_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv6)"
-    STATE_DATA_HASH="$(hash_file /var/lib/syswarden/ui/data.json)"
+    STATE_OPERATOR_DATA_HASH="$(hash_file /var/lib/syswarden/ui/lifecycle-operator.json)"
     STATE_CERT_HASH="$(hash_file /etc/syswarden/tls/operator.pem)"
     {
         printf 'STATE_CONFIG_HASH=%s\n' "${STATE_CONFIG_HASH}"
         printf 'STATE_TOKEN_HASH=%s\n' "${STATE_TOKEN_HASH}"
         printf 'STATE_LIST_HASH=%s\n' "${STATE_LIST_HASH}"
         printf 'STATE_LIST_IPV6_HASH=%s\n' "${STATE_LIST_IPV6_HASH}"
-        printf 'STATE_DATA_HASH=%s\n' "${STATE_DATA_HASH}"
+        printf 'STATE_OPERATOR_DATA_HASH=%s\n' "${STATE_OPERATOR_DATA_HASH}"
         printf 'STATE_CERT_HASH=%s\n' "${STATE_CERT_HASH}"
     } > "${OPERATOR_STATE_FILE}"
     chmod 0600 "${OPERATOR_STATE_FILE}"
 }
 
+attest_openrc_webtui_pidfile_before_manager() {
+    openrc_webtui_pidfile="$1"
+    openrc_webtui_proc_root="${2:-/proc}"
+    if [ ! -e "${openrc_webtui_pidfile}" ] && [ ! -L "${openrc_webtui_pidfile}" ]; then
+        SYSWARDEN_OPENRC_WEBTUI_PIDFILE_STATE=absent
+        SYSWARDEN_OPENRC_WEBTUI_PID=
+        return 0
+    fi
+    [ -f "${openrc_webtui_pidfile}" ] && [ ! -L "${openrc_webtui_pidfile}" ] || return 1
+    openrc_webtui_pidfile_before="$(stat -c '%d:%i:%f:%u:%g:%s:%Y' \
+        "${openrc_webtui_pidfile}" 2>/dev/null || true)"
+    openrc_webtui_pidfile_mode="$(stat -c '%a' "${openrc_webtui_pidfile}" 2>/dev/null || true)"
+    [ "$(stat -c '%u:%g' "${openrc_webtui_pidfile}" 2>/dev/null || true)" = 0:0 ] || return 1
+    case "${openrc_webtui_pidfile_mode}" in 600|640|644) ;; *) return 1 ;; esac
+    openrc_webtui_pidfile_size="$(wc -c < "${openrc_webtui_pidfile}" | tr -d ' ')"
+    case "${openrc_webtui_pidfile_size}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${openrc_webtui_pidfile_size}" -gt 1 ] && \
+        [ "${openrc_webtui_pidfile_size}" -le 32 ] || return 1
+    openrc_webtui_pid="$(cat "${openrc_webtui_pidfile}" 2>/dev/null || true)"
+    case "${openrc_webtui_pid}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${openrc_webtui_pid}" -gt 1 ] || return 1
+    printf '%s\n' "${openrc_webtui_pid}" | \
+        cmp -s - "${openrc_webtui_pidfile}" || return 1
+    openrc_webtui_pidfile_after="$(stat -c '%d:%i:%f:%u:%g:%s:%Y' \
+        "${openrc_webtui_pidfile}" 2>/dev/null || true)"
+    [ -n "${openrc_webtui_pidfile_before}" ] && \
+        [ "${openrc_webtui_pidfile_before}" = "${openrc_webtui_pidfile_after}" ] || return 1
+    openrc_webtui_process_root="${openrc_webtui_proc_root}/${openrc_webtui_pid}"
+    [ "$(readlink "${openrc_webtui_process_root}/exe" 2>/dev/null || true)" = \
+        /opt/syswarden/bin/syswarden-cli ] || return 1
+    syswarden_webtui_cmdline_matches "${openrc_webtui_process_root}" || return 1
+    SYSWARDEN_OPENRC_WEBTUI_PIDFILE_STATE=present
+    SYSWARDEN_OPENRC_WEBTUI_PID="${openrc_webtui_pid}"
+}
+
+write_exclusive_root_pidfile() {
+    exclusive_pidfile="$1"
+    exclusive_pid="$2"
+    exclusive_directory="${exclusive_pidfile%/*}"
+    [ -d "${exclusive_directory}" ] && [ ! -L "${exclusive_directory}" ] || return 1
+    [ ! -e "${exclusive_pidfile}" ] && [ ! -L "${exclusive_pidfile}" ] || return 1
+    exclusive_temporary="$(mktemp "${exclusive_directory}/.syswarden-pid.XXXXXX")" || return 1
+    if ! [ -f "${exclusive_temporary}" ] || [ -L "${exclusive_temporary}" ] || \
+       [ "$(stat -c '%u:%g:%a' "${exclusive_temporary}" 2>/dev/null || true)" != 0:0:600 ] || \
+       ! printf '%s\n' "${exclusive_pid}" > "${exclusive_temporary}" || \
+       ! ln "${exclusive_temporary}" "${exclusive_pidfile}"; then
+        rm -f "${exclusive_temporary}"
+        return 1
+    fi
+    exclusive_identity="$(stat -c '%d:%i:%s:%u:%g:%a' \
+        "${exclusive_temporary}" 2>/dev/null || true)"
+    if ! rm -f "${exclusive_temporary}" || \
+       [ "$(stat -c '%d:%i:%s:%u:%g:%a' "${exclusive_pidfile}" 2>/dev/null || true)" != \
+           "${exclusive_identity}" ] || \
+       ! printf '%s\n' "${exclusive_pid}" | cmp -s - "${exclusive_pidfile}"; then
+        rm -f "${exclusive_temporary}" "${exclusive_pidfile}"
+        return 1
+    fi
+}
+
+quiesce_previous_webtui_runtime() {
+    prepare_service_runtime_fixture || return 1
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm)
+            previous_webtui_unit=/etc/systemd/system/syswarden-webtui.service
+            previous_webtui_enablement=/etc/systemd/system/multi-user.target.wants/syswarden-webtui.service
+            if [ ! -e "${previous_webtui_unit}" ] && [ ! -L "${previous_webtui_unit}" ]; then
+                return 1
+            fi
+            [ -f "${previous_webtui_unit}" ] && [ ! -L "${previous_webtui_unit}" ] && \
+                [ "$(stat -c '%u:%g:%a' "${previous_webtui_unit}" 2>/dev/null || true)" = 0:0:600 ] || return 1
+            syswarden_read_exact_webtui_unit "${previous_webtui_unit}" systemd || return 1
+            syswarden_validate_exact_webtui_enablement "${previous_webtui_enablement}" systemd || return 1
+            syswarden_attest_systemd_webtui_runtime / || return 1
+            previous_webtui_state="$(syswarden_read_systemd_webtui_property ActiveState)" || return 1
+            case "${previous_webtui_state}" in
+                active)
+                    previous_webtui_pid="$(syswarden_read_systemd_webtui_property MainPID)" || return 1
+                    case "${previous_webtui_pid}" in ''|*[!0-9]*) return 1 ;; esac
+                    [ "${previous_webtui_pid}" -gt 1 ] || return 1
+                    [ "$(readlink "/proc/${previous_webtui_pid}/exe" 2>/dev/null || true)" = /opt/syswarden/bin/syswarden-cli ] || return 1
+                    systemctl stop syswarden-webtui.service || return 1
+                    if kill -0 "${previous_webtui_pid}" 2>/dev/null; then return 1; fi
+                    ;;
+                inactive) ;;
+                *) return 1 ;;
+            esac
+            [ "$(syswarden_read_systemd_webtui_property ActiveState)" = inactive ] || return 1
+            [ ! -e /run/syswarden-webtui.pid ] && [ ! -L /run/syswarden-webtui.pid ] || return 1
+            syswarden_read_exact_webtui_unit "${previous_webtui_unit}" systemd || return 1
+            syswarden_validate_exact_webtui_enablement "${previous_webtui_enablement}" systemd || return 1
+            ;;
+        apk)
+            previous_webtui_unit=/etc/init.d/syswarden-webtui
+            previous_webtui_enablement=/etc/runlevels/default/syswarden-webtui
+            if [ ! -e "${previous_webtui_unit}" ] && [ ! -L "${previous_webtui_unit}" ]; then
+                [ "${FORWARD_ONLY_APK_TRANSITION}" = 1 ] || return 1
+                for path in "${previous_webtui_enablement}" /run/syswarden-webtui.pid; do
+                    [ ! -e "${path}" ] && [ ! -L "${path}" ] || return 1
+                done
+            else
+                [ -f "${previous_webtui_unit}" ] && [ ! -L "${previous_webtui_unit}" ] && \
+                    [ "$(stat -c '%u:%g:%a' "${previous_webtui_unit}" 2>/dev/null || true)" = 0:0:755 ] || return 1
+                syswarden_read_exact_webtui_unit "${previous_webtui_unit}" openrc || return 1
+                syswarden_validate_exact_webtui_enablement "${previous_webtui_enablement}" openrc || return 1
+                syswarden_openrc_runtime_available / || return 1
+                attest_openrc_webtui_pidfile_before_manager \
+                    /run/syswarden-webtui.pid /proc || return 1
+                if rc-service syswarden-webtui status >/dev/null 2>&1; then
+                    previous_webtui_status=0
+                else
+                    previous_webtui_status=$?
+                fi
+                case "${SYSWARDEN_OPENRC_WEBTUI_PIDFILE_STATE}:${previous_webtui_status}" in
+                    present:0)
+                        rc-service syswarden-webtui stop || return 1
+                        if kill -0 "${SYSWARDEN_OPENRC_WEBTUI_PID}" 2>/dev/null; then
+                            return 1
+                        fi
+                        ;;
+                    absent:3) ;;
+                    *) return 1 ;;
+                esac
+                if rc-service syswarden-webtui status >/dev/null 2>&1; then
+                    return 1
+                else
+                    [ "$?" -eq 3 ] || return 1
+                fi
+                [ ! -e /run/syswarden-webtui.pid ] && [ ! -L /run/syswarden-webtui.pid ] || return 1
+                syswarden_read_exact_webtui_unit "${previous_webtui_unit}" openrc || return 1
+                syswarden_validate_exact_webtui_enablement "${previous_webtui_enablement}" openrc || return 1
+            fi
+            ;;
+        *) return 1 ;;
+    esac
+    syswarden_verify_no_exact_webtui_process / || return 1
+    [ -z "$(ss -H -ltn 'sport = :62027' 2>/dev/null || true)" ] || return 1
+}
+
+lifecycle_seed_hex_prefix() {
+    LC_ALL=C od -An -v -tx1 | tr -d ' \n' | cut -c1-512
+}
+
+record_lifecycle_seed_failure() {
+    lifecycle_seed_predicate="$1"
+    lifecycle_seed_status="$2"
+    lifecycle_seed_actual="$3"
+    lifecycle_seed_expected="$4"
+    lifecycle_seed_log="$5"
+    case "${lifecycle_seed_predicate}" in
+        LS0[1-9]_*) ;;
+        *) return 97 ;;
+    esac
+    case "${lifecycle_seed_status}" in
+        ''|*[!0-9]*) return 97 ;;
+    esac
+    [ "${lifecycle_seed_status}" -le 255 ] || return 97
+    case "${lifecycle_seed_log}" in
+        /tmp/syswarden-operator-62027.log|\
+        /tmp/syswarden-legacy-webtui-process.log) ;;
+        *) return 97 ;;
+    esac
+    lifecycle_seed_actual_bytes="$(
+        printf '%s' "${lifecycle_seed_actual}" | LC_ALL=C wc -c | tr -d ' '
+    )" || return 97
+    lifecycle_seed_expected_bytes="$(
+        printf '%s' "${lifecycle_seed_expected}" | LC_ALL=C wc -c | tr -d ' '
+    )" || return 97
+    case "${lifecycle_seed_actual_bytes}:${lifecycle_seed_expected_bytes}" in
+        *[!0-9:]*) return 97 ;;
+    esac
+    [ "${lifecycle_seed_actual_bytes}" -le 256 ] && \
+        [ "${lifecycle_seed_expected_bytes}" -le 256 ] || return 97
+    lifecycle_seed_actual_hex="$(
+        printf '%s' "${lifecycle_seed_actual}" | lifecycle_seed_hex_prefix
+    )" || return 97
+    lifecycle_seed_expected_hex="$(
+        printf '%s' "${lifecycle_seed_expected}" | lifecycle_seed_hex_prefix
+    )" || return 97
+    lifecycle_seed_log_bytes=0
+    lifecycle_seed_log_hex=
+    [ -f "${COMMAND_LOG}" ] && [ ! -L "${COMMAND_LOG}" ] || return 97
+    lifecycle_seed_command_owner="$(
+        stat -c '%u:%g' "${COMMAND_LOG}" 2>/dev/null || true
+    )"
+    [ -n "${lifecycle_seed_command_owner}" ] || return 97
+    if [ -e "${lifecycle_seed_log}" ] || [ -L "${lifecycle_seed_log}" ]; then
+        [ -f "${lifecycle_seed_log}" ] && [ ! -L "${lifecycle_seed_log}" ] && \
+            [ "$(stat -c '%u:%g' "${lifecycle_seed_log}" 2>/dev/null || true)" = \
+                "${lifecycle_seed_command_owner}" ] || return 97
+        lifecycle_seed_log_bytes="$(
+            LC_ALL=C wc -c < "${lifecycle_seed_log}" | tr -d ' '
+        )" || return 97
+        case "${lifecycle_seed_log_bytes}" in
+            ''|*[!0-9]*) return 97 ;;
+        esac
+        [ "${lifecycle_seed_log_bytes}" -le 1048576 ] || return 97
+        lifecycle_seed_log_hex="$(
+            LC_ALL=C head -c 256 "${lifecycle_seed_log}" | lifecycle_seed_hex_prefix
+        )" || return 97
+    fi
+    printf '%s\tpredicate=%s\trc=%s\tactual_bytes=%s\tactual_hex_prefix=%s\texpected_bytes=%s\texpected_hex_prefix=%s\tlog_bytes=%s\tlog_hex_prefix=%s\n' \
+        'SYSWARDEN_LIFECYCLE_SEED_FAILURE_V1' \
+        "${lifecycle_seed_predicate}" "${lifecycle_seed_status}" \
+        "${lifecycle_seed_actual_bytes}" "${lifecycle_seed_actual_hex}" \
+        "${lifecycle_seed_expected_bytes}" "${lifecycle_seed_expected_hex}" \
+        "${lifecycle_seed_log_bytes}" "${lifecycle_seed_log_hex}" \
+        >> "${COMMAND_LOG}"
+}
+
+stop_lifecycle_seed_process() {
+    lifecycle_seed_pid="$1"
+    case "${lifecycle_seed_pid}" in ''|*[!0-9]*) return 97 ;; esac
+    [ "${lifecycle_seed_pid}" -gt 1 ] || return 97
+    if kill -0 "${lifecycle_seed_pid}" 2>/dev/null; then
+        kill -KILL "${lifecycle_seed_pid}" 2>/dev/null || return 97
+    fi
+    wait "${lifecycle_seed_pid}" 2>/dev/null || true
+}
+
 seed_legacy_webtui_upgrade_state() {
+    quiesce_previous_webtui_runtime || return 1
     legacy_module=/etc/syswarden/config/modules/98-legacy-webtui.toml
     printf '%s\n' \
         '# Historical browser credential seeded for bounded upgrade cleanup' \
@@ -2252,8 +3122,13 @@ seed_legacy_webtui_upgrade_state() {
         > "${legacy_module}" || return 1
     chmod 0640 "${legacy_module}" || return 1
     mkdir -p /run
-    printf '%s\n' 4194303 > /run/syswarden-webtui.pid || return 1
-    chmod 0600 /run/syswarden-webtui.pid || return 1
+    [ ! -e /run/syswarden-webtui.pid ] && [ ! -L /run/syswarden-webtui.pid ] || return 1
+    write_exclusive_root_pidfile /run/syswarden-webtui.pid 4194303 || return 1
+    [ -f /run/syswarden-webtui.pid ] && [ ! -L /run/syswarden-webtui.pid ] && \
+        [ "$(stat -c '%u:%g:%a' /run/syswarden-webtui.pid 2>/dev/null || true)" = 0:0:600 ] || return 1
+    seeded_webtui_pidfile_identity="$(stat -c '%d:%i' \
+        /run/syswarden-webtui.pid 2>/dev/null || true)"
+    [ -n "${seeded_webtui_pidfile_identity}" ] || return 1
     case "${PACKAGE_FAMILY}" in
         deb|rpm)
             mkdir -p /etc/systemd/system/multi-user.target.wants /run/systemd
@@ -2282,12 +3157,17 @@ SYSWARDEN_SYSTEMD_WEBTUI
             chmod 0600 /etc/systemd/system/syswarden-webtui.service || return 1
             ln -sf ../syswarden-webtui.service \
                 /etc/systemd/system/multi-user.target.wants/syswarden-webtui.service || return 1
+            systemctl daemon-reload || return 1
             ;;
         apk)
             [ -d /run ] && [ ! -L /run ] || return 1
-            [ ! -e /run/openrc ] && [ ! -L /run/openrc ] || return 1
-            rm -f /run/syswarden-webtui.pid
-            printf '%s\n' 4194303 > /run/syswarden-webtui.pid || return 1
+            prepare_service_runtime_fixture || return 1
+            chmod 0644 /run/syswarden-webtui.pid || return 1
+            [ -f /run/syswarden-webtui.pid ] && [ ! -L /run/syswarden-webtui.pid ] && \
+                [ "$(stat -c '%d:%i' /run/syswarden-webtui.pid 2>/dev/null || true)" = \
+                    "${seeded_webtui_pidfile_identity}" ] && \
+                [ "$(stat -c '%u:%g:%a' /run/syswarden-webtui.pid 2>/dev/null || true)" = 0:0:644 ] && \
+                printf '%s\n' 4194303 | cmp -s - /run/syswarden-webtui.pid || return 1
             mkdir -p /etc/init.d /etc/runlevels/default
             cat > /etc/init.d/syswarden-webtui <<'SYSWARDEN_OPENRC_WEBTUI'
 #!/sbin/openrc-run
@@ -2319,10 +3199,10 @@ table inet syswarden {
 }
 SYSWARDEN_LEGACY_62027_NFT
 
-    socat TCP-LISTEN:62027,bind=127.0.0.1,reuseaddr,fork EXEC:/bin/cat \
+    socat TCP4-LISTEN:62027,bind=127.0.0.1,reuseaddr,fork EXEC:/bin/cat \
         >/tmp/syswarden-operator-62027.log 2>&1 &
     operator_listener_pid=$!
-    (umask 077 && printf '%s\n' "${operator_listener_pid}" > /tmp/syswarden-operator-62027.pid) || {
+    (umask 077 && printf '%s\n' "${operator_listener_pid}" > "${PERSIST_ROOT}/operator-62027.pid") || {
         kill -KILL "${operator_listener_pid}" 2>/dev/null || true
         wait "${operator_listener_pid}" 2>/dev/null || true
         return 1
@@ -2330,7 +3210,7 @@ SYSWARDEN_LEGACY_62027_NFT
     operator_listener_ready=0
     for _ in 1 2 3 4 5 6 7 8 9 10; do
         if [ "$(printf '%s' 'syswarden-operator-62027' | \
-            socat -T 1 - TCP:127.0.0.1:62027 2>/dev/null || true)" = \
+            socat -T 1 - TCP4:127.0.0.1:62027 2>/dev/null || true)" = \
             'syswarden-operator-62027' ]; then
             operator_listener_ready=1
             break
@@ -2338,21 +3218,77 @@ SYSWARDEN_LEGACY_62027_NFT
         kill -0 "${operator_listener_pid}" 2>/dev/null || break
         sleep 0.1
     done
-    [ "${operator_listener_ready}" -eq 1 ] || return 1
-    operator_listener_expected_executable="$(command -v socat)" || return 1
+    if [ "${operator_listener_ready}" -ne 1 ]; then
+        operator_listener_alive=0
+        kill -0 "${operator_listener_pid}" 2>/dev/null && operator_listener_alive=1
+        record_lifecycle_seed_failure LS01_OPERATOR_LISTENER_READY 1 \
+            "ready=${operator_listener_ready}|alive=${operator_listener_alive}" \
+            'ready=1|alive=1' /tmp/syswarden-operator-62027.log
+        operator_listener_diagnostic_rc=$?
+        stop_lifecycle_seed_process "${operator_listener_pid}" || return 97
+        [ "${operator_listener_diagnostic_rc}" -eq 0 ] || \
+            return "${operator_listener_diagnostic_rc}"
+        return 1
+    fi
+    operator_listener_expected_executable="$(command -v socat 2>/dev/null || true)"
     operator_listener_expected_executable="$(readlink -f \
-        "${operator_listener_expected_executable}" 2>/dev/null)" || return 1
+        "${operator_listener_expected_executable}" 2>/dev/null || true)"
     operator_listener_seeded_executable="$(readlink \
-        "/proc/${operator_listener_pid}/exe" 2>/dev/null)" || return 1
-    [ "${operator_listener_seeded_executable}" = \
-        "${operator_listener_expected_executable}" ] || return 1
+        "/proc/${operator_listener_pid}/exe" 2>/dev/null || true)"
+    if [ -z "${operator_listener_expected_executable}" ] || \
+       [ "${operator_listener_seeded_executable}" != \
+           "${operator_listener_expected_executable}" ]; then
+        record_lifecycle_seed_failure LS02_OPERATOR_EXECUTABLE_PATH 1 \
+            "${operator_listener_seeded_executable}" \
+            "${operator_listener_expected_executable}" \
+            /tmp/syswarden-operator-62027.log
+        operator_listener_diagnostic_rc=$?
+        stop_lifecycle_seed_process "${operator_listener_pid}" || return 97
+        [ "${operator_listener_diagnostic_rc}" -eq 0 ] || \
+            return "${operator_listener_diagnostic_rc}"
+        return 1
+    fi
     SEEDED_OPERATOR_LISTENER_PID="${operator_listener_pid}"
-    SEEDED_OPERATOR_LISTENER_PROCESS_IDENTITY="$(operator_listener_process_identity \
-        "${operator_listener_pid}")" || return 1
-    SEEDED_OPERATOR_LISTENER_PIDFILE_IDENTITY="$(stat -c '%d:%i:%s:%u:%g:%a' \
-        /tmp/syswarden-operator-62027.pid 2>/dev/null)" || return 1
+    if ! SEEDED_OPERATOR_LISTENER_PROCESS_IDENTITY="$(
+        operator_listener_process_identity "${operator_listener_pid}"
+    )"; then
+        record_lifecycle_seed_failure LS03_OPERATOR_PROCESS_IDENTITY 1 \
+            unavailable canonical-process-identity \
+            /tmp/syswarden-operator-62027.log
+        operator_listener_diagnostic_rc=$?
+        stop_lifecycle_seed_process "${operator_listener_pid}" || return 97
+        [ "${operator_listener_diagnostic_rc}" -eq 0 ] || \
+            return "${operator_listener_diagnostic_rc}"
+        return 1
+    fi
+    if ! SEEDED_OPERATOR_LISTENER_PIDFILE_IDENTITY="$(
+        stat -c '%d:%i:%s:%u:%g:%a' \
+            "${PERSIST_ROOT}/operator-62027.pid" 2>/dev/null
+    )"; then
+        record_lifecycle_seed_failure LS04_OPERATOR_PIDFILE_IDENTITY 1 \
+            unavailable canonical-pidfile-identity \
+            /tmp/syswarden-operator-62027.log
+        operator_listener_diagnostic_rc=$?
+        stop_lifecycle_seed_process "${operator_listener_pid}" || return 97
+        [ "${operator_listener_diagnostic_rc}" -eq 0 ] || \
+            return "${operator_listener_diagnostic_rc}"
+        return 1
+    fi
+    if ! SEEDED_OPERATOR_LISTENER_SOCKET_IDENTITY="$(
+        operator_listener_socket_identity "${operator_listener_pid}"
+    )"; then
+        record_lifecycle_seed_failure LS05_OPERATOR_SOCKET_IDENTITY 1 \
+            unavailable canonical-socket-identity \
+            /tmp/syswarden-operator-62027.log
+        operator_listener_diagnostic_rc=$?
+        stop_lifecycle_seed_process "${operator_listener_pid}" || return 97
+        [ "${operator_listener_diagnostic_rc}" -eq 0 ] || \
+            return "${operator_listener_diagnostic_rc}"
+        return 1
+    fi
     [ -n "${SEEDED_OPERATOR_LISTENER_PROCESS_IDENTITY}" ] && \
-        [ -n "${SEEDED_OPERATOR_LISTENER_PIDFILE_IDENTITY}" ] || return 1
+        [ -n "${SEEDED_OPERATOR_LISTENER_PIDFILE_IDENTITY}" ] && \
+        [ -n "${SEEDED_OPERATOR_LISTENER_SOCKET_IDENTITY}" ] || return 1
 }
 
 seed_legacy_saas_monitor_state() {
@@ -2360,11 +3296,11 @@ seed_legacy_saas_monitor_state() {
     legacy_saas_v6=/etc/syswarden/lists/syswarden_saas_monitors.ipv6
     legacy_saas_pair=/etc/syswarden/lists/syswarden_saas_monitors.pair
     mkdir -p /etc/syswarden/lists || return 1
-    printf '%s\n%s' '192.0.2.10' '198.51.100.0/24' > "${legacy_saas_v4}" || return 1
+    printf '%s\n%s' '8.8.8.8' '1.1.1.0/24' > "${legacy_saas_v4}" || return 1
     chmod 0600 "${legacy_saas_v4}" || return 1
     chown 0:0 "${legacy_saas_v4}" || return 1
     rm -f "${legacy_saas_v6}" "${legacy_saas_pair}" || return 1
-    : > /tmp/syswarden-legacy-saas-seeded
+    : > "${PERSIST_ROOT}/legacy-saas-seeded"
 }
 
 seed_live_legacy_webtui_process() {
@@ -2376,8 +3312,9 @@ seed_live_legacy_webtui_process() {
         --bind=127.0.0.1:62028 --token=lot0-lifecycle-live-retired-token \
         >/tmp/syswarden-legacy-webtui-process.log 2>&1 &
     legacy_webtui_pid=$!
-    printf '%s\n' "${legacy_webtui_pid}" > /tmp/syswarden-legacy-webtui-process.pid
+    printf '%s\n' "${legacy_webtui_pid}" > "${PERSIST_ROOT}/legacy-webtui-process.pid"
     legacy_webtui_ready=0
+    legacy_webtui_status=000
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
         legacy_webtui_status="$(curl --insecure --silent --output /dev/null \
             --write-out '%{http_code}' https://127.0.0.1:62028/ 2>/dev/null || true)"
@@ -2389,8 +3326,16 @@ seed_live_legacy_webtui_process() {
         sleep 0.1
     done
     if [ "${legacy_webtui_ready}" -ne 1 ]; then
-        kill -KILL "${legacy_webtui_pid}" 2>/dev/null || true
-        wait "${legacy_webtui_pid}" 2>/dev/null || true
+        legacy_webtui_alive=0
+        kill -0 "${legacy_webtui_pid}" 2>/dev/null && legacy_webtui_alive=1
+        record_lifecycle_seed_failure LS06_LIVE_WEBTUI_READY 1 \
+            "ready=${legacy_webtui_ready}|alive=${legacy_webtui_alive}|http=${legacy_webtui_status}" \
+            'ready=1|alive=1|http=401' \
+            /tmp/syswarden-legacy-webtui-process.log
+        legacy_webtui_diagnostic_rc=$?
+        stop_lifecycle_seed_process "${legacy_webtui_pid}" || return 97
+        [ "${legacy_webtui_diagnostic_rc}" -eq 0 ] || \
+            return "${legacy_webtui_diagnostic_rc}"
         return 1
     fi
 }
@@ -2401,11 +3346,11 @@ load_state_contract() {
     STATE_TOKEN_HASH="$(sed -n 's/^STATE_TOKEN_HASH=//p' "${OPERATOR_STATE_FILE}")"
     STATE_LIST_HASH="$(sed -n 's/^STATE_LIST_HASH=//p' "${OPERATOR_STATE_FILE}")"
     STATE_LIST_IPV6_HASH="$(sed -n 's/^STATE_LIST_IPV6_HASH=//p' "${OPERATOR_STATE_FILE}")"
-    STATE_DATA_HASH="$(sed -n 's/^STATE_DATA_HASH=//p' "${OPERATOR_STATE_FILE}")"
+    STATE_OPERATOR_DATA_HASH="$(sed -n 's/^STATE_OPERATOR_DATA_HASH=//p' "${OPERATOR_STATE_FILE}")"
     STATE_CERT_HASH="$(sed -n 's/^STATE_CERT_HASH=//p' "${OPERATOR_STATE_FILE}")"
     for expected_hash in \
         "${STATE_CONFIG_HASH}" "${STATE_TOKEN_HASH}" "${STATE_LIST_HASH}" \
-        "${STATE_LIST_IPV6_HASH}" "${STATE_DATA_HASH}" "${STATE_CERT_HASH}"
+        "${STATE_LIST_IPV6_HASH}" "${STATE_OPERATOR_DATA_HASH}" "${STATE_CERT_HASH}"
     do
         case "${expected_hash}" in
             *[!0-9a-f]*|'') return 1 ;;
@@ -2445,6 +3390,165 @@ assert_preserved() {
     check_equal "${label}.state.${key}.hash" "${expected_hash}" "${actual_hash}"
     check_equal "${label}.state.${key}.mode" "${expected_mode}" "${actual_mode}"
     check_equal "${label}.state.${key}.owner" 0:0 "${actual_owner}"
+}
+
+live_telemetry_schema_valid() {
+    live_telemetry_path="$1"
+    [ -f "${live_telemetry_path}" ] && [ ! -L "${live_telemetry_path}" ] || return 1
+    live_telemetry_size="$(wc -c < "${live_telemetry_path}" 2>/dev/null | tr -d ' ')" || return 1
+    case "${live_telemetry_size}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${live_telemetry_size}" -gt 0 ] && [ "${live_telemetry_size}" -le 8388608 ] || return 1
+    jq -e '
+        def integer: type == "number" and (floor == .);
+        type == "object" and
+        (keys == ["github_release", "github_stars", "layer3", "profile_name", "system", "timestamp", "waf", "whitelist"]) and
+        (has("ha") | not) and
+        (.timestamp | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+        (.github_stars | type == "string") and
+        (.github_release | type == "string") and
+        (.profile_name | type == "string") and
+        (.system |
+            type == "object" and
+            (keys == ["arch", "cores", "cpu_model", "disk_total_mb", "disk_used_mb", "hostname", "load_average", "os", "ports", "ram_total_mb", "ram_used_mb", "server_ip", "services", "uptime"]) and
+            (.hostname | type == "string") and
+            (.uptime | type == "string") and
+            (.load_average | type == "string") and
+            (.ram_used_mb | integer) and
+            (.ram_total_mb | integer) and
+            (.disk_used_mb | integer) and
+            (.disk_total_mb | integer) and
+            (.cores | type == "string") and
+            (.arch | type == "string") and
+            (.os | type == "string") and
+            (.cpu_model | type == "string") and
+            (.server_ip | type == "string") and
+            (.services | type == "array" and all(.[];
+                type == "object" and
+                (keys == ["name", "path", "status"]) and
+                (.name | type == "string") and
+                (.path | type == "string") and
+                (.status | type == "string"))) and
+            (.ports | type == "array" and all(.[];
+                type == "object" and
+                (keys == ["ip", "port", "protocol", "state"]) and
+                (.ip | type == "string") and
+                (.state | type == "string") and
+                (.port | type == "string") and
+                (.protocol | type == "string")))) and
+        (.layer3 |
+            type == "object" and
+            (keys == ["asn_blocked", "geoip_blocked", "global_blocked", "l7_banned", "zero_trust_mode"]) and
+            (.global_blocked | integer) and
+            (.geoip_blocked | integer) and
+            (.asn_blocked | integer) and
+            (.l7_banned | integer) and
+            (.zero_trust_mode | type == "boolean")) and
+        (.waf |
+            type == "object" and
+            (keys == ["active_signatures", "allowed_events", "banned_ips", "risk_radar", "signatures_data", "sparkline_24h", "targeted_ports", "top_attackers", "total_banned", "total_detected"]) and
+            (.total_banned | integer) and
+            (.total_detected | integer) and
+            (.active_signatures | integer) and
+            (.signatures_data | type == "array" and all(.[];
+                type == "object" and
+                (keys == ["count", "mitre", "name"]) and
+                (.name | type == "string") and
+                (.count | integer) and
+                (.mitre | type == "string"))) and
+            (.targeted_ports | . == null or
+                (type == "array" and all(.[];
+                    type == "object" and
+                    (keys == ["hits", "port", "service", "unique_ips"]) and
+                    (.port | type == "string") and
+                    (.service | type == "string") and
+                    (.hits | integer) and
+                    (.unique_ips | integer)))) and
+            (.banned_ips | type == "array" and all(.[];
+                type == "object" and
+                (keys == ["action", "ip", "jail", "mitre", "payload", "timestamp"]) and
+                (.timestamp | type == "string") and
+                (.ip | type == "string") and
+                (.jail | type == "string") and
+                (.payload | type == "string") and
+                (.mitre | type == "string") and
+                (.action | type == "string"))) and
+            (.top_attackers | type == "array" and all(.[];
+                type == "object" and
+                (keys == ["asn", "country", "hits", "ip", "last_seen", "org", "port", "severity", "threat"]) and
+                (.ip | type == "string") and
+                (.severity | type == "string") and
+                (.port | type == "string") and
+                (.country | type == "string") and
+                (.asn | type == "string") and
+                (.threat | type == "string") and
+                (.org | type == "string") and
+                (.hits | integer) and
+                (.last_seen | type == "string"))) and
+            (.risk_radar | . == null or (type == "array" and all(.[]; integer))) and
+            (.sparkline_24h | type == "array" and length == 24 and all(.[]; integer)) and
+            (.allowed_events | . == null or
+                (type == "array" and all(.[];
+                    type == "object" and
+                    (keys == ["ip", "payload", "service", "timestamp"]) and
+                    (.timestamp | type == "string") and
+                    (.ip | type == "string") and
+                    (.service | type == "string") and
+                    (.payload | type == "string"))))) and
+        (.whitelist |
+            type == "object" and
+            (keys == ["active_ips", "ips"]) and
+            (.active_ips | integer) and
+            (.ips | type == "array" and all(.[]; type == "string")))
+    ' "${live_telemetry_path}" >/dev/null 2>&1
+}
+
+assert_live_telemetry_data() {
+    label="$1"
+    live_telemetry_path="${2:-/var/lib/syswarden/ui/data.json}"
+    if [ -f "${live_telemetry_path}" ] && [ ! -L "${live_telemetry_path}" ]; then
+        actual_type=regular
+        actual_mode="$(file_mode "${live_telemetry_path}" 2>/dev/null || true)"
+        actual_owner="$(stat -c '%u:%g' "${live_telemetry_path}" 2>/dev/null || true)"
+        actual_json=invalid
+        actual_schema=invalid
+        live_telemetry_size="$(wc -c < "${live_telemetry_path}" 2>/dev/null | tr -d ' ')" || live_telemetry_size=invalid
+        case "${live_telemetry_size}" in
+            ''|*[!0-9]*) ;;
+            *)
+                if [ "${live_telemetry_size}" -gt 0 ] && \
+                   [ "${live_telemetry_size}" -le 8388608 ] && \
+                   jq -e . "${live_telemetry_path}" >/dev/null 2>&1; then
+                    actual_json=valid
+                fi
+                ;;
+        esac
+        if live_telemetry_schema_valid "${live_telemetry_path}"; then
+            actual_schema=dashboard-data-v1
+        fi
+    elif [ -L "${live_telemetry_path}" ]; then
+        actual_type=symlink
+        actual_mode="$(file_mode "${live_telemetry_path}" 2>/dev/null || true)"
+        actual_owner="$(stat -c '%u:%g' "${live_telemetry_path}" 2>/dev/null || true)"
+        actual_json=invalid
+        actual_schema=invalid
+    elif [ -e "${live_telemetry_path}" ]; then
+        actual_type=unsupported
+        actual_mode="$(file_mode "${live_telemetry_path}" 2>/dev/null || true)"
+        actual_owner="$(stat -c '%u:%g' "${live_telemetry_path}" 2>/dev/null || true)"
+        actual_json=invalid
+        actual_schema=invalid
+    else
+        actual_type=missing
+        actual_mode=-
+        actual_owner=-
+        actual_json=invalid
+        actual_schema=invalid
+    fi
+    check_equal "${label}.state.telemetry.type" regular "${actual_type}"
+    check_equal "${label}.state.telemetry.mode" 600 "${actual_mode}"
+    check_equal "${label}.state.telemetry.owner" 0:0 "${actual_owner}"
+    check_equal "${label}.state.telemetry.json" valid "${actual_json}"
+    check_equal "${label}.state.telemetry.schema" dashboard-data-v1 "${actual_schema}"
 }
 
 sanitize_historical_rollback_token() {
@@ -2557,8 +3661,9 @@ assert_all_state_preserved() {
     fi
     assert_preserved "${label}" list /etc/syswarden/lists/syswarden_blacklist.ipv4 "${STATE_LIST_HASH}" 600
     assert_preserved "${label}" list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6 "${STATE_LIST_IPV6_HASH}" 600
-    assert_preserved "${label}" data /var/lib/syswarden/ui/data.json "${STATE_DATA_HASH}" 600
+    assert_preserved "${label}" operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600
     assert_preserved "${label}" certificate /etc/syswarden/tls/operator.pem "${STATE_CERT_HASH}" 600
+    assert_live_telemetry_data "${label}"
 }
 
 assert_package_absent() {
@@ -2575,7 +3680,7 @@ assert_package_absent() {
         if [ "${kind}" != "directory" ] && { [ -e "${path}" ] || [ -L "${path}" ]; }; then
             printf '%s\n' "${path}" >> "${remaining}"
         fi
-    done < "/tmp/inventory-${expected_label}"
+    done < "${PERSIST_ROOT}/inventory-${expected_label}"
     if [ -s "${remaining}" ]; then
         record fail "${PREFIX}.${label}.payload_inventory" "package-owned files or links remain: $(tr '\n' ' ' < "${remaining}")"
     else
@@ -2590,29 +3695,42 @@ seed_generated_runtime_artifacts() {
         /etc/rsyslog.d/99-syswarden-waf-bridge.conf; do
         printf '%s\n' 'syswarden-lifecycle-generated-artifact' > "${path}"
     done
-    LC_ALL=C crontab -l > /tmp/syswarden-existing-cron 2>/tmp/syswarden-existing-cron.error || return 1
+    hash_file /etc/bash_completion.d/syswarden > /tmp/syswarden-completion-before || return 1
+    hash_file /etc/rsyslog.d/99-syswarden-siem.conf > /tmp/syswarden-rsyslog-siem-before || return 1
+    hash_file /etc/rsyslog.d/99-syswarden-waf-bridge.conf > /tmp/syswarden-rsyslog-waf-before || return 1
+    if LC_ALL=C crontab -l > /tmp/syswarden-existing-cron 2>/tmp/syswarden-existing-cron.error; then
+        :
+    elif [ ! -s /tmp/syswarden-existing-cron ] && grep -E -x -q \
+        "(no crontab for root|crontab: no crontab for root|crontab: can't open 'root': No such file or directory)" \
+        /tmp/syswarden-existing-cron.error; then
+        : > /tmp/syswarden-existing-cron
+    else
+        return 1
+    fi
     {
+        printf '%s\n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
         printf '%s\n' '# operator note mentioning syswarden-cli'
-        printf '%s\n' '19 4 * * * /opt/syswarden/bin/syswarden-cli update-feeds --operator-option'
-        printf '%s\n' ' */30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1'
-        printf '%s \n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
-        printf '%s\n' '17  * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
-        printf '*/30\t* * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1\n'
         printf '%s\n' '23 * * * * /srv/operator/bin/syswarden-cli update-feeds >/dev/null 2>&1'
         printf ' \t \n'
     } > "${OPERATOR_CRON_FILE}"
     {
         cat /tmp/syswarden-existing-cron
         cat "${OPERATOR_CRON_FILE}"
-    } | crontab -
+    } > /tmp/syswarden-root-cron-before
+    crontab - < /tmp/syswarden-root-cron-before || return 1
+    LC_ALL=C crontab -l > /tmp/syswarden-root-cron-confirmed 2>/tmp/syswarden-root-cron-confirmed.error || return 1
+    cmp -s /tmp/syswarden-root-cron-before /tmp/syswarden-root-cron-confirmed || return 1
+    [ -f /etc/cron.d/syswarden ] && [ ! -L /etc/cron.d/syswarden ] || return 1
+    printf '%s' '# Managed by' > /etc/cron.d/.syswarden.pending-v1 || return 1
+    chmod 0600 /etc/cron.d/.syswarden.pending-v1 || return 1
 }
 
-assert_generated_runtime_artifacts_absent() {
+assert_generated_runtime_artifact_contract() {
     label="$1"
-    if [ -s /tmp/syswarden-service-manager-calls ]; then
-        record fail "${PREFIX}.${label}.service_manager_calls" "offline removal invoked a service manager: $(tr '\n' ' ' < /tmp/syswarden-service-manager-calls)"
+    if prepare_service_runtime_fixture; then
+        record pass "${PREFIX}.${label}.service_manager_calls" "real init, active service manager, and enabled cron provider remain attestable"
     else
-        record pass "${PREFIX}.${label}.service_manager_calls" "offline removal invoked no service manager"
+        record fail "${PREFIX}.${label}.service_manager_calls" "real init, active service manager, or enabled cron provider became unavailable"
     fi
     check_absent "${label}.generated.systemd_core" /etc/systemd/system/syswarden-core.service
     check_absent "${label}.generated.systemd_firewall" /etc/systemd/system/syswarden-firewall.service
@@ -2624,42 +3742,52 @@ assert_generated_runtime_artifacts_absent() {
     check_absent "${label}.generated.systemd_firewall_enablement" /etc/systemd/system/multi-user.target.wants/syswarden-firewall.service
     check_absent "${label}.generated.openrc_core_enablement" /etc/runlevels/default/syswarden-core
     check_absent "${label}.generated.openrc_firewall_enablement" /etc/runlevels/default/syswarden-firewall
-    check_absent "${label}.generated.completion" /etc/bash_completion.d/syswarden
-    check_absent "${label}.generated.rsyslog_siem" /etc/rsyslog.d/99-syswarden-siem.conf
-    check_absent "${label}.generated.rsyslog_waf_bridge" /etc/rsyslog.d/99-syswarden-waf-bridge.conf
-    if ! cron_state="$(LC_ALL=C crontab -l 2>/tmp/syswarden-remove-cron.error)"; then
-        record fail "${PREFIX}.${label}.generated.cron_reference" "root crontab could not be read after removal"
-        record fail "${PREFIX}.${label}.generated.cron_unrelated" "operator cron preservation could not be verified"
+    check_absent "${label}.generated.runtime_socket" /run/syswarden.sock
+    if [ -f /etc/bash_completion.d/syswarden ] && [ ! -L /etc/bash_completion.d/syswarden ] && \
+       [ "$(hash_file /etc/bash_completion.d/syswarden 2>/dev/null || true)" = "$(cat /tmp/syswarden-completion-before)" ]; then
+        record pass "${PREFIX}.${label}.generated.completion_residual" "ambiguous shell completion is preserved for manual recovery"
+    else
+        record fail "${PREFIX}.${label}.generated.completion_residual" "ambiguous shell completion changed during removal"
+    fi
+    if [ -f /etc/rsyslog.d/99-syswarden-siem.conf ] && [ ! -L /etc/rsyslog.d/99-syswarden-siem.conf ] && \
+       [ "$(hash_file /etc/rsyslog.d/99-syswarden-siem.conf 2>/dev/null || true)" = "$(cat /tmp/syswarden-rsyslog-siem-before)" ]; then
+        record pass "${PREFIX}.${label}.generated.rsyslog_siem_residual" "ambiguous rsyslog SIEM bridge is preserved for manual recovery"
+    else
+        record fail "${PREFIX}.${label}.generated.rsyslog_siem_residual" "ambiguous rsyslog SIEM bridge changed during removal"
+    fi
+    if [ -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf ] && [ ! -L /etc/rsyslog.d/99-syswarden-waf-bridge.conf ] && \
+       [ "$(hash_file /etc/rsyslog.d/99-syswarden-waf-bridge.conf 2>/dev/null || true)" = "$(cat /tmp/syswarden-rsyslog-waf-before)" ]; then
+        record pass "${PREFIX}.${label}.generated.rsyslog_waf_bridge_residual" "ambiguous rsyslog WAF bridge is preserved for manual recovery"
+    else
+        record fail "${PREFIX}.${label}.generated.rsyslog_waf_bridge_residual" "ambiguous rsyslog WAF bridge changed during removal"
+    fi
+    check_absent "${label}.generated.cron_d_owned" /etc/cron.d/syswarden
+    check_absent "${label}.generated.cron_d_pending" /etc/cron.d/.syswarden.pending-v1
+    if ! LC_ALL=C crontab -l > /tmp/syswarden-root-cron-after 2>/tmp/syswarden-remove-cron.error; then
+        record fail "${PREFIX}.${label}.generated.root_crontab_bytes" "root crontab could not be read after removal"
+        record fail "${PREFIX}.${label}.generated.root_crontab_legacy_residual" "legacy residual could not be verified"
         return
     fi
-    managed_cron="$(printf '%s\n' "${cron_state}" | awk '
-        $0 == "*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1" { print }
-        $1 ~ /^([1-9]|[1-5][0-9])$/ &&
-            $0 == $1 " * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1" { print }
-    ')"
-    if [ -n "${managed_cron}" ]; then
-        record fail "${PREFIX}.${label}.generated.cron_reference" "dead SysWarden cron reference remains"
+    cron_state="$(cat /tmp/syswarden-root-cron-after)"
+    if cmp -s /tmp/syswarden-root-cron-before /tmp/syswarden-root-cron-after; then
+        record pass "${PREFIX}.${label}.generated.root_crontab_bytes" "operator-controlled root crontab bytes are preserved exactly"
     else
-        record pass "${PREFIX}.${label}.generated.cron_reference" "SysWarden cron references are absent"
+        record fail "${PREFIX}.${label}.generated.root_crontab_bytes" "operator-controlled root crontab bytes changed"
     fi
-    operator_cron_ok=1
-    while IFS= read -r operator_cron_line || [ -n "${operator_cron_line}" ]; do
-        if ! printf '%s\n' "${cron_state}" | grep -F -x -q "${operator_cron_line}"; then
-            operator_cron_ok=0
-        fi
-    done < "${OPERATOR_CRON_FILE}"
-    if [ "${operator_cron_ok}" -eq 1 ]; then
-        record pass "${PREFIX}.${label}.generated.cron_unrelated" "unrelated cron entry is preserved"
+    legacy_count="$(printf '%s\n' "${cron_state}" | grep -F -x -c \
+        '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1' || true)"
+    if [ "${legacy_count}" -eq 1 ] && [ ! -e /opt/syswarden/bin/syswarden-cli ] && [ ! -L /opt/syswarden/bin/syswarden-cli ]; then
+        record pass "${PREFIX}.${label}.generated.root_crontab_legacy_residual" "one exact inert legacy record remains as a bounded residual"
     else
-        record fail "${PREFIX}.${label}.generated.cron_unrelated" "unrelated cron entry was removed"
+        record fail "${PREFIX}.${label}.generated.root_crontab_legacy_residual" "bounded inert legacy residual contract is not satisfied"
     fi
 }
 
 prepare_expected_payloads() {
-    if ! run_step extract.previous extract_package "${PREVIOUS_PACKAGE}" /tmp/expected-previous; then
+    if ! run_step extract.previous extract_package "${PREVIOUS_PACKAGE}" "${PERSIST_ROOT}/expected-previous"; then
         return 1
     fi
-    if ! run_step extract.candidate extract_package "${CANDIDATE_PACKAGE}" /tmp/expected-candidate; then
+    if ! run_step extract.candidate extract_package "${CANDIDATE_PACKAGE}" "${PERSIST_ROOT}/expected-candidate"; then
         return 1
     fi
     check_equal metadata.previous.sha256 "${EXPECTED_PREVIOUS_SHA256}" "$(hash_file "${PREVIOUS_PACKAGE}" 2>/dev/null || true)"
@@ -2692,8 +3820,8 @@ prepare_expected_payloads() {
        [ "${CANDIDATE_ARCHITECTURE}" != "${EXPECTED_PACKAGE_ARCHITECTURE}" ]; then
         return 1
     fi
-    verify_package_artifact previous "${PREVIOUS_PACKAGE}" /tmp/expected-previous
-    verify_package_artifact candidate "${CANDIDATE_PACKAGE}" /tmp/expected-candidate
+    verify_package_artifact previous "${PREVIOUS_PACKAGE}" "${PERSIST_ROOT}/expected-previous"
+    verify_package_artifact candidate "${CANDIDATE_PACKAGE}" "${PERSIST_ROOT}/expected-candidate"
     return 0
 }
 
@@ -2717,7 +3845,7 @@ scenario_upgrade_rollback_initial() {
     seed_live_legacy_webtui_process || return
     seed_legacy_saas_monitor_state || return
 
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload candidate candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved candidate
@@ -2731,7 +3859,7 @@ scenario_upgrade_rollback_initial() {
 
 scenario_upgrade_rollback_restart_one() {
     load_state_contract || return
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     probe_payload restart-one candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved restart-one
     printf '%s\n' restart-two > "${RESTART_STATE_FILE}"
@@ -2739,10 +3867,10 @@ scenario_upgrade_rollback_restart_one() {
 
 scenario_upgrade_rollback_restart_two() {
     load_state_contract || return
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     probe_payload restart-two candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved restart-two
-    remove_service_manager_sentinels
+    prepare_service_runtime_fixture || return
     run_install_step rollback.previous "${PREVIOUS_PACKAGE}" || return
     if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
         probe_forward_only_apk_payload rollback
@@ -2750,7 +3878,7 @@ scenario_upgrade_rollback_restart_two() {
         probe_payload rollback previous "${EXPECTED_PREVIOUS_VERSION}"
     fi
     assert_all_state_preserved rollback
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     run_install_step recovery.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload recovery candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved recovery
@@ -2760,7 +3888,7 @@ scenario_upgrade_rollback_restart_two() {
 scenario_remove() {
     prepare_expected_payloads || return
     seed_state
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
@@ -2769,19 +3897,20 @@ scenario_remove() {
         deb|apk)
             run_step remove remove_package || return
             assert_package_absent remove candidate
-            assert_generated_runtime_artifacts_absent remove
+            assert_generated_runtime_artifact_contract remove
             assert_all_state_preserved remove
             ;;
         rpm)
             run_step final-removal remove_package || return
             assert_package_absent final-removal candidate
-            assert_generated_runtime_artifacts_absent final-removal
+            assert_generated_runtime_artifact_contract final-removal
             check_absent final-removal.state.config /etc/syswarden/config/lifecycle-operator.conf
             check_absent final-removal.state.token /etc/syswarden/config/modules/99-user.toml
             check_absent final-removal.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
             check_absent final-removal.state.list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6
             check_absent final-removal.state.certificate /etc/syswarden/tls/operator.pem
-            assert_preserved final-removal data /var/lib/syswarden/ui/data.json "${STATE_DATA_HASH}" 600
+            assert_preserved final-removal operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600
+            assert_live_telemetry_data final-removal
             if ! installed_version >/dev/null 2>&1 && [ ! -s /tmp/remaining-final-removal ]; then
                 record pass "${PREFIX}.final-removal.purge-equivalent" "RPM final erase completed its verified purge-equivalent semantics"
             else
@@ -2794,14 +3923,14 @@ scenario_remove() {
 scenario_purge() {
     prepare_expected_payloads || return
     seed_state
-    install_service_manager_sentinels || return
+    prepare_service_runtime_fixture || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
     seed_generated_runtime_artifacts || return
     run_step purge purge_package || return
     assert_package_absent purge candidate
-    assert_generated_runtime_artifacts_absent purge
+    assert_generated_runtime_artifact_contract purge
     case "${PACKAGE_FAMILY}" in
         deb)
             check_absent purge.state.config /etc/syswarden/config/lifecycle-operator.conf
@@ -2809,7 +3938,8 @@ scenario_purge() {
             check_absent purge.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
             check_absent purge.state.list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6
             check_absent purge.state.certificate /etc/syswarden/tls/operator.pem
-            assert_preserved purge data /var/lib/syswarden/ui/data.json "${STATE_DATA_HASH}" 600
+            assert_preserved purge operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600
+            assert_live_telemetry_data purge
             ;;
         apk)
             assert_all_state_preserved purge
@@ -2823,26 +3953,34 @@ if [ "${INVOCATION}" = "initial" ]; then
     fi
 fi
 
+scenario_rc=0
 case "${SCENARIO}" in
     upgrade-rollback)
         case "${INVOCATION}" in
-            initial) scenario_upgrade_rollback_initial ;;
-            restart-one) scenario_upgrade_rollback_restart_one ;;
-            restart-two) scenario_upgrade_rollback_restart_two ;;
-            *) exit 1 ;;
+            initial) scenario_upgrade_rollback_initial || scenario_rc=$? ;;
+            restart-one) scenario_upgrade_rollback_restart_one || scenario_rc=$? ;;
+            restart-two) scenario_upgrade_rollback_restart_two || scenario_rc=$? ;;
+            *) scenario_rc=1 ;;
         esac
         ;;
     remove)
-        scenario_remove
+        scenario_remove || scenario_rc=$?
         ;;
     purge)
-        scenario_purge
+        scenario_purge || scenario_rc=$?
         ;;
     *)
         record fail "scenario" "unsupported scenario ${SCENARIO}"
+        scenario_rc=1
         ;;
 esac
 
+if [ "${scenario_rc}" -ne 0 ]; then
+    if [ "${FAILURES}" -eq 0 ]; then
+        record fail "scenario.execution" "scenario returned exit code ${scenario_rc}"
+    fi
+    exit "${scenario_rc}"
+fi
 if [ "${FAILURES}" -ne 0 ]; then
     exit 1
 fi
@@ -3219,6 +4357,235 @@ def ensure_rootless_podman(runner: CommandRunner, podman: str) -> str:
     return version.stdout.strip()
 
 
+def inspect_rootless_podman_cgroups(
+    runner: CommandRunner, podman: str, expected_host_architecture: str
+) -> dict[str, object]:
+    inspected = runner.run(
+        (podman, "info", "--format", "json"),
+        timeout=30,
+    )
+    require_success(inspected, "Podman cgroup probe")
+    try:
+        document = json.loads(inspected.stdout)
+    except json.JSONDecodeError as exc:
+        raise LifecycleLabError("Podman cgroup probe is not valid JSON") from exc
+    host = document.get("host") if isinstance(document, dict) else None
+    if not isinstance(host, dict):
+        raise LifecycleLabError("Podman cgroup probe omits host evidence")
+    security = host.get("security")
+    controllers = host.get("cgroupControllers")
+    host_architecture = normalize_host_architecture(str(host.get("arch", "")))
+    expected_architecture = normalize_host_architecture(expected_host_architecture)
+    if (
+        not isinstance(security, dict)
+        or security.get("rootless") is not True
+        or host.get("cgroupVersion") != "v2"
+        or host.get("cgroupManager") != "systemd"
+        or not isinstance(controllers, list)
+        or any(not isinstance(item, str) for item in controllers)
+        or len(set(controllers)) != len(controllers)
+        or not {"cpu", "io", "memory", "pids"}.issubset(controllers)
+        or host.get("serviceIsRemote") is not False
+        or host.get("os") != "linux"
+        or host_architecture is None
+        or expected_architecture is None
+        or host_architecture != expected_architecture
+    ):
+        raise LifecycleLabError(
+            "package lifecycle lab requires native rootless Podman with systemd "
+            "cgroup v2 delegation and the cpu/io/memory/pids controllers"
+        )
+    effective_uid = os.geteuid()
+    effective_gid = os.getegid()
+    id_mappings = host.get("idMappings")
+    if (
+        effective_uid <= 0
+        or effective_gid <= 0
+        or not isinstance(id_mappings, dict)
+        or set(id_mappings) != {"uidmap", "gidmap"}
+    ):
+        raise LifecycleLabError(
+            "Podman rootless identity mapping evidence is incomplete"
+        )
+
+    def parse_engine_map(
+        raw: object, label: str, effective_id: int
+    ) -> list[dict[str, int]]:
+        if not isinstance(raw, list):
+            raise LifecycleLabError(f"Podman {label} is not an array")
+        rendered: list[str] = []
+        for record in raw:
+            if (
+                not isinstance(record, dict)
+                or set(record) != {"container_id", "host_id", "size"}
+                or any(
+                    type(record.get(key)) is not int
+                    for key in ("container_id", "host_id", "size")
+                )
+            ):
+                raise LifecycleLabError(f"Podman {label} schema is not exact")
+            rendered.append(
+                f"{record['container_id']}:{record['host_id']}:{record['size']}"
+            )
+        parsed = _parse_id_map(",".join(rendered), f"Podman {label}")
+        if parsed[0].outside_id != effective_id:
+            raise LifecycleLabError(
+                f"Podman {label} does not bind container root to the effective ID"
+            )
+        return [asdict(item) for item in parsed]
+
+    uid_map = parse_engine_map(
+        id_mappings.get("uidmap"), "uid_map", effective_uid
+    )
+    gid_map = parse_engine_map(
+        id_mappings.get("gidmap"), "gid_map", effective_gid
+    )
+    return {
+        "cgroups_version": "v2",
+        "cgroup_manager": "systemd",
+        "cgroup_delegation": "rootless-systemd-v2",
+        "cgroup_controllers": sorted(controllers),
+        "host_architecture": host_architecture,
+        "service_is_remote": False,
+        "effective_uid": effective_uid,
+        "effective_gid": effective_gid,
+        "uid_map": uid_map,
+        "gid_map": gid_map,
+    }
+
+
+def _regular_file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _read_stable_regular_file(path: Path, label: str) -> tuple[bytes, os.stat_result]:
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot inspect {label}: {exc}") from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise LifecycleLabError(f"{label} must be a regular non-symlink file")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        finally:
+            os.close(descriptor)
+        after = path.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot read {label}: {exc}") from exc
+    if (
+        stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISREG(opened.st_mode)
+        or not stat.S_ISREG(after.st_mode)
+        or _regular_file_identity(before) != _regular_file_identity(opened)
+        or _regular_file_identity(opened) != _regular_file_identity(after)
+    ):
+        raise LifecycleLabError(f"{label} changed while it was being read")
+    data = b"".join(chunks)
+    if len(data) != after.st_size:
+        raise LifecycleLabError(f"{label} byte count differs from its metadata")
+    return data, after
+
+
+def snapshot_lifecycle_helper(workspace: Path) -> tuple[Path, dict[str, object]]:
+    source = Path(__file__).resolve().with_name("package_webtui_retirement.sh")
+    data, source_metadata = _read_stable_regular_file(
+        source, "package lifecycle helper source"
+    )
+    digest = hashlib.sha256(data).hexdigest()
+    snapshot = workspace / "package-webtui-retirement.sh"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(snapshot, flags, 0o600)
+        try:
+            offset = 0
+            while offset < len(data):
+                offset += os.write(descriptor, data[offset:])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot freeze package lifecycle helper: {exc}") from exc
+    frozen_data, frozen_metadata = _read_stable_regular_file(
+        snapshot, "frozen package lifecycle helper"
+    )
+    if (
+        frozen_data != data
+        or stat.S_IMODE(frozen_metadata.st_mode) != 0o600
+        or hashlib.sha256(frozen_data).hexdigest() != digest
+    ):
+        raise LifecycleLabError("frozen package lifecycle helper differs from source")
+    return snapshot, {
+        "source": str(source),
+        "sha256": digest,
+        "size_bytes": len(data),
+        "source_regular_file": True,
+        "source_symlink": False,
+        "snapshot_mode": "0600",
+        "snapshot_regular_file": True,
+        "snapshot_symlink": False,
+        "source_identity": list(_regular_file_identity(source_metadata)),
+        "snapshot_identity": list(_regular_file_identity(frozen_metadata)),
+    }
+
+
+def revalidate_lifecycle_helper(
+    snapshot: Path, expected: dict[str, object]
+) -> dict[str, object]:
+    source = Path(str(expected.get("source", "")))
+    source_data, source_metadata = _read_stable_regular_file(
+        source, "package lifecycle helper source"
+    )
+    frozen_data, frozen_metadata = _read_stable_regular_file(
+        snapshot, "frozen package lifecycle helper"
+    )
+    digest = str(expected.get("sha256", ""))
+    if (
+        hashlib.sha256(source_data).hexdigest() != digest
+        or hashlib.sha256(frozen_data).hexdigest() != digest
+        or source_data != frozen_data
+        or len(source_data) != expected.get("size_bytes")
+        or list(_regular_file_identity(source_metadata))
+        != expected.get("source_identity")
+        or list(_regular_file_identity(frozen_metadata))
+        != expected.get("snapshot_identity")
+        or stat.S_IMODE(frozen_metadata.st_mode) != 0o600
+    ):
+        raise LifecycleLabError(
+            "package lifecycle helper changed while evidence was collected"
+        )
+    return {
+        "source": str(source),
+        "sha256": digest,
+        "size_bytes": len(source_data),
+        "source_regular_file": True,
+        "source_symlink": False,
+        "snapshot_mode": "0600",
+        "snapshot_regular_file": True,
+        "snapshot_symlink": False,
+        "frozen_copy": True,
+        "revalidated_before_report": True,
+    }
+
+
 def ensure_image(
     runner: CommandRunner,
     podman: str,
@@ -3417,6 +4784,232 @@ def probe_platform_execution(
     }
 
 
+def _capability_has_bit(value: str, bit: int) -> bool:
+    if re.fullmatch(r"[0-9a-f]{16}", value) is None:
+        raise LifecycleLabError("process capability mask is not canonical")
+    return bool(int(value, 16) & (1 << bit))
+
+
+def _validate_process_security(
+    value: ProcessSecurityEvidence,
+    *,
+    sys_admin_present: frozenset[str],
+    sys_ptrace_present: frozenset[str],
+    label: str,
+) -> ProcessSecurityEvidence:
+    capabilities = {
+        "inheritable": value.cap_inheritable,
+        "permitted": value.cap_permitted,
+        "effective": value.cap_effective,
+        "bounding": value.cap_bounding,
+        "ambient": value.cap_ambient,
+    }
+    if value.no_new_privileges is not True:
+        raise LifecycleLabError(f"{label} does not prove NoNewPrivs=1")
+    for capability_name, bit, expected_fields in (
+        ("SYS_ADMIN", SYS_ADMIN_CAPABILITY_BIT, sys_admin_present),
+        ("SYS_PTRACE", SYS_PTRACE_CAPABILITY_BIT, sys_ptrace_present),
+    ):
+        for name, encoded in capabilities.items():
+            observed = _capability_has_bit(encoded, bit)
+            if observed is not (name in expected_fields):
+                raise LifecycleLabError(
+                    f"{label} {capability_name} {name} capability state is not exact"
+                )
+    return value
+
+
+def _process_security_from_fields(
+    fields: Sequence[str],
+    *,
+    sys_admin_present: frozenset[str],
+    sys_ptrace_present: frozenset[str],
+    label: str,
+) -> ProcessSecurityEvidence:
+    if len(fields) != 6 or fields[5] not in {"0", "1"}:
+        raise LifecycleLabError(f"{label} process security field count is not exact")
+    evidence = ProcessSecurityEvidence(
+        cap_inheritable=fields[0],
+        cap_permitted=fields[1],
+        cap_effective=fields[2],
+        cap_bounding=fields[3],
+        cap_ambient=fields[4],
+        no_new_privileges=fields[5] == "1",
+    )
+    return _validate_process_security(
+        evidence,
+        sys_admin_present=sys_admin_present,
+        sys_ptrace_present=sys_ptrace_present,
+        label=label,
+    )
+
+
+def _parse_id_map(value: str, label: str) -> tuple[IDMapRange, ...]:
+    records: list[IDMapRange] = []
+    for raw in value.split(","):
+        match = re.fullmatch(
+            r"(0|[1-9][0-9]*):(0|[1-9][0-9]*):(0|[1-9][0-9]*)", raw
+        )
+        if match is None:
+            raise LifecycleLabError(f"{label} is not canonical")
+        inside, outside, length = (int(item) for item in match.groups())
+        if length <= 0 or max(inside, outside, length) > 4_294_967_295:
+            raise LifecycleLabError(f"{label} contains an invalid range")
+        if inside + length > 4_294_967_296 or outside + length > 4_294_967_296:
+            raise LifecycleLabError(f"{label} range overflows the ID space")
+        records.append(IDMapRange(inside, outside, length))
+    if len(records) != 2:
+        raise LifecycleLabError(f"{label} must contain the exact rootless map shape")
+    first, subordinate = records
+    first_outside_end = first.outside_id + first.length
+    subordinate_outside_end = subordinate.outside_id + subordinate.length
+    if (
+        first.inside_id != 0
+        or first.outside_id == 0
+        or first.length != 1
+        or subordinate.inside_id != 1
+        or subordinate.outside_id == 0
+        or subordinate.length != 65_536
+        or first.outside_id == subordinate.outside_id
+        or max(first.outside_id, subordinate.outside_id)
+        < min(first_outside_end, subordinate_outside_end)
+    ):
+        raise LifecycleLabError(f"{label} does not exclude host root exactly")
+    return tuple(records)
+
+
+def _exec_security_guard_script(spec: PlatformSpec) -> str:
+    expect_sys_ptrace = "1" if spec.family != "apk" else "0"
+    return f"""syswarden_read_status_value() {{
+    syswarden_status_pid="$1"
+    syswarden_status_key="$2"
+    awk -v wanted="${{syswarden_status_key}}:" '
+        $1 == wanted {{
+            if (found || NF != 2) exit 1
+            value = $2
+            found = 1
+        }}
+        END {{
+            if (!found) exit 1
+            print value
+        }}
+    ' "/proc/${{syswarden_status_pid}}/status"
+}}
+syswarden_capability_has_sys_admin() {{
+    syswarden_capability_value="$1"
+    printf '%s\\n' "${{syswarden_capability_value}}" | LC_ALL=C grep -Eq '^[0-9a-f]{{16}}$' || return 2
+    [ $((0x${{syswarden_capability_value}} & 0x00200000)) -ne 0 ]
+}}
+syswarden_capability_has_sys_ptrace() {{
+    syswarden_capability_value="$1"
+    printf '%s\\n' "${{syswarden_capability_value}}" | LC_ALL=C grep -Eq '^[0-9a-f]{{16}}$' || return 2
+    [ $((0x${{syswarden_capability_value}} & 0x00080000)) -ne 0 ]
+}}
+syswarden_exec_cap_inh="$(syswarden_read_status_value "$$" CapInh)" || exit 90
+syswarden_exec_cap_prm="$(syswarden_read_status_value "$$" CapPrm)" || exit 90
+syswarden_exec_cap_eff="$(syswarden_read_status_value "$$" CapEff)" || exit 90
+syswarden_exec_cap_bnd="$(syswarden_read_status_value "$$" CapBnd)" || exit 90
+syswarden_exec_cap_amb="$(syswarden_read_status_value "$$" CapAmb)" || exit 90
+syswarden_exec_nnp="$(syswarden_read_status_value "$$" NoNewPrivs)" || exit 90
+for syswarden_capability_value in \\
+    "${{syswarden_exec_cap_inh}}" \\
+    "${{syswarden_exec_cap_prm}}" \\
+    "${{syswarden_exec_cap_eff}}" \\
+    "${{syswarden_exec_cap_bnd}}" \\
+    "${{syswarden_exec_cap_amb}}"; do
+    if syswarden_capability_has_sys_admin "${{syswarden_capability_value}}"; then
+        exit 90
+    else
+        syswarden_capability_status=$?
+        [ "${{syswarden_capability_status}}" -eq 1 ] || exit 90
+    fi
+done
+syswarden_expect_sys_ptrace={expect_sys_ptrace}
+if [ "${{syswarden_expect_sys_ptrace}}" = 1 ]; then
+    for syswarden_capability_value in \
+        "${{syswarden_exec_cap_prm}}" \
+        "${{syswarden_exec_cap_eff}}" \
+        "${{syswarden_exec_cap_bnd}}"; do
+        syswarden_capability_has_sys_ptrace "${{syswarden_capability_value}}" || exit 90
+    done
+    for syswarden_capability_value in \
+        "${{syswarden_exec_cap_inh}}" \
+        "${{syswarden_exec_cap_amb}}"; do
+        if syswarden_capability_has_sys_ptrace "${{syswarden_capability_value}}"; then
+            exit 90
+        else
+            syswarden_capability_status=$?
+            [ "${{syswarden_capability_status}}" -eq 1 ] || exit 90
+        fi
+    done
+else
+    for syswarden_capability_value in \
+        "${{syswarden_exec_cap_inh}}" \
+        "${{syswarden_exec_cap_prm}}" \
+        "${{syswarden_exec_cap_eff}}" \
+        "${{syswarden_exec_cap_bnd}}" \
+        "${{syswarden_exec_cap_amb}}"; do
+        if syswarden_capability_has_sys_ptrace "${{syswarden_capability_value}}"; then
+            exit 90
+        else
+            syswarden_capability_status=$?
+            [ "${{syswarden_capability_status}}" -eq 1 ] || exit 90
+        fi
+    done
+fi
+[ "${{syswarden_exec_nnp}}" = 1 ] || exit 90
+printf '{EXEC_SECURITY_MARKER}\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \\
+    "${{syswarden_exec_cap_inh}}" "${{syswarden_exec_cap_prm}}" \\
+    "${{syswarden_exec_cap_eff}}" "${{syswarden_exec_cap_bnd}}" \\
+    "${{syswarden_exec_cap_amb}}" "${{syswarden_exec_nnp}}"
+"""
+
+
+def lifecycle_exec_arguments(
+    podman: str,
+    name: str,
+    spec: PlatformSpec,
+    script: str,
+) -> tuple[str, ...]:
+    arguments = [podman, "exec", name]
+    if spec.family == "apk":
+        arguments.extend(("/bin/sh", "-ceu"))
+    else:
+        arguments.extend(SYSTEMD_EXEC_LAUNCHER)
+    arguments.append(_exec_security_guard_script(spec) + script)
+    return tuple(arguments)
+
+
+def parse_exec_security_output(
+    output: str, label: str, spec: PlatformSpec
+) -> tuple[ProcessSecurityEvidence, str]:
+    first_line, separator, remainder = output.partition("\n")
+    if not separator:
+        raise LifecycleLabError(f"{label} omitted the exec security marker")
+    marker_fields = first_line.split("\t")
+    if (
+        len(marker_fields) != 7
+        or marker_fields[0] != EXEC_SECURITY_MARKER
+        or any(
+            line == EXEC_SECURITY_MARKER
+            or line.startswith(EXEC_SECURITY_MARKER + "\t")
+            for line in remainder.splitlines()
+        )
+    ):
+        raise LifecycleLabError(f"{label} exec security marker is not unique and exact")
+    security = _process_security_from_fields(
+        marker_fields[1:],
+        sys_admin_present=frozenset(),
+        sys_ptrace_present=(
+            SYSTEMD_MANAGER_CAPABILITY_FIELDS
+            if spec.family != "apk"
+            else frozenset()
+        ),
+        label=label,
+    )
+    return security, remainder
+
+
 def container_run_arguments(
     podman: str,
     image: str,
@@ -3424,6 +5017,7 @@ def container_run_arguments(
     candidate_root: Path,
     previous_root: Path,
     script_path: Path,
+    helper_path: Path,
     result_root: Path,
     spec: PlatformSpec,
     scenario: str,
@@ -3435,21 +5029,27 @@ def container_run_arguments(
         "--name",
         name,
         "--network=none",
-        "--cap-add",
-        "NET_ADMIN",
+        "--pid=private",
+        "--cgroupns=private",
+        "--ipc=private",
+        "--uts=private",
+        "--cap-add=NET_ADMIN",
         "--platform",
         spec.podman_platform,
         "--security-opt=no-new-privileges",
         "--security-opt=label=disable",
         "--pids-limit=512",
         "--memory=1g",
-        "--tmpfs=/run:rw,nodev,nosuid,size=64m",
+        "--tmpfs=/run:rw,nodev,nosuid,exec,size=64m,mode=755,notmpcopyup",
+        "--tmpfs=/tmp:rw,nodev,nosuid,exec,size=256m,mode=1777",
         "--volume",
         f"{candidate_root}:/candidate:ro",
         "--volume",
         f"{previous_root}:/previous:ro",
         "--volume",
         f"{script_path}:/lab/package-lifecycle.sh:ro",
+        "--volume",
+        f"{helper_path}:/lab/package-webtui-retirement.sh:ro",
         "--volume",
         f"{result_root}:/results:rw",
         "--env",
@@ -3476,8 +5076,1422 @@ def container_run_arguments(
         "--env",
         f"PREVIOUS_PACKAGE=/previous/{pair.previous.path.name}",
     ]
-    arguments.extend((image, "/bin/sh", "/lab/package-lifecycle.sh"))
+    if spec.family == "apk":
+        arguments.extend(("--cap-add=SYS_BOOT", "--stop-signal=SIGINT"))
+    else:
+        arguments.extend(
+            (
+                "--cap-add=SYS_ADMIN",
+                "--cap-add=SYS_PTRACE",
+                "--systemd=always",
+                "--stop-signal=SIGRTMIN+3",
+            )
+        )
+    arguments.append(image)
     return tuple(arguments)
+
+
+def runtime_namespace_script(spec: PlatformSpec) -> str:
+    helper_sha256 = hashlib.sha256(LAB_NETWORK_HELPER.encode("utf-8")).hexdigest()
+    common = NAMESPACE_ATTESTATION_HELPERS + f"""syswarden_namespace_status=0
+syswarden_namespace_actual="$(sha256sum /usr/local/libexec/syswarden-lab-network | awk '{{ print $1 }}')" || syswarden_namespace_status=$?
+syswarden_namespace_expect_equal NS01_HELPER_SHA "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}" "{helper_sha256}"
+syswarden_namespace_status=0
+syswarden_namespace_actual="$(stat -c '%u:%g:%a' /usr/local/libexec/syswarden-lab-network 2>&1)" || syswarden_namespace_status=$?
+syswarden_namespace_expect_equal NS02_HELPER_STAT "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}" 0:0:755
+syswarden_namespace_status=0
+syswarden_namespace_actual="$(ip link show dev eth0 2>&1)" || syswarden_namespace_status=$?
+syswarden_namespace_expect_status NS03_ETH0_LINK "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}"
+syswarden_namespace_status=0
+syswarden_namespace_actual="$(ip -d link show dev eth0 2>&1)" || syswarden_namespace_status=$?
+if [ "${{syswarden_namespace_status}}" -eq 0 ]; then
+    printf '%s\\n' "${{syswarden_namespace_actual}}" | grep -Eq '(^|[[:space:]])dummy([[:space:]]|$)' || syswarden_namespace_status=$?
+fi
+syswarden_namespace_expect_status NS04_ETH0_DUMMY "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}"
+syswarden_namespace_status=0
+syswarden_namespace_actual="$(ip link show dev eth0 2>&1)" || syswarden_namespace_status=$?
+syswarden_namespace_expect_status NS05_ETH0_UP_SOURCE "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}"
+syswarden_namespace_status=0
+printf '%s\\n' "${{syswarden_namespace_actual}}" | grep -Fq UP || syswarden_namespace_status=$?
+syswarden_namespace_expect_status NS06_ETH0_UP "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}"
+"""
+    if spec.family != "apk":
+        unit_sha256 = hashlib.sha256(
+            SYSTEMD_LAB_NETWORK_UNIT.encode("utf-8")
+        ).hexdigest()
+        systemd_runtime = (
+            common
+            + "syswarden_namespace_status=0\n"
+            + "syswarden_namespace_actual=\"$(sha256sum /etc/systemd/system/syswarden-lab-network.service | awk '{ print $1 }')\" || syswarden_namespace_status=$?\n"
+            + f"syswarden_namespace_expect_equal NS07_UNIT_SHA \"${{syswarden_namespace_status}}\" \"${{syswarden_namespace_actual}}\" \"{unit_sha256}\"\n"
+            + "syswarden_namespace_status=0\n"
+            + "syswarden_namespace_actual=\"$(stat -c '%u:%g:%a' /etc/systemd/system/syswarden-lab-network.service 2>&1)\" || syswarden_namespace_status=$?\n"
+            + "syswarden_namespace_expect_equal NS08_UNIT_STAT \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 0:0:644\n"
+            + "syswarden_namespace_status=0\n"
+            + "syswarden_namespace_actual=\"$(systemctl is-enabled syswarden-lab-network.service 2>&1)\" || syswarden_namespace_status=$?\n"
+            + "syswarden_namespace_expect_equal NS09_NET_ENABLED \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" enabled\n"
+            + "syswarden_namespace_status=0\n"
+            + "syswarden_namespace_actual=\"$(systemctl is-active syswarden-lab-network.service 2>&1)\" || syswarden_namespace_status=$?\n"
+            + "syswarden_namespace_expect_equal NS10_NET_ACTIVE \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" active\n"
+            + "syswarden_namespace_status=0\n"
+            + "syswarden_namespace_actual=\"$(systemctl is-enabled rsyslog.service 2>&1)\" || syswarden_namespace_status=$?\n"
+            + "syswarden_namespace_expect_equal NS11_RSYSLOG_ENABLED \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" enabled\n"
+            + "syswarden_namespace_status=0\n"
+            + "syswarden_namespace_actual=\"$(systemctl is-active rsyslog.service 2>&1)\" || syswarden_namespace_status=$?\n"
+            + "syswarden_namespace_expect_equal NS12_RSYSLOG_ACTIVE \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" active\n"
+            + "syswarden_namespace_status=0\n"
+            + "syswarden_namespace_actual=\"$(systemctl --failed --no-legend --plain 2>&1)\" || syswarden_namespace_status=$?\n"
+            + "syswarden_namespace_failed_count=\"$(printf '%s\\n' \"${syswarden_namespace_actual}\" | awk 'NF { count++ } END { print count + 0 }')\" || syswarden_namespace_status=$?\n"
+            + "if [ \"${syswarden_namespace_status}\" -ne 0 ] || [ \"${syswarden_namespace_failed_count}\" -ne 0 ]; then\n"
+            + "    syswarden_namespace_fail NS13_FAILED_UNITS \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" ''\n"
+            + "fi\n"
+        )
+        if spec.distribution == "fedora":
+            expected_masks = "\n".join(FEDORA_LAB_MASKED_UNITS)
+            systemd_runtime += (
+                "syswarden_namespace_status=0\n"
+                "syswarden_namespace_actual=\"$(systemctl list-unit-files --state=masked "
+                "--no-legend --plain 2>&1)\" || syswarden_namespace_status=$?\n"
+                "if [ \"${syswarden_namespace_status}\" -eq 0 ]; then\n"
+                "    actual_masks=\"$(printf '%s\\n' \"${syswarden_namespace_actual}\" | awk 'NF { print $1 }' | LC_ALL=C sort)\" || syswarden_namespace_status=$?\n"
+                "else\n"
+                "    actual_masks=\"${syswarden_namespace_actual}\"\n"
+                "fi\n"
+                f"syswarden_namespace_expect_equal NS14_FEDORA_MASKS \"${{syswarden_namespace_status}}\" \"${{actual_masks}}\" \"{expected_masks}\"\n"
+            )
+        return systemd_runtime
+    provider_sha256 = hashlib.sha256(
+        ALPINE_LAB_NETWORK_PROVIDER.encode("utf-8")
+    ).hexdigest()
+    return (
+        common
+        + f"[ \"$(sha256sum /etc/init.d/syswarden-lab-net | awk '{{ print $1 }}')\" = \"{provider_sha256}\" ]\n"
+        + "[ \"$(stat -c '%u:%g:%a' /etc/init.d/syswarden-lab-net)\" = 0:0:755 ]\n"
+        + "syswarden_apk_info_actual=\"$(\n"
+        + "    syswarden_apk_info_status=0\n"
+        + f"    apk info -e 'openrc={ALPINE_OPENRC_VERSION}' 2>&1 || syswarden_apk_info_status=$?\n"
+        + "    printf 'syswarden-apk-info-rc=%s' \"${syswarden_apk_info_status}\"\n"
+        + ")\"\n"
+        + "syswarden_apk_info_expected=\"$(printf 'openrc\\nsyswarden-apk-info-rc=0')\"\n"
+        + "syswarden_namespace_expect_equal NS15_OPENRC_PACKAGE 0 \"${syswarden_apk_info_actual}\" \"${syswarden_apk_info_expected}\"\n"
+        + "[ -f /etc/rc.conf ] && [ ! -L /etc/rc.conf ]\n"
+        + f"[ \"$(sha256sum /etc/rc.conf | awk '{{ print $1 }}')\" = \"{ALPINE_RC_CONF_POST_SHA256}\" ]\n"
+        + "[ \"$(grep -Fxc 'rc_sys=\"podman\"' /etc/rc.conf)\" -eq 1 ]\n"
+        + "[ \"$(grep -Fxc 'rc_cgroup_mode=\"legacy\"' /etc/rc.conf)\" -eq 1 ]\n"
+        + "[ \"$(awk '/^[[:space:]]*rc_sys[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf)\" -eq 1 ]\n"
+        + "[ \"$(awk '/^[[:space:]]*rc_cgroup_mode[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf)\" -eq 1 ]\n"
+        + "syswarden_openrc_sys_hex=\"$(\n"
+        + "    { openrc --sys; printf 'syswarden-openrc-rc=%s' \"$?\"; } |\n"
+        + "        od -An -v -tx1 | tr -d ' \\n'\n"
+        + ")\"\n"
+        + f"[ \"${{syswarden_openrc_sys_hex}}\" = \"{ALPINE_OPENRC_SYS_ATTESTATION_HEX}\" ]\n"
+        + "[ -f /etc/init.d/hostname ] && [ ! -L /etc/init.d/hostname ]\n"
+        + f"[ \"$(sha256sum /etc/init.d/hostname | awk '{{ print $1 }}')\" = \"{ALPINE_HOSTNAME_INIT_POST_SHA256}\" ]\n"
+        + "[ \"$(grep -Ec '^[[:space:]]*keyword -prefix -lxc -docker -podman$' /etc/init.d/hostname)\" -eq 1 ]\n"
+        + "[ \"$(tr '\\000' '\\n' < /proc/1/environ | grep -Fxc 'container=podman')\" -eq 1 ]\n"
+        + "awk "
+        + shlex.quote(ALPINE_CGROUP_MOUNTINFO_AWK)
+        + " /proc/self/mountinfo\n"
+        + "for openrc_cgroup_path in /sys/fs/cgroup/openrc.*; do\n"
+        + "    [ ! -e \"${openrc_cgroup_path}\" ] && [ ! -L \"${openrc_cgroup_path}\" ] || exit 1\n"
+        + "done\n"
+        + "[ \"$(rc-update show -v | awk '$1 == \"syswarden-lab-net\" && $2 == \"|\" && $3 == \"default\" { count++ } END { print count + 0 }')\" -eq 1 ]\n"
+        + "[ \"$(rc-update show -v | awk '$1 == \"cronie\" && $2 == \"|\" && $3 == \"default\" { count++ } END { print count + 0 }')\" -eq 1 ]\n"
+        + "[ \"$(rc-update show -v | awk '$1 == \"rsyslog\" && $2 == \"|\" && $3 == \"default\" { count++ } END { print count + 0 }')\" -eq 1 ]\n"
+        + "rc-service syswarden-lab-net status >/dev/null 2>&1\n"
+        + "rc-service cronie status >/dev/null 2>&1\n"
+        + "rc-service rsyslog status >/dev/null 2>&1\n"
+    )
+
+
+def attest_runtime_namespace(
+    runner: CommandRunner,
+    podman: str,
+    name: str,
+    spec: PlatformSpec,
+    *,
+    attempts: int = 30,
+) -> ProcessSecurityEvidence:
+    last_result: CommandResult | None = None
+    for attempt in range(attempts):
+        prepared = runner.run(
+            lifecycle_exec_arguments(
+                podman, name, spec, runtime_namespace_script(spec)
+            ),
+            timeout=60,
+        )
+        last_result = prepared
+        if prepared.returncode == 0:
+            security, remainder = parse_exec_security_output(
+                prepared.stdout, f"{spec.name} namespace attestation", spec
+            )
+            if remainder:
+                raise LifecycleLabError(
+                    f"{spec.name} namespace attestation emitted unexpected output"
+                )
+            return security
+        if attempt + 1 < attempts:
+            time.sleep(1)
+    assert last_result is not None
+    raise LifecycleLabError(
+        f"attest isolated runtime namespace for {spec.name} failed after "
+        f"{attempts} bounded attempts: {command_log_tail(last_result)}"
+    )
+
+
+def runtime_snapshot_script(spec: PlatformSpec, product_state: str) -> str:
+    if product_state not in {"active", "absent", "unasserted"}:
+        raise LifecycleLabError(
+            f"unsupported product service expectation: {product_state!r}"
+        )
+    manager = "openrc" if spec.family == "apk" else "systemd"
+    cron_executable = expected_cron_executable(spec)
+    if spec.family == "deb":
+        cron_service = "cron.service"
+        cron_fragment = "/usr/lib/systemd/system/cron.service"
+    elif spec.family == "rpm":
+        cron_service = "crond.service"
+        cron_fragment = "/usr/lib/systemd/system/crond.service"
+    else:
+        cron_service = "cronie"
+        cron_fragment = "/etc/init.d/cronie"
+    cron_fragment_mode_hex = "81ed" if spec.family == "apk" else "81a4"
+    expected_cron_dropin = (
+        FEDORA_CRON_DROPIN_PATH if spec.distribution == "fedora" else ""
+    )
+    return f"""set -eu
+syswarden_expected_manager='{manager}'
+syswarden_package_family='{spec.family}'
+syswarden_expected_product_state='{product_state}'
+. /lab/package-webtui-retirement.sh
+syswarden_snapshot_hex_prefix() {{
+    LC_ALL=C od -An -v -tx1 | tr -d ' \n' | cut -c1-512
+}}
+syswarden_snapshot_fail() {{
+    syswarden_snapshot_predicate="$1"
+    syswarden_snapshot_status="$2"
+    syswarden_snapshot_actual="$3"
+    syswarden_snapshot_expected="$4"
+    case "${{syswarden_snapshot_predicate}}" in
+        RS[0-9][0-9]_*) ;;
+        *) exit 97 ;;
+    esac
+    case "${{syswarden_snapshot_status}}" in
+        ''|*[!0-9]*) exit 97 ;;
+    esac
+    [ "${{syswarden_snapshot_status}}" -le 255 ] || exit 97
+    syswarden_snapshot_actual_bytes="$(
+        printf '%s' "${{syswarden_snapshot_actual}}" | LC_ALL=C wc -c | tr -d ' '
+    )" || exit 97
+    syswarden_snapshot_expected_bytes="$(
+        printf '%s' "${{syswarden_snapshot_expected}}" | LC_ALL=C wc -c | tr -d ' '
+    )" || exit 97
+    syswarden_snapshot_actual_hex_prefix="$(
+        printf '%s' "${{syswarden_snapshot_actual}}" | syswarden_snapshot_hex_prefix
+    )" || exit 97
+    syswarden_snapshot_expected_hex_prefix="$(
+        printf '%s' "${{syswarden_snapshot_expected}}" | syswarden_snapshot_hex_prefix
+    )" || exit 97
+    printf '%s\tpredicate=%s\trc=%s\tactual_bytes=%s\tactual_hex_prefix=%s\texpected_bytes=%s\texpected_hex_prefix=%s\n' \
+        '{SNAPSHOT_FAILURE_MARKER}' "${{syswarden_snapshot_predicate}}" \
+        "${{syswarden_snapshot_status}}" "${{syswarden_snapshot_actual_bytes}}" \
+        "${{syswarden_snapshot_actual_hex_prefix}}" \
+        "${{syswarden_snapshot_expected_bytes}}" \
+        "${{syswarden_snapshot_expected_hex_prefix}}" >&2
+}}
+attest_no_syswarden_core_runtime() {{
+    core_proc_root="$1"
+    core_pidfile="$2"
+    [ ! -e "${{core_pidfile}}" ] && [ ! -L "${{core_pidfile}}" ] || return 79
+    for core_process_root in "${{core_proc_root}}"/[0-9]*; do
+        [ -d "${{core_process_root}}" ] || continue
+        core_process_comm="$(cat "${{core_process_root}}/comm" 2>/dev/null || true)"
+        core_process_exe="$(readlink "${{core_process_root}}/exe" 2>/dev/null || true)"
+        if [ "${{core_process_comm}}" = syswarden-core ]; then
+            return 79
+        fi
+        case "${{core_process_exe}}" in
+            /opt/syswarden/bin/syswarden-core|\
+            '/opt/syswarden/bin/syswarden-core (deleted)') return 79 ;;
+        esac
+    done
+}}
+canonical_id_map() {{
+    awk '
+        NF != 3 || $1 !~ /^(0|[1-9][0-9]*)$/ ||
+            $2 !~ /^(0|[1-9][0-9]*)$/ ||
+            $3 !~ /^(0|[1-9][0-9]*)$/ {{ exit 1 }}
+        {{
+            printf "%s%s:%s:%s", (count ? "," : ""), $1, $2, $3
+            count++
+        }}
+        END {{
+            if (!count) exit 1
+            print ""
+        }}
+    ' "$1"
+}}
+capture_snapshot() {{
+    pid1_comm="$(cat /proc/1/comm)"
+    pid1_exe="$(readlink /proc/1/exe)"
+    pid1_starttime="$(awk '{{ print $22 }}' /proc/1/stat)"
+    case "${{pid1_starttime}}" in ''|*[!0-9]*) return 71 ;; esac
+    pid1_cap_inh="$(syswarden_read_status_value 1 CapInh)" || return 83
+    pid1_cap_prm="$(syswarden_read_status_value 1 CapPrm)" || return 83
+    pid1_cap_eff="$(syswarden_read_status_value 1 CapEff)" || return 83
+    pid1_cap_bnd="$(syswarden_read_status_value 1 CapBnd)" || return 83
+    pid1_cap_amb="$(syswarden_read_status_value 1 CapAmb)" || return 83
+    pid1_nnp="$(syswarden_read_status_value 1 NoNewPrivs)" || return 83
+    [ "${{pid1_nnp}}" = 1 ] || return 83
+    pid1_uid_map="$(canonical_id_map /proc/1/uid_map)" || return 83
+    pid1_gid_map="$(canonical_id_map /proc/1/gid_map)" || return 83
+    [ "${{pid1_uid_map%%,*}}" = "0:{os.geteuid()}:1" ] || return 83
+    [ "${{pid1_gid_map%%,*}}" = "0:{os.getegid()}:1" ] || return 83
+    if [ "${{syswarden_expected_manager}}" = systemd ]; then
+        for pid1_capability in \
+            "${{pid1_cap_prm}}" "${{pid1_cap_eff}}" "${{pid1_cap_bnd}}"; do
+            syswarden_capability_has_sys_admin "${{pid1_capability}}" || return 83
+            syswarden_capability_has_sys_ptrace "${{pid1_capability}}" || return 83
+        done
+        for pid1_capability in "${{pid1_cap_inh}}" "${{pid1_cap_amb}}"; do
+            if syswarden_capability_has_sys_admin "${{pid1_capability}}"; then
+                return 83
+            else
+                pid1_capability_status=$?
+                [ "${{pid1_capability_status}}" -eq 1 ] || return 83
+            fi
+            if syswarden_capability_has_sys_ptrace "${{pid1_capability}}"; then
+                return 83
+            else
+                pid1_capability_status=$?
+                [ "${{pid1_capability_status}}" -eq 1 ] || return 83
+            fi
+        done
+    else
+        for pid1_capability in \
+            "${{pid1_cap_inh}}" "${{pid1_cap_prm}}" \
+            "${{pid1_cap_eff}}" "${{pid1_cap_bnd}}" \
+            "${{pid1_cap_amb}}"; do
+            if syswarden_capability_has_sys_admin "${{pid1_capability}}"; then
+                return 83
+            else
+                pid1_capability_status=$?
+                [ "${{pid1_capability_status}}" -eq 1 ] || return 83
+            fi
+            if syswarden_capability_has_sys_ptrace "${{pid1_capability}}"; then
+                return 83
+            else
+                pid1_capability_status=$?
+                [ "${{pid1_capability_status}}" -eq 1 ] || return 83
+            fi
+        done
+    fi
+    if [ "${{syswarden_expected_manager}}" = systemd ]; then
+        setpriv_path=/usr/bin/setpriv
+        [ -f "${{setpriv_path}}" ] && [ ! -L "${{setpriv_path}}" ] || return 84
+        setpriv_identity="$(stat -Lc '%d:%i:%f:%u:%g' "${{setpriv_path}}" 2>/dev/null || true)"
+        case "${{setpriv_identity}}" in *:81ed:0:0) ;; *) return 84 ;; esac
+        setpriv_sha256="$(sha256sum "${{setpriv_path}}" 2>/dev/null | awk '{{ print $1 }}')"
+        case "${{setpriv_sha256}}" in *[!0-9a-f]*|'') return 84 ;; esac
+        [ "${{#setpriv_sha256}}" -eq 64 ] || return 84
+        case "${{syswarden_package_family}}" in
+            deb)
+                [ "$(dpkg-query -S "${{setpriv_path}}" 2>/dev/null || true)" = \
+                    "util-linux: ${{setpriv_path}}" ] || return 84
+                setpriv_package_name=util-linux
+                setpriv_package_version="$(dpkg-query -W -f='${{Version}}' util-linux 2>/dev/null || true)"
+                setpriv_package_architecture="$(dpkg-query -W -f='${{Architecture}}' util-linux 2>/dev/null || true)"
+                ;;
+            rpm)
+                setpriv_package_record="$(rpm -qf --qf '%{{NAME}}\t%{{EVR}}\t%{{ARCH}}' "${{setpriv_path}}" 2>/dev/null || true)"
+                [ "$(printf '%s\n' "${{setpriv_package_record}}" | awk -F '\t' 'NF == 3 {{ print $1 }}')" = util-linux ] || return 84
+                setpriv_package_name=util-linux
+                setpriv_package_version="$(printf '%s\n' "${{setpriv_package_record}}" | cut -f2)"
+                setpriv_package_architecture="$(printf '%s\n' "${{setpriv_package_record}}" | cut -f3)"
+                ;;
+        esac
+        case "${{setpriv_package_version}}" in ''|*[!A-Za-z0-9.+:~_-]*) return 84 ;; esac
+        [ "${{#setpriv_package_version}}" -le 128 ] || return 84
+        [ "${{setpriv_package_architecture}}" = "{spec.package_architecture}" ] || return 84
+        [ "$(stat -Lc '%d:%i:%f:%u:%g' "${{setpriv_path}}" 2>/dev/null || true)" = \
+            "${{setpriv_identity}}" ] || return 84
+        [ "$(sha256sum "${{setpriv_path}}" 2>/dev/null | awk '{{ print $1 }}')" = \
+            "${{setpriv_sha256}}" ] || return 84
+    else
+        setpriv_path=-
+        setpriv_identity=-
+        setpriv_sha256=-
+        setpriv_package_name=-
+        setpriv_package_version=-
+        setpriv_package_architecture=-
+    fi
+    manager_state="$(syswarden_classify_service_manager / "${{syswarden_expected_manager}}")"
+    [ "${{manager_state}}" = ACTIVE ] || return 72
+    ip link show dev eth0 >/dev/null 2>&1 || return 73
+    ip -d link show dev eth0 | grep -Eq '(^|[[:space:]])dummy([[:space:]]|$)' || return 73
+    ip link show dev eth0 | grep -Fq 'UP' || return 73
+    if [ "${{syswarden_expected_manager}}" = systemd ]; then
+        case "${{pid1_exe}}" in /usr/lib/systemd/systemd|/lib/systemd/systemd) ;; *) return 74 ;; esac
+        [ "${{pid1_comm}}" = systemd ] || return 74
+        manager_runtime="$(systemctl is-system-running 2>/dev/null || true)"
+        [ "${{manager_runtime}}" = running ] || return 75
+        cron_enabled="$(systemctl is-enabled {cron_service} 2>/dev/null || true)"
+        cron_active="$(systemctl is-active {cron_service} 2>/dev/null || true)"
+        cron_pid="$(systemctl show -p MainPID --value {cron_service} 2>/dev/null || true)"
+        rsyslog_enabled="$(systemctl is-enabled rsyslog.service 2>/dev/null || true)"
+        rsyslog_active="$(systemctl is-active rsyslog.service 2>/dev/null || true)"
+        rsyslog_pid="$(systemctl show -p MainPID --value rsyslog.service 2>/dev/null || true)"
+        [ "${{cron_enabled}}" = enabled ] && [ "${{cron_active}}" = active ] || return 76
+        [ "${{rsyslog_enabled}}" = enabled ] && [ "${{rsyslog_active}}" = active ] || return 76
+    else
+        [ "${{pid1_comm}}" = openrc-init ] && [ "${{pid1_exe}}" = /sbin/openrc-init ] || return 74
+        manager_runtime="$(rc-status --runlevel 2>/dev/null || true)"
+        [ "${{manager_runtime}}" = default ] || return 75
+        [ "$(rc-update show -v | awk '$1 == "cronie" && $2 == "|" && $3 == "default" {{ count++ }} END {{ print count + 0 }}')" -eq 1 ] || return 76
+        [ "$(rc-update show -v | awk '$1 == "rsyslog" && $2 == "|" && $3 == "default" {{ count++ }} END {{ print count + 0 }}')" -eq 1 ] || return 76
+        rc-service cronie status >/dev/null 2>&1 || return 76
+        rc-service rsyslog status >/dev/null 2>&1 || return 76
+        cron_enabled=enabled
+        cron_active=active
+        rsyslog_enabled=enabled
+        rsyslog_active=active
+        cron_pid="$(pgrep -x crond 2>/dev/null || true)"
+        rsyslog_pid="$(pgrep -x rsyslogd 2>/dev/null || true)"
+        [ "$(printf '%s\n' "${{cron_pid}}" | awk 'NF {{ count++ }} END {{ print count + 0 }}')" -eq 1 ] || return 76
+        [ "$(printf '%s\n' "${{rsyslog_pid}}" | awk 'NF {{ count++ }} END {{ print count + 0 }}')" -eq 1 ] || return 76
+    fi
+    case "${{cron_pid}}:${{rsyslog_pid}}" in *[!0-9:]*) return 77 ;; esac
+    [ "${{cron_pid}}" -gt 1 ] && [ "${{rsyslog_pid}}" -gt 1 ] || return 77
+    kill -0 "${{cron_pid}}" 2>/dev/null && kill -0 "${{rsyslog_pid}}" 2>/dev/null || return 77
+    cron_executable_path="$(readlink "/proc/${{cron_pid}}/exe" 2>/dev/null || true)"
+    if [ "${{cron_executable_path}}" != "{cron_executable}" ]; then
+        syswarden_snapshot_fail RS07_CRON_EXECUTABLE_PATH 82 \
+            "${{cron_executable_path}}" "{cron_executable}"
+        return 82
+    fi
+    cron_process_identity="$(stat -Lc '%d:%i:%f:%u:%g' "/proc/${{cron_pid}}/exe" 2>/dev/null || true)"
+    cron_installed_identity="$(stat -Lc '%d:%i:%f:%u:%g' "{cron_executable}" 2>/dev/null || true)"
+    cron_process_sha256="$(sha256sum "/proc/${{cron_pid}}/exe" 2>/dev/null | awk '{{ print $1 }}')"
+    cron_installed_sha256="$(sha256sum "{cron_executable}" 2>/dev/null | awk '{{ print $1 }}')"
+    [ -n "${{cron_process_identity}}" ] && \
+        [ "${{cron_process_identity}}" = "${{cron_installed_identity}}" ] && \
+        [ "${{cron_process_sha256}}" = "${{cron_installed_sha256}}" ] || return 82
+    case "${{cron_installed_sha256}}" in *[!0-9a-f]*|'') return 82 ;; esac
+    [ "${{#cron_installed_sha256}}" -eq 64 ] || return 82
+    [ "${{cron_installed_identity#*:*:}}" != "${{cron_installed_identity}}" ] || return 82
+    [ "$(stat -Lc '%f:%u:%g' "{cron_executable}" 2>/dev/null || true)" = 81ed:0:0 ] || return 82
+    if [ "${{syswarden_expected_manager}}" = systemd ]; then
+        cron_fragment_path="$(systemctl show {cron_service} -p FragmentPath --value 2>/dev/null || true)"
+        case "${{syswarden_package_family}}:${{cron_fragment_path}}" in
+            deb:/lib/systemd/system/cron.service|deb:/usr/lib/systemd/system/cron.service|\
+            rpm:/usr/lib/systemd/system/crond.service) ;;
+            *) return 82 ;;
+        esac
+        cron_dropin_value="$(systemctl show {cron_service} -p DropInPaths --value 2>/dev/null || true)"
+        if [ "${{cron_dropin_value}}" != "{expected_cron_dropin}" ]; then
+            syswarden_snapshot_fail RS01_CRON_DROPIN_PATHS 82 \
+                "${{cron_dropin_value}}" "{expected_cron_dropin}"
+            return 82
+        fi
+    else
+        cron_fragment_path="{cron_fragment}"
+        [ -f "${{cron_fragment_path}}" ] && [ ! -L "${{cron_fragment_path}}" ] || return 82
+        cron_dropin_value=
+    fi
+    cron_dropin_output=-
+    cron_dropin_attestation=-
+    if [ -n "${{cron_dropin_value}}" ]; then
+        cron_dropin_path="${{cron_dropin_value}}"
+        cron_dropin_lstat="$(stat -c '%d:%i:%f:%u:%g' "${{cron_dropin_path}}" 2>/dev/null || true)"
+        cron_dropin_stat="$(stat -Lc '%d:%i:%f:%u:%g' "${{cron_dropin_path}}" 2>/dev/null || true)"
+        cron_dropin_sha256="$(sha256sum "${{cron_dropin_path}}" 2>/dev/null | awk '{{ print $1 }}')"
+        cron_dropin_file_state="$(stat -c '%f:%u:%g' "${{cron_dropin_path}}" 2>/dev/null || true)"
+        if [ ! -f "${{cron_dropin_path}}" ] || [ -L "${{cron_dropin_path}}" ] || \
+           [ "${{cron_dropin_file_state}}" != 81a4:0:0 ] || \
+           [ -z "${{cron_dropin_lstat}}" ] || [ -z "${{cron_dropin_stat}}" ]; then
+            syswarden_snapshot_fail RS02_CRON_DROPIN_FILE 82 \
+                "${{cron_dropin_file_state}}" 81a4:0:0
+            return 82
+        fi
+        case "${{cron_dropin_sha256}}" in *[!0-9a-f]*|'')
+            syswarden_snapshot_fail RS03_CRON_DROPIN_SHA256 82 \
+                "${{cron_dropin_sha256}}" sha256-lowercase-hex
+            return 82
+            ;;
+        esac
+        if [ "${{#cron_dropin_sha256}}" -ne 64 ]; then
+            syswarden_snapshot_fail RS03_CRON_DROPIN_SHA256 82 \
+                "${{cron_dropin_sha256}}" sha256-lowercase-hex
+            return 82
+        fi
+        cron_dropin_package_status=0
+        cron_dropin_package_record="$(
+            rpm -qf --qf '%{{NAME}}\t%{{EVR}}\t%{{ARCH}}\t%{{FILEDIGESTALGO}}\n' \
+                "${{cron_dropin_path}}" 2>/dev/null
+        )" || cron_dropin_package_status=$?
+        if [ "${{cron_dropin_package_status}}" -ne 0 ]; then
+            syswarden_snapshot_fail RS04_CRON_DROPIN_PACKAGE 82 \
+                "rc=${{cron_dropin_package_status}}|${{cron_dropin_package_record}}" \
+                'rc=0|systemd<TAB>EVR<TAB>{spec.package_architecture}<TAB>8'
+            return 82
+        fi
+        if ! printf '%s\n' "${{cron_dropin_package_record}}" | awk -F '\t' \
+            -v expected_arch='{spec.package_architecture}' '
+                NF != 4 {{ bad = 1 }}
+                $1 != "systemd" || $2 !~ /^[A-Za-z0-9.+:~_-]+$/ ||
+                    length($2) > 128 || $3 != expected_arch || $4 != "8" {{ bad = 1 }}
+                {{ count++ }}
+                END {{ exit !(count == 1 && !bad) }}
+            '; then
+            syswarden_snapshot_fail RS04_CRON_DROPIN_PACKAGE 82 \
+                "${{cron_dropin_package_record}}" \
+                'systemd<TAB>EVR<TAB>{spec.package_architecture}<TAB>8'
+            return 82
+        fi
+        cron_dropin_package_version="$(printf '%s\n' "${{cron_dropin_package_record}}" | cut -f2)"
+        cron_dropin_metadata_status=0
+        cron_dropin_metadata_record="$(
+            rpm -qf --qf '[%{{FILENAMES}}\t%{{FILEDIGESTS}}\n]' \
+                "${{cron_dropin_path}}" 2>/dev/null
+        )" || cron_dropin_metadata_status=$?
+        if [ "${{cron_dropin_metadata_status}}" -ne 0 ]; then
+            syswarden_snapshot_fail RS05_CRON_DROPIN_RPM_DIGEST 82 \
+                "rc=${{cron_dropin_metadata_status}}|${{cron_dropin_metadata_record}}" \
+                'rc=0|PATH<TAB>SHA256'
+            return 82
+        fi
+        cron_dropin_metadata_sha256="$(
+            printf '%s\n' "${{cron_dropin_metadata_record}}" |
+                awk -F '\t' -v wanted="${{cron_dropin_path}}" '
+                    $1 == wanted {{ count++; digest = $2 }}
+                    END {{ if (count != 1) exit 1; print digest }}
+                '
+        )" || cron_dropin_metadata_sha256=
+        if [ "${{cron_dropin_metadata_sha256}}" != "${{cron_dropin_sha256}}" ]; then
+            syswarden_snapshot_fail RS05_CRON_DROPIN_RPM_DIGEST 82 \
+                "${{cron_dropin_sha256}}" "${{cron_dropin_metadata_sha256}}"
+            return 82
+        fi
+        cron_dropin_after="$(
+            stat -c '%d:%i:%f:%u:%g' "${{cron_dropin_path}}" 2>/dev/null || true
+        )|$(
+            stat -Lc '%d:%i:%f:%u:%g' "${{cron_dropin_path}}" 2>/dev/null || true
+        )|$(sha256sum "${{cron_dropin_path}}" 2>/dev/null | awk '{{ print $1 }}')"
+        if [ "${{cron_dropin_after}}" != \
+             "${{cron_dropin_lstat}}|${{cron_dropin_stat}}|${{cron_dropin_sha256}}" ]; then
+            syswarden_snapshot_fail RS06_CRON_DROPIN_DRIFT 82 \
+                "${{cron_dropin_after}}" \
+                "${{cron_dropin_lstat}}|${{cron_dropin_stat}}|${{cron_dropin_sha256}}"
+            return 82
+        fi
+        cron_dropin_output="${{cron_dropin_path}}"
+        cron_dropin_attestation="${{cron_dropin_stat}}|${{cron_dropin_sha256}}|systemd|${{cron_dropin_package_version}}|{spec.package_architecture}|8"
+    fi
+    [ -f "${{cron_fragment_path}}" ] && [ ! -L "${{cron_fragment_path}}" ] && \
+        [ "$(stat -c '%f:%u:%g' "${{cron_fragment_path}}" 2>/dev/null || true)" = {cron_fragment_mode_hex}:0:0 ] || return 82
+    cron_fragment_stat="$(stat -Lc '%d:%i:%f:%u:%g' "${{cron_fragment_path}}" 2>/dev/null || true)"
+    cron_fragment_sha256="$(sha256sum "${{cron_fragment_path}}" 2>/dev/null | awk '{{ print $1 }}')"
+    case "${{cron_fragment_sha256}}" in *[!0-9a-f]*|'') return 82 ;; esac
+    [ "${{#cron_fragment_sha256}}" -eq 64 ] || return 82
+    case "${{syswarden_package_family}}" in
+        deb)
+            [ "$(dpkg-query -S "{cron_executable}" 2>/dev/null || true)" = "cron: {cron_executable}" ] || return 82
+            cron_package_name=cron
+            cron_package_version="$(dpkg-query -W -f='${{Version}}' cron 2>/dev/null || true)"
+            cron_package_architecture="$(dpkg-query -W -f='${{Architecture}}' cron 2>/dev/null || true)"
+            cron_fragment_owner_count=0
+            for cron_fragment_owner_path in /lib/systemd/system/cron.service /usr/lib/systemd/system/cron.service; do
+                if [ "$(dpkg-query -S "${{cron_fragment_owner_path}}" 2>/dev/null || true)" = "cron: ${{cron_fragment_owner_path}}" ] && \
+                   [ "$(stat -Lc '%d:%i:%f:%u:%g' "${{cron_fragment_owner_path}}" 2>/dev/null || true)" = "${{cron_fragment_stat}}" ]; then
+                    cron_fragment_owner_count=$((cron_fragment_owner_count + 1))
+                fi
+            done
+            [ "${{cron_fragment_owner_count}}" -eq 1 ] || return 82
+            cron_fragment_package_name=cron
+            cron_fragment_package_version="${{cron_package_version}}"
+            cron_fragment_package_architecture="${{cron_package_architecture}}"
+            ;;
+        rpm)
+            cron_package_name="$(rpm -qf --qf '%{{NAME}}' "{cron_executable}" 2>/dev/null || true)"
+            cron_package_version="$(rpm -qf --qf '%{{EVR}}' "{cron_executable}" 2>/dev/null || true)"
+            cron_package_architecture="$(rpm -qf --qf '%{{ARCH}}' "{cron_executable}" 2>/dev/null || true)"
+            [ "${{cron_package_name}}" = cronie ] || return 82
+            cron_fragment_package_name="$(rpm -qf --qf '%{{NAME}}' "${{cron_fragment_path}}" 2>/dev/null || true)"
+            cron_fragment_package_version="$(rpm -qf --qf '%{{EVR}}' "${{cron_fragment_path}}" 2>/dev/null || true)"
+            cron_fragment_package_architecture="$(rpm -qf --qf '%{{ARCH}}' "${{cron_fragment_path}}" 2>/dev/null || true)"
+            [ "${{cron_fragment_package_name}}:${{cron_fragment_package_version}}:${{cron_fragment_package_architecture}}" = \
+                "${{cron_package_name}}:${{cron_package_version}}:${{cron_package_architecture}}" ] || return 82
+            ;;
+        apk)
+            apk_installed_db=/lib/apk/db/installed
+            [ -f "${{apk_installed_db}}" ] && [ ! -L "${{apk_installed_db}}" ] && \
+                [ "$(stat -c '%u:%g' "${{apk_installed_db}}" 2>/dev/null || true)" = 0:0 ] && \
+                [ "$(wc -c < "${{apk_installed_db}}" | tr -d ' ')" -le 16777216 ] || return 82
+            apk_installed_record() {{
+                awk -v wanted="$1" '
+                    function flush() {{
+                        if (package == wanted) {{
+                            count++
+                            if (pcount != 1 || vcount != 1 || acount != 1) bad = 1
+                            result = package "\t" version "\t" architecture
+                        }}
+                        package = version = architecture = ""
+                        pcount = vcount = acount = 0
+                    }}
+                    /^$/ {{ flush(); next }}
+                    /^P:/ {{ package = substr($0, 3); pcount++; next }}
+                    /^V:/ {{ version = substr($0, 3); vcount++; next }}
+                    /^A:/ {{ architecture = substr($0, 3); acount++; next }}
+                    END {{ flush(); if (count != 1 || bad) exit 1; print result }}
+                ' "${{apk_installed_db}}"
+            }}
+            cron_package_record="$(apk_installed_record cronie)" || return 82
+            cron_fragment_package_record="$(apk_installed_record cronie-openrc)" || return 82
+            [ "$(printf '%s\n' "${{cron_package_record}}" | awk -F '\t' 'NF == 3 {{ print $1 }}')" = cronie ] || return 82
+            cron_package_name=cronie
+            cron_package_version="$(printf '%s\n' "${{cron_package_record}}" | cut -f2)"
+            cron_package_architecture="$(printf '%s\n' "${{cron_package_record}}" | cut -f3)"
+            cron_fragment_package_name=cronie-openrc
+            cron_fragment_package_version="$(printf '%s\n' "${{cron_fragment_package_record}}" | cut -f2)"
+            cron_fragment_package_architecture="$(printf '%s\n' "${{cron_fragment_package_record}}" | cut -f3)"
+            cron_package_owner="$(apk info --who-owns "{cron_executable}" 2>/dev/null || true)"
+            [ "${{cron_package_owner}}" = "{cron_executable} is owned by cronie-${{cron_package_version}}" ] || return 82
+            cron_fragment_package_owner="$(apk info --who-owns "${{cron_fragment_path}}" 2>/dev/null || true)"
+            [ "${{cron_fragment_package_owner}}" = "${{cron_fragment_path}} is owned by cronie-openrc-${{cron_fragment_package_version}}" ] || return 82
+            [ "${{cron_package_version}}" = "${{cron_fragment_package_version}}" ] || return 82
+            [ "${{cron_package_architecture}}" = "$(apk --print-arch 2>/dev/null || true)" ] || return 82
+            ;;
+    esac
+    [ "${{cron_package_architecture}}" = "{spec.package_architecture}" ] || return 82
+    case "${{cron_package_version}}" in ''|*[!A-Za-z0-9.+:~_-]*) return 82 ;; esac
+    [ "${{#cron_package_version}}" -le 128 ] || return 82
+    [ "${{cron_fragment_package_architecture}}" = "${{cron_package_architecture}}" ] || return 82
+    cron_fragment_identity="${{cron_fragment_stat}}|${{cron_fragment_sha256}}"
+    [ "$(readlink "/proc/${{cron_pid}}/exe" 2>/dev/null || true)" = "${{cron_executable_path}}" ] || return 82
+    [ "$(stat -Lc '%d:%i:%f:%u:%g' "/proc/${{cron_pid}}/exe" 2>/dev/null || true)" = "${{cron_process_identity}}" ] || return 82
+    [ "$(stat -Lc '%d:%i:%f:%u:%g' "{cron_executable}" 2>/dev/null || true)" = "${{cron_installed_identity}}" ] || return 82
+    [ "$(sha256sum "/proc/${{cron_pid}}/exe" 2>/dev/null | awk '{{ print $1 }}')" = "${{cron_process_sha256}}" ] || return 82
+    [ "$(sha256sum "{cron_executable}" 2>/dev/null | awk '{{ print $1 }}')" = "${{cron_installed_sha256}}" ] || return 82
+    [ "$(stat -Lc '%d:%i:%f:%u:%g' "${{cron_fragment_path}}" 2>/dev/null || true)" = "${{cron_fragment_stat}}" ] || return 82
+    [ "$(sha256sum "${{cron_fragment_path}}" 2>/dev/null | awk '{{ print $1 }}')" = "${{cron_fragment_sha256}}" ] || return 82
+    cron_executable_identity="${{cron_installed_identity}}|${{cron_installed_sha256}}"
+    if [ "${{syswarden_expected_product_state}}" = active ]; then
+        if [ "${{syswarden_expected_manager}}" = systemd ]; then
+            core_load="$(systemctl show syswarden-core.service -p LoadState --value 2>/dev/null || true)"
+            core_fragment="$(systemctl show syswarden-core.service -p FragmentPath --value 2>/dev/null || true)"
+            core_active="$(systemctl show syswarden-core.service -p ActiveState --value 2>/dev/null || true)"
+            core_enabled="$(systemctl show syswarden-core.service -p UnitFileState --value 2>/dev/null || true)"
+            core_pid="$(systemctl show syswarden-core.service -p MainPID --value 2>/dev/null || true)"
+            firewall_load="$(systemctl show syswarden-firewall.service -p LoadState --value 2>/dev/null || true)"
+            firewall_fragment="$(systemctl show syswarden-firewall.service -p FragmentPath --value 2>/dev/null || true)"
+            firewall_active="$(systemctl show syswarden-firewall.service -p ActiveState --value 2>/dev/null || true)"
+            firewall_enabled="$(systemctl show syswarden-firewall.service -p UnitFileState --value 2>/dev/null || true)"
+            firewall_pid="$(systemctl show syswarden-firewall.service -p MainPID --value 2>/dev/null || true)"
+            [ "${{core_load}}:${{core_fragment}}:${{core_active}}:${{core_enabled}}" = \
+                'loaded:/etc/systemd/system/syswarden-core.service:active:enabled' ] || return 78
+            [ "${{firewall_load}}:${{firewall_fragment}}:${{firewall_active}}:${{firewall_enabled}}" = \
+                'loaded:/etc/systemd/system/syswarden-firewall.service:active:enabled' ] || return 78
+            [ "${{core_pid}}" -gt 1 ] && [ "${{firewall_pid}}" -eq 0 ] || return 78
+            kill -0 "${{core_pid}}" 2>/dev/null || return 78
+        else
+            for service in syswarden-core syswarden-firewall; do
+                [ -f "/etc/init.d/${{service}}" ] && [ ! -L "/etc/init.d/${{service}}" ] || return 78
+                [ -L "/etc/runlevels/default/${{service}}" ] && [ "$(readlink "/etc/runlevels/default/${{service}}")" = "/etc/init.d/${{service}}" ] || return 78
+                rc-service "${{service}}" status >/dev/null 2>&1 || return 78
+            done
+            core_pid="$(pgrep -x syswarden-core 2>/dev/null || true)"
+            [ "$(printf '%s\n' "${{core_pid}}" | awk 'NF {{ count++ }} END {{ print count + 0 }}')" -eq 1 ] || return 78
+            [ "${{core_pid}}" -gt 1 ] && kill -0 "${{core_pid}}" 2>/dev/null || return 78
+            core_load=loaded
+            core_fragment=/etc/init.d/syswarden-core
+            core_enabled=enabled
+            core_active=active
+            firewall_load=loaded
+            firewall_fragment=/etc/init.d/syswarden-firewall
+            firewall_enabled=enabled
+            firewall_active=active
+            firewall_pid=0
+        fi
+        core_cap_inh="$(syswarden_read_status_value "${{core_pid}}" CapInh)" || return 85
+        core_cap_prm="$(syswarden_read_status_value "${{core_pid}}" CapPrm)" || return 85
+        core_cap_eff="$(syswarden_read_status_value "${{core_pid}}" CapEff)" || return 85
+        core_cap_bnd="$(syswarden_read_status_value "${{core_pid}}" CapBnd)" || return 85
+        core_cap_amb="$(syswarden_read_status_value "${{core_pid}}" CapAmb)" || return 85
+        core_nnp="$(syswarden_read_status_value "${{core_pid}}" NoNewPrivs)" || return 85
+        [ "${{core_nnp}}" = 1 ] || return 85
+        for core_capability in \
+            "${{core_cap_inh}}" "${{core_cap_prm}}" \
+            "${{core_cap_eff}}" "${{core_cap_bnd}}" \
+            "${{core_cap_amb}}"; do
+            if syswarden_capability_has_sys_admin "${{core_capability}}"; then
+                return 85
+            else
+                core_capability_status=$?
+                [ "${{core_capability_status}}" -eq 1 ] || return 85
+            fi
+            if syswarden_capability_has_sys_ptrace "${{core_capability}}"; then
+                return 85
+            else
+                core_capability_status=$?
+                [ "${{core_capability_status}}" -eq 1 ] || return 85
+            fi
+        done
+        core_executable_path="$(readlink "/proc/${{core_pid}}/exe" 2>/dev/null || true)"
+        [ "${{core_executable_path}}" = /opt/syswarden/bin/syswarden-core ] || return 81
+        core_process_identity="$(stat -Lc '%d:%i:%f:%u:%g' "/proc/${{core_pid}}/exe" 2>/dev/null || true)"
+        core_installed_identity="$(stat -Lc '%d:%i:%f:%u:%g' /opt/syswarden/bin/syswarden-core 2>/dev/null || true)"
+        [ "$(stat -Lc '%f:%u:%g' /opt/syswarden/bin/syswarden-core 2>/dev/null || true)" = 81e8:0:0 ] || return 81
+        core_process_sha256="$(sha256sum "/proc/${{core_pid}}/exe" 2>/dev/null | awk '{{ print $1 }}')"
+        core_installed_sha256="$(sha256sum /opt/syswarden/bin/syswarden-core 2>/dev/null | awk '{{ print $1 }}')"
+        [ -n "${{core_process_identity}}" ] && \
+            [ "${{core_process_identity}}" = "${{core_installed_identity}}" ] && \
+            [ "${{core_process_sha256}}" = "${{core_installed_sha256}}" ] || return 81
+        case "${{core_installed_sha256}}" in *[!0-9a-f]*|'') return 81 ;; esac
+        [ "${{#core_installed_sha256}}" -eq 64 ] || return 81
+        [ "$(readlink "/proc/${{core_pid}}/exe" 2>/dev/null || true)" = "${{core_executable_path}}" ] || return 81
+        [ "$(stat -Lc '%d:%i:%f:%u:%g' "/proc/${{core_pid}}/exe" 2>/dev/null || true)" = "${{core_process_identity}}" ] || return 81
+        [ "$(stat -Lc '%d:%i:%f:%u:%g' /opt/syswarden/bin/syswarden-core 2>/dev/null || true)" = "${{core_installed_identity}}" ] || return 81
+        [ "$(sha256sum "/proc/${{core_pid}}/exe" 2>/dev/null | awk '{{ print $1 }}')" = "${{core_process_sha256}}" ] || return 81
+        [ "$(sha256sum /opt/syswarden/bin/syswarden-core 2>/dev/null | awk '{{ print $1 }}')" = "${{core_installed_sha256}}" ] || return 81
+        core_executable_identity="${{core_installed_identity}}|${{core_installed_sha256}}"
+        if [ "${{syswarden_expected_manager}}" = openrc ]; then
+            [ -f /run/syswarden-core.pid ] && [ ! -L /run/syswarden-core.pid ] || return 81
+            [ "$(stat -c '%u:%g:%a' /run/syswarden-core.pid 2>/dev/null || true)" = 0:0:644 ] || return 81
+            [ "$(wc -c < /run/syswarden-core.pid | tr -d ' ')" -le 32 ] || return 81
+            [ "$(cat /run/syswarden-core.pid 2>/dev/null || true)" = "${{core_pid}}" ] || return 81
+            core_pidfile_identity="$(stat -c '%d:%i:%s:%u:%g:%a' /run/syswarden-core.pid 2>/dev/null || true)"
+            [ -n "${{core_pidfile_identity}}" ] || return 81
+        else
+            core_pidfile_identity=-
+        fi
+    elif [ "${{syswarden_expected_product_state}}" = absent ]; then
+        attest_no_syswarden_core_runtime /proc /run/syswarden-core.pid || return 79
+        for path in \
+            /etc/systemd/system/syswarden-core.service \
+            /etc/systemd/system/syswarden-firewall.service \
+            /etc/systemd/system/multi-user.target.wants/syswarden-core.service \
+            /etc/systemd/system/multi-user.target.wants/syswarden-firewall.service \
+            /etc/init.d/syswarden-core \
+            /etc/init.d/syswarden-firewall \
+            /etc/runlevels/default/syswarden-core \
+            /etc/runlevels/default/syswarden-firewall; do
+            [ ! -e "${{path}}" ] && [ ! -L "${{path}}" ] || return 79
+        done
+        if [ "${{syswarden_expected_manager}}" = systemd ]; then
+            systemctl is-active --quiet syswarden-core.service && return 79
+            systemctl is-active --quiet syswarden-firewall.service && return 79
+            systemctl is-enabled --quiet syswarden-core.service && return 79
+            systemctl is-enabled --quiet syswarden-firewall.service && return 79
+        else
+            rc-service syswarden-core status >/dev/null 2>&1 && return 79
+            rc-service syswarden-firewall status >/dev/null 2>&1 && return 79
+        fi
+        core_load=absent
+        core_fragment=-
+        core_enabled=disabled
+        core_active=inactive
+        core_pid=-
+        core_executable_path=-
+        core_executable_identity=-
+        core_pidfile_identity=-
+        core_cap_inh=-
+        core_cap_prm=-
+        core_cap_eff=-
+        core_cap_bnd=-
+        core_cap_amb=-
+        core_nnp=-
+        firewall_load=absent
+        firewall_fragment=-
+        firewall_enabled=disabled
+        firewall_active=inactive
+        firewall_pid=-
+    else
+        core_load=unasserted
+        core_fragment=-
+        core_enabled=unasserted
+        core_active=unasserted
+        core_pid=-
+        core_executable_path=-
+        core_executable_identity=-
+        core_pidfile_identity=-
+        core_cap_inh=-
+        core_cap_prm=-
+        core_cap_eff=-
+        core_cap_bnd=-
+        core_cap_amb=-
+        core_nnp=-
+        firewall_load=unasserted
+        firewall_fragment=-
+        firewall_enabled=unasserted
+        firewall_active=unasserted
+        firewall_pid=-
+    fi
+    printf '%s\t' \
+        "${{pid1_comm}}" "${{pid1_exe}}" "${{pid1_starttime}}" \
+        "${{pid1_cap_inh}}" "${{pid1_cap_prm}}" "${{pid1_cap_eff}}" \
+        "${{pid1_cap_bnd}}" "${{pid1_cap_amb}}" "${{pid1_nnp}}" \
+        "${{pid1_uid_map}}" "${{pid1_gid_map}}" \
+        "${{setpriv_path}}" "${{setpriv_identity}}" "${{setpriv_sha256}}" \
+        "${{setpriv_package_name}}" "${{setpriv_package_version}}" \
+        "${{setpriv_package_architecture}}" "${{manager_state}}" \
+        "${{manager_runtime}}" "${{cron_enabled}}" "${{cron_active}}" "${{cron_pid}}" \
+        "${{cron_executable_path}}" "${{cron_executable_identity}}" "${{cron_fragment_path}}" \
+        "${{cron_fragment_identity}}" "${{cron_dropin_output}}" \
+        "${{cron_dropin_attestation}}" \
+        "${{cron_package_name}}" "${{cron_package_version}}" "${{cron_package_architecture}}" \
+        "${{cron_fragment_package_name}}" "${{cron_fragment_package_version}}" \
+        "${{cron_fragment_package_architecture}}" \
+        "${{rsyslog_enabled}}" "${{rsyslog_active}}" "${{rsyslog_pid}}" eth0:dummy:up \
+        "${{syswarden_expected_product_state}}" "${{core_load}}" "${{core_fragment}}" "${{core_enabled}}" \
+        "${{core_active}}" "${{core_pid}}" "${{core_executable_path}}" \
+        "${{core_executable_identity}}" "${{core_pidfile_identity}}" \
+        "${{core_cap_inh}}" "${{core_cap_prm}}" "${{core_cap_eff}}" \
+        "${{core_cap_bnd}}" "${{core_cap_amb}}" "${{core_nnp}}" \
+        "${{firewall_load}}" "${{firewall_fragment}}" \
+        "${{firewall_enabled}}" "${{firewall_active}}" "${{firewall_pid}}"
+    printf '%s\n' "{cron_service}"
+}}
+first="$(capture_snapshot)"
+second="$(capture_snapshot)"
+[ "${{first}}" = "${{second}}" ] || exit 80
+printf '%s\n' "${{first}}"
+"""
+
+
+def parse_runtime_snapshot(
+    output: str,
+    spec: PlatformSpec,
+    product_state: str,
+    attestation_process_security: ProcessSecurityEvidence,
+) -> RuntimeSnapshot:
+    lines = output.splitlines()
+    if len(lines) != 1:
+        raise LifecycleLabError("runtime attestation did not emit exactly one record")
+    fields = lines[0].split("\t")
+    if len(fields) != 59:
+        raise LifecycleLabError("runtime attestation field count is not exact")
+    (
+        pid1_comm,
+        pid1_exe,
+        starttime,
+        pid1_cap_inh,
+        pid1_cap_prm,
+        pid1_cap_eff,
+        pid1_cap_bnd,
+        pid1_cap_amb,
+        pid1_nnp,
+        pid1_uid_map_raw,
+        pid1_gid_map_raw,
+        setpriv_path,
+        setpriv_identity,
+        setpriv_sha256,
+        setpriv_package_name,
+        setpriv_package_version,
+        setpriv_package_architecture,
+        manager_state,
+        manager_runtime,
+        cron_enabled,
+        cron_active,
+        cron_pid,
+        cron_executable_path,
+        cron_executable_identity,
+        cron_fragment_path,
+        cron_fragment_identity,
+        cron_dropin_paths,
+        cron_dropin_attestation,
+        cron_package_name,
+        cron_package_version,
+        cron_package_architecture,
+        cron_fragment_package_name,
+        cron_fragment_package_version,
+        cron_fragment_package_architecture,
+        rsyslog_enabled,
+        rsyslog_active,
+        rsyslog_pid,
+        dummy_interface,
+        actual_product_state,
+        core_load,
+        core_fragment,
+        core_enabled_state,
+        core_active_state,
+        core_pid,
+        core_executable_path,
+        core_executable_identity,
+        core_pidfile_identity,
+        core_cap_inh,
+        core_cap_prm,
+        core_cap_eff,
+        core_cap_bnd,
+        core_cap_amb,
+        core_nnp,
+        firewall_load,
+        firewall_fragment,
+        firewall_enabled_state,
+        firewall_active_state,
+        firewall_pid,
+        cron_service,
+    ) = fields
+    expected_manager = "openrc" if spec.family == "apk" else "systemd"
+    pid1_process_security = _process_security_from_fields(
+        (
+            pid1_cap_inh,
+            pid1_cap_prm,
+            pid1_cap_eff,
+            pid1_cap_bnd,
+            pid1_cap_amb,
+            pid1_nnp,
+        ),
+        sys_admin_present=(
+            SYSTEMD_MANAGER_CAPABILITY_FIELDS
+            if expected_manager == "systemd"
+            else frozenset()
+        ),
+        sys_ptrace_present=(
+            SYSTEMD_MANAGER_CAPABILITY_FIELDS
+            if expected_manager == "systemd"
+            else frozenset()
+        ),
+        label=f"{spec.name} PID1",
+    )
+    pid1_uid_map = _parse_id_map(pid1_uid_map_raw, f"{spec.name} PID1 uid_map")
+    pid1_gid_map = _parse_id_map(pid1_gid_map_raw, f"{spec.name} PID1 gid_map")
+    if expected_manager == "systemd":
+        if (
+            setpriv_path != "/usr/bin/setpriv"
+            or re.fullmatch(r"[0-9]+:[0-9]+:81ed:0:0", setpriv_identity)
+            is None
+            or re.fullmatch(r"[0-9a-f]{64}", setpriv_sha256) is None
+            or setpriv_package_name != "util-linux"
+            or re.fullmatch(
+                r"[A-Za-z0-9.+:~_-]{1,128}", setpriv_package_version
+            )
+            is None
+            or setpriv_package_architecture != spec.package_architecture
+        ):
+            raise LifecycleLabError("setpriv provenance evidence is not exact")
+        setpriv = SetprivEvidence(
+            path=setpriv_path,
+            file_identity=setpriv_identity,
+            sha256=setpriv_sha256,
+            package_name=setpriv_package_name,
+            package_version=setpriv_package_version,
+            package_architecture=setpriv_package_architecture,
+        )
+    else:
+        if {
+            setpriv_path,
+            setpriv_identity,
+            setpriv_sha256,
+            setpriv_package_name,
+            setpriv_package_version,
+            setpriv_package_architecture,
+        } != {"-"}:
+            raise LifecycleLabError("OpenRC snapshot carries setpriv provenance")
+        setpriv = None
+    expected_init = "openrc-init" if spec.family == "apk" else "systemd"
+    expected_cron = (
+        "cronie"
+        if spec.family == "apk"
+        else "cron.service" if spec.family == "deb" else "crond.service"
+    )
+    expected_cron_executable_path = expected_cron_executable(spec)
+    expected_cron_fragments = (
+        {"/etc/init.d/cronie"}
+        if spec.family == "apk"
+        else (
+            {
+                "/lib/systemd/system/cron.service",
+                "/usr/lib/systemd/system/cron.service",
+            }
+            if spec.family == "deb"
+            else {"/usr/lib/systemd/system/crond.service"}
+        )
+    )
+    expected_cron_package = "cron" if spec.family == "deb" else "cronie"
+    expected_cron_fragment_mode = "81ed" if spec.family == "apk" else "81a4"
+    expected_cron_dropin_paths = (
+        (FEDORA_CRON_DROPIN_PATH,) if spec.distribution == "fedora" else ()
+    )
+    expected_cron_dropin_value = (
+        FEDORA_CRON_DROPIN_PATH if expected_cron_dropin_paths else "-"
+    )
+    if spec.distribution == "fedora":
+        if re.fullmatch(
+            rf"[0-9]+:[0-9]+:81a4:0:0\|[0-9a-f]{{64}}\|systemd\|"
+            rf"[A-Za-z0-9.+:~_-]{{1,128}}\|"
+            rf"{re.escape(spec.package_architecture)}\|8",
+            cron_dropin_attestation,
+        ) is None:
+            raise LifecycleLabError("Fedora cron drop-in provenance is not exact")
+    elif cron_dropin_attestation != "-":
+        raise LifecycleLabError("non-Fedora snapshot carries cron drop-in provenance")
+    if (
+        pid1_comm != expected_init
+        or manager_state != "ACTIVE"
+        or manager_runtime != ("default" if expected_manager == "openrc" else "running")
+        or cron_enabled != "enabled"
+        or cron_active != "active"
+        or cron_executable_path != expected_cron_executable_path
+        or re.fullmatch(
+            r"[0-9]+:[0-9]+:81ed:0:0\|[0-9a-f]{64}",
+            cron_executable_identity,
+        )
+        is None
+        or cron_fragment_path not in expected_cron_fragments
+        or re.fullmatch(
+            rf"[0-9]+:[0-9]+:{expected_cron_fragment_mode}:0:0\|[0-9a-f]{{64}}",
+            cron_fragment_identity,
+        )
+        is None
+        or cron_dropin_paths != expected_cron_dropin_value
+        or cron_package_name != expected_cron_package
+        or re.fullmatch(r"[A-Za-z0-9.+:~_-]{1,128}", cron_package_version)
+        is None
+        or cron_package_architecture != spec.package_architecture
+        or cron_fragment_package_name
+        != ("cronie-openrc" if spec.family == "apk" else expected_cron_package)
+        or cron_fragment_package_version != cron_package_version
+        or cron_fragment_package_architecture != cron_package_architecture
+        or rsyslog_enabled != "enabled"
+        or rsyslog_active != "active"
+        or dummy_interface != "eth0:dummy:up"
+        or actual_product_state != product_state
+        or cron_service != expected_cron
+    ):
+        raise LifecycleLabError("runtime attestation values differ from the ACTIVE contract")
+    if expected_manager == "openrc":
+        if pid1_exe != "/sbin/openrc-init":
+            raise LifecycleLabError("OpenRC PID1 executable is not exact")
+    elif pid1_exe not in {"/usr/lib/systemd/systemd", "/lib/systemd/systemd"}:
+        raise LifecycleLabError("systemd PID1 executable is not exact")
+    numeric = (starttime, cron_pid, rsyslog_pid)
+    if any(not value.isdecimal() or int(value) <= 1 for value in numeric):
+        raise LifecycleLabError("runtime PID/starttime evidence is invalid")
+    for label, value in (("core", core_pid), ("firewall", firewall_pid)):
+        if value != "-" and not value.isdecimal():
+            raise LifecycleLabError(f"runtime {label} PID is not canonical")
+    parsed_core: int | None = None if core_pid == "-" else int(core_pid)
+    parsed_firewall: int | None = None if firewall_pid == "-" else int(firewall_pid)
+    if product_state == "active":
+        core_process_security = _process_security_from_fields(
+            (
+                core_cap_inh,
+                core_cap_prm,
+                core_cap_eff,
+                core_cap_bnd,
+                core_cap_amb,
+                core_nnp,
+            ),
+            sys_admin_present=frozenset(),
+            sys_ptrace_present=frozenset(),
+            label=f"{spec.name} syswarden-core",
+        )
+    else:
+        if {
+            core_cap_inh,
+            core_cap_prm,
+            core_cap_eff,
+            core_cap_bnd,
+            core_cap_amb,
+            core_nnp,
+        } != {"-"}:
+            raise LifecycleLabError("inactive core carries process security evidence")
+        core_process_security = None
+    expected_core_fragment = (
+        "/etc/init.d/syswarden-core"
+        if expected_manager == "openrc"
+        else "/etc/systemd/system/syswarden-core.service"
+    )
+    expected_firewall_fragment = (
+        "/etc/init.d/syswarden-firewall"
+        if expected_manager == "openrc"
+        else "/etc/systemd/system/syswarden-firewall.service"
+    )
+    if product_state == "active" and (
+        core_load != "loaded"
+        or core_fragment != expected_core_fragment
+        or core_enabled_state != "enabled"
+        or core_active_state != "active"
+        or parsed_core is None
+        or parsed_core <= 1
+        or core_executable_path != "/opt/syswarden/bin/syswarden-core"
+        or re.fullmatch(
+            r"[0-9]+:[0-9]+:81e8:0:0\|[0-9a-f]{64}",
+            core_executable_identity,
+        )
+        is None
+        or (
+            expected_manager == "openrc"
+            and re.fullmatch(
+                r"[0-9]+:[0-9]+:[0-9]+:0:0:644", core_pidfile_identity
+            )
+            is None
+        )
+        or (expected_manager == "systemd" and core_pidfile_identity != "-")
+        or firewall_load != "loaded"
+        or firewall_fragment != expected_firewall_fragment
+        or firewall_enabled_state != "enabled"
+        or firewall_active_state != "active"
+        or parsed_firewall is None
+        or parsed_firewall != 0
+    ):
+        raise LifecycleLabError("active product service PID evidence is invalid")
+    if product_state == "absent" and (
+        core_load != "absent"
+        or core_fragment != "-"
+        or core_enabled_state != "disabled"
+        or core_active_state != "inactive"
+        or parsed_core is not None
+        or core_executable_path != "-"
+        or core_executable_identity != "-"
+        or core_pidfile_identity != "-"
+        or firewall_load != "absent"
+        or firewall_fragment != "-"
+        or firewall_enabled_state != "disabled"
+        or firewall_active_state != "inactive"
+        or parsed_firewall is not None
+    ):
+        raise LifecycleLabError("absent product service evidence carries PIDs")
+    if product_state == "unasserted" and (
+        core_load != "unasserted"
+        or core_fragment != "-"
+        or core_enabled_state != "unasserted"
+        or core_active_state != "unasserted"
+        or parsed_core is not None
+        or core_executable_path != "-"
+        or core_executable_identity != "-"
+        or core_pidfile_identity != "-"
+        or firewall_load != "unasserted"
+        or firewall_fragment != "-"
+        or firewall_enabled_state != "unasserted"
+        or firewall_active_state != "unasserted"
+        or parsed_firewall is not None
+    ):
+        raise LifecycleLabError("unasserted product service evidence carries PIDs")
+    return RuntimeSnapshot(
+        capture_count=2,
+        pid1_comm=pid1_comm,
+        pid1_exe=pid1_exe,
+        pid1_starttime_ticks=int(starttime),
+        pid1_process_security=pid1_process_security,
+        attestation_process_security=attestation_process_security,
+        pid1_uid_map=pid1_uid_map,
+        pid1_gid_map=pid1_gid_map,
+        setpriv=setpriv,
+        manager_state=manager_state,
+        manager_runtime=manager_runtime,
+        cron_enabled=True,
+        cron_active=True,
+        cron_main_pid=int(cron_pid),
+        cron_executable_path=cron_executable_path,
+        cron_executable_identity=cron_executable_identity,
+        cron_fragment_path=cron_fragment_path,
+        cron_fragment_identity=cron_fragment_identity,
+        cron_dropin_paths=expected_cron_dropin_paths,
+        cron_package_name=cron_package_name,
+        cron_package_version=cron_package_version,
+        cron_package_architecture=cron_package_architecture,
+        cron_fragment_package_name=cron_fragment_package_name,
+        cron_fragment_package_version=cron_fragment_package_version,
+        cron_fragment_package_architecture=cron_fragment_package_architecture,
+        rsyslog_enabled=True,
+        rsyslog_active=True,
+        rsyslog_main_pid=int(rsyslog_pid),
+        dummy_interface=dummy_interface,
+        product_services=ProductServicesEvidence(
+            expectation=actual_product_state,
+            core_load_state=core_load,
+            core_fragment_path=None if core_fragment == "-" else core_fragment,
+            core_enabled_state=core_enabled_state,
+            core_active_state=core_active_state,
+            core_main_pid=parsed_core,
+            core_executable_path=(
+                None if core_executable_path == "-" else core_executable_path
+            ),
+            core_executable_identity=(
+                None
+                if core_executable_identity == "-"
+                else core_executable_identity
+            ),
+            core_pidfile_identity=(
+                None if core_pidfile_identity == "-" else core_pidfile_identity
+            ),
+            core_process_security=core_process_security,
+            firewall_load_state=firewall_load,
+            firewall_fragment_path=(
+                None if firewall_fragment == "-" else firewall_fragment
+            ),
+            firewall_enabled_state=firewall_enabled_state,
+            firewall_active_state=firewall_active_state,
+            firewall_main_pid=parsed_firewall,
+        ),
+    )
+
+
+def attest_runtime_snapshot(
+    runner: CommandRunner,
+    podman: str,
+    name: str,
+    spec: PlatformSpec,
+    product_state: str,
+    *,
+    attempts: int = 30,
+) -> RuntimeSnapshot:
+    last_result: CommandResult | None = None
+    for attempt in range(attempts):
+        result = runner.run(
+            lifecycle_exec_arguments(
+                podman, name, spec, runtime_snapshot_script(spec, product_state)
+            ),
+            timeout=30,
+        )
+        last_result = result
+        if result.returncode == 0:
+            security, snapshot_output = parse_exec_security_output(
+                result.stdout, f"{spec.name} runtime snapshot", spec
+            )
+            return parse_runtime_snapshot(
+                snapshot_output, spec, product_state, security
+            )
+        if attempt + 1 < attempts:
+            time.sleep(1)
+    assert last_result is not None
+    raise LifecycleLabError(
+        "ACTIVE runtime attestation failed after bounded retries: "
+        + command_log_tail(last_result)
+    )
+
+
+def _canonical_tmpfs_options(
+    raw: object,
+    *,
+    expected_mode: str,
+    expected_size: str,
+    allow_tmpcopyup: bool,
+) -> tuple[str, ...]:
+    if not isinstance(raw, str):
+        raise LifecycleLabError("container tmpfs options are not strings")
+    tokens = set(raw.split(","))
+    size_aliases = {
+        expected_size,
+        "size=" + str(int(expected_size.removeprefix("size=").removesuffix("m")) * 1024 * 1024),
+    }
+    observed_sizes = {token for token in tokens if token.startswith("size=")}
+    if len(observed_sizes) != 1 or not observed_sizes.issubset(size_aliases):
+        raise LifecycleLabError("container tmpfs size differs from the exact contract")
+    tokens -= observed_sizes
+    required = {"rw", "nodev", "nosuid", "exec", f"mode={expected_mode}"}
+    allowed = required | {"rprivate"}
+    if allow_tmpcopyup:
+        allowed.add("tmpcopyup")
+    elif "tmpcopyup" in tokens:
+        raise LifecycleLabError("container /run tmpfs copy-up is not disabled")
+    if not required.issubset(tokens) or not tokens.issubset(allowed):
+        raise LifecycleLabError("container tmpfs options differ from the exact contract")
+    return tuple(sorted(required | {expected_size}))
+
+
+def inspect_container_isolation(
+    runner: CommandRunner,
+    podman: str,
+    name: str,
+    spec: PlatformSpec,
+    *,
+    candidate_root: Path,
+    previous_root: Path,
+    script_path: Path,
+    helper_path: Path,
+    result_root: Path,
+) -> RuntimeIsolationEvidence:
+    inspected = runner.run((podman, "inspect", name), timeout=30)
+    require_success(inspected, f"inspect {spec.name} lifecycle container")
+    try:
+        documents = json.loads(inspected.stdout)
+    except json.JSONDecodeError as exc:
+        raise LifecycleLabError("container inspection is not valid JSON") from exc
+    if (
+        not isinstance(documents, list)
+        or len(documents) != 1
+        or not isinstance(documents[0], dict)
+    ):
+        raise LifecycleLabError("container inspection must contain exactly one object")
+    document = documents[0]
+    host = document.get("HostConfig")
+    config = document.get("Config")
+    mounts = document.get("Mounts")
+    if not isinstance(host, dict) or not isinstance(config, dict) or not isinstance(mounts, list):
+        raise LifecycleLabError("container inspection omits isolation objects")
+    expected_caps = (
+        {"CAP_NET_ADMIN", "CAP_SYS_BOOT"}
+        if spec.family == "apk"
+        else {"CAP_NET_ADMIN", "CAP_SYS_ADMIN", "CAP_SYS_PTRACE"}
+    )
+    cap_add = host.get("CapAdd")
+    cap_drop = host.get("CapDrop")
+    devices = host.get("Devices")
+    security_opts = host.get("SecurityOpt")
+    if (
+        host.get("Privileged") is not False
+        or host.get("NetworkMode") != "none"
+        or host.get("PidMode") != "private"
+        or host.get("IpcMode") != "private"
+        or host.get("UTSMode") != "private"
+        or host.get("CgroupMode") != "private"
+        or host.get("UsernsMode") not in {"", None}
+        or not isinstance(cap_add, list)
+        or len(cap_add) != len(expected_caps)
+        or set(cap_add) != expected_caps
+        or not isinstance(cap_drop, list)
+        or cap_drop
+        or not isinstance(devices, list)
+        or devices
+        or not isinstance(security_opts, list)
+        or set(security_opts) != {"label=disable", "no-new-privileges"}
+    ):
+        raise LifecycleLabError("container namespace/capability isolation is not exact")
+    expected_stop = "SIGINT" if spec.family == "apk" else "SIGRTMIN+3"
+    if config.get("StopSignal") != expected_stop:
+        raise LifecycleLabError("container stop signal differs from the init contract")
+    tmpfs = host.get("Tmpfs")
+    if not isinstance(tmpfs, dict) or set(tmpfs) != {"/run", "/tmp"}:
+        raise LifecycleLabError("container internal tmpfs inventory is not exact")
+    canonical_tmpfs = {
+        "/run": _canonical_tmpfs_options(
+            tmpfs["/run"],
+            expected_mode="755",
+            expected_size="size=64m",
+            allow_tmpcopyup=False,
+        ),
+        "/tmp": _canonical_tmpfs_options(
+            tmpfs["/tmp"],
+            expected_mode="1777",
+            expected_size="size=256m",
+            allow_tmpcopyup=True,
+        ),
+    }
+    expected_mounts = {
+        "/candidate": ("candidate", str(candidate_root), True),
+        "/previous": ("previous", str(previous_root), True),
+        "/lab/package-lifecycle.sh": ("script", str(script_path), True),
+        "/lab/package-webtui-retirement.sh": ("helper", str(helper_path), True),
+        "/results": ("results", str(result_root), False),
+    }
+    observed: dict[str, RuntimeMountEvidence] = {}
+    for item in mounts:
+        if not isinstance(item, dict):
+            raise LifecycleLabError("container mount record is invalid")
+        if item.get("Type") == "tmpfs":
+            if item.get("Destination") not in {"/run", "/tmp"}:
+                raise LifecycleLabError("container exposes an unexpected tmpfs")
+            continue
+        destination = item.get("Destination")
+        if item.get("Type") != "bind" or destination not in expected_mounts:
+            raise LifecycleLabError("container exposes an unexpected host mount")
+        role, expected_source, read_only = expected_mounts[str(destination)]
+        if (
+            item.get("Source") != expected_source
+            or item.get("RW") is not (not read_only)
+            or destination in observed
+        ):
+            raise LifecycleLabError("container bind mount differs from the exact contract")
+        observed[str(destination)] = RuntimeMountEvidence(
+            role=role,
+            destination=str(destination),
+            read_only=read_only,
+        )
+    if set(observed) != set(expected_mounts):
+        raise LifecycleLabError("container bind mount inventory is incomplete")
+    return RuntimeIsolationEvidence(
+        privileged=False,
+        network_mode="none",
+        pid_mode="private",
+        ipc_mode="private",
+        uts_mode="private",
+        userns_mode="rootless-default",
+        cgroup_mode="private",
+        cap_add=tuple(sorted(expected_caps)),
+        cap_drop=(),
+        lifecycle_exec_launcher=(
+            ("/bin/sh", "-ceu")
+            if spec.family == "apk"
+            else SYSTEMD_EXEC_LAUNCHER
+        ),
+        devices=(),
+        security_opts=tuple(sorted({"label=disable", "no-new-privileges"})),
+        stop_signal=expected_stop,
+        tmpfs=canonical_tmpfs,
+        mounts=tuple(observed[path] for path in expected_mounts),
+    )
+
+
+def _json_dataclass_evidence(value: object) -> dict[str, object]:
+    rendered = json.loads(json.dumps(asdict(value), sort_keys=True))
+    if not isinstance(rendered, dict):
+        raise LifecycleLabError("runtime evidence did not serialize as an object")
+    return rendered
+
+
+def _scenario_invocations(scenario: str) -> tuple[str, ...]:
+    if scenario == "upgrade-rollback":
+        return ("initial", "restart-one", "restart-two")
+    if scenario in {"remove", "purge"}:
+        return ("initial",)
+    raise LifecycleLabError(f"unsupported lifecycle scenario {scenario!r}")
+
+
+def _restart_state_allows_continuation(result_root: Path) -> bool:
+    restart_state = result_root / "restart-state"
+    try:
+        metadata = restart_state.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            return False
+        return restart_state.read_text(encoding="utf-8").strip() in {
+            "restart-one",
+            "restart-two",
+        }
+    except OSError:
+        return False
+
+
+def _observed_restart_state(result_root: Path, scenario: str) -> str | None:
+    restart_state = result_root / "restart-state"
+    try:
+        metadata = restart_state.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise LifecycleLabError("cannot inspect restart-state evidence") from exc
+    try:
+        value = restart_state.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise LifecycleLabError("cannot read restart-state evidence") from exc
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+        or value not in {"restart-one\n", "restart-two\n", "complete\n"}
+    ):
+        raise LifecycleLabError(f"{scenario} restart-state evidence is not exact")
+    return value.strip()
+
+
+def _final_restart_state(result_root: Path, scenario: str) -> str | None:
+    value = _observed_restart_state(result_root, scenario)
+    if scenario != "upgrade-rollback":
+        if value is not None:
+            raise LifecycleLabError(
+                f"{scenario} unexpectedly produced restart-state evidence"
+            )
+        return None
+    if value is None:
+        raise LifecycleLabError(
+            "upgrade-rollback lacks final restart-state evidence"
+        )
+    if value != "complete":
+        raise LifecycleLabError(
+            "upgrade-rollback final restart-state evidence is not exact"
+        )
+    return "complete"
 
 
 def run_platform(
@@ -3488,6 +6502,7 @@ def run_platform(
     candidate_root: Path,
     previous_root: Path,
     workspace: Path,
+    helper_path: Path,
     pull_policy: str,
     timeout: int,
     host_architecture: str,
@@ -3532,10 +6547,8 @@ def run_platform(
             else "native_container_build"
         ),
         "lifecycle_network": "disabled",
-        "restart_contract": (
-            "upgrade-rollback performs two consecutive container restarts and "
-            "revalidates native and filesystem inventories plus operator state"
-        ),
+        "runtime_mode": "active-real-init",
+        "restart_contract": ACTIVE_RESTART_CONTRACT,
         "scenarios": [],
     }
     image_tag = f"localhost/syswarden-lifecycle-{slug}-{uuid.uuid4().hex}"
@@ -3544,6 +6557,7 @@ def run_platform(
     containerfile = context / "Containerfile"
     containerfile.write_text(build_containerfile(spec), encoding="utf-8")
     containerfile.chmod(0o600)
+    image_cleanup_failed = False
 
     try:
         ensure_image(runner, podman, spec, pull_policy)
@@ -3593,34 +6607,181 @@ def run_platform(
                 candidate_root,
                 previous_root,
                 script_path,
+                helper_path,
                 result_root,
                 spec,
                 scenario,
                 pair,
             )
+            created = runner.run(run_args, timeout=60)
+            last_command = created
+            isolation: RuntimeIsolationEvidence | None = None
+            boot_evidence: list[dict[str, object]] = []
+            executed_exit_codes: list[int] = []
+            orchestration_error: str | None = None
             try:
-                created = runner.run(run_args, timeout=60)
-                require_success(created, f"create {spec.name} {scenario} container")
-                required_starts = 3 if scenario == "upgrade-rollback" else 1
-                starts: list[CommandResult] = []
-                for _invocation in range(required_starts):
-                    started = runner.run(
-                        (podman, "start", "--attach", container_name),
+                if created.returncode != 0:
+                    raise LifecycleLabError(
+                        f"create {spec.name} {scenario} container failed with "
+                        f"exit code {created.returncode}: {command_log_tail(created)}"
+                    )
+                isolation = inspect_container_isolation(
+                    runner,
+                    podman,
+                    container_name,
+                    spec,
+                    candidate_root=candidate_root,
+                    previous_root=previous_root,
+                    script_path=script_path,
+                    helper_path=helper_path,
+                    result_root=result_root,
+                )
+                previous_starttime: int | None = None
+                for invocation in _scenario_invocations(scenario):
+                    if invocation == "initial":
+                        boot_result = runner.run(
+                            (podman, "start", container_name), timeout=60
+                        )
+                        restart = RuntimeRestartEvidence(
+                            performed=False,
+                            command_exit_code=None,
+                            previous_pid1_starttime_ticks=None,
+                            distinct=None,
+                        )
+                    else:
+                        boot_result = runner.run(
+                            (podman, "restart", "--time", "10", container_name),
+                            timeout=60,
+                        )
+                        restart = RuntimeRestartEvidence(
+                            performed=True,
+                            command_exit_code=boot_result.returncode,
+                            previous_pid1_starttime_ticks=previous_starttime,
+                            distinct=None,
+                        )
+                    last_command = boot_result
+                    boot_record: dict[str, object] = {
+                        "invocation": invocation,
+                        "boot_command_exit_code": boot_result.returncode,
+                        "restart": _json_dataclass_evidence(restart),
+                        "pre_exec": None,
+                        "lifecycle_exec_security": None,
+                        "script_exec_exit_code": None,
+                        "restart_state": None,
+                        "post_exec": None,
+                    }
+                    boot_evidence.append(boot_record)
+                    require_success(
+                        boot_result,
+                        f"{invocation} boot for {spec.name} {scenario}",
+                    )
+                    attest_runtime_namespace(runner, podman, container_name, spec)
+                    pre_state = "absent" if invocation == "initial" else "active"
+                    pre_exec = attest_runtime_snapshot(
+                        runner, podman, container_name, spec, pre_state
+                    )
+                    boot_record["pre_exec"] = _json_dataclass_evidence(pre_exec)
+                    if invocation != "initial":
+                        if previous_starttime is None:
+                            raise LifecycleLabError(
+                                "restart lacks the previous PID1 starttime"
+                            )
+                        distinct = pre_exec.pid1_starttime_ticks != previous_starttime
+                        if not distinct:
+                            raise LifecycleLabError(
+                                "real container restart did not replace PID1"
+                            )
+                        restart = RuntimeRestartEvidence(
+                            performed=True,
+                            command_exit_code=boot_result.returncode,
+                            previous_pid1_starttime_ticks=previous_starttime,
+                            distinct=True,
+                        )
+                        boot_record["restart"] = _json_dataclass_evidence(restart)
+                    executed = runner.run(
+                        lifecycle_exec_arguments(
+                            podman,
+                            container_name,
+                            spec,
+                            "exec /bin/sh /lab/package-lifecycle.sh",
+                        ),
                         timeout=timeout,
                     )
-                    starts.append(started)
-                    if started.returncode != 0:
-                        restart_state = result_root / "restart-state"
-                        may_continue_complete_failure_evidence = (
-                            scenario == "upgrade-rollback"
-                            and restart_state.is_file()
-                            and restart_state.read_text(encoding="utf-8").strip()
-                            in {"restart-one", "restart-two"}
+                    last_command = executed
+                    lifecycle_exec_security, _ = parse_exec_security_output(
+                        executed.stdout,
+                        f"{spec.name} {scenario} {invocation} lifecycle exec",
+                        spec,
+                    )
+                    boot_record["lifecycle_exec_security"] = (
+                        _json_dataclass_evidence(lifecycle_exec_security)
+                    )
+                    executed_exit_codes.append(executed.returncode)
+                    boot_record["script_exec_exit_code"] = executed.returncode
+                    observed_restart_state = _observed_restart_state(
+                        result_root, scenario
+                    )
+                    boot_record["restart_state"] = observed_restart_state
+                    if scenario != "upgrade-rollback" and observed_restart_state is not None:
+                        raise LifecycleLabError(
+                            f"{scenario} unexpectedly produced restart-state evidence"
                         )
-                        if not may_continue_complete_failure_evidence:
-                            break
+                    attest_runtime_namespace(
+                        runner, podman, container_name, spec
+                    )
+                    post_state = (
+                        "active"
+                        if executed.returncode == 0 and scenario == "upgrade-rollback"
+                        else "absent"
+                        if executed.returncode == 0
+                        else "unasserted"
+                    )
+                    post_exec = attest_runtime_snapshot(
+                        runner, podman, container_name, spec, post_state
+                    )
+                    boot_record["post_exec"] = _json_dataclass_evidence(post_exec)
+                    if (
+                        pre_exec.pid1_starttime_ticks
+                        != post_exec.pid1_starttime_ticks
+                    ):
+                        raise LifecycleLabError(
+                            "PID1 changed during a lifecycle script execution"
+                        )
+                    if pre_exec.cron_main_pid != post_exec.cron_main_pid:
+                        raise LifecycleLabError(
+                            "cron provider changed during a lifecycle script execution"
+                        )
+                    previous_starttime = post_exec.pid1_starttime_ticks
+                    if executed.returncode != 0 and not (
+                        scenario == "upgrade-rollback"
+                        and _restart_state_allows_continuation(result_root)
+                    ):
+                        break
+            except LifecycleLabError as exc:
+                orchestration_error = str(exc)
             finally:
-                runner.run((podman, "rm", "--force", container_name), timeout=30)
+                cleanup_result = runner.run(
+                    (podman, "rm", "--force", container_name), timeout=30
+                )
+                cleanup_exists = runner.run(
+                    (podman, "container", "exists", container_name), timeout=30
+                )
+                cleanup_evidence = {
+                    "remove_exit_code": cleanup_result.returncode,
+                    "exists_probe_exit_code": cleanup_exists.returncode,
+                    "absent_after_cleanup": cleanup_exists.returncode == 1,
+                }
+                if cleanup_result.returncode != 0 or cleanup_exists.returncode != 1:
+                    cleanup_error = (
+                        "container cleanup did not attest exact object absence: "
+                        f"rm={cleanup_result.returncode}, "
+                        f"exists={cleanup_exists.returncode}"
+                    )
+                    orchestration_error = (
+                        f"{orchestration_error}; {cleanup_error}"
+                        if orchestration_error is not None
+                        else cleanup_error
+                    )
 
             event_file = result_root / "events.tsv"
             command_log = result_root / "commands.log"
@@ -3640,25 +6801,47 @@ def run_platform(
                     }
                 ]
             failed = [event for event in events if event["status"] == "fail"]
-            start_exit_codes = [item.returncode for item in starts]
+            try:
+                restart_state = _final_restart_state(result_root, scenario)
+            except LifecycleLabError as exc:
+                restart_state = None
+                orchestration_error = (
+                    f"{orchestration_error}; {exc}"
+                    if orchestration_error is not None
+                    else str(exc)
+                )
+            required_boots = len(_scenario_invocations(scenario))
             scenario_status = (
                 "pass"
-                if len(starts) == required_starts
-                and all(code == 0 for code in start_exit_codes)
+                if created.returncode == 0
+                and orchestration_error is None
+                and isolation is not None
+                and len(boot_evidence) == required_boots
+                and len(executed_exit_codes) == required_boots
+                and all(code == 0 for code in executed_exit_codes)
+                and all(item.get("post_exec") is not None for item in boot_evidence)
                 and not failed
                 else "fail"
             )
-            last_start = starts[-1] if starts else created
             platform_result["scenarios"].append(
                 {
                     "name": scenario,
                     "status": scenario_status,
-                    "container_exit_code": last_start.returncode,
-                    "container_start_exit_codes": start_exit_codes,
-                    "container_restart_count": max(0, len(starts) - 1),
+                    "runtime_mode": "active-real-init",
+                    "container_create_exit_code": created.returncode,
+                    "lifecycle_exec_exit_codes": executed_exit_codes,
+                    "restart_state": restart_state,
+                    "boots": boot_evidence,
+                    "isolation": (
+                        _json_dataclass_evidence(isolation)
+                        if isolation is not None
+                        else None
+                    ),
+                    "cleanup": cleanup_evidence,
+                    "orchestration_error": orchestration_error,
                     "events": events,
                     "inventory_evidence": inventory_evidence,
-                    "log_tail": command_log_tail(last_start, command_log),
+                    "log_tail": command_log_tail(last_command, command_log),
                 }
             )
     except LifecycleLabError as exc:
@@ -3666,12 +6849,37 @@ def run_platform(
         platform_result["error"] = str(exc)
         return platform_result
     finally:
-        runner.run((podman, "image", "rm", "--force", image_tag), timeout=120)
+        image_cleanup = runner.run(
+            (podman, "image", "rm", "--force", image_tag), timeout=120
+        )
+        image_exists = runner.run(
+            (podman, "image", "exists", image_tag), timeout=30
+        )
+        platform_result["bootstrap_image_cleanup"] = {
+            "remove_exit_code": image_cleanup.returncode,
+            "exists_probe_exit_code": image_exists.returncode,
+            "absent_after_cleanup": image_exists.returncode == 1,
+        }
+        if image_cleanup.returncode != 0 or image_exists.returncode != 1:
+            image_cleanup_failed = True
+            cleanup_error = (
+                "bootstrap image cleanup did not attest exact object absence: "
+                f"rm={image_cleanup.returncode}, exists={image_exists.returncode}"
+            )
+            existing_error = platform_result.get("error")
+            platform_result["error"] = (
+                f"{existing_error}; {cleanup_error}"
+                if isinstance(existing_error, str) and existing_error
+                else cleanup_error
+            )
+            platform_result["status"] = "fail"
 
     scenarios = platform_result["scenarios"]
     platform_result["status"] = (
         "pass"
-        if scenarios and all(item["status"] == "pass" for item in scenarios)
+        if not image_cleanup_failed
+        and scenarios
+        and all(item["status"] == "pass" for item in scenarios)
         else "fail"
     )
     return platform_result
@@ -3770,6 +6978,746 @@ def validate_forward_only_apk_events(
     ]
 
 
+def _platform_spec_from_result(platform_result: dict[str, object]) -> PlatformSpec:
+    matches = [
+        spec
+        for spec in DEFAULT_PLATFORMS
+        if spec.distribution == platform_result.get("distribution")
+        and spec.architecture == platform_result.get("architecture_id")
+        and spec.family == platform_result.get("family")
+    ]
+    if len(matches) != 1:
+        raise LifecycleLabError("runtime platform identity is not exact")
+    return matches[0]
+
+
+PROCESS_SECURITY_KEYS = {
+    "cap_inheritable",
+    "cap_permitted",
+    "cap_effective",
+    "cap_bounding",
+    "cap_ambient",
+    "no_new_privileges",
+}
+ID_MAP_RANGE_KEYS = {"inside_id", "outside_id", "length"}
+SETPRIV_EVIDENCE_KEYS = {
+    "path",
+    "file_identity",
+    "sha256",
+    "package_name",
+    "package_version",
+    "package_architecture",
+}
+
+
+def _validate_process_security_evidence(
+    value: object,
+    *,
+    sys_admin_present: frozenset[str],
+    sys_ptrace_present: frozenset[str],
+    label: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != PROCESS_SECURITY_KEYS:
+        raise LifecycleLabError(f"{label} process security schema is not exact")
+    if type(value.get("no_new_privileges")) is not bool:
+        raise LifecycleLabError(f"{label} NoNewPrivs type is not exact")
+    evidence = ProcessSecurityEvidence(
+        cap_inheritable=str(value.get("cap_inheritable")),
+        cap_permitted=str(value.get("cap_permitted")),
+        cap_effective=str(value.get("cap_effective")),
+        cap_bounding=str(value.get("cap_bounding")),
+        cap_ambient=str(value.get("cap_ambient")),
+        no_new_privileges=bool(value.get("no_new_privileges")),
+    )
+    _validate_process_security(
+        evidence,
+        sys_admin_present=sys_admin_present,
+        sys_ptrace_present=sys_ptrace_present,
+        label=label,
+    )
+    return value
+
+
+def _validate_id_map_evidence(value: object, label: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise LifecycleLabError(f"{label} must be an array")
+    rendered: list[str] = []
+    for record in value:
+        if not isinstance(record, dict) or set(record) != ID_MAP_RANGE_KEYS:
+            raise LifecycleLabError(f"{label} range schema is not exact")
+        if any(type(record.get(key)) is not int for key in ID_MAP_RANGE_KEYS):
+            raise LifecycleLabError(f"{label} range types are not exact")
+        rendered.append(
+            f"{record['inside_id']}:{record['outside_id']}:{record['length']}"
+        )
+    _parse_id_map(",".join(rendered), label)
+    return value
+
+
+def _validate_setpriv_evidence(
+    value: object, spec: PlatformSpec, label: str
+) -> dict[str, object] | None:
+    if spec.family == "apk":
+        if value is not None:
+            raise LifecycleLabError(f"{label} OpenRC snapshot carries setpriv")
+        return None
+    if not isinstance(value, dict) or set(value) != SETPRIV_EVIDENCE_KEYS:
+        raise LifecycleLabError(f"{label} setpriv schema is not exact")
+    if (
+        value.get("path") != "/usr/bin/setpriv"
+        or re.fullmatch(
+            r"[0-9]+:[0-9]+:81ed:0:0", str(value.get("file_identity"))
+        )
+        is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256"))) is None
+        or value.get("package_name") != "util-linux"
+        or re.fullmatch(
+            r"[A-Za-z0-9.+:~_-]{1,128}", str(value.get("package_version"))
+        )
+        is None
+        or value.get("package_architecture") != spec.package_architecture
+    ):
+        raise LifecycleLabError(f"{label} setpriv provenance is not exact")
+    return value
+
+
+def _validate_product_services_evidence(
+    value: object, spec: PlatformSpec, expectation: str
+) -> None:
+    keys = {
+        "expectation",
+        "core_load_state",
+        "core_fragment_path",
+        "core_enabled_state",
+        "core_active_state",
+        "core_main_pid",
+        "core_executable_path",
+        "core_executable_identity",
+        "core_pidfile_identity",
+        "core_process_security",
+        "firewall_load_state",
+        "firewall_fragment_path",
+        "firewall_enabled_state",
+        "firewall_active_state",
+        "firewall_main_pid",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise LifecycleLabError("product service runtime evidence schema is not exact")
+    if value.get("expectation") != expectation:
+        raise LifecycleLabError("product service runtime expectation is inconsistent")
+    if expectation == "active":
+        core_fragment = (
+            "/etc/init.d/syswarden-core"
+            if spec.family == "apk"
+            else "/etc/systemd/system/syswarden-core.service"
+        )
+        firewall_fragment = (
+            "/etc/init.d/syswarden-firewall"
+            if spec.family == "apk"
+            else "/etc/systemd/system/syswarden-firewall.service"
+        )
+        expected = {
+            "core_load_state": "loaded",
+            "core_fragment_path": core_fragment,
+            "core_enabled_state": "enabled",
+            "core_active_state": "active",
+            "firewall_load_state": "loaded",
+            "firewall_fragment_path": firewall_fragment,
+            "firewall_enabled_state": "enabled",
+            "firewall_active_state": "active",
+            "firewall_main_pid": 0,
+        }
+        if any(value.get(key) != item for key, item in expected.items()):
+            raise LifecycleLabError("active product service evidence is not exact")
+        core_pid = value.get("core_main_pid")
+        if type(core_pid) is not int or core_pid <= 1:
+            raise LifecycleLabError("active core service PID evidence is invalid")
+        if (
+            value.get("core_executable_path")
+            != "/opt/syswarden/bin/syswarden-core"
+            or not isinstance(value.get("core_executable_identity"), str)
+            or re.fullmatch(
+                r"[0-9]+:[0-9]+:81e8:0:0\|[0-9a-f]{64}",
+                str(value.get("core_executable_identity")),
+            )
+            is None
+            or (
+                spec.family == "apk"
+                and re.fullmatch(
+                    r"[0-9]+:[0-9]+:[0-9]+:0:0:644",
+                    str(value.get("core_pidfile_identity")),
+                )
+                is None
+            )
+            or (
+                spec.family != "apk"
+                and value.get("core_pidfile_identity") is not None
+            )
+        ):
+            raise LifecycleLabError("active core executable identity is invalid")
+        _validate_process_security_evidence(
+            value.get("core_process_security"),
+            sys_admin_present=frozenset(),
+            sys_ptrace_present=frozenset(),
+            label="active syswarden-core",
+        )
+        return
+    if expectation != "absent":
+        raise LifecycleLabError("passing runtime evidence cannot be unasserted")
+    expected_absent = {
+        "core_load_state": "absent",
+        "core_fragment_path": None,
+        "core_enabled_state": "disabled",
+        "core_active_state": "inactive",
+        "core_main_pid": None,
+        "core_executable_path": None,
+        "core_executable_identity": None,
+        "core_pidfile_identity": None,
+        "core_process_security": None,
+        "firewall_load_state": "absent",
+        "firewall_fragment_path": None,
+        "firewall_enabled_state": "disabled",
+        "firewall_active_state": "inactive",
+        "firewall_main_pid": None,
+    }
+    if any(value.get(key) != item for key, item in expected_absent.items()):
+        raise LifecycleLabError("absent product service evidence is not exact")
+
+
+def _validate_runtime_snapshot_evidence(
+    value: object,
+    spec: PlatformSpec,
+    expectation: str,
+    *,
+    expected_uid_map: list[dict[str, object]] | None = None,
+    expected_gid_map: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    keys = {
+        "capture_count",
+        "pid1_comm",
+        "pid1_exe",
+        "pid1_starttime_ticks",
+        "pid1_process_security",
+        "attestation_process_security",
+        "pid1_uid_map",
+        "pid1_gid_map",
+        "setpriv",
+        "manager_state",
+        "manager_runtime",
+        "cron_enabled",
+        "cron_active",
+        "cron_main_pid",
+        "cron_executable_path",
+        "cron_executable_identity",
+        "cron_fragment_path",
+        "cron_fragment_identity",
+        "cron_dropin_paths",
+        "cron_package_name",
+        "cron_package_version",
+        "cron_package_architecture",
+        "cron_fragment_package_name",
+        "cron_fragment_package_version",
+        "cron_fragment_package_architecture",
+        "rsyslog_enabled",
+        "rsyslog_active",
+        "rsyslog_main_pid",
+        "dummy_interface",
+        "product_services",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise LifecycleLabError("runtime snapshot schema is not exact")
+    manager = "openrc" if spec.family == "apk" else "systemd"
+    _validate_process_security_evidence(
+        value.get("pid1_process_security"),
+        sys_admin_present=(
+            SYSTEMD_MANAGER_CAPABILITY_FIELDS
+            if manager == "systemd"
+            else frozenset()
+        ),
+        sys_ptrace_present=(
+            SYSTEMD_MANAGER_CAPABILITY_FIELDS
+            if manager == "systemd"
+            else frozenset()
+        ),
+        label="runtime PID1",
+    )
+    _validate_process_security_evidence(
+        value.get("attestation_process_security"),
+        sys_admin_present=frozenset(),
+        sys_ptrace_present=(
+            SYSTEMD_MANAGER_CAPABILITY_FIELDS
+            if manager == "systemd"
+            else frozenset()
+        ),
+        label="runtime attestation exec",
+    )
+    uid_map = _validate_id_map_evidence(
+        value.get("pid1_uid_map"), "runtime PID1 uid_map"
+    )
+    gid_map = _validate_id_map_evidence(
+        value.get("pid1_gid_map"), "runtime PID1 gid_map"
+    )
+    if (
+        (expected_uid_map is not None and uid_map != expected_uid_map)
+        or (expected_gid_map is not None and gid_map != expected_gid_map)
+    ):
+        raise LifecycleLabError(
+            "runtime PID1 identity maps differ from the native Podman engine"
+        )
+    _validate_setpriv_evidence(value.get("setpriv"), spec, "runtime snapshot")
+    init_comm = "openrc-init" if spec.family == "apk" else "systemd"
+    init_executables = (
+        {"/sbin/openrc-init"}
+        if spec.family == "apk"
+        else {"/usr/lib/systemd/systemd", "/lib/systemd/systemd"}
+    )
+    expected_cron_executable_path = expected_cron_executable(spec)
+    expected_cron_fragments = (
+        {"/etc/init.d/cronie"}
+        if spec.family == "apk"
+        else (
+            {
+                "/lib/systemd/system/cron.service",
+                "/usr/lib/systemd/system/cron.service",
+            }
+            if spec.family == "deb"
+            else {"/usr/lib/systemd/system/crond.service"}
+        )
+    )
+    expected_cron_fragment_mode = "81ed" if spec.family == "apk" else "81a4"
+    expected_cron_dropin_paths = (
+        [FEDORA_CRON_DROPIN_PATH] if spec.distribution == "fedora" else []
+    )
+    if (
+        value.get("capture_count") != 2
+        or value.get("pid1_comm") != init_comm
+        or value.get("pid1_exe") not in init_executables
+        or value.get("manager_state") != "ACTIVE"
+        or value.get("manager_runtime")
+        != ("default" if manager == "openrc" else "running")
+        or value.get("cron_enabled") is not True
+        or value.get("cron_active") is not True
+        or value.get("cron_executable_path") != expected_cron_executable_path
+        or not isinstance(value.get("cron_executable_identity"), str)
+        or re.fullmatch(
+            r"[0-9]+:[0-9]+:81ed:0:0\|[0-9a-f]{64}",
+            str(value.get("cron_executable_identity")),
+        )
+        is None
+        or value.get("cron_fragment_path") not in expected_cron_fragments
+        or not isinstance(value.get("cron_fragment_identity"), str)
+        or re.fullmatch(
+            rf"[0-9]+:[0-9]+:{expected_cron_fragment_mode}:0:0\|[0-9a-f]{{64}}",
+            str(value.get("cron_fragment_identity")),
+        )
+        is None
+        or value.get("cron_dropin_paths") != expected_cron_dropin_paths
+        or value.get("cron_package_name")
+        != ("cron" if spec.family == "deb" else "cronie")
+        or not isinstance(value.get("cron_package_version"), str)
+        or re.fullmatch(
+            r"[A-Za-z0-9.+:~_-]{1,128}",
+            str(value.get("cron_package_version")),
+        )
+        is None
+        or value.get("cron_package_architecture") != spec.package_architecture
+        or value.get("cron_fragment_package_name")
+        != ("cronie-openrc" if spec.family == "apk" else (
+            "cron" if spec.family == "deb" else "cronie"
+        ))
+        or value.get("cron_fragment_package_version")
+        != value.get("cron_package_version")
+        or value.get("cron_fragment_package_architecture")
+        != value.get("cron_package_architecture")
+        or value.get("rsyslog_enabled") is not True
+        or value.get("rsyslog_active") is not True
+        or value.get("dummy_interface") != "eth0:dummy:up"
+    ):
+        raise LifecycleLabError("runtime snapshot ACTIVE values are not exact")
+    for key in (
+        "pid1_starttime_ticks",
+        "cron_main_pid",
+        "rsyslog_main_pid",
+    ):
+        if type(value.get(key)) is not int or int(value[key]) <= 1:
+            raise LifecycleLabError(f"runtime snapshot {key} is invalid")
+    _validate_product_services_evidence(
+        value.get("product_services"), spec, expectation
+    )
+    return value
+
+
+def _validate_runtime_isolation_evidence(
+    value: object, spec: PlatformSpec
+) -> None:
+    keys = {
+        "privileged",
+        "network_mode",
+        "pid_mode",
+        "ipc_mode",
+        "uts_mode",
+        "userns_mode",
+        "cgroup_mode",
+        "cap_add",
+        "cap_drop",
+        "lifecycle_exec_launcher",
+        "devices",
+        "security_opts",
+        "stop_signal",
+        "tmpfs",
+        "mounts",
+    }
+    expected_caps = (
+        ["CAP_NET_ADMIN", "CAP_SYS_BOOT"]
+        if spec.family == "apk"
+        else ["CAP_NET_ADMIN", "CAP_SYS_ADMIN", "CAP_SYS_PTRACE"]
+    )
+    expected_launcher = (
+        ["/bin/sh", "-ceu"]
+        if spec.family == "apk"
+        else list(SYSTEMD_EXEC_LAUNCHER)
+    )
+    expected_tmpfs = {
+        "/run": sorted(
+            {"rw", "nodev", "nosuid", "exec", "mode=755", "size=64m"}
+        ),
+        "/tmp": sorted(
+            {"rw", "nodev", "nosuid", "exec", "mode=1777", "size=256m"}
+        ),
+    }
+    expected_mounts = [
+        {"role": "candidate", "destination": "/candidate", "read_only": True},
+        {"role": "previous", "destination": "/previous", "read_only": True},
+        {
+            "role": "script",
+            "destination": "/lab/package-lifecycle.sh",
+            "read_only": True,
+        },
+        {
+            "role": "helper",
+            "destination": "/lab/package-webtui-retirement.sh",
+            "read_only": True,
+        },
+        {"role": "results", "destination": "/results", "read_only": False},
+    ]
+    if (
+        not isinstance(value, dict)
+        or set(value) != keys
+        or value.get("privileged") is not False
+        or value.get("network_mode") != "none"
+        or value.get("pid_mode") != "private"
+        or value.get("ipc_mode") != "private"
+        or value.get("uts_mode") != "private"
+        or value.get("userns_mode") != "rootless-default"
+        or value.get("cgroup_mode") != "private"
+        or value.get("cap_add") != expected_caps
+        or value.get("cap_drop") != []
+        or value.get("lifecycle_exec_launcher") != expected_launcher
+        or value.get("devices") != []
+        or value.get("security_opts")
+        != ["label=disable", "no-new-privileges"]
+        or value.get("stop_signal")
+        != ("SIGINT" if spec.family == "apk" else "SIGRTMIN+3")
+        or value.get("tmpfs") != expected_tmpfs
+        or value.get("mounts") != expected_mounts
+    ):
+        raise LifecycleLabError("ACTIVE container isolation evidence is not exact")
+
+
+def _inventory_core_digest(
+    scenario_result: dict[str, object], phase_label: str
+) -> str:
+    inventories = scenario_result.get("inventory_evidence")
+    phase = inventories.get(phase_label) if isinstance(inventories, dict) else None
+    filesystem = phase.get("filesystem") if isinstance(phase, dict) else None
+    matches = [
+        entry.get("value")
+        for entry in filesystem
+        if isinstance(entry, dict)
+        and entry.get("path") == "/opt/syswarden/bin/syswarden-core"
+        and entry.get("type") == "file"
+        and entry.get("mode") == "750"
+        and entry.get("uid") == 0
+        and entry.get("gid") == 0
+    ] if isinstance(filesystem, list) else []
+    if (
+        len(matches) != 1
+        or re.fullmatch(r"[0-9a-f]{64}", str(matches[0])) is None
+    ):
+        raise LifecycleLabError("core inventory digest binding is absent")
+    return str(matches[0])
+
+
+def _validate_postinstall_core_digest_events(
+    scenario_result: dict[str, object], scenario: str
+) -> dict[str, str]:
+    labels = (
+        ("candidate", "reinstall", "restart-one", "restart-two", "recovery")
+        if scenario == "upgrade-rollback"
+        else ("fresh",)
+    )
+    events = scenario_result.get("events")
+    if not isinstance(events, list):
+        raise LifecycleLabError("core process event binding is absent")
+    by_check = {
+        item.get("check"): item
+        for item in events
+        if isinstance(item, dict) and isinstance(item.get("check"), str)
+    }
+    bindings: dict[str, str] = {}
+    for label in labels:
+        digest = _inventory_core_digest(scenario_result, label)
+        event = by_check.get(f"{scenario}.{label}.postinstall_contract")
+        detail = event.get("detail") if isinstance(event, dict) else None
+        if (
+            event is None
+            or event.get("status") != "pass"
+            or not isinstance(detail, str)
+            or not detail.endswith(
+                f"core process sha256={digest} match the installed version"
+            )
+        ):
+            raise LifecycleLabError(
+                f"core process bytes are not bound to inventory phase {label}"
+            )
+        bindings[label] = digest
+    return bindings
+
+
+def _snapshot_core_digest(snapshot: dict[str, object]) -> str:
+    services = snapshot.get("product_services")
+    identity = (
+        services.get("core_executable_identity")
+        if isinstance(services, dict)
+        else None
+    )
+    if (
+        not isinstance(identity, str)
+        or re.fullmatch(r"[0-9]+:[0-9]+:81e8:0:0\|[0-9a-f]{64}", identity)
+        is None
+    ):
+        raise LifecycleLabError("active core snapshot lacks byte identity")
+    return identity.rsplit("|", 1)[1]
+
+
+def validate_passing_active_scenario_runtime(
+    platform_result: dict[str, object],
+    scenario_result: dict[str, object],
+    *,
+    expected_uid_map: list[dict[str, object]] | None = None,
+    expected_gid_map: list[dict[str, object]] | None = None,
+) -> None:
+    scenario = scenario_result.get("name")
+    if not isinstance(scenario, str):
+        raise LifecycleLabError("runtime scenario name is invalid")
+    spec = _platform_spec_from_result(platform_result)
+    keys = {
+        "name",
+        "status",
+        "runtime_mode",
+        "container_create_exit_code",
+        "lifecycle_exec_exit_codes",
+        "restart_state",
+        "boots",
+        "isolation",
+        "cleanup",
+        "orchestration_error",
+        "events",
+        "inventory_evidence",
+        "log_tail",
+    }
+    invocations = _scenario_invocations(scenario)
+    expected_restart_states = (
+        ("restart-one", "restart-two", "complete")
+        if scenario == "upgrade-rollback"
+        else (None,)
+    )
+    boots = scenario_result.get("boots")
+    cleanup = scenario_result.get("cleanup")
+    if (
+        set(scenario_result) != keys
+        or scenario_result.get("runtime_mode") != "active-real-init"
+        or scenario_result.get("container_create_exit_code") != 0
+        or scenario_result.get("lifecycle_exec_exit_codes")
+        != [0] * len(invocations)
+        or scenario_result.get("restart_state")
+        != ("complete" if scenario == "upgrade-rollback" else None)
+        or scenario_result.get("orchestration_error") is not None
+        or not isinstance(cleanup, dict)
+        or set(cleanup)
+        != {"remove_exit_code", "exists_probe_exit_code", "absent_after_cleanup"}
+        or cleanup.get("remove_exit_code") != 0
+        or cleanup.get("exists_probe_exit_code") != 1
+        or cleanup.get("absent_after_cleanup") is not True
+        or not isinstance(scenario_result.get("log_tail"), str)
+        or not isinstance(boots, list)
+        or len(boots) != len(invocations)
+    ):
+        raise LifecycleLabError("passing ACTIVE scenario schema is not exact")
+    _validate_runtime_isolation_evidence(scenario_result.get("isolation"), spec)
+    core_bindings = _validate_postinstall_core_digest_events(
+        scenario_result, scenario
+    )
+    previous_starttime: int | None = None
+    previous_cron_binding: tuple[object, ...] | None = None
+    previous_boundary_binding: tuple[object, ...] | None = None
+    for index, (invocation, expected_restart_state) in enumerate(
+        zip(invocations, expected_restart_states, strict=True)
+    ):
+        boot = boots[index]
+        boot_keys = {
+            "invocation",
+            "boot_command_exit_code",
+            "restart",
+            "pre_exec",
+            "lifecycle_exec_security",
+            "script_exec_exit_code",
+            "restart_state",
+            "post_exec",
+        }
+        if (
+            not isinstance(boot, dict)
+            or set(boot) != boot_keys
+            or boot.get("invocation") != invocation
+            or boot.get("boot_command_exit_code") != 0
+            or boot.get("script_exec_exit_code") != 0
+            or boot.get("restart_state") != expected_restart_state
+        ):
+            raise LifecycleLabError("ACTIVE boot evidence is not exact")
+        _validate_process_security_evidence(
+            boot.get("lifecycle_exec_security"),
+            sys_admin_present=frozenset(),
+            sys_ptrace_present=(
+                SYSTEMD_MANAGER_CAPABILITY_FIELDS
+                if spec.family != "apk"
+                else frozenset()
+            ),
+            label=f"{scenario} {invocation} lifecycle exec",
+        )
+        restart = boot.get("restart")
+        restart_keys = {
+            "performed",
+            "command_exit_code",
+            "previous_pid1_starttime_ticks",
+            "distinct",
+        }
+        if not isinstance(restart, dict) or set(restart) != restart_keys:
+            raise LifecycleLabError("ACTIVE restart evidence schema is not exact")
+        if index == 0:
+            if restart != {
+                "performed": False,
+                "command_exit_code": None,
+                "previous_pid1_starttime_ticks": None,
+                "distinct": None,
+            }:
+                raise LifecycleLabError("initial boot restart evidence is not null")
+        elif restart != {
+            "performed": True,
+            "command_exit_code": 0,
+            "previous_pid1_starttime_ticks": previous_starttime,
+            "distinct": True,
+        }:
+            raise LifecycleLabError("real restart evidence is not exact")
+        pre_expectation = "absent" if index == 0 else "active"
+        post_expectation = "active" if scenario == "upgrade-rollback" else "absent"
+        pre = _validate_runtime_snapshot_evidence(
+            boot.get("pre_exec"),
+            spec,
+            pre_expectation,
+            expected_uid_map=expected_uid_map,
+            expected_gid_map=expected_gid_map,
+        )
+        post = _validate_runtime_snapshot_evidence(
+            boot.get("post_exec"),
+            spec,
+            post_expectation,
+            expected_uid_map=expected_uid_map,
+            expected_gid_map=expected_gid_map,
+        )
+        boundary_keys = (
+            "pid1_process_security",
+            "attestation_process_security",
+            "pid1_uid_map",
+            "pid1_gid_map",
+            "setpriv",
+        )
+        pre_boundary = tuple(pre[key] for key in boundary_keys)
+        post_boundary = tuple(post[key] for key in boundary_keys)
+        if (
+            pre_boundary != post_boundary
+            or boot.get("lifecycle_exec_security")
+            != pre["attestation_process_security"]
+            or (
+                previous_boundary_binding is not None
+                and pre_boundary != previous_boundary_binding
+            )
+        ):
+            raise LifecycleLabError(
+                "runtime capability/userns boundary changed across lifecycle execution"
+            )
+        if scenario == "upgrade-rollback":
+            post_phase = ("reinstall", "restart-one", "recovery")[index]
+            if _snapshot_core_digest(post) != core_bindings[post_phase]:
+                raise LifecycleLabError(
+                    "post-exec core process bytes differ from inventory"
+                )
+            if index > 0:
+                pre_phase = ("reinstall", "restart-one")[index - 1]
+                if _snapshot_core_digest(pre) != core_bindings[pre_phase]:
+                    raise LifecycleLabError(
+                        "pre-exec core process bytes differ from inventory"
+                    )
+        if (
+            pre["pid1_starttime_ticks"] != post["pid1_starttime_ticks"]
+            or pre["cron_main_pid"] != post["cron_main_pid"]
+        ):
+            raise LifecycleLabError(
+                "PID1 or cron changed during lifecycle script execution"
+            )
+        pre_cron_binding = tuple(
+            pre[key]
+            for key in (
+                "cron_executable_path",
+                "cron_executable_identity",
+                "cron_fragment_path",
+                "cron_fragment_identity",
+                "cron_dropin_paths",
+                "cron_package_name",
+                "cron_package_version",
+                "cron_package_architecture",
+                "cron_fragment_package_name",
+                "cron_fragment_package_version",
+                "cron_fragment_package_architecture",
+            )
+        )
+        post_cron_binding = tuple(
+            post[key]
+            for key in (
+                "cron_executable_path",
+                "cron_executable_identity",
+                "cron_fragment_path",
+                "cron_fragment_identity",
+                "cron_dropin_paths",
+                "cron_package_name",
+                "cron_package_version",
+                "cron_package_architecture",
+                "cron_fragment_package_name",
+                "cron_fragment_package_version",
+                "cron_fragment_package_architecture",
+            )
+        )
+        if pre_cron_binding != post_cron_binding or (
+            previous_cron_binding is not None
+            and pre_cron_binding != previous_cron_binding
+        ):
+            raise LifecycleLabError("cron provider identity changed across evidence")
+        if index > 0 and pre["pid1_starttime_ticks"] == previous_starttime:
+            raise LifecycleLabError("PID1 starttime did not change across restart")
+        previous_starttime = int(post["pid1_starttime_ticks"])
+        previous_cron_binding = post_cron_binding
+        previous_boundary_binding = post_boundary
+
+
 def classify_lifecycle_evidence(
     results: Sequence[dict[str, object]],
     *,
@@ -3813,6 +7761,30 @@ def classify_lifecycle_evidence(
             )
         else:
             family = str(platform_result.get("family"))
+            if platform_result.get("runtime_mode") != "active-real-init":
+                coordinate_structural.append(
+                    f"{coordinate_name}:runtime-mode-not-active-real-init"
+                )
+            if platform_result.get("restart_contract") != ACTIVE_RESTART_CONTRACT:
+                coordinate_structural.append(
+                    f"{coordinate_name}:restart-contract-invalid"
+                )
+            image_cleanup = platform_result.get("bootstrap_image_cleanup")
+            if (
+                not isinstance(image_cleanup, dict)
+                or set(image_cleanup)
+                != {
+                    "remove_exit_code",
+                    "exists_probe_exit_code",
+                    "absent_after_cleanup",
+                }
+                or image_cleanup.get("remove_exit_code") != 0
+                or image_cleanup.get("exists_probe_exit_code") != 1
+                or image_cleanup.get("absent_after_cleanup") is not True
+            ):
+                coordinate_structural.append(
+                    f"{coordinate_name}:bootstrap-image-cleanup-invalid"
+                )
             _, binding_problems = forward_only_apk_report_contract(platform_result)
             coordinate_structural.extend(
                 f"{coordinate_name}:{problem}" for problem in binding_problems
@@ -3838,17 +7810,15 @@ def classify_lifecycle_evidence(
                         f"{coordinate_name}:scenario-name-invalid"
                     )
                     continue
-                required_starts = 3 if scenario_name == "upgrade-rollback" else 1
-                start_codes = scenario_result.get("container_start_exit_codes")
-                if (
-                    not isinstance(start_codes, list)
-                    or len(start_codes) != required_starts
-                    or any(type(code) is not int for code in start_codes)
-                    or scenario_result.get("container_restart_count")
-                    != required_starts - 1
-                ):
+                runtime_valid = True
+                try:
+                    validate_passing_active_scenario_runtime(
+                        platform_result, scenario_result
+                    )
+                except LifecycleLabError:
+                    runtime_valid = False
                     coordinate_structural.append(
-                        f"{coordinate_name}:{scenario_name}:restart-evidence-incomplete"
+                        f"{coordinate_name}:{scenario_name}:active-runtime-evidence-invalid"
                     )
                 events = scenario_result.get("events")
                 try:
@@ -3879,31 +7849,15 @@ def classify_lifecycle_evidence(
                 scenario_failed_events = [
                     event for event in events if event["status"] == "fail"
                 ]
-                if isinstance(start_codes, list) and len(start_codes) == required_starts:
-                    if scenario_result.get("container_exit_code") != start_codes[-1]:
-                        coordinate_structural.append(
-                            f"{coordinate_name}:{scenario_name}:container-exit-inconsistent"
-                        )
-                    if not scenario_failed_events and any(
-                        code != 0 for code in start_codes
-                    ):
-                        coordinate_structural.append(
-                            f"{coordinate_name}:{scenario_name}:unexpected-container-exit"
-                        )
-                    if scenario_failed_events and start_codes[-1] == 0:
-                        coordinate_structural.append(
-                            f"{coordinate_name}:{scenario_name}:failure-exit-inconsistent"
-                        )
-                    derived_scenario_status = (
-                        "pass"
-                        if not scenario_failed_events
-                        and all(code == 0 for code in start_codes)
-                        else "fail"
+                derived_scenario_status = (
+                    "pass"
+                    if runtime_valid and not scenario_failed_events
+                    else "fail"
+                )
+                if scenario_result.get("status") != derived_scenario_status:
+                    coordinate_structural.append(
+                        f"{coordinate_name}:{scenario_name}:scenario-status-inconsistent"
                     )
-                    if scenario_result.get("status") != derived_scenario_status:
-                        coordinate_structural.append(
-                            f"{coordinate_name}:{scenario_name}:scenario-status-inconsistent"
-                        )
                 for event in events:
                     if event["status"] == "fail":
                         identifier = f"{coordinate_name}:{event['check']}"
@@ -3955,6 +7909,251 @@ def classify_lifecycle_evidence(
     }
 
 
+def validate_lifecycle_helper_evidence(value: object) -> dict[str, object]:
+    keys = {
+        "source",
+        "sha256",
+        "size_bytes",
+        "source_regular_file",
+        "source_symlink",
+        "snapshot_mode",
+        "snapshot_regular_file",
+        "snapshot_symlink",
+        "frozen_copy",
+        "revalidated_before_report",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise LifecycleLabError("lifecycle helper evidence schema is not exact")
+    source = value.get("source")
+    current_helper = Path(__file__).resolve().with_name(
+        "package_webtui_retirement.sh"
+    )
+    current_helper_bytes, _ = _read_stable_regular_file(
+        current_helper, "current package lifecycle helper"
+    )
+    current_helper_sha256 = hashlib.sha256(current_helper_bytes).hexdigest()
+    if (
+        not isinstance(source, str)
+        or not source
+        or (
+            source != "native-shards-byte-bound"
+            and (
+                not Path(source).is_absolute()
+                or Path(source).name != "package_webtui_retirement.sh"
+            )
+        )
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256"))) is None
+        or value.get("sha256") != current_helper_sha256
+        or type(value.get("size_bytes")) is not int
+        or int(value["size_bytes"]) <= 0
+        or value.get("size_bytes") != len(current_helper_bytes)
+        or value.get("source_regular_file") is not True
+        or value.get("source_symlink") is not False
+        or value.get("snapshot_mode") != "0600"
+        or value.get("snapshot_regular_file") is not True
+        or value.get("snapshot_symlink") is not False
+        or value.get("frozen_copy") is not True
+        or value.get("revalidated_before_report") is not True
+    ):
+        raise LifecycleLabError("lifecycle helper evidence values are invalid")
+    return value
+
+
+def validate_runtime_engine_evidence(value: object) -> dict[str, object]:
+    keys = {
+        "name",
+        "version",
+        "rootless",
+        "cgroups_version",
+        "cgroup_manager",
+        "cgroup_delegation",
+        "cgroup_controllers",
+        "host_architecture",
+        "service_is_remote",
+        "effective_uid",
+        "effective_gid",
+        "uid_map",
+        "gid_map",
+        "lifecycle_helper",
+        "arm64_emulator",
+        "arm64_binfmt",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise LifecycleLabError("package lifecycle engine schema is not exact")
+    controllers = value.get("cgroup_controllers")
+    host_architecture = value.get("host_architecture")
+    if (
+        value.get("name") != "podman"
+        or not isinstance(value.get("version"), str)
+        or not value.get("version")
+        or value.get("rootless") is not True
+        or value.get("cgroups_version") != "v2"
+        or value.get("cgroup_manager") != "systemd"
+        or value.get("cgroup_delegation")
+        not in {"rootless-systemd-v2", "native-shards-rootless-systemd-v2"}
+        or not isinstance(controllers, list)
+        or any(not isinstance(item, str) for item in controllers)
+        or controllers != sorted(set(controllers))
+        or not {"cpu", "io", "memory", "pids"}.issubset(controllers)
+        or host_architecture not in {"amd64", "arm64", "native-shards"}
+        or value.get("service_is_remote") is not False
+    ):
+        raise LifecycleLabError("package lifecycle engine values are invalid")
+    if host_architecture == "native-shards":
+        if any(
+            value.get(key) is not None
+            for key in ("effective_uid", "effective_gid", "uid_map", "gid_map")
+        ):
+            raise LifecycleLabError(
+                "aggregate engine fabricates a common rootless identity map"
+            )
+    else:
+        effective_uid = value.get("effective_uid")
+        effective_gid = value.get("effective_gid")
+        if (
+            type(effective_uid) is not int
+            or int(effective_uid) <= 0
+            or type(effective_gid) is not int
+            or int(effective_gid) <= 0
+        ):
+            raise LifecycleLabError(
+                "native engine effective rootless IDs are invalid"
+            )
+        uid_map = _validate_id_map_evidence(
+            value.get("uid_map"), "native engine uid_map"
+        )
+        gid_map = _validate_id_map_evidence(
+            value.get("gid_map"), "native engine gid_map"
+        )
+        if (
+            uid_map[0]["outside_id"] != effective_uid
+            or gid_map[0]["outside_id"] != effective_gid
+        ):
+            raise LifecycleLabError(
+                "native engine maps do not bind the effective rootless IDs"
+            )
+    validate_lifecycle_helper_evidence(value.get("lifecycle_helper"))
+    return value
+
+
+def validate_aggregate_engine_binding(
+    report: dict[str, object], engine: dict[str, object]
+) -> dict[str, tuple[list[dict[str, object]], list[dict[str, object]]]]:
+    native_shards = report.get("native_shards")
+    if native_shards is None:
+        return {}
+    if (
+        not isinstance(native_shards, dict)
+        or set(native_shards) != {"schema_version", "mode", "reports"}
+        or native_shards.get("schema_version") != 1
+        or native_shards.get("mode") != "native_architecture_shards_v1"
+    ):
+        raise LifecycleLabError("aggregate native shard schema is not exact")
+    records = native_shards.get("reports")
+    record_keys = {
+        "architecture",
+        "host_architecture",
+        "report_sha256",
+        "engine_name",
+        "engine_version",
+        "rootless",
+        "cgroups_version",
+        "cgroup_manager",
+        "cgroup_delegation",
+        "cgroup_controllers",
+        "engine_host_architecture",
+        "service_is_remote",
+        "effective_uid",
+        "effective_gid",
+        "uid_map",
+        "gid_map",
+        "lifecycle_helper",
+    }
+    if (
+        not isinstance(records, list)
+        or len(records) != 2
+        or [item.get("architecture") if isinstance(item, dict) else None for item in records]
+        != ["amd64", "arm64"]
+    ):
+        raise LifecycleLabError("aggregate native shard records are not exact")
+    helper_binding: tuple[object, ...] | None = None
+    controller_intersection: set[str] | None = None
+    identity_maps: dict[
+        str, tuple[list[dict[str, object]], list[dict[str, object]]]
+    ] = {}
+    for record in records:
+        assert isinstance(record, dict)
+        architecture = record["architecture"]
+        helper = validate_lifecycle_helper_evidence(record.get("lifecycle_helper"))
+        binding = tuple(helper[key] for key in sorted(set(helper) - {"source"}))
+        if helper_binding is None:
+            helper_binding = binding
+        elif binding != helper_binding:
+            raise LifecycleLabError("aggregate shard helper bindings differ")
+        controllers = record.get("cgroup_controllers")
+        effective_uid = record.get("effective_uid")
+        effective_gid = record.get("effective_gid")
+        uid_map = _validate_id_map_evidence(
+            record.get("uid_map"), f"{architecture} shard uid_map"
+        )
+        gid_map = _validate_id_map_evidence(
+            record.get("gid_map"), f"{architecture} shard gid_map"
+        )
+        if (
+            set(record) != record_keys
+            or record.get("host_architecture") != architecture
+            or re.fullmatch(r"[0-9a-f]{64}", str(record.get("report_sha256")))
+            is None
+            or record.get("engine_name") != "podman"
+            or not isinstance(record.get("engine_version"), str)
+            or not record.get("engine_version")
+            or record.get("rootless") is not True
+            or record.get("cgroups_version") != "v2"
+            or record.get("cgroup_manager") != "systemd"
+            or record.get("cgroup_delegation") != "rootless-systemd-v2"
+            or not isinstance(controllers, list)
+            or controllers != sorted(set(controllers))
+            or not {"cpu", "io", "memory", "pids"}.issubset(controllers)
+            or record.get("engine_host_architecture") != architecture
+            or record.get("service_is_remote") is not False
+            or type(effective_uid) is not int
+            or int(effective_uid) <= 0
+            or type(effective_gid) is not int
+            or int(effective_gid) <= 0
+            or uid_map[0]["outside_id"] != effective_uid
+            or gid_map[0]["outside_id"] != effective_gid
+        ):
+            raise LifecycleLabError("aggregate native shard engine record is invalid")
+        identity_maps[str(architecture)] = (uid_map, gid_map)
+        controller_intersection = (
+            set(controllers)
+            if controller_intersection is None
+            else controller_intersection & set(controllers)
+        )
+    assert helper_binding is not None and controller_intersection is not None
+    aggregate_helper = validate_lifecycle_helper_evidence(
+        engine.get("lifecycle_helper")
+    )
+    aggregate_binding = tuple(
+        aggregate_helper[key]
+        for key in sorted(set(aggregate_helper) - {"source"})
+    )
+    if (
+        engine.get("host_architecture") != "native-shards"
+        or engine.get("cgroup_delegation")
+        != "native-shards-rootless-systemd-v2"
+        or engine.get("cgroup_controllers") != sorted(controller_intersection)
+        or engine.get("version")
+        != ";".join(
+            f"{item['architecture']}={item['engine_version']}" for item in records
+        )
+        or aggregate_helper.get("source") != "native-shards-byte-bound"
+        or aggregate_binding != helper_binding
+    ):
+        raise LifecycleLabError("aggregate engine dilutes native shard evidence")
+    return identity_maps
+
+
 def validate_report_version_contract(
     report: dict[str, object],
     *,
@@ -4004,6 +8203,9 @@ def validate_report_version_contract(
             "package lifecycle report candidate numeric version is inconsistent"
         )
 
+    engine = validate_runtime_engine_evidence(report.get("engine"))
+    aggregate_identity_maps = validate_aggregate_engine_binding(report, engine)
+
     platforms = report.get("platforms")
     if not isinstance(platforms, list) or not platforms:
         raise LifecycleLabError("package lifecycle report has no platform results")
@@ -4021,6 +8223,26 @@ def validate_report_version_contract(
             raise LifecycleLabError(
                 "package lifecycle platform result has an unsupported family"
             )
+        if aggregate_identity_maps:
+            identity_binding = aggregate_identity_maps.get(
+                str(platform_result.get("architecture_id"))
+            )
+            if identity_binding is None:
+                raise LifecycleLabError(
+                    "aggregate platform lacks its native shard identity map"
+                )
+            expected_uid_map, expected_gid_map = identity_binding
+        else:
+            native_uid_map = engine.get("uid_map")
+            native_gid_map = engine.get("gid_map")
+            if not isinstance(native_uid_map, list) or not isinstance(
+                native_gid_map, list
+            ):
+                raise LifecycleLabError(
+                    "native report lacks engine identity maps"
+                )
+            expected_uid_map = native_uid_map
+            expected_gid_map = native_gid_map
         scenarios = platform_result.get("scenarios")
         if platform_result.get("status") == "pass":
             if not isinstance(scenarios, list) or [
@@ -4037,19 +8259,16 @@ def validate_report_version_contract(
                         "package lifecycle scenario result must be an object"
                     )
                 scenario_name = scenario_result["name"]
-                required_starts = 3 if scenario_name == "upgrade-rollback" else 1
-                if (
-                    scenario_result.get("status") != "pass"
-                    or scenario_result.get("container_start_exit_codes")
-                    != [0] * required_starts
-                    or scenario_result.get("container_restart_count")
-                    != required_starts - 1
-                    or scenario_result.get("container_exit_code") != 0
-                ):
+                if scenario_result.get("status") != "pass":
                     raise LifecycleLabError(
-                        "passing package lifecycle scenario lacks its exact "
-                        "container restart evidence"
+                        "passing package lifecycle platform contains a failed scenario"
                     )
+                validate_passing_active_scenario_runtime(
+                    platform_result,
+                    scenario_result,
+                    expected_uid_map=expected_uid_map,
+                    expected_gid_map=expected_gid_map,
+                )
                 scenario_events = scenario_result.get("events")
                 if not isinstance(scenario_events, list):
                     raise LifecycleLabError(
@@ -4093,9 +8312,6 @@ def validate_report_version_contract(
             raise LifecycleLabError(
                 "package lifecycle platform previous version is inconsistent"
             )
-    engine = report.get("engine")
-    if not isinstance(engine, dict):
-        raise LifecycleLabError("package lifecycle report lacks engine evidence")
     emulator_report = engine.get("arm64_emulator")
     if emulator_report is not None:
         if (
@@ -4408,12 +8624,16 @@ def run_lab(
         except LifecycleLabError as exc:
             arm64_binfmt_error = str(exc)
     podman_version = ensure_rootless_podman(active_runner, args.podman)
+    cgroup_evidence = inspect_rootless_podman_cgroups(
+        active_runner, args.podman, actual_host_architecture
+    )
 
     with tempfile.TemporaryDirectory(prefix="syswarden-package-lifecycle-") as raw:
         workspace = Path(raw)
         script_path = workspace / "package-lifecycle.sh"
         script_path.write_text(LIFECYCLE_SCRIPT, encoding="utf-8")
         script_path.chmod(0o500)
+        helper_path, helper_evidence = snapshot_lifecycle_helper(workspace)
 
         platform_results = [
             run_platform(
@@ -4424,6 +8644,7 @@ def run_lab(
                 candidate_root,
                 previous_root,
                 workspace,
+                helper_path,
                 args.pull_policy,
                 args.scenario_timeout,
                 actual_host_architecture,
@@ -4433,6 +8654,9 @@ def run_lab(
             )
             for spec in platforms
         ]
+        helper_evidence = revalidate_lifecycle_helper(
+            helper_path, helper_evidence
+        )
 
     if arm64_emulator is not None:
         final_emulator = validate_arm64_emulator(arm64_emulator.path)
@@ -4608,6 +8832,17 @@ def run_lab(
             "name": "podman",
             "version": podman_version,
             "rootless": True,
+            "cgroups_version": cgroup_evidence["cgroups_version"],
+            "cgroup_manager": cgroup_evidence["cgroup_manager"],
+            "cgroup_delegation": cgroup_evidence["cgroup_delegation"],
+            "cgroup_controllers": cgroup_evidence["cgroup_controllers"],
+            "host_architecture": cgroup_evidence["host_architecture"],
+            "service_is_remote": cgroup_evidence["service_is_remote"],
+            "effective_uid": cgroup_evidence["effective_uid"],
+            "effective_gid": cgroup_evidence["effective_gid"],
+            "uid_map": cgroup_evidence["uid_map"],
+            "gid_map": cgroup_evidence["gid_map"],
+            "lifecycle_helper": helper_evidence,
             "arm64_emulator": (
                 {
                     "path": str(arm64_emulator.path),
@@ -4724,15 +8959,10 @@ def validate_native_shard_report(
         != {(family, architecture) for family in REQUIRED_FAMILIES}
     ):
         raise LifecycleLabError("native shard coverage summary is not exact")
-    engine = report.get("engine")
+    engine = validate_runtime_engine_evidence(report.get("engine"))
     if (
-        not isinstance(engine, dict)
-        or set(engine)
-        != {"name", "version", "rootless", "arm64_emulator", "arm64_binfmt"}
-        or engine.get("name") != "podman"
-        or not isinstance(engine.get("version"), str)
-        or not engine.get("version")
-        or engine.get("rootless") is not True
+        engine.get("host_architecture") != architecture
+        or engine.get("cgroup_delegation") != "rootless-systemd-v2"
         or engine.get("arm64_emulator") is not None
         or engine.get("arm64_binfmt") is not None
     ):
@@ -5099,12 +9329,34 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
 
     status, classification, scope = _aggregate_matrix_summary(platform_results)
     native_records = []
+    common_helper_binding: tuple[object, ...] | None = None
+    aggregate_controllers: set[str] | None = None
     for architecture in ("amd64", "arm64"):
         shard = shard_reports[architecture]
         shard_scope = shard["scope"]
         shard_engine = shard["engine"]
-        if not isinstance(shard_scope, dict) or not isinstance(shard_engine, dict):
+        if not isinstance(shard_scope, dict):
             raise LifecycleLabError("native shard metadata is invalid")
+        shard_engine = validate_runtime_engine_evidence(shard_engine)
+        shard_helper = validate_lifecycle_helper_evidence(
+            shard_engine["lifecycle_helper"]
+        )
+        helper_binding = tuple(
+            shard_helper[key]
+            for key in sorted(set(shard_helper) - {"source"})
+        )
+        if common_helper_binding is None:
+            common_helper_binding = helper_binding
+        elif helper_binding != common_helper_binding:
+            raise LifecycleLabError(
+                "native shards used different frozen lifecycle helper bytes"
+            )
+        controllers = set(shard_engine["cgroup_controllers"])
+        aggregate_controllers = (
+            controllers
+            if aggregate_controllers is None
+            else aggregate_controllers & controllers
+        )
         native_records.append(
             {
                 "architecture": architecture,
@@ -5114,8 +9366,27 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
                 "report_sha256": shard_digests[architecture],
                 "engine_name": shard_engine["name"],
                 "engine_version": shard_engine["version"],
+                "rootless": shard_engine["rootless"],
+                "cgroups_version": shard_engine["cgroups_version"],
+                "cgroup_manager": shard_engine["cgroup_manager"],
+                "cgroup_delegation": shard_engine["cgroup_delegation"],
+                "cgroup_controllers": shard_engine["cgroup_controllers"],
+                "engine_host_architecture": shard_engine["host_architecture"],
+                "service_is_remote": shard_engine["service_is_remote"],
+                "effective_uid": shard_engine["effective_uid"],
+                "effective_gid": shard_engine["effective_gid"],
+                "uid_map": shard_engine["uid_map"],
+                "gid_map": shard_engine["gid_map"],
+                "lifecycle_helper": shard_helper,
             }
         )
+    assert aggregate_controllers is not None
+    first_helper = native_records[0]["lifecycle_helper"]
+    assert isinstance(first_helper, dict)
+    aggregate_helper = {
+        **first_helper,
+        "source": "native-shards-byte-bound",
+    }
     report: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -5133,6 +9404,17 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
                 for item in native_records
             ),
             "rootless": True,
+            "cgroups_version": "v2",
+            "cgroup_manager": "systemd",
+            "cgroup_delegation": "native-shards-rootless-systemd-v2",
+            "cgroup_controllers": sorted(aggregate_controllers),
+            "host_architecture": "native-shards",
+            "service_is_remote": False,
+            "effective_uid": None,
+            "effective_gid": None,
+            "uid_map": None,
+            "gid_map": None,
+            "lifecycle_helper": aggregate_helper,
             "arm64_emulator": None,
             "arm64_binfmt": None,
         },

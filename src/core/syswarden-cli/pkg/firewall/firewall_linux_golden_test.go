@@ -21,6 +21,9 @@ const (
 	linuxFirewallHelperEnvironment     = "SYSWARDEN_LINUX_FIREWALL_GOLDEN_HELPER"
 	linuxFirewallTargetDirectory       = "/etc/syswarden"
 	linuxFirewallTargetFile            = "/etc/syswarden/syswarden.nft"
+	// This documentation prefix is consumed only by the isolated fake nft helper.
+	// It is never committed to a kernel ruleset.
+	linuxFirewallFakeASNIPv4Prefix = "192.0.2.128/25"
 )
 
 func TestNftablesRulesGolden_SW_QA_001(t *testing.T) {
@@ -301,6 +304,24 @@ func runLinuxFirewallGoldenHelper(t *testing.T) {
 	defer cleanupLists()
 	previous := config.GlobalConfig
 	t.Cleanup(func() { config.GlobalConfig = previous })
+	previousPreflight := firewallBackendPreflight
+	previousNFTValidator := nftExecutableValidator
+	t.Cleanup(func() {
+		firewallBackendPreflight = previousPreflight
+		nftExecutableValidator = previousNFTValidator
+	})
+	firewallBackendPreflight = func(backend string) error {
+		if backend != "keep" {
+			return fmt.Errorf("firewall golden helper received unexpected backend %q", backend)
+		}
+		return nil
+	}
+	nftExecutableValidator = func(path string) error {
+		if path != "/tmp/test-tools/nft" {
+			return fmt.Errorf("firewall golden helper received unexpected nft path %q", path)
+		}
+		return validateTestLinuxWrapperExecutable(path)
+	}
 	config.GlobalConfig = &config.Config{
 		Interfaces: "eth-test0,eth-test1",
 		SSHPort:    "2222",
@@ -338,13 +359,13 @@ func writeLinuxFirewallListFixtures(t *testing.T) func() {
 	}
 	fixtures := map[string]string{
 		"allowed_fr.ipv4":      "192.0.2.0/24\n",
-		"allowed_fr.ipv6":      "2001:db8:1::/48\n",
+		"allowed_fr.ipv6":      "2001:db8:1::/64\n",
 		"allowed_AS64501.ipv4": "198.51.100.0/24\n",
-		"allowed_AS64501.ipv6": "2001:db8:2::/48\n",
+		"allowed_AS64501.ipv6": "2001:db8:2::/64\n",
 		"be.ipv4":              "203.0.113.0/24\n",
-		"be.ipv6":              "2001:db8:3::/48\n",
-		"AS64500.ipv4":         "198.18.0.0/15\n",
-		"AS64500.ipv6":         "2001:db8:4::/48\n",
+		"be.ipv6":              "2001:db8:3::/64\n",
+		"AS64500.ipv4":         linuxFirewallFakeASNIPv4Prefix + "\n",
+		"AS64500.ipv6":         "2001:db8:4::/64\n",
 	}
 	paths := make([]string, 0, len(fixtures))
 	for name, content := range fixtures {
@@ -445,13 +466,13 @@ func writeLinuxFirewallTestTools(t *testing.T, toolDir string) {
 		{name: "syswarden_ssh_bypass", inetOnly: true},
 		{name: "syswarden_ssh_bypass6", inetOnly: true},
 		{name: "syswarden_zt_allowed", entries: []string{"192.0.2.0/24", "198.51.100.0/24"}},
-		{name: "syswarden_zt_allowed6", entries: []string{"2001:db8:1::/48", "2001:db8:2::/48"}},
+		{name: "syswarden_zt_allowed6", entries: []string{"2001:db8:1::/64", "2001:db8:2::/64"}},
 		{name: "syswarden_blacklist"},
 		{name: "syswarden_blacklist6"},
 		{name: "syswarden_geoip", entries: []string{"203.0.113.0/24"}},
-		{name: "syswarden_geoip6", entries: []string{"2001:db8:3::/48"}},
-		{name: "syswarden_asn", entries: []string{"198.18.0.0/15"}},
-		{name: "syswarden_asn6", entries: []string{"2001:db8:4::/48"}},
+		{name: "syswarden_geoip6", entries: []string{"2001:db8:3::/64"}},
+		{name: "syswarden_asn", entries: []string{linuxFirewallFakeASNIPv4Prefix}},
+		{name: "syswarden_asn6", entries: []string{"2001:db8:4::/64"}},
 	}
 	for index := range populations {
 		normalized, err := normalizeNFTIntervals(populations[index].name, populations[index].entries)

@@ -8,9 +8,8 @@ import (
 	"testing"
 )
 
-func TestCompleteBlocklistRemovalAggregatesFailuresWithoutFalseSuccess(t *testing.T) {
+func TestCompleteBlocklistRemovalStopsBeforeHASyncWhenFirewallApplyFails(t *testing.T) {
 	applyErr := errors.New("nft verification failed")
-	syncErr := errors.New("HA peer rejected unban")
 	var output bytes.Buffer
 	var calls []string
 
@@ -23,17 +22,17 @@ func TestCompleteBlocklistRemovalAggregatesFailuresWithoutFalseSuccess(t *testin
 		},
 		func(ips []string) error {
 			calls = append(calls, "sync:"+strings.Join(ips, ","))
-			return syncErr
+			return errors.New("HA synchronization must not run")
 		},
 	)
 
-	if !errors.Is(err, applyErr) || !errors.Is(err, syncErr) {
-		t.Fatalf("completeBlocklistRemoval() error = %v, want both operation failures", err)
+	if !errors.Is(err, applyErr) {
+		t.Fatalf("completeBlocklistRemoval() error = %v, want apply failure", err)
 	}
 	if output.Len() != 0 {
 		t.Fatalf("failure emitted a false-success message: %q", output.String())
 	}
-	wantCalls := []string{"apply", "sync:198.51.100.7"}
+	wantCalls := []string{"apply"}
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("operation calls = %#v, want %#v", calls, wantCalls)
 	}

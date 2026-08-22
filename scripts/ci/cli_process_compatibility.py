@@ -95,6 +95,7 @@ func TestLot0CLIProcessSnapshotProbe(t *testing.T) {
 	var contracts []lot0ProcessCommandContract
 	var walk func(*cobra.Command)
 	walk = func(command *cobra.Command) {
+		if command != rootCmd && command.Hidden { return }
 		command.InitDefaultHelpFlag()
 		contract := lot0ProcessCommandContract{
 			Path: command.CommandPath(), Use: command.Use, Short: command.Short,

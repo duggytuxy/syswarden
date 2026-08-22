@@ -197,6 +197,23 @@ func LoadConfig() error {
 	return nil
 }
 
+// FirewallBackendForMutation returns the validated runtime backend only when
+// the core daemon may safely initialize its nftables mutation paths. The
+// iptables value remains parseable for compatibility but is not operational.
+func FirewallBackendForMutation() (string, error) {
+	backend := strings.TrimSpace(viper.GetString("core.firewall_backend"))
+	switch backend {
+	case "keep", "nftables":
+		return backend, nil
+	case "iptables":
+		return "", fmt.Errorf("iptables is accepted for configuration compatibility but refused for core firewall mutations")
+	case "":
+		return "", fmt.Errorf("core.firewall_backend is unavailable")
+	default:
+		return "", fmt.Errorf("unsupported core.firewall_backend %q", backend)
+	}
+}
+
 // LoadConfigDirectory validates an isolated candidate and publishes it only
 // after every file and policy value succeeds.
 func LoadConfigDirectory(configPath string) (Diagnostics, error) {
@@ -484,6 +501,9 @@ func validateRuntimeConfig(value *runtimeConfig) error {
 	}
 	if value.Network.WireGuard.Enabled && (value.Network.WireGuard.Subnet == "" || value.Network.WireGuard.Port == "") {
 		return fmt.Errorf("enabled WireGuard requires a subnet and port")
+	}
+	if value.Network.WireGuard.Enabled && value.Core.FirewallBackend != "nftables" {
+		return fmt.Errorf("network.wireguard.enabled requires core.firewall_backend=nftables")
 	}
 	switch value.Network.Blocklists.ListChoice {
 	case "", "1", "2", "3", "4":
