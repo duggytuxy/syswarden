@@ -1,7 +1,9 @@
 package logger
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -27,7 +30,35 @@ const (
 	persistentBlacklistIPv4File = "/etc/syswarden/lists/syswarden_blacklist.ipv4"
 	persistentBlacklistIPv6File = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
 	maxPersistentBlocklistBytes = 1024 * 1024
+
+	// InternalLogMarker identifies process-log records owned by SysWarden. Log
+	// ingestion boundaries must reject records carrying this marker so an event
+	// cannot be detected again after journald or rsyslog persists it.
+	InternalLogMarker = "[SYSWARDEN-INTERNAL]"
 )
+
+const (
+	internalLogTimestampPattern       = `[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} `
+	internalSyslogTimestampPattern    = `[A-Z][a-z]{2} +[0-9]{1,2} [0-9]{2}:[0-9]{2}:[0-9]{2} `
+	internalSyslogHostnamePattern     = `[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?`
+	internalLogCanonicalFieldsPattern = `action=[A-Z][A-Z0-9-]{0,63} ip=(?:[0-9A-Fa-f:.]+|invalid-[0-9a-f]{16}) scope=[A-Za-z0-9._:/%-]{1,128} payload_sha256=[0-9a-f]{64} payload_bytes=[0-9]{1,20}`
+	internalLogRecordPattern          = `\[SYSWARDEN-INTERNAL\] (` + internalLogCanonicalFieldsPattern + `) auth=([0-9a-f]{64})`
+)
+
+var (
+	internalProcessHMACKey  = newInternalProcessHMACKey()
+	internalLogRecordLine   = regexp.MustCompile(`^` + internalLogRecordPattern + `$`)
+	directInternalLogPrefix = regexp.MustCompile(`^` + internalLogTimestampPattern + `$`)
+	systemInternalLogPrefix = regexp.MustCompile(`^(?:` + internalSyslogTimestampPattern + internalSyslogHostnamePattern + ` )?syswarden-core(?:\[[0-9]+\])?: +(?:` + internalLogTimestampPattern + `)?$`)
+)
+
+func newInternalProcessHMACKey() []byte {
+	random := make([]byte, 32)
+	if _, err := rand.Read(random[:]); err != nil {
+		panic(fmt.Sprintf("generate internal log HMAC key: %v", err))
+	}
+	return random
+}
 
 // persistBanToDisk writes WAF/WAAP bans synchronously. The production paths
 // are fixed; UpdatePersistentBlocklist provides the shared HA/WAAP atomic RMW
@@ -306,6 +337,100 @@ type TelemetryEvent struct {
 	Severity  int    `json:"severity,omitempty"`
 }
 
+// IsInternalLogLine reports whether a line was emitted by SysWarden's event
+// logger and must therefore be excluded from every detection input.
+func IsInternalLogLine(line string) bool {
+	return isInternalLogLineForKey(line, internalProcessHMACKey)
+}
+
+func isInternalLogLineForKey(line string, key []byte) bool {
+	if !strings.Contains(line, InternalLogMarker) {
+		return false
+	}
+	markerIndex := strings.Index(line, InternalLogMarker)
+	if markerIndex < 0 {
+		return false
+	}
+	matches := internalLogRecordLine.FindStringSubmatch(line[markerIndex:])
+	if len(matches) != 3 {
+		return false
+	}
+	providedMAC, err := hex.DecodeString(matches[2])
+	if err != nil {
+		return false
+	}
+	expectedMAC := hmac.New(sha256.New, key)
+	_, _ = expectedMAC.Write([]byte(matches[1]))
+	if !hmac.Equal(providedMAC, expectedMAC.Sum(nil)) {
+		return false
+	}
+	prefix := line[:markerIndex]
+	return directInternalLogPrefix.MatchString(prefix) || systemInternalLogPrefix.MatchString(prefix)
+}
+
+// internalSecurityEventLine deliberately represents the untrusted payload by
+// digest and length only. The full payload remains available in the protected
+// NDJSON telemetry file, but is never copied into a rematchable process log.
+func internalSecurityEventLine(action, ip, scope, payload string) string {
+	return internalSecurityEventLineForKey(internalProcessHMACKey, action, ip, scope, payload)
+}
+
+func internalSecurityEventLineForKey(key []byte, action, ip, scope, payload string) string {
+	digest := sha256.Sum256([]byte(payload))
+	canonicalFields := fmt.Sprintf(
+		"action=%s ip=%s scope=%s payload_sha256=%x payload_bytes=%d",
+		internalLogAction(action),
+		internalLogIP(ip),
+		internalLogScope(scope),
+		digest,
+		len(payload),
+	)
+	authenticator := hmac.New(sha256.New, key)
+	_, _ = authenticator.Write([]byte(canonicalFields))
+	return fmt.Sprintf("%s %s auth=%x", InternalLogMarker, canonicalFields, authenticator.Sum(nil))
+}
+
+func internalLogAction(action string) string {
+	if len(action) == 0 || len(action) > 64 {
+		return "INVALID"
+	}
+	for _, character := range action {
+		if (character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '-' {
+			return "INVALID"
+		}
+	}
+	return action
+}
+
+func internalLogIP(raw string) string {
+	address, err := netip.ParseAddr(raw)
+	if err == nil && address.Zone() == "" {
+		return address.Unmap().String()
+	}
+	digest := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("invalid-%x", digest[:8])
+}
+
+func internalLogScope(raw string) string {
+	if len(raw) > 0 && len(raw) <= 128 {
+		safe := true
+		for _, character := range raw {
+			if (character < 'A' || character > 'Z') &&
+				(character < 'a' || character > 'z') &&
+				(character < '0' || character > '9') &&
+				!strings.ContainsRune("._:/%-", character) {
+				safe = false
+				break
+			}
+		}
+		if safe {
+			return raw
+		}
+	}
+	digest := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("sha256-%x", digest)
+}
+
 func NewLogger(logPath string) *Logger {
 	dir := filepath.Dir(logPath)
 	if err := os.MkdirAll(dir, 0750); err != nil {
@@ -365,7 +490,7 @@ func (l *Logger) LogBan(ip, jail, payload string) {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
 
-	log.Printf("[SYSWARDEN-BLOCK] IP=%s Jail=%s Payload=%s", ip, jail, payload)
+	log.Print(internalSecurityEventLine("BANNED", ip, jail, payload))
 }
 
 // LogAllowed writes a JSON telemetry event when an IP is successfully allowed (e.g. login)
@@ -399,7 +524,7 @@ func (l *Logger) LogAllowed(ip, service, payload string) {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
 
-	log.Printf("[SYSWARDEN-ALLOWED] Legitimate access IP=%s Service=%s", ip, service)
+	log.Print(internalSecurityEventLine("ALLOWED", ip, service, payload))
 }
 
 // LogDetected writes a JSON telemetry event when an IP is detected but not banned
@@ -433,7 +558,7 @@ func (l *Logger) LogDetected(ip, jail, payload string) {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
 
-	log.Printf("[SYSWARDEN-DETECTED] Threat detected without ban IP=%s Jail=%s Payload=%s", ip, jail, payload)
+	log.Print(internalSecurityEventLine("DETECTED", ip, jail, payload))
 }
 
 // LogShadowAlert writes a JSON telemetry event when an internal threat is detected but not banned
@@ -467,11 +592,11 @@ func (l *Logger) LogShadowAlert(ip, jail, payload string) {
 		log.Printf("[Logger] Error writing newline: %v", err)
 	}
 
+	action := "SHADOW-ALERT"
 	if utils.IsWhitelisted(ip) {
-		log.Printf("[SOC-ALERT] INSIDER THREAT DETECTED FROM WHITELISTED IP: %s (Vector: %s)", ip, jail)
-	} else {
-		log.Printf("[SOC-ALERT] HIGH RISK THREAT TRACKING (PRE-BAN): %s (Vector: %s)", ip, jail)
+		action = "SHADOW-ALERT-WHITELISTED"
 	}
+	log.Print(internalSecurityEventLine(action, ip, jail, payload))
 }
 
 // LogSimulatedBan logs an IP that would have been banned but was bypassed due to Audit mode.
@@ -497,7 +622,7 @@ func (l *Logger) LogSimulatedBan(ip, jail, payload string) {
 		l.mu.Unlock()
 	}
 
-	log.Printf("[SYSWARDEN-SIMULATED-BAN] IP=%s JAIL=%s PAYLOAD=%s\n", ip, jail, payload)
+	log.Print(internalSecurityEventLine("SIMULATED-BAN", ip, jail, payload))
 }
 
 // LogComplianceDrift logs a deviation found by a selected local check. The
@@ -522,7 +647,7 @@ func (l *Logger) LogComplianceDrift(msg string) {
 
 	go webhook.SendComplianceAlert(msg, "DRIFT")
 
-	log.Printf("[SYSWARDEN-LOCAL-CHECK-DRIFT] MSG=%s\n", msg)
+	log.Print(internalSecurityEventLine("LOCAL-CHECK-DRIFT", "127.0.0.1", "NIS2-AUDIT", msg))
 }
 
 // LogComplianceOK logs that the selected local checks did not find a
@@ -547,7 +672,7 @@ func (l *Logger) LogComplianceOK(msg string) {
 
 	go webhook.SendComplianceAlert(msg, "OK")
 
-	log.Printf("[SYSWARDEN-LOCAL-CHECK-OK] MSG=%s\n", msg)
+	log.Print(internalSecurityEventLine("LOCAL-CHECK-OK", "127.0.0.1", "NIS2-AUDIT", msg))
 }
 
 func (l *Logger) Close() {

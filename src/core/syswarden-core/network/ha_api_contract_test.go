@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -124,6 +125,8 @@ func newHAAPITestFixtureWithBunkerWeb(t *testing.T, manager firewall.Manager, pe
 	if err != nil {
 		t.Fatal(err)
 	}
+	api.localInterfaceAddresses = func() ([]netip.Addr, error) { return nil, nil }
+	api.isWhitelisted = func(string) (bool, error) { return false, nil }
 	fixture.api = api
 	fixture.handler = api.handler()
 	return fixture
@@ -141,8 +144,8 @@ func TestHABunkerWebExtensionsRequireExplicitGate_SW_HA_004(t *testing.T) {
 	}
 
 	manager := &recordingHAFirewallManager{}
-	disabled := newHAAPITestFixtureWithBunkerWeb(t, manager, []string{"192.0.2.10"}, false)
-	status := requestDirectHAPath(t, disabled.handler, http.MethodGet, "/ha/status", "Bearer shared-secret", "", "192.0.2.10:43123")
+	disabled := newHAAPITestFixtureWithBunkerWeb(t, manager, []string{"9.9.9.10"}, false)
+	status := requestDirectHAPath(t, disabled.handler, http.MethodGet, "/ha/status", "Bearer shared-secret", "", "9.9.9.10:43123")
 	if status.Code != http.StatusOK {
 		t.Fatalf("disabled-gate legacy status = %d, %q", status.Code, status.Body.String())
 	}
@@ -163,11 +166,11 @@ func TestHABunkerWebExtensionsRequireExplicitGate_SW_HA_004(t *testing.T) {
 		body   string
 	}{
 		{http.MethodGet, "/ha/sync?details=true", ""},
-		{http.MethodPost, "/ha/sync", `{"ip":"198.51.100.90","ttl":60,"reason":"gated","source":"bunkerweb"}`},
-		{http.MethodPost, "/ha/sync", `{"bans":[{"ip":"198.51.100.90","ttl":60,"reason":"gated","source":"bunkerweb"}]}`},
-		{http.MethodDelete, "/ha/sync", `{"ip":"198.51.100.90","source":"bunkerweb"}`},
+		{http.MethodPost, "/ha/sync", `{"ip":"8.8.4.90","ttl":60,"reason":"gated","source":"bunkerweb"}`},
+		{http.MethodPost, "/ha/sync", `{"bans":[{"ip":"8.8.4.90","ttl":60,"reason":"gated","source":"bunkerweb"}]}`},
+		{http.MethodDelete, "/ha/sync", `{"ip":"8.8.4.90","source":"bunkerweb"}`},
 	} {
-		response := requestDirectHAPath(t, disabled.handler, request.method, request.path, "Bearer shared-secret", request.body, "192.0.2.10:43123")
+		response := requestDirectHAPath(t, disabled.handler, request.method, request.path, "Bearer shared-secret", request.body, "9.9.9.10:43123")
 		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "integrations.bunkerweb.enabled") {
 			t.Fatalf("disabled BunkerWeb %s %s = %d, %q", request.method, request.path, response.Code, response.Body.String())
 		}
@@ -180,23 +183,23 @@ func TestHABunkerWebExtensionsRequireExplicitGate_SW_HA_004(t *testing.T) {
 
 	// Legacy authenticated HA remains available while the partner extension is
 	// disabled, including the historic body and GET response shape.
-	response := requestDirectHAHandler(t, disabled.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["198.51.100.91"]}`)
+	response := requestDirectHAHandler(t, disabled.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["8.8.4.91"]}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("disabled-gate legacy POST = %d, %q", response.Code, response.Body.String())
 	}
 	response = requestDirectHAHandler(t, disabled.handler, http.MethodGet, "Bearer shared-secret", "")
-	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"ips":["198.51.100.91"]}` {
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"ips":["8.8.4.91"]}` {
 		t.Fatalf("disabled-gate legacy GET = %d, %q", response.Code, response.Body.String())
 	}
 
 	enabledManager := &recordingHAFirewallManager{}
-	enabled := newHAAPITestFixtureWithBunkerWeb(t, enabledManager, []string{"192.0.2.10"}, true)
+	enabled := newHAAPITestFixtureWithBunkerWeb(t, enabledManager, []string{"9.9.9.10"}, true)
 	response = requestDirectHAHandler(t, enabled.handler, http.MethodPost, "Bearer shared-secret",
-		`{"ip":"198.51.100.92","ttl":60,"reason":"explicitly enabled","source":"bunkerweb"}`)
+		`{"ip":"8.8.4.92","ttl":60,"reason":"explicitly enabled","source":"bunkerweb"}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("enabled BunkerWeb temporary POST = %d, %q", response.Code, response.Body.String())
 	}
-	status = requestDirectHAPath(t, enabled.handler, http.MethodGet, "/ha/status", "Bearer shared-secret", "", "192.0.2.10:43123")
+	status = requestDirectHAPath(t, enabled.handler, http.MethodGet, "/ha/status", "Bearer shared-secret", "", "9.9.9.10:43123")
 	if !strings.Contains(status.Body.String(), `"sync_ttl"`) || !strings.Contains(status.Body.String(), `"sync_provenance"`) {
 		t.Fatalf("enabled BunkerWeb capabilities = %q", status.Body.String())
 	}
@@ -269,20 +272,20 @@ func TestHAServerAuthenticationAndMixedVersionContract_SW_HA_001(t *testing.T) {
 		}
 	}
 
-	disallowedServer := startHAServerProcess(t, "192.0.2.200", "shared-secret")
+	disallowedServer := startHAServerProcess(t, "9.9.9.200", "shared-secret")
 	response = requestHAServer(t, disallowedServer, http.MethodGet, "/ha/sync", "Bearer shared-secret", "")
 	assertHAResponse(t, response, http.StatusForbidden, "Forbidden")
 }
 
 func TestHAV4028ClientMustUpgradeAuthWhileLegacySyncWireRemains_SW_HA_001(t *testing.T) {
 	manager := &recordingHAFirewallManager{}
-	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 
 	// v4.02.8 TUI-style status and telemetry requests carried no bearer. They
 	// are intentionally rejected after hardening; the server must never fall
 	// back to IP-only authentication or reveal token details.
 	for _, path := range []string{"/ha/status", "/ha/telemetry"} {
-		response := requestDirectHAPath(t, fixture.handler, http.MethodGet, path, "", "", "192.0.2.10:43123")
+		response := requestDirectHAPath(t, fixture.handler, http.MethodGet, path, "", "", "9.9.9.10:43123")
 		if response.Code != http.StatusUnauthorized || strings.TrimSpace(response.Body.String()) != "Unauthorized" {
 			t.Fatalf("legacy unauthenticated %s = %d, %q", path, response.Code, response.Body.String())
 		}
@@ -290,15 +293,15 @@ func TestHAV4028ClientMustUpgradeAuthWhileLegacySyncWireRemains_SW_HA_001(t *tes
 
 	// The historic sync body remains a supported mixed-version wire contract
 	// once the old client is configured to send the mandatory bearer.
-	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["198.51.100.88"]}`)
+	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["8.8.4.88"]}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("authenticated legacy sync POST = %d, %q", response.Code, response.Body.String())
 	}
 	response = requestDirectHAHandler(t, fixture.handler, http.MethodGet, "Bearer shared-secret", "")
-	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"ips":["198.51.100.88"]}` {
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"ips":["8.8.4.88"]}` {
 		t.Fatalf("authenticated legacy sync GET = %d, %q", response.Code, response.Body.String())
 	}
-	response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.88"]}`)
+	response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.88"]}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("authenticated legacy sync DELETE = %d, %q", response.Code, response.Body.String())
 	}
@@ -329,6 +332,17 @@ func TestHAAllRoutesAuthenticateAfterCIDRAllowlist_SW_HA_001(t *testing.T) {
 		"test", fixture.ipv4, fixture.ipv6, fixture.telemetry, fixture.ledger); err == nil {
 		t.Fatal("HA API accepted a CIDR with host bits outside its mask")
 	}
+	for _, peer := range []string{"0.0.0.0/0", "::/0", "8.8.0.0/23", "2606:4700::/63"} {
+		if _, err := newHAAPI(HAConfig{Token: "shared-secret", PeerIPs: []string{peer}}, manager,
+			"test", fixture.ipv4, fixture.ipv6, fixture.telemetry, fixture.ledger); err == nil {
+			t.Fatalf("HA API accepted an overbroad peer prefix %q", peer)
+		}
+	}
+	for _, peer := range []string{"8.8.8.0/24", "2606:4700:4700::/64"} {
+		if _, err := canonicalHAPeerPrefix(peer); err != nil {
+			t.Fatalf("canonicalHAPeerPrefix(%q) rejected a bounded public CIDR: %v", peer, err)
+		}
+	}
 	for _, peers := range [][]string{
 		{"10.20.30.0/24", "10.20.30.0/29", "10.20.30.2"},
 		{"10.20.30.2", "10.20.30.0/29", "10.20.30.0/24"},
@@ -336,7 +350,7 @@ func TestHAAllRoutesAuthenticateAfterCIDRAllowlist_SW_HA_001(t *testing.T) {
 		orderFixture := newHAAPITestFixture(t, &recordingHAFirewallManager{}, peers)
 		orderFixture.api.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
 		response := requestDirectHAPath(t, orderFixture.handler, http.MethodPost, "/ha/sync", "Bearer shared-secret",
-			`{"ip":"198.51.100.7","ttl":60,"reason":"scope order","source":"claimed-source"}`, "10.20.30.2:43123")
+			`{"ip":"8.8.4.7","ttl":60,"reason":"scope order","source":"claimed-source"}`, "10.20.30.2:43123")
 		if response.Code != http.StatusOK {
 			t.Fatalf("overlapping-scope POST = %d, %q", response.Code, response.Body.String())
 		}
@@ -362,9 +376,9 @@ func TestHAMutationValidationRejectsEntireRequestBeforeMutation_SW_HA_003(t *tes
 		wantStatus int
 	}{
 		{name: "malformed", body: `{`, wantStatus: http.StatusBadRequest},
-		{name: "unknown field", body: `{"ips":["192.0.2.1"],"future":true}`, wantStatus: http.StatusBadRequest},
-		{name: "trailing value", body: `{"ips":["192.0.2.1"]}{}`, wantStatus: http.StatusBadRequest},
-		{name: "invalid after valid", body: `{"ips":["192.0.2.1","../../escape"]}`, wantStatus: http.StatusBadRequest},
+		{name: "unknown field", body: `{"ips":["9.9.9.1"],"future":true}`, wantStatus: http.StatusBadRequest},
+		{name: "trailing value", body: `{"ips":["9.9.9.1"]}{}`, wantStatus: http.StatusBadRequest},
+		{name: "invalid after valid", body: `{"ips":["9.9.9.1","../../escape"]}`, wantStatus: http.StatusBadRequest},
 		{name: "too many IPs", body: string(tooManyWire), wantStatus: http.StatusRequestEntityTooLarge},
 		{name: "too many bytes", body: `{"ips":[],"padding":"` + strings.Repeat("x", maxHARequestBytes) + `"}`, wantStatus: http.StatusRequestEntityTooLarge},
 	}
@@ -401,7 +415,7 @@ func TestHAMaxBytesReaderRejectsStreamingBodyBeforeMutation_SW_HA_003(t *testing
 	body := `{"ips":[],"padding":"` + strings.Repeat("x", maxHARequestBytes) + `"}`
 	request := httptest.NewRequest(http.MethodPost, "https://node.example/ha/sync", strings.NewReader(body))
 	request.ContentLength = -1 // Exercise MaxBytesReader rather than the Content-Length fast path.
-	request.RemoteAddr = "192.0.2.10:43123"
+	request.RemoteAddr = "9.9.9.10:43123"
 	request.Header.Set("Authorization", "Bearer shared-secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -421,7 +435,17 @@ func TestHAMaxBytesReaderRejectsStreamingBodyBeforeMutation_SW_HA_003(t *testing
 func TestHAMutationsAreIdempotentAndCanonical_SW_HA_002(t *testing.T) {
 	manager := &recordingHAFirewallManager{}
 	handler, ipv4, ipv6 := directHAHandler(t, manager)
-	postBody := `{"ips":["192.0.2.44","192.0.2.44","192.0.2.99/24","2001:0db8::44","2001:db8::44/64"]}`
+	rejected := requestDirectHAHandler(t, handler, http.MethodPost, "Bearer shared-secret", `{"ips":["8.8.8.0/24"]}`)
+	if rejected.Code != http.StatusBadRequest {
+		t.Fatalf("CIDR mutation = %d, %q; want rejection", rejected.Code, rejected.Body.String())
+	}
+	manager.mu.Lock()
+	if len(manager.banned) != 0 {
+		t.Fatalf("CIDR rejection mutated firewall: %v", manager.banned)
+	}
+	manager.mu.Unlock()
+
+	postBody := `{"ips":["9.9.9.44","9.9.9.44","2606:4700:4700:0000::44"]}`
 	for attempt := 0; attempt < 2; attempt++ {
 		response := requestDirectHAHandler(t, handler, http.MethodPost, "Bearer shared-secret", postBody)
 		if response.Code != http.StatusOK {
@@ -429,15 +453,15 @@ func TestHAMutationsAreIdempotentAndCanonical_SW_HA_002(t *testing.T) {
 		}
 	}
 	manager.mu.Lock()
-	wantBans := "192.0.2.0/24,192.0.2.44,2001:db8::/64,2001:db8::44,192.0.2.0/24,192.0.2.44,2001:db8::/64,2001:db8::44"
+	wantBans := "2606:4700:4700::44,9.9.9.44,2606:4700:4700::44,9.9.9.44"
 	if strings.Join(manager.banned, ",") != wantBans {
 		t.Fatalf("idempotent bans = %v", manager.banned)
 	}
 	manager.mu.Unlock()
-	assertFileText(t, ipv4, "192.0.2.0/24\n192.0.2.44\n")
-	assertFileText(t, ipv6, "2001:db8::/64\n2001:db8::44\n")
+	assertFileText(t, ipv4, "9.9.9.44\n")
+	assertFileText(t, ipv6, "2606:4700:4700::44\n")
 
-	deleteBody := `{"ips":["2001:db8::44","2001:db8::99/64","192.0.2.44","192.0.2.44","192.0.2.77/24"]}`
+	deleteBody := `{"ips":["2606:4700:4700::44","9.9.9.44","9.9.9.44"]}`
 	for attempt := 0; attempt < 2; attempt++ {
 		response := requestDirectHAHandler(t, handler, http.MethodDelete, "Bearer shared-secret", deleteBody)
 		if response.Code != http.StatusOK {
@@ -445,7 +469,7 @@ func TestHAMutationsAreIdempotentAndCanonical_SW_HA_002(t *testing.T) {
 		}
 	}
 	manager.mu.Lock()
-	wantUnbans := "192.0.2.0/24,192.0.2.44,2001:db8::/64,2001:db8::44,192.0.2.0/24,192.0.2.44,2001:db8::/64,2001:db8::44"
+	wantUnbans := "2606:4700:4700::44,9.9.9.44,2606:4700:4700::44,9.9.9.44"
 	if strings.Join(manager.unbanned, ",") != wantUnbans {
 		t.Fatalf("idempotent unbans = %v", manager.unbanned)
 	}
@@ -454,29 +478,157 @@ func TestHAMutationsAreIdempotentAndCanonical_SW_HA_002(t *testing.T) {
 	assertFileText(t, ipv6, "")
 }
 
+func TestHAProtectedBanRejectedButExistingBanCanBeRemoved_SW_SEC_M6(t *testing.T) {
+	tests := []struct {
+		name        string
+		target      string
+		local       []netip.Addr
+		whitelisted bool
+	}{
+		{name: "local interface", target: "9.9.9.9", local: []netip.Addr{netip.MustParseAddr("9.9.9.9")}},
+		{name: "HA peer", target: "9.9.9.10"},
+		{name: "whitelist", target: "1.1.1.1", whitelisted: true},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			manager := &recordingHAFirewallManager{}
+			fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
+			fixture.api.localInterfaceAddresses = func() ([]netip.Addr, error) { return test.local, nil }
+			fixture.api.isWhitelisted = func(address string) (bool, error) {
+				return test.whitelisted && address == test.target, nil
+			}
+			writeHATestRootedFile(t, fixture.ipv4, []byte(test.target+"\n"))
+
+			post := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret",
+				fmt.Sprintf(`{"ips":[%q]}`, test.target))
+			if post.Code != http.StatusBadRequest {
+				t.Fatalf("protected POST = %d, %q", post.Code, post.Body.String())
+			}
+			manager.mu.Lock()
+			if len(manager.banned) != 0 {
+				t.Fatalf("protected POST mutated firewall: %v", manager.banned)
+			}
+			manager.mu.Unlock()
+
+			remove := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret",
+				fmt.Sprintf(`{"ips":[%q]}`, test.target))
+			if remove.Code != http.StatusOK {
+				t.Fatalf("protected DELETE = %d, %q", remove.Code, remove.Body.String())
+			}
+			manager.mu.Lock()
+			if strings.Join(manager.unbanned, ",") != test.target {
+				t.Fatalf("protected DELETE unbans = %v", manager.unbanned)
+			}
+			manager.mu.Unlock()
+			assertFileText(t, fixture.ipv4, "")
+		})
+	}
+}
+
+func TestHALegacyUnsafePrefixCanOnlyBeRemoved_SW_SEC_M6(t *testing.T) {
+	manager := &recordingHAFirewallManager{}
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
+	writeHATestRootedFile(t, fixture.ipv4, []byte("0.0.0.0/0\n"))
+
+	get := requestDirectHAHandler(t, fixture.handler, http.MethodGet, "Bearer shared-secret", "")
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"0.0.0.0/0"`) {
+		t.Fatalf("legacy prefix GET = %d, %q", get.Code, get.Body.String())
+	}
+
+	post := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["0.0.0.0/0"]}`)
+	if post.Code != http.StatusBadRequest {
+		t.Fatalf("legacy prefix POST = %d, %q; want rejection", post.Code, post.Body.String())
+	}
+
+	remove := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["0.0.0.0/0"]}`)
+	if remove.Code != http.StatusOK {
+		t.Fatalf("legacy prefix DELETE = %d, %q", remove.Code, remove.Body.String())
+	}
+	manager.mu.Lock()
+	if strings.Join(manager.unbanned, ",") != "0.0.0.0/0" {
+		t.Fatalf("legacy prefix DELETE unbans = %v", manager.unbanned)
+	}
+	if len(manager.banned) != 0 {
+		t.Fatalf("legacy prefix recovery applied a ban: %v", manager.banned)
+	}
+	manager.mu.Unlock()
+	assertFileText(t, fixture.ipv4, "")
+}
+
+func TestHALegacyPrefixWithHostBitsCanOnlyBeRemoved_SW_SEC_M6(t *testing.T) {
+	manager := &recordingHAFirewallManager{}
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
+	writeHATestRootedFile(t, fixture.ipv4, []byte("8.8.8.129/24\n"))
+
+	get := requestDirectHAHandler(t, fixture.handler, http.MethodGet, "Bearer shared-secret", "")
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"8.8.8.0/24"`) {
+		t.Fatalf("legacy host-bit prefix GET = %d, %q", get.Code, get.Body.String())
+	}
+
+	post := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["8.8.8.129/24"]}`)
+	if post.Code != http.StatusBadRequest {
+		t.Fatalf("legacy host-bit prefix POST = %d, %q; want rejection", post.Code, post.Body.String())
+	}
+
+	remove := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.8.129/24"]}`)
+	if remove.Code != http.StatusOK {
+		t.Fatalf("legacy host-bit prefix DELETE = %d, %q", remove.Code, remove.Body.String())
+	}
+	manager.mu.Lock()
+	if strings.Join(manager.unbanned, ",") != "8.8.8.0/24" {
+		t.Fatalf("legacy host-bit prefix DELETE unbans = %v", manager.unbanned)
+	}
+	if len(manager.banned) != 0 {
+		t.Fatalf("legacy host-bit prefix recovery applied a ban: %v", manager.banned)
+	}
+	manager.mu.Unlock()
+	assertFileText(t, fixture.ipv4, "")
+}
+
+func TestHAMissingRequiredWhitelistFailsClosedBeforeMutation_SW_SEC_M6(t *testing.T) {
+	manager := &recordingHAFirewallManager{}
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
+	fixture.api.isWhitelisted = func(string) (bool, error) {
+		return false, errors.New("required whitelist source is missing")
+	}
+	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["8.8.8.8"]}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("POST with unavailable whitelist = %d, %q", response.Code, response.Body.String())
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.banned) != 0 || len(manager.unbanned) != 0 {
+		t.Fatalf("unavailable whitelist mutated firewall: bans=%v unbans=%v", manager.banned, manager.unbanned)
+	}
+	if _, err := readHARootedFile(fixture.ipv4); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unavailable whitelist mutated persistent blocklist: %v", err)
+	}
+}
+
 func TestHAMutationDoesNotClaimSuccessWhenFirewallRejects_SW_HA_002(t *testing.T) {
 	manager := &recordingHAFirewallManager{banErr: errors.New("injected ban failure")}
 	handler, ipv4, _ := directHAHandler(t, manager)
-	writeHATestRootedFile(t, ipv4, []byte("192.0.2.70\n"))
-	response := requestDirectHAHandler(t, handler, http.MethodPost, "Bearer shared-secret", `{"ips":["192.0.2.70"]}`)
+	writeHATestRootedFile(t, ipv4, []byte("9.9.9.70\n"))
+	response := requestDirectHAHandler(t, handler, http.MethodPost, "Bearer shared-secret", `{"ips":["9.9.9.70"]}`)
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "Firewall mutation failed") {
 		t.Fatalf("failed ban response = %d, %q", response.Code, response.Body.String())
 	}
 	manager.mu.Lock()
-	if strings.Join(manager.banned, ",") != "192.0.2.70" {
+	if strings.Join(manager.banned, ",") != "9.9.9.70" {
 		t.Fatalf("preexisting file bypassed kernel ban verification: %v", manager.banned)
 	}
 	manager.mu.Unlock()
-	assertFileText(t, ipv4, "192.0.2.70\n")
+	assertFileText(t, ipv4, "9.9.9.70\n")
 
 	manager = &recordingHAFirewallManager{unbanErr: errors.New("injected unban failure")}
 	handler, ipv4, _ = directHAHandler(t, manager)
-	response = requestDirectHAHandler(t, handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["192.0.2.70"]}`)
+	response = requestDirectHAHandler(t, handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["9.9.9.70"]}`)
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "Firewall reconciliation failed") {
 		t.Fatalf("failed unban response = %d, %q", response.Code, response.Body.String())
 	}
 	manager.mu.Lock()
-	if strings.Join(manager.unbanned, ",") != "192.0.2.70" {
+	if strings.Join(manager.unbanned, ",") != "9.9.9.70" {
 		t.Fatalf("absent file bypassed kernel unban verification: %v", manager.unbanned)
 	}
 	manager.mu.Unlock()
@@ -487,15 +639,15 @@ func TestHAMutationDoesNotClaimSuccessWhenFirewallRejects_SW_HA_002(t *testing.T
 
 func TestHALegacyPermanentBanFallsBackForMixedVersionManager_SW_HA_002(t *testing.T) {
 	manager := &legacyOnlyHAFirewallManager{}
-	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
-	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["198.51.100.80"]}`)
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
+	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["8.8.4.80"]}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("mixed-version legacy POST = %d, %q", response.Code, response.Body.String())
 	}
-	if strings.Join(manager.banned, ",") != "198.51.100.80" {
+	if strings.Join(manager.banned, ",") != "8.8.4.80" {
 		t.Fatalf("mixed-version Ban fallback = %v", manager.banned)
 	}
-	assertFileText(t, fixture.ipv4, "198.51.100.80\n")
+	assertFileText(t, fixture.ipv4, "8.8.4.80\n")
 }
 
 func TestHATemporaryBanLedgerCollisionRenewalAndProvenance_SW_HA_004(t *testing.T) {
@@ -509,10 +661,10 @@ func TestHATemporaryBanLedgerCollisionRenewalAndProvenance_SW_HA_004(t *testing.
 			t.Fatalf("temporary POST = %d, %q", response.Code, response.Body.String())
 		}
 	}
-	post(`{"ip":"198.51.100.44","ttl":120,"reason":"first producer","source":"producer-a"}`, "10.20.30.2:43123")
-	post(`{"ip":"198.51.100.44","ttl":30,"reason":"second producer","source":"producer-b"}`, "10.20.30.3:43123")
+	post(`{"ip":"8.8.4.44","ttl":120,"reason":"first producer","source":"producer-a"}`, "10.20.30.2:43123")
+	post(`{"ip":"8.8.4.44","ttl":30,"reason":"second producer","source":"producer-b"}`, "10.20.30.3:43123")
 	base = base.Add(10 * time.Second)
-	post(`{"ip":"198.51.100.44","ttl":60,"reason":"renewed without shortening","source":"producer-a"}`, "10.20.30.4:43123")
+	post(`{"ip":"8.8.4.44","ttl":60,"reason":"renewed without shortening","source":"producer-a"}`, "10.20.30.4:43123")
 
 	ledger, err := fixture.api.readHALedger()
 	if err != nil {
@@ -538,7 +690,7 @@ func TestHATemporaryBanLedgerCollisionRenewalAndProvenance_SW_HA_004(t *testing.
 	manager.mu.Unlock()
 
 	legacy := requestDirectHAPath(t, fixture.handler, http.MethodGet, "/ha/sync", "Bearer shared-secret", "", "10.20.30.5:43123")
-	if strings.TrimSpace(legacy.Body.String()) != `{"ips":["198.51.100.44"]}` {
+	if strings.TrimSpace(legacy.Body.String()) != `{"ips":["8.8.4.44"]}` {
 		t.Fatalf("legacy GET exposed provenance or changed shape: %q", legacy.Body.String())
 	}
 	details := requestDirectHAPath(t, fixture.handler, http.MethodGet, "/ha/sync?details=true&limit=1", "Bearer shared-secret", "", "10.20.30.5:43123")
@@ -560,7 +712,7 @@ func TestHATemporaryBanLedgerCollisionRenewalAndProvenance_SW_HA_004(t *testing.
 	}
 
 	response := requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
-		`{"ip":"198.51.100.44","source":"producer-b"}`, "10.20.30.6:43123")
+		`{"ip":"8.8.4.44","source":"producer-b"}`, "10.20.30.6:43123")
 	if response.Code != http.StatusOK {
 		t.Fatalf("different-scope temporary DELETE = %d, %q", response.Code, response.Body.String())
 	}
@@ -569,7 +721,7 @@ func TestHATemporaryBanLedgerCollisionRenewalAndProvenance_SW_HA_004(t *testing.
 		t.Fatalf("different-scope DELETE crossed ownership boundary: %#v, err=%v", ledger.Bans, err)
 	}
 	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
-		`{"ip":"198.51.100.44","source":"producer-b"}`, "10.20.30.5:43123")
+		`{"ip":"8.8.4.44","source":"producer-b"}`, "10.20.30.5:43123")
 	if response.Code != http.StatusOK {
 		t.Fatalf("scoped temporary DELETE = %d, %q", response.Code, response.Body.String())
 	}
@@ -582,17 +734,17 @@ func TestHATemporaryBanLedgerCollisionRenewalAndProvenance_SW_HA_004(t *testing.
 		t.Fatalf("owned delete created an absence or wrong final TTL: ttl=%v unbans=%v", manager.ttlBans, manager.unbanned)
 	}
 	manager.mu.Unlock()
-	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret", `{"ip":"198.51.100.44"}`, "10.20.30.2:43123")
+	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret", `{"ip":"8.8.4.44"}`, "10.20.30.2:43123")
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("unowned temporary DELETE = %d, %q", response.Code, response.Body.String())
 	}
 }
 
 func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
-	const ip = "198.51.100.45"
-	noFirewall := newHAAPITestFixture(t, nil, []string{"192.0.2.10"})
+	const ip = "8.8.4.45"
+	noFirewall := newHAAPITestFixture(t, nil, []string{"9.9.9.10"})
 	response := requestDirectHAHandler(t, noFirewall.handler, http.MethodDelete, "Bearer shared-secret",
-		`{"ip":"198.51.100.45","source":"unknown"}`)
+		`{"ip":"8.8.4.45","source":"unknown"}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("unknown DELETE without firewall = %d, %q", response.Code, response.Body.String())
 	}
@@ -605,7 +757,7 @@ func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
 	fixture.api.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
 
 	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
-		`{"ip":"198.51.100.45","source":"unknown"}`, "10.20.30.5:43123")
+		`{"ip":"8.8.4.45","source":"unknown"}`, "10.20.30.5:43123")
 	if response.Code != http.StatusOK {
 		t.Fatalf("unknown empty-ledger DELETE = %d, %q", response.Code, response.Body.String())
 	}
@@ -620,7 +772,7 @@ func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
 	manager.mu.Unlock()
 
 	response = requestDirectHAPath(t, fixture.handler, http.MethodPost, "/ha/sync", "Bearer shared-secret",
-		`{"ip":"198.51.100.45","ttl":120,"reason":"owned claim","source":"producer-a"}`, "10.20.30.5:43123")
+		`{"ip":"8.8.4.45","ttl":120,"reason":"owned claim","source":"producer-a"}`, "10.20.30.5:43123")
 	if response.Code != http.StatusOK {
 		t.Fatalf("owned POST = %d, %q", response.Code, response.Body.String())
 	}
@@ -638,9 +790,9 @@ func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
 		body   string
 		remote string
 	}{
-		{"unknown source", `{"ip":"198.51.100.45","source":"producer-b"}`, "10.20.30.4:43123"},
-		{"wrong peer scope", `{"ip":"198.51.100.45","source":"producer-a"}`, "10.20.30.6:43123"},
-		{"unknown IP batch member", `{"bans":[{"ip":"198.51.100.46","source":"producer-a"}]}`, "10.20.30.3:43123"},
+		{"unknown source", `{"ip":"8.8.4.45","source":"producer-b"}`, "10.20.30.4:43123"},
+		{"wrong peer scope", `{"ip":"8.8.4.45","source":"producer-a"}`, "10.20.30.6:43123"},
+		{"unknown IP batch member", `{"bans":[{"ip":"8.8.4.46","source":"producer-a"}]}`, "10.20.30.3:43123"},
 	} {
 		response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
 			request.body, request.remote)
@@ -667,7 +819,7 @@ func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
 	manager.mu.Unlock()
 
 	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
-		`{"ip":"198.51.100.45","source":"producer-a"}`, "10.20.30.3:43123")
+		`{"ip":"8.8.4.45","source":"producer-a"}`, "10.20.30.3:43123")
 	if response.Code != http.StatusOK {
 		t.Fatalf("owned DELETE = %d, %q", response.Code, response.Body.String())
 	}
@@ -683,12 +835,12 @@ func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
 }
 
 func TestHATemporaryDeletePendingClaimRetryConverges_SW_HA_004(t *testing.T) {
-	const ip = "198.51.100.47"
+	const ip = "8.8.4.47"
 	manager := &recordingHAFirewallManager{}
-	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 	fixture.api.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
 	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret",
-		`{"ip":"198.51.100.47","ttl":120,"reason":"retry claim","source":"producer-a"}`)
+		`{"ip":"8.8.4.47","ttl":120,"reason":"retry claim","source":"producer-a"}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("temporary POST = %d, %q", response.Code, response.Body.String())
 	}
@@ -696,7 +848,7 @@ func TestHATemporaryDeletePendingClaimRetryConverges_SW_HA_004(t *testing.T) {
 	manager.unbanErr = errors.New("injected temporary delete failure")
 	manager.mu.Unlock()
 	response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret",
-		`{"ip":"198.51.100.47","source":"producer-a"}`)
+		`{"ip":"8.8.4.47","source":"producer-a"}`)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("failed temporary DELETE = %d, %q", response.Code, response.Body.String())
 	}
@@ -708,7 +860,7 @@ func TestHATemporaryDeletePendingClaimRetryConverges_SW_HA_004(t *testing.T) {
 	manager.unbanErr = nil
 	manager.mu.Unlock()
 	response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret",
-		`{"ip":"198.51.100.47","source":"producer-a"}`)
+		`{"ip":"8.8.4.47","source":"producer-a"}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("temporary DELETE retry = %d, %q", response.Code, response.Body.String())
 	}
@@ -725,22 +877,22 @@ func TestHATemporaryDeletePendingClaimRetryConverges_SW_HA_004(t *testing.T) {
 
 func TestHATemporaryAndPermanentDeleteSemantics_SW_HA_004(t *testing.T) {
 	manager := &recordingHAFirewallManager{}
-	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 	fixture.api.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
 	for _, request := range []struct {
 		method string
 		body   string
 	}{
-		{http.MethodPost, `{"ips":["198.51.100.50"]}`},
-		{http.MethodPost, `{"ip":"198.51.100.50","ttl":300,"reason":"temporary overlap","source":"bunkerweb"}`},
-		{http.MethodDelete, `{"ip":"198.51.100.50","source":"bunkerweb"}`},
+		{http.MethodPost, `{"ips":["8.8.4.50"]}`},
+		{http.MethodPost, `{"ip":"8.8.4.50","ttl":300,"reason":"temporary overlap","source":"bunkerweb"}`},
+		{http.MethodDelete, `{"ip":"8.8.4.50","source":"bunkerweb"}`},
 	} {
 		response := requestDirectHAHandler(t, fixture.handler, request.method, "Bearer shared-secret", request.body)
 		if response.Code != http.StatusOK {
 			t.Fatalf("overlap mutation %s = %d, %q", request.method, response.Code, response.Body.String())
 		}
 	}
-	assertFileText(t, fixture.ipv4, "198.51.100.50\n")
+	assertFileText(t, fixture.ipv4, "8.8.4.50\n")
 	ledger, err := fixture.api.readHALedger()
 	if err != nil || len(ledger.Bans) != 0 {
 		t.Fatalf("temporary delete removed wrong state: %#v, %v", ledger.Bans, err)
@@ -752,11 +904,11 @@ func TestHATemporaryAndPermanentDeleteSemantics_SW_HA_004(t *testing.T) {
 	manager.mu.Unlock()
 
 	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret",
-		`{"ip":"198.51.100.50","ttl":300,"reason":"temporary overlap","source":"bunkerweb"}`)
+		`{"ip":"8.8.4.50","ttl":300,"reason":"temporary overlap","source":"bunkerweb"}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("re-add temporary = %d, %q", response.Code, response.Body.String())
 	}
-	response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.50"]}`)
+	response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.50"]}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("legacy static DELETE = %d, %q", response.Code, response.Body.String())
 	}
@@ -771,8 +923,8 @@ func addHAActiveTemporaryRecord(t *testing.T, fixture haAPITestFixture, ip, sour
 	t.Helper()
 	if err := fixture.api.mutateHALedger(func(ledger *haBanLedger) error {
 		ledger.Bans = append(ledger.Bans, haBanLedgerRecord{
-			IP: ip, Source: source, Reason: "legacy delete reconciliation", PeerScope: "192.0.2.10/32",
-			OriginPeerIP: "192.0.2.10", CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339),
+			IP: ip, Source: source, Reason: "legacy delete reconciliation", PeerScope: "9.9.9.10/32",
+			OriginPeerIP: "9.9.9.10", CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339),
 			ExpiresAt: now.Add(ttl).Format(time.RFC3339), State: haBanActive,
 		})
 		return nil
@@ -782,17 +934,17 @@ func addHAActiveTemporaryRecord(t *testing.T, fixture haAPITestFixture, ip, sour
 }
 
 func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) {
-	const ip = "198.51.100.77"
+	const ip = "8.8.4.77"
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 
 	t.Run("no remaining desired state uses Unban", func(t *testing.T) {
 		manager := &recordingHAFirewallManager{}
-		fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+		fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 		fixture.api.now = func() time.Time { return now }
 		if err := fixture.api.setStoredIP(ip, true); err != nil {
 			t.Fatal(err)
 		}
-		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.77"]}`)
+		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.77"]}`)
 		if response.Code != http.StatusOK {
 			t.Fatalf("legacy DELETE = %d, %q", response.Code, response.Body.String())
 		}
@@ -809,13 +961,13 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 
 	t.Run("external temporary state uses idempotent Ban without Unban", func(t *testing.T) {
 		manager := &recordingHAFirewallManager{}
-		fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+		fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 		fixture.api.now = func() time.Time { return now }
 		if err := fixture.api.setStoredIP(ip, true); err != nil {
 			t.Fatal(err)
 		}
 		addHAActiveTemporaryRecord(t, fixture, ip, "external", now, 2*time.Minute)
-		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.77"]}`)
+		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.77"]}`)
 		if response.Code != http.StatusOK {
 			t.Fatalf("external legacy DELETE = %d, %q", response.Code, response.Body.String())
 		}
@@ -828,13 +980,13 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 
 	t.Run("native temporary state uses exact ReconcileBanTTL without Unban", func(t *testing.T) {
 		manager := &recordingHANativeFirewallManager{}
-		fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+		fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 		fixture.api.now = func() time.Time { return now }
 		if err := fixture.api.setStoredIP(ip, true); err != nil {
 			t.Fatal(err)
 		}
 		addHAActiveTemporaryRecord(t, fixture, ip, "native", now, 2*time.Minute)
-		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.77"]}`)
+		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.77"]}`)
 		if response.Code != http.StatusOK {
 			t.Fatalf("native legacy DELETE = %d, %q", response.Code, response.Body.String())
 		}
@@ -847,7 +999,7 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 
 	t.Run("remaining static state uses BanPermanent", func(t *testing.T) {
 		manager := &recordingHAFirewallManager{}
-		fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+		fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 		if err := fixture.api.setStoredIP(ip, true); err != nil {
 			t.Fatal(err)
 		}
@@ -864,13 +1016,13 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 
 	t.Run("corrupt ledger fails after durable removal and retry converges", func(t *testing.T) {
 		manager := &recordingHAFirewallManager{}
-		fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+		fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 		fixture.api.now = func() time.Time { return now }
 		if err := fixture.api.setStoredIP(ip, true); err != nil {
 			t.Fatal(err)
 		}
 		writeHATestRootedFile(t, fixture.ledger, []byte(`{"version":1,"version":1,"bans":[]}`))
-		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.77"]}`)
+		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.77"]}`)
 		if response.Code != http.StatusInternalServerError {
 			t.Fatalf("corrupt-ledger DELETE = %d, %q", response.Code, response.Body.String())
 		}
@@ -885,7 +1037,7 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 		}
 		manager.mu.Unlock()
 		writeHATestRootedFile(t, fixture.ledger, []byte(`{"version":1,"bans":[]}`))
-		response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.77"]}`)
+		response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.77"]}`)
 		if response.Code != http.StatusOK {
 			t.Fatalf("repaired-ledger retry = %d, %q", response.Code, response.Body.String())
 		}
@@ -898,12 +1050,12 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 
 	t.Run("firewall failure leaves removal idempotent for retry", func(t *testing.T) {
 		manager := &recordingHAFirewallManager{unbanErr: errors.New("injected unban failure")}
-		fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+		fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 		fixture.api.now = func() time.Time { return now }
 		if err := fixture.api.setStoredIP(ip, true); err != nil {
 			t.Fatal(err)
 		}
-		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.77"]}`)
+		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.77"]}`)
 		if response.Code != http.StatusInternalServerError {
 			t.Fatalf("failed firewall DELETE = %d, %q", response.Code, response.Body.String())
 		}
@@ -914,7 +1066,7 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 		manager.mu.Lock()
 		manager.unbanErr = nil
 		manager.mu.Unlock()
-		response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.77"]}`)
+		response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.77"]}`)
 		if response.Code != http.StatusOK {
 			t.Fatalf("firewall retry = %d, %q", response.Code, response.Body.String())
 		}
@@ -927,7 +1079,7 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 
 	t.Run("native reconciliation failure retries without an Unban window", func(t *testing.T) {
 		manager := &recordingHANativeFirewallManager{}
-		fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+		fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 		fixture.api.now = func() time.Time { return now }
 		if err := fixture.api.setStoredIP(ip, true); err != nil {
 			t.Fatal(err)
@@ -936,7 +1088,7 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 		manager.mu.Lock()
 		manager.banErr = errors.New("injected reconcile failure")
 		manager.mu.Unlock()
-		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.77"]}`)
+		response := requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.77"]}`)
 		if response.Code != http.StatusInternalServerError {
 			t.Fatalf("failed native reconciliation = %d, %q", response.Code, response.Body.String())
 		}
@@ -947,7 +1099,7 @@ func TestHALegacyDeletePersistFirstReconciliationMatrix_SW_HA_002(t *testing.T) 
 		manager.mu.Lock()
 		manager.banErr = nil
 		manager.mu.Unlock()
-		response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["198.51.100.77"]}`)
+		response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret", `{"ips":["8.8.4.77"]}`)
 		if response.Code != http.StatusOK {
 			t.Fatalf("native reconciliation retry = %d, %q", response.Code, response.Body.String())
 		}
@@ -971,7 +1123,7 @@ func TestHATemporaryBatchLimitsWorstCaseAndAtomicValidation_SW_HA_004(t *testing
 		bans := make([]postBan, count)
 		for index := range bans {
 			bans[index] = postBan{
-				IP: fmt.Sprintf("198.18.%d.%d", index/250, index%250+1), TTL: 3600,
+				IP: fmt.Sprintf("8.0.%d.%d", index/250, index%250+1), TTL: 3600,
 				Reason: strings.Repeat("r", maxHAReasonBytes), Source: "bunkerweb",
 			}
 		}
@@ -987,7 +1139,7 @@ func TestHATemporaryBatchLimitsWorstCaseAndAtomicValidation_SW_HA_004(t *testing
 	}
 
 	manager := &recordingHAFirewallManager{}
-	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 	fixture.api.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
 	worstCase := marshalBatch(t, makeBans(maxHABansPerRequest))
 	if len(worstCase) > maxHARequestBytes {
@@ -1008,7 +1160,7 @@ func TestHATemporaryBatchLimitsWorstCaseAndAtomicValidation_SW_HA_004(t *testing
 	}
 
 	manager = &recordingHAFirewallManager{}
-	fixture = newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture = newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 	response = requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", marshalBatch(t, makeBans(maxHABansPerRequest+1)))
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("501-ban batch = %d, %q", response.Code, response.Body.String())
@@ -1020,8 +1172,8 @@ func TestHATemporaryBatchLimitsWorstCaseAndAtomicValidation_SW_HA_004(t *testing
 	manager.mu.Unlock()
 
 	invalid := []map[string]any{
-		{"ip": "198.51.100.1", "ttl": 60, "reason": "valid first", "source": "bunkerweb"},
-		{"ip": "198.51.100.2", "ttl": 0, "reason": "invalid second", "source": "bunkerweb"},
+		{"ip": "8.8.4.1", "ttl": 60, "reason": "valid first", "source": "bunkerweb"},
+		{"ip": "8.8.4.2", "ttl": 0, "reason": "invalid second", "source": "bunkerweb"},
 	}
 	response = requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", marshalBatch(t, invalid))
 	if response.Code != http.StatusBadRequest {
@@ -1033,7 +1185,7 @@ func TestHATemporaryBatchLimitsWorstCaseAndAtomicValidation_SW_HA_004(t *testing
 	}
 	manager.mu.Unlock()
 
-	duplicate := postBan{IP: "198.51.100.8", TTL: 60, Reason: "duplicate", Source: "bunkerweb"}
+	duplicate := postBan{IP: "8.8.4.8", TTL: 60, Reason: "duplicate", Source: "bunkerweb"}
 	response = requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", marshalBatch(t, []postBan{duplicate, duplicate}))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("identical duplicate batch = %d, %q", response.Code, response.Body.String())
@@ -1061,20 +1213,20 @@ func TestHATemporaryWireUnionBoundsAndOwnedDeleteBatch_SW_HA_004(t *testing.T) {
 		method string
 		body   string
 	}{
-		{http.MethodPost, `{"ips":["198.51.100.1"],"ip":"198.51.100.1","ttl":60,"reason":"mixed","source":"bunkerweb"}`},
-		{http.MethodPost, `{"ip":"198.51.100.1","ttl":0,"reason":"bad ttl","source":"bunkerweb"}`},
-		{http.MethodPost, `{"ip":"198.51.100.1","ttl":2592001,"reason":"bad ttl","source":"bunkerweb"}`},
-		{http.MethodPost, `{"ip":"198.51.100.1","ttl":1.5,"reason":"bad ttl","source":"bunkerweb"}`},
-		{http.MethodPost, `{"ip":"198.51.100.1","ttl":60,"reason":"","source":"bunkerweb"}`},
-		{http.MethodPost, `{"ip":"198.51.100.1","ttl":60,"reason":"line\nbreak","source":"bunkerweb"}`},
-		{http.MethodPost, `{"ip":"198.51.100.1","ttl":60,"reason":"valid","source":"bad source"}`},
-		{http.MethodPost, `{"ip":"198.51.100.1","ttl":60,"reason":"valid","source":"` + strings.Repeat("s", maxHASourceBytes+1) + `"}`},
-		{http.MethodPost, `{"ip":"198.51.100.1","ttl":60,"reason":"` + strings.Repeat("r", maxHAReasonBytes+1) + `","source":"bunkerweb"}`},
-		{http.MethodPost, `{"ip":"198.51.100.1","ttl":60,"reason":"valid","source":"bunkerweb","origin_peer_ip":"10.20.30.2"}`},
+		{http.MethodPost, `{"ips":["8.8.4.1"],"ip":"8.8.4.1","ttl":60,"reason":"mixed","source":"bunkerweb"}`},
+		{http.MethodPost, `{"ip":"8.8.4.1","ttl":0,"reason":"bad ttl","source":"bunkerweb"}`},
+		{http.MethodPost, `{"ip":"8.8.4.1","ttl":2592001,"reason":"bad ttl","source":"bunkerweb"}`},
+		{http.MethodPost, `{"ip":"8.8.4.1","ttl":1.5,"reason":"bad ttl","source":"bunkerweb"}`},
+		{http.MethodPost, `{"ip":"8.8.4.1","ttl":60,"reason":"","source":"bunkerweb"}`},
+		{http.MethodPost, `{"ip":"8.8.4.1","ttl":60,"reason":"line\nbreak","source":"bunkerweb"}`},
+		{http.MethodPost, `{"ip":"8.8.4.1","ttl":60,"reason":"valid","source":"bad source"}`},
+		{http.MethodPost, `{"ip":"8.8.4.1","ttl":60,"reason":"valid","source":"` + strings.Repeat("s", maxHASourceBytes+1) + `"}`},
+		{http.MethodPost, `{"ip":"8.8.4.1","ttl":60,"reason":"` + strings.Repeat("r", maxHAReasonBytes+1) + `","source":"bunkerweb"}`},
+		{http.MethodPost, `{"ip":"8.8.4.1","ttl":60,"reason":"valid","source":"bunkerweb","origin_peer_ip":"10.20.30.2"}`},
 		{http.MethodPost, `{"bans":[]}`},
-		{http.MethodDelete, `{"ip":"198.51.100.1"}`},
-		{http.MethodDelete, `{"ip":"198.51.100.1","source":"bunkerweb","reason":"forbidden"}`},
-		{http.MethodDelete, `{"ip":"198.51.100.1","source":"bunkerweb","ttl":60}`},
+		{http.MethodDelete, `{"ip":"8.8.4.1"}`},
+		{http.MethodDelete, `{"ip":"8.8.4.1","source":"bunkerweb","reason":"forbidden"}`},
+		{http.MethodDelete, `{"ip":"8.8.4.1","source":"bunkerweb","ttl":60}`},
 	}
 	for index, invalid := range invalidBodies {
 		manager := &recordingHAFirewallManager{}
@@ -1093,13 +1245,13 @@ func TestHATemporaryWireUnionBoundsAndOwnedDeleteBatch_SW_HA_004(t *testing.T) {
 	manager := &recordingHAFirewallManager{}
 	fixture := newHAAPITestFixture(t, manager, []string{"10.20.30.0/29"})
 	fixture.api.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
-	post := `{"bans":[{"ip":"198.51.100.20","ttl":60,"reason":"source a","source":"producer-a"},{"ip":"198.51.100.20","ttl":120,"reason":"source b","source":"producer-b"}]}`
+	post := `{"bans":[{"ip":"8.8.4.20","ttl":60,"reason":"source a","source":"producer-a"},{"ip":"8.8.4.20","ttl":120,"reason":"source b","source":"producer-b"}]}`
 	response := requestDirectHAPath(t, fixture.handler, http.MethodPost, "/ha/sync", "Bearer shared-secret", post, "10.20.30.2:43123")
 	if response.Code != http.StatusOK {
 		t.Fatalf("owned POST batch = %d, %q", response.Code, response.Body.String())
 	}
 	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
-		`{"bans":[{"ip":"198.51.100.20","source":"producer-a"}]}`, "10.20.30.3:43123")
+		`{"bans":[{"ip":"8.8.4.20","source":"producer-a"}]}`, "10.20.30.3:43123")
 	if response.Code != http.StatusOK {
 		t.Fatalf("owned DELETE batch = %d, %q", response.Code, response.Body.String())
 	}
@@ -1109,7 +1261,7 @@ func TestHATemporaryWireUnionBoundsAndOwnedDeleteBatch_SW_HA_004(t *testing.T) {
 	}
 	tooManyDeletes := make([]map[string]string, maxHABansPerRequest+1)
 	for index := range tooManyDeletes {
-		tooManyDeletes[index] = map[string]string{"ip": "198.51.100.20", "source": "producer-b"}
+		tooManyDeletes[index] = map[string]string{"ip": "8.8.4.20", "source": "producer-b"}
 	}
 	wire, err := json.Marshal(map[string]any{"bans": tooManyDeletes})
 	if err != nil {
@@ -1131,7 +1283,7 @@ func TestHATemporaryWireUnionBoundsAndOwnedDeleteBatch_SW_HA_004(t *testing.T) {
 
 func TestHALedgerRejectsCorruptionSymlinkOversizeAndQuotaWithoutMutation_SW_HA_004(t *testing.T) {
 	manager := &recordingHAFirewallManager{}
-	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 	fixture.api.now = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
 	assertNoFirewallMutation := func(label string) {
 		manager.mu.Lock()
@@ -1145,7 +1297,7 @@ func TestHALedgerRejectsCorruptionSymlinkOversizeAndQuotaWithoutMutation_SW_HA_0
 		t.Fatal(err)
 	}
 	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret",
-		`{"ip":"198.51.100.1","ttl":60,"reason":"corrupt ledger","source":"bunkerweb"}`)
+		`{"ip":"8.8.4.1","ttl":60,"reason":"corrupt ledger","source":"bunkerweb"}`)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("corrupt ledger POST = %d, %q", response.Code, response.Body.String())
 	}
@@ -1194,7 +1346,7 @@ func TestHALedgerRejectsCorruptionSymlinkOversizeAndQuotaWithoutMutation_SW_HA_0
 	for index := range ledger.Bans {
 		ledger.Bans[index] = haBanLedgerRecord{
 			IP:     fmt.Sprintf("10.%d.%d.%d", (index>>16)&255, (index>>8)&255, index&255),
-			Source: "quota", Reason: "quota record", PeerScope: "192.0.2.10/32", OriginPeerIP: "192.0.2.10",
+			Source: "quota", Reason: "quota record", PeerScope: "9.9.9.10/32", OriginPeerIP: "9.9.9.10",
 			CreatedAt: "2026-08-14T12:00:00Z", UpdatedAt: "2026-08-14T12:00:00Z",
 			ExpiresAt: "2026-09-01T12:00:00Z", State: haBanActive,
 		}
@@ -1210,7 +1362,7 @@ func TestHALedgerRejectsCorruptionSymlinkOversizeAndQuotaWithoutMutation_SW_HA_0
 		t.Fatal(err)
 	}
 	response = requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret",
-		`{"ip":"203.0.113.9","ttl":60,"reason":"over quota","source":"bunkerweb"}`)
+		`{"ip":"1.1.1.9","ttl":60,"reason":"over quota","source":"bunkerweb"}`)
 	if response.Code != http.StatusInsufficientStorage {
 		t.Fatalf("full ledger POST = %d, %q", response.Code, response.Body.String())
 	}
@@ -1219,11 +1371,11 @@ func TestHALedgerRejectsCorruptionSymlinkOversizeAndQuotaWithoutMutation_SW_HA_0
 
 func TestHATemporaryPendingRecoveryExpiryAndRestart_SW_HA_004(t *testing.T) {
 	manager := &recordingHAFirewallManager{banErr: errors.New("injected initial failure")}
-	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 	base := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	fixture.api.now = func() time.Time { return base }
 	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret",
-		`{"ip":"198.51.100.90","ttl":60,"reason":"recover after crash","source":"bunkerweb"}`)
+		`{"ip":"8.8.4.90","ttl":60,"reason":"recover after crash","source":"bunkerweb"}`)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("failed temporary apply = %d, %q", response.Code, response.Body.String())
 	}
@@ -1239,6 +1391,8 @@ func TestHATemporaryPendingRecoveryExpiryAndRestart_SW_HA_004(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	restarted.localInterfaceAddresses = func() ([]netip.Addr, error) { return nil, nil }
+	restarted.isWhitelisted = func(string) (bool, error) { return false, nil }
 	if err := restarted.reconcileHABans(base, maxHALedgerRecords); err != nil {
 		t.Fatalf("pending apply recovery: %v", err)
 	}
@@ -1254,14 +1408,14 @@ func TestHATemporaryPendingRecoveryExpiryAndRestart_SW_HA_004(t *testing.T) {
 		t.Fatalf("expired ledger = %#v, err=%v", ledger.Bans, err)
 	}
 	manager.mu.Lock()
-	if len(manager.banned) < 2 || len(manager.unbanned) != 1 || manager.unbanned[0] != "198.51.100.90" {
+	if len(manager.banned) < 2 || len(manager.unbanned) != 1 || manager.unbanned[0] != "8.8.4.90" {
 		t.Fatalf("restart/expiry manager calls: bans=%v unbans=%v", manager.banned, manager.unbanned)
 	}
 	manager.mu.Unlock()
 }
 
 func TestHAInitialLedgerReconciliationFailsClosed_SW_HA_004(t *testing.T) {
-	recordWithDuplicateSource := `{"ip":"198.51.100.9","source":"producer-a","source":"producer-b","reason":"duplicate schema","peer_scope":"192.0.2.10/32","origin_peer_ip":"192.0.2.10","expires_at":"2026-08-14T13:00:00Z","created_at":"2026-08-14T12:00:00Z","updated_at":"2026-08-14T12:00:00Z","state":"active"}`
+	recordWithDuplicateSource := `{"ip":"8.8.4.9","source":"producer-a","source":"producer-b","reason":"duplicate schema","peer_scope":"9.9.9.10/32","origin_peer_ip":"9.9.9.10","expires_at":"2026-08-14T13:00:00Z","created_at":"2026-08-14T12:00:00Z","updated_at":"2026-08-14T12:00:00Z","state":"active"}`
 	for name, wire := range map[string]string{
 		"unknown root field":     `{"version":1,"bans":[],"unexpected":true}`,
 		"duplicate root field":   `{"version":1,"version":1,"bans":[]}`,
@@ -1269,7 +1423,7 @@ func TestHAInitialLedgerReconciliationFailsClosed_SW_HA_004(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			manager := &recordingHAFirewallManager{}
-			fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+			fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 			if err := os.WriteFile(fixture.ledger, []byte(wire), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -1287,7 +1441,7 @@ func TestHAInitialLedgerReconciliationFailsClosed_SW_HA_004(t *testing.T) {
 
 func TestHABlocklistPublicationFlockSymlinkAndMode_SW_HA_003(t *testing.T) {
 	manager := &recordingHAFirewallManager{}
-	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 	second, err := newHAAPI(fixture.api.cfg, manager, "v4.02.8", fixture.ipv4, fixture.ipv6, fixture.telemetry, fixture.ledger)
 	if err != nil {
 		t.Fatal(err)
@@ -1302,7 +1456,7 @@ func TestHABlocklistPublicationFlockSymlinkAndMode_SW_HA_003(t *testing.T) {
 			if index%2 == 0 {
 				api = second
 			}
-			if err := api.setStoredIP(fmt.Sprintf("198.51.100.%d", index), true); err != nil {
+			if err := api.setStoredIP(fmt.Sprintf("8.8.4.%d", index), true); err != nil {
 				t.Errorf("concurrent blocklist append: %v", err)
 			}
 		}()
@@ -1330,7 +1484,7 @@ func TestHABlocklistPublicationFlockSymlinkAndMode_SW_HA_003(t *testing.T) {
 	if err := os.Symlink(target, fixture.ipv4); err != nil {
 		t.Fatal(err)
 	}
-	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["203.0.113.10"]}`)
+	response := requestDirectHAHandler(t, fixture.handler, http.MethodPost, "Bearer shared-secret", `{"ips":["1.1.1.10"]}`)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("symlink blocklist POST = %d, %q", response.Code, response.Body.String())
 	}
@@ -1346,9 +1500,9 @@ func TestHABlocklistPublicationFlockSymlinkAndMode_SW_HA_003(t *testing.T) {
 }
 
 func TestHAReplaceAndWAAPPersistenceShareAtomicDirectoryLock_SW_HA_003(t *testing.T) {
-	fixture := newHAAPITestFixture(t, &recordingHAFirewallManager{}, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, &recordingHAFirewallManager{}, []string{"9.9.9.10"})
 	for index := 1; index <= 32; index++ {
-		if err := fixture.api.setStoredIP(fmt.Sprintf("198.51.100.%d", index), true); err != nil {
+		if err := fixture.api.setStoredIP(fmt.Sprintf("8.8.4.%d", index), true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1360,14 +1514,14 @@ func TestHAReplaceAndWAAPPersistenceShareAtomicDirectoryLock_SW_HA_003(t *testin
 		go func() {
 			defer wait.Done()
 			<-start
-			if err := fixture.api.setStoredIP(fmt.Sprintf("198.51.100.%d", index), false); err != nil {
+			if err := fixture.api.setStoredIP(fmt.Sprintf("8.8.4.%d", index), false); err != nil {
 				t.Errorf("HA atomic removal: %v", err)
 			}
 		}()
 		go func() {
 			defer wait.Done()
 			<-start
-			if err := fixture.api.setStoredIP(fmt.Sprintf("198.51.100.%d", index+32), true); err != nil {
+			if err := fixture.api.setStoredIP(fmt.Sprintf("8.8.4.%d", index+32), true); err != nil {
 				t.Errorf("HA atomic replacement: %v", err)
 			}
 		}()
@@ -1376,7 +1530,7 @@ func TestHAReplaceAndWAAPPersistenceShareAtomicDirectoryLock_SW_HA_003(t *testin
 			<-start
 			// This is the exact synchronous primitive used by logger.LogBan for
 			// WAAP/WAF persistence, targeting the test-owned IPv4 blocklist.
-			if err := corelogger.UpdatePersistentBlocklist(fixture.ipv4, fmt.Sprintf("203.0.113.%d", index), true); err != nil {
+			if err := corelogger.UpdatePersistentBlocklist(fixture.ipv4, fmt.Sprintf("1.1.1.%d", index), true); err != nil {
 				t.Errorf("WAAP atomic persistence: %v", err)
 			}
 		}()
@@ -1396,10 +1550,10 @@ func TestHAReplaceAndWAAPPersistenceShareAtomicDirectoryLock_SW_HA_003(t *testin
 		set[entry] = struct{}{}
 	}
 	for index := 1; index <= 32; index++ {
-		if _, present := set[fmt.Sprintf("198.51.100.%d", index)]; present {
+		if _, present := set[fmt.Sprintf("8.8.4.%d", index)]; present {
 			t.Fatalf("HA removal was lost for index %d", index)
 		}
-		for _, expected := range []string{fmt.Sprintf("198.51.100.%d", index+32), fmt.Sprintf("203.0.113.%d", index)} {
+		for _, expected := range []string{fmt.Sprintf("8.8.4.%d", index+32), fmt.Sprintf("1.1.1.%d", index)} {
 			if _, present := set[expected]; !present {
 				t.Fatalf("concurrent HA/WAAP update lost %s", expected)
 			}
@@ -1408,7 +1562,7 @@ func TestHAReplaceAndWAAPPersistenceShareAtomicDirectoryLock_SW_HA_003(t *testin
 }
 
 func TestHATelemetryResponseIsBounded_SW_HA_003(t *testing.T) {
-	fixture := newHAAPITestFixture(t, &recordingHAFirewallManager{}, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, &recordingHAFirewallManager{}, []string{"9.9.9.10"})
 	telemetry, err := os.OpenFile(fixture.telemetry, os.O_WRONLY, 0600)
 	if err != nil {
 		t.Fatal(err)
@@ -1420,7 +1574,7 @@ func TestHATelemetryResponseIsBounded_SW_HA_003(t *testing.T) {
 	if err := telemetry.Close(); err != nil {
 		t.Fatal(err)
 	}
-	response := requestDirectHAPath(t, fixture.handler, http.MethodGet, "/ha/telemetry", "Bearer shared-secret", "", "192.0.2.10:43123")
+	response := requestDirectHAPath(t, fixture.handler, http.MethodGet, "/ha/telemetry", "Bearer shared-secret", "", "9.9.9.10:43123")
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("oversized telemetry = %d, %q", response.Code, response.Body.String())
 	}
@@ -1512,7 +1666,7 @@ const (
 // configured peer CIDR, while logical ownership remains bound to that scope.
 func TestBunkerWebSchedulerEndToEndContract_SW_HA_004(t *testing.T) {
 	manager := &recordingHANativeFirewallManager{}
-	fixture := newHAAPITestFixture(t, manager, []string{"127.0.0.0/8"})
+	fixture := newHAAPITestFixture(t, manager, []string{"127.0.0.0/24"})
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	fixture.api.now = func() time.Time { return now }
 
@@ -1590,14 +1744,14 @@ func TestBunkerWebSchedulerEndToEndContract_SW_HA_004(t *testing.T) {
 	bans := make([]schedulerBan, 0, maxHABansPerRequest)
 	for index := 0; index < maxHABansPerRequest-1; index++ {
 		bans = append(bans, schedulerBan{
-			IP: fmt.Sprintf("198.18.%d.%d", index/250, index%250+1), TTL: 300,
+			IP: fmt.Sprintf("45.200.%d.%d", index/250, index%250+1), TTL: 300,
 			Reason: "scheduler detection", Source: "bunkerweb-a",
 		})
 	}
 	// A distinct claimed source may own the same address inside the same trust
 	// scope; it must not collide with or be deleted by bunkerweb-a.
 	bans = append(bans, schedulerBan{
-		IP: "198.18.0.1", TTL: 120, Reason: "second producer", Source: "bunkerweb-b",
+		IP: "45.200.0.1", TTL: 120, Reason: "second producer", Source: "bunkerweb-b",
 	})
 	statusCode, wire = schedulerA.request(http.MethodPost, "/ha/sync", map[string]any{"bans": bans})
 	if statusCode != http.StatusOK {
@@ -1622,11 +1776,11 @@ func TestBunkerWebSchedulerEndToEndContract_SW_HA_004(t *testing.T) {
 	}
 
 	// Simulate a container restart: the scheduler's observed source address
-	// changes, but its configured /8 peer scope and claimed source are stable.
+	// changes, but its configured /24 peer scope and claimed source are stable.
 	now = now.Add(10 * time.Second)
 	schedulerB := newBunkerWebSchedulerHarness(t, server, roots, "127.0.0.3", "shared-secret")
 	statusCode, wire = schedulerB.request(http.MethodPost, "/ha/sync", schedulerBan{
-		IP: "198.18.0.1", TTL: 600, Reason: "renewed after container restart", Source: "bunkerweb-a",
+		IP: "45.200.0.1", TTL: 600, Reason: "renewed after container restart", Source: "bunkerweb-a",
 	})
 	if statusCode != http.StatusOK {
 		t.Fatalf("scheduler renewal from changed IP = %d, %q", statusCode, wire)
@@ -1638,7 +1792,7 @@ func TestBunkerWebSchedulerEndToEndContract_SW_HA_004(t *testing.T) {
 	var renewed, secondSource *haBanLedgerRecord
 	for index := range ledger.Bans {
 		record := &ledger.Bans[index]
-		if record.IP != "198.18.0.1" {
+		if record.IP != "45.200.0.1" {
 			continue
 		}
 		switch record.Source {
@@ -1648,14 +1802,14 @@ func TestBunkerWebSchedulerEndToEndContract_SW_HA_004(t *testing.T) {
 			secondSource = record
 		}
 	}
-	if renewed == nil || secondSource == nil || renewed.PeerScope != "127.0.0.0/8" ||
+	if renewed == nil || secondSource == nil || renewed.PeerScope != "127.0.0.0/24" ||
 		renewed.OriginPeerIP != "127.0.0.3" || secondSource.OriginPeerIP != "127.0.0.2" ||
 		renewed.ExpiresAt != "2026-08-14T12:10:10Z" {
 		t.Fatalf("scheduler dynamic-CIDR provenance = renewed:%#v second:%#v", renewed, secondSource)
 	}
 
 	statusCode, wire = schedulerB.request(http.MethodDelete, "/ha/sync", map[string]string{
-		"ip": "198.18.0.1", "source": "bunkerweb-a",
+		"ip": "45.200.0.1", "source": "bunkerweb-a",
 	})
 	if statusCode != http.StatusOK {
 		t.Fatalf("scheduler owned DELETE = %d, %q", statusCode, wire)
@@ -1665,7 +1819,7 @@ func TestBunkerWebSchedulerEndToEndContract_SW_HA_004(t *testing.T) {
 		t.Fatalf("scheduler owned DELETE ledger = %d records, err=%v", len(ledger.Bans), err)
 	}
 	for _, record := range ledger.Bans {
-		if record.IP == "198.18.0.1" && record.Source == "bunkerweb-a" {
+		if record.IP == "45.200.0.1" && record.Source == "bunkerweb-a" {
 			t.Fatal("owned DELETE retained the deleted scheduler tuple")
 		}
 	}
@@ -1724,8 +1878,8 @@ func TestTwoNodeLegacyHADurableBidirectionalSyncWithWAAP_BunkerGateMatrix_SW_HA_
 			clientToA := newBunkerWebSchedulerHarness(t, serverA, rootsA, "127.0.0.1", "shared-secret")
 			clientToB := newBunkerWebSchedulerHarness(t, serverB, rootsB, "127.0.0.1", "shared-secret")
 
-			nodeAEntries := []string{"198.51.100.10", "198.51.100.0/25", "203.0.113.77"}
-			nodeBEntries := []string{"2001:db8::10", "2001:db8:1::/64"}
+			nodeAEntries := []string{"8.8.4.10", "8.8.4.11", "1.1.1.77"}
+			nodeBEntries := []string{"2606:4700:4700::10", "2606:4700:4700::11"}
 			for _, entry := range nodeAEntries[:2] {
 				if err := nodeA.api.setStoredIP(entry, true); err != nil {
 					t.Fatal(err)
@@ -1799,7 +1953,7 @@ func TestTwoNodeLegacyHADurableBidirectionalSyncWithWAAP_BunkerGateMatrix_SW_HA_
 			managerA.mu.Unlock()
 			managerB.mu.Lock()
 			defer managerB.mu.Unlock()
-			if len(managerB.unbanned) != len(nodeAEntries) || !slices.Contains(managerB.unbanned, "203.0.113.77") {
+			if len(managerB.unbanned) != len(nodeAEntries) || !slices.Contains(managerB.unbanned, "1.1.1.77") {
 				t.Fatalf("node B removal calls lack WAAP entry: %v", managerB.unbanned)
 			}
 		})
@@ -1869,13 +2023,13 @@ func TestBunkerWebElevenScenarioQualificationOwnershipMatrix_SW_HA_004(t *testin
 
 func directHAHandler(t *testing.T, manager *recordingHAFirewallManager) (http.Handler, string, string) {
 	t.Helper()
-	fixture := newHAAPITestFixture(t, manager, []string{"192.0.2.10"})
+	fixture := newHAAPITestFixture(t, manager, []string{"9.9.9.10"})
 	return fixture.handler, fixture.ipv4, fixture.ipv6
 }
 
 func requestDirectHAHandler(t *testing.T, handler http.Handler, method, authorization, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	return requestDirectHAPath(t, handler, method, "/ha/sync", authorization, body, "192.0.2.10:43123")
+	return requestDirectHAPath(t, handler, method, "/ha/sync", authorization, body, "9.9.9.10:43123")
 }
 
 func requestDirectHAPath(t *testing.T, handler http.Handler, method, path, authorization, body, remoteAddress string) *httptest.ResponseRecorder {

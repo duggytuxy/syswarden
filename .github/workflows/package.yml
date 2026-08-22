@@ -474,21 +474,20 @@ jobs:
           if [ "$1" = "2" ] || [ "$1" = "1" ] || [ "$1" = "configure" ] || [ -f /etc/alpine-release ]; then
               manager="$(package_service_manager)"
               manager_state="$(syswarden_classify_service_manager / "${manager}")"
-              [ "${manager_state}" != AMBIGUOUS ] || {
-                  echo "Refusing an ambiguous service-manager runtime" >&2
-                  exit 1
-              }
-              /opt/syswarden/bin/syswarden-cli install
-              manager_state="$(syswarden_classify_service_manager / "${manager}")"
               case "${manager_state}" in
                   ACTIVE)
+                      /opt/syswarden/bin/syswarden-cli install
+                      [ "$(syswarden_classify_service_manager / "${manager}")" = ACTIVE ] || {
+                          echo "Service-manager runtime changed during package installation" >&2
+                          exit 1
+                      }
                       /opt/syswarden/bin/syswarden-cli reload
                       ;;
                   OFFLINE)
-                      /opt/syswarden/bin/syswarden-cli reload --no-restart
+                      echo "Service-manager runtime is offline; host configuration is deferred until an explicit online install."
                       ;;
                   *)
-                      echo "Service-manager runtime changed during package installation" >&2
+                      echo "Refusing an ambiguous service-manager runtime" >&2
                       exit 1
                       ;;
               esac
@@ -499,186 +498,104 @@ jobs:
           cat scripts/ci/package_webtui_retirement.sh > "${PACKAGE_SCRIPTS}/postrm.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/postrm.sh"
           export SYSWARDEN_PKG_INSTALL=1
-          syswarden_managed_cron_line() {
-              syswarden_cron_candidate="$1"
-              shift
-              syswarden_cron_minute="$(printf '%s\n' "${syswarden_cron_candidate}" | awk 'NR == 1 { print $1; exit }')"
-              for syswarden_cron_cli do
-                  if [ "${syswarden_cron_candidate}" = "*/30 * * * * ${syswarden_cron_cli} ha-sync >/dev/null 2>&1" ]; then
-                      return 0
-                  fi
-                  case "${syswarden_cron_minute}" in
-                      [1-9]|[1-5][0-9])
-                          if [ "${syswarden_cron_candidate}" = "${syswarden_cron_minute} * * * * ${syswarden_cron_cli} update-feeds >/dev/null 2>&1" ]; then
-                              return 0
-                          fi
-                          ;;
-                  esac
-              done
-              return 1
-          }
-          syswarden_filter_crontab() {
-              syswarden_cron_input="$1"
-              syswarden_cron_output="$2"
-              shift 2
-              {
-                  while :; do
-                      syswarden_cron_candidate=
-                      if IFS= read -r syswarden_cron_candidate; then
-                          syswarden_cron_terminated=1
-                      else
-                          syswarden_cron_terminated=0
-                          [ -n "${syswarden_cron_candidate}" ] || break
-                      fi
-                      if ! syswarden_managed_cron_line "${syswarden_cron_candidate}" "$@"; then
-                          if [ "${syswarden_cron_terminated}" -eq 1 ]; then
-                              printf '%s\n' "${syswarden_cron_candidate}" || return 1
-                          else
-                              printf '%s' "${syswarden_cron_candidate}" || return 1
-                          fi
-                      fi
-                  done
-              } < "${syswarden_cron_input}" > "${syswarden_cron_output}"
-          }
-          syswarden_read_crontab() {
-              syswarden_cron_backup="$1"
-              syswarden_cron_error="$2"
-              syswarden_cron_present=0
-              if LC_ALL=C crontab -l > "${syswarden_cron_backup}" 2> "${syswarden_cron_error}"; then
-                  syswarden_cron_present=1
-                  return 0
-              else
-                  syswarden_cron_rc=$?
-              fi
-              [ "${syswarden_cron_rc}" -eq 1 ] || {
-                  printf 'crontab -l failed with exit %s\n' "${syswarden_cron_rc}" >&2
-                  return 1
-              }
-              [ ! -s "${syswarden_cron_backup}" ] || {
-                  printf '%s\n' 'crontab -l emitted partial stdout while reporting absence' >&2
-                  return 1
-              }
-              syswarden_cron_message="$(cat "${syswarden_cron_error}")"
-              syswarden_cron_lines="$(LC_ALL=C awk 'END { print NR + 0 }' "${syswarden_cron_error}")"
-              case "${syswarden_cron_lines}:${syswarden_cron_message}" in
-                  "1:no crontab for root"|\
-                  "1:crontab: no crontab for root"|\
-                  "1:crontab: can't open 'root': No such file or directory")
-                      if [ -n "${SYSWARDEN_CRON_ABSENCE_SPOOL:-}" ] && \
-                         { [ -e "${SYSWARDEN_CRON_ABSENCE_SPOOL}" ] || [ -L "${SYSWARDEN_CRON_ABSENCE_SPOOL}" ]; }; then
-                          printf '%s\n' 'crontab reported absence while the configured spool path still exists' >&2
-                          return 1
-                      fi
-                      : > "${syswarden_cron_backup}"
-                      return 0
-                      ;;
-              esac
-              printf '%s\n' "${syswarden_cron_message}" >&2
-              return 1
-          }
-          syswarden_cleanup_cron_work() {
-              [ -n "${cron_work:-}" ] || return 0
-              syswarden_cron_cleanup_target="${cron_work}"
-              if [ "${XDG_CACHE_HOME:-}" = "${syswarden_cron_cleanup_target}/cache" ]; then
-                  unset XDG_CACHE_HOME
-              fi
-              cron_cache=
-              rm -rf -- "${syswarden_cron_cleanup_target}" || return 1
-              if [ -e "${syswarden_cron_cleanup_target}" ] || [ -L "${syswarden_cron_cleanup_target}" ]; then
-                  printf '%s\n' 'private cron work directory remains after cleanup' >&2
-                  return 1
-              fi
-              cron_work=
-          }
-          syswarden_prepare_cron_work() {
-              cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || return 1
-              chmod 0700 "${cron_work}" || return 1
-              cron_cache="${cron_work}/cache"
-              mkdir "${cron_cache}" || return 1
-              chmod 0700 "${cron_cache}" || return 1
-              XDG_CACHE_HOME="${cron_cache}"
-              export XDG_CACHE_HOME
-              cron_backup="${cron_work}/backup"
-              cron_error="${cron_work}/error"
-              cron_filtered="${cron_work}/filtered"
-          }
-          syswarden_cleanup_crontab() {
-              syswarden_cron_backup="$1"
-              syswarden_cron_error="$2"
-              syswarden_cron_filtered="$3"
-              shift 3
-              syswarden_read_crontab "${syswarden_cron_backup}" "${syswarden_cron_error}" || return 1
-              [ "${syswarden_cron_present}" -eq 1 ] || return 0
-              syswarden_filter_crontab "${syswarden_cron_backup}" "${syswarden_cron_filtered}" "$@" || return 1
-              if cmp -s "${syswarden_cron_backup}" "${syswarden_cron_filtered}"; then
-                  return 0
-              else
-                  syswarden_cron_cmp_rc=$?
-              fi
-              [ "${syswarden_cron_cmp_rc}" -eq 1 ] || return 1
-              if [ ! -s "${syswarden_cron_filtered}" ]; then
-                  LC_ALL=C crontab -r || return 1
-                  syswarden_read_crontab "${syswarden_cron_backup}" "${syswarden_cron_error}" || return 1
-                  [ "${syswarden_cron_present}" -eq 0 ] || {
-                      printf '%s\n' 'crontab -r returned success but the root crontab is still present' >&2
-                      return 1
-                  }
-                  return 0
-              fi
-              crontab - < "${syswarden_cron_filtered}" || return 1
-          }
 
           cleanup_generated_runtime_artifacts() {
-              if [ -f /etc/alpine-release ]; then manager=openrc; else manager=systemd; fi
-              manager_state="$(syswarden_classify_service_manager / "${manager}")"
-              [ "${manager_state}" != AMBIGUOUS ] || return 1
-              syswarden_remove_exact_product_services "${manager}" || return 1
-              rm -f \
-                  /etc/bash_completion.d/syswarden \
-                  /etc/rsyslog.d/99-syswarden-siem.conf \
-                  /etc/rsyslog.d/99-syswarden-waf-bridge.conf
-              if command -v crontab >/dev/null 2>&1; then
-                  umask 077
-                  SYSWARDEN_CRON_ABSENCE_SPOOL=
-                  cron_work=
-                  trap 'syswarden_cleanup_cron_work' 0
-                  trap 'syswarden_cleanup_cron_work; exit 129' 1
-                  trap 'syswarden_cleanup_cron_work; exit 130' 2
-                  trap 'syswarden_cleanup_cron_work; exit 143' 15
-                  syswarden_prepare_cron_work || return 1
-                  syswarden_cleanup_crontab \
-                      "${cron_backup}" "${cron_error}" "${cron_filtered}" \
-                      /opt/syswarden/bin/syswarden-cli || return 1
-                  syswarden_cleanup_cron_work || return 1
-                  trap - 0 1 2 15
-              fi
-              case "${manager_state}" in
-                  ACTIVE)
-                      if [ "${manager}" = systemd ]; then
-                          systemctl daemon-reload
-                          systemctl try-restart rsyslog.service
-                      else
-                          if rc-service rsyslog status >/dev/null 2>&1; then
-                              rc-service rsyslog restart
-                          else
-                              manager_status=$?
-                              [ "${manager_status}" -eq 3 ] || return 1
-                          fi
-                      fi
-                      ;;
-                  OFFLINE) : ;;
+              syswarden_verify_webtui_retirement / || return 1
+              printf '%s\n' 'Preserving root crontab, ambiguous rsyslog bridges, shell completion, and legacy hardening artifacts for manual recovery.' >&2
+          }
+
+          syswarden_path_absent() {
+              [ ! -e "$1" ] && [ ! -L "$1" ]
+          }
+
+          syswarden_remove_exact_product_link() {
+              syswarden_link_path="$1"
+              syswarden_link_target="$2"
+              syswarden_path_absent "${syswarden_link_path}" && return 0
+              [ -L "${syswarden_link_path}" ] || {
+                  printf 'Refusing non-symlink product launcher: %s\n' "${syswarden_link_path}" >&2
+                  return 1
+              }
+              [ "$(stat -c '%u:%g:%h' "${syswarden_link_path}")" = '0:0:1' ] || return 1
+              [ "$(readlink "${syswarden_link_path}")" = "${syswarden_link_target}" ] || {
+                  printf 'Refusing unexpected product launcher target: %s\n' "${syswarden_link_path}" >&2
+                  return 1
+              }
+              [ "$(readlink "${syswarden_link_path}")" = "${syswarden_link_target}" ] || return 1
+              rm -f -- "${syswarden_link_path}" || return 1
+              syswarden_path_absent "${syswarden_link_path}"
+          }
+
+          syswarden_remove_exact_runtime_socket() {
+              syswarden_socket_path="$1"
+              syswarden_path_absent "${syswarden_socket_path}" && return 0
+              [ ! -L "${syswarden_socket_path}" ] && [ -S "${syswarden_socket_path}" ] || {
+                  printf 'Refusing non-attributable product socket: %s\n' "${syswarden_socket_path}" >&2
+                  return 1
+              }
+              [ "$(stat -c '%u:%g:%h' "${syswarden_socket_path}")" = '0:0:1' ] || return 1
+              [ ! -L "${syswarden_socket_path}" ] && [ -S "${syswarden_socket_path}" ] || return 1
+              rm -f -- "${syswarden_socket_path}" || return 1
+              syswarden_path_absent "${syswarden_socket_path}"
+          }
+
+          syswarden_remove_dedicated_root() {
+              syswarden_root_path="$1"
+              syswarden_path_absent "${syswarden_root_path}" && return 0
+              [ ! -L "${syswarden_root_path}" ] && [ -d "${syswarden_root_path}" ] || {
+                  printf 'Refusing unsafe dedicated product root: %s\n' "${syswarden_root_path}" >&2
+                  return 1
+              }
+              case "$(stat -c '%u:%g:%a' "${syswarden_root_path}")" in
+                  0:0:700|0:0:750|0:0:755) ;;
+                  *) printf 'Refusing unsafe dedicated product root metadata: %s\n' "${syswarden_root_path}" >&2; return 1 ;;
+              esac
+              rm -rf -- "${syswarden_root_path}" || return 1
+              syswarden_path_absent "${syswarden_root_path}"
+          }
+
+          syswarden_attest_removal_tombstone() {
+              syswarden_tombstone=/var/lib/syswarden/removal-in-progress-v1
+              [ ! -L /var/lib/syswarden ] && [ -d /var/lib/syswarden ] || return 1
+              case "$(stat -c '%u:%g:%a' /var/lib/syswarden)" in
+                  0:0:700|0:0:750|0:0:755) ;;
                   *) return 1 ;;
               esac
+              [ ! -L "${syswarden_tombstone}" ] && [ -f "${syswarden_tombstone}" ] || return 1
+              [ "$(stat -c '%u:%g:%a:%h' "${syswarden_tombstone}")" = '0:0:600:1' ] || return 1
+              [ "$(LC_ALL=C wc -c < "${syswarden_tombstone}" | tr -d '[:space:]')" = '39' ] || return 1
+              syswarden_tombstone_record="$(printf 'SYSWARDEN_REMOVAL_V1\nstate=in-progress\n')"
+              [ "$(cat "${syswarden_tombstone}")" = "${syswarden_tombstone_record}" ]
+          }
+
+          syswarden_finalize_removal_tombstone() {
+              for syswarden_binary in \
+                  /opt/syswarden/bin/syswarden-cli \
+                  /opt/syswarden/bin/syswarden-core \
+                  /opt/syswarden/bin/syswarden-tui; do
+                  syswarden_path_absent "${syswarden_binary}" || {
+                      printf 'Refusing removal finalization while a product binary remains: %s\n' "${syswarden_binary}" >&2
+                      return 1
+                  }
+              done
+              syswarden_tombstone=/var/lib/syswarden/removal-in-progress-v1
+              syswarden_path_absent "${syswarden_tombstone}" && return 0
+              syswarden_attest_removal_tombstone || return 1
+              syswarden_attest_removal_tombstone || return 1
+              rm -f -- "${syswarden_tombstone}" || return 1
+              syswarden_path_absent "${syswarden_tombstone}"
           }
 
           if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
               cleanup_generated_runtime_artifacts || exit 1
-              rm -f /usr/local/bin/syswarden
-              rm -f /usr/local/bin/syswarden-tui
-          fi
-          if [ "$1" = "0" ] || [ "$1" = "purge" ]; then
-              rm -rf /opt/syswarden
-              rm -rf /etc/syswarden
+              syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
+              syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
+              syswarden_remove_exact_runtime_socket /run/syswarden.sock || exit 1
+              if [ "$1" = "0" ] || [ "$1" = "purge" ]; then
+                  syswarden_remove_dedicated_root /opt/syswarden || exit 1
+                  syswarden_remove_dedicated_root /etc/syswarden || exit 1
+              fi
+              syswarden_finalize_removal_tombstone || exit 1
           fi
           EOF
 
@@ -692,179 +609,9 @@ jobs:
           ::*) [ "$1" -gt 0 ] 2>/dev/null&&exit;exit 1;;
           *) exit 1;;
           esac
+          /opt/syswarden/bin/syswarden-cli prepare-package-removal || exit 1
           syswarden_retire_legacy_webtui / || exit 1
-          syswarden_managed_cron_line() {
-              syswarden_cron_candidate="$1"
-              shift
-              syswarden_cron_minute="$(printf '%s\n' "${syswarden_cron_candidate}" | awk 'NR == 1 { print $1; exit }')"
-              for syswarden_cron_cli do
-                  if [ "${syswarden_cron_candidate}" = "*/30 * * * * ${syswarden_cron_cli} ha-sync >/dev/null 2>&1" ]; then
-                      return 0
-                  fi
-                  case "${syswarden_cron_minute}" in
-                      [1-9]|[1-5][0-9])
-                          if [ "${syswarden_cron_candidate}" = "${syswarden_cron_minute} * * * * ${syswarden_cron_cli} update-feeds >/dev/null 2>&1" ]; then
-                              return 0
-                          fi
-                          ;;
-                  esac
-              done
-              return 1
-          }
-          syswarden_filter_crontab() {
-              syswarden_cron_input="$1"
-              syswarden_cron_output="$2"
-              shift 2
-              {
-                  while :; do
-                      syswarden_cron_candidate=
-                      if IFS= read -r syswarden_cron_candidate; then
-                          syswarden_cron_terminated=1
-                      else
-                          syswarden_cron_terminated=0
-                          [ -n "${syswarden_cron_candidate}" ] || break
-                      fi
-                      if ! syswarden_managed_cron_line "${syswarden_cron_candidate}" "$@"; then
-                          if [ "${syswarden_cron_terminated}" -eq 1 ]; then
-                              printf '%s\n' "${syswarden_cron_candidate}" || return 1
-                          else
-                              printf '%s' "${syswarden_cron_candidate}" || return 1
-                          fi
-                      fi
-                  done
-              } < "${syswarden_cron_input}" > "${syswarden_cron_output}"
-          }
-          syswarden_read_crontab() {
-              syswarden_cron_backup="$1"
-              syswarden_cron_error="$2"
-              syswarden_cron_present=0
-              if LC_ALL=C crontab -l > "${syswarden_cron_backup}" 2> "${syswarden_cron_error}"; then
-                  syswarden_cron_present=1
-                  return 0
-              else
-                  syswarden_cron_rc=$?
-              fi
-              [ "${syswarden_cron_rc}" -eq 1 ] || {
-                  printf 'crontab -l failed with exit %s\n' "${syswarden_cron_rc}" >&2
-                  return 1
-              }
-              [ ! -s "${syswarden_cron_backup}" ] || {
-                  printf '%s\n' 'crontab -l emitted partial stdout while reporting absence' >&2
-                  return 1
-              }
-              syswarden_cron_message="$(cat "${syswarden_cron_error}")"
-              syswarden_cron_lines="$(LC_ALL=C awk 'END { print NR + 0 }' "${syswarden_cron_error}")"
-              case "${syswarden_cron_lines}:${syswarden_cron_message}" in
-                  "1:no crontab for root"|\
-                  "1:crontab: no crontab for root"|\
-                  "1:crontab: can't open 'root': No such file or directory")
-                      if [ -n "${SYSWARDEN_CRON_ABSENCE_SPOOL:-}" ] && \
-                         { [ -e "${SYSWARDEN_CRON_ABSENCE_SPOOL}" ] || [ -L "${SYSWARDEN_CRON_ABSENCE_SPOOL}" ]; }; then
-                          printf '%s\n' 'crontab reported absence while the configured spool path still exists' >&2
-                          return 1
-                      fi
-                      : > "${syswarden_cron_backup}"
-                      return 0
-                      ;;
-              esac
-              printf '%s\n' "${syswarden_cron_message}" >&2
-              return 1
-          }
-          syswarden_cleanup_cron_work() {
-              [ -n "${cron_work:-}" ] || return 0
-              syswarden_cron_cleanup_target="${cron_work}"
-              if [ "${XDG_CACHE_HOME:-}" = "${syswarden_cron_cleanup_target}/cache" ]; then
-                  unset XDG_CACHE_HOME
-              fi
-              cron_cache=
-              rm -rf -- "${syswarden_cron_cleanup_target}" || return 1
-              if [ -e "${syswarden_cron_cleanup_target}" ] || [ -L "${syswarden_cron_cleanup_target}" ]; then
-                  printf '%s\n' 'private cron work directory remains after cleanup' >&2
-                  return 1
-              fi
-              cron_work=
-          }
-          syswarden_prepare_cron_work() {
-              cron_work="$(mktemp -d /var/tmp/syswarden-cron.XXXXXX)" || return 1
-              chmod 0700 "${cron_work}" || return 1
-              cron_cache="${cron_work}/cache"
-              mkdir "${cron_cache}" || return 1
-              chmod 0700 "${cron_cache}" || return 1
-              XDG_CACHE_HOME="${cron_cache}"
-              export XDG_CACHE_HOME
-              cron_backup="${cron_work}/backup"
-              cron_error="${cron_work}/error"
-              cron_filtered="${cron_work}/filtered"
-          }
-          syswarden_cleanup_crontab() {
-              syswarden_cron_backup="$1"
-              syswarden_cron_error="$2"
-              syswarden_cron_filtered="$3"
-              shift 3
-              syswarden_read_crontab "${syswarden_cron_backup}" "${syswarden_cron_error}" || return 1
-              [ "${syswarden_cron_present}" -eq 1 ] || return 0
-              syswarden_filter_crontab "${syswarden_cron_backup}" "${syswarden_cron_filtered}" "$@" || return 1
-              if cmp -s "${syswarden_cron_backup}" "${syswarden_cron_filtered}"; then
-                  return 0
-              else
-                  syswarden_cron_cmp_rc=$?
-              fi
-              [ "${syswarden_cron_cmp_rc}" -eq 1 ] || return 1
-              if [ ! -s "${syswarden_cron_filtered}" ]; then
-                  LC_ALL=C crontab -r || return 1
-                  syswarden_read_crontab "${syswarden_cron_backup}" "${syswarden_cron_error}" || return 1
-                  [ "${syswarden_cron_present}" -eq 0 ] || {
-                      printf '%s\n' 'crontab -r returned success but the root crontab is still present' >&2
-                      return 1
-                  }
-                  return 0
-              fi
-              crontab - < "${syswarden_cron_filtered}" || return 1
-          }
-
-          if [ -f /etc/alpine-release ]; then manager=openrc; else manager=systemd; fi
-          manager_state="$(syswarden_classify_service_manager / "${manager}")"
-          case "${manager_state}" in
-          ACTIVE)
-          if [ "${manager}" = systemd ]; then
-          systemctl stop syswarden-core.service
-          systemctl disable syswarden-core.service
-          systemctl stop syswarden-firewall.service
-          systemctl disable syswarden-firewall.service
-          systemctl restart rsyslog
-          else
-          rc-service syswarden-core stop
-          rc-update del syswarden-core default
-          rc-service syswarden-firewall stop
-          rc-update del syswarden-firewall default
-          rc-service rsyslog restart
-          fi
-          ;;
-          OFFLINE) : ;;
-          *) exit 1 ;;
-          esac
-          syswarden_remove_exact_product_services "${manager}" || exit 1
-          nft delete table netdev syswarden_hw_drop || true
-          nft delete table arp syswarden_arp || true
-          nft delete table inet syswarden || true
-          umask 077
-          SYSWARDEN_CRON_ABSENCE_SPOOL=
-          cron_work=
-          trap 'syswarden_cleanup_cron_work' 0
-          trap 'syswarden_cleanup_cron_work; exit 129' 1
-          trap 'syswarden_cleanup_cron_work; exit 130' 2
-          trap 'syswarden_cleanup_cron_work; exit 143' 15
-          syswarden_prepare_cron_work || {
-          echo "Unable to create the private cron backup" >&2
-          exit 1
-          }
-          syswarden_cleanup_crontab \
-          "${cron_backup}" "${cron_error}" "${cron_filtered}" \
-          /opt/syswarden/bin/syswarden-cli || exit 1
-          syswarden_cleanup_cron_work || exit 1
-          trap - 0 1 2 15
-          rm -f /etc/rsyslog.d/99-syswarden-siem.conf || true
-          rm -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true
+          printf '%s\n' 'Root crontab bytes and ambiguous legacy host artifacts were preserved for manual recovery.' >&2
           EOF
 
           chmod 0755 \
@@ -1021,6 +768,8 @@ jobs:
           depends:
             - nftables
             - openrc
+            - cronie
+            - cronie-openrc
             - curl
             - wget
             - rsyslog
@@ -1060,6 +809,8 @@ jobs:
           depends:
             - nftables
             - openrc
+            - cronie
+            - cronie-openrc
             - curl
             - wget
             - rsyslog
@@ -1143,6 +894,8 @@ jobs:
             [[ "$(grep --count '^pkgver = ' <<< "${metadata}")" -eq 1 ]]
             [[ "$(grep --count '^arch = ' <<< "${metadata}")" -eq 1 ]]
             [[ "$(grep --count '^depend = openrc$' <<< "${metadata}")" -eq 1 ]]
+            [[ "$(grep --count '^depend = cronie$' <<< "${metadata}")" -eq 1 ]]
+            [[ "$(grep --count '^depend = cronie-openrc$' <<< "${metadata}")" -eq 1 ]]
             mapfile -t preinstall_members < <(
               tar --list --file "${path}" | awk '/(^|\/)\.pre-install$/ { print }'
             )

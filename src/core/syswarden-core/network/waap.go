@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,11 +30,14 @@ type WAAPConfig struct {
 }
 
 type WAAPEngine struct {
-	config WAAPConfig
-	fw     firewall.Manager
-	logger *logger.Logger
-	engine *engine.Engine
-	wg     sync.WaitGroup
+	config                  WAAPConfig
+	fw                      firewall.Manager
+	logger                  *logger.Logger
+	engine                  *engine.Engine
+	localInterfaceAddresses func() ([]netip.Addr, error)
+	protectedHAPeers        func() ([]netip.Prefix, error)
+	isWhitelisted           func(string) (bool, error)
+	wg                      sync.WaitGroup
 }
 
 func loadWAAPConfig() WAAPConfig {
@@ -101,10 +105,13 @@ func discoverLogs() []string {
 func NewWAAPEngine(fw firewall.Manager, l *logger.Logger, e *engine.Engine) *WAAPEngine {
 	cfg := loadWAAPConfig()
 	return &WAAPEngine{
-		config: cfg,
-		fw:     fw,
-		logger: l,
-		engine: e,
+		config:                  cfg,
+		fw:                      fw,
+		logger:                  l,
+		engine:                  e,
+		localInterfaceAddresses: utils.LocalInterfaceAddresses,
+		protectedHAPeers:        configuredHAPeerPrefixes,
+		isWhitelisted:           utils.IsWhitelistedStrict,
 	}
 }
 
@@ -210,50 +217,122 @@ func (w *WAAPEngine) tailFile(ctx context.Context, path string) {
 			return
 		}
 
-		// Prevent recursive scanning of our own logs (infinite loops on Rocky Linux /var/log/messages)
-		if strings.Contains(text, "[SYSWARDEN-BLOCK] IP=") ||
-			strings.Contains(text, "[SYSWARDEN-DETECT] IP=") ||
-			strings.Contains(text, "[SYSWARDEN-SHADOW-ALERT] IP=") {
-			continue
+		w.processLogLine(text)
+	}
+}
+
+func (w *WAAPEngine) processLogLine(text string) {
+	// Process logs carrying this marker are product output, never new input.
+	if logger.IsInternalLogLine(text) {
+		return
+	}
+
+	if w.engine == nil {
+		return
+	}
+	match := w.engine.Scan(text)
+	if match == nil {
+		return
+	}
+	if !match.Host.IsValid() {
+		return
+	}
+	ip := match.Host.String()
+	if match.Action == "detect" {
+		w.logDetected(ip, match.RuleID, text)
+		return
+	}
+
+	shouldBan := true
+	if match.Action == "track" {
+		shouldBan = w.engine.EvaluateThreshold(ip, match.RuleID, match.Threshold, match.Window)
+		if !shouldBan {
+			w.logShadow(ip, match.RuleID, text)
 		}
-
-		match := w.engine.Scan(text)
-		if match != nil {
-			ip := engine.ExtractIP(text)
-			if ip != "" {
-				if match.Action == "detect" {
-					w.logger.LogDetected(ip, match.RuleID, text)
-				} else {
-					shouldBan := true
-					if match.Action == "track" {
-						shouldBan = w.engine.EvaluateThreshold(ip, match.RuleID, match.Threshold, match.Window)
-						if !shouldBan {
-							w.logger.LogShadowAlert(ip, match.RuleID, text)
-						}
-					}
-
-					if shouldBan {
-						if utils.IsWhitelisted(ip) {
-							w.logger.LogShadowAlert(ip, match.RuleID, text)
-							continue
-						}
-
-						if w.config.Mode == "audit" {
-							w.logger.LogSimulatedBan(ip, match.RuleID, text)
-							continue
-						}
-
-						err := w.fw.Ban(ip)
-						if err != nil {
-							w.logger.Error("Failed to ban IP, logging as DETECTED", err)
-							w.logger.LogDetected(ip, match.RuleID, text)
-						} else {
-							w.logger.LogBan(ip, match.RuleID, text)
-						}
-					}
-				}
-			}
+	}
+	if !shouldBan {
+		return
+	}
+	canonical, err := w.canonicalWAAPFirewallTarget(ip)
+	if err != nil {
+		if errors.Is(err, utils.ErrProtectedFirewallTarget) {
+			w.logShadow(ip, match.RuleID, text)
+		} else {
+			w.logError("WAAP firewall target policy failed closed", err)
+			w.logDetected(ip, match.RuleID, text)
 		}
+		return
+	}
+	switch w.config.Mode {
+	case "audit":
+		w.logSimulatedBan(canonical, match.RuleID, text)
+		return
+	case "enforcing":
+		// Continue to the only firewall mutation below.
+	default:
+		w.logError("WAAP enforcement mode is invalid", errors.New("unsupported enforcement mode"))
+		w.logDetected(canonical, match.RuleID, text)
+		return
+	}
+	if w.fw == nil {
+		w.logError("WAAP firewall is unavailable", errors.New("missing firewall manager"))
+		w.logDetected(canonical, match.RuleID, text)
+		return
+	}
+	if err := w.fw.Ban(canonical); err != nil {
+		w.logError("Failed to ban IP, logging as DETECTED", err)
+		w.logDetected(canonical, match.RuleID, text)
+		return
+	}
+	w.logBan(canonical, match.RuleID, text)
+}
+
+func (w *WAAPEngine) canonicalWAAPFirewallTarget(value string) (string, error) {
+	if w.localInterfaceAddresses == nil || w.protectedHAPeers == nil || w.isWhitelisted == nil {
+		return "", fmt.Errorf("WAAP firewall target policy is unavailable")
+	}
+	localAddresses, err := w.localInterfaceAddresses()
+	if err != nil {
+		return "", fmt.Errorf("load local interface addresses: %w", err)
+	}
+	peers, err := w.protectedHAPeers()
+	if err != nil {
+		return "", err
+	}
+	return utils.CanonicalFirewallMutationTarget(value, utils.FirewallTargetPolicy{
+		LocalAddresses:    localAddresses,
+		ProtectedPrefixes: peers,
+		IsWhitelisted:     w.isWhitelisted,
+	})
+}
+
+func (w *WAAPEngine) logDetected(ip, ruleID, line string) {
+	if w.logger != nil {
+		w.logger.LogDetected(ip, ruleID, line)
+	}
+}
+
+func (w *WAAPEngine) logShadow(ip, ruleID, line string) {
+	if w.logger != nil {
+		w.logger.LogShadowAlert(ip, ruleID, line)
+	}
+}
+
+func (w *WAAPEngine) logSimulatedBan(ip, ruleID, line string) {
+	if w.logger != nil {
+		w.logger.LogSimulatedBan(ip, ruleID, line)
+	}
+}
+
+func (w *WAAPEngine) logBan(ip, ruleID, line string) {
+	if w.logger != nil {
+		w.logger.LogBan(ip, ruleID, line)
+	}
+}
+
+func (w *WAAPEngine) logError(message string, err error) {
+	if w.logger != nil {
+		w.logger.Error(message, err)
 	}
 }
 

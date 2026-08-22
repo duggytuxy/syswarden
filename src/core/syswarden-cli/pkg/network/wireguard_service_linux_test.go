@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
+	"syswarden-cli/pkg/wireguardstate"
 	"testing"
 )
 
@@ -38,33 +38,6 @@ func readWireGuardServiceFixture(t *testing.T, path string) []byte {
 		t.Fatal(rootCloseErr)
 	}
 	return contents
-}
-
-func chmodWireGuardServiceFixture(t *testing.T, path string, mode os.FileMode) {
-	t.Helper()
-	root, err := os.OpenRoot(filepath.Dir(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := root.Chmod(filepath.Base(path), mode); err != nil {
-		_ = root.Close()
-		t.Fatal(err)
-	}
-	if err := root.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func wireGuardServiceRecorder(failAt int, failure error) (wireGuardServiceRunner, *[]string) {
-	calls := make([]string, 0, 2)
-	run := func(name string, args ...string) error {
-		calls = append(calls, strings.Join(append([]string{name}, args...), " "))
-		if len(calls)-1 == failAt {
-			return failure
-		}
-		return nil
-	}
-	return run, &calls
 }
 
 func TestEnsureExactSymlinkIsIdempotentAndFailClosed(t *testing.T) {
@@ -107,267 +80,300 @@ func TestEnsureExactSymlinkIsIdempotentAndFailClosed(t *testing.T) {
 	}
 }
 
-func wireGuardConfigurationOwnerUID(t *testing.T, path string) uint32 {
-	t.Helper()
-	info, err := os.Lstat(path)
+func TestPrepareOpenRCWireGuardServiceIsVerificationOnly_SW2_WGSTATE_001(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc/init.d"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	previousRoot := wireGuardFilesystemRoot
+	previousUID := wireGuardExpectedOwnerUID
+	previousGID := wireGuardExpectedOwnerGID
+	previousAlpine := wireGuardIsAlpine
+	previousDefinition := attestWireGuardServiceDefinition
+	wireGuardFilesystemRoot = root
+	wireGuardExpectedOwnerUID = uint32(os.Geteuid())
+	wireGuardExpectedOwnerGID = uint32(os.Getegid())
+	wireGuardIsAlpine = func() bool { return true }
+	definitionCalls := 0
+	attestWireGuardServiceDefinition = func() error {
+		definitionCalls++
+		return nil
+	}
+	t.Cleanup(func() {
+		wireGuardFilesystemRoot = previousRoot
+		wireGuardExpectedOwnerUID = previousUID
+		wireGuardExpectedOwnerGID = previousGID
+		wireGuardIsAlpine = previousAlpine
+		attestWireGuardServiceDefinition = previousDefinition
+	})
+	linkPath := filepath.Join(root, strings.TrimPrefix(wireguardstate.OpenRCServiceLinkPath, "/"))
+	if err := prepareConfiguredWireGuardService(); err == nil {
+		t.Fatal("missing OpenRC instance link was silently created")
+	}
+	if _, err := os.Lstat(linkPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("verification-only preparation mutated absent link: %v", err)
+	}
+	if err := os.Symlink(wireguardstate.OpenRCServiceLinkTarget, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Lstat(linkPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		t.Fatal("configuration ownership is unavailable")
-	}
-	return stat.Uid
-}
-
-func TestReuseExistingWireGuardConfigurationRetriesActivationWithoutRegeneratingKeys(t *testing.T) {
-	directory := t.TempDir()
-	server := filepath.Join(directory, "wg-syswarden.conf")
-	client := filepath.Join(directory, "admin-pc.conf")
-	if err := os.WriteFile(server, []byte("server-private-key-material"), 0600); err != nil {
+	if err := prepareConfiguredWireGuardService(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(client, []byte("client-private-key-material"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	expectedUID := wireGuardConfigurationOwnerUID(t, server)
-	failure := errors.New("injected first activation failure")
-	activationCalls := 0
-	activate := func() error {
-		activationCalls++
-		if activationCalls == 1 {
-			return failure
-		}
-		return nil
-	}
-
-	reused, err := reuseExistingWireGuardConfiguration(server, client, expectedUID, activate)
-	if reused || !errors.Is(err, failure) {
-		t.Fatalf("first activation must fail closed: reused=%v err=%v", reused, err)
-	}
-	reused, err = reuseExistingWireGuardConfiguration(server, client, expectedUID, activate)
-	if err != nil || !reused {
-		t.Fatalf("retry must reactivate existing complete configuration: reused=%v err=%v", reused, err)
-	}
-	if activationCalls != 2 {
-		t.Fatalf("activation called %d times, want 2", activationCalls)
-	}
-	for path, want := range map[string]string{
-		server: "server-private-key-material",
-		client: "client-private-key-material",
-	} {
-		got := readWireGuardServiceFixture(t, path)
-		if string(got) != want {
-			t.Fatalf("configuration %s changed during activation retry: %q", path, got)
-		}
+	after, err := os.Lstat(linkPath)
+	if err != nil || !os.SameFile(before, after) || definitionCalls != 1 {
+		t.Fatalf("exact preexisting link was changed: before=%v after=%v definitions=%d err=%v", before, after, definitionCalls, err)
 	}
 }
 
-func TestReuseExistingWireGuardConfigurationAcceptsHistoricalServerOnlyState(t *testing.T) {
-	directory := t.TempDir()
-	server := filepath.Join(directory, "wg-syswarden.conf")
-	client := filepath.Join(directory, "admin-pc.conf")
-	if err := os.WriteFile(server, []byte("server-private-key-material"), 0600); err != nil {
-		t.Fatal(err)
+type fakeExactWireGuardService struct {
+	state    wireGuardServiceState
+	calls    []string
+	failures map[string]error
+}
+
+func (service *fakeExactWireGuardService) run(name string, args ...string) error {
+	command := strings.Join(append([]string{name}, args...), " ")
+	service.calls = append(service.calls, command)
+	if err := service.failures[command]; err != nil {
+		return err
 	}
-	activationCalls := 0
-	reused, err := reuseExistingWireGuardConfiguration(
-		server,
-		client,
-		wireGuardConfigurationOwnerUID(t, server),
-		func() error { activationCalls++; return nil },
-	)
-	if err != nil || !reused {
-		t.Fatalf("historical server-only configuration was not reused: reused=%v err=%v", reused, err)
+	switch command {
+	case "systemctl enable --now wg-quick@wg-syswarden.service":
+		service.state.Enabled = true
+		service.state.Active = true
+		service.state.Interface = true
+	case "systemctl enable wg-quick@wg-syswarden.service", "rc-update add wg-quick.wg-syswarden default":
+		service.state.Enabled = true
+	case "systemctl disable wg-quick@wg-syswarden.service", "rc-update del wg-quick.wg-syswarden default":
+		service.state.Enabled = false
+	case "systemctl start wg-quick@wg-syswarden.service", "rc-service wg-quick.wg-syswarden start":
+		service.state.Active = true
+		service.state.Interface = true
+	case "systemctl stop wg-quick@wg-syswarden.service", "rc-service wg-quick.wg-syswarden stop":
+		service.state.Active = false
+		service.state.Interface = false
+	default:
+		return fmt.Errorf("unexpected service command %s", command)
 	}
-	if activationCalls != 1 {
-		t.Fatalf("activation called %d times, want 1", activationCalls)
+	return nil
+}
+
+func (service *fakeExactWireGuardService) output(name string, args ...string) ([]byte, error) {
+	command := strings.Join(append([]string{name}, args...), " ")
+	switch command {
+	case "systemctl is-active wg-quick@wg-syswarden.service":
+		if service.state.Active {
+			return []byte("active\n"), nil
+		}
+		return []byte("inactive\n"), errors.New("inactive exit status")
+	case "systemctl is-enabled wg-quick@wg-syswarden.service":
+		if service.state.Enabled {
+			return []byte("enabled\n"), nil
+		}
+		return []byte("disabled\n"), errors.New("disabled exit status")
+	case "rc-service wg-quick.wg-syswarden status":
+		if service.state.Active {
+			return []byte(" * status: started\n"), nil
+		}
+		return []byte(" * status: stopped\n"), errors.New("stopped exit status")
+	case "rc-update show":
+		if service.state.Enabled {
+			return []byte("wg-quick.wg-syswarden | default\n"), nil
+		}
+		return []byte("sshd | default\n"), nil
+	case "wg show interfaces":
+		if service.state.Interface {
+			return []byte("wg-syswarden\n"), nil
+		}
+		return []byte("\n"), nil
+	default:
+		return nil, fmt.Errorf("unexpected state command %s", command)
 	}
 }
 
-func TestReuseExistingWireGuardConfigurationRejectsPartialOrUnsafeState(t *testing.T) {
-	newFixture := func(t *testing.T) (string, string, uint32) {
-		t.Helper()
-		directory := t.TempDir()
-		server := filepath.Join(directory, "wg-syswarden.conf")
-		client := filepath.Join(directory, "admin-pc.conf")
-		if err := os.WriteFile(server, []byte("server"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(client, []byte("client"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		return server, client, wireGuardConfigurationOwnerUID(t, server)
+func seamExactWireGuardHookAttestation(t *testing.T) {
+	t.Helper()
+	previous := wireGuardServerIdentityInspector
+	previousDefinition := attestWireGuardServiceDefinition
+	previousHookExecutables := wireGuardServerHookExecutableAttestor
+	wireGuardServerIdentityInspector = func() (wireguardstate.ServerConfigurationIdentity, error) {
+		return exactWireGuardNFTIdentity(), nil
 	}
-
-	tests := []struct {
-		name   string
-		mutate func(*testing.T, string, string, uint32) uint32
-	}{
-		{
-			name: "client only",
-			mutate: func(t *testing.T, server, _ string, uid uint32) uint32 {
-				if err := os.Remove(server); err != nil {
-					t.Fatal(err)
-				}
-				return uid
-			},
-		},
-		{
-			name: "symlink",
-			mutate: func(t *testing.T, server, _ string, uid uint32) uint32 {
-				if err := os.Remove(server); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink("elsewhere", server); err != nil {
-					t.Fatal(err)
-				}
-				return uid
-			},
-		},
-		{
-			name: "permissive mode",
-			mutate: func(t *testing.T, server, _ string, uid uint32) uint32 {
-				chmodWireGuardServiceFixture(t, server, 0640)
-				return uid
-			},
-		},
-		{
-			name: "unexpected owner",
-			mutate: func(_ *testing.T, _ string, _ string, uid uint32) uint32 {
-				return uid ^ 1
-			},
-		},
-		{
-			name: "hard link",
-			mutate: func(t *testing.T, server, _ string, uid uint32) uint32 {
-				if err := os.Link(server, server+".backup"); err != nil {
-					t.Fatal(err)
-				}
-				return uid
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			server, client, expectedUID := newFixture(t)
-			expectedUID = test.mutate(t, server, client, expectedUID)
-			activationCalls := 0
-			reused, err := reuseExistingWireGuardConfiguration(server, client, expectedUID, func() error {
-				activationCalls++
-				return nil
-			})
-			if err == nil || reused {
-				t.Fatalf("unsafe or partial state was accepted: reused=%v err=%v", reused, err)
-			}
-			if activationCalls != 0 {
-				t.Fatalf("activation called %d times for rejected state", activationCalls)
-			}
-		})
-	}
-}
-
-func TestActivateOpenRCWireGuardServicePropagatesEveryFailure(t *testing.T) {
-	failure := errors.New("injected service-manager failure")
-	allCalls := []string{
-		"rc-update add wg-quick.wg-syswarden default",
-		"rc-service wg-quick.wg-syswarden start",
-	}
-
-	t.Run("link", func(t *testing.T) {
-		run, calls := wireGuardServiceRecorder(-1, nil)
-		err := activateWireGuardService(true, func() error { return failure }, run)
-		if !errors.Is(err, failure) || !strings.Contains(err.Error(), "prepare OpenRC WireGuard service") {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(*calls) != 0 {
-			t.Fatalf("service manager was called after link failure: %v", *calls)
-		}
+	attestWireGuardServiceDefinition = func() error { return nil }
+	wireGuardServerHookExecutableAttestor = func(wireguardstate.ServerConfigurationIdentity) error { return nil }
+	t.Cleanup(func() {
+		wireGuardServerIdentityInspector = previous
+		attestWireGuardServiceDefinition = previousDefinition
+		wireGuardServerHookExecutableAttestor = previousHookExecutables
 	})
+}
 
-	for failAt, operation := range []string{"enable OpenRC WireGuard service", "start OpenRC WireGuard service"} {
-		t.Run(fmt.Sprintf("step-%d", failAt+1), func(t *testing.T) {
-			linkCalls := 0
-			run, calls := wireGuardServiceRecorder(failAt, failure)
-			err := activateWireGuardService(true, func() error { linkCalls++; return nil }, run)
-			if !errors.Is(err, failure) || !strings.Contains(err.Error(), operation) {
-				t.Fatalf("unexpected error: %v", err)
+func TestInspectWireGuardServiceStateRequiresExactManagerAndInterfaceTruth_SW2_WGSTATE_001(t *testing.T) {
+	for _, alpine := range []bool{false, true} {
+		t.Run(fmt.Sprintf("alpine-%v", alpine), func(t *testing.T) {
+			service := &fakeExactWireGuardService{state: wireGuardServiceState{
+				Alpine: alpine, Active: true, Enabled: true, Interface: true,
+			}}
+			state, err := inspectWireGuardServiceState(alpine, service.output)
+			if err != nil || !state.ready() || state.Alpine != alpine {
+				t.Fatalf("exact service state: state=%#v err=%v", state, err)
 			}
-			if linkCalls != 1 {
-				t.Fatalf("link preparation called %d times, want 1", linkCalls)
-			}
-			if !reflect.DeepEqual(*calls, allCalls[:failAt+1]) {
-				t.Fatalf("unexpected calls: got %v, want %v", *calls, allCalls[:failAt+1])
+			service.state.Interface = false
+			if _, err := inspectWireGuardServiceState(alpine, service.output); err == nil {
+				t.Fatal("active service without exact interface was accepted")
 			}
 		})
 	}
+	service := &fakeExactWireGuardService{state: wireGuardServiceState{
+		Alpine: true, Active: true, Enabled: true, Interface: true,
+	}}
+	spoofedStatus := func(name string, args ...string) ([]byte, error) {
+		if strings.Join(append([]string{name}, args...), " ") == "rc-service wg-quick.wg-syswarden status" {
+			return []byte("operator prefix * status: started\n"), nil
+		}
+		return service.output(name, args...)
+	}
+	if _, err := inspectWireGuardServiceState(true, spoofedStatus); err == nil {
+		t.Fatal("OpenRC status with a noncanonical prefix was accepted")
+	}
+	spoofedRunlevel := func(name string, args ...string) ([]byte, error) {
+		if strings.Join(append([]string{name}, args...), " ") == "rc-update show" {
+			return []byte("wg-quick.wg-syswarden operator default\n"), nil
+		}
+		return service.output(name, args...)
+	}
+	if _, err := inspectWireGuardServiceState(true, spoofedRunlevel); err == nil {
+		t.Fatal("OpenRC enablement with a noncanonical shape was accepted")
+	}
 }
 
-func TestActivateWireGuardServiceSuccessPreservesManagerSelection(t *testing.T) {
-	tests := []struct {
-		name      string
-		alpine    bool
-		wantLink  int
-		wantCalls []string
-	}{
-		{
-			name:     "OpenRC",
-			alpine:   true,
-			wantLink: 1,
-			wantCalls: []string{
-				"rc-update add wg-quick.wg-syswarden default",
-				"rc-service wg-quick.wg-syswarden start",
-			},
-		},
-		{
-			name:     "systemd",
-			alpine:   false,
-			wantLink: 0,
-			wantCalls: []string{
-				"systemctl daemon-reload",
-				"systemctl enable --now wg-quick@wg-syswarden",
-			},
-		},
+func TestRestoreWireGuardServiceStatePreservesEveryInitialBoundary_SW2_WGSTATE_001(t *testing.T) {
+	seamExactWireGuardHookAttestation(t)
+	for _, alpine := range []bool{false, true} {
+		for _, target := range []wireGuardServiceState{
+			{Alpine: alpine, Active: true, Enabled: true, Interface: true},
+			{Alpine: alpine, Active: true, Enabled: false, Interface: true},
+			{Alpine: alpine, Active: false, Enabled: true, Interface: false},
+			{Alpine: alpine, Active: false, Enabled: false, Interface: false},
+		} {
+			t.Run(fmt.Sprintf("alpine-%v-active-%v-enabled-%v", alpine, target.Active, target.Enabled), func(t *testing.T) {
+				service := &fakeExactWireGuardService{state: wireGuardServiceState{
+					Alpine: alpine, Active: true, Enabled: true, Interface: true,
+				}, failures: map[string]error{}}
+				if err := restoreWireGuardServiceState(target, service.run, service.output); err != nil {
+					t.Fatal(err)
+				}
+				if service.state != target {
+					t.Fatalf("restored state = %#v, want %#v", service.state, target)
+				}
+				if target.ready() && len(service.calls) != 0 {
+					t.Fatalf("preexisting active/enabled service was mutated: %v", service.calls)
+				}
+			})
+		}
 	}
+}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			linkCalls := 0
-			run, calls := wireGuardServiceRecorder(-1, nil)
-			err := activateWireGuardService(test.alpine, func() error { linkCalls++; return nil }, run)
-			if err != nil {
+func TestActivateWireGuardServiceAttestsExactStateImmediatelyBeforeEveryCommand_SW2_WGSTATE_001(t *testing.T) {
+	for _, alpine := range []bool{false, true} {
+		t.Run(fmt.Sprintf("alpine-%v", alpine), func(t *testing.T) {
+			baseline := wireGuardServiceState{Alpine: alpine}
+			service := &fakeExactWireGuardService{state: baseline, failures: map[string]error{}}
+			events := make([]string, 0, 16)
+			output := func(name string, args ...string) ([]byte, error) {
+				events = append(events, "inspect:"+name)
+				return service.output(name, args...)
+			}
+			definitionAttestations := 0
+			attestDefinition := func() error {
+				definitionAttestations++
+				events = append(events, "definition")
+				return nil
+			}
+			hookAttestations := 0
+			attestHooks := func() error {
+				hookAttestations++
+				events = append(events, "hooks")
+				return nil
+			}
+			run := func(name string, args ...string) error {
+				if len(events) == 0 || events[len(events)-1] != "hooks" {
+					t.Fatalf("service command %s was not immediately preceded by exact attestation: %v", name, events)
+				}
+				events = append(events, "run:"+name)
+				return service.run(name, args...)
+			}
+			if err := activateWireGuardServiceFromExactState(
+				baseline, alpine, run, output, attestDefinition, attestHooks,
+			); err != nil {
 				t.Fatal(err)
 			}
-			if linkCalls != test.wantLink {
-				t.Fatalf("link preparation called %d times, want %d", linkCalls, test.wantLink)
+			wantAttestations := 1
+			if alpine {
+				wantAttestations = 2
 			}
-			if !reflect.DeepEqual(*calls, test.wantCalls) {
-				t.Fatalf("unexpected calls: got %v, want %v", *calls, test.wantCalls)
+			if definitionAttestations != wantAttestations || hookAttestations != wantAttestations || !service.state.ready() {
+				t.Fatalf(
+					"definition=%d hooks=%d state=%#v events=%v",
+					definitionAttestations, hookAttestations, service.state, events,
+				)
 			}
 		})
 	}
 }
 
-func TestActivateSystemdWireGuardServicePropagatesEveryFailure(t *testing.T) {
-	failure := errors.New("injected service-manager failure")
-	allCalls := []string{
-		"systemctl daemon-reload",
-		"systemctl enable --now wg-quick@wg-syswarden",
-	}
-	for failAt, operation := range []string{"reload systemd", "enable and start systemd WireGuard service"} {
-		t.Run(fmt.Sprintf("step-%d", failAt+1), func(t *testing.T) {
-			run, calls := wireGuardServiceRecorder(failAt, failure)
-			err := activateWireGuardService(false, func() error {
-				t.Fatal("systemd path attempted OpenRC link preparation")
-				return nil
-			}, run)
-			if !errors.Is(err, failure) || !strings.Contains(err.Error(), operation) {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !reflect.DeepEqual(*calls, allCalls[:failAt+1]) {
-				t.Fatalf("unexpected calls: got %v, want %v", *calls, allCalls[:failAt+1])
+func TestActivateWireGuardServiceDefinitionDriftPreventsManagerMutation_SW2_WGSTATE_001(t *testing.T) {
+	sentinel := errors.New("service definition drift")
+	for _, alpine := range []bool{false, true} {
+		t.Run(fmt.Sprintf("alpine-%v", alpine), func(t *testing.T) {
+			baseline := wireGuardServiceState{Alpine: alpine}
+			service := &fakeExactWireGuardService{state: baseline, failures: map[string]error{}}
+			runCalls := 0
+			err := activateWireGuardServiceFromExactState(
+				baseline,
+				alpine,
+				func(name string, args ...string) error {
+					runCalls++
+					return service.run(name, args...)
+				},
+				service.output,
+				func() error { return sentinel },
+				func() error {
+					t.Fatal("configuration hooks were inspected after service-definition drift")
+					return nil
+				},
+			)
+			if err == nil || !errors.Is(err, sentinel) || runCalls != 0 || service.state != baseline {
+				t.Fatalf("definition drift result: err=%v runs=%d state=%#v", err, runCalls, service.state)
 			}
 		})
+	}
+}
+
+func TestRestoreOpenRCWireGuardServiceRunsAllCompensationsAndJoinsFailures_SW2_WGSTATE_001(t *testing.T) {
+	seamExactWireGuardHookAttestation(t)
+	stopFailure := errors.New("stop failed")
+	disableFailure := errors.New("disable failed")
+	service := &fakeExactWireGuardService{
+		state: wireGuardServiceState{Alpine: true, Active: true, Enabled: true, Interface: true},
+		failures: map[string]error{
+			"rc-service wg-quick.wg-syswarden stop":       stopFailure,
+			"rc-update del wg-quick.wg-syswarden default": disableFailure,
+		},
+	}
+	target := wireGuardServiceState{Alpine: true}
+	err := restoreWireGuardServiceState(target, service.run, service.output)
+	if err == nil || !errors.Is(err, stopFailure) || !errors.Is(err, disableFailure) {
+		t.Fatalf("OpenRC compensation errors were not joined: %v", err)
+	}
+	if !reflect.DeepEqual(service.calls, []string{
+		"rc-service wg-quick.wg-syswarden stop",
+		"rc-update del wg-quick.wg-syswarden default",
+	}) {
+		t.Fatalf("OpenRC did not attempt every compensation: %v", service.calls)
 	}
 }

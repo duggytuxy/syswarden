@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -454,8 +455,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             pair = package_lifecycle_lab.PackagePair(
                 candidate=package_lifecycle_lab.PackageArtifact(
                     self.candidate
-                    / f"syswarden_4.03.1_{spec.package_architecture}.apk",
-                    "4.03.1",
+                    / f"syswarden_4.03.2_{spec.package_architecture}.apk",
+                    "4.03.2",
                     "a" * 64,
                 ),
                 previous=package_lifecycle_lab.PackageArtifact(
@@ -1116,7 +1117,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
         previous_path = self.root / "syswarden_4.02.8_x86_64.apk"
         previous_path.write_bytes(b"exact historical APK fixture")
         previous = str(previous_path)
-        candidate_path = self.root / "syswarden_4.03.1_x86_64.apk"
+        candidate_path = self.root / "syswarden_4.03.2_x86_64.apk"
         candidate_path.write_bytes(b"candidate APK fixture")
         candidate = str(candidate_path)
         previous_sha256 = hashlib.sha256(previous_path.read_bytes()).hexdigest()
@@ -1210,18 +1211,18 @@ class PackageLifecycleLabTests(unittest.TestCase):
             f'CALLS="{calls}"\n'
             f'RESTART_STATE_FILE="{restart}"\n'
             'PREVIOUS_PACKAGE="/previous/exact-v4.02.8.apk"\n'
-            'CANDIDATE_PACKAGE="/candidate/v4.03.1.apk"\n'
+            'CANDIDATE_PACKAGE="/candidate/v4.03.2.apk"\n'
             'PREVIOUS_VERSION="4.02.8"\n'
-            'CANDIDATE_VERSION="4.03.1"\n'
+            'CANDIDATE_VERSION="4.03.2"\n'
             'EXPECTED_PREVIOUS_VERSION="4.02.8"\n'
-            'EXPECTED_CANDIDATE_VERSION="4.03.1"\n'
+            'EXPECTED_CANDIDATE_VERSION="4.03.2"\n'
             'FORWARD_ONLY_APK_TRANSITION="1"\n'
             "prepare_expected_payloads() { return 0; }\n"
             "seed_state() { :; }\n"
             "seed_legacy_webtui_upgrade_state() { :; }\n"
             "seed_live_legacy_webtui_process() { :; }\n"
             "seed_legacy_saas_monitor_state() { :; }\n"
-            "install_service_manager_sentinels() { :; }\n"
+            "prepare_service_runtime_fixture() { :; }\n"
             "remove_service_manager_sentinels() { :; }\n"
             "load_state_contract() { return 0; }\n"
             'run_install_step() { printf "%s\\n" "$1" >> "${CALLS}"; }\n'
@@ -2013,11 +2014,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 architecture
             ]
             platform_result.update(
-                candidate_version="4.03.1",
+                candidate_version="4.03.2",
                 previous_version="4.02.8",
                 candidate={
-                    "filename": f"syswarden_4.03.1_{architecture}.apk",
-                    "version": "4.03.1",
+                    "filename": f"syswarden_4.03.2_{architecture}.apk",
+                    "version": "4.03.2",
                     "sha256": "c" * 64,
                 },
                 previous={
@@ -2214,9 +2215,14 @@ class PackageLifecycleLabTests(unittest.TestCase):
         )
         self.assertIn("remove.final-removal.service_manager_calls", checks)
         self.assertIn("remove.final-removal.generated.openrc_webtui", checks)
-        self.assertIn("remove.final-removal.generated.completion", checks)
-        self.assertIn("remove.final-removal.generated.cron_reference", checks)
-        self.assertIn("remove.final-removal.generated.cron_unrelated", checks)
+        self.assertIn("remove.final-removal.generated.runtime_socket", checks)
+        self.assertIn("remove.final-removal.generated.completion_residual", checks)
+        self.assertIn("remove.final-removal.generated.cron_d_owned", checks)
+        self.assertIn("remove.final-removal.generated.cron_d_pending", checks)
+        self.assertIn("remove.final-removal.generated.root_crontab_bytes", checks)
+        self.assertIn(
+            "remove.final-removal.generated.root_crontab_legacy_residual", checks
+        )
         self.assertFalse(any("not_applicable" in check for check in checks))
         report = package_lifecycle_lab.run_lab(
             self.args(), runner=FakePodmanRunner()
@@ -2237,7 +2243,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
     def test_remove_and_purge_seed_and_verify_generated_runtime_artifacts(self) -> None:
         script = package_lifecycle_lab.LIFECYCLE_SCRIPT
         self.assertIn("seed_generated_runtime_artifacts", script)
-        self.assertIn("assert_generated_runtime_artifacts_absent", script)
+        self.assertIn("assert_generated_runtime_artifact_contract", script)
         self.assertIn("/etc/systemd/system/syswarden-firewall.service", script)
 
     def test_systemd_enablement_target_depends_on_scenario_provenance(self) -> None:
@@ -2298,7 +2304,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
 
     def test_cleanup_shell_events_match_declared_contract_exactly(self) -> None:
         script = package_lifecycle_lab.LIFECYCLE_SCRIPT
-        start = script.index("assert_generated_runtime_artifacts_absent() {")
+        start = script.index("assert_generated_runtime_artifact_contract() {")
         end = script.index("\nprepare_expected_payloads() {", start)
         emitted = list(
             dict.fromkeys(
@@ -2313,25 +2319,72 @@ class PackageLifecycleLabTests(unittest.TestCase):
         ]
         self.assertEqual(emitted, declared)
 
-    def test_offline_package_lab_enforces_manager_sentinels_and_boot_links(self) -> None:
+    def test_package_lab_enforces_offline_sentinels_and_alpine_crond_provider(self) -> None:
         script = package_lifecycle_lab.LIFECYCLE_SCRIPT
         self.assertIn("install_service_manager_sentinels", script)
+        self.assertIn("prepare_service_runtime_fixture", script)
+        self.assertIn("prepare_alpine_crond_provider", script)
+        self.assertIn("attest_alpine_crond_provider", script)
+        self.assertIn("apk info --installed cronie", script)
+        self.assertIn("apk info --installed cronie-openrc", script)
+        self.assertIn("bash-completion cronie cronie-openrc curl", script)
+        self.assertIn("apk info --who-owns", script)
+        self.assertIn(
+            'syswarden_crond_target="$(readlink -f "${syswarden_crond_path}")"',
+            script,
+        )
+        self.assertIn('[ "${syswarden_crond_target##*/}" = crond ]', script)
+        self.assertIn(
+            'alpine_apk_owner_version "${syswarden_crond_target}" cronie',
+            script,
+        )
+        self.assertIn(
+            "alpine_apk_owner_version /etc/init.d/cronie cronie-openrc", script
+        )
+        self.assertIn(
+            '[ "${syswarden_crond_version}" = "${syswarden_init_version}" ]',
+            script,
+        )
+        self.assertIn("validate_alpine_cronie_runlevels required", script)
+        self.assertIn('"openrc_service=cronie"', script)
+        self.assertIn("NF != 3 || $2 != \"|\" || $3 != \"default\"", script)
+        self.assertIn(
+            '[ "${syswarden_provider_first}" = "${syswarden_provider_second}" ]',
+            script,
+        )
+        self.assertIn(
+            '[ "${syswarden_package_first}" = "${syswarden_package_second}" ]',
+            script,
+        )
+        self.assertIn("rc-update add cronie default", script)
+        self.assertIn("rc-service cronie start", script)
+        self.assertIn("rc-service cronie status", script)
         self.assertIn("/tmp/syswarden-service-manager-calls", script)
         self.assertIn("/tmp/syswarden-manager-original-path", script)
         self.assertIn('PATH="${SYSWARDEN_MANAGER_ORIGINAL_PATH:-${PATH}}"', script)
         self.assertIn(
             'record fail "${PREFIX}.${label}.service_manager_calls"', script
         )
+        removal_start = script.index("assert_generated_runtime_artifact_contract() {")
+        removal_assertion = script[
+            removal_start : script.index(
+                "\nprepare_expected_payloads() {", removal_start
+            )
+        ]
+        self.assertIn("attest_alpine_crond_provider", removal_assertion)
+        self.assertNotIn("prepare_alpine_crond_provider", removal_assertion)
+        self.assertNotIn("rc-update add", removal_assertion)
+        self.assertNotIn("rc-service cronie start", removal_assertion)
         self.assertIn(
             "scenario_upgrade_rollback_restart_one() {\n"
             "    load_state_contract || return\n"
-            "    install_service_manager_sentinels || return",
+            "    prepare_service_runtime_fixture || return",
             script,
         )
         self.assertIn(
             "scenario_upgrade_rollback_restart_two() {\n"
             "    load_state_contract || return\n"
-            "    install_service_manager_sentinels || return",
+            "    prepare_service_runtime_fixture || return",
             script,
         )
         for command in ("systemctl", "rc-service", "rc-update", "service"):
@@ -2364,28 +2417,23 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertIn("printf '%s \\n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'", script)
         self.assertIn("printf ' \\t \\n'", script)
         self.assertIn(
-            "LC_ALL=C crontab -l > /tmp/syswarden-existing-cron "
-            "2>/tmp/syswarden-existing-cron.error || return 1",
+            "if LC_ALL=C crontab -l > /tmp/syswarden-existing-cron "
+            "2>/tmp/syswarden-existing-cron.error; then",
             script,
         )
         self.assertIn(
-            'LC_ALL=C crontab -l 2>/tmp/syswarden-remove-cron.error',
+            'LC_ALL=C crontab -l > /tmp/syswarden-root-cron-after 2>/tmp/syswarden-remove-cron.error',
             script,
         )
         self.assertIn(
-            '$0 == "*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync '
-            '>/dev/null 2>&1"',
+            "cmp -s /tmp/syswarden-root-cron-before /tmp/syswarden-root-cron-after",
             script,
         )
         self.assertIn(
-            '$0 == $1 " * * * * /opt/syswarden/bin/syswarden-cli '
-            'update-feeds >/dev/null 2>&1"',
+            "one exact inert legacy record remains as a bounded residual",
             script,
         )
-        self.assertIn(
-            'while IFS= read -r operator_cron_line || [ -n "${operator_cron_line}" ]',
-            script,
-        )
+        self.assertIn("/etc/cron.d/.syswarden.pending-v1", script)
         for family, scenario in (
             ("deb", "remove"),
             ("deb", "purge"),
@@ -2410,17 +2458,211 @@ class PackageLifecycleLabTests(unittest.TestCase):
                         "systemd_firewall_enablement",
                         "openrc_core_enablement",
                         "openrc_firewall_enablement",
-                        "completion",
-                        "rsyslog_siem",
-                        "rsyslog_waf_bridge",
-                        "cron_reference",
-                        "cron_unrelated",
+                        "runtime_socket",
+                        "completion_residual",
+                        "rsyslog_siem_residual",
+                        "rsyslog_waf_bridge_residual",
+                        "cron_d_owned",
+                        "cron_d_pending",
+                        "root_crontab_bytes",
+                        "root_crontab_legacy_residual",
                     )
                 ]
                 self.assertEqual(generated, expected_generated)
                 self.assertIn(
                     f"{scenario}.{label}.service_manager_calls", checks
                 )
+
+    def test_alpine_crond_provider_attestation_rejects_ambiguous_evidence(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("alpine_apk_owner_version() {")
+        end = source.index("\nprepare_service_runtime_fixture() {", start)
+        functions = source[start:end]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary_directory = root / "bin"
+            binary_directory.mkdir()
+            calls = root / "calls"
+            counter = root / "runlevel-counter"
+
+            def write_executable(name: str, content: str) -> Path:
+                path = binary_directory / name
+                path.write_text(textwrap.dedent(content).lstrip(), encoding="ascii")
+                path.chmod(0o755)
+                return path
+
+            crond = write_executable(
+                "crond",
+                """
+                #!/bin/sh
+                exit 0
+                """,
+            )
+            write_executable(
+                "apk",
+                r"""
+                #!/bin/sh
+                printf 'apk %s\n' "$*" >> "${TEST_CALLS}"
+                case "$1:$2:$3" in
+                    info:--installed:cronie)
+                        exit 0
+                        ;;
+                    info:--installed:cronie-openrc)
+                        [ "${TEST_MISSING_OPENRC:-0}" != 1 ]
+                        exit
+                        ;;
+                    info:--who-owns:*)
+                        if [ "$3" = "${TEST_CROND_TARGET}" ]; then
+                            package="${TEST_DAEMON_PACKAGE:-cronie}"
+                            version="${TEST_DAEMON_VERSION:-1.7.2-r0}"
+                            multiline="${TEST_MULTILINE_OWNER:-}"
+                        elif [ "$3" = /etc/init.d/cronie ]; then
+                            package="${TEST_INIT_PACKAGE:-cronie-openrc}"
+                            version="${TEST_INIT_VERSION:-1.7.2-r0}"
+                            multiline="${TEST_MULTILINE_OWNER:-}"
+                        else
+                            exit 1
+                        fi
+                        printf '%s is owned by %s-%s\n' "$3" "${package}" "${version}"
+                        if [ "${multiline}" = "$3" ]; then
+                            printf '%s is owned by %s-%s\n' "$3" "${package}" "${version}"
+                        fi
+                        ;;
+                    *)
+                        exit 1
+                        ;;
+                esac
+                """,
+            )
+            write_executable(
+                "rc-service",
+                r"""
+                #!/bin/sh
+                printf 'rc-service %s\n' "$*" >> "${TEST_CALLS}"
+                case "$*" in
+                    '--exists cronie')
+                        exit 0
+                        ;;
+                    'cronie status')
+                        [ "${TEST_STATUS_FAILURE:-0}" != 1 ] || exit 3
+                        printf '%s\n' "${TEST_STATUS_OUTPUT:-status: started}"
+                        ;;
+                    'cronie start')
+                        exit 0
+                        ;;
+                    *)
+                        exit 1
+                        ;;
+                esac
+                """,
+            )
+            write_executable(
+                "rc-update",
+                r"""
+                #!/bin/sh
+                printf 'rc-update %s\n' "$*" >> "${TEST_CALLS}"
+                case "$*" in
+                    show)
+                        if [ "${TEST_RUNLEVEL_MODE:-stable}" = drift ]; then
+                            value=0
+                            [ ! -f "${TEST_COUNTER}" ] || value="$(cat "${TEST_COUNTER}")"
+                            if [ "${value}" -eq 0 ]; then
+                                printf '%s\n' 1 > "${TEST_COUNTER}"
+                                printf 'cronie | default\nalpha | default\n'
+                            else
+                                printf 'cronie | default\nbeta | default\n'
+                            fi
+                        else
+                            printf '%s' "${TEST_RUNLEVELS:-cronie | default
+}"
+                        fi
+                        ;;
+                    'add cronie default')
+                        exit 0
+                        ;;
+                    *)
+                        exit 1
+                        ;;
+                esac
+                """,
+            )
+
+            base_environment = {
+                **os.environ,
+                "LC_ALL": "C",
+                "PACKAGE_FAMILY": "apk",
+                "PATH": f"{binary_directory}:/usr/bin:/bin",
+                "TEST_CALLS": str(calls),
+                "TEST_COUNTER": str(counter),
+                "TEST_CROND_TARGET": str(crond),
+                "TEST_RUNLEVELS": "cronie | default\n",
+            }
+
+            def run_helper(
+                name: str, overrides: dict[str, str] | None = None
+            ) -> tuple[subprocess.CompletedProcess[str], str]:
+                calls.write_text("", encoding="ascii")
+                counter.unlink(missing_ok=True)
+                environment = dict(base_environment)
+                environment.update(overrides or {})
+                result = subprocess.run(
+                    ["/bin/sh", "-c", functions + f"\n{name}"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+                return result, calls.read_text(encoding="ascii")
+
+            success, success_calls = run_helper("attest_alpine_crond_provider")
+            self.assertEqual(success.returncode, 0, success)
+            self.assertEqual(success_calls.count("rc-update show\n"), 2)
+            self.assertEqual(success_calls.count("rc-service cronie status\n"), 2)
+            self.assertGreaterEqual(
+                success_calls.count("apk info --installed cronie-openrc\n"), 2
+            )
+            self.assertNotIn("rc-update add", success_calls)
+            self.assertNotIn("rc-service cronie start", success_calls)
+
+            adversarial = {
+                "missing openrc package": {"TEST_MISSING_OPENRC": "1"},
+                "wrong daemon package": {"TEST_DAEMON_PACKAGE": "operator"},
+                "ambiguous daemon package prefix": {
+                    "TEST_DAEMON_PACKAGE": "cronie-operator"
+                },
+                "wrong init package": {"TEST_INIT_PACKAGE": "operator"},
+                "version mismatch": {"TEST_INIT_VERSION": "1.7.3-r0"},
+                "multiple owner records": {
+                    "TEST_MULTILINE_OWNER": str(crond)
+                },
+                "missing runlevel": {"TEST_RUNLEVELS": "sshd | default\n"},
+                "daemon name is not service name": {
+                    "TEST_RUNLEVELS": "crond | default\n"
+                },
+                "extra runlevel": {
+                    "TEST_RUNLEVELS": "cronie | default boot\n"
+                },
+                "duplicate record": {
+                    "TEST_RUNLEVELS": "cronie | default\ncronie | default\n"
+                },
+                "status failure": {"TEST_STATUS_FAILURE": "1"},
+                "complete snapshot drift": {"TEST_RUNLEVEL_MODE": "drift"},
+            }
+            for label, overrides in adversarial.items():
+                with self.subTest(label=label):
+                    result, _ = run_helper(
+                        "attest_alpine_crond_provider", overrides
+                    )
+                    self.assertNotEqual(result.returncode, 0, result)
+
+            rejected_prepare, prepare_calls = run_helper(
+                "prepare_alpine_crond_provider",
+                {"TEST_INIT_PACKAGE": "operator"},
+            )
+            self.assertNotEqual(rejected_prepare.returncode, 0, rejected_prepare)
+            self.assertNotIn("rc-update add cronie default", prepare_calls)
+            self.assertNotIn("rc-service cronie start", prepare_calls)
 
     def test_candidate_dependency_and_postinstall_events_are_mandatory(self) -> None:
         for family, scenarios in package_lifecycle_lab.EXPECTED_SCENARIOS.items():
@@ -2959,7 +3201,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 {
                     "nftables", "curl", "wget", "rsyslog", "rsyslog-uxsock",
                     "bash-completion", "wireguard-tools", "libqrencode-tools", "jq",
-                    "openrc",
+                    "openrc", "cronie", "cronie-openrc",
                     "procps-ng",
                     "e2fsprogs-extra",
                     "shadow",
@@ -2974,6 +3216,10 @@ class PackageLifecycleLabTests(unittest.TestCase):
                         rf"(?:^|\s){re.escape(dependency)}(?:\s|$)",
                     )
         self.assertIn("epel-release", package_lifecycle_lab.RPM_BOOTSTRAP)
+        self.assertIn(
+            "apk add --no-cache openrc && apk add --no-cache",
+            package_lifecycle_lab.APK_BOOTSTRAP,
+        )
         self.assertIn("test -x /usr/bin/gpasswd", package_lifecycle_lab.APK_BOOTSTRAP)
 
     def test_failed_event_fails_platform_and_overall_report(self) -> None:

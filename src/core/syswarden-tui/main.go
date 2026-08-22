@@ -26,14 +26,21 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
 const DataFile = "/var/lib/syswarden/ui/data.json"
-const SysWardenVersion = "v4.03.1"
+const SysWardenVersion = "v4.03.2"
 const haPeerCABundleFile = "/etc/syswarden/ha-ca.pem"
 const haModularConfigDirectory = "/etc/syswarden/config"
 const maxTUIHAResponseBytes = 1024 * 1024
+const tuiRemovalTombstonePath = "/var/lib/syswarden/removal-in-progress-v1"
+const tuiRemovalTombstoneRecord = "SYSWARDEN_REMOVAL_V1\nstate=in-progress\n"
+const (
+	dashboardSnapshotTitle = "SYSWARDEN LOCAL DASHBOARD (SNAPSHOT)"
+	emptyRegistryMessage   = "Registry is empty. No active entries."
+)
 
 var (
 	activeNodeIP        = "local"
@@ -43,6 +50,77 @@ var (
 	haRuntimeConfigMu   sync.RWMutex
 	httpClient, haCAErr = newHAHTTPClient(haPeerCABundleFile)
 )
+
+func inspectTUIRemovalTombstone(path string, expectedUID, expectedGID uint32) (bool, error) {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != "removal-in-progress-v1" {
+		return true, fmt.Errorf("removal tombstone path is not fixed, clean, and absolute")
+	}
+	parentPath := filepath.Dir(path)
+	parent, err := os.Lstat(parentPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return true, fmt.Errorf("inspect removal state directory: %w", err)
+	}
+	parentStat, parentOK := parent.Sys().(*syscall.Stat_t)
+	if !parentOK || !parent.IsDir() || parent.Mode()&os.ModeSymlink != 0 || parent.Mode().Perm()&0022 != 0 ||
+		parentStat.Uid != expectedUID || parentStat.Gid != expectedGID {
+		return true, fmt.Errorf("refusing unsafe or modified removal tombstone")
+	}
+	parentFD, err := unix.Open(parentPath, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0) // #nosec G304 -- fixed production path or isolated test fixture
+	if err != nil {
+		return true, fmt.Errorf("pin removal state directory: %w", err)
+	}
+	parentFile := os.NewFile(uintptr(parentFD), parentPath)
+	if parentFile == nil {
+		_ = unix.Close(parentFD)
+		return true, fmt.Errorf("pin removal state directory")
+	}
+	defer parentFile.Close()
+	openedParent, parentStatErr := parentFile.Stat()
+	afterParent, afterParentErr := os.Lstat(parentPath)
+	if parentStatErr != nil || afterParentErr != nil || !os.SameFile(parent, openedParent) || !os.SameFile(openedParent, afterParent) {
+		return true, errors.Join(fmt.Errorf("removal state directory changed while pinning"), parentStatErr, afterParentErr)
+	}
+	fileFD, err := unix.Openat(parentFD, filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if errors.Is(err, unix.ENOENT) {
+		return false, nil
+	}
+	if err != nil {
+		return true, fmt.Errorf("open removal tombstone without following links: %w", err)
+	}
+	file := os.NewFile(uintptr(fileFD), path)
+	if file == nil {
+		_ = unix.Close(fileFD)
+		return true, fmt.Errorf("pin removal tombstone")
+	}
+	defer file.Close()
+	opened, statErr := file.Stat()
+	fileStat, fileOK := opened.Sys().(*syscall.Stat_t)
+	if statErr != nil || !fileOK || opened.Mode()&os.ModeSymlink != 0 || !opened.Mode().IsRegular() ||
+		opened.Mode().Perm() != 0600 || fileStat.Uid != expectedUID || fileStat.Gid != expectedGID ||
+		fileStat.Nlink != 1 || opened.Size() != int64(len(tuiRemovalTombstoneRecord)) {
+		return true, errors.Join(fmt.Errorf("refusing unsafe or modified removal tombstone"), statErr)
+	}
+	content, readErr := io.ReadAll(io.LimitReader(file, int64(len(tuiRemovalTombstoneRecord)+1)))
+	var after unix.Stat_t
+	afterErr := unix.Fstatat(parentFD, filepath.Base(path), &after, unix.AT_SYMLINK_NOFOLLOW)
+	finalParent, finalParentErr := os.Lstat(parentPath)
+	if readErr != nil || afterErr != nil || finalParentErr != nil ||
+		!os.SameFile(openedParent, finalParent) || fileStat.Dev != uint64(after.Dev) ||
+		fileStat.Ino != after.Ino || fileStat.Mode != after.Mode || fileStat.Uid != after.Uid ||
+		fileStat.Gid != after.Gid || fileStat.Nlink != after.Nlink || fileStat.Size != after.Size ||
+		string(content) != tuiRemovalTombstoneRecord {
+		return true, errors.Join(
+			fmt.Errorf("removal tombstone changed during TUI startup attestation"),
+			readErr,
+			afterErr,
+			finalParentErr,
+		)
+	}
+	return true, nil
+}
 
 func newHAHTTPClient(caBundleFile string) (*http.Client, error) {
 	rootCAs, err := loadHATrustRoots(caBundleFile)
@@ -348,6 +426,15 @@ var (
 )
 
 func main() {
+	removalInProgress, err := inspectTUIRemovalTombstone(tuiRemovalTombstonePath, 0, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[SYSWARDEN-TUI] Refusing startup while removal state is unsafe: %v\n", err)
+		os.Exit(1)
+	}
+	if removalInProgress {
+		fmt.Fprintf(os.Stderr, "[SYSWARDEN-TUI] Refusing startup while %s is present\n", tuiRemovalTombstonePath)
+		os.Exit(1)
+	}
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
 		printDashboardText()
 		return
@@ -422,7 +509,7 @@ func main() {
 				cell := bannedTable.GetCell(row, 0)
 				if cell != nil {
 					ip := cell.Text
-					if ip != "" && ip != "Registry is empty. Architecture is secure." {
+					if ip != "" && ip != emptyRegistryMessage {
 						modal := tview.NewModal().
 							SetText(fmt.Sprintf("[white]Do you want to delete / unban IP %s from the list?[-]", ip)).
 							AddButtons([]string{"y", "n"}).
@@ -1477,7 +1564,7 @@ func refreshUI() {
 	d.WAF.BannedIPs = filteredBanned
 
 	if len(d.WAF.BannedIPs) == 0 && len(d.WAF.AllowedEvents) == 0 {
-		bannedTable.SetCell(1, 0, tview.NewTableCell("Registry is empty. Architecture is secure.").SetTextColor(tcell.ColorGreen).SetSelectable(false))
+		bannedTable.SetCell(1, 0, tview.NewTableCell(emptyRegistryMessage).SetTextColor(tcell.ColorGreen).SetSelectable(false))
 	} else {
 		row := 1
 		for _, a := range d.WAF.AllowedEvents {
@@ -1561,13 +1648,13 @@ func refreshUI() {
 func printDashboardText() {
 	bytes, err := os.ReadFile(DataFile) // #nosec
 	if err != nil {
-		fmt.Printf("=== SYSWARDEN ENTERPRISE DASHBOARD (SNAPSHOT) ===\n[ERROR] Telemetry data unreadable: %v\n", err)
+		fmt.Printf("=== %s ===\n[ERROR] Telemetry data unreadable: %v\n", dashboardSnapshotTitle, err)
 		return
 	}
 
 	var d DashboardData
 	if err := json.Unmarshal(bytes, &d); err != nil {
-		fmt.Printf("=== SYSWARDEN ENTERPRISE DASHBOARD (SNAPSHOT) ===\n[ERROR] Invalid telemetry JSON: %v\n", err)
+		fmt.Printf("=== %s ===\n[ERROR] Invalid telemetry JSON: %v\n", dashboardSnapshotTitle, err)
 		return
 	}
 
@@ -1576,7 +1663,7 @@ func printDashboardText() {
 		load1Str = strings.TrimSpace(parts[0])
 	}
 
-	fmt.Println("=== SYSWARDEN ENTERPRISE DASHBOARD (SNAPSHOT) ===")
+	fmt.Printf("=== %s ===\n", dashboardSnapshotTitle)
 	fmt.Printf("[SYSTEM] NODE: %s | Uptime: %s | Load: %s\n", d.System.Hostname, d.System.Uptime, load1Str)
 	fmt.Printf("[L3 FIREWALL] Global Blocks: %d (GeoIP: %d | ASN: %d)\n", d.Layer3.GlobalBlocked, d.Layer3.GeoIPBlocked, d.Layer3.ASNBlocked)
 	fmt.Printf("[WAAP L7] Active Bans: %d\n", d.WAF.TotalBanned)

@@ -36,7 +36,7 @@ pidfile="/run/syswarden-core.pid"
 retry="TERM/5/KILL/5"
 
 depend() {
-	need net rsyslog
+	need net rsyslog syswarden-firewall
 }
 `
 
@@ -58,7 +58,8 @@ start() {
 
 	systemdCoreService = `[Unit]
 Description=SYSWARDEN WAF and Core Engine
-After=network.target rsyslog.service
+Requires=syswarden-firewall.service
+After=network.target rsyslog.service syswarden-firewall.service
 Wants=network-online.target
 
 [Service]

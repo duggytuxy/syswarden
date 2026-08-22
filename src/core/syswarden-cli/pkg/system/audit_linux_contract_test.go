@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestLinuxAuditAndUninstallUseExactFailClosedCronContract(t *testing.T) {
+func TestLinuxAuditUsesOwnedAndLegacyFailClosedCronContract(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve test source path")
@@ -26,8 +26,15 @@ func TestLinuxAuditAndUninstallUseExactFailClosedCronContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, required := range []string{
-		`inspectManagedFeedCron(exec.Command("crontab", "-l"))`,
-		`Cron Orchestration FAILED: cannot read root crontab`,
+		`cronstate.Inspect(cronOptions)`,
+		`cronstate.DefaultOptions(ReadOnlyRootCrontabEvidence)`,
+		`cronOptions.AttestCronDProvider = AttestCronDProvider`,
+		`InspectCronDProvider()`,
+		`Cron Daemon FAILED: /etc/cron.d is not backed by a fully attested provider`,
+		`no live daemon is claimed`,
+		`Cron Orchestration FAILED: scheduling state is not safely attestable`,
+		`feed updates use /etc/cron.d/syswarden`,
+		`HA synchronization remains scheduled while HA is disabled`,
 	} {
 		if !strings.Contains(string(auditSource), required) {
 			t.Fatalf("Linux audit lacks %q", required)
@@ -42,18 +49,15 @@ func TestLinuxAuditAndUninstallUseExactFailClosedCronContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{
-		`removeManagedRootCron(`,
-		`exec.Command("crontab", "-l")`,
-		`exec.Command("crontab", "-")`,
-		`return fmt.Errorf("clean root crontab: %w", err)`,
-	} {
-		if !strings.Contains(string(uninstallSource), required) {
-			t.Fatalf("Linux uninstall lacks %q", required)
-		}
-	}
 	if strings.Contains(string(uninstallSource), `strings.Contains(line, "syswarden-cli")`) ||
 		strings.Contains(string(uninstallSource), `out, _ := exec.Command("crontab", "-l").Output()`) {
 		t.Fatal("Linux uninstall still broadens cron deletion or ignores read errors")
+	}
+	if strings.Contains(string(uninstallSource), `exec.Command("iptables", "-S")`) ||
+		strings.Contains(string(uninstallSource), `--comment SYSWARDEN_CORE`) {
+		t.Fatal("Linux uninstall still scans unowned iptables rules outside the ownership manifest")
+	}
+	if strings.Contains(string(uninstallSource), `exec.Command("nft"`) {
+		t.Fatal("Linux uninstall still performs best-effort nftables cleanup outside the verified firewall transaction")
 	}
 }

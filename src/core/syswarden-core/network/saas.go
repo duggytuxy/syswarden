@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"syswarden-core/logger"
+	"syswarden-core/utils"
 
 	"github.com/spf13/viper"
 )
@@ -45,11 +46,13 @@ type saasFeed struct {
 
 // SaasMonitorDownloader periodically publishes validated SaaS monitor networks.
 type SaasMonitorDownloader struct {
-	logger     *logger.Logger
-	client     *http.Client
-	feeds      []saasFeed
-	targetIPv4 string
-	targetIPv6 string
+	logger                  *logger.Logger
+	client                  *http.Client
+	feeds                   []saasFeed
+	targetIPv4              string
+	targetIPv6              string
+	localInterfaceAddresses func() ([]netip.Addr, error)
+	protectedHAPeers        func() ([]netip.Prefix, error)
 }
 
 func NewSaasMonitorDownloader(l *logger.Logger) *SaasMonitorDownloader {
@@ -59,8 +62,10 @@ func NewSaasMonitorDownloader(l *logger.Logger) *SaasMonitorDownloader {
 		feeds: []saasFeed{
 			{url: "https://uptime.betterstack.com/ips.txt", required: true},
 		},
-		targetIPv4: defaultSaaSIPv4Path,
-		targetIPv6: defaultSaaSIPv6Path,
+		targetIPv4:              defaultSaaSIPv4Path,
+		targetIPv6:              defaultSaaSIPv6Path,
+		localInterfaceAddresses: utils.LocalInterfaceAddresses,
+		protectedHAPeers:        configuredHAPeerPrefixes,
 	}
 }
 
@@ -155,7 +160,11 @@ func (s *SaasMonitorDownloader) fetchMonitors() error {
 		allEntries = append(allEntries, entries...)
 	}
 
-	ipv4, ipv6, err := canonicalSaaSEntries(allEntries)
+	policy, err := s.saasFirewallNetworkPolicy()
+	if err != nil {
+		return err
+	}
+	ipv4, ipv6, err := canonicalSaaSEntries(allEntries, policy)
 	if err != nil {
 		return err
 	}
@@ -163,6 +172,34 @@ func (s *SaasMonitorDownloader) fetchMonitors() error {
 		return errors.New("SaaS feeds contain no usable IP address or CIDR")
 	}
 	return publishSaaSListPair(s.targetIPv4, s.targetIPv6, renderSaaSList(ipv4), renderSaaSList(ipv6))
+}
+
+func configuredHAPeerPrefixes() ([]netip.Prefix, error) {
+	configured := loadHAConfig().PeerIPs
+	peers := make([]netip.Prefix, 0, len(configured))
+	for _, value := range configured {
+		peer, err := canonicalHAPeerPrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid configured HA peer: %w", err)
+		}
+		peers = append(peers, peer)
+	}
+	return peers, nil
+}
+
+func (s *SaasMonitorDownloader) saasFirewallNetworkPolicy() (utils.FirewallNetworkPolicy, error) {
+	if s.localInterfaceAddresses == nil || s.protectedHAPeers == nil {
+		return utils.FirewallNetworkPolicy{}, fmt.Errorf("SaaS firewall network policy is unavailable")
+	}
+	localAddresses, err := s.localInterfaceAddresses()
+	if err != nil {
+		return utils.FirewallNetworkPolicy{}, fmt.Errorf("load local interface addresses: %w", err)
+	}
+	peers, err := s.protectedHAPeers()
+	if err != nil {
+		return utils.FirewallNetworkPolicy{}, err
+	}
+	return utils.FirewallNetworkPolicy{LocalAddresses: localAddresses, ProtectedPrefixes: peers}, nil
 }
 
 func (s *SaasMonitorDownloader) downloadList(rawURL string) ([]string, error) {
@@ -239,11 +276,11 @@ func canonicalSaaSEntry(value string) (string, bool, error) {
 	return prefix.String(), prefix.Addr().Is4(), nil
 }
 
-func canonicalSaaSEntries(entries []string) ([]string, []string, error) {
+func canonicalSaaSEntries(entries []string, policy utils.FirewallNetworkPolicy) ([]string, []string, error) {
 	ipv4Set := make(map[string]struct{})
 	ipv6Set := make(map[string]struct{})
 	for _, entry := range entries {
-		canonical, isIPv4, err := canonicalSaaSEntry(strings.TrimSpace(entry))
+		canonical, isIPv4, err := utils.CanonicalFirewallNetworkEntry(strings.TrimSpace(entry), policy)
 		if err != nil {
 			return nil, nil, err
 		}

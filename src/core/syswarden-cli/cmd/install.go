@@ -19,8 +19,21 @@ var installCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
 
+		if err := preflightConfiguredCronScheduling(); err != nil {
+			return installStageError("cron scheduling preflight failed before configuration repair", err)
+		}
+		if err := preflightConfiguredFirewallBackend(); err != nil {
+			return installStageError("firewall backend preflight failed before configuration repair", err)
+		}
+
 		if err := installConfigPreflight("/etc/syswarden/config"); err != nil {
 			return installStageError("configuration preflight failed before host mutation", err)
+		}
+		if err := preflightConfiguredCronScheduling(); err != nil {
+			return installStageError("cron scheduling preflight failed", err)
+		}
+		if err := preflightConfiguredFirewallBackend(); err != nil {
+			return installStageError("firewall backend preflight failed", err)
 		}
 
 		if err := system.InstallDependencies(); err != nil {
@@ -38,7 +51,7 @@ var installCmd = &cobra.Command{
 		// Phase 2: Network Intelligence
 		fmt.Println("[SYSWARDEN] Starting Network Intelligence Downloader...")
 		mirrorURL := config.GlobalConfig.CustomURL
-		if mirrorURL == "" {
+		if mirrorURL == "" && config.GlobalConfig.ListChoice != "3" {
 			mirrorURL = "https://codeberg.org/"
 		}
 		if err := network.DownloadFeeds(mirrorURL, config.GlobalConfig.CustomURLIPv6, config.GlobalConfig.CustomHash, config.GlobalConfig.CustomHashIPv6, config.GlobalConfig.ListChoice, config.GlobalConfig.GeoCodes, config.GlobalConfig.ASNList, config.GlobalConfig.GeoAllowed, config.GlobalConfig.ASNAllowed, config.GlobalConfig.LANMode, config.GlobalConfig.UseSpamhaus); err != nil {
@@ -106,12 +119,30 @@ var installCmd = &cobra.Command{
 			return installStageError("service setup failed", err)
 		}
 
-		fmt.Println("[SYSWARDEN] v4.03.1 native installation complete.")
+		fmt.Println("[SYSWARDEN] v4.03.2 native installation complete.")
 		return nil
 	},
 }
 
 var installConfigPreflight = prepareInstallConfiguration
+var hostFirewallBackendPreflight = system.PreflightHostFirewallBackend
+var hostCronSchedulingPreflight = func(haEnabled bool) error {
+	_, err := system.PreflightRuntimeCronScheduling(haEnabled)
+	return err
+}
+
+func preflightConfiguredCronScheduling() error {
+	haEnabled := config.GlobalConfig != nil && config.GlobalConfig.HAEnabled
+	return hostCronSchedulingPreflight(haEnabled)
+}
+
+func preflightConfiguredFirewallBackend() error {
+	backend := "keep"
+	if config.GlobalConfig != nil && config.GlobalConfig.FirewallBackend != "" {
+		backend = config.GlobalConfig.FirewallBackend
+	}
+	return hostFirewallBackendPreflight(backend)
+}
 
 func installStageError(stage string, err error) error {
 	return fmt.Errorf("[ERROR] %s: %w", stage, err)

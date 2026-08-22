@@ -65,6 +65,9 @@ func snapshotCommandTree(root *cobra.Command) []commandContract {
 	var contracts []commandContract
 	var walk func(*cobra.Command)
 	walk = func(command *cobra.Command) {
+		if command != root && command.Hidden {
+			return
+		}
 		command.InitDefaultHelpFlag()
 		contract := commandContract{
 			Path:        command.CommandPath(),

@@ -26,6 +26,13 @@ allow syslogd_t init_t:unix_dgram_socket sendto;
 allow syslogd_t var_run_t:sock_file write;
 `
 
+const (
+	syswardenInternalLogMarker      = "[SYSWARDEN-INTERNAL]"
+	rsyslogInternalTimestampPattern = `[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} `
+	rsyslogInternalRecordPattern    = `[[]SYSWARDEN-INTERNAL[]] action=[A-Z][A-Z0-9-]{0,63} ip=([0-9A-Fa-f:.]+|invalid-[0-9a-f]{16}) scope=[A-Za-z0-9._:/%-]{1,128} payload_sha256=[0-9a-f]{64} payload_bytes=[0-9]{1,20} auth=[0-9a-f]{64}`
+	rsyslogDirectInternalLogPattern = `^` + rsyslogInternalTimestampPattern + rsyslogInternalRecordPattern + `$`
+)
+
 const rsyslogWAFBase = `module(load="imfile")
 module(load="omuxsock")
 $OMUxSockSocket /var/run/syswarden.sock
@@ -46,17 +53,8 @@ const rsyslogWAFRuleset = `
 template(name="SYSWARDENRaw" type="string" string="%msg%\n")
 
 ruleset(name="waf_bridge") {
-    # Prevent infinite loops from SYSWARDEN logging its own blocks
-    if $programname == "syswarden-core" then stop
-    if $msg contains "SYSWARDEN-BLOCK" then stop
-    if $msg contains "SYSWARDEN-ALLOWED" then stop
-
-    # Do not forward native firewall kernel drops to WAF regex engine to avoid false positives and reduce CPU overhead
-    if $msg contains "SYSWARDEN-GEO" then stop
-    if $msg contains "SYSWARDEN-ASN" then stop
-    if $msg contains "SYSWARDEN-L3" then stop
-    if $msg contains "SYSWARDEN-TOR" then stop
-    if $msg contains "SYSWARDEN-PROXY" then stop
+    # Product-owned records are output, never fresh detection input.
+    if $programname == "syswarden-core" and re_match($msg, '` + rsyslogDirectInternalLogPattern + `') then stop
 
     *.* :omuxsock:;SYSWARDENRaw
 }

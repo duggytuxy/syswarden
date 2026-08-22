@@ -134,6 +134,13 @@ syswarden_require_offline_service_manager() {
     }
 }
 
+syswarden_package_runtime_is_offline() {
+    syswarden_offline_root="$1"
+    [ "${SYSWARDEN_PKG_INSTALL:-}" = 1 ] || return 1
+    [ "$(syswarden_classify_service_manager "${syswarden_offline_root}" systemd isolated)" = OFFLINE ] || return 1
+    [ "$(syswarden_classify_service_manager "${syswarden_offline_root}" openrc isolated)" = OFFLINE ] || return 1
+}
+
 syswarden_remove_exact_service_enablement() {
     syswarden_service_link="$1"
     shift
@@ -187,7 +194,7 @@ syswarden_remove_exact_product_services() {
                 /etc/systemd/system/syswarden-firewall.service || return 1
             syswarden_remove_exact_service_file \
                 /etc/systemd/system/syswarden-core.service \
-                0079096c0a92f17e3aafb6c76ad89a0fdac03c2977732a15776be01220d81768 600 || return 1
+                8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd 600 || return 1
             syswarden_remove_exact_service_file \
                 /etc/systemd/system/syswarden-firewall.service \
                 bc730793c007273a380261155b7602571c42efd93972f45ad2dd440f98251724 600 || return 1
@@ -199,7 +206,7 @@ syswarden_remove_exact_product_services() {
                 /etc/runlevels/default/syswarden-firewall /etc/init.d/syswarden-firewall || return 1
             syswarden_remove_exact_service_file \
                 /etc/init.d/syswarden-core \
-                89965a9e7d2784bc7e3119966e2564e17c5ec915dc2396986a98fe6ccfcb6247 755 || return 1
+                99adff6d6bcb6c5f0fad472e11668d3f8f4e19136c3b3ce473493101db136558 755 || return 1
             syswarden_remove_exact_service_file \
                 /etc/init.d/syswarden-firewall \
                 82a936e4f9ce394d6cc0ffd3978a1842a899570842ab5d283184384e73af5905 755 || return 1
@@ -243,6 +250,21 @@ syswarden_retire_stale_webtui_pid() {
         printf '%s\n' 'Legacy Web-TUI PID file remains after retirement' >&2
         return 1
     fi
+}
+
+syswarden_retire_offline_webtui_pid() {
+    syswarden_retire_pid_path="${1}/run/syswarden-webtui.pid"
+    [ ! -L "${syswarden_retire_pid_path}" ] || {
+        printf '%s\n' 'Refusing a symlinked legacy Web-TUI PID file' >&2
+        return 1
+    }
+    [ -e "${syswarden_retire_pid_path}" ] || return 0
+    [ -f "${syswarden_retire_pid_path}" ] || return 1
+    [ "$(wc -c < "${syswarden_retire_pid_path}" | tr -d ' ')" -le 32 ] || return 1
+    syswarden_retire_pid="$(cat "${syswarden_retire_pid_path}")"
+    case "${syswarden_retire_pid}" in ''|*[!0-9]*) return 1 ;; esac
+    rm -f -- "${syswarden_retire_pid_path}" || return 1
+    [ ! -e "${syswarden_retire_pid_path}" ] && [ ! -L "${syswarden_retire_pid_path}" ]
 }
 
 syswarden_validate_exact_webtui_enablement() {
@@ -1022,8 +1044,12 @@ syswarden_retire_legacy_webtui() {
     syswarden_retire_root="${1%/}"
     syswarden_retire_systemd_webtui "${syswarden_retire_root}" || return 1
     syswarden_retire_openrc_webtui "${syswarden_retire_root}" || return 1
-    syswarden_retire_exact_webtui_processes "${syswarden_retire_root}" || return 1
-    syswarden_retire_stale_webtui_pid "${syswarden_retire_root}" || return 1
+    if syswarden_package_runtime_is_offline "${syswarden_retire_root}"; then
+        syswarden_retire_offline_webtui_pid "${syswarden_retire_root}" || return 1
+    else
+        syswarden_retire_exact_webtui_processes "${syswarden_retire_root}" || return 1
+        syswarden_retire_stale_webtui_pid "${syswarden_retire_root}" || return 1
+    fi
     syswarden_retire_webtui_configuration "${syswarden_retire_root}" || return 1
 }
 
@@ -1048,5 +1074,7 @@ syswarden_verify_webtui_retirement() {
     [ -x "${syswarden_retire_root}/opt/syswarden/bin/syswarden-tui" ] || return 1
     [ -L "${syswarden_retire_root}/usr/local/bin/syswarden-tui" ] || return 1
     [ "$(readlink "${syswarden_retire_root}/usr/local/bin/syswarden-tui")" = /opt/syswarden/bin/syswarden-tui ] || return 1
-    syswarden_verify_no_exact_webtui_process "${syswarden_retire_root}" || return 1
+    if ! syswarden_package_runtime_is_offline "${syswarden_retire_root}"; then
+        syswarden_verify_no_exact_webtui_process "${syswarden_retire_root}" || return 1
+    fi
 }

@@ -743,6 +743,42 @@ func TestDetectBackendUsesFirewallCommandClient_SW_FW_003(t *testing.T) {
 	}
 }
 
+func TestConfiguredRuntimeManagerNeverSelectsCompatibilityFrontends_SW2_FWBACKEND_001(t *testing.T) {
+	for _, backend := range []string{"keep", "nftables"} {
+		t.Run(backend, func(t *testing.T) {
+			factoryCalls := 0
+			manager, err := newManagerForConfiguredBackend(backend, func() nftablesConnection {
+				factoryCalls++
+				return fullFakeNftablesConnection()
+			})
+			if err != nil {
+				t.Fatalf("newManagerForConfiguredBackend(%q): %v", backend, err)
+			}
+			if factoryCalls != 1 {
+				t.Fatalf("nftables factory calls = %d, want 1", factoryCalls)
+			}
+			if _, ok := manager.(*NftablesManager); !ok {
+				t.Fatalf("configured backend %q selected %T", backend, manager)
+			}
+			if !strings.HasPrefix(manager.Name(), "nftables") {
+				t.Fatalf("configured backend %q manager name = %q", backend, manager.Name())
+			}
+		})
+	}
+
+	factoryCalls := 0
+	manager, err := newManagerForConfiguredBackend("iptables", func() nftablesConnection {
+		factoryCalls++
+		return fullFakeNftablesConnection()
+	})
+	if err == nil || !strings.Contains(err.Error(), "accepted for configuration compatibility but refused") {
+		t.Fatalf("iptables manager error = %v", err)
+	}
+	if manager != nil || factoryCalls != 0 {
+		t.Fatalf("iptables reached runtime manager construction: manager=%T calls=%d", manager, factoryCalls)
+	}
+}
+
 func TestFirewallRuntimeLockRejectsSymlink_SW_FW_003(t *testing.T) {
 	directory := t.TempDir()
 	target := filepath.Join(directory, "target")

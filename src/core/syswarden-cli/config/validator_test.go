@@ -33,6 +33,12 @@ func TestCustomValidators(t *testing.T) {
 		{name: "canonical LAN", value: []string{"10.0.0.0/8", "2001:db8::/32"}, tag: "canonical_cidr_slice"},
 		{name: "LAN host bits", value: []string{"10.0.0.1/8"}, tag: "canonical_cidr_slice", wantErr: true},
 		{name: "whitelist shell payload", value: []string{"192.0.2.1;flush"}, tag: "ip_or_cidr_slice", wantErr: true},
+		{name: "bounded HA peers", value: []string{"10.20.30.7", "10.20.30.0/24", "fd00:20:30::7", "fd00:20:30::/64"}, tag: "ha_peer_slice"},
+		{name: "broad IPv4 HA peer", value: []string{"10.20.30.0/23"}, tag: "ha_peer_slice", wantErr: true},
+		{name: "broad IPv6 HA peer", value: []string{"fd00:20:30::/63"}, tag: "ha_peer_slice", wantErr: true},
+		{name: "HA peer host bits", value: []string{"10.20.30.7/24"}, tag: "ha_peer_slice", wantErr: true},
+		{name: "mapped HA peer", value: []string{"::ffff:192.0.2.10"}, tag: "ha_peer_slice", wantErr: true},
+		{name: "zoned HA peer", value: []string{"fe80::1%eth0"}, tag: "ha_peer_slice", wantErr: true},
 		{name: "country list", value: []string{"be", "FR"}, tag: "country_code_slice"},
 		{name: "long country", value: []string{"BEL"}, tag: "country_code_slice", wantErr: true},
 		{name: "maximum ASN", value: []string{"AS4294967295"}, tag: "asn_slice"},
@@ -81,6 +87,16 @@ func TestValidateConfigContract_SW_CFG_002(t *testing.T) {
 		t.Fatalf("valid modular configuration was rejected: %v", err)
 	}
 
+	wireGuardBackendMismatch := *valid
+	wireGuardBackendMismatch.Network.Wireguard.Enabled = true
+	if err := validateConfig(&wireGuardBackendMismatch); err == nil || !strings.Contains(err.Error(), "requires core.firewall_backend=nftables") {
+		t.Fatalf("WireGuard backend mismatch error = %v", err)
+	}
+	wireGuardBackendMismatch.Core.FirewallBackend = "nftables"
+	if err := validateConfig(&wireGuardBackendMismatch); err != nil {
+		t.Fatalf("nftables-backed WireGuard configuration was rejected: %v", err)
+	}
+
 	invalid := *valid
 	invalid.Core.SSHPort = "65536"
 	if err := validateConfig(&invalid); err == nil {
@@ -125,9 +141,34 @@ func TestValidateConfigContract_SW_CFG_002(t *testing.T) {
 	if err := validateConfig(&invalid); err == nil {
 		t.Fatal("modular configuration accepted enabled webhooks without an HTTPS endpoint")
 	}
+
+	digest := "sha256:" + strings.Repeat("a", 64)
+	pinned := *valid
+	pinned.Network.Blocklists.ListChoice = "3"
+	pinned.Network.Blocklists.CustomURL = "https://feeds.example.invalid/deny-v4.txt"
+	pinned.Network.Blocklists.CustomHash = digest
+	if err := validateConfig(&pinned); err != nil {
+		t.Fatalf("modular configuration rejected a pinned custom blocklist: %v", err)
+	}
+
+	for _, blocklists := range []BlocklistsConfig{
+		{ListChoice: "3", CustomURL: "https://feeds.example.invalid/deny-v4.txt"},
+		{ListChoice: "3", CustomURL6: "https://feeds.example.invalid/deny-v6.txt"},
+		{ListChoice: "3", CustomURL: "https://feeds.example.invalid/deny-v4.txt", CustomHash: digest, CustomURL6: "https://feeds.example.invalid/deny-v6.txt"},
+		{ListChoice: "4", CustomURL: "https://feeds.example.invalid/deny-v4.txt"},
+		{ListChoice: "4", CustomHash: digest},
+		{ListChoice: "4", CustomHash6: digest},
+		{ListChoice: "4", CustomURL: "https://feeds.example.invalid/deny-v4.txt", CustomHash6: digest},
+	} {
+		candidate := *valid
+		candidate.Network.Blocklists = blocklists
+		if err := validateConfig(&candidate); err == nil {
+			t.Fatalf("modular configuration accepted an unpaired custom blocklist: %#v", blocklists)
+		}
+	}
 }
 
-func TestValidateHARequiresTokenAndAcceptsPeerCIDRs(t *testing.T) {
+func TestValidateHARequiresTokenAndBoundedPeerCIDRs(t *testing.T) {
 	base := &ModularConfig{}
 	base.Core.ConfigDir = "/etc/syswarden/config/modules"
 	base.Core.LogLevel = "INFO"
@@ -141,7 +182,7 @@ func TestValidateHARequiresTokenAndAcceptsPeerCIDRs(t *testing.T) {
 	base.WAAP.BruteforceWindowSeconds = 60
 	base.Integrations.HA.Enabled = true
 	base.Integrations.HA.PeerPort = 62026
-	base.Integrations.HA.PeerIPs = []string{"10.20.30.0/29", "2001:db8::20"}
+	base.Integrations.HA.PeerIPs = []string{"10.20.30.7", "10.20.30.0/24", "fd00:20:30::7", "fd00:20:30::/64"}
 	base.Integrations.HA.Token = "shared-cluster-token"
 
 	if err := validateConfig(base); err != nil {
@@ -191,7 +232,49 @@ func TestValidateHARequiresTokenAndAcceptsPeerCIDRs(t *testing.T) {
 		{
 			name: "CIDR with host bits",
 			mutate: func(config *ModularConfig) {
-				config.Integrations.HA.PeerIPs = []string{"10.20.30.3/29"}
+				config.Integrations.HA.PeerIPs = []string{"10.20.30.3/24"}
+			},
+		},
+		{
+			name: "IPv6 CIDR with host bits",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"fd00:20:30::1/64"}
+			},
+		},
+		{
+			name: "IPv4 default route",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"0.0.0.0/0"}
+			},
+		},
+		{
+			name: "IPv4 scope broader than /24",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"10.20.30.0/23"}
+			},
+		},
+		{
+			name: "IPv6 default route",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"::/0"}
+			},
+		},
+		{
+			name: "IPv6 scope broader than /64",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"fd00:20:30::/63"}
+			},
+		},
+		{
+			name: "IPv4-mapped IPv6 prefix",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"::ffff:192.0.2.0/120"}
+			},
+		},
+		{
+			name: "zoned IPv6 peer",
+			mutate: func(config *ModularConfig) {
+				config.Integrations.HA.PeerIPs = []string{"fe80::1%eth0"}
 			},
 		},
 	}
@@ -206,6 +289,46 @@ func TestValidateHARequiresTokenAndAcceptsPeerCIDRs(t *testing.T) {
 				t.Fatal("invalid HA configuration was accepted")
 			}
 		})
+	}
+}
+
+func TestLegacyValidationUsesBoundedHAPeersAndPinnedCustomFeeds(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("b", 64)
+	valid := NewFailSafeConfig()
+	valid.HAEnabled = true
+	valid.HAToken = "shared-cluster-token"
+	valid.HAPeerIP = "10.20.30.7 10.20.30.0/24 fd00:20:30::7 fd00:20:30::/64"
+	valid.ListChoice = "3"
+	valid.CustomURL = "https://feeds.example.invalid/deny-v4.txt"
+	valid.CustomHash = digest
+	if err := validateLegacyConfig(valid); err != nil {
+		t.Fatalf("valid legacy HA and custom feed configuration was rejected: %v", err)
+	}
+
+	for _, peer := range []string{"0.0.0.0/0", "10.20.30.0/23", "::/0", "fd00:20:30::/63"} {
+		candidate := *valid
+		candidate.HAPeerIP = peer
+		if err := validateLegacyConfig(&candidate); err == nil {
+			t.Fatalf("legacy validation accepted broad HA peer %q", peer)
+		}
+	}
+
+	for _, mutate := range []func(*Config){
+		func(config *Config) { config.CustomHash = "" },
+		func(config *Config) {
+			config.CustomURL = ""
+			config.CustomHash = digest
+		},
+		func(config *Config) {
+			config.CustomURL = ""
+			config.CustomHash = ""
+		},
+	} {
+		candidate := *valid
+		mutate(&candidate)
+		if err := validateLegacyConfig(&candidate); err == nil {
+			t.Fatal("legacy validation accepted an incomplete custom feed configuration")
+		}
 	}
 }
 
@@ -245,7 +368,7 @@ func TestBunkerWebFeatureGateRequiresAuthenticatedHA_SW_CFG_002(t *testing.T) {
 		t.Fatal("BunkerWeb gate accepted an empty HA peer allowlist")
 	}
 
-	base.Integrations.HA.PeerIPs = []string{"192.0.2.20", "10.20.30.0/29"}
+	base.Integrations.HA.PeerIPs = []string{"192.0.2.20", "10.20.30.0/24"}
 	if err := validateConfig(base); err != nil {
 		t.Fatalf("BunkerWeb gate rejected authenticated HA with canonical peers: %v", err)
 	}

@@ -438,6 +438,10 @@ func appendListFileInDirectory(directory *os.Root, target approvedListFile, cont
 }
 
 func removeFromListFileAt(target approvedListFile, line string) error {
+	requested, err := parseCanonicalRecoveryListEntry(line, true)
+	if err != nil {
+		return fmt.Errorf("invalid recovery list entry: %w", err)
+	}
 	directory, err := openListDirectory(target, false)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -460,51 +464,35 @@ func removeFromListFileAt(target approvedListFile, line string) error {
 	}
 	lines := strings.Split(string(content), "\n")
 	var newLines []string
-	requested, requestedErr := parseCanonicalListEntry(line, true)
+	changed := false
 	for _, existing := range lines {
 		cleanExisting := strings.TrimSpace(existing)
 		if cleanExisting == "" {
 			continue
 		}
-		parsedExisting, parseErr := parseCanonicalListEntry(cleanExisting, true)
-		if cleanExisting == line || requestedErr == nil && parseErr == nil && sameListEntry(parsedExisting, requested) {
+		if strings.HasPrefix(cleanExisting, "#") {
+			newLines = append(newLines, existing)
+			continue
+		}
+		parsedExisting, parseErr := parseCanonicalRecoveryListEntry(cleanExisting, true)
+		_, strictErr := parseCanonicalListEntry(cleanExisting, true)
+		if parseErr != nil || strictErr != nil {
+			changed = true
+			continue
+		}
+		if sameListEntry(parsedExisting, requested) {
+			changed = true
 			continue
 		}
 		newLines = append(newLines, existing)
 	}
+	if !changed {
+		return nil
+	}
 	return writeListFileInDirectoryFromSnapshot(directory, target, []byte(strings.Join(newLines, "\n")+"\n"), content)
 }
 
-func addToListFileAt(target approvedListFile, line string) error {
-	directory, err := openListDirectory(target, true)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = directory.Close() }()
-	lockFile, err := lockListDirectory(directory)
-	if err != nil {
-		return err
-	}
-	defer unlockListDirectory(lockFile)
-	content, err := readListFileInDirectory(directory, target)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	requested, requestedErr := parseCanonicalListEntry(line, true)
-	for _, existing := range strings.Split(string(content), "\n") {
-		cleanExisting := strings.TrimSpace(existing)
-		if cleanExisting == line {
-			return nil
-		}
-		parsedExisting, parseErr := parseCanonicalListEntry(cleanExisting, true)
-		if requestedErr == nil && parseErr == nil && sameListEntry(parsedExisting, requested) {
-			return nil
-		}
-	}
-	return appendListFileInDirectory(directory, target, []byte(line+"\n"))
-}
-
-func removeIPFromListFileAt(target approvedListFile, ip string) (bool, error) {
+func sanitizeLegacyListFileAt(target approvedListFile) (bool, error) {
 	directory, err := openListDirectory(target, false)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -525,14 +513,121 @@ func removeIPFromListFileAt(target approvedListFile, ip string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	newContent, found := removeListEntriesForIP(content, ip)
-	if !found {
+	lines := strings.Split(string(content), "\n")
+	newLines := make([]string, 0, len(lines))
+	changed := false
+	for _, line := range lines {
+		cleanLine := strings.TrimSpace(line)
+		if cleanLine == "" {
+			continue
+		}
+		if strings.HasPrefix(cleanLine, "#") {
+			newLines = append(newLines, cleanLine)
+			continue
+		}
+		if _, err := parseCanonicalListEntry(cleanLine, true); err != nil {
+			changed = true
+			continue
+		}
+		newLines = append(newLines, cleanLine)
+	}
+	if !changed {
 		return false, nil
 	}
-	if err := writeListFileInDirectoryFromSnapshot(directory, target, newContent, content); err != nil {
+	updated := []byte(strings.Join(newLines, "\n") + "\n")
+	if err := writeListFileInDirectoryFromSnapshot(directory, target, updated, content); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func sanitizeLegacyOperatorLists() (bool, error) {
+	paths := []string{WhitelistV4, WhitelistV6, BlocklistV4, BlocklistV6, SSHBypass}
+	targets := make([]approvedListFile, 0, len(paths))
+	for _, path := range paths {
+		target, err := approvedListFileForPath(path)
+		if err != nil {
+			return false, err
+		}
+		targets = append(targets, target)
+	}
+	return sanitizeLegacyListTargets(targets)
+}
+
+func sanitizeLegacyListTargets(targets []approvedListFile) (bool, error) {
+	changed := false
+	for _, target := range targets {
+		fileChanged, err := sanitizeLegacyListFileAt(target)
+		if err != nil {
+			return false, fmt.Errorf("sanitize legacy operator list %s: %w", target.name, err)
+		}
+		changed = changed || fileChanged
+	}
+	return changed, nil
+}
+
+func addToListFileAt(target approvedListFile, line string) error {
+	requested, err := parseCanonicalListEntry(line, true)
+	if err != nil {
+		return fmt.Errorf("invalid list entry: %w", err)
+	}
+	canonicalLine := requested.String()
+	directory, err := openListDirectory(target, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockListDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer unlockListDirectory(lockFile)
+	content, err := readListFileInDirectory(directory, target)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for _, existing := range strings.Split(string(content), "\n") {
+		cleanExisting := strings.TrimSpace(existing)
+		if cleanExisting == canonicalLine {
+			return nil
+		}
+		parsedExisting, parseErr := parseCanonicalListEntry(cleanExisting, true)
+		if parseErr == nil && sameListEntry(parsedExisting, requested) {
+			return nil
+		}
+	}
+	return appendListFileInDirectory(directory, target, []byte(canonicalLine+"\n"))
+}
+
+func removeIPFromListFileAt(target approvedListFile, ip string) (bool, bool, error) {
+	directory, err := openListDirectory(target, false)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockListDirectory(directory)
+	if err != nil {
+		return false, false, err
+	}
+	defer unlockListDirectory(lockFile)
+	content, err := readListFileInDirectory(directory, target)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	newContent, found, changed := removeListEntriesForIP(content, ip)
+	if !changed {
+		return false, false, nil
+	}
+	if err := writeListFileInDirectoryFromSnapshot(directory, target, newContent, content); err != nil {
+		return false, false, err
+	}
+	return found, true, nil
 }
 
 const (
@@ -576,6 +671,9 @@ func AddToWhitelist(ip string, port string) error {
 	if err != nil {
 		return fmt.Errorf("invalid whitelist entry: %w", err)
 	}
+	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+		return fmt.Errorf("validate firewall backend before whitelist mutation: %w", err)
+	}
 
 	// Remove from blocklist just in case
 	fileToRemove := BlocklistV6
@@ -603,9 +701,12 @@ func AddToWhitelist(ip string, port string) error {
 
 // RemoveFromWhitelist removes an IP from the whitelist
 func RemoveFromWhitelist(ip string) error {
-	entry, err := parseCanonicalListEntry(ip, false)
+	entry, err := parseCanonicalRecoveryListEntry(ip, false)
 	if err != nil {
 		return fmt.Errorf("invalid IP address: %w", err)
+	}
+	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+		return fmt.Errorf("validate firewall backend before whitelist mutation: %w", err)
 	}
 	file := WhitelistV6
 	if entry.isIPv4 {
@@ -615,14 +716,20 @@ func RemoveFromWhitelist(ip string) error {
 	if err != nil {
 		return err
 	}
-	found, err := removeIPFromListFileAt(target, entry.network)
+	found, changed, err := removeIPFromListFileAt(target, entry.network)
 	if err != nil {
 		return fmt.Errorf("remove IP from whitelist: %w", err)
 	}
-	if found {
+	cleanupChanged, err := sanitizeLegacyOperatorLists()
+	if err != nil {
+		return err
+	}
+	if changed || cleanupChanged {
 		if err := ApplyPolicies(); err != nil {
 			return err
 		}
+	}
+	if found {
 		fmt.Printf("[SUCCESS] IP %s removed from whitelist.\n", ip)
 		return nil
 	}
@@ -635,6 +742,9 @@ func AddToBlocklist(ip string) error {
 	entry, err := parseCanonicalListEntry(ip, false)
 	if err != nil {
 		return fmt.Errorf("invalid IP address: %w", err)
+	}
+	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+		return fmt.Errorf("validate firewall backend before blocklist mutation: %w", err)
 	}
 
 	file := BlocklistV6
@@ -659,15 +769,11 @@ func completeBlocklistRemoval(
 	applyPolicies func() error,
 	syncHAUnban func([]string) error,
 ) error {
-	var operationErrors []error
 	if err := applyPolicies(); err != nil {
-		operationErrors = append(operationErrors, fmt.Errorf("apply firewall policies after blocklist removal: %w", err))
+		return fmt.Errorf("apply firewall policies after blocklist removal: %w", err)
 	}
 	if err := syncHAUnban([]string{ip}); err != nil {
-		operationErrors = append(operationErrors, fmt.Errorf("synchronize HA unban after blocklist removal: %w", err))
-	}
-	if err := errors.Join(operationErrors...); err != nil {
-		return err
+		return fmt.Errorf("synchronize HA unban after blocklist removal: %w", err)
 	}
 	_, err := fmt.Fprintf(output, "[SUCCESS] IP %s removed from blocklist.\n", ip)
 	return err
@@ -675,9 +781,12 @@ func completeBlocklistRemoval(
 
 // RemoveFromBlocklist removes an IP from the blocklist
 func RemoveFromBlocklist(ip string) error {
-	entry, err := parseCanonicalListEntry(ip, false)
+	entry, err := parseCanonicalRecoveryListEntry(ip, false)
 	if err != nil {
 		return fmt.Errorf("invalid IP address: %w", err)
+	}
+	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+		return fmt.Errorf("validate firewall backend before blocklist mutation: %w", err)
 	}
 
 	file := BlocklistV6
@@ -688,11 +797,17 @@ func RemoveFromBlocklist(ip string) error {
 	if err := removeFromFile(file, entry.network); err != nil {
 		return err
 	}
+	if _, err := sanitizeLegacyOperatorLists(); err != nil {
+		return err
+	}
 	return completeBlocklistRemoval(entry.network, os.Stdout, ApplyPolicies, network.SyncHAUnban)
 }
 
 // AllowSSH adds an IP to the SSH bypass list
 func AllowSSH(ip string, port string) error {
+	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+		return fmt.Errorf("validate firewall backend before SSH bypass mutation: %w", err)
+	}
 	configuredPort := ""
 	if config.GlobalConfig != nil {
 		configuredPort = config.GlobalConfig.SSHPort
@@ -717,22 +832,31 @@ func AllowSSH(ip string, port string) error {
 
 // RevokeSSH removes an IP from the SSH bypass list
 func RevokeSSH(ip string) error {
-	entry, err := parseCanonicalListEntry(ip, false)
+	entry, err := parseCanonicalRecoveryListEntry(ip, false)
 	if err != nil {
 		return fmt.Errorf("invalid IP address: %w", err)
+	}
+	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+		return fmt.Errorf("validate firewall backend before SSH bypass mutation: %w", err)
 	}
 	target, err := approvedListFileForPath(SSHBypass)
 	if err != nil {
 		return err
 	}
-	found, err := removeIPFromListFileAt(target, entry.network)
+	found, changed, err := removeIPFromListFileAt(target, entry.network)
 	if err != nil {
 		return fmt.Errorf("remove IP from SSH bypass list: %w", err)
 	}
-	if found {
+	cleanupChanged, err := sanitizeLegacyOperatorLists()
+	if err != nil {
+		return err
+	}
+	if changed || cleanupChanged {
 		if err := ApplyPolicies(); err != nil {
 			return err
 		}
+	}
+	if found {
 		fmt.Printf("[SUCCESS] SSH Bypass revoked for %s.\n", ip)
 		return nil
 	}
@@ -756,26 +880,44 @@ func formatListEntry(ip, port string) string {
 	return entry.String()
 }
 
-func removeListEntriesForIP(content []byte, ip string) ([]byte, bool) {
-	target, targetErr := parseCanonicalListEntry(ip, false)
+func removeListEntriesForIP(content []byte, ip string) ([]byte, bool, bool) {
+	target, targetErr := parseCanonicalRecoveryListEntry(ip, false)
 	lines := strings.Split(string(content), "\n")
 	newLines := make([]string, 0, len(lines))
 	found := false
+	changed := false
 	for _, line := range lines {
 		cleanLine := strings.TrimSpace(line)
-		entry, entryErr := parseCanonicalListEntry(cleanLine, true)
-		if targetErr == nil && entryErr == nil && sameListNetwork(entry, target) {
-			found = true
+		if cleanLine == "" {
 			continue
 		}
-		if cleanLine != "" {
+		if strings.HasPrefix(cleanLine, "#") {
 			newLines = append(newLines, cleanLine)
+			continue
 		}
+		entry, entryErr := parseCanonicalRecoveryListEntry(cleanLine, true)
+		_, strictErr := parseCanonicalListEntry(cleanLine, true)
+		if entryErr != nil || strictErr != nil {
+			changed = true
+			if targetErr == nil && entryErr == nil && sameListNetwork(entry, target) {
+				found = true
+			}
+			continue
+		}
+		if targetErr == nil && entryErr == nil && sameListNetwork(entry, target) {
+			found = true
+			changed = true
+			continue
+		}
+		newLines = append(newLines, cleanLine)
 	}
-	return []byte(strings.Join(newLines, "\n") + "\n"), found
+	return []byte(strings.Join(newLines, "\n") + "\n"), found, changed
 }
 
 func WhitelistInfra() error {
+	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+		return fmt.Errorf("validate firewall backend before infrastructure whitelist mutation: %w", err)
+	}
 	fmt.Println("[INFO] SYSWARDEN Auto-Whitelist Infrastructure")
 	ips := []string{}
 
@@ -846,7 +988,7 @@ func WhitelistInfra() error {
 
 // CheckIP performs a global diagnostic on an IP
 func CheckIP(ip string) {
-	target, err := parseCanonicalListEntry(ip, false)
+	target, err := parseCanonicalRecoveryListEntry(ip, false)
 	if err != nil {
 		fmt.Printf("[ERROR] Invalid IP address: %s\n", ip)
 		return

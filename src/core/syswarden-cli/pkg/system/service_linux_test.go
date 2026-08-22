@@ -257,6 +257,20 @@ func TestPublishServiceArtifactsRollsBackOnlyNewArtifacts(t *testing.T) {
 	}
 }
 
+func TestCoreServiceRequiresSuccessfulFirewallLoaderAtBoot_SW2_FWBACKEND_001(t *testing.T) {
+	for _, required := range []string{
+		"Requires=syswarden-firewall.service\n",
+		"After=network.target rsyslog.service syswarden-firewall.service\n",
+	} {
+		if !strings.Contains(systemdCoreService, required) {
+			t.Fatalf("systemd core unit lacks %q", required)
+		}
+	}
+	if !strings.Contains(openRCCoreService, "need net rsyslog syswarden-firewall\n") {
+		t.Fatal("OpenRC core unit does not require the firewall loader")
+	}
+}
+
 func withSystemdPublicationTestPaths(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()

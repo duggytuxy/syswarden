@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,19 +18,21 @@ func newHAFenceTestAPI(t *testing.T) *haAPI {
 	t.Helper()
 	directory := t.TempDir()
 	api, err := newHAAPI(HAConfig{
-		Token: "fence-test-token", PeerIPs: []string{"192.0.2.10"}, BunkerWebEnabled: true,
+		Token: "fence-test-token", PeerIPs: []string{"9.9.9.10"}, BunkerWebEnabled: true,
 	}, noOpFirewallManager{}, "v4.03.0", filepath.Join(directory, "blacklist.ipv4"), filepath.Join(directory, "blacklist.ipv6"),
 		filepath.Join(directory, "telemetry.json"), filepath.Join(directory, "bans.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	api.localInterfaceAddresses = func() ([]netip.Addr, error) { return nil, nil }
+	api.isWhitelisted = func(string) (bool, error) { return false, nil }
 	return api
 }
 
 func authenticatedHAFenceRequest(t *testing.T, method, path, body string) *http.Request {
 	t.Helper()
 	request := httptest.NewRequest(method, "https://syswarden.test"+path, strings.NewReader(body))
-	request.RemoteAddr = "192.0.2.10:43210"
+	request.RemoteAddr = "9.9.9.10:43210"
 	request.Header.Set("Authorization", "Bearer fence-test-token")
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
@@ -125,7 +128,7 @@ func TestHAFenceLegacyMutationPreconditionsAreZeroMutation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := authenticatedHAFenceRequest(t, test.method, "/ha/sync", `{"ips":["203.0.113.9"]}`)
+			request := authenticatedHAFenceRequest(t, test.method, "/ha/sync", `{"ips":["1.1.1.9"]}`)
 			for index := 0; index < len(test.headers); index += 2 {
 				request.Header.Add(test.headers[index], test.headers[index+1])
 			}
@@ -150,7 +153,7 @@ func TestHAFenceLegacyMutationPreconditionsAreZeroMutation(t *testing.T) {
 		t.Fatalf("conditioned cleanup status = %d, body = %s", approvedRecorder.Code, approvedRecorder.Body.String())
 	}
 
-	enriched := authenticatedHAFenceRequest(t, http.MethodDelete, "/ha/sync", `{"bans":[{"ip":"203.0.113.7","source":"partner"}]}`)
+	enriched := authenticatedHAFenceRequest(t, http.MethodDelete, "/ha/sync", `{"bans":[{"ip":"1.1.1.7","source":"partner"}]}`)
 	enrichedRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(enrichedRecorder, enriched)
 	if enrichedRecorder.Code != http.StatusOK {
