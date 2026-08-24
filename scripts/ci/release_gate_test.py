@@ -817,7 +817,7 @@ class ReleaseGateTests(unittest.TestCase):
         )
         for script in scripts:
             self.assertEqual(script.count("--tag-phase"), 4)
-            self.assertEqual(script.count("./scripts/versioning.sh validate-commit"), 10)
+            self.assertEqual(script.count("./scripts/versioning.sh validate-commit"), 11)
             self.assertEqual(
                 script.count("# BEGIN exact second preserved-version fix diff contract"),
                 1,
@@ -835,13 +835,13 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(script.count('for tree_ref in HEAD^ HEAD; do'), 2)
             self.assertEqual(
                 script.count('tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'),
-                5,
+                6,
             )
-            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 4)
-            self.assertEqual(script.count('"${tree_type}" != "blob"'), 5)
+            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 5)
+            self.assertEqual(script.count('"${tree_type}" != "blob"'), 6)
             expected_path_counts = {
-                ".github/workflows/release-manager.yml": 10,
-                "scripts/ci/release_gate_test.py": 10,
+                ".github/workflows/release-manager.yml": 12,
+                "scripts/ci/release_gate_test.py": 12,
                 "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go": 2,
             }
             for path, count in expected_path_counts.items():
@@ -869,9 +869,19 @@ class ReleaseGateTests(unittest.TestCase):
     ) -> None:
         blocks = self.v4032_recovery_blocks(workflow)
         self.assertEqual(
+            workflow.count(
+                'commit_subject="$(git log -1 --format=%s HEAD)"'
+            ),
+            2,
+        )
+        self.assertEqual(
             workflow.count('if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then'), 2
         )
         pinned_contracts = (
+            (
+                'if [[ "${v4032_runc_parent_sha}" != '
+                '"d025f5ee7b1d453a64d11ea2f5afcab13fc01a97" ]]; then'
+            ),
             (
                 'if [[ "${v4032_runtime_parent_sha}" != '
                 '"0e7fc0a3437d69cea8086abacd0a30e032a0579f" ]]; then'
@@ -899,6 +909,10 @@ class ReleaseGateTests(unittest.TestCase):
         )
         for contract in pinned_contracts:
             self.assertEqual(workflow.count(contract), 2)
+        runc_subject_contract = (
+            "v4032_runc_expected_subject='Qualification : pin v4.03.2 "
+            "ARM64 runc runtime path (#99)'"
+        )
         runtime_subject_contract = (
             "v4032_runtime_expected_subject='Qualification : repair v4.03.2 "
             "ARM64 OCI runtime resolution (#98)'"
@@ -921,6 +935,7 @@ class ReleaseGateTests(unittest.TestCase):
             "scripts/ci/release_gate_test.py",
             "scripts/ci/release_qualification_workflow_test.py",
         )
+        runc_paths = arm64_paths
         runtime_paths = arm64_paths
         merge_paths = (
             ".github/workflows/release-manager.yml",
@@ -959,6 +974,7 @@ class ReleaseGateTests(unittest.TestCase):
             "README.md",
         )
         for block in blocks:
+            self.assertEqual(block.count(runc_subject_contract), 1)
             self.assertEqual(block.count(runtime_subject_contract), 1)
             self.assertEqual(block.count(arm64_subject_contract), 1)
             self.assertEqual(block.count(merge_subject_contract), 1)
@@ -966,18 +982,83 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 block.count(
                     '[[ "${commit_subject}" != '
+                    '"${v4032_runc_expected_subject}" ]]'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count('v4032_runc_parent_sha="$(git rev-parse HEAD^)"'),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_runc_head_line <<< '
+                    '"$(git rev-list --parents -n 1 HEAD)"'
+                ),
+                1,
+            )
+            self.assertEqual(block.count("${#v4032_runc_head_line[@]} != 2"), 1)
+            self.assertEqual(
+                block.count(
+                    "# BEGIN exact v4.03.2 ARM64 runc pin diff contract"
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count("# END exact v4.03.2 ARM64 runc pin diff contract"),
+                1,
+            )
+            runc_diff = block.split(
+                "# BEGIN exact v4.03.2 ARM64 runc pin diff contract\n", 1
+            )[1].split(
+                "# END exact v4.03.2 ARM64 runc pin diff contract", 1
+            )[0]
+            self.assertEqual(
+                runc_diff.count(
+                    "git diff-tree --no-commit-id --name-status -r "
+                    "--no-renames -z HEAD^ HEAD"
+                ),
+                1,
+            )
+            self.assertEqual(runc_diff.count("for tree_ref in HEAD^ HEAD; do"), 1)
+            self.assertEqual(runc_diff.count('"${tree_mode}" != "100644"'), 1)
+            self.assertEqual(runc_diff.count('"${tree_type}" != "blob"'), 1)
+            self.assertEqual(
+                runc_diff.count(
+                    "${#actual_v4032_runc_diff[@]} != "
+                    "${#expected_v4032_runc_diff[@]}"
+                ),
+                1,
+            )
+            for path in runc_paths:
+                self.assertEqual(runc_diff.count(f'"{path}"'), 2)
+                self.assertEqual(runc_diff.count(f'M "{path}"'), 1)
+            self.assertEqual(block.count("v4032_runtime_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_runtime_parent_sha="$(git rev-parse '
+                    '"${v4032_runtime_ref}^")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_runtime_subject="$(git log -1 --format=%s '
+                    '"${v4032_runtime_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    '[[ "${v4032_runtime_subject}" != '
                     '"${v4032_runtime_expected_subject}" ]]'
                 ),
                 1,
             )
             self.assertEqual(
-                block.count('v4032_runtime_parent_sha="$(git rev-parse HEAD^)"'),
-                1,
-            )
-            self.assertEqual(
                 block.count(
-                    'v4032_runtime_head_line <<< '
-                    '"$(git rev-list --parents -n 1 HEAD)"'
+                    'v4032_runtime_head_line <<< "$(git rev-list --parents -n 1 '
+                    '"${v4032_runtime_ref}")"'
                 ),
                 1,
             )
@@ -1007,11 +1088,18 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 runtime_diff.count(
                     "git diff-tree --no-commit-id --name-status -r "
-                    "--no-renames -z HEAD^ HEAD"
+                    "--no-renames -z \\\n"
+                    '        "${v4032_runtime_ref}^" "${v4032_runtime_ref}"'
                 ),
                 1,
             )
-            self.assertEqual(runtime_diff.count("for tree_ref in HEAD^ HEAD; do"), 1)
+            self.assertEqual(
+                runtime_diff.count(
+                    'for tree_ref in "${v4032_runtime_ref}^" '
+                    '"${v4032_runtime_ref}"; do'
+                ),
+                1,
+            )
             self.assertEqual(runtime_diff.count('"${tree_mode}" != "100644"'), 1)
             self.assertEqual(runtime_diff.count('"${tree_type}" != "blob"'), 1)
             self.assertEqual(
@@ -1024,7 +1112,9 @@ class ReleaseGateTests(unittest.TestCase):
             for path in runtime_paths:
                 self.assertEqual(runtime_diff.count(f'"{path}"'), 2)
                 self.assertEqual(runtime_diff.count(f'M "{path}"'), 1)
-            self.assertEqual(block.count("v4032_arm64_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count('v4032_arm64_ref="${v4032_runtime_ref}^"\n'), 1
+            )
             self.assertEqual(
                 block.count(
                     'v4032_arm64_parent_sha="$(git rev-parse '
@@ -1254,7 +1344,7 @@ class ReleaseGateTests(unittest.TestCase):
                     "git diff-tree --no-commit-id --name-status -r "
                     "--no-renames -z \\"
                 ),
-                3,
+                4,
             )
             self.assertEqual(
                 block.count(
@@ -1273,12 +1363,12 @@ class ReleaseGateTests(unittest.TestCase):
                 block.count(
                     'tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'
                 ),
-                4,
+                5,
             )
             self.assertEqual(
                 block.count('"${tree_mode}" != "${expected_mode}"'), 1
             )
-            self.assertEqual(block.count('"${tree_type}" != "blob"'), 4)
+            self.assertEqual(block.count('"${tree_type}" != "blob"'), 5)
             self.assertEqual(block.count('expected_mode="100644"'), 1)
             self.assertEqual(
                 block.count('[[ "${fix_path}" == "build_packages.sh" ]]'), 1
@@ -1294,12 +1384,14 @@ class ReleaseGateTests(unittest.TestCase):
                 expected_count += 2 if path in merge_paths else 0
                 expected_count += 2 if path in arm64_paths else 0
                 expected_count += 2 if path in runtime_paths else 0
+                expected_count += 2 if path in runc_paths else 0
                 expected_count += 1 if path == "build_packages.sh" else 0
                 self.assertEqual(block.count(f'"{path}"'), expected_count)
                 expected_status_count = 1
                 expected_status_count += 1 if path in merge_paths else 0
                 expected_status_count += 1 if path in arm64_paths else 0
                 expected_status_count += 1 if path in runtime_paths else 0
+                expected_status_count += 1 if path in runc_paths else 0
                 self.assertEqual(
                     block.count(f'M "{path}"'), expected_status_count
                 )
@@ -1320,7 +1412,23 @@ class ReleaseGateTests(unittest.TestCase):
                 1,
             )
             self.assertEqual(
-                block.count('./scripts/versioning.sh validate-commit'), 5
+                block.count('./scripts/versioning.sh validate-commit'), 6
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_runtime_commit_message="$(git log -1 --format=%B '
+                    '"${v4032_runtime_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count('--base-ref "${v4032_runtime_parent_sha}"'), 1
+            )
+            self.assertEqual(
+                block.count(
+                    '--commit-message "${v4032_runtime_commit_message}"'
+                ),
+                1,
             )
             self.assertEqual(
                 block.count(
@@ -1401,6 +1509,28 @@ class ReleaseGateTests(unittest.TestCase):
             )[0]
             self.assertNotIn("--tag-phase", parent_validation)
 
+    def exact_v4032_runc_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        begin = "# BEGIN exact v4.03.2 ARM64 runc pin diff contract\n"
+        end = "# END exact v4.03.2 ARM64 runc pin diff contract"
+        self.assertEqual(block.count(begin), 1)
+        self.assertEqual(block.count(end), 1)
+        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+
+    def v4032_runc_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        start = "v4032_runc_expected_subject="
+        end = (
+            'read -r -a v4032_runc_head_line <<< '
+            '"$(git rev-list --parents -n 1 HEAD)"'
+        )
+        self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(end), 1)
+        fragment = start + block.split(start, 1)[1].split(end, 1)[0]
+        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+
     def exact_v4032_runtime_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
@@ -1410,20 +1540,31 @@ class ReleaseGateTests(unittest.TestCase):
         end = "# END exact v4.03.2 ARM64 OCI runtime resolution diff contract"
         self.assertEqual(block.count(begin), 1)
         self.assertEqual(block.count(end), 1)
-        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+        return (
+            "set -euo pipefail\nv4032_runtime_ref=HEAD\n"
+            + block.split(begin, 1)[1].split(end, 1)[0]
+        )
 
     def v4032_runtime_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
         start = "v4032_runtime_expected_subject="
+        subject_assignment = (
+            'v4032_runtime_subject="$(git log -1 --format=%s '
+            '"${v4032_runtime_ref}")"'
+        )
         end = (
             'read -r -a v4032_runtime_head_line <<< '
-            '"$(git rev-list --parents -n 1 HEAD)"'
+            '"$(git rev-list --parents -n 1 "${v4032_runtime_ref}")"'
         )
         self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(subject_assignment), 1)
         self.assertEqual(block.count(end), 1)
         fragment = start + block.split(start, 1)[1].split(end, 1)[0]
-        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+        fragment = fragment.replace(
+            subject_assignment, 'v4032_runtime_subject="${COMMIT_SUBJECT:?}"'
+        )
+        return "set -euo pipefail\n" + fragment
 
     def exact_v4032_arm64_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -1747,6 +1888,57 @@ class ReleaseGateTests(unittest.TestCase):
         )
         return repository
 
+    def test_release_manager_v4032_runc_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        self.assert_exact_subject_gate(
+            self.v4032_runc_subject_gate_script(),
+            {
+                "valid": (
+                    "Qualification : pin v4.03.2 ARM64 runc runtime path (#99)",
+                    True,
+                ),
+                "bare": (
+                    "Qualification : pin v4.03.2 ARM64 runc runtime path",
+                    False,
+                ),
+                "double pull request suffix": (
+                    "Qualification : pin v4.03.2 ARM64 runc runtime path (#99) (#99)",
+                    False,
+                ),
+                "previous pull request": (
+                    "Qualification : pin v4.03.2 ARM64 runc runtime path (#98)",
+                    False,
+                ),
+                "next pull request": (
+                    "Qualification : pin v4.03.2 ARM64 runc runtime path (#100)",
+                    False,
+                ),
+                "wrong version": (
+                    "Qualification : pin v4.03.3 ARM64 runc runtime path (#99)",
+                    False,
+                ),
+                "trailing space": (
+                    "Qualification : pin v4.03.2 ARM64 runc runtime path (#99) ",
+                    False,
+                ),
+            },
+        )
+
+    def test_release_manager_v4032_runc_diff_rejects_git_shape_mutations(
+        self,
+    ) -> None:
+        self.assert_regular_diff_gate(
+            self.exact_v4032_runc_diff_script(),
+            "v4032-runc-diff",
+            (
+                ".github/workflows/release-manager.yml",
+                ".github/workflows/release-qualification.yml",
+                "scripts/ci/release_gate_test.py",
+                "scripts/ci/release_qualification_workflow_test.py",
+            ),
+        )
+
     def test_release_manager_v4032_runtime_subject_is_exact_github_squash(
         self,
     ) -> None:
@@ -1862,9 +2054,36 @@ class ReleaseGateTests(unittest.TestCase):
                 'if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then',
                 'if [[ "${RELEASE_TAG}" == "v4.03.3" ]]; then',
             ),
+            "runc parent resolution": workflow.replace(
+                'v4032_runc_parent_sha="$(git rev-parse HEAD^)"',
+                'v4032_runc_parent_sha="$(git rev-parse HEAD^^)"',
+            ),
+            "exact runc parent": workflow.replace(
+                "d025f5ee7b1d453a64d11ea2f5afcab13fc01a97",
+                "e025f5ee7b1d453a64d11ea2f5afcab13fc01a97",
+            ),
+            "runc canonical subject": workflow.replace(
+                "Qualification : pin v4.03.2 ARM64 runc runtime path (#99)",
+                "Qualification : arbitrary v4.03.2 ARM64 runc pin (#99)",
+            ),
+            "runc subject source": workflow.replace(
+                'commit_subject="$(git log -1 --format=%s HEAD)"',
+                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+            ),
+            "runc linear head": workflow.replace(
+                'v4032_runc_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+                'v4032_runc_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+            ),
+            "runtime reference": workflow.replace(
+                "v4032_runtime_ref=HEAD^", "v4032_runtime_ref=HEAD^^"
+            ),
             "runtime parent resolution": workflow.replace(
-                'v4032_runtime_parent_sha="$(git rev-parse HEAD^)"',
-                'v4032_runtime_parent_sha="$(git rev-parse HEAD^^)"',
+                'v4032_runtime_parent_sha="$(git rev-parse '
+                '"${v4032_runtime_ref}^")"',
+                'v4032_runtime_parent_sha="$(git rev-parse '
+                '"${v4032_runtime_ref}^^")"',
             ),
             "exact runtime parent": workflow.replace(
                 "0e7fc0a3437d69cea8086abacd0a30e032a0579f",
@@ -1875,13 +2094,26 @@ class ReleaseGateTests(unittest.TestCase):
                 "Qualification : arbitrary v4.03.2 ARM64 OCI repair (#98)",
             ),
             "runtime linear head": workflow.replace(
-                'v4032_runtime_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD)"',
-                'v4032_runtime_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD^)"',
+                'v4032_runtime_head_line <<< "$(git rev-list --parents -n 1 '
+                '"${v4032_runtime_ref}")"',
+                'v4032_runtime_head_line <<< "$(git rev-list --parents -n 1 HEAD)"',
+            ),
+            "runtime subject source": workflow.replace(
+                'v4032_runtime_subject="$(git log -1 --format=%s '
+                '"${v4032_runtime_ref}")"',
+                'v4032_runtime_subject="$(git log -1 --format=%s HEAD)"',
+            ),
+            "runtime message source": workflow.replace(
+                'v4032_runtime_commit_message="$(git log -1 --format=%B '
+                '"${v4032_runtime_ref}")"',
+                'v4032_runtime_commit_message="$(git log -1 --format=%B HEAD)"',
+            ),
+            "runtime validation base": workflow.replace(
+                '--base-ref "${v4032_runtime_parent_sha}"', '--base-ref HEAD^'
             ),
             "ARM64 reference": workflow.replace(
-                "v4032_arm64_ref=HEAD^", "v4032_arm64_ref=HEAD^^"
+                'v4032_arm64_ref="${v4032_runtime_ref}^"',
+                'v4032_arm64_ref="${v4032_runtime_ref}^^"',
             ),
             "ARM64 parent resolution": workflow.replace(
                 'v4032_arm64_parent_sha="$(git rev-parse '

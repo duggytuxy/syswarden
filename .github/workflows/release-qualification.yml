@@ -158,6 +158,26 @@ jobs:
             '844e4d8900fd6856d3f8f03a81599d6add195b69015de6b040c2da3b99bb7b95  /usr/local/lib/podman/aardvark-dns' | \
             /usr/bin/sha256sum --check --strict
           test "$(/usr/local/bin/podman --version)" = "podman version 5.8.4"
+          runc_version="$(/usr/local/bin/runc --version)"
+          if [[ "${runc_version%%$'\n'*}" != "runc version 1.4.3" ]]; then
+            echo "ERROR: native ARM64 runc does not match the sealed v1.4.3 contract." >&2
+            exit 1
+          fi
+          runc_help="$(/usr/local/bin/runc --help)"
+          if [[ "${runc_help}" != *"--systemd-cgroup"* ]]; then
+            echo "ERROR: native ARM64 runc does not expose systemd cgroup support." >&2
+            exit 1
+          fi
+          conmon_version="$(/usr/local/lib/podman/conmon --version)"
+          if [[ "${conmon_version%%$'\n'*}" != "conmon version 2.2.1" ]]; then
+            echo "ERROR: native ARM64 conmon does not match the sealed v2.2.1 contract." >&2
+            exit 1
+          fi
+          conmon_help="$(/usr/local/lib/podman/conmon --help)"
+          if [[ "${conmon_help}" != *"--systemd-cgroup"* ]]; then
+            echo "ERROR: native ARM64 conmon does not expose systemd cgroup forwarding." >&2
+            exit 1
+          fi
           expected_native_runtime="/usr/local/bin/crun"
           if ! native_runtime_path="$(/usr/local/bin/podman info --format "{{.Host.OCIRuntime.Path}}")"; then
             echo "ERROR: native ARM64 Podman could not resolve its OCI runtime before checkout." >&2
@@ -476,7 +496,7 @@ jobs:
           runtime_dir="/run/user/${user_id}"
           delegate_directory="/etc/systemd/system/user@.service.d"
           delegate_drop_in="${delegate_directory}/syswarden-release-qualification.conf"
-          containers_override="${SHARD_ROOT}/containers-override.conf"
+          containers_conf="${SHARD_ROOT}/containers.conf"
           delegate_drop_in_owned=false
           original_user_service_active=false
           arm_cleanup_completed=false
@@ -497,8 +517,8 @@ jobs:
           test ! -L "${RUNNER_TEMP}"
           test -d "${SHARD_ROOT}"
           test ! -L "${SHARD_ROOT}"
-          test ! -e "${containers_override}"
-          test ! -L "${containers_override}"
+          test ! -e "${containers_conf}"
+          test ! -L "${containers_conf}"
           if sudo -n systemctl is-active --quiet "${user_service}"; then
             original_user_service_active=true
           fi
@@ -526,10 +546,10 @@ jobs:
                 fi
               fi
             fi
-            if ! rm -f -- "${containers_override}"; then
+            if ! rm -f -- "${containers_conf}"; then
               cleanup_rc=1
             fi
-            if [[ -e "${containers_override}" || -L "${containers_override}" ]]; then
+            if [[ -e "${containers_conf}" || -L "${containers_conf}" ]]; then
               cleanup_rc=1
             fi
             return "${cleanup_rc}"
@@ -580,13 +600,14 @@ jobs:
           printf '%s\n' \
             '[engine]' \
             'cgroup_manager="systemd"' \
-            'runtime="crun"' \
-            '[engine.runtimes]' \
-            'crun = ["/usr/local/bin/crun"]' > "${containers_override}"
-          if [[ ! -f "${containers_override}" || -L "${containers_override}" || \
-                "$(stat -c '%u' "${containers_override}")" != "${user_id}" || \
-                "$(stat -c '%a' "${containers_override}")" != "600" ]]; then
-            echo "ERROR: the isolated Podman override is not a private runner-owned file." >&2
+            'conmon_path=["/usr/local/lib/podman/conmon"]' \
+            'runtime="/usr/local/bin/runc"' \
+            '[engine.platform_to_oci_runtime]' \
+            '"linux/arm64"="/usr/local/bin/runc"' > "${containers_conf}"
+          if [[ ! -f "${containers_conf}" || -L "${containers_conf}" || \
+                "$(stat -c '%u' "${containers_conf}")" != "${user_id}" || \
+                "$(stat -c '%a' "${containers_conf}")" != "600" ]]; then
+            echo "ERROR: the isolated Podman configuration is not a private runner-owned file." >&2
             exit 1
           fi
 
@@ -604,7 +625,8 @@ jobs:
             --property='Type=exec' \
             --property='Delegate=cpu io memory pids' \
             --property='UMask=0077' \
-            --setenv="CONTAINERS_CONF_OVERRIDE=${containers_override}" \
+            --setenv="CONTAINERS_CONF=${containers_conf}" \
+            --setenv='CONTAINERS_CONF_OVERRIDE=' \
             --setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus" \
             --setenv="HOME=${HOME}" \
             --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
@@ -612,7 +634,7 @@ jobs:
             --setenv="RUNNER_TEMP=${RUNNER_TEMP}" \
             --setenv="XDG_RUNTIME_DIR=${runtime_dir}" \
             /usr/bin/bash --noprofile --norc -e -o pipefail -c \
-            'if ! runtime_path="$(/usr/local/bin/podman info --format "{{.Host.OCIRuntime.Path}}")"; then echo "ERROR: native ARM64 Podman could not resolve its OCI runtime." >&2; exit 1; fi; if [[ "${runtime_path}" != "/usr/local/bin/crun" ]]; then printf "ERROR: native ARM64 Podman resolved an unexpected OCI runtime path: %q.\n" "${runtime_path}" >&2; exit 1; fi; exec "$@"' \
+            'if [[ -z "${CONTAINERS_CONF:-}" || -n "${CONTAINERS_CONF_OVERRIDE:-}" ]]; then echo "ERROR: native ARM64 Podman configuration isolation is incomplete." >&2; exit 1; fi; if ! /usr/local/bin/runc --version >/dev/null; then echo "ERROR: native ARM64 runc is not executable inside the delegated session." >&2; exit 1; fi; if ! /usr/local/lib/podman/conmon --version >/dev/null; then echo "ERROR: native ARM64 conmon is not executable inside the delegated session." >&2; exit 1; fi; if ! podman_runtime="$(/usr/local/bin/podman info --format "{{.Host.Conmon.Path}}|{{.Host.OCIRuntime.Path}}|{{.Host.CgroupManager}}")"; then echo "ERROR: native ARM64 Podman could not attest its isolated runtime configuration." >&2; exit 1; fi; if [[ "${podman_runtime}" != "/usr/local/lib/podman/conmon|/usr/local/bin/runc|systemd" ]]; then printf "ERROR: native ARM64 Podman resolved an unexpected runtime configuration: %q.\n" "${podman_runtime}" >&2; exit 1; fi; exec "$@"' \
             syswarden-arm64-lifecycle \
             /usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py" \
             --packages-dir "${ARM_CANDIDATE_PACKAGES_DIR}" \

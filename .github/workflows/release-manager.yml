@@ -136,17 +136,75 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_runtime_parent_sha="$(git rev-parse HEAD^)"
+              v4032_runc_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_runc_parent_sha}" != "d025f5ee7b1d453a64d11ea2f5afcab13fc01a97" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 runc pin is not based on the reviewed PR98 squash." >&2
+                exit 1
+              fi
+              v4032_runc_expected_subject='Qualification : pin v4.03.2 ARM64 runc runtime path (#99)'
+              if [[ "${commit_subject}" != "${v4032_runc_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 runc pin requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_runc_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_runc_head_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 ARM64 runc pin must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 ARM64 runc pin diff contract
+              expected_v4032_runc_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+              )
+              mapfile -d '' -t actual_v4032_runc_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_runc_diff[@]} != ${#expected_v4032_runc_diff[@]} )); then
+                echo "ERROR: the v4.03.2 ARM64 runc pin must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_runc_diff[@]}; index++)); do
+                if [[ "${actual_v4032_runc_diff[index]}" != "${expected_v4032_runc_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 ARM64 runc pin contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_runc_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_runc_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 ARM64 runc pin ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 ARM64 runc pin diff contract
+              v4032_runtime_ref=HEAD^
+              v4032_runtime_parent_sha="$(git rev-parse "${v4032_runtime_ref}^")"
               if [[ "${v4032_runtime_parent_sha}" != "0e7fc0a3437d69cea8086abacd0a30e032a0579f" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 OCI runtime resolution is not based on the reviewed PR97 squash." >&2
                 exit 1
               fi
               v4032_runtime_expected_subject='Qualification : repair v4.03.2 ARM64 OCI runtime resolution (#98)'
-              if [[ "${commit_subject}" != "${v4032_runtime_expected_subject}" ]]; then
+              v4032_runtime_subject="$(git log -1 --format=%s "${v4032_runtime_ref}")"
+              if [[ "${v4032_runtime_subject}" != "${v4032_runtime_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 OCI runtime resolution requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_runtime_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_runtime_head_line <<< "$(git rev-list --parents -n 1 "${v4032_runtime_ref}")"
               if (( ${#v4032_runtime_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 ARM64 OCI runtime resolution must be one linear commit." >&2
                 exit 1
@@ -159,7 +217,8 @@ jobs:
                 M "scripts/ci/release_qualification_workflow_test.py"
               )
               mapfile -d '' -t actual_v4032_runtime_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_runtime_ref}^" "${v4032_runtime_ref}"
               )
               if (( ${#actual_v4032_runtime_diff[@]} != ${#expected_v4032_runtime_diff[@]} )); then
                 echo "ERROR: the v4.03.2 ARM64 OCI runtime resolution must modify exactly the four reviewed files." >&2
@@ -177,7 +236,7 @@ jobs:
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/release_qualification_workflow_test.py"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_runtime_ref}^" "${v4032_runtime_ref}"; do
                 for fix_path in "${v4032_runtime_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -192,7 +251,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 ARM64 OCI runtime resolution diff contract
-              v4032_arm64_ref=HEAD^
+              v4032_arm64_ref="${v4032_runtime_ref}^"
               v4032_arm64_parent_sha="$(git rev-parse "${v4032_arm64_ref}^")"
               if [[ "${v4032_arm64_parent_sha}" != "8387b3e8b96a3778b333504dc9c948dfe06777d5" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 Podman path repair is not based on the reviewed PR96 squash." >&2
@@ -424,6 +483,11 @@ jobs:
                 src/core/syswarden-cli/pkg/integration/webhook.go \
                 src/core/syswarden-core/webhook/discord.go \
                 README.md
+              v4032_runtime_commit_message="$(git log -1 --format=%B "${v4032_runtime_ref}")"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4032_runtime_parent_sha}" \
+                --commit-message "${v4032_runtime_commit_message}"
               v4032_arm64_commit_message="$(git log -1 --format=%B "${v4032_arm64_ref}")"
               ./scripts/versioning.sh validate-commit \
                 --repo "${GITHUB_WORKSPACE}" \
@@ -923,17 +987,75 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_runtime_parent_sha="$(git rev-parse HEAD^)"
+              v4032_runc_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_runc_parent_sha}" != "d025f5ee7b1d453a64d11ea2f5afcab13fc01a97" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 runc pin is not based on the reviewed PR98 squash." >&2
+                exit 1
+              fi
+              v4032_runc_expected_subject='Qualification : pin v4.03.2 ARM64 runc runtime path (#99)'
+              if [[ "${commit_subject}" != "${v4032_runc_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 runc pin requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_runc_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_runc_head_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 ARM64 runc pin must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 ARM64 runc pin diff contract
+              expected_v4032_runc_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+              )
+              mapfile -d '' -t actual_v4032_runc_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_runc_diff[@]} != ${#expected_v4032_runc_diff[@]} )); then
+                echo "ERROR: the v4.03.2 ARM64 runc pin must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_runc_diff[@]}; index++)); do
+                if [[ "${actual_v4032_runc_diff[index]}" != "${expected_v4032_runc_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 ARM64 runc pin contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_runc_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_runc_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 ARM64 runc pin ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 ARM64 runc pin diff contract
+              v4032_runtime_ref=HEAD^
+              v4032_runtime_parent_sha="$(git rev-parse "${v4032_runtime_ref}^")"
               if [[ "${v4032_runtime_parent_sha}" != "0e7fc0a3437d69cea8086abacd0a30e032a0579f" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 OCI runtime resolution is not based on the reviewed PR97 squash." >&2
                 exit 1
               fi
               v4032_runtime_expected_subject='Qualification : repair v4.03.2 ARM64 OCI runtime resolution (#98)'
-              if [[ "${commit_subject}" != "${v4032_runtime_expected_subject}" ]]; then
+              v4032_runtime_subject="$(git log -1 --format=%s "${v4032_runtime_ref}")"
+              if [[ "${v4032_runtime_subject}" != "${v4032_runtime_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 OCI runtime resolution requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_runtime_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_runtime_head_line <<< "$(git rev-list --parents -n 1 "${v4032_runtime_ref}")"
               if (( ${#v4032_runtime_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 ARM64 OCI runtime resolution must be one linear commit." >&2
                 exit 1
@@ -946,7 +1068,8 @@ jobs:
                 M "scripts/ci/release_qualification_workflow_test.py"
               )
               mapfile -d '' -t actual_v4032_runtime_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_runtime_ref}^" "${v4032_runtime_ref}"
               )
               if (( ${#actual_v4032_runtime_diff[@]} != ${#expected_v4032_runtime_diff[@]} )); then
                 echo "ERROR: the v4.03.2 ARM64 OCI runtime resolution must modify exactly the four reviewed files." >&2
@@ -964,7 +1087,7 @@ jobs:
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/release_qualification_workflow_test.py"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_runtime_ref}^" "${v4032_runtime_ref}"; do
                 for fix_path in "${v4032_runtime_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -979,7 +1102,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 ARM64 OCI runtime resolution diff contract
-              v4032_arm64_ref=HEAD^
+              v4032_arm64_ref="${v4032_runtime_ref}^"
               v4032_arm64_parent_sha="$(git rev-parse "${v4032_arm64_ref}^")"
               if [[ "${v4032_arm64_parent_sha}" != "8387b3e8b96a3778b333504dc9c948dfe06777d5" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 Podman path repair is not based on the reviewed PR96 squash." >&2
@@ -1211,6 +1334,11 @@ jobs:
                 src/core/syswarden-cli/pkg/integration/webhook.go \
                 src/core/syswarden-core/webhook/discord.go \
                 README.md
+              v4032_runtime_commit_message="$(git log -1 --format=%B "${v4032_runtime_ref}")"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4032_runtime_parent_sha}" \
+                --commit-message "${v4032_runtime_commit_message}"
               v4032_arm64_commit_message="$(git log -1 --format=%B "${v4032_arm64_ref}")"
               ./scripts/versioning.sh validate-commit \
                 --repo "${GITHUB_WORKSPACE}" \
