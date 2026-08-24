@@ -93,7 +93,11 @@ jobs:
           command -v jq >/dev/null
           command -v podman >/dev/null
           command -v python3 >/dev/null
+          command -v runc >/dev/null
           command -v sha256sum >/dev/null
+          command -v sudo >/dev/null
+          command -v systemctl >/dev/null
+          command -v systemd-run >/dev/null
 
       - name: Create Native ARM64 Shard Workspace
         id: arm_workspace
@@ -316,10 +320,149 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          user_id="$(id -u)"
+          user_name="$(id -un)"
+          user_service="user@${user_id}.service"
+          runtime_dir="/run/user/${user_id}"
+          delegate_directory="/etc/systemd/system/user@.service.d"
+          delegate_drop_in="${delegate_directory}/syswarden-release-qualification.conf"
+          containers_override="${SHARD_ROOT}/containers-override.conf"
+          delegate_drop_in_owned=false
+          original_user_service_active=false
+          arm_cleanup_completed=false
+
+          if [[ "${user_id}" -eq 0 || "${user_name}" != "runner" || \
+                "${HOME}" != "/home/runner" || ! -d "${HOME}" || \
+                -L "${HOME}" || "$(stat -c '%u' "${HOME}")" != "${user_id}" ]]; then
+            echo "ERROR: ARM64 qualification requires the exact non-root hosted runner identity." >&2
+            exit 1
+          fi
+          self_cgroup="$(awk -F: '$1 == "0" { print $3 }' /proc/self/cgroup)"
+          if [[ -z "${self_cgroup}" || "${self_cgroup}" == /user.slice/* ]]; then
+            echo "ERROR: the hosted runner shell must remain outside the user manager being renewed." >&2
+            exit 1
+          fi
+          test -n "${RUNNER_TEMP:-}"
+          test -d "${RUNNER_TEMP}"
+          test ! -L "${RUNNER_TEMP}"
+          test -d "${SHARD_ROOT}"
+          test ! -L "${SHARD_ROOT}"
+          test ! -e "${containers_override}"
+          test ! -L "${containers_override}"
+          if sudo -n systemctl is-active --quiet "${user_service}"; then
+            original_user_service_active=true
+          fi
+
+          cleanup_arm_cgroup_session() {
+            local cleanup_rc=0
+            if [[ "${delegate_drop_in_owned}" == "true" ]]; then
+              if ! sudo -n systemctl stop "${user_service}"; then
+                cleanup_rc=1
+              fi
+              if ! sudo -n rm -f -- "${delegate_drop_in}"; then
+                cleanup_rc=1
+              fi
+              if sudo -n test -e "${delegate_drop_in}" || \
+                 sudo -n test -L "${delegate_drop_in}"; then
+                cleanup_rc=1
+              fi
+              if ! sudo -n systemctl daemon-reload; then
+                cleanup_rc=1
+              fi
+              if [[ "${original_user_service_active}" == "true" ]]; then
+                if ! sudo -n systemctl start "${user_service}" || \
+                   ! sudo -n systemctl is-active --quiet "${user_service}"; then
+                  cleanup_rc=1
+                fi
+              fi
+            fi
+            if ! rm -f -- "${containers_override}"; then
+              cleanup_rc=1
+            fi
+            if [[ -e "${containers_override}" || -L "${containers_override}" ]]; then
+              cleanup_rc=1
+            fi
+            return "${cleanup_rc}"
+          }
+          cleanup_arm_cgroup_session_on_exit() {
+            local exit_rc=$?
+            trap - EXIT
+            if [[ "${arm_cleanup_completed}" != "true" ]] && \
+               ! cleanup_arm_cgroup_session; then
+              exit_rc=1
+            fi
+            exit "${exit_rc}"
+          }
+          trap cleanup_arm_cgroup_session_on_exit EXIT
+
+          if sudo -n test -e "${delegate_drop_in}" || \
+             sudo -n test -L "${delegate_drop_in}"; then
+            echo "ERROR: the dedicated ARM64 delegation drop-in already exists." >&2
+            exit 1
+          fi
+          if sudo -n test -L "${delegate_directory}"; then
+            echo "ERROR: the systemd user-service drop-in directory must not be a symbolic link." >&2
+            exit 1
+          fi
+          sudo -n install -d -o root -g root -m 0755 "${delegate_directory}"
+          if ! sudo -n test -d "${delegate_directory}" || \
+             sudo -n test -L "${delegate_directory}"; then
+            echo "ERROR: the systemd user-service drop-in directory is not a real directory." >&2
+            exit 1
+          fi
+          delegate_drop_in_owned=true
+          printf '%s\n' \
+            '[Service]' \
+            'Delegate=cpu io memory pids' | \
+            sudo -n tee "${delegate_drop_in}" >/dev/null
+          sudo -n chown root:root "${delegate_drop_in}"
+          sudo -n chmod 0644 "${delegate_drop_in}"
+          if ! sudo -n test -f "${delegate_drop_in}" || \
+             sudo -n test -L "${delegate_drop_in}" || \
+             [[ "$(sudo -n stat -c '%u:%g:%a' "${delegate_drop_in}")" != "0:0:644" ]]; then
+            echo "ERROR: the dedicated ARM64 delegation drop-in is not an exact root-owned file." >&2
+            exit 1
+          fi
+          sudo -n systemctl daemon-reload
+          sudo -n systemctl stop "${user_service}" || true
+
+          umask 077
+          printf '%s\n' \
+            '[engine]' \
+            'cgroup_manager="systemd"' \
+            'runtime="runc"' > "${containers_override}"
+          if [[ ! -f "${containers_override}" || -L "${containers_override}" || \
+                "$(stat -c '%u' "${containers_override}")" != "${user_id}" || \
+                "$(stat -c '%a' "${containers_override}")" != "600" ]]; then
+            echo "ERROR: the isolated Podman override is not a private runner-owned file." >&2
+            exit 1
+          fi
+
+          unit_name="syswarden-arm64-lifecycle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           set +e
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_lifecycle_lab.py \
+          sudo -n systemd-run \
+            --machine="${user_name}@" \
+            --user \
+            --unit="${unit_name}" \
+            --quiet \
+            --wait \
+            --collect \
+            --pipe \
+            --working-directory="${GITHUB_WORKSPACE}" \
+            --property='Type=exec' \
+            --property='Delegate=cpu io memory pids' \
+            --property='UMask=0077' \
+            --setenv="CONTAINERS_CONF_OVERRIDE=${containers_override}" \
+            --setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus" \
+            --setenv="HOME=${HOME}" \
+            --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+            --setenv='PYTHONDONTWRITEBYTECODE=1' \
+            --setenv="RUNNER_TEMP=${RUNNER_TEMP}" \
+            --setenv="XDG_RUNTIME_DIR=${runtime_dir}" \
+            /usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py" \
             --packages-dir "${ARM_CANDIDATE_PACKAGES_DIR}" \
             --previous-packages-dir "${ARM_PREVIOUS_PACKAGES_DIR}" \
+            --podman /usr/bin/podman \
             --architecture-shard arm64 \
             --qualification-repository "${GITHUB_REPOSITORY}" \
             --qualification-release-sha "${RELEASE_SHA}" \
@@ -336,6 +479,18 @@ jobs:
             --pretty
           shard_rc=$?
           set -e
+          cleanup_rc=0
+          if ! cleanup_arm_cgroup_session; then
+            cleanup_rc=1
+          fi
+          arm_cleanup_completed=true
+          trap - EXIT
+          if [[ "${cleanup_rc}" -ne 0 ]]; then
+            echo "ERROR: ARM64 delegated session cleanup or restoration failed." >&2
+            if [[ "${shard_rc}" -eq 0 ]]; then
+              shard_rc=1
+            fi
+          fi
           printf '%s\n' "${shard_rc}" > \
             "${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.rc"
           chmod 0600 "${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.rc"
@@ -473,13 +628,27 @@ jobs:
           if ! jq -e \
             --arg expected_name "${expected_runner_name}" \
             --arg expected_url "https://github.com/${GITHUB_REPOSITORY}" '
-              .AgentName == $expected_name and
-              .DisableUpdate == true and
-              .Ephemeral == true and
-              .GitHubUrl == $expected_url and
-              .WorkFolder == "_work" and
-              .PoolName == "Default" and
-              (.AgentId | type == "number" and . > 0 and floor == .)
+              def has_exact_key($canonical):
+                ([keys_unsorted[] |
+                  select(ascii_downcase == ($canonical | ascii_downcase))]
+                ) as $matching_keys |
+                ($matching_keys | length) == 1 and
+                $matching_keys[0] == $canonical;
+              type == "object" and
+              has_exact_key("agentId") and
+              has_exact_key("agentName") and
+              has_exact_key("disableUpdate") and
+              has_exact_key("ephemeral") and
+              has_exact_key("gitHubUrl") and
+              has_exact_key("workFolder") and
+              has_exact_key("poolName") and
+              .agentName == $expected_name and
+              .disableUpdate == true and
+              .ephemeral == true and
+              .gitHubUrl == $expected_url and
+              .workFolder == "_work" and
+              .poolName == "Default" and
+              (.agentId | type == "number" and . > 0 and floor == .)
             ' "${runner_config}" >/dev/null; then
             echo "ERROR: runner identity is not the exact ephemeral qualification configuration." >&2
             exit 1

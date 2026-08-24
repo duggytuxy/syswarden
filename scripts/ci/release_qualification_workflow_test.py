@@ -156,6 +156,7 @@ def run_runner_gate(
     *,
     context_overrides: dict[str, str] | None = None,
     runner_config_overrides: dict[str, object] | None = None,
+    runner_config_removals: tuple[str, ...] = (),
     runner_root_mode: int = 0o700,
     runner_work_mode: int = 0o700,
     runner_identity_mode: int = 0o600,
@@ -168,17 +169,19 @@ def run_runner_gate(
         runner_temp.parent.chmod(runner_work_mode)
         runner_temp.chmod(runner_work_mode)
         runner_config: dict[str, object] = {
-            "AgentId": 29,
-            "AgentName": "syswarden-release-lab-123456-a1",
-            "PoolId": 1,
-            "PoolName": "Default",
-            "DisableUpdate": True,
-            "Ephemeral": True,
-            "GitHubUrl": "https://github.com/duggytuxy/syswarden",
-            "WorkFolder": "_work",
+            "agentId": 29,
+            "agentName": "syswarden-release-lab-123456-a1",
+            "poolId": 1,
+            "poolName": "Default",
+            "disableUpdate": True,
+            "ephemeral": True,
+            "gitHubUrl": "https://github.com/duggytuxy/syswarden",
+            "workFolder": "_work",
         }
         if runner_config_overrides is not None:
             runner_config.update(runner_config_overrides)
+        for key in runner_config_removals:
+            runner_config.pop(key, None)
         for name, content in (
             (".runner", json.dumps(runner_config, separators=(",", ":"))),
             (".credentials", "{}"),
@@ -371,13 +374,33 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"${RUNNER_ARCH_CONTEXT}" != "X64"',
             '"$(stat -c \'%a\' "${directory}")" != "700"',
             "for identity_file in .runner .credentials .credentials_rsaparams",
-            ".DisableUpdate == true",
-            ".Ephemeral == true",
-            '.GitHubUrl == $expected_url',
-            '.WorkFolder == "_work"',
-            '.PoolName == "Default"',
+            "def has_exact_key($canonical):",
+            'has_exact_key("agentId")',
+            'has_exact_key("agentName")',
+            'has_exact_key("disableUpdate")',
+            'has_exact_key("ephemeral")',
+            'has_exact_key("gitHubUrl")',
+            'has_exact_key("workFolder")',
+            'has_exact_key("poolName")',
+            ".agentName == $expected_name",
+            ".disableUpdate == true",
+            ".ephemeral == true",
+            '.gitHubUrl == $expected_url',
+            '.workFolder == "_work"',
+            '.poolName == "Default"',
+            '(.agentId | type == "number" and . > 0 and floor == .)',
         ):
             self.assertIn(contract, script)
+        for forbidden_alias in (
+            ".AgentId",
+            ".AgentName",
+            ".DisableUpdate",
+            ".Ephemeral",
+            ".GitHubUrl",
+            ".WorkFolder",
+            ".PoolName",
+        ):
+            self.assertNotIn(forbidden_alias, script)
         self.assertNotIn("gh api", script)
         self.assertNotIn("GH_TOKEN", script)
         result = run_runner_gate(script)
@@ -401,13 +424,14 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 result = run_runner_gate(script, context_overrides=overrides)
                 self.assertNotEqual(result.returncode, 0, result.stderr)
         for name, overrides in (
-            ("persistent", {"Ephemeral": False}),
-            ("updates enabled", {"DisableUpdate": False}),
-            ("wrong repository", {"GitHubUrl": "https://github.com/example/repo"}),
-            ("wrong work folder", {"WorkFolder": "work"}),
-            ("wrong pool", {"PoolName": "Untrusted"}),
-            ("missing id", {"AgentId": 0}),
-            ("string id", {"AgentId": "29"}),
+            ("wrong configured name", {"agentName": "shared-runner"}),
+            ("persistent", {"ephemeral": False}),
+            ("updates enabled", {"disableUpdate": False}),
+            ("wrong repository", {"gitHubUrl": "https://github.com/example/repo"}),
+            ("wrong work folder", {"workFolder": "work"}),
+            ("wrong pool", {"poolName": "Untrusted"}),
+            ("missing id", {"agentId": 0}),
+            ("string id", {"agentId": "29"}),
         ):
             with self.subTest(runner=name):
                 result = run_runner_gate(script, runner_config_overrides=overrides)
@@ -423,6 +447,68 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                     runner_root_mode=root_mode,
                     runner_work_mode=work_mode,
                     runner_identity_mode=identity_mode,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+
+    def test_local_runner_schema_rejects_case_aliases_and_collisions(self) -> None:
+        script = workflow_step_script(
+            self.workflow, "Validate Dedicated Ephemeral Qualification Runner"
+        )
+        canonical_values: dict[str, object] = {
+            "agentId": 29,
+            "agentName": "syswarden-release-lab-123456-a1",
+            "disableUpdate": True,
+            "ephemeral": True,
+            "gitHubUrl": "https://github.com/duggytuxy/syswarden",
+            "workFolder": "_work",
+            "poolName": "Default",
+        }
+        pascal_aliases = {
+            "agentId": "AgentId",
+            "agentName": "AgentName",
+            "disableUpdate": "DisableUpdate",
+            "ephemeral": "Ephemeral",
+            "gitHubUrl": "GitHubUrl",
+            "workFolder": "WorkFolder",
+            "poolName": "PoolName",
+        }
+        mixed_case_aliases = {
+            "agentId": "AGENTID",
+            "agentName": "aGeNtNaMe",
+            "disableUpdate": "disableupdate",
+            "ephemeral": "ePhEmErAl",
+            "gitHubUrl": "githuburl",
+            "workFolder": "wOrKfOlDeR",
+            "poolName": "poolname",
+        }
+        conflicting_values: dict[str, object] = {
+            "agentId": 30,
+            "agentName": "shared-runner",
+            "disableUpdate": False,
+            "ephemeral": False,
+            "gitHubUrl": "https://github.com/example/repo",
+            "workFolder": "work",
+            "poolName": "Untrusted",
+        }
+        for canonical, alias in pascal_aliases.items():
+            with self.subTest(field=canonical, representation="PascalCase alias"):
+                result = run_runner_gate(
+                    script,
+                    runner_config_overrides={alias: canonical_values[canonical]},
+                )
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+            with self.subTest(field=canonical, representation="PascalCase only"):
+                result = run_runner_gate(
+                    script,
+                    runner_config_overrides={alias: canonical_values[canonical]},
+                    runner_config_removals=(canonical,),
+                )
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+        for canonical, alias in mixed_case_aliases.items():
+            with self.subTest(field=canonical, representation="mixed-case conflict"):
+                result = run_runner_gate(
+                    script,
+                    runner_config_overrides={alias: conflicting_values[canonical]},
                 )
                 self.assertNotEqual(result.returncode, 0, result.stderr)
 
@@ -769,6 +855,70 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertIn("--architecture-shard amd64", self.workflow)
         self.assertIn('test "$(uname -m)" = "aarch64"', self.workflow)
 
+    def test_arm64_lab_uses_exact_transient_systemd_delegation(self) -> None:
+        script = workflow_step_script(
+            self.workflow, "Run Native ARM64 Package Lifecycle Shard"
+        )
+        for contract in (
+            '"${user_name}" != "runner"',
+            '"${HOME}" != "/home/runner"',
+            '"${self_cgroup}" == /user.slice/*',
+            'delegate_drop_in="${delegate_directory}/syswarden-release-qualification.conf"',
+            'delegate_drop_in_owned=false',
+            'original_user_service_active=false',
+            'arm_cleanup_completed=false',
+            'trap cleanup_arm_cgroup_session_on_exit EXIT',
+            'if [[ "${delegate_drop_in_owned}" == "true" ]]; then',
+            'delegate_drop_in_owned=true',
+            "'Delegate=cpu io memory pids'",
+            'sudo -n test -L "${delegate_directory}"',
+            'sudo -n test -d "${delegate_directory}"',
+            'sudo -n stat -c \'%u:%g:%a\' "${delegate_drop_in}"',
+            "'cgroup_manager=\"systemd\"'",
+            "'runtime=\"runc\"'",
+            '"$(stat -c \'%a\' "${containers_override}")" != "600"',
+            'unit_name="syswarden-arm64-lifecycle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+            'sudo -n systemd-run',
+            '--machine="${user_name}@"',
+            '--property=\'Type=exec\'',
+            "--property='Delegate=cpu io memory pids'",
+            "--property='UMask=0077'",
+            '--setenv="CONTAINERS_CONF_OVERRIDE=${containers_override}"',
+            '--setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus"',
+            "--setenv='PYTHONDONTWRITEBYTECODE=1'",
+            '/usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py"',
+            '--podman /usr/bin/podman',
+            'sudo -n rm -f -- "${delegate_drop_in}"',
+            'sudo -n test -e "${delegate_drop_in}"',
+            'rm -f -- "${containers_override}"',
+            'sudo -n systemctl start "${user_service}"',
+            'cleanup_rc=0',
+            'arm_cleanup_completed=true',
+            'trap - EXIT',
+            'ARM64 delegated session cleanup or restoration failed.',
+        ):
+            self.assertIn(contract, script)
+        for forbidden in (
+            "apt-get",
+            "cgroup_manager=\"cgroupfs\"",
+            "loginctl enable-linger",
+            "--privileged",
+            "podman system reset",
+            "podman system migrate",
+        ):
+            self.assertNotIn(forbidden, script)
+        self.assertEqual(script.count("sudo -n systemd-run"), 1)
+        self.assertEqual(script.count("scripts/ci/package_lifecycle_lab.py"), 1)
+        ownership_guard = script.index(
+            'if sudo -n test -e "${delegate_drop_in}"'
+        )
+        create_drop_in = script.index(
+            'sudo -n tee "${delegate_drop_in}" >/dev/null'
+        )
+        mark_owned = script.index("delegate_drop_in_owned=true")
+        self.assertLess(ownership_guard, mark_owned)
+        self.assertLess(mark_owned, create_drop_in)
+
     def test_premerge_package_workflow_runs_every_qualification_validator(self) -> None:
         step = workflow_step(
             self.package_workflow, "Test Package and Release Validators"
@@ -831,9 +981,16 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"--device"',
         ):
             self.assertNotIn(forbidden, self.package_lab)
-        for job_name in ("package-lifecycle-arm64", "qualify-release"):
-            job = workflow_job(self.workflow, job_name)
-            self.assertNotRegex(job, r"(?m)^\s*sudo(?:\s|$)")
+        x64_job = workflow_job(self.workflow, "qualify-release")
+        self.assertNotRegex(x64_job, r"(?m)^\s*sudo(?:\s|$)")
+        arm_job = workflow_job(self.workflow, "package-lifecycle-arm64")
+        delegated_step = workflow_step(
+            self.workflow, "Run Native ARM64 Package Lifecycle Shard"
+        )
+        self.assertIn(delegated_step, arm_job)
+        self.assertNotRegex(
+            arm_job.replace(delegated_step, ""), r"(?m)^\s*sudo(?:\s|$)"
+        )
 
     def test_previous_packages_use_exact_latest_public_release_asset_ids(self) -> None:
         for contract in (

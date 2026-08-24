@@ -135,12 +135,91 @@ jobs:
               --base-ref HEAD^ \
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
-            if [[ "${RELEASE_TAG}" != "v4.03.0" ]]; then
-              echo "ERROR: preserved-version release recovery is authorized only for v4.03.0." >&2
-              exit 1
-            fi
-            current_parent_sha="$(git rev-parse HEAD^)"
-            case "${current_parent_sha}" in
+            if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
+              v4032_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_parent_sha}" != "3655abe045deffc669e0ba9c11a6e4cf17a317a5" ]]; then
+                echo "ERROR: the v4.03.2 qualification repair is not based on the reviewed release commit." >&2
+                exit 1
+              fi
+              v4032_subject_pattern='^Qualification : repair v4\.03\.2 release qualification \(#[1-9][0-9]*\)$'
+              if [[ ! "${commit_subject}" =~ ${v4032_subject_pattern} ]]; then
+                echo "ERROR: the v4.03.2 qualification repair requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_parent_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 qualification repair requires one linear follow-up after the reviewed release commit." >&2
+                exit 1
+              fi
+              v4032_grandparent_sha="$(git rev-parse HEAD^^)"
+              if [[ "${v4032_grandparent_sha}" != "f2270a2a8138f1f2b72a6200f6febbdc83fa5eaa" ]]; then
+                echo "ERROR: the v4.03.2 release commit does not have the reviewed Patch baseline." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 preserved-version recovery diff contract
+              expected_v4032_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+              )
+              mapfile -d '' -t actual_v4032_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_diff[@]} != ${#expected_v4032_diff[@]} )); then
+                echo "ERROR: the v4.03.2 qualification repair must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_diff[@]}; index++)); do
+                if [[ "${actual_v4032_diff[index]}" != "${expected_v4032_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 qualification repair contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_fix_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_fix_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 repair path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 preserved-version recovery diff contract
+              git diff --quiet HEAD^ HEAD -- \
+                changelog.md \
+                src/core/syswarden-cli/pkg/system/upgrade.go \
+                src/core/syswarden-tui/main.go \
+                src/core/syswarden-cli/cmd/install.go \
+                src/core/syswarden-cli/config/default.go \
+                src/core/syswarden-cli/pkg/integration/webhook.go \
+                src/core/syswarden-core/webhook/discord.go \
+                README.md
+              v4032_parent_commit_message="$(git log -1 --format=%B HEAD^)"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4032_grandparent_sha}" \
+                --tag-phase \
+                --commit-message "${v4032_parent_commit_message}"
+            else
+              if [[ "${RELEASE_TAG}" != "v4.03.0" ]]; then
+                echo "ERROR: preserved-version release recovery is authorized only for v4.03.0 or v4.03.2." >&2
+                exit 1
+              fi
+              current_parent_sha="$(git rev-parse HEAD^)"
+              case "${current_parent_sha}" in
               295275baf021adc2efe22e5e14e38e2184c635a1)
                 if [[ ! "${commit_subject}" =~ ^Qualification[[:space:]]*:[[:space:]]*[^[:space:]] ]]; then
                   echo "ERROR: a preserved-version release fix requires a Qualification commit subject." >&2
@@ -259,7 +338,8 @@ jobs:
                 echo "ERROR: preserved-version release recovery is not authorized for parent ${current_parent_sha}." >&2
                 exit 1
                 ;;
-            esac
+              esac
+            fi
           fi
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
             -s scripts/ci \
@@ -605,12 +685,91 @@ jobs:
               --base-ref HEAD^ \
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
-            if [[ "${RELEASE_TAG}" != "v4.03.0" ]]; then
-              echo "ERROR: preserved-version release recovery is authorized only for v4.03.0." >&2
-              exit 1
-            fi
-            current_parent_sha="$(git rev-parse HEAD^)"
-            case "${current_parent_sha}" in
+            if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
+              v4032_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_parent_sha}" != "3655abe045deffc669e0ba9c11a6e4cf17a317a5" ]]; then
+                echo "ERROR: the v4.03.2 qualification repair is not based on the reviewed release commit." >&2
+                exit 1
+              fi
+              v4032_subject_pattern='^Qualification : repair v4\.03\.2 release qualification \(#[1-9][0-9]*\)$'
+              if [[ ! "${commit_subject}" =~ ${v4032_subject_pattern} ]]; then
+                echo "ERROR: the v4.03.2 qualification repair requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_parent_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 qualification repair requires one linear follow-up after the reviewed release commit." >&2
+                exit 1
+              fi
+              v4032_grandparent_sha="$(git rev-parse HEAD^^)"
+              if [[ "${v4032_grandparent_sha}" != "f2270a2a8138f1f2b72a6200f6febbdc83fa5eaa" ]]; then
+                echo "ERROR: the v4.03.2 release commit does not have the reviewed Patch baseline." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 preserved-version recovery diff contract
+              expected_v4032_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+              )
+              mapfile -d '' -t actual_v4032_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_diff[@]} != ${#expected_v4032_diff[@]} )); then
+                echo "ERROR: the v4.03.2 qualification repair must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_diff[@]}; index++)); do
+                if [[ "${actual_v4032_diff[index]}" != "${expected_v4032_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 qualification repair contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_fix_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_fix_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 repair path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 preserved-version recovery diff contract
+              git diff --quiet HEAD^ HEAD -- \
+                changelog.md \
+                src/core/syswarden-cli/pkg/system/upgrade.go \
+                src/core/syswarden-tui/main.go \
+                src/core/syswarden-cli/cmd/install.go \
+                src/core/syswarden-cli/config/default.go \
+                src/core/syswarden-cli/pkg/integration/webhook.go \
+                src/core/syswarden-core/webhook/discord.go \
+                README.md
+              v4032_parent_commit_message="$(git log -1 --format=%B HEAD^)"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4032_grandparent_sha}" \
+                --tag-phase \
+                --commit-message "${v4032_parent_commit_message}"
+            else
+              if [[ "${RELEASE_TAG}" != "v4.03.0" ]]; then
+                echo "ERROR: preserved-version release recovery is authorized only for v4.03.0 or v4.03.2." >&2
+                exit 1
+              fi
+              current_parent_sha="$(git rev-parse HEAD^)"
+              case "${current_parent_sha}" in
               295275baf021adc2efe22e5e14e38e2184c635a1)
                 if [[ ! "${commit_subject}" =~ ^Qualification[[:space:]]*:[[:space:]]*[^[:space:]] ]]; then
                   echo "ERROR: a preserved-version release fix requires a Qualification commit subject." >&2
@@ -729,7 +888,8 @@ jobs:
                 echo "ERROR: preserved-version release recovery is not authorized for parent ${current_parent_sha}." >&2
                 exit 1
                 ;;
-            esac
+              esac
+            fi
           fi
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
             -s scripts/ci \
