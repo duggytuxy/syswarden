@@ -34,6 +34,7 @@ type firewallRemovalPreparationHost struct {
 	resolveWireGuardExe        func() (string, error)
 	wireGuardInterface         func() (bool, error)
 	attestSystemdUnit          func(string) error
+	attestSystemdDropIns       func(firewallManagerExecutor, string) (string, error)
 	attestOpenRCUnit           func(firewallRemovalService) error
 	openRCUnitPresent          func(firewallRemovalService) (bool, error)
 	attestOpenRCRunlevel       func(firewallRemovalService, string) error
@@ -46,6 +47,7 @@ type firewallRemovalManager struct {
 	runlevelPath               string
 	executor                   firewallManagerExecutor
 	attestSystemdUnit          func(string) error
+	attestSystemdDropIns       func(firewallManagerExecutor, string) (string, error)
 	attestOpenRCUnit           func(firewallRemovalService) error
 	openRCUnitPresent          func(firewallRemovalService) (bool, error)
 	attestOpenRCRunlevel       func(firewallRemovalService, string) error
@@ -75,6 +77,7 @@ func productionFirewallRemovalPreparationHost() firewallRemovalPreparationHost {
 		resolveWireGuardExe:        resolveWireGuardRemovalExecutable,
 		wireGuardInterface:         inspectWireGuardRemovalInterface,
 		attestSystemdUnit:          attestSystemdFirewallRemovalUnitFile,
+		attestSystemdDropIns:       attestApprovedSystemdServiceDropIns,
 		attestOpenRCUnit:           attestOpenRCFirewallRemovalUnit,
 		openRCUnitPresent:          inspectOpenRCFirewallRemovalUnitPresence,
 		attestOpenRCRunlevel:       attestOpenRCFirewallRemovalRunlevelLink,
@@ -90,6 +93,7 @@ func (host firewallRemovalPreparationHost) validate() error {
 		host.executor.output == nil || host.processScan == nil || host.attestWireGuard == nil ||
 		host.verifyWireGuardStopConfig == nil || host.resolveWireGuardExe == nil ||
 		host.wireGuardInterface == nil || host.attestSystemdUnit == nil ||
+		host.attestSystemdDropIns == nil ||
 		host.attestOpenRCUnit == nil || host.openRCUnitPresent == nil || host.attestOpenRCRunlevel == nil ||
 		host.verifyOpenRCRunlevelAbsent == nil {
 		return fmt.Errorf("firewall removal preparation dependencies are incomplete")
@@ -119,6 +123,7 @@ func (host firewallRemovalPreparationHost) resolveManager() (firewallRemovalMana
 		servicePath:                servicePath,
 		executor:                   host.executor,
 		attestSystemdUnit:          host.attestSystemdUnit,
+		attestSystemdDropIns:       host.attestSystemdDropIns,
 		attestOpenRCUnit:           host.attestOpenRCUnit,
 		openRCUnitPresent:          host.openRCUnitPresent,
 		attestOpenRCRunlevel:       host.attestOpenRCRunlevel,
@@ -213,8 +218,8 @@ func attestSystemdFirewallRemovalService(
 	if err != nil {
 		return err
 	}
-	if dropIns != "" {
-		return fmt.Errorf("refusing systemd drop-ins for firewall mutator %s", unit)
+	if _, err := manager.attestSystemdDropIns(manager.executor, dropIns); err != nil {
+		return fmt.Errorf("refusing unapproved systemd drop-ins for firewall mutator %s: %w", unit, err)
 	}
 	execStart, err := queryFirewallProperty(manager.executor, manager.servicePath, unit, "ExecStart")
 	if err != nil {

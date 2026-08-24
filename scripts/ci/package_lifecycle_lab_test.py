@@ -2750,6 +2750,7 @@ probe
             "seed_live_legacy_webtui_process() { :; }\n"
             "seed_legacy_saas_monitor_state() { :; }\n"
             "prepare_service_runtime_fixture() { :; }\n"
+            "prepare_package_transition() { prepare_service_runtime_fixture; }\n"
             "remove_service_manager_sentinels() { :; }\n"
             "load_state_contract() { return 0; }\n"
             'run_install_step() { printf "%s\\n" "$1" >> "${CALLS}"; }\n'
@@ -2800,6 +2801,7 @@ probe
             'FORWARD_ONLY_APK_TRANSITION="0"\n'
             "FAILURES=0\n"
             "probe_execution_architecture() { return 0; }\n"
+            "prepare_package_transition() { return 0; }\n"
             "prepare_expected_payloads() {\n"
             '    case "${SCENARIO}" in\n'
             "        upgrade-rollback) return 0 ;;\n"
@@ -4779,6 +4781,135 @@ probe
                 self.assertIn(
                     f"{scenario}.{label}.service_manager_calls", checks
                 )
+
+    def test_package_transitions_reset_only_an_active_rsyslog_rate_limit(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("prepare_package_transition() {")
+        end = source.index("\nexpected_systemd_enablement_prefix() {", start)
+        function = source[start:end]
+
+        self.assertIn("prepare_service_runtime_fixture || return 1", function)
+        self.assertIn("systemctl is-enabled rsyslog.service", function)
+        self.assertIn("systemctl is-active rsyslog.service", function)
+        self.assertIn("systemctl reset-failed rsyslog.service", function)
+        self.assertNotIn("systemctl start", function)
+        self.assertNotIn("systemctl restart", function)
+        self.assertNotIn("systemctl try-restart", function)
+        self.assertLess(
+            function.index("systemctl is-active rsyslog.service"),
+            function.index("systemctl reset-failed rsyslog.service"),
+        )
+        self.assertLess(
+            function.index("systemctl reset-failed rsyslog.service"),
+            function.rindex("systemctl is-active rsyslog.service"),
+        )
+        self.assertIn(
+            '[ "${syswarden_transition_rsyslog_pid_after}" = '
+            '"${syswarden_transition_rsyslog_pid_before}" ]',
+            function,
+        )
+        self.assertEqual(function.count("kill -0"), 2)
+
+        commands = (
+            ('install.previous "${PREVIOUS_PACKAGE}"', 1),
+            ('upgrade.candidate "${CANDIDATE_PACKAGE}"', 1),
+            ('reinstall.candidate "${CANDIDATE_PACKAGE}"', 1),
+            ('rollback.previous "${PREVIOUS_PACKAGE}"', 1),
+            ('recovery.candidate "${CANDIDATE_PACKAGE}"', 1),
+            ('install.candidate "${CANDIDATE_PACKAGE}"', 2),
+        )
+        for command, expected_count in commands:
+            with self.subTest(command=command):
+                self.assertEqual(
+                    source.count(
+                        "    prepare_package_transition || return\n"
+                        f"    run_install_step {command} || return"
+                    ),
+                    expected_count,
+                )
+
+        harness = function + r'''
+prepare_service_runtime_fixture() {
+    printf '%s\n' prepare-service-runtime >> "${TEST_CALLS}"
+    return "${TEST_FIXTURE_RC:-0}"
+}
+systemctl() {
+    printf 'systemctl %s\n' "$*" >> "${TEST_CALLS}"
+    case "$*" in
+        'is-enabled rsyslog.service') printf '%s\n' "${TEST_ENABLED:-enabled}" ;;
+        'is-active rsyslog.service') printf '%s\n' "${TEST_ACTIVE:-active}" ;;
+        'show -p MainPID --value rsyslog.service')
+            if [ -n "${TEST_PID_AFTER:-}" ] && grep -q '^systemctl reset-failed ' "${TEST_CALLS}"; then
+                printf '%s\n' "${TEST_PID_AFTER}"
+            else
+                printf '%s\n' "${TEST_PID_BEFORE:-123}"
+            fi
+            ;;
+        'reset-failed rsyslog.service') return "${TEST_RESET_RC:-0}" ;;
+        *) return 97 ;;
+    esac
+}
+kill() {
+    printf 'kill %s\n' "$*" >> "${TEST_CALLS}"
+    return "${TEST_KILL_RC:-0}"
+}
+syswarden_classify_service_manager() {
+    printf '%s\n' "${TEST_MANAGER_STATE:-ACTIVE}"
+}
+prepare_package_transition
+'''
+
+        with tempfile.TemporaryDirectory() as temporary:
+            calls = Path(temporary) / "calls"
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PACKAGE_FAMILY": "deb",
+                    "TEST_CALLS": str(calls),
+                }
+            )
+            accepted = subprocess.run(
+                ["/bin/sh", "-c", harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted)
+            accepted_calls = calls.read_text(encoding="ascii").splitlines()
+            self.assertEqual(accepted_calls.count("systemctl reset-failed rsyslog.service"), 1)
+            self.assertEqual(accepted_calls.count("kill -0 123"), 2)
+
+            calls.unlink()
+            environment["TEST_ACTIVE"] = "inactive"
+            rejected = subprocess.run(
+                ["/bin/sh", "-c", harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertNotEqual(rejected.returncode, 0, rejected)
+            self.assertNotIn(
+                "systemctl reset-failed rsyslog.service",
+                calls.read_text(encoding="ascii").splitlines(),
+            )
+
+            calls.unlink()
+            environment.pop("TEST_ACTIVE")
+            environment["TEST_PID_AFTER"] = "124"
+            changed_pid = subprocess.run(
+                ["/bin/sh", "-c", harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertNotEqual(changed_pid.returncode, 0, changed_pid)
+            self.assertIn(
+                "systemctl reset-failed rsyslog.service",
+                calls.read_text(encoding="ascii").splitlines(),
+            )
 
     def test_alpine_crond_provider_attestation_rejects_ambiguous_evidence(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT

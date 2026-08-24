@@ -27,7 +27,15 @@ def workflow_step(workflow: str, step_name: str) -> str:
     marker = f"      - name: {step_name}\n"
     if workflow.count(marker) != 1:
         raise AssertionError(f"expected exactly one workflow step named {step_name}")
-    step = workflow.split(marker, 1)[1].split("\n      - name:", 1)[0]
+    remainder = workflow.split(marker, 1)[1]
+    boundaries = []
+    next_step = remainder.find("\n      - name:")
+    if next_step >= 0:
+        boundaries.append(next_step)
+    next_job = re.search(r"(?m)^  [a-zA-Z0-9_-]+:\n", remainder)
+    if next_job is not None:
+        boundaries.append(next_job.start())
+    step = remainder[: min(boundaries)] if boundaries else remainder
     return marker + step
 
 
@@ -207,6 +215,34 @@ def run_runner_gate(
         )
         if context_overrides is not None:
             process_environment.update(context_overrides)
+        return subprocess.run(
+            ["/bin/bash", "-c", script],
+            cwd=REPOSITORY,
+            env=process_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+
+def run_arm_verdict(
+    script: str,
+    report: dict[str, object],
+    status: str = "0\n",
+) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory() as temporary:
+        evidence_directory = Path(temporary)
+        (evidence_directory / "package-lifecycle-arm64.json").write_text(
+            json.dumps(report, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        (evidence_directory / "package-lifecycle-arm64.rc").write_text(
+            status,
+            encoding="utf-8",
+        )
+        process_environment = os.environ.copy()
+        process_environment["ARM_EVIDENCE_DIR"] = str(evidence_directory)
         return subprocess.run(
             ["/bin/bash", "-c", script],
             cwd=REPOSITORY,
@@ -666,8 +702,17 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"${EVENT_ACTOR}" != "${REPOSITORY_OWNER}"',
             '"${EVENT_TRIGGERING_ACTOR}" != "${REPOSITORY_OWNER}"',
             '"${RUN_ATTEMPT}" != "1"',
+            'podman_path="/usr/local/bin/podman"',
+            "for parent in /usr /usr/local /usr/local/bin; do",
+            '"$(stat -c \'%u:%g\' "${parent}")" != "0:0"',
+            "(( (8#${parent_mode} & 0022) != 0 ))",
+            '[[ ! -f "${podman_path}" || -L "${podman_path}"',
+            '! -x "${podman_path}"',
+            '"$(stat -c \'%u:%g\' "${podman_path}")" != "0:0"',
+            "(( (8#${podman_mode} & 0022) != 0 ))",
         ):
             self.assertIn(contract, arm_context)
+        self.assertNotIn("command -v podman", arm_context)
         self.assertNotIn("--tag-phase", self.workflow)
         self.assertNotIn("--require-tag", self.workflow)
 
@@ -887,7 +932,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '--setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus"',
             "--setenv='PYTHONDONTWRITEBYTECODE=1'",
             '/usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py"',
-            '--podman /usr/bin/podman',
+            '--podman /usr/local/bin/podman',
             'sudo -n rm -f -- "${delegate_drop_in}"',
             'sudo -n test -e "${delegate_drop_in}"',
             'rm -f -- "${containers_override}"',
@@ -909,6 +954,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.assertNotIn(forbidden, script)
         self.assertEqual(script.count("sudo -n systemd-run"), 1)
         self.assertEqual(script.count("scripts/ci/package_lifecycle_lab.py"), 1)
+        self.assertNotIn("--podman /usr/bin/podman", self.workflow)
         ownership_guard = script.index(
             'if sudo -n test -e "${delegate_drop_in}"'
         )
@@ -1036,6 +1082,62 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         )
         self.assertIn('"${UPLOAD_OUTCOME}" != "success"', x64[verdict:])
         self.assertIn("all(.[]; . == 0)", x64[verdict:])
+
+    def test_arm64_failure_evidence_uploads_before_shard_verdict(self) -> None:
+        arm = workflow_job(self.workflow, "package-lifecycle-arm64")
+        upload = arm.index("Upload Native ARM64 Package Lifecycle Shard")
+        verdict = arm.index("Enforce Native ARM64 Package Lifecycle Verdict")
+        self.assertLess(upload, verdict)
+        verdict_script = workflow_step_script(
+            self.workflow, "Enforce Native ARM64 Package Lifecycle Verdict"
+        )
+        for contract in (
+            'shard_rc="$(cat "${status}")"',
+            '"${shard_rc}" != "0"',
+            '.status == "pass"',
+            ".harness_complete == true",
+            ".release_ready == true",
+            '(.blocker_ids | type == "array" and length == 0)',
+            '(.unexpected_failed_checks | type == "array" and length == 0)',
+            '(has("error") | not)',
+        ):
+            self.assertIn(contract, verdict_script)
+
+        valid_report: dict[str, object] = {
+            "status": "pass",
+            "harness_complete": True,
+            "release_ready": True,
+            "blocker_ids": [],
+            "unexpected_failed_checks": [],
+        }
+        accepted = run_arm_verdict(verdict_script, valid_report)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        rejected_reports = (
+            {**valid_report, "status": "fail"},
+            {**valid_report, "harness_complete": False},
+            {**valid_report, "release_ready": False},
+            {**valid_report, "blocker_ids": ["arm64:blocker"]},
+            {
+                **valid_report,
+                "unexpected_failed_checks": ["arm64:unexpected"],
+            },
+            {**valid_report, "error": "harness failed"},
+        )
+        for report in rejected_reports:
+            with self.subTest(report=report):
+                rejected = run_arm_verdict(verdict_script, report)
+                self.assertNotEqual(rejected.returncode, 0)
+        rejected_rc = run_arm_verdict(verdict_script, valid_report, "1\n")
+        self.assertNotEqual(rejected_rc.returncode, 0)
+
+    def test_unsigned_inventory_diff_uses_supported_gnu_invocation(self) -> None:
+        inventory = workflow_step_script(
+            self.workflow, "Seal Exact Unsigned Qualification Evidence Inventory"
+        )
+        self.assertIn("diff -u", inventory)
+        self.assertNotIn("diff --no-index", inventory)
+        self.assertIn("exit 1", inventory)
 
     def test_hosted_gate_sign_seal_upload_cleanup_and_verdict_order_is_exact(self) -> None:
         hosted = workflow_job(self.workflow, "seal-release")

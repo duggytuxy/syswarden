@@ -822,6 +822,42 @@ func TestValidateResolvedFirewallExecutableRejectsUnsafeTargets_SW2_FWBACKEND_01
 
 func TestRunFirewallPreflightCommandIsTimeAndOutputBounded_SW2_FWBACKEND_015(t *testing.T) {
 	directory := firewallPreflightTestDirectory(t)
+	t.Run("successful-rpm-output-excludes-stderr-warning", func(t *testing.T) {
+		path := writeFirewallPreflightTestExecutable(
+			t,
+			directory,
+			"rpm-warning",
+			"printf 'systemd\\t259.5-1.fc44\\tx86_64\\t8\\n'\n"+
+				"printf 'warning: waiting for RPM database lock\\n' >&2",
+			0700,
+		)
+		output, err := runFirewallPreflightCommandWithTimeout(path, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const expected = "systemd\t259.5-1.fc44\tx86_64\t8\n"
+		if string(output) != expected {
+			t.Fatalf("successful output = %q, want %q", output, expected)
+		}
+	})
+	t.Run("nonzero-retains-stdout-and-stderr", func(t *testing.T) {
+		path := writeFirewallPreflightTestExecutable(
+			t,
+			directory,
+			"failed-rpm-query",
+			"printf 'partial-rpm-stdout\\n'\nprintf 'rpm-stderr-proof\\n' >&2\nexit 7",
+			0700,
+		)
+		output, err := runFirewallPreflightCommandWithTimeout(path, time.Second)
+		if err == nil || !strings.Contains(err.Error(), "exit status 7") {
+			t.Fatalf("command error = %v", err)
+		}
+		for _, proof := range []string{"partial-rpm-stdout\n", "rpm-stderr-proof\n"} {
+			if !strings.Contains(string(output), proof) {
+				t.Fatalf("failure output %q does not retain %q", output, proof)
+			}
+		}
+	})
 	t.Run("output", func(t *testing.T) {
 		path := writeFirewallPreflightTestExecutable(
 			t,
@@ -836,6 +872,28 @@ func TestRunFirewallPreflightCommandIsTimeAndOutputBounded_SW2_FWBACKEND_015(t *
 		}
 		if len(output) != maximumFirewallPreflightOutput {
 			t.Fatalf("captured output = %d bytes, want %d", len(output), maximumFirewallPreflightOutput)
+		}
+	})
+	t.Run("combined-output", func(t *testing.T) {
+		path := writeFirewallPreflightTestExecutable(
+			t,
+			directory,
+			"combined-oversized",
+			"printf 'stdout-proof\\n'\nhead -c 40000 /dev/zero\n"+
+				"printf 'stderr-proof\\n' >&2\nhead -c 40000 /dev/zero >&2",
+			0700,
+		)
+		output, err := runFirewallPreflightCommandWithTimeout(path, time.Second)
+		if err == nil || !strings.Contains(err.Error(), "output exceeds") {
+			t.Fatalf("command error = %v", err)
+		}
+		if len(output) != maximumFirewallPreflightOutput {
+			t.Fatalf("combined output = %d bytes, want %d", len(output), maximumFirewallPreflightOutput)
+		}
+		for _, proof := range []string{"stdout-proof\n", "stderr-proof\n"} {
+			if !strings.Contains(string(output), proof) {
+				t.Fatalf("combined output does not retain %q", proof)
+			}
 		}
 	})
 	t.Run("timeout", func(t *testing.T) {

@@ -57,7 +57,17 @@ syswarden_attest_openrc_runtime() {
     syswarden_openrc_owner="$3"
     syswarden_openrc_softlevel="${syswarden_openrc_runtime}/softlevel"
     syswarden_openrc_comm="${syswarden_openrc_root}/proc/1/comm"
-    syswarden_safe_runtime_object "${syswarden_openrc_runtime}" directory "${syswarden_openrc_owner}" || return 1
+    [ ! -L "${syswarden_openrc_runtime}" ] && [ -d "${syswarden_openrc_runtime}" ] || return 1
+    syswarden_openrc_runtime_metadata="$(
+        stat -c '%u:%g:%a' "${syswarden_openrc_runtime}" 2>/dev/null
+    )" || return 1
+    case "${syswarden_openrc_runtime_metadata}" in
+        "${syswarden_openrc_owner}":755|"${syswarden_openrc_owner}":775) ;;
+        *) return 1 ;;
+    esac
+    syswarden_openrc_runtime_before="$(
+        stat -c '%d:%i:%f:%u:%g:%a:%s:%Y:%Z' "${syswarden_openrc_runtime}" 2>/dev/null
+    )" || return 1
     syswarden_safe_runtime_object "${syswarden_openrc_softlevel}" file "${syswarden_openrc_owner}" || return 1
     syswarden_openrc_softlevel_before="$(stat -c '%d:%i:%u:%g:%a:%s:%Y:%Z' "${syswarden_openrc_softlevel}" 2>/dev/null)" || return 1
     syswarden_openrc_softlevel_digest_before="$(
@@ -95,6 +105,10 @@ syswarden_attest_openrc_runtime() {
     case "${syswarden_openrc_identity}" in init|openrc-init) ;; *) return 1 ;; esac
     [ "$(wc -c < "${syswarden_openrc_comm}" | tr -d ' ')" -eq "$((${#syswarden_openrc_identity} + 1))" ] || return 1
     syswarden_safe_runtime_object "${syswarden_openrc_comm}" file "${syswarden_openrc_owner}" || return 1
+    [ "$(stat -c '%d:%i:%f:%u:%g:%a:%s:%Y:%Z' "${syswarden_openrc_runtime}" 2>/dev/null)" = \
+        "${syswarden_openrc_runtime_before}" ] || return 1
+    [ "$(stat -c '%u:%g:%a' "${syswarden_openrc_runtime}" 2>/dev/null)" = \
+        "${syswarden_openrc_runtime_metadata}" ] || return 1
     return 0
 }
 
@@ -153,6 +167,15 @@ syswarden_classify_service_manager() {
         return 0
     fi
     for syswarden_manager_path in "${syswarden_manager_expected}" "${syswarden_manager_competing}"; do
+        if [ "${syswarden_manager_kind}" = openrc ] && \
+           [ "${syswarden_manager_path}" = "${syswarden_manager_expected}" ]; then
+            if [ -L "${syswarden_manager_path}" ] || \
+               { [ -e "${syswarden_manager_path}" ] && [ ! -d "${syswarden_manager_path}" ]; }; then
+                printf '%s\n' AMBIGUOUS
+                return 0
+            fi
+            continue
+        fi
         if { [ -e "${syswarden_manager_path}" ] || [ -L "${syswarden_manager_path}" ]; } && \
            ! syswarden_safe_runtime_object "${syswarden_manager_path}" directory "${syswarden_manager_owner}"; then
             printf '%s\n' AMBIGUOUS
@@ -248,7 +271,7 @@ syswarden_remove_exact_product_services() {
                 8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd 600 || return 1
             syswarden_remove_exact_service_file \
                 /etc/systemd/system/syswarden-firewall.service \
-                bc730793c007273a380261155b7602571c42efd93972f45ad2dd440f98251724 600 || return 1
+                989be4b60c43bba830333ef30949376e57658222a48947194395393794e328c1 600 || return 1
             ;;
         openrc)
             syswarden_remove_exact_service_enablement \
@@ -260,7 +283,7 @@ syswarden_remove_exact_product_services() {
                 99adff6d6bcb6c5f0fad472e11668d3f8f4e19136c3b3ce473493101db136558 755 || return 1
             syswarden_remove_exact_service_file \
                 /etc/init.d/syswarden-firewall \
-                82a936e4f9ce394d6cc0ffd3978a1842a899570842ab5d283184384e73af5905 755 || return 1
+                d8c57c59dae9493523275026acb2a5c599bd4949ff8993add6760e725f89a5ba 755 || return 1
             ;;
         *) return 1 ;;
     esac
@@ -542,7 +565,8 @@ syswarden_attest_approved_systemd_service_dropins() {
         printf '%s\n' 'Refusing approved systemd drop-in with inexact bytes' >&2
         return 1
     }
-    syswarden_retire_rpm="$(command -v rpm 2>/dev/null)" || return 1
+    syswarden_retire_rpm_path="$(command -v rpm 2>/dev/null)" || return 1
+    syswarden_retire_rpm="$(readlink -f -- "${syswarden_retire_rpm_path}" 2>/dev/null)" || return 1
     syswarden_retire_expected_rpm="${syswarden_retire_root}/usr/bin/rpm"
     if [ "${syswarden_retire_rpm}" != "${syswarden_retire_expected_rpm}" ] || \
        [ -L "${syswarden_retire_rpm}" ] || [ ! -f "${syswarden_retire_rpm}" ] || \
@@ -1037,7 +1061,10 @@ syswarden_webtui_process_matches() {
     [ -n "${syswarden_retire_process_identity}" ] || return 1
     [ "${syswarden_retire_process_identity}" = "${syswarden_retire_expected_identity}" ] || return 1
     syswarden_retire_starttime="$(syswarden_webtui_process_starttime "${syswarden_retire_process_root}/stat" 2>/dev/null || true)"
-    [ -n "${syswarden_retire_starttime}" ] || return 2
+    if [ -z "${syswarden_retire_starttime}" ]; then
+        [ ! -d "${syswarden_retire_process_root}" ] && return 1
+        return 2
+    fi
     if syswarden_webtui_cmdline_matches "${syswarden_retire_process_root}"; then
         syswarden_retire_argv_match=1
     else

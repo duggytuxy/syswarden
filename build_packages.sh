@@ -450,7 +450,6 @@ if [ "$1" = "2" ] || [ "$1" = "1" ] || [ "$1" = "configure" ] || [ -f /etc/alpin
                 echo "Service-manager runtime changed during package installation" >&2
                 exit 1
             }
-            /opt/syswarden/bin/syswarden-cli reload
             ;;
         OFFLINE)
             echo "Service-manager runtime is offline; host configuration is deferred until an explicit online install."

@@ -844,7 +844,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn('[ "$1" = "2" ]', postinstall)
         self.assertIn('[ "$1" = "configure" ]', postinstall)
         self.assertIn("syswarden_classify_service_manager", postinstall)
-        self.assertNotIn("reload --no-restart", postinstall)
+        self.assertNotIn("/opt/syswarden/bin/syswarden-cli reload", postinstall)
         self.assertIn(
             "Service-manager runtime is offline; host configuration is deferred until an explicit online install.",
             postinstall,
@@ -1142,6 +1142,24 @@ class PackageLifecycleContractTests(unittest.TestCase):
             self.assertEqual(openrc_result.returncode, 0, openrc_result)
             self.assertEqual(openrc_result.stdout.strip(), "ACTIVE")
 
+            openrc.chmod(0o775)
+            standard_mode_result = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '. "$1"; syswarden_classify_service_manager "$2" openrc',
+                    "probe",
+                    str(WEBTUI_RETIREMENT_HELPER),
+                    str(root),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "SYSWARDEN_PKG_INSTALL": "1"},
+            )
+            self.assertEqual(standard_mode_result.returncode, 0, standard_mode_result)
+            self.assertEqual(standard_mode_result.stdout.strip(), "ACTIVE")
+
     def test_openrc_softlevel_encoding_and_metadata_are_fail_closed(self) -> None:
         def seed_runtime(root: Path, content: bytes) -> tuple[Path, Path, str]:
             runtime = root / "run/openrc"
@@ -1189,6 +1207,25 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 runtime, _, owner = seed_runtime(root, content)
                 result = attest(root, runtime, owner)
                 self.assertEqual(result.returncode, 0, result)
+
+        with self.subTest(
+            runtime_mode="openrc-standard-0775"
+        ), tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "root"
+            runtime, _, owner = seed_runtime(root, b"default")
+            runtime.chmod(0o775)
+            result = attest(root, runtime, owner)
+            self.assertEqual(result.returncode, 0, result)
+
+        for mode in (0o770, 0o777, 0o1775):
+            with self.subTest(
+                rejected_runtime_mode=oct(mode)
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "root"
+                runtime, _, owner = seed_runtime(root, b"default")
+                runtime.chmod(mode)
+                result = attest(root, runtime, owner)
+                self.assertNotEqual(result.returncode, 0, result)
 
         rejected = (
             ("empty", b""),
@@ -1677,6 +1714,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         cases = (
             "exact",
+            "merged-usr",
             "operator-path",
             "second-path",
             "content",
@@ -1691,6 +1729,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "drift",
             "late-drift",
             "rpm-path",
+            "rpm-outside-alias",
             "rpm-mode",
             "rpm-nlink",
             "rpm-drift",
@@ -1830,10 +1869,25 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 elif case == "second-path":
                     dropins += " " + str(root / "etc/systemd/system/operator.conf")
                 path_entries = [str(mock_bin), str(rooted_bin), os.environ["PATH"]]
-                if case == "rpm-path":
+                if case == "merged-usr":
+                    merged_bin = root / "bin"
+                    merged_bin.symlink_to("usr/bin", target_is_directory=True)
+                    path_entries = [
+                        str(mock_bin),
+                        str(merged_bin),
+                        str(rooted_bin),
+                        os.environ["PATH"],
+                    ]
+                elif case == "rpm-path":
                     fake_rpm = mock_bin / "rpm"
                     fake_rpm.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
                     fake_rpm.chmod(0o755)
+                    path_entries = [str(mock_bin), str(rooted_bin), os.environ["PATH"]]
+                elif case == "rpm-outside-alias":
+                    foreign_rpm = mock_bin / "rpm-foreign"
+                    foreign_rpm.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")
+                    foreign_rpm.chmod(0o755)
+                    (mock_bin / "rpm").symlink_to(foreign_rpm)
                     path_entries = [str(mock_bin), str(rooted_bin), os.environ["PATH"]]
                 result = subprocess.run(
                     [
@@ -1871,7 +1925,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     )
                     self.assertTrue(temporary_link.name.endswith(".operator-link"))
                     temporary_link.unlink(missing_ok=False)
-                if case == "exact":
+                if case in ("exact", "merged-usr"):
                     self.assertEqual(result.returncode, 0, result)
                     self.assertEqual(
                         len(rpm_calls.read_text(encoding="ascii").splitlines()),
@@ -2784,6 +2838,46 @@ class PackageLifecycleContractTests(unittest.TestCase):
         if listener.stderr is not None:
             listener.stderr.close()
 
+    def test_process_match_distinguishes_vanished_from_unreadable_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "syswarden-cli"
+            shutil.copy2("/bin/true", executable)
+            identity = executable.stat()
+            expected_identity = f"{identity.st_dev}:{identity.st_ino}"
+
+            for mode, expected_status in (("vanish", 1), ("unreadable", 2)):
+                with self.subTest(mode=mode):
+                    process_root = root / f"proc-{mode}" / "4242"
+                    process_root.mkdir(parents=True)
+                    (process_root / "exe").symlink_to(executable)
+                    result = subprocess.run(
+                        [
+                            "/bin/sh",
+                            "-c",
+                            '. "$1"; '
+                            'syswarden_test_process_root="$3/$4"; '
+                            'syswarden_test_mode="$6"; '
+                            "syswarden_webtui_process_starttime() { "
+                            'if [ "${syswarden_test_mode}" = vanish ]; then '
+                            'mv -- "${syswarden_test_process_root}" '
+                            '"${syswarden_test_process_root}.gone" || return 2; '
+                            "fi; return 1; }; "
+                            'syswarden_webtui_process_matches "$4" "$3" "$2" "$5"',
+                            "probe",
+                            str(WEBTUI_RETIREMENT_HELPER),
+                            str(executable),
+                            str(process_root.parent),
+                            process_root.name,
+                            expected_identity,
+                            mode,
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, expected_status, result)
+
     def test_deleted_old_process_with_replaced_binary_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             executable = Path(temporary) / "syswarden-cli"
@@ -3597,15 +3691,17 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("syswarden_classify_service_manager", postinstall)
         self.assertIn("AMBIGUOUS", postinstall)
         self.assertIn("OFFLINE", postinstall)
-        self.assertIn("/opt/syswarden/bin/syswarden-cli reload\n", postinstall)
-        self.assertNotIn("/opt/syswarden/bin/syswarden-cli reload --no-restart", postinstall)
+        self.assertNotIn("/opt/syswarden/bin/syswarden-cli reload", postinstall)
         active_branch = postinstall.index("ACTIVE)")
         offline_branch = postinstall.index("OFFLINE)", active_branch)
         install = postinstall.index("/opt/syswarden/bin/syswarden-cli install", active_branch)
-        reload = postinstall.index("/opt/syswarden/bin/syswarden-cli reload", install)
+        revalidate = postinstall.index(
+            '[ "$(syswarden_classify_service_manager / "${manager}")" = ACTIVE ]',
+            install,
+        )
         self.assertLess(active_branch, install)
-        self.assertLess(install, reload)
-        self.assertLess(reload, offline_branch)
+        self.assertLess(install, revalidate)
+        self.assertLess(revalidate, offline_branch)
 
     def test_linux_packages_declare_every_runtime_dependency(self) -> None:
         for dependency in (

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -55,26 +56,74 @@ func TestClassifyServiceManagerRuntime(t *testing.T) {
 		}, want: serviceManagerActive},
 		{name: "systemd-stale-directory", packageInstall: "1", prepare: func(t *testing.T, _ string) { t.Helper(); mustMkdirAll(t, serviceSystemdRuntimePath) }, want: serviceManagerAmbiguous, wantErr: true},
 		{name: "openrc-active", alpine: true, prepare: func(t *testing.T, root string) { t.Helper(); mustSeedOpenRCRuntime(t, root, serviceOpenRCRuntimePath) }, want: serviceManagerActive},
+		{name: "openrc-standard-group-writable-runtime", alpine: true, prepare: func(t *testing.T, root string) {
+			t.Helper()
+			mustSeedOpenRCRuntime(t, root, serviceOpenRCRuntimePath)
+			mustChmodTestPath(t, serviceOpenRCRuntimePath, 0775)
+		}, want: serviceManagerActive},
 		{name: "openrc-stale-directory", alpine: true, packageInstall: "1", prepare: func(t *testing.T, _ string) { t.Helper(); mustMkdirAll(t, serviceOpenRCRuntimePath) }, want: serviceManagerAmbiguous, wantErr: true},
 		{name: "openrc-pid1-mismatch", alpine: true, packageInstall: "1", prepare: func(t *testing.T, root string) {
 			t.Helper()
 			mustSeedOpenRCRuntime(t, root, serviceOpenRCRuntimePath)
 			mustWriteFile(t, filepath.Join(root, "proc", "1", "comm"), "systemd\n")
 		}, want: serviceManagerAmbiguous, wantErr: true},
-		{name: "openrc-writable-runtime", alpine: true, packageInstall: "1", prepare: func(t *testing.T, root string) {
+		{name: "openrc-nonstandard-owner-only-mode", alpine: true, packageInstall: "1", prepare: func(t *testing.T, root string) {
 			t.Helper()
 			mustSeedOpenRCRuntime(t, root, serviceOpenRCRuntimePath)
-			mustChmodTestPath(t, serviceOpenRCRuntimePath, 0775)
+			mustChmodTestPath(t, serviceOpenRCRuntimePath, 0700)
+		}, want: serviceManagerAmbiguous, wantErr: true},
+		{name: "openrc-nonstandard-group-mode", alpine: true, packageInstall: "1", prepare: func(t *testing.T, root string) {
+			t.Helper()
+			mustSeedOpenRCRuntime(t, root, serviceOpenRCRuntimePath)
+			mustChmodTestPath(t, serviceOpenRCRuntimePath, 0770)
+		}, want: serviceManagerAmbiguous, wantErr: true},
+		{name: "openrc-world-writable-runtime", alpine: true, packageInstall: "1", prepare: func(t *testing.T, root string) {
+			t.Helper()
+			mustSeedOpenRCRuntime(t, root, serviceOpenRCRuntimePath)
+			mustChmodTestPath(t, serviceOpenRCRuntimePath, 0777)
+		}, want: serviceManagerAmbiguous, wantErr: true},
+		{name: "openrc-sticky-runtime", alpine: true, packageInstall: "1", prepare: func(t *testing.T, root string) {
+			t.Helper()
+			mustSeedOpenRCRuntime(t, root, serviceOpenRCRuntimePath)
+			mustChmodTestPath(t, serviceOpenRCRuntimePath, os.ModeSticky|0775)
+		}, want: serviceManagerAmbiguous, wantErr: true},
+		{name: "openrc-setgid-runtime", alpine: true, packageInstall: "1", prepare: func(t *testing.T, root string) {
+			t.Helper()
+			mustSeedOpenRCRuntime(t, root, serviceOpenRCRuntimePath)
+			mustChmodTestPath(t, serviceOpenRCRuntimePath, os.ModeSetgid|0775)
+		}, want: serviceManagerAmbiguous, wantErr: true},
+		{name: "openrc-setuid-runtime", alpine: true, packageInstall: "1", prepare: func(t *testing.T, root string) {
+			t.Helper()
+			mustSeedOpenRCRuntime(t, root, serviceOpenRCRuntimePath)
+			mustChmodTestPath(t, serviceOpenRCRuntimePath, os.ModeSetuid|0775)
 		}, want: serviceManagerAmbiguous, wantErr: true},
 		{name: "systemd-offline-package", packageInstall: "1", want: serviceManagerOffline},
 		{name: "openrc-offline-package", alpine: true, packageInstall: "1", want: serviceManagerOffline},
 		{name: "missing-outside-package", want: serviceManagerAmbiguous, wantErr: true},
 		{name: "wrong-package-marker", packageInstall: "true", want: serviceManagerAmbiguous, wantErr: true},
 		{name: "conflicting-runtime", packageInstall: "1", prepare: func(t *testing.T, _ string) { t.Helper(); mustMkdirAll(t, serviceOpenRCRuntimePath) }, want: serviceManagerAmbiguous, wantErr: true},
+		{name: "competing-openrc-standard-mode-remains-unsafe", packageInstall: "1", prepare: func(t *testing.T, _ string) {
+			t.Helper()
+			mustMkdirAll(t, serviceOpenRCRuntimePath)
+			mustChmodTestPath(t, serviceOpenRCRuntimePath, 0775)
+		}, want: serviceManagerAmbiguous, wantErr: true},
+		{name: "systemd-runtime-keeps-generic-mode-policy", packageInstall: "1", prepare: func(t *testing.T, root string) {
+			t.Helper()
+			mustSeedSystemdRuntime(t, root, serviceSystemdRuntimePath)
+			mustChmodTestPath(t, serviceSystemdRuntimePath, 0775)
+		}, want: serviceManagerAmbiguous, wantErr: true},
 		{name: "symlinked-runtime", packageInstall: "1", prepare: func(t *testing.T, root string) {
 			t.Helper()
 			mustMkdirAll(t, filepath.Dir(serviceSystemdRuntimePath))
 			if err := os.Symlink(filepath.Join(root, "run"), serviceSystemdRuntimePath); err != nil {
+				t.Fatal(err)
+			}
+		}, want: serviceManagerAmbiguous, wantErr: true},
+		{name: "symlinked-openrc-runtime", alpine: true, packageInstall: "1", prepare: func(t *testing.T, root string) {
+			t.Helper()
+			realRuntime := filepath.Join(root, "real-openrc")
+			mustSeedOpenRCRuntime(t, root, realRuntime)
+			if err := os.Symlink(realRuntime, serviceOpenRCRuntimePath); err != nil {
 				t.Fatal(err)
 			}
 		}, want: serviceManagerAmbiguous, wantErr: true},
@@ -144,7 +193,118 @@ func mustReadTestFile(t *testing.T, path string) []byte {
 func mustSeedOpenRCRuntime(t *testing.T, root, runtimePath string) {
 	t.Helper()
 	mustWriteFile(t, filepath.Join(runtimePath, "softlevel"), "default\n")
+	mustChmodTestPath(t, runtimePath, 0755)
 	mustWriteFile(t, filepath.Join(root, "proc", "1", "comm"), "init\n")
+}
+
+func TestOpenRCRuntimeDirectoryAttestationRejectsOwnershipMismatch(t *testing.T) {
+	root := t.TempDir()
+	runtimePath := filepath.Join(root, "run", "openrc")
+	mustSeedOpenRCRuntime(t, root, runtimePath)
+	info, err := os.Lstat(runtimePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("OpenRC runtime ownership is unavailable")
+	}
+	for _, test := range []struct {
+		name string
+		uid  uint32
+		gid  uint32
+	}{
+		{name: "uid", uid: stat.Uid ^ 1, gid: stat.Gid},
+		{name: "gid", uid: stat.Uid, gid: stat.Gid ^ 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proof, present, err := beginOpenRCRuntimeDirectoryAttestation(
+				runtimePath,
+				test.uid,
+				test.gid,
+			)
+			if err == nil || present || proof != nil ||
+				!strings.Contains(err.Error(), "refusing unsafe service-manager runtime") {
+				t.Fatalf("ownership mismatch = %v, %v, %v", proof, present, err)
+			}
+		})
+	}
+}
+
+func TestOpenRCRuntimeDirectoryAttestationRejectsNonCanonicalPath(t *testing.T) {
+	root := t.TempDir()
+	runtimePath := filepath.Join(root, "run", "openrc")
+	mustSeedOpenRCRuntime(t, root, runtimePath)
+	info, err := os.Lstat(runtimePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("OpenRC runtime ownership is unavailable")
+	}
+	proof, present, err := beginOpenRCRuntimeDirectoryAttestation(
+		runtimePath+"/../openrc",
+		stat.Uid,
+		stat.Gid,
+	)
+	if err == nil || present || proof != nil ||
+		!strings.Contains(err.Error(), "refusing non-canonical service-manager runtime") {
+		t.Fatalf("non-canonical OpenRC runtime path = %v, %v, %v", proof, present, err)
+	}
+}
+
+func TestOpenRCRuntimeDirectoryAttestationRejectsMetadataAndIdentityDrift(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(t *testing.T, root, runtimePath string)
+	}{
+		{
+			name: "mode",
+			mutate: func(t *testing.T, _, runtimePath string) {
+				t.Helper()
+				mustChmodTestPath(t, runtimePath, 0770)
+			},
+		},
+		{
+			name: "replacement",
+			mutate: func(t *testing.T, root, runtimePath string) {
+				t.Helper()
+				if err := os.Rename(runtimePath, runtimePath+".original"); err != nil {
+					t.Fatal(err)
+				}
+				mustSeedOpenRCRuntime(t, root, runtimePath)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			runtimePath := filepath.Join(root, "run", "openrc")
+			mustSeedOpenRCRuntime(t, root, runtimePath)
+			rootInfo, err := os.Lstat(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rootStat, ok := rootInfo.Sys().(*syscall.Stat_t)
+			if !ok {
+				t.Fatal("test root ownership is unavailable")
+			}
+			proof, present, err := beginOpenRCRuntimeDirectoryAttestation(
+				runtimePath,
+				rootStat.Uid,
+				rootStat.Gid,
+			)
+			if err != nil || !present || proof == nil {
+				t.Fatalf("begin OpenRC runtime attestation = %v, %v, %v", proof, present, err)
+			}
+			defer func() { _ = proof.directory.Close() }()
+			test.mutate(t, root, runtimePath)
+			if err := proof.reattest(rootStat.Uid, rootStat.Gid); err == nil ||
+				!strings.Contains(err.Error(), "changed while attesting") {
+				t.Fatalf("OpenRC runtime drift was accepted: %v", err)
+			}
+		})
+	}
 }
 
 func mustSeedSystemdRuntime(t *testing.T, root, runtimePath string) {
@@ -272,7 +432,34 @@ func TestCoreServiceRequiresSuccessfulFirewallLoaderAtBoot_SW2_FWBACKEND_001(t *
 	}
 }
 
-func TestHistoricalV4028CoreServiceAnchors(t *testing.T) {
+func TestSystemdFirewallServiceWaitsForInstalledCronProviderAtBoot(t *testing.T) {
+	const ordering = "After=network-online.target rsyslog.service cron.service crond.service\n"
+	if strings.Count(systemdFirewallService, ordering) != 1 {
+		t.Fatalf("systemd firewall unit lacks exact cron provider ordering %q", ordering)
+	}
+	for _, dependency := range []string{
+		"Wants=cron.service",
+		"Wants=crond.service",
+		"Requires=cron.service",
+		"Requires=crond.service",
+	} {
+		if strings.Contains(systemdFirewallService, dependency) {
+			t.Fatalf("systemd firewall unit must not pull in an absent cron provider alias via %q", dependency)
+		}
+	}
+}
+
+func TestOpenRCFirewallServiceRequiresExactRuntimeProvidersAtBoot(t *testing.T) {
+	const dependencies = "\tneed net rsyslog cronie\n"
+	if strings.Count(openRCFirewallService, dependencies) != 1 {
+		t.Fatalf("OpenRC firewall service lacks exact runtime provider dependencies %q", dependencies)
+	}
+	if !strings.Contains(openRCFirewallService, "\tbefore syswarden-core\n") {
+		t.Fatal("OpenRC firewall service does not start before the core service")
+	}
+}
+
+func TestHistoricalV4028ServiceAnchors(t *testing.T) {
 	tests := []struct {
 		name       string
 		content    string
@@ -280,16 +467,28 @@ func TestHistoricalV4028CoreServiceAnchors(t *testing.T) {
 		wantSHA256 string
 	}{
 		{
-			name:       "systemd",
+			name:       "systemd-core",
 			content:    historicalV4028SystemdCoreService,
 			wantLength: historicalV4028SystemdCoreServiceLength,
 			wantSHA256: historicalV4028SystemdCoreServiceSHA256,
 		},
 		{
-			name:       "openrc",
+			name:       "openrc-core",
 			content:    historicalV4028OpenRCCoreService,
 			wantLength: historicalV4028OpenRCCoreServiceLength,
 			wantSHA256: historicalV4028OpenRCCoreServiceSHA256,
+		},
+		{
+			name:       "systemd-firewall",
+			content:    historicalV4028SystemdFirewallService,
+			wantLength: historicalV4028SystemdFirewallServiceLength,
+			wantSHA256: historicalV4028SystemdFirewallServiceSHA256,
+		},
+		{
+			name:       "openrc-firewall",
+			content:    historicalV4028OpenRCFirewallService,
+			wantLength: historicalV4028OpenRCFirewallServiceLength,
+			wantSHA256: historicalV4028OpenRCFirewallServiceSHA256,
 		},
 	}
 	for _, test := range tests {
@@ -365,7 +564,7 @@ func withOpenRCPublicationTestPaths(t *testing.T) (string, string) {
 func seedLegacySystemdPublication(t *testing.T, unitDirectory, wantsDirectory string) {
 	t.Helper()
 	mustWriteFile(t, filepath.Join(unitDirectory, "syswarden-core.service"), historicalV4028SystemdCoreService)
-	mustWriteFile(t, filepath.Join(unitDirectory, "syswarden-firewall.service"), systemdFirewallService)
+	mustWriteFile(t, filepath.Join(unitDirectory, "syswarden-firewall.service"), historicalV4028SystemdFirewallService)
 	mustMkdirAll(t, wantsDirectory)
 	if err := os.Symlink(
 		"/etc/systemd/system/syswarden-core.service",
@@ -386,7 +585,7 @@ func seedLegacyOpenRCPublication(t *testing.T, unitDirectory, runlevelDirectory 
 	corePath := filepath.Join(unitDirectory, "syswarden-core")
 	firewallPath := filepath.Join(unitDirectory, "syswarden-firewall")
 	mustWriteFile(t, corePath, historicalV4028OpenRCCoreService)
-	mustWriteFile(t, firewallPath, openRCFirewallService)
+	mustWriteFile(t, firewallPath, historicalV4028OpenRCFirewallService)
 	mustChmodTestPath(t, corePath, 0755)
 	mustChmodTestPath(t, firewallPath, 0755)
 	mustMkdirAll(t, runlevelDirectory)
@@ -406,11 +605,16 @@ func assertServiceEnablementTarget(t *testing.T, path, expected string) {
 	}
 }
 
-func TestPublishSystemdServicesMigratesExactV4028CoreAtomicallyAndIdempotently(t *testing.T) {
+func TestPublishSystemdServicesMigratesExactV4028UnitsAtomicallyAndIdempotently(t *testing.T) {
 	unitDirectory, wantsDirectory := withSystemdPublicationTestPaths(t)
 	seedLegacySystemdPublication(t, unitDirectory, wantsDirectory)
 	corePath := filepath.Join(unitDirectory, "syswarden-core.service")
-	historical, err := os.Lstat(corePath)
+	firewallPath := filepath.Join(unitDirectory, "syswarden-firewall.service")
+	historicalCore, err := os.Lstat(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historicalFirewall, err := os.Lstat(firewallPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,36 +622,58 @@ func TestPublishSystemdServicesMigratesExactV4028CoreAtomicallyAndIdempotently(t
 	if err := publishSystemdServices(); err != nil {
 		t.Fatal(err)
 	}
-	migrated, err := os.Lstat(corePath)
+	migratedCore, err := os.Lstat(corePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if os.SameFile(historical, migrated) {
+	migratedFirewall, err := os.Lstat(firewallPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(historicalCore, migratedCore) {
 		t.Fatal("historical systemd core inode was not atomically replaced")
+	}
+	if os.SameFile(historicalFirewall, migratedFirewall) {
+		t.Fatal("historical systemd firewall inode was not atomically replaced")
 	}
 	if got := string(mustReadTestFile(t, corePath)); got != systemdCoreService {
 		t.Fatalf("migrated systemd core = %q", got)
 	}
-	if migrated.Mode().Perm() != 0600 || !serviceFileHasSingleLink(migrated) {
-		t.Fatalf("migrated systemd core metadata = %v", migrated.Mode())
+	if got := string(mustReadTestFile(t, firewallPath)); got != systemdFirewallService {
+		t.Fatalf("migrated systemd firewall = %q", got)
+	}
+	if migratedCore.Mode().Perm() != 0600 || !serviceFileHasSingleLink(migratedCore) {
+		t.Fatalf("migrated systemd core metadata = %v", migratedCore.Mode())
+	}
+	if migratedFirewall.Mode().Perm() != 0600 || !serviceFileHasSingleLink(migratedFirewall) {
+		t.Fatalf("migrated systemd firewall metadata = %v", migratedFirewall.Mode())
 	}
 	assertNoServiceMigrationArtifacts(t, unitDirectory)
 
 	if err := publishSystemdServices(); err != nil {
 		t.Fatalf("idempotent systemd publication failed: %v", err)
 	}
-	reattested, err := os.Lstat(corePath)
-	if err != nil || !os.SameFile(migrated, reattested) {
-		t.Fatalf("idempotent systemd publication replaced the current unit: %v", err)
+	reattestedCore, err := os.Lstat(corePath)
+	if err != nil || !os.SameFile(migratedCore, reattestedCore) {
+		t.Fatalf("idempotent systemd publication replaced the current core unit: %v", err)
+	}
+	reattestedFirewall, err := os.Lstat(firewallPath)
+	if err != nil || !os.SameFile(migratedFirewall, reattestedFirewall) {
+		t.Fatalf("idempotent systemd publication replaced the current firewall unit: %v", err)
 	}
 	assertNoServiceMigrationArtifacts(t, unitDirectory)
 }
 
-func TestPublishOpenRCServicesMigratesExactV4028CoreAtomicallyAndIdempotently(t *testing.T) {
+func TestPublishOpenRCServicesMigratesExactV4028UnitsAtomicallyAndIdempotently(t *testing.T) {
 	unitDirectory, runlevelDirectory := withOpenRCPublicationTestPaths(t)
 	seedLegacyOpenRCPublication(t, unitDirectory, runlevelDirectory)
 	corePath := filepath.Join(unitDirectory, "syswarden-core")
-	historical, err := os.Lstat(corePath)
+	firewallPath := filepath.Join(unitDirectory, "syswarden-firewall")
+	historicalCore, err := os.Lstat(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historicalFirewall, err := os.Lstat(firewallPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,27 +681,44 @@ func TestPublishOpenRCServicesMigratesExactV4028CoreAtomicallyAndIdempotently(t 
 	if err := publishOpenRCServices(); err != nil {
 		t.Fatal(err)
 	}
-	migrated, err := os.Lstat(corePath)
+	migratedCore, err := os.Lstat(corePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if os.SameFile(historical, migrated) {
+	migratedFirewall, err := os.Lstat(firewallPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(historicalCore, migratedCore) {
 		t.Fatal("historical OpenRC core inode was not atomically replaced")
+	}
+	if os.SameFile(historicalFirewall, migratedFirewall) {
+		t.Fatal("historical OpenRC firewall inode was not atomically replaced")
 	}
 	if got := string(mustReadTestFile(t, corePath)); got != openRCCoreService {
 		t.Fatalf("migrated OpenRC core = %q", got)
 	}
-	if migrated.Mode().Perm() != 0755 || !serviceFileHasSingleLink(migrated) {
-		t.Fatalf("migrated OpenRC core metadata = %v", migrated.Mode())
+	if got := string(mustReadTestFile(t, firewallPath)); got != openRCFirewallService {
+		t.Fatalf("migrated OpenRC firewall = %q", got)
+	}
+	if migratedCore.Mode().Perm() != 0755 || !serviceFileHasSingleLink(migratedCore) {
+		t.Fatalf("migrated OpenRC core metadata = %v", migratedCore.Mode())
+	}
+	if migratedFirewall.Mode().Perm() != 0755 || !serviceFileHasSingleLink(migratedFirewall) {
+		t.Fatalf("migrated OpenRC firewall metadata = %v", migratedFirewall.Mode())
 	}
 	assertNoServiceMigrationArtifacts(t, unitDirectory)
 
 	if err := publishOpenRCServices(); err != nil {
 		t.Fatalf("idempotent OpenRC publication failed: %v", err)
 	}
-	reattested, err := os.Lstat(corePath)
-	if err != nil || !os.SameFile(migrated, reattested) {
-		t.Fatalf("idempotent OpenRC publication replaced the current unit: %v", err)
+	reattestedCore, err := os.Lstat(corePath)
+	if err != nil || !os.SameFile(migratedCore, reattestedCore) {
+		t.Fatalf("idempotent OpenRC publication replaced the current core unit: %v", err)
+	}
+	reattestedFirewall, err := os.Lstat(firewallPath)
+	if err != nil || !os.SameFile(migratedFirewall, reattestedFirewall) {
+		t.Fatalf("idempotent OpenRC publication replaced the current firewall unit: %v", err)
 	}
 	assertNoServiceMigrationArtifacts(t, unitDirectory)
 }
@@ -648,6 +891,9 @@ func TestPublishSystemdServicesRollsBackLegacyMigration(t *testing.T) {
 	if got := string(mustReadTestFile(t, filepath.Join(unitDirectory, "syswarden-core.service"))); got != historicalV4028SystemdCoreService {
 		t.Fatalf("historical systemd core was not restored after bundle failure: %q", got)
 	}
+	if got := string(mustReadTestFile(t, filepath.Join(unitDirectory, "syswarden-firewall.service"))); got != historicalV4028SystemdFirewallService {
+		t.Fatalf("historical systemd firewall was not restored after bundle failure: %q", got)
+	}
 	assertServiceEnablementTarget(
 		t,
 		filepath.Join(wantsDirectory, "syswarden-core.service"),
@@ -672,6 +918,26 @@ func TestPublishSystemdServicesKeepsFirewallUnitStrictAndRollsBackCore(t *testin
 	}
 	if got := string(mustReadTestFile(t, firewallPath)); got != "operator firewall service\n" {
 		t.Fatalf("operator firewall unit changed: %q", got)
+	}
+	assertNoServiceMigrationArtifacts(t, unitDirectory)
+}
+
+func TestPublishOpenRCServicesKeepsFirewallUnitStrictAndRollsBackCore(t *testing.T) {
+	unitDirectory, runlevelDirectory := withOpenRCPublicationTestPaths(t)
+	seedLegacyOpenRCPublication(t, unitDirectory, runlevelDirectory)
+	corePath := filepath.Join(unitDirectory, "syswarden-core")
+	firewallPath := filepath.Join(unitDirectory, "syswarden-firewall")
+	mustWriteFile(t, firewallPath, "operator firewall service\n")
+	mustChmodTestPath(t, firewallPath, 0755)
+
+	if err := publishOpenRCServices(); err == nil {
+		t.Fatal("modified OpenRC firewall service was accepted")
+	}
+	if got := string(mustReadTestFile(t, corePath)); got != historicalV4028OpenRCCoreService {
+		t.Fatalf("OpenRC core migration was not rolled back after firewall refusal: %q", got)
+	}
+	if got := string(mustReadTestFile(t, firewallPath)); got != "operator firewall service\n" {
+		t.Fatalf("operator OpenRC firewall service changed: %q", got)
 	}
 	assertNoServiceMigrationArtifacts(t, unitDirectory)
 }

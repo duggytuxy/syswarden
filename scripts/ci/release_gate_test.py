@@ -729,7 +729,10 @@ class ReleaseGateTests(unittest.TestCase):
             workflow.count('release_base_sha="$(git rev-parse HEAD^^)"'), 2
         )
         self.assertEqual(
-            workflow.count('release_base_sha="$(git rev-parse HEAD^^^)"'), 2
+            workflow.count(
+                '\n                release_base_sha="$(git rev-parse HEAD^^^)"'
+            ),
+            2,
         )
         self.assertEqual(workflow.count('--base-ref "${release_base_sha}"'), 4)
         self.assertNotIn("--base-ref HEAD^^", workflow)
@@ -814,7 +817,7 @@ class ReleaseGateTests(unittest.TestCase):
         )
         for script in scripts:
             self.assertEqual(script.count("--tag-phase"), 4)
-            self.assertEqual(script.count("./scripts/versioning.sh validate-commit"), 6)
+            self.assertEqual(script.count("./scripts/versioning.sh validate-commit"), 7)
             self.assertEqual(
                 script.count("# BEGIN exact second preserved-version fix diff contract"),
                 1,
@@ -834,7 +837,7 @@ class ReleaseGateTests(unittest.TestCase):
                 script.count('tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'),
                 2,
             )
-            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 2)
+            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 1)
             self.assertEqual(script.count('"${tree_type}" != "blob"'), 2)
             expected_path_counts = {
                 ".github/workflows/release-manager.yml": 4,
@@ -871,26 +874,49 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual(
             workflow.count(
                 'if [[ "${v4032_parent_sha}" != '
-                '"3655abe045deffc669e0ba9c11a6e4cf17a317a5" ]]; then'
+                '"3839d592467a4f92f24b613412d8d89bb6905251" ]]; then'
             ),
             2,
         )
         self.assertEqual(
             workflow.count(
                 'if [[ "${v4032_grandparent_sha}" != '
+                '"3655abe045deffc669e0ba9c11a6e4cf17a317a5" ]]; then'
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                'if [[ "${v4032_release_base_sha}" != '
                 '"f2270a2a8138f1f2b72a6200f6febbdc83fa5eaa" ]]; then'
             ),
             2,
         )
         subject_contract = (
-            "v4032_subject_pattern='^Qualification : repair v4\\.03\\.2 "
-            "release qualification \\(#[1-9][0-9]*\\)$'"
+            "v4032_expected_subject='Qualification : repair v4.03.2 "
+            "package lifecycle qualification (#95)'"
         )
         expected_paths = (
+            ".github/workflows/package.yml",
             ".github/workflows/release-manager.yml",
             ".github/workflows/release-qualification.yml",
+            "build_packages.sh",
+            "scripts/ci/package_lifecycle_contract_test.py",
+            "scripts/ci/package_lifecycle_lab.py",
+            "scripts/ci/package_lifecycle_lab_test.py",
+            "scripts/ci/package_webtui_retirement.sh",
             "scripts/ci/release_gate_test.py",
             "scripts/ci/release_qualification_workflow_test.py",
+            "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
+            "src/core/syswarden-cli/pkg/integration/waf_logs_linux_test.go",
+            "src/core/syswarden-cli/pkg/security/hardening_linux_helpers.go",
+            "src/core/syswarden-cli/pkg/security/hardening_linux_test.go",
+            "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
+            "src/core/syswarden-cli/pkg/system/firewall_optimizer_test.go",
+            "src/core/syswarden-cli/pkg/system/service_linux.go",
+            "src/core/syswarden-cli/pkg/system/service_linux_test.go",
+            "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
+            "src/core/syswarden-cli/pkg/system/uninstall_prepare_linux_test.go",
         )
         unchanged_targets = (
             "changelog.md",
@@ -906,7 +932,7 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(block.count(subject_contract), 1)
             self.assertEqual(
                 block.count(
-                    '[[ ! "${commit_subject}" =~ ${v4032_subject_pattern} ]]'
+                    '[[ "${commit_subject}" != "${v4032_expected_subject}" ]]'
                 ),
                 1,
             )
@@ -930,14 +956,22 @@ class ReleaseGateTests(unittest.TestCase):
             )
             self.assertEqual(
                 block.count(
-                    "${#v4032_head_line[@]} != 2 || "
-                    "${#v4032_parent_line[@]} != 2"
+                    'v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^^)"'
+                ),
+                1,
+            )
+            self.assertEqual(block.count("${#v4032_head_line[@]} != 2"), 1)
+            self.assertEqual(block.count("${#v4032_parent_line[@]} != 2"), 1)
+            self.assertEqual(block.count("${#v4032_release_line[@]} != 2"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_grandparent_sha="$(git rev-parse HEAD^^)"'
                 ),
                 1,
             )
             self.assertEqual(
                 block.count(
-                    'v4032_grandparent_sha="$(git rev-parse HEAD^^)"'
+                    'v4032_release_base_sha="$(git rev-parse HEAD^^^)"'
                 ),
                 1,
             )
@@ -967,15 +1001,23 @@ class ReleaseGateTests(unittest.TestCase):
                 ),
                 1,
             )
-            self.assertEqual(block.count('"${tree_mode}" != "100644"'), 1)
+            self.assertEqual(
+                block.count('"${tree_mode}" != "${expected_mode}"'), 1
+            )
             self.assertEqual(block.count('"${tree_type}" != "blob"'), 1)
+            self.assertEqual(block.count('expected_mode="100644"'), 1)
+            self.assertEqual(
+                block.count('[[ "${fix_path}" == "build_packages.sh" ]]'), 1
+            )
+            self.assertEqual(block.count('expected_mode="100755"'), 1)
             self.assertEqual(
                 block.count("${#actual_v4032_diff[@]} != "
                             "${#expected_v4032_diff[@]}"),
                 1,
             )
             for path in expected_paths:
-                self.assertEqual(block.count(f'"{path}"'), 2)
+                expected_count = 3 if path == "build_packages.sh" else 2
+                self.assertEqual(block.count(f'"{path}"'), expected_count)
                 self.assertEqual(block.count(f'M "{path}"'), 1)
             self.assertEqual(block.count("git diff --quiet HEAD^ HEAD --"), 1)
             for path in unchanged_targets:
@@ -987,16 +1029,37 @@ class ReleaseGateTests(unittest.TestCase):
                 1,
             )
             self.assertEqual(
-                block.count('./scripts/versioning.sh validate-commit'), 1
+                block.count('./scripts/versioning.sh validate-commit'), 2
             )
             self.assertEqual(
                 block.count('--base-ref "${v4032_grandparent_sha}"'), 1
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_release_commit_message="$(git log -1 --format=%B HEAD^^)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count('--base-ref "${v4032_release_base_sha}"'), 1
             )
             self.assertEqual(block.count("--tag-phase"), 1)
             self.assertEqual(
                 block.count('--commit-message "${v4032_parent_commit_message}"'),
                 1,
             )
+            self.assertEqual(
+                block.count('--commit-message "${v4032_release_commit_message}"'),
+                1,
+            )
+            parent_validation = block.split(
+                'v4032_parent_commit_message="$(git log -1 --format=%B HEAD^)"',
+                1,
+            )[1].split(
+                'v4032_release_commit_message="$(git log -1 --format=%B HEAD^^)"',
+                1,
+            )[0]
+            self.assertNotIn("--tag-phase", parent_validation)
 
     def exact_v4032_fix_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -1010,7 +1073,7 @@ class ReleaseGateTests(unittest.TestCase):
     def v4032_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
-        start = "v4032_subject_pattern="
+        start = "v4032_expected_subject="
         end = 'read -r -a v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"'
         self.assertEqual(block.count(start), 1)
         self.assertEqual(block.count(end), 1)
@@ -1039,13 +1102,36 @@ class ReleaseGateTests(unittest.TestCase):
             check=True,
         )
         paths = [
+            repository / ".github/workflows/package.yml",
             repository / ".github/workflows/release-manager.yml",
             repository / ".github/workflows/release-qualification.yml",
+            repository / "build_packages.sh",
+            repository / "scripts/ci/package_lifecycle_contract_test.py",
+            repository / "scripts/ci/package_lifecycle_lab.py",
+            repository / "scripts/ci/package_lifecycle_lab_test.py",
+            repository / "scripts/ci/package_webtui_retirement.sh",
             repository / "scripts/ci/release_gate_test.py",
             repository / "scripts/ci/release_qualification_workflow_test.py",
+            repository / "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
+            repository
+            / "src/core/syswarden-cli/pkg/integration/waf_logs_linux_test.go",
+            repository
+            / "src/core/syswarden-cli/pkg/security/hardening_linux_helpers.go",
+            repository
+            / "src/core/syswarden-cli/pkg/security/hardening_linux_test.go",
+            repository
+            / "src/core/syswarden-cli/pkg/system/firewall_optimizer.go",
+            repository
+            / "src/core/syswarden-cli/pkg/system/firewall_optimizer_test.go",
+            repository / "src/core/syswarden-cli/pkg/system/service_linux.go",
+            repository / "src/core/syswarden-cli/pkg/system/service_linux_test.go",
+            repository / "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
+            repository
+            / "src/core/syswarden-cli/pkg/system/uninstall_prepare_linux_test.go",
         ]
         for path in paths:
             self.write_file(path, b"reviewed parent\n")
+        (repository / "build_packages.sh").chmod(0o755)
         subprocess.run(["git", "-C", repository, "add", "--all"], check=True)
         subprocess.run(
             ["git", "-C", repository, "commit", "-q", "-m", "reviewed parent"],
@@ -1059,6 +1145,8 @@ class ReleaseGateTests(unittest.TestCase):
             paths[3].write_bytes(b"reviewed parent\n")
         elif mutation == "mode":
             paths[0].chmod(0o755)
+        elif mutation == "executable mode":
+            (repository / "build_packages.sh").chmod(0o644)
         elif mutation == "symlink":
             paths[1].unlink()
             paths[1].symlink_to("unauthorized-target")
@@ -1165,12 +1253,12 @@ class ReleaseGateTests(unittest.TestCase):
                 'v4032_parent_sha="$(git rev-parse HEAD^^)"',
             ),
             "exact parent": workflow.replace(
-                "3655abe045deffc669e0ba9c11a6e4cf17a317a5",
-                "4655abe045deffc669e0ba9c11a6e4cf17a317a5",
+                "3839d592467a4f92f24b613412d8d89bb6905251",
+                "4839d592467a4f92f24b613412d8d89bb6905251",
             ),
             "canonical subject": workflow.replace(
-                "Qualification : repair v4\\.03\\.2 release qualification",
-                "Qualification : arbitrary v4\\.03\\.2 repair",
+                "Qualification : repair v4.03.2 package lifecycle qualification (#95)",
+                "Qualification : arbitrary v4.03.2 repair (#95)",
             ),
             "linear head": workflow.replace(
                 'v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"',
@@ -1180,11 +1268,23 @@ class ReleaseGateTests(unittest.TestCase):
                 'v4032_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"',
                 'v4032_parent_line <<< "$(git rev-list --parents -n 1 HEAD^^)"',
             ),
+            "linear release": workflow.replace(
+                'v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^^)"',
+                'v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^)"',
+            ),
             "grandparent resolution": workflow.replace(
                 'v4032_grandparent_sha="$(git rev-parse HEAD^^)"',
                 'v4032_grandparent_sha="$(git rev-parse HEAD^)"',
             ),
             "exact grandparent": workflow.replace(
+                "3655abe045deffc669e0ba9c11a6e4cf17a317a5",
+                "4655abe045deffc669e0ba9c11a6e4cf17a317a5",
+            ),
+            "release base resolution": workflow.replace(
+                'v4032_release_base_sha="$(git rev-parse HEAD^^^)"',
+                'v4032_release_base_sha="$(git rev-parse HEAD^^)"',
+            ),
+            "exact release base": workflow.replace(
                 "f2270a2a8138f1f2b72a6200f6febbdc83fa5eaa",
                 "e2270a2a8138f1f2b72a6200f6febbdc83fa5eaa",
             ),
@@ -1203,6 +1303,13 @@ class ReleaseGateTests(unittest.TestCase):
                 "for tree_ref in HEAD^ HEAD; do", "for tree_ref in HEAD; do"
             ),
             "regular mode": workflow.replace('"100644"', '"100755"'),
+            "executable mode selector": workflow.replace(
+                '[[ "${fix_path}" == "build_packages.sh" ]]',
+                '[[ "${fix_path}" == "unauthorized.sh" ]]',
+            ),
+            "executable mode": workflow.replace(
+                'expected_mode="100755"', 'expected_mode="100644"'
+            ),
             "regular blob": workflow.replace('"${tree_type}" != "blob"',
                                               '"${tree_type}" != "tree"'),
             "changelog identity": workflow.replace(
@@ -1219,7 +1326,16 @@ class ReleaseGateTests(unittest.TestCase):
             "parent validation base": workflow.replace(
                 '--base-ref "${v4032_grandparent_sha}"', '--base-ref HEAD^'
             ),
-            "parent tag phase": workflow.replace("--tag-phase", "--ordinary-phase"),
+            "release message": workflow.replace(
+                'v4032_release_commit_message="$(git log -1 --format=%B HEAD^^)"',
+                'v4032_release_commit_message="$(git log -1 --format=%B HEAD^)"',
+            ),
+            "release validation base": workflow.replace(
+                '--base-ref "${v4032_release_base_sha}"', '--base-ref HEAD^^'
+            ),
+            "release tag phase": workflow.replace(
+                "--tag-phase", "--ordinary-phase"
+            ),
         }
         for name, mutation in mutations.items():
             with self.subTest(name=name), self.assertRaises(AssertionError):
@@ -1229,39 +1345,39 @@ class ReleaseGateTests(unittest.TestCase):
         script = self.v4032_subject_gate_script()
         cases = {
             "valid": (
-                "Qualification : repair v4.03.2 release qualification (#94)",
+                "Qualification : repair v4.03.2 package lifecycle qualification (#95)",
                 True,
             ),
             "bare": (
-                "Qualification : repair v4.03.2 release qualification",
+                "Qualification : repair v4.03.2 package lifecycle qualification",
                 False,
             ),
-            "zero": (
-                "Qualification : repair v4.03.2 release qualification (#0)",
+            "previous pull request": (
+                "Qualification : repair v4.03.2 package lifecycle qualification (#94)",
                 False,
             ),
-            "leading zero": (
-                "Qualification : repair v4.03.2 release qualification (#094)",
+            "different pull request": (
+                "Qualification : repair v4.03.2 package lifecycle qualification (#96)",
                 False,
             ),
             "non-numeric": (
-                "Qualification : repair v4.03.2 release qualification (#PR)",
+                "Qualification : repair v4.03.2 package lifecycle qualification (#PR)",
                 False,
             ),
             "wrong version": (
-                "Qualification : repair v4.03.3 release qualification (#94)",
+                "Qualification : repair v4.03.3 package lifecycle qualification (#95)",
                 False,
             ),
             "double space": (
-                "Qualification : repair v4.03.2  release qualification (#94)",
+                "Qualification : repair v4.03.2  package lifecycle qualification (#95)",
                 False,
             ),
             "trailing space": (
-                "Qualification : repair v4.03.2 release qualification (#94) ",
+                "Qualification : repair v4.03.2 package lifecycle qualification (#95) ",
                 False,
             ),
             "extra text": (
-                "Qualification : repair v4.03.2 release qualification (#94) extra",
+                "Qualification : repair v4.03.2 package lifecycle qualification (#95) extra",
                 False,
             ),
         }
@@ -1289,6 +1405,7 @@ class ReleaseGateTests(unittest.TestCase):
             "extra file",
             "unchanged file",
             "mode",
+            "executable mode",
             "symlink",
             "rename",
             "delete",

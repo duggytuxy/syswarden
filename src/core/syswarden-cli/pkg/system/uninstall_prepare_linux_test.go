@@ -394,7 +394,13 @@ func newFirewallRemovalTestHost(
 			return state != nil && state.active, nil
 		},
 		attestSystemdUnit: func(string) error { return nil },
-		attestOpenRCUnit:  func(firewallRemovalService) error { return nil },
+		attestSystemdDropIns: func(_ firewallManagerExecutor, dropIns string) (string, error) {
+			if dropIns != "" {
+				return "", errors.New("unapproved systemd service drop-in")
+			}
+			return "", nil
+		},
+		attestOpenRCUnit: func(firewallRemovalService) error { return nil },
 		openRCUnitPresent: func(service firewallRemovalService) (bool, error) {
 			name := openRCFirewallRemovalServiceName(service)
 			state := manager.states[name]
@@ -657,6 +663,36 @@ func TestPrepareFirewallStateForRemovalSystemdStopsDisablesAndReattests_SW2_FWBA
 	}
 }
 
+func TestPrepareFirewallStateForRemovalAcceptsOnlyAttestedVendorSystemdDropIns_SW2_FWBACKEND_001(t *testing.T) {
+	states := defaultSystemdFirewallRemovalStates()
+	for _, unit := range []string{
+		"syswarden-core.service",
+		"syswarden-firewall.service",
+		"wg-quick@wg-syswarden.service",
+	} {
+		states[unit].dropInPathsOverride = approvedSystemdServiceDropInPath
+	}
+	manager := &fakeFirewallRemovalManager{states: states}
+	host := newFirewallRemovalTestHost(t, manager, true)
+	attestations := 0
+	host.attestSystemdDropIns = func(_ firewallManagerExecutor, dropIns string) (string, error) {
+		attestations++
+		if dropIns != approvedSystemdServiceDropInPath {
+			return "", errors.New("unexpected systemd service drop-in")
+		}
+		return dropIns + "#exact-vendor-provenance", nil
+	}
+	if err := host.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if attestations != 10 {
+		t.Fatalf("vendor drop-in attestations = %d, want 10", attestations)
+	}
+	if got := manager.mutationCalls(); len(got) == 0 {
+		t.Fatal("approved vendor drop-in prevented the verified removal mutations")
+	}
+}
+
 func TestPrepareFirewallStateForRemovalSkipsAbsentAndInactiveDisabledSystemdUnits_SW2_FWBACKEND_001(t *testing.T) {
 	manager := &fakeFirewallRemovalManager{states: map[string]*fakeFirewallRemovalServiceState{
 		"syswarden-core.service":        {loaded: true},
@@ -911,7 +947,7 @@ func TestPrepareFirewallStateForRemovalAttestsUnitsAndWireGuardContentBeforeMuta
 			prepare: func(_ *firewallRemovalPreparationHost, states map[string]*fakeFirewallRemovalServiceState) {
 				states["syswarden-firewall.service"].dropInPathsOverride = "/etc/systemd/system/syswarden-firewall.service.d/operator.conf"
 			},
-			want: "refusing systemd drop-ins",
+			want: "refusing unapproved systemd drop-ins",
 		},
 		{
 			name: "unknown WireGuard ExecStop",

@@ -2364,6 +2364,35 @@ prepare_service_runtime_fixture() {
     esac
 }
 
+prepare_package_transition() {
+    prepare_service_runtime_fixture || return 1
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm)
+            [ "$(systemctl is-enabled rsyslog.service 2>/dev/null || true)" = enabled ] || return 1
+            [ "$(systemctl is-active rsyslog.service 2>/dev/null || true)" = active ] || return 1
+            syswarden_transition_rsyslog_pid_before="$(
+                systemctl show -p MainPID --value rsyslog.service 2>/dev/null || true
+            )"
+            case "${syswarden_transition_rsyslog_pid_before}" in
+                ''|*[!0-9]*) return 1 ;;
+            esac
+            [ "${syswarden_transition_rsyslog_pid_before}" -gt 1 ] || return 1
+            kill -0 "${syswarden_transition_rsyslog_pid_before}" 2>/dev/null || return 1
+            systemctl reset-failed rsyslog.service >/dev/null 2>&1 || return 1
+            [ "$(systemctl is-enabled rsyslog.service 2>/dev/null || true)" = enabled ] || return 1
+            [ "$(systemctl is-active rsyslog.service 2>/dev/null || true)" = active ] || return 1
+            syswarden_transition_rsyslog_pid_after="$(
+                systemctl show -p MainPID --value rsyslog.service 2>/dev/null || true
+            )"
+            [ "${syswarden_transition_rsyslog_pid_after}" = "${syswarden_transition_rsyslog_pid_before}" ] || return 1
+            kill -0 "${syswarden_transition_rsyslog_pid_after}" 2>/dev/null || return 1
+            [ "$(syswarden_classify_service_manager / systemd)" = ACTIVE ] || return 1
+            ;;
+        apk) ;;
+        *) return 1 ;;
+    esac
+}
+
 expected_systemd_enablement_prefix() {
     label="$1"
     case "${SCENARIO}:${label}" in
@@ -3833,6 +3862,7 @@ probe_execution_architecture() {
 
 scenario_upgrade_rollback_initial() {
     prepare_expected_payloads || return
+    prepare_package_transition || return
     run_install_step install.previous "${PREVIOUS_PACKAGE}" || return
     if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
         probe_forward_only_apk_payload previous
@@ -3845,11 +3875,12 @@ scenario_upgrade_rollback_initial() {
     seed_live_legacy_webtui_process || return
     seed_legacy_saas_monitor_state || return
 
-    prepare_service_runtime_fixture || return
+    prepare_package_transition || return
     run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload candidate candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved candidate
 
+    prepare_package_transition || return
     run_install_step reinstall.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload reinstall candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved reinstall
@@ -3870,7 +3901,7 @@ scenario_upgrade_rollback_restart_two() {
     prepare_service_runtime_fixture || return
     probe_payload restart-two candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved restart-two
-    prepare_service_runtime_fixture || return
+    prepare_package_transition || return
     run_install_step rollback.previous "${PREVIOUS_PACKAGE}" || return
     if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
         probe_forward_only_apk_payload rollback
@@ -3878,7 +3909,7 @@ scenario_upgrade_rollback_restart_two() {
         probe_payload rollback previous "${EXPECTED_PREVIOUS_VERSION}"
     fi
     assert_all_state_preserved rollback
-    prepare_service_runtime_fixture || return
+    prepare_package_transition || return
     run_install_step recovery.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload recovery candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved recovery
@@ -3888,7 +3919,7 @@ scenario_upgrade_rollback_restart_two() {
 scenario_remove() {
     prepare_expected_payloads || return
     seed_state
-    prepare_service_runtime_fixture || return
+    prepare_package_transition || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
@@ -3923,7 +3954,7 @@ scenario_remove() {
 scenario_purge() {
     prepare_expected_payloads || return
     seed_state
-    prepare_service_runtime_fixture || return
+    prepare_package_transition || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh

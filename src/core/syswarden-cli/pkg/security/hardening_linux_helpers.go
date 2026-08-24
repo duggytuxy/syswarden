@@ -22,6 +22,8 @@ import (
 
 const hardeningMaximumFileSize = 4 << 20
 
+const hardeningOpenRCRuntimePath = "/run/openrc"
+
 type hardeningExecutor struct {
 	run    func(name string, args ...string) error
 	output func(name string, args ...string) ([]byte, error)
@@ -288,14 +290,24 @@ func productionHardeningExecutionDecision() (hardeningExecutionDecision, error) 
 			return hardeningExecutionDecision{}, err
 		}
 	}
-	openRCParent, err := inspectRuntimeDirectory("/run/openrc", 0)
+	openRCProof, openRCParent, err := beginHardeningOpenRCRuntimeDirectoryAttestation(
+		hardeningOpenRCRuntimePath,
+		0,
+		0,
+	)
 	if err != nil {
 		return hardeningExecutionDecision{}, err
 	}
+	if openRCProof != nil {
+		defer func() { _ = openRCProof.directory.Close() }()
+	}
 	openRCActive := false
 	if openRCParent {
-		openRCActive, err = inspectRuntimeFile("/run/openrc/softlevel", 0)
+		openRCActive, err = inspectRuntimeFile(filepath.Join(hardeningOpenRCRuntimePath, "softlevel"), 0)
 		if err != nil {
+			return hardeningExecutionDecision{}, err
+		}
+		if err := openRCProof.reattest(0, 0); err != nil {
 			return hardeningExecutionDecision{}, err
 		}
 	}
@@ -400,6 +412,95 @@ func inspectRuntimeDirectory(path string, expectedUID uint32) (bool, error) {
 		return false, fmt.Errorf("runtime directory changed while opening: %s", path)
 	}
 	return true, nil
+}
+
+type hardeningOpenRCRuntimeDirectoryProof struct {
+	path      string
+	directory *os.File
+	info      os.FileInfo
+}
+
+func safeHardeningOpenRCRuntimeDirectory(info os.FileInfo, expectedUID, expectedGID uint32) bool {
+	if info == nil {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	unsafeMode := os.ModeSymlink | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+	if !ok || !info.IsDir() || info.Mode()&unsafeMode != 0 ||
+		stat.Uid != expectedUID || stat.Gid != expectedGID {
+		return false
+	}
+	return info.Mode().Perm() == 0755 || info.Mode().Perm() == 0775
+}
+
+func sameHardeningOpenRCRuntimeDirectory(
+	first os.FileInfo,
+	second os.FileInfo,
+	expectedUID uint32,
+	expectedGID uint32,
+) bool {
+	return first != nil && second != nil && os.SameFile(first, second) &&
+		first.Mode() == second.Mode() &&
+		safeHardeningOpenRCRuntimeDirectory(first, expectedUID, expectedGID) &&
+		safeHardeningOpenRCRuntimeDirectory(second, expectedUID, expectedGID)
+}
+
+func beginHardeningOpenRCRuntimeDirectoryAttestation(
+	path string,
+	expectedUID uint32,
+	expectedGID uint32,
+) (*hardeningOpenRCRuntimeDirectoryProof, bool, error) {
+	if filepath.Clean(path) != path {
+		return nil, false, fmt.Errorf("refusing non-canonical OpenRC runtime directory %s", path)
+	}
+	before, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect OpenRC runtime directory %s: %w", path, err)
+	}
+	if !safeHardeningOpenRCRuntimeDirectory(before, expectedUID, expectedGID) {
+		return nil, false, fmt.Errorf("refusing unsafe OpenRC runtime directory %s", path)
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, false, fmt.Errorf("open OpenRC runtime directory %s: %w", path, err)
+	}
+	directory := os.NewFile(uintptr(fd), path)
+	if directory == nil {
+		_ = syscall.Close(fd)
+		return nil, false, fmt.Errorf("open OpenRC runtime directory %s", path)
+	}
+	opened, statErr := directory.Stat()
+	if statErr != nil || !sameHardeningOpenRCRuntimeDirectory(
+		before,
+		opened,
+		expectedUID,
+		expectedGID,
+	) {
+		_ = directory.Close()
+		return nil, false, fmt.Errorf("OpenRC runtime directory %s changed while opening", path)
+	}
+	return &hardeningOpenRCRuntimeDirectoryProof{
+		path:      path,
+		directory: directory,
+		info:      opened,
+	}, true, nil
+}
+
+func (proof *hardeningOpenRCRuntimeDirectoryProof) reattest(expectedUID, expectedGID uint32) error {
+	if proof == nil || proof.directory == nil {
+		return fmt.Errorf("OpenRC runtime directory proof is unavailable")
+	}
+	opened, openedErr := proof.directory.Stat()
+	after, afterErr := os.Lstat(proof.path)
+	if openedErr != nil || afterErr != nil ||
+		!sameHardeningOpenRCRuntimeDirectory(proof.info, opened, expectedUID, expectedGID) ||
+		!sameHardeningOpenRCRuntimeDirectory(proof.info, after, expectedUID, expectedGID) {
+		return fmt.Errorf("OpenRC runtime directory %s changed while attesting", proof.path)
+	}
+	return nil
 }
 
 func inspectRuntimeFile(path string, expectedUID uint32) (bool, error) {

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"syswarden-cli/config"
 	"time"
@@ -116,6 +117,52 @@ func (output *boundedFirewallPreflightOutput) Write(content []byte) (int, error)
 	return len(content), nil
 }
 
+type boundedFirewallPreflightStreams struct {
+	mutex    sync.Mutex
+	stdout   bytes.Buffer
+	stderr   bytes.Buffer
+	captured int
+	exceeded bool
+}
+
+type boundedFirewallPreflightStreamWriter struct {
+	streams *boundedFirewallPreflightStreams
+	target  *bytes.Buffer
+}
+
+func (writer *boundedFirewallPreflightStreamWriter) Write(content []byte) (int, error) {
+	writer.streams.mutex.Lock()
+	defer writer.streams.mutex.Unlock()
+
+	remaining := maximumFirewallPreflightOutput - writer.streams.captured
+	if remaining > 0 {
+		written := len(content)
+		if written > remaining {
+			written = remaining
+		}
+		_, _ = writer.target.Write(content[:written])
+		writer.streams.captured += written
+	}
+	if len(content) > remaining {
+		writer.streams.exceeded = true
+	}
+	return len(content), nil
+}
+
+func (streams *boundedFirewallPreflightStreams) snapshot() ([]byte, []byte, bool) {
+	streams.mutex.Lock()
+	defer streams.mutex.Unlock()
+	stdout := append([]byte(nil), streams.stdout.Bytes()...)
+	stderr := append([]byte(nil), streams.stderr.Bytes()...)
+	return stdout, stderr, streams.exceeded
+}
+
+func firewallPreflightCommandEvidence(stdout, stderr []byte) []byte {
+	evidence := make([]byte, 0, len(stdout)+len(stderr))
+	evidence = append(evidence, stdout...)
+	return append(evidence, stderr...)
+}
+
 func validateResolvedFirewallExecutable(path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return fmt.Errorf("firewall preflight executable path %q is not a clean absolute path", path)
@@ -186,21 +233,28 @@ func runFirewallPreflightCommandWithTimeout(path string, timeout time.Duration, 
 		}
 		return err
 	}
-	output := &boundedFirewallPreflightOutput{}
-	command.Stdout = output
-	command.Stderr = output
+	streams := &boundedFirewallPreflightStreams{}
+	command.Stdout = &boundedFirewallPreflightStreamWriter{streams: streams, target: &streams.stdout}
+	command.Stderr = &boundedFirewallPreflightStreamWriter{streams: streams, target: &streams.stderr}
 	err := command.Run()
 	if errors.Is(err, exec.ErrWaitDelay) && command.Process != nil {
 		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 	}
-	content := append([]byte(nil), output.content.Bytes()...)
-	if output.exceeded {
-		return content, fmt.Errorf("firewall preflight command output exceeds %d bytes", maximumFirewallPreflightOutput)
+	stdout, stderr, exceeded := streams.snapshot()
+	if exceeded {
+		return firewallPreflightCommandEvidence(stdout, stderr), fmt.Errorf(
+			"firewall preflight command output exceeds %d bytes", maximumFirewallPreflightOutput,
+		)
 	}
 	if ctx.Err() != nil {
-		return content, fmt.Errorf("firewall preflight command exceeded %s: %w", timeout, ctx.Err())
+		return firewallPreflightCommandEvidence(stdout, stderr), fmt.Errorf(
+			"firewall preflight command exceeded %s: %w", timeout, ctx.Err(),
+		)
 	}
-	return content, err
+	if err != nil {
+		return firewallPreflightCommandEvidence(stdout, stderr), err
+	}
+	return stdout, nil
 }
 
 func queryFirewallProperty(

@@ -751,6 +751,210 @@ func TestRuntimeMarkerInspectionRejectsUnsafeState(t *testing.T) {
 	})
 }
 
+func TestOpenRCRuntimeDirectoryAttestationAcceptsOnlyExactStandardModes(t *testing.T) {
+	ownerRoot := t.TempDir()
+	ownerInfo, err := os.Stat(ownerRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerStat, ok := ownerInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("fixture ownership is unavailable")
+	}
+
+	for _, mode := range []os.FileMode{0755, 0775} {
+		t.Run(mode.String(), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "openrc")
+			if err := os.Mkdir(path, 0750); err != nil {
+				t.Fatal(err)
+			}
+			if err := chmodHardeningFixture(path, mode); err != nil {
+				t.Fatal(err)
+			}
+			proof, present, err := beginHardeningOpenRCRuntimeDirectoryAttestation(
+				path,
+				ownerStat.Uid,
+				ownerStat.Gid,
+			)
+			if err != nil || !present || proof == nil {
+				t.Fatalf("proof=%v present=%t error=%v", proof, present, err)
+			}
+			defer func() { _ = proof.directory.Close() }()
+			if err := proof.reattest(ownerStat.Uid, ownerStat.Gid); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestOpenRCRuntimeDirectoryAttestationRejectsUnsafeState(t *testing.T) {
+	ownerRoot := t.TempDir()
+	ownerInfo, err := os.Stat(ownerRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerStat, ok := ownerInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("fixture ownership is unavailable")
+	}
+
+	tests := []struct {
+		name        string
+		mode        os.FileMode
+		expectedUID uint32
+		expectedGID uint32
+	}{
+		{name: "mode 0770", mode: 0770, expectedUID: ownerStat.Uid, expectedGID: ownerStat.Gid},
+		{name: "mode 0777", mode: 0777, expectedUID: ownerStat.Uid, expectedGID: ownerStat.Gid},
+		{name: "sticky", mode: 0775 | os.ModeSticky, expectedUID: ownerStat.Uid, expectedGID: ownerStat.Gid},
+		{name: "setuid", mode: 0775 | os.ModeSetuid, expectedUID: ownerStat.Uid, expectedGID: ownerStat.Gid},
+		{name: "setgid", mode: 0775 | os.ModeSetgid, expectedUID: ownerStat.Uid, expectedGID: ownerStat.Gid},
+		{name: "wrong owner", mode: 0775, expectedUID: ownerStat.Uid ^ 1, expectedGID: ownerStat.Gid},
+		{name: "wrong group", mode: 0775, expectedUID: ownerStat.Uid, expectedGID: ownerStat.Gid ^ 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "openrc")
+			if err := os.Mkdir(path, 0750); err != nil {
+				t.Fatal(err)
+			}
+			if err := chmodHardeningFixture(path, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			proof, present, err := beginHardeningOpenRCRuntimeDirectoryAttestation(
+				path,
+				test.expectedUID,
+				test.expectedGID,
+			)
+			if proof != nil {
+				_ = proof.directory.Close()
+			}
+			if err == nil || present || proof != nil {
+				t.Fatalf("unsafe OpenRC runtime accepted: proof=%v present=%t error=%v", proof, present, err)
+			}
+		})
+	}
+
+	t.Run("symlink", func(t *testing.T) {
+		root := t.TempDir()
+		target := filepath.Join(root, "target")
+		if err := os.Mkdir(target, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := chmodHardeningFixture(target, 0775); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(root, "openrc")
+		if err := os.Symlink("target", path); err != nil {
+			t.Fatal(err)
+		}
+		if proof, present, err := beginHardeningOpenRCRuntimeDirectoryAttestation(
+			path,
+			ownerStat.Uid,
+			ownerStat.Gid,
+		); err == nil || present || proof != nil {
+			t.Fatalf("symlink OpenRC runtime accepted: proof=%v present=%t error=%v", proof, present, err)
+		}
+	})
+
+	t.Run("regular file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "openrc")
+		if err := writeHardeningFixtureFile(path, []byte("not a directory\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if proof, present, err := beginHardeningOpenRCRuntimeDirectoryAttestation(
+			path,
+			ownerStat.Uid,
+			ownerStat.Gid,
+		); err == nil || present || proof != nil {
+			t.Fatalf("regular-file OpenRC runtime accepted: proof=%v present=%t error=%v", proof, present, err)
+		}
+	})
+
+	t.Run("generic policy remains strict", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "systemd")
+		if err := os.Mkdir(path, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := chmodHardeningFixture(path, 0775); err != nil {
+			t.Fatal(err)
+		}
+		if present, err := inspectRuntimeDirectory(path, ownerStat.Uid); err == nil || present {
+			t.Fatalf("generic runtime policy accepted mode 0775: present=%t error=%v", present, err)
+		}
+	})
+}
+
+func TestOpenRCRuntimeDirectoryProofRejectsReplacementAndModeDrift(t *testing.T) {
+	ownerRoot := t.TempDir()
+	ownerInfo, err := os.Stat(ownerRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerStat, ok := ownerInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("fixture ownership is unavailable")
+	}
+
+	t.Run("replacement", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "openrc")
+		if err := os.Mkdir(path, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := chmodHardeningFixture(path, 0775); err != nil {
+			t.Fatal(err)
+		}
+		proof, present, err := beginHardeningOpenRCRuntimeDirectoryAttestation(
+			path,
+			ownerStat.Uid,
+			ownerStat.Gid,
+		)
+		if err != nil || !present || proof == nil {
+			t.Fatalf("proof=%v present=%t error=%v", proof, present, err)
+		}
+		defer func() { _ = proof.directory.Close() }()
+		original := filepath.Join(root, "original")
+		if err := os.Rename(path, original); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(path, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := chmodHardeningFixture(path, 0775); err != nil {
+			t.Fatal(err)
+		}
+		if err := proof.reattest(ownerStat.Uid, ownerStat.Gid); err == nil {
+			t.Fatal("replacement OpenRC runtime was accepted")
+		}
+	})
+
+	t.Run("mode drift", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "openrc")
+		if err := os.Mkdir(path, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := chmodHardeningFixture(path, 0775); err != nil {
+			t.Fatal(err)
+		}
+		proof, present, err := beginHardeningOpenRCRuntimeDirectoryAttestation(
+			path,
+			ownerStat.Uid,
+			ownerStat.Gid,
+		)
+		if err != nil || !present || proof == nil {
+			t.Fatalf("proof=%v present=%t error=%v", proof, present, err)
+		}
+		defer func() { _ = proof.directory.Close() }()
+		if err := chmodHardeningFixture(path, 0777); err != nil {
+			t.Fatal(err)
+		}
+		if err := proof.reattest(ownerStat.Uid, ownerStat.Gid); err == nil {
+			t.Fatal("OpenRC runtime mode drift was accepted")
+		}
+	})
+}
+
 func TestSysctlPersistentPolicyWhenKernelRuntimeIsOutsideNamespace(t *testing.T) {
 	commands := 0
 	host := hardeningTestHost(t, hardeningExecutor{
