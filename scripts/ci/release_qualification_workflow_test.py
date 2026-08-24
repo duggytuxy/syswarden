@@ -1073,11 +1073,11 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "'cgroup_manager=\"systemd\"'",
             "'conmon_path=[\"/usr/local/lib/podman/conmon\"]'",
             "'remote=false'",
-            "'runtime=\"runc\"'",
+            "'runtime=\"crun\"'",
             "'[engine.runtimes]'",
-            "'runc=[\"/usr/local/bin/runc\"]'",
+            "'crun=[\"/usr/local/bin/crun\"]'",
             "'[engine.platform_to_oci_runtime]'",
-            "'\"linux/arm64\"=\"runc\"'",
+            "'\"linux/arm64\"=\"crun\"'",
             '"$(stat -c \'%a\' "${containers_conf}")" != "600"',
             "'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY'",
             "'exec /usr/local/bin/podman --remote=false \"$@\"'",
@@ -1112,8 +1112,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '-z "${SYSWARDEN_PODMAN_INFO:-}"',
             '-z "${SYSWARDEN_PODMAN_INFO_INODE:-}"',
             "native ARM64 Podman info target is unavailable",
-            "if ! /usr/local/bin/runc --version >/dev/null",
-            "native ARM64 runc is not executable inside the delegated session",
+            "if ! /usr/local/bin/crun --version >/dev/null",
+            "native ARM64 crun is not executable inside the delegated session",
             "if ! /usr/local/lib/podman/conmon --version >/dev/null",
             "native ARM64 conmon is not executable inside the delegated session",
             '"${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" '
@@ -1124,7 +1124,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"${SYSWARDEN_PODMAN_INFO_INODE}"',
             "native ARM64 Podman info evidence changed identity or permissions",
             '.host.conmon.path == "/usr/local/lib/podman/conmon"',
-            '.host.ociRuntime.path == "/usr/local/bin/runc"',
+            '.host.ociRuntime.path == "/usr/local/bin/crun"',
             '.host.cgroupManager == "systemd"',
             ".host.security.rootless == true",
             ".host.serviceIsRemote == false",
@@ -1154,9 +1154,9 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         for forbidden in (
             "apt-get",
             "cgroup_manager=\"cgroupfs\"",
-            "runtime=\"crun\"",
-            "/usr/local/bin/crun",
             "runtime=\"/usr/local/bin/runc\"",
+            "runtime=\"runc\"",
+            "/usr/local/bin/runc",
             "OCIRuntime.Name",
             "podman_runtime=",
             "{{.Host.Conmon.Path}}",
@@ -1176,12 +1176,12 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertEqual(script.count("scripts/ci/package_lifecycle_lab.py"), 1)
         self.assertEqual(script.count("'conmon_path=[\"/usr/local/lib/podman/conmon\"]'"), 1)
         self.assertEqual(script.count("'remote=false'"), 1)
-        self.assertEqual(script.count("'runtime=\"runc\"'"), 1)
+        self.assertEqual(script.count("'runtime=\"crun\"'"), 1)
         self.assertEqual(script.count("'[engine.runtimes]'"), 1)
-        self.assertEqual(script.count("'runc=[\"/usr/local/bin/runc\"]'"), 1)
+        self.assertEqual(script.count("'crun=[\"/usr/local/bin/crun\"]'"), 1)
         self.assertEqual(script.count("'[engine.platform_to_oci_runtime]'"), 1)
         self.assertEqual(
-            script.count("'\"linux/arm64\"=\"runc\"'"), 1
+            script.count("'\"linux/arm64\"=\"crun\"'"), 1
         )
         self.assertEqual(
             script.count("'exec /usr/local/bin/podman --remote=false \"$@\"'"), 1
@@ -1212,11 +1212,11 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         mark_owned = script.index("delegate_drop_in_owned=true")
         conmon_pin = script.index("'conmon_path=[\"/usr/local/lib/podman/conmon\"]'")
         remote_pin = script.index("'remote=false'")
-        runtime_pin = script.index("'runtime=\"runc\"'")
+        runtime_pin = script.index("'runtime=\"crun\"'")
         runtime_table = script.index("'[engine.runtimes]'")
-        runtime_path = script.index("'runc=[\"/usr/local/bin/runc\"]'")
+        runtime_path = script.index("'crun=[\"/usr/local/bin/crun\"]'")
         platform_table = script.index("'[engine.platform_to_oci_runtime]'")
-        platform_pin = script.index("'\"linux/arm64\"=\"runc\"'")
+        platform_pin = script.index("'\"linux/arm64\"=\"crun\"'")
         wrapper_unset = script.index(
             "'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY'"
         )
@@ -1244,7 +1244,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         configuration_guard = script.index(
             "native ARM64 Podman configuration isolation is incomplete"
         )
-        runc_probe = script.index("/usr/local/bin/runc --version")
+        crun_probe = script.index("/usr/local/bin/crun --version")
         conmon_probe = script.index("/usr/local/lib/podman/conmon --version")
         info_target = script.index(': > "${podman_info}"')
         podman_probe = script.index(
@@ -1269,8 +1269,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertLess(info_target, systemd_run)
         self.assertLess(platform_pin, systemd_run)
         self.assertLess(systemd_run, configuration_guard)
-        self.assertLess(configuration_guard, runc_probe)
-        self.assertLess(runc_probe, conmon_probe)
+        self.assertLess(configuration_guard, crun_probe)
+        self.assertLess(crun_probe, conmon_probe)
         self.assertLess(conmon_probe, podman_probe)
         self.assertLess(podman_probe, podman_verdict)
         self.assertLess(podman_verdict, lifecycle_lab)
