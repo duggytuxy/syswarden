@@ -2,6 +2,27 @@
   <img src="assets/syswarden_hero.svg" alt="SysWarden Linux host defense and release qualification overview" width="100%">
 </div>
 
+<div align="center">
+  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/package.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/package.yml?branch=main&amp;style=flat-square&amp;logo=githubactions&amp;logoColor=white&amp;label=Package" alt="SysWarden package workflow">
+  </a>
+  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/security-audit.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/security-audit.yml?branch=main&amp;style=flat-square&amp;logo=githubactions&amp;logoColor=white&amp;label=Security%20Audit" alt="SysWarden security audit">
+  </a>
+  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/compliance.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/compliance.yml?branch=main&amp;style=flat-square&amp;logo=githubactions&amp;logoColor=white&amp;label=Plumber%20Compliance" alt="Plumber compliance">
+  </a>
+  <a href="https://score.getplumber.io/github.com/duggytuxy/syswarden">
+    <img src="https://score.getplumber.io/github.com/duggytuxy/syswarden.svg" alt="Plumber Score">
+  </a>
+  <a href="https://github.com/duggytuxy/syswarden/actions/workflows/scorecard.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/duggytuxy/syswarden/scorecard.yml?branch=main&amp;style=flat-square&amp;logo=githubactions&amp;logoColor=white&amp;label=OpenSSF%20Scorecard" alt="OpenSSF Scorecard">
+  </a>
+  <a href="https://github.com/duggytuxy/syswarden/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/duggytuxy/syswarden?style=flat-square&amp;logo=opensourceinitiative&amp;logoColor=white" alt="GitHub license">
+  </a>
+</div>
+
 # SysWarden
 
 SysWarden is a Linux host firewall orchestrator and out-of-band security-log

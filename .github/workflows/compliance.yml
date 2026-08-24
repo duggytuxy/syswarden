@@ -3,21 +3,86 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '30 2 * * 1'
 
-# OSSF Scorecard: Enforce strict read-all at the top-level
 permissions:
   contents: read
 
 jobs:
-  plumber:
+  pull-request-analysis:
+    name: Plumber analysis (pull request)
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write          # required to securely push Plumber Score via OIDC
-      security-events: write   # required to upload SARIF to Code Scanning
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: getplumber/plumber@e81ed4965fd92e0d2b63e95d399ed0419f5de2fa # v0.4.36
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+
+      - name: Run Plumber analysis
+        uses: getplumber/plumber@7bdbfee1f067431ce13f1b239c76f724ccadd0bf # v0.4.41
+        with:
+          version: v0.4.41
+          min-points: 100
+          score-push: false
+          upload-sarif: false
+          artifact-name: plumber-report
+
+  published-analysis:
+    name: Plumber analysis and publication
+    if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run and publish Plumber analysis
+        uses: getplumber/plumber@7bdbfee1f067431ce13f1b239c76f724ccadd0bf # v0.4.41
+        with:
+          version: v0.4.41
+          min-points: 100
           score-push: true
-          threshold: 80
+          upload-sarif: true
+          artifact-name: plumber-report
+
+  plumber:
+    name: Plumber Compliance
+    needs: [pull-request-analysis, published-analysis]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce event-specific Plumber result
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PULL_REQUEST_RESULT: ${{ needs.pull-request-analysis.result }}
+          PUBLISHED_RESULT: ${{ needs.published-analysis.result }}
+        run: |
+          set -euo pipefail
+          case "${EVENT_NAME}" in
+            pull_request)
+              [[ "${PULL_REQUEST_RESULT}" == "success" ]]
+              [[ "${PUBLISHED_RESULT}" == "skipped" ]]
+              ;;
+            push|schedule)
+              [[ "${PULL_REQUEST_RESULT}" == "skipped" ]]
+              [[ "${PUBLISHED_RESULT}" == "success" ]]
+              ;;
+            *)
+              echo "ERROR: unsupported Plumber event ${EVENT_NAME}." >&2
+              exit 1
+              ;;
+          esac

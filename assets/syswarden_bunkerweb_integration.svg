@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="940" viewBox="0 0 1600 940" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="940" viewBox="0 0 1600 940" role="img" aria-labelledby="title description" data-theme="dark" data-theme-status="legacy">
   <title id="title">SysWarden and BunkerWeb integration contract</title>
   <desc id="description">Client traffic crosses SysWarden nftables input and docker_protect forward protection before BunkerWeb. Banned traffic is dropped by the kernel, while allowed traffic reaches BunkerWeb and its protected upstream. The BunkerWeb scheduler sends source-owned temporary Layer 7 bans directly to each configured SysWarden peer. Durable authenticated SysWarden node synchronization remains active whether the optional enriched BunkerWeb gate is disabled or enabled. This is the SysWarden-side contract; BunkerWeb plugin, UI, cache, latency and no-reload behavior require external partner evidence.</desc>
 
@@ -6,6 +6,10 @@
     <linearGradient id="brandGradient" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#00A3FF"/>
       <stop offset="1" stop-color="#0055FF"/>
+    </linearGradient>
+    <linearGradient id="officialShieldGradient" x1="0" y1="0" x2="0" y2="100">
+      <stop offset="0%" stop-color="#00A3FF"/>
+      <stop offset="100%" stop-color="#0055FF"/>
     </linearGradient>
     <linearGradient id="controlGradient" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#14263A"/>
@@ -28,6 +32,22 @@
     <filter id="softShadow" x="-20%" y="-20%" width="140%" height="150%">
       <feDropShadow dx="0" dy="9" stdDeviation="11" flood-color="#000000" flood-opacity="0.34"/>
     </filter>
+    <filter id="officialLogoGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <!-- Official brand geometry copied verbatim from assets/syswarden_logo.svg. -->
+    <g id="syswardenOfficialMark">
+        <path d="M50 0 L100 20 V60 C100 90 75 110 50 120 C25 110 0 90 0 60 V20 L50 0 Z" fill="#161B22" stroke="url(#officialShieldGradient)" stroke-width="4" filter="url(#officialLogoGlow)"/>
+        <path d="M50 15 L85 30 V55 C85 75 65 90 50 100 C35 90 15 75 15 55 V30 L50 15 Z" fill="none" stroke="#00A3FF" stroke-width="1.5" opacity="0.5"/>
+        <path d="M35 45 L50 60 L35 75" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        <line x1="55" y1="75" x2="70" y2="75" stroke="#00A3FF" stroke-width="4" stroke-linecap="round" filter="url(#officialLogoGlow)"/>
+    </g>
+    <g id="syswardenOfficialLogo" data-brand-source="assets/syswarden_logo.svg">
+      <use href="#syswardenOfficialMark" transform="translate(30, 15)"/>
+      <text x="160" y="90" class="official-logo-text">SYSWARDEN</text>
+      <text x="165" y="118" class="official-logo-sub">ACTIVE DEFENSE HIDS/HIPS</text>
+    </g>
     <marker id="arrowCyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0 0L10 5L0 10Z" fill="#00A3FF"/>
     </marker>
@@ -51,6 +71,8 @@
       .body { fill: #8B949E; font-size: 14px; }
       .small { fill: #8B949E; font-size: 12px; }
       .flow { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .official-logo-text { font: 700 64px "Fira Code",ui-monospace,SFMono-Regular,Consolas,monospace; fill: #ffffff; letter-spacing: -1px; }
+      .official-logo-sub { font: 400 14px "Fira Code",ui-monospace,SFMono-Regular,Consolas,monospace; fill: #ffffff; letter-spacing: 5px; }
     </style>
   </defs>
 
@@ -61,14 +83,9 @@
 
   <!-- Header -->
   <g class="sans">
-    <g transform="translate(48 21) scale(0.5)">
-      <path d="M50 0L100 20V60C100 90 75 110 50 120C25 110 0 90 0 60V20L50 0Z" fill="#161B22" stroke="url(#brandGradient)" stroke-width="5" filter="url(#blueGlow)"/>
-      <path d="M50 15L85 30V55C85 75 65 90 50 100C35 90 15 75 15 55V30L50 15Z" fill="none" stroke="#00A3FF" stroke-width="2" opacity="0.6"/>
-      <path d="M34 43L49 58L34 73" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M56 74H72" stroke="#00A3FF" stroke-width="5" stroke-linecap="round"/>
+    <g transform="translate(28 2) scale(0.68)">
+      <use href="#syswardenOfficialLogo"/>
     </g>
-    <text x="116" y="52" fill="#FFFFFF" font-size="34" font-weight="800" letter-spacing="1">SYSWARDEN</text>
-    <text x="116" y="77" fill="#8B949E" font-size="13" font-weight="650" letter-spacing="1.7">BUNKERWEB INTEGRATION CONTRACT</text>
     <text x="785" y="49" fill="#F0F6FC" font-size="25" font-weight="750" text-anchor="middle">AUTHENTICATED L7 BAN ORCHESTRATION</text>
     <text x="785" y="76" fill="#8B949E" font-size="14" text-anchor="middle">Kernel enforcement, isolated peer scheduling and durable HA independence</text>
 
@@ -102,8 +119,7 @@
     <g transform="translate(350 158)">
       <rect width="240" height="184" rx="20" fill="#111D2A" stroke="#00A3FF" stroke-width="2"/>
       <text x="120" y="27" fill="#00A3FF" font-size="13" font-weight="750" text-anchor="middle" letter-spacing="1.4">SYSWARDEN HOST EDGE</text>
-      <path d="M120 42L158 57V89C158 113 139 130 120 139C101 130 82 113 82 89V57Z" fill="#161B22" stroke="url(#brandGradient)" stroke-width="3"/>
-      <path d="M101 77H139M101 89H139M101 101H139" stroke="#00A3FF" stroke-width="3" stroke-linecap="round"/>
+      <use href="#syswardenOfficialMark" transform="translate(84 45) scale(0.72)"/>
       <text x="120" y="160" fill="#F0F6FC" font-size="14" font-weight="700" text-anchor="middle">nftables input</text>
       <text x="120" y="177" fill="#C9D1D9" font-size="13" text-anchor="middle">docker_protect forward</text>
     </g>
@@ -131,14 +147,14 @@
         <rect width="118" height="78" rx="12" fill="#0D1117" stroke="#00E676"/>
         <path d="M18 20H100V60H18Z" fill="#00E676" opacity="0.12" stroke="#00E676"/>
         <path d="M25 30H93M25 41H75M25 52H84" stroke="#00E676" stroke-width="3" stroke-linecap="round"/>
-        <text x="59" y="72" class="mono" fill="#00E676" font-size="10" text-anchor="middle">WEBSITE</text>
+        <text x="59" y="73" class="mono" fill="#00E676" font-size="11" text-anchor="middle">WEBSITE</text>
       </g>
       <g transform="translate(306 53)">
         <rect width="118" height="78" rx="12" fill="#0D1117" stroke="#A371F7"/>
         <path d="M24 20H94V60H24Z" fill="#A371F7" opacity="0.12" stroke="#A371F7"/>
         <circle cx="38" cy="33" r="5" fill="#A371F7"/>
         <path d="M50 32H82M34 47H84" stroke="#A371F7" stroke-width="3" stroke-linecap="round"/>
-        <text x="59" y="72" class="mono" fill="#A371F7" font-size="10" text-anchor="middle">WEB APP</text>
+        <text x="59" y="73" class="mono" fill="#A371F7" font-size="11" text-anchor="middle">WEB APP</text>
       </g>
       <text x="226" y="167" class="body" text-anchor="middle">Allowed requests only</text>
     </g>
@@ -153,7 +169,7 @@
 
     <!-- Kernel drop -->
     <g transform="translate(616 348)">
-      <rect width="260" height="44" rx="12" fill="#2A1418" stroke="#B52E35"/>
+      <rect width="280" height="44" rx="12" fill="#2A1418" stroke="#B52E35"/>
       <circle cx="24" cy="22" r="11" fill="none" stroke="#F44336" stroke-width="2"/>
       <path d="M18 16L30 28M30 16L18 28" stroke="#F44336" stroke-width="2.5" stroke-linecap="round"/>
       <text x="46" y="27" fill="#F44336" font-size="14" font-weight="700">KERNEL DROP FOR BANNED IP</text>
@@ -225,7 +241,7 @@
       <text x="95" y="52" class="mono" fill="#F0F6FC" font-size="12" text-anchor="middle">integrations.bunkerweb</text>
       <text x="95" y="72" class="mono" fill="#F0F6FC" font-size="12" text-anchor="middle">.enabled ?</text>
       <text x="95" y="94" class="small" text-anchor="middle">Requires capabilities:</text>
-      <text x="95" y="111" class="mono" fill="#FFB000" font-size="10" text-anchor="middle">sync_ttl + sync_provenance</text>
+      <text x="95" y="111" class="mono" fill="#FFB000" font-size="11" text-anchor="middle">sync_ttl + sync_provenance</text>
       <text x="95" y="126" class="small" text-anchor="middle">Default: false</text>
     </g>
     <g transform="translate(750 659)">
@@ -249,7 +265,7 @@
     <path d="M657 622V647" class="flow" stroke="#FFB000" stroke-width="3" marker-end="url(#arrowPurple)"/>
     <path d="M722 725H738" class="flow" stroke="#00E676" stroke-width="3" marker-end="url(#arrowGreen)"/>
     <path d="M722 755V812H930V755" class="flow" stroke="#F44336" stroke-width="3" marker-end="url(#arrowRed)"/>
-    <path d="M832 659V642H984V622" class="flow" stroke="#00E676" stroke-width="3" marker-end="url(#arrowCyan)"/>
+    <path d="M832 659V642H974V622" class="flow" stroke="#00E676" stroke-width="3" marker-end="url(#arrowCyan)"/>
   </g>
 
   <!-- Other SysWarden peer -->
@@ -258,8 +274,7 @@
     <text x="1222" y="490" class="eyebrow">OTHER SYSWARDEN PEER B</text>
     <g transform="translate(1222 522)">
       <rect width="306" height="126" rx="17" fill="#111D2A" stroke="#00A3FF"/>
-      <path d="M47 19L77 31V56C77 75 62 88 47 95C32 88 17 75 17 56V31Z" fill="#161B22" stroke="#00A3FF" stroke-width="2.5"/>
-      <path d="M36 48L45 57L60 39" fill="none" stroke="#00A3FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <use href="#syswardenOfficialMark" transform="translate(16 16) scale(0.65)"/>
       <text x="96" y="36" fill="#00A3FF" font-size="17" font-weight="750">HA API :62026</text>
       <text x="96" y="60" class="body">Authenticated exact peer</text>
       <text x="96" y="82" class="body">Capabilities advertised</text>
@@ -279,25 +294,25 @@
   </g>
 
   <!-- Cross-plane flows -->
-  <path d="M805 338V418H250V539" class="flow" stroke="#A371F7" stroke-width="3.5" stroke-dasharray="8 8" marker-end="url(#arrowPurple)"/>
-  <rect x="630" y="407" width="300" height="24" rx="12" fill="#0D1117" stroke="#A371F7" stroke-opacity="0.6"/>
-  <text x="780" y="424" class="mono" fill="#A371F7" font-size="10" font-weight="700" text-anchor="middle">TEMPORARY L7 BAN OBSERVED</text>
+  <path d="M910 338V418H410V539" class="flow" stroke="#A371F7" stroke-width="3.5" stroke-dasharray="8 8" marker-end="url(#arrowPurple)"/>
+  <rect x="930" y="414" width="250" height="24" rx="12" fill="#0D1117" stroke="#A371F7" stroke-opacity="0.6"/>
+  <text x="1055" y="431" class="mono" fill="#A371F7" font-size="12" font-weight="700" text-anchor="middle">TEMPORARY L7 BAN OBSERVED</text>
 
   <path d="M460 574H488" class="flow" stroke="#A371F7" stroke-width="4" marker-end="url(#arrowPurple)"/>
-  <text x="474" y="558" class="mono" fill="#A371F7" font-size="10" text-anchor="middle">PUSH</text>
+  <text x="480" y="558" class="mono" fill="#A371F7" font-size="12" text-anchor="middle">PUSH</text>
   <path d="M500 608H472" class="flow" stroke="#00A3FF" stroke-width="3" marker-end="url(#arrowCyan)"/>
-  <text x="486" y="627" class="mono" fill="#00A3FF" font-size="10" text-anchor="middle">READ</text>
+  <text x="480" y="627" class="mono" fill="#00A3FF" font-size="12" text-anchor="middle">READ</text>
 
   <path d="M1118 570H1178" class="flow" stroke="#A371F7" stroke-width="4" marker-end="url(#arrowPurple)"/>
   <path d="M1178 598H1118" class="flow" stroke="#A371F7" stroke-width="4" marker-end="url(#arrowPurple)"/>
-  <rect x="1018" y="617" width="260" height="28" rx="14" fill="#0D1117" stroke="#A371F7" stroke-opacity="0.6"/>
-  <text x="1148" y="636" class="mono" fill="#A371F7" font-size="9" font-weight="700" text-anchor="middle">TWO SCHEDULED ONE-WAY PUSHES</text>
+  <rect x="988" y="625" width="156" height="24" rx="12" fill="#0D1117" stroke="#A371F7" stroke-opacity="0.6"/>
+  <text x="1066" y="642" class="mono" fill="#A371F7" font-size="12" font-weight="700" text-anchor="middle">TWO SCHEDULED PUSHES</text>
 
-  <path d="M428 615H476V878H1375V842" class="flow" stroke="#A371F7" stroke-width="3.5" stroke-dasharray="8 8" marker-end="url(#arrowPurple)"/>
+  <path d="M428 615H450V878H1375V842" class="flow" stroke="#A371F7" stroke-width="3.5" stroke-dasharray="8 8" marker-end="url(#arrowPurple)"/>
   <rect x="600" y="864" width="430" height="28" rx="14" fill="#0D1117" stroke="#A371F7" stroke-opacity="0.6"/>
-  <text x="815" y="883" class="mono" fill="#A371F7" font-size="11" font-weight="700" text-anchor="middle">SAME SOURCE-OWNED BAN SENT DIRECTLY TO PEER B</text>
+  <text x="815" y="883" class="mono" fill="#A371F7" font-size="12" font-weight="700" text-anchor="middle">SAME SOURCE-OWNED BAN SENT DIRECTLY TO PEER B</text>
 
-  <path d="M984 518V444H470V352" class="flow" stroke="#00A3FF" stroke-width="3.5" marker-end="url(#arrowCyan)"/>
+  <path d="M984 518V444H470V392" class="flow" stroke="#00A3FF" stroke-width="3.5" marker-end="url(#arrowCyan)"/>
 
   <!-- Contract boundary -->
   <g class="sans">

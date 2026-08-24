@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -115,6 +116,42 @@ class ReleaseGateTests(unittest.TestCase):
     def write_file(self, path: Path, content: bytes = b"evidence\n") -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
+
+    def plumber_report(self) -> dict[str, object]:
+        return {
+            "passed": True,
+            "ciValid": True,
+            "ciMissing": False,
+            "minPoints": 100,
+            "plumberScore": {
+                "score": "A",
+                "finalPoints": 100,
+                "counts": {
+                    "critical": 0,
+                    "high": 0,
+                    "medium": 0,
+                    "low": 0,
+                },
+            },
+        }
+
+    def plumber_report_bytes(self) -> bytes:
+        return (
+            json.dumps(self.plumber_report(), sort_keys=True, separators=(",", ":"))
+            + "\n"
+        ).encode("utf-8")
+
+    def make_compliance_archive(
+        self,
+        entries: list[tuple[str, bytes]],
+        *,
+        compression: int = zipfile.ZIP_DEFLATED,
+    ) -> Path:
+        archive = self.root / release_gate.COMPLIANCE_ARCHIVE_NAME
+        with zipfile.ZipFile(archive, "w", compression=compression) as output:
+            for name, content in entries:
+                output.writestr(name, content)
+        return archive
 
     def make_packages(self) -> Path:
         directory = self.root / "packages"
@@ -256,7 +293,10 @@ class ReleaseGateTests(unittest.TestCase):
 
     def make_compliance(self) -> Path:
         directory = self.root / "compliance"
-        self.write_file(directory / "native" / "report.json", b'{"score": 100}\n')
+        self.write_file(
+            directory / release_gate.PLUMBER_REPORT_NAME,
+            self.plumber_report_bytes(),
+        )
         return directory
 
     def make_repository(self, heading: str | None = None) -> Path:
@@ -297,7 +337,7 @@ class ReleaseGateTests(unittest.TestCase):
         )
         self.assertIn("# Release v4.02.8", notes.read_text(encoding="utf-8"))
         with zipfile.ZipFile(output / release_gate.COMPLIANCE_ARCHIVE_NAME) as archive:
-            self.assertEqual(archive.namelist(), ["native/report.json"])
+            self.assertEqual(archive.namelist(), [release_gate.PLUMBER_REPORT_NAME])
 
     def test_signed_update_asset_contract_starts_after_legacy_first_hop(self) -> None:
         self.assertFalse(release_gate.signed_update_required("v4.02.8"))
@@ -676,18 +716,582 @@ class ReleaseGateTests(unittest.TestCase):
 
     def test_compliance_rejects_empty_native_report(self) -> None:
         compliance = self.root / "compliance"
-        self.write_file(compliance / "report.json", b"")
+        self.write_file(compliance / release_gate.PLUMBER_REPORT_NAME, b"")
         with self.assertRaises(release_gate.ReleaseGateError):
             release_gate.write_compliance_archive(
                 compliance, self.root / release_gate.COMPLIANCE_ARCHIVE_NAME
             )
 
-    def test_compliance_archive_accepts_native_directories(self) -> None:
-        archive = self.root / release_gate.COMPLIANCE_ARCHIVE_NAME
-        with zipfile.ZipFile(archive, "w") as output:
-            output.writestr("native/", b"")
-            output.writestr("native/report.json", b'{"score": 100}\n')
+    def test_compliance_writer_validates_the_published_verdict(self) -> None:
+        compliance = self.root / "compliance"
+        report = self.plumber_report()
+        report["passed"] = False
+        self.write_file(
+            compliance / release_gate.PLUMBER_REPORT_NAME,
+            json.dumps(report).encode("utf-8"),
+        )
+        with self.assertRaisesRegex(release_gate.ReleaseGateError, "passed"):
+            release_gate.write_compliance_archive(
+                compliance, self.root / release_gate.COMPLIANCE_ARCHIVE_NAME
+            )
+
+    def test_compliance_archive_accepts_safe_companions_and_unknown_fields(self) -> None:
+        report = self.plumber_report()
+        report["futureRootField"] = {"enabled": True}
+        score = report["plumberScore"]
+        self.assertIsInstance(score, dict)
+        score["futureScoreField"] = "preserved"
+        counts = score["counts"]
+        self.assertIsInstance(counts, dict)
+        counts["informational"] = 7
+        report_content = json.dumps(report).encode("utf-8")
+        archive = self.make_compliance_archive(
+            [
+                ("native/", b""),
+                (release_gate.PLUMBER_REPORT_NAME, report_content),
+                ("native/pbom.json", b'{"version":1}\n'),
+            ]
+        )
         release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_archive_requires_one_normalized_root_report(self) -> None:
+        cases = (
+            ("missing", [("pbom.json", b"{}\n")]),
+            (
+                "nested-only",
+                [("native/plumber-report.json", self.plumber_report_bytes())],
+            ),
+            (
+                "normalized-duplicate",
+                [
+                    (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes()),
+                    ("./plumber-report.json", self.plumber_report_bytes()),
+                ],
+            ),
+            (
+                "root-plus-nested-report",
+                [
+                    (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes()),
+                    ("native/plumber-report.json", self.plumber_report_bytes()),
+                ],
+            ),
+            (
+                "report-directory-file-conflict",
+                [
+                    ("plumber-report.json/", b""),
+                    (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes()),
+                ],
+            ),
+            (
+                "directory-file-conflict",
+                [
+                    (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes()),
+                    ("native/", b""),
+                    ("native", b"companion\n"),
+                ],
+            ),
+            (
+                "normalized-duplicate-directory",
+                [
+                    (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes()),
+                    ("native/", b""),
+                    ("./native/", b""),
+                ],
+            ),
+        )
+        for label, entries in cases:
+            with self.subTest(label=label):
+                archive = self.make_compliance_archive(entries)
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_archive_preserves_safe_path_and_nonempty_contracts(self) -> None:
+        for unsafe_name in (
+            "../escape.json",
+            "/absolute.json",
+            "./../escape.json",
+            "..\\escape.json",
+            "native\\..\\escape.json",
+            "C:\\escape.json",
+            "C:/escape.json",
+        ):
+            with self.subTest(unsafe_name=unsafe_name):
+                archive = self.make_compliance_archive(
+                    [
+                        (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes()),
+                        (unsafe_name, b"unsafe\n"),
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+        archive = self.make_compliance_archive(
+            [
+                (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes()),
+                ("empty-companion.json", b""),
+            ]
+        )
+        with self.assertRaises(release_gate.ReleaseGateError):
+            release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_archive_rejects_non_regular_unix_entries(self) -> None:
+        archive = self.root / release_gate.COMPLIANCE_ARCHIVE_NAME
+        report_info = zipfile.ZipInfo(release_gate.PLUMBER_REPORT_NAME)
+        report_info.create_system = 3
+        report_info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr(report_info, self.plumber_report_bytes())
+        with self.assertRaises(release_gate.ReleaseGateError):
+            release_gate.validate_compliance_archive(archive)
+
+        for label, member_type in (
+            ("symlink", stat.S_IFLNK),
+            ("fifo", stat.S_IFIFO),
+            ("character-device", stat.S_IFCHR),
+        ):
+            with self.subTest(label=label):
+                companion = zipfile.ZipInfo(f"native/{label}")
+                companion.create_system = 3
+                companion.external_attr = (member_type | 0o600) << 16
+                with zipfile.ZipFile(archive, "w") as output:
+                    output.writestr(
+                        release_gate.PLUMBER_REPORT_NAME,
+                        self.plumber_report_bytes(),
+                    )
+                    output.writestr(companion, b"special\n")
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_archive_rejects_file_descendant_conflicts(self) -> None:
+        conflict_pairs = (
+            (
+                ("native", b"file\n"),
+                ("native/pbom.json", b"{}\n"),
+            ),
+            (
+                (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes()),
+                ("plumber-report.json/child", b"conflict\n"),
+            ),
+        )
+        for pair in conflict_pairs:
+            for reverse in (False, True):
+                with self.subTest(pair=pair[0][0], reverse=reverse):
+                    conflict_entries = list(reversed(pair)) if reverse else list(pair)
+                    if not any(
+                        name == release_gate.PLUMBER_REPORT_NAME
+                        for name, _ in conflict_entries
+                    ):
+                        conflict_entries.insert(
+                            0,
+                            (
+                                release_gate.PLUMBER_REPORT_NAME,
+                                self.plumber_report_bytes(),
+                            ),
+                        )
+                    archive = self.make_compliance_archive(conflict_entries)
+                    with self.assertRaises(release_gate.ReleaseGateError):
+                        release_gate.validate_compliance_archive(archive)
+
+        mismatches = (
+            ("native/", stat.S_IFREG),
+            ("native", stat.S_IFDIR),
+        )
+        for name, member_type in mismatches:
+            with self.subTest(name=name, member_type=member_type):
+                companion = zipfile.ZipInfo(name)
+                companion.create_system = 3
+                companion.external_attr = (member_type | 0o700) << 16
+                with zipfile.ZipFile(archive, "w") as output:
+                    output.writestr(
+                        release_gate.PLUMBER_REPORT_NAME,
+                        self.plumber_report_bytes(),
+                    )
+                    output.writestr(companion, b"" if name.endswith("/") else b"file\n")
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_archive_preserves_crc_validation(self) -> None:
+        report_content = self.plumber_report_bytes()
+        archive = self.make_compliance_archive(
+            [(release_gate.PLUMBER_REPORT_NAME, report_content)],
+            compression=zipfile.ZIP_STORED,
+        )
+        archive_content = bytearray(archive.read_bytes())
+        payload_offset = archive_content.index(report_content)
+        archive_content[payload_offset] ^= 1
+        archive.write_bytes(archive_content)
+        with self.assertRaisesRegex(release_gate.ReleaseGateError, "CRC"):
+            release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_report_has_a_bounded_uncompressed_size(self) -> None:
+        report_content = self.plumber_report_bytes()
+        exact_limit = report_content + b" " * (
+            release_gate.PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES - len(report_content)
+        )
+        archive = self.make_compliance_archive(
+            [(release_gate.PLUMBER_REPORT_NAME, exact_limit)]
+        )
+        release_gate.validate_compliance_archive(archive)
+
+        over_limit = exact_limit + b" "
+        archive = self.make_compliance_archive(
+            [(release_gate.PLUMBER_REPORT_NAME, over_limit)]
+        )
+        with self.assertRaisesRegex(release_gate.ReleaseGateError, "64-KiB"):
+            release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_archive_bounds_companion_expansion_and_member_count(
+        self,
+    ) -> None:
+        oversized_companion = b"A" * release_gate.COMPLIANCE_ARCHIVE_MAX_UNCOMPRESSED_BYTES
+        archive = self.make_compliance_archive(
+            [
+                (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes()),
+                ("native/oversized.txt", oversized_companion),
+            ]
+        )
+        with self.assertRaisesRegex(release_gate.ReleaseGateError, "aggregate"):
+            release_gate.validate_compliance_archive(archive)
+
+        entries = [
+            (release_gate.PLUMBER_REPORT_NAME, self.plumber_report_bytes())
+        ]
+        entries.extend(
+            (f"native/companion-{index}.txt", b"evidence\n")
+            for index in range(release_gate.COMPLIANCE_ARCHIVE_MAX_MEMBERS)
+        )
+        archive = self.make_compliance_archive(entries)
+        with self.assertRaisesRegex(release_gate.ReleaseGateError, "128-entry"):
+            release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_report_requires_strict_utf8_and_json(self) -> None:
+        valid = self.plumber_report_bytes()
+        malformed_reports = (
+            ("invalid-utf8", valid + b"\xff"),
+            ("trailing-json", valid + b"{}"),
+            ("array-root", b"[]"),
+            (
+                "duplicate-key",
+                valid.replace(b'"passed":true', b'"passed":true,"passed":true'),
+            ),
+            (
+                "nested-duplicate-key",
+                valid.replace(b'"critical":0', b'"critical":0,"critical":0'),
+            ),
+            (
+                "nan",
+                valid.replace(b'"finalPoints":100', b'"finalPoints":NaN'),
+            ),
+            (
+                "infinity",
+                valid.replace(b'"finalPoints":100', b'"finalPoints":Infinity'),
+            ),
+            (
+                "negative-infinity",
+                valid.replace(b'"finalPoints":100', b'"finalPoints":-Infinity'),
+            ),
+            (
+                "overflowing-number",
+                valid.replace(b'"finalPoints":100', b'"finalPoints":1e9999'),
+            ),
+        )
+        for label, content in malformed_reports:
+            with self.subTest(label=label):
+                archive = self.make_compliance_archive(
+                    [(release_gate.PLUMBER_REPORT_NAME, content)]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_report_requires_exact_boolean_verdicts(self) -> None:
+        cases = (
+            ("passed", False),
+            ("passed", 1),
+            ("passed", "true"),
+            ("ciValid", False),
+            ("ciValid", 1),
+            ("ciValid", "true"),
+            ("ciMissing", True),
+            ("ciMissing", 0),
+            ("ciMissing", "false"),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                report = self.plumber_report()
+                report[field] = value
+                archive = self.make_compliance_archive(
+                    [
+                        (
+                            release_gate.PLUMBER_REPORT_NAME,
+                            json.dumps(report).encode("utf-8"),
+                        )
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+        for field in ("passed", "ciValid", "ciMissing"):
+            with self.subTest(field=field, value="missing"):
+                report = self.plumber_report()
+                report.pop(field)
+                archive = self.make_compliance_archive(
+                    [
+                        (
+                            release_gate.PLUMBER_REPORT_NAME,
+                            json.dumps(report).encode("utf-8"),
+                        )
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_report_proves_the_strict_points_gate(self) -> None:
+        for value in (True, "100", 99, -100, None):
+            with self.subTest(field="minPoints", value=value):
+                report = self.plumber_report()
+                report["minPoints"] = value
+                archive = self.make_compliance_archive(
+                    [
+                        (
+                            release_gate.PLUMBER_REPORT_NAME,
+                            json.dumps(report).encode("utf-8"),
+                        )
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+        report = self.plumber_report()
+        report.pop("minPoints")
+        archive = self.make_compliance_archive(
+            [
+                (
+                    release_gate.PLUMBER_REPORT_NAME,
+                    json.dumps(report).encode("utf-8"),
+                )
+            ]
+        )
+        with self.assertRaises(release_gate.ReleaseGateError):
+            release_gate.validate_compliance_archive(archive)
+
+        for value in (False, 0, 80, "null"):
+            with self.subTest(field="threshold", value=value):
+                report = self.plumber_report()
+                report["threshold"] = value
+                archive = self.make_compliance_archive(
+                    [
+                        (
+                            release_gate.PLUMBER_REPORT_NAME,
+                            json.dumps(report).encode("utf-8"),
+                        )
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+        report = self.plumber_report()
+        self.assertNotIn("threshold", report)
+        archive = self.make_compliance_archive(
+            [
+                (
+                    release_gate.PLUMBER_REPORT_NAME,
+                    json.dumps(report).encode("utf-8"),
+                )
+            ]
+        )
+        release_gate.validate_compliance_archive(archive)
+
+        report = self.plumber_report()
+        report["minPoints"] = 100.0
+        report["threshold"] = None
+        archive = self.make_compliance_archive(
+            [
+                (
+                    release_gate.PLUMBER_REPORT_NAME,
+                    json.dumps(report).encode("utf-8"),
+                )
+            ]
+        )
+        release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_report_rejects_points_that_round_to_binary_100(self) -> None:
+        valid = self.plumber_report_bytes()
+        for field, exact_token in (
+            ("minPoints", b'"minPoints":100'),
+            ("finalPoints", b'"finalPoints":100'),
+        ):
+            for value in (
+                b"99.999999999999999999999",
+                b"100.000000000000000000001",
+            ):
+                with self.subTest(field=field, value=value.decode("ascii")):
+                    mutated = valid.replace(
+                        exact_token,
+                        exact_token.split(b":", 1)[0] + b":" + value,
+                    )
+                    archive = self.make_compliance_archive(
+                        [(release_gate.PLUMBER_REPORT_NAME, mutated)]
+                    )
+                    with self.assertRaises(release_gate.ReleaseGateError):
+                        release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_report_requires_exact_a_100_score(self) -> None:
+        for field, value in (
+            ("score", "B"),
+            ("score", True),
+            ("finalPoints", True),
+            ("finalPoints", "100"),
+            ("finalPoints", 99),
+            ("finalPoints", -100),
+            ("finalPoints", 10**400),
+        ):
+            with self.subTest(field=field, value=value):
+                report = self.plumber_report()
+                score = report["plumberScore"]
+                self.assertIsInstance(score, dict)
+                score[field] = value
+                archive = self.make_compliance_archive(
+                    [
+                        (
+                            release_gate.PLUMBER_REPORT_NAME,
+                            json.dumps(report).encode("utf-8"),
+                        )
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+        for field in ("score", "finalPoints"):
+            with self.subTest(field=field, value="missing"):
+                report = self.plumber_report()
+                score = report["plumberScore"]
+                self.assertIsInstance(score, dict)
+                score.pop(field)
+                archive = self.make_compliance_archive(
+                    [
+                        (
+                            release_gate.PLUMBER_REPORT_NAME,
+                            json.dumps(report).encode("utf-8"),
+                        )
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+        report = self.plumber_report()
+        score = report["plumberScore"]
+        self.assertIsInstance(score, dict)
+        score["finalPoints"] = 100.0
+        archive = self.make_compliance_archive(
+            [
+                (
+                    release_gate.PLUMBER_REPORT_NAME,
+                    json.dumps(report).encode("utf-8"),
+                )
+            ]
+        )
+        release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_report_requires_score_and_counts_objects(self) -> None:
+        for value in (None, [], "A"):
+            with self.subTest(field="plumberScore", value=value):
+                report = self.plumber_report()
+                report["plumberScore"] = value
+                archive = self.make_compliance_archive(
+                    [
+                        (
+                            release_gate.PLUMBER_REPORT_NAME,
+                            json.dumps(report).encode("utf-8"),
+                        )
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+        report = self.plumber_report()
+        report.pop("plumberScore")
+        archive = self.make_compliance_archive(
+            [
+                (
+                    release_gate.PLUMBER_REPORT_NAME,
+                    json.dumps(report).encode("utf-8"),
+                )
+            ]
+        )
+        with self.assertRaises(release_gate.ReleaseGateError):
+            release_gate.validate_compliance_archive(archive)
+
+        for value in (None, [], 0):
+            with self.subTest(field="counts", value=value):
+                report = self.plumber_report()
+                score = report["plumberScore"]
+                self.assertIsInstance(score, dict)
+                score["counts"] = value
+                archive = self.make_compliance_archive(
+                    [
+                        (
+                            release_gate.PLUMBER_REPORT_NAME,
+                            json.dumps(report).encode("utf-8"),
+                        )
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
+
+        report = self.plumber_report()
+        score = report["plumberScore"]
+        self.assertIsInstance(score, dict)
+        score.pop("counts")
+        archive = self.make_compliance_archive(
+            [
+                (
+                    release_gate.PLUMBER_REPORT_NAME,
+                    json.dumps(report).encode("utf-8"),
+                )
+            ]
+        )
+        with self.assertRaises(release_gate.ReleaseGateError):
+            release_gate.validate_compliance_archive(archive)
+
+    def test_compliance_report_requires_zero_integer_severity_counts(self) -> None:
+        severities = ("critical", "high", "medium", "low")
+        for severity in severities:
+            for value in (False, 0.0, "0", 1, -1):
+                with self.subTest(severity=severity, value=value):
+                    report = self.plumber_report()
+                    score = report["plumberScore"]
+                    self.assertIsInstance(score, dict)
+                    counts = score["counts"]
+                    self.assertIsInstance(counts, dict)
+                    counts[severity] = value
+                    archive = self.make_compliance_archive(
+                        [
+                            (
+                                release_gate.PLUMBER_REPORT_NAME,
+                                json.dumps(report).encode("utf-8"),
+                            )
+                        ]
+                    )
+                    with self.assertRaises(release_gate.ReleaseGateError):
+                        release_gate.validate_compliance_archive(archive)
+
+            with self.subTest(severity=severity, value="missing"):
+                report = self.plumber_report()
+                score = report["plumberScore"]
+                self.assertIsInstance(score, dict)
+                counts = score["counts"]
+                self.assertIsInstance(counts, dict)
+                counts.pop(severity)
+                archive = self.make_compliance_archive(
+                    [
+                        (
+                            release_gate.PLUMBER_REPORT_NAME,
+                            json.dumps(report).encode("utf-8"),
+                        )
+                    ]
+                )
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    release_gate.validate_compliance_archive(archive)
 
     def test_notes_reject_previous_release(self) -> None:
         repository = self.make_repository("v4.02.7")
@@ -835,13 +1439,13 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(script.count('for tree_ref in HEAD^ HEAD; do'), 2)
             self.assertEqual(
                 script.count('tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'),
-                9,
+                10,
             )
-            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 8)
-            self.assertEqual(script.count('"${tree_type}" != "blob"'), 9)
+            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 9)
+            self.assertEqual(script.count('"${tree_type}" != "blob"'), 10)
             expected_path_counts = {
-                ".github/workflows/release-manager.yml": 18,
-                "scripts/ci/release_gate_test.py": 18,
+                ".github/workflows/release-manager.yml": 20,
+                "scripts/ci/release_gate_test.py": 20,
                 "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go": 2,
             }
             for path, count in expected_path_counts.items():
@@ -878,6 +1482,10 @@ class ReleaseGateTests(unittest.TestCase):
             workflow.count('if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then'), 2
         )
         pinned_contracts = (
+            (
+                'if [[ "${v4032_compliance_parent_sha}" != '
+                '"ba1e853c11033f6abcd674dc7c251848f347e55b" ]]; then'
+            ),
             (
                 'if [[ "${v4032_init_runtime_parent_sha}" != '
                 '"97ebc9991fdeec293abd04444ad6600f11c30ee4" ]]; then'
@@ -921,6 +1529,10 @@ class ReleaseGateTests(unittest.TestCase):
         )
         for contract in pinned_contracts:
             self.assertEqual(workflow.count(contract), 2)
+        compliance_subject_contract = (
+            "v4032_compliance_expected_subject='Security : enforce v4.03.2 "
+            "compliance release verdict (#104)'"
+        )
         init_runtime_subject_contract = (
             "v4032_init_runtime_expected_subject='Qualification : repair "
             "v4.03.2 ARM64 init runtime (#103)'"
@@ -953,6 +1565,20 @@ class ReleaseGateTests(unittest.TestCase):
             "v4032_expected_subject='Qualification : repair v4.03.2 "
             "package lifecycle qualification (#95) (#95)'"
         )
+        compliance_paths = (
+            ".github/dependabot.yml",
+            ".github/workflows/compliance.yml",
+            ".github/workflows/release-manager.yml",
+            ".plumber.yaml",
+            "CONTRIBUTING.md",
+            "README.md",
+            "assets/syswarden_architecture.svg",
+            "assets/syswarden_bunkerweb_integration.svg",
+            "assets/syswarden_hero.svg",
+            "scripts/ci/release_gate.py",
+            "scripts/ci/release_gate_test.py",
+            "scripts/ci/workflow_required_checks_test.py",
+        )
         init_runtime_paths = (
             ".github/workflows/release-manager.yml",
             ".github/workflows/release-qualification.yml",
@@ -984,7 +1610,7 @@ class ReleaseGateTests(unittest.TestCase):
             ".github/workflows/release-manager.yml",
             "scripts/ci/release_gate_test.py",
         )
-        expected_paths = (
+        repair_paths = (
             ".github/workflows/package.yml",
             ".github/workflows/release-manager.yml",
             ".github/workflows/release-qualification.yml",
@@ -1006,6 +1632,7 @@ class ReleaseGateTests(unittest.TestCase):
             "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
             "src/core/syswarden-cli/pkg/system/uninstall_prepare_linux_test.go",
         )
+        expected_paths = tuple(dict.fromkeys(compliance_paths + repair_paths))
         unchanged_targets = (
             "changelog.md",
             "src/core/syswarden-cli/pkg/system/upgrade.go",
@@ -1014,9 +1641,9 @@ class ReleaseGateTests(unittest.TestCase):
             "src/core/syswarden-cli/config/default.go",
             "src/core/syswarden-cli/pkg/integration/webhook.go",
             "src/core/syswarden-core/webhook/discord.go",
-            "README.md",
         )
         for block in blocks:
+            self.assertEqual(block.count(compliance_subject_contract), 1)
             self.assertEqual(block.count(init_runtime_subject_contract), 1)
             self.assertEqual(block.count(stabilization_subject_contract), 1)
             self.assertEqual(block.count(local_subject_contract), 1)
@@ -1028,20 +1655,98 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 block.count(
                     '[[ "${commit_subject}" != '
+                    '"${v4032_compliance_expected_subject}" ]]'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_compliance_parent_sha="$(git rev-parse HEAD^)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_compliance_head_line <<< '
+                    '"$(git rev-list --parents -n 1 HEAD)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count("${#v4032_compliance_head_line[@]} != 2"), 1
+            )
+            self.assertEqual(
+                block.count(
+                    "# BEGIN exact v4.03.2 compliance release verdict diff contract"
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    "# END exact v4.03.2 compliance release verdict diff contract"
+                ),
+                1,
+            )
+            compliance_diff = block.split(
+                "# BEGIN exact v4.03.2 compliance release verdict diff contract\n",
+                1,
+            )[1].split(
+                "# END exact v4.03.2 compliance release verdict diff contract",
+                1,
+            )[0]
+            self.assertEqual(
+                compliance_diff.count(
+                    "git diff-tree --no-commit-id --name-status -r "
+                    "--no-renames -z HEAD^ HEAD"
+                ),
+                1,
+            )
+            self.assertEqual(
+                compliance_diff.count("for tree_ref in HEAD^ HEAD; do"), 1
+            )
+            self.assertEqual(
+                compliance_diff.count('"${tree_mode}" != "100644"'), 1
+            )
+            self.assertEqual(
+                compliance_diff.count('"${tree_type}" != "blob"'), 1
+            )
+            self.assertEqual(
+                compliance_diff.count(
+                    "${#actual_v4032_compliance_diff[@]} != "
+                    "${#expected_v4032_compliance_diff[@]}"
+                ),
+                1,
+            )
+            for path in compliance_paths:
+                self.assertEqual(compliance_diff.count(f'"{path}"'), 2)
+                self.assertEqual(compliance_diff.count(f'M "{path}"'), 1)
+            self.assertEqual(block.count("v4032_init_runtime_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_init_runtime_parent_sha="$(git rev-parse '
+                    '"${v4032_init_runtime_ref}^")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_init_runtime_subject="$(git log -1 --format=%s '
+                    '"${v4032_init_runtime_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    '[[ "${v4032_init_runtime_subject}" != '
                     '"${v4032_init_runtime_expected_subject}" ]]'
                 ),
                 1,
             )
             self.assertEqual(
                 block.count(
-                    'v4032_init_runtime_parent_sha="$(git rev-parse HEAD^)"'
-                ),
-                1,
-            )
-            self.assertEqual(
-                block.count(
                     'v4032_init_runtime_head_line <<< '
-                    '"$(git rev-list --parents -n 1 HEAD)"'
+                    '"$(git rev-list --parents -n 1 '
+                    '"${v4032_init_runtime_ref}")"'
                 ),
                 1,
             )
@@ -1070,12 +1775,18 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 init_runtime_diff.count(
                     "git diff-tree --no-commit-id --name-status -r "
-                    "--no-renames -z HEAD^ HEAD"
+                    "--no-renames -z \\\n"
+                    '        "${v4032_init_runtime_ref}^" '
+                    '"${v4032_init_runtime_ref}"'
                 ),
                 1,
             )
             self.assertEqual(
-                init_runtime_diff.count("for tree_ref in HEAD^ HEAD; do"), 1
+                init_runtime_diff.count(
+                    'for tree_ref in "${v4032_init_runtime_ref}^" '
+                    '"${v4032_init_runtime_ref}"; do'
+                ),
+                1,
             )
             self.assertEqual(
                 init_runtime_diff.count('"${tree_mode}" != "100644"'), 1
@@ -1093,7 +1804,12 @@ class ReleaseGateTests(unittest.TestCase):
             for path in init_runtime_paths:
                 self.assertEqual(init_runtime_diff.count(f'"{path}"'), 2)
                 self.assertEqual(init_runtime_diff.count(f'M "{path}"'), 1)
-            self.assertEqual(block.count("v4032_stabilization_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_stabilization_ref="${v4032_init_runtime_ref}^"\n'
+                ),
+                1,
+            )
             self.assertEqual(
                 block.count(
                     'v4032_stabilization_parent_sha="$(git rev-parse '
@@ -1647,7 +2363,7 @@ class ReleaseGateTests(unittest.TestCase):
                     "git diff-tree --no-commit-id --name-status -r "
                     "--no-renames -z \\"
                 ),
-                7,
+                8,
             )
             self.assertEqual(
                 block.count(
@@ -1666,12 +2382,12 @@ class ReleaseGateTests(unittest.TestCase):
                 block.count(
                     'tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'
                 ),
-                8,
+                9,
             )
             self.assertEqual(
                 block.count('"${tree_mode}" != "${expected_mode}"'), 1
             )
-            self.assertEqual(block.count('"${tree_type}" != "blob"'), 8)
+            self.assertEqual(block.count('"${tree_type}" != "blob"'), 9)
             self.assertEqual(block.count('expected_mode="100644"'), 1)
             self.assertEqual(
                 block.count('[[ "${fix_path}" == "build_packages.sh" ]]'), 1
@@ -1683,7 +2399,8 @@ class ReleaseGateTests(unittest.TestCase):
                 1,
             )
             for path in expected_paths:
-                expected_count = 2
+                expected_count = 2 if path in repair_paths else 0
+                expected_count += 2 if path in compliance_paths else 0
                 expected_count += 2 if path in merge_paths else 0
                 expected_count += 2 if path in arm64_paths else 0
                 expected_count += 2 if path in runtime_paths else 0
@@ -1693,7 +2410,8 @@ class ReleaseGateTests(unittest.TestCase):
                 expected_count += 2 if path in init_runtime_paths else 0
                 expected_count += 1 if path == "build_packages.sh" else 0
                 self.assertEqual(block.count(f'"{path}"'), expected_count)
-                expected_status_count = 1
+                expected_status_count = 1 if path in repair_paths else 0
+                expected_status_count += 1 if path in compliance_paths else 0
                 expected_status_count += 1 if path in merge_paths else 0
                 expected_status_count += 1 if path in arm64_paths else 0
                 expected_status_count += 1 if path in runtime_paths else 0
@@ -1832,6 +2550,28 @@ class ReleaseGateTests(unittest.TestCase):
             )[0]
             self.assertNotIn("--tag-phase", parent_validation)
 
+    def exact_v4032_compliance_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        begin = "# BEGIN exact v4.03.2 compliance release verdict diff contract\n"
+        end = "# END exact v4.03.2 compliance release verdict diff contract"
+        self.assertEqual(block.count(begin), 1)
+        self.assertEqual(block.count(end), 1)
+        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+
+    def v4032_compliance_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        start = "v4032_compliance_expected_subject="
+        end = (
+            'read -r -a v4032_compliance_head_line <<< '
+            '"$(git rev-list --parents -n 1 HEAD)"'
+        )
+        self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(end), 1)
+        fragment = start + block.split(start, 1)[1].split(end, 1)[0]
+        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+
     def exact_v4032_init_runtime_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
@@ -1839,20 +2579,33 @@ class ReleaseGateTests(unittest.TestCase):
         end = "# END exact v4.03.2 ARM64 init runtime repair diff contract"
         self.assertEqual(block.count(begin), 1)
         self.assertEqual(block.count(end), 1)
-        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+        return (
+            "set -euo pipefail\nv4032_init_runtime_ref=HEAD\n"
+            + block.split(begin, 1)[1].split(end, 1)[0]
+        )
 
     def v4032_init_runtime_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
         start = "v4032_init_runtime_expected_subject="
+        subject_assignment = (
+            'v4032_init_runtime_subject="$(git log -1 --format=%s '
+            '"${v4032_init_runtime_ref}")"'
+        )
         end = (
             'read -r -a v4032_init_runtime_head_line <<< '
-            '"$(git rev-list --parents -n 1 HEAD)"'
+            '"$(git rev-list --parents -n 1 '
+            '"${v4032_init_runtime_ref}")"'
         )
         self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(subject_assignment), 1)
         self.assertEqual(block.count(end), 1)
         fragment = start + block.split(start, 1)[1].split(end, 1)[0]
-        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+        fragment = fragment.replace(
+            subject_assignment,
+            'v4032_init_runtime_subject="${COMMIT_SUBJECT:?}"',
+        )
+        return "set -euo pipefail\n" + fragment
 
     def exact_v4032_stabilization_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -2314,6 +3067,61 @@ class ReleaseGateTests(unittest.TestCase):
         )
         return repository
 
+    def test_release_manager_v4032_compliance_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        self.assert_exact_subject_gate(
+            self.v4032_compliance_subject_gate_script(),
+            {
+                "valid": (
+                    "Security : enforce v4.03.2 compliance release verdict (#104)",
+                    True,
+                ),
+                "bare": (
+                    "Security : enforce v4.03.2 compliance release verdict",
+                    False,
+                ),
+                "previous pull request": (
+                    "Security : enforce v4.03.2 compliance release verdict (#103)",
+                    False,
+                ),
+                "next pull request": (
+                    "Security : enforce v4.03.2 compliance release verdict (#105)",
+                    False,
+                ),
+                "wrong verb": (
+                    "Security : relax v4.03.2 compliance release verdict (#104)",
+                    False,
+                ),
+                "trailing space": (
+                    "Security : enforce v4.03.2 compliance release verdict (#104) ",
+                    False,
+                ),
+            },
+        )
+
+    def test_release_manager_v4032_compliance_diff_rejects_git_shape_mutations(
+        self,
+    ) -> None:
+        self.assert_regular_diff_gate(
+            self.exact_v4032_compliance_diff_script(),
+            "v4032-compliance-diff",
+            (
+                ".github/dependabot.yml",
+                ".github/workflows/compliance.yml",
+                ".github/workflows/release-manager.yml",
+                ".plumber.yaml",
+                "CONTRIBUTING.md",
+                "README.md",
+                "assets/syswarden_architecture.svg",
+                "assets/syswarden_bunkerweb_integration.svg",
+                "assets/syswarden_hero.svg",
+                "scripts/ci/release_gate.py",
+                "scripts/ci/release_gate_test.py",
+                "scripts/ci/workflow_required_checks_test.py",
+            ),
+        )
+
     def test_release_manager_v4032_init_runtime_subject_is_exact_github_squash(
         self,
     ) -> None:
@@ -2635,9 +3443,37 @@ class ReleaseGateTests(unittest.TestCase):
                 'if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then',
                 'if [[ "${RELEASE_TAG}" == "v4.03.3" ]]; then',
             ),
+            "compliance parent resolution": workflow.replace(
+                'v4032_compliance_parent_sha="$(git rev-parse HEAD^)"',
+                'v4032_compliance_parent_sha="$(git rev-parse HEAD^^)"',
+            ),
+            "exact compliance parent": workflow.replace(
+                "ba1e853c11033f6abcd674dc7c251848f347e55b",
+                "ca1e853c11033f6abcd674dc7c251848f347e55b",
+            ),
+            "compliance canonical subject": workflow.replace(
+                "Security : enforce v4.03.2 compliance release verdict (#104)",
+                "Security : relax v4.03.2 compliance release verdict (#104)",
+            ),
+            "compliance subject source": workflow.replace(
+                'commit_subject="$(git log -1 --format=%s HEAD)"',
+                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+            ),
+            "compliance linear head": workflow.replace(
+                'v4032_compliance_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+                'v4032_compliance_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+            ),
+            "init runtime reference": workflow.replace(
+                "v4032_init_runtime_ref=HEAD^",
+                "v4032_init_runtime_ref=HEAD^^",
+            ),
             "init runtime parent resolution": workflow.replace(
-                'v4032_init_runtime_parent_sha="$(git rev-parse HEAD^)"',
-                'v4032_init_runtime_parent_sha="$(git rev-parse HEAD^^)"',
+                'v4032_init_runtime_parent_sha="$(git rev-parse '
+                '"${v4032_init_runtime_ref}^")"',
+                'v4032_init_runtime_parent_sha="$(git rev-parse '
+                '"${v4032_init_runtime_ref}^^")"',
             ),
             "exact init runtime parent": workflow.replace(
                 "97ebc9991fdeec293abd04444ad6600f11c30ee4",
@@ -2648,18 +3484,20 @@ class ReleaseGateTests(unittest.TestCase):
                 "Qualification : arbitrary v4.03.2 ARM64 init runtime (#103)",
             ),
             "init runtime subject source": workflow.replace(
-                'commit_subject="$(git log -1 --format=%s HEAD)"',
-                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+                'v4032_init_runtime_subject="$(git log -1 --format=%s '
+                '"${v4032_init_runtime_ref}")"',
+                'v4032_init_runtime_subject="$(git log -1 --format=%s HEAD)"',
             ),
             "init runtime linear head": workflow.replace(
                 'v4032_init_runtime_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD)"',
+                '"$(git rev-list --parents -n 1 '
+                '"${v4032_init_runtime_ref}")"',
                 'v4032_init_runtime_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD^)"',
+                '"$(git rev-list --parents -n 1 HEAD)"',
             ),
             "stabilization reference": workflow.replace(
-                "v4032_stabilization_ref=HEAD^",
-                "v4032_stabilization_ref=HEAD^^",
+                'v4032_stabilization_ref="${v4032_init_runtime_ref}^"',
+                'v4032_stabilization_ref="${v4032_init_runtime_ref}^^"',
             ),
             "stabilization parent resolution": workflow.replace(
                 'v4032_stabilization_parent_sha="$(git rev-parse '
