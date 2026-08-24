@@ -32,6 +32,25 @@ def set_capability_bit(mask: str, bit: int, *, present: bool) -> str:
     return f"{value:016x}"
 
 
+def namespace_failure_record(
+    predicate: str,
+    status: int | str,
+    actual: str,
+    expected: str,
+) -> str:
+    actual_bytes = actual.encode()
+    expected_bytes = expected.encode()
+    prefix_bytes = package_lifecycle_lab.NAMESPACE_DIAGNOSTIC_PREFIX_BYTES
+    return (
+        package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+        + f"\tpredicate={predicate}\trc={status}"
+        + f"\tactual_bytes={len(actual_bytes)}"
+        + f"\tactual_hex_prefix={actual_bytes[:prefix_bytes].hex()}"
+        + f"\texpected_bytes={len(expected_bytes)}"
+        + f"\texpected_hex_prefix={expected_bytes[:prefix_bytes].hex()}\n"
+    )
+
+
 class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
     def __init__(
         self,
@@ -270,6 +289,8 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
         namespace_failure_stderr: str = "runtime not ready\n",
         inspect_cap_add: list[str] | None = None,
         inspect_run_tmpfs: str = "rw,nodev,nosuid,exec,size=64m,mode=755",
+        inspect_memory: object = 1_073_741_824,
+        inspect_pids_limit: object = 512,
         uid_map: list[dict[str, int]] | None = None,
         gid_map: list[dict[str, int]] | None = None,
     ) -> None:
@@ -282,6 +303,8 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
         self.namespace_failure_stderr = namespace_failure_stderr
         self.inspect_cap_add = inspect_cap_add
         self.inspect_run_tmpfs = inspect_run_tmpfs
+        self.inspect_memory = inspect_memory
+        self.inspect_pids_limit = inspect_pids_limit
         self.uid_map = uid_map if uid_map is not None else [
             {"container_id": 0, "host_id": 1000, "size": 1},
             {"container_id": 1, "host_id": 524288, "size": 65536},
@@ -703,6 +726,8 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
                             "UTSMode": "private",
                             "CgroupMode": "private",
                             "UsernsMode": "",
+                            "Memory": self.inspect_memory,
+                            "PidsLimit": self.inspect_pids_limit,
                             "CapAdd": caps,
                             "CapDrop": [],
                             "Devices": [],
@@ -1493,7 +1518,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertIn(
             package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
             + "\tpredicate=NS14_FEDORA_MASKS\trc=7"
-            + f"\tactual_hex={'permission denied'.encode().hex()}",
+            + "\tactual_bytes=17"
+            + f"\tactual_hex_prefix={'permission denied'.encode().hex()}",
             command_failure.stderr,
         )
 
@@ -1516,10 +1542,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertEqual(rejected.stdout, "")
         self.assertEqual(
             rejected.stderr,
-            package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
-            + "\tpredicate=NS14_FEDORA_MASKS\trc=0"
-            + f"\tactual_hex={actual.encode().hex()}"
-            + f"\texpected_hex={expected.encode().hex()}\n",
+            namespace_failure_record("NS14_FEDORA_MASKS", 0, actual, expected),
         )
 
         accepted = subprocess.run(
@@ -1544,6 +1567,65 @@ class PackageLifecycleLabTests(unittest.TestCase):
         )
         self.assertEqual(failed_command.returncode, 1)
         self.assertIn("\tpredicate=NS03_ETH0_LINK\trc=7\t", failed_command.stderr)
+
+        integer_probe = (
+            package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
+            + 'syswarden_namespace_expect_integer NS20_APK_RC_SYS_LINE '
+            + '"$1" "$2" 1\n'
+        )
+        for actual in ("1", "01", "+1"):
+            with self.subTest(integer=actual):
+                numeric = subprocess.run(
+                    ["/bin/sh", "-eu", "-c", integer_probe, "probe", "0", actual],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(numeric.returncode, 0, numeric.stderr)
+                self.assertEqual(numeric.stdout, "")
+                self.assertEqual(numeric.stderr, "")
+        for status, actual in (("0", "2"), ("0", "invalid"), ("7", "1")):
+            with self.subTest(status=status, rejected_integer=actual):
+                numeric = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-eu",
+                        "-c",
+                        integer_probe,
+                        "probe",
+                        status,
+                        actual,
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(numeric.returncode, 1)
+                self.assertEqual(numeric.stdout, "")
+                self.assertIn(
+                    namespace_failure_record(
+                        "NS20_APK_RC_SYS_LINE", status, actual, "1"
+                    ),
+                    numeric.stderr,
+                )
+
+        oversized = "operator\n" + "x" * 32_768
+        bounded = subprocess.run(
+            ["/bin/sh", "-eu", "-c", probe, "probe", oversized, "exact"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(bounded.returncode, 1)
+        self.assertEqual(
+            bounded.stderr,
+            namespace_failure_record("NS14_FEDORA_MASKS", 0, oversized, "exact"),
+        )
+        actual_hex_prefix = bounded.stderr.split(
+            "\tactual_hex_prefix=", 1
+        )[1].split("\t", 1)[0]
+        self.assertEqual(len(actual_hex_prefix), 512)
+        self.assertLess(len(bounded.stderr), 800)
 
     def test_alpine_containerfile_and_runtime_attest_exact_openrc_boundary(
         self,
@@ -1584,20 +1666,70 @@ class PackageLifecycleLabTests(unittest.TestCase):
             package_lifecycle_lab.ALPINE_RC_CONF_POST_SHA256,
             package_lifecycle_lab.ALPINE_HOSTNAME_INIT_POST_SHA256,
             'container=podman',
-            "syswarden_openrc_sys_hex=",
-            "openrc --sys; printf 'syswarden-openrc-rc=%s'",
-            "od -An -v -tx1 | tr -d ' \\n'",
+            "syswarden_namespace_openrc_file=",
+            'openrc --sys > "${syswarden_namespace_openrc_file}" 2>&1',
+            "syswarden_namespace_file_record",
             package_lifecycle_lab.ALPINE_OPENRC_SYS_ATTESTATION_HEX,
             '$(separator + 1) != "cgroup2"',
             "field_number = 7",
             'options[option] == "ro"',
-            "/sys/fs/cgroup/openrc.*",
+            'options[option] == "rw"',
+            'options[option] == "nosuid"',
+            'options[option] == "nodev"',
+            'options[option] == "noexec"',
+            "delegated-cgroup2",
+            "find /sys/fs/cgroup -mindepth 1 -maxdepth 1",
             "rc-service syswarden-lab-net status",
             "rc-service cronie status",
             "rc-service rsyslog status",
         ):
             self.assertIn(expected, runtime)
         self.assertNotIn("for (index =", runtime)
+        predicates = (
+            "NS15_OPENRC_PACKAGE",
+            "NS16_APK_PROVIDER_SHA",
+            "NS17_APK_PROVIDER_STAT",
+            "NS18_APK_RC_CONF_STAT",
+            "NS19_APK_RC_CONF_SHA",
+            "NS20_APK_RC_SYS_LINE",
+            "NS21_APK_RC_CGROUP_LINE",
+            "NS22_APK_RC_SYS_COUNT",
+            "NS23_APK_RC_CGROUP_COUNT",
+            "NS24_APK_OPENRC_SYS",
+            "NS25_APK_HOSTNAME_STAT",
+            "NS26_APK_HOSTNAME_SHA",
+            "NS27_APK_HOSTNAME_KEYWORD",
+            "NS28_APK_PID1_ENV",
+            "NS29_APK_CGROUP_MOUNT",
+            "NS30_APK_CGROUP_BOUNDARY",
+            "NS31_APK_NET_RUNLEVEL",
+            "NS32_APK_CRON_RUNLEVEL",
+            "NS33_APK_RSYSLOG_RUNLEVEL",
+            "NS34_APK_NET_ACTIVE",
+            "NS35_APK_CRON_ACTIVE",
+            "NS36_APK_RSYSLOG_ACTIVE",
+        )
+        for predicate in predicates:
+            self.assertEqual(runtime.count(predicate), 1, predicate)
+            self.assertRegex(
+                runtime,
+                rf"syswarden_namespace_expect_(?:equal|integer|status) "
+                rf"{re.escape(predicate)}(?: |$)",
+            )
+        alpine_tail_start = runtime.index('syswarden_apk_info_actual="$(')
+        alpine_tail = runtime[alpine_tail_start:]
+        self.assertFalse(
+            any(line.startswith("[ ") for line in alpine_tail.splitlines())
+        )
+        self.assertFalse(
+            any(line.startswith("awk ") for line in alpine_tail.splitlines())
+        )
+        self.assertFalse(
+            any(
+                line.startswith("rc-service ")
+                for line in alpine_tail.splitlines()
+            )
+        )
         syntax = subprocess.run(
             ["/bin/sh", "-n"],
             input=package_lifecycle_lab._exec_security_guard_script(spec) + runtime,
@@ -1659,17 +1791,22 @@ class PackageLifecycleLabTests(unittest.TestCase):
                         result.stderr,
                     )
 
-        expected_openrc_attestation = b"PODMAN\nsyswarden-openrc-rc=0"
+        expected_openrc_attestation = b"PODMAN\n"
         self.assertEqual(
             package_lifecycle_lab.ALPINE_OPENRC_SYS_ATTESTATION_HEX,
             expected_openrc_attestation.hex(),
         )
-        guard_start = runtime_lines.index('syswarden_openrc_sys_hex="$(')
+        openrc_file_index = runtime_lines.index(
+            'syswarden_namespace_openrc_file="$(mktemp '
+            '/tmp/syswarden-openrc-sys.XXXXXX 2>&1)" '
+            '|| syswarden_namespace_status=$?'
+        )
+        guard_start = openrc_file_index - 1
         guard_end = next(
             index
             for index in range(guard_start, len(runtime_lines))
             if runtime_lines[index].startswith(
-                '[ "${syswarden_openrc_sys_hex}" = '
+                "syswarden_namespace_expect_equal NS24_APK_OPENRC_SYS"
             )
         )
         openrc_sys_guard = "\n".join(runtime_lines[guard_start : guard_end + 1])
@@ -1690,6 +1827,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
                     "openrc() { [ \"$1\" = --sys ] || return 2; "
                     f"printf {shlex.quote(output_format)}; "
                     f"return {command_status}; }}\n"
+                    + package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
                     + openrc_sys_guard
                     + "\n"
                 )
@@ -1700,6 +1838,16 @@ class PackageLifecycleLabTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(result.returncode == 0, expected_status == 0)
+                if expected_status == 0:
+                    self.assertEqual(result.stderr, "")
+                else:
+                    self.assertIn(
+                        package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                        + "\tpredicate=NS24_APK_OPENRC_SYS\t",
+                        result.stderr,
+                    )
+                    if command_status:
+                        self.assertIn(f"\trc={command_status}\t", result.stderr)
 
         with mock.patch.object(
             package_lifecycle_lab,
@@ -1711,6 +1859,353 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 "configuration payload is not exact",
             ):
                 package_lifecycle_lab.build_containerfile(spec)
+
+    def test_alpine_file_and_configuration_guards_are_behavioral(self) -> None:
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.family == "apk"
+        )
+        runtime_lines = package_lifecycle_lab.runtime_namespace_script(
+            spec
+        ).splitlines()
+        provider_sha256 = hashlib.sha256(
+            package_lifecycle_lab.ALPINE_LAB_NETWORK_PROVIDER.encode()
+        ).hexdigest()
+        cases = (
+            (
+                "NS16_APK_PROVIDER_SHA",
+                "sha256sum",
+                f"{provider_sha256}  /etc/init.d/syswarden-lab-net",
+                "0" * 64 + "  /etc/init.d/syswarden-lab-net",
+            ),
+            (
+                "NS17_APK_PROVIDER_STAT",
+                "stat",
+                "regular file:0:0:755",
+                "symbolic link:0:0:755",
+            ),
+            (
+                "NS18_APK_RC_CONF_STAT",
+                "stat",
+                "regular file:0:0:644",
+                "symbolic link:0:0:644",
+            ),
+            (
+                "NS19_APK_RC_CONF_SHA",
+                "sha256sum",
+                package_lifecycle_lab.ALPINE_RC_CONF_POST_SHA256
+                + "  /etc/rc.conf",
+                "0" * 64 + "  /etc/rc.conf",
+            ),
+            ("NS20_APK_RC_SYS_LINE", "grep", "1", "0"),
+            ("NS21_APK_RC_CGROUP_LINE", "grep", "1", "0"),
+            ("NS22_APK_RC_SYS_COUNT", "awk", "1", "2"),
+            ("NS23_APK_RC_CGROUP_COUNT", "awk", "1", "2"),
+            (
+                "NS25_APK_HOSTNAME_STAT",
+                "stat",
+                "regular file:0:0:755",
+                "symbolic link:0:0:755",
+            ),
+            (
+                "NS26_APK_HOSTNAME_SHA",
+                "sha256sum",
+                package_lifecycle_lab.ALPINE_HOSTNAME_INIT_POST_SHA256
+                + "  /etc/init.d/hostname",
+                "0" * 64 + "  /etc/init.d/hostname",
+            ),
+            ("NS27_APK_HOSTNAME_KEYWORD", "grep", "1", "0"),
+        )
+
+        def guard_for(predicate: str) -> str:
+            end = next(
+                index
+                for index, line in enumerate(runtime_lines)
+                if predicate in line
+                and line.startswith("syswarden_namespace_expect_")
+            )
+            start = max(
+                index
+                for index in range(end)
+                if runtime_lines[index] == "syswarden_namespace_status=0"
+            )
+            return "\n".join(runtime_lines[start : end + 1]) + "\n"
+
+        for predicate, command, valid, mismatch in cases:
+            command_mock = (
+                f"{command}() {{\n"
+                "    printf '%s\\n' \"${SYSWARDEN_MOCK_OUTPUT}\"\n"
+                "    return \"${SYSWARDEN_MOCK_STATUS}\"\n"
+                "}\n"
+            )
+            probe = (
+                package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
+                + command_mock
+                + guard_for(predicate)
+            )
+            for label, output, status, accepted in (
+                ("valid", valid, "0", True),
+                ("mismatch", mismatch, "0", False),
+                ("producer failure", valid, "7", False),
+            ):
+                with self.subTest(predicate=predicate, case=label):
+                    result = subprocess.run(
+                        ["/bin/sh", "-eu", "-c", probe],
+                        env={
+                            **os.environ,
+                            "SYSWARDEN_MOCK_OUTPUT": output,
+                            "SYSWARDEN_MOCK_STATUS": status,
+                        },
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    if accepted:
+                        self.assertEqual(result.stderr, "")
+                    else:
+                        self.assertEqual(
+                            result.stderr.count(
+                                package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                            ),
+                            1,
+                        )
+                        self.assertIn(
+                            package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                            + f"\tpredicate={predicate}\trc={status}\t",
+                            result.stderr,
+                        )
+
+    def test_alpine_pid1_environment_guard_preserves_each_status(self) -> None:
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.family == "apk"
+        )
+        runtime_lines = package_lifecycle_lab.runtime_namespace_script(
+            spec
+        ).splitlines()
+        end = next(
+            index
+            for index, line in enumerate(runtime_lines)
+            if line.startswith(
+                "syswarden_namespace_expect_integer NS28_APK_PID1_ENV"
+            )
+        )
+        start = max(
+            index
+            for index in range(end)
+            if runtime_lines[index] == "syswarden_namespace_status=0"
+        )
+        guard = "\n".join(runtime_lines[start : end + 1]) + "\n"
+        mocks = r'''tr() {
+    if [ "$1" = '\000' ]; then
+        printf 'container=podman\n'
+        return "${SYSWARDEN_TR_STATUS}"
+    fi
+    command tr "$@"
+}
+grep() {
+    printf '%s\n' "${SYSWARDEN_GREP_OUTPUT}"
+    return "${SYSWARDEN_GREP_STATUS}"
+}
+'''
+        with tempfile.TemporaryDirectory() as temporary:
+            environ = Path(temporary) / "environ"
+            environ.write_bytes(b"container=podman\0")
+            probe = (
+                package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
+                + mocks
+                + guard.replace("/proc/1/environ", str(environ))
+            )
+            for label, tr_status, grep_status, grep_output, accepted in (
+                ("valid", "0", "0", "1", True),
+                ("count mismatch", "0", "0", "0", False),
+                ("parser failure", "0", "7", "1", False),
+                ("producer failure with valid output", "7", "0", "1", False),
+            ):
+                with self.subTest(case=label):
+                    result = subprocess.run(
+                        ["/bin/sh", "-eu", "-c", probe],
+                        env={
+                            **os.environ,
+                            "SYSWARDEN_TR_STATUS": tr_status,
+                            "SYSWARDEN_GREP_STATUS": grep_status,
+                            "SYSWARDEN_GREP_OUTPUT": grep_output,
+                        },
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    if accepted:
+                        self.assertEqual(result.stderr, "")
+                    else:
+                        expected_status = tr_status if tr_status != "0" else grep_status
+                        self.assertEqual(
+                            result.stderr.count(
+                                package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                            ),
+                            1,
+                        )
+                        self.assertIn(
+                            package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                            + "\tpredicate=NS28_APK_PID1_ENV"
+                            + f"\trc={expected_status}\t",
+                            result.stderr,
+                        )
+
+    def test_complete_alpine_tail_runs_under_pinned_ash_when_available(
+        self,
+    ) -> None:
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.distribution == "alpine" and item.architecture == "amd64"
+        )
+        runtime = package_lifecycle_lab.runtime_namespace_script(spec)
+        ns15 = runtime.index(
+            "syswarden_namespace_expect_equal NS15_OPENRC_PACKAGE"
+        )
+        tail = runtime[runtime.index("\n", ns15) + 1 :]
+        provider_sha256 = hashlib.sha256(
+            package_lifecycle_lab.ALPINE_LAB_NETWORK_PROVIDER.encode()
+        ).hexdigest()
+        mocks = f'''sha256sum() {{
+    case "$1" in
+        /etc/init.d/syswarden-lab-net)
+            printf '%s  %s\n' '{provider_sha256}' "$1" ;;
+        /etc/rc.conf)
+            printf '%s  %s\n' '{package_lifecycle_lab.ALPINE_RC_CONF_POST_SHA256}' "$1" ;;
+        /etc/init.d/hostname)
+            printf '%s  %s\n' '{package_lifecycle_lab.ALPINE_HOSTNAME_INIT_POST_SHA256}' "$1" ;;
+        *) return 96 ;;
+    esac
+}}
+stat() {{
+    case "$3" in
+        /etc/init.d/syswarden-lab-net|/etc/init.d/hostname)
+            printf 'regular file:0:0:755\n' ;;
+        /etc/rc.conf) printf 'regular file:0:0:644\n' ;;
+        *) return 96 ;;
+    esac
+}}
+grep() {{ printf '1\n'; }}
+awk() {{
+    case " $* " in
+        *"/proc/self/mountinfo"*) printf 'rw\n' ;;
+        *) printf '1\n' ;;
+    esac
+}}
+tr() {{
+    if [ "$1" = '\\000' ]; then
+        printf 'container=podman\n'
+    else
+        command tr "$@"
+    fi
+}}
+openrc() {{
+    [ "$#" -eq 1 ] && [ "$1" = --sys ] || return 96
+    printf 'PODMAN\n'
+}}
+rc_update() {{
+    printf 'syswarden-lab-net | default\ncronie | default\nrsyslog | default\n'
+}}
+rc_service() {{ return 0; }}
+'''
+        base_probe = package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS + mocks
+        with tempfile.TemporaryDirectory() as temporary:
+            pid1_environment = Path(temporary) / "pid1-environ"
+            pid1_environment.write_bytes(b"container=podman\0")
+            cgroup_root = Path(temporary) / "cgroup"
+            cgroup_root.mkdir()
+            (cgroup_root / "memory.max").write_text(
+                "1073741824\n", encoding="utf-8"
+            )
+            (cgroup_root / "pids.max").write_text("512\n", encoding="utf-8")
+            self_cgroup = Path(temporary) / "self.cgroup"
+            self_cgroup.write_text("0::/\n", encoding="utf-8")
+            host_tail = (
+                tail.replace("/proc/1/environ", str(pid1_environment))
+                .replace("/proc/self/cgroup", str(self_cgroup))
+                .replace("/sys/fs/cgroup", str(cgroup_root))
+                .replace("rc-update show -v", "rc_update show -v")
+                .replace("rc-service ", "rc_service ")
+            )
+            host = subprocess.run(
+                [
+                    shutil.which("dash") or "/bin/sh",
+                    "-eu",
+                    "-c",
+                    base_probe + host_tail,
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(host.returncode, 0, host.stderr)
+            self.assertEqual(host.stdout, "")
+            self.assertEqual(host.stderr, "")
+
+        podman = shutil.which("podman")
+        if podman is None or subprocess.run(
+            [podman, "image", "exists", spec.image],
+            capture_output=True,
+            check=False,
+        ).returncode != 0:
+            self.skipTest("pinned local Alpine image required for ash execution")
+        alpine_environment = "/tmp/syswarden-test-pid1-environ"
+        alpine_cgroup_root = "/tmp/syswarden-test-cgroup"
+        alpine_self_cgroup = "/tmp/syswarden-test-self.cgroup"
+        alpine_tail = (
+            tail.replace("/proc/1/environ", alpine_environment)
+            .replace("/proc/self/cgroup", alpine_self_cgroup)
+            .replace("/sys/fs/cgroup", alpine_cgroup_root)
+            .replace("rc-update show -v", "rc_update show -v")
+            .replace("rc-service ", "rc_service ")
+        )
+        alpine_probe = (
+            f": > {alpine_environment}\n"
+            + f"mkdir {alpine_cgroup_root}\n"
+            + f"printf '1073741824\\n' > {alpine_cgroup_root}/memory.max\n"
+            + f"printf '512\\n' > {alpine_cgroup_root}/pids.max\n"
+            + f"printf '0::/\\n' > {alpine_self_cgroup}\n"
+            + base_probe
+            + alpine_tail
+        )
+        alpine = subprocess.run(
+            [
+                podman,
+                "run",
+                "--rm",
+                "--interactive",
+                "--pull=never",
+                "--platform=linux/amd64",
+                "--network=none",
+                "--read-only",
+                "--cap-drop=all",
+                "--security-opt=no-new-privileges",
+                "--security-opt=label=disable",
+                "--pids-limit=32",
+                "--memory=64m",
+                "--tmpfs=/tmp:rw,nodev,nosuid,noexec,size=1m,mode=1777",
+                "--user=65534:65534",
+                spec.image,
+                "/bin/ash",
+                "-eu",
+                "-s",
+            ],
+            input=alpine_probe,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(alpine.returncode, 0, alpine.stderr)
+        self.assertEqual(alpine.stdout, "")
+        self.assertEqual(alpine.stderr, "")
 
     def test_alpine_cgroup_mountinfo_awk_is_busybox_safe_and_fail_closed(
         self,
@@ -1756,20 +2251,39 @@ class PackageLifecycleLabTests(unittest.TestCase):
             "29 23 0:26 / /sys/fs/cgroup "
             "ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw\n"
         )
+        valid_rw = valid.replace("ro,nosuid", "rw,nosuid")
         cases = (
-            ("valid", valid, 0),
-            ("missing", "", 1),
+            ("read-only", valid, 0, "ro\n"),
+            ("delegated-read-write", valid_rw, 0, "rw\n"),
+            ("missing", "", 1, ""),
             (
-                "read-write",
-                valid.replace("ro,nosuid", "rw,nosuid"),
+                "contradictory-access",
+                valid.replace("ro,nosuid", "ro,rw,nosuid"),
                 1,
+                "",
             ),
-            ("cgroup-v1", valid.replace("- cgroup2", "- cgroup"), 1),
-            ("duplicate", valid + valid, 1),
-            ("wrong-mountpoint", valid.replace("/sys/fs/cgroup", "/cgroup"), 1),
-            ("missing-separator", valid.replace(" - cgroup2", " cgroup2"), 1),
+            ("missing-access", valid.replace("ro,", ""), 1, ""),
+            ("duplicate-access", valid.replace("ro,", "ro,ro,"), 1, ""),
+            ("missing-nosuid", valid.replace("nosuid,", ""), 1, ""),
+            ("missing-nodev", valid.replace("nodev,", ""), 1, ""),
+            ("missing-noexec", valid.replace("noexec,", ""), 1, ""),
+            ("wrong-root", valid.replace("0:26 / /sys", "0:26 /host /sys"), 1, ""),
+            ("cgroup-v1", valid.replace("- cgroup2", "- cgroup"), 1, ""),
+            ("duplicate", valid + valid, 1, ""),
+            (
+                "wrong-mountpoint",
+                valid.replace("/sys/fs/cgroup", "/cgroup"),
+                1,
+                "",
+            ),
+            (
+                "missing-separator",
+                valid.replace(" - cgroup2", " cgroup2"),
+                1,
+                "",
+            ),
         )
-        for label, mountinfo, expected_status in cases:
+        for label, mountinfo, expected_status, expected_output in cases:
             with self.subTest(mountinfo=label):
                 result = subprocess.run(
                     command,
@@ -1779,8 +2293,66 @@ class PackageLifecycleLabTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(result.returncode, expected_status, result.stderr)
+                self.assertEqual(result.stdout, expected_output)
+                self.assertEqual(result.stderr, "")
 
-    def test_openrc_cgroup_glob_rejects_literal_directory_and_broken_symlink(
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.family == "apk"
+        )
+        runtime = package_lifecycle_lab.runtime_namespace_script(spec)
+        runtime_lines = runtime.splitlines()
+        assignment = next(
+            index
+            for index, line in enumerate(runtime_lines)
+            if line.startswith('syswarden_namespace_actual="$(awk ')
+            and "/proc/self/mountinfo" in line
+        )
+        guard_end = next(
+            index
+            for index in range(assignment, len(runtime_lines))
+            if runtime_lines[index].startswith(
+                "syswarden_namespace_expect_equal NS29_APK_CGROUP_MOUNT"
+            )
+        )
+        cgroup_guard = "\n".join(runtime_lines[assignment - 1 : guard_end + 1])
+        with tempfile.TemporaryDirectory() as temporary:
+            mountinfo_path = Path(temporary) / "mountinfo"
+            cgroup_guard = cgroup_guard.replace(
+                "/proc/self/mountinfo", str(mountinfo_path)
+            )
+            for label, mountinfo, expected_status, _ in cases:
+                with self.subTest(runtime_mountinfo=label):
+                    mountinfo_path.write_text(mountinfo, encoding="utf-8")
+                    guarded = subprocess.run(
+                        [
+                            "/bin/sh",
+                            "-eu",
+                            "-c",
+                            package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
+                            + cgroup_guard,
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        guarded.returncode,
+                        expected_status,
+                        guarded.stderr,
+                    )
+                    self.assertEqual(guarded.stdout, "")
+                    if expected_status == 0:
+                        self.assertEqual(guarded.stderr, "")
+                    else:
+                        self.assertIn(
+                            package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                            + "\tpredicate=NS29_APK_CGROUP_MOUNT\t",
+                            guarded.stderr,
+                        )
+
+    def test_alpine_cgroup_boundary_accepts_only_exact_ro_or_bounded_rw(
         self,
     ) -> None:
         spec = next(
@@ -1789,35 +2361,240 @@ class PackageLifecycleLabTests(unittest.TestCase):
             if item.family == "apk"
         )
         runtime = package_lifecycle_lab.runtime_namespace_script(spec)
-        start = runtime.index("for openrc_cgroup_path")
-        end = runtime.index("done\n", start) + len("done\n")
-        loop = runtime[start:end]
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            probe = loop.replace("/sys/fs/cgroup", str(root))
-            clean = subprocess.run(
-                ["/bin/sh", "-eu", "-c", probe],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(clean.returncode, 0, clean.stderr)
-            for name, create in (
-                ("openrc.*", lambda path: path.mkdir()),
-                ("openrc.cronie", lambda path: path.mkdir()),
-                ("openrc.broken", lambda path: path.symlink_to("missing")),
-            ):
-                with self.subTest(name=name):
-                    path = root / name
-                    create(path)
-                    rejected = subprocess.run(
+        start = runtime.index("syswarden_namespace_cgroup_boundary() {")
+        predicate = "syswarden_namespace_expect_equal NS30_APK_CGROUP_BOUNDARY"
+        end = runtime.index("\n", runtime.index(predicate, start)) + 1
+        guard = runtime[start:end]
+
+        def run_guard(
+            access: str,
+            *,
+            cgroup: str = "0::/",
+            memory: str = "1073741824",
+            pids: str = "512",
+            child: str | None = None,
+            broken_symlink: bool = False,
+            missing: str | None = None,
+            unreadable: bool = False,
+            find_failure: bool = False,
+        ) -> subprocess.CompletedProcess[str]:
+            with tempfile.TemporaryDirectory() as temporary:
+                temporary_root = Path(temporary)
+                cgroup_root = temporary_root / "cgroup"
+                cgroup_root.mkdir()
+                proc_self_cgroup = temporary_root / "self.cgroup"
+                proc_self_cgroup.write_text(cgroup + "\n", encoding="utf-8")
+                if access == "rw":
+                    (cgroup_root / "memory.max").write_text(
+                        memory + "\n", encoding="utf-8"
+                    )
+                    (cgroup_root / "pids.max").write_text(
+                        pids + "\n", encoding="utf-8"
+                    )
+                if missing is not None:
+                    target = (
+                        proc_self_cgroup
+                        if missing == "cgroup"
+                        else cgroup_root / missing
+                    )
+                    target.unlink()
+                if child is not None:
+                    child_path = cgroup_root / child
+                    if broken_symlink:
+                        child_path.symlink_to("missing")
+                    else:
+                        child_path.mkdir()
+                prefix = "find() { return 7; }\n" if find_failure else ""
+                probe = (
+                    package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
+                    + prefix
+                    + f"syswarden_namespace_cgroup_access={shlex.quote(access)}\n"
+                    + guard.replace("/proc/self/cgroup", str(proc_self_cgroup))
+                    .replace("/sys/fs/cgroup", str(cgroup_root))
+                )
+                if unreadable:
+                    cgroup_root.chmod(0)
+                try:
+                    return subprocess.run(
                         ["/bin/sh", "-eu", "-c", probe],
-                        capture_output=True,
                         text=True,
+                        capture_output=True,
                         check=False,
                     )
-                    self.assertNotEqual(rejected.returncode, 0)
-                    path.unlink() if path.is_symlink() else path.rmdir()
+                finally:
+                    if unreadable:
+                        cgroup_root.chmod(0o700)
+
+        for access in ("ro", "rw"):
+            with self.subTest(accepted_access=access):
+                accepted = run_guard(access)
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+                self.assertEqual(accepted.stdout, "")
+                self.assertEqual(accepted.stderr, "")
+
+        rejected_cases = (
+            ("wrong cgroup root", {"cgroup": "0::/delegated"}),
+            ("wrong memory maximum", {"memory": "max"}),
+            ("wrong PID maximum", {"pids": "max"}),
+            ("missing cgroup", {"missing": "cgroup"}),
+            ("missing memory maximum", {"missing": "memory.max"}),
+            ("missing PID maximum", {"missing": "pids.max"}),
+            ("arbitrary child", {"child": "operator.scope"}),
+            (
+                "broken symlink",
+                {"child": "operator.broken", "broken_symlink": True},
+            ),
+            ("find producer failure", {"find_failure": True}),
+        )
+        for label, options in rejected_cases:
+            with self.subTest(rejected=label):
+                rejected = run_guard("rw", **options)
+                self.assertEqual(rejected.returncode, 1)
+                self.assertEqual(rejected.stdout, "")
+                self.assertEqual(
+                    rejected.stderr.count(
+                        package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                    ),
+                    1,
+                )
+                self.assertIn(
+                    package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                    + "\tpredicate=NS30_APK_CGROUP_BOUNDARY\t",
+                    rejected.stderr,
+                )
+        if os.geteuid() != 0:
+            unreadable = run_guard("rw", unreadable=True)
+            self.assertEqual(unreadable.returncode, 1)
+            self.assertIn(
+                package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                + "\tpredicate=NS30_APK_CGROUP_BOUNDARY\t",
+                unreadable.stderr,
+            )
+
+    def test_alpine_runlevel_and_service_guards_are_independent_and_diagnostic(
+        self,
+    ) -> None:
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.family == "apk"
+        )
+        runtime = package_lifecycle_lab.runtime_namespace_script(spec)
+        runtime_lines = runtime.splitlines()
+        start = runtime_lines.index("syswarden_namespace_runlevel_count() {")
+        end = next(
+            index
+            for index in range(start, len(runtime_lines))
+            if runtime_lines[index].startswith(
+                "syswarden_namespace_expect_status NS36_APK_RSYSLOG_ACTIVE"
+            )
+        )
+        guarded_tail = (
+            "\n".join(runtime_lines[start : end + 1])
+            .replace("rc-update show -v", "rc_update show -v")
+            .replace("rc-service ", "rc_service ")
+            + "\n"
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            calls = Path(temporary) / "rc-update.calls"
+            mocks = r'''rc_update() {
+    [ "$#" -eq 2 ] && [ "$1" = show ] && [ "$2" = -v ] || return 96
+    printf 'call\n' >> "${SYSWARDEN_RC_UPDATE_CALLS}"
+    if [ "${SYSWARDEN_FAIL_RC_UPDATE:-}" = 1 ]; then
+        printf 'rc-update denied\n'
+        return 7
+    fi
+    for service in syswarden-lab-net cronie rsyslog; do
+        if [ "${service}" != "${SYSWARDEN_OMIT_SERVICE:-}" ]; then
+            printf '%s | default\n' "${service}"
+        fi
+    done
+}
+rc_service() {
+    [ "$#" -eq 2 ] && [ "$2" = status ] || return 96
+    if [ "$1" = "${SYSWARDEN_FAIL_SERVICE:-}" ]; then
+        printf '%s is stopped\n' "$1"
+        return 7
+    fi
+    printf '%s is started\n' "$1"
+}
+'''
+
+            def run_guard(**overrides: str) -> subprocess.CompletedProcess[str]:
+                calls.write_text("", encoding="utf-8")
+                return subprocess.run(
+                    [
+                        shutil.which("dash") or "/bin/sh",
+                        "-eu",
+                        "-c",
+                        package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
+                        + mocks
+                        + guarded_tail,
+                    ],
+                    env={
+                        **os.environ,
+                        "SYSWARDEN_RC_UPDATE_CALLS": str(calls),
+                        **overrides,
+                    },
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+            passed = run_guard()
+            self.assertEqual(passed.returncode, 0, passed.stderr)
+            self.assertEqual(passed.stdout, "")
+            self.assertEqual(passed.stderr, "")
+            self.assertEqual(calls.read_text(encoding="utf-8"), "call\n" * 3)
+
+            for service, predicate, call_count in (
+                ("syswarden-lab-net", "NS31_APK_NET_RUNLEVEL", 1),
+                ("cronie", "NS32_APK_CRON_RUNLEVEL", 2),
+                ("rsyslog", "NS33_APK_RSYSLOG_RUNLEVEL", 3),
+            ):
+                with self.subTest(missing_runlevel=service):
+                    missing = run_guard(SYSWARDEN_OMIT_SERVICE=service)
+                    self.assertEqual(missing.returncode, 1)
+                    self.assertEqual(missing.stdout, "")
+                    self.assertEqual(
+                        calls.read_text(encoding="utf-8"),
+                        "call\n" * call_count,
+                    )
+                    self.assertEqual(
+                        missing.stderr,
+                        namespace_failure_record(predicate, 0, "0", "1"),
+                    )
+
+            failed_update = run_guard(SYSWARDEN_FAIL_RC_UPDATE="1")
+            self.assertEqual(failed_update.returncode, 1)
+            self.assertEqual(failed_update.stdout, "")
+            self.assertEqual(calls.read_text(encoding="utf-8"), "call\n")
+            self.assertEqual(
+                failed_update.stderr,
+                namespace_failure_record(
+                    "NS31_APK_NET_RUNLEVEL", 7, "rc-update denied", "1"
+                ),
+            )
+
+            for service, predicate in (
+                ("syswarden-lab-net", "NS34_APK_NET_ACTIVE"),
+                ("cronie", "NS35_APK_CRON_ACTIVE"),
+                ("rsyslog", "NS36_APK_RSYSLOG_ACTIVE"),
+            ):
+                with self.subTest(failed_service=service):
+                    failed = run_guard(SYSWARDEN_FAIL_SERVICE=service)
+                    self.assertEqual(failed.returncode, 1)
+                    self.assertEqual(failed.stdout, "")
+                    self.assertEqual(
+                        calls.read_text(encoding="utf-8"), "call\n" * 3
+                    )
+                    self.assertEqual(
+                        failed.stderr,
+                        namespace_failure_record(
+                            predicate, 7, f"{service} is stopped", ""
+                        ),
+                    )
 
     def test_container_run_is_networkless_and_mounts_packages_read_only(self) -> None:
         pair = package_lifecycle_lab.PackagePair(
@@ -1857,6 +2634,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertNotIn("--gidmap", args)
         self.assertEqual(args[args.index("--platform") + 1], "linux/amd64")
         self.assertIn("--security-opt=no-new-privileges", args)
+        self.assertIn("--memory=1g", args)
+        self.assertIn("--pids-limit=512", args)
         self.assertEqual(
             [value for value in args if value.startswith("--tmpfs=")],
             [
@@ -2280,6 +3059,32 @@ probe
                 self.assertEqual(scenario["status"], "fail")
                 self.assertIn(
                     "namespace/capability isolation is not exact",
+                    scenario["orchestration_error"],
+                )
+
+    def test_inspect_requires_exact_memory_and_pid_limits(self) -> None:
+        spec = package_lifecycle_lab.DEFAULT_PLATFORMS[0]
+        for label, overrides in (
+            ("missing memory", {"inspect_memory": None}),
+            ("unlimited memory", {"inspect_memory": 0}),
+            ("text memory", {"inspect_memory": "1073741824"}),
+            ("float memory", {"inspect_memory": 1_073_741_824.0}),
+            ("missing PID limit", {"inspect_pids_limit": None}),
+            ("unlimited PIDs", {"inspect_pids_limit": 0}),
+            ("text PID limit", {"inspect_pids_limit": "512"}),
+            ("float PID limit", {"inspect_pids_limit": 512.0}),
+        ):
+            with self.subTest(label=label):
+                report = package_lifecycle_lab.run_lab(
+                    self.args(),
+                    runner=FakePodmanRunner(**overrides),
+                    platforms=(spec,),
+                    host_architecture="x86_64",
+                )
+                scenario = report["platforms"][0]["scenarios"][0]
+                self.assertEqual(scenario["status"], "fail")
+                self.assertIn(
+                    "container memory/PID limits are not exact",
                     scenario["orchestration_error"],
                 )
 
@@ -3176,10 +3981,8 @@ probe
         self.assertEqual(sleep.call_count, 29)
 
     def test_namespace_failure_record_is_preserved_in_report(self) -> None:
-        diagnostic = (
-            package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
-            + "\tpredicate=NS14_FEDORA_MASKS\trc=0"
-            + "\tactual_hex=6f70657261746f72\texpected_hex=6578616374\n"
+        diagnostic = namespace_failure_record(
+            "NS14_FEDORA_MASKS", 0, "operator", "exact"
         )
         runner = FakePodmanRunner(
             namespace_failures=30,

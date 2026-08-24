@@ -835,13 +835,13 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(script.count('for tree_ref in HEAD^ HEAD; do'), 2)
             self.assertEqual(
                 script.count('tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'),
-                7,
+                8,
             )
-            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 6)
-            self.assertEqual(script.count('"${tree_type}" != "blob"'), 7)
+            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 7)
+            self.assertEqual(script.count('"${tree_type}" != "blob"'), 8)
             expected_path_counts = {
-                ".github/workflows/release-manager.yml": 14,
-                "scripts/ci/release_gate_test.py": 14,
+                ".github/workflows/release-manager.yml": 16,
+                "scripts/ci/release_gate_test.py": 16,
                 "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go": 2,
             }
             for path, count in expected_path_counts.items():
@@ -879,6 +879,10 @@ class ReleaseGateTests(unittest.TestCase):
         )
         pinned_contracts = (
             (
+                'if [[ "${v4032_stabilization_parent_sha}" != '
+                '"41d7a7da2895f5d3949cc63f3e45308c03f7f93a" ]]; then'
+            ),
+            (
                 'if [[ "${v4032_local_parent_sha}" != '
                 '"93bb85a657d8f8927cd6617c4105653732c59114" ]]; then'
             ),
@@ -913,6 +917,10 @@ class ReleaseGateTests(unittest.TestCase):
         )
         for contract in pinned_contracts:
             self.assertEqual(workflow.count(contract), 2)
+        stabilization_subject_contract = (
+            "v4032_stabilization_expected_subject='Qualification : stabilize "
+            "v4.03.2 ARM64 lifecycle evidence (#102)'"
+        )
         local_subject_contract = (
             "v4032_local_expected_subject='Qualification : repair v4.03.2 "
             "ARM64 lab and config root handling (#101)'"
@@ -942,6 +950,16 @@ class ReleaseGateTests(unittest.TestCase):
             ".github/workflows/release-qualification.yml",
             "scripts/ci/release_gate_test.py",
             "scripts/ci/release_qualification_workflow_test.py",
+        )
+        stabilization_paths = (
+            ".github/workflows/release-manager.yml",
+            ".github/workflows/release-qualification.yml",
+            "scripts/ci/package_lifecycle_lab.py",
+            "scripts/ci/package_lifecycle_lab_test.py",
+            "scripts/ci/release_gate_test.py",
+            "scripts/ci/release_qualification_workflow_test.py",
+            "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
+            "src/core/syswarden-cli/pkg/integration/waf_logs_linux_test.go",
         )
         local_paths = (
             ".github/workflows/release-manager.yml",
@@ -990,6 +1008,7 @@ class ReleaseGateTests(unittest.TestCase):
             "README.md",
         )
         for block in blocks:
+            self.assertEqual(block.count(stabilization_subject_contract), 1)
             self.assertEqual(block.count(local_subject_contract), 1)
             self.assertEqual(block.count(runc_subject_contract), 1)
             self.assertEqual(block.count(runtime_subject_contract), 1)
@@ -999,18 +1018,100 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 block.count(
                     '[[ "${commit_subject}" != '
+                    '"${v4032_stabilization_expected_subject}" ]]'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_stabilization_parent_sha="$(git rev-parse HEAD^)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_stabilization_head_line <<< '
+                    '"$(git rev-list --parents -n 1 HEAD)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count("${#v4032_stabilization_head_line[@]} != 2"), 1
+            )
+            self.assertEqual(
+                block.count(
+                    "# BEGIN exact v4.03.2 ARM64 lifecycle stabilization "
+                    "diff contract"
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    "# END exact v4.03.2 ARM64 lifecycle stabilization "
+                    "diff contract"
+                ),
+                1,
+            )
+            stabilization_diff = block.split(
+                "# BEGIN exact v4.03.2 ARM64 lifecycle stabilization "
+                "diff contract\n",
+                1,
+            )[1].split(
+                "# END exact v4.03.2 ARM64 lifecycle stabilization diff contract",
+                1,
+            )[0]
+            self.assertEqual(
+                stabilization_diff.count(
+                    "git diff-tree --no-commit-id --name-status -r "
+                    "--no-renames -z HEAD^ HEAD"
+                ),
+                1,
+            )
+            self.assertEqual(
+                stabilization_diff.count("for tree_ref in HEAD^ HEAD; do"), 1
+            )
+            self.assertEqual(
+                stabilization_diff.count('"${tree_mode}" != "100644"'), 1
+            )
+            self.assertEqual(
+                stabilization_diff.count('"${tree_type}" != "blob"'), 1
+            )
+            self.assertEqual(
+                stabilization_diff.count(
+                    "${#actual_v4032_stabilization_diff[@]} != "
+                    "${#expected_v4032_stabilization_diff[@]}"
+                ),
+                1,
+            )
+            for path in stabilization_paths:
+                self.assertEqual(stabilization_diff.count(f'"{path}"'), 2)
+                self.assertEqual(stabilization_diff.count(f'M "{path}"'), 1)
+            self.assertEqual(block.count("v4032_local_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_local_parent_sha="$(git rev-parse '
+                    '"${v4032_local_ref}^")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_local_subject="$(git log -1 --format=%s '
+                    '"${v4032_local_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    '[[ "${v4032_local_subject}" != '
                     '"${v4032_local_expected_subject}" ]]'
                 ),
                 1,
             )
             self.assertEqual(
-                block.count('v4032_local_parent_sha="$(git rev-parse HEAD^)"'),
-                1,
-            )
-            self.assertEqual(
                 block.count(
-                    'v4032_local_head_line <<< '
-                    '"$(git rev-list --parents -n 1 HEAD)"'
+                    'v4032_local_head_line <<< "$(git rev-list --parents -n 1 '
+                    '"${v4032_local_ref}")"'
                 ),
                 1,
             )
@@ -1036,11 +1137,18 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 local_diff.count(
                     "git diff-tree --no-commit-id --name-status -r "
-                    "--no-renames -z HEAD^ HEAD"
+                    "--no-renames -z \\\n"
+                    '        "${v4032_local_ref}^" "${v4032_local_ref}"'
                 ),
                 1,
             )
-            self.assertEqual(local_diff.count("for tree_ref in HEAD^ HEAD; do"), 1)
+            self.assertEqual(
+                local_diff.count(
+                    'for tree_ref in "${v4032_local_ref}^" '
+                    '"${v4032_local_ref}"; do'
+                ),
+                1,
+            )
             self.assertEqual(local_diff.count('"${tree_mode}" != "100644"'), 1)
             self.assertEqual(local_diff.count('"${tree_type}" != "blob"'), 1)
             self.assertEqual(
@@ -1053,7 +1161,9 @@ class ReleaseGateTests(unittest.TestCase):
             for path in local_paths:
                 self.assertEqual(local_diff.count(f'"{path}"'), 2)
                 self.assertEqual(local_diff.count(f'M "{path}"'), 1)
-            self.assertEqual(block.count("v4032_runc_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count('v4032_runc_ref="${v4032_local_ref}^"\n'), 1
+            )
             self.assertEqual(
                 block.count(
                     'v4032_runc_parent_sha="$(git rev-parse '
@@ -1438,7 +1548,7 @@ class ReleaseGateTests(unittest.TestCase):
                     "git diff-tree --no-commit-id --name-status -r "
                     "--no-renames -z \\"
                 ),
-                5,
+                6,
             )
             self.assertEqual(
                 block.count(
@@ -1457,12 +1567,12 @@ class ReleaseGateTests(unittest.TestCase):
                 block.count(
                     'tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'
                 ),
-                6,
+                7,
             )
             self.assertEqual(
                 block.count('"${tree_mode}" != "${expected_mode}"'), 1
             )
-            self.assertEqual(block.count('"${tree_type}" != "blob"'), 6)
+            self.assertEqual(block.count('"${tree_type}" != "blob"'), 7)
             self.assertEqual(block.count('expected_mode="100644"'), 1)
             self.assertEqual(
                 block.count('[[ "${fix_path}" == "build_packages.sh" ]]'), 1
@@ -1480,6 +1590,7 @@ class ReleaseGateTests(unittest.TestCase):
                 expected_count += 2 if path in runtime_paths else 0
                 expected_count += 2 if path in runc_paths else 0
                 expected_count += 2 if path in local_paths else 0
+                expected_count += 2 if path in stabilization_paths else 0
                 expected_count += 1 if path == "build_packages.sh" else 0
                 self.assertEqual(block.count(f'"{path}"'), expected_count)
                 expected_status_count = 1
@@ -1488,6 +1599,7 @@ class ReleaseGateTests(unittest.TestCase):
                 expected_status_count += 1 if path in runtime_paths else 0
                 expected_status_count += 1 if path in runc_paths else 0
                 expected_status_count += 1 if path in local_paths else 0
+                expected_status_count += 1 if path in stabilization_paths else 0
                 self.assertEqual(
                     block.count(f'M "{path}"'), expected_status_count
                 )
@@ -1619,6 +1731,30 @@ class ReleaseGateTests(unittest.TestCase):
             )[0]
             self.assertNotIn("--tag-phase", parent_validation)
 
+    def exact_v4032_stabilization_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        begin = (
+            "# BEGIN exact v4.03.2 ARM64 lifecycle stabilization diff contract\n"
+        )
+        end = "# END exact v4.03.2 ARM64 lifecycle stabilization diff contract"
+        self.assertEqual(block.count(begin), 1)
+        self.assertEqual(block.count(end), 1)
+        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+
+    def v4032_stabilization_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        start = "v4032_stabilization_expected_subject="
+        end = (
+            'read -r -a v4032_stabilization_head_line <<< '
+            '"$(git rev-list --parents -n 1 HEAD)"'
+        )
+        self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(end), 1)
+        fragment = start + block.split(start, 1)[1].split(end, 1)[0]
+        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+
     def exact_v4032_local_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
@@ -1626,20 +1762,31 @@ class ReleaseGateTests(unittest.TestCase):
         end = "# END exact v4.03.2 final qualification repair diff contract"
         self.assertEqual(block.count(begin), 1)
         self.assertEqual(block.count(end), 1)
-        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+        return (
+            "set -euo pipefail\nv4032_local_ref=HEAD\n"
+            + block.split(begin, 1)[1].split(end, 1)[0]
+        )
 
     def v4032_local_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
         start = "v4032_local_expected_subject="
+        subject_assignment = (
+            'v4032_local_subject="$(git log -1 --format=%s '
+            '"${v4032_local_ref}")"'
+        )
         end = (
             'read -r -a v4032_local_head_line <<< '
-            '"$(git rev-list --parents -n 1 HEAD)"'
+            '"$(git rev-list --parents -n 1 "${v4032_local_ref}")"'
         )
         self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(subject_assignment), 1)
         self.assertEqual(block.count(end), 1)
         fragment = start + block.split(start, 1)[1].split(end, 1)[0]
-        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+        fragment = fragment.replace(
+            subject_assignment, 'v4032_local_subject="${COMMIT_SUBJECT:?}"'
+        )
+        return "set -euo pipefail\n" + fragment
 
     def exact_v4032_runc_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -2031,6 +2178,57 @@ class ReleaseGateTests(unittest.TestCase):
         )
         return repository
 
+    def test_release_manager_v4032_stabilization_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        self.assert_exact_subject_gate(
+            self.v4032_stabilization_subject_gate_script(),
+            {
+                "valid": (
+                    "Qualification : stabilize v4.03.2 ARM64 lifecycle evidence (#102)",
+                    True,
+                ),
+                "bare": (
+                    "Qualification : stabilize v4.03.2 ARM64 lifecycle evidence",
+                    False,
+                ),
+                "previous pull request": (
+                    "Qualification : stabilize v4.03.2 ARM64 lifecycle evidence (#101)",
+                    False,
+                ),
+                "next pull request": (
+                    "Qualification : stabilize v4.03.2 ARM64 lifecycle evidence (#103)",
+                    False,
+                ),
+                "wrong verb": (
+                    "Qualification : repair v4.03.2 ARM64 lifecycle evidence (#102)",
+                    False,
+                ),
+                "trailing space": (
+                    "Qualification : stabilize v4.03.2 ARM64 lifecycle evidence (#102) ",
+                    False,
+                ),
+            },
+        )
+
+    def test_release_manager_v4032_stabilization_diff_rejects_git_shape_mutations(
+        self,
+    ) -> None:
+        self.assert_regular_diff_gate(
+            self.exact_v4032_stabilization_diff_script(),
+            "v4032-stabilization-diff",
+            (
+                ".github/workflows/release-manager.yml",
+                ".github/workflows/release-qualification.yml",
+                "scripts/ci/package_lifecycle_lab.py",
+                "scripts/ci/package_lifecycle_lab_test.py",
+                "scripts/ci/release_gate_test.py",
+                "scripts/ci/release_qualification_workflow_test.py",
+                "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
+                "src/core/syswarden-cli/pkg/integration/waf_logs_linux_test.go",
+            ),
+        )
+
     def test_release_manager_v4032_local_subject_is_exact_github_squash(
         self,
     ) -> None:
@@ -2250,9 +2448,36 @@ class ReleaseGateTests(unittest.TestCase):
                 'if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then',
                 'if [[ "${RELEASE_TAG}" == "v4.03.3" ]]; then',
             ),
+            "stabilization parent resolution": workflow.replace(
+                'v4032_stabilization_parent_sha="$(git rev-parse HEAD^)"',
+                'v4032_stabilization_parent_sha="$(git rev-parse HEAD^^)"',
+            ),
+            "exact stabilization parent": workflow.replace(
+                "41d7a7da2895f5d3949cc63f3e45308c03f7f93a",
+                "51d7a7da2895f5d3949cc63f3e45308c03f7f93a",
+            ),
+            "stabilization canonical subject": workflow.replace(
+                "Qualification : stabilize v4.03.2 ARM64 lifecycle evidence (#102)",
+                "Qualification : arbitrary v4.03.2 stabilization (#102)",
+            ),
+            "stabilization subject source": workflow.replace(
+                'commit_subject="$(git log -1 --format=%s HEAD)"',
+                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+            ),
+            "stabilization linear head": workflow.replace(
+                'v4032_stabilization_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+                'v4032_stabilization_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+            ),
+            "local reference": workflow.replace(
+                "v4032_local_ref=HEAD^", "v4032_local_ref=HEAD^^"
+            ),
             "local parent resolution": workflow.replace(
-                'v4032_local_parent_sha="$(git rev-parse HEAD^)"',
-                'v4032_local_parent_sha="$(git rev-parse HEAD^^)"',
+                'v4032_local_parent_sha="$(git rev-parse '
+                '"${v4032_local_ref}^")"',
+                'v4032_local_parent_sha="$(git rev-parse '
+                '"${v4032_local_ref}^^")"',
             ),
             "exact local parent": workflow.replace(
                 "93bb85a657d8f8927cd6617c4105653732c59114",
@@ -2263,17 +2488,18 @@ class ReleaseGateTests(unittest.TestCase):
                 "Qualification : arbitrary v4.03.2 final repair (#101)",
             ),
             "local subject source": workflow.replace(
-                'commit_subject="$(git log -1 --format=%s HEAD)"',
-                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+                'v4032_local_subject="$(git log -1 --format=%s '
+                '"${v4032_local_ref}")"',
+                'v4032_local_subject="$(git log -1 --format=%s HEAD)"',
             ),
             "local linear head": workflow.replace(
-                'v4032_local_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD)"',
-                'v4032_local_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD^)"',
+                'v4032_local_head_line <<< "$(git rev-list --parents -n 1 '
+                '"${v4032_local_ref}")"',
+                'v4032_local_head_line <<< "$(git rev-list --parents -n 1 HEAD)"',
             ),
             "runc reference": workflow.replace(
-                "v4032_runc_ref=HEAD^", "v4032_runc_ref=HEAD^^"
+                'v4032_runc_ref="${v4032_local_ref}^"',
+                'v4032_runc_ref="${v4032_local_ref}^^"',
             ),
             "runc parent resolution": workflow.replace(
                 'v4032_runc_parent_sha="$(git rev-parse '
