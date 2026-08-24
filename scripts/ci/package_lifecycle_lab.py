@@ -217,6 +217,34 @@ stop() {
     return 0
 }
 """
+ALPINE_RSYSLOG_READINESS_PROVIDER = """#!/sbin/openrc-run
+name="syswarden-lab-rsyslog-ready"
+description="Ensure rsyslog is active in the isolated SysWarden lifecycle lab"
+
+depend() {
+    need syswarden-lab-net
+    after rsyslog
+}
+
+start() {
+    ebegin "Attesting isolated lifecycle rsyslog service"
+    if ! rc-service rsyslog status >/dev/null 2>&1; then
+        if ! rc-service rsyslog start; then
+            eend 1
+            return 1
+        fi
+    fi
+    if ! rc-service rsyslog status >/dev/null 2>&1; then
+        eend 1
+        return 1
+    fi
+    eend 0
+}
+
+stop() {
+    return 0
+}
+"""
 ALPINE_OPENRC_VERSION = "0.62.6-r0"
 ALPINE_OPENRC_SYS_ATTESTATION_HEX = (
     "504f444d414e0a"
@@ -1554,6 +1582,9 @@ def build_containerfile(spec: PlatformSpec) -> str:
         provider_encoded = base64.b64encode(
             ALPINE_LAB_NETWORK_PROVIDER.encode("utf-8")
         ).decode("ascii")
+        rsyslog_readiness_encoded = base64.b64encode(
+            ALPINE_RSYSLOG_READINESS_PROVIDER.encode("utf-8")
+        ).decode("ascii")
         init_contract = (
             "RUN apk info -e 'openrc="
             + ALPINE_OPENRC_VERSION
@@ -1585,8 +1616,12 @@ def build_containerfile(spec: PlatformSpec) -> str:
             + f"RUN printf '%s' {shlex.quote(provider_encoded)} | base64 -d > "
             "/etc/init.d/syswarden-lab-net && "
             "chmod 0755 /etc/init.d/syswarden-lab-net\n"
+            + f"RUN printf '%s' {shlex.quote(rsyslog_readiness_encoded)} | base64 -d > "
+            "/etc/init.d/syswarden-lab-rsyslog-ready && "
+            "chmod 0755 /etc/init.d/syswarden-lab-rsyslog-ready\n"
             "RUN rc-update add syswarden-lab-net default && "
             "rc-update add cronie default && rc-update add rsyslog default && "
+            "rc-update add syswarden-lab-rsyslog-ready default && "
             "rc-update -u\n"
             "STOPSIGNAL SIGINT\n"
             'CMD ["/sbin/openrc-init"]\n'
@@ -2429,6 +2464,170 @@ prepare_service_runtime_fixture() {
             attest_alpine_crond_provider || return 1
             ;;
     esac
+}
+
+# The exact historical AlmaLinux v4.02.8 RPM ignores a failed rsyslog restart.
+# In a rootless cgroup that restart can strand a live daemon in failed state.
+# This transition-only lab fixture refuses manual stop before that old scriptlet,
+# while candidate reload and all active-state assertions remain fully enforced.
+rootless_podman_id_map() {
+    awk '
+        NF != 3 || $1 !~ /^(0|[1-9][0-9]*)$/ ||
+            $2 !~ /^(0|[1-9][0-9]*)$/ ||
+            $3 !~ /^[1-9][0-9]*$/ { invalid = 1; next }
+        NR == 1 {
+            if ($1 != 0 || $2 == 0 || $3 != 1) invalid = 1
+            next_inside = 1
+            next
+        }
+        {
+            if ($1 != next_inside || $2 == 0) invalid = 1
+            next_inside += $3
+        }
+        END { exit (invalid || NR < 2) ? 1 : 0 }
+    ' "$1"
+}
+
+attest_rootless_podman_systemd_runtime() {
+    syswarden_transition_proc_root="${1:-/proc}"
+    [ "${container:-}" = podman ] || return 1
+    [ "$(cat "${syswarden_transition_proc_root}/1/comm" 2>/dev/null || true)" = systemd ] || return 1
+    rootless_podman_id_map "${syswarden_transition_proc_root}/1/uid_map" || return 1
+    rootless_podman_id_map "${syswarden_transition_proc_root}/1/gid_map" || return 1
+    [ "$(syswarden_classify_service_manager / systemd)" = ACTIVE ]
+}
+
+alma_v4028_rpm_transition_selected() {
+    [ "${PACKAGE_FAMILY}:${SCENARIO}:${EXPECTED_DISTRIBUTION}" = \
+        rpm:upgrade-rollback:almalinux ] && \
+        [ "${EXPECTED_PREVIOUS_VERSION}" = 4.02.8 ] && \
+        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.2 ]
+}
+
+attest_alma_v4028_previous_rpm_artifact() {
+    [ -f "${PREVIOUS_PACKAGE}" ] && [ ! -L "${PREVIOUS_PACKAGE}" ] || return 1
+    [ "${PREVIOUS_PACKAGE##*/}" = \
+        "syswarden-4.02.8-1.${EXPECTED_PACKAGE_ARCHITECTURE}.rpm" ] || return 1
+    [ "$(hash_file "${PREVIOUS_PACKAGE}" 2>/dev/null || true)" = "${EXPECTED_PREVIOUS_SHA256}" ] || return 1
+    syswarden_transition_previous_record="$(
+        rpm -qp --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}' \
+            "${PREVIOUS_PACKAGE}" 2>/dev/null
+    )" || return 1
+    [ "${syswarden_transition_previous_record}" = \
+        "syswarden|0|4.02.8|1|${EXPECTED_PACKAGE_ARCHITECTURE}" ]
+}
+
+attest_alma_v4028_rsyslog_process() {
+    syswarden_transition_expected_pid="$1"
+    syswarden_transition_proc_root="${2:-/proc}"
+    case "${syswarden_transition_expected_pid}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${syswarden_transition_expected_pid}" -gt 1 ] || return 1
+    kill -0 "${syswarden_transition_expected_pid}" 2>/dev/null || return 1
+    [ "$(cat "${syswarden_transition_proc_root}/${syswarden_transition_expected_pid}/comm" 2>/dev/null || true)" = rsyslogd ] || return 1
+    [ "$(readlink "${syswarden_transition_proc_root}/${syswarden_transition_expected_pid}/exe" 2>/dev/null || true)" = /usr/sbin/rsyslogd ]
+}
+
+attest_alma_v4028_rpm_rsyslog_fixture() {
+    alma_v4028_rpm_transition_selected || return 0
+    syswarden_transition_proc_root="$1"
+    syswarden_transition_systemd_root="$2"
+    syswarden_transition_owner="$3"
+    syswarden_transition_rsyslogd="$4"
+    syswarden_transition_dropin_dir="${syswarden_transition_systemd_root}/rsyslog.service.d"
+    syswarden_transition_dropin="${syswarden_transition_dropin_dir}/90-syswarden-lifecycle-v4028.conf"
+    syswarden_transition_expected_pid="${syswarden_transition_rsyslog_pid_before:-}"
+
+    attest_rootless_podman_systemd_runtime "${syswarden_transition_proc_root}" || return 1
+    attest_alma_v4028_previous_rpm_artifact || return 1
+    case "${syswarden_transition_rsyslogd}" in /*) ;; *) return 1 ;; esac
+    [ -x "${syswarden_transition_rsyslogd}" ] && \
+        [ ! -L "${syswarden_transition_rsyslogd}" ] || return 1
+    "${syswarden_transition_rsyslogd}" -N1 -f /etc/rsyslog.conf \
+        >/dev/null 2>&1 || return 1
+    [ -d "${syswarden_transition_systemd_root}" ] && \
+        [ ! -L "${syswarden_transition_systemd_root}" ] && \
+        [ "$(stat -c '%u:%g:%a' "${syswarden_transition_systemd_root}" 2>/dev/null || true)" = \
+            "${syswarden_transition_owner}:755" ] || return 1
+    [ -d "${syswarden_transition_dropin_dir}" ] && \
+        [ ! -L "${syswarden_transition_dropin_dir}" ] && \
+        [ "$(stat -c '%u:%g:%a' "${syswarden_transition_dropin_dir}" 2>/dev/null || true)" = \
+            "${syswarden_transition_owner}:755" ] || return 1
+    [ -f "${syswarden_transition_dropin}" ] && \
+        [ ! -L "${syswarden_transition_dropin}" ] && \
+        [ "$(stat -c '%u:%g:%a' "${syswarden_transition_dropin}" 2>/dev/null || true)" = \
+            "${syswarden_transition_owner}:644" ] && \
+        [ "$(hash_file "${syswarden_transition_dropin}" 2>/dev/null || true)" = \
+            896e27cd6a65891cd2184253fcfba7e691f0d46047f41d08ee11be81a7d06098 ] || return 1
+    [ "$(systemctl show -p RefuseManualStop --value rsyslog.service 2>/dev/null || true)" = yes ] || return 1
+    [ "$(systemctl is-enabled rsyslog.service 2>/dev/null || true)" = enabled ] || return 1
+    [ "$(systemctl is-active rsyslog.service 2>/dev/null || true)" = active ] || return 1
+    [ "$(systemctl show -p MainPID --value rsyslog.service 2>/dev/null || true)" = \
+        "${syswarden_transition_expected_pid}" ] || return 1
+    attest_alma_v4028_rsyslog_process \
+        "${syswarden_transition_expected_pid}" "${syswarden_transition_proc_root}"
+}
+
+prepare_alma_v4028_rpm_rsyslog_fixture() {
+    alma_v4028_rpm_transition_selected || return 0
+    syswarden_transition_proc_root="$1"
+    syswarden_transition_systemd_root="$2"
+    syswarden_transition_owner="$3"
+    syswarden_transition_rsyslogd="$4"
+    syswarden_transition_dropin_dir="${syswarden_transition_systemd_root}/rsyslog.service.d"
+    syswarden_transition_dropin="${syswarden_transition_dropin_dir}/90-syswarden-lifecycle-v4028.conf"
+    syswarden_transition_expected_pid="${syswarden_transition_rsyslog_pid_before:-}"
+
+    attest_rootless_podman_systemd_runtime "${syswarden_transition_proc_root}" || return 1
+    attest_alma_v4028_previous_rpm_artifact || return 1
+    case "${syswarden_transition_rsyslogd}" in /*) ;; *) return 1 ;; esac
+    [ -x "${syswarden_transition_rsyslogd}" ] && \
+        [ ! -L "${syswarden_transition_rsyslogd}" ] || return 1
+    "${syswarden_transition_rsyslogd}" -N1 -f /etc/rsyslog.conf \
+        >/dev/null 2>&1 || return 1
+    [ "$(systemctl show -p RefuseManualStop --value rsyslog.service 2>/dev/null || true)" = no ] || return 1
+    [ "$(systemctl is-enabled rsyslog.service 2>/dev/null || true)" = enabled ] || return 1
+    [ "$(systemctl is-active rsyslog.service 2>/dev/null || true)" = active ] || return 1
+    [ "$(systemctl show -p MainPID --value rsyslog.service 2>/dev/null || true)" = \
+        "${syswarden_transition_expected_pid}" ] || return 1
+    attest_alma_v4028_rsyslog_process \
+        "${syswarden_transition_expected_pid}" "${syswarden_transition_proc_root}" || return 1
+    [ -d "${syswarden_transition_systemd_root}" ] && \
+        [ ! -L "${syswarden_transition_systemd_root}" ] && \
+        [ "$(stat -c '%u:%g:%a' "${syswarden_transition_systemd_root}" 2>/dev/null || true)" = \
+            "${syswarden_transition_owner}:755" ] || return 1
+    [ ! -e "${syswarden_transition_dropin}" ] && [ ! -L "${syswarden_transition_dropin}" ] || return 1
+    if [ -e "${syswarden_transition_dropin_dir}" ] || [ -L "${syswarden_transition_dropin_dir}" ]; then
+        return 1
+    fi
+    mkdir -m 0755 "${syswarden_transition_dropin_dir}" || return 1
+    (umask 077 && printf '%s\n' '[Unit]' 'RefuseManualStop=yes' > "${syswarden_transition_dropin}") || return 1
+    chmod 0644 "${syswarden_transition_dropin}" || return 1
+    [ "$(stat -c '%u:%g:%a' "${syswarden_transition_dropin_dir}" 2>/dev/null || true)" = \
+        "${syswarden_transition_owner}:755" ] || return 1
+    [ "$(stat -c '%u:%g:%a' "${syswarden_transition_dropin}" 2>/dev/null || true)" = \
+        "${syswarden_transition_owner}:644" ] || return 1
+    [ "$(hash_file "${syswarden_transition_dropin}" 2>/dev/null || true)" = \
+        896e27cd6a65891cd2184253fcfba7e691f0d46047f41d08ee11be81a7d06098 ] || return 1
+    systemctl daemon-reload >/dev/null 2>&1 || return 1
+    attest_alma_v4028_rpm_rsyslog_fixture \
+        "${syswarden_transition_proc_root}" "${syswarden_transition_systemd_root}" \
+        "${syswarden_transition_owner}" "${syswarden_transition_rsyslogd}" || return 1
+    printf 'TRANSITION alma-v4028-rpm-rsyslog fixture=refuse-manual-stop pid=%s\n' \
+        "${syswarden_transition_expected_pid}" >> "${COMMAND_LOG}"
+}
+
+attest_alma_v4028_rpm_rsyslog_after_previous() {
+    alma_v4028_rpm_transition_selected || return 0
+    syswarden_transition_installed_record="$(
+        rpm -q --queryformat '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}' \
+            syswarden 2>/dev/null
+    )" || return 1
+    [ "${syswarden_transition_installed_record}" = \
+        "syswarden|0|4.02.8|1|${EXPECTED_PACKAGE_ARCHITECTURE}" ] || return 1
+    [ "$(installed_version 2>/dev/null || true)" = 4.02.8 ] || return 1
+    attest_alma_v4028_rpm_rsyslog_fixture "$@" || return 1
+    printf 'TRANSITION alma-v4028-rpm-rsyslog postinstall=active pid=%s\n' \
+        "${syswarden_transition_rsyslog_pid_before}" >> "${COMMAND_LOG}"
 }
 
 prepare_package_transition() {
@@ -3930,7 +4129,11 @@ probe_execution_architecture() {
 scenario_upgrade_rollback_initial() {
     prepare_expected_payloads || return
     prepare_package_transition || return
+    prepare_alma_v4028_rpm_rsyslog_fixture \
+        /proc /etc/systemd/system 0:0 /usr/sbin/rsyslogd || return
     run_install_step install.previous "${PREVIOUS_PACKAGE}" || return
+    attest_alma_v4028_rpm_rsyslog_after_previous \
+        /proc /etc/systemd/system 0:0 /usr/sbin/rsyslogd || return
     if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
         probe_forward_only_apk_payload previous
     else
@@ -3969,7 +4172,11 @@ scenario_upgrade_rollback_restart_two() {
     probe_payload restart-two candidate "${EXPECTED_CANDIDATE_VERSION}"
     assert_all_state_preserved restart-two
     prepare_package_transition || return
+    attest_alma_v4028_rpm_rsyslog_fixture \
+        /proc /etc/systemd/system 0:0 /usr/sbin/rsyslogd || return
     run_install_step rollback.previous "${PREVIOUS_PACKAGE}" || return
+    attest_alma_v4028_rpm_rsyslog_after_previous \
+        /proc /etc/systemd/system 0:0 /usr/sbin/rsyslogd || return
     if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
         probe_forward_only_apk_payload rollback
     else
@@ -5156,6 +5363,8 @@ def container_run_arguments(
         f"EXPECTED_PACKAGE_ARCHITECTURE={spec.package_architecture}",
         "--env",
         f"EXPECTED_UNAME_ARCHITECTURE={spec.uname_architecture}",
+        "--env",
+        f"EXPECTED_DISTRIBUTION={spec.distribution}",
         "--env",
         f"EXPECTED_CANDIDATE_VERSION={pair.candidate.version}",
         "--env",

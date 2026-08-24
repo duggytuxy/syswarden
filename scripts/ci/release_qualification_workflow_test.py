@@ -425,6 +425,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(label, x64)
         self.assertIn("needs: package-lifecycle-arm64", x64)
+        self.assertIn("if: ${{ !cancelled() }}", x64)
         self.assertNotIn("environment:", x64)
         self.assertNotIn("${{ secrets.", x64)
         self.assertNotIn("SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY", x64)

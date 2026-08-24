@@ -803,6 +803,7 @@ jobs:
   qualify-release:
     name: Qualify Exact Pre-Tag Commit
     needs: package-lifecycle-arm64
+    if: ${{ !cancelled() }}
     outputs:
       candidate_artifact_id: ${{ steps.candidate.outputs.artifact_id }}
       candidate_artifact_name: ${{ steps.candidate.outputs.artifact_name }}

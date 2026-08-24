@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import ipaddress
 import json
@@ -1655,7 +1656,20 @@ class PackageLifecycleLabTests(unittest.TestCase):
         )
         self.assertIn("keyword -prefix -lxc -docker\\)$/\\1 -podman", containerfile)
         self.assertIn(
-            "rc-update add rsyslog default && rc-update -u\n",
+            "rc-update add rsyslog default && "
+            "rc-update add syswarden-lab-rsyslog-ready default && "
+            "rc-update -u\n",
+            containerfile,
+        )
+        rsyslog_readiness = (
+            package_lifecycle_lab.ALPINE_RSYSLOG_READINESS_PROVIDER
+        )
+        self.assertIn(
+            base64.b64encode(rsyslog_readiness.encode()).decode(),
+            containerfile,
+        )
+        self.assertIn(
+            "/etc/init.d/syswarden-lab-rsyslog-ready",
             containerfile,
         )
         self.assertNotIn("/tmp/syswarden-openrc-config", containerfile)
@@ -1684,6 +1698,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             "rc-service rsyslog status",
         ):
             self.assertIn(expected, runtime)
+        self.assertNotIn("rc-service rsyslog start", runtime)
+        self.assertNotIn("rc-service rsyslog restart", runtime)
         self.assertNotIn("for (index =", runtime)
         predicates = (
             "NS15_OPENRC_PACKAGE",
@@ -1859,6 +1875,189 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 "configuration payload is not exact",
             ):
                 package_lifecycle_lab.build_containerfile(spec)
+
+    def test_alpine_rsyslog_readiness_provider_is_fail_closed_and_portable(
+        self,
+    ) -> None:
+        provider = package_lifecycle_lab.ALPINE_RSYSLOG_READINESS_PROVIDER
+        self.assertTrue(provider.startswith("#!/sbin/openrc-run\n"))
+        self.assertIn("need syswarden-lab-net", provider)
+        self.assertIn("after rsyslog", provider)
+        self.assertEqual(provider.count("rc-service rsyslog status"), 2)
+        self.assertEqual(provider.count("rc-service rsyslog start"), 1)
+        self.assertNotIn("|| true", provider)
+        syntax = subprocess.run(
+            [shutil.which("dash") or "/bin/sh", "-n"],
+            input=provider,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+        mocks = r'''syswarden_test_status_calls=0
+ebegin() {
+    printf 'ebegin:%s\n' "$1" >> "${SYSWARDEN_TEST_CALLS}"
+}
+eend() {
+    printf 'eend:%s\n' "$1" >> "${SYSWARDEN_TEST_CALLS}"
+}
+rc_service() {
+    [ "$#" -eq 2 ] || return 96
+    printf 'rc-service:%s:%s\n' "$1" "$2" >> "${SYSWARDEN_TEST_CALLS}"
+    case "$2" in
+        status)
+            syswarden_test_status_calls=$((syswarden_test_status_calls + 1))
+            if [ "${syswarden_test_status_calls}" -eq 1 ]; then
+                return "${SYSWARDEN_TEST_INITIAL_STATUS}"
+            fi
+            return "${SYSWARDEN_TEST_FINAL_STATUS}"
+            ;;
+        start)
+            return "${SYSWARDEN_TEST_START_STATUS}"
+            ;;
+        *) return 96 ;;
+    esac
+}
+'''
+        probe = mocks + provider.replace("rc-service", "rc_service") + "\nstart\n"
+        shells = [("posix", [shutil.which("dash") or "/bin/sh"])]
+        busybox = shutil.which("busybox")
+        if busybox is not None:
+            shells.append(("busybox-ash", [busybox, "ash"]))
+        cases = (
+            (
+                "already-active",
+                "0",
+                "7",
+                "0",
+                0,
+                (
+                    "ebegin:Attesting isolated lifecycle rsyslog service",
+                    "rc-service:rsyslog:status",
+                    "rc-service:rsyslog:status",
+                    "eend:0",
+                ),
+            ),
+            (
+                "start-stopped-service",
+                "3",
+                "0",
+                "0",
+                0,
+                (
+                    "ebegin:Attesting isolated lifecycle rsyslog service",
+                    "rc-service:rsyslog:status",
+                    "rc-service:rsyslog:start",
+                    "rc-service:rsyslog:status",
+                    "eend:0",
+                ),
+            ),
+            (
+                "start-fails",
+                "3",
+                "7",
+                "0",
+                1,
+                (
+                    "ebegin:Attesting isolated lifecycle rsyslog service",
+                    "rc-service:rsyslog:status",
+                    "rc-service:rsyslog:start",
+                    "eend:1",
+                ),
+            ),
+            (
+                "start-does-not-become-active",
+                "3",
+                "0",
+                "3",
+                1,
+                (
+                    "ebegin:Attesting isolated lifecycle rsyslog service",
+                    "rc-service:rsyslog:status",
+                    "rc-service:rsyslog:start",
+                    "rc-service:rsyslog:status",
+                    "eend:1",
+                ),
+            ),
+            (
+                "active-service-stops-before-final-check",
+                "0",
+                "0",
+                "3",
+                1,
+                (
+                    "ebegin:Attesting isolated lifecycle rsyslog service",
+                    "rc-service:rsyslog:status",
+                    "rc-service:rsyslog:status",
+                    "eend:1",
+                ),
+            ),
+        )
+        for shell_name, shell in shells:
+            for (
+                label,
+                initial_status,
+                start_status,
+                final_status,
+                expected_returncode,
+                expected_calls,
+            ) in cases:
+                with self.subTest(shell=shell_name, case=label):
+                    with tempfile.TemporaryDirectory() as temporary:
+                        calls = Path(temporary) / "calls"
+                        result = subprocess.run(
+                            [*shell, "-eu", "-c", probe],
+                            env={
+                                **os.environ,
+                                "SYSWARDEN_TEST_CALLS": str(calls),
+                                "SYSWARDEN_TEST_INITIAL_STATUS": initial_status,
+                                "SYSWARDEN_TEST_START_STATUS": start_status,
+                                "SYSWARDEN_TEST_FINAL_STATUS": final_status,
+                            },
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                        )
+                        self.assertEqual(
+                            result.returncode,
+                            expected_returncode,
+                            result.stderr,
+                        )
+                        self.assertEqual(result.stdout, "")
+                        self.assertEqual(result.stderr, "")
+                        self.assertEqual(
+                            calls.read_text(encoding="utf-8").splitlines(),
+                            list(expected_calls),
+                        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            calls = Path(temporary) / "calls"
+            calls.write_text("", encoding="utf-8")
+            stopped = subprocess.run(
+                [
+                    shutil.which("dash") or "/bin/sh",
+                    "-eu",
+                    "-c",
+                    mocks
+                    + provider.replace("rc-service", "rc_service")
+                    + "\nstop\n",
+                ],
+                env={
+                    **os.environ,
+                    "SYSWARDEN_TEST_CALLS": str(calls),
+                    "SYSWARDEN_TEST_INITIAL_STATUS": "96",
+                    "SYSWARDEN_TEST_START_STATUS": "96",
+                    "SYSWARDEN_TEST_FINAL_STATUS": "96",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(stopped.returncode, 0, stopped.stderr)
+            self.assertEqual(stopped.stdout, "")
+            self.assertEqual(stopped.stderr, "")
+            self.assertEqual(calls.read_text(encoding="utf-8"), "")
 
     def test_alpine_file_and_configuration_guards_are_behavioral(self) -> None:
         spec = next(
@@ -2657,6 +2856,7 @@ rc_service() {
         self.assertNotIn("/run/podman/podman.sock", " ".join(args))
         self.assertIn("EXPECTED_PACKAGE_ARCHITECTURE=amd64", args)
         self.assertIn("EXPECTED_UNAME_ARCHITECTURE=x86_64", args)
+        self.assertIn("EXPECTED_DISTRIBUTION=debian", args)
         self.assertIn("EXPECTED_CANDIDATE_VERSION=4.02.8", args)
         self.assertIn("EXPECTED_PREVIOUS_VERSION=4.02.7", args)
 
@@ -3556,6 +3756,9 @@ probe
             "seed_legacy_saas_monitor_state() { :; }\n"
             "prepare_service_runtime_fixture() { :; }\n"
             "prepare_package_transition() { prepare_service_runtime_fixture; }\n"
+            "prepare_alma_v4028_rpm_rsyslog_fixture() { :; }\n"
+            "attest_alma_v4028_rpm_rsyslog_fixture() { :; }\n"
+            "attest_alma_v4028_rpm_rsyslog_after_previous() { :; }\n"
             "remove_service_manager_sentinels() { :; }\n"
             "load_state_contract() { return 0; }\n"
             'run_install_step() { printf "%s\\n" "$1" >> "${CALLS}"; }\n'
@@ -3607,6 +3810,9 @@ probe
             "FAILURES=0\n"
             "probe_execution_architecture() { return 0; }\n"
             "prepare_package_transition() { return 0; }\n"
+            "prepare_alma_v4028_rpm_rsyslog_fixture() { return 0; }\n"
+            "attest_alma_v4028_rpm_rsyslog_fixture() { return 0; }\n"
+            "attest_alma_v4028_rpm_rsyslog_after_previous() { return 0; }\n"
             "prepare_expected_payloads() {\n"
             '    case "${SCENARIO}" in\n'
             "        upgrade-rollback) return 0 ;;\n"
@@ -5585,6 +5791,311 @@ probe
                     f"{scenario}.{label}.service_manager_calls", checks
                 )
 
+    def test_alma_v4028_rpm_rsyslog_transition_fixture_is_exact_and_fail_closed(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("# The exact historical AlmaLinux v4.02.8 RPM")
+        end = source.index("\nprepare_package_transition() {", start)
+        functions = source[start:end]
+        scenario_start = source.index("scenario_upgrade_rollback_initial() {")
+        scenario_end = source.index("\nscenario_remove() {", scenario_start)
+        scenarios = source[scenario_start:scenario_end]
+
+        self.assertIn("RefuseManualStop=yes", functions)
+        self.assertIn(
+            "896e27cd6a65891cd2184253fcfba7e691f0d46047f41d08ee11be81a7d06098",
+            functions,
+        )
+        self.assertEqual(functions.count("systemctl daemon-reload"), 1)
+        for forbidden in (
+            "systemctl start rsyslog",
+            "systemctl stop rsyslog",
+            "systemctl restart rsyslog",
+            "systemctl reset-failed rsyslog",
+        ):
+            self.assertNotIn(forbidden, functions)
+        self.assertEqual(
+            scenarios.count("prepare_alma_v4028_rpm_rsyslog_fixture \\\n"),
+            1,
+        )
+        self.assertEqual(
+            scenarios.count("attest_alma_v4028_rpm_rsyslog_fixture \\\n"),
+            1,
+        )
+        self.assertEqual(
+            scenarios.count(
+                "attest_alma_v4028_rpm_rsyslog_after_previous \\\n"
+            ),
+            2,
+        )
+        for candidate_step in (
+            'run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}"',
+            'run_install_step reinstall.candidate "${CANDIDATE_PACKAGE}"',
+            'run_install_step recovery.candidate "${CANDIDATE_PACKAGE}"',
+        ):
+            candidate_index = scenarios.index(candidate_step)
+            preceding = scenarios[:candidate_index].splitlines()[-2:]
+            self.assertNotIn("alma_v4028", "\n".join(preceding))
+
+        harness = (
+            "#!/bin/sh\nset -u\n"
+            + functions
+            + r'''
+hash_file() {
+    sha256sum "$1" | awk '{ print $1 }'
+}
+installed_version() {
+    printf '%s\n' "${TEST_INSTALLED_VERSION:-4.02.8}"
+}
+syswarden_classify_service_manager() {
+    printf '%s\n' "${TEST_MANAGER_STATE:-ACTIVE}"
+}
+rpm() {
+    printf 'rpm %s\n' "$*" >> "${TEST_CALLS}"
+    case "$1" in
+        -qp)
+            printf '%s' "${TEST_ARTIFACT_RECORD:-syswarden|0|4.02.8|1|x86_64}"
+            ;;
+        -q)
+            printf '%s' "${TEST_INSTALLED_RECORD:-syswarden|0|4.02.8|1|x86_64}"
+            ;;
+        *) return 97 ;;
+    esac
+}
+systemctl() {
+    printf 'systemctl %s\n' "$*" >> "${TEST_CALLS}"
+    syswarden_test_reloaded=0
+    [ ! -f "${TEST_RELOADED}" ] || syswarden_test_reloaded=1
+    case "$*" in
+        'show -p RefuseManualStop --value rsyslog.service')
+            if [ "${syswarden_test_reloaded}" -eq 1 ]; then
+                printf '%s\n' "${TEST_FINAL_PROPERTY:-yes}"
+            else
+                printf '%s\n' "${TEST_INITIAL_PROPERTY:-no}"
+            fi
+            ;;
+        'is-enabled rsyslog.service')
+            if [ "${syswarden_test_reloaded}" -eq 1 ]; then
+                printf '%s\n' "${TEST_FINAL_ENABLED:-enabled}"
+            else
+                printf '%s\n' "${TEST_INITIAL_ENABLED:-enabled}"
+            fi
+            ;;
+        'is-active rsyslog.service')
+            if [ "${syswarden_test_reloaded}" -eq 1 ]; then
+                printf '%s\n' "${TEST_FINAL_ACTIVE:-active}"
+            else
+                printf '%s\n' "${TEST_INITIAL_ACTIVE:-active}"
+            fi
+            ;;
+        'show -p MainPID --value rsyslog.service')
+            if [ "${syswarden_test_reloaded}" -eq 1 ]; then
+                printf '%s\n' "${TEST_FINAL_PID:-123}"
+            else
+                printf '%s\n' "${TEST_INITIAL_PID:-123}"
+            fi
+            ;;
+        'daemon-reload')
+            syswarden_test_reload_rc="${TEST_DAEMON_RELOAD_RC:-0}"
+            if [ "${syswarden_test_reload_rc}" -eq 0 ]; then
+                : > "${TEST_RELOADED}"
+            fi
+            return "${syswarden_test_reload_rc}"
+            ;;
+        *) return 97 ;;
+    esac
+}
+kill() {
+    printf 'kill %s\n' "$*" >> "${TEST_CALLS}"
+    return "${TEST_KILL_RC:-0}"
+}
+
+case "${TEST_ACTION:-full}" in
+    prepare)
+        prepare_alma_v4028_rpm_rsyslog_fixture \
+            "${TEST_PROC_ROOT}" "${TEST_SYSTEMD_ROOT}" "${TEST_OWNER}" \
+            "${TEST_RSYSLOGD}"
+        ;;
+    full)
+        prepare_alma_v4028_rpm_rsyslog_fixture \
+            "${TEST_PROC_ROOT}" "${TEST_SYSTEMD_ROOT}" "${TEST_OWNER}" \
+            "${TEST_RSYSLOGD}" &&
+        attest_alma_v4028_rpm_rsyslog_after_previous \
+            "${TEST_PROC_ROOT}" "${TEST_SYSTEMD_ROOT}" "${TEST_OWNER}" \
+            "${TEST_RSYSLOGD}"
+        ;;
+    tamper)
+        prepare_alma_v4028_rpm_rsyslog_fixture \
+            "${TEST_PROC_ROOT}" "${TEST_SYSTEMD_ROOT}" "${TEST_OWNER}" \
+            "${TEST_RSYSLOGD}" || exit $?
+        printf '%s\n' tampered > \
+            "${TEST_SYSTEMD_ROOT}/rsyslog.service.d/90-syswarden-lifecycle-v4028.conf"
+        attest_alma_v4028_rpm_rsyslog_after_previous \
+            "${TEST_PROC_ROOT}" "${TEST_SYSTEMD_ROOT}" "${TEST_OWNER}" \
+            "${TEST_RSYSLOGD}"
+        ;;
+    *) exit 98 ;;
+esac
+'''
+        )
+
+        def run_case(
+            overrides: dict[str, str] | None = None,
+            *,
+            invalid_map: bool = False,
+            wrong_process: bool = False,
+            preexisting_dropin: bool = False,
+            wrong_package_name: bool = False,
+        ) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
+            temporary = tempfile.TemporaryDirectory()
+            self.addCleanup(temporary.cleanup)
+            root = Path(temporary.name)
+            proc_root = root / "proc"
+            pid1 = proc_root / "1"
+            process = proc_root / "123"
+            pid1.mkdir(parents=True)
+            process.mkdir()
+            (pid1 / "comm").write_text("systemd\n", encoding="ascii")
+            identity_map = (
+                "0 0 4294967295\n"
+                if invalid_map
+                else "0 1000 1\n1 524288 65536\n"
+            )
+            (pid1 / "uid_map").write_text(identity_map, encoding="ascii")
+            (pid1 / "gid_map").write_text(identity_map, encoding="ascii")
+            (process / "comm").write_text(
+                "unexpected\n" if wrong_process else "rsyslogd\n",
+                encoding="ascii",
+            )
+            (process / "exe").symlink_to("/usr/sbin/rsyslogd")
+            systemd_root = root / "systemd"
+            systemd_root.mkdir(mode=0o755)
+            if preexisting_dropin:
+                dropin_dir = systemd_root / "rsyslog.service.d"
+                dropin_dir.mkdir(mode=0o755)
+                (dropin_dir / "90-syswarden-lifecycle-v4028.conf").write_text(
+                    "unexpected\n", encoding="ascii"
+                )
+            package = root / (
+                "unexpected.rpm"
+                if wrong_package_name
+                else "syswarden-4.02.8-1.x86_64.rpm"
+            )
+            package.write_bytes(b"exact historical RPM fixture")
+            rsyslogd = root / "rsyslogd"
+            rsyslogd.write_text(
+                "#!/bin/sh\n"
+                "printf 'rsyslogd %s\\n' \"$*\" >> \"${TEST_CALLS}\"\n"
+                "exit \"${TEST_VALIDATE_RC:-0}\"\n",
+                encoding="ascii",
+            )
+            rsyslogd.chmod(0o755)
+            calls = root / "calls"
+            calls.write_text("", encoding="ascii")
+            command_log = root / "commands.log"
+            reloaded = root / "daemon-reloaded"
+            environment = {
+                **os.environ,
+                "container": "podman",
+                "PACKAGE_FAMILY": "rpm",
+                "SCENARIO": "upgrade-rollback",
+                "EXPECTED_DISTRIBUTION": "almalinux",
+                "EXPECTED_PREVIOUS_VERSION": "4.02.8",
+                "EXPECTED_CANDIDATE_VERSION": "4.03.2",
+                "EXPECTED_PREVIOUS_SHA256": hashlib.sha256(
+                    package.read_bytes()
+                ).hexdigest(),
+                "EXPECTED_PACKAGE_ARCHITECTURE": "x86_64",
+                "PREVIOUS_PACKAGE": str(package),
+                "COMMAND_LOG": str(command_log),
+                "TEST_CALLS": str(calls),
+                "TEST_RELOADED": str(reloaded),
+                "TEST_PROC_ROOT": str(proc_root),
+                "TEST_SYSTEMD_ROOT": str(systemd_root),
+                "TEST_OWNER": f"{systemd_root.stat().st_uid}:{systemd_root.stat().st_gid}",
+                "TEST_RSYSLOGD": str(rsyslogd),
+                "syswarden_transition_rsyslog_pid_before": "123",
+            }
+            environment.update(overrides or {})
+            result = subprocess.run(
+                [shutil.which("dash") or "/bin/sh", "-c", harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            observed = calls.read_text(encoding="ascii").splitlines()
+            return result, observed, systemd_root
+
+        accepted, calls, systemd_root = run_case()
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(calls.count("systemctl daemon-reload"), 1)
+        self.assertGreaterEqual(
+            sum(call.endswith(" -N1 -f /etc/rsyslog.conf") for call in calls), 3
+        )
+        self.assertFalse(
+            any(
+                call.startswith(
+                    (
+                        "systemctl start ",
+                        "systemctl stop ",
+                        "systemctl restart ",
+                        "systemctl reload rsyslog",
+                    )
+                )
+                for call in calls
+            )
+        )
+        dropin = (
+            systemd_root
+            / "rsyslog.service.d"
+            / "90-syswarden-lifecycle-v4028.conf"
+        )
+        self.assertEqual(dropin.read_bytes(), b"[Unit]\nRefuseManualStop=yes\n")
+        self.assertEqual(dropin.stat().st_mode & 0o777, 0o644)
+
+        for label, overrides in (
+            ("other-family", {"PACKAGE_FAMILY": "deb"}),
+            ("other-scenario", {"SCENARIO": "remove"}),
+            ("other-distribution", {"EXPECTED_DISTRIBUTION": "fedora"}),
+            ("other-version", {"EXPECTED_PREVIOUS_VERSION": "4.02.7"}),
+            ("other-candidate", {"EXPECTED_CANDIDATE_VERSION": "4.03.3"}),
+        ):
+            with self.subTest(noop=label):
+                result, observed, root = run_case(overrides)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(observed, [])
+                self.assertFalse((root / "rsyslog.service.d").exists())
+
+        failures: tuple[
+            tuple[str, dict[str, str], dict[str, bool]], ...
+        ] = (
+            ("artifact-digest", {"EXPECTED_PREVIOUS_SHA256": "0" * 64}, {}),
+            ("artifact-identity", {"TEST_ARTIFACT_RECORD": "other"}, {}),
+            ("artifact-name", {}, {"wrong_package_name": True}),
+            ("invalid-config", {"TEST_VALIDATE_RC": "1"}, {}),
+            ("inactive-before", {"TEST_INITIAL_ACTIVE": "inactive"}, {}),
+            ("wrong-pid-before", {"TEST_INITIAL_PID": "124"}, {}),
+            ("reload-failure", {"TEST_DAEMON_RELOAD_RC": "1"}, {}),
+            ("property-not-loaded", {"TEST_FINAL_PROPERTY": "no"}, {}),
+            ("inactive-after", {"TEST_FINAL_ACTIVE": "failed"}, {}),
+            ("wrong-pid-after", {"TEST_FINAL_PID": "124"}, {}),
+            ("installed-identity", {"TEST_INSTALLED_RECORD": "other"}, {}),
+            ("installed-version", {"TEST_INSTALLED_VERSION": "4.03.2"}, {}),
+            ("rootless-map", {}, {"invalid_map": True}),
+            ("process-identity", {}, {"wrong_process": True}),
+            ("preexisting-dropin", {}, {"preexisting_dropin": True}),
+        )
+        for label, overrides, options in failures:
+            with self.subTest(fail_closed=label):
+                result, observed, _ = run_case(overrides, **options)
+                self.assertNotEqual(result.returncode, 0, result)
+                self.assertNotIn("systemctl restart rsyslog.service", observed)
+
+        tampered, _, _ = run_case({"TEST_ACTION": "tamper"})
+        self.assertNotEqual(tampered.returncode, 0, tampered)
+
     def test_package_transitions_reset_only_an_active_rsyslog_rate_limit(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
         start = source.index("prepare_package_transition() {")
@@ -5614,10 +6125,8 @@ probe
         self.assertEqual(function.count("kill -0"), 2)
 
         commands = (
-            ('install.previous "${PREVIOUS_PACKAGE}"', 1),
             ('upgrade.candidate "${CANDIDATE_PACKAGE}"', 1),
             ('reinstall.candidate "${CANDIDATE_PACKAGE}"', 1),
-            ('rollback.previous "${PREVIOUS_PACKAGE}"', 1),
             ('recovery.candidate "${CANDIDATE_PACKAGE}"', 1),
             ('install.candidate "${CANDIDATE_PACKAGE}"', 2),
         )
@@ -5630,6 +6139,24 @@ probe
                     ),
                     expected_count,
                 )
+        self.assertEqual(
+            source.count(
+                "    prepare_package_transition || return\n"
+                "    prepare_alma_v4028_rpm_rsyslog_fixture \\\n"
+                "        /proc /etc/systemd/system 0:0 /usr/sbin/rsyslogd || return\n"
+                '    run_install_step install.previous "${PREVIOUS_PACKAGE}" || return'
+            ),
+            1,
+        )
+        self.assertEqual(
+            source.count(
+                "    prepare_package_transition || return\n"
+                "    attest_alma_v4028_rpm_rsyslog_fixture \\\n"
+                "        /proc /etc/systemd/system 0:0 /usr/sbin/rsyslogd || return\n"
+                '    run_install_step rollback.previous "${PREVIOUS_PACKAGE}" || return'
+            ),
+            1,
+        )
 
         harness = function + r'''
 prepare_service_runtime_fixture() {
