@@ -9,10 +9,12 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import zipfile
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
@@ -22,6 +24,11 @@ CHECKSUM_PATTERN = re.compile(r"^([0-9a-f]{64})  ([A-Za-z0-9_.-]+)$")
 BUNDLE_NAME = "syswarden-release.tar.gz"
 SBOM_NAME = "syswarden-sbom.spdx.json"
 COMPLIANCE_ARCHIVE_NAME = "plumber-report.zip"
+PLUMBER_REPORT_NAME = "plumber-report.json"
+# Native reports are currently under 32 KiB. This leaves bounded growth headroom.
+PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES = 64 * 1024
+COMPLIANCE_ARCHIVE_MAX_MEMBERS = 128
+COMPLIANCE_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 1024 * 1024
 PACKAGE_CHECKSUM_NAME = "SHA256SUMS.txt"
 RELEASE_CHECKSUM_NAME = "RELEASE_SHA256SUMS.txt"
 UPDATE_MANIFEST_NAME = "syswarden-update-manifest-v1.json"
@@ -519,7 +526,13 @@ def normalize_archive_name(raw_name: str) -> str:
     while name.startswith("./"):
         name = name[2:]
     path = PurePosixPath(name)
-    if not name or path.is_absolute() or ".." in path.parts:
+    if (
+        not name
+        or "\\" in name
+        or re.match(r"^[A-Za-z]:", name) is not None
+        or path.is_absolute()
+        or ".." in path.parts
+    ):
         raise ReleaseGateError(f"unsafe bundle entry: {raw_name!r}")
     return path.as_posix()
 
@@ -599,6 +612,89 @@ def write_compliance_archive(source: Path, destination: Path) -> None:
             info.external_attr = 0o100644 << 16
             archive.writestr(info, path.read_bytes())
     regular_nonempty_file(destination, "Plumber report archive")
+    validate_compliance_archive(destination)
+
+
+def _strict_plumber_report(content: bytes) -> dict[str, Any]:
+    label = "Plumber report"
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ReleaseGateError(f"{label} contains duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise ReleaseGateError(f"{label} contains non-finite number {value!r}")
+
+    def parse_finite_decimal(value: str) -> Decimal:
+        try:
+            number = Decimal(value)
+        except InvalidOperation as exc:
+            raise ReleaseGateError(
+                f"{label} contains invalid number {value!r}"
+            ) from exc
+        if not number.is_finite():
+            raise ReleaseGateError(f"{label} contains non-finite number {value!r}")
+        return number
+
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ReleaseGateError(f"{label} is not strict UTF-8: {exc}") from exc
+    try:
+        document = json.loads(
+            text,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_constant,
+            parse_float=parse_finite_decimal,
+        )
+    except json.JSONDecodeError as exc:
+        raise ReleaseGateError(f"{label} is not strict JSON: {exc}") from exc
+    if not isinstance(document, dict):
+        raise ReleaseGateError(f"{label} root must be a JSON object")
+    return document
+
+
+def _validate_plumber_verdict(report: dict[str, Any]) -> None:
+    def exact_finite_numeric_100(value: Any) -> bool:
+        if type(value) is int:
+            return value == 100
+        if isinstance(value, Decimal):
+            return value.is_finite() and value == Decimal(100)
+        return False
+
+    if report.get("passed") is not True:
+        raise ReleaseGateError("Plumber report must declare passed exactly true")
+    if report.get("ciValid") is not True:
+        raise ReleaseGateError("Plumber report must declare ciValid exactly true")
+    if report.get("ciMissing") is not False:
+        raise ReleaseGateError("Plumber report must declare ciMissing exactly false")
+    if not exact_finite_numeric_100(report.get("minPoints")):
+        raise ReleaseGateError("Plumber report minPoints must be finite numeric 100")
+    if report.get("threshold") is not None:
+        raise ReleaseGateError("Plumber report threshold must be absent or exactly null")
+
+    score = report.get("plumberScore")
+    if not isinstance(score, dict):
+        raise ReleaseGateError("Plumber report plumberScore must be a JSON object")
+    if score.get("score") != "A":
+        raise ReleaseGateError("Plumber report score must be exactly A")
+    final_points = score.get("finalPoints")
+    if not exact_finite_numeric_100(final_points):
+        raise ReleaseGateError("Plumber report finalPoints must be finite numeric 100")
+
+    counts = score.get("counts")
+    if not isinstance(counts, dict):
+        raise ReleaseGateError("Plumber report counts must be a JSON object")
+    for severity in ("critical", "high", "medium", "low"):
+        count = counts.get(severity)
+        if type(count) is not int or count != 0:
+            raise ReleaseGateError(
+                f"Plumber report {severity} count must be exact integer 0"
+            )
 
 
 def validate_compliance_archive(path: Path) -> None:
@@ -608,27 +704,89 @@ def validate_compliance_archive(path: Path) -> None:
             members = archive.infolist()
             if not members:
                 raise ReleaseGateError("Plumber report archive contains no native report")
-            names: set[str] = set()
+            if len(members) > COMPLIANCE_ARCHIVE_MAX_MEMBERS:
+                raise ReleaseGateError(
+                    "Plumber report archive exceeds the 128-entry limit"
+                )
+            if (
+                sum(member.file_size for member in members)
+                > COMPLIANCE_ARCHIVE_MAX_UNCOMPRESSED_BYTES
+            ):
+                raise ReleaseGateError(
+                    "Plumber report archive exceeds the one-megabyte "
+                    "aggregate uncompressed size limit"
+                )
+            entries: dict[str, bool] = {}
+            report_member: zipfile.ZipInfo | None = None
             for member in members:
                 name = normalize_archive_name(member.filename)
-                if member.is_dir():
+                if name in entries:
+                    raise ReleaseGateError(
+                        f"Plumber report archive contains duplicate entry {name}"
+                    )
+                is_directory = member.is_dir()
+                for existing_name, existing_is_directory in entries.items():
+                    if (
+                        name.startswith(existing_name + "/")
+                        and not existing_is_directory
+                    ) or (
+                        existing_name.startswith(name + "/")
+                        and not is_directory
+                    ):
+                        raise ReleaseGateError(
+                            "Plumber report archive contains a file/descendant "
+                            f"path conflict: {name} and {existing_name}"
+                        )
+                entries[name] = is_directory
+                if member.create_system == 3:
+                    member_type = stat.S_IFMT(member.external_attr >> 16)
+                    expected_types = (
+                        (0, stat.S_IFDIR)
+                        if is_directory
+                        else (0, stat.S_IFREG)
+                    )
+                    if member_type not in expected_types:
+                        raise ReleaseGateError(
+                            "Plumber report archive contains a non-regular entry: "
+                            f"{member.filename}"
+                        )
+                if is_directory:
                     continue
                 if member.file_size <= 0:
                     raise ReleaseGateError(
                         f"Plumber report archive contains an empty entry: {member.filename}"
                     )
-                if name in names:
-                    raise ReleaseGateError(
-                        f"Plumber report archive contains duplicate entry {name}"
-                    )
-                names.add(name)
-            if not names:
+                if PurePosixPath(name).name == PLUMBER_REPORT_NAME:
+                    if name != PLUMBER_REPORT_NAME or report_member is not None:
+                        raise ReleaseGateError(
+                            "Plumber report archive must contain exactly one root "
+                            f"{PLUMBER_REPORT_NAME}"
+                        )
+                    report_member = member
+            if not entries:
                 raise ReleaseGateError("Plumber report archive contains no native report file")
+            if report_member is None:
+                raise ReleaseGateError(
+                    f"Plumber report archive must contain one root {PLUMBER_REPORT_NAME}"
+                )
+            if report_member.file_size > PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES:
+                raise ReleaseGateError(
+                    "Plumber report exceeds the 64-KiB uncompressed size limit"
+                )
             bad_member = archive.testzip()
             if bad_member is not None:
                 raise ReleaseGateError(
                     f"Plumber report archive failed CRC validation at {bad_member}"
                 )
+            with archive.open(report_member) as stream:
+                report_content = stream.read(
+                    PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES + 1
+                )
+            if len(report_content) > PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES:
+                raise ReleaseGateError(
+                    "Plumber report exceeds the 64-KiB uncompressed size limit"
+                )
+            _validate_plumber_verdict(_strict_plumber_report(report_content))
     except zipfile.BadZipFile as exc:
         raise ReleaseGateError(f"invalid Plumber report archive: {exc}") from exc
 

@@ -10,3 +10,18 @@ updates:
     directory: "/src/core/syswarden-core"
     schedule:
       interval: "weekly"
+
+  - package-ecosystem: "gomod"
+    directory: "/src/core/syswarden-cli"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "gomod"
+    directory: "/src/core/syswarden-tui"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "gomod"
+    directory: "/scripts/versionctl"
+    schedule:
+      interval: "weekly"
