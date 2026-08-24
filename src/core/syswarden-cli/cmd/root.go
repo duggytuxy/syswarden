@@ -18,6 +18,9 @@ var rootCmd = &cobra.Command{
 	Short: "SYSWARDEN Security Orchestrator",
 	Long:  "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := enforceRemovalState(cmd); err != nil {
+			return err
+		}
 		return enforceValidatedConfiguration(cmd)
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -45,24 +48,83 @@ func init() {
 
 var initConfigHook = initConfig
 
-var degradedConfigAllowlist = map[string]struct{}{
-	"completion":     {},
-	"config":         {},
-	"ha-fence":       {},
-	"help":           {},
-	"install":        {},
-	"manual":         {},
-	"migrate-config": {},
+var inspectRemovalTombstone = system.InspectRemovalTombstone
+
+var removalStateReadOnlyCommands = map[string]struct{}{
+	"alerts":     {},
+	"audit":      {},
+	"check":      {},
+	"completion": {},
+	"config-get": {},
+	"help":       {},
+	"list":       {},
+	"manual":     {},
 }
 
-func enforceValidatedConfiguration(cmd *cobra.Command) error {
-	if cmd == nil || cmd.Parent() == nil {
+func topLevelCommand(cmd *cobra.Command) *cobra.Command {
+	if cmd == nil {
 		return nil
 	}
 	topLevel := cmd
 	for topLevel.Parent() != nil && topLevel.Parent().Parent() != nil {
 		topLevel = topLevel.Parent()
 	}
+	return topLevel
+}
+
+func commandAllowedDuringRemoval(cmd *cobra.Command) bool {
+	topLevel := topLevelCommand(cmd)
+	if topLevel == nil || topLevel.Parent() == nil {
+		return true
+	}
+	switch topLevel.Name() {
+	case "prepare-package-removal", "uninstall":
+		return true
+	}
+	if _, allowed := removalStateReadOnlyCommands[topLevel.Name()]; allowed {
+		return true
+	}
+	if topLevel.Name() != "ha-fence" {
+		return false
+	}
+	path := cmd.CommandPath()
+	return path == "syswarden ha-fence status" || path == "syswarden ha-fence manifest verify"
+}
+
+func enforceRemovalState(cmd *cobra.Command) error {
+	if commandAllowedDuringRemoval(cmd) {
+		return nil
+	}
+	present, err := inspectRemovalTombstone()
+	if err != nil {
+		return fmt.Errorf("[ERROR] refusing operational mutation while removal state is unsafe: %w", err)
+	}
+	if !present {
+		return nil
+	}
+	return fmt.Errorf(
+		"[ERROR] refusing operational mutation while %s is present; resume verified removal or inspect the retained evidence",
+		system.RemovalTombstonePath,
+	)
+}
+
+var degradedConfigAllowlist = map[string]struct{}{
+	"completion":              {},
+	"config":                  {},
+	"ha-fence":                {},
+	"help":                    {},
+	"install":                 {},
+	"manual":                  {},
+	"migrate-config":          {},
+	"prepare-package-removal": {},
+	"uninstall":               {},
+}
+
+func enforceValidatedConfiguration(cmd *cobra.Command) error {
+	if cmd == nil || cmd.Parent() == nil {
+		return nil
+	}
+	topLevel := topLevelCommand(cmd)
 	if _, allowed := degradedConfigAllowlist[topLevel.Name()]; allowed {
 		return nil
 	}

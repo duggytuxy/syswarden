@@ -109,6 +109,7 @@ func newWebTUIRetirementFixture(t *testing.T, alpine bool) *webTUIRetirementFixt
 	previousExpectedGID := legacyWebTUIExpectedOwnerGID
 	previousRunner := runRetirementCommand
 	previousOutputReader := readRetirementCommandOutput
+	previousDropInAttestor := legacySystemdDropInAttestor
 	previousProbe := probeRetiredService
 	previousDiscover := discoverRetiredProcesses
 	previousInspect := inspectRetiredProcess
@@ -156,6 +157,7 @@ func newWebTUIRetirementFixture(t *testing.T, alpine bool) *webTUIRetirementFixt
 			return "", fmt.Errorf("unexpected manager query %s", call)
 		}
 	}
+	legacySystemdDropInAttestor = attestApprovedSystemdServiceDropIns
 	probeRetiredService = func(bool) (bool, error) { return false, nil }
 	discoverRetiredProcesses = discoverExactLegacyWebTUIProcesses
 	inspectRetiredProcess = inspectExactLegacyWebTUIProcess
@@ -183,6 +185,7 @@ func newWebTUIRetirementFixture(t *testing.T, alpine bool) *webTUIRetirementFixt
 		legacyWebTUIExpectedOwnerGID = previousExpectedGID
 		runRetirementCommand = previousRunner
 		readRetirementCommandOutput = previousOutputReader
+		legacySystemdDropInAttestor = previousDropInAttestor
 		probeRetiredService = previousProbe
 		discoverRetiredProcesses = previousDiscover
 		inspectRetiredProcess = previousInspect
@@ -450,6 +453,42 @@ func TestRetireLegacyWebTUIServiceRejectsUnexpectedLoadedSystemdIdentity(t *test
 			assertPathExists(t, fixture.enablementPath)
 			assertFileContent(t, fixture.pidPath, "123\n")
 		})
+	}
+}
+
+func TestRetireLegacyWebTUIServiceAcceptsOnlyAttestedVendorDropIn(t *testing.T) {
+	fixture := newWebTUIRetirementFixture(t, false)
+	fixture.seedExact(t)
+	const vendorDropIn = "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+	readRetirementCommandOutput = func(_ string, args ...string) (string, error) {
+		switch strings.TrimPrefix(args[2], "--property=") {
+		case "LoadState":
+			return "loaded", nil
+		case "ActiveState":
+			return "inactive", nil
+		case "FragmentPath":
+			return fixture.servicePath, nil
+		case "DropInPaths":
+			return vendorDropIn, nil
+		case "ExecStart":
+			return "{ path=/opt/syswarden/bin/syswarden-cli ; argv[]=/opt/syswarden/bin/syswarden-cli web-tui ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }", nil
+		default:
+			return "", fmt.Errorf("unexpected manager property %s", args[2])
+		}
+	}
+	attestCalls := 0
+	legacySystemdDropInAttestor = func(_ firewallManagerExecutor, value string) (string, error) {
+		attestCalls++
+		if value != vendorDropIn {
+			return "", errors.New("unexpected drop-in")
+		}
+		return vendorDropIn + "#attested", nil
+	}
+	if err := retireLegacyWebTUIService(false); err != nil {
+		t.Fatal(err)
+	}
+	if attestCalls != 3 {
+		t.Fatalf("vendor drop-in attestation calls = %d, want 3", attestCalls)
 	}
 }
 
@@ -1256,6 +1295,76 @@ func TestRetirementCommandRunnerRejectsUnexpectedExecutable(t *testing.T) {
 	}
 }
 
+func TestRetirementCommandRunnerUsesTrustedBoundedExecutor(t *testing.T) {
+	previousExecutor := legacyRetirementManagerExecutor
+	t.Cleanup(func() { legacyRetirementManagerExecutor = previousExecutor })
+
+	directory := t.TempDir()
+	systemctlPath := filepath.Join(directory, "systemctl")
+	if err := os.WriteFile(systemctlPath, []byte("fixture"), 0700); err != nil { // #nosec G306 -- owner-only executable mode is required for this isolated runner fixture
+		t.Fatal(err)
+	}
+	lookups := 0
+	validations := 0
+	executions := 0
+	legacyRetirementManagerExecutor = func() firewallManagerExecutor {
+		return firewallManagerExecutor{
+			lookPath: func(name string) (string, error) {
+				lookups++
+				if name != "systemctl" {
+					return "", fmt.Errorf("unexpected executable %s", name)
+				}
+				return systemctlPath, nil
+			},
+			validate: func(path string) error {
+				validations++
+				if path != systemctlPath {
+					return fmt.Errorf("unexpected validated path %s", path)
+				}
+				return nil
+			},
+			output: func(path string, args ...string) ([]byte, error) {
+				executions++
+				if path != systemctlPath {
+					return nil, fmt.Errorf("unexpected executed path %s", path)
+				}
+				if len(args) > 0 && args[0] == "show" {
+					return []byte("loaded\n"), nil
+				}
+				return nil, nil
+			},
+		}
+	}
+
+	if err := runAllowedRetirementCommand("systemctl", "stop", "syswarden-webtui.service"); err != nil {
+		t.Fatal(err)
+	}
+	value, err := readAllowedRetirementCommandOutput(
+		"systemctl", "show", "syswarden-webtui.service", "--property=LoadState", "--value",
+	)
+	if err != nil || value != "loaded" {
+		t.Fatalf("trusted manager query = %q, error %v", value, err)
+	}
+	if lookups != 2 || validations != 2 || executions != 2 {
+		t.Fatalf("trusted executor calls = lookups %d validations %d executions %d", lookups, validations, executions)
+	}
+
+	legacyRetirementManagerExecutor = func() firewallManagerExecutor {
+		return firewallManagerExecutor{
+			lookPath: func(string) (string, error) { return systemctlPath, nil },
+			validate: func(string) error { return nil },
+			output: func(string, ...string) ([]byte, error) {
+				return []byte(strings.Repeat("x", maximumLegacyManagerOutput) + "\n"), nil
+			},
+		}
+	}
+	if _, err := readAllowedRetirementCommandOutput(
+		"systemctl", "show", "syswarden-webtui.service", "--property=LoadState", "--value",
+	); err == nil {
+		t.Fatal("oversized legacy manager output was accepted")
+	}
+}
+
 func TestRetiredServiceCleanupContainsNoBroadProcessOrFilesystemOperation(t *testing.T) {
 	_, sourcePath, _, ok := runtime.Caller(0)
 	if !ok {
@@ -1270,6 +1379,13 @@ func TestRetiredServiceCleanupContainsNoBroadProcessOrFilesystemOperation(t *tes
 		for _, forbidden := range []string{"pkill", "killall", `exec.Command("kill"`} {
 			if strings.Contains(string(content), forbidden) {
 				t.Fatalf("%s contains broad process operation %q", file, forbidden)
+			}
+		}
+		if file == "web_tui_retirement_linux.go" {
+			for _, forbidden := range []string{`exec.Command("systemctl"`, `exec.Command("rc-service"`, `exec.Command("rc-update"`} {
+				if strings.Contains(string(content), forbidden) {
+					t.Fatalf("%s contains ambient manager execution %q", file, forbidden)
+				}
 			}
 		}
 		if file == "web_tui_retirement_linux.go" && strings.Contains(string(content), "RemoveAll") {

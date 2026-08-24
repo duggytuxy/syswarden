@@ -79,6 +79,8 @@ var (
 	legacyWebTUIExpectedOwnerUID      = uint32(0)
 	legacyWebTUIExpectedOwnerGID      = uint32(0)
 	legacyPackageEnvironment          = os.Getenv
+	legacyRetirementManagerExecutor   = hostFirewallExecutor
+	legacySystemdDropInAttestor       = attestApprovedSystemdServiceDropIns
 	runRetirementCommand              = runAllowedRetirementCommand
 	readRetirementCommandOutput       = readAllowedRetirementCommandOutput
 	probeRetiredService               = probeRetiredServiceActive
@@ -106,45 +108,52 @@ type legacyWebTUIProcess struct {
 }
 
 func runAllowedRetirementCommand(name string, args ...string) error {
+	_, err := runAllowedRetirementManagerCommand(name, args...)
+	return err
+}
+
+func runAllowedRetirementManagerCommand(name string, args ...string) ([]byte, error) {
 	command := name + "\x00" + strings.Join(args, "\x00")
 	switch command {
 	case "systemctl\x00is-active\x00--quiet\x00syswarden-webtui.service":
-		return exec.Command("systemctl", "is-active", "--quiet", "syswarden-webtui.service").Run()
 	case "systemctl\x00stop\x00syswarden-webtui.service":
-		return exec.Command("systemctl", "stop", "syswarden-webtui.service").Run()
 	case "systemctl\x00disable\x00syswarden-webtui.service":
-		return exec.Command("systemctl", "disable", "syswarden-webtui.service").Run()
 	case "systemctl\x00daemon-reload":
-		return exec.Command("systemctl", "daemon-reload").Run()
 	case "rc-service\x00syswarden-webtui\x00status":
-		return exec.Command("rc-service", "syswarden-webtui", "status").Run()
 	case "rc-service\x00syswarden-webtui\x00stop":
-		return exec.Command("rc-service", "syswarden-webtui", "stop").Run()
 	case "rc-update\x00del\x00syswarden-webtui\x00default":
-		return exec.Command("rc-update", "del", "syswarden-webtui", "default").Run()
+	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=LoadState\x00--value":
+	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=ActiveState\x00--value":
+	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=FragmentPath\x00--value":
+	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=DropInPaths\x00--value":
+	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=ExecStart\x00--value":
 	default:
-		return fmt.Errorf("refusing unexpected legacy Web-TUI manager command")
+		return nil, fmt.Errorf("refusing unexpected legacy Web-TUI manager command")
 	}
+	executor := legacyRetirementManagerExecutor()
+	path, err := resolveFirewallExecutable(executor, name)
+	if err != nil {
+		return nil, fmt.Errorf("resolve trusted legacy Web-TUI manager: %w", err)
+	}
+	output, err := executor.output(path, args...)
+	if err != nil {
+		return output, err
+	}
+	return output, nil
 }
 
 func readAllowedRetirementCommandOutput(name string, args ...string) (string, error) {
 	command := name + "\x00" + strings.Join(args, "\x00")
-	var output []byte
-	var err error
 	switch command {
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=LoadState\x00--value":
-		output, err = exec.Command("systemctl", "show", "syswarden-webtui.service", "--property=LoadState", "--value").Output()
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=ActiveState\x00--value":
-		output, err = exec.Command("systemctl", "show", "syswarden-webtui.service", "--property=ActiveState", "--value").Output()
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=FragmentPath\x00--value":
-		output, err = exec.Command("systemctl", "show", "syswarden-webtui.service", "--property=FragmentPath", "--value").Output()
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=DropInPaths\x00--value":
-		output, err = exec.Command("systemctl", "show", "syswarden-webtui.service", "--property=DropInPaths", "--value").Output()
 	case "systemctl\x00show\x00syswarden-webtui.service\x00--property=ExecStart\x00--value":
-		output, err = exec.Command("systemctl", "show", "syswarden-webtui.service", "--property=ExecStart", "--value").Output()
 	default:
 		return "", fmt.Errorf("refusing unexpected legacy Web-TUI manager query")
 	}
+	output, err := runAllowedRetirementManagerCommand(name, args...)
 	if err != nil {
 		return "", err
 	}
@@ -223,8 +232,8 @@ func attestLegacyServiceManagerRuntime(alpine bool) error {
 	if err != nil {
 		return fmt.Errorf("attest loaded legacy Web-TUI drop-ins: %w", err)
 	}
-	if dropIns != "" {
-		return fmt.Errorf("refusing loaded legacy Web-TUI unit with drop-ins")
+	if _, err := legacySystemdDropInAttestor(legacyRetirementManagerExecutor(), dropIns); err != nil {
+		return fmt.Errorf("refusing loaded legacy Web-TUI unit with drop-ins: %w", err)
 	}
 	execStart, err := readRetirementCommandOutput(
 		"systemctl", "show", "syswarden-webtui.service", "--property=ExecStart", "--value",

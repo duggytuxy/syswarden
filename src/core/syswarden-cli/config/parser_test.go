@@ -227,3 +227,19 @@ func TestLegacyValidAuthenticatedHARemainsEnabled_SW_CFG_001(t *testing.T) {
 		t.Fatalf("valid legacy gates = HA %t, BunkerWeb %t", GlobalConfig.HAEnabled, GlobalConfig.BunkerWebEnabled)
 	}
 }
+
+func TestLegacyFirewalldBackendRemainsReadableForMigration_SW2_FWBACKEND_001(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.conf")
+	content := "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_FIREWALL_BACKEND=firewalld\nSYSWARDEN_ENABLE_WG=n\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := GlobalConfig
+	t.Cleanup(func() { GlobalConfig = previous })
+	if err := loadOldConfig(path); err != nil {
+		t.Fatalf("historical firewalld configuration is not migration-readable: %v", err)
+	}
+	if GlobalConfig == nil || GlobalConfig.FirewallBackend != "firewalld" {
+		t.Fatalf("legacy backend = %#v", GlobalConfig)
+	}
+}

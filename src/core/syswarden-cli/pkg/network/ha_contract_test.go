@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -26,6 +27,63 @@ import (
 
 	"syswarden-cli/config"
 )
+
+func TestSetupHAClusterFailsClosedWhenAutoWhitelistFails_SW2_M6(t *testing.T) {
+	previousConfig := config.GlobalConfig
+	t.Cleanup(func() {
+		config.GlobalConfig = previousConfig
+	})
+	config.GlobalConfig.HAEnabled = true
+	config.GlobalConfig.HAPeerIP = "8.8.8.8"
+	config.GlobalConfig.HAPeerPort = "62026"
+
+	var cronCalls []bool
+	err := setupHACluster(
+		func(peer string) (*exec.Cmd, error) {
+			if peer != "8.8.8.8" {
+				t.Fatalf("auto-whitelist peer = %q", peer)
+			}
+			return exec.Command("false"), nil
+		},
+		func(enable bool) error {
+			cronCalls = append(cronCalls, enable)
+			return nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "failed to auto-whitelist HA peer 8.8.8.8") {
+		t.Fatalf("auto-whitelist failure = %v", err)
+	}
+	if len(cronCalls) != 1 || cronCalls[0] {
+		t.Fatalf("HA cron recovery calls = %v, want one disable", cronCalls)
+	}
+}
+
+func TestSetupHAClusterJoinsAutoWhitelistAndCronDisableFailures_SW2_M6(t *testing.T) {
+	previousConfig := config.GlobalConfig
+	t.Cleanup(func() {
+		config.GlobalConfig = previousConfig
+	})
+	config.GlobalConfig.HAEnabled = true
+	config.GlobalConfig.HAPeerIP = "8.8.8.8"
+	config.GlobalConfig.HAPeerPort = "62026"
+
+	whitelistErr := errors.New("whitelist failed")
+	cronErr := errors.New("cron disable failed")
+	err := setupHACluster(
+		func(string) (*exec.Cmd, error) {
+			return nil, whitelistErr
+		},
+		func(enable bool) error {
+			if enable {
+				t.Fatal("HA cron was enabled after setup failure")
+			}
+			return cronErr
+		},
+	)
+	if !errors.Is(err, whitelistErr) || !errors.Is(err, cronErr) {
+		t.Fatalf("setupHACluster() error = %v, want joined whitelist and cron failures", err)
+	}
+}
 
 func newStrictHATestCertificatePEM(t *testing.T, serial int64) []byte {
 	t.Helper()
@@ -526,7 +584,7 @@ func TestHACIDRPeersAreInboundOnlyAndNeverDialed_SW_HA_001(t *testing.T) {
 		return nil, errors.New("CIDR destination was dialed")
 	})}
 	options := testHASyncOptions(t, client)
-	cfg := &config.Config{HAEnabled: true, HAPeerIP: "10.20.30.0/29", HAPeerPort: "62026", HAToken: "shared-secret"}
+	cfg := &config.Config{HAEnabled: true, HAPeerIP: "10.20.30.0/24", HAPeerPort: "62026", HAToken: "shared-secret"}
 	if err := syncHAPeers(context.Background(), cfg, options); !errors.Is(err, errNoDialableHAPeer) {
 		t.Fatalf("manual inbound-only sync error = %v", err)
 	}
@@ -537,29 +595,31 @@ func TestHACIDRPeersAreInboundOnlyAndNeverDialed_SW_HA_001(t *testing.T) {
 		t.Fatalf("CIDR-only HA configuration emitted %d requests", requests)
 	}
 
-	plan, err := planHAClusterPeers("10.20.30.0/29, 192.0.2.10 2001:db8::10")
+	plan, err := planHAClusterPeers("10.20.30.0/24, fd00:20:30::/64 10.20.30.7 fd00:20:30::7")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(plan.Allowlist, ",") != "10.20.30.0/29,192.0.2.10,2001:db8::10" {
+	if strings.Join(plan.Allowlist, ",") != "10.20.30.0/24,fd00:20:30::/64,10.20.30.7,fd00:20:30::7" {
 		t.Fatalf("HA allowlist plan = %v", plan.Allowlist)
 	}
-	if strings.Join(plan.Dialable, ",") != "192.0.2.10,2001:db8::10" {
+	if strings.Join(plan.Dialable, ",") != "10.20.30.7,fd00:20:30::7" {
 		t.Fatalf("HA outbound plan = %v", plan.Dialable)
 	}
-	for _, invalid := range []string{"10.20.30.1/29", "::ffff:192.0.2.1", "fe80::1%eth0"} {
+	for _, invalid := range []string{
+		"0.0.0.0/0",
+		"10.20.30.0/23",
+		"10.20.30.1/24",
+		"::/0",
+		"fd00:20:30::/63",
+		"fd00:20:30::1/64",
+		"::ffff:192.0.2.1",
+		"::ffff:192.0.2.0/120",
+		"fe80::1%eth0",
+		"[fd00:20:30::7]",
+	} {
 		if _, err := planHAClusterPeers(invalid); err == nil {
 			t.Fatalf("HA peer planner accepted %q", invalid)
 		}
-	}
-	existingCron := "15 2 * * * /usr/local/bin/backup\n*/30 * * * * /opt/syswarden/bin/syswarden-cli ha-sync >/dev/null 2>&1\n"
-	inboundOnlyCron := mustHACron(t, existingCron, false)
-	if strings.Contains(inboundOnlyCron, "ha-sync") || !strings.Contains(inboundOnlyCron, "backup") {
-		t.Fatalf("inbound-only cron plan = %q", inboundOnlyCron)
-	}
-	outboundCron := mustHACron(t, existingCron, true)
-	if strings.Count(outboundCron, "ha-sync") != 1 || !strings.Contains(outboundCron, "backup") {
-		t.Fatalf("outbound cron plan = %q", outboundCron)
 	}
 }
 

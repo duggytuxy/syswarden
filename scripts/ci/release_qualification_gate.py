@@ -29,7 +29,7 @@ from typing import Any, Sequence
 SCHEMA_VERSION = 1
 REPORT_SCHEMA_VERSIONS = {
     "nftables_kernel": 1,
-    "linux_package_lifecycle": 3,
+    "linux_package_lifecycle": 4,
 }
 REPORT_LIMIT = 8 * 1024 * 1024
 PACKAGE_LIMIT = 128 * 1024 * 1024
@@ -418,12 +418,16 @@ LIFECYCLE_KEYS = frozenset(
     {
         "previous_version",
         "candidate_version",
+        "runtime_mode",
+        "active_service_manager",
+        "active_postinstall",
+        "legacy_runtime_retirement",
         "fresh_install",
         "upgrade",
         "reinstall",
         "rollback",
         "remove",
-        "purge_semantics",
+        "purge",
         "second_restart",
         "previous_package_checksums",
     }
@@ -567,6 +571,7 @@ def _validate_lifecycle(
     boolean_keys = LIFECYCLE_KEYS - {
         "previous_version",
         "candidate_version",
+        "runtime_mode",
         "previous_package_checksums",
     }
     for key in boolean_keys:
@@ -578,6 +583,10 @@ def _validate_lifecycle(
         raise EvidenceError(f"{kind} lifecycle versions must be strings")
     if candidate != binding.version or version_tuple(previous) >= version_tuple(candidate):
         raise EvidenceError(f"{kind} lifecycle must prove previous_version < candidate_version")
+    if lifecycle["runtime_mode"] != "active-real-init":
+        raise EvidenceError(
+            f"{kind} lifecycle runtime_mode must be active-real-init"
+        )
     previous_checksums = lifecycle["previous_package_checksums"]
     if not isinstance(previous_checksums, dict):
         raise EvidenceError(
@@ -754,7 +763,12 @@ def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[st
             if not all(
                 lifecycle[key]
                 for key in LIFECYCLE_KEYS
-                - {"previous_version", "candidate_version", "previous_package_checksums"}
+                - {
+                    "previous_version",
+                    "candidate_version",
+                    "runtime_mode",
+                    "previous_package_checksums",
+                }
             ):
                 reasons.append(f"{report.kind} lifecycle is incomplete")
         unknown = set(report.blockers) - REPORT_ALLOWLIST[report.kind]

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,25 +27,169 @@ import (
 )
 
 const (
-	nftStateDirectory = "/etc/syswarden"
-	nftStateFile      = "/etc/syswarden/syswarden.nft"
+	nftStateDirectory        = "/etc/syswarden"
+	nftStateFile             = "/etc/syswarden/syswarden.nft"
+	maximumNFTCommandOutput  = 64 << 20
+	maximumNFTExecutableSize = 128 << 20
+	nftCommandProcessWait    = time.Second
 )
 
 var (
-	nftReloadMu        sync.Mutex
-	nftRuntimeLockPath = "/run/syswarden-firewall.lock"
-	nftSetNameRE       = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	nftReloadMu             sync.Mutex
+	nftRuntimeLockPath      = "/run/syswarden-firewall.lock"
+	nftSetNameRE            = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	nftExecutableLookPath   = exec.LookPath
+	nftExecutableValidator  = validateResolvedLinuxWrapperExecutable
+	nftExecutablePinnedHook = func() {}
+	nftCommandOutputLimit   = maximumNFTCommandOutput
 )
 
 type nftCommandRunner interface {
 	Run(ctx context.Context, stdin []byte, args ...string) ([]byte, error)
 }
 
-type execNFTCommandRunner struct{}
+type execNFTCommandRunner struct {
+	path     string
+	identity nftExecutableIdentity
+}
 
-func (execNFTCommandRunner) Run(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
+type nftExecutableIdentity struct {
+	digest [sha256.Size]byte
+	mode   os.FileMode
+	uid    uint32
+	gid    uint32
+	nlink  uint64
+	device uint64
+	inode  uint64
+	size   int64
+}
+
+type boundedNFTCommandOutput struct {
+	content  bytes.Buffer
+	limit    int
+	exceeded bool
+}
+
+func (output *boundedNFTCommandOutput) Write(content []byte) (int, error) {
+	remaining := output.limit - output.content.Len()
+	if remaining > 0 {
+		written := len(content)
+		if written > remaining {
+			written = remaining
+		}
+		_, _ = output.content.Write(content[:written])
+	}
+	if len(content) > remaining {
+		output.exceeded = true
+	}
+	return len(content), nil
+}
+
+func pinNFTExecutable(path string) (*os.File, nftExecutableIdentity, error) {
+	if err := nftExecutableValidator(path); err != nil {
+		return nil, nftExecutableIdentity{}, err
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, nftExecutableIdentity{}, fmt.Errorf("pin nft executable: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return nil, nftExecutableIdentity{}, fmt.Errorf("pin nft executable")
+	}
+	before, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nftExecutableIdentity{}, fmt.Errorf("inspect pinned nft executable: %w", err)
+	}
+	stat, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || !before.Mode().IsRegular() || before.Mode().Perm()&0111 == 0 ||
+		before.Mode().Perm()&0022 != 0 || stat.Uid != 0 && int64(stat.Uid) != int64(os.Geteuid()) ||
+		stat.Nlink == 0 || before.Size() < 1 ||
+		before.Size() > maximumNFTExecutableSize {
+		_ = file.Close()
+		return nil, nftExecutableIdentity{}, fmt.Errorf("pinned nft executable has an unsafe identity")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.LimitReader(file, maximumNFTExecutableSize+1)); err != nil {
+		_ = file.Close()
+		return nil, nftExecutableIdentity{}, fmt.Errorf("hash pinned nft executable: %w", err)
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], hash.Sum(nil))
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, nftExecutableIdentity{}, fmt.Errorf("rewind pinned nft executable: %w", err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() ||
+		before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		_ = file.Close()
+		return nil, nftExecutableIdentity{}, fmt.Errorf("nft executable path changed while pinning")
+	}
+	afterStat, ok := after.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != afterStat.Uid || stat.Gid != afterStat.Gid ||
+		stat.Nlink != afterStat.Nlink || stat.Dev != afterStat.Dev || stat.Ino != afterStat.Ino {
+		_ = file.Close()
+		return nil, nftExecutableIdentity{}, fmt.Errorf("nft executable identity changed while pinning")
+	}
+	if err := nftExecutableValidator(path); err != nil {
+		_ = file.Close()
+		return nil, nftExecutableIdentity{}, fmt.Errorf("reattest pinned nft executable: %w", err)
+	}
+	return file, nftExecutableIdentity{
+		digest: digest, mode: before.Mode(), uid: stat.Uid, gid: stat.Gid,
+		nlink: uint64(stat.Nlink), device: uint64(stat.Dev), inode: stat.Ino, size: before.Size(),
+	}, nil
+}
+
+func captureNFTExecutableIdentity(path string) (nftExecutableIdentity, error) {
+	file, identity, err := pinNFTExecutable(path)
+	if err != nil {
+		return nftExecutableIdentity{}, err
+	}
+	if err := file.Close(); err != nil {
+		return nftExecutableIdentity{}, fmt.Errorf("close pinned nft executable: %w", err)
+	}
+	return identity, nil
+}
+
+func newExecNFTCommandRunner() (nftCommandRunner, error) {
+	path, err := nftExecutableLookPath("nft")
+	if err != nil {
+		return nil, fmt.Errorf("resolve nft executable: %w", err)
+	}
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, fmt.Errorf("nft executable did not resolve to a clean absolute path")
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve nft executable target: %w", err)
+	}
+	resolved = filepath.Clean(resolved)
+	if err := nftExecutableValidator(resolved); err != nil {
+		return nil, fmt.Errorf("validate nft executable: %w", err)
+	}
+	identity, err := captureNFTExecutableIdentity(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("capture nft executable identity: %w", err)
+	}
+	return execNFTCommandRunner{path: resolved, identity: identity}, nil
+}
+
+func (runner execNFTCommandRunner) Run(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
 	if stdin != nil {
 		return nil, fmt.Errorf("nft command input is unsupported")
+	}
+	if runner.path == "" || !filepath.IsAbs(runner.path) || filepath.Clean(runner.path) != runner.path {
+		return nil, fmt.Errorf("nft runner has no pinned clean absolute executable")
+	}
+	if err := nftExecutableValidator(runner.path); err != nil {
+		return nil, fmt.Errorf("reattest nft executable: %w", err)
+	}
+	if nftCommandOutputLimit <= 0 || nftCommandOutputLimit > maximumNFTCommandOutput {
+		return nil, fmt.Errorf("invalid nft command output limit")
 	}
 	var cmd *exec.Cmd
 	var commandFile *os.File
@@ -54,43 +200,73 @@ func (execNFTCommandRunner) Run(ctx context.Context, stdin []byte, args ...strin
 	}()
 	switch {
 	case len(args) == 3 && args[0] == "-j" && args[1] == "list" && args[2] == "tables":
-		cmd = exec.CommandContext(ctx, "nft", "-j", "list", "tables")
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "tables")
 	case len(args) == 3 && args[0] == "-j" && args[1] == "list" && args[2] == "ruleset":
-		cmd = exec.CommandContext(ctx, "nft", "-j", "list", "ruleset")
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-j", "list", "ruleset")
 	case len(args) == 4 && args[0] == "list" && args[1] == "table":
 		target := nftTableTarget{family: args[2], name: args[3]}
 		switch target {
 		case nftTableTarget{family: "inet", name: "syswarden"}:
-			cmd = exec.CommandContext(ctx, "nft", "list", "table", "inet", "syswarden")
+			cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "list", "table", "inet", "syswarden")
 		case nftTableTarget{family: "inet", name: "syswarden_table"}:
-			cmd = exec.CommandContext(ctx, "nft", "list", "table", "inet", "syswarden_table")
+			cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "list", "table", "inet", "syswarden_table")
 		case nftTableTarget{family: "netdev", name: "syswarden_hw_drop"}:
-			cmd = exec.CommandContext(ctx, "nft", "list", "table", "netdev", "syswarden_hw_drop")
+			cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "list", "table", "netdev", "syswarden_hw_drop")
 		case nftTableTarget{family: "arp", name: "syswarden_arp"}:
-			cmd = exec.CommandContext(ctx, "nft", "list", "table", "arp", "syswarden_arp")
+			cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "list", "table", "arp", "syswarden_arp")
 		default:
 			return nil, fmt.Errorf("refuse unexpected nftables table %s %s", target.family, target.name)
 		}
+	case len(args) == 4 && args[0] == "delete" && args[1] == "table":
+		target := nftTableTarget{family: args[2], name: args[3]}
+		if !isReservedNFTTableForUninstall(target) {
+			return nil, fmt.Errorf("refuse unexpected nftables uninstall target %s %s", target.family, target.name)
+		}
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "delete", "table", target.family, target.name) // #nosec G204 -- executable is fd-bound and target passed the exact reserved-table allowlist
 	case len(args) == 3 && args[0] == "-c" && args[1] == "-f":
 		var err error
 		commandFile, err = openPrivateNFTCommandFile(args[2])
 		if err != nil {
 			return nil, err
 		}
-		cmd = exec.CommandContext(ctx, "nft", "-c", "-f", "/proc/self/fd/3")
-		cmd.ExtraFiles = []*os.File{commandFile}
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-c", "-f", "/proc/self/fd/4")
 	case len(args) == 2 && args[0] == "-f":
 		var err error
 		commandFile, err = openPrivateNFTCommandFile(args[1])
 		if err != nil {
 			return nil, err
 		}
-		cmd = exec.CommandContext(ctx, "nft", "-f", "/proc/self/fd/3")
-		cmd.ExtraFiles = []*os.File{commandFile}
+		cmd = exec.CommandContext(ctx, "/proc/self/fd/3", "-f", "/proc/self/fd/4")
 	default:
 		return nil, fmt.Errorf("refuse unsupported nft command")
 	}
-	return cmd.CombinedOutput()
+	cmd.Env = fixedLinuxWrapperCommandEnvironment()
+	cmd.WaitDelay = nftCommandProcessWait
+	output := &boundedNFTCommandOutput{limit: nftCommandOutputLimit}
+	cmd.Stdout = output
+	cmd.Stderr = output
+	executableFile, identity, identityErr := pinNFTExecutable(runner.path)
+	if identityErr != nil {
+		return nil, fmt.Errorf("reattest nft executable immediately before start: %w", identityErr)
+	}
+	defer func() { _ = executableFile.Close() }()
+	if identity != runner.identity {
+		return nil, fmt.Errorf("nft executable changed identity before start")
+	}
+	cmd.ExtraFiles = []*os.File{executableFile}
+	if commandFile != nil {
+		cmd.ExtraFiles = append(cmd.ExtraFiles, commandFile)
+	}
+	nftExecutablePinnedHook()
+	err := cmd.Run()
+	content := append([]byte(nil), output.content.Bytes()...)
+	if output.exceeded {
+		return content, fmt.Errorf("nft command output exceeds %d bytes", nftCommandOutputLimit)
+	}
+	if ctx.Err() != nil {
+		return content, fmt.Errorf("nft command context ended: %w", ctx.Err())
+	}
+	return content, err
 }
 
 type nftListSource struct {
@@ -136,8 +312,25 @@ var syswardenNFTTables = []nftTableTarget{
 	{family: "arp", name: "syswarden_arp"},
 }
 
+var reservedNFTTablesForUninstall = []nftTableTarget{
+	{family: "inet", name: "syswarden"},
+	{family: "inet", name: "syswarden_table"},
+	{family: "netdev", name: "syswarden_hw_drop"},
+	{family: "arp", name: "syswarden_arp"},
+	{family: "inet", name: "syswarden_wg"},
+}
+
 func isSyswardenNFTTable(target nftTableTarget) bool {
 	for _, allowed := range syswardenNFTTables {
+		if target == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func isReservedNFTTableForUninstall(target nftTableTarget) bool {
+	for _, allowed := range reservedNFTTablesForUninstall {
 		if target == allowed {
 			return true
 		}
@@ -207,6 +400,7 @@ type nftJSONEntry struct {
 	Chain   *nftJSONChain   `json:"chain,omitempty"`
 	Set     *nftJSONSet     `json:"set,omitempty"`
 	Element *nftJSONElement `json:"element,omitempty"`
+	Rule    *nftJSONRule    `json:"rule,omitempty"`
 }
 
 type nftJSONTable struct {
@@ -233,6 +427,14 @@ type nftJSONElement struct {
 	Table    string            `json:"table"`
 	Name     string            `json:"name"`
 	Elements []json.RawMessage `json:"elem"`
+}
+
+type nftJSONRule struct {
+	Family      string            `json:"family"`
+	Table       string            `json:"table"`
+	Chain       string            `json:"chain"`
+	Handle      uint64            `json:"handle"`
+	Expressions []json.RawMessage `json:"expr"`
 }
 
 type nftDynamicBan struct {
@@ -518,7 +720,7 @@ func populateSet(ctx context.Context, sources []nftListSource, setName string) (
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-			canonical, isIPv4, parseErr := canonicalIPOrPrefix(line)
+			canonical, isIPv4, parseErr := canonicalFirewallListNetwork(line)
 			if parseErr != nil {
 				errs = append(errs, fmt.Errorf("%s: %s:%d: %w", setName, source.path, lineNumber+1, parseErr))
 				continue
@@ -907,14 +1109,14 @@ func applyNftablesTransaction(ctx context.Context, runner nftCommandRunner, stat
 		return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: acquire reload lock: %w", transactionID, err)
 	}
 	defer releaseNFTReloadGuard(lock)
-	return applyNftablesTransactionLocked(ctx, runner, stateDirectory, baseRules, populations, verification, transactionID)
+	return applyNftablesTransactionLocked(ctx, runner, stateDirectory, baseRules, populations, verification, transactionID, nil)
 }
 
 // applyNftablesTransactionLocked executes a complete transaction while the
 // caller holds both the in-process mutex and the shared firewall flock. Keeping
 // this split lets ApplyPolicies retain the same lock until its non-authoritative
 // compatibility wrappers have also been reconciled.
-func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner, stateDirectory, baseRules string, populations []nftSetPopulation, verification nftVerificationPlan, transactionID string) (string, error) {
+func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner, stateDirectory, baseRules string, populations []nftSetPopulation, verification nftVerificationPlan, transactionID string, precommit func() error) (string, error) {
 	fail := func(format string, args ...any) (string, error) {
 		return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: %s", transactionID, fmt.Sprintf(format, args...))
 	}
@@ -977,6 +1179,11 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 	if output, checkErr := runner.Run(ctx, nil, "-c", "-f", transactionPath); checkErr != nil {
 		return fail("candidate validation failed: %v: %s", checkErr, strings.TrimSpace(string(output)))
 	}
+	if precommit != nil {
+		if err := precommit(); err != nil {
+			return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: precommit firewall backend reattestation failed: %w", transactionID, err)
+		}
+	}
 
 	if output, applyErr := runner.Run(ctx, nil, "-f", transactionPath); applyErr != nil {
 		return fail("candidate apply failed: %v: %s", applyErr, strings.TrimSpace(string(output)))
@@ -988,6 +1195,24 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 			return transactionID, fmt.Errorf("firewall transaction %s verification failed (%v) and rollback failed: %w", transactionID, err, rollbackErr)
 		}
 		return fail("post-apply verification failed: %v", err)
+	}
+	if precommit != nil {
+		if err := precommit(); err != nil {
+			rollbackErr := rollbackNftables(runner, rollbackRules, dynamicSnapshot)
+			if rollbackErr != nil {
+				return transactionID, fmt.Errorf(
+					"firewall transaction %s post-apply backend reattestation failed (%v) and rollback failed: %w",
+					transactionID,
+					err,
+					rollbackErr,
+				)
+			}
+			return transactionID, fmt.Errorf(
+				"firewall transaction %s rolled back before persistence: post-apply firewall backend reattestation failed: %w",
+				transactionID,
+				err,
+			)
+		}
 	}
 
 	statePath := filepath.Join(stateDirectory, filepath.Base(nftStateFile))
@@ -1108,6 +1333,152 @@ func listExistingSyswardenTables(ctx context.Context, runner nftCommandRunner) (
 		}
 	}
 	return existing, nil
+}
+
+func listExistingReservedNFTablesForUninstall(ctx context.Context, runner nftCommandRunner) (map[nftTableTarget]bool, error) {
+	output, err := runner.Run(ctx, nil, "-j", "list", "tables")
+	if err != nil {
+		return nil, fmt.Errorf("nft list tables for uninstall: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	document, err := decodeNFTJSON(output)
+	if err != nil {
+		return nil, fmt.Errorf("decode nft list tables for uninstall: %w", err)
+	}
+	existing := make(map[nftTableTarget]bool)
+	for _, entry := range document.NFTables {
+		if entry.Table == nil {
+			continue
+		}
+		target := nftTableTarget{family: entry.Table.Family, name: entry.Table.Name}
+		if isReservedNFTTableForUninstall(target) {
+			existing[target] = true
+		}
+	}
+	return existing, nil
+}
+
+func legacyWireGuardForwardRuleHandle(rule *nftJSONRule) (uint64, bool) {
+	if rule == nil || rule.Family != "inet" || rule.Table != "filter" || rule.Chain != "forward" ||
+		rule.Handle == 0 || len(rule.Expressions) != 2 {
+		return 0, false
+	}
+	var expression map[string]json.RawMessage
+	if err := json.Unmarshal(rule.Expressions[0], &expression); err != nil || len(expression) != 1 {
+		return 0, false
+	}
+	matchRaw, ok := expression["match"]
+	if !ok {
+		return 0, false
+	}
+	var match map[string]json.RawMessage
+	if err := json.Unmarshal(matchRaw, &match); err != nil || len(match) != 3 {
+		return 0, false
+	}
+	var operation string
+	if err := json.Unmarshal(match["op"], &operation); err != nil || operation != "==" {
+		return 0, false
+	}
+	var left map[string]json.RawMessage
+	if err := json.Unmarshal(match["left"], &left); err != nil || len(left) != 1 {
+		return 0, false
+	}
+	metaRaw, ok := left["meta"]
+	if !ok {
+		return 0, false
+	}
+	var meta map[string]json.RawMessage
+	if err := json.Unmarshal(metaRaw, &meta); err != nil || len(meta) != 1 {
+		return 0, false
+	}
+	var key string
+	if err := json.Unmarshal(meta["key"], &key); err != nil || (key != "iifname" && key != "oifname") {
+		return 0, false
+	}
+	var right string
+	if err := json.Unmarshal(match["right"], &right); err != nil || right != "wg-syswarden" {
+		return 0, false
+	}
+	var verdict map[string]json.RawMessage
+	if err := json.Unmarshal(rule.Expressions[1], &verdict); err != nil || len(verdict) != 1 {
+		return 0, false
+	}
+	accept, ok := verdict["accept"]
+	if !ok || !bytes.Equal(bytes.TrimSpace(accept), []byte("null")) {
+		return 0, false
+	}
+	return rule.Handle, true
+}
+
+func listLegacyWireGuardForwardRuleHandles(ctx context.Context, runner nftCommandRunner) ([]uint64, error) {
+	output, err := runner.Run(ctx, nil, "-j", "list", "ruleset")
+	if err != nil {
+		return nil, fmt.Errorf("nft list ruleset for legacy WireGuard cleanup: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	document, err := decodeNFTJSON(output)
+	if err != nil {
+		return nil, fmt.Errorf("decode nft ruleset for legacy WireGuard cleanup: %w", err)
+	}
+	seen := make(map[uint64]struct{})
+	handles := make([]uint64, 0, 2)
+	for _, entry := range document.NFTables {
+		handle, matched := legacyWireGuardForwardRuleHandle(entry.Rule)
+		if !matched {
+			continue
+		}
+		if _, duplicate := seen[handle]; duplicate {
+			return nil, fmt.Errorf("duplicate legacy WireGuard nftables rule handle %d", handle)
+		}
+		seen[handle] = struct{}{}
+		handles = append(handles, handle)
+	}
+	sort.Slice(handles, func(i, j int) bool { return handles[i] < handles[j] })
+	return handles, nil
+}
+
+func cleanupReservedNFTablesForUninstall(ctx context.Context, runner nftCommandRunner) error {
+	legacyHandles, err := listLegacyWireGuardForwardRuleHandles(ctx, runner)
+	if err != nil {
+		return err
+	}
+	if len(legacyHandles) > 0 {
+		values := make([]string, 0, len(legacyHandles))
+		for _, handle := range legacyHandles {
+			values = append(values, strconv.FormatUint(handle, 10))
+		}
+		return fmt.Errorf("refusing to remove unowned legacy WireGuard nftables rules: handles %s; remove or attest them explicitly before retrying", strings.Join(values, ", "))
+	}
+
+	existing, err := listExistingReservedNFTablesForUninstall(ctx, runner)
+	if err != nil {
+		return err
+	}
+	wireGuardTarget := nftTableTarget{family: "inet", name: "syswarden_wg"}
+	if existing[wireGuardTarget] {
+		return fmt.Errorf("refusing to remove an unowned WireGuard nftables table; verified manifest-bound cleanup is required before retrying")
+	}
+	for _, target := range syswardenNFTTables {
+		if !existing[target] {
+			continue
+		}
+		output, deleteErr := runner.Run(ctx, nil, "delete", "table", target.family, target.name)
+		if deleteErr != nil {
+			return fmt.Errorf("delete reserved nftables table %s %s: %w: %s", target.family, target.name, deleteErr, strings.TrimSpace(string(output)))
+		}
+	}
+	remaining, err := listExistingReservedNFTablesForUninstall(ctx, runner)
+	if err != nil {
+		return fmt.Errorf("verify reserved nftables cleanup: %w", err)
+	}
+	if len(remaining) > 0 {
+		identities := make([]string, 0, len(remaining))
+		for _, target := range syswardenNFTTables {
+			if remaining[target] {
+				identities = append(identities, target.family+" "+target.name)
+			}
+		}
+		return fmt.Errorf("reserved nftables tables remain after uninstall cleanup: %s", strings.Join(identities, ", "))
+	}
+	return nil
 }
 
 func snapshotSyswardenTables(ctx context.Context, runner nftCommandRunner, existing map[nftTableTarget]bool) (string, error) {

@@ -119,12 +119,16 @@ class QualificationFixture:
         return {
             "previous_version": self.previous_version,
             "candidate_version": self.version,
+            "runtime_mode": "active-real-init",
+            "active_service_manager": True,
+            "active_postinstall": True,
+            "legacy_runtime_retirement": True,
             "fresh_install": True,
             "upgrade": True,
             "reinstall": True,
             "rollback": True,
             "remove": True,
-            "purge_semantics": True,
+            "purge": True,
             "second_restart": True,
             "previous_package_checksums": previous_checksums,
         }
@@ -321,7 +325,7 @@ class ReleaseQualificationGateTests(unittest.TestCase):
 
         self.fixture.write_reports("release")
         document = self.fixture.load_report("linux_package_lifecycle")
-        document["schema_version"] = 2
+        document["schema_version"] = 3
         self.fixture.save_report("linux_package_lifecycle", document)
         self.assertEvidenceError(self.fixture.args())
 
@@ -452,6 +456,46 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         document = self.fixture.load_report("linux_package_lifecycle")
         document["lifecycle"]["previous_version"] = "v5.00.0"
         self.fixture.save_report("linux_package_lifecycle", document)
+        self.assertEvidenceError(self.fixture.args())
+
+    def test_active_runtime_mode_and_every_derived_claim_are_mandatory(self) -> None:
+        package = self.fixture.load_report("linux_package_lifecycle")
+        package["lifecycle"]["runtime_mode"] = "offline"
+        self.fixture.save_report("linux_package_lifecycle", package)
+        self.assertEvidenceError(self.fixture.args())
+
+        boolean_claims = gate.LIFECYCLE_KEYS - {
+            "previous_version",
+            "candidate_version",
+            "runtime_mode",
+            "previous_package_checksums",
+        }
+        for claim in sorted(boolean_claims):
+            with self.subTest(claim=claim):
+                self.fixture.write_reports("release")
+                package = self.fixture.load_report("linux_package_lifecycle")
+                package["lifecycle"][claim] = False
+                self.fixture.save_report("linux_package_lifecycle", package)
+                code, aggregate = gate.run_gate(
+                    self.fixture.args(), now=self.fixture.now
+                )
+                self.assertEqual(code, 1)
+                self.assertIn(
+                    "lifecycle is incomplete", " ".join(aggregate["reasons"])
+                )
+
+    def test_lifecycle_schema_rejects_legacy_or_unknown_claims(self) -> None:
+        package = self.fixture.load_report("linux_package_lifecycle")
+        package["lifecycle"]["purge_semantics"] = package["lifecycle"].pop(
+            "purge"
+        )
+        self.fixture.save_report("linux_package_lifecycle", package)
+        self.assertEvidenceError(self.fixture.args())
+
+        self.fixture.write_reports("release")
+        package = self.fixture.load_report("linux_package_lifecycle")
+        package["lifecycle"]["offline_service_manager"] = True
+        self.fixture.save_report("linux_package_lifecycle", package)
         self.assertEvidenceError(self.fixture.args())
 
     def test_output_symlink_and_output_inside_repo_are_rejected(self) -> None:

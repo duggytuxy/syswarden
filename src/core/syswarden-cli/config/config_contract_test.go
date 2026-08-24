@@ -26,6 +26,24 @@ bruteforce_window_seconds = 60
 peer_port = 62026
 `
 
+func TestPublishedDefaultConfigHasNoRegulatoryOrCertificationClaims_SW_DOC_001(t *testing.T) {
+	lower := strings.ToLower(DefaultConfig)
+	for _, forbidden := range []string{
+		"iso 27001",
+		"nis2",
+		"compliant",
+		"required for compliance",
+		"enterprise compliance",
+		"enterprise subnets",
+		"enterprise lan",
+		"corporate policies",
+	} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("published default configuration contains unsupported claim %q", forbidden)
+		}
+	}
+}
+
 func TestLoadModularConfigMinimalAndUnknownKeysAreReadOnly_SW_CFG_002(t *testing.T) {
 	root := t.TempDir()
 	modules := filepath.Join(root, "modules")
@@ -79,6 +97,7 @@ func TestLoadModularConfigCompleteAndPriorityContract_SW_CFG_002(t *testing.T) {
 	}
 
 	lowPriority := `[core]
+firewall_backend = "nftables"
 ssh_port = "2200"
 hardening_enabled = true
 

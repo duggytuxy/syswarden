@@ -3,6 +3,33 @@
 # One-release package compatibility helper. This code retires only the exact
 # legacy browser service and credential owned by SysWarden.
 
+syswarden_normalize_webtui_root() {
+    syswarden_webtui_root_input="$1"
+    case "${syswarden_webtui_root_input}" in
+        ''|/)
+            SYSWARDEN_NORMALIZED_WEBTUI_ROOT=
+            ;;
+        /*)
+            case "${syswarden_webtui_root_input}" in
+                *//*|*/./*|*/../*|*/.|*/..) return 1 ;;
+            esac
+            SYSWARDEN_NORMALIZED_WEBTUI_ROOT="${syswarden_webtui_root_input%/}"
+            [ -n "${SYSWARDEN_NORMALIZED_WEBTUI_ROOT}" ] || return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    syswarden_webtui_root_path="${SYSWARDEN_NORMALIZED_WEBTUI_ROOT:-/}"
+    [ ! -L "${syswarden_webtui_root_path}" ] && [ -d "${syswarden_webtui_root_path}" ]
+}
+
+syswarden_webtui_root_identity() {
+    [ "$#" -eq 1 ] && [ -n "$1" ] || return 1
+    [ ! -L "$1" ] && [ -d "$1" ] || return 1
+    stat -c '%d:%i:%u:%g:%a' "$1" 2>/dev/null
+}
+
 syswarden_safe_runtime_object() {
     syswarden_runtime_object="$1"
     syswarden_runtime_kind="$2"
@@ -32,12 +59,36 @@ syswarden_attest_openrc_runtime() {
     syswarden_openrc_comm="${syswarden_openrc_root}/proc/1/comm"
     syswarden_safe_runtime_object "${syswarden_openrc_runtime}" directory "${syswarden_openrc_owner}" || return 1
     syswarden_safe_runtime_object "${syswarden_openrc_softlevel}" file "${syswarden_openrc_owner}" || return 1
-    [ "$(wc -c < "${syswarden_openrc_softlevel}" | tr -d ' ')" -le 64 ] || return 1
+    syswarden_openrc_softlevel_before="$(stat -c '%d:%i:%u:%g:%a:%s:%Y:%Z' "${syswarden_openrc_softlevel}" 2>/dev/null)" || return 1
+    syswarden_openrc_softlevel_digest_before="$(
+        sha256sum "${syswarden_openrc_softlevel}" 2>/dev/null | awk '{ print $1 }'
+    )" || return 1
+    case "${syswarden_openrc_softlevel_digest_before}" in
+        *[!0-9a-f]*|'') return 1 ;;
+    esac
+    [ "${#syswarden_openrc_softlevel_digest_before}" -eq 64 ] || return 1
+    syswarden_openrc_softlevel_size="$(wc -c < "${syswarden_openrc_softlevel}" | tr -d ' ')" || return 1
+    case "${syswarden_openrc_softlevel_size}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${syswarden_openrc_softlevel_size}" -le 64 ] || return 1
     syswarden_openrc_level="$(sed -n '1p' "${syswarden_openrc_softlevel}" 2>/dev/null)" || return 1
     [ -n "${syswarden_openrc_level}" ] || return 1
     case "${syswarden_openrc_level}" in *[!A-Za-z0-9_.-]*) return 1 ;; esac
-    [ "$(wc -c < "${syswarden_openrc_softlevel}" | tr -d ' ')" -eq "$((${#syswarden_openrc_level} + 1))" ] || return 1
+    case "${syswarden_openrc_softlevel_size}" in
+        "${#syswarden_openrc_level}") ;;
+        "$((${#syswarden_openrc_level} + 1))")
+            syswarden_openrc_softlevel_tail="$(
+                tail -c 1 "${syswarden_openrc_softlevel}" 2>/dev/null |
+                    od -An -tx1 | tr -d ' \n'
+            )" || return 1
+            [ "${syswarden_openrc_softlevel_tail}" = 0a ] || return 1
+            ;;
+        *) return 1 ;;
+    esac
     syswarden_safe_runtime_object "${syswarden_openrc_softlevel}" file "${syswarden_openrc_owner}" || return 1
+    [ "$(stat -c '%d:%i:%u:%g:%a:%s:%Y:%Z' "${syswarden_openrc_softlevel}" 2>/dev/null)" = \
+        "${syswarden_openrc_softlevel_before}" ] || return 1
+    [ "$(sha256sum "${syswarden_openrc_softlevel}" 2>/dev/null | awk '{ print $1 }')" = \
+        "${syswarden_openrc_softlevel_digest_before}" ] || return 1
     syswarden_safe_runtime_object "${syswarden_openrc_comm}" file "${syswarden_openrc_owner}" || return 1
     [ "$(wc -c < "${syswarden_openrc_comm}" | tr -d ' ')" -le 32 ] || return 1
     syswarden_openrc_identity="$(cat "${syswarden_openrc_comm}" 2>/dev/null)" || return 1
@@ -134,6 +185,13 @@ syswarden_require_offline_service_manager() {
     }
 }
 
+syswarden_package_runtime_is_offline() {
+    syswarden_offline_root="$1"
+    [ "${SYSWARDEN_PKG_INSTALL:-}" = 1 ] || return 1
+    [ "$(syswarden_classify_service_manager "${syswarden_offline_root}" systemd isolated)" = OFFLINE ] || return 1
+    [ "$(syswarden_classify_service_manager "${syswarden_offline_root}" openrc isolated)" = OFFLINE ] || return 1
+}
+
 syswarden_remove_exact_service_enablement() {
     syswarden_service_link="$1"
     shift
@@ -187,7 +245,7 @@ syswarden_remove_exact_product_services() {
                 /etc/systemd/system/syswarden-firewall.service || return 1
             syswarden_remove_exact_service_file \
                 /etc/systemd/system/syswarden-core.service \
-                0079096c0a92f17e3aafb6c76ad89a0fdac03c2977732a15776be01220d81768 600 || return 1
+                8d84f0eeb3bf912055eadee1173b5b354b7e03f9bef34ab43546b06458e980bd 600 || return 1
             syswarden_remove_exact_service_file \
                 /etc/systemd/system/syswarden-firewall.service \
                 bc730793c007273a380261155b7602571c42efd93972f45ad2dd440f98251724 600 || return 1
@@ -199,7 +257,7 @@ syswarden_remove_exact_product_services() {
                 /etc/runlevels/default/syswarden-firewall /etc/init.d/syswarden-firewall || return 1
             syswarden_remove_exact_service_file \
                 /etc/init.d/syswarden-core \
-                89965a9e7d2784bc7e3119966e2564e17c5ec915dc2396986a98fe6ccfcb6247 755 || return 1
+                99adff6d6bcb6c5f0fad472e11668d3f8f4e19136c3b3ce473493101db136558 755 || return 1
             syswarden_remove_exact_service_file \
                 /etc/init.d/syswarden-firewall \
                 82a936e4f9ce394d6cc0ffd3978a1842a899570842ab5d283184384e73af5905 755 || return 1
@@ -245,6 +303,21 @@ syswarden_retire_stale_webtui_pid() {
     fi
 }
 
+syswarden_retire_offline_webtui_pid() {
+    syswarden_retire_pid_path="${1}/run/syswarden-webtui.pid"
+    [ ! -L "${syswarden_retire_pid_path}" ] || {
+        printf '%s\n' 'Refusing a symlinked legacy Web-TUI PID file' >&2
+        return 1
+    }
+    [ -e "${syswarden_retire_pid_path}" ] || return 0
+    [ -f "${syswarden_retire_pid_path}" ] || return 1
+    [ "$(wc -c < "${syswarden_retire_pid_path}" | tr -d ' ')" -le 32 ] || return 1
+    syswarden_retire_pid="$(cat "${syswarden_retire_pid_path}")"
+    case "${syswarden_retire_pid}" in ''|*[!0-9]*) return 1 ;; esac
+    rm -f -- "${syswarden_retire_pid_path}" || return 1
+    [ ! -e "${syswarden_retire_pid_path}" ] && [ ! -L "${syswarden_retire_pid_path}" ]
+}
+
 syswarden_validate_exact_webtui_enablement() {
     syswarden_retire_enablement="$1"
     syswarden_retire_enablement_kind="$2"
@@ -285,9 +358,10 @@ syswarden_remove_exact_webtui_enablement() {
 # is provably absent, and 2 for an unsafe or ambiguous runtime surface.
 syswarden_openrc_runtime_available() {
     syswarden_retire_root="$1"
+    syswarden_retire_root_identity="${syswarden_retire_root:-/}"
     syswarden_retire_run="${syswarden_retire_root}/run"
     syswarden_retire_runtime="${syswarden_retire_run}/openrc"
-    syswarden_retire_owner="$(stat -c '%u:%g' "${syswarden_retire_root}" 2>/dev/null)" || return 2
+    syswarden_retire_owner="$(stat -c '%u:%g' "${syswarden_retire_root_identity}" 2>/dev/null)" || return 2
     if ! syswarden_safe_runtime_object "${syswarden_retire_run}" directory "${syswarden_retire_owner}"; then
         printf '%s\n' 'Refusing an unsafe OpenRC runtime parent' >&2
         return 2
@@ -417,8 +491,218 @@ syswarden_read_systemd_webtui_property() {
     return "${syswarden_retire_property_status}"
 }
 
-syswarden_attest_systemd_webtui_runtime() {
+syswarden_attest_boundary_owned_parent_chain() {
+    syswarden_chain_boundary="$1"
+    syswarden_chain_path="$2"
+    syswarden_chain_owner="$3"
+    syswarden_chain_parent="$(dirname "${syswarden_chain_path}")" || return 1
+    while :; do
+        [ ! -L "${syswarden_chain_parent}" ] && [ -d "${syswarden_chain_parent}" ] || return 1
+        syswarden_chain_metadata="$(stat -c '%u:%g:%a' "${syswarden_chain_parent}" 2>/dev/null)" || return 1
+        case "${syswarden_chain_metadata}" in "${syswarden_chain_owner}":*) ;; *) return 1 ;; esac
+        syswarden_chain_mode="${syswarden_chain_metadata##*:}"
+        case "${syswarden_chain_mode}" in *[2367][0-7]|*[0-7][2367]) return 1 ;; esac
+        [ "${syswarden_chain_parent}" != "${syswarden_chain_boundary}" ] || return 0
+        syswarden_chain_next="$(dirname "${syswarden_chain_parent}")" || return 1
+        [ "${syswarden_chain_next}" != "${syswarden_chain_parent}" ] || return 1
+        syswarden_chain_parent="${syswarden_chain_next}"
+    done
+}
+
+syswarden_attest_approved_systemd_service_dropins() {
     syswarden_retire_root="$1"
+    syswarden_retire_dropins="$2"
+    [ -n "${syswarden_retire_dropins}" ] || return 0
+    syswarden_retire_approved_dropin="${syswarden_retire_root}/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+    if [ "${syswarden_retire_dropins}" != "${syswarden_retire_approved_dropin}" ]; then
+        printf '%s\n' 'Refusing a loaded legacy Web-TUI unit with unapproved drop-ins' >&2
+        return 1
+    fi
+    syswarden_retire_boundary="${syswarden_retire_root:-/}"
+    syswarden_retire_boundary_owner="$(stat -c '%u:%g' "${syswarden_retire_boundary}" 2>/dev/null)" || return 1
+    syswarden_attest_boundary_owned_parent_chain "${syswarden_retire_boundary}" \
+        "${syswarden_retire_approved_dropin}" "${syswarden_retire_boundary_owner}" || {
+        printf '%s\n' 'Refusing an unsafe approved systemd drop-in parent chain' >&2
+        return 1
+    }
+    if [ -L "${syswarden_retire_approved_dropin}" ] || [ ! -f "${syswarden_retire_approved_dropin}" ] || \
+       [ "$(stat -c '%u:%g:%a:%h:%s' "${syswarden_retire_approved_dropin}" 2>/dev/null || true)" != \
+         "${syswarden_retire_boundary_owner}:644:1:596" ]; then
+        printf '%s\n' 'Refusing approved systemd drop-in with inexact metadata' >&2
+        return 1
+    fi
+    syswarden_retire_dropin_before="$({
+        stat -c '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_approved_dropin}" &&
+        stat -Lc '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_approved_dropin}" &&
+        sha256sum "${syswarden_retire_approved_dropin}" | awk '{ print $1 }'
+    } 2>/dev/null)" || return 1
+    syswarden_retire_expected_dropin_sha=ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37
+    [ "$(printf '%s\n' "${syswarden_retire_dropin_before}" | sed -n '3p')" = \
+        "${syswarden_retire_expected_dropin_sha}" ] || {
+        printf '%s\n' 'Refusing approved systemd drop-in with inexact bytes' >&2
+        return 1
+    }
+    syswarden_retire_rpm="$(command -v rpm 2>/dev/null)" || return 1
+    syswarden_retire_expected_rpm="${syswarden_retire_root}/usr/bin/rpm"
+    if [ "${syswarden_retire_rpm}" != "${syswarden_retire_expected_rpm}" ] || \
+       [ -L "${syswarden_retire_rpm}" ] || [ ! -f "${syswarden_retire_rpm}" ] || \
+       [ "$(stat -c '%u:%g:%a:%h' "${syswarden_retire_rpm}" 2>/dev/null || true)" != \
+         "${syswarden_retire_boundary_owner}:755:1" ] || \
+       ! syswarden_attest_boundary_owned_parent_chain "${syswarden_retire_boundary}" \
+            "${syswarden_retire_rpm}" "${syswarden_retire_boundary_owner}"; then
+        printf '%s\n' 'Refusing an untrusted RPM executable for approved systemd drop-in attestation' >&2
+        return 1
+    fi
+    syswarden_retire_rpm_before="$({
+        stat -c '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_rpm}" &&
+        stat -Lc '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_rpm}"
+    } 2>/dev/null)" || return 1
+    syswarden_retire_owner_one="$(mktemp /tmp/syswarden-webtui-rpm-owner.XXXXXX)" || return 1
+    syswarden_retire_files_one="$(mktemp /tmp/syswarden-webtui-rpm-files.XXXXXX)" || {
+        rm -f -- "${syswarden_retire_owner_one}"
+        return 1
+    }
+    syswarden_retire_digests_one="$(mktemp /tmp/syswarden-webtui-rpm-digests.XXXXXX)" || {
+        rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}"
+        return 1
+    }
+    syswarden_retire_owner_two="$(mktemp /tmp/syswarden-webtui-rpm-owner.XXXXXX)" || {
+        rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" "${syswarden_retire_digests_one}"
+        return 1
+    }
+    syswarden_retire_files_two="$(mktemp /tmp/syswarden-webtui-rpm-files.XXXXXX)" || {
+        rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+            "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}"
+        return 1
+    }
+    syswarden_retire_digests_two="$(mktemp /tmp/syswarden-webtui-rpm-digests.XXXXXX)" || {
+        rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+            "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" "${syswarden_retire_files_two}"
+        return 1
+    }
+    for syswarden_retire_metadata_file in \
+        "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+        "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" \
+        "${syswarden_retire_files_two}" "${syswarden_retire_digests_two}"; do
+        if [ -L "${syswarden_retire_metadata_file}" ] || [ ! -f "${syswarden_retire_metadata_file}" ] || \
+           [ "$(stat -c '%u:%g:%a:%h' "${syswarden_retire_metadata_file}" 2>/dev/null || true)" != \
+             "${syswarden_retire_boundary_owner}:600:1" ]; then
+            rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+                "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" \
+                "${syswarden_retire_files_two}" "${syswarden_retire_digests_two}"
+            printf '%s\n' 'Refusing unsafe temporary RPM metadata evidence' >&2
+            return 1
+        fi
+    done
+    if ! LC_ALL=C "${syswarden_retire_rpm}" --query --file "${syswarden_retire_approved_dropin}" \
+        --queryformat '%{NAME}\t%{EVR}\t%{ARCH}\t%{FILEDIGESTALGO}\n' > "${syswarden_retire_owner_one}" || \
+       ! LC_ALL=C "${syswarden_retire_rpm}" --query --file "${syswarden_retire_approved_dropin}" \
+        --queryformat '[%{FILENAMES}\n]' > "${syswarden_retire_files_one}" || \
+       ! LC_ALL=C "${syswarden_retire_rpm}" --query --file "${syswarden_retire_approved_dropin}" \
+        --queryformat '[%{FILEDIGESTS}\n]' > "${syswarden_retire_digests_one}"; then
+        rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+            "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" \
+            "${syswarden_retire_files_two}" "${syswarden_retire_digests_two}"
+        printf '%s\n' 'Unable to attest approved systemd drop-in RPM metadata' >&2
+        return 1
+    fi
+    syswarden_retire_machine="$(uname -m 2>/dev/null)" || syswarden_retire_machine=
+    case "${syswarden_retire_machine}" in x86_64|aarch64) ;; *) syswarden_retire_machine=invalid ;; esac
+    if [ -L "${syswarden_retire_owner_one}" ] || [ ! -f "${syswarden_retire_owner_one}" ] || \
+       [ "$(wc -c < "${syswarden_retire_owner_one}" | tr -d ' ')" -gt 4096 ] || \
+       ! awk -F '\t' -v expected_arch="${syswarden_retire_machine}" '
+            NF != 4 { bad = 1 }
+            $1 != "systemd" || $2 !~ /^[A-Za-z0-9.+:~_-]+$/ || length($2) > 128 ||
+                $3 != expected_arch || $4 != "8" { bad = 1 }
+            { count++ }
+            END { exit !(count == 1 && !bad) }
+        ' "${syswarden_retire_owner_one}" || \
+       [ "$(wc -c < "${syswarden_retire_files_one}" | tr -d ' ')" -gt 65536 ] || \
+       [ "$(wc -c < "${syswarden_retire_digests_one}" | tr -d ' ')" -gt 65536 ] || \
+       ! awk -v wanted="${syswarden_retire_approved_dropin}" \
+           -v expected_digest="${syswarden_retire_expected_dropin_sha}" '
+            FILENAME == ARGV[1] { digests[FNR] = $0; digest_count = FNR; next }
+            { file_count = FNR; if ($0 == wanted) { matches++; if (digests[FNR] != expected_digest) bad = 1 } }
+            END { exit !(digest_count == file_count && file_count > 0 && matches == 1 && !bad) }
+        ' "${syswarden_retire_digests_one}" "${syswarden_retire_files_one}"; then
+        rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+            "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" \
+            "${syswarden_retire_files_two}" "${syswarden_retire_digests_two}"
+        printf '%s\n' 'Refusing unproven approved systemd drop-in RPM metadata' >&2
+        return 1
+    fi
+    syswarden_retire_dropin_after="$({
+        stat -c '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_approved_dropin}" &&
+        stat -Lc '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_approved_dropin}" &&
+        sha256sum "${syswarden_retire_approved_dropin}" | awk '{ print $1 }'
+    } 2>/dev/null)" || syswarden_retire_dropin_after=
+    if [ "${syswarden_retire_dropin_after}" != "${syswarden_retire_dropin_before}" ] || \
+       ! LC_ALL=C "${syswarden_retire_rpm}" --query --file "${syswarden_retire_approved_dropin}" \
+        --queryformat '%{NAME}\t%{EVR}\t%{ARCH}\t%{FILEDIGESTALGO}\n' > "${syswarden_retire_owner_two}" || \
+       ! LC_ALL=C "${syswarden_retire_rpm}" --query --file "${syswarden_retire_approved_dropin}" \
+        --queryformat '[%{FILENAMES}\n]' > "${syswarden_retire_files_two}" || \
+       ! LC_ALL=C "${syswarden_retire_rpm}" --query --file "${syswarden_retire_approved_dropin}" \
+        --queryformat '[%{FILEDIGESTS}\n]' > "${syswarden_retire_digests_two}" || \
+       ! cmp -s "${syswarden_retire_owner_one}" "${syswarden_retire_owner_two}" || \
+       ! cmp -s "${syswarden_retire_files_one}" "${syswarden_retire_files_two}" || \
+       ! cmp -s "${syswarden_retire_digests_one}" "${syswarden_retire_digests_two}"; then
+        rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+            "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" \
+            "${syswarden_retire_files_two}" "${syswarden_retire_digests_two}"
+        printf '%s\n' 'Approved systemd drop-in or RPM metadata changed during attestation' >&2
+        return 1
+    fi
+    syswarden_retire_dropin_final="$({
+        stat -c '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_approved_dropin}" &&
+        stat -Lc '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_approved_dropin}" &&
+        sha256sum "${syswarden_retire_approved_dropin}" | awk '{ print $1 }'
+    } 2>/dev/null)" || syswarden_retire_dropin_final=
+    if [ "${syswarden_retire_dropin_final}" != "${syswarden_retire_dropin_before}" ] || \
+       ! syswarden_attest_boundary_owned_parent_chain "${syswarden_retire_boundary}" \
+            "${syswarden_retire_approved_dropin}" "${syswarden_retire_boundary_owner}" || \
+       [ "$({
+            stat -c '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_rpm}" &&
+            stat -Lc '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "${syswarden_retire_rpm}"
+          } 2>/dev/null)" != "${syswarden_retire_rpm_before}" ] || \
+       ! syswarden_attest_boundary_owned_parent_chain "${syswarden_retire_boundary}" \
+            "${syswarden_retire_rpm}" "${syswarden_retire_boundary_owner}"; then
+        rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+            "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" \
+            "${syswarden_retire_files_two}" "${syswarden_retire_digests_two}"
+        printf '%s\n' 'Approved systemd drop-in changed after RPM metadata reattestation' >&2
+        return 1
+    fi
+    for syswarden_retire_metadata_file in \
+        "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+        "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" \
+        "${syswarden_retire_files_two}" "${syswarden_retire_digests_two}"; do
+        [ ! -L "${syswarden_retire_metadata_file}" ] && [ -f "${syswarden_retire_metadata_file}" ] && \
+            [ "$(stat -c '%u:%g:%a:%h' "${syswarden_retire_metadata_file}" 2>/dev/null || true)" = \
+              "${syswarden_retire_boundary_owner}:600:1" ] || {
+            rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+                "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" \
+                "${syswarden_retire_files_two}" "${syswarden_retire_digests_two}"
+            return 1
+        }
+    done
+    rm -f -- "${syswarden_retire_owner_one}" "${syswarden_retire_files_one}" \
+        "${syswarden_retire_digests_one}" "${syswarden_retire_owner_two}" \
+        "${syswarden_retire_files_two}" "${syswarden_retire_digests_two}" || return 1
+}
+
+syswarden_attest_systemd_webtui_runtime() {
+    if ! syswarden_normalize_webtui_root "$1"; then
+        printf '%s\n' 'Refusing an unsafe legacy Web-TUI retirement root' >&2
+        return 1
+    fi
+    syswarden_retire_root="${SYSWARDEN_NORMALIZED_WEBTUI_ROOT}"
+    syswarden_systemd_attest_root="${syswarden_retire_root:-/}"
+    syswarden_systemd_attest_root_before="$(
+        syswarden_webtui_root_identity "${syswarden_systemd_attest_root}"
+    )" || {
+        printf '%s\n' 'Unable to attest the legacy Web-TUI retirement root' >&2
+        return 1
+    }
     syswarden_assert_no_webtui_manager_overrides "${syswarden_retire_root}" systemd || return 1
     syswarden_retire_load_state="$(syswarden_read_systemd_webtui_property LoadState)" || return 1
     if [ "${syswarden_retire_load_state}" != loaded ]; then
@@ -431,10 +715,8 @@ syswarden_attest_systemd_webtui_runtime() {
         return 1
     fi
     syswarden_retire_dropins="$(syswarden_read_systemd_webtui_property DropInPaths)" || return 1
-    if [ -n "${syswarden_retire_dropins}" ]; then
-        printf '%s\n' 'Refusing a loaded legacy Web-TUI unit with drop-ins' >&2
-        return 1
-    fi
+    syswarden_attest_approved_systemd_service_dropins \
+        "${syswarden_retire_root}" "${syswarden_retire_dropins}" || return 1
     syswarden_retire_execstart="$(syswarden_read_systemd_webtui_property ExecStart)" || return 1
     if ! printf '%s\n' "${syswarden_retire_execstart}" | LC_ALL=C awk '
         /^[{] path=\/opt\/syswarden\/bin\/syswarden-cli ; argv\[\]=\/opt\/syswarden\/bin\/syswarden-cli web-tui ; ignore_errors=(yes|no) ; start_time=[^;]* ; stop_time=[^;]* ; pid=[0-9]+ ; code=[^;]* ; status=[^;]* [}]$/ {
@@ -445,7 +727,12 @@ syswarden_attest_systemd_webtui_runtime() {
         printf '%s\n' 'Refusing an unexpected loaded legacy Web-TUI ExecStart' >&2
         return 1
     fi
-    syswarden_assert_no_webtui_manager_overrides "${syswarden_retire_root}" systemd
+    syswarden_assert_no_webtui_manager_overrides "${syswarden_retire_root}" systemd || return 1
+    if [ "$(syswarden_webtui_root_identity "${syswarden_systemd_attest_root}" 2>/dev/null || true)" != \
+         "${syswarden_systemd_attest_root_before}" ]; then
+        printf '%s\n' 'Legacy Web-TUI retirement root changed during systemd attestation' >&2
+        return 1
+    fi
 }
 
 syswarden_retire_cached_systemd_webtui() {
@@ -830,7 +1117,10 @@ syswarden_retire_exact_webtui_processes() {
     syswarden_retire_processes="${SYSWARDEN_MATCHED_WEBTUI_PROCESSES}"
     syswarden_retire_expected_identity="$(stat -L -c '%d:%i' "${syswarden_retire_executable}" 2>/dev/null || true)"
     for syswarden_retire_process in ${syswarden_retire_processes}; do
-        syswarden_retire_pid="${syswarden_retire_process%%:*}"
+        syswarden_retire_pid="$(
+            printf '%s\n' "${syswarden_retire_process}" |
+                LC_ALL=C awk -F ':' 'NR == 1 { print $1; exit }'
+        )" || return 1
         syswarden_retire_starttime="${syswarden_retire_process#*:}"
         if syswarden_webtui_process_matches \
             "${syswarden_retire_pid}" "${syswarden_retire_proc_root}" \
@@ -1019,16 +1309,28 @@ syswarden_retire_webtui_configuration() {
 }
 
 syswarden_retire_legacy_webtui() {
-    syswarden_retire_root="${1%/}"
+    if [ "$#" -ne 1 ] || [ -z "$1" ] || ! syswarden_normalize_webtui_root "$1"; then
+        printf '%s\n' 'Refusing an unsafe legacy Web-TUI retirement root' >&2
+        return 1
+    fi
+    syswarden_retire_root="${SYSWARDEN_NORMALIZED_WEBTUI_ROOT}"
     syswarden_retire_systemd_webtui "${syswarden_retire_root}" || return 1
     syswarden_retire_openrc_webtui "${syswarden_retire_root}" || return 1
-    syswarden_retire_exact_webtui_processes "${syswarden_retire_root}" || return 1
-    syswarden_retire_stale_webtui_pid "${syswarden_retire_root}" || return 1
+    if syswarden_package_runtime_is_offline "${syswarden_retire_root}"; then
+        syswarden_retire_offline_webtui_pid "${syswarden_retire_root}" || return 1
+    else
+        syswarden_retire_exact_webtui_processes "${syswarden_retire_root}" || return 1
+        syswarden_retire_stale_webtui_pid "${syswarden_retire_root}" || return 1
+    fi
     syswarden_retire_webtui_configuration "${syswarden_retire_root}" || return 1
 }
 
-syswarden_verify_webtui_retirement() {
-    syswarden_retire_root="${1%/}"
+syswarden_verify_legacy_webtui_runtime_absent() {
+    if [ "$#" -ne 1 ] || [ -z "$1" ] || ! syswarden_normalize_webtui_root "$1"; then
+        printf '%s\n' 'Refusing an unsafe legacy Web-TUI verification root' >&2
+        return 1
+    fi
+    syswarden_retire_root="${SYSWARDEN_NORMALIZED_WEBTUI_ROOT}"
     for syswarden_retire_path in \
         "${syswarden_retire_root}/etc/systemd/system/syswarden-webtui.service" \
         "${syswarden_retire_root}/etc/systemd/system/syswarden-webtui.service.syswarden-retiring" \
@@ -1045,8 +1347,28 @@ syswarden_verify_webtui_retirement() {
             return 1
         fi
     done
-    [ -x "${syswarden_retire_root}/opt/syswarden/bin/syswarden-tui" ] || return 1
-    [ -L "${syswarden_retire_root}/usr/local/bin/syswarden-tui" ] || return 1
-    [ "$(readlink "${syswarden_retire_root}/usr/local/bin/syswarden-tui")" = /opt/syswarden/bin/syswarden-tui ] || return 1
-    syswarden_verify_no_exact_webtui_process "${syswarden_retire_root}" || return 1
+    if ! syswarden_package_runtime_is_offline "${syswarden_retire_root}"; then
+        syswarden_verify_no_exact_webtui_process "${syswarden_retire_root}" || return 1
+    fi
+}
+
+syswarden_verify_webtui_retirement() {
+    syswarden_verify_legacy_webtui_runtime_absent "$@" || return 1
+    if ! syswarden_normalize_webtui_root "$1"; then
+        printf '%s\n' 'Refusing an unsafe legacy Web-TUI verification root' >&2
+        return 1
+    fi
+    syswarden_retire_root="${SYSWARDEN_NORMALIZED_WEBTUI_ROOT}"
+    [ -x "${syswarden_retire_root}/opt/syswarden/bin/syswarden-tui" ] || {
+        printf '%s\n' 'Native SysWarden TUI payload is missing after installation' >&2
+        return 1
+    }
+    [ -L "${syswarden_retire_root}/usr/local/bin/syswarden-tui" ] || {
+        printf '%s\n' 'Native SysWarden TUI launcher is missing after installation' >&2
+        return 1
+    }
+    [ "$(readlink "${syswarden_retire_root}/usr/local/bin/syswarden-tui")" = /opt/syswarden/bin/syswarden-tui ] || {
+        printf '%s\n' 'Native SysWarden TUI launcher has an unexpected target' >&2
+        return 1
+    }
 }

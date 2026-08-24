@@ -1,7 +1,7 @@
 package config
 
 const DefaultConfig = `# ==============================================================================
-# Version=v4.03.1
+# Version=v4.03.2
 # SYSWARDEN UNATTENDED INSTALLATION CONFIGURATION
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,20 +15,20 @@ const DefaultConfig = `# =======================================================
 # [1] SYSTEM & CORE
 # ==========================================
 # --- WAAP Enforcement Mode ---
-# "enforcing" = Actively bans malicious IPs via Nftables/Iptables.
+# "enforcing" = Applies validated ban decisions through the nftables policy engine.
 # "audit"     = Dry-Run/Shadow mode. Analyzes and logs threats [SIMULATED-BAN] without blocking.
 SYSWARDEN_ENFORCEMENT_MODE="enforcing"
 
-# --- Enterprise Compliance Mode ---
-# y = Strictly disables third-party telemetry/reporting (e.g., AbuseIPDB) to comply with corporate policies.
+# --- Optional Telemetry Isolation Mode ---
+# y = Disables third-party telemetry and reporting (for example, AbuseIPDB) for local data-handling policy.
 SYSWARDEN_ENTERPRISE_MODE="n"
 
-# --- Firewall Engine Optimization (RHEL/Alma/Fedora) ---
-# If firewalld is detected, SYSWARDEN can replace it for extreme performance.
-# "nftables" = Replace with pure Nftables (Recommended for massive blocklists)
-# "iptables" = Replace with classic Iptables (Via iptables-services)
-# "keep"     = Do not modify Firewalld (Warning: Reloads will be very slow)
-SYSWARDEN_FIREWALL_BACKEND="nftables"
+# --- Host Firewall Backend Contract ---
+# "keep"     = Preserve the operator-managed frontend. It performs no service transition and refuses active or enabled iptables services.
+# "nftables" = Validation-only explicit choice. The operator must preconfigure nftables.service as enabled and active,
+#               with firewalld, UFW, iptables-services and netfilter-persistent inactive and disabled. SYSWARDEN never transitions these services.
+# "iptables" = Legacy parse compatibility only. Operational firewall policy mutation paths reject this choice.
+SYSWARDEN_FIREWALL_BACKEND="keep"
 
 # --- OS Hardening ---
 # y = Enable, n = Disable (Strict restrictions for privileged groups & Cron. Recommended for NEW servers only)
@@ -44,18 +44,18 @@ SYSWARDEN_SSH_PORT=""
 
 # --- Security & Lifecycle Management ---
 # y = Securely wipe this configuration file (shred) from disk after successful installation.
-# MANDATORY for ISO 27001 compliance to prevent API keys from lingering in plaintext.
+# Select this only after reviewing local secret-retention and recovery requirements.
 SYSWARDEN_SECURE_WIPE_CONF="n"
 
 
 # ==========================================
 # [2] ZERO-TRUST NETWORK CONTROLS
 # ==========================================
-# Auto-whitelist critical infrastructure (DNS, Gateway, DHCP, Cloud Metadata)
+# Auto-whitelist critical infrastructure (DNS, gateway, and local interface addresses)
 # Highly recommended to prevent server lockout when using aggressive ASN/GEO blocklists.
 SYSWARDEN_WHITELIST_INFRA="y"
 
-# Explicitly trust internal enterprise subnets to bypass L4 Catch-All rules.
+# Explicitly trust internal private subnets to bypass L4 Catch-All rules.
 # Space-separated list in CIDR format (Default: RFC1918)
 SYSWARDEN_LAN_SUBNETS="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 
@@ -96,7 +96,7 @@ SYSWARDEN_USE_SPAMHAUS="n"
 
 # If choice is 3, provide the URL below. MUST be HTTPS. HTTP schemes will be rejected.
 SYSWARDEN_CUSTOM_URL=""
-# Prevent supply chain poisoning: Provide the expected SHA256 hash of the custom list (Optional but recommended for NIS2)
+# Custom feeds require the exact expected SHA256 before publication.
 SYSWARDEN_CUSTOM_HASH=""
 
 # If choice is 3, provide the IPv6 URL below.
@@ -137,7 +137,7 @@ SYSWARDEN_HONEYPORTS="6379,23"
 # --- Local Network & L2 Protection ---
 # Enable OSI Layer 2 ARP Spoofing Prevention
 SYSWARDEN_ENABLE_L2="y"
-# Enable 500req/sec ARP Flood limits (Enterprise LAN adjusted)
+# Enable 500req/sec ARP flood limits for the local-network profile
 SYSWARDEN_ARP_PROTECT="y"
 # Enable Local LAN Mode to save RAM by skipping global OSINT downloads
 SYSWARDEN_LAN_MODE="n"
@@ -168,12 +168,12 @@ SYSWARDEN_WG_SUBNET="10.66.66.0/24"
 # ==========================================
 # [7] SIEM & EXTERNAL INTEGRATIONS
 # ==========================================
-# --- SIEM Log Forwarding (ISO 27001 / NIS2 COMPLIANT) ---
+# --- SIEM Log Forwarding ---
 # y = Enable, n = Disable (Forwards attack logs to an external SIEM via Rsyslog)
 SYSWARDEN_SIEM_ENABLED="n"
 SYSWARDEN_SIEM_IP=""
 SYSWARDEN_SIEM_PORT="6514"
-# REQUIRED FOR COMPLIANCE: "tls" is highly recommended over standard "tcp" or "udp"
+# Prefer authenticated TLS over cleartext TCP or UDP when the receiver supports it.
 SYSWARDEN_SIEM_PROTO="tls"
 # Path to the CA certificate for mutual TLS (mTLS) or server validation
 SYSWARDEN_SIEM_TLS_CA="/etc/ssl/certs/ca-certificates.crt"

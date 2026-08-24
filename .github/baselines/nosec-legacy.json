@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "baseline_commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
-  "policy": "The 83 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
+  "policy": "The 56 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
   "legacy": [
     {
       "count": 2,
@@ -83,10 +83,6 @@
       "source_sha256": "e1d2a2508de003fdd398945bdc32f5a49c6f22b1538fc841e571b2b431350ba3"
     },
     {
-      "file": "src/core/syswarden-cli/pkg/network/downloader.go",
-      "source_sha256": "d6a11e4f544492764ebf2584590ada9b3a69a04e27db8a02aaa9395d2ae9cebd"
-    },
-    {
       "file": "src/core/syswarden-cli/pkg/system/audit_linux.go",
       "source_sha256": "30d6c5d2adc1b8d3b9c36996e4330b4dce60c0f967eabaecf060e7f2f37d2fbf"
     },
@@ -137,106 +133,6 @@
     {
       "file": "src/core/syswarden-cli/pkg/system/dependencies.go",
       "source_sha256": "c575714b1e9619ada46d91ceda2505a180bcf75f13dadc56f36b6e61df8d5d4a"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "19e6615705009f0fd52bb3e4e9e1064153df7c6db9ecb5430a401bc49a7dbae5"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "2cc7e2725bce3e08fd3e969a86a91549aaa0ebed3e5182b7ea47ca4522248ac9"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "32f2093cbb9badc3edd3d7c2f8d63381d367dd394314137efdc73f51ee59763a"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "3cdfc1c624ec23757759da93ee6f8449971e77ef7123d94a0c19762f581c7fdf"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "4cd6065fe48f0b8f575577a48ee429131ba9a0de3c6b2d3c2a11a51fe213d19d"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "4f3cf876296807302c59b960758d46e5aa5fb8dcec5d52502a0315d8b3512d8c"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "5443e77abc68dff0ccff4e531be0bbc27ce3adc59a4166af66d10887c440ead2"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "5f545cb09be60b1ef7811a5d1ea41559fa06737e21e7126d1a88187b2b52d52e"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "6132842cef3302f5981389760ce91047d4b34ce307a3d82b045dadcc12e96eb7"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "61e51da33418adca596afd620a8cb150a1708b9d1f4cd7725cd93b67ab15d217"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "6c0f4b24612c99027af5f07ce93b9502c957462f99ce13a1a851aa6d0d195ac7"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "6d4ed68676e1af8d4480968e5aa9452937c03b789bb1bba5d60e4c8d2c887abc"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "7a174e2ad4065cef659f30dbb90e1d22226d3141e40194f06f5319218680f423"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "83840fe3342b4b6a8e505a11eef93cbb99177b6e1284848233d0968995350ed7"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "840a959eb5b79aa773b741998d473c2da0b72175195b0e4cc87162a64cd34959"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "8651cab2cf266ea4f8d08d9150a4832d449e99f02473517b26066e935e66a15e"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "97f99c4201d3888c6edd448d21c0816e980f8da5ad0cebb6c1d08b464237f373"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "a79f518f479e642950314c53eecbd9abfbd4e3ab9bccf64d0ea61507d7f86d49"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "b1c89fffcb67d7ec11d1d40b92f378e812450d5326533a4df6a77801df85bfd3"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "c09c783086623beceed7f314163774ac95aa508aa4fb84ebdb14f62018a26d43"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "c0e8b364f96d8478b2c3192b4296b5e4a0e739253e48393091ef5b1426d75da3"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "c3fd486e9d834687f3bb1aca90fe2905bb0f0ffbfe90d650fc0a4b4176c0ebc6"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "f15211673ce24a0d1892b7de127b6c8450b4c77aea45f89ef7eed99487eb705c"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "f3b6e6fed5ee729d9c54cebeb517644f6d967d55ba800b3e83ce64fba44c80e4"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
-      "source_sha256": "fac829ddc83afb2471def8655affebec8c71d1d02c2a4aed256812b71e217a9f"
     },
     {
       "file": "src/core/syswarden-core/engine/ahocorasick.go",
@@ -313,10 +209,6 @@
     {
       "file": "src/core/syswarden-core/telemetry/worker.go",
       "source_sha256": "fe7a13f811e83c2a895135b3fea5937cab23eadcab4509c5665e35c6e3e6cd8f"
-    },
-    {
-      "file": "src/core/syswarden-core/utils/whitelist.go",
-      "source_sha256": "3b13fc9f102b5dd4ce7642fbf0b9788ff9568ac12ff8de2a60c4101fd606ca5b"
     },
     {
       "file": "src/core/syswarden-tui/main.go",

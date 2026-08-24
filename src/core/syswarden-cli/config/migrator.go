@@ -887,12 +887,18 @@ func (m *Migrator) generateCore(oldConfig map[string]string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	firewallBackend, err := migratedFirewallBackend(oldConfig)
+	if err != nil {
+		return "", err
+	}
 	content := `# [00] CORE SYSTEM CONFIGURATION
 # Priority: 00 (loaded first, lowest precedence)
 
 [core]
-# Supported backends (RHEL/Alma/Fedora ONLY): "nftables", "iptables", "keep"
-firewall_backend = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_FIREWALL_BACKEND", "keep")) + `
+# "keep" preserves the operator-managed frontend, performs no service transition and refuses active or enabled iptables services.
+# "nftables" requires an enabled and active nftables.service with firewalld, UFW, iptables-services and netfilter-persistent inactive and disabled.
+# "iptables" is retained for legacy parsing only and is rejected by operational policy mutations.
+firewall_backend = ` + quoteTOML(firewallBackend) + `
 
 # Boolean values: true or false (no quotes)
 hardening_enabled = ` + hardening + `
@@ -903,6 +909,30 @@ secure_wipe_conf = ` + secureWipe + `
 ssh_port = ` + quoteTOML(sshPort) + `
 `
 	return canonicalizeGeneratedTOML(content)
+}
+
+func migratedFirewallBackend(oldConfig map[string]string) (string, error) {
+	legacyBackend := legacyValue(oldConfig, "SYSWARDEN_FIREWALL_BACKEND", "keep")
+	mappedBackend := legacyBackend
+	switch legacyBackend {
+	case "firewalld":
+		mappedBackend = "keep"
+	case "keep", "nftables", "iptables":
+	default:
+		return "", fmt.Errorf("unsupported legacy firewall backend %q", legacyBackend)
+	}
+	wireGuardEnabled, err := legacyBoolText(oldConfig, "SYSWARDEN_ENABLE_WG", false)
+	if err != nil {
+		return "", err
+	}
+	if wireGuardEnabled == "true" && mappedBackend != "nftables" {
+		return "", fmt.Errorf(
+			"legacy firewall backend %q maps to %q, but enabled WireGuard requires nftables; select nftables or disable WireGuard before migration",
+			legacyBackend,
+			mappedBackend,
+		)
+	}
+	return mappedBackend, nil
 }
 
 func (m *Migrator) generateNetwork(oldConfig map[string]string) (string, error) {

@@ -9,6 +9,12 @@ import (
 
 // AutoWhitelistAdminAndInfra detects and safely whitelists the admin IP and critical infra IPs
 func AutoWhitelistAdminAndInfra() error {
+	if _, err := preflightConfiguredFirewallBackendMutation(); err != nil {
+		return fmt.Errorf("validate firewall backend before automatic whitelist mutation: %w", err)
+	}
+	if _, err := retireLegacyMetadataWhitelistEntry(); err != nil {
+		return fmt.Errorf("retire legacy metadata whitelist entry: %w", err)
+	}
 	fmt.Println("[INFO] Scanning and auto-whitelisting critical infrastructure & Admin IP...")
 
 	_ = os.MkdirAll("/etc/syswarden/lists", 0750)
@@ -17,8 +23,6 @@ func AutoWhitelistAdminAndInfra() error {
 	// Read existing
 	content, _ := os.ReadFile(whitelistFile) // #nosec
 	existing := string(content)
-
-	var ipsToAdd []string
 
 	// 1. Admin IP Detection
 	adminIP := ""
@@ -32,31 +36,18 @@ func AutoWhitelistAdminAndInfra() error {
 		}
 	}
 
-	if adminIP != "" && adminIP != "127.0.0.1" {
-		if valid, isIPv4 := IsValidIP(adminIP); valid && isIPv4 {
-			if !strings.Contains(existing, adminIP) {
-				ipsToAdd = append(ipsToAdd, adminIP)
-				fmt.Printf(" -> Auto-whitelisting Admin SSH IP: %s\n", adminIP)
-			}
-		}
-	} else {
+	if adminIP == "" || adminIP == "127.0.0.1" {
 		fmt.Println("[WARN] Could not safely determine Admin IP from environment.")
 	}
 
-	// 2. Infra IPs (DNS, Gateway, Metadata)
+	// 2. Infra IPs (DNS, gateway, and local interface addresses)
+	var discoveredInfraIPs []string
 	if config.GlobalConfig.WhitelistInfra {
-		// Metadata
-		ipsToAdd = append(ipsToAdd, "169.254.169.254")
-
 		infraIPs, err := infraIPv4Candidates()
 		if err != nil {
 			return err
 		}
-		for _, ip := range infraIPs {
-			if valid, isIPv4 := IsValidIP(ip); valid && isIPv4 {
-				ipsToAdd = append(ipsToAdd, ip)
-			}
-		}
+		discoveredInfraIPs = infraIPs
 	}
 
 	// 3. User-Defined Config IPs
@@ -64,19 +55,15 @@ func AutoWhitelistAdminAndInfra() error {
 	contentV6, _ := os.ReadFile(whitelistFileV6) // #nosec
 	existingV6 := string(contentV6)
 
-	var ipsToAddV6 []string
-
-	if config.GlobalConfig.WhitelistIPs != "" {
-		customIPs := strings.Fields(config.GlobalConfig.WhitelistIPs)
-		for _, ip := range customIPs {
-			if valid, isIPv4 := IsValidIP(ip); valid {
-				if isIPv4 {
-					ipsToAdd = append(ipsToAdd, ip)
-				} else {
-					ipsToAddV6 = append(ipsToAddV6, ip)
-				}
-			}
-		}
+	ipsToAdd, ipsToAddV6 := automaticWhitelistCandidates(
+		adminIP,
+		config.GlobalConfig.WhitelistInfra,
+		discoveredInfraIPs,
+		strings.Fields(config.GlobalConfig.WhitelistIPs),
+	)
+	canonicalAdminIP := ""
+	if entry, err := parseCanonicalListEntry(adminIP, false); err == nil && entry.isIPv4 {
+		canonicalAdminIP = entry.network
 	}
 
 	// Append to IPv4 file safely
@@ -92,7 +79,9 @@ func AutoWhitelistAdminAndInfra() error {
 			_, _ = f.WriteString(ip + "\n")
 			existing += ip + "\n"
 			addedCount++
-			if ip != adminIP {
+			if ip == canonicalAdminIP {
+				fmt.Printf(" -> Auto-whitelisting Admin SSH IP: %s\n", ip)
+			} else {
 				fmt.Printf(" -> Auto-whitelisting Infra IPv4: %s\n", ip)
 			}
 		}
@@ -119,4 +108,16 @@ func AutoWhitelistAdminAndInfra() error {
 	}
 
 	return nil
+}
+
+func automaticWhitelistCandidates(adminIP string, includeInfra bool, infraIPs, configuredIPs []string) ([]string, []string) {
+	candidates := make([]string, 0, 1+len(infraIPs)+len(configuredIPs))
+	if adminIP != "" && adminIP != "127.0.0.1" {
+		candidates = append(candidates, adminIP)
+	}
+	if includeInfra {
+		candidates = append(candidates, infraIPs...)
+	}
+	candidates = append(candidates, configuredIPs...)
+	return canonicalWhitelistCandidates(candidates...)
 }

@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -36,6 +38,57 @@ type fakeNFTRunner struct {
 	rulesetCalls         int
 }
 
+type fakeUninstallNFTRunner struct {
+	mu                  sync.Mutex
+	tables              []nftTableTarget
+	listErr             error
+	deleteErr           map[nftTableTarget]error
+	retain              map[nftTableTarget]bool
+	deleteCalls         []nftTableTarget
+	legacyHandles       []uint64
+	rulesetErr          error
+	includeOperatorRule bool
+}
+
+func (runner *fakeUninstallNFTRunner) Run(_ context.Context, stdin []byte, args ...string) ([]byte, error) {
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if stdin != nil {
+		return nil, fmt.Errorf("unexpected nft input")
+	}
+	if len(args) == 3 && args[0] == "-j" && args[1] == "list" && args[2] == "tables" {
+		if runner.listErr != nil {
+			return nil, runner.listErr
+		}
+		return nftTablesJSON(runner.tables), nil
+	}
+	if len(args) == 3 && args[0] == "-j" && args[1] == "list" && args[2] == "ruleset" {
+		if runner.rulesetErr != nil {
+			return nil, runner.rulesetErr
+		}
+		return nftLegacyWireGuardRulesJSON(runner.legacyHandles, runner.includeOperatorRule), nil
+	}
+	if len(args) == 4 && args[0] == "delete" && args[1] == "table" {
+		target := nftTableTarget{family: args[2], name: args[3]}
+		runner.deleteCalls = append(runner.deleteCalls, target)
+		if err := runner.deleteErr[target]; err != nil {
+			return nil, err
+		}
+		if runner.retain[target] {
+			return nil, nil
+		}
+		remaining := runner.tables[:0]
+		for _, existing := range runner.tables {
+			if existing != target {
+				remaining = append(remaining, existing)
+			}
+		}
+		runner.tables = append([]nftTableTarget(nil), remaining...)
+		return nil, nil
+	}
+	return nil, fmt.Errorf("unexpected nft command: %q", args)
+}
+
 func TestMain(m *testing.M) {
 	directory, err := os.MkdirTemp("", "syswarden-firewall-tests-")
 	if err != nil {
@@ -43,9 +96,48 @@ func TestMain(m *testing.M) {
 	}
 	nftRuntimeLockPath = filepath.Join(directory, "firewall.lock")
 	linuxWrapperStateFile = filepath.Join(directory, "firewall-wrappers.state")
+	linuxWrapperExecutableValidator = validateTestLinuxWrapperExecutable
+	linuxWrapperCommandEnvironment = testLinuxWrapperCommandEnvironment
+	uninstallNFTRunnerFactory = func() (nftCommandRunner, error) { return &fakeUninstallNFTRunner{}, nil }
+	firewallRemovalServiceReattest = func() error { return nil }
 	code := m.Run()
 	_ = os.RemoveAll(directory)
 	os.Exit(code)
+}
+
+func testLinuxWrapperCommandEnvironment() []string {
+	environment := fixedLinuxWrapperCommandEnvironment()
+	for _, entry := range os.Environ() {
+		name, _, found := strings.Cut(entry, "=")
+		if found && strings.HasPrefix(name, "SYSWARDEN_") {
+			environment = append(environment, entry)
+		}
+	}
+	return environment
+}
+
+func validateTestLinuxWrapperExecutable(path string) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return fmt.Errorf("test wrapper path is not a clean absolute path")
+	}
+	for _, target := range []string{path, filepath.Dir(path)} {
+		info, err := os.Lstat(target)
+		if err != nil {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != 0 && int64(stat.Uid) != int64(os.Geteuid()) {
+			return fmt.Errorf("test wrapper target has unexpected ownership")
+		}
+		if target == path {
+			if !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 || info.Mode().Perm()&0022 != 0 {
+				return fmt.Errorf("test wrapper target is not a trusted executable")
+			}
+		} else if !info.IsDir() || info.Mode().Perm()&0022 != 0 {
+			return fmt.Errorf("test wrapper directory is not trusted")
+		}
+	}
+	return nil
 }
 
 func newFakeNFTRunner(plan nftVerificationPlan, initial ...nftTableTarget) *fakeNFTRunner {
@@ -420,6 +512,323 @@ func TestApplyChunkPropagatesValidationErrors_SW_FW_002(t *testing.T) {
 	}
 }
 
+func TestReservedNFTablesUninstallCleanupIsExactAndVerified_SW2_FWBACKEND_001(t *testing.T) {
+	operatorTable := nftTableTarget{family: "inet", name: "operator_table"}
+	runner := &fakeUninstallNFTRunner{
+		tables:              append(append([]nftTableTarget(nil), syswardenNFTTables...), operatorTable),
+		includeOperatorRule: true,
+	}
+	if err := cleanupReservedNFTablesForUninstall(context.Background(), runner); err != nil {
+		t.Fatalf("cleanupReservedNFTablesForUninstall() error = %v", err)
+	}
+	if !reflect.DeepEqual(runner.deleteCalls, syswardenNFTTables) {
+		t.Fatalf("delete calls = %#v, want %#v", runner.deleteCalls, syswardenNFTTables)
+	}
+	if !reflect.DeepEqual(runner.tables, []nftTableTarget{operatorTable}) {
+		t.Fatalf("remaining tables = %#v, want only operator table", runner.tables)
+	}
+}
+
+func TestReservedNFTablesUninstallCleanupFailsClosed_SW2_FWBACKEND_001(t *testing.T) {
+	target := reservedNFTTablesForUninstall[0]
+	tests := []struct {
+		name            string
+		runner          *fakeUninstallNFTRunner
+		wantDeleteCalls int
+	}{
+		{
+			name:            "ruleset inventory failure",
+			runner:          &fakeUninstallNFTRunner{rulesetErr: errors.New("ruleset unavailable")},
+			wantDeleteCalls: 0,
+		},
+		{
+			name: "unowned legacy WireGuard rule",
+			runner: &fakeUninstallNFTRunner{
+				legacyHandles: []uint64{31},
+			},
+			wantDeleteCalls: 0,
+		},
+		{
+			name: "unowned reserved WireGuard table",
+			runner: &fakeUninstallNFTRunner{
+				tables: []nftTableTarget{{family: "inet", name: "syswarden_wg"}},
+			},
+			wantDeleteCalls: 0,
+		},
+		{
+			name:            "inventory failure",
+			runner:          &fakeUninstallNFTRunner{listErr: errors.New("inventory unavailable")},
+			wantDeleteCalls: 0,
+		},
+		{
+			name: "delete failure",
+			runner: &fakeUninstallNFTRunner{
+				tables:    []nftTableTarget{target},
+				deleteErr: map[nftTableTarget]error{target: errors.New("delete denied")},
+			},
+			wantDeleteCalls: 1,
+		},
+		{
+			name: "residual table",
+			runner: &fakeUninstallNFTRunner{
+				tables: []nftTableTarget{target},
+				retain: map[nftTableTarget]bool{target: true},
+			},
+			wantDeleteCalls: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := cleanupReservedNFTablesForUninstall(context.Background(), test.runner); err == nil {
+				t.Fatal("cleanupReservedNFTablesForUninstall() unexpectedly succeeded")
+			}
+			if got := len(test.runner.deleteCalls); got != test.wantDeleteCalls {
+				t.Fatalf("delete calls = %d, want %d", got, test.wantDeleteCalls)
+			}
+		})
+	}
+}
+
+func TestUninstallFirewallCleanupIsBracketedByServiceReattestation_SW2_FWBACKEND_001(t *testing.T) {
+	previousUID := firewallCleanupEffectiveUserID
+	previousReattest := firewallRemovalServiceReattest
+	previousWrapperCleanup := applyLinuxFirewallWrappersForUninstall
+	previousRunnerFactory := uninstallNFTRunnerFactory
+	t.Cleanup(func() {
+		firewallCleanupEffectiveUserID = previousUID
+		firewallRemovalServiceReattest = previousReattest
+		applyLinuxFirewallWrappersForUninstall = previousWrapperCleanup
+		uninstallNFTRunnerFactory = previousRunnerFactory
+	})
+
+	var order []string
+	reattestCalls := 0
+	firewallCleanupEffectiveUserID = func() int { return 0 }
+	firewallRemovalServiceReattest = func() error {
+		reattestCalls++
+		order = append(order, fmt.Sprintf("reattest-%d", reattestCalls))
+		return nil
+	}
+	applyLinuxFirewallWrappersForUninstall = func(_, _ []string) error {
+		order = append(order, "wrapper-cleanup")
+		return nil
+	}
+	uninstallNFTRunnerFactory = func() (nftCommandRunner, error) {
+		order = append(order, "nft-cleanup")
+		return &fakeUninstallNFTRunner{}, nil
+	}
+
+	if err := CleanupOwnedCompatibilityRulesForUninstall(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(order, ","); got != "reattest-1,wrapper-cleanup,nft-cleanup,reattest-2" {
+		t.Fatalf("cleanup order = %q", got)
+	}
+}
+
+func TestExecNFTRunnerUsesPinnedTrustedPathAndMinimalEnvironment_SW2_FWBACKEND_001(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nft-fixture")
+	content := "#!/bin/sh\nprintf '%s\\n' \"${LD_PRELOAD-unset}|${PYTHONPATH-unset}|${LC_ALL-unset}|${PATH-unset}\"\n"
+	if err := os.WriteFile(path, []byte(content), 0700); err != nil { // #nosec G306 -- owner-only executable is an isolated test fixture
+		t.Fatal(err)
+	}
+	previousLookPath := nftExecutableLookPath
+	previousValidator := nftExecutableValidator
+	nftExecutableLookPath = func(name string) (string, error) {
+		if name != "nft" {
+			t.Fatalf("lookup name = %q, want nft", name)
+		}
+		return path, nil
+	}
+	nftExecutableValidator = validateTestLinuxWrapperExecutable
+	t.Cleanup(func() {
+		nftExecutableLookPath = previousLookPath
+		nftExecutableValidator = previousValidator
+	})
+
+	runner, err := newExecNFTCommandRunner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := runner.Run(context.Background(), nil, "-j", "list", "tables")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "unset|unset|C|/usr/sbin:/usr/bin:/sbin:/bin\n"
+	if string(output) != want {
+		t.Fatalf("nft child environment = %q, want %q", output, want)
+	}
+}
+
+func TestExecNFTRunnerReattestsExecutableAndBoundsOutput_SW2_FWBACKEND_001(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nft-fixture")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '123456789'\n"), 0700); err != nil { // #nosec G306 -- owner-only executable is an isolated test fixture
+		t.Fatal(err)
+	}
+	previousValidator := nftExecutableValidator
+	previousLimit := nftCommandOutputLimit
+	t.Cleanup(func() {
+		nftExecutableValidator = previousValidator
+		nftCommandOutputLimit = previousLimit
+	})
+
+	sentinel := errors.New("executable identity changed")
+	nftExecutableValidator = func(string) error { return sentinel }
+	if _, err := (execNFTCommandRunner{path: path}).Run(context.Background(), nil, "-j", "list", "tables"); err == nil || !errors.Is(err, sentinel) {
+		t.Fatalf("nft executable reattestation error = %v", err)
+	}
+
+	nftExecutableValidator = validateTestLinuxWrapperExecutable
+	nftCommandOutputLimit = 4
+	identity, err := captureNFTExecutableIdentity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := (execNFTCommandRunner{path: path, identity: identity}).Run(context.Background(), nil, "-j", "list", "tables")
+	if err == nil || !strings.Contains(err.Error(), "output exceeds 4 bytes") {
+		t.Fatalf("bounded nft output error = %v", err)
+	}
+	if string(output) != "1234" {
+		t.Fatalf("bounded nft output = %q, want 1234", output)
+	}
+}
+
+func TestExecNFTRunnerRejectsExecutableSwapBeforeStart_SW2_FWBACKEND_001(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "nft-fixture")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil { // #nosec G306 -- owner-only executable is an isolated test fixture
+		t.Fatal(err)
+	}
+	previousLookPath := nftExecutableLookPath
+	previousValidator := nftExecutableValidator
+	nftExecutableLookPath = func(string) (string, error) { return path, nil }
+	nftExecutableValidator = validateTestLinuxWrapperExecutable
+	t.Cleanup(func() {
+		nftExecutableLookPath = previousLookPath
+		nftExecutableValidator = previousValidator
+	})
+	runner, err := newExecNFTCommandRunner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(directory, "replacement")
+	if err := os.WriteFile(replacement, []byte("#!/bin/sh\nexit 7\n"), 0700); err != nil { // #nosec G306 -- owner-only executable is an isolated adversarial fixture
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background(), nil, "-j", "list", "tables"); err == nil ||
+		!strings.Contains(err.Error(), "changed identity before start") {
+		t.Fatalf("swapped nft executable error = %v", err)
+	}
+}
+
+func TestExecNFTRunnerExecutesPinnedFileAcrossPostOpenPathSwap_SW2_FWBACKEND_001(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "nft-fixture")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'original\\n'\n"), 0700); err != nil { // #nosec G306 -- owner-only executable is an isolated test fixture
+		t.Fatal(err)
+	}
+	previousLookPath := nftExecutableLookPath
+	previousValidator := nftExecutableValidator
+	previousHook := nftExecutablePinnedHook
+	nftExecutableLookPath = func(string) (string, error) { return path, nil }
+	nftExecutableValidator = validateTestLinuxWrapperExecutable
+	t.Cleanup(func() {
+		nftExecutableLookPath = previousLookPath
+		nftExecutableValidator = previousValidator
+		nftExecutablePinnedHook = previousHook
+	})
+	runner, err := newExecNFTCommandRunner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hookErr error
+	nftExecutablePinnedHook = func() {
+		replacement := filepath.Join(directory, "post-open-replacement")
+		if err := os.WriteFile(replacement, []byte("#!/bin/sh\nprintf 'replacement\\n'\n"), 0700); err != nil { // #nosec G306 -- owner-only executable is an isolated adversarial fixture
+			hookErr = err
+			return
+		}
+		hookErr = os.Rename(replacement, path)
+	}
+	output, err := runner.Run(context.Background(), nil, "-j", "list", "tables")
+	if hookErr != nil {
+		t.Fatalf("replace executable after pin: %v", hookErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "original\n" {
+		t.Fatalf("fd-bound nft output = %q, want original", output)
+	}
+}
+
+func TestExecNFTRunnerRejectsUntrustedInputsWithoutExecuting_SW2_FWBACKEND_001(t *testing.T) {
+	directory := t.TempDir()
+	marker := filepath.Join(directory, "executed")
+	path := filepath.Join(directory, "nft-fixture")
+	script := fmt.Sprintf("#!/bin/sh\nprintf executed > %q\n", marker)
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil { // #nosec G306 -- owner-only executable is an isolated negative fixture
+		t.Fatal(err)
+	}
+	previousValidator := nftExecutableValidator
+	nftExecutableValidator = validateTestLinuxWrapperExecutable
+	t.Cleanup(func() { nftExecutableValidator = previousValidator })
+	identity, err := captureNFTExecutableIdentity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := execNFTCommandRunner{path: path, identity: identity}
+
+	rulesTarget := filepath.Join(directory, "target.nft")
+	if err := os.WriteFile(rulesTarget, []byte("table inet fixture {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rulesLink := filepath.Join(directory, "linked.nft")
+	if err := os.Symlink(rulesTarget, rulesLink); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name    string
+		stdin   []byte
+		args    []string
+		wantErr string
+	}{
+		{
+			name: "non-nil input", stdin: []byte{},
+			args: []string{"-j", "list", "tables"}, wantErr: "input is unsupported",
+		},
+		{
+			name: "unsupported argv", args: []string{"list", "ruleset", ";touch", marker},
+			wantErr: "refuse unsupported nft command",
+		},
+		{
+			name: "unreserved delete target", args: []string{"delete", "table", "inet", "operator;touch"},
+			wantErr: "refuse unexpected nftables uninstall target",
+		},
+		{
+			name: "symlink command file", args: []string{"-f", rulesLink},
+			wantErr: "open nftables command file",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output, err := runner.Run(context.Background(), test.stdin, test.args...)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("negative nft invocation error = %v, want %q", err, test.wantErr)
+			}
+			if len(output) != 0 {
+				t.Fatalf("negative nft invocation output = %q", output)
+			}
+			if _, markerErr := os.Lstat(marker); !errors.Is(markerErr, os.ErrNotExist) {
+				t.Fatalf("rejected nft input executed child: marker error = %v", markerErr)
+			}
+		})
+	}
+}
+
 func minimalVerificationPlan(elementCount int) nftVerificationPlan {
 	return nftVerificationPlan{
 		tables: map[nftObjectKey]struct{}{{family: "inet", name: "syswarden"}: {}},
@@ -444,6 +853,48 @@ func nftTablesJSON(tables []nftTableTarget) []byte {
 	entries := make([]map[string]any, 0, len(tables))
 	for _, table := range tables {
 		entries = append(entries, map[string]any{"table": map[string]any{"family": table.family, "name": table.name}})
+	}
+	content, _ := json.Marshal(map[string]any{"nftables": entries})
+	return content
+}
+
+func nftLegacyWireGuardRulesJSON(handles []uint64, includeOperatorRule bool) []byte {
+	entries := make([]map[string]any, 0, len(handles)+1)
+	for index, handle := range handles {
+		key := "iifname"
+		if index%2 == 1 {
+			key = "oifname"
+		}
+		entries = append(entries, map[string]any{"rule": map[string]any{
+			"family": "inet",
+			"table":  "filter",
+			"chain":  "forward",
+			"handle": handle,
+			"expr": []any{
+				map[string]any{"match": map[string]any{
+					"op":    "==",
+					"left":  map[string]any{"meta": map[string]any{"key": key}},
+					"right": "wg-syswarden",
+				}},
+				map[string]any{"accept": nil},
+			},
+		}})
+	}
+	if includeOperatorRule {
+		entries = append(entries, map[string]any{"rule": map[string]any{
+			"family": "inet",
+			"table":  "filter",
+			"chain":  "forward",
+			"handle": uint64(9000),
+			"expr": []any{
+				map[string]any{"match": map[string]any{
+					"op":    "==",
+					"left":  map[string]any{"meta": map[string]any{"key": "iifname"}},
+					"right": "operator0",
+				}},
+				map[string]any{"accept": nil},
+			},
+		}})
 	}
 	content, _ := json.Marshal(map[string]any{"nftables": entries})
 	return content

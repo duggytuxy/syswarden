@@ -59,12 +59,66 @@ func TestCLICommandTreeSnapshot_SW_QA_001(t *testing.T) {
 	}
 }
 
+func TestCLICommandTreeSnapshotFiltersOnlyHiddenCommands_SW_SEC_M1(t *testing.T) {
+	if !preparePackageRemovalCmd.Hidden {
+		t.Fatal("prepare-package-removal must remain an internal hidden command")
+	}
+	for _, contract := range snapshotCommandTree(rootCmd) {
+		if contract.Path == "syswarden prepare-package-removal" {
+			t.Fatal("public CLI snapshot contains hidden prepare-package-removal command")
+		}
+	}
+
+	fixtureRoot := &cobra.Command{Use: "fixture"}
+	hidden := &cobra.Command{Use: "internal-with-unrelated-name", Hidden: true}
+	public := &cobra.Command{Use: "public", Short: "before"}
+	fixtureRoot.AddCommand(hidden, public)
+	contracts := snapshotCommandTree(fixtureRoot)
+	foundPublic := false
+	for _, contract := range contracts {
+		if contract.Path == "fixture internal-with-unrelated-name" {
+			t.Fatal("snapshot hidden filter depends on command identity instead of Hidden")
+		}
+		if contract.Path == "fixture public" && contract.Short == "before" {
+			foundPublic = true
+		}
+	}
+	if !foundPublic {
+		t.Fatal("public fixture command is absent from the snapshot")
+	}
+
+	public.Short = "after"
+	mutatedPublic := false
+	for _, contract := range snapshotCommandTree(fixtureRoot) {
+		if contract.Path == "fixture public" && contract.Short == "after" {
+			mutatedPublic = true
+		}
+	}
+	if !mutatedPublic {
+		t.Fatal("public command mutation is absent from the snapshot")
+	}
+
+	hidden.Hidden = false
+	foundExposed := false
+	for _, contract := range snapshotCommandTree(fixtureRoot) {
+		if contract.Path == "fixture internal-with-unrelated-name" {
+			foundExposed = true
+		}
+	}
+	if !foundExposed {
+		t.Fatal("command remains filtered after Hidden is cleared")
+	}
+}
+
 func snapshotCommandTree(root *cobra.Command) []commandContract {
 	root.InitDefaultHelpCmd()
 	root.InitDefaultCompletionCmd()
 	var contracts []commandContract
 	var walk func(*cobra.Command)
 	walk = func(command *cobra.Command) {
+		if command != root && command.Hidden {
+			return
+		}
 		command.InitDefaultHelpFlag()
 		contract := commandContract{
 			Path:        command.CommandPath(),

@@ -72,3 +72,24 @@ func TestIsManagedCronLineRequiresExactGeneratedCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedFeedCronMinutePreservesExactHistoricalForms(t *testing.T) {
+	for _, line := range []string{
+		"17 * * * * " + CLI + " update-feeds >/dev/null",
+		"17 * * * * " + CLI + " update-feeds >/dev/null 2>&1",
+	} {
+		minute, exact := ManagedFeedCronMinute(line)
+		if !exact || minute != 17 {
+			t.Fatalf("historical feed record = minute %d, exact=%t", minute, exact)
+		}
+	}
+	for _, line := range []string{
+		"0 * * * * " + CLI + " update-feeds >/dev/null",
+		"17  * * * * " + CLI + " update-feeds >/dev/null",
+		"17 * * * * " + CLI + " update-feeds --operator-option >/dev/null",
+	} {
+		if minute, exact := ManagedFeedCronMinute(line); exact || minute != 0 {
+			t.Fatalf("noncanonical feed record = minute %d, exact=%t", minute, exact)
+		}
+	}
+}

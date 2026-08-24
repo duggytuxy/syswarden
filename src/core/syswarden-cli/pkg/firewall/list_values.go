@@ -3,6 +3,7 @@ package firewall
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 )
 
@@ -13,6 +14,21 @@ type canonicalListEntry struct {
 }
 
 func parseCanonicalListEntry(value string, allowPort bool) (canonicalListEntry, error) {
+	return parseCanonicalListEntryWith(value, allowPort, canonicalFirewallListNetwork)
+}
+
+// parseCanonicalRecoveryListEntry accepts syntactically valid legacy networks
+// so an operator can inspect or remove policy that the strict mutation path
+// now rejects. It must never be used to add or populate active firewall state.
+func parseCanonicalRecoveryListEntry(value string, allowPort bool) (canonicalListEntry, error) {
+	return parseCanonicalListEntryWith(value, allowPort, canonicalIPOrPrefix)
+}
+
+func parseCanonicalListEntryWith(
+	value string,
+	allowPort bool,
+	canonicalize func(string) (string, bool, error),
+) (canonicalListEntry, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return canonicalListEntry{}, fmt.Errorf("list entry is empty")
@@ -20,17 +36,24 @@ func parseCanonicalListEntry(value string, allowPort bool) (canonicalListEntry, 
 	if strings.ContainsAny(value, "\r\n\x00") {
 		return canonicalListEntry{}, fmt.Errorf("list entry contains a forbidden control character")
 	}
-	if canonical, isIPv4, err := canonicalIPOrPrefix(value); err == nil {
+	canonical, isIPv4, directErr := canonicalize(value)
+	if directErr == nil {
 		return canonicalListEntry{network: canonical, isIPv4: isIPv4}, nil
 	}
 	if !allowPort {
-		return canonicalListEntry{}, fmt.Errorf("invalid IP address or CIDR %q", value)
+		return canonicalListEntry{}, directErr
+	}
+	if _, addressErr := netip.ParseAddr(value); addressErr == nil {
+		return canonicalListEntry{}, directErr
+	}
+	if _, prefixErr := netip.ParsePrefix(value); prefixErr == nil {
+		return canonicalListEntry{}, directErr
 	}
 	host, rawPort, err := net.SplitHostPort(value)
 	if err != nil {
 		return canonicalListEntry{}, fmt.Errorf("invalid address and port %q", value)
 	}
-	canonical, isIPv4, err := canonicalIPOrPrefix(host)
+	canonical, isIPv4, err = canonicalize(host)
 	if err != nil {
 		return canonicalListEntry{}, err
 	}
@@ -99,7 +122,7 @@ func listContentContainsNetwork(content []byte, target canonicalListEntry) bool 
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		entry, err := parseCanonicalListEntry(line, true)
+		entry, err := parseCanonicalRecoveryListEntry(line, true)
 		if err == nil && sameListNetwork(entry, target) {
 			return true
 		}
@@ -117,7 +140,7 @@ func nftRulesetContainsExactNetwork(content []byte, target canonicalListEntry) b
 		}
 	})
 	for _, field := range fields {
-		entry, err := parseCanonicalListEntry(field, true)
+		entry, err := parseCanonicalRecoveryListEntry(field, true)
 		if err == nil && sameListNetwork(entry, target) {
 			return true
 		}

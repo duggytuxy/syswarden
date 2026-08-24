@@ -3,6 +3,7 @@
 package system
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -257,6 +258,78 @@ func TestPublishServiceArtifactsRollsBackOnlyNewArtifacts(t *testing.T) {
 	}
 }
 
+func TestCoreServiceRequiresSuccessfulFirewallLoaderAtBoot_SW2_FWBACKEND_001(t *testing.T) {
+	for _, required := range []string{
+		"Requires=syswarden-firewall.service\n",
+		"After=network.target rsyslog.service syswarden-firewall.service\n",
+	} {
+		if !strings.Contains(systemdCoreService, required) {
+			t.Fatalf("systemd core unit lacks %q", required)
+		}
+	}
+	if !strings.Contains(openRCCoreService, "need net rsyslog syswarden-firewall\n") {
+		t.Fatal("OpenRC core unit does not require the firewall loader")
+	}
+}
+
+func TestHistoricalV4028CoreServiceAnchors(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		wantLength int
+		wantSHA256 string
+	}{
+		{
+			name:       "systemd",
+			content:    historicalV4028SystemdCoreService,
+			wantLength: historicalV4028SystemdCoreServiceLength,
+			wantSHA256: historicalV4028SystemdCoreServiceSHA256,
+		},
+		{
+			name:       "openrc",
+			content:    historicalV4028OpenRCCoreService,
+			wantLength: historicalV4028OpenRCCoreServiceLength,
+			wantSHA256: historicalV4028OpenRCCoreServiceSHA256,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			digest := sha256.Sum256([]byte(test.content))
+			if got := len([]byte(test.content)); got != test.wantLength {
+				t.Fatalf("historical content length = %d, want %d", got, test.wantLength)
+			}
+			if got := fmt.Sprintf("%x", digest); got != test.wantSHA256 {
+				t.Fatalf("historical content SHA-256 = %s, want %s", got, test.wantSHA256)
+			}
+		})
+	}
+}
+
+func assertNoServiceMigrationArtifacts(t *testing.T, directory string) {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".syswarden-service-") ||
+			strings.HasPrefix(entry.Name(), ".syswarden-quarantine-") {
+			t.Fatalf("unexpected service migration artifact %s", filepath.Join(directory, entry.Name()))
+		}
+	}
+}
+
+func systemdCoreMigrationArtifact(path string) serviceArtifact {
+	return serviceArtifact{
+		path:                    path,
+		content:                 systemdCoreService,
+		mode:                    0600,
+		historicalContent:       historicalV4028SystemdCoreService,
+		historicalContentLength: historicalV4028SystemdCoreServiceLength,
+		historicalContentSHA256: historicalV4028SystemdCoreServiceSHA256,
+	}
+}
+
 func withSystemdPublicationTestPaths(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -273,9 +346,25 @@ func withSystemdPublicationTestPaths(t *testing.T) (string, string) {
 	return unitDirectory, wantsDirectory
 }
 
+func withOpenRCPublicationTestPaths(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	unitDirectory := filepath.Join(root, "init.d")
+	runlevelDirectory := filepath.Join(root, "runlevels", "default")
+	oldUnitDirectory := serviceOpenRCUnitDir
+	oldRunlevelDirectory := serviceOpenRCRunlevelDir
+	serviceOpenRCUnitDir = unitDirectory
+	serviceOpenRCRunlevelDir = runlevelDirectory
+	t.Cleanup(func() {
+		serviceOpenRCUnitDir = oldUnitDirectory
+		serviceOpenRCRunlevelDir = oldRunlevelDirectory
+	})
+	return unitDirectory, runlevelDirectory
+}
+
 func seedLegacySystemdPublication(t *testing.T, unitDirectory, wantsDirectory string) {
 	t.Helper()
-	mustWriteFile(t, filepath.Join(unitDirectory, "syswarden-core.service"), systemdCoreService)
+	mustWriteFile(t, filepath.Join(unitDirectory, "syswarden-core.service"), historicalV4028SystemdCoreService)
 	mustWriteFile(t, filepath.Join(unitDirectory, "syswarden-firewall.service"), systemdFirewallService)
 	mustMkdirAll(t, wantsDirectory)
 	if err := os.Symlink(
@@ -292,11 +381,165 @@ func seedLegacySystemdPublication(t *testing.T, unitDirectory, wantsDirectory st
 	}
 }
 
+func seedLegacyOpenRCPublication(t *testing.T, unitDirectory, runlevelDirectory string) {
+	t.Helper()
+	corePath := filepath.Join(unitDirectory, "syswarden-core")
+	firewallPath := filepath.Join(unitDirectory, "syswarden-firewall")
+	mustWriteFile(t, corePath, historicalV4028OpenRCCoreService)
+	mustWriteFile(t, firewallPath, openRCFirewallService)
+	mustChmodTestPath(t, corePath, 0755)
+	mustChmodTestPath(t, firewallPath, 0755)
+	mustMkdirAll(t, runlevelDirectory)
+	if err := os.Symlink("/etc/init.d/syswarden-core", filepath.Join(runlevelDirectory, "syswarden-core")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/init.d/syswarden-firewall", filepath.Join(runlevelDirectory, "syswarden-firewall")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func assertServiceEnablementTarget(t *testing.T, path, expected string) {
 	t.Helper()
 	target, err := os.Readlink(path)
 	if err != nil || target != expected {
 		t.Fatalf("service enablement %s = %q, %v; want %q", path, target, err, expected)
+	}
+}
+
+func TestPublishSystemdServicesMigratesExactV4028CoreAtomicallyAndIdempotently(t *testing.T) {
+	unitDirectory, wantsDirectory := withSystemdPublicationTestPaths(t)
+	seedLegacySystemdPublication(t, unitDirectory, wantsDirectory)
+	corePath := filepath.Join(unitDirectory, "syswarden-core.service")
+	historical, err := os.Lstat(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := publishSystemdServices(); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := os.Lstat(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(historical, migrated) {
+		t.Fatal("historical systemd core inode was not atomically replaced")
+	}
+	if got := string(mustReadTestFile(t, corePath)); got != systemdCoreService {
+		t.Fatalf("migrated systemd core = %q", got)
+	}
+	if migrated.Mode().Perm() != 0600 || !serviceFileHasSingleLink(migrated) {
+		t.Fatalf("migrated systemd core metadata = %v", migrated.Mode())
+	}
+	assertNoServiceMigrationArtifacts(t, unitDirectory)
+
+	if err := publishSystemdServices(); err != nil {
+		t.Fatalf("idempotent systemd publication failed: %v", err)
+	}
+	reattested, err := os.Lstat(corePath)
+	if err != nil || !os.SameFile(migrated, reattested) {
+		t.Fatalf("idempotent systemd publication replaced the current unit: %v", err)
+	}
+	assertNoServiceMigrationArtifacts(t, unitDirectory)
+}
+
+func TestPublishOpenRCServicesMigratesExactV4028CoreAtomicallyAndIdempotently(t *testing.T) {
+	unitDirectory, runlevelDirectory := withOpenRCPublicationTestPaths(t)
+	seedLegacyOpenRCPublication(t, unitDirectory, runlevelDirectory)
+	corePath := filepath.Join(unitDirectory, "syswarden-core")
+	historical, err := os.Lstat(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := publishOpenRCServices(); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := os.Lstat(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(historical, migrated) {
+		t.Fatal("historical OpenRC core inode was not atomically replaced")
+	}
+	if got := string(mustReadTestFile(t, corePath)); got != openRCCoreService {
+		t.Fatalf("migrated OpenRC core = %q", got)
+	}
+	if migrated.Mode().Perm() != 0755 || !serviceFileHasSingleLink(migrated) {
+		t.Fatalf("migrated OpenRC core metadata = %v", migrated.Mode())
+	}
+	assertNoServiceMigrationArtifacts(t, unitDirectory)
+
+	if err := publishOpenRCServices(); err != nil {
+		t.Fatalf("idempotent OpenRC publication failed: %v", err)
+	}
+	reattested, err := os.Lstat(corePath)
+	if err != nil || !os.SameFile(migrated, reattested) {
+		t.Fatalf("idempotent OpenRC publication replaced the current unit: %v", err)
+	}
+	assertNoServiceMigrationArtifacts(t, unitDirectory)
+}
+
+func TestPublishMigratableServiceFileRefusesNonExactHistoricalState(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(t *testing.T, path string) string
+	}{
+		{
+			name: "one-byte-variation",
+			prepare: func(t *testing.T, path string) string {
+				t.Helper()
+				content := []byte(historicalV4028SystemdCoreService)
+				content[len(content)-2] ^= 1
+				mustWriteFile(t, path, string(content))
+				return string(content)
+			},
+		},
+		{
+			name: "wrong-mode",
+			prepare: func(t *testing.T, path string) string {
+				t.Helper()
+				mustWriteFile(t, path, historicalV4028SystemdCoreService)
+				mustChmodTestPath(t, path, 0644)
+				return historicalV4028SystemdCoreService
+			},
+		},
+		{
+			name: "special-mode",
+			prepare: func(t *testing.T, path string) string {
+				t.Helper()
+				mustWriteFile(t, path, historicalV4028SystemdCoreService)
+				if err := os.Chmod(path, 0600|os.ModeSetuid); err != nil {
+					t.Fatal(err)
+				}
+				return historicalV4028SystemdCoreService
+			},
+		},
+		{
+			name: "multiple-links",
+			prepare: func(t *testing.T, path string) string {
+				t.Helper()
+				mustWriteFile(t, path, historicalV4028SystemdCoreService)
+				if err := os.Link(path, path+".operator-link"); err != nil {
+					t.Fatal(err)
+				}
+				return historicalV4028SystemdCoreService
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			path := filepath.Join(directory, "syswarden-core.service")
+			before := test.prepare(t, path)
+			if err := publishServiceArtifacts([]serviceArtifact{systemdCoreMigrationArtifact(path)}); err == nil {
+				t.Fatal("non-exact historical service state was accepted")
+			}
+			if got := string(mustReadTestFile(t, path)); got != before {
+				t.Fatalf("refused historical service state changed: %q", got)
+			}
+			assertNoServiceMigrationArtifacts(t, directory)
+		})
 	}
 }
 
@@ -402,12 +645,237 @@ func TestPublishSystemdServicesRollsBackLegacyMigration(t *testing.T) {
 	if err := publishSystemdServices(); err == nil {
 		t.Fatal("expected the second enablement to fail publication")
 	}
+	if got := string(mustReadTestFile(t, filepath.Join(unitDirectory, "syswarden-core.service"))); got != historicalV4028SystemdCoreService {
+		t.Fatalf("historical systemd core was not restored after bundle failure: %q", got)
+	}
 	assertServiceEnablementTarget(
 		t,
 		filepath.Join(wantsDirectory, "syswarden-core.service"),
 		"/etc/systemd/system/syswarden-core.service",
 	)
 	assertServiceEnablementTarget(t, firewallEnablement, "../operator.service")
+	assertNoServiceMigrationArtifacts(t, unitDirectory)
+}
+
+func TestPublishSystemdServicesKeepsFirewallUnitStrictAndRollsBackCore(t *testing.T) {
+	unitDirectory, wantsDirectory := withSystemdPublicationTestPaths(t)
+	seedLegacySystemdPublication(t, unitDirectory, wantsDirectory)
+	corePath := filepath.Join(unitDirectory, "syswarden-core.service")
+	firewallPath := filepath.Join(unitDirectory, "syswarden-firewall.service")
+	mustWriteFile(t, firewallPath, "operator firewall service\n")
+
+	if err := publishSystemdServices(); err == nil {
+		t.Fatal("modified firewall unit was accepted")
+	}
+	if got := string(mustReadTestFile(t, corePath)); got != historicalV4028SystemdCoreService {
+		t.Fatalf("core migration was not rolled back after firewall refusal: %q", got)
+	}
+	if got := string(mustReadTestFile(t, firewallPath)); got != "operator firewall service\n" {
+		t.Fatalf("operator firewall unit changed: %q", got)
+	}
+	assertNoServiceMigrationArtifacts(t, unitDirectory)
+}
+
+func TestPublishMigratableServiceFileCleansUpOnExchangeFault(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "syswarden-core.service")
+	mustWriteFile(t, path, historicalV4028SystemdCoreService)
+	injected := errors.New("injected migration exchange failure")
+	failed := false
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		if flags == unix.RENAME_EXCHANGE && !failed {
+			failed = true
+			return injected
+		}
+		return unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+	}
+
+	if _, err := publishMigratableServiceFileUsing(systemdCoreMigrationArtifact(path), rename); !errors.Is(err, injected) {
+		t.Fatalf("exchange failure was not propagated: %v", err)
+	}
+	if got := string(mustReadTestFile(t, path)); got != historicalV4028SystemdCoreService {
+		t.Fatalf("historical unit changed after exchange failure: %q", got)
+	}
+	assertNoServiceMigrationArtifacts(t, directory)
+}
+
+func TestPublishMigratableServiceFileRollsBackOnQuarantineFault(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "syswarden-core.service")
+	mustWriteFile(t, path, historicalV4028SystemdCoreService)
+	injected := errors.New("injected migration quarantine failure")
+	exchanged := false
+	failed := false
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		if flags == unix.RENAME_EXCHANGE {
+			err := unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+			if err == nil {
+				exchanged = true
+			}
+			return err
+		}
+		if exchanged && !failed && flags == unix.RENAME_NOREPLACE &&
+			strings.HasPrefix(oldName, ".syswarden-service-") &&
+			strings.HasPrefix(newName, ".syswarden-quarantine-") {
+			failed = true
+			return injected
+		}
+		return unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+	}
+
+	if _, err := publishMigratableServiceFileUsing(systemdCoreMigrationArtifact(path), rename); !errors.Is(err, injected) {
+		t.Fatalf("quarantine failure was not propagated: %v", err)
+	}
+	if got := string(mustReadTestFile(t, path)); got != historicalV4028SystemdCoreService {
+		t.Fatalf("historical unit was not restored after quarantine failure: %q", got)
+	}
+	assertNoServiceMigrationArtifacts(t, directory)
+}
+
+func TestPublishMigratableServiceFileNeverRepublishesMutatedQuarantine(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "syswarden-core.service")
+	mustWriteFile(t, path, historicalV4028SystemdCoreService)
+	mutated := []byte(historicalV4028SystemdCoreService)
+	mutated[len(mutated)-2] ^= 1
+	mutatedQuarantine := false
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		err := unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+		if err == nil && flags == unix.RENAME_EXCHANGE && !mutatedQuarantine {
+			mutatedQuarantine = true
+			if writeErr := os.WriteFile(filepath.Join(directory, oldName), mutated, 0600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		}
+		return err
+	}
+
+	if _, err := publishMigratableServiceFileUsing(systemdCoreMigrationArtifact(path), rename); err == nil {
+		t.Fatal("mutated historical quarantine was accepted")
+	}
+	if got := string(mustReadTestFile(t, path)); got != systemdCoreService {
+		t.Fatalf("exact replacement was not preserved at the target: %q", got)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundMutatedQuarantine := false
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".syswarden-service-") {
+			t.Fatalf("unclassified migration temporary survived: %s", entry.Name())
+		}
+		if !strings.HasPrefix(entry.Name(), ".syswarden-quarantine-") {
+			continue
+		}
+		if got := mustReadTestFile(t, filepath.Join(directory, entry.Name())); reflect.DeepEqual(got, mutated) {
+			foundMutatedQuarantine = true
+		}
+	}
+	if !foundMutatedQuarantine {
+		t.Fatalf("mutated historical object was not preserved in quarantine: %v", entries)
+	}
+}
+
+func TestRollbackMigratedServiceFileRefusesConcurrentTargetSubstitution(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "syswarden-core.service")
+	mustWriteFile(t, path, historicalV4028SystemdCoreService)
+	change, err := publishMigratableServiceFileUsing(systemdCoreMigrationArtifact(path), unix.Renameat2)
+	if err != nil || change.migration == nil {
+		t.Fatalf("prepare migration = %+v, %v", change, err)
+	}
+	defer change.migration.close()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, path, "operator replacement\n")
+
+	if err := rollbackMigratedServiceFile(change.migration); err == nil {
+		t.Fatal("concurrent target substitution was accepted during rollback")
+	}
+	if got := string(mustReadTestFile(t, path)); got != "operator replacement\n" {
+		t.Fatalf("operator replacement changed during refused rollback: %q", got)
+	}
+	if got := string(mustReadTestFile(t, filepath.Join(directory, change.migration.quarantineName))); got != historicalV4028SystemdCoreService {
+		t.Fatalf("historical quarantine changed during refused rollback: %q", got)
+	}
+}
+
+func TestRollbackMigratedServiceFileReversesHistoricalQuarantineMutation(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "syswarden-core.service")
+	mustWriteFile(t, path, historicalV4028SystemdCoreService)
+	mutated := []byte(historicalV4028SystemdCoreService)
+	mutated[len(mutated)-2] ^= 1
+	exchanges := 0
+	rename := func(oldDirectory int, oldName string, newDirectory int, newName string, flags uint) error {
+		err := unix.Renameat2(oldDirectory, oldName, newDirectory, newName, flags)
+		if err == nil && flags == unix.RENAME_EXCHANGE {
+			exchanges++
+			if exchanges == 2 {
+				if writeErr := os.WriteFile(path, mutated, 0600); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+		}
+		return err
+	}
+	change, err := publishMigratableServiceFileUsing(systemdCoreMigrationArtifact(path), rename)
+	if err != nil || change.migration == nil {
+		t.Fatalf("prepare migration = %+v, %v", change, err)
+	}
+	defer change.migration.close()
+
+	if err := rollbackMigratedServiceFile(change.migration); err == nil {
+		t.Fatal("historical quarantine mutation during rollback was accepted")
+	}
+	if got := string(mustReadTestFile(t, path)); got != systemdCoreService {
+		t.Fatalf("replacement was not restored after reversing raced rollback: %q", got)
+	}
+	if got := mustReadTestFile(t, filepath.Join(directory, change.migration.quarantineName)); !reflect.DeepEqual(got, mutated) {
+		t.Fatalf("mutated historical object was not preserved in quarantine: %q", got)
+	}
+}
+
+func TestMigrationCommitNeverAttemptsRollbackAfterPostUnlinkFault(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "syswarden-core.service")
+	mustWriteFile(t, path, historicalV4028SystemdCoreService)
+	change, err := publishMigratableServiceFileUsing(systemdCoreMigrationArtifact(path), unix.Renameat2)
+	if err != nil || change.migration == nil {
+		t.Fatalf("prepare migration = %+v, %v", change, err)
+	}
+	injected := errors.New("injected post-unlink directory sync failure")
+	syncCalls := 0
+	commit := func(migration *migratedServiceFile) (bool, error) {
+		return commitMigratedServiceFileUsing(
+			migration,
+			unix.Unlinkat,
+			func() error {
+				syncCalls++
+				if syncCalls == 2 {
+					return injected
+				}
+				return migration.directory.sync()
+			},
+		)
+	}
+
+	err = commitServiceArtifactChangesUsing([]serviceArtifactChange{change}, commit)
+	if !errors.Is(err, injected) || !strings.Contains(err.Error(), "cannot roll back") {
+		t.Fatalf("post-unlink failure did not expose the irreversible boundary: %v", err)
+	}
+	if !change.migration.closed {
+		t.Fatal("migration directory remained open after irreversible commit failure")
+	}
+	if got := string(mustReadTestFile(t, path)); got != systemdCoreService {
+		t.Fatalf("committed replacement was rolled back after historical unlink: %q", got)
+	}
+	if _, statErr := os.Lstat(filepath.Join(directory, change.migration.quarantineName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("historical quarantine survived successful unlink: %v", statErr)
+	}
+	assertNoServiceMigrationArtifacts(t, directory)
 }
 
 func TestRemoveCreatedServiceEnablementRestoresConcurrentSubstitution(t *testing.T) {

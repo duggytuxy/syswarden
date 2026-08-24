@@ -92,7 +92,7 @@ table inet syswarden {
 		tcp dport 2222 counter drop
 		ct state new tcp dport { 236379 } limit rate 5/second burst 10 packets log prefix "[SYSWARDEN-HONEYPORT] "
 		ct state new tcp dport { 236379 } counter drop
-		# Explicitly trust internal enterprise subnets (Bypass Catch-All)
+		# Explicitly trust internal private subnets (Bypass Catch-All)
 		ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 203.0.113.0/24 } accept
 		ct state new limit rate 2/second burst 5 packets log prefix "[SYSWARDEN-BLOCK] [CATCH-ALL] "
 		ct state new counter drop

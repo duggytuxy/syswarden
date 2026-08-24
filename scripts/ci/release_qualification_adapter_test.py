@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -28,6 +30,32 @@ ACT_IMAGE = (
     "docker.io/catthehacker/ubuntu:act-24.04@sha256:"
     "b839c14c4410998529ec18f951262bdf87a2b23bc1467304d07b491b9455e074"
 )
+
+
+def set_sys_admin(mask: str, *, present: bool) -> str:
+    value = int(mask, 16)
+    bit = 1 << adapter.SYS_ADMIN_CAPABILITY_BIT
+    value = value | bit if present else value & ~bit
+    return f"{value:016x}"
+
+
+def set_sys_ptrace(mask: str, *, present: bool) -> str:
+    value = int(mask, 16)
+    bit = 1 << adapter.SYS_PTRACE_CAPABILITY_BIT
+    value = value | bit if present else value & ~bit
+    return f"{value:016x}"
+
+
+def replace_snapshot_identity_maps(
+    platform: dict[str, Any],
+    uid_map: list[dict[str, int]],
+    gid_map: list[dict[str, int]],
+) -> None:
+    for scenario in platform["scenarios"]:
+        for boot in scenario["boots"]:
+            for phase in ("pre_exec", "post_exec"):
+                boot[phase]["pid1_uid_map"] = copy.deepcopy(uid_map)
+                boot[phase]["pid1_gid_map"] = copy.deepcopy(gid_map)
 
 
 class AdapterFixture:
@@ -191,9 +219,29 @@ class AdapterFixture:
                 for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
                 if spec.architecture == architecture
             )
+            subordinate_uid = 524_288 if architecture == "amd64" else 624_288
+            subordinate_gid = 524_288 if architecture == "amd64" else 724_288
             shard = package_lifecycle_lab.run_lab(
                 package_args,
-                runner=FakePodmanRunner(),
+                runner=FakePodmanRunner(
+                    host_architecture=architecture,
+                    uid_map=[
+                        {"container_id": 0, "host_id": os.geteuid(), "size": 1},
+                        {
+                            "container_id": 1,
+                            "host_id": subordinate_uid,
+                            "size": 65_536,
+                        },
+                    ],
+                    gid_map=[
+                        {"container_id": 0, "host_id": os.getegid(), "size": 1},
+                        {
+                            "container_id": 1,
+                            "host_id": subordinate_gid,
+                            "size": 65_536,
+                        },
+                    ],
+                ),
                 platforms=platforms,
                 host_architecture=host,
             )
@@ -346,10 +394,11 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             platform["status"] = "fail"
             for scenario in platform["scenarios"]:
                 scenario["status"] = "fail"
-                scenario["container_exit_code"] = 1
-                scenario["container_start_exit_codes"] = [
-                    1 for _ in scenario["container_start_exit_codes"]
+                scenario["lifecycle_exec_exit_codes"] = [
+                    1 for _ in scenario["lifecycle_exec_exit_codes"]
                 ]
+                for boot in scenario["boots"]:
+                    boot["script_exec_exit_code"] = 1
                 for event in scenario["events"]:
                     if event["check"].endswith(".executable"):
                         event["status"] = "fail"
@@ -390,10 +439,11 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 platform["status"] = "fail"
                 for scenario in platform["scenarios"]:
                     scenario["status"] = "fail"
-                    scenario["container_exit_code"] = 1
-                    scenario["container_start_exit_codes"] = [
-                        1 for _ in scenario["container_start_exit_codes"]
+                    scenario["lifecycle_exec_exit_codes"] = [
+                        1 for _ in scenario["lifecycle_exec_exit_codes"]
                     ]
+                    for boot in scenario["boots"]:
+                        boot["script_exec_exit_code"] = 1
                     for event in scenario["events"]:
                         if config_coordinate and event["check"].endswith(
                             ".maintainer_script"
@@ -459,6 +509,1029 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         report["release_ready"] = False
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
+
+    def test_active_runtime_schema_rejects_offline_restart_and_isolation_mutations(self) -> None:
+        report = self.fixture.load_raw("package-lifecycle-raw.json")
+        platform = report["platforms"][0]
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.distribution == platform["distribution"]
+            and item.architecture == platform["architecture_id"]
+        )
+        original = platform["scenarios"][0]
+        adapter._validate_runtime_scenario(
+            original, spec, original["name"], "fixture.scenario"
+        )
+        restarted_rsyslog = copy.deepcopy(original)
+        restarted_rsyslog["boots"][0]["post_exec"]["rsyslog_main_pid"] += 1
+        adapter._validate_runtime_scenario(
+            restarted_rsyslog,
+            spec,
+            restarted_rsyslog["name"],
+            "fixture.rsyslog-restart",
+        )
+        debian_lib_fragment = copy.deepcopy(original)
+        for boot in debian_lib_fragment["boots"]:
+            for phase in ("pre_exec", "post_exec"):
+                boot[phase]["cron_fragment_path"] = (
+                    "/lib/systemd/system/cron.service"
+                )
+        adapter._validate_runtime_scenario(
+            debian_lib_fragment,
+            spec,
+            debian_lib_fragment["name"],
+            "fixture.debian-lib-fragment",
+        )
+
+        def change_identity_mode(
+            snapshot: dict[str, Any], key: str, mode: str
+        ) -> None:
+            stat_fields, digest = snapshot[key].split("|", 1)
+            fields = stat_fields.split(":")
+            fields[2] = mode
+            snapshot[key] = ":".join(fields) + "|" + digest
+
+        def assert_rejected(mutator: Any) -> None:
+            scenario = copy.deepcopy(original)
+            mutator(scenario)
+            with self.assertRaises(adapter.AdapterError):
+                adapter._validate_runtime_scenario(
+                    scenario, spec, original["name"], "fixture.scenario"
+                )
+
+        mutations = {
+            "offline": lambda item: item.__setitem__("runtime_mode", "offline"),
+            "privileged": lambda item: item["isolation"].__setitem__(
+                "privileged", True
+            ),
+            "privileged-integer": lambda item: item["isolation"].__setitem__(
+                "privileged", 0
+            ),
+            "sys-admin-duplicate": lambda item: item["isolation"]["cap_add"].append(
+                "CAP_SYS_ADMIN"
+            ),
+            "sys-admin-missing": lambda item: item["isolation"]["cap_add"].remove(
+                "CAP_SYS_ADMIN"
+            ),
+            "sys-ptrace-duplicate": lambda item: item["isolation"]["cap_add"].append(
+                "CAP_SYS_PTRACE"
+            ),
+            "sys-ptrace-missing": lambda item: item["isolation"]["cap_add"].remove(
+                "CAP_SYS_PTRACE"
+            ),
+            "cap-drop": lambda item: item["isolation"]["cap_drop"].append(
+                "CAP_NET_RAW"
+            ),
+            "launcher-path": lambda item: item["isolation"][
+                "lifecycle_exec_launcher"
+            ].__setitem__(0, "/bin/sh"),
+            "launcher-option": lambda item: item["isolation"][
+                "lifecycle_exec_launcher"
+            ].__setitem__(1, "--bounding-set=+sys_admin"),
+            "launcher-extra": lambda item: item["isolation"][
+                "lifecycle_exec_launcher"
+            ].append("unexpected"),
+            "host-network": lambda item: item["isolation"].__setitem__(
+                "network_mode", "host"
+            ),
+            "device": lambda item: item["isolation"]["devices"].append(
+                "/dev/net/tun"
+            ),
+            "socket": lambda item: item["isolation"]["mounts"].append(
+                {
+                    "role": "socket",
+                    "destination": "/run/podman/podman.sock",
+                    "read_only": False,
+                }
+            ),
+            "mount-boolean-integer": lambda item: item["isolation"]["mounts"][
+                0
+            ].__setitem__("read_only", 1),
+            "manager-offline": lambda item: item["boots"][0]["pre_exec"].__setitem__(
+                "manager_state", "OFFLINE"
+            ),
+            "scenario-extra": lambda item: item.__setitem__("unknown", True),
+            "scenario-missing": lambda item: item.pop("isolation"),
+            "snapshot-extra": lambda item: item["boots"][0]["pre_exec"].__setitem__(
+                "unknown", True
+            ),
+            "snapshot-missing": lambda item: item["boots"][0]["pre_exec"].pop(
+                "cron_package_name"
+            ),
+            "single-capture": lambda item: item["boots"][0]["pre_exec"].__setitem__(
+                "capture_count", 1
+            ),
+            "pid1-permitted-sys-admin-missing": lambda item: item["boots"][0][
+                "pre_exec"
+            ]["pid1_process_security"].__setitem__(
+                "cap_permitted",
+                set_sys_admin(
+                    item["boots"][0]["pre_exec"]["pid1_process_security"][
+                        "cap_permitted"
+                    ],
+                    present=False,
+                ),
+            ),
+            "pid1-inheritable-sys-admin-present": lambda item: item["boots"][0][
+                "pre_exec"
+            ]["pid1_process_security"].__setitem__(
+                "cap_inheritable",
+                set_sys_admin(
+                    item["boots"][0]["pre_exec"]["pid1_process_security"][
+                        "cap_inheritable"
+                    ],
+                    present=True,
+                ),
+            ),
+            "attestation-sys-admin": lambda item: item["boots"][0]["pre_exec"][
+                "attestation_process_security"
+            ].__setitem__(
+                "cap_effective",
+                set_sys_admin(
+                    item["boots"][0]["pre_exec"][
+                        "attestation_process_security"
+                    ]["cap_effective"],
+                    present=True,
+                ),
+            ),
+            "lifecycle-exec-sys-admin": lambda item: item["boots"][0][
+                "lifecycle_exec_security"
+            ].__setitem__(
+                "cap_bounding",
+                set_sys_admin(
+                    item["boots"][0]["lifecycle_exec_security"][
+                        "cap_bounding"
+                    ],
+                    present=True,
+                ),
+            ),
+            "lifecycle-exec-nnp": lambda item: item["boots"][0][
+                "lifecycle_exec_security"
+            ].__setitem__("no_new_privileges", False),
+            "core-sys-admin": lambda item: item["boots"][0]["post_exec"][
+                "product_services"
+            ]["core_process_security"].__setitem__(
+                "cap_ambient",
+                set_sys_admin(
+                    item["boots"][0]["post_exec"]["product_services"][
+                        "core_process_security"
+                    ]["cap_ambient"],
+                    present=True,
+                ),
+            ),
+            "core-nnp": lambda item: item["boots"][0]["post_exec"][
+                "product_services"
+            ]["core_process_security"].__setitem__(
+                "no_new_privileges", False
+            ),
+            "cap-mask-width": lambda item: item["boots"][0][
+                "lifecycle_exec_security"
+            ].__setitem__("cap_effective", "0" * 15),
+            "nnp-integer": lambda item: item["boots"][0][
+                "lifecycle_exec_security"
+            ].__setitem__("no_new_privileges", 1),
+            "uid-map-host-root": lambda item: item["boots"][0]["pre_exec"][
+                "pid1_uid_map"
+            ][0].__setitem__("outside_id", 0),
+            "uid-map-length": lambda item: item["boots"][0]["pre_exec"][
+                "pid1_uid_map"
+            ][1].__setitem__("length", 65_535),
+            "uid-map-overlap": lambda item: item["boots"][0]["pre_exec"][
+                "pid1_uid_map"
+            ][1].__setitem__(
+                "outside_id",
+                item["boots"][0]["pre_exec"]["pid1_uid_map"][0][
+                    "outside_id"
+                ],
+            ),
+            "uid-map-extra": lambda item: item["boots"][0]["pre_exec"][
+                "pid1_uid_map"
+            ].append({"inside_id": 65_537, "outside_id": 200_000, "length": 1}),
+            "gid-map-inside": lambda item: item["boots"][0]["pre_exec"][
+                "pid1_gid_map"
+            ][1].__setitem__("inside_id", 2),
+            "setpriv-null": lambda item: item["boots"][0]["pre_exec"].__setitem__(
+                "setpriv", None
+            ),
+            "setpriv-path": lambda item: item["boots"][0]["pre_exec"][
+                "setpriv"
+            ].__setitem__("path", "/usr/local/bin/setpriv"),
+            "setpriv-identity": lambda item: item["boots"][0]["pre_exec"][
+                "setpriv"
+            ].__setitem__("file_identity", "1:2:81a4:0:0"),
+            "setpriv-digest": lambda item: item["boots"][0]["pre_exec"][
+                "setpriv"
+            ].__setitem__("sha256", "f" * 63),
+            "setpriv-package": lambda item: item["boots"][0]["pre_exec"][
+                "setpriv"
+            ].__setitem__("package_name", "unbound"),
+            "setpriv-architecture": lambda item: item["boots"][0]["pre_exec"][
+                "setpriv"
+            ].__setitem__("package_architecture", "wrong"),
+            "cron-executable-mode": lambda item: change_identity_mode(
+                item["boots"][0]["pre_exec"],
+                "cron_executable_identity",
+                "81a4",
+            ),
+            "cron-fragment-cross-family-mode": lambda item: change_identity_mode(
+                item["boots"][0]["pre_exec"],
+                "cron_fragment_identity",
+                "81ed",
+            ),
+            "cron-identity": lambda item: item["boots"][0]["post_exec"].__setitem__(
+                "cron_executable_identity",
+                "1:2:81ed:0:0|" + "0" * 64,
+            ),
+            "cron-version": lambda item: item["boots"][0]["pre_exec"].__setitem__(
+                "cron_package_version", ""
+            ),
+            "cron-fragment-identity": lambda item: item["boots"][0][
+                "pre_exec"
+            ].__setitem__("cron_fragment_identity", "forged"),
+            "cron-fragment-package": lambda item: item["boots"][0][
+                "pre_exec"
+            ].__setitem__("cron_fragment_package_name", "unbound"),
+            "cron-fragment-version": lambda item: item["boots"][0][
+                "pre_exec"
+            ].__setitem__("cron_fragment_package_version", "0"),
+            "cron-dropin": lambda item: item["boots"][0]["pre_exec"].__setitem__(
+                "cron_dropin_paths", ["/etc/systemd/system/cron.service.d/override.conf"]
+            ),
+            "product-extra": lambda item: item["boots"][1]["pre_exec"][
+                "product_services"
+            ].__setitem__("unknown", True),
+            "product-missing": lambda item: item["boots"][1]["pre_exec"][
+                "product_services"
+            ].pop("core_executable_path"),
+            "core-path": lambda item: item["boots"][1]["pre_exec"][
+                "product_services"
+            ].__setitem__("core_executable_path", "/usr/local/bin/syswarden-core"),
+            "core-identity": lambda item: item["boots"][1]["pre_exec"][
+                "product_services"
+            ].__setitem__(
+                "core_executable_identity", "1:2:81ed:0:0|" + "0" * 64
+            ),
+            "core-pidfile-identity": lambda item: item["boots"][1]["pre_exec"][
+                "product_services"
+            ].__setitem__("core_pidfile_identity", "1:2:33188:0:0:644"),
+            "restart-not-distinct": lambda item: item["boots"][1][
+                "restart"
+            ].__setitem__("distinct", False),
+            "initial-restart-boolean-integer": lambda item: item["boots"][0][
+                "restart"
+            ].__setitem__("performed", 0),
+            "restart-state": lambda item: item.__setitem__(
+                "restart_state", "restart-two"
+            ),
+            "exec-code": lambda item: item["lifecycle_exec_exit_codes"].__setitem__(
+                0, 1
+            ),
+            "exec-code-boolean": lambda item: item[
+                "lifecycle_exec_exit_codes"
+            ].__setitem__(0, False),
+            "cleanup-remove": lambda item: item["cleanup"].__setitem__(
+                "remove_exit_code", 1
+            ),
+            "cleanup-exists": lambda item: item["cleanup"].__setitem__(
+                "exists_probe_exit_code", 0
+            ),
+            "cleanup-presence": lambda item: item["cleanup"].__setitem__(
+                "absent_after_cleanup", False
+            ),
+            "orchestration": lambda item: item.__setitem__(
+                "orchestration_error", "synthetic"
+            ),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(mutation=name):
+                assert_rejected(mutation)
+
+        schema_objects = (
+            ("scenario", lambda item: item, adapter.PACKAGE_SCENARIO_KEYS),
+            (
+                "isolation",
+                lambda item: item["isolation"],
+                adapter.RUNTIME_ISOLATION_KEYS,
+            ),
+            ("boot", lambda item: item["boots"][0], adapter.RUNTIME_BOOT_KEYS),
+            (
+                "restart",
+                lambda item: item["boots"][0]["restart"],
+                adapter.RUNTIME_RESTART_KEYS,
+            ),
+            (
+                "snapshot",
+                lambda item: item["boots"][0]["pre_exec"],
+                adapter.RUNTIME_SNAPSHOT_KEYS,
+            ),
+            (
+                "lifecycle-process-security",
+                lambda item: item["boots"][0]["lifecycle_exec_security"],
+                adapter.PROCESS_SECURITY_KEYS,
+            ),
+            (
+                "pid1-process-security",
+                lambda item: item["boots"][0]["pre_exec"][
+                    "pid1_process_security"
+                ],
+                adapter.PROCESS_SECURITY_KEYS,
+            ),
+            (
+                "attestation-process-security",
+                lambda item: item["boots"][0]["pre_exec"][
+                    "attestation_process_security"
+                ],
+                adapter.PROCESS_SECURITY_KEYS,
+            ),
+            (
+                "uid-map-range",
+                lambda item: item["boots"][0]["pre_exec"]["pid1_uid_map"][0],
+                adapter.ID_MAP_RANGE_KEYS,
+            ),
+            (
+                "setpriv",
+                lambda item: item["boots"][0]["pre_exec"]["setpriv"],
+                adapter.SETPRIV_KEYS,
+            ),
+            (
+                "product",
+                lambda item: item["boots"][0]["pre_exec"]["product_services"],
+                adapter.PRODUCT_SERVICES_KEYS,
+            ),
+            (
+                "core-process-security",
+                lambda item: item["boots"][0]["post_exec"][
+                    "product_services"
+                ]["core_process_security"],
+                adapter.PROCESS_SECURITY_KEYS,
+            ),
+            (
+                "mount",
+                lambda item: item["isolation"]["mounts"][0],
+                adapter.RUNTIME_MOUNT_KEYS,
+            ),
+            (
+                "event",
+                lambda item: item["events"][0],
+                frozenset({"status", "check", "detail"}),
+            ),
+            (
+                "tmpfs",
+                lambda item: item["isolation"]["tmpfs"],
+                frozenset({"/run", "/tmp"}),
+            ),
+            (
+                "cleanup",
+                lambda item: item["cleanup"],
+                adapter.RUNTIME_CLEANUP_KEYS,
+            ),
+        )
+        for object_name, locate, keys in schema_objects:
+            for key in sorted(keys):
+                with self.subTest(schema=object_name, missing=key):
+                    scenario = copy.deepcopy(original)
+                    locate(scenario).pop(key)
+                    with self.assertRaises(adapter.AdapterError):
+                        adapter._validate_runtime_scenario(
+                            scenario,
+                            spec,
+                            original["name"],
+                            "fixture.scenario",
+                        )
+            with self.subTest(schema=object_name, extra="unknown"):
+                scenario = copy.deepcopy(original)
+                locate(scenario)["unknown"] = True
+                with self.assertRaises(adapter.AdapterError):
+                    adapter._validate_runtime_scenario(
+                        scenario, spec, original["name"], "fixture.scenario"
+                    )
+
+    def test_adapter_rejects_every_capability_process_boundary_bit(self) -> None:
+        report = self.fixture.load_raw("package-lifecycle-raw.json")
+        platform = report["platforms"][0]
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.distribution == platform["distribution"]
+            and item.architecture == platform["architecture_id"]
+        )
+        original = platform["scenarios"][0]
+        fields = (
+            "cap_inheritable",
+            "cap_permitted",
+            "cap_effective",
+            "cap_bounding",
+            "cap_ambient",
+        )
+        systemd_present = {
+            "cap_permitted",
+            "cap_effective",
+            "cap_bounding",
+        }
+
+        def boundary(
+            scenario: dict[str, Any], name: str
+        ) -> dict[str, Any]:
+            boot = scenario["boots"][0]
+            if name == "pid1":
+                return boot["pre_exec"]["pid1_process_security"]
+            if name == "attestation":
+                return boot["pre_exec"]["attestation_process_security"]
+            if name == "lifecycle":
+                return boot["lifecycle_exec_security"]
+            return boot["post_exec"]["product_services"][
+                "core_process_security"
+            ]
+
+        expected_fields = {
+            "SYS_ADMIN": {
+                "pid1": systemd_present,
+                "attestation": set(),
+                "lifecycle": set(),
+                "core": set(),
+            },
+            "SYS_PTRACE": {
+                "pid1": systemd_present,
+                "attestation": systemd_present,
+                "lifecycle": systemd_present,
+                "core": set(),
+            },
+        }
+        for name in ("pid1", "attestation", "lifecycle", "core"):
+            for capability, setter in (
+                ("SYS_ADMIN", set_sys_admin),
+                ("SYS_PTRACE", set_sys_ptrace),
+            ):
+                for field in fields:
+                    with self.subTest(
+                        boundary=name,
+                        capability=capability,
+                        field=field,
+                    ):
+                        scenario = copy.deepcopy(original)
+                        security = boundary(scenario, name)
+                        security[field] = setter(
+                            security[field],
+                            present=field not in expected_fields[capability][name],
+                        )
+                        with self.assertRaises(adapter.AdapterError):
+                            adapter._validate_runtime_scenario(
+                                scenario,
+                                spec,
+                                original["name"],
+                                "fixture.scenario",
+                            )
+
+    def test_alpine_cron_fragment_mode_is_family_bound(self) -> None:
+        report = self.fixture.load_raw("package-lifecycle-raw.json")
+        platform = next(
+            item for item in report["platforms"] if item["family"] == "apk"
+        )
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.distribution == platform["distribution"]
+            and item.architecture == platform["architecture_id"]
+        )
+        original = copy.deepcopy(platform["scenarios"][0])
+        scenario = copy.deepcopy(original)
+        adapter._validate_runtime_scenario(
+            scenario, spec, scenario["name"], "fixture.alpine"
+        )
+        snapshot = scenario["boots"][0]["pre_exec"]
+        self.assertIn(":81ed:0:0|", snapshot["cron_fragment_identity"])
+        snapshot["cron_fragment_identity"] = snapshot[
+            "cron_fragment_identity"
+        ].replace(":81ed:0:0|", ":81a4:0:0|")
+        with self.assertRaises(adapter.AdapterError):
+            adapter._validate_runtime_scenario(
+                scenario, spec, scenario["name"], "fixture.alpine"
+            )
+
+        systemd_platform = next(
+            item for item in report["platforms"] if item["family"] != "apk"
+        )
+        systemd_setpriv = copy.deepcopy(
+            systemd_platform["scenarios"][0]["boots"][0]["pre_exec"]["setpriv"]
+        )
+        openrc_mutations = {
+            "sys-admin-cap-add": lambda item: item["isolation"]["cap_add"].append(
+                "CAP_SYS_ADMIN"
+            ),
+            "sys-ptrace-cap-add": lambda item: item["isolation"]["cap_add"].append(
+                "CAP_SYS_PTRACE"
+            ),
+            "systemd-launcher": lambda item: item["isolation"].__setitem__(
+                "lifecycle_exec_launcher",
+                list(adapter.SYSTEMD_LIFECYCLE_EXEC_LAUNCHER),
+            ),
+            "setpriv-provenance": lambda item: item["boots"][0][
+                "pre_exec"
+            ].__setitem__("setpriv", systemd_setpriv),
+            "pid1-sys-admin": lambda item: item["boots"][0]["pre_exec"][
+                "pid1_process_security"
+            ].__setitem__(
+                "cap_bounding",
+                set_sys_admin(
+                    item["boots"][0]["pre_exec"]["pid1_process_security"][
+                        "cap_bounding"
+                    ],
+                    present=True,
+                ),
+            ),
+            "pid1-sys-ptrace": lambda item: item["boots"][0]["pre_exec"][
+                "pid1_process_security"
+            ].__setitem__(
+                "cap_bounding",
+                set_sys_ptrace(
+                    item["boots"][0]["pre_exec"]["pid1_process_security"][
+                        "cap_bounding"
+                    ],
+                    present=True,
+                ),
+            ),
+            "lifecycle-sys-ptrace": lambda item: item["boots"][0][
+                "lifecycle_exec_security"
+            ].__setitem__(
+                "cap_effective",
+                set_sys_ptrace(
+                    item["boots"][0]["lifecycle_exec_security"][
+                        "cap_effective"
+                    ],
+                    present=True,
+                ),
+            ),
+            "core-sys-ptrace": lambda item: item["boots"][0]["post_exec"][
+                "product_services"
+            ]["core_process_security"].__setitem__(
+                "cap_permitted",
+                set_sys_ptrace(
+                    item["boots"][0]["post_exec"]["product_services"][
+                        "core_process_security"
+                    ]["cap_permitted"],
+                    present=True,
+                ),
+            ),
+        }
+        for name, mutation in openrc_mutations.items():
+            with self.subTest(openrc_mutation=name):
+                changed = copy.deepcopy(original)
+                mutation(changed)
+                with self.assertRaises(adapter.AdapterError):
+                    adapter._validate_runtime_scenario(
+                        changed, spec, changed["name"], "fixture.alpine"
+                    )
+
+    def test_lifecycle_claims_are_derived_from_active_event_evidence(self) -> None:
+        report = self.fixture.load_raw("package-lifecycle-raw.json")
+        for coordinate_platform in report["platforms"]:
+            coordinate_spec = next(
+                item
+                for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+                if item.distribution == coordinate_platform["distribution"]
+                and item.architecture == coordinate_platform["architecture_id"]
+            )
+            with self.subTest(
+                distribution=coordinate_platform["distribution"],
+                architecture=coordinate_platform["architecture_id"],
+            ):
+                coordinate_claims = adapter._derive_platform_lifecycle_claims(
+                    coordinate_platform, coordinate_spec
+                )
+                self.assertTrue(all(coordinate_claims.values()))
+        platform = copy.deepcopy(report["platforms"][0])
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.distribution == platform["distribution"]
+            and item.architecture == platform["architecture_id"]
+        )
+        claims = adapter._derive_platform_lifecycle_claims(platform, spec)
+        self.assertEqual(set(claims), set(adapter.LIFECYCLE_CLAIM_KEYS))
+        self.assertEqual(len(adapter.LIFECYCLE_CLAIM_KEYS), 10)
+        self.assertFalse(
+            any("sys_admin" in claim for claim in adapter.LIFECYCLE_CLAIM_KEYS)
+        )
+        self.assertFalse(
+            any("sys_ptrace" in claim for claim in adapter.LIFECYCLE_CLAIM_KEYS)
+        )
+        self.assertTrue(all(claims.values()))
+
+        def scenario(item: dict[str, Any], name: str) -> dict[str, Any]:
+            return next(value for value in item["scenarios"] if value["name"] == name)
+
+        def event(
+            item: dict[str, Any], scenario_name: str, check: str
+        ) -> dict[str, Any]:
+            return next(
+                value
+                for value in scenario(item, scenario_name)["events"]
+                if value["check"] == check
+            )
+
+        claim_mutations = {
+            "active_service_manager": lambda item: scenario(
+                item, "upgrade-rollback"
+            )["boots"][0]["pre_exec"].__setitem__("manager_state", "OFFLINE"),
+            "active_postinstall": lambda item: event(
+                item,
+                "upgrade-rollback",
+                "upgrade-rollback.candidate.postinstall_contract",
+            ).__setitem__("status", "fail"),
+            "legacy_runtime_retirement": lambda item: event(
+                item,
+                "upgrade-rollback",
+                "upgrade-rollback.candidate.postinstall_contract",
+            ).__setitem__(
+                "detail", "postinstall contract passed without retirement proof"
+            ),
+            "fresh_install": lambda item: event(
+                item, "remove", "remove.install.candidate"
+            ).__setitem__("status", "fail"),
+            "upgrade": lambda item: event(
+                item,
+                "upgrade-rollback",
+                "upgrade-rollback.upgrade.candidate",
+            ).__setitem__("status", "fail"),
+            "reinstall": lambda item: event(
+                item,
+                "upgrade-rollback",
+                "upgrade-rollback.reinstall.candidate",
+            ).__setitem__("status", "fail"),
+            "rollback": lambda item: event(
+                item,
+                "upgrade-rollback",
+                "upgrade-rollback.rollback.previous",
+            ).__setitem__("status", "fail"),
+            "remove": lambda item: event(
+                item, "remove", "remove.remove"
+            ).__setitem__("status", "fail"),
+            "purge": lambda item: event(
+                item, "purge", "purge.purge"
+            ).__setitem__("status", "fail"),
+            "second_restart": lambda item: scenario(
+                item, "upgrade-rollback"
+            )["boots"][2]["restart"].__setitem__("distinct", False),
+        }
+        self.assertEqual(set(claim_mutations), set(adapter.LIFECYCLE_CLAIM_KEYS))
+        for claim, mutation in claim_mutations.items():
+            with self.subTest(claim=claim):
+                changed_platform = copy.deepcopy(platform)
+                mutation(changed_platform)
+                changed = adapter._derive_platform_lifecycle_claims(
+                    changed_platform, spec
+                )
+                self.assertFalse(changed[claim])
+                if claim == "legacy_runtime_retirement":
+                    self.assertTrue(changed["active_postinstall"])
+
+        boundary_mutations = {
+            "active_service_manager": lambda item: scenario(
+                item, "upgrade-rollback"
+            )["boots"][0]["pre_exec"]["pid1_process_security"].__setitem__(
+                "cap_permitted",
+                set_sys_admin(
+                    scenario(item, "upgrade-rollback")["boots"][0]["pre_exec"][
+                        "pid1_process_security"
+                    ]["cap_permitted"],
+                    present=False,
+                ),
+            ),
+            "active_postinstall": lambda item: scenario(
+                item, "upgrade-rollback"
+            )["boots"][0]["lifecycle_exec_security"].__setitem__(
+                "cap_effective",
+                set_sys_admin(
+                    scenario(item, "upgrade-rollback")["boots"][0][
+                        "lifecycle_exec_security"
+                    ]["cap_effective"],
+                    present=True,
+                ),
+            ),
+        }
+        for claim, mutation in boundary_mutations.items():
+            with self.subTest(boundary_prerequisite=claim):
+                changed_platform = copy.deepcopy(platform)
+                mutation(changed_platform)
+                changed = adapter._derive_platform_lifecycle_claims(
+                    changed_platform, spec
+                )
+                self.assertFalse(changed[claim])
+
+    def test_raw_v4_engine_helper_cleanup_and_native_records_are_exact(self) -> None:
+        original = self.fixture.load_raw("package-lifecycle-raw.json")
+        adapter._validate_package_schema(original)
+        self.assertEqual(len(original["platforms"]), 10)
+        native_records = {
+            record["architecture"]: record
+            for record in original["native_shards"]["reports"]
+        }
+        self.assertNotEqual(
+            native_records["amd64"]["uid_map"],
+            native_records["arm64"]["uid_map"],
+        )
+        self.assertNotEqual(
+            native_records["amd64"]["gid_map"],
+            native_records["arm64"]["gid_map"],
+        )
+        self.assertEqual(
+            {
+                (item["distribution"], item["architecture_id"])
+                for item in original["platforms"]
+            },
+            package_lifecycle_lab.REQUIRED_PLATFORM_COORDINATES,
+        )
+        self.assertEqual(
+            {item["runtime_mode"] for item in original["platforms"]},
+            {"active-real-init"},
+        )
+
+        def assert_rejected(mutator: Any) -> None:
+            report = copy.deepcopy(original)
+            mutator(report)
+            with self.assertRaises(adapter.AdapterError):
+                adapter._validate_package_schema(report)
+
+        def swap_native_record_identity_maps(item: dict[str, Any]) -> None:
+            records = item["native_shards"]["reports"]
+            for key in ("effective_uid", "effective_gid", "uid_map", "gid_map"):
+                records[0][key], records[1][key] = records[1][key], records[0][key]
+
+        def mismatch_native_effective_uid_map(item: dict[str, Any]) -> None:
+            record = item["native_shards"]["reports"][0]
+            record["uid_map"][0]["outside_id"] = record["effective_uid"] + 1
+
+        def replace_platform_identity_maps(
+            item: dict[str, Any],
+            *,
+            source_architecture: str,
+            target_architecture: str,
+        ) -> None:
+            records = {
+                record["architecture"]: record
+                for record in item["native_shards"]["reports"]
+            }
+            source = records[source_architecture]
+            target = next(
+                platform
+                for platform in item["platforms"]
+                if platform["architecture_id"] == target_architecture
+            )
+            replace_snapshot_identity_maps(
+                target,
+                source["uid_map"],
+                source["gid_map"],
+            )
+
+        mutations = {
+            "engine-rootless": lambda item: item["engine"].__setitem__(
+                "rootless", False
+            ),
+            "engine-cgroups-v1": lambda item: item["engine"].__setitem__(
+                "cgroups_version", "v1"
+            ),
+            "engine-cgroupfs": lambda item: item["engine"].__setitem__(
+                "cgroup_manager", "cgroupfs"
+            ),
+            "engine-delegation": lambda item: item["engine"].__setitem__(
+                "cgroup_delegation", "rootless-systemd-v2"
+            ),
+            "engine-controller-missing": lambda item: item["engine"][
+                "cgroup_controllers"
+            ].remove("memory"),
+            "engine-controller-order": lambda item: item["engine"].__setitem__(
+                "cgroup_controllers",
+                list(reversed(item["engine"]["cgroup_controllers"])),
+            ),
+            "engine-remote": lambda item: item["engine"].__setitem__(
+                "service_is_remote", True
+            ),
+            "engine-host": lambda item: item["engine"].__setitem__(
+                "host_architecture", "amd64"
+            ),
+            "engine-emulator": lambda item: item["engine"].__setitem__(
+                "arm64_emulator", {}
+            ),
+            "aggregate-effective-uid": lambda item: item["engine"].__setitem__(
+                "effective_uid", 1000
+            ),
+            "aggregate-uid-map": lambda item: item["engine"].__setitem__(
+                "uid_map",
+                copy.deepcopy(item["native_shards"]["reports"][0]["uid_map"]),
+            ),
+            "helper-digest": lambda item: item["engine"][
+                "lifecycle_helper"
+            ].__setitem__("sha256", "0" * 64),
+            "helper-size": lambda item: item["engine"][
+                "lifecycle_helper"
+            ].__setitem__("size_bytes", 0),
+            "helper-source": lambda item: item["engine"][
+                "lifecycle_helper"
+            ].__setitem__("source", "/tmp/package_webtui_retirement.sh"),
+            "helper-symlink": lambda item: item["engine"][
+                "lifecycle_helper"
+            ].__setitem__("snapshot_symlink", True),
+            "helper-mode": lambda item: item["engine"][
+                "lifecycle_helper"
+            ].__setitem__("snapshot_mode", "0644"),
+            "helper-not-revalidated": lambda item: item["engine"][
+                "lifecycle_helper"
+            ].__setitem__("revalidated_before_report", False),
+            "helper-boolean-integer": lambda item: item["engine"][
+                "lifecycle_helper"
+            ].__setitem__("source_regular_file", 1),
+            "native-controller": lambda item: item["native_shards"]["reports"][
+                0
+            ]["cgroup_controllers"].remove("pids"),
+            "native-effective-id-type": lambda item: item["native_shards"][
+                "reports"
+            ][0].__setitem__("effective_uid", True),
+            "native-effective-id-map-mismatch": mismatch_native_effective_uid_map,
+            "native-map-cross-architecture-swap": swap_native_record_identity_maps,
+            "aggregate-platform-map-only": lambda item: replace_platform_identity_maps(
+                item,
+                source_architecture="arm64",
+                target_architecture="amd64",
+            ),
+            "native-helper-binding": lambda item: item["native_shards"][
+                "reports"
+            ][0]["lifecycle_helper"].__setitem__("sha256", "f" * 64),
+            "bootstrap-cleanup-remove": lambda item: item["platforms"][0][
+                "bootstrap_image_cleanup"
+            ].__setitem__("remove_exit_code", 1),
+            "bootstrap-cleanup-exists": lambda item: item["platforms"][0][
+                "bootstrap_image_cleanup"
+            ].__setitem__("exists_probe_exit_code", 0),
+            "bootstrap-cleanup-presence": lambda item: item["platforms"][0][
+                "bootstrap_image_cleanup"
+            ].__setitem__("absent_after_cleanup", False),
+            "platform-restart-contract": lambda item: item["platforms"][
+                0
+            ].__setitem__("restart_contract", "operator-defined restart"),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(mutation=name):
+                assert_rejected(mutation)
+
+        schema_objects = (
+            ("engine", lambda item: item["engine"], adapter.PACKAGE_ENGINE_KEYS),
+            (
+                "aggregate-helper",
+                lambda item: item["engine"]["lifecycle_helper"],
+                adapter.LIFECYCLE_HELPER_KEYS,
+            ),
+            (
+                "native-record",
+                lambda item: item["native_shards"]["reports"][0],
+                adapter.PACKAGE_NATIVE_SHARD_RECORD_KEYS,
+            ),
+            (
+                "native-helper",
+                lambda item: item["native_shards"]["reports"][0][
+                    "lifecycle_helper"
+                ],
+                adapter.LIFECYCLE_HELPER_KEYS,
+            ),
+            (
+                "bootstrap-cleanup",
+                lambda item: item["platforms"][0]["bootstrap_image_cleanup"],
+                adapter.RUNTIME_CLEANUP_KEYS,
+            ),
+        )
+        for object_name, locate, keys in schema_objects:
+            for key in sorted(keys):
+                with self.subTest(schema=object_name, missing=key):
+                    assert_rejected(lambda item, key=key: locate(item).pop(key))
+            with self.subTest(schema=object_name, extra="unknown"):
+                assert_rejected(
+                    lambda item: locate(item).__setitem__("unknown", True)
+                )
+
+    def test_fedora_vendor_cron_dropin_is_exact_for_both_architectures(
+        self,
+    ) -> None:
+        original = self.fixture.load_raw("package-lifecycle-raw.json")
+        adapter._validate_package_schema(original)
+
+        def platform(
+            report: dict[str, Any], distribution: str, architecture: str
+        ) -> dict[str, Any]:
+            return next(
+                item
+                for item in report["platforms"]
+                if item["distribution"] == distribution
+                and item["architecture_id"] == architecture
+            )
+
+        def snapshots(item: dict[str, Any]) -> list[dict[str, Any]]:
+            return [
+                boot[phase]
+                for scenario in item["scenarios"]
+                for boot in scenario["boots"]
+                for phase in ("pre_exec", "post_exec")
+            ]
+
+        expected = [package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH]
+        for architecture in ("amd64", "arm64"):
+            fedora_snapshots = snapshots(
+                platform(original, "fedora", architecture)
+            )
+            self.assertTrue(
+                all(
+                    snapshot["cron_dropin_paths"] == expected
+                    for snapshot in fedora_snapshots
+                )
+            )
+            self.assertTrue(
+                all(
+                    snapshot["cron_executable_path"] == "/usr/bin/crond"
+                    for snapshot in fedora_snapshots
+                )
+            )
+        for architecture in ("amd64", "arm64"):
+            alma_snapshots = snapshots(
+                platform(original, "almalinux", architecture)
+            )
+            self.assertTrue(
+                all(
+                    snapshot["cron_executable_path"] == "/usr/sbin/crond"
+                    for snapshot in alma_snapshots
+                )
+            )
+        for distribution in ("debian", "ubuntu", "almalinux", "alpine"):
+            for architecture in ("amd64", "arm64"):
+                self.assertTrue(
+                    all(
+                        snapshot["cron_dropin_paths"] == []
+                        for snapshot in snapshots(
+                            platform(original, distribution, architecture)
+                        )
+                    )
+                )
+
+        def assert_rejected(
+            distribution: str,
+            architecture: str,
+            value: list[str],
+        ) -> None:
+            report = copy.deepcopy(original)
+            snapshots(platform(report, distribution, architecture))[0][
+                "cron_dropin_paths"
+            ] = value
+            with self.assertRaises(adapter.AdapterError):
+                adapter._validate_package_schema(report)
+
+        for name, distribution, architecture, value in (
+            ("missing", "fedora", "amd64", []),
+            (
+                "extra",
+                "fedora",
+                "amd64",
+                [
+                    package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH,
+                    "/etc/systemd/system/crond.service.d/operator.conf",
+                ],
+            ),
+            (
+                "duplicate",
+                "fedora",
+                "amd64",
+                [
+                    package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH,
+                    package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH,
+                ],
+            ),
+            (
+                "wrong",
+                "fedora",
+                "amd64",
+                ["/etc/systemd/system/crond.service.d/operator.conf"],
+            ),
+            ("cross_arch_missing", "fedora", "arm64", []),
+            (
+                "cross_distribution",
+                "almalinux",
+                "arm64",
+                [package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH],
+            ),
+        ):
+            with self.subTest(mutation=name):
+                assert_rejected(distribution, architecture, value)
+
+        for name, distribution, architecture, value in (
+            ("fedora_alias", "fedora", "amd64", "/usr/sbin/crond"),
+            ("fedora_cross_arch_alias", "fedora", "arm64", "/usr/sbin/crond"),
+            ("alma_fedora_path", "almalinux", "amd64", "/usr/bin/crond"),
+            ("alma_cross_arch_fedora_path", "almalinux", "arm64", "/usr/bin/crond"),
+        ):
+            with self.subTest(mutation=name):
+                report = copy.deepcopy(original)
+                snapshots(platform(report, distribution, architecture))[0][
+                    "cron_executable_path"
+                ] = value
+                with self.assertRaises(adapter.AdapterError):
+                    adapter._validate_package_schema(report)
 
     def test_arm64_probe_must_be_native_and_report_the_native_uname(self) -> None:
         report = self.fixture.load_raw("package-lifecycle-raw.json")
@@ -537,6 +1610,53 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             "completed_distributions"
         ].reverse()
         self.fixture.save_raw("package-lifecycle-raw.json", report)
+        self.assertAdapterError(self.fixture.args())
+
+        self.fixture._make_raw_reports()
+        arm_path = self.fixture.raw / "package-lifecycle-arm64.json"
+        arm = self.fixture.load_raw("package-lifecycle-arm64.json")
+        changed_uid_map = copy.deepcopy(arm["engine"]["uid_map"])
+        changed_uid_map[0]["outside_id"] += 1
+        arm["engine"]["effective_uid"] += 1
+        arm["engine"]["uid_map"] = changed_uid_map
+        for platform in arm["platforms"]:
+            replace_snapshot_identity_maps(
+                platform,
+                changed_uid_map,
+                arm["engine"]["gid_map"],
+            )
+        self.fixture.save_raw("package-lifecycle-arm64.json", arm)
+        aggregate = self.fixture.load_raw("package-lifecycle-raw.json")
+        arm_record = next(
+            item
+            for item in aggregate["native_shards"]["reports"]
+            if item["architecture"] == "arm64"
+        )
+        arm_record["report_sha256"] = hashlib.sha256(
+            arm_path.read_bytes()
+        ).hexdigest()
+        self.fixture.save_raw("package-lifecycle-raw.json", aggregate)
+        self.assertAdapterError(self.fixture.args())
+
+        self.fixture._make_raw_reports()
+        aggregate = self.fixture.load_raw("package-lifecycle-raw.json")
+        records = {
+            record["architecture"]: record
+            for record in aggregate["native_shards"]["reports"]
+        }
+        for key in ("effective_uid", "effective_gid", "uid_map", "gid_map"):
+            records["amd64"][key], records["arm64"][key] = (
+                records["arm64"][key],
+                records["amd64"][key],
+            )
+        for platform in aggregate["platforms"]:
+            record = records[platform["architecture_id"]]
+            replace_snapshot_identity_maps(
+                platform,
+                record["uid_map"],
+                record["gid_map"],
+            )
+        self.fixture.save_raw("package-lifecycle-raw.json", aggregate)
         self.assertAdapterError(self.fixture.args())
 
     def test_package_digest_and_previous_version_binding_are_rejected(self) -> None:
