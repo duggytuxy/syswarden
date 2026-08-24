@@ -1092,6 +1092,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '--machine="${user_name}@"',
             '--property=\'Type=exec\'',
             "--property='Delegate=cpu io memory pids'",
+            "--property='MemoryMax=1G'",
+            "--property='TasksMax=512'",
             "--property='UMask=0077'",
             '--setenv="CONTAINERS_CONF=${containers_conf}"',
             "--setenv='CONTAINERS_CONF_OVERRIDE='",
@@ -1168,6 +1170,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, script)
         self.assertEqual(script.count("sudo -n systemd-run"), 1)
+        self.assertEqual(script.count("--property='MemoryMax=1G'"), 1)
+        self.assertEqual(script.count("--property='TasksMax=512'"), 1)
         self.assertEqual(script.count("scripts/ci/package_lifecycle_lab.py"), 1)
         self.assertEqual(script.count("'conmon_path=[\"/usr/local/lib/podman/conmon\"]'"), 1)
         self.assertEqual(script.count("'remote=false'"), 1)
@@ -1219,6 +1223,23 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "'exec /usr/local/bin/podman --remote=false \"$@\"'"
         )
         systemd_run = script.index("sudo -n systemd-run")
+        systemd_command = script.index(
+            "/usr/bin/bash --noprofile --norc -e -o pipefail -c",
+            systemd_run,
+        )
+        transient_properties = re.findall(
+            r"--property='([^']+)'", script[systemd_run:systemd_command]
+        )
+        self.assertEqual(
+            transient_properties,
+            [
+                "Type=exec",
+                "Delegate=cpu io memory pids",
+                "MemoryMax=1G",
+                "TasksMax=512",
+                "UMask=0077",
+            ],
+        )
         configuration_guard = script.index(
             "native ARM64 Podman configuration isolation is incomplete"
         )

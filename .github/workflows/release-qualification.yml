@@ -657,6 +657,8 @@ jobs:
             --working-directory="${GITHUB_WORKSPACE}" \
             --property='Type=exec' \
             --property='Delegate=cpu io memory pids' \
+            --property='MemoryMax=1G' \
+            --property='TasksMax=512' \
             --property='UMask=0077' \
             --setenv="CONTAINERS_CONF=${containers_conf}" \
             --setenv='CONTAINERS_CONF_OVERRIDE=' \

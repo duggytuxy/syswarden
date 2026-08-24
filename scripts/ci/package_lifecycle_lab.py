@@ -32,6 +32,7 @@ from typing import Sequence
 
 SCHEMA_VERSION = 4
 LOG_TAIL_LIMIT = 12_000
+NAMESPACE_DIAGNOSTIC_PREFIX_BYTES = 256
 MAX_VERSION_COMPONENT = 2_147_483_647
 SYS_ADMIN_CAPABILITY_BIT = 21
 SYS_PTRACE_CAPABILITY_BIT = 19
@@ -218,7 +219,7 @@ stop() {
 """
 ALPINE_OPENRC_VERSION = "0.62.6-r0"
 ALPINE_OPENRC_SYS_ATTESTATION_HEX = (
-    "504f444d414e0a73797377617264656e2d6f70656e72632d72633d30"
+    "504f444d414e0a"
 )
 ALPINE_RC_CONF_PRE_SHA256 = (
     "87799a1b4fa5e3941276e695e8525fcd2c1a08f551d02d1c0b1bdfdd67a71dce"
@@ -254,20 +255,34 @@ FEDORA_LAB_MASKED_UNITS = tuple(
         )
     )
 )
+# A delegated rootless cgroup namespace may expose its own cgroup2 mount as rw.
+# The caller separately proves the non-host-root ID map, private cgroup namespace,
+# exact non-SYS_ADMIN capabilities, and NoNewPrivs. The Alpine runtime additionally
+# pins legacy OpenRC cgroup mode and rejects every openrc.* cgroup residue.
 ALPINE_CGROUP_MOUNTINFO_AWK = (
     '$5 == "/sys/fs/cgroup" { '
     "count++; separator = 0; "
     "for (field_number = 7; field_number <= NF; field_number++) "
     'if ($field_number == "-") { separator = field_number; break } '
-    'if (!separator || $(separator + 1) != "cgroup2") bad = 1; '
-    'split($6, options, ","); readonly = 0; '
-    'for (option in options) if (options[option] == "ro") readonly = 1; '
-    "if (!readonly) bad = 1 "
-    "} END { exit !(count == 1 && !bad) }"
+    'if ($4 != "/" || !separator || $(separator + 1) != "cgroup2") bad = 1; '
+    'split($6, options, ","); readonly = 0; readwrite = 0; '
+    "nosuid = 0; nodev = 0; noexec = 0; "
+    "for (option in options) { "
+    'if (options[option] == "ro") readonly++; '
+    'else if (options[option] == "rw") readwrite++; '
+    'else if (options[option] == "nosuid") nosuid++; '
+    'else if (options[option] == "nodev") nodev++; '
+    'else if (options[option] == "noexec") noexec++ '
+    "} "
+    "if (readonly + readwrite != 1 || nosuid != 1 || nodev != 1 || "
+    "noexec != 1) bad = 1; "
+    'access = readonly == 1 ? "ro" : "rw" '
+    "} END { if (count != 1 || bad) exit 1; print access }"
 )
 NAMESPACE_ATTESTATION_HELPERS = f"""set -eu
-syswarden_namespace_hex() {{
-    LC_ALL=C od -An -v -tx1 | tr -d ' \\n'
+syswarden_namespace_hex_prefix() {{
+    LC_ALL=C dd bs={NAMESPACE_DIAGNOSTIC_PREFIX_BYTES} count=1 2>/dev/null | \\
+        od -An -v -tx1 | tr -d ' \\n'
 }}
 syswarden_namespace_fail() {{
     syswarden_namespace_predicate="$1"
@@ -282,16 +297,24 @@ syswarden_namespace_fail() {{
         ''|*[!0-9]*) exit 97 ;;
     esac
     [ "${{syswarden_namespace_status}}" -le 255 ] || exit 97
-    syswarden_namespace_actual_hex="$(
-        printf '%s' "${{syswarden_namespace_actual}}" | syswarden_namespace_hex
+    syswarden_namespace_actual_bytes="$(
+        printf '%s' "${{syswarden_namespace_actual}}" | LC_ALL=C wc -c | tr -d ' '
     )" || exit 97
-    syswarden_namespace_expected_hex="$(
-        printf '%s' "${{syswarden_namespace_expected}}" | syswarden_namespace_hex
+    syswarden_namespace_expected_bytes="$(
+        printf '%s' "${{syswarden_namespace_expected}}" | LC_ALL=C wc -c | tr -d ' '
     )" || exit 97
-    printf '%s\\tpredicate=%s\\trc=%s\\tactual_hex=%s\\texpected_hex=%s\\n' \\
+    syswarden_namespace_actual_hex_prefix="$(
+        printf '%s' "${{syswarden_namespace_actual}}" | syswarden_namespace_hex_prefix
+    )" || exit 97
+    syswarden_namespace_expected_hex_prefix="$(
+        printf '%s' "${{syswarden_namespace_expected}}" | syswarden_namespace_hex_prefix
+    )" || exit 97
+    printf '%s\\tpredicate=%s\\trc=%s\\tactual_bytes=%s\\tactual_hex_prefix=%s\\texpected_bytes=%s\\texpected_hex_prefix=%s\\n' \\
         '{NAMESPACE_FAILURE_MARKER}' "${{syswarden_namespace_predicate}}" \\
-        "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual_hex}}" \\
-        "${{syswarden_namespace_expected_hex}}" >&2
+        "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual_bytes}}" \\
+        "${{syswarden_namespace_actual_hex_prefix}}" \\
+        "${{syswarden_namespace_expected_bytes}}" \\
+        "${{syswarden_namespace_expected_hex_prefix}}" >&2
     exit 1
 }}
 syswarden_namespace_expect_equal() {{
@@ -306,6 +329,23 @@ syswarden_namespace_expect_equal() {{
             "${{syswarden_namespace_expected}}"
     fi
 }}
+syswarden_namespace_expect_integer() {{
+    syswarden_namespace_predicate="$1"
+    syswarden_namespace_status="$2"
+    syswarden_namespace_actual="$3"
+    syswarden_namespace_expected="$4"
+    if [ "${{syswarden_namespace_status}}" -ne 0 ]; then
+        syswarden_namespace_fail "${{syswarden_namespace_predicate}}" \\
+            "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}" \\
+            "${{syswarden_namespace_expected}}"
+    fi
+    if ! [ "${{syswarden_namespace_actual}}" -eq \\
+           "${{syswarden_namespace_expected}}" ] 2>/dev/null; then
+        syswarden_namespace_fail "${{syswarden_namespace_predicate}}" \\
+            "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}" \\
+            "${{syswarden_namespace_expected}}"
+    fi
+}}
 syswarden_namespace_expect_status() {{
     syswarden_namespace_predicate="$1"
     syswarden_namespace_status="$2"
@@ -314,6 +354,33 @@ syswarden_namespace_expect_status() {{
         syswarden_namespace_fail "${{syswarden_namespace_predicate}}" \\
             "${{syswarden_namespace_status}}" "${{syswarden_namespace_actual}}" ''
     fi
+}}
+syswarden_namespace_file_record() {{
+    syswarden_namespace_record_path="$1"
+    syswarden_namespace_record_bytes="$(
+        LC_ALL=C wc -c < "${{syswarden_namespace_record_path}}" 2>&1
+    )" || {{
+        syswarden_namespace_record_status=$?
+        printf 'wc=%s' "${{syswarden_namespace_record_bytes}}"
+        return "${{syswarden_namespace_record_status}}"
+    }}
+    syswarden_namespace_record_od="$(
+        LC_ALL=C od -An -N {NAMESPACE_DIAGNOSTIC_PREFIX_BYTES} -v -tx1 \\
+            "${{syswarden_namespace_record_path}}" 2>&1
+    )" || {{
+        syswarden_namespace_record_status=$?
+        printf 'od=%s' "${{syswarden_namespace_record_od}}"
+        return "${{syswarden_namespace_record_status}}"
+    }}
+    syswarden_namespace_record_hex="$(
+        printf '%s' "${{syswarden_namespace_record_od}}" | tr -d ' \\n'
+    )" || {{
+        syswarden_namespace_record_status=$?
+        printf 'tr=%s' "${{syswarden_namespace_record_hex}}"
+        return "${{syswarden_namespace_record_status}}"
+    }}
+    printf 'bytes=%s;hex=%s' "${{syswarden_namespace_record_bytes}}" \\
+        "${{syswarden_namespace_record_hex}}"
 }}
 """
 
@@ -5196,8 +5263,6 @@ syswarden_namespace_expect_status NS06_ETH0_UP "${{syswarden_namespace_status}}"
     ).hexdigest()
     return (
         common
-        + f"[ \"$(sha256sum /etc/init.d/syswarden-lab-net | awk '{{ print $1 }}')\" = \"{provider_sha256}\" ]\n"
-        + "[ \"$(stat -c '%u:%g:%a' /etc/init.d/syswarden-lab-net)\" = 0:0:755 ]\n"
         + "syswarden_apk_info_actual=\"$(\n"
         + "    syswarden_apk_info_status=0\n"
         + f"    apk info -e 'openrc={ALPINE_OPENRC_VERSION}' 2>&1 || syswarden_apk_info_status=$?\n"
@@ -5205,33 +5270,151 @@ syswarden_namespace_expect_status NS06_ETH0_UP "${{syswarden_namespace_status}}"
         + ")\"\n"
         + "syswarden_apk_info_expected=\"$(printf 'openrc\\nsyswarden-apk-info-rc=0')\"\n"
         + "syswarden_namespace_expect_equal NS15_OPENRC_PACKAGE 0 \"${syswarden_apk_info_actual}\" \"${syswarden_apk_info_expected}\"\n"
-        + "[ -f /etc/rc.conf ] && [ ! -L /etc/rc.conf ]\n"
-        + f"[ \"$(sha256sum /etc/rc.conf | awk '{{ print $1 }}')\" = \"{ALPINE_RC_CONF_POST_SHA256}\" ]\n"
-        + "[ \"$(grep -Fxc 'rc_sys=\"podman\"' /etc/rc.conf)\" -eq 1 ]\n"
-        + "[ \"$(grep -Fxc 'rc_cgroup_mode=\"legacy\"' /etc/rc.conf)\" -eq 1 ]\n"
-        + "[ \"$(awk '/^[[:space:]]*rc_sys[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf)\" -eq 1 ]\n"
-        + "[ \"$(awk '/^[[:space:]]*rc_cgroup_mode[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf)\" -eq 1 ]\n"
-        + "syswarden_openrc_sys_hex=\"$(\n"
-        + "    { openrc --sys; printf 'syswarden-openrc-rc=%s' \"$?\"; } |\n"
-        + "        od -An -v -tx1 | tr -d ' \\n'\n"
-        + ")\"\n"
-        + f"[ \"${{syswarden_openrc_sys_hex}}\" = \"{ALPINE_OPENRC_SYS_ATTESTATION_HEX}\" ]\n"
-        + "[ -f /etc/init.d/hostname ] && [ ! -L /etc/init.d/hostname ]\n"
-        + f"[ \"$(sha256sum /etc/init.d/hostname | awk '{{ print $1 }}')\" = \"{ALPINE_HOSTNAME_INIT_POST_SHA256}\" ]\n"
-        + "[ \"$(grep -Ec '^[[:space:]]*keyword -prefix -lxc -docker -podman$' /etc/init.d/hostname)\" -eq 1 ]\n"
-        + "[ \"$(tr '\\000' '\\n' < /proc/1/environ | grep -Fxc 'container=podman')\" -eq 1 ]\n"
-        + "awk "
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(sha256sum /etc/init.d/syswarden-lab-net 2>&1)\" || syswarden_namespace_status=$?\n"
+        + f"syswarden_namespace_expect_equal NS16_APK_PROVIDER_SHA \"${{syswarden_namespace_status}}\" \"${{syswarden_namespace_actual}}\" \"{provider_sha256}  /etc/init.d/syswarden-lab-net\"\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(stat -c '%F:%u:%g:%a' /etc/init.d/syswarden-lab-net 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_equal NS17_APK_PROVIDER_STAT \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 'regular file:0:0:755'\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(stat -c '%F:%u:%g:%a' /etc/rc.conf 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_equal NS18_APK_RC_CONF_STAT \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 'regular file:0:0:644'\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(sha256sum /etc/rc.conf 2>&1)\" || syswarden_namespace_status=$?\n"
+        + f"syswarden_namespace_expect_equal NS19_APK_RC_CONF_SHA \"${{syswarden_namespace_status}}\" \"${{syswarden_namespace_actual}}\" \"{ALPINE_RC_CONF_POST_SHA256}  /etc/rc.conf\"\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(grep -Fxc 'rc_sys=\"podman\"' /etc/rc.conf 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_integer NS20_APK_RC_SYS_LINE \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(grep -Fxc 'rc_cgroup_mode=\"legacy\"' /etc/rc.conf 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_integer NS21_APK_RC_CGROUP_LINE \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(awk '/^[[:space:]]*rc_sys[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_integer NS22_APK_RC_SYS_COUNT \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(awk '/^[[:space:]]*rc_cgroup_mode[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_integer NS23_APK_RC_CGROUP_COUNT \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_openrc_file=\"$(mktemp /tmp/syswarden-openrc-sys.XXXXXX 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "if [ \"${syswarden_namespace_status}\" -eq 0 ]; then\n"
+        + "    openrc --sys > \"${syswarden_namespace_openrc_file}\" 2>&1 || syswarden_namespace_status=$?\n"
+        + "    syswarden_namespace_record_status=0\n"
+        + "    syswarden_namespace_actual=\"$(syswarden_namespace_file_record \"${syswarden_namespace_openrc_file}\")\" || syswarden_namespace_record_status=$?\n"
+        + "    if [ \"${syswarden_namespace_status}\" -eq 0 ]; then\n"
+        + "        syswarden_namespace_status=\"${syswarden_namespace_record_status}\"\n"
+        + "    fi\n"
+        + "    syswarden_namespace_cleanup_status=0\n"
+        + "    syswarden_namespace_cleanup=\"$(rm -f \"${syswarden_namespace_openrc_file}\" 2>&1)\" || syswarden_namespace_cleanup_status=$?\n"
+        + "    if [ \"${syswarden_namespace_cleanup_status}\" -ne 0 ]; then\n"
+        + "        syswarden_namespace_actual=\"${syswarden_namespace_actual};cleanup=${syswarden_namespace_cleanup}\"\n"
+        + "        if [ \"${syswarden_namespace_status}\" -eq 0 ]; then\n"
+        + "            syswarden_namespace_status=\"${syswarden_namespace_cleanup_status}\"\n"
+        + "        fi\n"
+        + "    fi\n"
+        + "else\n"
+        + "    syswarden_namespace_actual=\"mktemp=${syswarden_namespace_openrc_file}\"\n"
+        + "fi\n"
+        + f"syswarden_namespace_expect_equal NS24_APK_OPENRC_SYS \"${{syswarden_namespace_status}}\" \"${{syswarden_namespace_actual}}\" 'bytes=7;hex={ALPINE_OPENRC_SYS_ATTESTATION_HEX}'\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(stat -c '%F:%u:%g:%a' /etc/init.d/hostname 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_equal NS25_APK_HOSTNAME_STAT \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 'regular file:0:0:755'\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(sha256sum /etc/init.d/hostname 2>&1)\" || syswarden_namespace_status=$?\n"
+        + f"syswarden_namespace_expect_equal NS26_APK_HOSTNAME_SHA \"${{syswarden_namespace_status}}\" \"${{syswarden_namespace_actual}}\" \"{ALPINE_HOSTNAME_INIT_POST_SHA256}  /etc/init.d/hostname\"\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(grep -Ec '^[[:space:]]*keyword -prefix -lxc -docker -podman$' /etc/init.d/hostname 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_integer NS27_APK_HOSTNAME_KEYWORD \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_pid1_environment=\"$(tr '\\000' '\\n' < /proc/1/environ 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "if [ \"${syswarden_namespace_status}\" -eq 0 ]; then\n"
+        + "    syswarden_namespace_actual=\"$(printf '%s\\n' \"${syswarden_namespace_pid1_environment}\" | grep -Fxc 'container=podman')\" || syswarden_namespace_status=$?\n"
+        + "else\n"
+        + "    syswarden_namespace_actual=\"${syswarden_namespace_pid1_environment}\"\n"
+        + "fi\n"
+        + "syswarden_namespace_expect_integer NS28_APK_PID1_ENV \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(awk "
         + shlex.quote(ALPINE_CGROUP_MOUNTINFO_AWK)
-        + " /proc/self/mountinfo\n"
-        + "for openrc_cgroup_path in /sys/fs/cgroup/openrc.*; do\n"
-        + "    [ ! -e \"${openrc_cgroup_path}\" ] && [ ! -L \"${openrc_cgroup_path}\" ] || exit 1\n"
-        + "done\n"
-        + "[ \"$(rc-update show -v | awk '$1 == \"syswarden-lab-net\" && $2 == \"|\" && $3 == \"default\" { count++ } END { print count + 0 }')\" -eq 1 ]\n"
-        + "[ \"$(rc-update show -v | awk '$1 == \"cronie\" && $2 == \"|\" && $3 == \"default\" { count++ } END { print count + 0 }')\" -eq 1 ]\n"
-        + "[ \"$(rc-update show -v | awk '$1 == \"rsyslog\" && $2 == \"|\" && $3 == \"default\" { count++ } END { print count + 0 }')\" -eq 1 ]\n"
-        + "rc-service syswarden-lab-net status >/dev/null 2>&1\n"
-        + "rc-service cronie status >/dev/null 2>&1\n"
-        + "rc-service rsyslog status >/dev/null 2>&1\n"
+        + " /proc/self/mountinfo 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "case \"${syswarden_namespace_actual}\" in\n"
+        + "    ro|rw) syswarden_namespace_cgroup_access=\"${syswarden_namespace_actual}\"; syswarden_namespace_cgroup_contract=delegated-cgroup2 ;;\n"
+        + "    *) syswarden_namespace_cgroup_contract=\"${syswarden_namespace_actual}\" ;;\n"
+        + "esac\n"
+        + "syswarden_namespace_expect_equal NS29_APK_CGROUP_MOUNT \"${syswarden_namespace_status}\" \"${syswarden_namespace_cgroup_contract}\" delegated-cgroup2\n"
+        + "syswarden_namespace_cgroup_boundary() {\n"
+        + "    syswarden_namespace_cgroup_access=\"$1\"\n"
+        + "    syswarden_namespace_children_status=0\n"
+        + "    syswarden_namespace_children=\"$(find /sys/fs/cgroup -mindepth 1 -maxdepth 1 '(' -type d -o -type l ')' -print 2>&1)\" || syswarden_namespace_children_status=$?\n"
+        + "    if [ \"${syswarden_namespace_children_status}\" -ne 0 ]; then\n"
+        + "        printf 'find=%s' \"${syswarden_namespace_children}\"\n"
+        + "        return \"${syswarden_namespace_children_status}\"\n"
+        + "    fi\n"
+        + "    if [ -n \"${syswarden_namespace_children}\" ]; then\n"
+        + "        printf 'children=%s' \"${syswarden_namespace_children}\"\n"
+        + "        return 1\n"
+        + "    fi\n"
+        + "    if [ \"${syswarden_namespace_cgroup_access}\" = ro ]; then\n"
+        + "        printf 'ro;children='\n"
+        + "        return 0\n"
+        + "    fi\n"
+        + "    syswarden_namespace_cgroup_status=0\n"
+        + "    syswarden_namespace_cgroup=\"$(cat /proc/self/cgroup 2>&1)\" || syswarden_namespace_cgroup_status=$?\n"
+        + "    if [ \"${syswarden_namespace_cgroup_status}\" -ne 0 ]; then\n"
+        + "        printf 'cgroup=%s' \"${syswarden_namespace_cgroup}\"\n"
+        + "        return \"${syswarden_namespace_cgroup_status}\"\n"
+        + "    fi\n"
+        + "    syswarden_namespace_memory_status=0\n"
+        + "    syswarden_namespace_memory=\"$(cat /sys/fs/cgroup/memory.max 2>&1)\" || syswarden_namespace_memory_status=$?\n"
+        + "    if [ \"${syswarden_namespace_memory_status}\" -ne 0 ]; then\n"
+        + "        printf 'memory.max=%s' \"${syswarden_namespace_memory}\"\n"
+        + "        return \"${syswarden_namespace_memory_status}\"\n"
+        + "    fi\n"
+        + "    syswarden_namespace_pids_status=0\n"
+        + "    syswarden_namespace_pids=\"$(cat /sys/fs/cgroup/pids.max 2>&1)\" || syswarden_namespace_pids_status=$?\n"
+        + "    if [ \"${syswarden_namespace_pids_status}\" -ne 0 ]; then\n"
+        + "        printf 'pids.max=%s' \"${syswarden_namespace_pids}\"\n"
+        + "        return \"${syswarden_namespace_pids_status}\"\n"
+        + "    fi\n"
+        + "    printf 'rw;cgroup=%s;memory.max=%s;pids.max=%s;children=' \\\n"
+        + "        \"${syswarden_namespace_cgroup}\" \"${syswarden_namespace_memory}\" \\\n"
+        + "        \"${syswarden_namespace_pids}\"\n"
+        + "}\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(syswarden_namespace_cgroup_boundary \"${syswarden_namespace_cgroup_access}\")\" || syswarden_namespace_status=$?\n"
+        + "case \"${syswarden_namespace_cgroup_access}\" in\n"
+        + "    ro) syswarden_namespace_expected='ro;children=' ;;\n"
+        + "    rw) syswarden_namespace_expected='rw;cgroup=0::/;memory.max=1073741824;pids.max=512;children=' ;;\n"
+        + "    *) syswarden_namespace_expected=delegated-cgroup2 ;;\n"
+        + "esac\n"
+        + "syswarden_namespace_expect_equal NS30_APK_CGROUP_BOUNDARY \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" \"${syswarden_namespace_expected}\"\n"
+        + "syswarden_namespace_runlevel_count() {\n"
+        + "    syswarden_namespace_service=\"$1\"\n"
+        + "    syswarden_namespace_runlevel_status=0\n"
+        + "    syswarden_namespace_runlevels=\"$(rc-update show -v 2>&1)\" || syswarden_namespace_runlevel_status=$?\n"
+        + "    if [ \"${syswarden_namespace_runlevel_status}\" -ne 0 ]; then\n"
+        + "        printf '%s' \"${syswarden_namespace_runlevels}\"\n"
+        + "        return \"${syswarden_namespace_runlevel_status}\"\n"
+        + "    fi\n"
+        + "    printf '%s\\n' \"${syswarden_namespace_runlevels}\" | awk -v wanted=\"${syswarden_namespace_service}\" '$1 == wanted && $2 == \"|\" && $3 == \"default\" { count++ } END { print count + 0 }'\n"
+        + "}\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(syswarden_namespace_runlevel_count syswarden-lab-net)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_integer NS31_APK_NET_RUNLEVEL \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(syswarden_namespace_runlevel_count cronie)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_integer NS32_APK_CRON_RUNLEVEL \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(syswarden_namespace_runlevel_count rsyslog)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_integer NS33_APK_RSYSLOG_RUNLEVEL \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(rc-service syswarden-lab-net status 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_status NS34_APK_NET_ACTIVE \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\"\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(rc-service cronie status 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_status NS35_APK_CRON_ACTIVE \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\"\n"
+        + "syswarden_namespace_status=0\n"
+        + "syswarden_namespace_actual=\"$(rc-service rsyslog status 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_expect_status NS36_APK_RSYSLOG_ACTIVE \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\"\n"
     )
 
 
@@ -6380,6 +6563,15 @@ def inspect_container_isolation(
         or set(security_opts) != {"label=disable", "no-new-privileges"}
     ):
         raise LifecycleLabError("container namespace/capability isolation is not exact")
+    memory_limit = host.get("Memory")
+    pids_limit = host.get("PidsLimit")
+    if (
+        type(memory_limit) is not int
+        or memory_limit != 1_073_741_824
+        or type(pids_limit) is not int
+        or pids_limit != 512
+    ):
+        raise LifecycleLabError("container memory/PID limits are not exact")
     expected_stop = "SIGINT" if spec.family == "apk" else "SIGRTMIN+3"
     if config.get("StopSignal") != expected_stop:
         raise LifecycleLabError("container stop signal differs from the init contract")
