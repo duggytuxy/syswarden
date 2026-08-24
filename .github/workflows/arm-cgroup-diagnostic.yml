@@ -36,16 +36,7 @@ jobs:
           printf 'identity=%s:%s user=%s architecture=%s\n' \
             "$(id -u)" "$(id -g)" "$(id -un)" "$(uname -m)"
           printf 'self_cgroup=%s\n' "$(awk -F: '$1 == "0" { print $3 }' /proc/self/cgroup)"
-          podman version --format 'podman_client={{.Client.Version}}'
-          podman info --format json | jq -c '{host: {
-            arch: .host.arch,
-            cgroupControllers: .host.cgroupControllers,
-            cgroupManager: .host.cgroupManager,
-            cgroupVersion: .host.cgroupVersion,
-            os: .host.os,
-            rootless: .host.security.rootless,
-            serviceIsRemote: .host.serviceIsRemote
-          }}'
+          podman --version
 
           user_id="$(id -u)"
           loginctl show-user "${user_id}" \
