@@ -2111,10 +2111,10 @@ openrc() {{
     [ "$#" -eq 1 ] && [ "$1" = --sys ] || return 96
     printf 'PODMAN\n'
 }}
-rc-update() {{
+rc_update() {{
     printf 'syswarden-lab-net | default\ncronie | default\nrsyslog | default\n'
 }}
-rc-service() {{ return 0; }}
+rc_service() {{ return 0; }}
 '''
         base_probe = package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS + mocks
         with tempfile.TemporaryDirectory() as temporary:
@@ -2132,10 +2132,12 @@ rc-service() {{ return 0; }}
                 tail.replace("/proc/1/environ", str(pid1_environment))
                 .replace("/proc/self/cgroup", str(self_cgroup))
                 .replace("/sys/fs/cgroup", str(cgroup_root))
+                .replace("rc-update show -v", "rc_update show -v")
+                .replace("rc-service ", "rc_service ")
             )
             host = subprocess.run(
                 [
-                    "/bin/sh",
+                    shutil.which("dash") or "/bin/sh",
                     "-eu",
                     "-c",
                     base_probe + host_tail,
@@ -2162,6 +2164,8 @@ rc-service() {{ return 0; }}
             tail.replace("/proc/1/environ", alpine_environment)
             .replace("/proc/self/cgroup", alpine_self_cgroup)
             .replace("/sys/fs/cgroup", alpine_cgroup_root)
+            .replace("rc-update show -v", "rc_update show -v")
+            .replace("rc-service ", "rc_service ")
         )
         alpine_probe = (
             f": > {alpine_environment}\n"
@@ -2485,11 +2489,16 @@ rc-service() {{ return 0; }}
                 "syswarden_namespace_expect_status NS36_APK_RSYSLOG_ACTIVE"
             )
         )
-        guarded_tail = "\n".join(runtime_lines[start : end + 1]) + "\n"
+        guarded_tail = (
+            "\n".join(runtime_lines[start : end + 1])
+            .replace("rc-update show -v", "rc_update show -v")
+            .replace("rc-service ", "rc_service ")
+            + "\n"
+        )
 
         with tempfile.TemporaryDirectory() as temporary:
             calls = Path(temporary) / "rc-update.calls"
-            mocks = r'''rc-update() {
+            mocks = r'''rc_update() {
     [ "$#" -eq 2 ] && [ "$1" = show ] && [ "$2" = -v ] || return 96
     printf 'call\n' >> "${SYSWARDEN_RC_UPDATE_CALLS}"
     if [ "${SYSWARDEN_FAIL_RC_UPDATE:-}" = 1 ]; then
@@ -2502,7 +2511,7 @@ rc-service() {{ return 0; }}
         fi
     done
 }
-rc-service() {
+rc_service() {
     [ "$#" -eq 2 ] && [ "$2" = status ] || return 96
     if [ "$1" = "${SYSWARDEN_FAIL_SERVICE:-}" ]; then
         printf '%s is stopped\n' "$1"
@@ -2516,7 +2525,7 @@ rc-service() {
                 calls.write_text("", encoding="utf-8")
                 return subprocess.run(
                     [
-                        "/bin/sh",
+                        shutil.which("dash") or "/bin/sh",
                         "-eu",
                         "-c",
                         package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
