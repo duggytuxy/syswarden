@@ -1535,7 +1535,7 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(workflow.count(contract), 2)
         crun_subject_contract = (
             "v4032_crun_expected_subject='Qualification : restore v4.03.2 "
-            "ARM64 crun runtime (#108)'"
+            "ARM64 lifecycle under crun (#108)'"
         )
         compliance_subject_contract = (
             "v4032_compliance_expected_subject='Security : enforce v4.03.2 "
@@ -1603,7 +1603,14 @@ class ReleaseGateTests(unittest.TestCase):
             "scripts/ci/release_gate_test.py",
             "scripts/ci/release_qualification_workflow_test.py",
         )
-        crun_paths = arm64_paths
+        crun_paths = (
+            ".github/workflows/release-manager.yml",
+            ".github/workflows/release-qualification.yml",
+            "scripts/ci/release_gate_test.py",
+            "scripts/ci/release_qualification_workflow_test.py",
+            "src/core/syswarden-cli/pkg/security/hardening_linux_test.go",
+            "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
+        )
         stabilization_paths = init_runtime_paths
         local_paths = (
             ".github/workflows/release-manager.yml",
@@ -1641,7 +1648,9 @@ class ReleaseGateTests(unittest.TestCase):
             "src/core/syswarden-cli/pkg/system/uninstall_linux.go",
             "src/core/syswarden-cli/pkg/system/uninstall_prepare_linux_test.go",
         )
-        expected_paths = tuple(dict.fromkeys(compliance_paths + repair_paths))
+        expected_paths = tuple(
+            dict.fromkeys(compliance_paths + repair_paths + crun_paths)
+        )
         unchanged_targets = (
             "changelog.md",
             "src/core/syswarden-cli/pkg/system/upgrade.go",
@@ -3216,31 +3225,35 @@ class ReleaseGateTests(unittest.TestCase):
             self.v4032_crun_subject_gate_script(),
             {
                 "valid": (
-                    "Qualification : restore v4.03.2 ARM64 crun runtime (#108)",
+                    "Qualification : restore v4.03.2 ARM64 lifecycle under crun (#108)",
                     True,
                 ),
                 "bare": (
-                    "Qualification : restore v4.03.2 ARM64 crun runtime",
+                    "Qualification : restore v4.03.2 ARM64 lifecycle under crun",
                     False,
                 ),
                 "previous pull request": (
-                    "Qualification : restore v4.03.2 ARM64 crun runtime (#107)",
+                    "Qualification : restore v4.03.2 ARM64 lifecycle under crun (#107)",
                     False,
                 ),
                 "next pull request": (
-                    "Qualification : restore v4.03.2 ARM64 crun runtime (#109)",
+                    "Qualification : restore v4.03.2 ARM64 lifecycle under crun (#109)",
                     False,
                 ),
                 "wrong verb": (
-                    "Qualification : repair v4.03.2 ARM64 crun runtime (#108)",
+                    "Qualification : repair v4.03.2 ARM64 lifecycle under crun (#108)",
                     False,
                 ),
                 "wrong runtime": (
-                    "Qualification : restore v4.03.2 ARM64 runc runtime (#108)",
+                    "Qualification : restore v4.03.2 ARM64 lifecycle under runc (#108)",
+                    False,
+                ),
+                "previous scope": (
+                    "Qualification : restore v4.03.2 ARM64 crun runtime (#108)",
                     False,
                 ),
                 "trailing space": (
-                    "Qualification : restore v4.03.2 ARM64 crun runtime (#108) ",
+                    "Qualification : restore v4.03.2 ARM64 lifecycle under crun (#108) ",
                     False,
                 ),
             },
@@ -3257,6 +3270,8 @@ class ReleaseGateTests(unittest.TestCase):
                 ".github/workflows/release-qualification.yml",
                 "scripts/ci/release_gate_test.py",
                 "scripts/ci/release_qualification_workflow_test.py",
+                "src/core/syswarden-cli/pkg/security/hardening_linux_test.go",
+                "src/core/syswarden-cli/pkg/security/os_hardening_linux.go",
             ),
         )
 
@@ -3645,8 +3660,8 @@ class ReleaseGateTests(unittest.TestCase):
                 "a74756b71e26e39b98c7fa60b65a3486adfde3e8",
             ),
             "crun canonical subject": workflow.replace(
-                "Qualification : restore v4.03.2 ARM64 crun runtime (#108)",
-                "Qualification : repair v4.03.2 ARM64 crun runtime (#108)",
+                "Qualification : restore v4.03.2 ARM64 lifecycle under crun (#108)",
+                "Qualification : repair v4.03.2 ARM64 lifecycle under crun (#108)",
             ),
             "crun subject source": workflow.replace(
                 'commit_subject="$(git log -1 --format=%s HEAD)"',

@@ -141,7 +141,7 @@ jobs:
                 echo "ERROR: the v4.03.2 ARM64 crun runtime restoration is not based on the reviewed PR104 squash." >&2
                 exit 1
               fi
-              v4032_crun_expected_subject='Qualification : restore v4.03.2 ARM64 crun runtime (#108)'
+              v4032_crun_expected_subject='Qualification : restore v4.03.2 ARM64 lifecycle under crun (#108)'
               if [[ "${commit_subject}" != "${v4032_crun_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 crun runtime restoration requires the exact reviewed squash subject." >&2
                 exit 1
@@ -157,12 +157,14 @@ jobs:
                 M ".github/workflows/release-qualification.yml"
                 M "scripts/ci/release_gate_test.py"
                 M "scripts/ci/release_qualification_workflow_test.py"
+                M "src/core/syswarden-cli/pkg/security/hardening_linux_test.go"
+                M "src/core/syswarden-cli/pkg/security/os_hardening_linux.go"
               )
               mapfile -d '' -t actual_v4032_crun_diff < <(
                 git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
               )
               if (( ${#actual_v4032_crun_diff[@]} != ${#expected_v4032_crun_diff[@]} )); then
-                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration must modify exactly the four reviewed files." >&2
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration must modify exactly the six reviewed files." >&2
                 exit 1
               fi
               for ((index = 0; index < ${#expected_v4032_crun_diff[@]}; index++)); do
@@ -176,6 +178,8 @@ jobs:
                 ".github/workflows/release-qualification.yml"
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/release_qualification_workflow_test.py"
+                "src/core/syswarden-cli/pkg/security/hardening_linux_test.go"
+                "src/core/syswarden-cli/pkg/security/os_hardening_linux.go"
               )
               for tree_ref in HEAD^ HEAD; do
                 for fix_path in "${v4032_crun_paths[@]}"; do
@@ -1328,7 +1332,7 @@ jobs:
                 echo "ERROR: the v4.03.2 ARM64 crun runtime restoration is not based on the reviewed PR104 squash." >&2
                 exit 1
               fi
-              v4032_crun_expected_subject='Qualification : restore v4.03.2 ARM64 crun runtime (#108)'
+              v4032_crun_expected_subject='Qualification : restore v4.03.2 ARM64 lifecycle under crun (#108)'
               if [[ "${commit_subject}" != "${v4032_crun_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 crun runtime restoration requires the exact reviewed squash subject." >&2
                 exit 1
@@ -1344,12 +1348,14 @@ jobs:
                 M ".github/workflows/release-qualification.yml"
                 M "scripts/ci/release_gate_test.py"
                 M "scripts/ci/release_qualification_workflow_test.py"
+                M "src/core/syswarden-cli/pkg/security/hardening_linux_test.go"
+                M "src/core/syswarden-cli/pkg/security/os_hardening_linux.go"
               )
               mapfile -d '' -t actual_v4032_crun_diff < <(
                 git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
               )
               if (( ${#actual_v4032_crun_diff[@]} != ${#expected_v4032_crun_diff[@]} )); then
-                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration must modify exactly the four reviewed files." >&2
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration must modify exactly the six reviewed files." >&2
                 exit 1
               fi
               for ((index = 0; index < ${#expected_v4032_crun_diff[@]}; index++)); do
@@ -1363,6 +1369,8 @@ jobs:
                 ".github/workflows/release-qualification.yml"
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/release_qualification_workflow_test.py"
+                "src/core/syswarden-cli/pkg/security/hardening_linux_test.go"
+                "src/core/syswarden-cli/pkg/security/os_hardening_linux.go"
               )
               for tree_ref in HEAD^ HEAD; do
                 for fix_path in "${v4032_crun_paths[@]}"; do
