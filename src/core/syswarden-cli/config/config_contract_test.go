@@ -525,6 +525,38 @@ func TestEnsureDefaultsCompletesPartialConfigWithoutOverwritingOperatorState_SW_
 	}
 }
 
+func TestParseConfigRejectsSymlinkedConfigurationRoot_SW_CFG_001(t *testing.T) {
+	target := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "config")
+	if err := os.Symlink(target, configPath); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := GlobalConfig
+	previousState := CurrentLoadState()
+	active := &Config{SSHPort: "2222", FirewallBackend: "keep"}
+	GlobalConfig = active
+	t.Cleanup(func() {
+		GlobalConfig = previous
+		loadStateMu.Lock()
+		loadState = previousState
+		loadStateMu.Unlock()
+	})
+
+	want := fmt.Sprintf("configuration path %s is a symbolic link", configPath)
+	err := ParseConfig(configPath)
+	if err == nil || err.Error() != want {
+		t.Fatalf("ParseConfig() error = %v, want %q", err, want)
+	}
+	if GlobalConfig != active {
+		t.Fatal("rejected symlinked configuration root replaced the active configuration")
+	}
+	state := CurrentLoadState()
+	if !state.Degraded || state.Source != configPath || state.Error != want {
+		t.Fatalf("load state = %#v, want rejected symlink source and exact error", state)
+	}
+}
+
 func TestEnsureDefaultsRejectsSymlinkedOperatorModule_SW_CFG_001(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "config")
 	modules := filepath.Join(root, "modules")
