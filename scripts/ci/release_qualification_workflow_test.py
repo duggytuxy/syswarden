@@ -716,6 +716,89 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertNotIn("--tag-phase", self.workflow)
         self.assertNotIn("--require-tag", self.workflow)
 
+    def test_arm64_podman_trust_path_is_sealed_before_checkout(self) -> None:
+        step_name = "Seal Native ARM64 Podman Trust Path"
+        step = workflow_step(self.workflow, step_name)
+        self.assertIn(
+            "shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}", step
+        )
+        script = workflow_step_script(self.workflow, step_name)
+        for contract in (
+            'podman_parent="/usr/local/bin"',
+            "for trusted_parent in /usr /usr/bin /usr/local; do",
+            '"$(/usr/bin/stat -c \'%u:%g\' "${trusted_parent}")" != "0:0"',
+            "(( (8#${trusted_parent_mode} & 0022) != 0 ))",
+            "/usr/bin/bash",
+            "/usr/bin/chmod",
+            "/usr/bin/sha256sum",
+            "/usr/bin/stat",
+            "/usr/bin/sudo",
+            'podman_bin_tools=(',
+            "/usr/local/bin/podman",
+            "/usr/local/bin/crun",
+            "/usr/local/bin/runc",
+            "/usr/local/bin/pasta",
+            "/usr/local/bin/fuse-overlayfs",
+            "for podman_library_parent in /usr/local/lib /usr/local/lib/podman; do",
+            'podman_library_tools=(',
+            "/usr/local/lib/podman/conmon",
+            "/usr/local/lib/podman/rootlessport",
+            "/usr/local/lib/podman/netavark",
+            "/usr/local/lib/podman/catatonit",
+            "/usr/local/lib/podman/aardvark-dns",
+            "/usr/bin/sudo -n /usr/bin/chmod 0755 --",
+            '"${podman_parent}" "${podman_bin_tools[@]}"',
+            '"$(/usr/bin/stat -c \'%u:%g:%a\' "${podman_parent}")" != "0:0:755"',
+            "a2f6b73cc0f7018e2e8518338a4ec27db70148e1af86e16719235605aefd1df3",
+            "5884e882b252f4a8073fc22c66633993fb8e0adf79ecd1631b4d3e1f382f6f90",
+            "eb61412faa7ea9ee395b21f3a70def43238de0d7e120ae5e93f4f9528af5f5f4",
+            "4efb64a7a1125462cec5023c09384651654c15f294b3c59e0753e8e1536c068b",
+            "54461fe89d55222cde826b917e96b92c450031446841eeab672c6c70fcdc9822",
+            "36c2f2886f132e568636d018e491570c36364d9984f4df30a4616133f89c0119",
+            "dcc03958b573a8ddc189f5cd87b78913df129384cba59cb03093f1ff03417c53",
+            "b0fa7e4a1aacaed6dffe28131cff7d1d295f2d7653bc963d507f6a67009225d9",
+            "2d80e408dd2d393673e8970f201165df96f84e0dd91976d64b9c1cc77fde6bf9",
+            "75e90ba96e3fbe6c9ed9f994f821fc4e7af89273acb5022790b682674b6911df",
+            "844e4d8900fd6856d3f8f03a81599d6add195b69015de6b040c2da3b99bb7b95",
+            "/usr/bin/sha256sum --check --strict",
+            'test "$(/usr/local/bin/podman --version)" = "podman version 5.8.4"',
+        ):
+            self.assertIn(contract, script)
+        structure_guard = script.index(
+            'if [[ ! -d "${podman_parent}" || -L "${podman_parent}"'
+        )
+        tool_guard = script.index('for podman_tool in "${podman_bin_tools[@]}"; do')
+        seal = script.index("/usr/bin/sudo -n /usr/bin/chmod 0755 --")
+        attestation = script.index(
+            '"$(/usr/bin/stat -c \'%u:%g:%a\' "${podman_parent}")" != "0:0:755"'
+        )
+        digest = script.index("/usr/bin/sha256sum --check --strict")
+        version = script.index('/usr/local/bin/podman --version')
+        self.assertLess(structure_guard, tool_guard)
+        self.assertLess(tool_guard, seal)
+        self.assertLess(seal, attestation)
+        self.assertLess(attestation, digest)
+        self.assertLess(digest, version)
+        seal_step = self.workflow.index(f"      - name: {step_name}\n")
+        checkout_step = self.workflow.index(
+            "      - name: Checkout Exact ARM64 Candidate Commit\n"
+        )
+        context_step = self.workflow.index(
+            "      - name: Validate Native ARM64 Shard Context\n"
+        )
+        self.assertLess(seal_step, checkout_step)
+        self.assertLess(checkout_step, context_step)
+        for forbidden in (
+            "./scripts/",
+            "git ",
+            "curl ",
+            "apt-get",
+            "command -v",
+            "chmod -R",
+            "|| true",
+        ):
+            self.assertNotIn(forbidden, script)
+
     def test_package_main_is_independently_resolved_on_hosted_runner(self) -> None:
         for step_name in (
             "Resolve Unique Successful Main Package Artifact",
@@ -921,6 +1004,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             'sudo -n stat -c \'%u:%g:%a\' "${delegate_drop_in}"',
             "'cgroup_manager=\"systemd\"'",
             "'runtime=\"runc\"'",
+            "'[engine.runtimes]'",
+            "'runc = [\"/usr/local/bin/runc\"]'",
             '"$(stat -c \'%a\' "${containers_override}")" != "600"',
             'unit_name="syswarden-arm64-lifecycle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
             'sudo -n systemd-run',
@@ -931,6 +1016,10 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '--setenv="CONTAINERS_CONF_OVERRIDE=${containers_override}"',
             '--setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus"',
             "--setenv='PYTHONDONTWRITEBYTECODE=1'",
+            "/usr/bin/bash --noprofile --norc -e -o pipefail -c",
+            'runtime_path="$(/usr/local/bin/podman info --format "{{.Host.OCIRuntime.Path}}")"',
+            'test "${runtime_path}" = "/usr/local/bin/runc"; exec "$@"',
+            "syswarden-arm64-lifecycle",
             '/usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py"',
             '--podman /usr/local/bin/podman',
             'sudo -n rm -f -- "${delegate_drop_in}"',
