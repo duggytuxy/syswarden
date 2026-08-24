@@ -136,17 +136,75 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_compliance_parent_sha="$(git rev-parse HEAD^)"
+              v4032_crun_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_crun_parent_sha}" != "b74756b71e26e39b98c7fa60b65a3486adfde3e8" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration is not based on the reviewed PR104 squash." >&2
+                exit 1
+              fi
+              v4032_crun_expected_subject='Qualification : restore v4.03.2 ARM64 crun runtime (#108)'
+              if [[ "${commit_subject}" != "${v4032_crun_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_crun_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_crun_head_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 ARM64 crun runtime restoration diff contract
+              expected_v4032_crun_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+              )
+              mapfile -d '' -t actual_v4032_crun_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_crun_diff[@]} != ${#expected_v4032_crun_diff[@]} )); then
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_crun_diff[@]}; index++)); do
+                if [[ "${actual_v4032_crun_diff[index]}" != "${expected_v4032_crun_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 ARM64 crun runtime restoration contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_crun_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_crun_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 ARM64 crun runtime restoration ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 ARM64 crun runtime restoration diff contract
+              v4032_compliance_ref=HEAD^
+              v4032_compliance_parent_sha="$(git rev-parse "${v4032_compliance_ref}^")"
               if [[ "${v4032_compliance_parent_sha}" != "ba1e853c11033f6abcd674dc7c251848f347e55b" ]]; then
                 echo "ERROR: the v4.03.2 compliance release verdict is not based on the reviewed PR103 squash." >&2
                 exit 1
               fi
               v4032_compliance_expected_subject='Security : enforce v4.03.2 compliance release verdict (#104)'
-              if [[ "${commit_subject}" != "${v4032_compliance_expected_subject}" ]]; then
+              v4032_compliance_subject="$(git log -1 --format=%s "${v4032_compliance_ref}")"
+              if [[ "${v4032_compliance_subject}" != "${v4032_compliance_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 compliance release verdict requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_compliance_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_compliance_head_line <<< "$(git rev-list --parents -n 1 "${v4032_compliance_ref}")"
               if (( ${#v4032_compliance_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 compliance release verdict must be one linear commit." >&2
                 exit 1
@@ -167,7 +225,8 @@ jobs:
                 M "scripts/ci/workflow_required_checks_test.py"
               )
               mapfile -d '' -t actual_v4032_compliance_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_compliance_ref}^" "${v4032_compliance_ref}"
               )
               if (( ${#actual_v4032_compliance_diff[@]} != ${#expected_v4032_compliance_diff[@]} )); then
                 echo "ERROR: the v4.03.2 compliance release verdict must modify exactly the twelve reviewed files." >&2
@@ -193,7 +252,7 @@ jobs:
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/workflow_required_checks_test.py"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_compliance_ref}^" "${v4032_compliance_ref}"; do
                 for fix_path in "${v4032_compliance_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -208,7 +267,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 compliance release verdict diff contract
-              v4032_init_runtime_ref=HEAD^
+              v4032_init_runtime_ref="${v4032_compliance_ref}^"
               v4032_init_runtime_parent_sha="$(git rev-parse "${v4032_init_runtime_ref}^")"
               if [[ "${v4032_init_runtime_parent_sha}" != "97ebc9991fdeec293abd04444ad6600f11c30ee4" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 init runtime repair is not based on the reviewed PR102 squash." >&2
@@ -1264,17 +1323,75 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_compliance_parent_sha="$(git rev-parse HEAD^)"
+              v4032_crun_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_crun_parent_sha}" != "b74756b71e26e39b98c7fa60b65a3486adfde3e8" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration is not based on the reviewed PR104 squash." >&2
+                exit 1
+              fi
+              v4032_crun_expected_subject='Qualification : restore v4.03.2 ARM64 crun runtime (#108)'
+              if [[ "${commit_subject}" != "${v4032_crun_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_crun_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_crun_head_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 ARM64 crun runtime restoration diff contract
+              expected_v4032_crun_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+              )
+              mapfile -d '' -t actual_v4032_crun_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_crun_diff[@]} != ${#expected_v4032_crun_diff[@]} )); then
+                echo "ERROR: the v4.03.2 ARM64 crun runtime restoration must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_crun_diff[@]}; index++)); do
+                if [[ "${actual_v4032_crun_diff[index]}" != "${expected_v4032_crun_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 ARM64 crun runtime restoration contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_crun_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_crun_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 ARM64 crun runtime restoration ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 ARM64 crun runtime restoration diff contract
+              v4032_compliance_ref=HEAD^
+              v4032_compliance_parent_sha="$(git rev-parse "${v4032_compliance_ref}^")"
               if [[ "${v4032_compliance_parent_sha}" != "ba1e853c11033f6abcd674dc7c251848f347e55b" ]]; then
                 echo "ERROR: the v4.03.2 compliance release verdict is not based on the reviewed PR103 squash." >&2
                 exit 1
               fi
               v4032_compliance_expected_subject='Security : enforce v4.03.2 compliance release verdict (#104)'
-              if [[ "${commit_subject}" != "${v4032_compliance_expected_subject}" ]]; then
+              v4032_compliance_subject="$(git log -1 --format=%s "${v4032_compliance_ref}")"
+              if [[ "${v4032_compliance_subject}" != "${v4032_compliance_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 compliance release verdict requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_compliance_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_compliance_head_line <<< "$(git rev-list --parents -n 1 "${v4032_compliance_ref}")"
               if (( ${#v4032_compliance_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 compliance release verdict must be one linear commit." >&2
                 exit 1
@@ -1295,7 +1412,8 @@ jobs:
                 M "scripts/ci/workflow_required_checks_test.py"
               )
               mapfile -d '' -t actual_v4032_compliance_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_compliance_ref}^" "${v4032_compliance_ref}"
               )
               if (( ${#actual_v4032_compliance_diff[@]} != ${#expected_v4032_compliance_diff[@]} )); then
                 echo "ERROR: the v4.03.2 compliance release verdict must modify exactly the twelve reviewed files." >&2
@@ -1321,7 +1439,7 @@ jobs:
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/workflow_required_checks_test.py"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_compliance_ref}^" "${v4032_compliance_ref}"; do
                 for fix_path in "${v4032_compliance_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -1336,7 +1454,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 compliance release verdict diff contract
-              v4032_init_runtime_ref=HEAD^
+              v4032_init_runtime_ref="${v4032_compliance_ref}^"
               v4032_init_runtime_parent_sha="$(git rev-parse "${v4032_init_runtime_ref}^")"
               if [[ "${v4032_init_runtime_parent_sha}" != "97ebc9991fdeec293abd04444ad6600f11c30ee4" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 init runtime repair is not based on the reviewed PR102 squash." >&2
