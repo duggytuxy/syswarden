@@ -58,11 +58,13 @@ jobs:
           user_name="$(id -un)"
           runtime_dir="/run/user/${user_id}"
           delegate_drop_in="/etc/systemd/system/user@.service.d/syswarden-delegate.conf"
+          containers_override="${RUNNER_TEMP}/syswarden-containers-override.conf"
           cleanup() {
             set +e
             sudo systemctl stop "user@${user_id}.service"
             sudo rm -f "${delegate_drop_in}"
             sudo systemctl daemon-reload
+            rm -f "${containers_override}"
           }
           trap cleanup EXIT
 
@@ -74,6 +76,11 @@ jobs:
           sudo chmod 0644 "${delegate_drop_in}"
           sudo systemctl daemon-reload
           sudo systemctl stop "user@${user_id}.service" || true
+          umask 077
+          printf '%s\n' \
+            '[engine]' \
+            'cgroup_manager="systemd"' > "${containers_override}"
+          test "$(stat -c '%a' "${containers_override}")" = "600"
 
           unit_name="syswarden-arm64-cgroup-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo systemd-run \
@@ -90,6 +97,7 @@ jobs:
             --setenv="PATH=${PATH}" \
             --setenv="RUNNER_TEMP=${RUNNER_TEMP}" \
             --setenv="XDG_RUNTIME_DIR=${runtime_dir}" \
+            --setenv="CONTAINERS_CONF_OVERRIDE=${containers_override}" \
             /bin/bash -euo pipefail -s <<'SCOPED'
           test "$(id -u)" -gt 0
           printf 'scope_cgroup=%s\n' \
@@ -113,4 +121,13 @@ jobs:
             .host.os == "linux" and
             (["cpu", "io", "memory", "pids"] - .host.cgroupControllers | length == 0)
           ' "${RUNNER_TEMP}/podman-info.json" >/dev/null
+          podman run \
+            --rm \
+            --pull=always \
+            --network=none \
+            --memory=64m \
+            --pids-limit=32 \
+            --platform=linux/arm64 \
+            docker.io/library/alpine:3.22@sha256:2c9d26f410d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37 \
+            /bin/true
           SCOPED
