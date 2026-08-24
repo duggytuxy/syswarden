@@ -5,7 +5,7 @@ go 1.26.6
 require (
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/go-playground/validator/v10 v10.30.3
-	github.com/pelletier/go-toml/v2 v2.2.4
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/rivo/tview v0.42.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
