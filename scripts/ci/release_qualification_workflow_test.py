@@ -254,6 +254,47 @@ def run_arm_verdict(
         )
 
 
+def run_arm_seal(
+    script: str,
+    report: dict[str, object] | None,
+    status: str = "0\n",
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    with tempfile.TemporaryDirectory() as temporary:
+        evidence_directory = Path(temporary) / "evidence"
+        evidence_directory.mkdir()
+        if report is not None:
+            (evidence_directory / "package-lifecycle-arm64.json").write_text(
+                json.dumps(report, separators=(",", ":")),
+                encoding="utf-8",
+            )
+        (evidence_directory / "package-lifecycle-arm64.rc").write_text(
+            status,
+            encoding="utf-8",
+        )
+        github_output = Path(temporary) / "github-output"
+        process_environment = os.environ.copy()
+        process_environment.update(
+            {
+                "ARM_EVIDENCE_DIR": str(evidence_directory),
+                "GITHUB_OUTPUT": str(github_output),
+                "GITHUB_RUN_ATTEMPT": "1",
+                "GITHUB_RUN_ID": "123456",
+                "RELEASE_SHA": "a" * 40,
+            }
+        )
+        result = subprocess.run(
+            ["/bin/bash", "-c", script],
+            cwd=REPOSITORY,
+            env=process_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        output = github_output.read_text(encoding="utf-8") if github_output.exists() else ""
+        return result, output
+
+
 def run_unsigned_artifact_resolver(
     script: str,
     artifacts: list[dict[str, object]],
@@ -762,6 +803,11 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "844e4d8900fd6856d3f8f03a81599d6add195b69015de6b040c2da3b99bb7b95",
             "/usr/bin/sha256sum --check --strict",
             'test "$(/usr/local/bin/podman --version)" = "podman version 5.8.4"',
+            'expected_native_runtime="/usr/local/bin/crun"',
+            'if ! native_runtime_path="$(/usr/local/bin/podman info --format "{{.Host.OCIRuntime.Path}}")"',
+            "native ARM64 Podman could not resolve its OCI runtime before checkout",
+            '"${native_runtime_path}" != "${expected_native_runtime}"',
+            "native ARM64 Podman resolved an unexpected OCI runtime path",
         ):
             self.assertIn(contract, script)
         structure_guard = script.index(
@@ -774,11 +820,13 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         )
         digest = script.index("/usr/bin/sha256sum --check --strict")
         version = script.index('/usr/local/bin/podman --version')
+        runtime_probe = script.index('/usr/local/bin/podman info --format')
         self.assertLess(structure_guard, tool_guard)
         self.assertLess(tool_guard, seal)
         self.assertLess(seal, attestation)
         self.assertLess(attestation, digest)
         self.assertLess(digest, version)
+        self.assertLess(version, runtime_probe)
         seal_step = self.workflow.index(f"      - name: {step_name}\n")
         checkout_step = self.workflow.index(
             "      - name: Checkout Exact ARM64 Candidate Commit\n"
@@ -1003,9 +1051,9 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             'sudo -n test -d "${delegate_directory}"',
             'sudo -n stat -c \'%u:%g:%a\' "${delegate_drop_in}"',
             "'cgroup_manager=\"systemd\"'",
-            "'runtime=\"runc\"'",
+            "'runtime=\"crun\"'",
             "'[engine.runtimes]'",
-            "'runc = [\"/usr/local/bin/runc\"]'",
+            "'crun = [\"/usr/local/bin/crun\"]'",
             '"$(stat -c \'%a\' "${containers_override}")" != "600"',
             'unit_name="syswarden-arm64-lifecycle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
             'sudo -n systemd-run',
@@ -1017,8 +1065,11 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '--setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus"',
             "--setenv='PYTHONDONTWRITEBYTECODE=1'",
             "/usr/bin/bash --noprofile --norc -e -o pipefail -c",
-            'runtime_path="$(/usr/local/bin/podman info --format "{{.Host.OCIRuntime.Path}}")"',
-            'test "${runtime_path}" = "/usr/local/bin/runc"; exec "$@"',
+            'if ! runtime_path="$(/usr/local/bin/podman info --format "{{.Host.OCIRuntime.Path}}")"',
+            '"${runtime_path}" != "/usr/local/bin/crun"',
+            "native ARM64 Podman could not resolve its OCI runtime",
+            "native ARM64 Podman resolved an unexpected OCI runtime path",
+            'exec "$@"',
             "syswarden-arm64-lifecycle",
             '/usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py"',
             '--podman /usr/local/bin/podman',
@@ -1030,6 +1081,12 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             'arm_cleanup_completed=true',
             'trap - EXIT',
             'ARM64 delegated session cleanup or restoration failed.',
+            'report="${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.json"',
+            'if [[ ! -e "${report}" && ! -L "${report}" ]]',
+            "native ARM64 lifecycle command exited before producing its canonical report",
+            "schema_version: 4",
+            'unexpected_failed_checks: ["harness:" + $error]',
+            'chmod 0600 "${report}"',
         ):
             self.assertIn(contract, script)
         for forbidden in (
@@ -1219,6 +1276,72 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 self.assertNotEqual(rejected.returncode, 0)
         rejected_rc = run_arm_verdict(verdict_script, valid_report, "1\n")
         self.assertNotEqual(rejected_rc.returncode, 0)
+
+    def test_arm64_missing_report_recovery_and_seal_failure_evidence(self) -> None:
+        lifecycle_script = workflow_step_script(
+            self.workflow, "Run Native ARM64 Package Lifecycle Shard"
+        )
+        recovery_marker = 'report="${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.json"'
+        self.assertEqual(lifecycle_script.count(recovery_marker), 1)
+        recovery_script = (
+            "set -euo pipefail\nshard_rc=1\n"
+            + recovery_marker
+            + lifecycle_script.split(recovery_marker, 1)[1]
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            process_environment = os.environ.copy()
+            process_environment["ARM_EVIDENCE_DIR"] = temporary
+            recovered = subprocess.run(
+                ["/bin/bash", "-c", recovery_script],
+                cwd=REPOSITORY,
+                env=process_environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(recovered.returncode, 0, recovered.stderr)
+            recovered_report_path = Path(temporary) / "package-lifecycle-arm64.json"
+            recovered_report = json.loads(
+                recovered_report_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(recovered_report["schema_version"], 4)
+            self.assertEqual(recovered_report["status"], "fail")
+            self.assertFalse(recovered_report["harness_complete"])
+            self.assertFalse(recovered_report["release_ready"])
+            self.assertIn("rc=1", recovered_report["error"])
+            self.assertEqual(recovered_report_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                (Path(temporary) / "package-lifecycle-arm64.rc").read_text(
+                    encoding="utf-8"
+                ),
+                "1\n",
+            )
+
+        seal_script = workflow_step_script(
+            self.workflow, "Seal Native ARM64 Package Lifecycle Shard"
+        )
+        valid_report: dict[str, object] = {
+            "status": "pass",
+            "harness_complete": True,
+            "release_ready": True,
+            "blocker_ids": [],
+            "unexpected_failed_checks": [],
+        }
+        accepted, github_output = run_arm_seal(seal_script, valid_report)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIn("artifact_name=syswarden-package-lifecycle-arm64-", github_output)
+        self.assertRegex(github_output, r"(?m)^report_sha256=[0-9a-f]{64}$")
+
+        missing, _ = run_arm_seal(seal_script, None)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("lifecycle evidence file is absent or invalid", missing.stderr)
+
+        failure_evidence, github_output = run_arm_seal(
+            seal_script, valid_report, "1\n"
+        )
+        self.assertEqual(failure_evidence.returncode, 0, failure_evidence.stderr)
+        self.assertRegex(github_output, r"(?m)^report_sha256=[0-9a-f]{64}$")
 
     def test_unsigned_inventory_diff_uses_supported_gnu_invocation(self) -> None:
         inventory = workflow_step_script(

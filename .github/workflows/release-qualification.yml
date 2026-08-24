@@ -158,6 +158,16 @@ jobs:
             '844e4d8900fd6856d3f8f03a81599d6add195b69015de6b040c2da3b99bb7b95  /usr/local/lib/podman/aardvark-dns' | \
             /usr/bin/sha256sum --check --strict
           test "$(/usr/local/bin/podman --version)" = "podman version 5.8.4"
+          expected_native_runtime="/usr/local/bin/crun"
+          if ! native_runtime_path="$(/usr/local/bin/podman info --format "{{.Host.OCIRuntime.Path}}")"; then
+            echo "ERROR: native ARM64 Podman could not resolve its OCI runtime before checkout." >&2
+            exit 1
+          fi
+          if [[ "${native_runtime_path}" != "${expected_native_runtime}" ]]; then
+            printf 'ERROR: native ARM64 Podman resolved an unexpected OCI runtime path: %q.\n' \
+              "${native_runtime_path}" >&2
+            exit 1
+          fi
 
       - name: Checkout Exact ARM64 Candidate Commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -570,9 +580,9 @@ jobs:
           printf '%s\n' \
             '[engine]' \
             'cgroup_manager="systemd"' \
-            'runtime="runc"' \
+            'runtime="crun"' \
             '[engine.runtimes]' \
-            'runc = ["/usr/local/bin/runc"]' > "${containers_override}"
+            'crun = ["/usr/local/bin/crun"]' > "${containers_override}"
           if [[ ! -f "${containers_override}" || -L "${containers_override}" || \
                 "$(stat -c '%u' "${containers_override}")" != "${user_id}" || \
                 "$(stat -c '%a' "${containers_override}")" != "600" ]]; then
@@ -602,7 +612,7 @@ jobs:
             --setenv="RUNNER_TEMP=${RUNNER_TEMP}" \
             --setenv="XDG_RUNTIME_DIR=${runtime_dir}" \
             /usr/bin/bash --noprofile --norc -e -o pipefail -c \
-            'runtime_path="$(/usr/local/bin/podman info --format "{{.Host.OCIRuntime.Path}}")"; test "${runtime_path}" = "/usr/local/bin/runc"; exec "$@"' \
+            'if ! runtime_path="$(/usr/local/bin/podman info --format "{{.Host.OCIRuntime.Path}}")"; then echo "ERROR: native ARM64 Podman could not resolve its OCI runtime." >&2; exit 1; fi; if [[ "${runtime_path}" != "/usr/local/bin/crun" ]]; then printf "ERROR: native ARM64 Podman resolved an unexpected OCI runtime path: %q.\n" "${runtime_path}" >&2; exit 1; fi; exec "$@"' \
             syswarden-arm64-lifecycle \
             /usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py" \
             --packages-dir "${ARM_CANDIDATE_PACKAGES_DIR}" \
@@ -636,6 +646,25 @@ jobs:
               shard_rc=1
             fi
           fi
+          report="${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.json"
+          if [[ ! -e "${report}" && ! -L "${report}" ]]; then
+            error_message="native ARM64 lifecycle command exited before producing its canonical report (rc=${shard_rc})"
+            generated_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            jq -n \
+              --arg error "${error_message}" \
+              --arg generated_at "${generated_at}" \
+              '{
+                schema_version: 4,
+                generated_at: $generated_at,
+                status: "fail",
+                harness_complete: false,
+                release_ready: false,
+                blocker_ids: [],
+                unexpected_failed_checks: ["harness:" + $error],
+                error: $error
+              }' > "${report}"
+            chmod 0600 "${report}"
+          fi
           printf '%s\n' "${shard_rc}" > \
             "${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.rc"
           chmod 0600 "${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.rc"
@@ -651,9 +680,10 @@ jobs:
           report="${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.json"
           status="${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.rc"
           for path in "${report}" "${status}"; do
-            test -s "${path}"
-            test -f "${path}"
-            test ! -L "${path}"
+            if [[ ! -s "${path}" || ! -f "${path}" || -L "${path}" ]]; then
+              echo "ERROR: the native ARM64 lifecycle evidence file is absent or invalid: ${path}." >&2
+              exit 1
+            fi
           done
           report_sha256="$(sha256sum "${report}")"
           report_sha256="${report_sha256%% *}"
