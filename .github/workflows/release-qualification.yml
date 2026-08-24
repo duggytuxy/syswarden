@@ -91,13 +91,38 @@ jobs:
           test "$(uname -m)" = "aarch64"
           command -v gh >/dev/null
           command -v jq >/dev/null
-          command -v podman >/dev/null
           command -v python3 >/dev/null
           command -v runc >/dev/null
           command -v sha256sum >/dev/null
           command -v sudo >/dev/null
           command -v systemctl >/dev/null
           command -v systemd-run >/dev/null
+          podman_path="/usr/local/bin/podman"
+          for parent in /usr /usr/local /usr/local/bin; do
+            if [[ ! -d "${parent}" || -L "${parent}" || \
+                  "$(stat -c '%u:%g' "${parent}")" != "0:0" ]]; then
+              echo "ERROR: the native ARM64 Podman parent path is not a trusted root-owned directory: ${parent}." >&2
+              exit 1
+            fi
+            parent_mode="$(stat -c '%a' "${parent}")"
+            if [[ ! "${parent_mode}" =~ ^[0-7]{3,4}$ ]] || \
+               (( (8#${parent_mode} & 0022) != 0 )); then
+              echo "ERROR: the native ARM64 Podman parent path is writable by an untrusted account: ${parent}." >&2
+              exit 1
+            fi
+          done
+          if [[ ! -f "${podman_path}" || -L "${podman_path}" || \
+                ! -x "${podman_path}" || \
+                "$(stat -c '%u:%g' "${podman_path}")" != "0:0" ]]; then
+            echo "ERROR: the native ARM64 Podman executable is not the exact trusted regular file." >&2
+            exit 1
+          fi
+          podman_mode="$(stat -c '%a' "${podman_path}")"
+          if [[ ! "${podman_mode}" =~ ^[0-7]{3,4}$ ]] || \
+             (( (8#${podman_mode} & 0022) != 0 )); then
+            echo "ERROR: the native ARM64 Podman executable is writable by an untrusted account." >&2
+            exit 1
+          fi
 
       - name: Create Native ARM64 Shard Workspace
         id: arm_workspace
@@ -462,7 +487,7 @@ jobs:
             /usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py" \
             --packages-dir "${ARM_CANDIDATE_PACKAGES_DIR}" \
             --previous-packages-dir "${ARM_PREVIOUS_PACKAGES_DIR}" \
-            --podman /usr/bin/podman \
+            --podman /usr/local/bin/podman \
             --architecture-shard arm64 \
             --qualification-repository "${GITHUB_REPOSITORY}" \
             --qualification-release-sha "${RELEASE_SHA}" \
@@ -534,6 +559,36 @@ jobs:
           if-no-files-found: error
           retention-days: 3
           compression-level: 0
+
+      - name: Enforce Native ARM64 Package Lifecycle Verdict
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.json"
+          status="${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.rc"
+          test -s "${report}"
+          test -f "${report}"
+          test ! -L "${report}"
+          test -s "${status}"
+          test -f "${status}"
+          test ! -L "${status}"
+          shard_rc="$(cat "${status}")"
+          if [[ ! "${shard_rc}" =~ ^[0-9]+$ || "${shard_rc}" != "0" ]]; then
+            echo "ERROR: the native ARM64 package lifecycle command failed with rc=${shard_rc}." >&2
+            exit 1
+          fi
+          if ! jq -e '
+            type == "object" and
+            .status == "pass" and
+            .harness_complete == true and
+            .release_ready == true and
+            (.blocker_ids | type == "array" and length == 0) and
+            (.unexpected_failed_checks | type == "array" and length == 0) and
+            (has("error") | not)
+          ' "${report}" >/dev/null; then
+            echo "ERROR: the native ARM64 package lifecycle report is not release-ready." >&2
+            exit 1
+          fi
 
   qualify-release:
     name: Qualify Exact Pre-Tag Commit
@@ -1375,7 +1430,7 @@ jobs:
           )
           if [[ "${sorted_expected[*]}" != "${actual_before_manifest[*]}" ]]; then
             echo "ERROR: qualification evidence inventory is incomplete or contains unexpected files." >&2
-            diff --no-index \
+            diff -u \
               <(printf '%s\n' "${sorted_expected[@]}") \
               <(printf '%s\n' "${actual_before_manifest[@]}") >&2 || true
             exit 1

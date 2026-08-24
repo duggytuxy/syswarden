@@ -63,6 +63,7 @@ name="syswarden-firewall"
 description="SYSWARDEN Firewall Persistence & Engine Loader"
 
 depend() {
+	need net rsyslog cronie
 	before syswarden-core
 }
 
@@ -72,6 +73,23 @@ start() {
 	eend $?
 }
 `
+	historicalV4028OpenRCFirewallService = `#!/sbin/openrc-run
+
+name="syswarden-firewall"
+description="SYSWARDEN Firewall Persistence & Engine Loader"
+
+depend() {
+	before syswarden-core
+}
+
+start() {
+	ebegin "Loading SYSWARDEN Firewall Persistence"
+	/opt/syswarden/bin/syswarden-cli reload --no-restart
+	eend $?
+}
+`
+	historicalV4028OpenRCFirewallServiceLength = 269
+	historicalV4028OpenRCFirewallServiceSHA256 = "82a936e4f9ce394d6cc0ffd3978a1842a899570842ab5d283184384e73af5905"
 
 	systemdCoreService = `[Unit]
 Description=SYSWARDEN WAF and Core Engine
@@ -138,6 +156,21 @@ WantedBy=multi-user.target
 
 	systemdFirewallService = `[Unit]
 Description=SYSWARDEN Firewall Persistence & Engine Loader
+After=network-online.target rsyslog.service cron.service crond.service
+Wants=network-online.target
+Before=syswarden-core.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/syswarden/bin/syswarden-cli reload --no-restart
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+`
+	historicalV4028SystemdFirewallService = `[Unit]
+Description=SYSWARDEN Firewall Persistence & Engine Loader
 After=network-online.target
 Wants=network-online.target
 Before=syswarden-core.service
@@ -151,6 +184,8 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 `
+	historicalV4028SystemdFirewallServiceLength = 307
+	historicalV4028SystemdFirewallServiceSHA256 = "bc730793c007273a380261155b7602571c42efd93972f45ad2dd440f98251724"
 )
 
 var (
@@ -231,7 +266,20 @@ func classifyServiceManagerRuntimePaths(
 			return serviceManagerAmbiguous, fmt.Errorf("inspect systemd runtime parent %s: %w", systemdParent, err)
 		}
 	}
-	expectedPresent, err := attestRuntimeDirectory(expectedPath, hostStat.Uid, hostStat.Gid)
+	var openRCRuntimeProof *openRCRuntimeDirectoryProof
+	var expectedPresent bool
+	if alpine {
+		openRCRuntimeProof, expectedPresent, err = beginOpenRCRuntimeDirectoryAttestation(
+			expectedPath,
+			hostStat.Uid,
+			hostStat.Gid,
+		)
+		if openRCRuntimeProof != nil {
+			defer func() { _ = openRCRuntimeProof.directory.Close() }()
+		}
+	} else {
+		expectedPresent, err = attestRuntimeDirectory(expectedPath, hostStat.Uid, hostStat.Gid)
+	}
 	if err != nil {
 		return serviceManagerAmbiguous, err
 	}
@@ -245,7 +293,13 @@ func classifyServiceManagerRuntimePaths(
 	if expectedPresent {
 		pid1CommPath := filepath.Join(hostRoot, "proc", "1", "comm")
 		if alpine {
-			if err := attestOpenRCRuntime(expectedPath, pid1CommPath, hostStat.Uid, hostStat.Gid); err != nil {
+			if err := attestOpenRCRuntime(
+				expectedPath,
+				pid1CommPath,
+				hostStat.Uid,
+				hostStat.Gid,
+				openRCRuntimeProof,
+			); err != nil {
 				return serviceManagerAmbiguous, err
 			}
 		} else if err := attestSystemdRuntime(pid1CommPath, filepath.Join(hostRoot, "proc", "1", "exe"), hostStat.Uid, hostStat.Gid); err != nil {
@@ -290,6 +344,90 @@ func attestRuntimeDirectory(path string, expectedUID, expectedGID uint32) (bool,
 	return true, nil
 }
 
+type openRCRuntimeDirectoryProof struct {
+	path      string
+	directory *os.File
+	info      os.FileInfo
+}
+
+func safeOpenRCRuntimeDirectory(info os.FileInfo, expectedUID, expectedGID uint32) bool {
+	if info == nil {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	unsafeMode := os.ModeSymlink | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+	if !ok || !info.IsDir() || info.Mode()&unsafeMode != 0 ||
+		stat.Uid != expectedUID || stat.Gid != expectedGID {
+		return false
+	}
+	return info.Mode().Perm() == 0755 || info.Mode().Perm() == 0775
+}
+
+func sameOpenRCRuntimeDirectory(
+	first os.FileInfo,
+	second os.FileInfo,
+	expectedUID uint32,
+	expectedGID uint32,
+) bool {
+	return first != nil && second != nil && os.SameFile(first, second) &&
+		first.Mode() == second.Mode() &&
+		safeOpenRCRuntimeDirectory(first, expectedUID, expectedGID) &&
+		safeOpenRCRuntimeDirectory(second, expectedUID, expectedGID)
+}
+
+func beginOpenRCRuntimeDirectoryAttestation(
+	path string,
+	expectedUID uint32,
+	expectedGID uint32,
+) (*openRCRuntimeDirectoryProof, bool, error) {
+	if filepath.Clean(path) != path {
+		return nil, false, fmt.Errorf("refusing non-canonical service-manager runtime %s", path)
+	}
+	before, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect service-manager runtime %s: %w", path, err)
+	}
+	if !safeOpenRCRuntimeDirectory(before, expectedUID, expectedGID) {
+		return nil, false, fmt.Errorf("refusing unsafe service-manager runtime %s", path)
+	}
+	directory, err := os.Open(path) // #nosec G304 -- the expected OpenRC runtime is lstat/fstat identity attested
+	if err != nil {
+		return nil, false, fmt.Errorf("open service-manager runtime %s: %w", path, err)
+	}
+	opened, statErr := directory.Stat()
+	if statErr != nil || !sameOpenRCRuntimeDirectory(
+		before,
+		opened,
+		expectedUID,
+		expectedGID,
+	) {
+		_ = directory.Close()
+		return nil, false, fmt.Errorf("service-manager runtime %s changed while opening", path)
+	}
+	return &openRCRuntimeDirectoryProof{
+		path:      path,
+		directory: directory,
+		info:      opened,
+	}, true, nil
+}
+
+func (proof *openRCRuntimeDirectoryProof) reattest(expectedUID, expectedGID uint32) error {
+	if proof == nil || proof.directory == nil {
+		return fmt.Errorf("OpenRC service-manager runtime proof is unavailable")
+	}
+	opened, openedErr := proof.directory.Stat()
+	after, afterErr := os.Lstat(proof.path)
+	if openedErr != nil || afterErr != nil ||
+		!sameOpenRCRuntimeDirectory(proof.info, opened, expectedUID, expectedGID) ||
+		!sameOpenRCRuntimeDirectory(proof.info, after, expectedUID, expectedGID) {
+		return fmt.Errorf("OpenRC service-manager runtime %s changed while attesting", proof.path)
+	}
+	return nil
+}
+
 func readAttestedRuntimeFile(path string, expectedUID, expectedGID uint32, limit int64) (string, error) {
 	before, err := os.Lstat(path)
 	if err != nil {
@@ -317,7 +455,16 @@ func readAttestedRuntimeFile(path string, expectedUID, expectedGID uint32, limit
 	return string(content), nil
 }
 
-func attestOpenRCRuntime(runtimePath, pid1CommPath string, expectedUID, expectedGID uint32) error {
+func attestOpenRCRuntime(
+	runtimePath string,
+	pid1CommPath string,
+	expectedUID uint32,
+	expectedGID uint32,
+	runtimeProof *openRCRuntimeDirectoryProof,
+) error {
+	if runtimeProof == nil || runtimeProof.path != runtimePath {
+		return fmt.Errorf("OpenRC service-manager runtime proof does not match %s", runtimePath)
+	}
 	softlevel, err := readAttestedRuntimeFile(filepath.Join(runtimePath, "softlevel"), expectedUID, expectedGID, 64)
 	if err != nil {
 		return fmt.Errorf("attest OpenRC softlevel: %w", err)
@@ -339,7 +486,7 @@ func attestOpenRCRuntime(runtimePath, pid1CommPath string, expectedUID, expected
 	if comm != "init\n" && comm != "openrc-init\n" {
 		return fmt.Errorf("PID 1 identity %q is not coherent with OpenRC", strings.TrimSpace(comm))
 	}
-	return nil
+	return runtimeProof.reattest(expectedUID, expectedGID)
 }
 
 func attestSystemdRuntime(pid1CommPath, pid1ExecutablePath string, expectedUID, expectedGID uint32) error {
@@ -1749,7 +1896,12 @@ func publishOpenRCServices() error {
 			historicalContentLength: historicalV4028OpenRCCoreServiceLength,
 			historicalContentSHA256: historicalV4028OpenRCCoreServiceSHA256,
 		},
-		{path: filepath.Join(serviceOpenRCUnitDir, "syswarden-firewall"), content: openRCFirewallService, mode: 0755},
+		{
+			path: filepath.Join(serviceOpenRCUnitDir, "syswarden-firewall"), content: openRCFirewallService, mode: 0755,
+			historicalContent:       historicalV4028OpenRCFirewallService,
+			historicalContentLength: historicalV4028OpenRCFirewallServiceLength,
+			historicalContentSHA256: historicalV4028OpenRCFirewallServiceSHA256,
+		},
 		{path: filepath.Join(serviceOpenRCRunlevelDir, "syswarden-core"), target: "/etc/init.d/syswarden-core"},
 		{path: filepath.Join(serviceOpenRCRunlevelDir, "syswarden-firewall"), target: "/etc/init.d/syswarden-firewall"},
 	})
@@ -1765,7 +1917,12 @@ func publishSystemdServices() error {
 			historicalContentLength: historicalV4028SystemdCoreServiceLength,
 			historicalContentSHA256: historicalV4028SystemdCoreServiceSHA256,
 		},
-		{path: firewallUnitPath, content: systemdFirewallService, mode: 0600},
+		{
+			path: firewallUnitPath, content: systemdFirewallService, mode: 0600,
+			historicalContent:       historicalV4028SystemdFirewallService,
+			historicalContentLength: historicalV4028SystemdFirewallServiceLength,
+			historicalContentSHA256: historicalV4028SystemdFirewallServiceSHA256,
+		},
 		{
 			path: filepath.Join(serviceSystemdWantsDir, "syswarden-core.service"), target: "../syswarden-core.service",
 			legacyTargets:    []string{"/etc/systemd/system/syswarden-core.service"},

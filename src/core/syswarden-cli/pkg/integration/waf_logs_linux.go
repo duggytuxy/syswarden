@@ -133,22 +133,61 @@ func SetupWAFLogForwarder() error {
 }
 
 func restartManagedService(service string) error {
-	state, err := system.ServiceManagerRuntimeState()
+	return restartManagedServiceUsing(
+		service,
+		system.ServiceManagerRuntimeState,
+		system.IsAlpine,
+		func(name string, args ...string) error {
+			return exec.Command(name, args...).Run() // #nosec G204 -- callers pass fixed product integration service constants
+		},
+	)
+}
+
+func restartManagedServiceUsing(
+	service string,
+	classify func() (string, error),
+	isAlpine func() bool,
+	run func(string, ...string) error,
+) error {
+	state, err := classify()
 	if err != nil {
 		return err
 	}
 	switch state {
 	case "OFFLINE":
-		fmt.Printf("[INFO] Service-manager runtime is offline; %s restart is deferred to boot.\n", service)
+		fmt.Printf("[INFO] Service-manager runtime is offline; %s activation is deferred to boot.\n", service)
 		return nil
 	case "ACTIVE":
-		if system.IsAlpine() {
-			if err := exec.Command("rc-service", service, "restart").Run(); err != nil { // #nosec G204 -- caller passes fixed product integration service constants
+		if isAlpine() {
+			if service == "rsyslog" {
+				// The firewall OpenRC service needs rsyslog and invokes the reload
+				// pipeline during start. Stopping that dependency here creates a
+				// circular OpenRC wait. Rsyslog on Alpine does not apply new rules
+				// after its nominal reload action, so restart it without traversing
+				// the dependency graph after validating the complete configuration.
+				if err := run("/usr/sbin/rsyslogd", "-N1", "-f", "/etc/rsyslog.conf"); err != nil {
+					return fmt.Errorf("validate rsyslog configuration before OpenRC restart: %w", err)
+				}
+				if err := run("/sbin/rc-service", "--ifnotstarted", service, "start"); err != nil {
+					return fmt.Errorf("conditionally start OpenRC service %s with dependencies: %w", service, err)
+				}
+				if err := run("/sbin/rc-service", service, "status"); err != nil {
+					return fmt.Errorf("attest active OpenRC service %s before dependency-bypassing restart: %w", service, err)
+				}
+				if err := run("/sbin/rc-service", "--nodeps", service, "restart"); err != nil {
+					return fmt.Errorf("restart OpenRC service %s without dependency traversal: %w", service, err)
+				}
+				if err := run("/sbin/rc-service", service, "status"); err != nil {
+					return fmt.Errorf("attest restarted OpenRC service %s: %w", service, err)
+				}
+				return nil
+			}
+			if err := run("/sbin/rc-service", service, "restart"); err != nil {
 				return fmt.Errorf("restart OpenRC service %s: %w", service, err)
 			}
 			return nil
 		}
-		if err := exec.Command("systemctl", "restart", service).Run(); err != nil { // #nosec G204 -- caller passes fixed product integration service constants
+		if err := run("systemctl", "restart", service); err != nil {
 			return fmt.Errorf("restart systemd service %s: %w", service, err)
 		}
 		return nil

@@ -137,38 +137,62 @@ jobs:
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               v4032_parent_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4032_parent_sha}" != "3655abe045deffc669e0ba9c11a6e4cf17a317a5" ]]; then
-                echo "ERROR: the v4.03.2 qualification repair is not based on the reviewed release commit." >&2
+              if [[ "${v4032_parent_sha}" != "3839d592467a4f92f24b613412d8d89bb6905251" ]]; then
+                echo "ERROR: the v4.03.2 package lifecycle repair is not based on the reviewed qualification repair." >&2
                 exit 1
               fi
-              v4032_subject_pattern='^Qualification : repair v4\.03\.2 release qualification \(#[1-9][0-9]*\)$'
-              if [[ ! "${commit_subject}" =~ ${v4032_subject_pattern} ]]; then
-                echo "ERROR: the v4.03.2 qualification repair requires the exact reviewed squash subject." >&2
+              v4032_expected_subject='Qualification : repair v4.03.2 package lifecycle qualification (#95)'
+              if [[ "${commit_subject}" != "${v4032_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 package lifecycle repair requires the exact reviewed squash subject." >&2
                 exit 1
               fi
               read -r -a v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
               read -r -a v4032_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
-              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_parent_line[@]} != 2 )); then
-                echo "ERROR: the v4.03.2 qualification repair requires one linear follow-up after the reviewed release commit." >&2
+              read -r -a v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^^)"
+              if (( ${#v4032_head_line[@]} != 2 || \
+                    ${#v4032_parent_line[@]} != 2 || \
+                    ${#v4032_release_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 package lifecycle repair requires the reviewed three-commit linear chain." >&2
                 exit 1
               fi
               v4032_grandparent_sha="$(git rev-parse HEAD^^)"
-              if [[ "${v4032_grandparent_sha}" != "f2270a2a8138f1f2b72a6200f6febbdc83fa5eaa" ]]; then
+              if [[ "${v4032_grandparent_sha}" != "3655abe045deffc669e0ba9c11a6e4cf17a317a5" ]]; then
+                echo "ERROR: the v4.03.2 qualification repair is not based on the reviewed release commit." >&2
+                exit 1
+              fi
+              v4032_release_base_sha="$(git rev-parse HEAD^^^)"
+              if [[ "${v4032_release_base_sha}" != "f2270a2a8138f1f2b72a6200f6febbdc83fa5eaa" ]]; then
                 echo "ERROR: the v4.03.2 release commit does not have the reviewed Patch baseline." >&2
                 exit 1
               fi
               # BEGIN exact v4.03.2 preserved-version recovery diff contract
               expected_v4032_diff=(
+                M ".github/workflows/package.yml"
                 M ".github/workflows/release-manager.yml"
                 M ".github/workflows/release-qualification.yml"
+                M "build_packages.sh"
+                M "scripts/ci/package_lifecycle_contract_test.py"
+                M "scripts/ci/package_lifecycle_lab.py"
+                M "scripts/ci/package_lifecycle_lab_test.py"
+                M "scripts/ci/package_webtui_retirement.sh"
                 M "scripts/ci/release_gate_test.py"
                 M "scripts/ci/release_qualification_workflow_test.py"
+                M "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go"
+                M "src/core/syswarden-cli/pkg/integration/waf_logs_linux_test.go"
+                M "src/core/syswarden-cli/pkg/security/hardening_linux_helpers.go"
+                M "src/core/syswarden-cli/pkg/security/hardening_linux_test.go"
+                M "src/core/syswarden-cli/pkg/system/firewall_optimizer.go"
+                M "src/core/syswarden-cli/pkg/system/firewall_optimizer_test.go"
+                M "src/core/syswarden-cli/pkg/system/service_linux.go"
+                M "src/core/syswarden-cli/pkg/system/service_linux_test.go"
+                M "src/core/syswarden-cli/pkg/system/uninstall_linux.go"
+                M "src/core/syswarden-cli/pkg/system/uninstall_prepare_linux_test.go"
               )
               mapfile -d '' -t actual_v4032_diff < <(
                 git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
               )
               if (( ${#actual_v4032_diff[@]} != ${#expected_v4032_diff[@]} )); then
-                echo "ERROR: the v4.03.2 qualification repair must modify exactly the four reviewed files." >&2
+                echo "ERROR: the v4.03.2 package lifecycle repair must modify exactly the twenty reviewed files." >&2
                 exit 1
               fi
               for ((index = 0; index < ${#expected_v4032_diff[@]}; index++)); do
@@ -178,21 +202,41 @@ jobs:
                 fi
               done
               v4032_fix_paths=(
+                ".github/workflows/package.yml"
                 ".github/workflows/release-manager.yml"
                 ".github/workflows/release-qualification.yml"
+                "build_packages.sh"
+                "scripts/ci/package_lifecycle_contract_test.py"
+                "scripts/ci/package_lifecycle_lab.py"
+                "scripts/ci/package_lifecycle_lab_test.py"
+                "scripts/ci/package_webtui_retirement.sh"
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/release_qualification_workflow_test.py"
+                "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go"
+                "src/core/syswarden-cli/pkg/integration/waf_logs_linux_test.go"
+                "src/core/syswarden-cli/pkg/security/hardening_linux_helpers.go"
+                "src/core/syswarden-cli/pkg/security/hardening_linux_test.go"
+                "src/core/syswarden-cli/pkg/system/firewall_optimizer.go"
+                "src/core/syswarden-cli/pkg/system/firewall_optimizer_test.go"
+                "src/core/syswarden-cli/pkg/system/service_linux.go"
+                "src/core/syswarden-cli/pkg/system/service_linux_test.go"
+                "src/core/syswarden-cli/pkg/system/uninstall_linux.go"
+                "src/core/syswarden-cli/pkg/system/uninstall_prepare_linux_test.go"
               )
               for tree_ref in HEAD^ HEAD; do
                 for fix_path in "${v4032_fix_paths[@]}"; do
+                  expected_mode="100644"
+                  if [[ "${fix_path}" == "build_packages.sh" ]]; then
+                    expected_mode="100755"
+                  fi
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
-                  if [[ "${tree_mode}" != "100644" || \
+                  if [[ "${tree_mode}" != "${expected_mode}" || \
                         "${tree_type}" != "blob" || \
                         ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
                         "${tree_path}" != "${fix_path}" || \
                         -n "${tree_extra:-}" ]]; then
-                    echo "ERROR: reviewed v4.03.2 repair path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    echo "ERROR: reviewed v4.03.2 repair path ${fix_path} is not one exact ${expected_mode} blob at ${tree_ref}." >&2
                     exit 1
                   fi
                 done
@@ -211,8 +255,13 @@ jobs:
               ./scripts/versioning.sh validate-commit \
                 --repo "${GITHUB_WORKSPACE}" \
                 --base-ref "${v4032_grandparent_sha}" \
-                --tag-phase \
                 --commit-message "${v4032_parent_commit_message}"
+              v4032_release_commit_message="$(git log -1 --format=%B HEAD^^)"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4032_release_base_sha}" \
+                --tag-phase \
+                --commit-message "${v4032_release_commit_message}"
             else
               if [[ "${RELEASE_TAG}" != "v4.03.0" ]]; then
                 echo "ERROR: preserved-version release recovery is authorized only for v4.03.0 or v4.03.2." >&2
@@ -687,38 +736,62 @@ jobs:
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               v4032_parent_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4032_parent_sha}" != "3655abe045deffc669e0ba9c11a6e4cf17a317a5" ]]; then
-                echo "ERROR: the v4.03.2 qualification repair is not based on the reviewed release commit." >&2
+              if [[ "${v4032_parent_sha}" != "3839d592467a4f92f24b613412d8d89bb6905251" ]]; then
+                echo "ERROR: the v4.03.2 package lifecycle repair is not based on the reviewed qualification repair." >&2
                 exit 1
               fi
-              v4032_subject_pattern='^Qualification : repair v4\.03\.2 release qualification \(#[1-9][0-9]*\)$'
-              if [[ ! "${commit_subject}" =~ ${v4032_subject_pattern} ]]; then
-                echo "ERROR: the v4.03.2 qualification repair requires the exact reviewed squash subject." >&2
+              v4032_expected_subject='Qualification : repair v4.03.2 package lifecycle qualification (#95)'
+              if [[ "${commit_subject}" != "${v4032_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 package lifecycle repair requires the exact reviewed squash subject." >&2
                 exit 1
               fi
               read -r -a v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
               read -r -a v4032_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
-              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_parent_line[@]} != 2 )); then
-                echo "ERROR: the v4.03.2 qualification repair requires one linear follow-up after the reviewed release commit." >&2
+              read -r -a v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^^)"
+              if (( ${#v4032_head_line[@]} != 2 || \
+                    ${#v4032_parent_line[@]} != 2 || \
+                    ${#v4032_release_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 package lifecycle repair requires the reviewed three-commit linear chain." >&2
                 exit 1
               fi
               v4032_grandparent_sha="$(git rev-parse HEAD^^)"
-              if [[ "${v4032_grandparent_sha}" != "f2270a2a8138f1f2b72a6200f6febbdc83fa5eaa" ]]; then
+              if [[ "${v4032_grandparent_sha}" != "3655abe045deffc669e0ba9c11a6e4cf17a317a5" ]]; then
+                echo "ERROR: the v4.03.2 qualification repair is not based on the reviewed release commit." >&2
+                exit 1
+              fi
+              v4032_release_base_sha="$(git rev-parse HEAD^^^)"
+              if [[ "${v4032_release_base_sha}" != "f2270a2a8138f1f2b72a6200f6febbdc83fa5eaa" ]]; then
                 echo "ERROR: the v4.03.2 release commit does not have the reviewed Patch baseline." >&2
                 exit 1
               fi
               # BEGIN exact v4.03.2 preserved-version recovery diff contract
               expected_v4032_diff=(
+                M ".github/workflows/package.yml"
                 M ".github/workflows/release-manager.yml"
                 M ".github/workflows/release-qualification.yml"
+                M "build_packages.sh"
+                M "scripts/ci/package_lifecycle_contract_test.py"
+                M "scripts/ci/package_lifecycle_lab.py"
+                M "scripts/ci/package_lifecycle_lab_test.py"
+                M "scripts/ci/package_webtui_retirement.sh"
                 M "scripts/ci/release_gate_test.py"
                 M "scripts/ci/release_qualification_workflow_test.py"
+                M "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go"
+                M "src/core/syswarden-cli/pkg/integration/waf_logs_linux_test.go"
+                M "src/core/syswarden-cli/pkg/security/hardening_linux_helpers.go"
+                M "src/core/syswarden-cli/pkg/security/hardening_linux_test.go"
+                M "src/core/syswarden-cli/pkg/system/firewall_optimizer.go"
+                M "src/core/syswarden-cli/pkg/system/firewall_optimizer_test.go"
+                M "src/core/syswarden-cli/pkg/system/service_linux.go"
+                M "src/core/syswarden-cli/pkg/system/service_linux_test.go"
+                M "src/core/syswarden-cli/pkg/system/uninstall_linux.go"
+                M "src/core/syswarden-cli/pkg/system/uninstall_prepare_linux_test.go"
               )
               mapfile -d '' -t actual_v4032_diff < <(
                 git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
               )
               if (( ${#actual_v4032_diff[@]} != ${#expected_v4032_diff[@]} )); then
-                echo "ERROR: the v4.03.2 qualification repair must modify exactly the four reviewed files." >&2
+                echo "ERROR: the v4.03.2 package lifecycle repair must modify exactly the twenty reviewed files." >&2
                 exit 1
               fi
               for ((index = 0; index < ${#expected_v4032_diff[@]}; index++)); do
@@ -728,21 +801,41 @@ jobs:
                 fi
               done
               v4032_fix_paths=(
+                ".github/workflows/package.yml"
                 ".github/workflows/release-manager.yml"
                 ".github/workflows/release-qualification.yml"
+                "build_packages.sh"
+                "scripts/ci/package_lifecycle_contract_test.py"
+                "scripts/ci/package_lifecycle_lab.py"
+                "scripts/ci/package_lifecycle_lab_test.py"
+                "scripts/ci/package_webtui_retirement.sh"
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/release_qualification_workflow_test.py"
+                "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go"
+                "src/core/syswarden-cli/pkg/integration/waf_logs_linux_test.go"
+                "src/core/syswarden-cli/pkg/security/hardening_linux_helpers.go"
+                "src/core/syswarden-cli/pkg/security/hardening_linux_test.go"
+                "src/core/syswarden-cli/pkg/system/firewall_optimizer.go"
+                "src/core/syswarden-cli/pkg/system/firewall_optimizer_test.go"
+                "src/core/syswarden-cli/pkg/system/service_linux.go"
+                "src/core/syswarden-cli/pkg/system/service_linux_test.go"
+                "src/core/syswarden-cli/pkg/system/uninstall_linux.go"
+                "src/core/syswarden-cli/pkg/system/uninstall_prepare_linux_test.go"
               )
               for tree_ref in HEAD^ HEAD; do
                 for fix_path in "${v4032_fix_paths[@]}"; do
+                  expected_mode="100644"
+                  if [[ "${fix_path}" == "build_packages.sh" ]]; then
+                    expected_mode="100755"
+                  fi
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
-                  if [[ "${tree_mode}" != "100644" || \
+                  if [[ "${tree_mode}" != "${expected_mode}" || \
                         "${tree_type}" != "blob" || \
                         ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
                         "${tree_path}" != "${fix_path}" || \
                         -n "${tree_extra:-}" ]]; then
-                    echo "ERROR: reviewed v4.03.2 repair path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    echo "ERROR: reviewed v4.03.2 repair path ${fix_path} is not one exact ${expected_mode} blob at ${tree_ref}." >&2
                     exit 1
                   fi
                 done
@@ -761,8 +854,13 @@ jobs:
               ./scripts/versioning.sh validate-commit \
                 --repo "${GITHUB_WORKSPACE}" \
                 --base-ref "${v4032_grandparent_sha}" \
-                --tag-phase \
                 --commit-message "${v4032_parent_commit_message}"
+              v4032_release_commit_message="$(git log -1 --format=%B HEAD^^)"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4032_release_base_sha}" \
+                --tag-phase \
+                --commit-message "${v4032_release_commit_message}"
             else
               if [[ "${RELEASE_TAG}" != "v4.03.0" ]]; then
                 echo "ERROR: preserved-version release recovery is authorized only for v4.03.0 or v4.03.2." >&2
