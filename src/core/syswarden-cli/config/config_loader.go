@@ -21,15 +21,22 @@ type modularConfigSource struct {
 }
 
 // ParseConfig is the entrypoint for loading configuration. A real directory is
-// treated as a modular TOML root; any other path is parsed as the deprecated
-// flat syswarden-auto.conf format.
+// treated as a modular TOML root, a symbolic link is rejected explicitly, and
+// any other path is parsed as the deprecated flat syswarden-auto.conf format.
 func ParseConfig(configPath string) error {
-	if info, err := os.Lstat(configPath); err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-		if err := loadModularConfig(configPath); err != nil {
+	if info, err := os.Lstat(configPath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			err := fmt.Errorf("configuration path %s is a symbolic link", configPath)
+			recordConfigLoadFailure(configPath, err)
 			return err
 		}
-		log.Println("[INFO] Using new modular TOML configuration format")
-		return nil
+		if info.IsDir() {
+			if err := loadModularConfig(configPath); err != nil {
+				return err
+			}
+			log.Println("[INFO] Using new modular TOML configuration format")
+			return nil
+		}
 	}
 
 	if err := loadOldConfig(configPath); err != nil {

@@ -497,6 +497,8 @@ jobs:
           delegate_directory="/etc/systemd/system/user@.service.d"
           delegate_drop_in="${delegate_directory}/syswarden-release-qualification.conf"
           containers_conf="${SHARD_ROOT}/containers.conf"
+          podman_info="${SHARD_ROOT}/podman-info.json"
+          podman_local="${SHARD_ROOT}/podman-local"
           delegate_drop_in_owned=false
           original_user_service_active=false
           arm_cleanup_completed=false
@@ -519,6 +521,10 @@ jobs:
           test ! -L "${SHARD_ROOT}"
           test ! -e "${containers_conf}"
           test ! -L "${containers_conf}"
+          test ! -e "${podman_info}"
+          test ! -L "${podman_info}"
+          test ! -e "${podman_local}"
+          test ! -L "${podman_local}"
           if sudo -n systemctl is-active --quiet "${user_service}"; then
             original_user_service_active=true
           fi
@@ -546,10 +552,12 @@ jobs:
                 fi
               fi
             fi
-            if ! rm -f -- "${containers_conf}"; then
+            if ! rm -f -- "${containers_conf}" "${podman_info}" "${podman_local}"; then
               cleanup_rc=1
             fi
-            if [[ -e "${containers_conf}" || -L "${containers_conf}" ]]; then
+            if [[ -e "${containers_conf}" || -L "${containers_conf}" || \
+                  -e "${podman_info}" || -L "${podman_info}" || \
+                  -e "${podman_local}" || -L "${podman_local}" ]]; then
               cleanup_rc=1
             fi
             return "${cleanup_rc}"
@@ -601,15 +609,40 @@ jobs:
             '[engine]' \
             'cgroup_manager="systemd"' \
             'conmon_path=["/usr/local/lib/podman/conmon"]' \
-            'runtime="/usr/local/bin/runc"' \
+            'remote=false' \
+            'runtime="runc"' \
+            '[engine.runtimes]' \
+            'runc=["/usr/local/bin/runc"]' \
             '[engine.platform_to_oci_runtime]' \
-            '"linux/arm64"="/usr/local/bin/runc"' > "${containers_conf}"
+            '"linux/arm64"="runc"' > "${containers_conf}"
           if [[ ! -f "${containers_conf}" || -L "${containers_conf}" || \
                 "$(stat -c '%u' "${containers_conf}")" != "${user_id}" || \
                 "$(stat -c '%a' "${containers_conf}")" != "600" ]]; then
             echo "ERROR: the isolated Podman configuration is not a private runner-owned file." >&2
             exit 1
           fi
+          printf '%s\n' \
+            '#!/usr/bin/bash' \
+            'set -euo pipefail' \
+            'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY' \
+            'exec /usr/local/bin/podman --remote=false "$@"' > "${podman_local}"
+          chmod 0700 "${podman_local}"
+          if [[ ! -f "${podman_local}" || -L "${podman_local}" || \
+                ! -x "${podman_local}" || \
+                "$(stat -c '%u' "${podman_local}")" != "${user_id}" || \
+                "$(stat -c '%a' "${podman_local}")" != "700" ]]; then
+            echo "ERROR: the local-only Podman launcher is not a private runner-owned executable." >&2
+            exit 1
+          fi
+          : > "${podman_info}"
+          chmod 0600 "${podman_info}"
+          if [[ ! -f "${podman_info}" || -L "${podman_info}" || \
+                "$(stat -c '%u' "${podman_info}")" != "${user_id}" || \
+                "$(stat -c '%a' "${podman_info}")" != "600" ]]; then
+            echo "ERROR: the native ARM64 Podman info target is not a private runner-owned file." >&2
+            exit 1
+          fi
+          podman_info_inode="$(stat -c '%d:%i' "${podman_info}")"
 
           unit_name="syswarden-arm64-lifecycle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           set +e
@@ -632,14 +665,17 @@ jobs:
             --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
             --setenv='PYTHONDONTWRITEBYTECODE=1' \
             --setenv="RUNNER_TEMP=${RUNNER_TEMP}" \
+            --setenv="SYSWARDEN_PODMAN_INFO=${podman_info}" \
+            --setenv="SYSWARDEN_PODMAN_INFO_INODE=${podman_info_inode}" \
+            --setenv="SYSWARDEN_PODMAN_LOCAL=${podman_local}" \
             --setenv="XDG_RUNTIME_DIR=${runtime_dir}" \
             /usr/bin/bash --noprofile --norc -e -o pipefail -c \
-            'if [[ -z "${CONTAINERS_CONF:-}" || -n "${CONTAINERS_CONF_OVERRIDE:-}" ]]; then echo "ERROR: native ARM64 Podman configuration isolation is incomplete." >&2; exit 1; fi; if ! /usr/local/bin/runc --version >/dev/null; then echo "ERROR: native ARM64 runc is not executable inside the delegated session." >&2; exit 1; fi; if ! /usr/local/lib/podman/conmon --version >/dev/null; then echo "ERROR: native ARM64 conmon is not executable inside the delegated session." >&2; exit 1; fi; if ! podman_runtime="$(/usr/local/bin/podman info --format "{{.Host.Conmon.Path}}|{{.Host.OCIRuntime.Path}}|{{.Host.CgroupManager}}")"; then echo "ERROR: native ARM64 Podman could not attest its isolated runtime configuration." >&2; exit 1; fi; if [[ "${podman_runtime}" != "/usr/local/lib/podman/conmon|/usr/local/bin/runc|systemd" ]]; then printf "ERROR: native ARM64 Podman resolved an unexpected runtime configuration: %q.\n" "${podman_runtime}" >&2; exit 1; fi; exec "$@"' \
+            'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY; if [[ -z "${CONTAINERS_CONF:-}" || -n "${CONTAINERS_CONF_OVERRIDE:-}" ]]; then echo "ERROR: native ARM64 Podman configuration isolation is incomplete." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_LOCAL:-}" || ! -f "${SYSWARDEN_PODMAN_LOCAL}" || -L "${SYSWARDEN_PODMAN_LOCAL}" || ! -x "${SYSWARDEN_PODMAN_LOCAL}" ]]; then echo "ERROR: native ARM64 local-only Podman launcher is unavailable." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_INFO:-}" || -z "${SYSWARDEN_PODMAN_INFO_INODE:-}" || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" ]]; then echo "ERROR: native ARM64 Podman info target is unavailable." >&2; exit 1; fi; if ! /usr/local/bin/runc --version >/dev/null; then echo "ERROR: native ARM64 runc is not executable inside the delegated session." >&2; exit 1; fi; if ! /usr/local/lib/podman/conmon --version >/dev/null; then echo "ERROR: native ARM64 conmon is not executable inside the delegated session." >&2; exit 1; fi; if ! "${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" info --format json; then echo "ERROR: native ARM64 Podman could not attest its isolated runtime configuration." >&2; exit 1; fi; if [[ ! -s "${SYSWARDEN_PODMAN_INFO}" || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" || "$(stat -c "%u:%a" "${SYSWARDEN_PODMAN_INFO}")" != "$(id -u):600" || "$(stat -c "%d:%i" "${SYSWARDEN_PODMAN_INFO}")" != "${SYSWARDEN_PODMAN_INFO_INODE}" ]]; then echo "ERROR: native ARM64 Podman info evidence changed identity or permissions." >&2; exit 1; fi; if ! jq -e -s '\''length == 1 and .[0].host.conmon.path == "/usr/local/lib/podman/conmon" and .[0].host.ociRuntime.path == "/usr/local/bin/runc" and .[0].host.cgroupManager == "systemd" and .[0].host.security.rootless == true and .[0].host.serviceIsRemote == false and .[0].host.arch == "arm64" and .[0].host.os == "linux"'\'' "${SYSWARDEN_PODMAN_INFO}" >/dev/null; then echo "ERROR: native ARM64 Podman resolved an unexpected local runtime configuration." >&2; exit 1; fi; exec "$@"' \
             syswarden-arm64-lifecycle \
             /usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py" \
             --packages-dir "${ARM_CANDIDATE_PACKAGES_DIR}" \
             --previous-packages-dir "${ARM_PREVIOUS_PACKAGES_DIR}" \
-            --podman /usr/local/bin/podman \
+            --podman "${podman_local}" \
             --architecture-shard arm64 \
             --qualification-repository "${GITHUB_REPOSITORY}" \
             --qualification-release-sha "${RELEASE_SHA}" \

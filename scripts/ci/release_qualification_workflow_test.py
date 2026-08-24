@@ -1067,12 +1067,26 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             'sudo -n test -d "${delegate_directory}"',
             'sudo -n stat -c \'%u:%g:%a\' "${delegate_drop_in}"',
             'containers_conf="${SHARD_ROOT}/containers.conf"',
+            'podman_info="${SHARD_ROOT}/podman-info.json"',
+            'podman_local="${SHARD_ROOT}/podman-local"',
             "'cgroup_manager=\"systemd\"'",
             "'conmon_path=[\"/usr/local/lib/podman/conmon\"]'",
-            "'runtime=\"/usr/local/bin/runc\"'",
+            "'remote=false'",
+            "'runtime=\"runc\"'",
+            "'[engine.runtimes]'",
+            "'runc=[\"/usr/local/bin/runc\"]'",
             "'[engine.platform_to_oci_runtime]'",
-            "'\"linux/arm64\"=\"/usr/local/bin/runc\"'",
+            "'\"linux/arm64\"=\"runc\"'",
             '"$(stat -c \'%a\' "${containers_conf}")" != "600"',
+            "'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY'",
+            "'exec /usr/local/bin/podman --remote=false \"$@\"'",
+            'chmod 0700 "${podman_local}"',
+            '"$(stat -c \'%a\' "${podman_local}")" != "700"',
+            "local-only Podman launcher is not a private runner-owned executable",
+            ': > "${podman_info}"',
+            'chmod 0600 "${podman_info}"',
+            'podman_info_inode="$(stat -c \'%d:%i\' "${podman_info}")"',
+            "native ARM64 Podman info target is not a private runner-owned file",
             'unit_name="syswarden-arm64-lifecycle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
             'sudo -n systemd-run',
             '--machine="${user_name}@"',
@@ -1083,28 +1097,44 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "--setenv='CONTAINERS_CONF_OVERRIDE='",
             '--setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus"',
             "--setenv='PYTHONDONTWRITEBYTECODE=1'",
+            '--setenv="SYSWARDEN_PODMAN_INFO=${podman_info}"',
+            '--setenv="SYSWARDEN_PODMAN_INFO_INODE=${podman_info_inode}"',
+            '--setenv="SYSWARDEN_PODMAN_LOCAL=${podman_local}"',
             "/usr/bin/bash --noprofile --norc -e -o pipefail -c",
+            "unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY;",
             '-z "${CONTAINERS_CONF:-}" || -n "${CONTAINERS_CONF_OVERRIDE:-}"',
             "native ARM64 Podman configuration isolation is incomplete",
+            '-z "${SYSWARDEN_PODMAN_LOCAL:-}"',
+            "native ARM64 local-only Podman launcher is unavailable",
+            '-z "${SYSWARDEN_PODMAN_INFO:-}"',
+            '-z "${SYSWARDEN_PODMAN_INFO_INODE:-}"',
+            "native ARM64 Podman info target is unavailable",
             "if ! /usr/local/bin/runc --version >/dev/null",
             "native ARM64 runc is not executable inside the delegated session",
             "if ! /usr/local/lib/podman/conmon --version >/dev/null",
             "native ARM64 conmon is not executable inside the delegated session",
-            (
-                '/usr/local/bin/podman info --format '
-                '"{{.Host.Conmon.Path}}|{{.Host.OCIRuntime.Path}}|'
-                '{{.Host.CgroupManager}}"'
-            ),
+            '"${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" '
+            "info --format json",
             "native ARM64 Podman could not attest its isolated runtime configuration",
-            '"${podman_runtime}" != "/usr/local/lib/podman/conmon|/usr/local/bin/runc|systemd"',
-            "native ARM64 Podman resolved an unexpected runtime configuration",
+            '"$(stat -c "%u:%a" "${SYSWARDEN_PODMAN_INFO}")" != "$(id -u):600"',
+            '"$(stat -c "%d:%i" "${SYSWARDEN_PODMAN_INFO}")" != '
+            '"${SYSWARDEN_PODMAN_INFO_INODE}"',
+            "native ARM64 Podman info evidence changed identity or permissions",
+            '.host.conmon.path == "/usr/local/lib/podman/conmon"',
+            '.host.ociRuntime.path == "/usr/local/bin/runc"',
+            '.host.cgroupManager == "systemd"',
+            ".host.security.rootless == true",
+            ".host.serviceIsRemote == false",
+            '.host.arch == "arm64"',
+            '.host.os == "linux"',
+            "native ARM64 Podman resolved an unexpected local runtime configuration",
             'exec "$@"',
             "syswarden-arm64-lifecycle",
             '/usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py"',
-            '--podman /usr/local/bin/podman',
+            '--podman "${podman_local}"',
             'sudo -n rm -f -- "${delegate_drop_in}"',
             'sudo -n test -e "${delegate_drop_in}"',
-            'rm -f -- "${containers_conf}"',
+            'rm -f -- "${containers_conf}" "${podman_info}" "${podman_local}"',
             'sudo -n systemctl start "${user_service}"',
             'cleanup_rc=0',
             'arm_cleanup_completed=true',
@@ -1123,24 +1153,43 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "cgroup_manager=\"cgroupfs\"",
             "runtime=\"crun\"",
             "/usr/local/bin/crun",
-            "[engine.runtimes]",
+            "runtime=\"/usr/local/bin/runc\"",
             "OCIRuntime.Name",
+            "podman_runtime=",
+            "{{.Host.Conmon.Path}}",
             'CONTAINERS_CONF_OVERRIDE=${containers_conf}',
             "containers_override",
             "loginctl enable-linger",
             "--privileged",
             "podman system reset",
             "podman system migrate",
+            "--setenv='CONTAINER_HOST='",
+            "--setenv='CONTAINER_CONNECTION='",
         ):
             self.assertNotIn(forbidden, script)
         self.assertEqual(script.count("sudo -n systemd-run"), 1)
         self.assertEqual(script.count("scripts/ci/package_lifecycle_lab.py"), 1)
         self.assertEqual(script.count("'conmon_path=[\"/usr/local/lib/podman/conmon\"]'"), 1)
-        self.assertEqual(script.count("'runtime=\"/usr/local/bin/runc\"'"), 1)
+        self.assertEqual(script.count("'remote=false'"), 1)
+        self.assertEqual(script.count("'runtime=\"runc\"'"), 1)
+        self.assertEqual(script.count("'[engine.runtimes]'"), 1)
+        self.assertEqual(script.count("'runc=[\"/usr/local/bin/runc\"]'"), 1)
         self.assertEqual(script.count("'[engine.platform_to_oci_runtime]'"), 1)
         self.assertEqual(
-            script.count("'\"linux/arm64\"=\"/usr/local/bin/runc\"'"), 1
+            script.count("'\"linux/arm64\"=\"runc\"'"), 1
         )
+        self.assertEqual(
+            script.count("'exec /usr/local/bin/podman --remote=false \"$@\"'"), 1
+        )
+        self.assertEqual(
+            script.count(
+                '"${SYSWARDEN_PODMAN_LOCAL}" --out '
+                '"${SYSWARDEN_PODMAN_INFO}" info --format json'
+            ),
+            1,
+        )
+        self.assertEqual(script.count(".host.serviceIsRemote == false"), 1)
+        self.assertEqual(script.count(".host.security.rootless == true"), 1)
         self.assertEqual(
             script.count('--setenv="CONTAINERS_CONF=${containers_conf}"'), 1
         )
@@ -1148,6 +1197,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             script.count("--setenv='CONTAINERS_CONF_OVERRIDE='"), 1
         )
         self.assertNotIn("--podman /usr/bin/podman", self.workflow)
+        self.assertNotIn("--podman /usr/local/bin/podman", script)
         ownership_guard = script.index(
             'if sudo -n test -e "${delegate_drop_in}"'
         )
@@ -1156,28 +1206,52 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         )
         mark_owned = script.index("delegate_drop_in_owned=true")
         conmon_pin = script.index("'conmon_path=[\"/usr/local/lib/podman/conmon\"]'")
-        runtime_pin = script.index("'runtime=\"/usr/local/bin/runc\"'")
+        remote_pin = script.index("'remote=false'")
+        runtime_pin = script.index("'runtime=\"runc\"'")
+        runtime_table = script.index("'[engine.runtimes]'")
+        runtime_path = script.index("'runc=[\"/usr/local/bin/runc\"]'")
         platform_table = script.index("'[engine.platform_to_oci_runtime]'")
-        platform_pin = script.index("'\"linux/arm64\"=\"/usr/local/bin/runc\"'")
+        platform_pin = script.index("'\"linux/arm64\"=\"runc\"'")
+        wrapper_unset = script.index(
+            "'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY'"
+        )
+        wrapper_exec = script.index(
+            "'exec /usr/local/bin/podman --remote=false \"$@\"'"
+        )
         systemd_run = script.index("sudo -n systemd-run")
         configuration_guard = script.index(
             "native ARM64 Podman configuration isolation is incomplete"
         )
         runc_probe = script.index("/usr/local/bin/runc --version")
         conmon_probe = script.index("/usr/local/lib/podman/conmon --version")
-        podman_probe = script.index("/usr/local/bin/podman info --format")
+        info_target = script.index(': > "${podman_info}"')
+        podman_probe = script.index(
+            '"${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" '
+            "info --format json"
+        )
+        podman_verdict = script.index(".host.serviceIsRemote == false")
         lifecycle_lab = script.index("scripts/ci/package_lifecycle_lab.py")
         self.assertLess(ownership_guard, mark_owned)
         self.assertLess(mark_owned, create_drop_in)
         self.assertLess(create_drop_in, conmon_pin)
-        self.assertLess(conmon_pin, runtime_pin)
+        self.assertLess(conmon_pin, remote_pin)
+        self.assertLess(remote_pin, runtime_pin)
+        self.assertLess(runtime_pin, runtime_table)
+        self.assertLess(runtime_table, runtime_path)
+        self.assertLess(runtime_path, platform_table)
         self.assertLess(runtime_pin, platform_table)
         self.assertLess(platform_table, platform_pin)
+        self.assertLess(platform_pin, wrapper_unset)
+        self.assertLess(wrapper_unset, wrapper_exec)
+        self.assertLess(wrapper_exec, info_target)
+        self.assertLess(info_target, systemd_run)
         self.assertLess(platform_pin, systemd_run)
         self.assertLess(systemd_run, configuration_guard)
         self.assertLess(configuration_guard, runc_probe)
         self.assertLess(runc_probe, conmon_probe)
         self.assertLess(conmon_probe, podman_probe)
+        self.assertLess(podman_probe, podman_verdict)
+        self.assertLess(podman_verdict, lifecycle_lab)
         self.assertLess(podman_probe, lifecycle_lab)
 
     def test_premerge_package_workflow_runs_every_qualification_validator(self) -> None:
