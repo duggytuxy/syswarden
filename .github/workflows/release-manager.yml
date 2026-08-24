@@ -136,17 +136,75 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_merge_parent_sha="$(git rev-parse HEAD^)"
+              v4032_arm64_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_arm64_parent_sha}" != "8387b3e8b96a3778b333504dc9c948dfe06777d5" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 Podman path repair is not based on the reviewed PR96 squash." >&2
+                exit 1
+              fi
+              v4032_arm64_expected_subject='Qualification : repair v4.03.2 native ARM64 Podman path contract (#97)'
+              if [[ "${commit_subject}" != "${v4032_arm64_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 Podman path repair requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_arm64_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_arm64_head_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 ARM64 Podman path repair must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 ARM64 Podman path repair diff contract
+              expected_v4032_arm64_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+              )
+              mapfile -d '' -t actual_v4032_arm64_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_arm64_diff[@]} != ${#expected_v4032_arm64_diff[@]} )); then
+                echo "ERROR: the v4.03.2 ARM64 Podman path repair must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_arm64_diff[@]}; index++)); do
+                if [[ "${actual_v4032_arm64_diff[index]}" != "${expected_v4032_arm64_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 ARM64 Podman path repair contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_arm64_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_arm64_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 ARM64 Podman path repair ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 ARM64 Podman path repair diff contract
+              v4032_merge_ref=HEAD^
+              v4032_merge_parent_sha="$(git rev-parse "${v4032_merge_ref}^")"
               if [[ "${v4032_merge_parent_sha}" != "14ccbf1d32c221ee1e430dbad5eac40b1c5bd2c1" ]]; then
                 echo "ERROR: the v4.03.2 merge-subject repair is not based on the reviewed PR95 squash." >&2
                 exit 1
               fi
               v4032_merge_expected_subject='Qualification : repair v4.03.2 merged squash subject contract (#96)'
-              if [[ "${commit_subject}" != "${v4032_merge_expected_subject}" ]]; then
+              v4032_merge_subject="$(git log -1 --format=%s "${v4032_merge_ref}")"
+              if [[ "${v4032_merge_subject}" != "${v4032_merge_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 merge-subject repair requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_merge_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_merge_head_line <<< "$(git rev-list --parents -n 1 "${v4032_merge_ref}")"
               if (( ${#v4032_merge_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 merge-subject repair must be one linear commit." >&2
                 exit 1
@@ -157,7 +215,8 @@ jobs:
                 M "scripts/ci/release_gate_test.py"
               )
               mapfile -d '' -t actual_v4032_merge_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_merge_ref}^" "${v4032_merge_ref}"
               )
               if (( ${#actual_v4032_merge_diff[@]} != ${#expected_v4032_merge_diff[@]} )); then
                 echo "ERROR: the v4.03.2 merge-subject repair must modify exactly the two reviewed files." >&2
@@ -173,7 +232,7 @@ jobs:
                 ".github/workflows/release-manager.yml"
                 "scripts/ci/release_gate_test.py"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_merge_ref}^" "${v4032_merge_ref}"; do
                 for fix_path in "${v4032_merge_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -188,7 +247,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 merge-subject repair diff contract
-              v4032_repair_ref=HEAD^
+              v4032_repair_ref="${v4032_merge_ref}^"
               v4032_parent_sha="$(git rev-parse "${v4032_repair_ref}^")"
               if [[ "${v4032_parent_sha}" != "3839d592467a4f92f24b613412d8d89bb6905251" ]]; then
                 echo "ERROR: the v4.03.2 package lifecycle repair is not based on the reviewed qualification repair." >&2
@@ -306,6 +365,11 @@ jobs:
                 src/core/syswarden-cli/pkg/integration/webhook.go \
                 src/core/syswarden-core/webhook/discord.go \
                 README.md
+              v4032_merge_commit_message="$(git log -1 --format=%B "${v4032_merge_ref}")"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4032_merge_parent_sha}" \
+                --commit-message "${v4032_merge_commit_message}"
               v4032_repair_commit_message="$(git log -1 --format=%B "${v4032_repair_ref}")"
               ./scripts/versioning.sh validate-commit \
                 --repo "${GITHUB_WORKSPACE}" \
@@ -795,17 +859,75 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_merge_parent_sha="$(git rev-parse HEAD^)"
+              v4032_arm64_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_arm64_parent_sha}" != "8387b3e8b96a3778b333504dc9c948dfe06777d5" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 Podman path repair is not based on the reviewed PR96 squash." >&2
+                exit 1
+              fi
+              v4032_arm64_expected_subject='Qualification : repair v4.03.2 native ARM64 Podman path contract (#97)'
+              if [[ "${commit_subject}" != "${v4032_arm64_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 ARM64 Podman path repair requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_arm64_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_arm64_head_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 ARM64 Podman path repair must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 ARM64 Podman path repair diff contract
+              expected_v4032_arm64_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+              )
+              mapfile -d '' -t actual_v4032_arm64_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_arm64_diff[@]} != ${#expected_v4032_arm64_diff[@]} )); then
+                echo "ERROR: the v4.03.2 ARM64 Podman path repair must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_arm64_diff[@]}; index++)); do
+                if [[ "${actual_v4032_arm64_diff[index]}" != "${expected_v4032_arm64_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 ARM64 Podman path repair contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_arm64_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_arm64_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 ARM64 Podman path repair ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 ARM64 Podman path repair diff contract
+              v4032_merge_ref=HEAD^
+              v4032_merge_parent_sha="$(git rev-parse "${v4032_merge_ref}^")"
               if [[ "${v4032_merge_parent_sha}" != "14ccbf1d32c221ee1e430dbad5eac40b1c5bd2c1" ]]; then
                 echo "ERROR: the v4.03.2 merge-subject repair is not based on the reviewed PR95 squash." >&2
                 exit 1
               fi
               v4032_merge_expected_subject='Qualification : repair v4.03.2 merged squash subject contract (#96)'
-              if [[ "${commit_subject}" != "${v4032_merge_expected_subject}" ]]; then
+              v4032_merge_subject="$(git log -1 --format=%s "${v4032_merge_ref}")"
+              if [[ "${v4032_merge_subject}" != "${v4032_merge_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 merge-subject repair requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_merge_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_merge_head_line <<< "$(git rev-list --parents -n 1 "${v4032_merge_ref}")"
               if (( ${#v4032_merge_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 merge-subject repair must be one linear commit." >&2
                 exit 1
@@ -816,7 +938,8 @@ jobs:
                 M "scripts/ci/release_gate_test.py"
               )
               mapfile -d '' -t actual_v4032_merge_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_merge_ref}^" "${v4032_merge_ref}"
               )
               if (( ${#actual_v4032_merge_diff[@]} != ${#expected_v4032_merge_diff[@]} )); then
                 echo "ERROR: the v4.03.2 merge-subject repair must modify exactly the two reviewed files." >&2
@@ -832,7 +955,7 @@ jobs:
                 ".github/workflows/release-manager.yml"
                 "scripts/ci/release_gate_test.py"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_merge_ref}^" "${v4032_merge_ref}"; do
                 for fix_path in "${v4032_merge_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -847,7 +970,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 merge-subject repair diff contract
-              v4032_repair_ref=HEAD^
+              v4032_repair_ref="${v4032_merge_ref}^"
               v4032_parent_sha="$(git rev-parse "${v4032_repair_ref}^")"
               if [[ "${v4032_parent_sha}" != "3839d592467a4f92f24b613412d8d89bb6905251" ]]; then
                 echo "ERROR: the v4.03.2 package lifecycle repair is not based on the reviewed qualification repair." >&2
@@ -965,6 +1088,11 @@ jobs:
                 src/core/syswarden-cli/pkg/integration/webhook.go \
                 src/core/syswarden-core/webhook/discord.go \
                 README.md
+              v4032_merge_commit_message="$(git log -1 --format=%B "${v4032_merge_ref}")"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4032_merge_parent_sha}" \
+                --commit-message "${v4032_merge_commit_message}"
               v4032_repair_commit_message="$(git log -1 --format=%B "${v4032_repair_ref}")"
               ./scripts/versioning.sh validate-commit \
                 --repo "${GITHUB_WORKSPACE}" \
