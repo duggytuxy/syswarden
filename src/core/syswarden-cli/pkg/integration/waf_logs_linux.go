@@ -5,8 +5,12 @@ package integration
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,11 +20,13 @@ import (
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/system"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
 	managedServiceOutputLimit     = 4096
-	managedServiceEvidenceLimit   = 512
+	managedServiceEvidenceLimit   = 384
 	managedServiceDiagnosticLimit = 4096
 	managedServiceCommandTimeout  = 30 * time.Second
 	trustedPathSymlinkLimit       = 40
@@ -34,6 +40,12 @@ const (
 	trustedSemodulePackagePath = "/usr/bin/semodule_package"
 	trustedSemodulePath        = "/usr/sbin/semodule"
 	selinuxRuntimeEnforcement  = "/sys/fs/selinux/enforce"
+
+	wafRsyslogParentDirectory = "/etc"
+	wafRsyslogDirectoryName   = "rsyslog.d"
+	wafRsyslogConfigName      = "99-syswarden-waf-bridge.conf"
+	wafRsyslogConfigReadLimit = 64 * 1024
+	wafRsyslogStagingAttempts = 128
 )
 
 type managedServiceRunner func(string, ...string) ([]byte, error)
@@ -178,8 +190,6 @@ func renderWAFRsyslogConfig(rawPatterns string) (string, int, error) {
 func SetupWAFLogForwarder() error {
 	fmt.Println("[INFO] Configuring WAF Multi-Tenant Log Bridge (Rsyslog -> UDS)...")
 
-	confPath := "/etc/rsyslog.d/99-syswarden-waf-bridge.conf"
-
 	rsyslogConf, activePatterns, err := renderWAFRsyslogConfig(config.GlobalConfig.ModsecLogs)
 	if err != nil {
 		return fmt.Errorf("render WAF bridge config: %w", err)
@@ -235,17 +245,458 @@ func SetupWAFLogForwarder() error {
 		}
 	}
 
-	_ = os.MkdirAll("/etc/rsyslog.d", 0750)
-	if err := os.WriteFile(confPath, []byte(rsyslogConf), 0600); err != nil {
-		return fmt.Errorf("failed to write WAF bridge config: %w", err)
+	configChanged, publicationErr := reconcileWAFRsyslogConfig([]byte(rsyslogConf))
+	if publicationErr == nil && !configChanged {
+		fmt.Println("[INFO] WAF bridge rsyslog configuration is unchanged; runtime activation will be re-attested.")
 	}
-
-	if err := restartManagedService("rsyslog"); err != nil {
-		return fmt.Errorf("activate WAF bridge rsyslog configuration: %w", err)
+	if err := finishWAFRsyslogSetup(configChanged, publicationErr, reconcileWAFRsyslogService); err != nil {
+		return err
 	}
 
 	fmt.Println("[+] WAF Log Bridge successfully configured.")
 	return nil
+}
+
+type wafRsyslogConfigState struct {
+	exists bool
+	dev    uint64
+	ino    uint64
+	size   int64
+	mode   uint32
+	uid    uint32
+	gid    uint32
+	mtime  unix.Timespec
+	ctime  unix.Timespec
+	digest [sha256.Size]byte
+}
+
+// wafRsyslogPublicationDurabilityError means a published target directory could
+// not be synced. The caller must still activate the visible file, while a later
+// idempotent run retries the durability barrier before it can succeed.
+type wafRsyslogPublicationDurabilityError struct {
+	cause error
+}
+
+func (failure *wafRsyslogPublicationDurabilityError) Error() string { return failure.cause.Error() }
+func (failure *wafRsyslogPublicationDurabilityError) Unwrap() error { return failure.cause }
+
+func finishWAFRsyslogSetup(
+	configChanged bool,
+	publicationErr error,
+	activate func(bool) error,
+) error {
+	var durabilityErr *wafRsyslogPublicationDurabilityError
+	if publicationErr != nil && !errors.As(publicationErr, &durabilityErr) {
+		return fmt.Errorf("publish WAF bridge rsyslog configuration: %w", publicationErr)
+	}
+
+	activationErr := activate(configChanged)
+	if activationErr != nil {
+		activationErr = fmt.Errorf("activate WAF bridge rsyslog configuration: %w", activationErr)
+	}
+	if publicationErr != nil {
+		publicationErr = fmt.Errorf("publish WAF bridge rsyslog configuration: %w", publicationErr)
+	}
+	return errors.Join(publicationErr, activationErr)
+}
+
+func validateWAFRsyslogDirectoryMetadata(
+	label string,
+	stat *unix.Stat_t,
+	expectedUID, expectedGID uint32,
+) error {
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return fmt.Errorf("%s is not a real directory", label)
+	}
+	if stat.Uid != expectedUID || stat.Gid != expectedGID {
+		return fmt.Errorf(
+			"%s must be owned by uid %d gid %d, got uid %d gid %d",
+			label, expectedUID, expectedGID, stat.Uid, stat.Gid,
+		)
+	}
+	if stat.Mode&0022 != 0 {
+		return fmt.Errorf("%s must not be group/world writable: mode %04o", label, stat.Mode&07777)
+	}
+	return nil
+}
+
+func openWAFRsyslogDirectoryAt(
+	parentPath string,
+	expectedUID, expectedGID uint32,
+) (*os.File, error) {
+	parentFD, err := unix.Open(
+		parentPath,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open anchored rsyslog parent directory %s: %w", parentPath, err)
+	}
+	defer unix.Close(parentFD)
+
+	var parentStat unix.Stat_t
+	if err := unix.Fstat(parentFD, &parentStat); err != nil {
+		return nil, fmt.Errorf("inspect anchored rsyslog parent directory %s: %w", parentPath, err)
+	}
+	if err := validateWAFRsyslogDirectoryMetadata(
+		"rsyslog parent directory "+parentPath,
+		&parentStat,
+		expectedUID,
+		expectedGID,
+	); err != nil {
+		return nil, err
+	}
+
+	created := false
+	if err := unix.Mkdirat(parentFD, wafRsyslogDirectoryName, 0750); err != nil {
+		if !errors.Is(err, unix.EEXIST) {
+			return nil, fmt.Errorf("create anchored rsyslog directory: %w", err)
+		}
+	} else {
+		created = true
+	}
+
+	directoryFD, err := unix.Openat(
+		parentFD,
+		wafRsyslogDirectoryName,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open anchored rsyslog directory without following symlinks: %w", err)
+	}
+	if created {
+		if err := unix.Fchmod(directoryFD, 0750); err != nil {
+			_ = unix.Close(directoryFD)
+			return nil, fmt.Errorf("set anchored rsyslog directory mode: %w", err)
+		}
+	}
+
+	var directoryStat unix.Stat_t
+	if err := unix.Fstat(directoryFD, &directoryStat); err != nil {
+		_ = unix.Close(directoryFD)
+		return nil, fmt.Errorf("inspect anchored rsyslog directory: %w", err)
+	}
+	if err := validateWAFRsyslogDirectoryMetadata(
+		"rsyslog directory "+filepath.Join(parentPath, wafRsyslogDirectoryName),
+		&directoryStat,
+		expectedUID,
+		expectedGID,
+	); err != nil {
+		_ = unix.Close(directoryFD)
+		return nil, err
+	}
+	// Sync on every pass so a previous post-Mkdirat sync failure is recoverable
+	// even though the directory is already visible on the next attempt.
+	if err := unix.Fsync(parentFD); err != nil {
+		_ = unix.Close(directoryFD)
+		return nil, fmt.Errorf("sync rsyslog parent directory: %w", err)
+	}
+
+	directory := os.NewFile(
+		uintptr(directoryFD),
+		filepath.Join(parentPath, wafRsyslogDirectoryName),
+	)
+	if directory == nil {
+		_ = unix.Close(directoryFD)
+		return nil, fmt.Errorf("wrap anchored rsyslog directory descriptor")
+	}
+	return directory, nil
+}
+
+func sameWAFRsyslogStat(left, right *unix.Stat_t) bool {
+	return uint64(left.Dev) == uint64(right.Dev) &&
+		uint64(left.Ino) == uint64(right.Ino) &&
+		left.Size == right.Size &&
+		left.Mode == right.Mode &&
+		left.Uid == right.Uid &&
+		left.Gid == right.Gid &&
+		left.Mtim == right.Mtim &&
+		left.Ctim == right.Ctim
+}
+
+func inspectWAFRsyslogConfig(
+	directory *os.File,
+	expectedUID, expectedGID uint32,
+) (wafRsyslogConfigState, []byte, error) {
+	fd, err := unix.Openat(
+		int(directory.Fd()),
+		wafRsyslogConfigName,
+		unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		0,
+	)
+	if errors.Is(err, unix.ENOENT) {
+		return wafRsyslogConfigState{}, nil, nil
+	}
+	if err != nil {
+		return wafRsyslogConfigState{}, nil, fmt.Errorf(
+			"open anchored rsyslog configuration without following symlinks: %w",
+			err,
+		)
+	}
+	file := os.NewFile(uintptr(fd), wafRsyslogConfigName)
+	if file == nil {
+		_ = unix.Close(fd)
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("wrap anchored rsyslog configuration descriptor")
+	}
+
+	var before unix.Stat_t
+	if err := unix.Fstat(fd, &before); err != nil {
+		_ = file.Close()
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("inspect rsyslog configuration: %w", err)
+	}
+	if before.Mode&unix.S_IFMT != unix.S_IFREG {
+		_ = file.Close()
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("rsyslog configuration must be a regular file")
+	}
+	if before.Uid != expectedUID || before.Gid != expectedGID {
+		_ = file.Close()
+		return wafRsyslogConfigState{}, nil, fmt.Errorf(
+			"rsyslog configuration must be owned by uid %d gid %d, got uid %d gid %d",
+			expectedUID, expectedGID, before.Uid, before.Gid,
+		)
+	}
+	if before.Mode&07777 != 0600 {
+		_ = file.Close()
+		return wafRsyslogConfigState{}, nil, fmt.Errorf(
+			"rsyslog configuration mode must be 0600, got %04o",
+			before.Mode&07777,
+		)
+	}
+	if before.Size < 0 || before.Size > wafRsyslogConfigReadLimit {
+		_ = file.Close()
+		return wafRsyslogConfigState{}, nil, fmt.Errorf(
+			"rsyslog configuration size %d exceeds limit %d",
+			before.Size,
+			wafRsyslogConfigReadLimit,
+		)
+	}
+
+	content, readErr := io.ReadAll(io.LimitReader(file, wafRsyslogConfigReadLimit+1))
+	var after unix.Stat_t
+	statErr := unix.Fstat(fd, &after)
+	closeErr := file.Close()
+	if readErr != nil {
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("read bounded rsyslog configuration: %w", readErr)
+	}
+	if len(content) > wafRsyslogConfigReadLimit {
+		return wafRsyslogConfigState{}, nil, fmt.Errorf(
+			"rsyslog configuration grew beyond limit %d while reading",
+			wafRsyslogConfigReadLimit,
+		)
+	}
+	if statErr != nil {
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("reinspect rsyslog configuration: %w", statErr)
+	}
+	if closeErr != nil {
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("close rsyslog configuration: %w", closeErr)
+	}
+	if !sameWAFRsyslogStat(&before, &after) || int64(len(content)) != before.Size {
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("rsyslog configuration changed while reading")
+	}
+
+	return wafRsyslogConfigState{
+		exists: true,
+		dev:    uint64(after.Dev),
+		ino:    uint64(after.Ino),
+		size:   after.Size,
+		mode:   after.Mode,
+		uid:    after.Uid,
+		gid:    after.Gid,
+		mtime:  after.Mtim,
+		ctime:  after.Ctim,
+		digest: sha256.Sum256(content),
+	}, content, nil
+}
+
+func sameWAFRsyslogConfigState(expected, actual wafRsyslogConfigState) bool {
+	return expected.exists == actual.exists &&
+		expected.dev == actual.dev &&
+		expected.ino == actual.ino &&
+		expected.size == actual.size &&
+		expected.mode == actual.mode &&
+		expected.uid == actual.uid &&
+		expected.gid == actual.gid &&
+		expected.mtime == actual.mtime &&
+		expected.ctime == actual.ctime &&
+		expected.digest == actual.digest
+}
+
+func createWAFRsyslogStagingFile(
+	directory *os.File,
+	expectedUID, expectedGID uint32,
+) (*os.File, string, error) {
+	for range wafRsyslogStagingAttempts {
+		var random [16]byte
+		if _, err := cryptorand.Read(random[:]); err != nil {
+			return nil, "", fmt.Errorf("generate rsyslog staging name: %w", err)
+		}
+		name := "." + wafRsyslogConfigName + ".syswarden-" + hex.EncodeToString(random[:]) + ".tmp"
+		fd, err := unix.Openat(
+			int(directory.Fd()),
+			name,
+			unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+			0600,
+		)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("create anchored rsyslog staging file: %w", err)
+		}
+		if err := unix.Fchmod(fd, 0600); err != nil {
+			_ = unix.Close(fd)
+			_ = unix.Unlinkat(int(directory.Fd()), name, 0)
+			return nil, "", fmt.Errorf("set rsyslog staging file mode: %w", err)
+		}
+		var stat unix.Stat_t
+		if err := unix.Fstat(fd, &stat); err != nil {
+			_ = unix.Close(fd)
+			_ = unix.Unlinkat(int(directory.Fd()), name, 0)
+			return nil, "", fmt.Errorf("inspect rsyslog staging file: %w", err)
+		}
+		if stat.Uid != expectedUID || stat.Gid != expectedGID {
+			if err := unix.Fchown(fd, int(expectedUID), int(expectedGID)); err != nil {
+				_ = unix.Close(fd)
+				_ = unix.Unlinkat(int(directory.Fd()), name, 0)
+				return nil, "", fmt.Errorf("set rsyslog staging file owner: %w", err)
+			}
+		}
+		file := os.NewFile(uintptr(fd), name)
+		if file == nil {
+			_ = unix.Close(fd)
+			_ = unix.Unlinkat(int(directory.Fd()), name, 0)
+			return nil, "", fmt.Errorf("wrap rsyslog staging file descriptor")
+		}
+		return file, name, nil
+	}
+	return nil, "", fmt.Errorf("create rsyslog staging file: too many name collisions")
+}
+
+func reconcileWAFRsyslogConfig(desired []byte) (bool, error) {
+	return reconcileWAFRsyslogConfigAt(
+		wafRsyslogParentDirectory,
+		0,
+		0,
+		desired,
+		nil,
+	)
+}
+
+func reconcileWAFRsyslogConfigAt(
+	parentPath string,
+	expectedUID, expectedGID uint32,
+	desired []byte,
+	beforeRename func() error,
+) (bool, error) {
+	return reconcileWAFRsyslogConfigAtUsing(
+		parentPath,
+		expectedUID,
+		expectedGID,
+		desired,
+		beforeRename,
+		func(directory *os.File) error { return directory.Sync() },
+	)
+}
+
+func reconcileWAFRsyslogConfigAtUsing(
+	parentPath string,
+	expectedUID, expectedGID uint32,
+	desired []byte,
+	beforeRename func() error,
+	syncDirectory func(*os.File) error,
+) (bool, error) {
+	if len(desired) > wafRsyslogConfigReadLimit {
+		return false, fmt.Errorf(
+			"desired rsyslog configuration size %d exceeds limit %d",
+			len(desired),
+			wafRsyslogConfigReadLimit,
+		)
+	}
+	directory, err := openWAFRsyslogDirectoryAt(parentPath, expectedUID, expectedGID)
+	if err != nil {
+		return false, err
+	}
+	defer directory.Close()
+
+	initial, existing, err := inspectWAFRsyslogConfig(directory, expectedUID, expectedGID)
+	if err != nil {
+		return false, err
+	}
+	if initial.exists && bytes.Equal(existing, desired) {
+		// Retrying this sync closes a prior crash or fsync-failure window after
+		// Renameat. Exact content is not durable until this directory sync passes.
+		if err := syncDirectory(directory); err != nil {
+			return false, &wafRsyslogPublicationDurabilityError{
+				cause: fmt.Errorf("sync unchanged rsyslog configuration directory: %w", err),
+			}
+		}
+		return false, nil
+	}
+
+	staging, stagingName, err := createWAFRsyslogStagingFile(directory, expectedUID, expectedGID)
+	if err != nil {
+		return true, err
+	}
+	defer func() {
+		if staging != nil {
+			_ = staging.Close()
+		}
+		if stagingName != "" {
+			_ = unix.Unlinkat(int(directory.Fd()), stagingName, 0)
+		}
+	}()
+
+	if written, err := staging.Write(desired); err != nil {
+		return true, fmt.Errorf("write rsyslog staging file: %w", err)
+	} else if written != len(desired) {
+		return true, fmt.Errorf("write rsyslog staging file: %w", io.ErrShortWrite)
+	}
+	if err := staging.Sync(); err != nil {
+		return true, fmt.Errorf("sync rsyslog staging file: %w", err)
+	}
+	if err := staging.Close(); err != nil {
+		return true, fmt.Errorf("close rsyslog staging file: %w", err)
+	}
+	staging = nil
+
+	if beforeRename != nil {
+		if err := beforeRename(); err != nil {
+			return true, err
+		}
+	}
+	current, _, err := inspectWAFRsyslogConfig(directory, expectedUID, expectedGID)
+	if err != nil {
+		return true, fmt.Errorf("reinspect rsyslog configuration before publication: %w", err)
+	}
+	if !sameWAFRsyslogConfigState(initial, current) {
+		return true, fmt.Errorf("rsyslog configuration changed before publication")
+	}
+	if err := unix.Renameat(
+		int(directory.Fd()),
+		stagingName,
+		int(directory.Fd()),
+		wafRsyslogConfigName,
+	); err != nil {
+		return true, fmt.Errorf("atomically publish rsyslog configuration: %w", err)
+	}
+	stagingName = ""
+	if err := syncDirectory(directory); err != nil {
+		return true, &wafRsyslogPublicationDurabilityError{
+			cause: fmt.Errorf("sync rsyslog configuration directory after publication: %w", err),
+		}
+	}
+	return true, nil
+}
+
+func reconcileWAFRsyslogService(configChanged bool) error {
+	return restartManagedServiceUsingConfigState(
+		"rsyslog",
+		configChanged,
+		system.ServiceManagerRuntimeState,
+		system.IsAlpine,
+		runManagedServiceCommand,
+	)
 }
 
 func restartManagedService(service string) error {
@@ -489,6 +940,16 @@ func restartManagedServiceUsing(
 	isAlpine func() bool,
 	run managedServiceRunner,
 ) error {
+	return restartManagedServiceUsingConfigState(service, true, classify, isAlpine, run)
+}
+
+func restartManagedServiceUsingConfigState(
+	service string,
+	_ bool,
+	classify func() (string, error),
+	isAlpine func() bool,
+	run managedServiceRunner,
+) error {
 	state, err := classify()
 	if err != nil {
 		return err
@@ -502,17 +963,18 @@ func restartManagedServiceUsing(
 			if service == "rsyslog" {
 				// The firewall OpenRC service needs rsyslog and invokes the reload
 				// pipeline during start. Stopping that dependency here creates a
-				// circular OpenRC wait. Rsyslog on Alpine does not apply new rules
-				// after its nominal reload action, so restart it without traversing
-				// the dependency graph after validating the complete configuration.
+				// circular OpenRC wait. Alpine's nominal rsyslog reload does not apply
+				// new rules, so every valid setup attempt performs one bounded nodeps
+				// restart. This also recovers a crash after atomic publication but
+				// before service activation.
 				if _, err := run(trustedRsyslogdPath, "-N1", "-f", "/etc/rsyslog.conf"); err != nil {
-					return fmt.Errorf("validate rsyslog configuration before OpenRC restart: %w", err)
+					return fmt.Errorf("validate rsyslog configuration before OpenRC activation: %w", err)
 				}
 				if _, err := run(trustedOpenRCServicePath, "--ifnotstarted", service, "start"); err != nil {
 					return fmt.Errorf("conditionally start OpenRC service %s with dependencies: %w", service, err)
 				}
 				if _, err := run(trustedOpenRCServicePath, service, "status"); err != nil {
-					return fmt.Errorf("attest active OpenRC service %s before dependency-bypassing restart: %w", service, err)
+					return fmt.Errorf("attest active OpenRC service %s before configuration reconciliation: %w", service, err)
 				}
 				if _, err := run(trustedOpenRCServicePath, "--nodeps", service, "restart"); err != nil {
 					return fmt.Errorf("restart OpenRC service %s without dependency traversal: %w", service, err)
@@ -546,11 +1008,33 @@ func restartSystemdRsyslogUsing(run managedServiceRunner) error {
 	if validationErr != nil {
 		return newManagedServiceDiagnosticError(
 			fmt.Sprintf(
-				"validate complete rsyslog configuration before systemd restart: %s",
+				"validate complete rsyslog configuration before systemd activation: %s",
 				managedServiceEvidence(validationErr, validationOutput),
 			),
 			validationErr,
 		)
+	}
+
+	initialActiveOutput, initialActiveErr := run(
+		trustedSystemctlPath, "is-active", "--quiet", "rsyslog",
+	)
+	reloadEvidence := "not-attempted"
+	reloadActiveEvidence := "not-attempted"
+	var reloadErr, reloadActiveErr error
+	if initialActiveErr == nil {
+		// Reload even exact content to recover a crash after atomic publication
+		// but before the previous setup attempt reached service activation.
+		reloadOutput, currentReloadErr := run(trustedSystemctlPath, "reload", "rsyslog")
+		reloadErr = currentReloadErr
+		reloadEvidence = managedServiceEvidence(reloadErr, reloadOutput)
+		reloadActiveOutput, currentReloadActiveErr := run(
+			trustedSystemctlPath, "is-active", "--quiet", "rsyslog",
+		)
+		reloadActiveErr = currentReloadActiveErr
+		reloadActiveEvidence = managedServiceEvidence(reloadActiveErr, reloadActiveOutput)
+		if reloadErr == nil && reloadActiveErr == nil {
+			return nil
+		}
 	}
 
 	firstOutput, firstErr := run(trustedSystemctlPath, "restart", "rsyslog")
@@ -558,6 +1042,7 @@ func restartSystemdRsyslogUsing(run managedServiceRunner) error {
 		trustedSystemctlPath, "is-active", "--quiet", "rsyslog",
 	)
 	if firstErr == nil && firstActiveErr == nil {
+		fmt.Println("[WARN] Rsyslog required one bounded restart fallback after reload or active-state attestation.")
 		return nil
 	}
 
@@ -567,7 +1052,7 @@ func restartSystemdRsyslogUsing(run managedServiceRunner) error {
 		trustedSystemctlPath, "is-active", "--quiet", "rsyslog",
 	)
 	if retryErr == nil && retryActiveErr == nil {
-		fmt.Println("[WARN] Initial rsyslog restart failed; recovered after one bounded retry.")
+		fmt.Println("[WARN] Initial rsyslog restart or active-state attestation failed; recovered after one bounded retry.")
 		return nil
 	}
 
@@ -576,7 +1061,10 @@ func restartSystemdRsyslogUsing(run managedServiceRunner) error {
 	)
 	return newManagedServiceDiagnosticError(
 		fmt.Sprintf(
-			"restart systemd service rsyslog failed after one bounded retry: first_restart=%s; first_active=%s; reset_failed=%s; retry_restart=%s; retry_active=%s; journal=%s",
+			"activate systemd service rsyslog failed after one bounded retry following reload or active-state attestation: initial_active=%s; reload=%s; reload_active=%s; first_restart=%s; first_active=%s; reset_failed=%s; retry_restart=%s; retry_active=%s; journal=%s",
+			managedServiceEvidence(initialActiveErr, initialActiveOutput),
+			reloadEvidence,
+			reloadActiveEvidence,
 			managedServiceEvidence(firstErr, firstOutput),
 			managedServiceEvidence(firstActiveErr, firstActiveOutput),
 			managedServiceEvidence(resetErr, resetOutput),
@@ -584,6 +1072,9 @@ func restartSystemdRsyslogUsing(run managedServiceRunner) error {
 			managedServiceEvidence(retryActiveErr, retryActiveOutput),
 			managedServiceEvidence(journalErr, journalOutput),
 		),
+		initialActiveErr,
+		reloadErr,
+		reloadActiveErr,
 		firstErr,
 		firstActiveErr,
 		resetErr,
