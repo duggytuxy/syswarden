@@ -341,7 +341,7 @@ PACKAGE_SCOPE_KEYS = frozenset(
         "family_architecture_coverage",
         "required_platform_coordinates",
         "missing_platform_coordinates",
-        "arm64_coverage_policy",
+        "architecture_coverage_policy",
         "rollback_model",
     }
 )
@@ -400,8 +400,6 @@ PACKAGE_ENGINE_KEYS = frozenset(
         "uid_map",
         "gid_map",
         "lifecycle_helper",
-        "arm64_emulator",
-        "arm64_binfmt",
     }
 )
 LIFECYCLE_HELPER_KEYS = frozenset(
@@ -420,9 +418,8 @@ LIFECYCLE_HELPER_KEYS = frozenset(
 )
 PACKAGE_NATIVE_SHARD_NAMES = {
     "amd64": "package-lifecycle-amd64.json",
-    "arm64": "package-lifecycle-arm64.json",
 }
-PACKAGE_NATIVE_AGGREGATE_HOST = "native-shards:amd64,arm64"
+PACKAGE_NATIVE_AGGREGATE_HOST = "native-shards:amd64"
 PACKAGE_PLATFORM_KEYS = frozenset(
     {
         "name",
@@ -740,8 +737,6 @@ def _validate_package_engine(
             engine["service_is_remote"], f"{label}.service_is_remote"
         )
         is not False
-        or engine["arm64_emulator"] is not None
-        or engine["arm64_binfmt"] is not None
     ):
         _fail(f"{label} lacks exact native rootless cgroup v2 evidence")
     _validate_cgroup_controllers(
@@ -782,8 +777,8 @@ def _validate_package_native_shards(value: Any) -> dict[str, dict[str, Any]]:
     if native_shards["mode"] != "native_architecture_shards_v1":
         _fail("package native shard mode is invalid")
     reports = _list(native_shards["reports"], "package.native_shards.reports")
-    if len(reports) != 2:
-        _fail("package native shard inventory must contain exactly two reports")
+    if len(reports) != 1:
+        _fail("package native shard inventory must contain exactly one report")
     by_architecture: dict[str, dict[str, Any]] = {}
     architecture_order: list[str] = []
     helper_binding: tuple[Any, ...] | None = None
@@ -814,7 +809,7 @@ def _validate_package_native_shards(value: Any) -> dict[str, dict[str, Any]]:
             report["report_sha256"],
             f"package.native_shards.reports[{index}].report_sha256",
         )
-        if architecture in by_architecture or architecture not in {"amd64", "arm64"}:
+        if architecture in by_architecture or architecture != "amd64":
             _fail("package native shard architecture is duplicate or unsupported")
         controllers = _validate_cgroup_controllers(
             report["cgroup_controllers"],
@@ -866,10 +861,10 @@ def _validate_package_native_shards(value: Any) -> dict[str, dict[str, Any]]:
             _fail("package native shard host or engine identity is invalid")
         by_architecture[architecture] = report
         architecture_order.append(architecture)
-    if set(by_architecture) != {"amd64", "arm64"}:
+    if set(by_architecture) != {"amd64"}:
         _fail("package native shard architecture inventory is incomplete")
-    if architecture_order != ["amd64", "arm64"]:
-        _fail("package native shard inventory order must be amd64 then arm64")
+    if architecture_order != ["amd64"]:
+        _fail("package native shard inventory order must contain AMD64 only")
     return by_architecture
 
 
@@ -884,9 +879,9 @@ def _validate_package_shard_binding(
     if binding != expected_binding:
         _fail("package qualification binding differs from the exact workflow inputs")
     records = _validate_package_native_shards(document["native_shards"])
-    if set(package_shards) != {"amd64", "arm64"}:
+    if set(package_shards) != {"amd64"}:
         _fail("package native shard file inventory is incomplete")
-    for architecture in ("amd64", "arm64"):
+    for architecture in ("amd64",):
         raw = package_shards[architecture]
         record = records[architecture]
         if raw.snapshot.path.name != PACKAGE_NATIVE_SHARD_NAMES[architecture]:
@@ -938,7 +933,7 @@ def _validate_package_shard_binding(
             _fail(f"package {architecture} shard metadata differs from its report")
     shard_platforms = [
         platform
-        for architecture in ("amd64", "arm64")
+        for architecture in ("amd64",)
         for platform in package_shards[architecture].document["platforms"]
     ]
     if document.get("platforms") != shard_platforms:
@@ -966,7 +961,7 @@ def _validate_package_shard_binding(
 
     shard_contracts = [
         package_shards[architecture].document["package_version_contract"]
-        for architecture in ("amd64", "arm64")
+        for architecture in ("amd64",)
     ]
     expected_contract = {
         key: shard_contracts[0][key]
@@ -991,7 +986,7 @@ def _validate_package_shard_binding(
         _fail("package aggregate version contract differs from its native shards")
     expected_engine_version = ";".join(
         f"{architecture}={records[architecture]['engine_version']}"
-        for architecture in ("amd64", "arm64")
+        for architecture in ("amd64",)
     )
     engine = document.get("engine")
     if not isinstance(engine, dict) or engine.get("version") != expected_engine_version:
@@ -1932,8 +1927,8 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
         if len(numbers) != 3 or any(type(item) is not int or item < 0 for item in numbers):
             _fail(f"package.version_contract.{key} must contain three non-negative integers")
     coordinates = _list(contract["coordinates"], "package.version_contract.coordinates")
-    if len(coordinates) != 6:
-        _fail("package version contract must contain exactly six package coordinates")
+    if len(coordinates) != 3:
+        _fail("package version contract must contain exactly three package coordinates")
     for index, item in enumerate(coordinates):
         coordinate = _exact_keys(
             item, PACKAGE_CONTRACT_COORDINATE_KEYS, f"package.version_contract.coordinates[{index}]"
@@ -1952,7 +1947,7 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
         "network_during_image_bootstrap",
         "network_during_package_operations",
         "host_mutation",
-        "arm64_coverage_policy",
+        "architecture_coverage_policy",
         "rollback_model",
     ):
         _string(scope[key], f"package.scope.{key}")
@@ -1961,12 +1956,12 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
     )
     native_aggregate = scope["host_architecture"] == PACKAGE_NATIVE_AGGREGATE_HOST
     if not native_aggregate or normalized_host_architecture is not None:
-        _fail("package report must identify the exact amd64 plus arm64 native shard model")
+        _fail("package report must identify the exact AMD64 native shard model")
     if scope["network_during_package_operations"] != "disabled":
         _fail("package operations were not network-isolated")
     classification = _list(scope["coordinate_classification"], "package.scope.coordinate_classification")
-    if len(classification) != 10:
-        _fail("package coordinate classification must contain exactly ten coordinates")
+    if len(classification) != 5:
+        _fail("package coordinate classification must contain exactly five coordinates")
     for index, item in enumerate(classification):
         entry = _exact_keys(
             item,
@@ -1984,8 +1979,8 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
         for key in entry:
             _string(entry[key], f"package.scope.architectures_incomplete_or_failed[{index}].{key}")
     architecture_coverage = _list(scope["architecture_coverage"], "package.scope.architecture_coverage")
-    if len(architecture_coverage) != 2:
-        _fail("package architecture coverage must contain amd64 and arm64")
+    if len(architecture_coverage) != 1:
+        _fail("package architecture coverage must contain AMD64 only")
     for index, item in enumerate(architecture_coverage):
         entry = _exact_keys(item, {"architecture", "architecture_id", "status", "required_distributions", "completed_distributions", "incomplete_or_failed_distributions"}, f"package.scope.architecture_coverage[{index}]")
         for key in ("architecture", "architecture_id", "status"):
@@ -1993,8 +1988,8 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
         for key in ("required_distributions", "completed_distributions", "incomplete_or_failed_distributions"):
             _string_list(entry[key], f"package.scope.architecture_coverage[{index}].{key}")
     family_coverage = _list(scope["family_architecture_coverage"], "package.scope.family_architecture_coverage")
-    if len(family_coverage) != 6:
-        _fail("package family/architecture coverage must contain six coordinates")
+    if len(family_coverage) != 3:
+        _fail("package family/architecture coverage must contain three coordinates")
     for index, item in enumerate(family_coverage):
         entry = _exact_keys(item, {"family", "architecture", "architecture_id", "status", "required_distributions", "completed_distributions"}, f"package.scope.family_architecture_coverage[{index}]")
         for key in ("family", "architecture", "architecture_id", "status"):
@@ -2013,11 +2008,10 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
     )
     expected_engine_version = ";".join(
         f"{architecture}={native_records[architecture]['engine_version']}"
-        for architecture in ("amd64", "arm64")
+        for architecture in ("amd64",)
     )
     controller_intersection = sorted(
         set(native_records["amd64"]["cgroup_controllers"])
-        & set(native_records["arm64"]["cgroup_controllers"])
     )
     helper_keys = sorted(LIFECYCLE_HELPER_KEYS - {"source"})
     aggregate_helper_binding = tuple(
@@ -2041,8 +2035,8 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
         _fail("package roots were not mounted read-only")
 
     platforms = _list(document["platforms"], "package.platforms")
-    if len(platforms) != 10:
-        _fail("package report must contain exactly ten platform results")
+    if len(platforms) != 5:
+        _fail("package report must contain exactly five platform results")
     seen: set[tuple[str, str]] = set()
     specs = {(item.distribution, item.architecture): item for item in package_lab.DEFAULT_PLATFORMS}
     for index, item in enumerate(platforms):
@@ -2085,7 +2079,7 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
             _string(artifact["filename"], f"package.platforms[{index}].{artifact_key}.filename")
             _string(artifact["version"], f"package.platforms[{index}].{artifact_key}.version")
             _sha256(artifact["sha256"], f"package.platforms[{index}].{artifact_key}.sha256")
-        probe = _exact_keys(platform["architecture_probe"], {"status", "execution_mode", "podman_platform", "expected_uname", "actual_uname", "container_exit_code", "network", "filesystem", "emulator", "binfmt"}, f"package.platforms[{index}].architecture_probe")
+        probe = _exact_keys(platform["architecture_probe"], {"status", "execution_mode", "podman_platform", "expected_uname", "actual_uname", "container_exit_code", "network", "filesystem"}, f"package.platforms[{index}].architecture_probe")
         for key in ("status", "execution_mode", "podman_platform", "expected_uname", "actual_uname", "network", "filesystem"):
             _string(probe[key], f"package.platforms[{index}].architecture_probe.{key}")
         if (
@@ -2099,69 +2093,10 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
             or probe["podman_platform"] != spec.podman_platform
             or probe["expected_uname"] != spec.uname_architecture
             or probe["actual_uname"] != spec.uname_architecture
+            or probe["execution_mode"] != "native"
+            or platform["bootstrap_execution"] != "native_container_build"
         ):
             _fail(f"package architecture execution probe is incomplete at {coordinate}")
-        probe_emulator = probe["emulator"]
-        if probe_emulator is not None:
-            probe_emulator = _exact_keys(probe_emulator, {"path", "sha256", "role"}, f"package.platforms[{index}].architecture_probe.emulator")
-            _string(probe_emulator["path"], "package probe emulator path")
-            _sha256(probe_emulator["sha256"], "package probe emulator sha256")
-            if probe_emulator["role"] != "host binfmt interpreter":
-                _fail("package probe emulator role is invalid")
-        probe_binfmt = probe["binfmt"]
-        if probe_binfmt is not None:
-            probe_binfmt = _exact_keys(
-                probe_binfmt,
-                {"path", "sha256", "interpreter", "flags"},
-                f"package.platforms[{index}].architecture_probe.binfmt",
-            )
-            _string(probe_binfmt["path"], "package probe binfmt path")
-            _sha256(probe_binfmt["sha256"], "package probe binfmt sha256")
-            _string(probe_binfmt["interpreter"], "package probe binfmt interpreter")
-            if "F" not in _string(probe_binfmt["flags"], "package probe binfmt flags"):
-                _fail("package probe binfmt flags are invalid")
-        native_coordinate = native_aggregate
-        cross_arm64_coordinate = (
-            spec.architecture == "arm64"
-            and normalized_host_architecture != "arm64"
-        )
-        if native_coordinate:
-            if (
-                probe["execution_mode"] != "native"
-                or probe_emulator is not None
-                or probe_binfmt is not None
-                or platform["bootstrap_execution"] != "native_container_build"
-            ):
-                _fail(
-                    f"package native execution evidence is inconsistent at {coordinate}"
-                )
-        elif cross_arm64_coordinate:
-            expected_probe_emulator = (
-                {
-                    "path": emulator["path"],
-                    "sha256": emulator["sha256"],
-                    "role": emulator["role"],
-                }
-                if emulator is not None
-                else None
-            )
-            if (
-                probe["execution_mode"] != "host_binfmt_qemu_aarch64"
-                or probe_emulator != expected_probe_emulator
-                or probe_binfmt != binfmt
-                or emulator is None
-                or binfmt is None
-                or platform["bootstrap_execution"]
-                != "podman_platform_with_validated_host_binfmt"
-            ):
-                _fail(
-                    f"package cross-ARM64 execution lacks exact emulator/binfmt evidence at {coordinate}"
-                )
-        else:
-            _fail(
-                f"package coordinate {coordinate} cannot execute natively on host "
-                f"{normalized_host_architecture!r} and has no approved cross-architecture mode"
-            )
         scenarios = _list(platform["scenarios"], f"package.platforms[{index}].scenarios")
         expected_scenarios = package_lab.EXPECTED_SCENARIOS[spec.family]
         if [
@@ -2364,10 +2299,7 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
     candidate = gate.verify_packages(args.candidate_packages_dir, binding)
     raw_paths = {"nft": args.nft_raw, "package": args.package_raw}
     raws = {key: _load_raw(path, key, binding.root, current, args.max_age_seconds) for key, path in raw_paths.items()}
-    package_shard_paths = {
-        "amd64": args.package_amd64_shard,
-        "arm64": args.package_arm64_shard,
-    }
+    package_shard_paths = {"amd64": args.package_amd64_shard}
     package_shards = {
         architecture: _load_raw(
             path,
@@ -2383,9 +2315,9 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
             _fail(f"{key} raw basename must be exactly {RAW_NAMES[key]!r}")
     all_raws = [*raws.values(), *package_shards.values()]
     if (
-        len({(item.snapshot.device, item.snapshot.inode) for item in all_raws}) != 4
-        or len({item.snapshot.path for item in all_raws}) != 4
-        or len({item.snapshot.path.name for item in all_raws}) != 4
+        len({(item.snapshot.device, item.snapshot.inode) for item in all_raws}) != 3
+        or len({item.snapshot.path for item in all_raws}) != 3
+        or len({item.snapshot.path.name for item in all_raws}) != 3
     ):
         _fail("the raw reports and native shards must have distinct files, inodes, paths, and basenames")
     timestamps = [item.generated_at for item in raws.values()]
@@ -2569,7 +2501,6 @@ def _common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--nft-raw", type=Path, required=True)
     parser.add_argument("--package-raw", type=Path, required=True)
     parser.add_argument("--package-amd64-shard", type=Path, required=True)
-    parser.add_argument("--package-arm64-shard", type=Path, required=True)
     parser.add_argument("--expected-repository", required=True)
     parser.add_argument("--expected-workflow-run-id", type=int, required=True)
     parser.add_argument("--expected-workflow-run-attempt", type=int, required=True)

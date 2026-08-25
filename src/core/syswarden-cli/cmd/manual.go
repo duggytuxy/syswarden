@@ -117,7 +117,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %sRELOAD:%s the Linux nftables candidate is committed atomically and verified; compatibility-wrapper failure leaves nftables authoritative and returns an error. The core normally restarts, so keep console access and a ruleset backup.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sUPDATE:%s v4.02.9+ requires a trusted Ed25519 release manifest; v4.02.8 needs a separately verified manual first hop to the qualified v4.03.2 Linux package.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sUNINSTALL:%s configuration, data, logs, services and firewall tables are deleted; it is not a rollback.\n", ansiRed, ansiReset)
-		fmt.Printf("  %sALPINE:%s dedicated CGO-free static APK binaries are built for x86_64 and aarch64; install only an exact release-qualified artifact.\n", ansiRed, ansiReset)
+		fmt.Printf("  %sALPINE:%s dedicated CGO-free static APK binaries are built for x86_64; install only an exact release-qualified artifact.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sPLATFORMS:%s v4.03.2 supports the qualified Linux DEB, RPM and APK package matrix only.\n\n", ansiRed, ansiReset)
 
 		fmt.Printf("%s================================================================================%s\n", ansiCyan, ansiReset)

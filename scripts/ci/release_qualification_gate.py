@@ -310,11 +310,8 @@ def package_names(version: str) -> tuple[str, ...]:
     raw = version.removeprefix("v")
     return (
         f"syswarden_{raw}_amd64.deb",
-        f"syswarden_{raw}_arm64.deb",
         f"syswarden-{raw}-1.x86_64.rpm",
-        f"syswarden-{raw}-1.aarch64.rpm",
         f"syswarden_{raw}_x86_64.apk",
-        f"syswarden_{raw}_aarch64.apk",
     )
 
 
@@ -686,7 +683,7 @@ def parse_report(
 
 LINUX_BASE_PLATFORMS = frozenset({"debian", "ubuntu", "fedora", "alpine"})
 RHEL_PLATFORMS = frozenset({"rhel", "almalinux", "rocky"})
-ARCHITECTURES = frozenset({"amd64", "arm64"})
+ARCHITECTURES = frozenset({"amd64"})
 
 
 def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[str]:
@@ -724,13 +721,13 @@ def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[st
     }
     if len(chosen_rhel) != 1:
         reasons.append(
-            "Linux coverage must contain exactly one complete RHEL-compatible amd64/arm64 pair"
+            "Linux coverage must contain exactly one complete RHEL-compatible AMD64 target"
         )
     allowed_linux = LINUX_BASE_PLATFORMS | RHEL_PLATFORMS
     if any(platform not in allowed_linux or architecture not in ARCHITECTURES for platform, architecture in linux_coordinates):
         reasons.append("Linux coverage contains an unknown platform or architecture")
-    if len(linux_coordinates) != 10:
-        reasons.append("Linux coverage must contain exactly ten required coordinates")
+    if len(linux_coordinates) != 5:
+        reasons.append("Linux coverage must contain exactly five required coordinates")
     package_blockers = set(by_kind["linux_package_lifecycle"].blockers)
     alpine_statuses = {
         status
@@ -738,7 +735,7 @@ def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[st
         if platform == "alpine"
     }
     if "SW-PKG-001" in package_blockers and alpine_statuses != {"blocker"}:
-        reasons.append("SW-PKG-001 must be bound to both Alpine architecture blockers")
+        reasons.append("SW-PKG-001 must be bound to the Alpine AMD64 blocker")
     if "SW-PKG-001" not in package_blockers and "blocker" in alpine_statuses:
         reasons.append("Alpine blocker coverage lacks canonical SW-PKG-001")
     config_statuses = {

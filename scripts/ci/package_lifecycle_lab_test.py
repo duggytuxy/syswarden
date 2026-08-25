@@ -172,7 +172,7 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
             else:
                 stdout = self.reported_architectures.get(
                     architecture,
-                    "x86_64" if architecture == "amd64" else "aarch64",
+                    "x86_64",
                 ) + "\n"
             return package_lifecycle_lab.CommandResult(
                 args=command,
@@ -670,7 +670,7 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
             else:
                 stdout = self.reported_architectures.get(
                     architecture,
-                    "x86_64" if architecture == "amd64" else "aarch64",
+                    "x86_64",
                 ) + "\n"
         elif command[1] == "create":
             volumes = self._volume_values(command)
@@ -804,20 +804,6 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.previous = self.root / "previous"
         self.candidate.mkdir()
         self.previous.mkdir()
-        self.emulator = self.root / "qemu-aarch64-static"
-        self.emulator.write_bytes(b"explicit fake static emulator")
-        self.emulator.chmod(0o700)
-        self.binfmt = self.root / "qemu-aarch64"
-        self.binfmt.write_text(
-            "enabled\n"
-            f"interpreter {self.emulator}\n"
-            "flags: POCF\n"
-            "offset 0\n"
-            "magic 7f454c46\n"
-            "mask ffffffff\n",
-            encoding="utf-8",
-        )
-        self.binfmt.chmod(0o600)
         self.create_package_set(self.candidate, b"candidate", "4.02.8")
         self.create_package_set(self.previous, b"previous", "4.02.7")
 
@@ -825,11 +811,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
     def create_package_set(root: Path, content: bytes, version: str) -> None:
         names = (
             f"syswarden_{version}_amd64.deb",
-            f"syswarden_{version}_arm64.deb",
             f"syswarden-{version}-1.x86_64.rpm",
-            f"syswarden-{version}-1.aarch64.rpm",
             f"syswarden_{version}_x86_64.apk",
-            f"syswarden_{version}_aarch64.apk",
         )
         checksums = []
         for name in names:
@@ -848,8 +831,6 @@ class PackageLifecycleLabTests(unittest.TestCase):
             "podman": "podman",
             "pull_policy": "never",
             "scenario_timeout": 60,
-            "arm64_emulator": self.emulator,
-            "_arm64_binfmt_registration": self.binfmt,
         }
         values.update(overrides)
         return argparse.Namespace(**values)
@@ -858,7 +839,6 @@ class PackageLifecycleLabTests(unittest.TestCase):
         values: dict[str, object] = {
             **vars(self.args()),
             "architecture_shard": architecture,
-            "arm64_emulator": None,
             "qualification_repository": "duggytuxy/syswarden",
             "qualification_release_sha": "a" * 40,
             "qualification_release_tag": "v4.02.8",
@@ -870,63 +850,32 @@ class PackageLifecycleLabTests(unittest.TestCase):
             "qualification_candidate_artifact_name": "syswarden-packages-4.02.8",
             "qualification_previous_release_id": "800",
             "aggregate_amd64_report": None,
-            "aggregate_arm64_report": None,
         }
         values.update(overrides)
         return argparse.Namespace(**values)
 
-    def native_shard_reports(self) -> tuple[dict[str, object], dict[str, object]]:
-        reports = []
-        for architecture, host in (("amd64", "x86_64"), ("arm64", "aarch64")):
-            platforms = tuple(
-                spec
-                for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
-                if spec.architecture == architecture
-            )
-            if architecture == "arm64":
-                uid_map = [
-                    {"container_id": 0, "host_id": 2000, "size": 1},
-                    {"container_id": 1, "host_id": 624288, "size": 65536},
-                ]
-                gid_map = [
-                    {"container_id": 0, "host_id": 2000, "size": 1},
-                    {"container_id": 1, "host_id": 724288, "size": 65536},
-                ]
-                runner = FakePodmanRunner(
-                    host_architecture=architecture,
-                    uid_map=uid_map,
-                    gid_map=gid_map,
-                )
-                with mock.patch.object(
-                    os, "geteuid", return_value=2000
-                ), mock.patch.object(os, "getegid", return_value=2000):
-                    report = package_lifecycle_lab.run_lab(
-                        self.qualification_args(architecture),
-                        runner=runner,
-                        platforms=platforms,
-                        host_architecture=host,
-                    )
-            else:
-                report = package_lifecycle_lab.run_lab(
-                    self.qualification_args(architecture),
-                    runner=FakePodmanRunner(host_architecture=architecture),
-                    platforms=platforms,
-                    host_architecture=host,
-                )
-            reports.append(report)
-        return reports[0], reports[1]
+    def native_shard_report(self) -> dict[str, object]:
+        platforms = tuple(
+            spec
+            for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if spec.architecture == "amd64"
+        )
+        return package_lifecycle_lab.run_lab(
+            self.qualification_args("amd64"),
+            runner=FakePodmanRunner(host_architecture="amd64"),
+            platforms=platforms,
+            host_architecture="x86_64",
+        )
 
     def aggregate_args(
         self,
         amd64_path: Path,
-        arm64_path: Path,
         **overrides: object,
     ) -> argparse.Namespace:
         values = {
             **vars(self.qualification_args("amd64")),
             "architecture_shard": None,
             "aggregate_amd64_report": amd64_path,
-            "aggregate_arm64_report": arm64_path,
         }
         values.update(overrides)
         return argparse.Namespace(**values)
@@ -984,11 +933,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             set(pairs),
             {
                 "deb:amd64",
-                "deb:arm64",
                 "rpm:x86_64",
-                "rpm:aarch64",
                 "apk:x86_64",
-                "apk:aarch64",
             },
         )
         self.assertNotEqual(
@@ -1220,97 +1166,9 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 ):
                     package_lifecycle_lab.validate_image_reference(image)
 
-    def test_arm64_emulator_must_be_executable_regular_and_non_symlink(self) -> None:
-        artifact = package_lifecycle_lab.validate_arm64_emulator(self.emulator)
-        assert artifact is not None
-        self.assertEqual(artifact.path, self.emulator)
-        self.assertEqual(
-            artifact.sha256,
-            hashlib.sha256(self.emulator.read_bytes()).hexdigest(),
-        )
-
-        non_executable = self.root / "qemu-non-executable"
-        non_executable.write_bytes(b"not executable")
-        non_executable.chmod(0o600)
-        empty = self.root / "qemu-empty"
-        empty.touch(mode=0o700)
-        symlink = self.root / "qemu-symlink"
-        symlink.symlink_to(self.emulator)
-        directory = self.root / "qemu-directory"
-        directory.mkdir()
-        cases = {
-            "not executable": non_executable,
-            "empty": empty,
-            "non-symlink": symlink,
-            "regular non-symlink": directory,
-        }
-        for message, path in cases.items():
-            with self.subTest(path=path):
-                with self.assertRaisesRegex(
-                    package_lifecycle_lab.LifecycleLabError, message
-                ):
-                    package_lifecycle_lab.validate_arm64_emulator(path)
-
-    def test_arm64_emulator_checksum_change_invalidates_the_run(self) -> None:
-        original = package_lifecycle_lab.validate_arm64_emulator
-        calls = 0
-
-        def changing(
-            path: Path | None,
-        ) -> package_lifecycle_lab.EmulatorArtifact | None:
-            nonlocal calls
-            calls += 1
-            artifact = original(path)
-            if calls == 2 and artifact is not None:
-                return replace(artifact, sha256="f" * 64)
-            return artifact
-
-        with mock.patch.object(
-            package_lifecycle_lab,
-            "validate_arm64_emulator",
-            side_effect=changing,
-        ):
-            with self.assertRaisesRegex(
-                package_lifecycle_lab.LifecycleLabError,
-                "emulator changed",
-            ):
-                package_lifecycle_lab.run_lab(
-                    self.args(), runner=FakePodmanRunner()
-                )
-
-    def test_arm64_binfmt_requires_exact_interpreter_enabled_and_flag_f(self) -> None:
-        emulator = package_lifecycle_lab.validate_arm64_emulator(self.emulator)
-        assert emulator is not None
-        registration = package_lifecycle_lab.validate_arm64_binfmt(
-            emulator, self.binfmt
-        )
-        self.assertEqual(registration.interpreter, str(self.emulator))
-        self.assertIn("F", registration.flags)
-
-        mutations = {
-            "not enabled": "disabled\n",
-            "does not exactly match": (
-                "enabled\ninterpreter /tmp/other-qemu\nflags: POCF\n"
-            ),
-            "lacks the persistent": (
-                f"enabled\ninterpreter {self.emulator}\nflags: POC\n"
-            ),
-        }
-        original = self.binfmt.read_text(encoding="utf-8")
-        for message, content in mutations.items():
-            with self.subTest(message=message):
-                self.binfmt.write_text(content, encoding="utf-8")
-                with self.assertRaisesRegex(
-                    package_lifecycle_lab.LifecycleLabError, message
-                ):
-                    package_lifecycle_lab.validate_arm64_binfmt(
-                        emulator, self.binfmt
-                    )
-        self.binfmt.write_text(original, encoding="utf-8")
-
     def test_default_matrix_is_official_digest_pinned_and_complete(self) -> None:
         platforms = package_lifecycle_lab.DEFAULT_PLATFORMS
-        self.assertEqual(len(platforms), 10)
+        self.assertEqual(len(platforms), 5)
         self.assertEqual(
             {package_lifecycle_lab.platform_coordinate(spec) for spec in platforms},
             package_lifecycle_lab.REQUIRED_PLATFORM_COORDINATES,
@@ -1327,9 +1185,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
             {
                 (spec.family, spec.package_architecture)
                 for spec in platforms
-                if spec.architecture == "arm64"
             },
-            {("deb", "arm64"), ("rpm", "aarch64"), ("apk", "aarch64")},
+            {("deb", "amd64"), ("rpm", "x86_64"), ("apk", "x86_64")},
         )
         self.assertIn(
             "sed -i '\\|^path-exclude /usr/share/doc/\\*$|d'",
@@ -1352,7 +1209,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
 
         wrong_architecture = replace(
             baseline,
-            podman_platform="linux/arm64",
+            podman_platform="linux/unsupported",
         )
         with self.assertRaisesRegex(
             package_lifecycle_lab.LifecycleLabError, "Podman platform mismatch"
@@ -1361,9 +1218,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
 
         wrong_package = replace(
             baseline,
-            package_pattern=package_lifecycle_lab.EXPECTED_PACKAGE_PATTERNS[
-                ("deb", "arm64")
-            ],
+            package_pattern=r"^unsupported$",
         )
         with self.assertRaisesRegex(
             package_lifecycle_lab.LifecycleLabError,
@@ -1380,11 +1235,21 @@ class PackageLifecycleLabTests(unittest.TestCase):
         ):
             package_lifecycle_lab.validate_platforms((missing_scenario,))
 
-    def test_missing_arm64_artifact_fails_before_container_execution(self) -> None:
-        package = self.candidate / "syswarden_4.02.8_arm64.deb"
+    def test_removed_arm64_architecture_is_rejected(self) -> None:
+        removed = replace(
+            package_lifecycle_lab.DEFAULT_PLATFORMS[0], architecture="arm64"
+        )
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError,
+            "unsupported package lifecycle architecture",
+        ):
+            package_lifecycle_lab.validate_platforms((removed,))
+
+    def test_missing_amd64_artifact_fails_before_container_execution(self) -> None:
+        package = self.candidate / "syswarden_4.02.8_amd64.deb"
         package.unlink()
         with self.assertRaisesRegex(
-            package_lifecycle_lab.LifecycleLabError, "arm64"
+            package_lifecycle_lab.LifecycleLabError, "amd64"
         ):
             package_lifecycle_lab.validate_inputs(
                 self.candidate,
@@ -3183,7 +3048,7 @@ probe
                 27, values[27].replace("|systemd|", "|cronie|")
             ),
             "wrong_arch": lambda values: values.__setitem__(
-                27, values[27].replace("|x86_64|8", "|aarch64|8")
+                27, values[27].replace("|x86_64|8", "|unsupported|8")
             ),
             "wrong_digest_algorithm": lambda values: values.__setitem__(
                 27, values[27].removesuffix("|8") + "|1"
@@ -3411,14 +3276,14 @@ probe
             )
         )
 
-    def test_arm64_probe_and_lifecycle_arguments_are_explicit_and_bounded(self) -> None:
+    def test_amd64_probe_and_lifecycle_arguments_are_explicit_and_bounded(self) -> None:
         spec = next(
             item
             for item in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if item.distribution == "alpine" and item.architecture == "arm64"
+            if item.distribution == "alpine" and item.architecture == "amd64"
         )
         probe = package_lifecycle_lab.architecture_probe_arguments("podman", spec)
-        self.assertEqual(probe[probe.index("--platform") + 1], "linux/arm64")
+        self.assertEqual(probe[probe.index("--platform") + 1], "linux/amd64")
         self.assertIn("--network=none", probe)
         self.assertIn("--read-only", probe)
         self.assertIn("--cap-drop=all", probe)
@@ -3427,16 +3292,14 @@ probe
         self.assertNotIn("--volume", probe)
 
         self.assertNotIn("--entrypoint", probe)
-        self.assertNotIn(str(self.emulator), probe)
-
         pair = package_lifecycle_lab.PackagePair(
             package_lifecycle_lab.PackageArtifact(
-                self.candidate / "syswarden_4.02.8_aarch64.apk",
+                self.candidate / "syswarden_4.02.8_x86_64.apk",
                 "4.02.8",
                 "a" * 64,
             ),
             package_lifecycle_lab.PackageArtifact(
-                self.previous / "syswarden_4.02.7_aarch64.apk",
+                self.previous / "syswarden_4.02.7_x86_64.apk",
                 "4.02.7",
                 "b" * 64,
             ),
@@ -3455,10 +3318,10 @@ probe
             pair,
         )
         self.assertEqual(
-            lifecycle[lifecycle.index("--platform") + 1], "linux/arm64"
+            lifecycle[lifecycle.index("--platform") + 1], "linux/amd64"
         )
-        self.assertIn("EXPECTED_PACKAGE_ARCHITECTURE=aarch64", lifecycle)
-        self.assertIn("EXPECTED_UNAME_ARCHITECTURE=aarch64", lifecycle)
+        self.assertIn("EXPECTED_PACKAGE_ARCHITECTURE=x86_64", lifecycle)
+        self.assertIn("EXPECTED_UNAME_ARCHITECTURE=x86_64", lifecycle)
         self.assertIn("--cap-add=NET_ADMIN", lifecycle)
         self.assertIn("--cap-add=SYS_BOOT", lifecycle)
         self.assertNotIn("--cap-add=SYS_ADMIN", lifecycle)
@@ -3470,18 +3333,16 @@ probe
         )
 
         self.assertNotIn("--entrypoint", lifecycle)
-        self.assertNotIn(str(self.emulator), lifecycle)
-
-    def test_arm64_pull_is_explicitly_platform_selected_and_digest_checked(self) -> None:
+    def test_amd64_pull_is_explicitly_platform_selected_and_digest_checked(self) -> None:
         spec = next(
             item
             for item in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if item.distribution == "ubuntu" and item.architecture == "arm64"
+            if item.distribution == "ubuntu" and item.architecture == "amd64"
         )
         runner = FakePodmanRunner()
         package_lifecycle_lab.ensure_image(runner, "podman", spec, "always")
         pull = next(call for call in runner.calls if call[1] == "pull")
-        self.assertEqual(pull[pull.index("--platform") + 1], "linux/arm64")
+        self.assertEqual(pull[pull.index("--platform") + 1], "linux/amd64")
         self.assertEqual(pull[-1], spec.image)
         inspect = next(
             call for call in runner.calls if call[1:3] == ("image", "inspect")
@@ -4371,7 +4232,7 @@ probe
         self.assertEqual(version_contract["candidate_version"], "4.02.8")
         self.assertEqual(version_contract["previous_numeric"], [4, 2, 7])
         self.assertEqual(version_contract["candidate_numeric"], [4, 2, 8])
-        self.assertEqual(len(version_contract["coordinates"]), 6)
+        self.assertEqual(len(version_contract["coordinates"]), 3)
         self.assertTrue(
             all(
                 item["previous_version"] == "4.02.7"
@@ -4387,19 +4248,10 @@ probe
         self.assertEqual(report["blocker_ids"], [])
         self.assertEqual(report["unexpected_failed_checks"], [])
         self.assertEqual(
-            report["engine"]["arm64_emulator"]["sha256"],
-            hashlib.sha256(self.emulator.read_bytes()).hexdigest(),
-        )
-        self.assertEqual(
-            report["engine"]["arm64_binfmt"]["interpreter"],
-            str(self.emulator),
-        )
-        self.assertIn("F", report["engine"]["arm64_binfmt"]["flags"])
-        self.assertEqual(
             {item["distribution"] for item in report["platforms"]},
             {"debian", "ubuntu", "fedora", "almalinux", "alpine"},
         )
-        self.assertEqual(len(report["platforms"]), 10)
+        self.assertEqual(len(report["platforms"]), 5)
         self.assertTrue(all(item["status"] == "pass" for item in report["platforms"]))
         deb_upgrade = next(
             scenario
@@ -4426,20 +4278,20 @@ probe
         )
         self.assertEqual(
             report["scope"]["architectures_completed"],
-            ["amd64/x86_64", "arm64/aarch64"],
+            ["amd64/x86_64"],
         )
         self.assertEqual(report["scope"]["missing_platform_coordinates"], [])
-        arm_family_coverage = {
+        family_coverage = {
             item["family"]: item["status"]
             for item in report["scope"]["family_architecture_coverage"]
-            if item["architecture_id"] == "arm64"
+            if item["architecture_id"] == "amd64"
         }
         self.assertEqual(
-            arm_family_coverage, {"deb": "pass", "rpm": "pass", "apk": "pass"}
+            family_coverage, {"deb": "pass", "rpm": "pass", "apk": "pass"}
         )
         self.assertIn("not a SysWarden product rollback", report["scope"]["rollback_model"])
         run_calls = [call for call in runner.calls if call[1] == "run"]
-        self.assertEqual(len(run_calls), 10)
+        self.assertEqual(len(run_calls), 5)
         lifecycle_creates = [
             call
             for call in runner.calls
@@ -4447,7 +4299,7 @@ probe
                 value.endswith(":/results:rw") for value in call
             )
         ]
-        self.assertEqual(len(lifecycle_creates), 26)
+        self.assertEqual(len(lifecycle_creates), 13)
         self.assertTrue(all("--network=none" in call for call in lifecycle_creates))
         bootstrap_creates = [
             call
@@ -4463,43 +4315,37 @@ probe
             if call[1] == "exec"
             and "exec /bin/sh /lab/package-lifecycle.sh" in call[-1]
         ]
-        self.assertEqual(len(start_calls), 26)
-        self.assertEqual(len(restart_calls), 20)
-        self.assertEqual(len(lifecycle_execs), 46)
+        self.assertEqual(len(start_calls), 13)
+        self.assertEqual(len(restart_calls), 10)
+        self.assertEqual(len(lifecycle_execs), 23)
         self.assertEqual(
             len([call for call in runner.calls if call[1] == "commit"]), 0
         )
         build_calls = [call for call in runner.calls if call[1] == "build"]
-        self.assertEqual(len(build_calls), 10)
+        self.assertEqual(len(build_calls), 5)
         self.assertTrue(all("--platform" in call for call in build_calls))
         self.assertTrue(all("--network=host" not in call for call in build_calls))
 
-    def test_native_shards_cover_exact_architecture_without_emulation(self) -> None:
-        amd64, arm64 = self.native_shard_reports()
-        for architecture, report in (("amd64", amd64), ("arm64", arm64)):
-            with self.subTest(architecture=architecture):
-                self.assertEqual(report["status"], "pass")
-                self.assertEqual(
-                    report["native_shard"],
-                    {"schema_version": 1, "architecture": architecture},
-                )
-                self.assertEqual(
-                    {item["architecture_id"] for item in report["platforms"]},
-                    {architecture},
-                )
-                self.assertEqual(len(report["platforms"]), 5)
-                self.assertIsNone(report["engine"]["arm64_emulator"])
-                self.assertIsNone(report["engine"]["arm64_binfmt"])
-                self.assertTrue(
-                    all(
-                        item["architecture_probe"]["execution_mode"] == "native"
-                        and item["architecture_probe"]["emulator"] is None
-                        and item["architecture_probe"]["binfmt"] is None
-                        for item in report["platforms"]
-                    )
-                )
+    def test_native_shard_covers_exact_amd64_architecture(self) -> None:
+        report = self.native_shard_report()
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(
+            report["native_shard"],
+            {"schema_version": 1, "architecture": "amd64"},
+        )
+        self.assertEqual(
+            {item["architecture_id"] for item in report["platforms"]},
+            {"amd64"},
+        )
+        self.assertEqual(len(report["platforms"]), 5)
+        self.assertTrue(
+            all(
+                item["architecture_probe"]["execution_mode"] == "native"
+                for item in report["platforms"]
+            )
+        )
 
-    def test_native_shard_rejects_wrong_host_and_any_emulator(self) -> None:
+    def test_native_shard_rejects_non_amd64_host(self) -> None:
         amd64_platforms = tuple(
             spec
             for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
@@ -4513,30 +4359,18 @@ probe
                 self.qualification_args("amd64"),
                 runner=FakePodmanRunner(),
                 platforms=amd64_platforms,
-                host_architecture="aarch64",
-            )
-        with self.assertRaisesRegex(
-            package_lifecycle_lab.LifecycleLabError,
-            "forbid ARM64 emulation",
-        ):
-            package_lifecycle_lab.run_lab(
-                self.qualification_args("amd64", arm64_emulator=self.emulator),
-                runner=FakePodmanRunner(),
-                platforms=amd64_platforms,
-                host_architecture="x86_64",
+                host_architecture="unsupported",
             )
 
     def test_native_shard_aggregate_is_exact_digest_bound_and_adapter_compatible(self) -> None:
-        amd64, arm64 = self.native_shard_reports()
+        amd64 = self.native_shard_report()
         amd64_path = self.root / "package-lifecycle-amd64.json"
-        arm64_path = self.root / "package-lifecycle-arm64.json"
-        for path, report in ((amd64_path, amd64), (arm64_path, arm64)):
-            path.write_text(
-                json.dumps(report, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+        amd64_path.write_text(
+            json.dumps(amd64, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         aggregate = package_lifecycle_lab.aggregate_native_shard_reports(
-            self.aggregate_args(amd64_path, arm64_path)
+            self.aggregate_args(amd64_path)
         )
         self.assertEqual(aggregate["status"], "pass")
         self.assertTrue(aggregate["harness_complete"])
@@ -4545,44 +4379,36 @@ probe
             aggregate["scope"]["host_architecture"],
             package_lifecycle_lab.NATIVE_AGGREGATE_HOST,
         )
-        self.assertEqual(len(aggregate["platforms"]), 10)
+        self.assertEqual(len(aggregate["platforms"]), 5)
         self.assertEqual(
             [item["architecture"] for item in aggregate["native_shards"]["reports"]],
-            ["amd64", "arm64"],
+            ["amd64"],
         )
-        for path, record in zip(
-            (amd64_path, arm64_path),
-            aggregate["native_shards"]["reports"],
-            strict=True,
-        ):
-            self.assertEqual(
-                record["report_sha256"],
-                hashlib.sha256(path.read_bytes()).hexdigest(),
-            )
+        self.assertEqual(
+            aggregate["native_shards"]["reports"][0]["report_sha256"],
+            hashlib.sha256(amd64_path.read_bytes()).hexdigest(),
+        )
         package_lifecycle_lab.validate_report_version_contract(aggregate)
 
     def test_native_shard_aggregate_propagates_product_failure(self) -> None:
-        amd64, arm64 = self.native_shard_reports()
-        arm64_platforms = tuple(
+        amd64_platforms = tuple(
             spec
             for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if spec.architecture == "arm64"
+            if spec.architecture == "amd64"
         )
-        arm64 = package_lifecycle_lab.run_lab(
-            self.qualification_args("arm64"),
+        amd64 = package_lifecycle_lab.run_lab(
+            self.qualification_args("amd64"),
             runner=FakePodmanRunner(
-                event_status="fail", host_architecture="arm64"
+                event_status="fail", host_architecture="amd64"
             ),
-            platforms=arm64_platforms,
-            host_architecture="aarch64",
+            platforms=amd64_platforms,
+            host_architecture="x86_64",
         )
         amd64_path = self.root / "failed-aggregate-amd64.json"
-        arm64_path = self.root / "failed-aggregate-arm64.json"
         amd64_path.write_text(json.dumps(amd64) + "\n", encoding="utf-8")
-        arm64_path.write_text(json.dumps(arm64) + "\n", encoding="utf-8")
 
         aggregate = package_lifecycle_lab.aggregate_native_shard_reports(
-            self.aggregate_args(amd64_path, arm64_path)
+            self.aggregate_args(amd64_path)
         )
         self.assertEqual(aggregate["status"], "fail")
         self.assertFalse(aggregate["harness_complete"])
@@ -4590,7 +4416,7 @@ probe
         self.assertTrue(aggregate["unexpected_failed_checks"])
 
     def test_native_shard_aggregate_rejects_mutated_binding_matrix_and_execution(self) -> None:
-        baseline_amd64, baseline_arm64 = self.native_shard_reports()
+        baseline_amd64 = self.native_shard_report()
         mutations = {
             "run mismatch": lambda report: report["qualification_binding"].__setitem__(
                 "workflow_run_id", 1002
@@ -4607,12 +4433,12 @@ probe
             "binding string": lambda report: report[
                 "qualification_binding"
             ].__setitem__("workflow_run_id", "1001"),
-            "emulated arm64": lambda report: report["platforms"][0][
+            "translated execution": lambda report: report["platforms"][0][
                 "architecture_probe"
-            ].__setitem__("execution_mode", "host_binfmt_qemu_aarch64"),
+            ].__setitem__("execution_mode", "translated"),
             "wrong native uname": lambda report: report["platforms"][0][
                 "architecture_probe"
-            ].__setitem__("actual_uname", "x86_64"),
+            ].__setitem__("actual_uname", "unsupported"),
             "missing coordinate": lambda report: report["platforms"].pop(),
             "duplicate coordinate": lambda report: report["platforms"].__setitem__(
                 -1, dict(report["platforms"][0])
@@ -4625,59 +4451,35 @@ probe
         for name, mutate in mutations.items():
             with self.subTest(name=name):
                 amd64 = json.loads(json.dumps(baseline_amd64))
-                arm64 = json.loads(json.dumps(baseline_arm64))
-                target = arm64 if name in {
-                    "emulated arm64",
-                    "wrong native uname",
-                    "missing coordinate",
-                    "duplicate coordinate",
-                    "reordered coordinates",
-                } else amd64
-                mutate(target)
+                mutate(amd64)
                 amd64_path = self.root / f"{name}-amd64.json"
-                arm64_path = self.root / f"{name}-arm64.json"
                 amd64_path.write_text(json.dumps(amd64) + "\n", encoding="utf-8")
-                arm64_path.write_text(json.dumps(arm64) + "\n", encoding="utf-8")
                 with self.assertRaises(package_lifecycle_lab.LifecycleLabError):
                     package_lifecycle_lab.aggregate_native_shard_reports(
-                        self.aggregate_args(amd64_path, arm64_path)
+                        self.aggregate_args(amd64_path)
                     )
 
-        single = self.root / "same-shard.json"
-        single.write_text(json.dumps(baseline_amd64) + "\n", encoding="utf-8")
-        with self.assertRaisesRegex(
-            package_lifecycle_lab.LifecycleLabError,
-            "distinct inodes",
-        ):
-            package_lifecycle_lab.aggregate_native_shard_reports(
-                self.aggregate_args(single, single)
-            )
-
     def test_native_shard_reader_rejects_duplicate_json_keys(self) -> None:
-        amd64, arm64 = self.native_shard_reports()
+        amd64 = self.native_shard_report()
         amd64_path = self.root / "duplicate-amd64.json"
-        arm64_path = self.root / "duplicate-arm64.json"
         payload = json.dumps(amd64)
         amd64_path.write_text(
             payload.replace("{", '{"schema_version":3,', 1) + "\n",
             encoding="utf-8",
         )
-        arm64_path.write_text(json.dumps(arm64) + "\n", encoding="utf-8")
         with self.assertRaisesRegex(
             package_lifecycle_lab.LifecycleLabError,
             "duplicate JSON key",
         ):
             package_lifecycle_lab.aggregate_native_shard_reports(
-                self.aggregate_args(amd64_path, arm64_path)
+                self.aggregate_args(amd64_path)
             )
 
     def test_native_shard_aggregate_cli_writes_exact_report(self) -> None:
-        amd64, arm64 = self.native_shard_reports()
+        amd64 = self.native_shard_report()
         amd64_path = self.root / "cli-amd64.json"
-        arm64_path = self.root / "cli-arm64.json"
         output = self.root / "cli-aggregate.json"
         amd64_path.write_text(json.dumps(amd64) + "\n", encoding="utf-8")
-        arm64_path.write_text(json.dumps(arm64) + "\n", encoding="utf-8")
         arguments = (
             "--packages-dir",
             str(self.candidate),
@@ -4685,8 +4487,6 @@ probe
             str(self.previous),
             "--aggregate-amd64-report",
             str(amd64_path),
-            "--aggregate-arm64-report",
-            str(arm64_path),
             "--qualification-repository",
             "duggytuxy/syswarden",
             "--qualification-release-sha",
@@ -4715,7 +4515,7 @@ probe
             self.assertEqual(package_lifecycle_lab.main(arguments), 0)
         written = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(written["status"], "pass")
-        self.assertEqual(len(written["platforms"]), 10)
+        self.assertEqual(len(written["platforms"]), 5)
         stdout.write.assert_called_once()
 
     def test_report_version_contract_rejects_schema_order_and_platform_tampering(
@@ -4787,12 +4587,6 @@ probe
             "helper_digest": lambda item: item["engine"][
                 "lifecycle_helper"
             ].update(sha256="0" * 64),
-            "emulator": lambda item: item["engine"]["arm64_emulator"].update(
-                sha256="0" * 64
-            ),
-            "binfmt": lambda item: item["engine"]["arm64_binfmt"].update(
-                interpreter="/tmp/wrong-qemu"
-            ),
             "inventory": lambda item: item["platforms"][0]["scenarios"][0][
                 "inventory_evidence"
             ]["previous"]["filesystem"][0].update(mode="777"),
@@ -5063,7 +4857,7 @@ probe
                 package_version=""
             ),
             "setpriv_architecture": lambda item: setpriv(item).update(
-                package_architecture="aarch64"
+                package_architecture="unsupported"
             ),
             "setpriv_missing_key": lambda item: setpriv(item).pop("sha256"),
             "setpriv_extra_key": lambda item: setpriv(item).update(extra=True),
@@ -5143,65 +4937,19 @@ probe
                         platform, scenario
                     )
 
-    def test_aggregate_binds_distinct_identity_maps_to_their_native_architecture(
-        self,
-    ) -> None:
-        amd64_platforms = tuple(
-            spec
-            for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if spec.architecture == "amd64"
-        )
-        arm64_platforms = tuple(
-            spec
-            for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if spec.architecture == "arm64"
-        )
-        amd64 = package_lifecycle_lab.run_lab(
-            self.qualification_args("amd64"),
-            runner=FakePodmanRunner(host_architecture="amd64"),
-            platforms=amd64_platforms,
-            host_architecture="x86_64",
-        )
-        arm_uid_map = [
-            {"container_id": 0, "host_id": 2000, "size": 1},
-            {"container_id": 1, "host_id": 624288, "size": 65536},
-        ]
-        arm_gid_map = [
-            {"container_id": 0, "host_id": 2000, "size": 1},
-            {"container_id": 1, "host_id": 724288, "size": 65536},
-        ]
-        with mock.patch.object(os, "geteuid", return_value=2000), mock.patch.object(
-            os, "getegid", return_value=2000
-        ):
-            arm64 = package_lifecycle_lab.run_lab(
-                self.qualification_args("arm64"),
-                runner=FakePodmanRunner(
-                    host_architecture="arm64",
-                    uid_map=arm_uid_map,
-                    gid_map=arm_gid_map,
-                ),
-                platforms=arm64_platforms,
-                host_architecture="aarch64",
-            )
+    def test_aggregate_binds_native_amd64_identity_map(self) -> None:
+        amd64 = self.native_shard_report()
         amd64_path = self.root / "map-aggregate-amd64.json"
-        arm64_path = self.root / "map-aggregate-arm64.json"
         amd64_path.write_text(json.dumps(amd64) + "\n", encoding="utf-8")
-        arm64_path.write_text(json.dumps(arm64) + "\n", encoding="utf-8")
         aggregate = package_lifecycle_lab.aggregate_native_shard_reports(
-            self.aggregate_args(amd64_path, arm64_path)
+            self.aggregate_args(amd64_path)
         )
         records = aggregate["native_shards"]["reports"]
-        self.assertNotEqual(records[0]["uid_map"], records[1]["uid_map"])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["architecture"], "amd64")
+        self.assertEqual(records[0]["uid_map"], amd64["engine"]["uid_map"])
         self.assertIsNone(aggregate["engine"]["effective_uid"])
         self.assertIsNone(aggregate["engine"]["uid_map"])
-
-        def swap_maps(item: dict[str, object]) -> None:
-            shard_records = item["native_shards"]["reports"]
-            for key in ("effective_uid", "effective_gid", "uid_map", "gid_map"):
-                shard_records[0][key], shard_records[1][key] = (
-                    shard_records[1][key],
-                    shard_records[0][key],
-                )
 
         def shard_only_map(item: dict[str, object]) -> None:
             record = item["native_shards"]["reports"][0]
@@ -5209,7 +4957,6 @@ probe
             record["uid_map"][0]["outside_id"] = 1001
 
         mutations = {
-            "cross_architecture_swap": swap_maps,
             "shard_only_map": shard_only_map,
             "shard_missing_map": lambda item: item["native_shards"]["reports"][
                 0
@@ -5396,7 +5143,7 @@ probe
             item
             for item in wrong_hash
             if item["distribution"] == "alpine"
-            and item["architecture_id"] == "arm64"
+            and item["architecture_id"] == "amd64"
         )["previous"]["sha256"] = "0" * 64
         rejected = package_lifecycle_lab.classify_lifecycle_evidence(wrong_hash)
         self.assertFalse(rejected["harness_complete"])
@@ -5449,7 +5196,7 @@ probe
         self.assertEqual(rejected["blocker_ids"], [])
         self.assertTrue(rejected["unexpected_failed_checks"])
 
-    def test_exact_amd64_blockers_stay_canonical_when_arm64_is_unavailable(self) -> None:
+    def test_exact_amd64_failures_stay_canonical(self) -> None:
         report = package_lifecycle_lab.run_lab(
             self.args(), runner=FakePodmanRunner()
         )
@@ -5458,9 +5205,6 @@ probe
             "package manager returned success after maintainer script emitted a Go panic"
         )
         for platform_result in platforms:
-            if platform_result["architecture_id"] == "arm64":
-                platform_result.update(status="incomplete", scenarios=[])
-                continue
             platform_result["status"] = "fail"
             for scenario in platform_result["scenarios"]:
                 scenario["status"] = "fail"
@@ -7403,97 +7147,6 @@ prepare_package_transition
         self.assertEqual(report["status"], "fail")
         self.assertTrue(all(item["status"] == "fail" for item in report["platforms"]))
 
-    def test_missing_arm64_emulation_is_incomplete_and_never_coverage(self) -> None:
-        runner = FakePodmanRunner()
-        report = package_lifecycle_lab.run_lab(
-            self.args(arm64_emulator=None),
-            runner=runner,
-            host_architecture="x86_64",
-        )
-        self.assertEqual(report["status"], "incomplete")
-        self.assertFalse(report["harness_complete"])
-        self.assertFalse(report["release_ready"])
-        self.assertEqual(report["blocker_ids"], [])
-        self.assertTrue(report["unexpected_failed_checks"])
-        self.assertFalse(report["scope"]["container_lab_complete"])
-        self.assertEqual(report["scope"]["architectures_completed"], ["amd64/x86_64"])
-        arm_coverage = next(
-            item
-            for item in report["scope"]["architecture_coverage"]
-            if item["architecture_id"] == "arm64"
-        )
-        self.assertEqual(arm_coverage["status"], "incomplete")
-        arm_results = [
-            item for item in report["platforms"] if item["architecture_id"] == "arm64"
-        ]
-        self.assertEqual(len(arm_results), 5)
-        self.assertTrue(all(item["status"] == "incomplete" for item in arm_results))
-        self.assertTrue(
-            all(
-                item["architecture_probe"]["execution_mode"]
-                == "explicit_emulator_required"
-                for item in arm_results
-            )
-        )
-        arm_builds = [
-            call
-            for call in runner.calls
-            if call[1] == "build"
-            and call[call.index("--platform") + 1] == "linux/arm64"
-        ]
-        self.assertEqual(arm_builds, [])
-        arm_probes = [
-            call
-            for call in runner.calls
-            if call[1] == "run"
-            and call[call.index("--platform") + 1] == "linux/arm64"
-        ]
-        self.assertEqual(arm_probes, [])
-
-    def test_missing_arm64_binfmt_is_incomplete_without_any_arm_execution(self) -> None:
-        runner = FakePodmanRunner()
-        report = package_lifecycle_lab.run_lab(
-            self.args(_arm64_binfmt_registration=self.root / "missing-binfmt"),
-            runner=runner,
-            host_architecture="x86_64",
-        )
-        arm_results = [
-            item for item in report["platforms"] if item["architecture_id"] == "arm64"
-        ]
-        self.assertTrue(all(item["status"] == "incomplete" for item in arm_results))
-        self.assertTrue(
-            all(
-                item["architecture_probe"]["execution_mode"]
-                == "host_binfmt_required"
-                for item in arm_results
-            )
-        )
-        arm_commands = [
-            call
-            for call in runner.calls
-            if "--platform" in call
-            and call[call.index("--platform") + 1] == "linux/arm64"
-            and call[1] in {"run", "build", "create"}
-        ]
-        self.assertEqual(arm_commands, [])
-
-    def test_wrong_emulated_uname_is_incomplete(self) -> None:
-        runner = FakePodmanRunner(reported_architectures={"arm64": "x86_64"})
-        report = package_lifecycle_lab.run_lab(
-            self.args(), runner=runner, host_architecture="x86_64"
-        )
-        self.assertEqual(report["status"], "incomplete")
-        arm_results = [
-            item for item in report["platforms"] if item["architecture_id"] == "arm64"
-        ]
-        self.assertTrue(all(item["status"] == "incomplete" for item in arm_results))
-        self.assertTrue(
-            all(
-                item["architecture_probe"]["actual_uname"] == "x86_64"
-                for item in arm_results
-            )
-        )
-
     def test_partial_distribution_matrix_is_incomplete_fail_closed(self) -> None:
         runner = FakePodmanRunner()
         report = package_lifecycle_lab.run_lab(
@@ -7504,7 +7157,7 @@ prepare_package_transition
         )
         self.assertEqual(report["status"], "incomplete")
         self.assertFalse(report["scope"]["container_lab_complete"])
-        self.assertEqual(len(report["scope"]["missing_platform_coordinates"]), 8)
+        self.assertEqual(len(report["scope"]["missing_platform_coordinates"]), 3)
         self.assertEqual(report["scope"]["architectures_completed"], [])
 
     def test_image_inspection_architecture_mismatch_is_rejected(self) -> None:
@@ -7524,7 +7177,7 @@ prepare_package_transition
                 return package_lifecycle_lab.CommandResult(
                     args=command,
                     returncode=0,
-                    stdout=f"{digest}\tlinux/arm64\n",
+                    stdout=f"{digest}\tlinux/unsupported\n",
                     stderr="",
                 )
             return result
@@ -7619,7 +7272,7 @@ prepare_package_transition
         self.assertEqual(return_code, 1)
         stdout.write.assert_called_once()
 
-    def test_parser_exposes_separate_digest_pinned_images_for_both_architectures(self) -> None:
+    def test_parser_exposes_digest_pinned_amd64_images(self) -> None:
         parser = package_lifecycle_lab.build_parser()
         args = parser.parse_args(
             (
@@ -7630,29 +7283,28 @@ prepare_package_transition
             )
         )
         configured = package_lifecycle_lab.configured_platforms(args)
-        self.assertIsNone(args.arm64_emulator)
-        self.assertEqual(len(configured), 10)
+        self.assertEqual(len(configured), 5)
         self.assertEqual(
             {package_lifecycle_lab.platform_coordinate(spec) for spec in configured},
             package_lifecycle_lab.REQUIRED_PLATFORM_COORDINATES,
         )
         self.assertTrue(all("@sha256:" in spec.image for spec in configured))
 
-        arm_shard = parser.parse_args(
+        amd64_shard = parser.parse_args(
             (
                 "--packages-dir",
                 str(self.candidate),
                 "--previous-packages-dir",
                 str(self.previous),
                 "--architecture-shard",
-                "arm64",
+                "amd64",
             )
         )
-        arm_configured = package_lifecycle_lab.configured_platforms(arm_shard)
-        self.assertEqual(len(arm_configured), 5)
+        shard_configured = package_lifecycle_lab.configured_platforms(amd64_shard)
+        self.assertEqual(len(shard_configured), 5)
         self.assertEqual(
-            {spec.architecture for spec in arm_configured},
-            {"arm64"},
+            {spec.architecture for spec in shard_configured},
+            {"amd64"},
         )
 
         replacement_image = (
@@ -7664,20 +7316,17 @@ prepare_package_transition
                 str(self.candidate),
                 "--previous-packages-dir",
                 str(self.previous),
-                "--ubuntu-arm64-image",
+                "--ubuntu-amd64-image",
                 replacement_image,
-                "--arm64-emulator",
-                str(self.emulator),
             )
         )
-        ubuntu_arm64 = next(
+        ubuntu_amd64 = next(
             spec
             for spec in package_lifecycle_lab.configured_platforms(overridden)
             if package_lifecycle_lab.platform_coordinate(spec)
-            == ("ubuntu", "arm64")
+            == ("ubuntu", "amd64")
         )
-        self.assertEqual(ubuntu_arm64.image, replacement_image)
-        self.assertEqual(overridden.arm64_emulator, self.emulator)
+        self.assertEqual(ubuntu_amd64.image, replacement_image)
 
 
 if __name__ == "__main__":

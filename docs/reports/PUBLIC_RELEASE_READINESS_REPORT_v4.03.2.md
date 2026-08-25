@@ -6,8 +6,8 @@
 |---|---|
 | Candidate | v4.03.2 |
 | Distribution boundary | Linux packages only |
-| Public package count | 6 |
-| Public release asset count | 13 |
+| Public package count | 3 |
+| Public release asset count | 10 |
 | Decision | NO-GO until protected qualification passes on the exact merged SHA |
 | Scope | Source, package, firewall, HA migration, documentation and release governance |
 
@@ -21,47 +21,41 @@ does not authorize or replace the required v4.03.2 qualification.
 
 ## Executive summary
 
-v4.03.2 retains the supported distribution surface of six Linux packages,
+v4.03.2 limits the supported distribution surface to three Linux packages,
 removes the network-facing browser terminal while retaining the native local
 TUI, retains the verifiable HA migration fence and targets closure of the LOT
 2S controls selected from security audit BW-SW-2026-002.
 
 The release remains blocked until the exact merged commit passes native AMD64
-and ARM64 package lifecycles, isolated nftables qualification, security and
+package lifecycles, isolated nftables qualification, security and
 supply-chain gates, partner migration acceptance, exact evidence sealing and
-the immutable thirteen-asset publisher.
+the immutable ten-asset publisher.
 
 ## Supported package matrix
 
 | Package family | Architecture | Expected asset |
 |---|---|---|
 | DEB | amd64 | `syswarden_4.03.2_amd64.deb` |
-| DEB | arm64 | `syswarden_4.03.2_arm64.deb` |
 | RPM | x86_64 | `syswarden-4.03.2-1.x86_64.rpm` |
-| RPM | aarch64 | `syswarden-4.03.2-1.aarch64.rpm` |
 | APK | x86_64 | `syswarden_4.03.2_x86_64.apk` |
-| APK | aarch64 | `syswarden_4.03.2_aarch64.apk` |
 
-No current package or updater route exists outside this matrix. ARM64 package
-qualification runs on a native ARM64 runner rather than through emulation.
+No current package, updater or qualification route exists outside this
+AMD64/x86_64 matrix.
 
 ## Exact public release inventory
 
-A qualified v4.03.2 Release must contain exactly these thirteen assets:
+A qualified v4.03.2 Release must contain exactly these ten assets:
 
 1. `syswarden_4.03.2_amd64.deb`
-2. `syswarden_4.03.2_arm64.deb`
-3. `syswarden-4.03.2-1.x86_64.rpm`
-4. `syswarden-4.03.2-1.aarch64.rpm`
-5. `syswarden_4.03.2_x86_64.apk`
-6. `syswarden_4.03.2_aarch64.apk`
-7. `SHA256SUMS.txt`
-8. `RELEASE_SHA256SUMS.txt`
-9. `syswarden-release.tar.gz`
-10. `syswarden-sbom.spdx.json`
-11. `plumber-report.zip`
-12. `syswarden-update-manifest-v1.json`
-13. `syswarden-update-manifest-v1.json.sig`
+2. `syswarden-4.03.2-1.x86_64.rpm`
+3. `syswarden_4.03.2_x86_64.apk`
+4. `SHA256SUMS.txt`
+5. `RELEASE_SHA256SUMS.txt`
+6. `syswarden-release.tar.gz`
+7. `syswarden-sbom.spdx.json`
+8. `plumber-report.zip`
+9. `syswarden-update-manifest-v1.json`
+10. `syswarden-update-manifest-v1.json.sig`
 
 Every asset must be rebuilt from the exact qualified SHA. The publisher must
 reject missing, duplicate or unexpected assets and must verify both checksum
@@ -271,7 +265,7 @@ become eligible after release.
 The final protected qualification must seal exactly two product evidence
 families:
 
-1. native Linux package lifecycle evidence, including AMD64 and ARM64 shards;
+1. native AMD64 Linux package lifecycle evidence;
 2. isolated nftables kernel evidence.
 
 The adapter and aggregate gate bind both evidence families to the repository,
@@ -314,7 +308,7 @@ lots. This report does not claim closure outside the explicit LOT 2S matrix.
 ## LOT 2 closure boundary
 
 LOT 2 combines the completed Linux-only surface reduction in LOT 2A, the
-six-package reproducibility work in LOT 2B and the bounded security remediation
+three-package reproducibility work in LOT 2B and the bounded security remediation
 in LOT 2S. The candidate contains all three sublots. The aggregate decision is
 `LOT 2: CLOSED` only for the exact merged commit after its protected main and
 qualification gates pass.
@@ -371,5 +365,5 @@ migration evidence remains pending.
 
 The v4.03.2 candidate remains NO-GO until all required gates pass on the exact
 merged commit, no unexplained partner-attributable static residue remains, and
-the publisher verifies exactly thirteen public assets. Only then may the
+the publisher verifies exactly ten public assets. Only then may the
 maintainer authorize the immutable tag and public Release.

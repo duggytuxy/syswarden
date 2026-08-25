@@ -109,7 +109,7 @@ jobs:
           printf 'PACKAGE_REPOSITORY_STATE=%s\n' "${PACKAGE_REPOSITORY_STATE}" \
             >> "${GITHUB_ENV}"
 
-      - name: Compile Universal Script
+      - name: Compile AMD64 Release Binaries
         run: pwsh -File ./build.ps1
 
       - name: Validate Compiled Inventory
@@ -120,11 +120,7 @@ jobs:
             dist/bin/syswarden-cli
             dist/bin/syswarden-core
             dist/bin/syswarden-tui
-            dist/linux-arm64/bin/syswarden-cli
-            dist/linux-arm64/bin/syswarden-core
-            dist/linux-arm64/bin/syswarden-tui
             dist/signatures.json
-            dist/linux-arm64/signatures.json
           )
           for artifact in "${expected[@]}"; do
             test -s "${artifact}" || {
@@ -160,12 +156,6 @@ jobs:
             dist/bin/syswarden-tui; do
             validate_linux_pie "${artifact}" 'Advanced Micro Devices X86-64'
           done
-          for artifact in \
-            dist/linux-arm64/bin/syswarden-cli \
-            dist/linux-arm64/bin/syswarden-core \
-            dist/linux-arm64/bin/syswarden-tui; do
-            validate_linux_pie "${artifact}" 'AArch64'
-          done
           dist/bin/syswarden-cli --help >/dev/null
 
       - name: Set up Ruby for FPM
@@ -189,18 +179,14 @@ jobs:
           test -d "${RUNNER_TEMP}"
           PACKAGE_WORKSPACE="$(mktemp -d "${RUNNER_TEMP%/}/syswarden-package.XXXXXX")"
           STAGING_AMD64="${PACKAGE_WORKSPACE}/staging-amd64"
-          STAGING_ARM64="${PACKAGE_WORKSPACE}/staging-arm64"
           STAGING_APK_AMD64="${PACKAGE_WORKSPACE}/staging-apk-amd64"
-          STAGING_APK_ARM64="${PACKAGE_WORKSPACE}/staging-apk-arm64"
           PACKAGE_ASSETS="${PACKAGE_WORKSPACE}/assets"
           PACKAGE_SCRIPTS="${PACKAGE_WORKSPACE}/scripts"
           PACKAGE_RPM_SCRIPTS="${PACKAGE_WORKSPACE}/rpm-scripts"
           PACKAGE_CONFIGS="${PACKAGE_WORKSPACE}/configs"
           install -d -m 0755 \
             "${STAGING_AMD64}" \
-            "${STAGING_ARM64}" \
             "${STAGING_APK_AMD64}" \
-            "${STAGING_APK_ARM64}" \
             "${PACKAGE_ASSETS}"
           install -d -m 0700 \
             "${PACKAGE_SCRIPTS}" \
@@ -209,9 +195,7 @@ jobs:
           {
             printf 'PACKAGE_WORKSPACE=%s\n' "${PACKAGE_WORKSPACE}"
             printf 'STAGING_AMD64=%s\n' "${STAGING_AMD64}"
-            printf 'STAGING_ARM64=%s\n' "${STAGING_ARM64}"
             printf 'STAGING_APK_AMD64=%s\n' "${STAGING_APK_AMD64}"
-            printf 'STAGING_APK_ARM64=%s\n' "${STAGING_APK_ARM64}"
             printf 'PACKAGE_ASSETS=%s\n' "${PACKAGE_ASSETS}"
             printf 'PACKAGE_SCRIPTS=%s\n' "${PACKAGE_SCRIPTS}"
             printf 'PACKAGE_RPM_SCRIPTS=%s\n' "${PACKAGE_RPM_SCRIPTS}"
@@ -242,29 +226,6 @@ jobs:
             "${STAGING_AMD64}/usr/local/bin/syswarden"
           ln -s /opt/syswarden/bin/syswarden-tui \
             "${STAGING_AMD64}/usr/local/bin/syswarden-tui"
-
-      - name: Prepare Staging Environment (ARM64)
-        run: |
-          set -euo pipefail
-          install -d -m 0755 \
-            "${STAGING_ARM64}/opt/syswarden/bin" \
-            "${STAGING_ARM64}/usr/local/bin"
-
-          cp dist/linux-arm64/bin/syswarden-cli "${STAGING_ARM64}/opt/syswarden/bin/"
-          cp dist/linux-arm64/bin/syswarden-core "${STAGING_ARM64}/opt/syswarden/bin/"
-          cp dist/linux-arm64/bin/syswarden-tui "${STAGING_ARM64}/opt/syswarden/bin/"
-          cp dist/linux-arm64/signatures.json "${STAGING_ARM64}/opt/syswarden/"
-
-          chmod 0750 \
-            "${STAGING_ARM64}/opt/syswarden/bin/syswarden-cli" \
-            "${STAGING_ARM64}/opt/syswarden/bin/syswarden-core" \
-            "${STAGING_ARM64}/opt/syswarden/bin/syswarden-tui"
-          chmod 0640 "${STAGING_ARM64}/opt/syswarden/signatures.json"
-
-          ln -s /opt/syswarden/bin/syswarden-cli \
-            "${STAGING_ARM64}/usr/local/bin/syswarden"
-          ln -s /opt/syswarden/bin/syswarden-tui \
-            "${STAGING_ARM64}/usr/local/bin/syswarden-tui"
 
       - name: Build and Stage Static Alpine Binaries
         shell: bash
@@ -329,12 +290,8 @@ jobs:
           }
 
           build_apk_stage amd64 "${STAGING_APK_AMD64}"
-          build_apk_stage arm64 "${STAGING_APK_ARM64}"
           for artifact in "${STAGING_APK_AMD64}"/opt/syswarden/bin/*; do
             validate_static_apk_binary "${artifact}" 'Advanced Micro Devices X86-64'
-          done
-          for artifact in "${STAGING_APK_ARM64}"/opt/syswarden/bin/*; do
-            validate_static_apk_binary "${artifact}" 'AArch64'
           done
           "${STAGING_APK_AMD64}/opt/syswarden/bin/syswarden-cli" --help >/dev/null
           docker run --rm \
@@ -351,11 +308,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_AMD64}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
-            linux --root "${STAGING_ARM64}"
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_APK_AMD64}"
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
-            linux --root "${STAGING_APK_ARM64}"
 
       - name: Prepare Linux Maintainer Scripts
         run: |
@@ -683,9 +636,7 @@ jobs:
           prepare_rpm_changelog "${RPM_CHANGELOG}"
           normalize_package_mtimes \
             "${STAGING_AMD64}" \
-            "${STAGING_ARM64}" \
             "${STAGING_APK_AMD64}" \
-            "${STAGING_APK_ARM64}" \
             "${PACKAGE_SCRIPTS}" \
             "${PACKAGE_RPM_SCRIPTS}" \
             "${RPM_CHANGELOG}"
@@ -713,24 +664,6 @@ jobs:
             --after-remove "${PACKAGE_SCRIPTS}/postrm.sh" \
             -C "${STAGING_AMD64}" .
 
-          fpm -s dir -t deb \
-            -n syswarden \
-            -v "${VERSION}" \
-            -p "${PACKAGE_ASSETS}/syswarden_${VERSION}_arm64.deb" \
-            --vendor "SysWarden Security" \
-            --maintainer "SysWarden Engineering" \
-            --description "SysWarden Host-based Security Orchestrator for Linux (ARM64)" \
-            --url "https://github.com/${{ github.repository }}" \
-            --architecture arm64 \
-            --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
-            -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
-            -d "wireguard-tools" -d "qrencode" -d "jq" -d "unattended-upgrades" -d "apt-listchanges" -d "procps" -d "e2fsprogs" \
-            --before-install "${PACKAGE_SCRIPTS}/preinst.sh" \
-            --after-install "${PACKAGE_SCRIPTS}/postinst.sh" \
-            --before-remove "${PACKAGE_SCRIPTS}/prerm.sh" \
-            --after-remove "${PACKAGE_SCRIPTS}/postrm.sh" \
-            -C "${STAGING_ARM64}" .
-
       - name: Build RHEL Family Package (.rpm)
         run: |
           set -euo pipefail
@@ -756,29 +689,6 @@ jobs:
             --before-remove "${PACKAGE_RPM_SCRIPTS}/prerm.sh" \
             --after-remove "${PACKAGE_RPM_SCRIPTS}/postrm.sh" \
             -C "${STAGING_AMD64}" .
-
-          fpm -s dir -t rpm \
-            -n syswarden \
-            -v "${VERSION}" \
-            -p "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.aarch64.rpm" \
-            --vendor "SysWarden Security" \
-            --maintainer "SysWarden Engineering" \
-            --description "SysWarden Host-based Security Orchestrator for Linux (ARM64)" \
-            --url "https://github.com/${{ github.repository }}" \
-            --architecture aarch64 \
-            --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
-            --rpm-changelog "${RPM_CHANGELOG}" \
-            --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
-            --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
-            --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
-            -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
-            -d "wireguard-tools" -d "qrencode" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
-            -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
-            --before-install "${PACKAGE_RPM_SCRIPTS}/preinst.sh" \
-            --after-install "${PACKAGE_RPM_SCRIPTS}/postinst.sh" \
-            --before-remove "${PACKAGE_RPM_SCRIPTS}/prerm.sh" \
-            --after-remove "${PACKAGE_RPM_SCRIPTS}/postrm.sh" \
-            -C "${STAGING_ARM64}" .
 
       - name: Build Alpine Package (.apk)
         run: |
@@ -828,55 +738,10 @@ jobs:
               postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"
           EOF
 
-          cat << EOF > "${PACKAGE_CONFIGS}/nfpm_alpine_aarch64.yaml"
-          name: "syswarden"
-          arch: "arm64"
-          platform: "linux"
-          version: "${VERSION}"
-          maintainer: "SysWarden Engineering"
-          description: "SysWarden Host-based Security Orchestrator for Alpine Linux (ARM64)"
-          vendor: "SysWarden Security"
-          homepage: "https://github.com/${{ github.repository }}"
-          depends:
-            - nftables
-            - openrc
-            - cronie
-            - cronie-openrc
-            - curl
-            - wget
-            - rsyslog
-            - rsyslog-uxsock
-            - bash-completion
-            - wireguard-tools
-            - libqrencode-tools
-            - jq
-            - procps-ng
-            - e2fsprogs-extra
-            - shadow
-          contents:
-            - src: "${STAGING_APK_ARM64}/opt"
-              dst: "/opt"
-            - src: "${STAGING_APK_ARM64}/usr"
-              dst: "/usr"
-          scripts:
-            preinstall: "${PACKAGE_SCRIPTS}/preinst.sh"
-            postinstall: "${PACKAGE_SCRIPTS}/postinst.sh"
-            preremove: "${PACKAGE_SCRIPTS}/prerm.sh"
-            postremove: "${PACKAGE_SCRIPTS}/postrm.sh"
-          apk:
-            scripts:
-              preupgrade: "${PACKAGE_SCRIPTS}/preinst.sh"
-              postupgrade: "${PACKAGE_SCRIPTS}/postinst.sh"
-          EOF
-
           "${TOOL_DIR}/nfpm" pkg \
             --config "${PACKAGE_CONFIGS}/nfpm_alpine_x86_64.yaml" \
             --packager apk \
             --target "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk"
-          "${TOOL_DIR}/nfpm" pkg \
-            --config "${PACKAGE_CONFIGS}/nfpm_alpine_aarch64.yaml" \
-            --packager apk \
-            --target "${PACKAGE_ASSETS}/syswarden_${VERSION}_aarch64.apk"
 
       - name: Validate Package Metadata
         shell: bash
@@ -1004,33 +869,9 @@ jobs:
             [[ "${package_architecture}" == "${architecture}" ]]
           }
 
-          compare_apk_hook_parity() {
-            local left="$1"
-            local right="$2"
-            local hook="$3"
-            local left_member
-            local right_member
-            left_member="$(tar --list --file "${left}" | awk -F / -v hook="${hook}" '$NF == hook { print }')"
-            right_member="$(tar --list --file "${right}" | awk -F / -v hook="${hook}" '$NF == hook { print }')"
-            [[ -n "${left_member}" && "${left_member}" != *$'\n'* ]]
-            [[ -n "${right_member}" && "${right_member}" != *$'\n'* ]]
-            cmp -s \
-              <(tar --extract --to-stdout --file "${left}" "${left_member}") \
-              <(tar --extract --to-stdout --file "${right}" "${right_member}")
-          }
-
           validate_deb "${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" amd64
-          validate_deb "${PACKAGE_ASSETS}/syswarden_${VERSION}_arm64.deb" arm64
           validate_rpm "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" x86_64
-          validate_rpm "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.aarch64.rpm" aarch64
           validate_apk "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" x86_64
-          validate_apk "${PACKAGE_ASSETS}/syswarden_${VERSION}_aarch64.apk" aarch64
-          for hook in .pre-install .pre-upgrade .post-install .post-upgrade; do
-            compare_apk_hook_parity \
-              "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" \
-              "${PACKAGE_ASSETS}/syswarden_${VERSION}_aarch64.apk" \
-              "${hook}"
-          done
 
       - name: Generate Checksums
         shell: bash
@@ -1038,11 +879,8 @@ jobs:
           set -euo pipefail
           assets=(
             "syswarden_${VERSION}_amd64.deb"
-            "syswarden_${VERSION}_arm64.deb"
             "syswarden-${VERSION}-1.x86_64.rpm"
-            "syswarden-${VERSION}-1.aarch64.rpm"
             "syswarden_${VERSION}_x86_64.apk"
-            "syswarden_${VERSION}_aarch64.apk"
           )
           (
             cd "${PACKAGE_ASSETS}"

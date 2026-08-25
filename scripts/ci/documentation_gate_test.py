@@ -60,6 +60,19 @@ class DocumentationGateTest(unittest.TestCase):
         )
         self.assertIn("does not authorize a tag or public Release", report)
 
+    def test_v4032_release_notes_match_the_amd64_only_inventory(self) -> None:
+        changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
+        active = changelog.split("\n---\n\n# Release v4.03.1", 1)[0]
+        normalized = documentation_gate.normalized(active)
+        self.assertIn("three-package reproducibility", normalized)
+        self.assertIn("ten-asset publisher gates", normalized)
+        self.assertIn("AMD64-only package scope", active)
+        self.assertIn("one amd64 DEB", normalized)
+        self.assertIn("one x86_64 RPM", normalized)
+        self.assertIn("one x86_64 APK", normalized)
+        self.assertNotIn("six-package", normalized)
+        self.assertNotIn("thirteen-asset", normalized)
+
     def test_sealed_changelog_reset_pointer_is_exact(self) -> None:
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
         pointer = f"Archived pre-v4.03.0 changelog SHA-256: {ARCHIVE_DIGEST}"
@@ -90,19 +103,19 @@ class DocumentationGateTest(unittest.TestCase):
             [],
         )
 
-    def test_public_release_contract_is_six_packages_and_thirteen_assets(self) -> None:
+    def test_public_release_contract_is_three_packages_and_ten_assets(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
         expected_packages = release_gate.package_names("4.03.2")
         expected_assets = release_gate.expected_release_assets("v4.03.2")
-        self.assertEqual(len(expected_packages), 6)
-        self.assertEqual(len(expected_assets), 13)
+        self.assertEqual(len(expected_packages), 3)
+        self.assertEqual(len(expected_assets), 10)
         self.assertEqual(
             set(contract["public_report_contract"]["expected_assets"]),
             expected_assets,
         )
-        self.assertEqual(contract["active_surface_contract"]["package_count"], 6)
+        self.assertEqual(contract["active_surface_contract"]["package_count"], 3)
         self.assertEqual(
-            contract["active_surface_contract"]["public_asset_count"], 13
+            contract["active_surface_contract"]["public_asset_count"], 10
         )
 
     def test_optional_image_extension_is_active_and_bounded(self) -> None:
@@ -159,7 +172,10 @@ class DocumentationGateTest(unittest.TestCase):
         self.assertNotIn("--pull=false", actrc)
         self.assertIn("Act's sandbox shortcut is not an AppArmor proof", normalized)
         self.assertIn("AppArmor host proof may be marked `REMOTE-ONLY`", normalized)
-        self.assertIn("`PARTIAL-NO-NATIVE-ARM64`", normalized)
+        self.assertIn(
+            "If native AMD64 hardware is unavailable, do not claim complete local qualification.",
+            normalized,
+        )
         self.assertIn("evidence files are not byte-comparable", normalized)
         self.assertIn("Compare evidence schemas, bindings, inventories", normalized)
         self.assertIn("post-preflight action", normalized)
@@ -373,7 +389,7 @@ class DocumentationGateTest(unittest.TestCase):
             set(package_contract["tables"]),
             {"wiki/Deployment-Tutorial.md"},
         )
-        self.assertEqual(len(package_contract["artifacts"]), 6)
+        self.assertEqual(len(package_contract["artifacts"]), 3)
         self.assertEqual(
             {entry["family"] for entry in package_contract["artifacts"]},
             {"DEB", "RPM", "APK"},
@@ -384,7 +400,8 @@ class DocumentationGateTest(unittest.TestCase):
         package_contract = contract["package_platform_contract"]
         label = "wiki/Deployment-Tutorial.md"
         documented_count = package_contract["inventory_phrases"][label]
-        wrong_count = documented_count.replace("two DEB, two RPM", "nine DEB, two RPM")
+        wrong_count = documented_count.replace("one DEB, one RPM", "nine DEB, one RPM")
+        self.assertNotEqual(wrong_count, documented_count)
         errors = documentation_gate.validate_package_documentation(
             wrong_count, label, package_contract
         )

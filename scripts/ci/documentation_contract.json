@@ -54,6 +54,7 @@
     "Authoritative nftables enforcement with bounded firewalld and UFW compatibility",
     "Native local terminal dashboard with no browser service or listening port.",
     "Authenticated HA synchronization over TLS 1.3",
+    "Native DEB, RPM and APK packaging for supported amd64 Linux hosts.",
     "Checksummed Linux packages, signed update metadata and release evidence",
     "Operational procedures are centralized in the [SysWarden wiki](https://github.com/duggytuxy/syswarden/wiki).",
     "[Migration procedure](https://github.com/duggytuxy/syswarden/wiki/Migration-v4.02.8-to-v4.03.2)",
@@ -74,7 +75,7 @@
     "All HA routes require the bearer token",
     "canonical CIDRs authorize inbound peers only and are never dialed",
     "v4.02.9+ requires a trusted Ed25519 release manifest",
-    "dedicated CGO-free static APK binaries are built for x86_64 and aarch64",
+    "dedicated CGO-free static APK binaries are built for x86_64",
     "configuration, data, logs, services and firewall tables are deleted",
     "X-SysWarden-HA-Fence-Condition",
     "opaque, case-sensitive strings",
@@ -92,11 +93,14 @@
   ],
   "required_wiki_phrases": {
     "Home.md": [
+      "The v4.03.2 contract targets three candidate Linux packages:",
+      "The complete public Release contains exactly ten assets: the three packages,",
+      "No package, updater or qualification route exists outside this AMD64/x86_64 Linux matrix.",
       "The optional RHEL-compatible image staging extension is additive",
       "Offline staging is not runtime-readiness evidence."
     ],
     "Deployment-Tutorial.md": [
-      "The package workflow is configured to generate two DEB, two RPM and two APK packages plus `SHA256SUMS.txt`.",
+      "The package workflow is configured to generate one DEB, one RPM and one APK package plus `SHA256SUMS.txt`.",
       "## 5. Optional RHEL-compatible image staging",
       "The extension installs that RPM with plugins, package scripts and triggers disabled.",
       "Offline staging is not runtime-readiness evidence.",
@@ -117,6 +121,7 @@
       "SSH/HA port separation while WireGuard is enabled."
     ],
     "Use-cases.md": [
+      "Use Linux hosts matching one of the three candidate packages and retain verified console access.",
       "## 9. Stage a fresh RHEL-compatible image root",
       "No product binary, service manager, firewall tool, kernel-policy tool, cron command, network endpoint or process signal runs during offline staging."
     ],
@@ -135,6 +140,7 @@
     "Migration-v4.02.8-to-v4.03.2.md": [
       "The historical v4.02.8 binary predates the signed updater protocol.",
       "The first hop to v4.03.2 must use a separately downloaded and checksum-verified Linux package.",
+      "| Destination architecture | `amd64` |",
       "Back up `/etc/syswarden`, required list files and HA trust material.",
       "Keep verified local console or SSH recovery access throughout the migration.",
       "SysWarden package rollback is an explicit package and configuration recovery procedure, not a general host-state reversal."
@@ -626,38 +632,20 @@
         "workflow_name": "syswarden_${VERSION}_amd64.deb"
       },
       {
-        "family": "DEB",
-        "architecture": "arm64",
-        "release_name": "syswarden_{version}_arm64.deb",
-        "workflow_name": "syswarden_${VERSION}_arm64.deb"
-      },
-      {
         "family": "RPM",
         "architecture": "x86_64",
         "release_name": "syswarden-{version}-1.x86_64.rpm",
         "workflow_name": "syswarden-${VERSION}-1.x86_64.rpm"
       },
       {
-        "family": "RPM",
-        "architecture": "aarch64",
-        "release_name": "syswarden-{version}-1.aarch64.rpm",
-        "workflow_name": "syswarden-${VERSION}-1.aarch64.rpm"
-      },
-      {
         "family": "APK",
         "architecture": "x86_64",
         "release_name": "syswarden_{version}_x86_64.apk",
         "workflow_name": "syswarden_${VERSION}_x86_64.apk"
-      },
-      {
-        "family": "APK",
-        "architecture": "aarch64",
-        "release_name": "syswarden_{version}_aarch64.apk",
-        "workflow_name": "syswarden_${VERSION}_aarch64.apk"
       }
     ],
     "inventory_phrases": {
-      "wiki/Deployment-Tutorial.md": "The package workflow is configured to generate two DEB, two RPM and two APK packages plus `SHA256SUMS.txt`."
+      "wiki/Deployment-Tutorial.md": "The package workflow is configured to generate one DEB, one RPM and one APK package plus `SHA256SUMS.txt`."
     },
     "tables": {
       "wiki/Deployment-Tutorial.md": {
@@ -674,29 +662,14 @@
             "`syswarden_4.03.2_amd64.deb`"
           ],
           [
-            "Debian or Ubuntu",
-            "arm64",
-            "`syswarden_4.03.2_arm64.deb`"
-          ],
-          [
             "Fedora or RHEL family",
             "x86_64",
             "`syswarden-4.03.2-1.x86_64.rpm`"
           ],
           [
-            "Fedora or RHEL family",
-            "aarch64",
-            "`syswarden-4.03.2-1.aarch64.rpm`"
-          ],
-          [
             "Alpine",
             "x86_64",
             "`syswarden_4.03.2_x86_64.apk`"
-          ],
-          [
-            "Alpine",
-            "aarch64",
-            "`syswarden_4.03.2_aarch64.apk`"
           ]
         ]
       }
@@ -707,8 +680,8 @@
     "required_phrases": [
       "| Candidate | v4.03.2 |",
       "| Distribution boundary | Linux packages only |",
-      "| Public package count | 6 |",
-      "| Public release asset count | 13 |",
+      "| Public package count | 3 |",
+      "| Public release asset count | 10 |",
       "| Decision | NO-GO until protected qualification passes on the exact merged SHA |",
       "The epoch and both digests are opaque, case-sensitive strings for the integrator.",
       "The integrator does not recalculate the digests and does not reimplement SysWarden canonicalization.",
@@ -747,11 +720,8 @@
     ],
     "expected_assets": [
       "syswarden_4.03.2_amd64.deb",
-      "syswarden_4.03.2_arm64.deb",
       "syswarden-4.03.2-1.x86_64.rpm",
-      "syswarden-4.03.2-1.aarch64.rpm",
       "syswarden_4.03.2_x86_64.apk",
-      "syswarden_4.03.2_aarch64.apk",
       "SHA256SUMS.txt",
       "RELEASE_SHA256SUMS.txt",
       "syswarden-release.tar.gz",
@@ -778,8 +748,8 @@
     ],
     "report_directory": "docs/reports",
     "archive_pointer": "Archived pre-v4.03.0 changelog SHA-256: a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5",
-    "public_asset_count": 13,
-    "package_count": 6
+    "public_asset_count": 10,
+    "package_count": 3
   },
   "source_assertions": [
     {
@@ -928,9 +898,9 @@
       "literal": "ed25519.Verify(publicKey, manifestBytes, signature)"
     },
     {
-      "id": "release-six-packages",
+      "id": "release-three-packages",
       "path": "scripts/ci/release_gate.py",
-      "literal": "f\"syswarden_{version}_aarch64.apk\","
+      "literal": "f\"syswarden_{version}_x86_64.apk\","
     },
     {
       "id": "release-signed-manifest",
@@ -938,9 +908,9 @@
       "literal": "UPDATE_MANIFEST_NAME = \"syswarden-update-manifest-v1.json\""
     },
     {
-      "id": "package-native-arm64",
+      "id": "package-native-amd64",
       "path": ".github/workflows/release-qualification.yml",
-      "literal": "runs-on: ubuntu-24.04-arm"
+      "literal": "--package-amd64-shard"
     }
   ]
 }

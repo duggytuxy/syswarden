@@ -129,8 +129,8 @@ func TestVerifyAcceptsDeterministicSignedManifest(t *testing.T) {
 		t.Fatalf("verify valid signed manifest: %v", err)
 	}
 	candidate := fixture.parsed(t)
-	if len(candidate.Artifacts) != 6 {
-		t.Fatalf("manifest artifact count = %d, want 6", len(candidate.Artifacts))
+	if len(candidate.Artifacts) != 3 {
+		t.Fatalf("manifest artifact count = %d, want 3", len(candidate.Artifacts))
 	}
 	for _, item := range candidate.Artifacts {
 		if item.OS != "linux" || (item.Format != "deb" && item.Format != "rpm" && item.Format != "apk") {

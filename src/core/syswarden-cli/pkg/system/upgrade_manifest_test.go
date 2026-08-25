@@ -134,12 +134,12 @@ func TestVerifySignedManifestAcceptsExactContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verifySignedManifest() error = %v", err)
 	}
-	if manifest.Schema != updateManifestSchema || len(manifest.Artifacts) != 6 {
+	if manifest.Schema != updateManifestSchema || len(manifest.Artifacts) != 3 {
 		t.Fatalf("verified manifest = %#v", manifest)
 	}
 }
 
-func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
+func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -163,16 +163,6 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 			wantInstaller: "/usr/bin/apt-get",
 		},
 		{
-			name:          "deb arm64",
-			goos:          "linux",
-			manager:       "apt-get",
-			managerPath:   "/usr/bin/apt-get",
-			architecture:  "arm64",
-			wantFormat:    packageFormatDEB,
-			wantFilename:  "syswarden_4.02.9_arm64.deb",
-			wantInstaller: "/usr/bin/apt-get",
-		},
-		{
 			name:          "rpm amd64",
 			goos:          "linux",
 			manager:       "dnf",
@@ -183,16 +173,6 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 			wantInstaller: "/usr/bin/dnf",
 		},
 		{
-			name:          "rpm arm64",
-			goos:          "linux",
-			manager:       "yum",
-			managerPath:   "/usr/bin/yum",
-			architecture:  "arm64",
-			wantFormat:    packageFormatRPM,
-			wantFilename:  "syswarden-4.02.9-1.aarch64.rpm",
-			wantInstaller: "/usr/bin/yum",
-		},
-		{
 			name:          "apk amd64",
 			goos:          "linux",
 			manager:       "apk",
@@ -201,16 +181,6 @@ func TestDetectPackageTargetSelectsNativeDEBAndRPMArchitecture(t *testing.T) {
 			wantFormat:    packageFormatAPK,
 			wantFilename:  "syswarden_4.02.9_x86_64.apk",
 			wantInstaller: "/sbin/apk",
-		},
-		{
-			name:          "apk arm64",
-			goos:          "linux",
-			manager:       "apk",
-			managerPath:   "/usr/sbin/apk",
-			architecture:  "arm64",
-			wantFormat:    packageFormatAPK,
-			wantFilename:  "syswarden_4.02.9_aarch64.apk",
-			wantInstaller: "/usr/sbin/apk",
 		},
 	}
 
@@ -253,7 +223,8 @@ func TestDetectPackageTargetRejectsWrongOSArchitectureAndPath(t *testing.T) {
 		resolved string
 	}{
 		{name: "wrong os", goos: "windows", goarch: "amd64", resolved: "/usr/bin/apt-get"},
-		{name: "wrong architecture", goos: "linux", goarch: "ppc64le", resolved: "/usr/bin/apt-get"},
+		{name: "retired arm64 architecture", goos: "linux", goarch: "arm64", resolved: "/usr/bin/apt-get"},
+		{name: "unknown architecture", goos: "linux", goarch: "ppc64le", resolved: "/usr/bin/apt-get"},
 		{name: "relative manager", goos: "linux", goarch: "amd64", resolved: "apt-get"},
 		{name: "untrusted absolute manager", goos: "linux", goarch: "amd64", resolved: "/tmp/apt-get"},
 	}

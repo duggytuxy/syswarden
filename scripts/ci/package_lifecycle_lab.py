@@ -2,7 +2,7 @@
 """Run fail-closed SysWarden package lifecycle tests in rootless Podman.
 
 The lab prepares disposable Debian, Ubuntu, Fedora, AlmaLinux, and Alpine images
-from immutable official-image references for amd64 and arm64. Package operations
+from immutable official-image references for amd64. Package operations
 then run without network access. Package directories are mounted read-only. No
 host service, firewall, device, container-engine socket, or non-lab writable path
 is exposed to a test container.
@@ -57,7 +57,6 @@ SYSTEMD_EXEC_LAUNCHER = (
 )
 VERSION_SCHEME = "canonical_syswarden_numeric_v1"
 VERSION_RELATION = "previous < candidate"
-ARM64_BINFMT_REGISTRATION = Path("/proc/sys/fs/binfmt_misc/qemu-aarch64")
 IMAGE_PATTERN = re.compile(
     r"^[a-z0-9][a-z0-9./_-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$"
 )
@@ -65,15 +64,9 @@ SYSWARDEN_VERSION_PATTERN = re.compile(
     r"^(0|[1-9][0-9]*)\.([0-9]{2})\.(0|[1-9][0-9]*)$"
 )
 ARTIFACT_VERSION_PATTERNS = (
-    re.compile(
-        r"^syswarden_(?P<version>[0-9][0-9.]*)_(?:amd64|arm64)\.deb$"
-    ),
-    re.compile(
-        r"^syswarden-(?P<version>[0-9][0-9.]*)-1\.(?:x86_64|aarch64)\.rpm$"
-    ),
-    re.compile(
-        r"^syswarden_(?P<version>[0-9][0-9.]*)_(?:x86_64|aarch64)\.apk$"
-    ),
+    re.compile(r"^syswarden_(?P<version>[0-9][0-9.]*)_amd64\.deb$"),
+    re.compile(r"^syswarden-(?P<version>[0-9][0-9.]*)-1\.x86_64\.rpm$"),
+    re.compile(r"^syswarden_(?P<version>[0-9][0-9.]*)_x86_64\.apk$"),
 )
 
 
@@ -100,25 +93,18 @@ class PlatformSpec:
 
 ARCHITECTURE_LABELS = {
     "amd64": "amd64/x86_64",
-    "arm64": "arm64/aarch64",
 }
 
 EXPECTED_PACKAGE_ARCHITECTURES = {
     ("deb", "amd64"): "amd64",
-    ("deb", "arm64"): "arm64",
     ("rpm", "amd64"): "x86_64",
-    ("rpm", "arm64"): "aarch64",
     ("apk", "amd64"): "x86_64",
-    ("apk", "arm64"): "aarch64",
 }
 
 EXPECTED_PACKAGE_PATTERNS = {
     ("deb", "amd64"): r"^syswarden_[0-9][0-9.]*_amd64\.deb$",
-    ("deb", "arm64"): r"^syswarden_[0-9][0-9.]*_arm64\.deb$",
     ("rpm", "amd64"): r"^syswarden-[0-9][0-9.]*-1\.x86_64\.rpm$",
-    ("rpm", "arm64"): r"^syswarden-[0-9][0-9.]*-1\.aarch64\.rpm$",
     ("apk", "amd64"): r"^syswarden_[0-9][0-9.]*_x86_64\.apk$",
-    ("apk", "arm64"): r"^syswarden_[0-9][0-9.]*_aarch64\.apk$",
 }
 
 EXPECTED_SCENARIOS = {
@@ -433,24 +419,6 @@ DEFAULT_PLATFORMS = (
         purge_semantics=DEB_PURGE_SEMANTICS,
     ),
     PlatformSpec(
-        name="Debian",
-        distribution="debian",
-        family="deb",
-        architecture="arm64",
-        package_architecture="arm64",
-        podman_platform="linux/arm64",
-        uname_architecture="aarch64",
-        official_repository=OFFICIAL_REPOSITORIES["debian"],
-        image=(
-            "docker.io/library/debian:stable-slim@sha256:"
-            "9d047d46b340f5f97430c9a8ea63de328bf6223fb5dacdd5d24be2eadf54a0cf"
-        ),
-        package_pattern=r"^syswarden_[0-9][0-9.]*_arm64\.deb$",
-        bootstrap_command=DEB_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove", "purge"),
-        purge_semantics=DEB_PURGE_SEMANTICS,
-    ),
-    PlatformSpec(
         name="Ubuntu",
         distribution="ubuntu",
         family="deb",
@@ -464,24 +432,6 @@ DEFAULT_PLATFORMS = (
             "019e8eb29a85e74d64925745884f2ec79aa27e3feab36353d24656f4d6b89467"
         ),
         package_pattern=r"^syswarden_[0-9][0-9.]*_amd64\.deb$",
-        bootstrap_command=DEB_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove", "purge"),
-        purge_semantics=DEB_PURGE_SEMANTICS,
-    ),
-    PlatformSpec(
-        name="Ubuntu",
-        distribution="ubuntu",
-        family="deb",
-        architecture="arm64",
-        package_architecture="arm64",
-        podman_platform="linux/arm64",
-        uname_architecture="aarch64",
-        official_repository=OFFICIAL_REPOSITORIES["ubuntu"],
-        image=(
-            "docker.io/library/ubuntu:24.04@sha256:"
-            "b17516cd982bf06bdd5d5600253d12a8de017b9eb831cc052b532a0363d294f9"
-        ),
-        package_pattern=r"^syswarden_[0-9][0-9.]*_arm64\.deb$",
         bootstrap_command=DEB_BOOTSTRAP,
         scenarios=("upgrade-rollback", "remove", "purge"),
         purge_semantics=DEB_PURGE_SEMANTICS,
@@ -505,24 +455,6 @@ DEFAULT_PLATFORMS = (
         purge_semantics=RPM_PURGE_SEMANTICS,
     ),
     PlatformSpec(
-        name="Fedora",
-        distribution="fedora",
-        family="rpm",
-        architecture="arm64",
-        package_architecture="aarch64",
-        podman_platform="linux/arm64",
-        uname_architecture="aarch64",
-        official_repository=OFFICIAL_REPOSITORIES["fedora"],
-        image=(
-            "docker.io/library/fedora:44@sha256:"
-            "a471bd8bf8e7e99812fd2f29fc950685d860b3d528b9f090443dbc1a0d2bad62"
-        ),
-        package_pattern=r"^syswarden-[0-9][0-9.]*-1\.aarch64\.rpm$",
-        bootstrap_command=RPM_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove"),
-        purge_semantics=RPM_PURGE_SEMANTICS,
-    ),
-    PlatformSpec(
         name="AlmaLinux",
         distribution="almalinux",
         family="rpm",
@@ -536,24 +468,6 @@ DEFAULT_PLATFORMS = (
             "28db580abb508f7ccbc0ac6d53e1d8da9d42a26c77fa3dcc26ac2726673fbe3e"
         ),
         package_pattern=r"^syswarden-[0-9][0-9.]*-1\.x86_64\.rpm$",
-        bootstrap_command=RPM_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove"),
-        purge_semantics=RPM_PURGE_SEMANTICS,
-    ),
-    PlatformSpec(
-        name="AlmaLinux",
-        distribution="almalinux",
-        family="rpm",
-        architecture="arm64",
-        package_architecture="aarch64",
-        podman_platform="linux/arm64",
-        uname_architecture="aarch64",
-        official_repository=OFFICIAL_REPOSITORIES["almalinux"],
-        image=(
-            "docker.io/library/almalinux:9@sha256:"
-            "2c999b3bd705fad8b115741d9036ae2499148ba162752f09f2f4ab62b0c07320"
-        ),
-        package_pattern=r"^syswarden-[0-9][0-9.]*-1\.aarch64\.rpm$",
         bootstrap_command=RPM_BOOTSTRAP,
         scenarios=("upgrade-rollback", "remove"),
         purge_semantics=RPM_PURGE_SEMANTICS,
@@ -576,24 +490,6 @@ DEFAULT_PLATFORMS = (
         scenarios=("upgrade-rollback", "remove", "purge"),
         purge_semantics=APK_PURGE_SEMANTICS,
     ),
-    PlatformSpec(
-        name="Alpine",
-        distribution="alpine",
-        family="apk",
-        architecture="arm64",
-        package_architecture="aarch64",
-        podman_platform="linux/arm64",
-        uname_architecture="aarch64",
-        official_repository=OFFICIAL_REPOSITORIES["alpine"],
-        image=(
-            "docker.io/library/alpine:3.22@sha256:"
-            "2c9d26f410d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37"
-        ),
-        package_pattern=r"^syswarden_[0-9][0-9.]*_aarch64\.apk$",
-        bootstrap_command=APK_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove", "purge"),
-        purge_semantics=APK_PURGE_SEMANTICS,
-    ),
 )
 
 REQUIRED_PLATFORM_COORDINATES = frozenset(
@@ -607,7 +503,7 @@ PACKAGE_COORDINATE_PATTERNS = {
     for spec in DEFAULT_PLATFORMS
 }
 REQUIRED_FAMILIES = ("deb", "rpm", "apk")
-NATIVE_AGGREGATE_HOST = "native-shards:amd64,arm64"
+NATIVE_AGGREGATE_HOST = "native-shards:amd64"
 QUALIFICATION_BINDING_KEYS = frozenset(
     {
         "schema_version",
@@ -668,10 +564,6 @@ FORWARD_ONLY_APK_PREVIOUS = {
     "x86_64": {
         "filename": "syswarden_4.02.8_x86_64.apk",
         "sha256": "c0869bcb6f9adc1e4ca191ae5f5ed7962c9c89fb2bac9a4d52c0c246b09036d4",
-    },
-    "aarch64": {
-        "filename": "syswarden_4.02.8_aarch64.apk",
-        "sha256": "80a16b099d299db4053249f7bcb3d7c234ee662ad1e10e7081ae92553d13d275",
     },
 }
 DEB_PACKAGE_PATHS = frozenset(
@@ -901,20 +793,6 @@ def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> boo
 
 
 @dataclass(frozen=True)
-class EmulatorArtifact:
-    path: Path
-    sha256: str
-
-
-@dataclass(frozen=True)
-class BinfmtRegistration:
-    path: Path
-    sha256: str
-    interpreter: str
-    flags: str
-
-
-@dataclass(frozen=True)
 class CommandResult:
     args: tuple[str, ...]
     returncode: int
@@ -1139,87 +1017,6 @@ def require_real_directory(path: Path, label: str) -> Path:
     return absolute
 
 
-def validate_arm64_emulator(path: Path | None) -> EmulatorArtifact | None:
-    """Validate the exact interpreter expected by the host binfmt registration."""
-
-    if path is None:
-        return None
-    absolute = path.expanduser().absolute()
-    if ":" in str(absolute) or "\n" in str(absolute):
-        raise LifecycleLabError(
-            f"arm64 emulator path is unsafe for a read-only bind mount: {absolute}"
-        )
-    try:
-        metadata = absolute.lstat()
-    except OSError as exc:
-        raise LifecycleLabError(
-            f"cannot inspect arm64 emulator {absolute}: {exc}"
-        ) from exc
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-        raise LifecycleLabError(
-            f"arm64 emulator must be a regular non-symlink file: {absolute}"
-        )
-    if metadata.st_size == 0:
-        raise LifecycleLabError(f"arm64 emulator is empty: {absolute}")
-    if metadata.st_mode & 0o111 == 0 or not os.access(absolute, os.X_OK):
-        raise LifecycleLabError(f"arm64 emulator is not executable: {absolute}")
-    return EmulatorArtifact(path=absolute, sha256=sha256_file(absolute))
-
-
-def validate_arm64_binfmt(
-    emulator: EmulatorArtifact,
-    registration_path: Path = ARM64_BINFMT_REGISTRATION,
-) -> BinfmtRegistration:
-    """Require an enabled, persistent binfmt registration for the exact emulator."""
-
-    absolute = registration_path.expanduser().absolute()
-    try:
-        metadata = absolute.lstat()
-        content = absolute.read_bytes()
-    except OSError as exc:
-        raise LifecycleLabError(
-            f"cannot inspect arm64 binfmt registration {absolute}: {exc}"
-        ) from exc
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-        raise LifecycleLabError(
-            f"arm64 binfmt registration must be a regular non-symlink file: {absolute}"
-        )
-    try:
-        lines = content.decode("utf-8").splitlines()
-    except UnicodeDecodeError as exc:
-        raise LifecycleLabError(
-            f"arm64 binfmt registration is not UTF-8: {absolute}"
-        ) from exc
-    if not lines or lines[0] != "enabled":
-        raise LifecycleLabError("arm64 binfmt registration is not enabled")
-    interpreter_lines = [
-        line.removeprefix("interpreter ")
-        for line in lines
-        if line.startswith("interpreter ")
-    ]
-    flags_lines = [
-        line.removeprefix("flags: ")
-        for line in lines
-        if line.startswith("flags: ")
-    ]
-    if interpreter_lines != [str(emulator.path)]:
-        raise LifecycleLabError(
-            "arm64 binfmt interpreter does not exactly match --arm64-emulator"
-        )
-    if len(flags_lines) != 1 or re.fullmatch(r"[A-Z]+", flags_lines[0]) is None:
-        raise LifecycleLabError("arm64 binfmt flags are absent or malformed")
-    if "F" not in flags_lines[0]:
-        raise LifecycleLabError(
-            "arm64 binfmt registration lacks the persistent interpreter flag F"
-        )
-    return BinfmtRegistration(
-        path=absolute,
-        sha256=hashlib.sha256(content).hexdigest(),
-        interpreter=interpreter_lines[0],
-        flags=flags_lines[0],
-    )
-
-
 def read_checksum(checksum_file: Path, package_name: str) -> str:
     try:
         metadata = checksum_file.lstat()
@@ -1355,7 +1152,7 @@ def validate_platforms(platforms: Sequence[PlatformSpec]) -> None:
                 f"Podman platform mismatch for {coordinate}: expected {expected_platform!r}, "
                 f"found {spec.podman_platform!r}"
             )
-        expected_uname = "x86_64" if spec.architecture == "amd64" else "aarch64"
+        expected_uname = "x86_64"
         if spec.uname_architecture != expected_uname:
             raise LifecycleLabError(
                 f"uname architecture mismatch for {coordinate}: expected {expected_uname!r}"
@@ -2275,20 +2072,13 @@ probe_forward_only_apk_payload() {
         record fail "${PREFIX}.${label}.executable" "historical failure class changed; expected loader exit 127, found ${historical_rc}"
     fi
 
-    case "${EXPECTED_PACKAGE_ARCHITECTURE}" in
-        x86_64)
-            expected_interp=/lib64/ld-linux-x86-64.so.2
-            expected_machine='Advanced Micro Devices X86-64'
-            ;;
-        aarch64)
-            expected_interp=/lib/ld-linux-aarch64.so.1
-            expected_machine='AArch64'
-            ;;
-        *)
-            expected_interp=invalid
-            expected_machine=invalid
-            ;;
-    esac
+    if [ "${EXPECTED_PACKAGE_ARCHITECTURE}" = x86_64 ]; then
+        expected_interp=/lib64/ld-linux-x86-64.so.2
+        expected_machine='Advanced Micro Devices X86-64'
+    else
+        expected_interp=invalid
+        expected_machine=invalid
+    fi
     historical_elf_ok=1
     for binary in \
         /opt/syswarden/bin/syswarden-cli \
@@ -3091,7 +2881,6 @@ probe_payload() {
 
     case "${EXPECTED_PACKAGE_ARCHITECTURE}" in
         amd64|x86_64) expected_machine='Advanced Micro Devices X86-64' ;;
-        arm64|aarch64) expected_machine='AArch64' ;;
         *) expected_machine=invalid ;;
     esac
     elf_contract_ok=1
@@ -4946,7 +4735,7 @@ def architecture_probe_arguments(
     podman: str,
     spec: PlatformSpec,
 ) -> tuple[str, ...]:
-    """Build a networkless, read-only execution probe for native/binfmt support."""
+    """Build a networkless, read-only native AMD64 execution probe."""
 
     arguments = [
         podman,
@@ -4971,8 +4760,6 @@ def normalize_host_architecture(value: str) -> str | None:
     normalized = value.strip().casefold()
     if normalized in {"amd64", "x86_64"}:
         return "amd64"
-    if normalized in {"arm64", "aarch64"}:
-        return "arm64"
     return None
 
 
@@ -4995,97 +4782,53 @@ def probe_platform_execution(
     podman: str,
     spec: PlatformSpec,
     host_architecture: str,
-    emulator: EmulatorArtifact | None = None,
-    binfmt: BinfmtRegistration | None = None,
-    binfmt_error: str | None = None,
 ) -> dict[str, object]:
-    """Prove that the requested architecture can execute, including emulation."""
+    """Prove that the requested AMD64 architecture executes natively."""
 
     normalized_host = normalize_host_architecture(host_architecture)
-    cross_arm64 = spec.architecture == "arm64" and normalized_host != "arm64"
-    if cross_arm64 and emulator is None:
+    if normalized_host != "amd64":
         return {
             "status": "unavailable",
-            "execution_mode": "explicit_emulator_required",
+            "execution_mode": "native_amd64_required",
             "podman_platform": spec.podman_platform,
             "expected_uname": spec.uname_architecture,
-            "reason": (
-                "cross-architecture arm64 execution requires an explicit, "
-                "validated --arm64-emulator and its exact persistent binfmt "
-                "registration; implicit emulation is forbidden"
-            ),
+            "reason": "package lifecycle qualification requires a native AMD64 host",
         }
-    if cross_arm64 and binfmt is None:
-        return {
-            "status": "unavailable",
-            "execution_mode": "host_binfmt_required",
-            "podman_platform": spec.podman_platform,
-            "expected_uname": spec.uname_architecture,
-            "reason": binfmt_error or "validated arm64 binfmt registration is absent",
-        }
-    active_emulator = emulator if cross_arm64 else None
-    active_binfmt = binfmt if cross_arm64 else None
-    execution_mode = "host_binfmt_qemu_aarch64" if active_binfmt else "native"
-    emulator_evidence = (
-        {
-            "path": str(active_emulator.path),
-            "sha256": active_emulator.sha256,
-            "role": "host binfmt interpreter",
-        }
-        if active_emulator is not None
-        else None
-    )
-    binfmt_evidence = (
-        {
-            "path": str(active_binfmt.path),
-            "sha256": active_binfmt.sha256,
-            "interpreter": active_binfmt.interpreter,
-            "flags": active_binfmt.flags,
-        }
-        if active_binfmt is not None
-        else None
-    )
     args = architecture_probe_arguments(podman, spec)
     try:
         result = runner.run(args, timeout=60)
     except LifecycleLabError as exc:
         return {
             "status": "unavailable",
-            "execution_mode": execution_mode,
+            "execution_mode": "native",
             "podman_platform": spec.podman_platform,
             "expected_uname": spec.uname_architecture,
             "reason": str(exc),
-            "emulator": emulator_evidence,
-            "binfmt": binfmt_evidence,
         }
     actual_uname = result.stdout.strip()
     if result.returncode != 0 or actual_uname != spec.uname_architecture:
         return {
             "status": "unavailable",
-            "execution_mode": execution_mode,
+            "execution_mode": "native",
             "podman_platform": spec.podman_platform,
             "expected_uname": spec.uname_architecture,
             "actual_uname": actual_uname,
             "container_exit_code": result.returncode,
             "reason": (
                 "the pinned image did not execute with the requested architecture; "
-                "native execution or explicitly configured binfmt/emulation is required"
+                "native AMD64 execution is required"
             ),
             "log_tail": command_log_tail(result),
-            "emulator": emulator_evidence,
-            "binfmt": binfmt_evidence,
         }
     return {
         "status": "available",
-        "execution_mode": execution_mode,
+        "execution_mode": "native",
         "podman_platform": spec.podman_platform,
         "expected_uname": spec.uname_architecture,
         "actual_uname": actual_uname,
         "container_exit_code": result.returncode,
         "network": "disabled",
         "filesystem": "read-only with bounded /tmp tmpfs",
-        "emulator": emulator_evidence,
-        "binfmt": binfmt_evidence,
     }
 
 
@@ -6938,18 +6681,8 @@ def run_platform(
     pull_policy: str,
     timeout: int,
     host_architecture: str,
-    arm64_emulator: EmulatorArtifact | None = None,
-    arm64_binfmt: BinfmtRegistration | None = None,
-    arm64_binfmt_error: str | None = None,
 ) -> dict[str, object]:
     slug = platform_slug(spec)
-    use_emulator = (
-        spec.architecture == "arm64"
-        and normalize_host_architecture(host_architecture) != "arm64"
-        and arm64_emulator is not None
-        and arm64_binfmt is not None
-    )
-    active_emulator = arm64_emulator if use_emulator else None
     platform_result: dict[str, object] = {
         "name": spec.name,
         "distribution": spec.distribution,
@@ -6973,11 +6706,7 @@ def run_platform(
             "sha256": pair.previous.sha256,
         },
         "package_bytes_differ": pair.candidate.sha256 != pair.previous.sha256,
-        "bootstrap_execution": (
-            "podman_platform_with_validated_host_binfmt"
-            if active_emulator is not None
-            else "native_container_build"
-        ),
+        "bootstrap_execution": "native_container_build",
         "lifecycle_network": "disabled",
         "runtime_mode": "active-real-init",
         "restart_contract": ACTIVE_RESTART_CONTRACT,
@@ -6998,9 +6727,6 @@ def run_platform(
             podman,
             spec,
             host_architecture,
-            arm64_emulator,
-            arm64_binfmt,
-            arm64_binfmt_error,
         )
         platform_result["architecture_probe"] = architecture_probe
         if architecture_probe["status"] != "available":
@@ -8407,8 +8133,6 @@ def validate_runtime_engine_evidence(value: object) -> dict[str, object]:
         "uid_map",
         "gid_map",
         "lifecycle_helper",
-        "arm64_emulator",
-        "arm64_binfmt",
     }
     if not isinstance(value, dict) or set(value) != keys:
         raise LifecycleLabError("package lifecycle engine schema is not exact")
@@ -8427,7 +8151,7 @@ def validate_runtime_engine_evidence(value: object) -> dict[str, object]:
         or any(not isinstance(item, str) for item in controllers)
         or controllers != sorted(set(controllers))
         or not {"cpu", "io", "memory", "pids"}.issubset(controllers)
-        or host_architecture not in {"amd64", "arm64", "native-shards"}
+        or host_architecture not in {"amd64", "native-shards"}
         or value.get("service_is_remote") is not False
     ):
         raise LifecycleLabError("package lifecycle engine values are invalid")
@@ -8503,9 +8227,9 @@ def validate_aggregate_engine_binding(
     }
     if (
         not isinstance(records, list)
-        or len(records) != 2
+        or len(records) != 1
         or [item.get("architecture") if isinstance(item, dict) else None for item in records]
-        != ["amd64", "arm64"]
+        != ["amd64"]
     ):
         raise LifecycleLabError("aggregate native shard records are not exact")
     helper_binding: tuple[object, ...] | None = None
@@ -8743,58 +8467,6 @@ def validate_report_version_contract(
         ):
             raise LifecycleLabError(
                 "package lifecycle platform previous version is inconsistent"
-            )
-    emulator_report = engine.get("arm64_emulator")
-    if emulator_report is not None:
-        if (
-            not isinstance(emulator_report, dict)
-            or not isinstance(emulator_report.get("path"), str)
-            or not re.fullmatch(
-                r"[0-9a-f]{64}", str(emulator_report.get("sha256"))
-            )
-            or emulator_report.get("regular_file") is not True
-            or emulator_report.get("executable") is not True
-            or emulator_report.get("symlink") is not False
-            or emulator_report.get("role") != "host binfmt interpreter"
-        ):
-            raise LifecycleLabError(
-                "package lifecycle report has invalid arm64 emulator evidence"
-            )
-    binfmt_report = engine.get("arm64_binfmt")
-    if binfmt_report is not None:
-        if (
-            not isinstance(binfmt_report, dict)
-            or not isinstance(binfmt_report.get("path"), str)
-            or not re.fullmatch(r"[0-9a-f]{64}", str(binfmt_report.get("sha256")))
-            or not isinstance(binfmt_report.get("interpreter"), str)
-            or not isinstance(binfmt_report.get("flags"), str)
-            or "F" not in str(binfmt_report.get("flags"))
-            or not isinstance(emulator_report, dict)
-            or binfmt_report.get("interpreter") != emulator_report.get("path")
-        ):
-            raise LifecycleLabError(
-                "package lifecycle report has invalid arm64 binfmt evidence"
-            )
-    for platform_result in platforms:
-        architecture_probe = platform_result.get("architecture_probe")
-        if not isinstance(architecture_probe, dict):
-            continue
-        if architecture_probe.get("execution_mode") != "host_binfmt_qemu_aarch64":
-            continue
-        probe_emulator = architecture_probe.get("emulator")
-        probe_binfmt = architecture_probe.get("binfmt")
-        if (
-            not isinstance(emulator_report, dict)
-            or not isinstance(probe_emulator, dict)
-            or not isinstance(binfmt_report, dict)
-            or not isinstance(probe_binfmt, dict)
-            or probe_emulator.get("path") != emulator_report.get("path")
-            or probe_emulator.get("sha256") != emulator_report.get("sha256")
-            or probe_emulator.get("role") != "host binfmt interpreter"
-            or probe_binfmt != binfmt_report
-        ):
-            raise LifecycleLabError(
-                "package lifecycle arm64 probe/binfmt evidence is inconsistent"
             )
     if not expected_coordinates.issubset(REQUIRED_PACKAGE_COORDINATES):
         raise LifecycleLabError(
@@ -9035,26 +8707,6 @@ def run_lab(
         raise LifecycleLabError(
             f"{architecture_shard} shard requires a native {architecture_shard} host"
         )
-    if architecture_shard is not None and getattr(args, "arm64_emulator", None) is not None:
-        raise LifecycleLabError("native architecture shards forbid ARM64 emulation")
-    arm64_emulator = validate_arm64_emulator(
-        getattr(args, "arm64_emulator", None)
-    )
-    arm64_binfmt: BinfmtRegistration | None = None
-    arm64_binfmt_error: str | None = None
-    if (
-        normalize_host_architecture(actual_host_architecture) != "arm64"
-        and arm64_emulator is not None
-    ):
-        registration_path = getattr(
-            args, "_arm64_binfmt_registration", ARM64_BINFMT_REGISTRATION
-        )
-        try:
-            arm64_binfmt = validate_arm64_binfmt(
-                arm64_emulator, registration_path
-            )
-        except LifecycleLabError as exc:
-            arm64_binfmt_error = str(exc)
     podman_version = ensure_rootless_podman(active_runner, args.podman)
     cgroup_evidence = inspect_rootless_podman_cgroups(
         active_runner, args.podman, actual_host_architecture
@@ -9080,31 +8732,12 @@ def run_lab(
                 args.pull_policy,
                 args.scenario_timeout,
                 actual_host_architecture,
-                arm64_emulator,
-                arm64_binfmt,
-                arm64_binfmt_error,
             )
             for spec in platforms
         ]
         helper_evidence = revalidate_lifecycle_helper(
             helper_path, helper_evidence
         )
-
-    if arm64_emulator is not None:
-        final_emulator = validate_arm64_emulator(arm64_emulator.path)
-        if final_emulator is None or final_emulator.sha256 != arm64_emulator.sha256:
-            raise LifecycleLabError(
-                "arm64 emulator changed while lifecycle evidence was being collected"
-            )
-    if arm64_binfmt is not None and arm64_emulator is not None:
-        final_binfmt = validate_arm64_binfmt(
-            arm64_emulator, arm64_binfmt.path
-        )
-        if final_binfmt != arm64_binfmt:
-            raise LifecycleLabError(
-                "arm64 binfmt registration changed while lifecycle evidence was "
-                "being collected"
-            )
 
     results_by_coordinate = {
         (str(result["distribution"]), str(result["architecture_id"])): result
@@ -9243,16 +8876,9 @@ def run_lab(
                 {"distribution": distribution, "architecture": architecture}
                 for distribution, architecture in missing_coordinates
             ],
-            "arm64_coverage_policy": (
-                "qualification shards require native execution on matching amd64 "
-                "and arm64 hosts and forbid emulation"
-                if architecture_shard is not None
-                else (
-                    "arm64/aarch64 is complete only after each DEB, RPM, and APK "
-                    "distribution variant executes natively or through a validated "
-                    "persistent host binfmt registration whose interpreter exactly "
-                    "matches the checksum-recorded --arm64-emulator"
-                )
+            "architecture_coverage_policy": (
+                "qualification requires the exact five-platform AMD64 matrix "
+                "on a native AMD64 host; native execution is mandatory"
             ),
             "rollback_model": (
                 "external package-manager downgrade to the separately supplied, "
@@ -9275,28 +8901,6 @@ def run_lab(
             "uid_map": cgroup_evidence["uid_map"],
             "gid_map": cgroup_evidence["gid_map"],
             "lifecycle_helper": helper_evidence,
-            "arm64_emulator": (
-                {
-                    "path": str(arm64_emulator.path),
-                    "sha256": arm64_emulator.sha256,
-                    "regular_file": True,
-                    "executable": True,
-                    "symlink": False,
-                    "role": "host binfmt interpreter",
-                }
-                if arm64_emulator is not None
-                else None
-            ),
-            "arm64_binfmt": (
-                {
-                    "path": str(arm64_binfmt.path),
-                    "sha256": arm64_binfmt.sha256,
-                    "interpreter": arm64_binfmt.interpreter,
-                    "flags": arm64_binfmt.flags,
-                }
-                if arm64_binfmt is not None
-                else None
-            ),
         },
         "package_roots": {
             "candidate": str(candidate_root),
@@ -9395,8 +8999,6 @@ def validate_native_shard_report(
     if (
         engine.get("host_architecture") != architecture
         or engine.get("cgroup_delegation") != "rootless-systemd-v2"
-        or engine.get("arm64_emulator") is not None
-        or engine.get("arm64_binfmt") is not None
     ):
         raise LifecycleLabError("native shard engine evidence is invalid")
     roots = report.get("package_roots")
@@ -9464,8 +9066,6 @@ def validate_native_shard_report(
                 "container_exit_code",
                 "network",
                 "filesystem",
-                "emulator",
-                "binfmt",
             }
             or probe.get("status") != "available"
             or probe.get("execution_mode") != "native"
@@ -9476,8 +9076,6 @@ def validate_native_shard_report(
             or probe.get("container_exit_code") != 0
             or probe.get("network") != "disabled"
             or probe.get("filesystem") != "read-only with bounded /tmp tmpfs"
-            or probe.get("emulator") is not None
-            or probe.get("binfmt") is not None
         ):
             raise LifecycleLabError(
                 f"native shard execution evidence is invalid at {coordinate}"
@@ -9615,13 +9213,11 @@ def _aggregate_matrix_summary(
         "container_lab_complete": status == "pass",
         "coordinate_classification": classification["coordinate_classification"],
         "host_architecture": NATIVE_AGGREGATE_HOST,
-        "network_during_image_bootstrap": (
-            "rootless Podman default on each native architecture shard"
-        ),
+        "network_during_image_bootstrap": "rootless Podman default on the native AMD64 shard",
         "network_during_package_operations": "disabled",
         "host_mutation": (
-            "bounded to rootless Podman storage and temporary workdirs on each "
-            "native architecture runner"
+            "bounded to rootless Podman storage and temporary workdirs on the "
+            "native AMD64 runner"
         ),
         "architectures_completed": [
             item["architecture"]
@@ -9646,9 +9242,9 @@ def _aggregate_matrix_summary(
             for distribution, architecture in sorted(REQUIRED_PLATFORM_COORDINATES)
         ],
         "missing_platform_coordinates": [],
-        "arm64_coverage_policy": (
-            "arm64/aarch64 qualification requires the native ubuntu-24.04-arm "
-            "shard; emulation and binfmt execution are forbidden"
+        "architecture_coverage_policy": (
+            "qualification requires the exact five-platform AMD64 matrix on the "
+            "native AMD64 shard; native execution is mandatory"
         ),
         "rollback_model": (
             "external package-manager downgrade to the separately supplied, "
@@ -9672,14 +9268,11 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
         previous_root,
         version_contract,
     )
-    paths = {
-        "amd64": args.aggregate_amd64_report,
-        "arm64": args.aggregate_arm64_report,
-    }
+    paths = {"amd64": args.aggregate_amd64_report}
     shard_reports: dict[str, dict[str, object]] = {}
     shard_digests: dict[str, str] = {}
     identities: set[tuple[int, int]] = set()
-    for architecture in ("amd64", "arm64"):
+    for architecture in ("amd64",):
         report, digest, identity = _read_native_shard(
             paths[architecture], f"{architecture} native shard report"
         )
@@ -9701,7 +9294,7 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
     }
     platform_results: list[dict[str, object]] = []
     observed_package_coordinates: set[str] = set()
-    for architecture in ("amd64", "arm64"):
+    for architecture in ("amd64",):
         shard = shard_reports[architecture]
         shard_contract = shard["package_version_contract"]
         if not isinstance(shard_contract, dict):
@@ -9763,7 +9356,7 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
     native_records = []
     common_helper_binding: tuple[object, ...] | None = None
     aggregate_controllers: set[str] | None = None
-    for architecture in ("amd64", "arm64"):
+    for architecture in ("amd64",):
         shard = shard_reports[architecture]
         shard_scope = shard["scope"]
         shard_engine = shard["engine"]
@@ -9847,8 +9440,6 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
             "uid_map": None,
             "gid_map": None,
             "lifecycle_helper": aggregate_helper,
-            "arm64_emulator": None,
-            "arm64_binfmt": None,
         },
         "package_roots": {
             "candidate": str(candidate_root),
@@ -9903,9 +9494,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument("--podman", default="podman")
-    parser.add_argument("--architecture-shard", choices=("amd64", "arm64"))
+    parser.add_argument("--architecture-shard", choices=("amd64",))
     parser.add_argument("--aggregate-amd64-report", type=Path)
-    parser.add_argument("--aggregate-arm64-report", type=Path)
     parser.add_argument("--qualification-repository")
     parser.add_argument("--qualification-release-sha")
     parser.add_argument("--qualification-release-tag")
@@ -9916,14 +9506,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--qualification-candidate-artifact-id")
     parser.add_argument("--qualification-candidate-artifact-name")
     parser.add_argument("--qualification-previous-release-id")
-    parser.add_argument(
-        "--arm64-emulator",
-        type=Path,
-        help=(
-            "exact qemu-aarch64-static interpreter registered by enabled host "
-            "binfmt_misc with persistent flag F on a non-arm64 host"
-        ),
-    )
     parser.add_argument(
         "--pull-policy", choices=("never", "missing", "always"), default="missing"
     )
@@ -9938,13 +9520,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=defaults[("debian", "amd64")],
     )
     parser.add_argument(
-        "--debian-arm64-image", default=defaults[("debian", "arm64")]
-    )
-    parser.add_argument(
         "--ubuntu-amd64-image", default=defaults[("ubuntu", "amd64")]
-    )
-    parser.add_argument(
-        "--ubuntu-arm64-image", default=defaults[("ubuntu", "arm64")]
     )
     parser.add_argument(
         "--fedora-image",
@@ -9953,13 +9529,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=defaults[("fedora", "amd64")],
     )
     parser.add_argument(
-        "--fedora-arm64-image", default=defaults[("fedora", "arm64")]
-    )
-    parser.add_argument(
         "--almalinux-amd64-image", default=defaults[("almalinux", "amd64")]
-    )
-    parser.add_argument(
-        "--almalinux-arm64-image", default=defaults[("almalinux", "arm64")]
     )
     parser.add_argument(
         "--alpine-image",
@@ -9967,24 +9537,16 @@ def build_parser() -> argparse.ArgumentParser:
         dest="alpine_amd64_image",
         default=defaults[("alpine", "amd64")],
     )
-    parser.add_argument(
-        "--alpine-arm64-image", default=defaults[("alpine", "arm64")]
-    )
     return parser
 
 
 def configured_platforms(args: argparse.Namespace) -> tuple[PlatformSpec, ...]:
     images = {
         ("debian", "amd64"): args.debian_amd64_image,
-        ("debian", "arm64"): args.debian_arm64_image,
         ("ubuntu", "amd64"): args.ubuntu_amd64_image,
-        ("ubuntu", "arm64"): args.ubuntu_arm64_image,
         ("fedora", "amd64"): args.fedora_amd64_image,
-        ("fedora", "arm64"): args.fedora_arm64_image,
         ("almalinux", "amd64"): args.almalinux_amd64_image,
-        ("almalinux", "arm64"): args.almalinux_arm64_image,
         ("alpine", "amd64"): args.alpine_amd64_image,
-        ("alpine", "arm64"): args.alpine_arm64_image,
     }
     return tuple(
         PlatformSpec(
@@ -10015,19 +9577,13 @@ def error_report(exc: Exception) -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    aggregate_requested = (
-        args.aggregate_amd64_report is not None
-        or args.aggregate_arm64_report is not None
-    )
+    aggregate_requested = args.aggregate_amd64_report is not None
     if aggregate_requested and (
-        args.aggregate_amd64_report is None
-        or args.aggregate_arm64_report is None
-        or args.architecture_shard is not None
-        or args.arm64_emulator is not None
+        args.architecture_shard is not None
     ):
         report = error_report(
             LifecycleLabError(
-                "aggregation requires exactly both shard reports and forbids shard/emulator options"
+                "aggregation requires the exact AMD64 shard report and forbids shard mode"
             )
         )
     elif args.scenario_timeout < 30:

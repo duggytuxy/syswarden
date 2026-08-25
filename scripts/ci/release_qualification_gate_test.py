@@ -136,11 +136,10 @@ class QualificationFixture:
     def linux_coordinates(self, *, blocker: bool = False) -> list[dict[str, str]]:
         result = []
         for platform in ("almalinux", "alpine", "debian", "fedora", "ubuntu"):
-            for architecture in ("amd64", "arm64"):
-                status = "blocker" if blocker else "pass"
-                result.append(
-                    {"platform": platform, "architecture": architecture, "status": status}
-                )
+            status = "blocker" if blocker else "pass"
+            result.append(
+                {"platform": platform, "architecture": "amd64", "status": status}
+            )
         return result
 
     def report(self, kind: str, profile: str) -> dict[str, object]:
@@ -640,7 +639,7 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         nft = self.fixture.load_report("nftables_kernel")
         self.assertNotIn("lifecycle", nft)
         linux = self.fixture.load_report("linux_package_lifecycle")
-        self.assertEqual(len(linux["lifecycle"]["previous_package_checksums"]), 6)
+        self.assertEqual(len(linux["lifecycle"]["previous_package_checksums"]), 3)
 
         previous_name = next(iter(linux["lifecycle"]["previous_package_checksums"]))
         index = gate.package_names(self.fixture.previous_version).index(previous_name)

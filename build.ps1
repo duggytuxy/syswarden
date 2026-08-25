@@ -35,13 +35,6 @@ $Targets = @(
         GOARCH = 'amd64'
         BuildMode = 'pie'
         OutputDir = Join-Path $DistDir 'bin'
-    },
-    [PSCustomObject]@{
-        Name = 'Linux ARM64'
-        GOOS = 'linux'
-        GOARCH = 'arm64'
-        BuildMode = 'pie'
-        OutputDir = Join-Path $DistDir 'linux-arm64/bin'
     }
 )
 
@@ -97,7 +90,6 @@ function Assert-GoArtifact {
     $Machine = [int]$Header[18] -bor ([int]$Header[19] -shl 8)
     $ExpectedMachine = switch ($ExpectedArch) {
         'amd64' { 0x3e }
-        'arm64' { 0xb7 }
         default { throw "Unsupported artifact architecture check: $ExpectedArch" }
     }
 
@@ -180,20 +172,18 @@ function Invoke-GoBuild {
 
 function Assert-ExactDistInventory {
     $ExpectedFiles = @(
-        'bin/syswarden-cli'
-        'bin/syswarden-core'
-        'bin/syswarden-tui'
-        'linux-arm64/bin/syswarden-cli'
-        'linux-arm64/bin/syswarden-core'
-        'linux-arm64/bin/syswarden-tui'
-        'linux-arm64/signatures.json'
-        'signatures.json'
-    ) | Sort-Object
+        @(
+            'bin/syswarden-cli'
+            'bin/syswarden-core'
+            'bin/syswarden-tui'
+            'signatures.json'
+        ) | Sort-Object
+    )
     $ExpectedDirectories = @(
-        'bin'
-        'linux-arm64'
-        'linux-arm64/bin'
-    ) | Sort-Object
+        @(
+            'bin'
+        ) | Sort-Object
+    )
 
     $Entries = @(Get-ChildItem -LiteralPath $DistDir -Recurse -Force)
     foreach ($Entry in $Entries) {
@@ -203,15 +193,19 @@ function Assert-ExactDistInventory {
     }
 
     $ActualFiles = @(
-        $Entries | Where-Object { !$_.PSIsContainer } | ForEach-Object {
-            [System.IO.Path]::GetRelativePath($DistDir, $_.FullName).Replace('\', '/')
-        }
-    ) | Sort-Object
+        @(
+            $Entries | Where-Object { !$_.PSIsContainer } | ForEach-Object {
+                [System.IO.Path]::GetRelativePath($DistDir, $_.FullName).Replace('\', '/')
+            }
+        ) | Sort-Object
+    )
     $ActualDirectories = @(
-        $Entries | Where-Object { $_.PSIsContainer } | ForEach-Object {
-            [System.IO.Path]::GetRelativePath($DistDir, $_.FullName).Replace('\', '/')
-        }
-    ) | Sort-Object
+        @(
+            $Entries | Where-Object { $_.PSIsContainer } | ForEach-Object {
+                [System.IO.Path]::GetRelativePath($DistDir, $_.FullName).Replace('\', '/')
+            }
+        ) | Sort-Object
+    )
 
     if ($ActualFiles.Count -ne $ExpectedFiles.Count) {
         throw "Build inventory expected $($ExpectedFiles.Count) files but found $($ActualFiles.Count): $($ActualFiles -join ', ')"
@@ -284,10 +278,6 @@ Copy-Item `
     -LiteralPath $SignaturesSource `
     -Destination (Join-Path $DistDir 'signatures.json') `
     -Force
-Copy-Item `
-    -LiteralPath $SignaturesSource `
-    -Destination (Join-Path $DistDir 'linux-arm64/signatures.json') `
-    -Force
 
 $VerifiedArtifactCount = 0
 foreach ($Target in $Targets) {
@@ -301,10 +291,10 @@ foreach ($Target in $Targets) {
     }
 }
 
-if ($VerifiedArtifactCount -ne 6) {
-    throw "Build verification expected 6 binaries but verified $VerifiedArtifactCount."
+if ($VerifiedArtifactCount -ne 3) {
+    throw "Build verification expected 3 binaries but verified $VerifiedArtifactCount."
 }
 
 Assert-ExactDistInventory
 
-Write-Host "[+] Build complete. Verified all $VerifiedArtifactCount native binaries and the exact 8-file distribution inventory." -ForegroundColor Green
+Write-Host "[+] Build complete. Verified all $VerifiedArtifactCount native binaries and the exact 4-file AMD64 distribution inventory." -ForegroundColor Green

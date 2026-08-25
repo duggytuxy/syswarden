@@ -54,7 +54,7 @@ remains mandatory on the exact GitHub candidate or merged SHA.
 | --- | --- | --- |
 | `auto-versioning.yml` | Version inspection, single-commit Patch validation and candidate-bound Act event | Actual `main` push identity and protected branch result |
 | `security-audit.yml` | Hygiene, tests, race, vet, fuzz, lint, gosec, nosec debt, Gitleaks, Trivy, SBOM, bundle and isolated golden test | Exact Ubuntu AppArmor host proof when unavailable locally, SARIF upload, OIDC attestation and GitHub artifact identity |
-| `package.yml` | Validators, reproducible AMD64 and ARM64 builds, six package files, metadata, inventory and checksums in the pinned build environment | Unique successful `main` run and immutable GitHub package artifact identity |
+| `package.yml` | Validators, reproducible AMD64 builds, three package files, metadata, inventory and checksums in the pinned build environment | Unique successful `main` run and immutable GitHub package artifact identity |
 | `scorecard.yml` | Workflow and policy contract tests | GitHub repository posture, Scorecard service result and SARIF publication |
 | `compliance.yml` | Workflow and policy contract tests | Plumber service execution, GitHub OIDC result and remote score publication |
 | `release-qualification.yml` | Optional native lifecycle, kernel and evidence-schema rehearsal when matching hardware and inputs exist | Protected environment review, ephemeral runner identity, authoritative run and artifact IDs, sealing and protected signing secret |
@@ -163,9 +163,8 @@ For CLI, Core and TUI, run the normal tests, race tests and vet with Go 1.26.6,
 `GOFLAGS=-mod=readonly`, the repository `go.work` file and isolated per-module
 caches. Run versionctl as its own module with `GOWORK=off`.
 
-Build all three Linux binaries for AMD64 and ARM64 with the same PIE, linker,
-version and reproducibility flags used by `build.ps1` and the Package workflow.
-A native-only build is not sufficient.
+Build all three Linux binaries for AMD64 with the same PIE, linker, version and
+reproducibility flags used by `build.ps1` and the Package workflow.
 
 ### Security workflow
 
@@ -193,8 +192,8 @@ rule and documents the controlled fixture invariant on the same line.
 ### Package workflow
 
 Run the package, stage, repository-state and release validators with the exact
-Package workflow environment. Build and validate the six candidate packages:
-DEB amd64 and arm64, RPM x86_64 and aarch64, and APK x86_64 and aarch64. Package
+Package workflow environment. Build and validate the three candidate packages:
+DEB amd64, RPM x86_64 and APK x86_64. Package
 lifecycle execution belongs to the optional prequalification rehearsal, not
 the mandatory pre-push package build.
 
@@ -217,13 +216,12 @@ After the complete pre-push gate is green, a maintainer may rehearse the
 non-secret technical qualification shards against the same candidate SHA. This
 rehearsal is optional and never authorizes a merge, lot closure, tag or Release.
 
-Use the six candidate packages produced by the Package workflow mirror. The
+Use the three candidate packages produced by the Package workflow mirror. The
 protected qualification downloads the unique successful Package `main`
 artifact. It does not rebuild packages.
 
-Run AMD64 lifecycle tests only on native AMD64 and ARM64 lifecycle tests only
-on native ARM64. The workflow forbids emulation. If native ARM64 hardware is
-unavailable, record `PARTIAL-NO-NATIVE-ARM64` and do not claim complete local
+Run AMD64 lifecycle tests only on native AMD64 hardware. The workflow forbids
+emulation. If native AMD64 hardware is unavailable, do not claim complete local
 qualification.
 
 Local and protected evidence files are not byte-comparable. They contain
@@ -279,6 +277,12 @@ After review and user-approved merge, require all main-push checks on the exact
 merged SHA, then run the protected qualification. Compare eligible package
 bytes and semantic evidence contracts with any local rehearsal, never evidence
 file digests. Treat the protected result as authoritative.
+
+After qualification succeeds, create `v4.03.2` locally as an annotated SSH- or
+GPG-signed tag whose peeled commit is the exact qualified `main` SHA. Verify the
+tag locally against the approved signer before pushing only that tag reference.
+The publisher rejects a lightweight tag, a tag that peels to another commit, or
+a tag object whose signature GitHub does not report as valid.
 
 A technical lot may close after its exact merged SHA passes the required
 protected gates. Tagging and publication remain separate decisions and require

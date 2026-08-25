@@ -57,7 +57,7 @@ has been qualified, tagged or published.
   migration-fence controls.
 - Optional BunkerWeb integration with authenticated HA and provenance-aware
   cleanup.
-- Native DEB, RPM and APK packaging for supported amd64 and arm64 Linux hosts.
+- Native DEB, RPM and APK packaging for supported amd64 Linux hosts.
 
 ## Capabilities
 
