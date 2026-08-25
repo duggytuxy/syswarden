@@ -425,7 +425,7 @@ func applyLogAntiForgingOn(host hardeningHost) error {
 		applied = true
 		content := []byte("# --- SYSWARDEN: Anti Log Forging & CRLF Mitigation ---\n$EscapeControlCharactersOnReceive on\n$DropTrailingLFOnReception on\n")
 		logical := "/etc/rsyslog.d/99-syswarden-antiforging.conf"
-		restart := func() error { return restartLoggingService(host, "rsyslog") }
+		reconcile := func() error { return reconcileRsyslogService(host) }
 		validate := func() error { return host.executor.run("rsyslogd", "-N1") }
 		var applyErr error
 		if deferredRestart {
@@ -454,7 +454,7 @@ func applyLogAntiForgingOn(host hardeningHost) error {
 				}
 			}
 		} else {
-			applyErr = host.applyManagedFile(logical, content, validate, restart)
+			applyErr = host.applyManagedFile(logical, content, validate, reconcile)
 		}
 		if applyErr != nil {
 			failures = append(failures, fmt.Errorf("configure rsyslog anti-forging: %w", applyErr))
@@ -526,15 +526,22 @@ func applyLogAntiForgingOn(host hardeningHost) error {
 	return errors.Join(failures...)
 }
 
-func restartLoggingService(host hardeningHost, service string) error {
+func reconcileRsyslogService(host hardeningHost) error {
 	alpine, err := host.markerExists("/etc/alpine-release")
 	if err != nil {
 		return err
 	}
 	if alpine {
-		return host.executor.run("rc-service", service, "restart")
+		return host.executor.run("rc-service", "rsyslog", "restart")
 	}
-	return host.executor.run("systemctl", "restart", service+".service")
+	const unit = "rsyslog.service"
+	if err := host.executor.run("systemctl", "reload-or-restart", unit); err != nil {
+		return fmt.Errorf("reload or start systemd service %s: %w", unit, err)
+	}
+	if err := host.executor.run("systemctl", "is-active", "--quiet", unit); err != nil {
+		return fmt.Errorf("attest reconciled systemd service %s is active: %w", unit, err)
+	}
+	return nil
 }
 
 func restrictAuthLogsOn(host hardeningHost) error {
