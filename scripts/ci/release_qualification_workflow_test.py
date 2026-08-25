@@ -772,6 +772,10 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "(( (8#${trusted_parent_mode} & 0022) != 0 ))",
             "/usr/bin/bash",
             "/usr/bin/chmod",
+            "/usr/bin/curl",
+            "/usr/bin/install",
+            "/usr/bin/rm",
+            "/usr/bin/rmdir",
             "/usr/bin/sha256sum",
             "/usr/bin/stat",
             "/usr/bin/sudo",
@@ -857,12 +861,340 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "./scripts/",
             "git ",
             "curl ",
+            "/usr/bin/curl --",
             "apt-get",
             "command -v",
             "chmod -R",
             "|| true",
         ):
             self.assertNotIn(forbidden, script)
+
+    def test_arm64_crun_runtime_is_pinned_attested_and_ordered(self) -> None:
+        step_name = "Install Exact Native ARM64 crun Runtime"
+        step = workflow_step(self.workflow, step_name)
+        self.assertIn(
+            "shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}", step
+        )
+        for contract in (
+            "CRUN_COMMIT: 54f16ffbefcd022bf032af768b5c5ce075c18bfc",
+            "CRUN_SHA256: cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342",
+            "CRUN_SIZE_BYTES: '3298128'",
+            "CRUN_SPEC_VERSION: 1.0.0",
+            "CRUN_URL: https://github.com/containers/crun/releases/download/1.28/crun-1.28-linux-arm64",
+            "CRUN_VERSION: '1.28'",
+        ):
+            self.assertIn(contract, step)
+        workspace_script = workflow_step_script(
+            self.workflow, "Create Native ARM64 Shard Workspace"
+        )
+        for contract in (
+            'shard_root_inode="$(stat -c \'%d:%i\' "${shard_root}")"',
+            '"$(stat -c \'%u:%g:%a:%d:%i\' "${shard_root}")" !=',
+            '"$(id -u):$(id -g):700:${shard_root_inode}"',
+            "printf 'ARM_SHARD_ROOT_INODE=%s\\n' \"${shard_root_inode}\"",
+        ):
+            self.assertIn(contract, workspace_script)
+        script = workflow_step_script(self.workflow, step_name)
+        for contract in (
+            'runtime_directory="${SHARD_ROOT}/runtime"',
+            'crun_download="${runtime_directory}/.crun-1.28-linux-arm64.download"',
+            'crun_path="${runtime_directory}/crun-1.28-linux-arm64"',
+            'runtime_directory_inode=""',
+            'install_completed=false',
+            'attest_install_shard_root() {',
+            '"${user_id}:${user_group}:700:${ARM_SHARD_ROOT_INODE}"',
+            'attest_install_runtime_directory() {',
+            '"${user_id}:${user_group}:700:${runtime_directory_inode}"',
+            'cleanup_failed_crun_install() {',
+            'if [[ -L "${runtime_directory}" ]]; then',
+            '/usr/bin/rm -f -- "${runtime_directory}"',
+            'if [[ ! -e "${runtime_directory}" ]]; then',
+            'cleanup_failed_crun_install_on_exit() {',
+            'trap cleanup_failed_crun_install_on_exit EXIT',
+            '-e "${runtime_directory}" || -L "${runtime_directory}"',
+            '/usr/bin/install -d -m 0700 -- "${runtime_directory}"',
+            'runtime_directory_inode="$(/usr/bin/stat -c \'%d:%i\' '
+            '"${runtime_directory}")"',
+            '/usr/bin/curl --disable --fail --location',
+            "--proto '=https'",
+            "--proto-redir '=https'",
+            "--tlsv1.2",
+            "--connect-timeout 10",
+            "--max-time 120",
+            "--max-redirs 5",
+            "--retry 3",
+            "--retry-all-errors",
+            "--retry-delay 1",
+            "--retry-max-time 120",
+            '--max-filesize "${CRUN_SIZE_BYTES}"',
+            "--remove-on-error",
+            "--silent",
+            "--show-error",
+            '--output "${crun_download}"',
+            '"${CRUN_URL}"',
+            '[[ ! -f "${crun_download}" || -L "${crun_download}"',
+            '"${user_id}:${user_group}:600:${CRUN_SIZE_BYTES}"',
+            '/usr/bin/install -m 0700 -- "${crun_download}" "${crun_path}"',
+            '/usr/bin/rm -f -- "${crun_download}"',
+            '[[ -e "${crun_download}" || -L "${crun_download}"',
+            '! -f "${crun_path}" || -L "${crun_path}"',
+            '"${user_id}:${user_group}:700:${CRUN_SIZE_BYTES}"',
+            'crun_inode="$(/usr/bin/stat -c \'%d:%i\' "${crun_path}")"',
+            '"${crun_inode}" =~ ^[0-9]+:[0-9]+$',
+            'crun_version_output="$("${crun_path}" --version)"',
+            '"${crun_version_lines[0]:-}" != "crun version ${CRUN_VERSION}"',
+            '"${crun_version_lines[1]:-}" != "commit: ${CRUN_COMMIT}"',
+            '"${crun_version_lines[3]:-}" != "spec: ${CRUN_SPEC_VERSION}"',
+            r'\+SYSTEMD($|[[:space:]])',
+            "printf 'ARM_CRUN_PATH=%s\\n' \"${crun_path}\"",
+            "printf 'ARM_CRUN_SHA256=%s\\n' \"${CRUN_SHA256}\"",
+            "printf 'ARM_CRUN_INODE=%s\\n' \"${crun_inode}\"",
+            "printf 'ARM_CRUN_DIRECTORY_INODE=%s\\n' "
+            '"${runtime_directory_inode}"',
+            '} >> "${GITHUB_ENV}"',
+            'install_completed=true',
+            'trap - EXIT',
+        ):
+            self.assertIn(contract, script)
+        for forbidden in ("set +e", "|| true", "--insecure"):
+            self.assertNotIn(forbidden, script)
+        self.assertEqual(script.count("/usr/bin/curl --disable"), 1)
+        self.assertEqual(script.count("/usr/bin/sha256sum --check --strict"), 2)
+        cleanup_trap = script.index("trap cleanup_failed_crun_install_on_exit EXIT")
+        runtime_create = script.index(
+            '/usr/bin/install -d -m 0700 -- "${runtime_directory}"'
+        )
+        runtime_inode = script.index(
+            'runtime_directory_inode="$(/usr/bin/stat -c \'%d:%i\''
+        )
+        target_guard = script.index('if [[ -e "${crun_download}"')
+        download = script.index("/usr/bin/curl --disable")
+        downloaded_identity = script.index(
+            '[[ ! -f "${crun_download}" || -L "${crun_download}"'
+        )
+        source_digest = script.index("/usr/bin/sha256sum --check --strict")
+        install = script.index('/usr/bin/install -m 0700 -- "${crun_download}"')
+        installed_identity = script.index('! -f "${crun_path}" || -L "${crun_path}"')
+        destination_digest = script.index(
+            "/usr/bin/sha256sum --check --strict", source_digest + 1
+        )
+        version = script.index('"${crun_path}" --version')
+        export = script.index("printf 'ARM_CRUN_PATH=%s\\n'")
+        mark_complete = script.index("install_completed=true")
+        disarm_trap = script.index("trap - EXIT", mark_complete)
+        self.assertLess(cleanup_trap, runtime_create)
+        self.assertLess(runtime_create, runtime_inode)
+        self.assertLess(runtime_inode, target_guard)
+        self.assertLess(target_guard, download)
+        self.assertLess(download, downloaded_identity)
+        self.assertLess(downloaded_identity, source_digest)
+        self.assertLess(source_digest, install)
+        self.assertLess(install, installed_identity)
+        self.assertLess(installed_identity, destination_digest)
+        self.assertLess(destination_digest, version)
+        self.assertLess(version, export)
+        self.assertLess(export, mark_complete)
+        self.assertLess(mark_complete, disarm_trap)
+
+        arm_job = workflow_job(self.workflow, "package-lifecycle-arm64")
+        checkout = arm_job.index("Checkout Exact ARM64 Candidate Commit")
+        workspace = arm_job.index("Create Native ARM64 Shard Workspace")
+        install_step = arm_job.index(step_name)
+        download_command = arm_job.index("/usr/bin/curl --disable")
+        lifecycle = arm_job.index("Run Native ARM64 Package Lifecycle Shard")
+        final_cleanup = arm_job.index("Remove Exact Native ARM64 crun Runtime")
+        self.assertLess(checkout, workspace)
+        self.assertLess(workspace, install_step)
+        self.assertLess(install_step, download_command)
+        self.assertLess(download_command, lifecycle)
+        self.assertLess(lifecycle, final_cleanup)
+        self.assertNotIn("/usr/local/bin/crun", script)
+
+    def test_arm64_crun_final_cleanup_is_fail_closed_and_symlink_safe(self) -> None:
+        step_name = "Remove Exact Native ARM64 crun Runtime"
+        step = workflow_step(self.workflow, step_name)
+        self.assertIn(
+            "if: ${{ always() && steps.arm_workspace.outcome == 'success' }}",
+            step,
+        )
+        self.assertIn(
+            "shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}", step
+        )
+        script = workflow_step_script(self.workflow, step_name)
+        required = (
+            'crun_directory="${SHARD_ROOT}/runtime"',
+            'attest_final_arm_shard_root() {',
+            '"${user_id}:${user_group}:700:${ARM_SHARD_ROOT_INODE}"',
+            'attest_final_crun_directory() {',
+            '"${user_id}:${user_group}:700:${ARM_CRUN_DIRECTORY_INODE}"',
+            'cleanup_final_crun_runtime() {',
+            'if [[ -L "${SHARD_ROOT}" ]]; then',
+            'if [[ ! -e "${SHARD_ROOT}" ]]; then',
+            'if [[ -L "${crun_directory}" ]]; then',
+            '/usr/bin/rm -f -- "${crun_directory}"',
+            'if [[ ! -e "${crun_directory}" ]]; then',
+            'if ! attest_final_crun_directory; then',
+            '/usr/bin/rm -f -- "${expected_crun_path}" "${crun_download}"',
+            '/usr/bin/rmdir -- "${crun_directory}"',
+            'if ! cleanup_final_crun_runtime; then',
+            "final native ARM64 crun cleanup was not identity-safe",
+            '[[ -e "${crun_directory}" || -L "${crun_directory}" ]]',
+            "final native ARM64 crun cleanup did not attest exact absence",
+        )
+        expected_return_failures = script.count("return 1")
+        expected_exit_failures = script.count("exit 1")
+
+        def assert_fail_closed(candidate: str) -> None:
+            for contract in required:
+                self.assertIn(contract, candidate)
+            for forbidden in ("set +e", "|| true", "--insecure"):
+                self.assertNotIn(forbidden, candidate)
+            self.assertEqual(candidate.count("return 1"), expected_return_failures)
+            self.assertEqual(candidate.count("exit 1"), expected_exit_failures)
+
+        self.assertGreaterEqual(expected_return_failures, 5)
+        self.assertGreaterEqual(expected_exit_failures, 3)
+        assert_fail_closed(script)
+        mutations = (
+            script.replace("return 1", "return 0", 1),
+            script.replace(
+                "if ! attest_final_crun_directory; then",
+                "if attest_final_crun_directory; then",
+                1,
+            ),
+            script.replace(
+                '/usr/bin/rm -f -- "${crun_directory}"',
+                '/usr/bin/rm -rf -- "${crun_directory}/"',
+                1,
+            ),
+            script.replace("exit 1", "exit 0", 1),
+            script + "\nset +e\n",
+            script + "\ncleanup_final_crun_runtime || true\n",
+            script + "\ncurl --insecure https://example.invalid\n",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation[-80:]), self.assertRaises(
+                AssertionError
+            ):
+                assert_fail_closed(mutation)
+
+        def inode(path: Path) -> str:
+            identity = path.stat()
+            return f"{identity.st_dev}:{identity.st_ino}"
+
+        def invoke(shard_root: Path, runtime_inode: str | None) -> subprocess.CompletedProcess[str]:
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "SHARD_ROOT": str(shard_root),
+                    "ARM_SHARD_ROOT_INODE": inode(shard_root),
+                }
+            )
+            if runtime_inode is None:
+                environment.pop("ARM_CRUN_DIRECTORY_INODE", None)
+            else:
+                environment["ARM_CRUN_DIRECTORY_INODE"] = runtime_inode
+            return subprocess.run(
+                ["/usr/bin/bash", "-c", script],
+                cwd=REPOSITORY,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sentinel = root / "sentinel-exact"
+            sentinel.write_text("preserve-exact\n", encoding="utf-8")
+            shard_root = root / "shard-exact"
+            shard_root.mkdir(mode=0o700)
+            shard_root.chmod(0o700)
+            runtime = shard_root / "runtime"
+            runtime.mkdir(mode=0o700)
+            runtime.chmod(0o700)
+            crun = runtime / "crun-1.28-linux-arm64"
+            crun.write_bytes(b"exact-runtime")
+            crun.chmod(0o700)
+            (runtime / ".crun-1.28-linux-arm64.download").symlink_to(sentinel)
+            result = invoke(shard_root, inode(runtime))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(runtime.exists())
+            self.assertFalse(runtime.is_symlink())
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve-exact\n")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sentinel = root / "sentinel-absent"
+            sentinel.write_text("preserve-absent\n", encoding="utf-8")
+            shard_root = root / "shard-absent"
+            shard_root.mkdir(mode=0o700)
+            shard_root.chmod(0o700)
+            result = invoke(shard_root, None)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((shard_root / "runtime").exists())
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve-absent\n")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            outside = root / "outside-runtime"
+            outside.mkdir(mode=0o700)
+            sentinel = outside / "sentinel-symlink"
+            sentinel.write_text("preserve-symlink\n", encoding="utf-8")
+            shard_root = root / "shard-symlink"
+            shard_root.mkdir(mode=0o700)
+            shard_root.chmod(0o700)
+            runtime = shard_root / "runtime"
+            runtime.symlink_to(outside, target_is_directory=True)
+            result = invoke(shard_root, None)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(runtime.exists())
+            self.assertFalse(runtime.is_symlink())
+            self.assertEqual(
+                sentinel.read_text(encoding="utf-8"), "preserve-symlink\n"
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sentinel = root / "sentinel-changed-inode"
+            sentinel.write_text("preserve-changed\n", encoding="utf-8")
+            shard_root = root / "shard-changed-inode"
+            shard_root.mkdir(mode=0o700)
+            shard_root.chmod(0o700)
+            runtime = shard_root / "runtime"
+            runtime.mkdir(mode=0o700)
+            runtime.chmod(0o700)
+            crun = runtime / "crun-1.28-linux-arm64"
+            crun.write_bytes(b"must-remain")
+            runtime_stat = runtime.stat()
+            changed_inode = f"{runtime_stat.st_dev}:{runtime_stat.st_ino + 1}"
+            result = invoke(shard_root, changed_inode)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(runtime.is_dir())
+            self.assertEqual(crun.read_bytes(), b"must-remain")
+            self.assertEqual(
+                sentinel.read_text(encoding="utf-8"), "preserve-changed\n"
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            outside_shard = root / "outside-shard"
+            outside_shard.mkdir(mode=0o700)
+            outside_shard.chmod(0o700)
+            outside_runtime = outside_shard / "runtime"
+            outside_runtime.mkdir(mode=0o700)
+            sentinel = outside_runtime / "sentinel-parent-symlink"
+            sentinel.write_text("preserve-parent-symlink\n", encoding="utf-8")
+            shard_root = root / "shard-parent-symlink"
+            shard_root.symlink_to(outside_shard, target_is_directory=True)
+            result = invoke(shard_root, inode(outside_runtime))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(shard_root.is_symlink())
+            self.assertEqual(
+                sentinel.read_text(encoding="utf-8"),
+                "preserve-parent-symlink\n",
+            )
 
     def test_package_main_is_independently_resolved_on_hosted_runner(self) -> None:
         for step_name in (
@@ -1070,12 +1402,43 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             'containers_conf="${SHARD_ROOT}/containers.conf"',
             'podman_info="${SHARD_ROOT}/podman-info.json"',
             'podman_local="${SHARD_ROOT}/podman-local"',
+            'crun_directory="${SHARD_ROOT}/runtime"',
+            'crun_download="${crun_directory}/.crun-1.28-linux-arm64.download"',
+            'expected_crun_path="${crun_directory}/crun-1.28-linux-arm64"',
+            '"${ARM_CRUN_PATH:-}" != "${expected_crun_path}"',
+            '"${ARM_CRUN_SHA256:-}" != '
+            '"cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342"',
+            '! "${ARM_CRUN_INODE:-}" =~ ^[0-9]+:[0-9]+$',
+            '! "${ARM_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$',
+            '! "${ARM_SHARD_ROOT_INODE:-}" =~ ^[0-9]+:[0-9]+$',
+            'attest_arm_shard_root() {',
+            '"${user_id}:${user_group}:700:${ARM_SHARD_ROOT_INODE}"',
+            'attest_arm_crun_directory() {',
+            '"${user_id}:${user_group}:700:${ARM_CRUN_DIRECTORY_INODE}"',
+            'attest_arm_crun() {',
+            '"$(stat -c \'%u:%g:%a:%s:%d:%i\' "${ARM_CRUN_PATH}")" !=',
+            '"${user_id}:${user_group}:700:3298128:${ARM_CRUN_INODE}"',
+            'printf \'%s  %s\\n\' "${ARM_CRUN_SHA256}" "${ARM_CRUN_PATH}"',
+            'crun_version_output="$("${ARM_CRUN_PATH}" --version)" || return 1',
+            '"${crun_version_lines[0]:-}" != "crun version 1.28"',
+            '"commit: 54f16ffbefcd022bf032af768b5c5ce075c18bfc"',
+            '"${crun_version_lines[3]:-}" != "spec: 1.0.0"',
+            r'\+SYSTEMD($|[[:space:]])',
+            'cleanup_arm_crun_runtime() {',
+            'if [[ -L "${crun_directory}" ]]; then',
+            '/usr/bin/rm -f -- "${crun_directory}"',
+            'if [[ ! -e "${crun_directory}" ]]; then',
+            'if ! attest_arm_crun_directory; then',
+            'if ! cleanup_arm_crun_runtime; then',
+            "native ARM64 crun parent identity changed before use",
+            'if ! attest_arm_crun; then',
+            "native ARM64 crun runtime changed before delegated use",
             "'cgroup_manager=\"systemd\"'",
             "'conmon_path=[\"/usr/local/lib/podman/conmon\"]'",
             "'remote=false'",
             "'runtime=\"crun\"'",
             "'[engine.runtimes]'",
-            "'crun=[\"/usr/local/bin/crun\"]'",
+            '"crun=[\\"${ARM_CRUN_PATH}\\"]"',
             "'[engine.platform_to_oci_runtime]'",
             "'\"linux/arm64\"=\"crun\"'",
             '"$(stat -c \'%a\' "${containers_conf}")" != "600"',
@@ -1100,6 +1463,10 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "--setenv='CONTAINERS_CONF_OVERRIDE='",
             '--setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus"',
             "--setenv='PYTHONDONTWRITEBYTECODE=1'",
+            '--setenv="SYSWARDEN_CRUN_DIRECTORY_INODE=${ARM_CRUN_DIRECTORY_INODE}"',
+            '--setenv="SYSWARDEN_CRUN_INODE=${ARM_CRUN_INODE}"',
+            '--setenv="SYSWARDEN_CRUN_PATH=${ARM_CRUN_PATH}"',
+            '--setenv="SYSWARDEN_CRUN_SHA256=${ARM_CRUN_SHA256}"',
             '--setenv="SYSWARDEN_PODMAN_INFO=${podman_info}"',
             '--setenv="SYSWARDEN_PODMAN_INFO_INODE=${podman_info_inode}"',
             '--setenv="SYSWARDEN_PODMAN_LOCAL=${podman_local}"',
@@ -1112,8 +1479,24 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '-z "${SYSWARDEN_PODMAN_INFO:-}"',
             '-z "${SYSWARDEN_PODMAN_INFO_INODE:-}"',
             "native ARM64 Podman info target is unavailable",
-            "if ! /usr/local/bin/crun --version >/dev/null",
+            '-z "${SYSWARDEN_CRUN_PATH:-}"',
+            '"${SYSWARDEN_CRUN_SHA256:-}" != '
+            '"cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342"',
+            '! "${SYSWARDEN_CRUN_INODE:-}" =~ ^[0-9]+:[0-9]+$',
+            '! "${SYSWARDEN_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$',
+            "native ARM64 crun delegated identity is incomplete",
+            'crun_parent="${SYSWARDEN_CRUN_PATH%/*}"',
+            '"$(stat -c "%u:%g:%a:%d:%i" "${crun_parent}")" != '
+            '"$(id -u):$(id -g):700:${SYSWARDEN_CRUN_DIRECTORY_INODE}"',
+            '"$(stat -c "%u:%g:%a:%s:%d:%i" "${SYSWARDEN_CRUN_PATH}")" != '
+            '"$(id -u):$(id -g):700:3298128:${SYSWARDEN_CRUN_INODE}"',
+            "native ARM64 crun changed identity inside the delegated session",
+            'printf "%s  %s\\n" "${SYSWARDEN_CRUN_SHA256}" '
+            '"${SYSWARDEN_CRUN_PATH}"',
+            "native ARM64 crun changed bytes inside the delegated session",
+            'crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --version)"',
             "native ARM64 crun is not executable inside the delegated session",
+            "native ARM64 crun lacks the exact delegated version or systemd capability",
             "if ! /usr/local/lib/podman/conmon --version >/dev/null",
             "native ARM64 conmon is not executable inside the delegated session",
             '"${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" '
@@ -1124,7 +1507,12 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"${SYSWARDEN_PODMAN_INFO_INODE}"',
             "native ARM64 Podman info evidence changed identity or permissions",
             '.host.conmon.path == "/usr/local/lib/podman/conmon"',
-            '.host.ociRuntime.path == "/usr/local/bin/crun"',
+            '.host.ociRuntime.name == "crun"',
+            '.host.ociRuntime.path == $crun_path',
+            'startswith("crun version 1.28\\ncommit: '
+            '54f16ffbefcd022bf032af768b5c5ce075c18bfc\\n")',
+            'contains("\\nspec: 1.0.0\\n")',
+            'contains("\\n+SYSTEMD ")',
             '.host.cgroupManager == "systemd"',
             ".host.security.rootless == true",
             ".host.serviceIsRemote == false",
@@ -1137,7 +1525,13 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '--podman "${podman_local}"',
             'sudo -n rm -f -- "${delegate_drop_in}"',
             'sudo -n test -e "${delegate_drop_in}"',
-            'rm -f -- "${containers_conf}" "${podman_info}" "${podman_local}"',
+            'shard_rc=0',
+            'if sudo -n systemd-run',
+            'else\n  shard_rc=$?',
+            '"${crun_download}"',
+            '-e "${expected_crun_path}" || -L "${expected_crun_path}"',
+            '/usr/bin/rmdir -- "${crun_directory}"',
+            '[[ -e "${crun_directory}" || -L "${crun_directory}" ]]',
             'sudo -n systemctl start "${user_service}"',
             'cleanup_rc=0',
             'arm_cleanup_completed=true',
@@ -1157,6 +1551,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "runtime=\"/usr/local/bin/runc\"",
             "runtime=\"runc\"",
             "/usr/local/bin/runc",
+            "/usr/local/bin/crun",
             "OCIRuntime.Name",
             "podman_runtime=",
             "{{.Host.Conmon.Path}}",
@@ -1168,6 +1563,9 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "podman system migrate",
             "--setenv='CONTAINER_HOST='",
             "--setenv='CONTAINER_CONNECTION='",
+            "set +e",
+            "|| true",
+            "--insecure",
         ):
             self.assertNotIn(forbidden, script)
         self.assertEqual(script.count("sudo -n systemd-run"), 1)
@@ -1178,7 +1576,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertEqual(script.count("'remote=false'"), 1)
         self.assertEqual(script.count("'runtime=\"crun\"'"), 1)
         self.assertEqual(script.count("'[engine.runtimes]'"), 1)
-        self.assertEqual(script.count("'crun=[\"/usr/local/bin/crun\"]'"), 1)
+        self.assertEqual(script.count('"crun=[\\"${ARM_CRUN_PATH}\\"]"'), 1)
         self.assertEqual(script.count("'[engine.platform_to_oci_runtime]'"), 1)
         self.assertEqual(
             script.count("'\"linux/arm64\"=\"crun\"'"), 1
@@ -1201,6 +1599,41 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertEqual(
             script.count("--setenv='CONTAINERS_CONF_OVERRIDE='"), 1
         )
+        self.assertEqual(
+            script.count(
+                '--setenv="SYSWARDEN_CRUN_DIRECTORY_INODE=${ARM_CRUN_DIRECTORY_INODE}"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            script.count('--setenv="SYSWARDEN_CRUN_INODE=${ARM_CRUN_INODE}"'), 1
+        )
+        self.assertEqual(
+            script.count('--setenv="SYSWARDEN_CRUN_PATH=${ARM_CRUN_PATH}"'), 1
+        )
+        self.assertEqual(
+            script.count('--setenv="SYSWARDEN_CRUN_SHA256=${ARM_CRUN_SHA256}"'), 1
+        )
+        self.assertEqual(script.count("if ! attest_arm_crun; then"), 1)
+        cleanup_start = script.index("cleanup_arm_cgroup_session() {")
+        cleanup_end = script.index("cleanup_arm_cgroup_session_on_exit() {")
+        cleanup_script = script[cleanup_start:cleanup_end]
+        self.assertIn('/usr/bin/rm -f --', cleanup_script)
+        self.assertIn('if ! cleanup_arm_crun_runtime; then', cleanup_script)
+        self.assertNotIn('"${ARM_CRUN_PATH}"', cleanup_script)
+        runtime_cleanup_start = script.index("cleanup_arm_crun_runtime() {")
+        runtime_cleanup_end = script.index("cleanup_arm_cgroup_session() {")
+        runtime_cleanup = script[runtime_cleanup_start:runtime_cleanup_end]
+        self.assertIn('"${expected_crun_path}"', runtime_cleanup)
+        self.assertIn('"${crun_download}"', runtime_cleanup)
+        self.assertIn('/usr/bin/rm -f -- "${crun_directory}"', runtime_cleanup)
+        self.assertIn('/usr/bin/rmdir -- "${crun_directory}"', runtime_cleanup)
+        self.assertNotIn('"${ARM_CRUN_PATH}"', runtime_cleanup)
+        cleanup_trap = script.index("trap cleanup_arm_cgroup_session_on_exit EXIT")
+        exported_identity_guard = script.index(
+            'if [[ "${ARM_CRUN_PATH:-}" != "${expected_crun_path}"'
+        )
+        self.assertLess(cleanup_trap, exported_identity_guard)
         self.assertNotIn("--podman /usr/bin/podman", self.workflow)
         self.assertNotIn("--podman /usr/local/bin/podman", script)
         ownership_guard = script.index(
@@ -1214,7 +1647,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         remote_pin = script.index("'remote=false'")
         runtime_pin = script.index("'runtime=\"crun\"'")
         runtime_table = script.index("'[engine.runtimes]'")
-        runtime_path = script.index("'crun=[\"/usr/local/bin/crun\"]'")
+        runtime_path = script.index('"crun=[\\"${ARM_CRUN_PATH}\\"]"')
         platform_table = script.index("'[engine.platform_to_oci_runtime]'")
         platform_pin = script.index("'\"linux/arm64\"=\"crun\"'")
         wrapper_unset = script.index(
@@ -1244,9 +1677,27 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         configuration_guard = script.index(
             "native ARM64 Podman configuration isolation is incomplete"
         )
-        crun_probe = script.index("/usr/local/bin/crun --version")
-        conmon_probe = script.index("/usr/local/lib/podman/conmon --version")
         info_target = script.index(': > "${podman_info}"')
+        host_crun_attestation = script.index("if ! attest_arm_crun; then")
+        delegated_crun_identity = script.index(
+            "native ARM64 crun changed identity inside the delegated session",
+            systemd_run,
+        )
+        delegated_crun_digest = script.index(
+            "native ARM64 crun changed bytes inside the delegated session",
+            systemd_run,
+        )
+        crun_probe = script.index(
+            'crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --version)"',
+            systemd_run,
+        )
+        crun_version_verdict = script.index(
+            "native ARM64 crun lacks the exact delegated version or systemd capability",
+            systemd_run,
+        )
+        conmon_probe = script.index(
+            "/usr/local/lib/podman/conmon --version", systemd_run
+        )
         podman_probe = script.index(
             '"${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" '
             "info --format json"
@@ -1266,10 +1717,15 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertLess(platform_pin, wrapper_unset)
         self.assertLess(wrapper_unset, wrapper_exec)
         self.assertLess(wrapper_exec, info_target)
-        self.assertLess(info_target, systemd_run)
+        self.assertLess(info_target, host_crun_attestation)
+        self.assertLess(host_crun_attestation, systemd_run)
         self.assertLess(platform_pin, systemd_run)
         self.assertLess(systemd_run, configuration_guard)
-        self.assertLess(configuration_guard, crun_probe)
+        self.assertLess(configuration_guard, delegated_crun_identity)
+        self.assertLess(delegated_crun_identity, delegated_crun_digest)
+        self.assertLess(delegated_crun_digest, crun_probe)
+        self.assertLess(crun_probe, crun_version_verdict)
+        self.assertLess(crun_version_verdict, conmon_probe)
         self.assertLess(crun_probe, conmon_probe)
         self.assertLess(conmon_probe, podman_probe)
         self.assertLess(podman_probe, podman_verdict)

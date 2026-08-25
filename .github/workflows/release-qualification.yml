@@ -65,6 +65,10 @@ jobs:
           trusted_system_tools=(
             /usr/bin/bash
             /usr/bin/chmod
+            /usr/bin/curl
+            /usr/bin/install
+            /usr/bin/rm
+            /usr/bin/rmdir
             /usr/bin/sha256sum
             /usr/bin/stat
             /usr/bin/sudo
@@ -289,8 +293,17 @@ jobs:
             "${previous_packages}" \
             "${evidence_dir}" \
             "${transition_dir}"
+          shard_root_inode="$(stat -c '%d:%i' "${shard_root}")"
+          if [[ ! "${shard_root_inode}" =~ ^[0-9]+:[0-9]+$ || \
+                -L "${shard_root}" || ! -d "${shard_root}" || \
+                "$(stat -c '%u:%g:%a:%d:%i' "${shard_root}")" != \
+                  "$(id -u):$(id -g):700:${shard_root_inode}" ]]; then
+            echo "ERROR: the native ARM64 shard workspace identity is not exact." >&2
+            exit 1
+          fi
           {
             printf 'SHARD_ROOT=%s\n' "${shard_root}"
+            printf 'ARM_SHARD_ROOT_INODE=%s\n' "${shard_root_inode}"
             printf 'ARM_CANDIDATE_PACKAGES_DIR=%s\n' "${candidate_packages}"
             printf 'ARM_PREVIOUS_PACKAGES_DIR=%s\n' "${previous_packages}"
             printf 'ARM_EVIDENCE_DIR=%s\n' "${evidence_dir}"
@@ -301,6 +314,169 @@ jobs:
             printf 'previous_packages_dir=%s\n' "${previous_packages}"
             printf 'evidence_dir=%s\n' "${evidence_dir}"
           } >> "${GITHUB_OUTPUT}"
+
+      - name: Install Exact Native ARM64 crun Runtime
+        shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          CRUN_COMMIT: 54f16ffbefcd022bf032af768b5c5ce075c18bfc
+          CRUN_SHA256: cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342
+          CRUN_SIZE_BYTES: '3298128'
+          CRUN_SPEC_VERSION: 1.0.0
+          CRUN_URL: https://github.com/containers/crun/releases/download/1.28/crun-1.28-linux-arm64
+          CRUN_VERSION: '1.28'
+        run: |
+          set -euo pipefail
+          umask 077
+          user_id="$(id -u)"
+          user_group="$(id -g)"
+          runtime_directory="${SHARD_ROOT}/runtime"
+          crun_download="${runtime_directory}/.crun-1.28-linux-arm64.download"
+          crun_path="${runtime_directory}/crun-1.28-linux-arm64"
+          runtime_directory_inode=""
+          install_completed=false
+
+          attest_install_shard_root() {
+            if [[ -L "${SHARD_ROOT}" || ! -d "${SHARD_ROOT}" || \
+                  ! "${ARM_SHARD_ROOT_INODE:-}" =~ ^[0-9]+:[0-9]+$ || \
+                  "$(/usr/bin/stat -c '%u:%g:%a:%d:%i' "${SHARD_ROOT}")" != \
+                    "${user_id}:${user_group}:700:${ARM_SHARD_ROOT_INODE}" ]]; then
+              return 1
+            fi
+          }
+          attest_install_runtime_directory() {
+            if [[ ! "${runtime_directory_inode}" =~ ^[0-9]+:[0-9]+$ || \
+                  -L "${runtime_directory}" || ! -d "${runtime_directory}" || \
+                  "$(/usr/bin/stat -c '%u:%g:%a:%d:%i' "${runtime_directory}")" != \
+                    "${user_id}:${user_group}:700:${runtime_directory_inode}" ]]; then
+              return 1
+            fi
+          }
+          cleanup_failed_crun_install() {
+            if ! attest_install_shard_root; then
+              return 1
+            fi
+            if [[ -L "${runtime_directory}" ]]; then
+              if ! /usr/bin/rm -f -- "${runtime_directory}" || \
+                 [[ -e "${runtime_directory}" || -L "${runtime_directory}" ]]; then
+                return 1
+              fi
+              return 0
+            fi
+            if [[ ! -e "${runtime_directory}" ]]; then
+              return 0
+            fi
+            if ! attest_install_runtime_directory; then
+              return 1
+            fi
+            if ! /usr/bin/rm -f -- "${crun_path}" "${crun_download}" || \
+               [[ -e "${crun_path}" || -L "${crun_path}" || \
+                  -e "${crun_download}" || -L "${crun_download}" ]] || \
+               ! /usr/bin/rmdir -- "${runtime_directory}" || \
+               [[ -e "${runtime_directory}" || -L "${runtime_directory}" ]]; then
+              return 1
+            fi
+          }
+          cleanup_failed_crun_install_on_exit() {
+            local exit_rc=$?
+            trap - EXIT
+            if [[ "${install_completed}" != "true" ]] && \
+               ! cleanup_failed_crun_install; then
+              exit_rc=1
+            fi
+            exit "${exit_rc}"
+          }
+          trap cleanup_failed_crun_install_on_exit EXIT
+
+          if [[ ! "${CRUN_SHA256}" =~ ^[0-9a-f]{64}$ || \
+                "${CRUN_SIZE_BYTES}" != "3298128" || \
+                "${CRUN_VERSION}" != "1.28" || \
+                "${CRUN_SPEC_VERSION}" != "1.0.0" || \
+                "${CRUN_COMMIT}" != "54f16ffbefcd022bf032af768b5c5ce075c18bfc" || \
+                "${CRUN_URL}" != "https://github.com/containers/crun/releases/download/1.28/crun-1.28-linux-arm64" ]]; then
+            echo "ERROR: the native ARM64 crun release contract is not exact." >&2
+            exit 1
+          fi
+          if ! attest_install_shard_root || \
+             [[ -e "${runtime_directory}" || -L "${runtime_directory}" ]]; then
+            echo "ERROR: the native ARM64 crun workspace is not an exact private directory." >&2
+            exit 1
+          fi
+          /usr/bin/install -d -m 0700 -- "${runtime_directory}"
+          runtime_directory_inode="$(/usr/bin/stat -c '%d:%i' "${runtime_directory}")"
+          if ! attest_install_runtime_directory; then
+            echo "ERROR: the native ARM64 crun runtime directory is not exact." >&2
+            exit 1
+          fi
+          if [[ -e "${crun_download}" || -L "${crun_download}" || \
+                -e "${crun_path}" || -L "${crun_path}" ]]; then
+            echo "ERROR: the native ARM64 crun download target already exists." >&2
+            exit 1
+          fi
+          /usr/bin/curl --disable --fail --location \
+            --proto '=https' \
+            --proto-redir '=https' \
+            --tlsv1.2 \
+            --connect-timeout 10 \
+            --max-time 120 \
+            --max-redirs 5 \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 1 \
+            --retry-max-time 120 \
+            --max-filesize "${CRUN_SIZE_BYTES}" \
+            --remove-on-error \
+            --silent \
+            --show-error \
+            --output "${crun_download}" \
+            "${CRUN_URL}"
+          if [[ ! -f "${crun_download}" || -L "${crun_download}" || \
+                "$(/usr/bin/stat -c '%u:%g:%a:%s' "${crun_download}")" != \
+                  "${user_id}:${user_group}:600:${CRUN_SIZE_BYTES}" ]]; then
+            echo "ERROR: the downloaded native ARM64 crun asset is not an exact private regular file." >&2
+            exit 1
+          fi
+          printf '%s  %s\n' "${CRUN_SHA256}" "${crun_download}" | \
+            /usr/bin/sha256sum --check --strict
+          /usr/bin/install -m 0700 -- "${crun_download}" "${crun_path}"
+          if ! attest_install_runtime_directory; then
+            echo "ERROR: the native ARM64 crun runtime directory changed during installation." >&2
+            exit 1
+          fi
+          /usr/bin/rm -f -- "${crun_download}"
+          if [[ -e "${crun_download}" || -L "${crun_download}" || \
+                ! -f "${crun_path}" || -L "${crun_path}" || \
+                ! -x "${crun_path}" || \
+                "$(/usr/bin/stat -c '%u:%g:%a:%s' "${crun_path}")" != \
+                  "${user_id}:${user_group}:700:${CRUN_SIZE_BYTES}" ]]; then
+            echo "ERROR: the installed native ARM64 crun runtime is not exact." >&2
+            exit 1
+          fi
+          printf '%s  %s\n' "${CRUN_SHA256}" "${crun_path}" | \
+            /usr/bin/sha256sum --check --strict
+          crun_inode="$(/usr/bin/stat -c '%d:%i' "${crun_path}")"
+          if [[ ! "${crun_inode}" =~ ^[0-9]+:[0-9]+$ ]]; then
+            echo "ERROR: the installed native ARM64 crun inode is malformed." >&2
+            exit 1
+          fi
+          crun_version_output="$("${crun_path}" --version)"
+          mapfile -t crun_version_lines <<< "${crun_version_output}"
+          if [[ "${#crun_version_lines[@]}" -ne 5 || \
+                "${crun_version_lines[0]:-}" != "crun version ${CRUN_VERSION}" || \
+                "${crun_version_lines[1]:-}" != "commit: ${CRUN_COMMIT}" || \
+                ! "${crun_version_lines[2]:-}" =~ ^rundir:\ /run/(user/[0-9]+/)?crun$ || \
+                "${crun_version_lines[3]:-}" != "spec: ${CRUN_SPEC_VERSION}" || \
+                ! "${crun_version_lines[4]:-}" =~ (^|[[:space:]])\+SYSTEMD($|[[:space:]]) ]]; then
+            echo "ERROR: the installed native ARM64 crun version or systemd capability is not exact." >&2
+            exit 1
+          fi
+          {
+            printf 'ARM_CRUN_PATH=%s\n' "${crun_path}"
+            printf 'ARM_CRUN_SHA256=%s\n' "${CRUN_SHA256}"
+            printf 'ARM_CRUN_INODE=%s\n' "${crun_inode}"
+            printf 'ARM_CRUN_DIRECTORY_INODE=%s\n' "${runtime_directory_inode}"
+          } >> "${GITHUB_ENV}"
+          install_completed=true
+          trap - EXIT
 
       - name: Resolve Exact ARM64 Candidate Package Artifact
         id: candidate
@@ -491,11 +667,15 @@ jobs:
         run: |
           set -euo pipefail
           user_id="$(id -u)"
+          user_group="$(id -g)"
           user_name="$(id -un)"
           user_service="user@${user_id}.service"
           runtime_dir="/run/user/${user_id}"
           delegate_directory="/etc/systemd/system/user@.service.d"
           delegate_drop_in="${delegate_directory}/syswarden-release-qualification.conf"
+          crun_directory="${SHARD_ROOT}/runtime"
+          crun_download="${crun_directory}/.crun-1.28-linux-arm64.download"
+          expected_crun_path="${crun_directory}/crun-1.28-linux-arm64"
           containers_conf="${SHARD_ROOT}/containers.conf"
           podman_info="${SHARD_ROOT}/podman-info.json"
           podman_local="${SHARD_ROOT}/podman-local"
@@ -517,17 +697,78 @@ jobs:
           test -n "${RUNNER_TEMP:-}"
           test -d "${RUNNER_TEMP}"
           test ! -L "${RUNNER_TEMP}"
-          test -d "${SHARD_ROOT}"
-          test ! -L "${SHARD_ROOT}"
-          test ! -e "${containers_conf}"
-          test ! -L "${containers_conf}"
-          test ! -e "${podman_info}"
-          test ! -L "${podman_info}"
-          test ! -e "${podman_local}"
-          test ! -L "${podman_local}"
-          if sudo -n systemctl is-active --quiet "${user_service}"; then
-            original_user_service_active=true
-          fi
+
+          attest_arm_shard_root() {
+            if [[ -L "${SHARD_ROOT}" || ! -d "${SHARD_ROOT}" || \
+                  ! "${ARM_SHARD_ROOT_INODE:-}" =~ ^[0-9]+:[0-9]+$ || \
+                  "$(stat -c '%u:%g:%a:%d:%i' "${SHARD_ROOT}")" != \
+                    "${user_id}:${user_group}:700:${ARM_SHARD_ROOT_INODE}" ]]; then
+              return 1
+            fi
+          }
+          attest_arm_crun_directory() {
+            if ! attest_arm_shard_root || \
+               [[ -L "${crun_directory}" || ! -d "${crun_directory}" || \
+                  ! "${ARM_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$ || \
+                  "$(stat -c '%u:%g:%a:%d:%i' "${crun_directory}")" != \
+                    "${user_id}:${user_group}:700:${ARM_CRUN_DIRECTORY_INODE}" ]]; then
+              return 1
+            fi
+          }
+
+          attest_arm_crun() {
+            local crun_version_output
+            local -a crun_version_lines
+            if ! attest_arm_crun_directory || \
+               [[ "${ARM_CRUN_PATH}" != "${expected_crun_path}" || \
+                  ! -f "${ARM_CRUN_PATH}" || -L "${ARM_CRUN_PATH}" || \
+                  ! -x "${ARM_CRUN_PATH}" || \
+                  "$(stat -c '%u:%g:%a:%s:%d:%i' "${ARM_CRUN_PATH}")" != \
+                    "${user_id}:${user_group}:700:3298128:${ARM_CRUN_INODE}" ]]; then
+              return 1
+            fi
+            if ! printf '%s  %s\n' "${ARM_CRUN_SHA256}" "${ARM_CRUN_PATH}" | \
+                 sha256sum --check --strict >/dev/null; then
+              return 1
+            fi
+            crun_version_output="$("${ARM_CRUN_PATH}" --version)" || return 1
+            mapfile -t crun_version_lines <<< "${crun_version_output}"
+            if [[ "${#crun_version_lines[@]}" -ne 5 || \
+                  "${crun_version_lines[0]:-}" != "crun version 1.28" || \
+                  "${crun_version_lines[1]:-}" != \
+                    "commit: 54f16ffbefcd022bf032af768b5c5ce075c18bfc" || \
+                  ! "${crun_version_lines[2]:-}" =~ ^rundir:\ /run/(user/[0-9]+/)?crun$ || \
+                  "${crun_version_lines[3]:-}" != "spec: 1.0.0" || \
+                  ! "${crun_version_lines[4]:-}" =~ (^|[[:space:]])\+SYSTEMD($|[[:space:]]) ]]; then
+              return 1
+            fi
+          }
+
+          cleanup_arm_crun_runtime() {
+            if ! attest_arm_shard_root; then
+              return 1
+            fi
+            if [[ -L "${crun_directory}" ]]; then
+              if ! /usr/bin/rm -f -- "${crun_directory}" || \
+                 [[ -e "${crun_directory}" || -L "${crun_directory}" ]]; then
+                return 1
+              fi
+              return 0
+            fi
+            if [[ ! -e "${crun_directory}" ]]; then
+              return 0
+            fi
+            if ! attest_arm_crun_directory; then
+              return 1
+            fi
+            if ! /usr/bin/rm -f -- "${expected_crun_path}" "${crun_download}" || \
+               [[ -e "${expected_crun_path}" || -L "${expected_crun_path}" || \
+                  -e "${crun_download}" || -L "${crun_download}" ]] || \
+               ! /usr/bin/rmdir -- "${crun_directory}" || \
+               [[ -e "${crun_directory}" || -L "${crun_directory}" ]]; then
+              return 1
+            fi
+          }
 
           cleanup_arm_cgroup_session() {
             local cleanup_rc=0
@@ -552,12 +793,20 @@ jobs:
                 fi
               fi
             fi
-            if ! rm -f -- "${containers_conf}" "${podman_info}" "${podman_local}"; then
+            if ! attest_arm_shard_root; then
               cleanup_rc=1
+            else
+              if ! /usr/bin/rm -f -- \
+                   "${containers_conf}" \
+                   "${podman_info}" \
+                   "${podman_local}" || \
+                 [[ -e "${containers_conf}" || -L "${containers_conf}" || \
+                    -e "${podman_info}" || -L "${podman_info}" || \
+                    -e "${podman_local}" || -L "${podman_local}" ]]; then
+                cleanup_rc=1
+              fi
             fi
-            if [[ -e "${containers_conf}" || -L "${containers_conf}" || \
-                  -e "${podman_info}" || -L "${podman_info}" || \
-                  -e "${podman_local}" || -L "${podman_local}" ]]; then
+            if ! cleanup_arm_crun_runtime; then
               cleanup_rc=1
             fi
             return "${cleanup_rc}"
@@ -572,6 +821,28 @@ jobs:
             exit "${exit_rc}"
           }
           trap cleanup_arm_cgroup_session_on_exit EXIT
+
+          if [[ "${ARM_CRUN_PATH:-}" != "${expected_crun_path}" || \
+                "${ARM_CRUN_SHA256:-}" != "cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342" || \
+                ! "${ARM_CRUN_INODE:-}" =~ ^[0-9]+:[0-9]+$ || \
+                ! "${ARM_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$ || \
+                ! "${ARM_SHARD_ROOT_INODE:-}" =~ ^[0-9]+:[0-9]+$ ]]; then
+            echo "ERROR: the native ARM64 crun exported identity is not exact." >&2
+            exit 1
+          fi
+          if ! attest_arm_crun_directory; then
+            echo "ERROR: the native ARM64 crun parent identity changed before use." >&2
+            exit 1
+          fi
+          test ! -e "${containers_conf}"
+          test ! -L "${containers_conf}"
+          test ! -e "${podman_info}"
+          test ! -L "${podman_info}"
+          test ! -e "${podman_local}"
+          test ! -L "${podman_local}"
+          if sudo -n systemctl is-active --quiet "${user_service}"; then
+            original_user_service_active=true
+          fi
 
           if sudo -n test -e "${delegate_drop_in}" || \
              sudo -n test -L "${delegate_drop_in}"; then
@@ -602,7 +873,7 @@ jobs:
             exit 1
           fi
           sudo -n systemctl daemon-reload
-          sudo -n systemctl stop "${user_service}" || true
+          sudo -n systemctl stop "${user_service}"
 
           umask 077
           printf '%s\n' \
@@ -612,7 +883,7 @@ jobs:
             'remote=false' \
             'runtime="crun"' \
             '[engine.runtimes]' \
-            'crun=["/usr/local/bin/crun"]' \
+            "crun=[\"${ARM_CRUN_PATH}\"]" \
             '[engine.platform_to_oci_runtime]' \
             '"linux/arm64"="crun"' > "${containers_conf}"
           if [[ ! -f "${containers_conf}" || -L "${containers_conf}" || \
@@ -643,57 +914,67 @@ jobs:
             exit 1
           fi
           podman_info_inode="$(stat -c '%d:%i' "${podman_info}")"
+          if ! attest_arm_crun; then
+            echo "ERROR: the native ARM64 crun runtime changed before delegated use." >&2
+            exit 1
+          fi
 
           unit_name="syswarden-arm64-lifecycle-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          set +e
-          sudo -n systemd-run \
-            --machine="${user_name}@" \
-            --user \
-            --unit="${unit_name}" \
-            --quiet \
-            --wait \
-            --collect \
-            --pipe \
-            --working-directory="${GITHUB_WORKSPACE}" \
-            --property='Type=exec' \
-            --property='Delegate=cpu io memory pids' \
-            --property='MemoryMax=1G' \
-            --property='TasksMax=512' \
-            --property='UMask=0077' \
-            --setenv="CONTAINERS_CONF=${containers_conf}" \
-            --setenv='CONTAINERS_CONF_OVERRIDE=' \
-            --setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus" \
-            --setenv="HOME=${HOME}" \
-            --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
-            --setenv='PYTHONDONTWRITEBYTECODE=1' \
-            --setenv="RUNNER_TEMP=${RUNNER_TEMP}" \
-            --setenv="SYSWARDEN_PODMAN_INFO=${podman_info}" \
-            --setenv="SYSWARDEN_PODMAN_INFO_INODE=${podman_info_inode}" \
-            --setenv="SYSWARDEN_PODMAN_LOCAL=${podman_local}" \
-            --setenv="XDG_RUNTIME_DIR=${runtime_dir}" \
-            /usr/bin/bash --noprofile --norc -e -o pipefail -c \
-            'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY; if [[ -z "${CONTAINERS_CONF:-}" || -n "${CONTAINERS_CONF_OVERRIDE:-}" ]]; then echo "ERROR: native ARM64 Podman configuration isolation is incomplete." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_LOCAL:-}" || ! -f "${SYSWARDEN_PODMAN_LOCAL}" || -L "${SYSWARDEN_PODMAN_LOCAL}" || ! -x "${SYSWARDEN_PODMAN_LOCAL}" ]]; then echo "ERROR: native ARM64 local-only Podman launcher is unavailable." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_INFO:-}" || -z "${SYSWARDEN_PODMAN_INFO_INODE:-}" || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" ]]; then echo "ERROR: native ARM64 Podman info target is unavailable." >&2; exit 1; fi; if ! /usr/local/bin/crun --version >/dev/null; then echo "ERROR: native ARM64 crun is not executable inside the delegated session." >&2; exit 1; fi; if ! /usr/local/lib/podman/conmon --version >/dev/null; then echo "ERROR: native ARM64 conmon is not executable inside the delegated session." >&2; exit 1; fi; if ! "${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" info --format json; then echo "ERROR: native ARM64 Podman could not attest its isolated runtime configuration." >&2; exit 1; fi; if [[ ! -s "${SYSWARDEN_PODMAN_INFO}" || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" || "$(stat -c "%u:%a" "${SYSWARDEN_PODMAN_INFO}")" != "$(id -u):600" || "$(stat -c "%d:%i" "${SYSWARDEN_PODMAN_INFO}")" != "${SYSWARDEN_PODMAN_INFO_INODE}" ]]; then echo "ERROR: native ARM64 Podman info evidence changed identity or permissions." >&2; exit 1; fi; if ! jq -e -s '\''length == 1 and .[0].host.conmon.path == "/usr/local/lib/podman/conmon" and .[0].host.ociRuntime.path == "/usr/local/bin/crun" and .[0].host.cgroupManager == "systemd" and .[0].host.security.rootless == true and .[0].host.serviceIsRemote == false and .[0].host.arch == "arm64" and .[0].host.os == "linux"'\'' "${SYSWARDEN_PODMAN_INFO}" >/dev/null; then echo "ERROR: native ARM64 Podman resolved an unexpected local runtime configuration." >&2; exit 1; fi; exec "$@"' \
-            syswarden-arm64-lifecycle \
-            /usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py" \
-            --packages-dir "${ARM_CANDIDATE_PACKAGES_DIR}" \
-            --previous-packages-dir "${ARM_PREVIOUS_PACKAGES_DIR}" \
-            --podman "${podman_local}" \
-            --architecture-shard arm64 \
-            --qualification-repository "${GITHUB_REPOSITORY}" \
-            --qualification-release-sha "${RELEASE_SHA}" \
-            --qualification-release-tag "${RELEASE_TAG}" \
-            --qualification-previous-tag "${PREVIOUS_TAG}" \
-            --qualification-workflow-run-id "${GITHUB_RUN_ID}" \
-            --qualification-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
-            --qualification-candidate-run-id "${CANDIDATE_RUN_ID}" \
-            --qualification-candidate-artifact-id "${CANDIDATE_ARTIFACT_ID}" \
-            --qualification-candidate-artifact-name "${CANDIDATE_ARTIFACT_NAME}" \
-            --qualification-previous-release-id "${PREVIOUS_RELEASE_ID}" \
-            --pull-policy always \
-            --output "${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.json" \
-            --pretty
-          shard_rc=$?
-          set -e
+          shard_rc=0
+          if sudo -n systemd-run \
+              --machine="${user_name}@" \
+              --user \
+              --unit="${unit_name}" \
+              --quiet \
+              --wait \
+              --collect \
+              --pipe \
+              --working-directory="${GITHUB_WORKSPACE}" \
+              --property='Type=exec' \
+              --property='Delegate=cpu io memory pids' \
+              --property='MemoryMax=1G' \
+              --property='TasksMax=512' \
+              --property='UMask=0077' \
+              --setenv="CONTAINERS_CONF=${containers_conf}" \
+              --setenv='CONTAINERS_CONF_OVERRIDE=' \
+              --setenv="DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus" \
+              --setenv="HOME=${HOME}" \
+              --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+              --setenv='PYTHONDONTWRITEBYTECODE=1' \
+              --setenv="RUNNER_TEMP=${RUNNER_TEMP}" \
+              --setenv="SYSWARDEN_CRUN_DIRECTORY_INODE=${ARM_CRUN_DIRECTORY_INODE}" \
+              --setenv="SYSWARDEN_CRUN_INODE=${ARM_CRUN_INODE}" \
+              --setenv="SYSWARDEN_CRUN_PATH=${ARM_CRUN_PATH}" \
+              --setenv="SYSWARDEN_CRUN_SHA256=${ARM_CRUN_SHA256}" \
+              --setenv="SYSWARDEN_PODMAN_INFO=${podman_info}" \
+              --setenv="SYSWARDEN_PODMAN_INFO_INODE=${podman_info_inode}" \
+              --setenv="SYSWARDEN_PODMAN_LOCAL=${podman_local}" \
+              --setenv="XDG_RUNTIME_DIR=${runtime_dir}" \
+              /usr/bin/bash --noprofile --norc -e -o pipefail -c \
+              'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY; if [[ -z "${CONTAINERS_CONF:-}" || -n "${CONTAINERS_CONF_OVERRIDE:-}" ]]; then echo "ERROR: native ARM64 Podman configuration isolation is incomplete." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_LOCAL:-}" || ! -f "${SYSWARDEN_PODMAN_LOCAL}" || -L "${SYSWARDEN_PODMAN_LOCAL}" || ! -x "${SYSWARDEN_PODMAN_LOCAL}" ]]; then echo "ERROR: native ARM64 local-only Podman launcher is unavailable." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_INFO:-}" || -z "${SYSWARDEN_PODMAN_INFO_INODE:-}" || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" ]]; then echo "ERROR: native ARM64 Podman info target is unavailable." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_CRUN_PATH:-}" || "${SYSWARDEN_CRUN_SHA256:-}" != "cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342" || ! "${SYSWARDEN_CRUN_INODE:-}" =~ ^[0-9]+:[0-9]+$ || ! "${SYSWARDEN_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$ ]]; then echo "ERROR: native ARM64 crun delegated identity is incomplete." >&2; exit 1; fi; crun_parent="${SYSWARDEN_CRUN_PATH%/*}"; if [[ ! -d "${crun_parent}" || -L "${crun_parent}" || "$(stat -c "%u:%g:%a:%d:%i" "${crun_parent}")" != "$(id -u):$(id -g):700:${SYSWARDEN_CRUN_DIRECTORY_INODE}" || ! -f "${SYSWARDEN_CRUN_PATH}" || -L "${SYSWARDEN_CRUN_PATH}" || ! -x "${SYSWARDEN_CRUN_PATH}" || "$(stat -c "%u:%g:%a:%s:%d:%i" "${SYSWARDEN_CRUN_PATH}")" != "$(id -u):$(id -g):700:3298128:${SYSWARDEN_CRUN_INODE}" ]]; then echo "ERROR: native ARM64 crun changed identity inside the delegated session." >&2; exit 1; fi; if ! printf "%s  %s\n" "${SYSWARDEN_CRUN_SHA256}" "${SYSWARDEN_CRUN_PATH}" | sha256sum --check --strict >/dev/null; then echo "ERROR: native ARM64 crun changed bytes inside the delegated session." >&2; exit 1; fi; if ! crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --version)"; then echo "ERROR: native ARM64 crun is not executable inside the delegated session." >&2; exit 1; fi; mapfile -t crun_version_lines <<< "${crun_version_output}"; if [[ "${#crun_version_lines[@]}" -ne 5 || "${crun_version_lines[0]:-}" != "crun version 1.28" || "${crun_version_lines[1]:-}" != "commit: 54f16ffbefcd022bf032af768b5c5ce075c18bfc" || ! "${crun_version_lines[2]:-}" =~ ^rundir:\ /run/(user/[0-9]+/)?crun$ || "${crun_version_lines[3]:-}" != "spec: 1.0.0" || ! "${crun_version_lines[4]:-}" =~ (^|[[:space:]])\+SYSTEMD($|[[:space:]]) ]]; then echo "ERROR: native ARM64 crun lacks the exact delegated version or systemd capability." >&2; exit 1; fi; if ! /usr/local/lib/podman/conmon --version >/dev/null; then echo "ERROR: native ARM64 conmon is not executable inside the delegated session." >&2; exit 1; fi; if ! "${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" info --format json; then echo "ERROR: native ARM64 Podman could not attest its isolated runtime configuration." >&2; exit 1; fi; if [[ ! -s "${SYSWARDEN_PODMAN_INFO}" || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" || "$(stat -c "%u:%a" "${SYSWARDEN_PODMAN_INFO}")" != "$(id -u):600" || "$(stat -c "%d:%i" "${SYSWARDEN_PODMAN_INFO}")" != "${SYSWARDEN_PODMAN_INFO_INODE}" ]]; then echo "ERROR: native ARM64 Podman info evidence changed identity or permissions." >&2; exit 1; fi; if ! jq --arg crun_path "${SYSWARDEN_CRUN_PATH}" -e -s '\''length == 1 and .[0].host.conmon.path == "/usr/local/lib/podman/conmon" and .[0].host.ociRuntime.name == "crun" and .[0].host.ociRuntime.path == $crun_path and (.[0].host.ociRuntime.version | type) == "string" and (.[0].host.ociRuntime.version | startswith("crun version 1.28\ncommit: 54f16ffbefcd022bf032af768b5c5ce075c18bfc\n")) and (.[0].host.ociRuntime.version | contains("\nspec: 1.0.0\n")) and (.[0].host.ociRuntime.version | contains("\n+SYSTEMD ")) and .[0].host.cgroupManager == "systemd" and .[0].host.security.rootless == true and .[0].host.serviceIsRemote == false and .[0].host.arch == "arm64" and .[0].host.os == "linux"'\'' "${SYSWARDEN_PODMAN_INFO}" >/dev/null; then echo "ERROR: native ARM64 Podman resolved an unexpected local runtime configuration." >&2; exit 1; fi; exec "$@"' \
+              syswarden-arm64-lifecycle \
+              /usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py" \
+              --packages-dir "${ARM_CANDIDATE_PACKAGES_DIR}" \
+              --previous-packages-dir "${ARM_PREVIOUS_PACKAGES_DIR}" \
+              --podman "${podman_local}" \
+              --architecture-shard arm64 \
+              --qualification-repository "${GITHUB_REPOSITORY}" \
+              --qualification-release-sha "${RELEASE_SHA}" \
+              --qualification-release-tag "${RELEASE_TAG}" \
+              --qualification-previous-tag "${PREVIOUS_TAG}" \
+              --qualification-workflow-run-id "${GITHUB_RUN_ID}" \
+              --qualification-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+              --qualification-candidate-run-id "${CANDIDATE_RUN_ID}" \
+              --qualification-candidate-artifact-id "${CANDIDATE_ARTIFACT_ID}" \
+              --qualification-candidate-artifact-name "${CANDIDATE_ARTIFACT_NAME}" \
+              --qualification-previous-release-id "${PREVIOUS_RELEASE_ID}" \
+              --pull-policy always \
+              --output "${ARM_EVIDENCE_DIR}/package-lifecycle-arm64.json" \
+              --pretty; then
+            shard_rc=0
+          else
+            shard_rc=$?
+          fi
           cleanup_rc=0
           if ! cleanup_arm_cgroup_session; then
             cleanup_rc=1
@@ -798,6 +1079,82 @@ jobs:
           ' "${report}" >/dev/null; then
             echo "ERROR: the native ARM64 package lifecycle report is not release-ready." >&2
             exit 1
+          fi
+
+      - name: Remove Exact Native ARM64 crun Runtime
+        if: ${{ always() && steps.arm_workspace.outcome == 'success' }}
+        shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          user_id="$(id -u)"
+          user_group="$(id -g)"
+          crun_directory="${SHARD_ROOT}/runtime"
+          crun_download="${crun_directory}/.crun-1.28-linux-arm64.download"
+          expected_crun_path="${crun_directory}/crun-1.28-linux-arm64"
+
+          attest_final_arm_shard_root() {
+            if [[ -L "${SHARD_ROOT}" || ! -d "${SHARD_ROOT}" || \
+                  ! "${ARM_SHARD_ROOT_INODE:-}" =~ ^[0-9]+:[0-9]+$ || \
+                  "$(/usr/bin/stat -c '%u:%g:%a:%d:%i' "${SHARD_ROOT}")" != \
+                    "${user_id}:${user_group}:700:${ARM_SHARD_ROOT_INODE}" ]]; then
+              return 1
+            fi
+          }
+          attest_final_crun_directory() {
+            if ! attest_final_arm_shard_root || \
+               [[ -L "${crun_directory}" || ! -d "${crun_directory}" || \
+                  ! "${ARM_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$ || \
+                  "$(/usr/bin/stat -c '%u:%g:%a:%d:%i' "${crun_directory}")" != \
+                    "${user_id}:${user_group}:700:${ARM_CRUN_DIRECTORY_INODE}" ]]; then
+              return 1
+            fi
+          }
+          cleanup_final_crun_runtime() {
+            if [[ -L "${SHARD_ROOT}" ]]; then
+              return 1
+            fi
+            if [[ ! -e "${SHARD_ROOT}" ]]; then
+              return 0
+            fi
+            if ! attest_final_arm_shard_root; then
+              return 1
+            fi
+            if [[ -L "${crun_directory}" ]]; then
+              if ! /usr/bin/rm -f -- "${crun_directory}" || \
+                 [[ -e "${crun_directory}" || -L "${crun_directory}" ]]; then
+                return 1
+              fi
+              return 0
+            fi
+            if [[ ! -e "${crun_directory}" ]]; then
+              return 0
+            fi
+            if ! attest_final_crun_directory; then
+              return 1
+            fi
+            if ! /usr/bin/rm -f -- "${expected_crun_path}" "${crun_download}" || \
+               [[ -e "${expected_crun_path}" || -L "${expected_crun_path}" || \
+                  -e "${crun_download}" || -L "${crun_download}" ]] || \
+               ! /usr/bin/rmdir -- "${crun_directory}" || \
+               [[ -e "${crun_directory}" || -L "${crun_directory}" ]]; then
+              return 1
+            fi
+          }
+
+          if ! cleanup_final_crun_runtime; then
+            echo "ERROR: final native ARM64 crun cleanup was not identity-safe." >&2
+            exit 1
+          fi
+          if [[ -L "${SHARD_ROOT}" ]]; then
+            echo "ERROR: final native ARM64 crun cleanup cannot attest a symlinked shard root." >&2
+            exit 1
+          fi
+          if [[ -e "${SHARD_ROOT}" ]]; then
+            if ! attest_final_arm_shard_root || \
+               [[ -e "${crun_directory}" || -L "${crun_directory}" ]]; then
+              echo "ERROR: final native ARM64 crun cleanup did not attest exact absence." >&2
+              exit 1
+            fi
           fi
 
   qualify-release:

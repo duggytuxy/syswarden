@@ -1439,13 +1439,13 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(script.count('for tree_ref in HEAD^ HEAD; do'), 2)
             self.assertEqual(
                 script.count('tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'),
-                11,
+                14,
             )
-            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 10)
-            self.assertEqual(script.count('"${tree_type}" != "blob"'), 11)
+            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 13)
+            self.assertEqual(script.count('"${tree_type}" != "blob"'), 14)
             expected_path_counts = {
-                ".github/workflows/release-manager.yml": 22,
-                "scripts/ci/release_gate_test.py": 22,
+                ".github/workflows/release-manager.yml": 24,
+                "scripts/ci/release_gate_test.py": 24,
                 "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go": 2,
             }
             for path, count in expected_path_counts.items():
@@ -1482,6 +1482,18 @@ class ReleaseGateTests(unittest.TestCase):
             workflow.count('if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then'), 2
         )
         pinned_contracts = (
+            (
+                'if [[ "${v4032_systemd_parent_sha}" != '
+                '"540bab73a477c76d6301d276383602db06d36acd" ]]; then'
+            ),
+            (
+                'if [[ "${v4032_cli_toml_parent_sha}" != '
+                '"4eacbae34561ae09611a7adb1f78717ca56e52a6" ]]; then'
+            ),
+            (
+                'if [[ "${v4032_core_toml_parent_sha}" != '
+                '"3513acaee928cdd0aa235024f6ebfc5b2efe1dff" ]]; then'
+            ),
             (
                 'if [[ "${v4032_crun_parent_sha}" != '
                 '"b74756b71e26e39b98c7fa60b65a3486adfde3e8" ]]; then'
@@ -1533,6 +1545,18 @@ class ReleaseGateTests(unittest.TestCase):
         )
         for contract in pinned_contracts:
             self.assertEqual(workflow.count(contract), 2)
+        systemd_subject_contract = (
+            "v4032_systemd_expected_subject='Qualification : seal "
+            "systemd-capable ARM64 crun runtime (#109)'"
+        )
+        cli_toml_subject_contract = (
+            "v4032_cli_toml_expected_subject='Bump "
+            "github.com/pelletier/go-toml/v2 in /src/core/syswarden-cli (#105)'"
+        )
+        core_toml_subject_contract = (
+            "v4032_core_toml_expected_subject='Bump "
+            "github.com/pelletier/go-toml/v2 in /src/core/syswarden-core (#106)'"
+        )
         crun_subject_contract = (
             "v4032_crun_expected_subject='Qualification : restore v4.03.2 "
             "ARM64 lifecycle under crun (#108)'"
@@ -1572,6 +1596,20 @@ class ReleaseGateTests(unittest.TestCase):
         repair_subject_contract = (
             "v4032_expected_subject='Qualification : repair v4.03.2 "
             "package lifecycle qualification (#95) (#95)'"
+        )
+        systemd_paths = (
+            ".github/workflows/release-manager.yml",
+            ".github/workflows/release-qualification.yml",
+            "scripts/ci/release_gate_test.py",
+            "scripts/ci/release_qualification_workflow_test.py",
+        )
+        cli_toml_paths = (
+            "src/core/syswarden-cli/go.mod",
+            "src/core/syswarden-cli/go.sum",
+        )
+        core_toml_paths = (
+            "src/core/syswarden-core/go.mod",
+            "src/core/syswarden-core/go.sum",
         )
         compliance_paths = (
             ".github/dependabot.yml",
@@ -1649,7 +1687,14 @@ class ReleaseGateTests(unittest.TestCase):
             "src/core/syswarden-cli/pkg/system/uninstall_prepare_linux_test.go",
         )
         expected_paths = tuple(
-            dict.fromkeys(compliance_paths + repair_paths + crun_paths)
+            dict.fromkeys(
+                compliance_paths
+                + repair_paths
+                + crun_paths
+                + systemd_paths
+                + cli_toml_paths
+                + core_toml_paths
+            )
         )
         unchanged_targets = (
             "changelog.md",
@@ -1661,6 +1706,9 @@ class ReleaseGateTests(unittest.TestCase):
             "src/core/syswarden-core/webhook/discord.go",
         )
         for block in blocks:
+            self.assertEqual(block.count(systemd_subject_contract), 1)
+            self.assertEqual(block.count(cli_toml_subject_contract), 1)
+            self.assertEqual(block.count(core_toml_subject_contract), 1)
             self.assertEqual(block.count(crun_subject_contract), 1)
             self.assertEqual(block.count(compliance_subject_contract), 1)
             self.assertEqual(block.count(init_runtime_subject_contract), 1)
@@ -1674,20 +1722,246 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 block.count(
                     '[[ "${commit_subject}" != '
+                    '"${v4032_systemd_expected_subject}" ]]'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_systemd_parent_sha="$(git rev-parse HEAD^)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_systemd_head_line <<< '
+                    '"$(git rev-list --parents -n 1 HEAD)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count("${#v4032_systemd_head_line[@]} != 2"), 1
+            )
+            systemd_diff = block.split(
+                "# BEGIN exact v4.03.2 systemd-capable ARM64 crun runtime "
+                "correction diff contract\n",
+                1,
+            )[1].split(
+                "# END exact v4.03.2 systemd-capable ARM64 crun runtime "
+                "correction diff contract",
+                1,
+            )[0]
+            self.assertEqual(
+                systemd_diff.count(
+                    "git diff-tree --no-commit-id --name-status -r "
+                    "--no-renames -z HEAD^ HEAD"
+                ),
+                1,
+            )
+            self.assertEqual(
+                systemd_diff.count("for tree_ref in HEAD^ HEAD; do"), 1
+            )
+            self.assertEqual(
+                systemd_diff.count('"${tree_mode}" != "100644"'), 1
+            )
+            self.assertEqual(
+                systemd_diff.count('"${tree_type}" != "blob"'), 1
+            )
+            self.assertEqual(
+                systemd_diff.count(
+                    "! \"${tree_object}\" =~ ^[0-9a-f]{40}$"
+                ),
+                1,
+            )
+            self.assertEqual(
+                systemd_diff.count(
+                    "${#actual_v4032_systemd_diff[@]} != "
+                    "${#expected_v4032_systemd_diff[@]}"
+                ),
+                1,
+            )
+            for path in systemd_paths:
+                self.assertEqual(systemd_diff.count(f'"{path}"'), 2)
+                self.assertEqual(systemd_diff.count(f'M "{path}"'), 1)
+            self.assertEqual(block.count("v4032_cli_toml_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_cli_toml_parent_sha="$(git rev-parse '
+                    '"${v4032_cli_toml_ref}^")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_cli_toml_subject="$(git log -1 --format=%s '
+                    '"${v4032_cli_toml_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    '[[ "${v4032_cli_toml_subject}" != '
+                    '"${v4032_cli_toml_expected_subject}" ]]'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_cli_toml_head_line <<< '
+                    '"$(git rev-list --parents -n 1 '
+                    '"${v4032_cli_toml_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count("${#v4032_cli_toml_head_line[@]} != 2"), 1
+            )
+            cli_toml_diff = block.split(
+                "# BEGIN exact v4.03.2 syswarden-cli go-toml dependency "
+                "diff contract\n",
+                1,
+            )[1].split(
+                "# END exact v4.03.2 syswarden-cli go-toml dependency "
+                "diff contract",
+                1,
+            )[0]
+            self.assertEqual(
+                cli_toml_diff.count(
+                    "git diff-tree --no-commit-id --name-status -r "
+                    "--no-renames -z \\\n"
+                    '        "${v4032_cli_toml_ref}^" '
+                    '"${v4032_cli_toml_ref}"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                cli_toml_diff.count(
+                    'for tree_ref in "${v4032_cli_toml_ref}^" '
+                    '"${v4032_cli_toml_ref}"; do'
+                ),
+                1,
+            )
+            self.assertEqual(
+                cli_toml_diff.count('"${tree_mode}" != "100644"'), 1
+            )
+            self.assertEqual(
+                cli_toml_diff.count('"${tree_type}" != "blob"'), 1
+            )
+            self.assertEqual(
+                cli_toml_diff.count(
+                    "! \"${tree_object}\" =~ ^[0-9a-f]{40}$"
+                ),
+                1,
+            )
+            for path in cli_toml_paths:
+                self.assertEqual(cli_toml_diff.count(f'"{path}"'), 2)
+                self.assertEqual(cli_toml_diff.count(f'M "{path}"'), 1)
+            self.assertEqual(
+                block.count("v4032_core_toml_ref=HEAD^^\n"),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_core_toml_parent_sha="$(git rev-parse '
+                    '"${v4032_core_toml_ref}^")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_core_toml_subject="$(git log -1 --format=%s '
+                    '"${v4032_core_toml_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    '[[ "${v4032_core_toml_subject}" != '
+                    '"${v4032_core_toml_expected_subject}" ]]'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_core_toml_head_line <<< '
+                    '"$(git rev-list --parents -n 1 '
+                    '"${v4032_core_toml_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count("${#v4032_core_toml_head_line[@]} != 2"), 1
+            )
+            core_toml_diff = block.split(
+                "# BEGIN exact v4.03.2 syswarden-core go-toml dependency "
+                "diff contract\n",
+                1,
+            )[1].split(
+                "# END exact v4.03.2 syswarden-core go-toml dependency "
+                "diff contract",
+                1,
+            )[0]
+            self.assertEqual(
+                core_toml_diff.count(
+                    "git diff-tree --no-commit-id --name-status -r "
+                    "--no-renames -z \\\n"
+                    '        "${v4032_core_toml_ref}^" '
+                    '"${v4032_core_toml_ref}"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                core_toml_diff.count(
+                    'for tree_ref in "${v4032_core_toml_ref}^" '
+                    '"${v4032_core_toml_ref}"; do'
+                ),
+                1,
+            )
+            self.assertEqual(
+                core_toml_diff.count('"${tree_mode}" != "100644"'), 1
+            )
+            self.assertEqual(
+                core_toml_diff.count('"${tree_type}" != "blob"'), 1
+            )
+            self.assertEqual(
+                core_toml_diff.count(
+                    "! \"${tree_object}\" =~ ^[0-9a-f]{40}$"
+                ),
+                1,
+            )
+            for path in core_toml_paths:
+                self.assertEqual(core_toml_diff.count(f'"{path}"'), 2)
+                self.assertEqual(core_toml_diff.count(f'M "{path}"'), 1)
+            self.assertEqual(
+                block.count("v4032_crun_ref=HEAD^^^\n"),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_crun_parent_sha="$(git rev-parse '
+                    '"${v4032_crun_ref}^")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_crun_subject="$(git log -1 --format=%s '
+                    '"${v4032_crun_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    '[[ "${v4032_crun_subject}" != '
                     '"${v4032_crun_expected_subject}" ]]'
                 ),
                 1,
             )
             self.assertEqual(
                 block.count(
-                    'v4032_crun_parent_sha="$(git rev-parse HEAD^)"'
-                ),
-                1,
-            )
-            self.assertEqual(
-                block.count(
                     'v4032_crun_head_line <<< '
-                    '"$(git rev-list --parents -n 1 HEAD)"'
+                    '"$(git rev-list --parents -n 1 '
+                    '"${v4032_crun_ref}")"'
                 ),
                 1,
             )
@@ -1719,12 +1993,17 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 crun_diff.count(
                     "git diff-tree --no-commit-id --name-status -r "
-                    "--no-renames -z HEAD^ HEAD"
+                    "--no-renames -z \\\n"
+                    '        "${v4032_crun_ref}^" "${v4032_crun_ref}"'
                 ),
                 1,
             )
             self.assertEqual(
-                crun_diff.count("for tree_ref in HEAD^ HEAD; do"), 1
+                crun_diff.count(
+                    'for tree_ref in "${v4032_crun_ref}^" '
+                    '"${v4032_crun_ref}"; do'
+                ),
+                1,
             )
             self.assertEqual(
                 crun_diff.count('"${tree_mode}" != "100644"'), 1
@@ -1742,7 +2021,12 @@ class ReleaseGateTests(unittest.TestCase):
             for path in crun_paths:
                 self.assertEqual(crun_diff.count(f'"{path}"'), 2)
                 self.assertEqual(crun_diff.count(f'M "{path}"'), 1)
-            self.assertEqual(block.count("v4032_compliance_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_compliance_ref="${v4032_crun_ref}^"\n'
+                ),
+                1,
+            )
             self.assertEqual(
                 block.count(
                     'v4032_compliance_parent_sha="$(git rev-parse '
@@ -2474,7 +2758,7 @@ class ReleaseGateTests(unittest.TestCase):
                     "git diff-tree --no-commit-id --name-status -r "
                     "--no-renames -z \\"
                 ),
-                9,
+                12,
             )
             self.assertEqual(
                 block.count(
@@ -2493,12 +2777,12 @@ class ReleaseGateTests(unittest.TestCase):
                 block.count(
                     'tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'
                 ),
-                10,
+                13,
             )
             self.assertEqual(
                 block.count('"${tree_mode}" != "${expected_mode}"'), 1
             )
-            self.assertEqual(block.count('"${tree_type}" != "blob"'), 10)
+            self.assertEqual(block.count('"${tree_type}" != "blob"'), 13)
             self.assertEqual(block.count('expected_mode="100644"'), 1)
             self.assertEqual(
                 block.count('[[ "${fix_path}" == "build_packages.sh" ]]'), 1
@@ -2520,6 +2804,9 @@ class ReleaseGateTests(unittest.TestCase):
                 expected_count += 2 if path in local_paths else 0
                 expected_count += 2 if path in stabilization_paths else 0
                 expected_count += 2 if path in init_runtime_paths else 0
+                expected_count += 2 if path in systemd_paths else 0
+                expected_count += 2 if path in cli_toml_paths else 0
+                expected_count += 2 if path in core_toml_paths else 0
                 expected_count += 1 if path == "build_packages.sh" else 0
                 self.assertEqual(block.count(f'"{path}"'), expected_count)
                 expected_status_count = 1 if path in repair_paths else 0
@@ -2532,6 +2819,9 @@ class ReleaseGateTests(unittest.TestCase):
                 expected_status_count += 1 if path in local_paths else 0
                 expected_status_count += 1 if path in stabilization_paths else 0
                 expected_status_count += 1 if path in init_runtime_paths else 0
+                expected_status_count += 1 if path in systemd_paths else 0
+                expected_status_count += 1 if path in cli_toml_paths else 0
+                expected_status_count += 1 if path in core_toml_paths else 0
                 self.assertEqual(
                     block.count(f'M "{path}"'), expected_status_count
                 )
@@ -2663,6 +2953,106 @@ class ReleaseGateTests(unittest.TestCase):
             )[0]
             self.assertNotIn("--tag-phase", parent_validation)
 
+    def exact_v4032_systemd_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        begin = (
+            "# BEGIN exact v4.03.2 systemd-capable ARM64 crun runtime "
+            "correction diff contract\n"
+        )
+        end = (
+            "# END exact v4.03.2 systemd-capable ARM64 crun runtime "
+            "correction diff contract"
+        )
+        self.assertEqual(block.count(begin), 1)
+        self.assertEqual(block.count(end), 1)
+        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+
+    def v4032_systemd_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        start = "v4032_systemd_expected_subject="
+        end = (
+            'read -r -a v4032_systemd_head_line <<< '
+            '"$(git rev-list --parents -n 1 HEAD)"'
+        )
+        self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(end), 1)
+        fragment = start + block.split(start, 1)[1].split(end, 1)[0]
+        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+
+    def exact_v4032_cli_toml_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        begin = (
+            "# BEGIN exact v4.03.2 syswarden-cli go-toml dependency diff "
+            "contract\n"
+        )
+        end = "# END exact v4.03.2 syswarden-cli go-toml dependency diff contract"
+        self.assertEqual(block.count(begin), 1)
+        self.assertEqual(block.count(end), 1)
+        return (
+            "set -euo pipefail\nv4032_cli_toml_ref=HEAD\n"
+            + block.split(begin, 1)[1].split(end, 1)[0]
+        )
+
+    def v4032_cli_toml_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        start = "v4032_cli_toml_expected_subject="
+        subject_assignment = (
+            'v4032_cli_toml_subject="$(git log -1 --format=%s '
+            '"${v4032_cli_toml_ref}")"'
+        )
+        end = (
+            'read -r -a v4032_cli_toml_head_line <<< '
+            '"$(git rev-list --parents -n 1 "${v4032_cli_toml_ref}")"'
+        )
+        self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(subject_assignment), 1)
+        self.assertEqual(block.count(end), 1)
+        fragment = start + block.split(start, 1)[1].split(end, 1)[0]
+        fragment = fragment.replace(
+            subject_assignment, 'v4032_cli_toml_subject="${COMMIT_SUBJECT:?}"'
+        )
+        return "set -euo pipefail\n" + fragment
+
+    def exact_v4032_core_toml_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        begin = (
+            "# BEGIN exact v4.03.2 syswarden-core go-toml dependency diff "
+            "contract\n"
+        )
+        end = "# END exact v4.03.2 syswarden-core go-toml dependency diff contract"
+        self.assertEqual(block.count(begin), 1)
+        self.assertEqual(block.count(end), 1)
+        return (
+            "set -euo pipefail\nv4032_core_toml_ref=HEAD\n"
+            + block.split(begin, 1)[1].split(end, 1)[0]
+        )
+
+    def v4032_core_toml_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        start = "v4032_core_toml_expected_subject="
+        subject_assignment = (
+            'v4032_core_toml_subject="$(git log -1 --format=%s '
+            '"${v4032_core_toml_ref}")"'
+        )
+        end = (
+            'read -r -a v4032_core_toml_head_line <<< '
+            '"$(git rev-list --parents -n 1 "${v4032_core_toml_ref}")"'
+        )
+        self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(subject_assignment), 1)
+        self.assertEqual(block.count(end), 1)
+        fragment = start + block.split(start, 1)[1].split(end, 1)[0]
+        fragment = fragment.replace(
+            subject_assignment, 'v4032_core_toml_subject="${COMMIT_SUBJECT:?}"'
+        )
+        return "set -euo pipefail\n" + fragment
+
     def exact_v4032_crun_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
@@ -2673,20 +3063,31 @@ class ReleaseGateTests(unittest.TestCase):
         end = "# END exact v4.03.2 ARM64 crun runtime restoration diff contract"
         self.assertEqual(block.count(begin), 1)
         self.assertEqual(block.count(end), 1)
-        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+        return (
+            "set -euo pipefail\nv4032_crun_ref=HEAD\n"
+            + block.split(begin, 1)[1].split(end, 1)[0]
+        )
 
     def v4032_crun_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
         start = "v4032_crun_expected_subject="
+        subject_assignment = (
+            'v4032_crun_subject="$(git log -1 --format=%s '
+            '"${v4032_crun_ref}")"'
+        )
         end = (
             'read -r -a v4032_crun_head_line <<< '
-            '"$(git rev-list --parents -n 1 HEAD)"'
+            '"$(git rev-list --parents -n 1 "${v4032_crun_ref}")"'
         )
         self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(subject_assignment), 1)
         self.assertEqual(block.count(end), 1)
         fragment = start + block.split(start, 1)[1].split(end, 1)[0]
-        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+        fragment = fragment.replace(
+            subject_assignment, 'v4032_crun_subject="${COMMIT_SUBJECT:?}"'
+        )
+        return "set -euo pipefail\n" + fragment
 
     def exact_v4032_compliance_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -3218,6 +3619,221 @@ class ReleaseGateTests(unittest.TestCase):
         )
         return repository
 
+    def test_release_manager_v4032_systemd_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        self.assert_exact_subject_gate(
+            self.v4032_systemd_subject_gate_script(),
+            {
+                "valid": (
+                    "Qualification : seal systemd-capable ARM64 crun runtime (#109)",
+                    True,
+                ),
+                "bare": (
+                    "Qualification : seal systemd-capable ARM64 crun runtime",
+                    False,
+                ),
+                "previous pull request": (
+                    "Qualification : seal systemd-capable ARM64 crun runtime (#108)",
+                    False,
+                ),
+                "wrong verb": (
+                    "Qualification : repair systemd-capable ARM64 crun runtime (#109)",
+                    False,
+                ),
+                "previous scope": (
+                    "Qualification : restore v4.03.2 ARM64 lifecycle under crun (#109)",
+                    False,
+                ),
+                "trailing space": (
+                    "Qualification : seal systemd-capable ARM64 crun runtime (#109) ",
+                    False,
+                ),
+            },
+        )
+
+    def test_release_manager_v4032_systemd_diff_rejects_git_shape_mutations(
+        self,
+    ) -> None:
+        self.assert_regular_diff_gate(
+            self.exact_v4032_systemd_diff_script(),
+            "v4032-systemd-diff",
+            (
+                ".github/workflows/release-manager.yml",
+                ".github/workflows/release-qualification.yml",
+                "scripts/ci/release_gate_test.py",
+                "scripts/ci/release_qualification_workflow_test.py",
+            ),
+        )
+
+    def test_release_manager_v4032_cli_toml_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        self.assert_exact_subject_gate(
+            self.v4032_cli_toml_subject_gate_script(),
+            {
+                "valid": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-cli (#105)",
+                    True,
+                ),
+                "bare": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-cli",
+                    False,
+                ),
+                "wrong pull request": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-cli (#106)",
+                    False,
+                ),
+                "wrong module": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-core (#105)",
+                    False,
+                ),
+                "trailing space": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-cli (#105) ",
+                    False,
+                ),
+            },
+        )
+
+    def test_release_manager_v4032_cli_toml_diff_rejects_git_shape_mutations(
+        self,
+    ) -> None:
+        self.assert_regular_diff_gate(
+            self.exact_v4032_cli_toml_diff_script(),
+            "v4032-cli-toml-diff",
+            (
+                "src/core/syswarden-cli/go.mod",
+                "src/core/syswarden-cli/go.sum",
+            ),
+        )
+
+    def test_release_manager_v4032_core_toml_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        self.assert_exact_subject_gate(
+            self.v4032_core_toml_subject_gate_script(),
+            {
+                "valid": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-core (#106)",
+                    True,
+                ),
+                "bare": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-core",
+                    False,
+                ),
+                "wrong pull request": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-core (#105)",
+                    False,
+                ),
+                "wrong module": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-cli (#106)",
+                    False,
+                ),
+                "trailing space": (
+                    "Bump github.com/pelletier/go-toml/v2 in "
+                    "/src/core/syswarden-core (#106) ",
+                    False,
+                ),
+            },
+        )
+
+    def test_release_manager_v4032_core_toml_diff_rejects_git_shape_mutations(
+        self,
+    ) -> None:
+        self.assert_regular_diff_gate(
+            self.exact_v4032_core_toml_diff_script(),
+            "v4032-core-toml-diff",
+            (
+                "src/core/syswarden-core/go.mod",
+                "src/core/syswarden-core/go.sum",
+            ),
+        )
+
+    def test_release_manager_v4032_dependency_squashes_match_local_objects(
+        self,
+    ) -> None:
+        contracts = (
+            (
+                "540bab73a477c76d6301d276383602db06d36acd",
+                "4eacbae34561ae09611a7adb1f78717ca56e52a6",
+                "Bump github.com/pelletier/go-toml/v2 in "
+                "/src/core/syswarden-cli (#105)",
+                {
+                    "src/core/syswarden-cli/go.mod": (
+                        "66f6623dabd59b30d48906180ab51faf2b3de617",
+                        "ff807092dd11a281e8cc08380bc5152aeb55ac61",
+                    ),
+                    "src/core/syswarden-cli/go.sum": (
+                        "c4f38878c8a489144a549a19de19f49fd7e600b3",
+                        "ce676e05fabca3828da4ef31f5e82ee0ce8a7223",
+                    ),
+                },
+            ),
+            (
+                "4eacbae34561ae09611a7adb1f78717ca56e52a6",
+                "3513acaee928cdd0aa235024f6ebfc5b2efe1dff",
+                "Bump github.com/pelletier/go-toml/v2 in "
+                "/src/core/syswarden-core (#106)",
+                {
+                    "src/core/syswarden-core/go.mod": (
+                        "26e4105948f496ba8cbf8efea067c252c2b4d94d",
+                        "3181e179994324ae7ff5eb769051b529a9bc7a39",
+                    ),
+                    "src/core/syswarden-core/go.sum": (
+                        "b7e67fd6352f003613d3f4c63bc99203172d2449",
+                        "227d3d731718cf79ae9eb7e9841a52db283ba050",
+                    ),
+                },
+            ),
+        )
+        for commit, parent, subject, paths in contracts:
+            with self.subTest(commit=commit):
+                self.assertEqual(
+                    subprocess.run(
+                        ["git", "rev-parse", f"{commit}^"],
+                        cwd=REPOSITORY,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip(),
+                    parent,
+                )
+                self.assertEqual(
+                    subprocess.run(
+                        ["git", "log", "-1", "--format=%s", commit],
+                        cwd=REPOSITORY,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip(),
+                    subject,
+                )
+                for path, (parent_blob, commit_blob) in paths.items():
+                    for ref, expected_blob in (
+                        (parent, parent_blob),
+                        (commit, commit_blob),
+                    ):
+                        entry = subprocess.run(
+                            ["git", "ls-tree", ref, "--", path],
+                            cwd=REPOSITORY,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        ).stdout.strip()
+                        self.assertEqual(
+                            entry,
+                            f"100644 blob {expected_blob}\t{path}",
+                        )
+
     def test_release_manager_v4032_crun_subject_is_exact_github_squash(
         self,
     ) -> None:
@@ -3651,9 +4267,101 @@ class ReleaseGateTests(unittest.TestCase):
                 'if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then',
                 'if [[ "${RELEASE_TAG}" == "v4.03.3" ]]; then',
             ),
+            "systemd parent resolution": workflow.replace(
+                'v4032_systemd_parent_sha="$(git rev-parse HEAD^)"',
+                'v4032_systemd_parent_sha="$(git rev-parse HEAD^^)"',
+            ),
+            "exact systemd parent": workflow.replace(
+                "540bab73a477c76d6301d276383602db06d36acd",
+                "640bab73a477c76d6301d276383602db06d36acd",
+            ),
+            "systemd canonical subject": workflow.replace(
+                "Qualification : seal systemd-capable ARM64 crun runtime (#109)",
+                "Qualification : repair systemd-capable ARM64 crun runtime (#109)",
+            ),
+            "systemd subject source": workflow.replace(
+                'commit_subject="$(git log -1 --format=%s HEAD)"',
+                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+            ),
+            "systemd linear head": workflow.replace(
+                'v4032_systemd_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+                'v4032_systemd_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+            ),
+            "CLI dependency reference": workflow.replace(
+                "v4032_cli_toml_ref=HEAD^",
+                "v4032_cli_toml_ref=HEAD^^",
+            ),
+            "CLI dependency parent resolution": workflow.replace(
+                'v4032_cli_toml_parent_sha="$(git rev-parse '
+                '"${v4032_cli_toml_ref}^")"',
+                'v4032_cli_toml_parent_sha="$(git rev-parse '
+                '"${v4032_cli_toml_ref}^^")"',
+            ),
+            "exact CLI dependency parent": workflow.replace(
+                "4eacbae34561ae09611a7adb1f78717ca56e52a6",
+                "5eacbae34561ae09611a7adb1f78717ca56e52a6",
+            ),
+            "CLI dependency canonical subject": workflow.replace(
+                "Bump github.com/pelletier/go-toml/v2 in "
+                "/src/core/syswarden-cli (#105)",
+                "Bump github.com/pelletier/go-toml/v2 in "
+                "/src/core/syswarden-cli (#106)",
+            ),
+            "CLI dependency subject source": workflow.replace(
+                'v4032_cli_toml_subject="$(git log -1 --format=%s '
+                '"${v4032_cli_toml_ref}")"',
+                'v4032_cli_toml_subject="$(git log -1 --format=%s HEAD)"',
+            ),
+            "CLI dependency linear head": workflow.replace(
+                'v4032_cli_toml_head_line <<< '
+                '"$(git rev-list --parents -n 1 '
+                '"${v4032_cli_toml_ref}")"',
+                'v4032_cli_toml_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+            ),
+            "core dependency reference": workflow.replace(
+                "v4032_core_toml_ref=HEAD^^",
+                "v4032_core_toml_ref=HEAD^^^",
+            ),
+            "core dependency parent resolution": workflow.replace(
+                'v4032_core_toml_parent_sha="$(git rev-parse '
+                '"${v4032_core_toml_ref}^")"',
+                'v4032_core_toml_parent_sha="$(git rev-parse '
+                '"${v4032_core_toml_ref}^^")"',
+            ),
+            "exact core dependency parent": workflow.replace(
+                "3513acaee928cdd0aa235024f6ebfc5b2efe1dff",
+                "4513acaee928cdd0aa235024f6ebfc5b2efe1dff",
+            ),
+            "core dependency canonical subject": workflow.replace(
+                "Bump github.com/pelletier/go-toml/v2 in "
+                "/src/core/syswarden-core (#106)",
+                "Bump github.com/pelletier/go-toml/v2 in "
+                "/src/core/syswarden-core (#105)",
+            ),
+            "core dependency subject source": workflow.replace(
+                'v4032_core_toml_subject="$(git log -1 --format=%s '
+                '"${v4032_core_toml_ref}")"',
+                'v4032_core_toml_subject="$(git log -1 --format=%s HEAD)"',
+            ),
+            "core dependency linear head": workflow.replace(
+                'v4032_core_toml_head_line <<< '
+                '"$(git rev-list --parents -n 1 '
+                '"${v4032_core_toml_ref}")"',
+                'v4032_core_toml_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+            ),
+            "crun reference": workflow.replace(
+                "v4032_crun_ref=HEAD^^^",
+                "v4032_crun_ref=HEAD^^^^",
+            ),
             "crun parent resolution": workflow.replace(
-                'v4032_crun_parent_sha="$(git rev-parse HEAD^)"',
-                'v4032_crun_parent_sha="$(git rev-parse HEAD^^)"',
+                'v4032_crun_parent_sha="$(git rev-parse '
+                '"${v4032_crun_ref}^")"',
+                'v4032_crun_parent_sha="$(git rev-parse '
+                '"${v4032_crun_ref}^^")"',
             ),
             "exact crun parent": workflow.replace(
                 "b74756b71e26e39b98c7fa60b65a3486adfde3e8",
@@ -3664,18 +4372,20 @@ class ReleaseGateTests(unittest.TestCase):
                 "Qualification : repair v4.03.2 ARM64 lifecycle under crun (#108)",
             ),
             "crun subject source": workflow.replace(
-                'commit_subject="$(git log -1 --format=%s HEAD)"',
-                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+                'v4032_crun_subject="$(git log -1 --format=%s '
+                '"${v4032_crun_ref}")"',
+                'v4032_crun_subject="$(git log -1 --format=%s HEAD)"',
             ),
             "crun linear head": workflow.replace(
                 'v4032_crun_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD)"',
+                '"$(git rev-list --parents -n 1 '
+                '"${v4032_crun_ref}")"',
                 'v4032_crun_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD^)"',
+                '"$(git rev-list --parents -n 1 HEAD)"',
             ),
             "compliance reference": workflow.replace(
-                "v4032_compliance_ref=HEAD^",
-                "v4032_compliance_ref=HEAD^^",
+                'v4032_compliance_ref="${v4032_crun_ref}^"',
+                'v4032_compliance_ref="${v4032_crun_ref}^^"',
             ),
             "compliance parent resolution": workflow.replace(
                 'v4032_compliance_parent_sha="$(git rev-parse '
