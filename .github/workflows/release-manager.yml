@@ -1879,7 +1879,7 @@ jobs:
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
             --assets existing_release_assets
-          diff --no-index \
+          cmp --silent \
             release_payload/assets/RELEASE_SHA256SUMS.txt \
             existing_release_assets/RELEASE_SHA256SUMS.txt
           bash scripts/ci/verify_release_attestations.sh \
@@ -1949,7 +1949,7 @@ jobs:
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
             --assets draft_release_assets
-          diff --no-index \
+          cmp --silent \
             release_payload/assets/RELEASE_SHA256SUMS.txt \
             draft_release_assets/RELEASE_SHA256SUMS.txt
           bash scripts/ci/verify_release_attestations.sh \
@@ -2154,7 +2154,7 @@ jobs:
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
             --assets published_release_assets
-          diff --no-index \
+          cmp --silent \
             release_payload/assets/RELEASE_SHA256SUMS.txt \
             published_release_assets/RELEASE_SHA256SUMS.txt
           bash scripts/ci/verify_release_attestations.sh \

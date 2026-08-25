@@ -1367,6 +1367,34 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertEqual(workflow.count("jq -j '.body'"), 2)
         self.assertNotIn("jq -r '.body'", workflow)
 
+    def test_workflow_uses_portable_byte_exact_release_inventory_comparisons(
+        self,
+    ) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        comparisons = (
+            (
+                "release_payload/assets/RELEASE_SHA256SUMS.txt",
+                "existing_release_assets/RELEASE_SHA256SUMS.txt",
+            ),
+            (
+                "release_payload/assets/RELEASE_SHA256SUMS.txt",
+                "draft_release_assets/RELEASE_SHA256SUMS.txt",
+            ),
+            (
+                "release_payload/assets/RELEASE_SHA256SUMS.txt",
+                "published_release_assets/RELEASE_SHA256SUMS.txt",
+            ),
+        )
+
+        self.assertNotIn("diff --no-index", workflow)
+        for expected, actual in comparisons:
+            comparison = (
+                "cmp --silent \\\n"
+                f"            {expected} \\\n"
+                f"            {actual}"
+            )
+            self.assertEqual(workflow.count(comparison), 1, actual)
+
     def assert_preserved_version_recovery_contract(self, workflow: str) -> None:
         scripts = workflow_step_scripts(
             workflow, "Validate Tag, Source, Changelog, and Main Ancestry"
