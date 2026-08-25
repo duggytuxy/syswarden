@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"syswarden-cli/pkg/firewall"
+	"syswarden-cli/pkg/integration"
 	"syswarden-cli/pkg/network"
 	"syswarden-cli/pkg/system"
 
@@ -17,6 +18,7 @@ var removeOwnedWireGuardStateForRemoval = func() error {
 	return system.RemoveOwnedWireGuardArtifactsForRemoval(network.CleanupOwnedWireGuardNFTState)
 }
 var removePreparedServiceArtifacts = system.RemovePreparedServiceArtifactsForRemoval
+var removeOwnedIntegrationArtifactsForRemoval = integration.RemoveOwnedGeneratedArtifactsForPackageRemoval
 
 func prepareVerifiedFirewallRemoval() error {
 	if err := beginRemoval(); err != nil {
@@ -43,6 +45,12 @@ func prepareVerifiedFirewallRemoval() error {
 	if err := cleanupFirewallStateForRemoval(); err != nil {
 		return fmt.Errorf(
 			"refusing removal before verified firewall cleanup; the durable removal barrier and stopped exact firewall mutators are retained for recovery: %w",
+			err,
+		)
+	}
+	if err := removeOwnedIntegrationArtifactsForRemoval(); err != nil {
+		return fmt.Errorf(
+			"refusing removal before exact generated integration cleanup; every ambiguous artifact is preserved and the durable removal barrier is retained: %w",
 			err,
 		)
 	}

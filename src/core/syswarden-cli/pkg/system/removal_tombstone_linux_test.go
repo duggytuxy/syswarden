@@ -49,6 +49,93 @@ func TestRemovalTombstoneGrammarAndAtomicIdempotentPublication_SW2_FWBACKEND_001
 	}
 }
 
+func TestRemovalFinalizingBarrierBlocksWhenInternalStateIsAbsent_SW2_PKG_001(t *testing.T) {
+	if RemovalFinalizingRecord != RemovalTombstoneRecord || len(RemovalFinalizingRecord) != 39 {
+		t.Fatalf("finalizing barrier record does not match the cross-runtime removal record")
+	}
+	path, uid, gid := testRemovalTombstonePath(t)
+	finalizingPath := removalFinalizingPathFor(path)
+	if err := ensureRemovalFinalizingAt(finalizingPath, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	present, err := inspectRemovalBarrierAt(path, finalizingPath, uid, gid)
+	if err != nil || !present {
+		t.Fatalf("inspect external finalizing barrier: present=%t err=%v", present, err)
+	}
+	if _, err := os.Lstat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("external barrier unexpectedly created internal state: %v", err)
+	}
+}
+
+func TestRemovalBarrierInspectionCannotMissAtomicFinalizingRename_SW2_PKG_001(t *testing.T) {
+	path, uid, gid := testRemovalTombstonePath(t)
+	if err := ensureRemovalTombstoneAt(path, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	finalizingPath := removalFinalizingPathFor(path)
+	renameRequest := make(chan struct{})
+	renameResult := make(chan error, 1)
+	go func() {
+		<-renameRequest
+		directory, err := openExistingRemovalStateDirectory(filepath.Dir(path), uid, gid)
+		if err != nil {
+			renameResult <- err
+			return
+		}
+		defer directory.close()
+		renameResult <- transitionRemovalTombstoneToFinalizing(
+			directory, finalizingPath, uid, gid, func(string) {},
+		)
+	}()
+	present, err := inspectRemovalBarrierAtUsing(
+		path,
+		finalizingPath,
+		uid,
+		gid,
+		func() error {
+			close(renameRequest)
+			return <-renameResult
+		},
+	)
+	if err != nil || !present {
+		t.Fatalf("atomic finalizing rename was missed: present=%t err=%v", present, err)
+	}
+	if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("atomic finalizing rename left internal source: %v", statErr)
+	}
+	if finalizing, inspectErr := inspectRemovalFinalizingAt(finalizingPath, uid, gid); inspectErr != nil || !finalizing {
+		t.Fatalf("atomic finalizing destination: present=%t err=%v", finalizing, inspectErr)
+	}
+}
+
+func TestRemovalBarrierInspectionFailsClosedBeforeHookForUnsafeInternalRecord_SW2_PKG_001(t *testing.T) {
+	path, uid, gid := testRemovalTombstonePath(t)
+	if err := os.Mkdir(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	modified := "SYSWARDEN_REMOVAL_V1\nstate=xn-progress\n"
+	if len(modified) != len(RemovalTombstoneRecord) {
+		t.Fatalf("test record length = %d", len(modified))
+	}
+	if err := os.WriteFile(path, []byte(modified), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hookCalls := 0
+	present, err := inspectRemovalBarrierAtUsing(
+		path,
+		removalFinalizingPathFor(path),
+		uid,
+		gid,
+		func() error {
+			hookCalls++
+			return nil
+		},
+	)
+	if err == nil || !present || hookCalls != 0 {
+		t.Fatalf("unsafe internal barrier result: present=%t err=%v hook_calls=%d", present, err, hookCalls)
+	}
+}
+
 func TestRemovalTombstoneRejectsModifiedHardlinkedAndSymlinkedEvidence_SW2_FWBACKEND_001(t *testing.T) {
 	t.Run("modified record", func(t *testing.T) {
 		path, uid, gid := testRemovalTombstonePath(t)
@@ -121,6 +208,67 @@ func TestRemovalTombstoneRejectsModifiedHardlinkedAndSymlinkedEvidence_SW2_FWBAC
 	})
 }
 
+func TestRemovalRecordAttestationRejectsMetadataChangeBetweenSnapshots_SW2_PKG_001(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		requiresRoot bool
+		mutate       func(string) error
+	}{
+		{
+			name: "mode",
+			mutate: func(path string) error {
+				return os.Chmod(path, 0666)
+			},
+		},
+		{
+			name: "hardlink",
+			mutate: func(path string) error {
+				return os.Link(path, path+".operator-link")
+			},
+		},
+		{
+			name:         "owner",
+			requiresRoot: true,
+			mutate: func(path string) error {
+				return os.Chown(path, 1, 1)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.requiresRoot && os.Geteuid() != 0 {
+				t.Skip("owner mutation requires root")
+			}
+			path, uid, gid := testRemovalTombstonePath(t)
+			if err := ensureRemovalTombstoneAt(path, uid, gid); err != nil {
+				t.Fatal(err)
+			}
+			directory, err := openExistingRemovalStateDirectory(filepath.Dir(path), uid, gid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer directory.close()
+			_, err = attestExactRemovalRecordUsing(
+				directory,
+				removalTombstoneName,
+				RemovalTombstoneRecord,
+				uid,
+				gid,
+				func() {
+					if mutateErr := test.mutate(path); mutateErr != nil {
+						t.Fatalf("mutate removal record metadata: %v", mutateErr)
+					}
+				},
+			)
+			if err == nil {
+				t.Fatal("metadata change between snapshots was accepted")
+			}
+			if _, statErr := os.Lstat(path); statErr != nil {
+				t.Fatalf("metadata race removed the record: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestRemovalTombstoneFinalizationRequiresAbsentExecutablesAndEmptyState_SW2_FWBACKEND_001(t *testing.T) {
 	path, uid, gid := testRemovalTombstonePath(t)
 	if err := ensureRemovalTombstoneAt(path, uid, gid); err != nil {
@@ -159,5 +307,103 @@ func TestRemovalTombstoneFinalizationRequiresAbsentExecutablesAndEmptyState_SW2_
 	}
 	if _, err := os.Lstat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state directory remains after finalization: %v", err)
+	}
+}
+
+func TestRemovalTombstoneFinalizationCrashRetryKeepsDurableExternalBarrier_SW2_PKG_001(t *testing.T) {
+	for _, fault := range []string{
+		"after-finalizing-rename",
+		"after-finalizing-barrier",
+		"after-internal-tombstone",
+		"after-state-directory",
+	} {
+		t.Run(fault, func(t *testing.T) {
+			path, uid, gid := testRemovalTombstonePath(t)
+			if err := ensureRemovalTombstoneAt(path, uid, gid); err != nil {
+				t.Fatal(err)
+			}
+			finalizingPath := removalFinalizingPathFor(path)
+			panicValue := "simulated worker crash at " + fault
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != panicValue {
+						t.Fatalf("recovered crash = %v, want %q", recovered, panicValue)
+					}
+				}()
+				err := finalizeRemovalTombstoneAtUsing(
+					path,
+					uid,
+					gid,
+					nil,
+					func(point string) {
+						if point == fault {
+							panic(panicValue)
+						}
+					},
+				)
+				if err != nil {
+					t.Fatalf("finalization before injected crash: %v", err)
+				}
+			}()
+
+			present, inspectErr := inspectRemovalBarrierAt(path, finalizingPath, uid, gid)
+			if inspectErr != nil || !present {
+				t.Fatalf("crash lost removal barrier: present=%t err=%v", present, inspectErr)
+			}
+			if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("crash left simultaneous internal and external barriers: %v", statErr)
+			}
+			content, readErr := os.ReadFile(finalizingPath) // #nosec G304 -- finalizingPath is confined to the private crash fixture
+			if readErr != nil || string(content) != RemovalFinalizingRecord {
+				t.Fatalf("external barrier after crash: content=%q err=%v", content, readErr)
+			}
+
+			if err := finalizeRemovalTombstoneAt(path, uid, gid, nil); err != nil {
+				t.Fatalf("resume finalization after crash: %v", err)
+			}
+			if _, err := os.Lstat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("resumed finalization left state directory: %v", err)
+			}
+			if _, err := os.Lstat(finalizingPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("resumed finalization left external barrier: %v", err)
+			}
+		})
+	}
+}
+
+func TestRemovalTombstoneFinalizationRejectsStateRootMetadataRace_SW2_PKG_001(t *testing.T) {
+	path, uid, gid := testRemovalTombstonePath(t)
+	if err := ensureRemovalTombstoneAt(path, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	directoryPath := filepath.Dir(path)
+	err := finalizeRemovalTombstoneAtUsing(
+		path,
+		uid,
+		gid,
+		nil,
+		func(point string) {
+			if point == "before-state-root-recheck" {
+				if chmodErr := os.Chmod(directoryPath, 0777); chmodErr != nil {
+					t.Fatalf("mutate state root metadata: %v", chmodErr)
+				}
+			}
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "changed before final deletion") {
+		t.Fatalf("state-root metadata race = %v", err)
+	}
+	if _, statErr := os.Lstat(directoryPath); statErr != nil {
+		t.Fatalf("metadata-raced state root was removed: %v", statErr)
+	}
+	finalizingPath := removalFinalizingPathFor(path)
+	if present, inspectErr := inspectRemovalFinalizingAt(finalizingPath, uid, gid); inspectErr != nil || !present {
+		t.Fatalf("metadata race lost external barrier: present=%t err=%v", present, inspectErr)
+	}
+	if err := os.Chmod(directoryPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizeRemovalTombstoneAt(path, uid, gid, nil); err != nil {
+		t.Fatalf("retry after restoring state-root metadata: %v", err)
 	}
 }

@@ -61,6 +61,9 @@ func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
 	if cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
 		return false
 	}
+	if topLevel := topLevelCommand(cmd); topLevel != nil && topLevel.Name() == "completion" {
+		return false
+	}
 	return true
 }
 

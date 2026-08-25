@@ -24,8 +24,8 @@ required v4.03.3 qualification.
 v4.03.3 preserves the published three-package AMD64 Linux surface, native local
 TUI, verifiable HA migration fence and bounded LOT 2 security posture. This
 Patch corrects Microsoft Teams and Power Automate webhook dispatch, nftables
-interval encoding and OSINT installation tolerance without changing the
-supported package or runtime matrix.
+interval encoding, OSINT installation tolerance and package lifecycle recovery
+without changing the supported package or runtime matrix.
 
 The release remains blocked until the exact merged commit passes native AMD64
 package lifecycles, isolated nftables qualification, security and
@@ -126,6 +126,53 @@ strict existing behavior.
 The DEB package hook invokes the installation pipeline with fail-fast shell
 semantics. Qualification must therefore prove that this bounded upstream data
 condition does not abort package configuration or leave `dpkg` in `iF` state.
+
+## Signed update path from historical v4.03.2 to v4.03.3
+
+After publication, the normal operator transition is `sudo syswarden update`
+from the installed historical v4.03.2 CLI. That updater embeds the canonical
+Ed25519 release trust-root inventory. It obtains `releases/latest`, requires
+v4.03.3 to be newer than the installed version, authenticates the canonical
+manifest and detached signature, binds the trusted key identity and release
+version, then selects exactly one AMD64 package for the detected native package
+manager.
+
+Before installation, the updater verifies the selected filename, platform,
+format, size and SHA-256 inside a private workspace and reattests the package
+immediately before invoking the package manager. There is no unsigned fallback.
+Direct package installation remains a pre-tag qualification mechanism or a
+separately approved recovery path, not the normal published migration.
+
+The exact post-publication route cannot be claimed from a candidate artifact.
+One disposable host must remain on the published historical v4.03.2 package
+until GitHub resolves the latest Release to v4.03.3. Its evidence must bind the
+signed manifest, selected package digest, resulting native v4.03.3 package
+record and service health.
+
+## Package ownership and removal recovery
+
+Bash completion is a package-owned immutable payload at
+`/usr/share/bash-completion/completions/syswarden`. Package hooks do not generate
+it under `/etc/bash_completion.d` and do not edit `/root/.bashrc`. Staging gates
+bind its exact size and SHA-256 for both dynamically linked and static package
+payloads. Historical completion is removed only when its exact known bytes and
+metadata are attributable to SysWarden; modified, linked or otherwise ambiguous
+operator paths are preserved.
+
+Debian `remove` preserves `/etc/syswarden`, `/var/lib/syswarden` and
+`/var/log/syswarden` behind an exact private deferred-purge barrier. A package
+reinstall consumes that barrier only after installation succeeds. Debian
+`purge`, final RPM erase and APK post-deinstall are destructive final-removal
+paths. They preflight every dedicated root and descendant against the live mount
+topology before changing removal state. Final state removal uses a durable exact
+barrier outside `/var/lib/syswarden`, allowing bounded crashes before or after
+state-root removal to resume without accepting an ambiguous marker.
+
+Generated WAF and SIEM rsyslog fragments use a private root-owned provenance
+registry. Reload and removal may delete only the exact recorded file identity
+and bytes. An obsolete enabled-to-disabled SIEM fragment is removed through the
+same contract. Any modified, replaced, linked or concurrently changed fragment
+is preserved together with its provenance for explicit recovery.
 
 ## Local terminal boundary
 
@@ -372,6 +419,14 @@ core, so external producers remain paused and the core is stopped again before
 the post-upgrade four-set capture. Any mismatched version, architecture,
 unfinished package transaction or lost producer quiescence fails the migration
 gate.
+
+Native package evidence must also cover Debian remove, reinstall after remove,
+purge, final RPM erase and APK post-deinstall, including bounded crashes around
+the durable removal barrier. It must prove that mounted descendants cause zero
+removal-state mutation, that ambiguous integration artifacts and provenance are
+preserved, and that package-owned completion has the contracted bytes. The
+post-publication `syswarden update` smoke remains a separate release follow-up
+because no signed v4.03.3 Release exists during pre-tag qualification.
 
 ## LOT 2S security remediation
 

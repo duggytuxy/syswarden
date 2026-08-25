@@ -146,6 +146,9 @@ var installCmd = &cobra.Command{
 		if err := system.SetupService(); err != nil {
 			return installStageError("service setup failed", err)
 		}
+		if err := removeExactLegacyCompletionAfterInstall(); err != nil {
+			return installStageError("legacy shell completion reconciliation failed", err)
+		}
 
 		fmt.Println("[SYSWARDEN] v4.03.3 native installation complete.")
 		return nil
@@ -153,6 +156,7 @@ var installCmd = &cobra.Command{
 }
 
 var installConfigPreflight = prepareInstallConfiguration
+var removeExactLegacyCompletionAfterInstall = integration.RemoveExactLegacyBashCompletion
 var hostFirewallBackendPreflight = system.PreflightHostFirewallBackend
 var inspectInstallFirewallCompatibility = config.InspectHistoricalDefaultFirewallCompatibility
 var applyInstallFirewallCompatibility = config.ApplyHistoricalDefaultFirewallCompatibility

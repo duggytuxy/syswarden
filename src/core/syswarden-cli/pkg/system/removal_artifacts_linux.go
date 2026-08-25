@@ -44,11 +44,26 @@ func removeDedicatedRemovalTreeAt(
 	expectedGID uint32,
 	removeAll removalTreeOperator,
 ) error {
+	return removeDedicatedRemovalTreeAtUsingMountInfo(
+		path, expectedUID, expectedGID, removeAll, readProcRemovalMountInfo,
+	)
+}
+
+func removeDedicatedRemovalTreeAtUsingMountInfo(
+	path string,
+	expectedUID uint32,
+	expectedGID uint32,
+	removeAll removalTreeOperator,
+	readMountInfo removalMountInfoReader,
+) error {
 	if removeAll == nil {
 		return fmt.Errorf("dedicated removal operator is unavailable")
 	}
 	if path == "" || path == "/" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return fmt.Errorf("dedicated removal root %q is not safe", path)
+	}
+	if err := preflightRemovalMountBoundariesAt([]string{path}, readMountInfo); err != nil {
+		return err
 	}
 	parent, err := openAttestedRemovalParent(path, expectedUID, expectedGID)
 	if err != nil {
@@ -178,8 +193,23 @@ func removeRemovalStateContentsAt(
 	expectedGID uint32,
 	removeAll removalTreeOperator,
 ) error {
+	return removeRemovalStateContentsAtUsingMountInfo(
+		directoryPath, expectedUID, expectedGID, removeAll, readProcRemovalMountInfo,
+	)
+}
+
+func removeRemovalStateContentsAtUsingMountInfo(
+	directoryPath string,
+	expectedUID uint32,
+	expectedGID uint32,
+	removeAll removalTreeOperator,
+	readMountInfo removalMountInfoReader,
+) error {
 	if removeAll == nil {
 		return fmt.Errorf("removal state operator is unavailable")
+	}
+	if err := preflightRemovalMountBoundariesAt([]string{directoryPath}, readMountInfo); err != nil {
+		return err
 	}
 	directory, err := openExistingRemovalStateDirectory(directoryPath, expectedUID, expectedGID)
 	if err != nil {

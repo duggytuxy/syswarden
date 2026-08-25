@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -329,5 +331,46 @@ func TestRootCobraLifecycleStillInitializesNormalCommands_SW_CFG_001(t *testing.
 	}
 	if !commandRequiresAutomaticConfigLoad(probe) {
 		t.Fatal("normal command unexpectedly opted out of automatic configuration loading")
+	}
+}
+
+func TestCompletionSkipsAutomaticConfigurationAndMatchesLegacyAttestation_SW2_PKG_001(t *testing.T) {
+	initializations := 0
+	rootCmd.InitDefaultCompletionCmd()
+	completion, _, err := rootCmd.Find([]string{"completion", "bash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousRun := completion.Run
+	previousRunE := completion.RunE
+	completion.Run = nil
+	completion.RunE = func(*cobra.Command, []string) error { return nil }
+	t.Cleanup(func() {
+		completion.Run = previousRun
+		completion.RunE = previousRunE
+	})
+	_, err = executeRootCobraLifecycle(
+		t,
+		[]string{"completion", "bash"},
+		func() { initializations++ },
+	)
+	if err != nil {
+		t.Fatalf("completion lifecycle error = %v", err)
+	}
+	if initializations != 0 {
+		t.Fatalf("completion initialized live configuration %d times", initializations)
+	}
+	var output bytes.Buffer
+	if err := rootCmd.GenBashCompletionV2(&output, false); err != nil {
+		t.Fatalf("generate attested completion: %v", err)
+	}
+	const wantSize = 16339
+	const wantSHA256 = "c23c9f6c54b91105e9ecd8ad4431a9a11ad26ba3437bcd20ec2cef1a96e51d21"
+	generated := output.Bytes()
+	if len(generated) != wantSize || fmt.Sprintf("%x", sha256.Sum256(generated)) != wantSHA256 {
+		t.Fatalf(
+			"completion attestation = size %d sha256 %x, want %d/%s",
+			len(generated), sha256.Sum256(generated), wantSize, wantSHA256,
+		)
 	}
 }

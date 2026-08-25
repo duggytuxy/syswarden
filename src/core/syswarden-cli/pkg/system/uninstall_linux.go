@@ -782,6 +782,9 @@ func UninstallSystem() error {
 	if err := ReattestFirewallStatePreparedForRemoval(); err != nil {
 		return fmt.Errorf("host removal requires prepared firewall mutators: %w", err)
 	}
+	if err := preflightHostRemovalMountBoundaries(); err != nil {
+		return fmt.Errorf("refusing host removal before mount-boundary preflight: %w", err)
+	}
 	if err := retireLegacyWebTUIService(IsAlpine()); err != nil {
 		return fmt.Errorf("retire legacy Web-TUI service: %w", err)
 	}

@@ -153,16 +153,16 @@ APK_BOOTSTRAP = (
     "e2fsprogs-extra shadow socat binutils file && test -x /usr/bin/gpasswd"
 )
 DEB_PURGE_SEMANTICS = (
-    "remove preserves generated /etc and /var state; purge removes generated "
-    "/etc state while the current package leaves /var data"
+    "remove preserves generated /etc, /var/lib, and /var/log state behind an "
+    "exact deferred-purge marker; a later purge removes every dedicated product root"
 )
 RPM_PURGE_SEMANTICS = (
     "RPM has no distinct purge operation; erase runs the package's destructive "
     "final-removal script"
 )
 APK_PURGE_SEMANTICS = (
-    "apk --purge only purges package-managed configuration; the current package "
-    "does not own generated /etc or /var state"
+    "APK final removal runs post-deinstall and removes the dedicated opt, etc, "
+    "data, and log roots; apk --purge adds no broader product cleanup"
 )
 LAB_NETWORK_HELPER = """#!/bin/sh
 set -eu
@@ -550,13 +550,24 @@ LIVE_TELEMETRY_STATE_ATTRIBUTES = (
     "schema",
 )
 
-PACKAGE_PAYLOAD_PATHS = (
+BASH_COMPLETION_PATH = "/usr/share/bash-completion/completions/syswarden"
+LEGACY_BASH_COMPLETION_PATH = "/etc/bash_completion.d/syswarden"
+LEGACY_BASH_COMPLETION_VERSION = "4.03.2"
+LEGACY_BASH_COMPLETION_SIZE = 16_339
+LEGACY_BASH_COMPLETION_SHA256 = (
+    "c23c9f6c54b91105e9ecd8ad4431a9a11ad26ba3437bcd20ec2cef1a96e51d21"
+)
+LEGACY_PACKAGE_PAYLOAD_PATHS = (
     "/opt/syswarden/bin/syswarden-cli",
     "/opt/syswarden/bin/syswarden-core",
     "/opt/syswarden/bin/syswarden-tui",
     "/opt/syswarden/signatures.json",
     "/usr/local/bin/syswarden",
     "/usr/local/bin/syswarden-tui",
+)
+PACKAGE_PAYLOAD_PATHS = (
+    *LEGACY_PACKAGE_PAYLOAD_PATHS,
+    BASH_COMPLETION_PATH,
 )
 FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.03.2"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
@@ -566,8 +577,8 @@ FORWARD_ONLY_APK_PREVIOUS = {
         "sha256": "c0869bcb6f9adc1e4ca191ae5f5ed7962c9c89fb2bac9a4d52c0c246b09036d4",
     },
 }
-DEB_PACKAGE_PATHS = frozenset(
-    (*PACKAGE_PAYLOAD_PATHS,)
+LEGACY_DEB_PACKAGE_PATHS = frozenset(
+    (*LEGACY_PACKAGE_PAYLOAD_PATHS,)
     + (
         "/opt",
         "/opt/syswarden",
@@ -581,6 +592,15 @@ DEB_PACKAGE_PATHS = frozenset(
         "/usr/share/doc/syswarden/changelog.gz",
     )
 )
+DEB_PACKAGE_PATHS = frozenset(
+    (*LEGACY_DEB_PACKAGE_PATHS,)
+    + (
+        BASH_COMPLETION_PATH,
+        "/usr/share/bash-completion",
+        "/usr/share/bash-completion/completions",
+    )
+)
+LEGACY_APK_PACKAGE_PATHS = frozenset(LEGACY_PACKAGE_PAYLOAD_PATHS)
 APK_PACKAGE_PATHS = frozenset(PACKAGE_PAYLOAD_PATHS)
 RPM_BUILD_ID_DIRECTORY_PATTERN = re.compile(r"^/usr/lib/\.build-id/[0-9a-f]{2}$")
 RPM_BUILD_ID_LINK_PATTERN = re.compile(
@@ -612,28 +632,65 @@ def _installed_phase_event_checks(scenario: str, label: str) -> tuple[str, ...]:
     )
 
 
-def _generated_cleanup_event_checks(scenario: str, label: str) -> tuple[str, ...]:
-    return tuple(
-        f"{scenario}.{label}.generated.{key}"
-        for key in (
-            "systemd_core",
-            "systemd_firewall",
-            "systemd_webtui",
-            "openrc_core",
-            "openrc_firewall",
-            "openrc_webtui",
-            "systemd_core_enablement",
-            "systemd_firewall_enablement",
-            "openrc_core_enablement",
-            "openrc_firewall_enablement",
-            "runtime_socket",
-            "completion_residual",
-            "rsyslog_siem_residual",
-            "rsyslog_waf_bridge_residual",
+def _generated_cleanup_event_checks(
+    scenario: str,
+    label: str,
+    *,
+    exact_rsyslog: bool = False,
+) -> tuple[str, ...]:
+    keys = [
+        "systemd_core",
+        "systemd_firewall",
+        "systemd_webtui",
+        "openrc_core",
+        "openrc_firewall",
+        "openrc_webtui",
+        "systemd_core_enablement",
+        "systemd_firewall_enablement",
+        "openrc_core_enablement",
+        "openrc_firewall_enablement",
+        "runtime_socket",
+        "completion_residual",
+    ]
+    if exact_rsyslog:
+        keys.extend(
+            (
+                "rsyslog_siem_exact_removed",
+                "rsyslog_waf_bridge_exact_removed",
+                "rsyslog_provenance_removed",
+                "rsyslog_configuration_valid",
+                "rsyslog_reactivated",
+            )
+        )
+    else:
+        keys.extend(
+            (
+                "rsyslog_siem_residual",
+                "rsyslog_waf_bridge_residual",
+                "rsyslog_provenance_residual",
+            )
+        )
+    keys.extend(
+        (
             "cron_d_owned",
             "cron_d_pending",
             "root_crontab_bytes",
             "root_crontab_legacy_residual",
+        )
+    )
+    return tuple(f"{scenario}.{label}.generated.{key}" for key in keys)
+
+
+def _generated_rsyslog_pre_removal_event_checks(
+    scenario: str,
+    label: str,
+) -> tuple[str, ...]:
+    return tuple(
+        f"{scenario}.{label}.generated.{key}"
+        for key in (
+            "rsyslog_siem_exact_generated",
+            "rsyslog_waf_bridge_exact_generated",
+            "rsyslog_provenance_exact",
         )
     )
 
@@ -649,7 +706,9 @@ def expected_inventory_phase_labels(scenario: str) -> tuple[str, ...]:
             "rollback",
             "recovery",
         )
-    if scenario in {"remove", "purge"}:
+    if scenario == "remove":
+        return ("fresh",)
+    if scenario == "purge":
         return ("fresh",)
     raise LifecycleLabError(f"unsupported inventory scenario: {scenario!r}")
 
@@ -689,6 +748,38 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
         checks.extend(_installed_phase_event_checks(scenario, label))
         checks.extend(_state_event_checks(scenario, label))
 
+    def deb_removed(label: str) -> None:
+        checks.extend(
+            _generated_rsyslog_pre_removal_event_checks(
+                scenario,
+                label,
+            )
+        )
+        checks.extend(
+            (
+                f"{scenario}.{label}",
+                f"{scenario}.{label}.database",
+                f"{scenario}.{label}.payload_inventory",
+                f"{scenario}.{label}.service_manager_calls",
+            )
+        )
+        checks.extend(
+            _generated_cleanup_event_checks(
+                scenario,
+                label,
+                exact_rsyslog=True,
+            )
+        )
+        checks.extend(_state_event_checks(scenario, label))
+        checks.extend(
+            f"{scenario}.{label}.state.log.{attribute}"
+            for attribute in ("type", "hash", "mode", "owner")
+        )
+        checks.extend(
+            f"{scenario}.{label}.state.deferred_purge_marker.{attribute}"
+            for attribute in ("type", "hash", "mode", "owner", "links")
+        )
+
     if scenario == "upgrade-rollback":
         installed("install.previous", "previous")
         installed("upgrade.candidate", "candidate")
@@ -702,6 +793,39 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
         return tuple(checks)
 
     installed("install.candidate", "fresh")
+
+    if family == "deb" and scenario == "remove":
+        deb_removed("remove")
+        installed(
+            "reinstall-after-remove.candidate",
+            "reinstall-after-remove",
+        )
+        checks.extend(
+            f"{scenario}.reinstall-after-remove.state.log.{attribute}"
+            for attribute in ("type", "hash", "mode", "owner")
+        )
+        checks.append(
+            f"{scenario}.reinstall-after-remove.state.deferred_purge_marker"
+        )
+        deb_removed("remove-before-purge")
+        checks.extend(
+            (
+                f"{scenario}.purge-after-remove",
+                f"{scenario}.purge-after-remove.database",
+                f"{scenario}.purge-after-remove.payload_inventory",
+            )
+        )
+        checks.extend(
+            f"{scenario}.purge-after-remove.state.{key}"
+            for key in (
+                "opt_root",
+                "config_root",
+                "data_root",
+                "log_root",
+            )
+        )
+        return tuple(checks)
+
     removal_label = "final-removal" if family == "rpm" else scenario
     checks.extend(
         (
@@ -712,36 +836,12 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
     )
     checks.append(f"{scenario}.{removal_label}.service_manager_calls")
     checks.extend(_generated_cleanup_event_checks(scenario, removal_label))
-    if family in {"apk"} or (family == "deb" and scenario == "remove"):
-        checks.extend(_state_event_checks(scenario, removal_label))
-    elif family == "deb":
+    if family in {"deb", "rpm", "apk"}:
         checks.extend(
             f"{scenario}.{removal_label}.state.{key}"
-            for key in ("config", "token", "list", "list_ipv6", "certificate")
+            for key in ("opt_root", "config_root", "data_root", "log_root")
         )
-        for key in ("operator_data",):
-            checks.extend(
-                f"{scenario}.{removal_label}.state.{key}.{attribute}"
-                for attribute in ("type", "hash", "mode", "owner")
-            )
-        checks.extend(
-            f"{scenario}.{removal_label}.state.{LIVE_TELEMETRY_STATE_KEY}.{attribute}"
-            for attribute in LIVE_TELEMETRY_STATE_ATTRIBUTES
-        )
-    elif family == "rpm":
-        checks.extend(
-            f"{scenario}.{removal_label}.state.{key}"
-            for key in ("config", "token", "list", "list_ipv6", "certificate")
-        )
-        for key in ("operator_data",):
-            checks.extend(
-                f"{scenario}.{removal_label}.state.{key}.{attribute}"
-                for attribute in ("type", "hash", "mode", "owner")
-            )
-        checks.extend(
-            f"{scenario}.{removal_label}.state.{LIVE_TELEMETRY_STATE_KEY}.{attribute}"
-            for attribute in LIVE_TELEMETRY_STATE_ATTRIBUTES
-        )
+    if family == "rpm":
         checks.append(f"{scenario}.{removal_label}.purge-equivalent")
     return tuple(checks)
 
@@ -1920,8 +2020,40 @@ required_manifest_path() {
     [ "$(grep -Fxc "${path}" "${manifest}" 2>/dev/null || true)" = "1" ]
 }
 
+package_uses_legacy_completion_payload() {
+    artifact_role="$1"
+    case "${artifact_role}" in
+        candidate)
+            if [ "${PACKAGE_FAMILY}" = apk ] && \
+               [ "${FORWARD_ONLY_APK_TRANSITION}" = 1 ] && \
+               [ "${EXPECTED_PREVIOUS_VERSION}" = 4.02.8 ] && \
+               [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.2 ]; then
+                return 0
+            fi
+            return 1
+            ;;
+        previous)
+            if [ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.2 ]; then
+                return 0
+            fi
+            if [ "${PACKAGE_FAMILY}" = apk ] && \
+               [ "${FORWARD_ONLY_APK_TRANSITION}" = 1 ] && \
+               [ "${EXPECTED_PREVIOUS_VERSION}" = 4.02.8 ] && \
+               [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.2 ]; then
+                return 0
+            fi
+            return 1
+            ;;
+        *)
+            return 2
+            ;;
+    esac
+}
+
 validate_manifest_contract() {
     manifest="$1"
+    artifact_role="$2"
+    case "${artifact_role}" in candidate|previous) ;; *) return 1 ;; esac
     for required in \
         /opt/syswarden/bin/syswarden-cli \
         /opt/syswarden/bin/syswarden-core \
@@ -1932,20 +2064,49 @@ validate_manifest_contract() {
     do
         required_manifest_path "${manifest}" "${required}" || return 1
     done
+    legacy_completion_payload=0
+    if package_uses_legacy_completion_payload "${artifact_role}"; then
+        legacy_completion_payload=1
+        required_manifest_path "${manifest}" \
+            /usr/share/bash-completion/completions/syswarden && return 1
+    else
+        legacy_completion_rc=$?
+        [ "${legacy_completion_rc}" -eq 1 ] || return 1
+        required_manifest_path "${manifest}" \
+            /usr/share/bash-completion/completions/syswarden || return 1
+    fi
 
     case "${PACKAGE_FAMILY}" in
         deb)
-            allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
-            [ "$(wc -l < "${manifest}" | tr -d ' ')" = "16" ] || return 1
+            if [ "${legacy_completion_payload}" -eq 1 ]; then
+                allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
+                expected_manifest_count=16
+            else
+                allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
+                expected_manifest_count=19
+            fi
+            [ "$(wc -l < "${manifest}" | tr -d ' ')" = \
+                "${expected_manifest_count}" ] || return 1
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
             ;;
         apk)
-            allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
-            [ "$(wc -l < "${manifest}" | tr -d ' ')" = "6" ] || return 1
+            if [ "${legacy_completion_payload}" -eq 1 ]; then
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
+                expected_manifest_count=6
+            else
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden)$'
+                expected_manifest_count=7
+            fi
+            [ "$(wc -l < "${manifest}" | tr -d ' ')" = \
+                "${expected_manifest_count}" ] || return 1
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
             ;;
         rpm)
-            allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+            if [ "${legacy_completion_payload}" -eq 1 ]; then
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+            else
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+            fi
             grep -Ev "${allowed}" "${manifest}" | grep -q . && return 1
             required_manifest_path "${manifest}" /usr/lib/.build-id || return 1
             awk '
@@ -1996,12 +2157,25 @@ inventory_has_exact_entry() {
 
 validate_inventory_contract() {
     inventory="$1"
+    artifact_role="$2"
+    case "${artifact_role}" in candidate|previous) ;; *) return 1 ;; esac
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-cli file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-cli" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-core file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-core" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/bin/syswarden-tui file 750 "$(awk -F '\t' '$1 == "/opt/syswarden/bin/syswarden-tui" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /opt/syswarden/signatures.json file 640 "$(awk -F '\t' '$1 == "/opt/syswarden/signatures.json" { print $6 }' "${inventory}")" || return 1
     inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden symlink 777 /opt/syswarden/bin/syswarden-cli || return 1
     inventory_has_exact_entry "${inventory}" /usr/local/bin/syswarden-tui symlink 777 /opt/syswarden/bin/syswarden-tui || return 1
+    legacy_completion_payload=0
+    if package_uses_legacy_completion_payload "${artifact_role}"; then
+        legacy_completion_payload=1
+        grep -Fq '/usr/share/bash-completion/completions/syswarden' \
+            "${inventory}" && return 1
+    else
+        legacy_completion_rc=$?
+        [ "${legacy_completion_rc}" -eq 1 ] || return 1
+        completion_hash="$(awk -F '\t' '$1 == "/usr/share/bash-completion/completions/syswarden" { print $6 }' "${inventory}")"
+        inventory_has_exact_entry "${inventory}" /usr/share/bash-completion/completions/syswarden file 644 "${completion_hash}" || return 1
+    fi
     if awk -F '\t' '$2 == "missing" || $2 == "unsupported" { found = 1 } END { exit found ? 0 : 1 }' "${inventory}"; then
         return 1
     fi
@@ -2011,7 +2185,11 @@ validate_inventory_contract() {
         return 1
     fi
     if [ "${PACKAGE_FAMILY}" = "deb" ]; then
-        for directory in /opt /opt/syswarden /opt/syswarden/bin /usr /usr/local /usr/local/bin /usr/share /usr/share/doc /usr/share/doc/syswarden; do
+        required_directories='/opt /opt/syswarden /opt/syswarden/bin /usr /usr/local /usr/local/bin /usr/share /usr/share/doc /usr/share/doc/syswarden'
+        if [ "${legacy_completion_payload}" -eq 0 ]; then
+            required_directories="${required_directories} /usr/share/bash-completion /usr/share/bash-completion/completions"
+        fi
+        for directory in ${required_directories}; do
             inventory_has_exact_entry "${inventory}" "${directory}" directory 755 - || return 1
         done
         changelog_hash="$(awk -F '\t' '$1 == "/usr/share/doc/syswarden/changelog.gz" { print $6 }' "${inventory}")"
@@ -2033,12 +2211,14 @@ verify_package_artifact() {
     expected_root="$3"
     manifest="${PERSIST_ROOT}/manifest-${label}"
     inventory="${PERSIST_ROOT}/inventory-${label}"
-    if package_manager_manifest "${package}" "${manifest}" && validate_manifest_contract "${manifest}"; then
+    if package_manager_manifest "${package}" "${manifest}" && \
+       validate_manifest_contract "${manifest}" "${label}"; then
         record pass "${PREFIX}.metadata.${label}.manager_manifest" "exact native package manifest sha256=$(hash_file "${manifest}")"
     else
         record fail "${PREFIX}.metadata.${label}.manager_manifest" "native package manifest violates its exact family contract"
     fi
-    if build_filesystem_inventory "${manifest}" "${expected_root}" "${inventory}" && validate_inventory_contract "${inventory}"; then
+    if build_filesystem_inventory "${manifest}" "${expected_root}" "${inventory}" && \
+       validate_inventory_contract "${inventory}" "${label}"; then
         record pass "${PREFIX}.metadata.${label}.payload_inventory" "complete payload inventory sha256=$(hash_file "${inventory}")"
     else
         record fail "${PREFIX}.metadata.${label}.payload_inventory" "payload type, mode, owner, link, or content inventory mismatch"
@@ -2457,7 +2637,7 @@ expected_systemd_enablement_prefix() {
         upgrade-rollback:recovery)
             printf '%s\n' /etc/systemd/system
             ;;
-        remove:fresh|purge:fresh)
+        remove:fresh|remove:reinstall-after-remove|purge:fresh)
             printf '%s\n' ..
             ;;
         *)
@@ -2482,7 +2662,7 @@ candidate_nft_runtime_required() {
     label="$1"
     case "${SCENARIO}:${label}" in
         upgrade-rollback:candidate|upgrade-rollback:reinstall|\
-        upgrade-rollback:recovery|remove:fresh|purge:fresh)
+        upgrade-rollback:recovery|remove:fresh|remove:reinstall-after-remove|purge:fresh)
             return 0
             ;;
         *)
@@ -2647,7 +2827,26 @@ attest_installed_core_process() {
         [ "$(stat -Lc '%d:%i:%f:%u:%g' "/proc/${core_runtime_pid}/exe" 2>/dev/null || true)" = "${core_runtime_identity}" ] && \
         [ "$(stat -Lc '%d:%i:%f:%u:%g' /opt/syswarden/bin/syswarden-core 2>/dev/null || true)" = "${core_installed_identity}" ] && \
         [ "$(sha256sum "/proc/${core_runtime_pid}/exe" 2>/dev/null | awk '{ print $1 }')" = "${core_runtime_sha256}" ] && \
-        [ "$(sha256sum /opt/syswarden/bin/syswarden-core 2>/dev/null | awk '{ print $1 }')" = "${core_installed_sha256}" ]
+    [ "$(sha256sum /opt/syswarden/bin/syswarden-core 2>/dev/null | awk '{ print $1 }')" = "${core_installed_sha256}" ]
+}
+
+legacy_bash_completion_is_exact() {
+    legacy_completion=/etc/bash_completion.d/syswarden
+    [ -f "${legacy_completion}" ] && \
+        [ ! -L "${legacy_completion}" ] && \
+        [ "$(stat -c '%u:%g:%a:%h:%s' \
+            "${legacy_completion}" 2>/dev/null || true)" = \
+            0:0:644:1:16339 ] && \
+        [ "$(hash_file "${legacy_completion}" 2>/dev/null || true)" = \
+            c23c9f6c54b91105e9ecd8ad4431a9a11ad26ba3437bcd20ec2cef1a96e51d21 ]
+}
+
+package_owned_bash_completion_is_exact() {
+    package_completion=/usr/share/bash-completion/completions/syswarden
+    [ -s "${package_completion}" ] && \
+        [ ! -L "${package_completion}" ] && \
+        [ "$(stat -c '%u:%g:%a:%h' \
+            "${package_completion}" 2>/dev/null || true)" = 0:0:644:1 ]
 }
 
 probe_postinstall_contract() {
@@ -2673,8 +2872,28 @@ probe_postinstall_contract() {
         /etc/syswarden/config/modules/99-user.toml; do
         [ -f "${path}" ] && [ ! -L "${path}" ] || mark_postinstall_failure modular-config
     done
-    if [ ! -s /etc/bash_completion.d/syswarden ] || [ -L /etc/bash_completion.d/syswarden ]; then
-        mark_postinstall_failure completion
+    if { [ "${actual_version}" = "${EXPECTED_PREVIOUS_VERSION}" ] && \
+         [ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.2 ]; } || \
+       { [ "${PACKAGE_FAMILY}" = apk ] && \
+         [ "${FORWARD_ONLY_APK_TRANSITION}" = 1 ] && \
+         [ "${EXPECTED_PREVIOUS_VERSION}" = 4.02.8 ] && \
+         [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.2 ] && \
+         [ "${actual_version}" = "${EXPECTED_CANDIDATE_VERSION}" ]; }; then
+        legacy_bash_completion_is_exact || \
+            mark_postinstall_failure completion-legacy
+        if [ -e /usr/share/bash-completion/completions/syswarden ] || \
+           [ -L /usr/share/bash-completion/completions/syswarden ]; then
+            mark_postinstall_failure completion-package-owned-residual
+        fi
+    elif [ "${actual_version}" = "${EXPECTED_CANDIDATE_VERSION}" ] || \
+         [ "${actual_version}" = "${EXPECTED_PREVIOUS_VERSION}" ]; then
+        package_owned_bash_completion_is_exact || \
+            mark_postinstall_failure completion-package-owned
+        if legacy_bash_completion_is_exact; then
+            mark_postinstall_failure completion-legacy-residual
+        fi
+    else
+        mark_postinstall_failure completion-version
     fi
     feed_cron_count=0
     if [ -f /etc/cron.d/syswarden ] && [ ! -L /etc/cron.d/syswarden ] && \
@@ -2838,20 +3057,27 @@ probe_postinstall_contract() {
 verify_installed_inventory() {
     label="$1"
     expected_label="$2"
+    publish_evidence="${3:-1}"
     expected_manifest="${PERSIST_ROOT}/manifest-${expected_label}"
     expected_inventory="${PERSIST_ROOT}/inventory-${expected_label}"
     actual_manifest="/tmp/manifest-installed-${label}"
     actual_inventory="/tmp/inventory-installed-${label}"
     mkdir -p /results/inventories
     if installed_manager_manifest "${actual_manifest}" && cmp -s "${expected_manifest}" "${actual_manifest}"; then
-        cp "${actual_manifest}" "/results/inventories/${PREFIX}-${label}-manager.tsv"
+        if [ "${publish_evidence}" = 1 ]; then
+            cp "${actual_manifest}" "/results/inventories/${PREFIX}-${label}-manager.tsv"
+        fi
         record pass "${PREFIX}.${label}.inventory.manager" "exact native installed manifest sha256=$(hash_file "${actual_manifest}")"
     else
         diff -u "${expected_manifest}" "${actual_manifest}" >> "${COMMAND_LOG}" 2>&1 || true
         record fail "${PREFIX}.${label}.inventory.manager" "installed native manifest differs from the package manifest"
     fi
-    if build_filesystem_inventory "${expected_manifest}" / "${actual_inventory}" && validate_inventory_contract "${actual_inventory}" && cmp -s "${expected_inventory}" "${actual_inventory}"; then
-        cp "${actual_inventory}" "/results/inventories/${PREFIX}-${label}-filesystem.tsv"
+    if build_filesystem_inventory "${expected_manifest}" / "${actual_inventory}" && \
+       validate_inventory_contract "${actual_inventory}" "${expected_label}" && \
+       cmp -s "${expected_inventory}" "${actual_inventory}"; then
+        if [ "${publish_evidence}" = 1 ]; then
+            cp "${actual_inventory}" "/results/inventories/${PREFIX}-${label}-filesystem.tsv"
+        fi
         record pass "${PREFIX}.${label}.inventory.filesystem" "exact type/mode/owner/link/content inventory sha256=$(hash_file "${actual_inventory}")"
     else
         diff -u "${expected_inventory}" "${actual_inventory}" >> "${COMMAND_LOG}" 2>&1 || true
@@ -2863,10 +3089,11 @@ probe_payload() {
     label="$1"
     expected_label="$2"
     expected_version="$3"
+    publish_inventory="${4:-1}"
 
     actual_version="$(installed_version 2>/dev/null || true)"
     check_equal "${label}.version" "${expected_version}" "${actual_version}"
-    verify_installed_inventory "${label}" "${expected_label}"
+    verify_installed_inventory "${label}" "${expected_label}" "${publish_inventory}"
 
     if /opt/syswarden/bin/syswarden-cli --help > /tmp/syswarden-help.out 2>&1; then
         if grep -q '^Usage:' /tmp/syswarden-help.out; then
@@ -2936,6 +3163,17 @@ write_seeded_operator_token() {
             'custom_hash_ipv6 = ""' \
             'use_spamhaus = false' \
             ''
+        if [ "${PACKAGE_FAMILY:-}" = deb ] && \
+           { [ "${SCENARIO}" = remove ] || [ "${SCENARIO}" = purge ]; }; then
+            printf '%s\n' \
+                '[integrations.siem]' \
+                'enabled = true' \
+                'ip = "127.0.0.1"' \
+                'port = "5514"' \
+                'protocol = "udp"' \
+                'tls_ca = ""' \
+                ''
+        fi
         printf '%s\n' '[user]' 'profile_name = "lifecycle-operator"'
     } > "${seeded_operator_token}"
 }
@@ -2973,6 +3211,16 @@ seed_state() {
         printf 'STATE_CERT_HASH=%s\n' "${STATE_CERT_HASH}"
     } > "${OPERATOR_STATE_FILE}"
     chmod 0600 "${OPERATOR_STATE_FILE}"
+}
+
+seed_deb_removal_log() {
+    [ "${PACKAGE_FAMILY}" = deb ] || return 1
+    mkdir -p /var/log/syswarden || return 1
+    printf '%s\n' 'operator-log=preserve-until-explicit-purge' > \
+        /var/log/syswarden/lifecycle-operator.log || return 1
+    chmod 0600 /var/log/syswarden/lifecycle-operator.log || return 1
+    STATE_LOG_HASH="$(hash_file /var/log/syswarden/lifecycle-operator.log)" || return 1
+    [ -n "${STATE_LOG_HASH}" ]
 }
 
 attest_openrc_webtui_pidfile_before_manager() {
@@ -3750,6 +3998,59 @@ assert_all_state_preserved() {
     assert_live_telemetry_data "${label}"
 }
 
+assert_deb_removal_log_preserved() {
+    label="$1"
+    [ "${PACKAGE_FAMILY}" = deb ] || return 1
+    assert_preserved \
+        "${label}" log \
+        /var/log/syswarden/lifecycle-operator.log \
+        "${STATE_LOG_HASH}" 600
+}
+
+assert_deferred_purge_marker() {
+    label="$1"
+    marker=/var/lib/syswarden/removed-awaiting-purge-v1
+    expected_hash=e1a0bbd8e3d90884bdaf9306233e6c2cfb5ab752c3065939139119982fed4514
+    if [ -f "${marker}" ] && [ ! -L "${marker}" ]; then
+        actual_type=regular
+        actual_hash="$(hash_file "${marker}" 2>/dev/null || true)"
+        actual_mode="$(file_mode "${marker}" 2>/dev/null || true)"
+        actual_owner="$(stat -c '%u:%g' "${marker}" 2>/dev/null || true)"
+        actual_links="$(stat -c '%h' "${marker}" 2>/dev/null || true)"
+    elif [ -L "${marker}" ]; then
+        actual_type=symlink
+        actual_hash=invalid
+        actual_mode="$(file_mode "${marker}" 2>/dev/null || true)"
+        actual_owner="$(stat -c '%u:%g' "${marker}" 2>/dev/null || true)"
+        actual_links="$(stat -c '%h' "${marker}" 2>/dev/null || true)"
+    elif [ -e "${marker}" ]; then
+        actual_type=unsupported
+        actual_hash=invalid
+        actual_mode="$(file_mode "${marker}" 2>/dev/null || true)"
+        actual_owner="$(stat -c '%u:%g' "${marker}" 2>/dev/null || true)"
+        actual_links="$(stat -c '%h' "${marker}" 2>/dev/null || true)"
+    else
+        actual_type=missing
+        actual_hash=missing
+        actual_mode=-
+        actual_owner=-
+        actual_links=-
+    fi
+    check_equal "${label}.state.deferred_purge_marker.type" regular "${actual_type}"
+    check_equal "${label}.state.deferred_purge_marker.hash" "${expected_hash}" "${actual_hash}"
+    check_equal "${label}.state.deferred_purge_marker.mode" 600 "${actual_mode}"
+    check_equal "${label}.state.deferred_purge_marker.owner" 0:0 "${actual_owner}"
+    check_equal "${label}.state.deferred_purge_marker.links" 1 "${actual_links}"
+}
+
+assert_dedicated_roots_absent() {
+    label="$1"
+    check_absent "${label}.state.opt_root" /opt/syswarden
+    check_absent "${label}.state.config_root" /etc/syswarden
+    check_absent "${label}.state.data_root" /var/lib/syswarden
+    check_absent "${label}.state.log_root" /var/log/syswarden
+}
+
 assert_package_absent() {
     label="$1"
     expected_label="$2"
@@ -3772,36 +4073,212 @@ assert_package_absent() {
     fi
 }
 
-seed_generated_runtime_artifacts() {
-    mkdir -p /etc/rsyslog.d
-    for path in \
-        /etc/rsyslog.d/99-syswarden-siem.conf \
-        /etc/rsyslog.d/99-syswarden-waf-bridge.conf; do
-        printf '%s\n' 'syswarden-lifecycle-generated-artifact' > "${path}"
+rsyslog_exec_reload_succeeded() {
+    reload_records="$1"
+    [ -n "${reload_records}" ] || return 1
+    printf '%s\n' "${reload_records}" | LC_ALL=C awk '
+        BEGIN { count = 0 }
+        {
+            count++
+            if ($0 !~ /^[{] path=\/[^;]+ ; argv\[\]=[^;]+ ; ignore_errors=(yes|no) ; start_time=\[[^]]+\] ; stop_time=\[[^]]+\] ; pid=[0-9]+ ; code=exited ; status=0(\/SUCCESS)? [}]$/) {
+                exit 1
+            }
+            if (index($0, "start_time=[n/a]") ||
+                index($0, "stop_time=[n/a]")) {
+                exit 1
+            }
+            pid = $0
+            sub(/^.* ; pid=/, "", pid)
+            sub(/ ; code=.*$/, "", pid)
+            if (pid !~ /^[0-9]+$/ || pid + 0 <= 1) {
+                exit 1
+            }
+        }
+        END { if (count < 1) exit 1 }
+    '
+}
+
+rsyslog_reactivation_mode() {
+    reload_before="$1"
+    reload_after="$2"
+    main_pid_before="$3"
+    main_pid_after="$4"
+    active_enter_before="$5"
+    active_enter_after="$6"
+    for reactivation_number in \
+        "${main_pid_before}" \
+        "${main_pid_after}" \
+        "${active_enter_before}" \
+        "${active_enter_after}"; do
+        case "${reactivation_number}" in
+            ''|*[!0-9]*) return 1 ;;
+        esac
     done
-    hash_file /etc/bash_completion.d/syswarden > /tmp/syswarden-completion-before || return 1
-    hash_file /etc/rsyslog.d/99-syswarden-siem.conf > /tmp/syswarden-rsyslog-siem-before || return 1
-    hash_file /etc/rsyslog.d/99-syswarden-waf-bridge.conf > /tmp/syswarden-rsyslog-waf-before || return 1
-    if LC_ALL=C crontab -l > /tmp/syswarden-existing-cron 2>/tmp/syswarden-existing-cron.error; then
-        :
-    elif [ ! -s /tmp/syswarden-existing-cron ] && grep -E -x -q \
-        "(no crontab for root|crontab: no crontab for root|crontab: can't open 'root': No such file or directory)" \
-        /tmp/syswarden-existing-cron.error; then
-        : > /tmp/syswarden-existing-cron
-    else
+    [ "${main_pid_before}" -gt 1 ] && \
+        [ "${main_pid_after}" -gt 1 ] && \
+        [ "${active_enter_before}" -gt 0 ] && \
+        [ "${active_enter_after}" -gt 0 ] || return 1
+
+    if [ -n "${reload_before}" ] && \
+       [ -n "${reload_after}" ] && \
+       [ "${reload_after}" != "${reload_before}" ] && \
+       rsyslog_exec_reload_succeeded "${reload_after}" && \
+       [ "${main_pid_after}" -eq "${main_pid_before}" ]; then
+        printf '%s\n' reload
+        return 0
+    fi
+    if [ "${main_pid_after}" -ne "${main_pid_before}" ] && \
+       [ "${active_enter_after}" -gt "${active_enter_before}" ]; then
+        printf '%s\n' restart
+        return 0
+    fi
+    return 1
+}
+
+seed_generated_runtime_artifacts() {
+    rsyslog_contract="${1:-ambiguous-rsyslog}"
+    evidence_label="${2:-}"
+    mkdir -p /etc/rsyslog.d
+    case "${rsyslog_contract}" in
+        exact-rsyslog)
+            [ "${PACKAGE_FAMILY}" = deb ] || return 1
+            [ -n "${evidence_label}" ] || return 1
+            for path in \
+                /etc/rsyslog.d/99-syswarden-siem.conf \
+                /etc/rsyslog.d/99-syswarden-waf-bridge.conf \
+                /etc/rsyslog.d/.syswarden-rsyslog-provenance-v1; do
+                [ -f "${path}" ] && [ ! -L "${path}" ] || return 1
+                [ "$(stat -c '%u:%g:%a:%h' "${path}" 2>/dev/null || true)" = 0:0:600:1 ] || return 1
+            done
+            grep -F -x -q '*.* @127.0.0.1:5514' \
+                /etc/rsyslog.d/99-syswarden-siem.conf || return 1
+            for fragment in \
+                'File="/var/log/syswarden/waf.json"' \
+                'Tag="syswarden-waf-json"' \
+                'Facility="local7"'; do
+                grep -F -q "${fragment}" \
+                    /etc/rsyslog.d/99-syswarden-siem.conf || return 1
+            done
+            for fragment in \
+                'module(load="omuxsock")' \
+                '$OMUxSockSocket /var/run/syswarden.sock' \
+                'input(type="imfile" File="/var/log/nginx/*.log" Tag="syswarden-waf" ruleset="waf_bridge")' \
+                'input(type="imfile" File="/var/log/auth.log" Tag="syswarden-waf" ruleset="waf_bridge")' \
+                '*.* :omuxsock:;SYSWARDENRaw'; do
+                grep -F -q "${fragment}" \
+                    /etc/rsyslog.d/99-syswarden-waf-bridge.conf || return 1
+            done
+            /usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf >> \
+                "${COMMAND_LOG}" 2>&1 || return 1
+            hash_file /etc/rsyslog.d/99-syswarden-siem.conf > \
+                /tmp/syswarden-rsyslog-siem-before || return 1
+            hash_file /etc/rsyslog.d/99-syswarden-waf-bridge.conf > \
+                /tmp/syswarden-rsyslog-waf-before || return 1
+            wc -c < /etc/rsyslog.d/99-syswarden-siem.conf | tr -d '[:space:]' > \
+                /tmp/syswarden-rsyslog-siem-size || return 1
+            wc -c < /etc/rsyslog.d/99-syswarden-waf-bridge.conf | tr -d '[:space:]' > \
+                /tmp/syswarden-rsyslog-waf-size || return 1
+            [ "$(sed -n '1p' /etc/rsyslog.d/.syswarden-rsyslog-provenance-v1)" = \
+                syswarden-rsyslog-provenance-v1 ] || return 1
+            [ "$(wc -l < /etc/rsyslog.d/.syswarden-rsyslog-provenance-v1 | tr -d '[:space:]')" = 3 ] || return 1
+            grep -F -x -q "$(printf '%s\t%s\t%s' \
+                99-syswarden-siem.conf \
+                "$(cat /tmp/syswarden-rsyslog-siem-size)" \
+                "$(cat /tmp/syswarden-rsyslog-siem-before)")" \
+                /etc/rsyslog.d/.syswarden-rsyslog-provenance-v1 || return 1
+            grep -F -x -q "$(printf '%s\t%s\t%s' \
+                99-syswarden-waf-bridge.conf \
+                "$(cat /tmp/syswarden-rsyslog-waf-size)" \
+                "$(cat /tmp/syswarden-rsyslog-waf-before)")" \
+                /etc/rsyslog.d/.syswarden-rsyslog-provenance-v1 || return 1
+            LC_ALL=C systemctl show rsyslog.service -p ExecReload --value > \
+                /tmp/syswarden-rsyslog-reload-before || return 1
+            LC_ALL=C systemctl show rsyslog.service -p MainPID --value > \
+                /tmp/syswarden-rsyslog-pid-before || return 1
+            LC_ALL=C systemctl show rsyslog.service \
+                -p ActiveEnterTimestampMonotonic --value > \
+                /tmp/syswarden-rsyslog-active-enter-before || return 1
+            rsyslog_pid_before="$(cat /tmp/syswarden-rsyslog-pid-before)"
+            rsyslog_active_enter_before="$(
+                cat /tmp/syswarden-rsyslog-active-enter-before
+            )"
+            case "${rsyslog_pid_before}" in ''|*[!0-9]*) return 1 ;; esac
+            case "${rsyslog_active_enter_before}" in
+                ''|*[!0-9]*) return 1 ;;
+            esac
+            [ "${rsyslog_pid_before}" -gt 1 ] && \
+                [ "${rsyslog_active_enter_before}" -gt 0 ] && \
+                kill -0 "${rsyslog_pid_before}" 2>/dev/null || return 1
+            record pass \
+                "${PREFIX}.${evidence_label}.generated.rsyslog_siem_exact_generated" \
+                "SIEM-enabled rsyslog bytes are product-generated and provenance-bound sha256=$(cat /tmp/syswarden-rsyslog-siem-before)"
+            record pass \
+                "${PREFIX}.${evidence_label}.generated.rsyslog_waf_bridge_exact_generated" \
+                "WAF rsyslog bytes are product-generated and provenance-bound sha256=$(cat /tmp/syswarden-rsyslog-waf-before)"
+            record pass \
+                "${PREFIX}.${evidence_label}.generated.rsyslog_provenance_exact" \
+                "canonical product provenance binds exactly the generated SIEM and WAF artifacts"
+            ;;
+        ambiguous-rsyslog)
+            rsyslog_provenance=/etc/rsyslog.d/.syswarden-rsyslog-provenance-v1
+            [ -f "${rsyslog_provenance}" ] && \
+                [ ! -L "${rsyslog_provenance}" ] && \
+                [ "$(stat -c '%u:%g:%a:%h' \
+                    "${rsyslog_provenance}" 2>/dev/null || true)" = \
+                    0:0:600:1 ] || return 1
+            hash_file "${rsyslog_provenance}" > \
+                /tmp/syswarden-rsyslog-provenance-before || return 1
+            printf '%s\n' '# operator-owned ambiguous SIEM bridge preserved by the lifecycle lab' > \
+                /etc/rsyslog.d/99-syswarden-siem.conf || return 1
+            printf '%s\n' '# operator-owned ambiguous WAF bridge preserved by the lifecycle lab' > \
+                /etc/rsyslog.d/99-syswarden-waf-bridge.conf || return 1
+            chmod 0600 \
+                /etc/rsyslog.d/99-syswarden-siem.conf \
+                /etc/rsyslog.d/99-syswarden-waf-bridge.conf || return 1
+            hash_file /etc/rsyslog.d/99-syswarden-siem.conf > \
+                /tmp/syswarden-rsyslog-siem-before || return 1
+            hash_file /etc/rsyslog.d/99-syswarden-waf-bridge.conf > \
+                /tmp/syswarden-rsyslog-waf-before || return 1
+            ;;
+        *) return 1 ;;
+    esac
+
+    mkdir -p /etc/bash_completion.d || return 1
+    if [ ! -f /tmp/syswarden-completion-before ]; then
+        printf '%s\n' '# operator-owned ambiguous SysWarden completion' > \
+            /etc/bash_completion.d/syswarden || return 1
+        chmod 0644 /etc/bash_completion.d/syswarden || return 1
+        hash_file /etc/bash_completion.d/syswarden > \
+            /tmp/syswarden-completion-before || return 1
+    elif [ ! -f /etc/bash_completion.d/syswarden ] || \
+         [ -L /etc/bash_completion.d/syswarden ] || \
+         [ "$(hash_file /etc/bash_completion.d/syswarden 2>/dev/null || true)" != \
+             "$(cat /tmp/syswarden-completion-before)" ]; then
         return 1
     fi
-    {
-        printf '%s\n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
-        printf '%s\n' '# operator note mentioning syswarden-cli'
-        printf '%s\n' '23 * * * * /srv/operator/bin/syswarden-cli update-feeds >/dev/null 2>&1'
-        printf ' \t \n'
-    } > "${OPERATOR_CRON_FILE}"
-    {
-        cat /tmp/syswarden-existing-cron
-        cat "${OPERATOR_CRON_FILE}"
-    } > /tmp/syswarden-root-cron-before
-    crontab - < /tmp/syswarden-root-cron-before || return 1
+
+    if [ ! -f /tmp/syswarden-root-cron-before ]; then
+        if LC_ALL=C crontab -l > /tmp/syswarden-existing-cron 2>/tmp/syswarden-existing-cron.error; then
+            :
+        elif [ ! -s /tmp/syswarden-existing-cron ] && grep -E -x -q \
+            "(no crontab for root|crontab: no crontab for root|crontab: can't open 'root': No such file or directory)" \
+            /tmp/syswarden-existing-cron.error; then
+            : > /tmp/syswarden-existing-cron
+        else
+            return 1
+        fi
+        {
+            printf '%s\n' '17 * * * * /opt/syswarden/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+            printf '%s\n' '# operator note mentioning syswarden-cli'
+            printf '%s\n' '23 * * * * /srv/operator/bin/syswarden-cli update-feeds >/dev/null 2>&1'
+            printf ' \t \n'
+        } > "${OPERATOR_CRON_FILE}"
+        {
+            cat /tmp/syswarden-existing-cron
+            cat "${OPERATOR_CRON_FILE}"
+        } > /tmp/syswarden-root-cron-before
+        crontab - < /tmp/syswarden-root-cron-before || return 1
+    fi
     LC_ALL=C crontab -l > /tmp/syswarden-root-cron-confirmed 2>/tmp/syswarden-root-cron-confirmed.error || return 1
     cmp -s /tmp/syswarden-root-cron-before /tmp/syswarden-root-cron-confirmed || return 1
     [ -f /etc/cron.d/syswarden ] && [ ! -L /etc/cron.d/syswarden ] || return 1
@@ -3811,6 +4288,7 @@ seed_generated_runtime_artifacts() {
 
 assert_generated_runtime_artifact_contract() {
     label="$1"
+    rsyslog_contract="${2:-ambiguous-rsyslog}"
     if prepare_service_runtime_fixture; then
         record pass "${PREFIX}.${label}.service_manager_calls" "real init, active service manager, and enabled cron provider remain attestable"
     else
@@ -3833,18 +4311,77 @@ assert_generated_runtime_artifact_contract() {
     else
         record fail "${PREFIX}.${label}.generated.completion_residual" "ambiguous shell completion changed during removal"
     fi
-    if [ -f /etc/rsyslog.d/99-syswarden-siem.conf ] && [ ! -L /etc/rsyslog.d/99-syswarden-siem.conf ] && \
-       [ "$(hash_file /etc/rsyslog.d/99-syswarden-siem.conf 2>/dev/null || true)" = "$(cat /tmp/syswarden-rsyslog-siem-before)" ]; then
-        record pass "${PREFIX}.${label}.generated.rsyslog_siem_residual" "ambiguous rsyslog SIEM bridge is preserved for manual recovery"
-    else
-        record fail "${PREFIX}.${label}.generated.rsyslog_siem_residual" "ambiguous rsyslog SIEM bridge changed during removal"
-    fi
-    if [ -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf ] && [ ! -L /etc/rsyslog.d/99-syswarden-waf-bridge.conf ] && \
-       [ "$(hash_file /etc/rsyslog.d/99-syswarden-waf-bridge.conf 2>/dev/null || true)" = "$(cat /tmp/syswarden-rsyslog-waf-before)" ]; then
-        record pass "${PREFIX}.${label}.generated.rsyslog_waf_bridge_residual" "ambiguous rsyslog WAF bridge is preserved for manual recovery"
-    else
-        record fail "${PREFIX}.${label}.generated.rsyslog_waf_bridge_residual" "ambiguous rsyslog WAF bridge changed during removal"
-    fi
+    case "${rsyslog_contract}" in
+        exact-rsyslog)
+            check_absent "${label}.generated.rsyslog_siem_exact_removed" \
+                /etc/rsyslog.d/99-syswarden-siem.conf
+            check_absent "${label}.generated.rsyslog_waf_bridge_exact_removed" \
+                /etc/rsyslog.d/99-syswarden-waf-bridge.conf
+            check_absent "${label}.generated.rsyslog_provenance_removed" \
+                /etc/rsyslog.d/.syswarden-rsyslog-provenance-v1
+            if /usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf >> "${COMMAND_LOG}" 2>&1; then
+                record pass "${PREFIX}.${label}.generated.rsyslog_configuration_valid" \
+                    "complete rsyslog configuration validates after exact generated bridge removal"
+            else
+                record fail "${PREFIX}.${label}.generated.rsyslog_configuration_valid" \
+                    "complete rsyslog configuration is invalid after exact generated bridge removal"
+            fi
+            rsyslog_reload_before="$(cat /tmp/syswarden-rsyslog-reload-before 2>/dev/null || true)"
+            rsyslog_reload_after="$(LC_ALL=C systemctl show rsyslog.service -p ExecReload --value 2>/dev/null || true)"
+            rsyslog_pid_before="$(cat /tmp/syswarden-rsyslog-pid-before 2>/dev/null || true)"
+            rsyslog_active_enter_before="$(cat /tmp/syswarden-rsyslog-active-enter-before 2>/dev/null || true)"
+            rsyslog_pid_after="$(LC_ALL=C systemctl show rsyslog.service -p MainPID --value 2>/dev/null || true)"
+            rsyslog_active_enter_after="$(LC_ALL=C systemctl show rsyslog.service -p ActiveEnterTimestampMonotonic --value 2>/dev/null || true)"
+            case "${rsyslog_pid_after}" in ''|*[!0-9]*) rsyslog_pid_after=0 ;; esac
+            rsyslog_reactivation_proof="$(rsyslog_reactivation_mode \
+                "${rsyslog_reload_before}" "${rsyslog_reload_after}" \
+                "${rsyslog_pid_before}" "${rsyslog_pid_after}" \
+                "${rsyslog_active_enter_before}" \
+                "${rsyslog_active_enter_after}" 2>/dev/null || true)"
+            if { [ "${rsyslog_reactivation_proof}" = reload ] || \
+                 [ "${rsyslog_reactivation_proof}" = restart ]; } && \
+               [ "$(systemctl is-active rsyslog.service 2>/dev/null || true)" = active ] && \
+               [ "${rsyslog_pid_after}" -gt 1 ] && \
+               kill -0 "${rsyslog_pid_after}" 2>/dev/null; then
+                record pass "${PREFIX}.${label}.generated.rsyslog_reactivated" \
+                    "rsyslog completed a successful ${rsyslog_reactivation_proof} activation and remains active after exact cleanup"
+            else
+                record fail "${PREFIX}.${label}.generated.rsyslog_reactivated" \
+                    "rsyslog lacks portable evidence of a successful reload or restart fallback after exact cleanup"
+            fi
+            ;;
+        ambiguous-rsyslog)
+            if [ -f /etc/rsyslog.d/99-syswarden-siem.conf ] && [ ! -L /etc/rsyslog.d/99-syswarden-siem.conf ] && \
+               [ "$(hash_file /etc/rsyslog.d/99-syswarden-siem.conf 2>/dev/null || true)" = "$(cat /tmp/syswarden-rsyslog-siem-before)" ]; then
+                record pass "${PREFIX}.${label}.generated.rsyslog_siem_residual" "ambiguous rsyslog SIEM bridge is preserved for manual recovery"
+            else
+                record fail "${PREFIX}.${label}.generated.rsyslog_siem_residual" "ambiguous rsyslog SIEM bridge changed during removal"
+            fi
+            if [ -f /etc/rsyslog.d/99-syswarden-waf-bridge.conf ] && [ ! -L /etc/rsyslog.d/99-syswarden-waf-bridge.conf ] && \
+               [ "$(hash_file /etc/rsyslog.d/99-syswarden-waf-bridge.conf 2>/dev/null || true)" = "$(cat /tmp/syswarden-rsyslog-waf-before)" ]; then
+                record pass "${PREFIX}.${label}.generated.rsyslog_waf_bridge_residual" "ambiguous rsyslog WAF bridge is preserved for manual recovery"
+            else
+                record fail "${PREFIX}.${label}.generated.rsyslog_waf_bridge_residual" "ambiguous rsyslog WAF bridge changed during removal"
+            fi
+            rsyslog_provenance=/etc/rsyslog.d/.syswarden-rsyslog-provenance-v1
+            if [ -f "${rsyslog_provenance}" ] && \
+               [ ! -L "${rsyslog_provenance}" ] && \
+               [ "$(stat -c '%u:%g:%a:%h' \
+                   "${rsyslog_provenance}" 2>/dev/null || true)" = \
+                   0:0:600:1 ] && \
+               [ "$(hash_file "${rsyslog_provenance}" 2>/dev/null || true)" = \
+                   "$(cat /tmp/syswarden-rsyslog-provenance-before)" ]; then
+                record pass \
+                    "${PREFIX}.${label}.generated.rsyslog_provenance_residual" \
+                    "ambiguous rsyslog provenance is preserved byte-exact for manual recovery"
+            else
+                record fail \
+                    "${PREFIX}.${label}.generated.rsyslog_provenance_residual" \
+                    "ambiguous rsyslog provenance changed during removal"
+            fi
+            ;;
+        *) return 1 ;;
+    esac
     check_absent "${label}.generated.cron_d_owned" /etc/cron.d/syswarden
     check_absent "${label}.generated.cron_d_pending" /etc/cron.d/.syswarden.pending-v1
     if ! LC_ALL=C crontab -l > /tmp/syswarden-root-cron-after 2>/tmp/syswarden-remove-cron.error; then
@@ -3982,29 +4519,62 @@ scenario_upgrade_rollback_restart_two() {
 scenario_remove() {
     prepare_expected_payloads || return
     seed_state
+    if [ "${PACKAGE_FAMILY}" = deb ]; then
+        seed_deb_removal_log || return
+    fi
     prepare_package_transition || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
-    seed_generated_runtime_artifacts || return
     case "${PACKAGE_FAMILY}" in
-        deb|apk)
+        deb)
+            prepare_package_transition || return
+            seed_generated_runtime_artifacts exact-rsyslog remove || return
+            run_step remove remove_package || return
+            assert_package_absent remove candidate
+            assert_generated_runtime_artifact_contract remove exact-rsyslog
+            assert_all_state_preserved remove
+            assert_deb_removal_log_preserved remove
+            assert_deferred_purge_marker remove
+
+            prepare_package_transition || return
+            run_install_step reinstall-after-remove.candidate \
+                "${CANDIDATE_PACKAGE}" || return
+            probe_payload reinstall-after-remove candidate "${CANDIDATE_VERSION}" 0
+            assert_all_state_preserved reinstall-after-remove
+            assert_deb_removal_log_preserved reinstall-after-remove
+            check_absent \
+                reinstall-after-remove.state.deferred_purge_marker \
+                /var/lib/syswarden/removed-awaiting-purge-v1
+
+            prepare_package_transition || return
+            seed_generated_runtime_artifacts \
+                exact-rsyslog remove-before-purge || return
+            run_step remove-before-purge remove_package || return
+            assert_package_absent remove-before-purge candidate
+            assert_generated_runtime_artifact_contract \
+                remove-before-purge exact-rsyslog
+            assert_all_state_preserved remove-before-purge
+            assert_deb_removal_log_preserved remove-before-purge
+            assert_deferred_purge_marker remove-before-purge
+
+            run_step purge-after-remove purge_package || return
+            assert_package_absent purge-after-remove candidate
+            assert_dedicated_roots_absent purge-after-remove
+            ;;
+        apk)
+            seed_generated_runtime_artifacts || return
             run_step remove remove_package || return
             assert_package_absent remove candidate
             assert_generated_runtime_artifact_contract remove
-            assert_all_state_preserved remove
+            assert_dedicated_roots_absent remove
             ;;
         rpm)
+            seed_generated_runtime_artifacts || return
             run_step final-removal remove_package || return
             assert_package_absent final-removal candidate
             assert_generated_runtime_artifact_contract final-removal
-            check_absent final-removal.state.config /etc/syswarden/config/lifecycle-operator.conf
-            check_absent final-removal.state.token /etc/syswarden/config/modules/99-user.toml
-            check_absent final-removal.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
-            check_absent final-removal.state.list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6
-            check_absent final-removal.state.certificate /etc/syswarden/tls/operator.pem
-            assert_preserved final-removal operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600
-            assert_live_telemetry_data final-removal
+            assert_dedicated_roots_absent final-removal
             if ! installed_version >/dev/null 2>&1 && [ ! -s /tmp/remaining-final-removal ]; then
                 record pass "${PREFIX}.final-removal.purge-equivalent" "RPM final erase completed its verified purge-equivalent semantics"
             else
@@ -4017,6 +4587,9 @@ scenario_remove() {
 scenario_purge() {
     prepare_expected_payloads || return
     seed_state
+    if [ "${PACKAGE_FAMILY}" = deb ]; then
+        seed_deb_removal_log || return
+    fi
     prepare_package_transition || return
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
@@ -4027,16 +4600,10 @@ scenario_purge() {
     assert_generated_runtime_artifact_contract purge
     case "${PACKAGE_FAMILY}" in
         deb)
-            check_absent purge.state.config /etc/syswarden/config/lifecycle-operator.conf
-            check_absent purge.state.token /etc/syswarden/config/modules/99-user.toml
-            check_absent purge.state.list /etc/syswarden/lists/syswarden_blacklist.ipv4
-            check_absent purge.state.list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6
-            check_absent purge.state.certificate /etc/syswarden/tls/operator.pem
-            assert_preserved purge operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600
-            assert_live_telemetry_data purge
+            assert_dedicated_roots_absent purge
             ;;
         apk)
-            assert_all_state_preserved purge
+            assert_dedicated_roots_absent purge
             ;;
     esac
 }
@@ -4141,7 +4708,67 @@ def validate_event_contract(
         )
 
 
-def _validate_manager_paths(family: str, paths: list[str]) -> None:
+def _inventory_role_for_phase(label: str) -> str:
+    if label in {"previous", "rollback"}:
+        return "previous"
+    if label in {
+        "candidate",
+        "reinstall",
+        "restart-one",
+        "restart-two",
+        "recovery",
+        "fresh",
+    }:
+        return "candidate"
+    raise LifecycleLabError(f"unsupported inventory phase: {label!r}")
+
+
+def _uses_legacy_completion_payload(
+    family: str,
+    role: str,
+    version: str,
+    candidate_version: str,
+    *,
+    forward_only_apk: bool = False,
+) -> bool:
+    if role not in {"previous", "candidate"}:
+        raise LifecycleLabError(f"unsupported package artifact role: {role!r}")
+    parse_syswarden_version(version)
+    parse_syswarden_version(candidate_version)
+    if forward_only_apk:
+        if (
+            family != "apk"
+            or candidate_version != FORWARD_ONLY_APK_CANDIDATE_VERSION
+        ):
+            raise LifecycleLabError(
+                "forward-only APK completion contract is not byte-bound"
+            )
+        expected_version = (
+            FORWARD_ONLY_APK_PREVIOUS_VERSION
+            if role == "previous"
+            else FORWARD_ONLY_APK_CANDIDATE_VERSION
+        )
+        if version != expected_version:
+            raise LifecycleLabError(
+                "forward-only APK completion role/version is inconsistent"
+            )
+        return True
+    if role != "previous":
+        return False
+    if version == LEGACY_BASH_COMPLETION_VERSION:
+        return True
+    return False
+
+
+def _validate_manager_paths(
+    family: str,
+    paths: list[str],
+    *,
+    role: str,
+    version: str,
+    candidate_version: str,
+    forward_only_apk: bool = False,
+) -> None:
     if paths != sorted(paths) or len(paths) != len(set(paths)):
         raise LifecycleLabError(
             "native package-manager inventory must be sorted and duplicate-free"
@@ -4157,12 +4784,30 @@ def _validate_manager_paths(family: str, paths: list[str]) -> None:
             "native package-manager inventory contains an unsafe path"
         )
     observed = set(paths)
+    legacy_completion = _uses_legacy_completion_payload(
+        family,
+        role,
+        version,
+        candidate_version,
+        forward_only_apk=forward_only_apk,
+    )
+    expected_payload_paths = set(
+        LEGACY_PACKAGE_PAYLOAD_PATHS
+        if legacy_completion
+        else PACKAGE_PAYLOAD_PATHS
+    )
     if family == "deb":
-        if observed != DEB_PACKAGE_PATHS:
+        expected = (
+            LEGACY_DEB_PACKAGE_PATHS if legacy_completion else DEB_PACKAGE_PATHS
+        )
+        if observed != expected:
             raise LifecycleLabError("DEB native package inventory is not exact")
         return
     if family == "apk":
-        if observed != APK_PACKAGE_PATHS:
+        expected = (
+            LEGACY_APK_PACKAGE_PATHS if legacy_completion else APK_PACKAGE_PATHS
+        )
+        if observed != expected:
             raise LifecycleLabError("APK native package inventory is not exact")
         return
     if family != "rpm":
@@ -4177,7 +4822,7 @@ def _validate_manager_paths(family: str, paths: list[str]) -> None:
         path.rsplit("/", 1)[0] for path in build_links
     }
     expected = (
-        set(PACKAGE_PAYLOAD_PATHS)
+        expected_payload_paths
         | {"/usr/lib/.build-id"}
         | required_build_directories
         | build_links
@@ -4194,10 +4839,29 @@ def validate_inventory_snapshot(
     family: str,
     manager_paths: list[str],
     filesystem: list[dict[str, object]],
+    *,
+    role: str,
+    version: str,
+    candidate_version: str,
+    forward_only_apk: bool = False,
 ) -> None:
     """Validate the full native path list and every filesystem metadata entry."""
 
-    _validate_manager_paths(family, manager_paths)
+    _validate_manager_paths(
+        family,
+        manager_paths,
+        role=role,
+        version=version,
+        candidate_version=candidate_version,
+        forward_only_apk=forward_only_apk,
+    )
+    legacy_completion = _uses_legacy_completion_payload(
+        family,
+        role,
+        version,
+        candidate_version,
+        forward_only_apk=forward_only_apk,
+    )
     if len(filesystem) != len(manager_paths):
         raise LifecycleLabError(
             "filesystem inventory does not cover every native package path"
@@ -4246,6 +4910,8 @@ def validate_inventory_snapshot(
         "/opt/syswarden/bin/syswarden-tui": "750",
         "/opt/syswarden/signatures.json": "640",
     }
+    if not legacy_completion:
+        file_modes[BASH_COMPLETION_PATH] = "644"
     for path, mode in file_modes.items():
         entry = entries[path]
         if (
@@ -4271,7 +4937,15 @@ def validate_inventory_snapshot(
                 f"package public-link contract failed at {path}"
             )
     if family == "deb":
-        for path in DEB_PACKAGE_PATHS - set(PACKAGE_PAYLOAD_PATHS) - {
+        expected_paths = (
+            LEGACY_DEB_PACKAGE_PATHS if legacy_completion else DEB_PACKAGE_PATHS
+        )
+        expected_payload_paths = set(
+            LEGACY_PACKAGE_PAYLOAD_PATHS
+            if legacy_completion
+            else PACKAGE_PAYLOAD_PATHS
+        )
+        for path in expected_paths - expected_payload_paths - {
             "/usr/share/doc/syswarden/changelog.gz"
         }:
             entry = entries[path]
@@ -4319,8 +4993,18 @@ def validate_inventory_snapshot(
 
 
 def parse_scenario_inventory_evidence(
-    result_root: Path, family: str, scenario: str
+    result_root: Path,
+    family: str,
+    scenario: str,
+    *,
+    previous_version: str,
+    candidate_version: str,
 ) -> dict[str, object]:
+    forward_only_apk = (
+        family == "apk"
+        and previous_version == FORWARD_ONLY_APK_PREVIOUS_VERSION
+        and candidate_version == FORWARD_ONLY_APK_CANDIDATE_VERSION
+    )
     inventory_root = result_root / "inventories"
     try:
         root_metadata = inventory_root.lstat()
@@ -4379,7 +5063,19 @@ def parse_scenario_inventory_evidence(
                     "value": value,
                 }
             )
-        validate_inventory_snapshot(family, manager_paths, filesystem)
+        role = _inventory_role_for_phase(label)
+        role_version = (
+            previous_version if role == "previous" else candidate_version
+        )
+        validate_inventory_snapshot(
+            family,
+            manager_paths,
+            filesystem,
+            role=role,
+            version=role_version,
+            candidate_version=candidate_version,
+            forward_only_apk=forward_only_apk,
+        )
         evidence[label] = {
             "manager_paths": manager_paths,
             "filesystem": filesystem,
@@ -4388,8 +5084,18 @@ def parse_scenario_inventory_evidence(
 
 
 def validate_scenario_inventory_evidence(
-    evidence: object, family: str, scenario: str
+    evidence: object,
+    family: str,
+    scenario: str,
+    *,
+    previous_version: str,
+    candidate_version: str,
 ) -> None:
+    forward_only_apk = (
+        family == "apk"
+        and previous_version == FORWARD_ONLY_APK_PREVIOUS_VERSION
+        and candidate_version == FORWARD_ONLY_APK_CANDIDATE_VERSION
+    )
     labels = expected_inventory_phase_labels(scenario)
     if not isinstance(evidence, dict) or set(evidence) != set(labels):
         raise LifecycleLabError(
@@ -4415,7 +5121,19 @@ def validate_scenario_inventory_evidence(
             raise LifecycleLabError(
                 f"scenario inventory phase values are invalid for {family}/{scenario}/{label}"
             )
-        validate_inventory_snapshot(family, manager_paths, filesystem)
+        role = _inventory_role_for_phase(label)
+        role_version = (
+            previous_version if role == "previous" else candidate_version
+        )
+        validate_inventory_snapshot(
+            family,
+            manager_paths,
+            filesystem,
+            role=role,
+            version=role_version,
+            candidate_version=candidate_version,
+            forward_only_apk=forward_only_apk,
+        )
 
 
 def command_log_tail(result: CommandResult, command_log: Path | None = None) -> str:
@@ -6947,7 +7665,11 @@ def run_platform(
                 events = parse_events(event_file)
                 validate_event_contract(events, spec.family, scenario)
                 inventory_evidence = parse_scenario_inventory_evidence(
-                    result_root, spec.family, scenario
+                    result_root,
+                    spec.family,
+                    scenario,
+                    previous_version=pair.previous.version,
+                    candidate_version=pair.candidate.version,
                 )
             except LifecycleLabError as exc:
                 inventory_evidence = {}
@@ -7999,6 +8721,12 @@ def classify_lifecycle_evidence(
                         scenario_result.get("inventory_evidence"),
                         family,
                         scenario_name,
+                        previous_version=str(
+                            platform_result.get("previous_version", "")
+                        ),
+                        candidate_version=str(
+                            platform_result.get("candidate_version", "")
+                        ),
                     )
                 except LifecycleLabError:
                     coordinate_structural.append(

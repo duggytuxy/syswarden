@@ -12,6 +12,7 @@ func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBAC
 	previousPrepare := prepareFirewallStateForRemoval
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
+	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousUninstall := uninstallHostSystem
 	t.Cleanup(func() {
@@ -20,6 +21,7 @@ func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBAC
 		prepareFirewallStateForRemoval = previousPrepare
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
+		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removePreparedServiceArtifacts = previousRemoveServices
 		uninstallHostSystem = previousUninstall
 	})
@@ -173,6 +175,7 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 	previousPrepare := prepareFirewallStateForRemoval
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
+	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousUninstall := uninstallHostSystem
 	t.Cleanup(func() {
@@ -181,6 +184,7 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 		prepareFirewallStateForRemoval = previousPrepare
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
+		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removePreparedServiceArtifacts = previousRemoveServices
 		uninstallHostSystem = previousUninstall
 	})
@@ -206,6 +210,10 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 		order = append(order, "firewall-cleanup")
 		return nil
 	}
+	removeOwnedIntegrationArtifactsForRemoval = func() error {
+		order = append(order, "integration-artifact-removal")
+		return nil
+	}
 	removePreparedServiceArtifacts = func() error {
 		order = append(order, "service-artifact-removal")
 		return nil
@@ -217,7 +225,7 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 	if err := uninstallCmd.RunE(uninstallCmd, nil); err != nil {
 		t.Fatalf("verified uninstall: %v", err)
 	}
-	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,service-artifact-removal,host-removal" {
+	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,integration-artifact-removal,service-artifact-removal,host-removal" {
 		t.Fatalf("uninstall order = %q", got)
 	}
 }
@@ -228,6 +236,7 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 	previousPrepare := prepareFirewallStateForRemoval
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
+	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	t.Cleanup(func() {
 		beginRemoval = previousBegin
@@ -235,6 +244,7 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 		prepareFirewallStateForRemoval = previousPrepare
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
+		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removePreparedServiceArtifacts = previousRemoveServices
 	})
 
@@ -259,6 +269,10 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 		order = append(order, "firewall-cleanup")
 		return nil
 	}
+	removeOwnedIntegrationArtifactsForRemoval = func() error {
+		order = append(order, "integration-artifact-removal")
+		return nil
+	}
 	removePreparedServiceArtifacts = func() error {
 		order = append(order, "service-artifact-removal")
 		return nil
@@ -266,8 +280,48 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 	if err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil); err != nil {
 		t.Fatalf("prepare-package-removal: %v", err)
 	}
-	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,service-artifact-removal" {
+	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,integration-artifact-removal,service-artifact-removal" {
 		t.Fatalf("package removal preparation order = %q", got)
+	}
+}
+
+func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *testing.T) {
+	previousBegin := beginRemoval
+	previousCron := removeOwnedCronStateForRemoval
+	previousPrepare := prepareFirewallStateForRemoval
+	previousWireGuard := removeOwnedWireGuardStateForRemoval
+	previousCleanup := cleanupFirewallStateForRemoval
+	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousRemoveServices := removePreparedServiceArtifacts
+	t.Cleanup(func() {
+		beginRemoval = previousBegin
+		removeOwnedCronStateForRemoval = previousCron
+		prepareFirewallStateForRemoval = previousPrepare
+		removeOwnedWireGuardStateForRemoval = previousWireGuard
+		cleanupFirewallStateForRemoval = previousCleanup
+		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removePreparedServiceArtifacts = previousRemoveServices
+	})
+
+	sentinel := errors.New("synthetic rsyslog recovery failure")
+	serviceArtifactCalls := 0
+	beginRemoval = func() error { return nil }
+	prepareFirewallStateForRemoval = func() error { return nil }
+	removeOwnedCronStateForRemoval = func() error { return nil }
+	removeOwnedWireGuardStateForRemoval = func() error { return nil }
+	cleanupFirewallStateForRemoval = func() error { return nil }
+	removeOwnedIntegrationArtifactsForRemoval = func() error { return sentinel }
+	removePreparedServiceArtifacts = func() error {
+		serviceArtifactCalls++
+		return nil
+	}
+	err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil)
+	if err == nil || !errors.Is(err, sentinel) ||
+		!strings.Contains(err.Error(), "durable removal barrier is retained") {
+		t.Fatalf("integration cleanup refusal = %v", err)
+	}
+	if serviceArtifactCalls != 0 {
+		t.Fatalf("service artifacts removed after integration failure: %d", serviceArtifactCalls)
 	}
 }
 

@@ -41,6 +41,29 @@
 - **Installation regression coverage:** Reproduce the upstream `2002::/16`
   6to4 case, prove that the entry is absent from the canonical IPv6 output and
   retain failures for malformed entries or an insufficient post-filter source.
+- **Package-owned shell completion:** Install Bash completion as an immutable
+  package payload under `/usr/share/bash-completion/completions/syswarden`.
+  Stop package hooks from writing `/etc/bash_completion.d` or `/root/.bashrc`,
+  and remove only the byte-exact historical v4.02.8 through v4.03.2 completion
+  during migration or verified removal. Preserve every modified, linked or
+  otherwise ambiguous operator path.
+- **Attributed integration cleanup:** Remove only byte-exact SysWarden WAF and
+  enabled SIEM rsyslog fragments while the installed binary and configuration
+  can still attest their expected bytes. Record published identities in a
+  private root-owned provenance registry so later configuration changes can
+  remove an exact obsolete fragment without claiming an operator file. Pin
+  root-controlled directories, publish and quarantine atomically, recover a
+  bounded interrupted operation, reactivate rsyslog before commit and preserve
+  every concurrent or ambiguous replacement together with its provenance.
+- **Explicit package purge semantics:** Keep Debian `remove` non-destructive for
+  `/etc/syswarden`, `/var/lib/syswarden` and `/var/log/syswarden`. Treat Debian
+  `purge`, final RPM erase and APK post-deinstall as destructive removal of
+  those dedicated namespaces. Refuse mounted roots or descendants before
+  changing removal state, preserve an exact deferred barrier across Debian
+  remove, consume it only after a successful reinstall, and refuse any active
+  or ambiguous barrier. Move the exact final barrier outside the state root
+  before removing that root so a retry or a successful reinstall can recover
+  every bounded crash window without crossing an external mount.
 
 ### RELEASE GATE
 
@@ -61,6 +84,22 @@
   SHA, workflow artifact identity and package SHA-256. Its evidence must show
   the bounded warning, absence of the entry from published lists, successful
   service health and no package left in `iF` state.
+- Disposable Ubuntu 26.04, AlmaLinux 10 and Alpine 3.24 AMD64 hosts must bind
+  the exact candidate source SHA, workflow run, artifact ID and package digest.
+  Their native package-manager records must prove v4.03.2 to v4.03.3 upgrade,
+  configuration preservation, service health, reload and the family-specific
+  destructive removal contract. The Ubuntu host must additionally exercise
+  isolated GEO, ASN and WAAP threshold policy without writing synthetic events
+  to a real authentication log or leaving test bans behind.
+
+### POST-PUBLICATION CHECK
+
+- Keep one disposable host on the exact published v4.03.2 package until the
+  v4.03.3 Release is public. Run `syswarden update` only after GitHub
+  `releases/latest` resolves to v4.03.3, then attest the embedded Ed25519 trust
+  root, signed manifest, selected AMD64 package digest, installed v4.03.3
+  package record and service health. This smoke test cannot be fabricated or
+  claimed before publication.
 
 ---
 
