@@ -138,23 +138,72 @@ jobs:
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               # The protected qualification, package byte comparison, signed
               # update manifest, tag resolution and origin/main ancestry bind
-              # the release to one exact SHA. Keep this release-specific
-              # exception proportional and independent of retired platforms.
-              v4032_amd64_parent_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4032_amd64_parent_sha}" != "e121e832492e6e107822441edaf5edef569ac0ef" ]]; then
-                echo "ERROR: the v4.03.2 AMD64-only candidate is not based on the reviewed PR113 squash." >&2
+              # the release to one exact reviewed two-commit chain. Keep this
+              # release-specific exception proportional and fail closed.
+              v4032_release_commit_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_release_commit_sha}" != "28b7c055ceb9cc6bd0de8d66045aec76adf49db2" ]]; then
+                echo "ERROR: the v4.03.2 candidate is not based on the reviewed PR114 squash." >&2
                 exit 1
               fi
-              v4032_amd64_expected_subject='Release : support AMD64 packages only (#114)'
-              if [[ "${commit_subject}" != "${v4032_amd64_expected_subject}" ]]; then
-                echo "ERROR: the v4.03.2 AMD64-only candidate requires the exact reviewed squash subject." >&2
+              v4032_release_base_sha="$(git rev-parse HEAD^^)"
+              if [[ "${v4032_release_base_sha}" != "e121e832492e6e107822441edaf5edef569ac0ef" ]]; then
+                echo "ERROR: the reviewed PR114 squash is not based on the reviewed PR113 squash." >&2
                 exit 1
               fi
-              read -r -a v4032_amd64_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
-              if (( ${#v4032_amd64_head_line[@]} != 2 )); then
-                echo "ERROR: the v4.03.2 AMD64-only candidate must be one linear commit." >&2
+              v4032_expected_subject='Qualification : bind v4.03.2 release tip (#115)'
+              if [[ "${commit_subject}" != "${v4032_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 candidate requires the exact reviewed qualification squash subject." >&2
                 exit 1
               fi
+              v4032_release_subject="$(git log -1 --format=%s HEAD^)"
+              v4032_expected_release_subject='Release : support AMD64 packages only (#114)'
+              if [[ "${v4032_release_subject}" != "${v4032_expected_release_subject}" ]]; then
+                echo "ERROR: the reviewed PR114 squash subject is not exact." >&2
+                exit 1
+              fi
+              read -r -a v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_release_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 qualification tip and reviewed release commit must be linear." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 release-tip diff contract
+              expected_v4032_fix_diff=(
+                M ".github/workflows/release-manager.yml"
+                M "scripts/ci/release_gate_test.py"
+              )
+              mapfile -d '' -t actual_v4032_fix_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_fix_diff[@]} != ${#expected_v4032_fix_diff[@]} )); then
+                echo "ERROR: the v4.03.2 qualification tip must modify exactly the two reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_fix_diff[@]}; index++)); do
+                if [[ "${actual_v4032_fix_diff[index]}" != "${expected_v4032_fix_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 qualification tip contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_fix_paths=(
+                ".github/workflows/release-manager.yml"
+                "scripts/ci/release_gate_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_fix_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 fix path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 release-tip diff contract
               git diff --quiet HEAD^ HEAD -- \
                 src/core/syswarden-cli/pkg/system/upgrade.go \
                 src/core/syswarden-tui/main.go \
@@ -637,23 +686,72 @@ jobs:
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               # The protected qualification, package byte comparison, signed
               # update manifest, tag resolution and origin/main ancestry bind
-              # the release to one exact SHA. Keep this release-specific
-              # exception proportional and independent of retired platforms.
-              v4032_amd64_parent_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4032_amd64_parent_sha}" != "e121e832492e6e107822441edaf5edef569ac0ef" ]]; then
-                echo "ERROR: the v4.03.2 AMD64-only candidate is not based on the reviewed PR113 squash." >&2
+              # the release to one exact reviewed two-commit chain. Keep this
+              # release-specific exception proportional and fail closed.
+              v4032_release_commit_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_release_commit_sha}" != "28b7c055ceb9cc6bd0de8d66045aec76adf49db2" ]]; then
+                echo "ERROR: the v4.03.2 candidate is not based on the reviewed PR114 squash." >&2
                 exit 1
               fi
-              v4032_amd64_expected_subject='Release : support AMD64 packages only (#114)'
-              if [[ "${commit_subject}" != "${v4032_amd64_expected_subject}" ]]; then
-                echo "ERROR: the v4.03.2 AMD64-only candidate requires the exact reviewed squash subject." >&2
+              v4032_release_base_sha="$(git rev-parse HEAD^^)"
+              if [[ "${v4032_release_base_sha}" != "e121e832492e6e107822441edaf5edef569ac0ef" ]]; then
+                echo "ERROR: the reviewed PR114 squash is not based on the reviewed PR113 squash." >&2
                 exit 1
               fi
-              read -r -a v4032_amd64_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
-              if (( ${#v4032_amd64_head_line[@]} != 2 )); then
-                echo "ERROR: the v4.03.2 AMD64-only candidate must be one linear commit." >&2
+              v4032_expected_subject='Qualification : bind v4.03.2 release tip (#115)'
+              if [[ "${commit_subject}" != "${v4032_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 candidate requires the exact reviewed qualification squash subject." >&2
                 exit 1
               fi
+              v4032_release_subject="$(git log -1 --format=%s HEAD^)"
+              v4032_expected_release_subject='Release : support AMD64 packages only (#114)'
+              if [[ "${v4032_release_subject}" != "${v4032_expected_release_subject}" ]]; then
+                echo "ERROR: the reviewed PR114 squash subject is not exact." >&2
+                exit 1
+              fi
+              read -r -a v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_release_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 qualification tip and reviewed release commit must be linear." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 release-tip diff contract
+              expected_v4032_fix_diff=(
+                M ".github/workflows/release-manager.yml"
+                M "scripts/ci/release_gate_test.py"
+              )
+              mapfile -d '' -t actual_v4032_fix_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_fix_diff[@]} != ${#expected_v4032_fix_diff[@]} )); then
+                echo "ERROR: the v4.03.2 qualification tip must modify exactly the two reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_fix_diff[@]}; index++)); do
+                if [[ "${actual_v4032_fix_diff[index]}" != "${expected_v4032_fix_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 qualification tip contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_fix_paths=(
+                ".github/workflows/release-manager.yml"
+                "scripts/ci/release_gate_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_fix_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 fix path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 release-tip diff contract
               git diff --quiet HEAD^ HEAD -- \
                 src/core/syswarden-cli/pkg/system/upgrade.go \
                 src/core/syswarden-tui/main.go \
