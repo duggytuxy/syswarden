@@ -138,45 +138,59 @@ jobs:
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               # The protected qualification, package byte comparison, signed
               # update manifest, tag resolution and origin/main ancestry bind
-              # the release to one exact reviewed two-commit chain. Keep this
+              # the release to one exact reviewed three-commit chain. Keep this
               # release-specific exception proportional and fail closed.
-              v4032_release_commit_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4032_release_commit_sha}" != "28b7c055ceb9cc6bd0de8d66045aec76adf49db2" ]]; then
-                echo "ERROR: the v4.03.2 candidate is not based on the reviewed PR114 squash." >&2
+              v4032_binding_commit_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_binding_commit_sha}" != "2c2568b591ee622805339394de7501489a44ff2f" ]]; then
+                echo "ERROR: the v4.03.2 candidate is not based on the reviewed PR115 squash." >&2
                 exit 1
               fi
-              v4032_release_base_sha="$(git rev-parse HEAD^^)"
+              v4032_release_commit_sha="$(git rev-parse HEAD^^)"
+              if [[ "${v4032_release_commit_sha}" != "28b7c055ceb9cc6bd0de8d66045aec76adf49db2" ]]; then
+                echo "ERROR: the reviewed PR115 squash is not based on the reviewed PR114 squash." >&2
+                exit 1
+              fi
+              v4032_release_base_sha="$(git rev-parse HEAD^^^)"
               if [[ "${v4032_release_base_sha}" != "e121e832492e6e107822441edaf5edef569ac0ef" ]]; then
                 echo "ERROR: the reviewed PR114 squash is not based on the reviewed PR113 squash." >&2
                 exit 1
               fi
-              v4032_expected_subject='Qualification : bind v4.03.2 release tip (#115)'
+              v4032_expected_subject='Qualification : bind v4.03.2 unsigned evidence SHA (#116)'
               if [[ "${commit_subject}" != "${v4032_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 candidate requires the exact reviewed qualification squash subject." >&2
                 exit 1
               fi
-              v4032_release_subject="$(git log -1 --format=%s HEAD^)"
+              v4032_binding_subject="$(git log -1 --format=%s HEAD^)"
+              v4032_expected_binding_subject='Qualification : bind v4.03.2 release tip (#115)'
+              if [[ "${v4032_binding_subject}" != "${v4032_expected_binding_subject}" ]]; then
+                echo "ERROR: the reviewed PR115 squash subject is not exact." >&2
+                exit 1
+              fi
+              v4032_release_subject="$(git log -1 --format=%s HEAD^^)"
               v4032_expected_release_subject='Release : support AMD64 packages only (#114)'
               if [[ "${v4032_release_subject}" != "${v4032_expected_release_subject}" ]]; then
                 echo "ERROR: the reviewed PR114 squash subject is not exact." >&2
                 exit 1
               fi
               read -r -a v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
-              read -r -a v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^)"
-              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_release_line[@]} != 2 )); then
-                echo "ERROR: the v4.03.2 qualification tip and reviewed release commit must be linear." >&2
+              read -r -a v4032_binding_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+              read -r -a v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^^)"
+              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_binding_line[@]} != 2 || ${#v4032_release_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 qualification tip and both reviewed parent commits must be linear." >&2
                 exit 1
               fi
               # BEGIN exact v4.03.2 release-tip diff contract
               expected_v4032_fix_diff=(
                 M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
                 M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
               )
               mapfile -d '' -t actual_v4032_fix_diff < <(
                 git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
               )
               if (( ${#actual_v4032_fix_diff[@]} != ${#expected_v4032_fix_diff[@]} )); then
-                echo "ERROR: the v4.03.2 qualification tip must modify exactly the two reviewed files." >&2
+                echo "ERROR: the v4.03.2 qualification tip must modify exactly the four reviewed files." >&2
                 exit 1
               fi
               for ((index = 0; index < ${#expected_v4032_fix_diff[@]}; index++)); do
@@ -187,7 +201,9 @@ jobs:
               done
               v4032_fix_paths=(
                 ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
                 "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
               )
               for tree_ref in HEAD^ HEAD; do
                 for fix_path in "${v4032_fix_paths[@]}"; do
@@ -686,45 +702,59 @@ jobs:
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               # The protected qualification, package byte comparison, signed
               # update manifest, tag resolution and origin/main ancestry bind
-              # the release to one exact reviewed two-commit chain. Keep this
+              # the release to one exact reviewed three-commit chain. Keep this
               # release-specific exception proportional and fail closed.
-              v4032_release_commit_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4032_release_commit_sha}" != "28b7c055ceb9cc6bd0de8d66045aec76adf49db2" ]]; then
-                echo "ERROR: the v4.03.2 candidate is not based on the reviewed PR114 squash." >&2
+              v4032_binding_commit_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_binding_commit_sha}" != "2c2568b591ee622805339394de7501489a44ff2f" ]]; then
+                echo "ERROR: the v4.03.2 candidate is not based on the reviewed PR115 squash." >&2
                 exit 1
               fi
-              v4032_release_base_sha="$(git rev-parse HEAD^^)"
+              v4032_release_commit_sha="$(git rev-parse HEAD^^)"
+              if [[ "${v4032_release_commit_sha}" != "28b7c055ceb9cc6bd0de8d66045aec76adf49db2" ]]; then
+                echo "ERROR: the reviewed PR115 squash is not based on the reviewed PR114 squash." >&2
+                exit 1
+              fi
+              v4032_release_base_sha="$(git rev-parse HEAD^^^)"
               if [[ "${v4032_release_base_sha}" != "e121e832492e6e107822441edaf5edef569ac0ef" ]]; then
                 echo "ERROR: the reviewed PR114 squash is not based on the reviewed PR113 squash." >&2
                 exit 1
               fi
-              v4032_expected_subject='Qualification : bind v4.03.2 release tip (#115)'
+              v4032_expected_subject='Qualification : bind v4.03.2 unsigned evidence SHA (#116)'
               if [[ "${commit_subject}" != "${v4032_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 candidate requires the exact reviewed qualification squash subject." >&2
                 exit 1
               fi
-              v4032_release_subject="$(git log -1 --format=%s HEAD^)"
+              v4032_binding_subject="$(git log -1 --format=%s HEAD^)"
+              v4032_expected_binding_subject='Qualification : bind v4.03.2 release tip (#115)'
+              if [[ "${v4032_binding_subject}" != "${v4032_expected_binding_subject}" ]]; then
+                echo "ERROR: the reviewed PR115 squash subject is not exact." >&2
+                exit 1
+              fi
+              v4032_release_subject="$(git log -1 --format=%s HEAD^^)"
               v4032_expected_release_subject='Release : support AMD64 packages only (#114)'
               if [[ "${v4032_release_subject}" != "${v4032_expected_release_subject}" ]]; then
                 echo "ERROR: the reviewed PR114 squash subject is not exact." >&2
                 exit 1
               fi
               read -r -a v4032_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
-              read -r -a v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^)"
-              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_release_line[@]} != 2 )); then
-                echo "ERROR: the v4.03.2 qualification tip and reviewed release commit must be linear." >&2
+              read -r -a v4032_binding_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+              read -r -a v4032_release_line <<< "$(git rev-list --parents -n 1 HEAD^^)"
+              if (( ${#v4032_head_line[@]} != 2 || ${#v4032_binding_line[@]} != 2 || ${#v4032_release_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 qualification tip and both reviewed parent commits must be linear." >&2
                 exit 1
               fi
               # BEGIN exact v4.03.2 release-tip diff contract
               expected_v4032_fix_diff=(
                 M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
                 M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
               )
               mapfile -d '' -t actual_v4032_fix_diff < <(
                 git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
               )
               if (( ${#actual_v4032_fix_diff[@]} != ${#expected_v4032_fix_diff[@]} )); then
-                echo "ERROR: the v4.03.2 qualification tip must modify exactly the two reviewed files." >&2
+                echo "ERROR: the v4.03.2 qualification tip must modify exactly the four reviewed files." >&2
                 exit 1
               fi
               for ((index = 0; index < ${#expected_v4032_fix_diff[@]}; index++)); do
@@ -735,7 +765,9 @@ jobs:
               done
               v4032_fix_paths=(
                 ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
                 "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
               )
               for tree_ref in HEAD^ HEAD; do
                 for fix_path in "${v4032_fix_paths[@]}"; do

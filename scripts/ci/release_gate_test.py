@@ -1544,31 +1544,45 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertNotIn("aarch" + "64", workflow.casefold())
         for block in blocks:
             required = (
-                'v4032_release_commit_sha="$(git rev-parse HEAD^)"',
+                "one exact reviewed three-commit chain",
+                'v4032_binding_commit_sha="$(git rev-parse HEAD^)"',
+                '"${v4032_binding_commit_sha}" != '
+                '"2c2568b591ee622805339394de7501489a44ff2f"',
+                'v4032_release_commit_sha="$(git rev-parse HEAD^^)"',
                 '"${v4032_release_commit_sha}" != '
                 '"28b7c055ceb9cc6bd0de8d66045aec76adf49db2"',
-                'v4032_release_base_sha="$(git rev-parse HEAD^^)"',
+                'v4032_release_base_sha="$(git rev-parse HEAD^^^)"',
                 '"${v4032_release_base_sha}" != '
                 '"e121e832492e6e107822441edaf5edef569ac0ef"',
                 "v4032_expected_subject="
-                "'Qualification : bind v4.03.2 release tip (#115)'",
+                "'Qualification : bind v4.03.2 unsigned evidence SHA (#116)'",
                 '"${commit_subject}" != "${v4032_expected_subject}"',
-                'v4032_release_subject="$(git log -1 --format=%s HEAD^)"',
+                'v4032_binding_subject="$(git log -1 --format=%s HEAD^)"',
+                "v4032_expected_binding_subject="
+                "'Qualification : bind v4.03.2 release tip (#115)'",
+                '"${v4032_binding_subject}" != '
+                '"${v4032_expected_binding_subject}"',
+                'v4032_release_subject="$(git log -1 --format=%s HEAD^^)"',
                 "v4032_expected_release_subject="
                 "'Release : support AMD64 packages only (#114)'",
                 '"${v4032_release_subject}" != '
                 '"${v4032_expected_release_subject}"',
                 'v4032_head_line <<< '
                 '"$(git rev-list --parents -n 1 HEAD)"',
-                'v4032_release_line <<< '
+                'v4032_binding_line <<< '
                 '"$(git rev-list --parents -n 1 HEAD^)"',
+                'v4032_release_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^^)"',
                 "${#v4032_head_line[@]} != 2",
+                "${#v4032_binding_line[@]} != 2",
                 "${#v4032_release_line[@]} != 2",
                 "# BEGIN exact v4.03.2 release-tip diff contract",
                 "# END exact v4.03.2 release-tip diff contract",
                 "expected_v4032_fix_diff=(",
                 'M ".github/workflows/release-manager.yml"',
+                'M ".github/workflows/release-qualification.yml"',
                 'M "scripts/ci/release_gate_test.py"',
+                'M "scripts/ci/release_qualification_workflow_test.py"',
                 "git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD",
                 "${#actual_v4032_fix_diff[@]} != ${#expected_v4032_fix_diff[@]}",
                 'for tree_ref in HEAD^ HEAD; do',
@@ -1585,13 +1599,21 @@ class ReleaseGateTests(unittest.TestCase):
             )
             for contract in required:
                 self.assertEqual(block.count(contract), 1, contract)
+            expected_path_counts = {
+                ".github/workflows/release-manager.yml": 2,
+                ".github/workflows/release-qualification.yml": 2,
+                "scripts/ci/release_gate_test.py": 2,
+                "scripts/ci/release_qualification_workflow_test.py": 2,
+            }
+            for path, count in expected_path_counts.items():
+                self.assertEqual(block.count(f'"{path}"'), count, path)
             self.assertNotIn("changelog.md", block)
 
     def v4032_qualification_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
         start = "v4032_expected_subject="
-        end = 'v4032_release_subject="$(git log -1 --format=%s HEAD^)"'
+        end = 'v4032_binding_subject="$(git log -1 --format=%s HEAD^)"'
         self.assertEqual(block.count(start), 1)
         self.assertEqual(block.count(end), 1)
         fragment = start + block.split(start, 1)[1].split(end, 1)[0]
@@ -1686,17 +1708,19 @@ class ReleaseGateTests(unittest.TestCase):
         )
         paths = [
             repository / ".github/workflows/release-manager.yml",
+            repository / ".github/workflows/release-qualification.yml",
             repository / "scripts/ci/release_gate_test.py",
+            repository / "scripts/ci/release_qualification_workflow_test.py",
         ]
         for path in paths:
-            self.write_file(path, b"reviewed PR114 tree\n")
+            self.write_file(path, b"reviewed PR115 tree\n")
         subprocess.run(["git", "-C", repository, "add", "--all"], check=True)
         subprocess.run(
-            ["git", "-C", repository, "commit", "-q", "-m", "reviewed PR114"],
+            ["git", "-C", repository, "commit", "-q", "-m", "reviewed PR115"],
             check=True,
         )
         for path in paths:
-            path.write_bytes(b"reviewed v4.03.2 qualification tip\n")
+            path.write_bytes(b"reviewed v4.03.2 evidence binding\n")
         if mutation == "extra file":
             self.write_file(repository / "unauthorized.txt", b"unexpected\n")
         elif mutation == "mode":
@@ -1705,7 +1729,9 @@ class ReleaseGateTests(unittest.TestCase):
             paths[1].unlink()
             paths[1].symlink_to("unauthorized-target")
         elif mutation == "rename":
-            paths[1].rename(paths[1].with_name("renamed_release_gate_test.py"))
+            paths[3].rename(
+                paths[3].with_name("renamed_release_qualification_workflow_test.py")
+            )
         subprocess.run(["git", "-C", repository, "add", "--all"], check=True)
         subprocess.run(
             ["git", "-C", repository, "commit", "-q", "-m", "reviewed tip"],
@@ -1726,29 +1752,47 @@ class ReleaseGateTests(unittest.TestCase):
                 'if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then',
                 'if [[ "${RELEASE_TAG}" == "v4.03.3" ]]; then',
             ),
+            "binding commit resolution": workflow.replace(
+                'v4032_binding_commit_sha="$(git rev-parse HEAD^)"',
+                'v4032_binding_commit_sha="$(git rev-parse HEAD^^)"',
+            ),
+            "exact reviewed PR115": workflow.replace(
+                "2c2568b591ee622805339394de7501489a44ff2f",
+                "3c2568b591ee622805339394de7501489a44ff2f",
+            ),
             "release commit resolution": workflow.replace(
-                'v4032_release_commit_sha="$(git rev-parse HEAD^)"',
                 'v4032_release_commit_sha="$(git rev-parse HEAD^^)"',
+                'v4032_release_commit_sha="$(git rev-parse HEAD^)"',
             ),
             "exact reviewed PR114": workflow.replace(
                 "28b7c055ceb9cc6bd0de8d66045aec76adf49db2",
                 "38b7c055ceb9cc6bd0de8d66045aec76adf49db2",
             ),
             "release base resolution": workflow.replace(
+                'v4032_release_base_sha="$(git rev-parse HEAD^^^)"',
                 'v4032_release_base_sha="$(git rev-parse HEAD^^)"',
-                'v4032_release_base_sha="$(git rev-parse HEAD^)"',
             ),
             "exact reviewed PR113": workflow.replace(
                 "e121e832492e6e107822441edaf5edef569ac0ef",
                 "f121e832492e6e107822441edaf5edef569ac0ef",
             ),
             "qualification subject": workflow.replace(
-                "Qualification : bind v4.03.2 release tip (#115)",
-                "Qualification : arbitrary release tip (#115)",
+                "Qualification : bind v4.03.2 unsigned evidence SHA (#116)",
+                "Qualification : bind v4.03.2 unsigned evidence (#116)",
             ),
             "qualification subject comparison": workflow.replace(
                 '"${commit_subject}" != "${v4032_expected_subject}"',
                 '"${commit_subject}" == "${v4032_expected_subject}"',
+            ),
+            "reviewed binding subject": workflow.replace(
+                "Qualification : bind v4.03.2 release tip (#115)",
+                "Qualification : bind v4.03.2 release tree (#115)",
+            ),
+            "reviewed binding subject comparison": workflow.replace(
+                '"${v4032_binding_subject}" != '
+                '"${v4032_expected_binding_subject}"',
+                '"${v4032_binding_subject}" == '
+                '"${v4032_expected_binding_subject}"',
             ),
             "reviewed release subject": workflow.replace(
                 "Release : support AMD64 packages only (#114)",
@@ -1766,19 +1810,33 @@ class ReleaseGateTests(unittest.TestCase):
                 'v4032_head_line <<< '
                 '"$(git rev-list --parents -n 1 HEAD^)"',
             ),
+            "linear binding commit": workflow.replace(
+                'v4032_binding_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+                'v4032_binding_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^^)"',
+            ),
             "linear release commit": workflow.replace(
                 'v4032_release_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD^)"',
-                'v4032_release_line <<< '
                 '"$(git rev-list --parents -n 1 HEAD^^)"',
+                'v4032_release_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^^^)"',
             ),
             "diff rename policy": workflow.replace(
                 "git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD",
                 "git diff-tree --no-commit-id --name-status -r -z HEAD^ HEAD",
             ),
             "exact fix path": workflow.replace(
-                'M "scripts/ci/release_gate_test.py"',
-                'M "scripts/ci/release_gate.py"',
+                'M "scripts/ci/release_qualification_workflow_test.py"',
+                'M "scripts/ci/release_qualification_test.py"',
+            ),
+            "tree fix path": workflow.replace(
+                '\n                "scripts/ci/release_gate_test.py"\n',
+                '\n                "scripts/ci/release_gate.py"\n',
+            ),
+            "linearity comparison": workflow.replace(
+                "${#v4032_binding_line[@]} != 2",
+                "${#v4032_binding_line[@]} == 2",
             ),
             "blob mode": workflow.replace(
                 '"${tree_mode}" != "100644"',
@@ -1798,22 +1856,28 @@ class ReleaseGateTests(unittest.TestCase):
     def test_release_manager_v4032_subject_is_exact_github_squash(self) -> None:
         script = self.v4032_qualification_subject_gate_script()
         cases = {
-            "valid": ("Qualification : bind v4.03.2 release tip (#115)", True),
-            "bare": ("Qualification : bind v4.03.2 release tip", False),
+            "valid": (
+                "Qualification : bind v4.03.2 unsigned evidence SHA (#116)",
+                True,
+            ),
+            "bare": (
+                "Qualification : bind v4.03.2 unsigned evidence SHA",
+                False,
+            ),
             "wrong pull request": (
-                "Qualification : bind v4.03.2 release tip (#114)",
+                "Qualification : bind v4.03.2 unsigned evidence SHA (#115)",
                 False,
             ),
             "different scope": (
-                "Qualification : bind v4.03.2 publication tip (#115)",
+                "Qualification : bind v4.03.2 signed evidence SHA (#116)",
                 False,
             ),
             "wrong version": (
-                "Qualification : bind v4.03.3 release tip (#115)",
+                "Qualification : bind v4.03.3 unsigned evidence SHA (#116)",
                 False,
             ),
             "trailing space": (
-                "Qualification : bind v4.03.2 release tip (#115) ",
+                "Qualification : bind v4.03.2 unsigned evidence SHA (#116) ",
                 False,
             ),
         }

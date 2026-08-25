@@ -799,6 +799,15 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         unsigned_seal = workflow_step_script(
             self.workflow, "Seal Exact Unsigned Qualification Evidence Inventory"
         )
+        unsigned_seal_step = workflow_step(
+            self.workflow, "Seal Exact Unsigned Qualification Evidence Inventory"
+        )
+        self.assertEqual(
+            unsigned_seal_step.count(
+                "RELEASE_SHA: ${{ inputs.release_sha }}"
+            ),
+            1,
+        )
         self.assertNotIn("update/syswarden-update-manifest-v1.json", unsigned_seal)
         final_seal = workflow_step_script(
             self.workflow, "Seal Exact Qualification Evidence Inventory"
