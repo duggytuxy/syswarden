@@ -408,7 +408,10 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '! "${SYSWARDEN_HOST_UID}" =~ ^[1-9][0-9]*$',
             '! "${SYSWARDEN_HOST_OWNER}" =~ ^[1-9][0-9]*:[0-9]+$',
             '"${SYSWARDEN_HOST_OWNER%%:*}" != "${SYSWARDEN_HOST_UID}"',
-            'delegated_uid="$(id -u)"',
+            'delegated_uid=""',
+            'delegated_uid="$(/usr/bin/id -u)"',
+            '! "${delegated_uid}" =~ ^[1-9][0-9]*$',
+            "native ARM64 delegated UID is unavailable from the trusted identity probe",
             '"${delegated_uid}" != "${SYSWARDEN_HOST_UID}"',
             "native ARM64 delegated UID differs from the exported host UID",
             '"$(stat -c "%u:%g:%a" "${CONTAINERS_CONF}")" != '
@@ -452,11 +455,16 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         )
         lifecycle_lab = script.index("scripts/ci/package_lifecycle_lab.py")
         delegated_script = script[delegated_shell:lifecycle_lab]
+        self.assertNotIn("$(id -u)", delegated_script)
         self.assertNotIn("$(id -g)", delegated_script)
+        self.assertNotIn("/usr/bin/id -g", delegated_script)
+        self.assertNotIn('delegated_uid="${UID}"', delegated_script)
+        self.assertNotIn('delegated_uid="${EUID}"', delegated_script)
         self.assertNotIn('$(id -g "${user_name}")', script)
 
         ordered = (
             "native ARM64 delegated host owner identity is incomplete",
+            "native ARM64 delegated UID is unavailable from the trusted identity probe",
             "native ARM64 delegated UID differs from the exported host UID",
             "native ARM64 Podman configuration isolation is incomplete",
             "native ARM64 local-only Podman launcher is unavailable",
@@ -866,6 +874,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "/usr/bin/bash",
             "/usr/bin/chmod",
             "/usr/bin/curl",
+            "/usr/bin/id",
             "/usr/bin/install",
             "/usr/bin/rm",
             "/usr/bin/rmdir",
@@ -1598,7 +1607,10 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '! "${SYSWARDEN_HOST_OWNER}" =~ ^[1-9][0-9]*:[0-9]+$',
             '"${SYSWARDEN_HOST_OWNER%%:*}" != "${SYSWARDEN_HOST_UID}"',
             "native ARM64 delegated host owner identity is incomplete",
-            'delegated_uid="$(id -u)"',
+            'delegated_uid=""',
+            'delegated_uid="$(/usr/bin/id -u)"',
+            '! "${delegated_uid}" =~ ^[1-9][0-9]*$',
+            "native ARM64 delegated UID is unavailable from the trusted identity probe",
             '"${delegated_uid}" != "${SYSWARDEN_HOST_UID}"',
             "native ARM64 delegated UID differs from the exported host UID",
             "native ARM64 crun delegated identity is incomplete",
@@ -1884,7 +1896,11 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         )
         owner_export = '--setenv="SYSWARDEN_HOST_OWNER=${host_owner_identity}"'
         uid_export = '--setenv="SYSWARDEN_HOST_UID=${user_id}"'
-        delegated_uid = 'delegated_uid="$(id -u)"'
+        delegated_uid_initialization = 'delegated_uid=""'
+        delegated_uid = 'delegated_uid="$(/usr/bin/id -u)"'
+        delegated_uid_numeric_guard = (
+            ' || [[ ! "${delegated_uid}" =~ ^[1-9][0-9]*$ ]]'
+        )
         parent_identity = (
             'expected_crun_parent_identity="${SYSWARDEN_HOST_OWNER}:700:'
             '${SYSWARDEN_CRUN_DIRECTORY_INODE}"'
@@ -1911,7 +1927,29 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             ),
             replace_exact(self.workflow, owner_export, "# owner export removed"),
             replace_exact(self.workflow, uid_export, "# UID export removed"),
-            replace_exact(self.workflow, delegated_uid, 'delegated_uid="$(id -g)"'),
+            replace_exact(
+                self.workflow,
+                delegated_uid_initialization,
+                "# delegated UID initialization removed",
+            ),
+            replace_exact(self.workflow, delegated_uid, 'delegated_uid="$(id -u)"'),
+            replace_exact(
+                self.workflow,
+                delegated_uid,
+                'delegated_uid="$(/usr/bin/id -g)"',
+            ),
+            replace_exact(
+                self.workflow,
+                delegated_uid,
+                delegated_uid + '; delegated_gid="$(/usr/bin/id -g)"',
+            ),
+            replace_exact(
+                self.workflow,
+                delegated_uid_numeric_guard,
+                "",
+            ),
+            replace_exact(self.workflow, delegated_uid, 'delegated_uid="${UID}"'),
+            replace_exact(self.workflow, delegated_uid, 'delegated_uid="${EUID}"'),
             replace_exact(
                 self.workflow,
                 parent_identity,
@@ -1952,7 +1990,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.assert_arm64_delegated_owner_contract(reordered)
 
-    def test_arm64_delegated_owner_uses_host_gid_not_delegated_primary_gid(
+    def test_arm64_delegated_owner_uses_trusted_uid_probe_despite_shell_poisoning(
         self,
     ) -> None:
         if os.getuid() == 0:
@@ -1998,15 +2036,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             delegated_id = binary_directory / "id"
             delegated_id.write_text(
                 "#!/bin/sh\n"
-                "if [ \"${1:-}\" = \"-u\" ]; then\n"
-                "  printf '%s\\n' \"${FAKE_DELEGATED_UID:?}\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "if [ \"${1:-}\" = \"-g\" ]; then\n"
-                "  echo 'delegated id -g must not be queried' >&2\n"
-                "  exit 97\n"
-                "fi\n"
-                "exec /usr/bin/id \"$@\"\n",
+                "echo 'PATH id must not be queried' >&2\n"
+                "exit 97\n",
                 encoding="utf-8",
             )
             delegated_id.chmod(0o700)
@@ -2022,7 +2053,10 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 {
                     "CONTAINERS_CONF": str(containers_conf),
                     "CONTAINERS_CONF_OVERRIDE": "",
-                    "FAKE_DELEGATED_UID": str(user_id),
+                    "BASH_FUNC_id%%": (
+                        "() { echo 'exported id must not be queried' >&2; :; }"
+                    ),
+                    "EUID": str(user_id + 20_000),
                     "PATH": f"{binary_directory}{os.pathsep}{environment['PATH']}",
                     "SYSWARDEN_CRUN_DIRECTORY_INODE": inode(runtime),
                     "SYSWARDEN_CRUN_INODE": inode(crun),
@@ -2035,10 +2069,20 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                     "SYSWARDEN_PODMAN_INFO": str(podman_info),
                     "SYSWARDEN_PODMAN_INFO_INODE": inode(podman_info),
                     "SYSWARDEN_PODMAN_LOCAL": str(podman_local),
+                    "UID": str(user_id + 10_000),
                 }
             )
             accepted = subprocess.run(
-                ["/bin/bash", "-e", "-o", "pipefail", "-c", identity_prefix],
+                [
+                    "/usr/bin/bash",
+                    "--noprofile",
+                    "--norc",
+                    "-e",
+                    "-o",
+                    "pipefail",
+                    "-c",
+                    identity_prefix,
+                ],
                 cwd=REPOSITORY,
                 env=environment,
                 check=False,
@@ -2047,11 +2091,22 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 timeout=10,
             )
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
-            self.assertNotIn("delegated id -g must not be queried", accepted.stderr)
+            self.assertNotIn("PATH id must not be queried", accepted.stderr)
+            self.assertNotIn("exported id must not be queried", accepted.stderr)
 
-            environment["FAKE_DELEGATED_UID"] = str(user_id + 1)
+            environment["SYSWARDEN_HOST_OWNER"] = f"{user_id + 1}:{user_group}"
+            environment["SYSWARDEN_HOST_UID"] = str(user_id + 1)
             rejected = subprocess.run(
-                ["/bin/bash", "-e", "-o", "pipefail", "-c", identity_prefix],
+                [
+                    "/usr/bin/bash",
+                    "--noprofile",
+                    "--norc",
+                    "-e",
+                    "-o",
+                    "pipefail",
+                    "-c",
+                    identity_prefix,
+                ],
                 cwd=REPOSITORY,
                 env=environment,
                 check=False,
@@ -2063,6 +2118,38 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.assertIn(
                 "delegated UID differs from the exported host UID", rejected.stderr
             )
+
+            environment["SYSWARDEN_HOST_OWNER"] = f"{user_id}:{user_group}"
+            environment["SYSWARDEN_HOST_UID"] = str(user_id)
+            self.assertEqual(identity_prefix.count("/usr/bin/id -u"), 1)
+            for replacement in ("printf %s ''", "printf %s not-a-uid"):
+                malformed_script = identity_prefix.replace(
+                    "/usr/bin/id -u", replacement, 1
+                )
+                malformed = subprocess.run(
+                    [
+                        "/usr/bin/bash",
+                        "--noprofile",
+                        "--norc",
+                        "-e",
+                        "-o",
+                        "pipefail",
+                        "-c",
+                        malformed_script,
+                    ],
+                    cwd=REPOSITORY,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                with self.subTest(replacement=replacement):
+                    self.assertNotEqual(malformed.returncode, 0)
+                    self.assertIn(
+                        "delegated UID is unavailable from the trusted identity probe",
+                        malformed.stderr,
+                    )
 
     def test_premerge_package_workflow_runs_every_qualification_validator(self) -> None:
         step = workflow_step(
