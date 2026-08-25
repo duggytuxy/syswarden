@@ -388,6 +388,99 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 f"{name} must be pinned to a full commit SHA",
             )
 
+    def assert_arm64_delegated_owner_contract(self, workflow: str) -> None:
+        script = workflow_step_script(
+            workflow, "Run Native ARM64 Package Lifecycle Shard"
+        )
+        required = (
+            'host_owner_identity="${user_id}:${user_group}"',
+            '! "${host_owner_identity}" =~ ^[1-9][0-9]*:[0-9]+$',
+            '"$(stat -c \'%u\' "${HOME}")" != \\\n'
+            '        "${user_id}"',
+            '"${host_owner_identity}:700:${ARM_SHARD_ROOT_INODE}"',
+            '"${host_owner_identity}:700:${ARM_CRUN_DIRECTORY_INODE}"',
+            '"${host_owner_identity}:700:3298128:${ARM_CRUN_INODE}"',
+            '"$(stat -c \'%u:%g:%a\' "${containers_conf}")" !=',
+            '"$(stat -c \'%u:%g:%a\' "${podman_local}")" !=',
+            '"$(stat -c \'%u:%g:%a\' "${podman_info}")" !=',
+            '--setenv="SYSWARDEN_HOST_OWNER=${host_owner_identity}"',
+            '--setenv="SYSWARDEN_HOST_UID=${user_id}"',
+            '! "${SYSWARDEN_HOST_UID}" =~ ^[1-9][0-9]*$',
+            '! "${SYSWARDEN_HOST_OWNER}" =~ ^[1-9][0-9]*:[0-9]+$',
+            '"${SYSWARDEN_HOST_OWNER%%:*}" != "${SYSWARDEN_HOST_UID}"',
+            'delegated_uid="$(id -u)"',
+            '"${delegated_uid}" != "${SYSWARDEN_HOST_UID}"',
+            "native ARM64 delegated UID differs from the exported host UID",
+            '"$(stat -c "%u:%g:%a" "${CONTAINERS_CONF}")" != '
+            '"${SYSWARDEN_HOST_OWNER}:600"',
+            '"$(stat -c "%u:%g:%a" "${SYSWARDEN_PODMAN_LOCAL}")" != '
+            '"${SYSWARDEN_HOST_OWNER}:700"',
+            'expected_crun_parent_identity="${SYSWARDEN_HOST_OWNER}:700:'
+            '${SYSWARDEN_CRUN_DIRECTORY_INODE}"',
+            '"${crun_parent_identity}" != "${expected_crun_parent_identity}"',
+            "native ARM64 crun parent identity changed inside the delegated session",
+            'expected_crun_identity="${SYSWARDEN_HOST_OWNER}:700:3298128:'
+            '${SYSWARDEN_CRUN_INODE}"',
+            '"${crun_identity}" != "${expected_crun_identity}"',
+            "native ARM64 crun identity changed inside the delegated session",
+            'printf "%s  %s\\n" "${SYSWARDEN_CRUN_SHA256}" '
+            '"${SYSWARDEN_CRUN_PATH}"',
+            'crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --root '
+            '"${crun_parent}" --version)"',
+            '"${crun_version_lines[2]:-}" != "rundir: ${crun_parent}"',
+            r'\+SYSTEMD($|[[:space:]])',
+            'expected_podman_info_identity="${SYSWARDEN_HOST_OWNER}:600:'
+            '${SYSWARDEN_PODMAN_INFO_INODE}"',
+            '"${podman_info_identity}" != "${expected_podman_info_identity}"',
+            "native ARM64 Podman info evidence changed identity or permissions",
+            "(expected=%s observed=%s)",
+        )
+        for contract in required:
+            self.assertIn(contract, script)
+        self.assertEqual(
+            script.count('--setenv="SYSWARDEN_HOST_OWNER=${host_owner_identity}"'),
+            1,
+        )
+        self.assertEqual(
+            script.count('--setenv="SYSWARDEN_HOST_UID=${user_id}"'), 1
+        )
+        self.assertNotIn('account_owner_identity=', script)
+
+        systemd_run = script.index("sudo -n systemd-run")
+        delegated_shell = script.index(
+            "/usr/bin/bash --noprofile --norc -e -o pipefail -c", systemd_run
+        )
+        lifecycle_lab = script.index("scripts/ci/package_lifecycle_lab.py")
+        delegated_script = script[delegated_shell:lifecycle_lab]
+        self.assertNotIn("$(id -g)", delegated_script)
+        self.assertNotIn('$(id -g "${user_name}")', script)
+
+        ordered = (
+            "native ARM64 delegated host owner identity is incomplete",
+            "native ARM64 delegated UID differs from the exported host UID",
+            "native ARM64 Podman configuration isolation is incomplete",
+            "native ARM64 local-only Podman launcher is unavailable",
+            "native ARM64 Podman info target is unavailable",
+            "native ARM64 crun delegated identity is incomplete",
+            "native ARM64 crun parent is not a real delegated directory",
+            "native ARM64 crun parent identity is unavailable inside the delegated session",
+            "native ARM64 crun parent identity changed inside the delegated session",
+            "native ARM64 crun is not a real delegated executable",
+            "native ARM64 crun identity is unavailable inside the delegated session",
+            "native ARM64 crun identity changed inside the delegated session",
+            "native ARM64 crun changed bytes inside the delegated session",
+            "native ARM64 crun is not executable inside the delegated session",
+            "native ARM64 crun lacks the exact delegated version or systemd capability",
+            "native ARM64 conmon is not executable inside the delegated session",
+            "native ARM64 Podman could not attest its isolated runtime configuration",
+            "native ARM64 Podman info evidence is not a real non-empty file",
+            "native ARM64 Podman info evidence identity is unavailable",
+            "native ARM64 Podman info evidence changed identity or permissions",
+            "native ARM64 Podman resolved an unexpected local runtime configuration",
+        )
+        positions = [delegated_script.index(marker) for marker in ordered]
+        self.assertEqual(positions, sorted(positions))
+
     def test_is_manual_only_with_three_required_inputs(self) -> None:
         trigger = self.workflow.split("\nenv:", 1)[0]
         self.assertIn("  workflow_dispatch:\n", trigger)
@@ -1385,12 +1478,17 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertIn('test "$(uname -m)" = "aarch64"', self.workflow)
 
     def test_arm64_lab_uses_exact_transient_systemd_delegation(self) -> None:
+        self.assert_arm64_delegated_owner_contract(self.workflow)
         script = workflow_step_script(
             self.workflow, "Run Native ARM64 Package Lifecycle Shard"
         )
         for contract in (
+            'host_owner_identity="${user_id}:${user_group}"',
+            '! "${host_owner_identity}" =~ ^[1-9][0-9]*:[0-9]+$',
             '"${user_name}" != "runner"',
             '"${HOME}" != "/home/runner"',
+            '"$(stat -c \'%u\' "${HOME}")" != \\\n'
+            '        "${user_id}"',
             '"${self_cgroup}" == /user.slice/*',
             'delegate_drop_in="${delegate_directory}/syswarden-release-qualification.conf"',
             'delegate_drop_in_owned=false',
@@ -1416,12 +1514,12 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '! "${ARM_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$',
             '! "${ARM_SHARD_ROOT_INODE:-}" =~ ^[0-9]+:[0-9]+$',
             'attest_arm_shard_root() {',
-            '"${user_id}:${user_group}:700:${ARM_SHARD_ROOT_INODE}"',
+            '"${host_owner_identity}:700:${ARM_SHARD_ROOT_INODE}"',
             'attest_arm_crun_directory() {',
-            '"${user_id}:${user_group}:700:${ARM_CRUN_DIRECTORY_INODE}"',
+            '"${host_owner_identity}:700:${ARM_CRUN_DIRECTORY_INODE}"',
             'attest_arm_crun() {',
             '"$(stat -c \'%u:%g:%a:%s:%d:%i\' "${ARM_CRUN_PATH}")" !=',
-            '"${user_id}:${user_group}:700:3298128:${ARM_CRUN_INODE}"',
+            '"${host_owner_identity}:700:3298128:${ARM_CRUN_INODE}"',
             'printf \'%s  %s\\n\' "${ARM_CRUN_SHA256}" "${ARM_CRUN_PATH}"',
             'crun_version_output="$("${ARM_CRUN_PATH}"',
             '--root "${crun_directory}" --version)" || return 1',
@@ -1447,11 +1545,13 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"crun=[\\"${ARM_CRUN_PATH}\\"]"',
             "'[engine.platform_to_oci_runtime]'",
             "'\"linux/arm64\"=\"crun\"'",
-            '"$(stat -c \'%a\' "${containers_conf}")" != "600"',
+            '"$(stat -c \'%u:%g:%a\' "${containers_conf}")" !=',
+            '"${host_owner_identity}:600"',
             "'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY'",
             "'exec /usr/local/bin/podman --remote=false \"$@\"'",
             'chmod 0700 "${podman_local}"',
-            '"$(stat -c \'%a\' "${podman_local}")" != "700"',
+            '"$(stat -c \'%u:%g:%a\' "${podman_local}")" !=',
+            '"${host_owner_identity}:700"',
             "local-only Podman launcher is not a private runner-owned executable",
             ': > "${podman_info}"',
             'chmod 0600 "${podman_info}"',
@@ -1473,6 +1573,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '--setenv="SYSWARDEN_CRUN_INODE=${ARM_CRUN_INODE}"',
             '--setenv="SYSWARDEN_CRUN_PATH=${ARM_CRUN_PATH}"',
             '--setenv="SYSWARDEN_CRUN_SHA256=${ARM_CRUN_SHA256}"',
+            '--setenv="SYSWARDEN_HOST_OWNER=${host_owner_identity}"',
+            '--setenv="SYSWARDEN_HOST_UID=${user_id}"',
             '--setenv="SYSWARDEN_PODMAN_INFO=${podman_info}"',
             '--setenv="SYSWARDEN_PODMAN_INFO_INODE=${podman_info_inode}"',
             '--setenv="SYSWARDEN_PODMAN_LOCAL=${podman_local}"',
@@ -1490,13 +1592,34 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342"',
             '! "${SYSWARDEN_CRUN_INODE:-}" =~ ^[0-9]+:[0-9]+$',
             '! "${SYSWARDEN_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$',
+            '-z "${SYSWARDEN_HOST_UID:-}"',
+            '! "${SYSWARDEN_HOST_UID}" =~ ^[1-9][0-9]*$',
+            '-z "${SYSWARDEN_HOST_OWNER:-}"',
+            '! "${SYSWARDEN_HOST_OWNER}" =~ ^[1-9][0-9]*:[0-9]+$',
+            '"${SYSWARDEN_HOST_OWNER%%:*}" != "${SYSWARDEN_HOST_UID}"',
+            "native ARM64 delegated host owner identity is incomplete",
+            'delegated_uid="$(id -u)"',
+            '"${delegated_uid}" != "${SYSWARDEN_HOST_UID}"',
+            "native ARM64 delegated UID differs from the exported host UID",
             "native ARM64 crun delegated identity is incomplete",
             'crun_parent="${SYSWARDEN_CRUN_PATH%/*}"',
-            '"$(stat -c "%u:%g:%a:%d:%i" "${crun_parent}")" != '
-            '"$(id -u):$(id -g):700:${SYSWARDEN_CRUN_DIRECTORY_INODE}"',
-            '"$(stat -c "%u:%g:%a:%s:%d:%i" "${SYSWARDEN_CRUN_PATH}")" != '
-            '"$(id -u):$(id -g):700:3298128:${SYSWARDEN_CRUN_INODE}"',
-            "native ARM64 crun changed identity inside the delegated session",
+            'if [[ ! -d "${crun_parent}" || -L "${crun_parent}" ]]',
+            "native ARM64 crun parent is not a real delegated directory",
+            'crun_parent_identity="$(stat -c "%u:%g:%a:%d:%i" '
+            '"${crun_parent}")"',
+            'expected_crun_parent_identity="${SYSWARDEN_HOST_OWNER}:700:'
+            '${SYSWARDEN_CRUN_DIRECTORY_INODE}"',
+            '"${crun_parent_identity}" != "${expected_crun_parent_identity}"',
+            "native ARM64 crun parent identity changed inside the delegated session",
+            'if [[ ! -f "${SYSWARDEN_CRUN_PATH}" || '
+            '-L "${SYSWARDEN_CRUN_PATH}" || ! -x "${SYSWARDEN_CRUN_PATH}" ]]',
+            "native ARM64 crun is not a real delegated executable",
+            'crun_identity="$(stat -c "%u:%g:%a:%s:%d:%i" '
+            '"${SYSWARDEN_CRUN_PATH}")"',
+            'expected_crun_identity="${SYSWARDEN_HOST_OWNER}:700:3298128:'
+            '${SYSWARDEN_CRUN_INODE}"',
+            '"${crun_identity}" != "${expected_crun_identity}"',
+            "native ARM64 crun identity changed inside the delegated session",
             'printf "%s  %s\\n" "${SYSWARDEN_CRUN_SHA256}" '
             '"${SYSWARDEN_CRUN_PATH}"',
             "native ARM64 crun changed bytes inside the delegated session",
@@ -1510,9 +1633,11 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" '
             "info --format json",
             "native ARM64 Podman could not attest its isolated runtime configuration",
-            '"$(stat -c "%u:%a" "${SYSWARDEN_PODMAN_INFO}")" != "$(id -u):600"',
-            '"$(stat -c "%d:%i" "${SYSWARDEN_PODMAN_INFO}")" != '
-            '"${SYSWARDEN_PODMAN_INFO_INODE}"',
+            'podman_info_identity="$(stat -c "%u:%g:%a:%d:%i" '
+            '"${SYSWARDEN_PODMAN_INFO}")"',
+            'expected_podman_info_identity="${SYSWARDEN_HOST_OWNER}:600:'
+            '${SYSWARDEN_PODMAN_INFO_INODE}"',
+            '"${podman_info_identity}" != "${expected_podman_info_identity}"',
             "native ARM64 Podman info evidence changed identity or permissions",
             '.host.conmon.path == "/usr/local/lib/podman/conmon"',
             '.host.ociRuntime.name == "crun"',
@@ -1687,8 +1812,12 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         )
         info_target = script.index(': > "${podman_info}"')
         host_crun_attestation = script.index("if ! attest_arm_crun; then")
+        delegated_crun_parent_identity = script.index(
+            "native ARM64 crun parent identity changed inside the delegated session",
+            systemd_run,
+        )
         delegated_crun_identity = script.index(
-            "native ARM64 crun changed identity inside the delegated session",
+            "native ARM64 crun identity changed inside the delegated session",
             systemd_run,
         )
         delegated_crun_digest = script.index(
@@ -1730,6 +1859,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertLess(host_crun_attestation, systemd_run)
         self.assertLess(platform_pin, systemd_run)
         self.assertLess(systemd_run, configuration_guard)
+        self.assertLess(configuration_guard, delegated_crun_parent_identity)
+        self.assertLess(delegated_crun_parent_identity, delegated_crun_identity)
         self.assertLess(configuration_guard, delegated_crun_identity)
         self.assertLess(delegated_crun_identity, delegated_crun_digest)
         self.assertLess(delegated_crun_digest, crun_probe)
@@ -1740,6 +1871,198 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertLess(podman_probe, podman_verdict)
         self.assertLess(podman_verdict, lifecycle_lab)
         self.assertLess(podman_probe, lifecycle_lab)
+
+    def test_arm64_delegated_owner_contract_rejects_identity_mutations(self) -> None:
+        def replace_exact(source: str, old: str, new: str) -> str:
+            self.assertEqual(source.count(old), 1, old)
+            return source.replace(old, new, 1)
+
+        host_owner = 'host_owner_identity="${user_id}:${user_group}"'
+        home_owner = (
+            '"$(stat -c \'%u\' "${HOME}")" != \\\n'
+            '                  "${user_id}"'
+        )
+        owner_export = '--setenv="SYSWARDEN_HOST_OWNER=${host_owner_identity}"'
+        uid_export = '--setenv="SYSWARDEN_HOST_UID=${user_id}"'
+        delegated_uid = 'delegated_uid="$(id -u)"'
+        parent_identity = (
+            'expected_crun_parent_identity="${SYSWARDEN_HOST_OWNER}:700:'
+            '${SYSWARDEN_CRUN_DIRECTORY_INODE}"'
+        )
+        crun_identity = (
+            'expected_crun_identity="${SYSWARDEN_HOST_OWNER}:700:3298128:'
+            '${SYSWARDEN_CRUN_INODE}"'
+        )
+        podman_identity = (
+            'expected_podman_info_identity="${SYSWARDEN_HOST_OWNER}:600:'
+            '${SYSWARDEN_PODMAN_INFO_INODE}"'
+        )
+        mutations = (
+            replace_exact(
+                self.workflow,
+                host_owner,
+                'host_owner_identity="${user_id}:$(id -g "${user_name}")"',
+            ),
+            replace_exact(
+                self.workflow,
+                home_owner,
+                '"$(stat -c \'%u:%g\' "${HOME}")" != '
+                '"${host_owner_identity}"',
+            ),
+            replace_exact(self.workflow, owner_export, "# owner export removed"),
+            replace_exact(self.workflow, uid_export, "# UID export removed"),
+            replace_exact(self.workflow, delegated_uid, 'delegated_uid="$(id -g)"'),
+            replace_exact(
+                self.workflow,
+                parent_identity,
+                'expected_crun_parent_identity="$(id -u):$(id -g):700:'
+                '${SYSWARDEN_CRUN_DIRECTORY_INODE}"',
+            ),
+            replace_exact(
+                self.workflow,
+                crun_identity,
+                'expected_crun_identity="$(id -u):$(id -g):700:3298128:'
+                '${SYSWARDEN_CRUN_INODE}"',
+            ),
+            replace_exact(
+                self.workflow,
+                '"$(stat -c "%u:%g:%a" "${CONTAINERS_CONF}")" != '
+                '"${SYSWARDEN_HOST_OWNER}:600"',
+                '"$(stat -c "%u:%g:%a" "${CONTAINERS_CONF}")" != '
+                '"$(id -u):$(id -g):600"',
+            ),
+            replace_exact(
+                self.workflow,
+                podman_identity,
+                'expected_podman_info_identity="$(id -u):$(id -g):600:'
+                '${SYSWARDEN_PODMAN_INFO_INODE}"',
+            ),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation[-160:]), self.assertRaises(
+                AssertionError
+            ):
+                self.assert_arm64_delegated_owner_contract(mutation)
+
+        first = "native ARM64 delegated UID differs from the exported host UID"
+        second = "native ARM64 Podman configuration isolation is incomplete"
+        placeholder = "ARM64_ORDER_MUTATION_PLACEHOLDER"
+        reordered = self.workflow.replace(first, placeholder, 1)
+        reordered = reordered.replace(second, first, 1).replace(placeholder, second, 1)
+        with self.assertRaises(AssertionError):
+            self.assert_arm64_delegated_owner_contract(reordered)
+
+    def test_arm64_delegated_owner_uses_host_gid_not_delegated_primary_gid(
+        self,
+    ) -> None:
+        if os.getuid() == 0:
+            self.skipTest("delegated non-root identity behavior requires a non-root test user")
+        script = workflow_step_script(
+            self.workflow, "Run Native ARM64 Package Lifecycle Shard"
+        )
+        command_line = next(
+            line.strip()
+            for line in script.splitlines()
+            if line.strip().startswith(
+                "'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY;"
+            )
+        )
+        identity_prefix, separator, _ = command_line.partition(
+            'if ! printf "%s  %s\\n" "${SYSWARDEN_CRUN_SHA256}"'
+        )
+        self.assertTrue(separator)
+        self.assertTrue(identity_prefix.startswith("'"))
+        identity_prefix = identity_prefix[1:] + "exit 0"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            runtime.mkdir(mode=0o700)
+            runtime.chmod(0o700)
+            crun = runtime / "crun-1.28-linux-arm64"
+            crun.touch(mode=0o700)
+            os.truncate(crun, 3_298_128)
+            crun.chmod(0o700)
+            containers_conf = root / "containers.conf"
+            containers_conf.write_text("[engine]\n", encoding="utf-8")
+            containers_conf.chmod(0o600)
+            podman_local = root / "podman-local"
+            podman_local.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            podman_local.chmod(0o700)
+            podman_info = root / "podman-info.json"
+            podman_info.touch(mode=0o600)
+            podman_info.chmod(0o600)
+
+            binary_directory = root / "bin"
+            binary_directory.mkdir(mode=0o700)
+            delegated_id = binary_directory / "id"
+            delegated_id.write_text(
+                "#!/bin/sh\n"
+                "if [ \"${1:-}\" = \"-u\" ]; then\n"
+                "  printf '%s\\n' \"${FAKE_DELEGATED_UID:?}\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [ \"${1:-}\" = \"-g\" ]; then\n"
+                "  echo 'delegated id -g must not be queried' >&2\n"
+                "  exit 97\n"
+                "fi\n"
+                "exec /usr/bin/id \"$@\"\n",
+                encoding="utf-8",
+            )
+            delegated_id.chmod(0o700)
+
+            def inode(path: Path) -> str:
+                identity = path.stat()
+                return f"{identity.st_dev}:{identity.st_ino}"
+
+            user_id = os.getuid()
+            user_group = os.getgid()
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "CONTAINERS_CONF": str(containers_conf),
+                    "CONTAINERS_CONF_OVERRIDE": "",
+                    "FAKE_DELEGATED_UID": str(user_id),
+                    "PATH": f"{binary_directory}{os.pathsep}{environment['PATH']}",
+                    "SYSWARDEN_CRUN_DIRECTORY_INODE": inode(runtime),
+                    "SYSWARDEN_CRUN_INODE": inode(crun),
+                    "SYSWARDEN_CRUN_PATH": str(crun),
+                    "SYSWARDEN_CRUN_SHA256": (
+                        "cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342"
+                    ),
+                    "SYSWARDEN_HOST_OWNER": f"{user_id}:{user_group}",
+                    "SYSWARDEN_HOST_UID": str(user_id),
+                    "SYSWARDEN_PODMAN_INFO": str(podman_info),
+                    "SYSWARDEN_PODMAN_INFO_INODE": inode(podman_info),
+                    "SYSWARDEN_PODMAN_LOCAL": str(podman_local),
+                }
+            )
+            accepted = subprocess.run(
+                ["/bin/bash", "-e", "-o", "pipefail", "-c", identity_prefix],
+                cwd=REPOSITORY,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertNotIn("delegated id -g must not be queried", accepted.stderr)
+
+            environment["FAKE_DELEGATED_UID"] = str(user_id + 1)
+            rejected = subprocess.run(
+                ["/bin/bash", "-e", "-o", "pipefail", "-c", identity_prefix],
+                cwd=REPOSITORY,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn(
+                "delegated UID differs from the exported host UID", rejected.stderr
+            )
 
     def test_premerge_package_workflow_runs_every_qualification_validator(self) -> None:
         step = workflow_step(
