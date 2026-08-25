@@ -1,18 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="340" viewBox="0 0 1600 340" role="img" aria-labelledby="title description" data-theme="light">
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="340" viewBox="0 0 1600 340" role="img" aria-labelledby="title description">
   <title id="title">Official SysWarden logo</title>
-  <desc id="description">The official SysWarden Linux host defense logo on a clean light banner.</desc>
+  <desc id="description">The official SysWarden Linux host defense logo at full banner scale.</desc>
   <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#f8fafc"/>
-      <stop offset="1" stop-color="#eef6fb"/>
-    </linearGradient>
     <linearGradient id="officialShieldGradient" x1="0" y1="0" x2="0" y2="100">
       <stop offset="0%" stop-color="#00A3FF"/>
       <stop offset="100%" stop-color="#0055FF"/>
     </linearGradient>
-    <filter id="cardShadow" x="-20%" y="-30%" width="140%" height="170%">
-      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#1e3a5f" flood-opacity="0.10"/>
-    </filter>
     <filter id="officialLogoGlow" x="-20%" y="-20%" width="140%" height="140%">
       <feGaussianBlur stdDeviation="6" result="blur"/>
       <feComposite in="SourceGraphic" in2="blur" operator="over"/>
@@ -46,12 +39,8 @@
     </style>
   </defs>
 
-  <rect width="1600" height="340" rx="24" fill="url(#background)"/>
-  <circle cx="530" cy="75" r="155" fill="#dff4ff" opacity="0.62"/>
-  <circle cx="1115" cy="270" r="170" fill="#e5f0ff" opacity="0.58"/>
-  <rect x="350" y="50" width="900" height="240" rx="28" fill="#0b1f33" stroke="#25445f" stroke-width="2" filter="url(#cardShadow)"/>
-  <path d="M414 270 H1186" stroke="#294760" stroke-width="2" stroke-linecap="round"/>
-  <g transform="translate(500 95)">
+  <rect width="1600" height="340" rx="24" fill="#0b1f33"/>
+  <g transform="translate(170 12.5) scale(2.1)">
     <use href="#syswardenOfficialLogo"/>
   </g>
 </svg>

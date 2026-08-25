@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/syswarden_hero.svg" alt="Official SysWarden logo on a light background" width="100%">
+  <img src="assets/syswarden_hero.svg" alt="Official SysWarden logo" width="100%">
 </div>
 
 <br>

@@ -237,19 +237,88 @@ class RequiredCheckWorkflowTests(unittest.TestCase):
             for path in (REPOSITORY / "assets").glob("syswarden_*.svg")
             if path.name != "syswarden_logo.svg"
         }
+        hero_name = "syswarden_hero.svg"
         self.assertTrue(LEGACY_DARK_VISUALS.issubset(self.brand_visuals))
         self.assertTrue(LEGACY_DARK_VISUALS.issubset(visuals))
+        self.assertIn(hero_name, visuals)
         for name, visual in visuals.items():
             with self.subTest(visual=name):
-                if name in LEGACY_DARK_VISUALS:
+                if name == hero_name:
+                    self.assertNotIn('data-theme=', visual)
+                    self.assertNotIn('data-theme-status=', visual)
+                elif name in LEGACY_DARK_VISUALS:
                     self.assertIn('data-theme="dark"', visual)
                     self.assertIn('data-theme-status="legacy"', visual)
                 else:
                     self.assertIn('data-theme="light"', visual)
                     self.assertNotIn('data-theme-status="legacy"', visual)
-        hero = visuals["syswarden_hero.svg"]
-        self.assertIn('<stop offset="0" stop-color="#f8fafc"/>', hero)
-        self.assertIn('fill="#0b1f33"', hero)
+
+        hero = visuals[hero_name]
+        self.assertIn(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="1600" '
+            'height="340" viewBox="0 0 1600 340"',
+            hero,
+        )
+        self.assertEqual(
+            hero.count(
+                '<rect width="1600" height="340" rx="24" fill="#0b1f33"/>'
+            ),
+            1,
+        )
+        self.assertEqual(
+            hero.count('<g transform="translate(170 12.5) scale(2.1)">'),
+            1,
+        )
+        self.assertEqual(hero.count('<use href="#syswardenOfficialLogo"/>'), 1)
+        self.assertNotIn('id="background"', hero)
+        self.assertNotIn('url(#background)', hero)
+        self.assertNotIn('id="cardShadow"', hero)
+        self.assertNotIn("feDropShadow", hero)
+        self.assertNotIn('<stop offset="0" stop-color="#f8fafc"/>', hero)
+        self.assertNotIn('<stop offset="1" stop-color="#eef6fb"/>', hero)
+
+        rendered_content = hero.split("</defs>", 1)[1]
+        self.assertEqual(rendered_content.count("<rect "), 1)
+        self.assertEqual(rendered_content.count("<g "), 1)
+        self.assertEqual(rendered_content.count("<use "), 1)
+        for decorative_element in ("<circle ", "<ellipse ", "<path ", "<line "):
+            self.assertNotIn(decorative_element, rendered_content)
+
+        placement = re.search(
+            r'<g transform="translate\((?P<x>[0-9.]+) (?P<y>[0-9.]+)\) '
+            r'scale\((?P<scale>[0-9.]+)\)">',
+            rendered_content,
+        )
+        self.assertIsNotNone(placement)
+        assert placement is not None
+        logo_x = float(placement.group("x"))
+        logo_y = float(placement.group("y"))
+        logo_scale = float(placement.group("scale"))
+        self.assertGreaterEqual(logo_x, 0)
+        self.assertGreaterEqual(logo_y, 0)
+        self.assertLessEqual(logo_x + (600 * logo_scale), 1600)
+        self.assertLessEqual(logo_y + (150 * logo_scale), 340)
+
+        mark_placement = re.search(
+            r'<use href="#syswardenOfficialMark" '
+            r'transform="translate\((?P<x>[0-9.]+), (?P<y>[0-9.]+)\)"/>',
+            hero,
+        )
+        wordmark = re.search(
+            r'<text x="(?P<x>[0-9.]+)" y="90" '
+            r'class="official-logo-text">SYSWARDEN</text>',
+            hero,
+        )
+        self.assertIsNotNone(mark_placement)
+        self.assertIsNotNone(wordmark)
+        assert mark_placement is not None
+        assert wordmark is not None
+        self.assertLess(
+            float(mark_placement.group("x")) + 100,
+            float(wordmark.group("x")),
+        )
+
+        self.assertEqual(hero.count('fill="#0b1f33"'), 1)
         self.assertEqual(hero.count("fill: #FFFFFF;"), 2)
         self.assertNotIn("fill: #0f2740;", hero)
         self.assertNotIn("fill: #34506b;", hero)

@@ -136,17 +136,81 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_docs_parent_sha="$(git rev-parse HEAD^)"
+              v4032_arm64_attestation_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_arm64_attestation_parent_sha}" != "8e3ef2a0f50e4833f3078a7a09c2d07bf984f6ef" ]]; then
+                echo "ERROR: the deterministic ARM64 crun attestation correction is not based on the reviewed PR110 squash." >&2
+                exit 1
+              fi
+              v4032_arm64_attestation_expected_subject='Qualification : stabilize ARM64 crun version attestation (#111)'
+              if [[ "${commit_subject}" != "${v4032_arm64_attestation_expected_subject}" ]]; then
+                echo "ERROR: the deterministic ARM64 crun attestation correction requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_arm64_attestation_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_arm64_attestation_head_line[@]} != 2 )); then
+                echo "ERROR: the deterministic ARM64 crun attestation correction must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 deterministic ARM64 crun attestation diff contract
+              expected_v4032_arm64_attestation_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "README.md"
+                M "assets/syswarden_hero.svg"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+                M "scripts/ci/workflow_required_checks_test.py"
+              )
+              mapfile -d '' -t actual_v4032_arm64_attestation_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_arm64_attestation_diff[@]} != ${#expected_v4032_arm64_attestation_diff[@]} )); then
+                echo "ERROR: the deterministic ARM64 crun attestation correction must modify exactly the seven reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_arm64_attestation_diff[@]}; index++)); do
+                if [[ "${actual_v4032_arm64_attestation_diff[index]}" != "${expected_v4032_arm64_attestation_diff[index]}" ]]; then
+                  echo "ERROR: the deterministic ARM64 crun attestation correction contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_arm64_attestation_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "README.md"
+                "assets/syswarden_hero.svg"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+                "scripts/ci/workflow_required_checks_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_arm64_attestation_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed deterministic ARM64 crun attestation correction ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 deterministic ARM64 crun attestation diff contract
+              v4032_docs_ref=HEAD^
+              v4032_docs_parent_sha="$(git rev-parse "${v4032_docs_ref}^")"
               if [[ "${v4032_docs_parent_sha}" != "3d95b9e53fabf01f73ed36b7fb7dcdaaec0dc4a0" ]]; then
                 echo "ERROR: the v4.03.2 read-only and documentation correction is not based on the reviewed PR109 squash." >&2
                 exit 1
               fi
               v4032_docs_expected_subject='Security : preserve read-only config preflight and centralize v4.03.2 docs (#110)'
-              if [[ "${commit_subject}" != "${v4032_docs_expected_subject}" ]]; then
+              v4032_docs_subject="$(git log -1 --format=%s "${v4032_docs_ref}")"
+              if [[ "${v4032_docs_subject}" != "${v4032_docs_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 read-only and documentation correction requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_docs_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_docs_head_line <<< "$(git rev-list --parents -n 1 "${v4032_docs_ref}")"
               if (( ${#v4032_docs_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 read-only and documentation correction must be one linear commit." >&2
                 exit 1
@@ -165,7 +229,8 @@ jobs:
                 M "src/core/syswarden-cli/cmd/root_config_guard_test.go"
               )
               mapfile -d '' -t actual_v4032_docs_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_docs_ref}^" "${v4032_docs_ref}"
               )
               if (( ${#actual_v4032_docs_diff[@]} != ${#expected_v4032_docs_diff[@]} )); then
                 echo "ERROR: the v4.03.2 read-only and documentation correction must modify exactly the ten reviewed files." >&2
@@ -189,7 +254,7 @@ jobs:
                 "src/core/syswarden-cli/cmd/root.go"
                 "src/core/syswarden-cli/cmd/root_config_guard_test.go"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_docs_ref}^" "${v4032_docs_ref}"; do
                 for fix_path in "${v4032_docs_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -204,7 +269,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 read-only configuration and documentation diff contract
-              v4032_systemd_ref=HEAD^
+              v4032_systemd_ref="${v4032_docs_ref}^"
               v4032_systemd_parent_sha="$(git rev-parse "${v4032_systemd_ref}^")"
               if [[ "${v4032_systemd_parent_sha}" != "540bab73a477c76d6301d276383602db06d36acd" ]]; then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction is not based on the reviewed PR105 squash." >&2
@@ -1567,17 +1632,81 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_docs_parent_sha="$(git rev-parse HEAD^)"
+              v4032_arm64_attestation_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_arm64_attestation_parent_sha}" != "8e3ef2a0f50e4833f3078a7a09c2d07bf984f6ef" ]]; then
+                echo "ERROR: the deterministic ARM64 crun attestation correction is not based on the reviewed PR110 squash." >&2
+                exit 1
+              fi
+              v4032_arm64_attestation_expected_subject='Qualification : stabilize ARM64 crun version attestation (#111)'
+              if [[ "${commit_subject}" != "${v4032_arm64_attestation_expected_subject}" ]]; then
+                echo "ERROR: the deterministic ARM64 crun attestation correction requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_arm64_attestation_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_arm64_attestation_head_line[@]} != 2 )); then
+                echo "ERROR: the deterministic ARM64 crun attestation correction must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 deterministic ARM64 crun attestation diff contract
+              expected_v4032_arm64_attestation_diff=(
+                M ".github/workflows/release-manager.yml"
+                M ".github/workflows/release-qualification.yml"
+                M "README.md"
+                M "assets/syswarden_hero.svg"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/release_qualification_workflow_test.py"
+                M "scripts/ci/workflow_required_checks_test.py"
+              )
+              mapfile -d '' -t actual_v4032_arm64_attestation_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_arm64_attestation_diff[@]} != ${#expected_v4032_arm64_attestation_diff[@]} )); then
+                echo "ERROR: the deterministic ARM64 crun attestation correction must modify exactly the seven reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_arm64_attestation_diff[@]}; index++)); do
+                if [[ "${actual_v4032_arm64_attestation_diff[index]}" != "${expected_v4032_arm64_attestation_diff[index]}" ]]; then
+                  echo "ERROR: the deterministic ARM64 crun attestation correction contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_arm64_attestation_paths=(
+                ".github/workflows/release-manager.yml"
+                ".github/workflows/release-qualification.yml"
+                "README.md"
+                "assets/syswarden_hero.svg"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/release_qualification_workflow_test.py"
+                "scripts/ci/workflow_required_checks_test.py"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_arm64_attestation_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed deterministic ARM64 crun attestation correction ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 deterministic ARM64 crun attestation diff contract
+              v4032_docs_ref=HEAD^
+              v4032_docs_parent_sha="$(git rev-parse "${v4032_docs_ref}^")"
               if [[ "${v4032_docs_parent_sha}" != "3d95b9e53fabf01f73ed36b7fb7dcdaaec0dc4a0" ]]; then
                 echo "ERROR: the v4.03.2 read-only and documentation correction is not based on the reviewed PR109 squash." >&2
                 exit 1
               fi
               v4032_docs_expected_subject='Security : preserve read-only config preflight and centralize v4.03.2 docs (#110)'
-              if [[ "${commit_subject}" != "${v4032_docs_expected_subject}" ]]; then
+              v4032_docs_subject="$(git log -1 --format=%s "${v4032_docs_ref}")"
+              if [[ "${v4032_docs_subject}" != "${v4032_docs_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 read-only and documentation correction requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_docs_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_docs_head_line <<< "$(git rev-list --parents -n 1 "${v4032_docs_ref}")"
               if (( ${#v4032_docs_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 read-only and documentation correction must be one linear commit." >&2
                 exit 1
@@ -1596,7 +1725,8 @@ jobs:
                 M "src/core/syswarden-cli/cmd/root_config_guard_test.go"
               )
               mapfile -d '' -t actual_v4032_docs_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_docs_ref}^" "${v4032_docs_ref}"
               )
               if (( ${#actual_v4032_docs_diff[@]} != ${#expected_v4032_docs_diff[@]} )); then
                 echo "ERROR: the v4.03.2 read-only and documentation correction must modify exactly the ten reviewed files." >&2
@@ -1620,7 +1750,7 @@ jobs:
                 "src/core/syswarden-cli/cmd/root.go"
                 "src/core/syswarden-cli/cmd/root_config_guard_test.go"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_docs_ref}^" "${v4032_docs_ref}"; do
                 for fix_path in "${v4032_docs_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -1635,7 +1765,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 read-only configuration and documentation diff contract
-              v4032_systemd_ref=HEAD^
+              v4032_systemd_ref="${v4032_docs_ref}^"
               v4032_systemd_parent_sha="$(git rev-parse "${v4032_systemd_ref}^")"
               if [[ "${v4032_systemd_parent_sha}" != "540bab73a477c76d6301d276383602db06d36acd" ]]; then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction is not based on the reviewed PR105 squash." >&2
