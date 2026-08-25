@@ -5,7 +5,7 @@ go 1.26.6
 require (
 	github.com/duggytuxy/ahocorasick v0.0.0-20260730090121-324ac534d992
 	github.com/google/nftables v0.3.0
-	github.com/pelletier/go-toml/v2 v2.2.4
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/spf13/viper v1.21.0
 	golang.org/x/sys v0.47.0
 )

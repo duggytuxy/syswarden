@@ -1493,16 +1493,83 @@ func TestRsyslogOfflineAndActiveContracts(t *testing.T) {
 		}
 	})
 
-	t.Run("active restart failure", func(t *testing.T) {
-		injected := errors.New("restart failed")
+	t.Run("systemd service uses reload or restart and active attestation", func(t *testing.T) {
+		commands := []string{}
 		host := newHost(t, hardeningExecutionDecision{state: hardeningExecutionActive}, nil, func(name string, args ...string) error {
-			if name == "systemctl" {
+			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+			return nil
+		})
+		if err := applyLogAntiForgingOn(host); err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.Join(commands, "|")
+		if want := "rsyslogd -N1|systemctl reload-or-restart rsyslog.service|systemctl is-active --quiet rsyslog.service"; joined != want {
+			t.Fatalf("commands=%q, want %q", joined, want)
+		}
+		if strings.Contains(joined, "systemctl restart rsyslog.service") {
+			t.Fatalf("direct rsyslog restart was used: %v", commands)
+		}
+	})
+
+	t.Run("systemd reconcile failure fails closed without direct restart", func(t *testing.T) {
+		injected := errors.New("reload or restart failed")
+		commands := []string{}
+		host := newHost(t, hardeningExecutionDecision{state: hardeningExecutionActive}, nil, func(name string, args ...string) error {
+			command := strings.Join(append([]string{name}, args...), " ")
+			commands = append(commands, command)
+			if command == "systemctl reload-or-restart rsyslog.service" {
 				return injected
 			}
 			return nil
 		})
 		if err := applyLogAntiForgingOn(host); !errors.Is(err, injected) {
 			t.Fatalf("error=%v", err)
+		}
+		if strings.Contains(strings.Join(commands, "|"), "systemctl restart rsyslog.service") {
+			t.Fatalf("failed reconciliation used a direct restart: %v", commands)
+		}
+	})
+
+	t.Run("systemd active attestation failure is propagated", func(t *testing.T) {
+		injected := errors.New("not active")
+		commands := []string{}
+		host := newHost(t, hardeningExecutionDecision{state: hardeningExecutionActive}, nil, func(name string, args ...string) error {
+			command := strings.Join(append([]string{name}, args...), " ")
+			commands = append(commands, command)
+			if command == "systemctl is-active --quiet rsyslog.service" {
+				return injected
+			}
+			return nil
+		})
+		if err := applyLogAntiForgingOn(host); !errors.Is(err, injected) {
+			t.Fatalf("error=%v", err)
+		}
+		if strings.Contains(strings.Join(commands, "|"), "systemctl restart rsyslog.service") {
+			t.Fatalf("failed active attestation used a direct restart: %v", commands)
+		}
+	})
+
+	t.Run("OpenRC keeps its bounded rsyslog restart", func(t *testing.T) {
+		commands := []string{}
+		host := newHost(t, hardeningExecutionDecision{state: hardeningExecutionActive}, nil, func(name string, args ...string) error {
+			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+			return nil
+		})
+		marker, err := host.path("/etc/alpine-release")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(marker), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeHardeningFixtureFile(marker, []byte("3.22.0\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := applyLogAntiForgingOn(host); err != nil {
+			t.Fatal(err)
+		}
+		if want := "rsyslogd -N1|rc-service rsyslog restart"; strings.Join(commands, "|") != want {
+			t.Fatalf("commands=%v, want %q", commands, want)
 		}
 	})
 }
