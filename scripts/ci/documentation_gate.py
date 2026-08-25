@@ -67,6 +67,14 @@ CURRENT_SURFACE_RETIRED_TERMS = (
     "web" + "_tui",
     "." + "txz",
 )
+REQUIRED_OPERATIONAL_WIKI_PAGES = frozenset(
+    {
+        "Deployment-Tutorial.md",
+        "BunkerWeb-Integration.md",
+        "Migration-v4.02.8-to-v4.03.2.md",
+        "RHEL-9-Image-Extensions.md",
+    }
+)
 FRENCH_RE = re.compile(
     r"[àâçéèêëîïôùûüÿœ]|\b(?:aucune|ceci|cliquez|doit|français|"
     r"installation\s+sécurisée|mise\s+à\s+jour|paramètres|pré-requis|"
@@ -500,8 +508,8 @@ def resolve_local_target(document: Path, target: str, wiki_root: Path | None) ->
     candidate = document.parent / path_part
     if candidate.exists():
         return candidate
-    if wiki_root is not None and candidate.suffix == "":
-        markdown_candidate = candidate.with_suffix(".md")
+    if wiki_root is not None and not candidate.name.casefold().endswith(".md"):
+        markdown_candidate = candidate.parent / f"{candidate.name}.md"
         if markdown_candidate.exists():
             return markdown_candidate
     return candidate
@@ -630,7 +638,9 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
     errors: list[str] = []
     release_names: list[str] = []
     workflow_names: list[str] = []
+    table_rows: list[list[str]] = []
     coordinates: set[tuple[str, str]] = set()
+    current_version = source_version(repo_root).removeprefix("v")
     for index, artifact in enumerate(artifacts):
         if not isinstance(artifact, dict) or not all(
             isinstance(artifact.get(key), str) and artifact[key]
@@ -665,6 +675,19 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
             )
         release_names.append(release_name)
         workflow_names.append(artifact["workflow_name"])
+        distribution = {
+            "DEB": "Debian or Ubuntu",
+            "RPM": "Fedora or RHEL family",
+            "APK": "Alpine",
+        }.get(family)
+        if distribution is not None:
+            table_rows.append(
+                [
+                    distribution,
+                    architecture,
+                    f"`{artifact['release_name'].format(version=current_version)}`",
+                ]
+            )
 
     expected_release_names = release_gate.package_names("9.99.9")
     if release_names != expected_release_names:
@@ -685,7 +708,7 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
         return number_words.get(count, str(count))
 
     expected_inventory_phrases = {
-        "README.md": (
+        "wiki/Deployment-Tutorial.md": (
             "The package workflow is configured to generate "
             f"{count_word('DEB')} DEB, {count_word('RPM')} RPM "
             f"and {count_word('APK')} APK packages plus "
@@ -697,6 +720,25 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
         errors.append(
             "documentation package count statements do not match the exact release inventory; "
             f"expected={expected_inventory_phrases}, actual={inventory_phrases}"
+        )
+
+    expected_tables = {
+        "wiki/Deployment-Tutorial.md": {
+            "heading": "1. Supported package matrix",
+            "header": [
+                "Distribution family",
+                "Architecture",
+                "Expected package",
+            ],
+            "rows": table_rows,
+        }
+    }
+    tables = value.get("tables")
+    if tables != expected_tables:
+        errors.append(
+            "documentation package table contract does not match the exact "
+            "source package matrix; "
+            f"expected={expected_tables}, actual={tables}"
         )
 
     workflow = read_text(repo_root / ".github/workflows/package.yml")
@@ -1169,6 +1211,41 @@ def require_phrases(
     return errors
 
 
+def validate_wiki_phrase_contract(value: object) -> list[str]:
+    """Validate the repository-owned contract for separately published wiki pages."""
+
+    if not isinstance(value, dict) or not value:
+        return ["documentation contract required_wiki_phrases must be a non-empty object"]
+
+    errors: list[str] = []
+    pages = set(value)
+    missing = REQUIRED_OPERATIONAL_WIKI_PAGES - pages
+    if missing:
+        errors.append(
+            "documentation contract is missing required operational wiki pages: "
+            f"{sorted(missing)}"
+        )
+
+    for page, phrases in value.items():
+        if not isinstance(page, str) or not page.endswith(".md") or "/" in page:
+            errors.append(f"invalid wiki contract page: {page!r}")
+            continue
+        if not isinstance(phrases, list) or not phrases or not all(
+            isinstance(phrase, str) and phrase.strip() for phrase in phrases
+        ):
+            errors.append(
+                f"documentation contract required_wiki_phrases[{page!r}] "
+                "must be a non-empty string list"
+            )
+            continue
+        if len(phrases) != len(set(phrases)):
+            errors.append(
+                f"documentation contract required_wiki_phrases[{page!r}] "
+                "contains duplicates"
+            )
+    return errors
+
+
 def validate_source_assertions(repo_root: Path, contract: dict[str, object]) -> list[str]:
     errors: list[str] = []
     assertions = contract.get("source_assertions")
@@ -1374,6 +1451,7 @@ def validate_repository(
     if not isinstance(manual_required, list) or not all(isinstance(item, str) for item in manual_required):
         errors.append("documentation contract required_manual_phrases must be a string list")
         manual_required = []
+    errors.extend(validate_wiki_phrase_contract(wiki_required))
     if not isinstance(product_command_count, int) or product_command_count <= 0:
         errors.append("documentation contract product_command_count must be a positive integer")
     elif len(source_commands) != product_command_count:
@@ -1450,16 +1528,6 @@ def validate_repository(
     )
     errors.extend(require_phrases(readme, readme_required, version, "README.md"))
     errors.extend(require_phrases(manual, manual_required, version, "manual.go"))
-    errors.extend(
-        validate_package_documentation(
-            readme, "README.md", package_platform_contract
-        )
-    )
-    errors.extend(
-        validate_command_inventory(
-            readme, "Operator commands", source_commands, "README.md"
-        )
-    )
     errors.extend(validate_source_assertions(repo_root, contract))
     errors.extend(
         validate_active_public_surfaces(

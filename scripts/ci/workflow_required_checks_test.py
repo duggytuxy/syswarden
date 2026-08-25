@@ -33,7 +33,6 @@ EMBEDDED_MARK_PRESENTATION = (
 LEGACY_DARK_VISUALS = {
     "syswarden_architecture.svg",
     "syswarden_bunkerweb_integration.svg",
-    "syswarden_hero.svg",
 }
 
 
@@ -179,7 +178,20 @@ class RequiredCheckWorkflowTests(unittest.TestCase):
             self.readme.count('src="assets/syswarden_hero.svg"'), 1
         )
         self.assertEqual(
-            self.readme.count('src="assets/syswarden_architecture.svg"'), 1
+            self.readme.count('src="assets/syswarden_architecture.svg"'), 0
+        )
+        self.assertEqual(
+            self.readme.count(
+                '</div>\n\n<br>\n\n<div align="center">'
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.readme.count(
+                "[![Support on Ko-Fi](https://ko-fi.com/img/githubbutton_sm.svg)]"
+                "(https://ko-fi.com/laurentmduggytuxy)"
+            ),
+            1,
         )
 
     def test_published_visuals_embed_the_exact_official_syswarden_brand(self) -> None:
@@ -235,6 +247,12 @@ class RequiredCheckWorkflowTests(unittest.TestCase):
                 else:
                     self.assertIn('data-theme="light"', visual)
                     self.assertNotIn('data-theme-status="legacy"', visual)
+        hero = visuals["syswarden_hero.svg"]
+        self.assertIn('<stop offset="0" stop-color="#f8fafc"/>', hero)
+        self.assertIn('fill="#0b1f33"', hero)
+        self.assertEqual(hero.count("fill: #FFFFFF;"), 2)
+        self.assertNotIn("fill: #0f2740;", hero)
+        self.assertNotIn("fill: #34506b;", hero)
 
     def test_bunkerweb_visual_routes_and_labels_do_not_reintroduce_overlaps(self) -> None:
         visual = self.brand_visuals["syswarden_bunkerweb_integration.svg"]

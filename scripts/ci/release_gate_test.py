@@ -1439,13 +1439,13 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(script.count('for tree_ref in HEAD^ HEAD; do'), 2)
             self.assertEqual(
                 script.count('tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'),
-                14,
+                15,
             )
-            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 13)
-            self.assertEqual(script.count('"${tree_type}" != "blob"'), 14)
+            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 14)
+            self.assertEqual(script.count('"${tree_type}" != "blob"'), 15)
             expected_path_counts = {
-                ".github/workflows/release-manager.yml": 24,
-                "scripts/ci/release_gate_test.py": 24,
+                ".github/workflows/release-manager.yml": 26,
+                "scripts/ci/release_gate_test.py": 26,
                 "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go": 2,
             }
             for path, count in expected_path_counts.items():
@@ -1482,6 +1482,10 @@ class ReleaseGateTests(unittest.TestCase):
             workflow.count('if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then'), 2
         )
         pinned_contracts = (
+            (
+                'if [[ "${v4032_docs_parent_sha}" != '
+                '"3d95b9e53fabf01f73ed36b7fb7dcdaaec0dc4a0" ]]; then'
+            ),
             (
                 'if [[ "${v4032_systemd_parent_sha}" != '
                 '"540bab73a477c76d6301d276383602db06d36acd" ]]; then'
@@ -1545,6 +1549,10 @@ class ReleaseGateTests(unittest.TestCase):
         )
         for contract in pinned_contracts:
             self.assertEqual(workflow.count(contract), 2)
+        docs_subject_contract = (
+            "v4032_docs_expected_subject='Security : preserve read-only config "
+            "preflight and centralize v4.03.2 docs (#110)'"
+        )
         systemd_subject_contract = (
             "v4032_systemd_expected_subject='Qualification : seal "
             "systemd-capable ARM64 crun runtime (#109)'"
@@ -1596,6 +1604,18 @@ class ReleaseGateTests(unittest.TestCase):
         repair_subject_contract = (
             "v4032_expected_subject='Qualification : repair v4.03.2 "
             "package lifecycle qualification (#95) (#95)'"
+        )
+        docs_paths = (
+            ".github/workflows/release-manager.yml",
+            "README.md",
+            "assets/syswarden_hero.svg",
+            "scripts/ci/documentation_contract.json",
+            "scripts/ci/documentation_gate.py",
+            "scripts/ci/documentation_gate_test.py",
+            "scripts/ci/release_gate_test.py",
+            "scripts/ci/workflow_required_checks_test.py",
+            "src/core/syswarden-cli/cmd/root.go",
+            "src/core/syswarden-cli/cmd/root_config_guard_test.go",
         )
         systemd_paths = (
             ".github/workflows/release-manager.yml",
@@ -1691,6 +1711,7 @@ class ReleaseGateTests(unittest.TestCase):
                 compliance_paths
                 + repair_paths
                 + crun_paths
+                + docs_paths
                 + systemd_paths
                 + cli_toml_paths
                 + core_toml_paths
@@ -1706,6 +1727,7 @@ class ReleaseGateTests(unittest.TestCase):
             "src/core/syswarden-core/webhook/discord.go",
         )
         for block in blocks:
+            self.assertEqual(block.count(docs_subject_contract), 1)
             self.assertEqual(block.count(systemd_subject_contract), 1)
             self.assertEqual(block.count(cli_toml_subject_contract), 1)
             self.assertEqual(block.count(core_toml_subject_contract), 1)
@@ -1722,20 +1744,94 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 block.count(
                     '[[ "${commit_subject}" != '
+                    '"${v4032_docs_expected_subject}" ]]'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_docs_parent_sha="$(git rev-parse HEAD^)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_docs_head_line <<< '
+                    '"$(git rev-list --parents -n 1 HEAD)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count("${#v4032_docs_head_line[@]} != 2"), 1
+            )
+            docs_diff = block.split(
+                "# BEGIN exact v4.03.2 read-only configuration and documentation "
+                "diff contract\n",
+                1,
+            )[1].split(
+                "# END exact v4.03.2 read-only configuration and documentation "
+                "diff contract",
+                1,
+            )[0]
+            self.assertEqual(
+                docs_diff.count(
+                    "git diff-tree --no-commit-id --name-status -r "
+                    "--no-renames -z HEAD^ HEAD"
+                ),
+                1,
+            )
+            self.assertEqual(
+                docs_diff.count("for tree_ref in HEAD^ HEAD; do"), 1
+            )
+            self.assertEqual(
+                docs_diff.count('"${tree_mode}" != "100644"'), 1
+            )
+            self.assertEqual(
+                docs_diff.count('"${tree_type}" != "blob"'), 1
+            )
+            self.assertEqual(
+                docs_diff.count(
+                    "! \"${tree_object}\" =~ ^[0-9a-f]{40}$"
+                ),
+                1,
+            )
+            self.assertEqual(
+                docs_diff.count(
+                    "${#actual_v4032_docs_diff[@]} != "
+                    "${#expected_v4032_docs_diff[@]}"
+                ),
+                1,
+            )
+            for path in docs_paths:
+                self.assertEqual(docs_diff.count(f'"{path}"'), 2)
+                self.assertEqual(docs_diff.count(f'M "{path}"'), 1)
+            self.assertEqual(block.count("v4032_systemd_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_systemd_parent_sha="$(git rev-parse '
+                    '"${v4032_systemd_ref}^")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_systemd_subject="$(git log -1 --format=%s '
+                    '"${v4032_systemd_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    '[[ "${v4032_systemd_subject}" != '
                     '"${v4032_systemd_expected_subject}" ]]'
                 ),
                 1,
             )
             self.assertEqual(
                 block.count(
-                    'v4032_systemd_parent_sha="$(git rev-parse HEAD^)"'
-                ),
-                1,
-            )
-            self.assertEqual(
-                block.count(
                     'v4032_systemd_head_line <<< '
-                    '"$(git rev-list --parents -n 1 HEAD)"'
+                    '"$(git rev-list --parents -n 1 '
+                    '"${v4032_systemd_ref}")"'
                 ),
                 1,
             )
@@ -1754,12 +1850,18 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 systemd_diff.count(
                     "git diff-tree --no-commit-id --name-status -r "
-                    "--no-renames -z HEAD^ HEAD"
+                    "--no-renames -z \\\n"
+                    '        "${v4032_systemd_ref}^" '
+                    '"${v4032_systemd_ref}"'
                 ),
                 1,
             )
             self.assertEqual(
-                systemd_diff.count("for tree_ref in HEAD^ HEAD; do"), 1
+                systemd_diff.count(
+                    'for tree_ref in "${v4032_systemd_ref}^" '
+                    '"${v4032_systemd_ref}"; do'
+                ),
+                1,
             )
             self.assertEqual(
                 systemd_diff.count('"${tree_mode}" != "100644"'), 1
@@ -1783,7 +1885,12 @@ class ReleaseGateTests(unittest.TestCase):
             for path in systemd_paths:
                 self.assertEqual(systemd_diff.count(f'"{path}"'), 2)
                 self.assertEqual(systemd_diff.count(f'M "{path}"'), 1)
-            self.assertEqual(block.count("v4032_cli_toml_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_cli_toml_ref="${v4032_systemd_ref}^"\n'
+                ),
+                1,
+            )
             self.assertEqual(
                 block.count(
                     'v4032_cli_toml_parent_sha="$(git rev-parse '
@@ -1857,7 +1964,9 @@ class ReleaseGateTests(unittest.TestCase):
                 self.assertEqual(cli_toml_diff.count(f'"{path}"'), 2)
                 self.assertEqual(cli_toml_diff.count(f'M "{path}"'), 1)
             self.assertEqual(
-                block.count("v4032_core_toml_ref=HEAD^^\n"),
+                block.count(
+                    'v4032_core_toml_ref="${v4032_cli_toml_ref}^"\n'
+                ),
                 1,
             )
             self.assertEqual(
@@ -1933,7 +2042,9 @@ class ReleaseGateTests(unittest.TestCase):
                 self.assertEqual(core_toml_diff.count(f'"{path}"'), 2)
                 self.assertEqual(core_toml_diff.count(f'M "{path}"'), 1)
             self.assertEqual(
-                block.count("v4032_crun_ref=HEAD^^^\n"),
+                block.count(
+                    'v4032_crun_ref="${v4032_core_toml_ref}^"\n'
+                ),
                 1,
             )
             self.assertEqual(
@@ -2758,7 +2869,7 @@ class ReleaseGateTests(unittest.TestCase):
                     "git diff-tree --no-commit-id --name-status -r "
                     "--no-renames -z \\"
                 ),
-                12,
+                13,
             )
             self.assertEqual(
                 block.count(
@@ -2777,12 +2888,12 @@ class ReleaseGateTests(unittest.TestCase):
                 block.count(
                     'tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'
                 ),
-                13,
+                14,
             )
             self.assertEqual(
                 block.count('"${tree_mode}" != "${expected_mode}"'), 1
             )
-            self.assertEqual(block.count('"${tree_type}" != "blob"'), 13)
+            self.assertEqual(block.count('"${tree_type}" != "blob"'), 14)
             self.assertEqual(block.count('expected_mode="100644"'), 1)
             self.assertEqual(
                 block.count('[[ "${fix_path}" == "build_packages.sh" ]]'), 1
@@ -2795,6 +2906,7 @@ class ReleaseGateTests(unittest.TestCase):
             )
             for path in expected_paths:
                 expected_count = 2 if path in repair_paths else 0
+                expected_count += 2 if path in docs_paths else 0
                 expected_count += 2 if path in crun_paths else 0
                 expected_count += 2 if path in compliance_paths else 0
                 expected_count += 2 if path in merge_paths else 0
@@ -2810,6 +2922,7 @@ class ReleaseGateTests(unittest.TestCase):
                 expected_count += 1 if path == "build_packages.sh" else 0
                 self.assertEqual(block.count(f'"{path}"'), expected_count)
                 expected_status_count = 1 if path in repair_paths else 0
+                expected_status_count += 1 if path in docs_paths else 0
                 expected_status_count += 1 if path in crun_paths else 0
                 expected_status_count += 1 if path in compliance_paths else 0
                 expected_status_count += 1 if path in merge_paths else 0
@@ -2953,6 +3066,34 @@ class ReleaseGateTests(unittest.TestCase):
             )[0]
             self.assertNotIn("--tag-phase", parent_validation)
 
+    def exact_v4032_docs_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        begin = (
+            "# BEGIN exact v4.03.2 read-only configuration and documentation "
+            "diff contract\n"
+        )
+        end = (
+            "# END exact v4.03.2 read-only configuration and documentation "
+            "diff contract"
+        )
+        self.assertEqual(block.count(begin), 1)
+        self.assertEqual(block.count(end), 1)
+        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+
+    def v4032_docs_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        start = "v4032_docs_expected_subject="
+        end = (
+            'read -r -a v4032_docs_head_line <<< '
+            '"$(git rev-list --parents -n 1 HEAD)"'
+        )
+        self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(end), 1)
+        fragment = start + block.split(start, 1)[1].split(end, 1)[0]
+        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+
     def exact_v4032_systemd_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
@@ -2966,20 +3107,31 @@ class ReleaseGateTests(unittest.TestCase):
         )
         self.assertEqual(block.count(begin), 1)
         self.assertEqual(block.count(end), 1)
-        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+        return (
+            "set -euo pipefail\nv4032_systemd_ref=HEAD\n"
+            + block.split(begin, 1)[1].split(end, 1)[0]
+        )
 
     def v4032_systemd_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
         start = "v4032_systemd_expected_subject="
+        subject_assignment = (
+            'v4032_systemd_subject="$(git log -1 --format=%s '
+            '"${v4032_systemd_ref}")"'
+        )
         end = (
             'read -r -a v4032_systemd_head_line <<< '
-            '"$(git rev-list --parents -n 1 HEAD)"'
+            '"$(git rev-list --parents -n 1 "${v4032_systemd_ref}")"'
         )
         self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(subject_assignment), 1)
         self.assertEqual(block.count(end), 1)
         fragment = start + block.split(start, 1)[1].split(end, 1)[0]
-        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+        fragment = fragment.replace(
+            subject_assignment, 'v4032_systemd_subject="${COMMIT_SUBJECT:?}"'
+        )
+        return "set -euo pipefail\n" + fragment
 
     def exact_v4032_cli_toml_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -3618,6 +3770,59 @@ class ReleaseGateTests(unittest.TestCase):
             check=True,
         )
         return repository
+
+    def test_release_manager_v4032_docs_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        self.assert_exact_subject_gate(
+            self.v4032_docs_subject_gate_script(),
+            {
+                "valid": (
+                    "Security : preserve read-only config preflight and centralize v4.03.2 docs (#110)",
+                    True,
+                ),
+                "bare": (
+                    "Security : preserve read-only config preflight and centralize v4.03.2 docs",
+                    False,
+                ),
+                "previous pull request": (
+                    "Security : preserve read-only config preflight and centralize v4.03.2 docs (#109)",
+                    False,
+                ),
+                "wrong version": (
+                    "Security : preserve read-only config preflight and centralize v4.03.3 docs (#110)",
+                    False,
+                ),
+                "wrong scope": (
+                    "Security : weaken config preflight and centralize v4.03.2 docs (#110)",
+                    False,
+                ),
+                "trailing space": (
+                    "Security : preserve read-only config preflight and centralize v4.03.2 docs (#110) ",
+                    False,
+                ),
+            },
+        )
+
+    def test_release_manager_v4032_docs_diff_rejects_git_shape_mutations(
+        self,
+    ) -> None:
+        self.assert_regular_diff_gate(
+            self.exact_v4032_docs_diff_script(),
+            "v4032-docs-diff",
+            (
+                ".github/workflows/release-manager.yml",
+                "README.md",
+                "assets/syswarden_hero.svg",
+                "scripts/ci/documentation_contract.json",
+                "scripts/ci/documentation_gate.py",
+                "scripts/ci/documentation_gate_test.py",
+                "scripts/ci/release_gate_test.py",
+                "scripts/ci/workflow_required_checks_test.py",
+                "src/core/syswarden-cli/cmd/root.go",
+                "src/core/syswarden-cli/cmd/root_config_guard_test.go",
+            ),
+        )
 
     def test_release_manager_v4032_systemd_subject_is_exact_github_squash(
         self,
@@ -4267,9 +4472,37 @@ class ReleaseGateTests(unittest.TestCase):
                 'if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then',
                 'if [[ "${RELEASE_TAG}" == "v4.03.3" ]]; then',
             ),
+            "documentation parent resolution": workflow.replace(
+                'v4032_docs_parent_sha="$(git rev-parse HEAD^)"',
+                'v4032_docs_parent_sha="$(git rev-parse HEAD^^)"',
+            ),
+            "exact documentation parent": workflow.replace(
+                "3d95b9e53fabf01f73ed36b7fb7dcdaaec0dc4a0",
+                "4d95b9e53fabf01f73ed36b7fb7dcdaaec0dc4a0",
+            ),
+            "documentation canonical subject": workflow.replace(
+                "Security : preserve read-only config preflight and centralize v4.03.2 docs (#110)",
+                "Security : preserve read-only config preflight and centralize v4.03.3 docs (#110)",
+            ),
+            "documentation subject source": workflow.replace(
+                'commit_subject="$(git log -1 --format=%s HEAD)"',
+                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+            ),
+            "documentation linear head": workflow.replace(
+                'v4032_docs_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+                'v4032_docs_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+            ),
+            "systemd reference": workflow.replace(
+                "v4032_systemd_ref=HEAD^",
+                "v4032_systemd_ref=HEAD^^",
+            ),
             "systemd parent resolution": workflow.replace(
-                'v4032_systemd_parent_sha="$(git rev-parse HEAD^)"',
-                'v4032_systemd_parent_sha="$(git rev-parse HEAD^^)"',
+                'v4032_systemd_parent_sha="$(git rev-parse '
+                '"${v4032_systemd_ref}^")"',
+                'v4032_systemd_parent_sha="$(git rev-parse '
+                '"${v4032_systemd_ref}^^")"',
             ),
             "exact systemd parent": workflow.replace(
                 "540bab73a477c76d6301d276383602db06d36acd",
@@ -4280,18 +4513,20 @@ class ReleaseGateTests(unittest.TestCase):
                 "Qualification : repair systemd-capable ARM64 crun runtime (#109)",
             ),
             "systemd subject source": workflow.replace(
-                'commit_subject="$(git log -1 --format=%s HEAD)"',
-                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+                'v4032_systemd_subject="$(git log -1 --format=%s '
+                '"${v4032_systemd_ref}")"',
+                'v4032_systemd_subject="$(git log -1 --format=%s HEAD)"',
             ),
             "systemd linear head": workflow.replace(
                 'v4032_systemd_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD)"',
+                '"$(git rev-list --parents -n 1 '
+                '"${v4032_systemd_ref}")"',
                 'v4032_systemd_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD^)"',
+                '"$(git rev-list --parents -n 1 HEAD)"',
             ),
             "CLI dependency reference": workflow.replace(
-                "v4032_cli_toml_ref=HEAD^",
-                "v4032_cli_toml_ref=HEAD^^",
+                'v4032_cli_toml_ref="${v4032_systemd_ref}^"',
+                'v4032_cli_toml_ref="${v4032_systemd_ref}^^"',
             ),
             "CLI dependency parent resolution": workflow.replace(
                 'v4032_cli_toml_parent_sha="$(git rev-parse '
@@ -4322,8 +4557,8 @@ class ReleaseGateTests(unittest.TestCase):
                 '"$(git rev-list --parents -n 1 HEAD)"',
             ),
             "core dependency reference": workflow.replace(
-                "v4032_core_toml_ref=HEAD^^",
-                "v4032_core_toml_ref=HEAD^^^",
+                'v4032_core_toml_ref="${v4032_cli_toml_ref}^"',
+                'v4032_core_toml_ref="${v4032_cli_toml_ref}^^"',
             ),
             "core dependency parent resolution": workflow.replace(
                 'v4032_core_toml_parent_sha="$(git rev-parse '
@@ -4354,8 +4589,8 @@ class ReleaseGateTests(unittest.TestCase):
                 '"$(git rev-list --parents -n 1 HEAD)"',
             ),
             "crun reference": workflow.replace(
-                "v4032_crun_ref=HEAD^^^",
-                "v4032_crun_ref=HEAD^^^^",
+                'v4032_crun_ref="${v4032_core_toml_ref}^"',
+                'v4032_crun_ref="${v4032_core_toml_ref}^^"',
             ),
             "crun parent resolution": workflow.replace(
                 'v4032_crun_parent_sha="$(git rev-parse '

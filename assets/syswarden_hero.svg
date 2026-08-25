@@ -1,36 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="720" viewBox="0 0 1600 720" role="img" aria-labelledby="title description" data-theme="dark" data-theme-status="legacy">
-  <title id="title">SysWarden Linux host defense</title>
-  <desc id="description">Linux security signals flow through the SysWarden decision engine into nftables enforcement, local terminal operations and an authenticated HA migration fence. Six Linux packages produce an exact thirteen-asset Release.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="340" viewBox="0 0 1600 340" role="img" aria-labelledby="title description" data-theme="light">
+  <title id="title">Official SysWarden logo</title>
+  <desc id="description">The official SysWarden Linux host defense logo on a clean light banner.</desc>
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#07111f"/>
-      <stop offset="0.52" stop-color="#0b2033"/>
-      <stop offset="1" stop-color="#081727"/>
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef6fb"/>
     </linearGradient>
     <linearGradient id="officialShieldGradient" x1="0" y1="0" x2="0" y2="100">
       <stop offset="0%" stop-color="#00A3FF"/>
       <stop offset="100%" stop-color="#0055FF"/>
     </linearGradient>
-    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#112c42" stop-opacity="0.98"/>
-      <stop offset="1" stop-color="#0c1e31" stop-opacity="0.98"/>
-    </linearGradient>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#020617" flood-opacity="0.55"/>
-    </filter>
-    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
-      <feGaussianBlur stdDeviation="22"/>
+    <filter id="cardShadow" x="-20%" y="-30%" width="140%" height="170%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#1e3a5f" flood-opacity="0.10"/>
     </filter>
     <filter id="officialLogoGlow" x="-20%" y="-20%" width="140%" height="140%">
       <feGaussianBlur stdDeviation="6" result="blur"/>
       <feComposite in="SourceGraphic" in2="blur" operator="over"/>
     </filter>
-    <!-- Official brand geometry copied verbatim from assets/syswarden_logo.svg. -->
     <g id="syswardenOfficialMark">
-        <path d="M50 0 L100 20 V60 C100 90 75 110 50 120 C25 110 0 90 0 60 V20 L50 0 Z" fill="#161B22" stroke="url(#officialShieldGradient)" stroke-width="4" filter="url(#officialLogoGlow)"/>
-        <path d="M50 15 L85 30 V55 C85 75 65 90 50 100 C35 90 15 75 15 55 V30 L50 15 Z" fill="none" stroke="#00A3FF" stroke-width="1.5" opacity="0.5"/>
-        <path d="M35 45 L50 60 L35 75" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-        <line x1="55" y1="75" x2="70" y2="75" stroke="#00A3FF" stroke-width="4" stroke-linecap="round" filter="url(#officialLogoGlow)"/>
+      <path d="M50 0 L100 20 V60 C100 90 75 110 50 120 C25 110 0 90 0 60 V20 L50 0 Z" fill="#161B22" stroke="url(#officialShieldGradient)" stroke-width="4" filter="url(#officialLogoGlow)"/>
+      <path d="M50 15 L85 30 V55 C85 75 65 90 50 100 C35 90 15 75 15 55 V30 L50 15 Z" fill="none" stroke="#00A3FF" stroke-width="1.5" opacity="0.5"/>
+      <path d="M35 45 L50 60 L35 75" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="55" y1="75" x2="70" y2="75" stroke="#00A3FF" stroke-width="4" stroke-linecap="round" filter="url(#officialLogoGlow)"/>
     </g>
     <g id="syswardenOfficialLogo" data-brand-source="assets/syswarden_logo.svg">
       <use href="#syswardenOfficialMark" transform="translate(30, 15)"/>
@@ -38,111 +29,29 @@
       <text x="165" y="118" class="official-logo-sub">ACTIVE DEFENSE HIDS/HIPS</text>
     </g>
     <style>
-      .label { font: 700 18px Inter,Segoe UI,Arial,sans-serif; fill: #f8fafc; }
-      .small { font: 500 14px Inter,Segoe UI,Arial,sans-serif; fill: #a8bed0; }
-      .mono { font: 700 14px ui-monospace,SFMono-Regular,Consolas,monospace; fill: #d8f6ff; letter-spacing: .4px; }
-      .chip { fill: #102c42; stroke: #2d5872; stroke-width: 1.5; }
-      .official-logo-text { font: 700 64px "Fira Code",ui-monospace,SFMono-Regular,Consolas,monospace; fill: #ffffff; letter-spacing: -1px; }
-      .official-logo-sub { font: 400 14px "Fira Code",ui-monospace,SFMono-Regular,Consolas,monospace; fill: #ffffff; letter-spacing: 5px; }
+      .official-logo-text {
+        font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-weight: 700;
+        font-size: 64px;
+        fill: #FFFFFF;
+        letter-spacing: -1px;
+      }
+      .official-logo-sub {
+        font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-weight: 400;
+        font-size: 14px;
+        fill: #FFFFFF;
+        letter-spacing: 5px;
+      }
     </style>
   </defs>
 
-  <rect width="1600" height="720" rx="30" fill="url(#background)"/>
-  <circle cx="1345" cy="82" r="190" fill="#0ea5e9" opacity="0.09" filter="url(#glow)"/>
-  <circle cx="230" cy="650" r="210" fill="#14b8a6" opacity="0.08" filter="url(#glow)"/>
-  <path d="M0 560 C260 500 420 650 700 585 S1190 500 1600 590 V720 H0 Z" fill="#0a1b2c" opacity="0.72"/>
-
-  <g transform="translate(70 48) scale(1.2)" filter="url(#shadow)">
+  <rect width="1600" height="340" rx="24" fill="url(#background)"/>
+  <circle cx="530" cy="75" r="155" fill="#dff4ff" opacity="0.62"/>
+  <circle cx="1115" cy="270" r="170" fill="#e5f0ff" opacity="0.58"/>
+  <rect x="350" y="50" width="900" height="240" rx="28" fill="#0b1f33" stroke="#25445f" stroke-width="2" filter="url(#cardShadow)"/>
+  <path d="M414 270 H1186" stroke="#294760" stroke-width="2" stroke-linecap="round"/>
+  <g transform="translate(500 95)">
     <use href="#syswardenOfficialLogo"/>
-  </g>
-  <text x="92" y="235" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="500" fill="#a8bed0">Linux host defense | local enforcement | authenticated HA | fail-closed release gates</text>
-
-  <g transform="translate(90 292)" filter="url(#shadow)">
-    <rect width="320" height="214" rx="22" fill="url(#panel)" stroke="#22455e" stroke-width="2"/>
-    <text x="26" y="40" class="small" fill="#5eead4">SECURITY INPUTS</text>
-    <g transform="translate(24 64)">
-      <rect width="272" height="38" rx="10" class="chip"/>
-      <circle cx="22" cy="19" r="6" fill="#38bdf8"/>
-      <text x="40" y="24" class="label" font-size="16">HIDS and host telemetry</text>
-    </g>
-    <g transform="translate(24 112)">
-      <rect width="272" height="38" rx="10" class="chip"/>
-      <circle cx="22" cy="19" r="6" fill="#2dd4bf"/>
-      <text x="40" y="24" class="label" font-size="16">WAAP logs, out of band</text>
-    </g>
-    <g transform="translate(24 160)">
-      <rect width="272" height="38" rx="10" class="chip"/>
-      <circle cx="22" cy="19" r="6" fill="#f59e0b"/>
-      <text x="40" y="24" class="label" font-size="16">Threat-intelligence feeds</text>
-    </g>
-  </g>
-
-  <g transform="translate(492 255)" filter="url(#shadow)">
-    <rect width="426" height="288" rx="28" fill="#0d293e" stroke="#2dd4bf" stroke-width="2.5"/>
-    <rect x="20" y="20" width="386" height="248" rx="20" fill="#091d2f" stroke="#24506a"/>
-    <text x="213" y="64" text-anchor="middle" class="small" fill="#5eead4">HOST-LOCAL DECISION ENGINE</text>
-    <text x="213" y="111" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="31" font-weight="800" fill="#f8fafc">Policy and provenance</text>
-    <path d="M79 150 H347" stroke="#284a61" stroke-width="2"/>
-    <g transform="translate(48 173)">
-      <rect width="150" height="58" rx="14" fill="#102e43"/>
-      <text x="75" y="25" text-anchor="middle" class="mono">CLI + CORE</text>
-      <text x="75" y="44" text-anchor="middle" class="small">validated config</text>
-    </g>
-    <g transform="translate(228 173)">
-      <rect width="150" height="58" rx="14" fill="#102e43"/>
-      <text x="75" y="25" text-anchor="middle" class="mono">LOCAL TUI</text>
-      <text x="75" y="44" text-anchor="middle" class="small">no listener</text>
-    </g>
-  </g>
-
-  <path d="M410 399 H472" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"/>
-  <path d="M460 389 L476 399 L460 409" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-
-  <g transform="translate(1000 292)" filter="url(#shadow)">
-    <rect width="510" height="214" rx="22" fill="url(#panel)" stroke="#22455e" stroke-width="2"/>
-    <text x="26" y="40" class="small" fill="#5eead4">VERIFIED OUTPUTS</text>
-    <g transform="translate(24 64)">
-      <rect width="222" height="62" rx="13" class="chip"/>
-      <text x="18" y="27" class="mono">NFTABLES</text>
-      <text x="18" y="48" class="small">atomic Linux policy</text>
-    </g>
-    <g transform="translate(264 64)">
-      <rect width="222" height="62" rx="13" class="chip"/>
-      <text x="18" y="27" class="mono">HA API : 62026</text>
-      <text x="18" y="48" class="small">TLS 1.3 + bearer</text>
-    </g>
-    <g transform="translate(24 142)">
-      <rect width="462" height="48" rx="12" fill="#0e3548" stroke="#2dd4bf" stroke-width="1.5"/>
-      <text x="20" y="21" class="mono">MIGRATION FENCE</text>
-      <text x="190" y="21" class="small">challenge + condition bound</text>
-      <text x="20" y="40" class="small">Opaque epoch and digest equality | peer scoped</text>
-    </g>
-  </g>
-
-  <path d="M920 399 H980" stroke="#2dd4bf" stroke-width="4" stroke-linecap="round"/>
-  <path d="M968 389 L984 399 L968 409" fill="none" stroke="#2dd4bf" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-
-  <g transform="translate(90 586)">
-    <text x="0" y="18" class="small" fill="#5eead4">QUALIFIED RELEASE CONTRACT</text>
-    <g transform="translate(0 34)">
-      <rect width="218" height="48" rx="12" class="chip"/>
-      <text x="109" y="29" text-anchor="middle" class="mono">DEB | amd64 + arm64</text>
-    </g>
-    <g transform="translate(232 34)">
-      <rect width="234" height="48" rx="12" class="chip"/>
-      <text x="117" y="29" text-anchor="middle" class="mono">RPM | x86_64 + aarch64</text>
-    </g>
-    <g transform="translate(480 34)">
-      <rect width="234" height="48" rx="12" class="chip"/>
-      <text x="117" y="29" text-anchor="middle" class="mono">APK | x86_64 + aarch64</text>
-    </g>
-    <g transform="translate(728 34)">
-      <rect width="260" height="48" rx="12" fill="#103446" stroke="#2dd4bf" stroke-width="1.5"/>
-      <text x="130" y="29" text-anchor="middle" class="mono">6 PACKAGES | 13 ASSETS</text>
-    </g>
-    <g transform="translate(1002 34)">
-      <rect width="418" height="48" rx="12" class="chip"/>
-      <text x="209" y="29" text-anchor="middle" class="mono">NATIVE ARM64 | ED25519 | EXACT SHA</text>
-    </g>
   </g>
 </svg>

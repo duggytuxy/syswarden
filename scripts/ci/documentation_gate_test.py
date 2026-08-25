@@ -30,13 +30,30 @@ class DocumentationGateTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual([record.path for record in records], ["README.md"])
 
+    def test_operational_wiki_contract_is_required_without_network_access(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        wiki_contract = contract["required_wiki_phrases"]
+        self.assertEqual(
+            documentation_gate.validate_wiki_phrase_contract(wiki_contract), []
+        )
+        changed = json.loads(json.dumps(wiki_contract))
+        changed.pop("RHEL-9-Image-Extensions.md")
+        errors = documentation_gate.validate_wiki_phrase_contract(changed)
+        self.assertTrue(any("missing required operational wiki pages" in error for error in errors))
+
     def test_current_version_and_candidate_status_are_explicit(self) -> None:
         self.assertEqual(documentation_gate.source_version(REPO_ROOT), "v4.03.2")
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
         report = REPORT.read_text(encoding="utf-8")
-        self.assertIn("Current source version: **v4.03.2**.", readme)
-        self.assertIn("does not claim that v4.03.2 is qualified", readme)
+        self.assertEqual(
+            readme.splitlines().count("Current source version: **v4.03.2**."),
+            1,
+        )
+        self.assertIn(
+            "does not claim that the release has been qualified, tagged or published",
+            documentation_gate.normalized(readme),
+        )
         self.assertIn(
             "does not authorize a tag or publication",
             documentation_gate.normalized(changelog),
@@ -153,11 +170,11 @@ class DocumentationGateTest(unittest.TestCase):
         documented_workflows = set(re.findall(r"`([a-z0-9-]+\.yml)`", procedure))
         self.assertEqual(documented_workflows, actual_workflows)
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md", readme)
+        self.assertNotIn("docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md", readme)
 
     def test_optional_image_policy_manifest_set_is_exact_and_executable(self) -> None:
         recipes: list[str] = []
-        for relative in ("README.md", "extensions/rhel-image/README.md"):
+        for relative in ("extensions/rhel-image/README.md",):
             errors: list[str] = []
             blocks = documentation_gate.extract_fenced_blocks(
                 (REPO_ROOT / relative).read_text(encoding="utf-8"),
@@ -189,7 +206,7 @@ class DocumentationGateTest(unittest.TestCase):
             start = recipe.index("POLICY_FILES=()")
             end = recipe.index(marker, start)
             segments.append(recipe[start:end])
-        self.assertEqual(segments[0], segments[1])
+        self.assertEqual(len(segments), 1)
 
         expected_files = [
             "ru.ipv4",
@@ -245,7 +262,7 @@ class DocumentationGateTest(unittest.TestCase):
         stage_command = (
             "sudo extensions/rhel-image/stage-syswarden-rhel-image.sh"
         )
-        for relative in ("README.md", "extensions/rhel-image/README.md"):
+        for relative in ("extensions/rhel-image/README.md",):
             errors: list[str] = []
             blocks = documentation_gate.extract_fenced_blocks(
                 (REPO_ROOT / relative).read_text(encoding="utf-8"),
@@ -273,11 +290,11 @@ class DocumentationGateTest(unittest.TestCase):
                     recipe.index(stage_command),
                     relative,
                 )
-        self.assertGreaterEqual(checked, 4)
+        self.assertGreaterEqual(checked, 3)
 
     def test_optional_image_configuration_publication_is_exact(self) -> None:
         recipes: list[str] = []
-        for relative in ("README.md", "extensions/rhel-image/README.md"):
+        for relative in ("extensions/rhel-image/README.md",):
             errors: list[str] = []
             blocks = documentation_gate.extract_fenced_blocks(
                 (REPO_ROOT / relative).read_text(encoding="utf-8"),
@@ -311,7 +328,7 @@ class DocumentationGateTest(unittest.TestCase):
             ):
                 self.assertIn(command, recipe)
             recipes.append(recipe)
-        self.assertEqual(recipes[0], recipes[1])
+        self.assertEqual(len(recipes), 1)
 
     def test_report_numbered_asset_inventory_matches_release_gate_order(self) -> None:
         report = REPORT.read_text(encoding="utf-8")
@@ -339,10 +356,9 @@ class DocumentationGateTest(unittest.TestCase):
         )
         self.assertTrue(any("exact release gate" in error for error in errors))
 
-    def test_package_contract_matches_workflow_and_readme(self) -> None:
+    def test_package_contract_matches_workflow_and_wiki_contract(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
         package_contract = contract["package_platform_contract"]
-        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertEqual(
             documentation_gate.validate_package_source_contract(
                 REPO_ROOT, package_contract
@@ -350,10 +366,12 @@ class DocumentationGateTest(unittest.TestCase):
             [],
         )
         self.assertEqual(
-            documentation_gate.validate_package_documentation(
-                readme, "README.md", package_contract
-            ),
-            [],
+            set(package_contract["inventory_phrases"]),
+            {"wiki/Deployment-Tutorial.md"},
+        )
+        self.assertEqual(
+            set(package_contract["tables"]),
+            {"wiki/Deployment-Tutorial.md"},
         )
         self.assertEqual(len(package_contract["artifacts"]), 6)
         self.assertEqual(
@@ -364,10 +382,11 @@ class DocumentationGateTest(unittest.TestCase):
     def test_package_count_and_architecture_mutations_are_rejected(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
         package_contract = contract["package_platform_contract"]
-        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        wrong_count = readme.replace("two DEB, two RPM", "nine DEB, two RPM")
+        label = "wiki/Deployment-Tutorial.md"
+        documented_count = package_contract["inventory_phrases"][label]
+        wrong_count = documented_count.replace("two DEB, two RPM", "nine DEB, two RPM")
         errors = documentation_gate.validate_package_documentation(
-            wrong_count, "README.md", package_contract
+            wrong_count, label, package_contract
         )
         self.assertTrue(any("artifact count statement changed" in error for error in errors))
 
@@ -382,10 +401,9 @@ class DocumentationGateTest(unittest.TestCase):
         normalized_readme = documentation_gate.normalized(readme)
         normalized_report = documentation_gate.normalized(report)
         self.assertIn(
-            "runs inside the invoking terminal and opens no listening socket",
+            "Native local terminal dashboard with no browser service or listening port.",
             normalized_readme,
         )
-        self.assertIn("SysWarden owns no listener", readme)
         self.assertIn("native local TUI", normalized_report)
 
         contract = documentation_gate.load_contract(REPO_ROOT)
@@ -405,9 +423,8 @@ class DocumentationGateTest(unittest.TestCase):
         self.assertTrue(any("retired platform" in error for error in errors))
 
     def test_ha_partner_contract_is_unambiguous(self) -> None:
-        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         report = REPORT.read_text(encoding="utf-8")
-        for text in (readme, report):
+        for text in (report,):
             text = documentation_gate.normalized(text)
             self.assertIn("X-SysWarden-HA-Fence-Condition", text)
             self.assertIn("active_drained", text)
@@ -420,27 +437,49 @@ class DocumentationGateTest(unittest.TestCase):
             self.assertIn("HTTP 412", text)
             self.assertIn("one-hour", text)
             self.assertIn("It is never proof of drain", text)
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        wiki_contract = documentation_gate.normalized(
+            "\n".join(
+                contract["required_wiki_phrases"]["BunkerWeb-Integration.md"]
+            )
+        )
+        for phrase in (
+            "X-SysWarden-HA-Fence-Condition",
+            "active_drained",
+            "opaque, case-sensitive strings",
+            "does not recalculate",
+            "HTTP 428",
+            "HTTP 400",
+            "HTTP 412",
+            "one-hour",
+            "It is never proof of drain",
+        ):
+            self.assertIn(phrase, wiki_contract)
 
     def test_ha_delete_semantics_are_explicit(self) -> None:
-        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         report = REPORT.read_text(encoding="utf-8")
-        for text in (readme, report):
+        for text in (report,):
             self.assertIn('DELETE {"bans": [...]}` removes provenance ledger entries only', text)
             self.assertIn('DELETE {"ips": [...]}`', text)
             self.assertIn("durable", text)
             self.assertIn("ownership is never inferred", text.casefold())
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        wiki_contract = documentation_gate.normalized(
+            "\n".join(
+                contract["required_wiki_phrases"]["BunkerWeb-Integration.md"]
+            )
+        ).format()
+        self.assertIn('DELETE {"bans": [...]}', wiki_contract)
+        self.assertIn('DELETE {"ips": [...]}', wiki_contract)
 
     def test_config_saas_and_persistent_list_contract_is_source_bound(self) -> None:
-        readme = documentation_gate.normalized(
-            (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        )
         report = documentation_gate.normalized(REPORT.read_text(encoding="utf-8"))
         manual = documentation_gate.normalized(
             (REPO_ROOT / "src/core/syswarden-cli/cmd/manual.go").read_text(
                 encoding="utf-8"
             )
         )
-        for text in (readme, report):
+        for text in (report,):
             self.assertIn("schema_version = 1", text)
             self.assertIn("historical input", text)
             self.assertIn("config validate", text)
@@ -474,6 +513,30 @@ class DocumentationGateTest(unittest.TestCase):
             self.assertIn(phrase, manual)
 
         contract = documentation_gate.load_contract(REPO_ROOT)
+        deployment_contract = documentation_gate.normalized(
+            "\n".join(
+                contract["required_wiki_phrases"]["Deployment-Tutorial.md"]
+            )
+        )
+        for phrase in (
+            "schema_version = 1",
+            "historical input",
+            "config validate",
+            "unknown and deprecated",
+            "config migrate --dry-run",
+            "zero source or destination writes",
+            "network.saas.allow_monitors",
+            "integrations.saas.enabled",
+            "lock-coordinated atomic pair",
+            "--port",
+            "effective SSH port",
+            "fails closed",
+            "revalidates the file identity and type after every rotation",
+            "parent directory protected against untrusted replacement",
+            "destination grammars",
+            "SSH/HA port separation",
+        ):
+            self.assertIn(phrase, deployment_contract)
         source_assertion_ids = {
             assertion["id"] for assertion in contract["source_assertions"]
         }
@@ -499,20 +562,45 @@ class DocumentationGateTest(unittest.TestCase):
             }.issubset(source_assertion_ids)
         )
 
+    def test_migration_and_rhel_wiki_boundaries_are_explicit(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        wiki = contract["required_wiki_phrases"]
+        migration = documentation_gate.normalized(
+            "\n".join(wiki["Migration-v4.02.8-to-v4.03.2.md"])
+        )
+        for phrase in (
+            "historical v4.02.8 binary predates the signed updater protocol",
+            "checksum-verified Linux package",
+            "Back up `/etc/syswarden`",
+            "verified local console or SSH recovery access",
+            "SysWarden package rollback is an explicit package and configuration recovery procedure, not a general host-state reversal.",
+        ):
+            self.assertIn(phrase, migration)
+
+        rhel = documentation_gate.normalized(
+            "\n".join(wiki["RHEL-9-Image-Extensions.md"])
+        )
+        self.assertIn("only currently available RHEL 9+ image extension", rhel)
+        self.assertIn(
+            "runtime-only, package-owned system-integration extension is not available",
+            rhel,
+        )
+        self.assertIn("Go binaries runtime-only", rhel)
+        self.assertIn("RPM owns firewall and systemd configuration", rhel)
+
     def test_cli_command_inventory_and_exact_add_remove_approvals(self) -> None:
         commands = documentation_gate.cobra_commands(REPO_ROOT)
         self.assertEqual(len(commands), 23)
         self.assertIn("ha-fence", commands)
         self.assertIn("tui", commands)
-        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+        contract = documentation_gate.load_contract(REPO_ROOT)
         self.assertEqual(
-            documentation_gate.validate_command_inventory(
-                readme, "Operator commands", commands, "README.md"
+            documentation_gate.validate_wiki_phrase_contract(
+                contract["required_wiki_phrases"]
             ),
             [],
         )
-
-        contract = documentation_gate.load_contract(REPO_ROOT)
         command_approvals = {
             item["path"]: (item["before"], item["after"])
             for item in contract["approved_cli_public_differences"]
@@ -575,7 +663,10 @@ class DocumentationGateTest(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             root = ET.fromstring(text)
             self.assertEqual(root.tag.rsplit("}", 1)[-1], "svg")
-            self.assertIn(f'assets/{name}', readme)
+            if name == "syswarden_hero.svg":
+                self.assertIn(f'assets/{name}', readme)
+            else:
+                self.assertNotIn(f'assets/{name}', readme)
             for element in root.iter():
                 self.assertNotIn(
                     element.tag.rsplit("}", 1)[-1].casefold(),
@@ -614,6 +705,23 @@ class DocumentationGateTest(unittest.TestCase):
             )
         self.assertTrue(any("unclosed Markdown fence" in error for error in errors))
         self.assertTrue(any("missing local link target" in error for error in errors))
+
+    def test_versioned_wiki_page_link_resolves_without_md_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wiki_root = Path(directory)
+            source = wiki_root / "Home.md"
+            target = wiki_root / "Migration-v4.02.8-to-v4.03.2.md"
+            source.write_text(
+                "# Home\n\n[Migration](Migration-v4.02.8-to-v4.03.2)\n",
+                encoding="utf-8",
+            )
+            target.write_text("# Migration\n", encoding="utf-8")
+            resolved = documentation_gate.resolve_local_target(
+                source,
+                "Migration-v4.02.8-to-v4.03.2",
+                wiki_root,
+            )
+        self.assertEqual(resolved, target)
 
     def test_report_writer_is_machine_readable_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
