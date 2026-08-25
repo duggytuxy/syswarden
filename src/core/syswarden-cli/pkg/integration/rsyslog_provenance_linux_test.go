@@ -115,7 +115,7 @@ func TestRsyslogProvenanceRefusesSymlinkWithoutTouchingTarget_SW2_PKG_001(t *tes
 	if err == nil {
 		t.Fatal("symlinked provenance registry was accepted")
 	}
-	if got, readErr := os.ReadFile(target); readErr != nil || !bytes.Equal(got, operator) {
+	if got, readErr := os.ReadFile(target); readErr != nil || !bytes.Equal(got, operator) { // #nosec G304 -- target is confined to the private symlink-adversary fixture root
 		t.Fatalf("operator target = %q, %v", got, readErr)
 	}
 }
@@ -211,7 +211,7 @@ func TestGeneratedRsyslogRemovalPreservesRegistryForTrackedModifiedArtifact_SW2_
 	if activationCalls != 0 {
 		t.Fatalf("tracked modified artifact triggered %d rsyslog activations", activationCalls)
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, modified) {
+	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, modified) { // #nosec G304 -- path is confined to the private tracked-artifact fixture root
 		t.Fatalf("tracked modified artifact changed = %q, %v", got, readErr)
 	}
 	registry, readErr := readRsyslogProvenanceRegistryAtUsing(parent, uid, gid)
@@ -269,7 +269,7 @@ func TestSIEMDisableRemovesExactForwarderReloadsAndRetiresOnlyItsProvenance_SW2_
 	if _, err := os.Lstat(filepath.Join(directory, rsyslogSIEMConfigName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("disabled SIEM forwarder remains: %v", err)
 	}
-	if got, err := os.ReadFile(filepath.Join(directory, wafRsyslogConfigName)); err != nil || !bytes.Equal(got, waf) {
+	if got, err := os.ReadFile(filepath.Join(directory, wafRsyslogConfigName)); err != nil || !bytes.Equal(got, waf) { // #nosec G304 -- fixed WAF name is beneath the private SIEM-disable fixture root
 		t.Fatalf("WAF bridge changed during SIEM disable = %q, %v", got, err)
 	}
 	registry, err := readRsyslogProvenanceRegistryAtUsing(parent, uid, gid)
@@ -316,7 +316,7 @@ func TestSIEMDisableServiceFailureRestoresForwarderAndKeepsProvenance_SW2_PKG_00
 	if activationCalls != 2 {
 		t.Fatalf("SIEM disable rollback activation calls = %d", activationCalls)
 	}
-	if got, readErr := os.ReadFile(filepath.Join(directory, rsyslogSIEMConfigName)); readErr != nil || !bytes.Equal(got, siem) {
+	if got, readErr := os.ReadFile(filepath.Join(directory, rsyslogSIEMConfigName)); readErr != nil || !bytes.Equal(got, siem) { // #nosec G304 -- fixed SIEM name is beneath the private rollback fixture root
 		t.Fatalf("SIEM forwarder rollback = %q, %v", got, readErr)
 	}
 	registry, readErr := readRsyslogProvenanceRegistryAtUsing(parent, uid, gid)
@@ -422,7 +422,7 @@ func TestRsyslogProducerRollsBackVisibleConfigWhenProvenanceFails_SW2_PKG_001(t 
 				}
 				return
 			}
-			if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, test.oldContent) {
+			if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, test.oldContent) { // #nosec G304 -- path is confined to the private producer-rollback fixture root
 				t.Fatalf("historical config rollback = %q, %v", got, readErr)
 			}
 			registry, readErr := readRsyslogProvenanceRegistryAtUsing(parent, uid, gid)
@@ -469,7 +469,7 @@ func TestRsyslogProducerRecordsVisibleConfigBeforeActivation_SW2_PKG_001(t *test
 			if !changed {
 				t.Fatal("historical config change was not reported")
 			}
-			visible, readErr := os.ReadFile(filepath.Join(parent, wafRsyslogDirectoryName, wafRsyslogConfigName))
+			visible, readErr := os.ReadFile(filepath.Join(parent, wafRsyslogDirectoryName, wafRsyslogConfigName)) // #nosec G304 -- fixed WAF path is beneath the private publication fixture root
 			registry, registryErr := readRsyslogProvenanceRegistryAtUsing(parent, uid, gid)
 			if readErr != nil || registryErr != nil || !bytes.Equal(visible, newContent) ||
 				registry.records[wafRsyslogConfigName].digest != sha256.Sum256(newContent) {
@@ -771,7 +771,7 @@ func TestSIEMRsyslogPublicationRefusesSymlinkedPaths_SW2_PKG_001(t *testing.T) {
 		if err == nil {
 			t.Fatal("symlinked SIEM canonical was accepted")
 		}
-		if got, readErr := os.ReadFile(target); readErr != nil || !bytes.Equal(got, operator) {
+		if got, readErr := os.ReadFile(target); readErr != nil || !bytes.Equal(got, operator) { // #nosec G304 -- target is confined to the private SIEM symlink-adversary fixture root
 			t.Fatalf("SIEM symlink target = %q, %v", got, readErr)
 		}
 	})

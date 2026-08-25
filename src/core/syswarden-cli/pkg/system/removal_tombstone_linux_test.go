@@ -217,7 +217,7 @@ func TestRemovalRecordAttestationRejectsMetadataChangeBetweenSnapshots_SW2_PKG_0
 		{
 			name: "mode",
 			mutate: func(path string) error {
-				return os.Chmod(path, 0666)
+				return os.Chmod(path, 0666) // #nosec G302 -- adversarial mode is applied only to a private tombstone fixture that t.TempDir removes
 			},
 		},
 		{
@@ -384,7 +384,7 @@ func TestRemovalTombstoneFinalizationRejectsStateRootMetadataRace_SW2_PKG_001(t 
 		nil,
 		func(point string) {
 			if point == "before-state-root-recheck" {
-				if chmodErr := os.Chmod(directoryPath, 0777); chmodErr != nil {
+				if chmodErr := os.Chmod(directoryPath, 0777); chmodErr != nil { // #nosec G302 -- adversarial mode is confined to the private state-root fixture and restored below
 					t.Fatalf("mutate state root metadata: %v", chmodErr)
 				}
 			}
@@ -400,7 +400,7 @@ func TestRemovalTombstoneFinalizationRejectsStateRootMetadataRace_SW2_PKG_001(t 
 	if present, inspectErr := inspectRemovalFinalizingAt(finalizingPath, uid, gid); inspectErr != nil || !present {
 		t.Fatalf("metadata race lost external barrier: present=%t err=%v", present, inspectErr)
 	}
-	if err := os.Chmod(directoryPath, 0700); err != nil {
+	if err := os.Chmod(directoryPath, 0700); err != nil { // #nosec G302 -- owner-only directory mode restores the private state-root fixture after the adversarial mutation
 		t.Fatal(err)
 	}
 	if err := finalizeRemovalTombstoneAt(path, uid, gid, nil); err != nil {

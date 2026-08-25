@@ -123,7 +123,7 @@ func TestExactOwnedArtifactRemovalPreservesModifiedBytesWithWarning_SW2_PKG_001(
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "Preserving") {
 		t.Fatalf("modified warnings = %v", warnings)
 	}
-	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, modified) {
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, modified) { // #nosec G304 -- path is confined to the private modified-artifact fixture root
 		t.Fatalf("modified artifact bytes = %q, %v", got, err)
 	}
 }
@@ -324,7 +324,7 @@ func TestExactOwnedArtifactRemovalRefusesConcurrentOriginalReplacement_SW2_PKG_0
 	if err == nil || removed || !strings.Contains(err.Error(), "appeared concurrently") {
 		t.Fatalf("concurrent replacement result = %t, %v", removed, err)
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "operator\n" {
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "operator\n" { // #nosec G304 -- path is confined to the private concurrent-replacement fixture root
 		t.Fatalf("concurrent replacement = %q, %v", got, readErr)
 	}
 	if exchangeCalls != 0 {
@@ -342,7 +342,7 @@ func TestExactOwnedArtifactRemovalRefusesConcurrentOriginalReplacement_SW2_PKG_0
 		}
 		if strings.Contains(entry.Name(), ".syswarden-preserved-") {
 			preserved++
-			got, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+			got, err := os.ReadFile(filepath.Join(directory, entry.Name())) // #nosec G304 -- entry came from ReadDir on the private quarantine fixture
 			if err != nil || !bytes.Equal(got, content) {
 				t.Fatalf("preserved exact bytes = %q, %v", got, err)
 			}
@@ -432,7 +432,7 @@ func TestExactOwnedArtifactRemovalRestoresAfterRenameSyncFailure_SW2_PKG_001(t *
 	if err == nil || !errors.Is(err, sentinel) || removed {
 		t.Fatalf("rename-sync rollback = %t, %v", removed, err)
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) {
+	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) { // #nosec G304 -- path is confined to the private rename-rollback fixture root
 		t.Fatalf("rename-sync restored bytes = %q, %v", got, readErr)
 	}
 }
@@ -461,7 +461,7 @@ func TestExactOwnedArtifactRemovalRunsRecoveryHookWhenRestoreSyncFails_SW2_PKG_0
 	if recoveryCalls != 1 {
 		t.Fatalf("recovery hook calls = %d", recoveryCalls)
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) {
+	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) { // #nosec G304 -- path is confined to the private restore-failure fixture root
 		t.Fatalf("restored canonical bytes = %q, %v", got, readErr)
 	}
 }
@@ -490,7 +490,7 @@ func TestExactOwnedArtifactRemovalRestoresAfterUnlinkFailure_SW2_PKG_001(t *test
 	if err == nil || !errors.Is(err, sentinel) || removed {
 		t.Fatalf("unlink rollback = %t, %v", removed, err)
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) {
+	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) { // #nosec G304 -- path is confined to the private unlink-rollback fixture root
 		t.Fatalf("unlink restored bytes = %q, %v", got, readErr)
 	}
 }
@@ -519,7 +519,7 @@ func TestExactOwnedArtifactRemovalRecreatesAfterPostUnlinkSyncFailure_SW2_PKG_00
 	if err == nil || !errors.Is(err, sentinel) || removed {
 		t.Fatalf("post-unlink sync recovery = %t, %v", removed, err)
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) {
+	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) { // #nosec G304 -- path is confined to the private post-unlink recovery fixture root
 		t.Fatalf("post-unlink recreated bytes = %q, %v", got, readErr)
 	}
 }
@@ -563,7 +563,7 @@ func TestExactOwnedArtifactRecreationStagesEveryFailureBeforePublication_SW2_PKG
 			}
 			canonical := filepath.Join(directoryPath, expectation.name)
 			if step == "directory-sync" {
-				if got, readErr := os.ReadFile(canonical); readErr != nil || !bytes.Equal(got, content) {
+				if got, readErr := os.ReadFile(canonical); readErr != nil || !bytes.Equal(got, content) { // #nosec G304 -- canonical is confined to the private recreation fixture root
 					t.Fatalf("post-publication sync failure canonical = %q, %v", got, readErr)
 				}
 				return
@@ -606,7 +606,7 @@ func TestExactOwnedArtifactRecreationNeverOverwritesConcurrentCanonical_SW2_PKG_
 	if err == nil || !errors.Is(err, unix.EEXIST) {
 		t.Fatalf("concurrent recreation publication error = %v", err)
 	}
-	if got, readErr := os.ReadFile(canonical); readErr != nil || !bytes.Equal(got, operator) {
+	if got, readErr := os.ReadFile(canonical); readErr != nil || !bytes.Equal(got, operator) { // #nosec G304 -- canonical is confined to the private concurrent-publication fixture root
 		t.Fatalf("concurrent canonical = %q, %v", got, readErr)
 	}
 	staging := filepath.Join(directoryPath, "."+expectation.name+exactArtifactRecreationSuffix)
@@ -687,7 +687,7 @@ func TestExactOwnedArtifactRemovalNeverOverwritesPostUnlinkReplacement_SW2_PKG_0
 	if err == nil || removed {
 		t.Fatalf("post-unlink replacement result = %t, %v", removed, err)
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, operatorBytes) {
+	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, operatorBytes) { // #nosec G304 -- path is confined to the private post-unlink adversary fixture root
 		t.Fatalf("post-unlink operator replacement = %q, %v", got, readErr)
 	}
 }
@@ -745,7 +745,7 @@ func TestExactOwnedArtifactRemovalRecoversDeterministicQuarantineAfterCrash_SW2_
 			if _, err := os.Lstat(canonical); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("canonical path after crash = %v", err)
 			}
-			if got, err := os.ReadFile(quarantine); err != nil || !bytes.Equal(got, content) {
+			if got, err := os.ReadFile(quarantine); err != nil || !bytes.Equal(got, content) { // #nosec G304 -- quarantine is confined to the private crash-recovery fixture root
 				t.Fatalf("durable crash quarantine = %q, %v", got, err)
 			}
 
@@ -800,7 +800,7 @@ func TestExactOwnedArtifactRecoveryPreservesCanonicalReplacementAndQuarantine_SW
 		t.Fatalf("conflict recovery hook calls = %d", recoveryCalls)
 	}
 	for path, want := range map[string][]byte{canonical: operatorBytes, quarantine: content} {
-		if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, want) {
+		if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, want) { // #nosec G304 -- path is selected from two fixed names beneath the private conflict fixture root
 			t.Fatalf("preserved conflict path %s = %q, %v", path, got, readErr)
 		}
 	}
@@ -827,7 +827,7 @@ func TestExactOwnedArtifactRecoveryBlocksAmbiguousQuarantine_SW2_PKG_001(t *test
 	if recoveryCalls != 1 {
 		t.Fatalf("ambiguous recovery hook calls = %d", recoveryCalls)
 	}
-	if got, readErr := os.ReadFile(quarantine); readErr != nil || string(got) != "operator\n" {
+	if got, readErr := os.ReadFile(quarantine); readErr != nil || string(got) != "operator\n" { // #nosec G304 -- quarantine is confined to the private ambiguous-recovery fixture root
 		t.Fatalf("ambiguous quarantine = %q, %v", got, readErr)
 	}
 }
@@ -878,7 +878,7 @@ func TestGeneratedRsyslogRemovalReactivatesAndPropagatesServiceFailure_SW2_PKG_0
 	if activationCalls != 2 {
 		t.Fatalf("rsyslog activation calls = %d", activationCalls)
 	}
-	if got, err := os.ReadFile(filepath.Join(directory, wafRsyslogConfigName)); err != nil || string(got) != waf {
+	if got, err := os.ReadFile(filepath.Join(directory, wafRsyslogConfigName)); err != nil || string(got) != waf { // #nosec G304 -- fixed WAF name is beneath the private service-rollback fixture root
 		t.Fatalf("WAF configuration rollback = %q, %v", got, err)
 	}
 }
@@ -916,7 +916,7 @@ func TestGeneratedRsyslogRemovalSkipsDisabledSIEMArtifact_SW2_PKG_001(t *testing
 	if activationCalls != 0 {
 		t.Fatalf("disabled SIEM triggered %d rsyslog activations", activationCalls)
 	}
-	if got, err := os.ReadFile(siemPath); err != nil || !bytes.Equal(got, operatorSIEM) {
+	if got, err := os.ReadFile(siemPath); err != nil || !bytes.Equal(got, operatorSIEM) { // #nosec G304 -- siemPath is confined to the private disabled-SIEM fixture root
 		t.Fatalf("disabled SIEM artifact = %q, %v", got, err)
 	}
 }
@@ -960,10 +960,10 @@ func TestLegacyCompletionPreservesAmbiguousDirectoryWithWarning_SW2_PKG_001(t *t
 			seed: func(t *testing.T, parent string) string {
 				t.Helper()
 				directory := filepath.Join(parent, legacyCompletionDirectoryName)
-				if err := os.Mkdir(directory, 0770); err != nil {
+				if err := os.Mkdir(directory, 0770); err != nil { // #nosec G301 -- group-writable adversary is confined to a private t.TempDir fixture
 					t.Fatal(err)
 				}
-				if err := os.Chmod(directory, 0770); err != nil {
+				if err := os.Chmod(directory, 0770); err != nil { // #nosec G302 -- group-writable adversary is confined to a private t.TempDir fixture
 					t.Fatal(err)
 				}
 				operator := filepath.Join(directory, legacyCompletionName)
@@ -987,7 +987,7 @@ func TestLegacyCompletionPreservesAmbiguousDirectoryWithWarning_SW2_PKG_001(t *t
 			if len(warnings) != 1 || !strings.Contains(warnings[0], "Preserving") {
 				t.Fatalf("ambiguous completion directory warnings = %v", warnings)
 			}
-			if got, readErr := os.ReadFile(operator); readErr != nil || string(got) != "operator completion\n" {
+			if got, readErr := os.ReadFile(operator); readErr != nil || string(got) != "operator completion\n" { // #nosec G304 -- operator is confined to the private ambiguous-completion fixture root
 				t.Fatalf("ambiguous completion target = %q, %v", got, readErr)
 			}
 		})

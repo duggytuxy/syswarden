@@ -98,7 +98,7 @@ func TestDedicatedRemovalTreeMountPreflightPreservesEveryByteAndAllowsRetry_SW2_
 	if operatorCalls != 0 {
 		t.Fatalf("nested mount preflight invoked %d destructive operators", operatorCalls)
 	}
-	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "preserve exactly" {
+	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "preserve exactly" { // #nosec G304 -- marker is confined to the private nested-mount fixture root
 		t.Fatalf("nested mount preflight changed marker = %q, %v", got, readErr)
 	}
 	err = removeDedicatedRemovalTreeAtUsingMountInfo(
@@ -221,7 +221,7 @@ func TestRemovalStateMountPreflightPreservesTombstoneAndDataUntilRetry_SW2_PKG_0
 	if operatorCalls != 0 {
 		t.Fatalf("state mount preflight invoked %d destructive operators", operatorCalls)
 	}
-	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "preserve exactly" {
+	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "preserve exactly" { // #nosec G304 -- marker is confined to the private removal-state mount fixture root
 		t.Fatalf("state mount preflight changed marker = %q, %v", got, readErr)
 	}
 	if present, inspectErr := inspectRemovalTombstoneAt(path, uid, gid); inspectErr != nil || !present {
