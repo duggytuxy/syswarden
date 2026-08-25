@@ -730,6 +730,7 @@ jobs:
         shell: bash
         env:
           PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           SIGNED_UPDATE_REQUIRED: ${{ steps.update_contract.outputs.required }}
         run: |
