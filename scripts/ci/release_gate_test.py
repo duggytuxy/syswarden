@@ -1439,13 +1439,13 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(script.count('for tree_ref in HEAD^ HEAD; do'), 2)
             self.assertEqual(
                 script.count('tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'),
-                16,
+                17,
             )
-            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 15)
-            self.assertEqual(script.count('"${tree_type}" != "blob"'), 16)
+            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 16)
+            self.assertEqual(script.count('"${tree_type}" != "blob"'), 17)
             expected_path_counts = {
-                ".github/workflows/release-manager.yml": 28,
-                "scripts/ci/release_gate_test.py": 28,
+                ".github/workflows/release-manager.yml": 30,
+                "scripts/ci/release_gate_test.py": 30,
                 "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go": 2,
             }
             for path, count in expected_path_counts.items():
@@ -1482,6 +1482,10 @@ class ReleaseGateTests(unittest.TestCase):
             workflow.count('if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then'), 2
         )
         pinned_contracts = (
+            (
+                'if [[ "${v4032_delegated_owner_parent_sha}" != '
+                '"5d20d2c4cbd1b249fc36b25025db280f25f7eb32" ]]; then'
+            ),
             (
                 'if [[ "${v4032_arm64_attestation_parent_sha}" != '
                 '"8e3ef2a0f50e4833f3078a7a09c2d07bf984f6ef" ]]; then'
@@ -1553,6 +1557,10 @@ class ReleaseGateTests(unittest.TestCase):
         )
         for contract in pinned_contracts:
             self.assertEqual(workflow.count(contract), 2)
+        delegated_owner_subject_contract = (
+            "v4032_delegated_owner_expected_subject='Qualification : preserve "
+            "ARM64 crun owner across delegation (#112)'"
+        )
         arm64_attestation_subject_contract = (
             "v4032_arm64_attestation_expected_subject='Qualification : stabilize "
             "ARM64 crun version attestation (#111)'"
@@ -1612,6 +1620,12 @@ class ReleaseGateTests(unittest.TestCase):
         repair_subject_contract = (
             "v4032_expected_subject='Qualification : repair v4.03.2 "
             "package lifecycle qualification (#95) (#95)'"
+        )
+        delegated_owner_paths = (
+            ".github/workflows/release-manager.yml",
+            ".github/workflows/release-qualification.yml",
+            "scripts/ci/release_gate_test.py",
+            "scripts/ci/release_qualification_workflow_test.py",
         )
         arm64_attestation_paths = (
             ".github/workflows/release-manager.yml",
@@ -1728,6 +1742,7 @@ class ReleaseGateTests(unittest.TestCase):
                 compliance_paths
                 + repair_paths
                 + crun_paths
+                + delegated_owner_paths
                 + arm64_attestation_paths
                 + docs_paths
                 + systemd_paths
@@ -1745,6 +1760,7 @@ class ReleaseGateTests(unittest.TestCase):
             "src/core/syswarden-core/webhook/discord.go",
         )
         for block in blocks:
+            self.assertEqual(block.count(delegated_owner_subject_contract), 1)
             self.assertEqual(block.count(arm64_attestation_subject_contract), 1)
             self.assertEqual(block.count(docs_subject_contract), 1)
             self.assertEqual(block.count(systemd_subject_contract), 1)
@@ -1763,20 +1779,96 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 block.count(
                     '[[ "${commit_subject}" != '
+                    '"${v4032_delegated_owner_expected_subject}" ]]'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_delegated_owner_parent_sha="$(git rev-parse HEAD^)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_delegated_owner_head_line <<< '
+                    '"$(git rev-list --parents -n 1 HEAD)"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count("${#v4032_delegated_owner_head_line[@]} != 2"), 1
+            )
+            delegated_owner_diff = block.split(
+                "# BEGIN exact v4.03.2 delegated ARM64 crun owner "
+                "diff contract\n",
+                1,
+            )[1].split(
+                "# END exact v4.03.2 delegated ARM64 crun owner "
+                "diff contract",
+                1,
+            )[0]
+            self.assertEqual(
+                delegated_owner_diff.count(
+                    "git diff-tree --no-commit-id --name-status -r "
+                    "--no-renames -z HEAD^ HEAD"
+                ),
+                1,
+            )
+            self.assertEqual(
+                delegated_owner_diff.count("for tree_ref in HEAD^ HEAD; do"), 1
+            )
+            self.assertEqual(
+                delegated_owner_diff.count('"${tree_mode}" != "100644"'), 1
+            )
+            self.assertEqual(
+                delegated_owner_diff.count('"${tree_type}" != "blob"'), 1
+            )
+            self.assertEqual(
+                delegated_owner_diff.count(
+                    "! \"${tree_object}\" =~ ^[0-9a-f]{40}$"
+                ),
+                1,
+            )
+            self.assertEqual(
+                delegated_owner_diff.count(
+                    "${#actual_v4032_delegated_owner_diff[@]} != "
+                    "${#expected_v4032_delegated_owner_diff[@]}"
+                ),
+                1,
+            )
+            for path in delegated_owner_paths:
+                self.assertEqual(delegated_owner_diff.count(f'"{path}"'), 2)
+                self.assertEqual(delegated_owner_diff.count(f'M "{path}"'), 1)
+            self.assertEqual(
+                block.count("v4032_arm64_attestation_ref=HEAD^\n"), 1
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_arm64_attestation_parent_sha="$(git rev-parse '
+                    '"${v4032_arm64_attestation_ref}^")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    'v4032_arm64_attestation_subject="$(git log -1 --format=%s '
+                    '"${v4032_arm64_attestation_ref}")"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                block.count(
+                    '[[ "${v4032_arm64_attestation_subject}" != '
                     '"${v4032_arm64_attestation_expected_subject}" ]]'
                 ),
                 1,
             )
             self.assertEqual(
                 block.count(
-                    'v4032_arm64_attestation_parent_sha="$(git rev-parse HEAD^)"'
-                ),
-                1,
-            )
-            self.assertEqual(
-                block.count(
                     'v4032_arm64_attestation_head_line <<< '
-                    '"$(git rev-list --parents -n 1 HEAD)"'
+                    '"$(git rev-list --parents -n 1 '
+                    '"${v4032_arm64_attestation_ref}")"'
                 ),
                 1,
             )
@@ -1795,17 +1887,28 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(
                 arm64_attestation_diff.count(
                     "git diff-tree --no-commit-id --name-status -r "
-                    "--no-renames -z HEAD^ HEAD"
+                    "--no-renames -z \\\n"
+                    '        "${v4032_arm64_attestation_ref}^" '
+                    '"${v4032_arm64_attestation_ref}"'
                 ),
                 1,
             )
             self.assertEqual(
-                arm64_attestation_diff.count("for tree_ref in HEAD^ HEAD; do"), 1
+                arm64_attestation_diff.count(
+                    'for tree_ref in "${v4032_arm64_attestation_ref}^" '
+                    '"${v4032_arm64_attestation_ref}"; do'
+                ),
+                1,
             )
             for path in arm64_attestation_paths:
                 self.assertEqual(arm64_attestation_diff.count(f'"{path}"'), 2)
                 self.assertEqual(arm64_attestation_diff.count(f'M "{path}"'), 1)
-            self.assertEqual(block.count("v4032_docs_ref=HEAD^\n"), 1)
+            self.assertEqual(
+                block.count(
+                    'v4032_docs_ref="${v4032_arm64_attestation_ref}^"\n'
+                ),
+                1,
+            )
             self.assertEqual(
                 block.count(
                     'v4032_docs_parent_sha="$(git rev-parse '
@@ -2949,7 +3052,7 @@ class ReleaseGateTests(unittest.TestCase):
                     "git diff-tree --no-commit-id --name-status -r "
                     "--no-renames -z \\"
                 ),
-                14,
+                15,
             )
             self.assertEqual(
                 block.count(
@@ -2968,12 +3071,12 @@ class ReleaseGateTests(unittest.TestCase):
                 block.count(
                     'tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'
                 ),
-                15,
+                16,
             )
             self.assertEqual(
                 block.count('"${tree_mode}" != "${expected_mode}"'), 1
             )
-            self.assertEqual(block.count('"${tree_type}" != "blob"'), 15)
+            self.assertEqual(block.count('"${tree_type}" != "blob"'), 16)
             self.assertEqual(block.count('expected_mode="100644"'), 1)
             self.assertEqual(
                 block.count('[[ "${fix_path}" == "build_packages.sh" ]]'), 1
@@ -2990,6 +3093,7 @@ class ReleaseGateTests(unittest.TestCase):
                 expected_count += 2 if path in crun_paths else 0
                 expected_count += 2 if path in compliance_paths else 0
                 expected_count += 2 if path in merge_paths else 0
+                expected_count += 2 if path in delegated_owner_paths else 0
                 expected_count += 2 if path in arm64_attestation_paths else 0
                 expected_count += 2 if path in arm64_paths else 0
                 expected_count += 2 if path in runtime_paths else 0
@@ -3007,6 +3111,7 @@ class ReleaseGateTests(unittest.TestCase):
                 expected_status_count += 1 if path in crun_paths else 0
                 expected_status_count += 1 if path in compliance_paths else 0
                 expected_status_count += 1 if path in merge_paths else 0
+                expected_status_count += 1 if path in delegated_owner_paths else 0
                 expected_status_count += (
                     1 if path in arm64_attestation_paths else 0
                 )
@@ -3150,6 +3255,30 @@ class ReleaseGateTests(unittest.TestCase):
             )[0]
             self.assertNotIn("--tag-phase", parent_validation)
 
+    def exact_v4032_delegated_owner_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        begin = (
+            "# BEGIN exact v4.03.2 delegated ARM64 crun owner diff contract\n"
+        )
+        end = "# END exact v4.03.2 delegated ARM64 crun owner diff contract"
+        self.assertEqual(block.count(begin), 1)
+        self.assertEqual(block.count(end), 1)
+        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+
+    def v4032_delegated_owner_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4032_recovery_blocks(workflow)[0]
+        start = "v4032_delegated_owner_expected_subject="
+        end = (
+            'read -r -a v4032_delegated_owner_head_line <<< '
+            '"$(git rev-list --parents -n 1 HEAD)"'
+        )
+        self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(end), 1)
+        fragment = start + block.split(start, 1)[1].split(end, 1)[0]
+        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+
     def exact_v4032_arm64_attestation_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
@@ -3163,20 +3292,33 @@ class ReleaseGateTests(unittest.TestCase):
         )
         self.assertEqual(block.count(begin), 1)
         self.assertEqual(block.count(end), 1)
-        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+        return (
+            "set -euo pipefail\nv4032_arm64_attestation_ref=HEAD\n"
+            + block.split(begin, 1)[1].split(end, 1)[0]
+        )
 
     def v4032_arm64_attestation_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         block = self.v4032_recovery_blocks(workflow)[0]
         start = "v4032_arm64_attestation_expected_subject="
+        subject_assignment = (
+            'v4032_arm64_attestation_subject="$(git log -1 --format=%s '
+            '"${v4032_arm64_attestation_ref}")"'
+        )
         end = (
             'read -r -a v4032_arm64_attestation_head_line <<< '
-            '"$(git rev-list --parents -n 1 HEAD)"'
+            '"$(git rev-list --parents -n 1 '
+            '"${v4032_arm64_attestation_ref}")"'
         )
         self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(subject_assignment), 1)
         self.assertEqual(block.count(end), 1)
         fragment = start + block.split(start, 1)[1].split(end, 1)[0]
-        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+        fragment = fragment.replace(
+            subject_assignment,
+            'v4032_arm64_attestation_subject="${COMMIT_SUBJECT:?}"',
+        )
+        return "set -euo pipefail\n" + fragment
 
     def exact_v4032_docs_diff_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -3893,6 +4035,53 @@ class ReleaseGateTests(unittest.TestCase):
             check=True,
         )
         return repository
+
+    def test_release_manager_v4032_delegated_owner_subject_is_exact_github_squash(
+        self,
+    ) -> None:
+        self.assert_exact_subject_gate(
+            self.v4032_delegated_owner_subject_gate_script(),
+            {
+                "valid": (
+                    "Qualification : preserve ARM64 crun owner across delegation (#112)",
+                    True,
+                ),
+                "bare": (
+                    "Qualification : preserve ARM64 crun owner across delegation",
+                    False,
+                ),
+                "previous pull request": (
+                    "Qualification : preserve ARM64 crun owner across delegation (#111)",
+                    False,
+                ),
+                "wrong verb": (
+                    "Qualification : stabilize ARM64 crun owner across delegation (#112)",
+                    False,
+                ),
+                "wrong scope": (
+                    "Qualification : preserve ARM64 runc owner across delegation (#112)",
+                    False,
+                ),
+                "trailing space": (
+                    "Qualification : preserve ARM64 crun owner across delegation (#112) ",
+                    False,
+                ),
+            },
+        )
+
+    def test_release_manager_v4032_delegated_owner_diff_rejects_git_shape_mutations(
+        self,
+    ) -> None:
+        self.assert_regular_diff_gate(
+            self.exact_v4032_delegated_owner_diff_script(),
+            "v4032-delegated-owner-diff",
+            (
+                ".github/workflows/release-manager.yml",
+                ".github/workflows/release-qualification.yml",
+                "scripts/ci/release_gate_test.py",
+                "scripts/ci/release_qualification_workflow_test.py",
+            ),
+        )
 
     def test_release_manager_v4032_arm64_attestation_subject_is_exact_github_squash(
         self,
@@ -4645,9 +4834,37 @@ class ReleaseGateTests(unittest.TestCase):
                 'if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then',
                 'if [[ "${RELEASE_TAG}" == "v4.03.3" ]]; then',
             ),
+            "delegated owner parent resolution": workflow.replace(
+                'v4032_delegated_owner_parent_sha="$(git rev-parse HEAD^)"',
+                'v4032_delegated_owner_parent_sha="$(git rev-parse HEAD^^)"',
+            ),
+            "exact delegated owner parent": workflow.replace(
+                "5d20d2c4cbd1b249fc36b25025db280f25f7eb32",
+                "6d20d2c4cbd1b249fc36b25025db280f25f7eb32",
+            ),
+            "delegated owner canonical subject": workflow.replace(
+                "Qualification : preserve ARM64 crun owner across delegation (#112)",
+                "Qualification : stabilize ARM64 crun owner across delegation (#112)",
+            ),
+            "delegated owner subject source": workflow.replace(
+                'commit_subject="$(git log -1 --format=%s HEAD)"',
+                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+            ),
+            "delegated owner linear head": workflow.replace(
+                'v4032_delegated_owner_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+                'v4032_delegated_owner_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+            ),
+            "ARM64 attestation reference": workflow.replace(
+                "v4032_arm64_attestation_ref=HEAD^",
+                "v4032_arm64_attestation_ref=HEAD^^",
+            ),
             "ARM64 attestation parent resolution": workflow.replace(
-                'v4032_arm64_attestation_parent_sha="$(git rev-parse HEAD^)"',
-                'v4032_arm64_attestation_parent_sha="$(git rev-parse HEAD^^)"',
+                'v4032_arm64_attestation_parent_sha="$(git rev-parse '
+                '"${v4032_arm64_attestation_ref}^")"',
+                'v4032_arm64_attestation_parent_sha="$(git rev-parse '
+                '"${v4032_arm64_attestation_ref}^^")"',
             ),
             "exact ARM64 attestation parent": workflow.replace(
                 "8e3ef2a0f50e4833f3078a7a09c2d07bf984f6ef",
@@ -4658,18 +4875,20 @@ class ReleaseGateTests(unittest.TestCase):
                 "Qualification : repair ARM64 crun version attestation (#111)",
             ),
             "ARM64 attestation subject source": workflow.replace(
-                'commit_subject="$(git log -1 --format=%s HEAD)"',
-                'commit_subject="$(git log -1 --format=%s HEAD^)"',
+                'v4032_arm64_attestation_subject="$(git log -1 --format=%s '
+                '"${v4032_arm64_attestation_ref}")"',
+                'v4032_arm64_attestation_subject="$(git log -1 --format=%s HEAD)"',
             ),
             "ARM64 attestation linear head": workflow.replace(
                 'v4032_arm64_attestation_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD)"',
+                '"$(git rev-list --parents -n 1 '
+                '"${v4032_arm64_attestation_ref}")"',
                 'v4032_arm64_attestation_head_line <<< '
-                '"$(git rev-list --parents -n 1 HEAD^)"',
+                '"$(git rev-list --parents -n 1 HEAD)"',
             ),
             "documentation reference": workflow.replace(
-                "v4032_docs_ref=HEAD^",
-                "v4032_docs_ref=HEAD^^",
+                'v4032_docs_ref="${v4032_arm64_attestation_ref}^"',
+                'v4032_docs_ref="${v4032_arm64_attestation_ref}^^"',
             ),
             "documentation parent resolution": workflow.replace(
                 'v4032_docs_parent_sha="$(git rev-parse '

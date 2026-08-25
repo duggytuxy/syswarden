@@ -669,6 +669,7 @@ jobs:
           user_id="$(id -u)"
           user_group="$(id -g)"
           user_name="$(id -un)"
+          host_owner_identity="${user_id}:${user_group}"
           user_service="user@${user_id}.service"
           runtime_dir="/run/user/${user_id}"
           delegate_directory="/etc/systemd/system/user@.service.d"
@@ -683,9 +684,11 @@ jobs:
           original_user_service_active=false
           arm_cleanup_completed=false
 
-          if [[ "${user_id}" -eq 0 || "${user_name}" != "runner" || \
+          if [[ ! "${host_owner_identity}" =~ ^[1-9][0-9]*:[0-9]+$ || \
+                "${user_name}" != "runner" || \
                 "${HOME}" != "/home/runner" || ! -d "${HOME}" || \
-                -L "${HOME}" || "$(stat -c '%u' "${HOME}")" != "${user_id}" ]]; then
+                -L "${HOME}" || "$(stat -c '%u' "${HOME}")" != \
+                  "${user_id}" ]]; then
             echo "ERROR: ARM64 qualification requires the exact non-root hosted runner identity." >&2
             exit 1
           fi
@@ -702,7 +705,7 @@ jobs:
             if [[ -L "${SHARD_ROOT}" || ! -d "${SHARD_ROOT}" || \
                   ! "${ARM_SHARD_ROOT_INODE:-}" =~ ^[0-9]+:[0-9]+$ || \
                   "$(stat -c '%u:%g:%a:%d:%i' "${SHARD_ROOT}")" != \
-                    "${user_id}:${user_group}:700:${ARM_SHARD_ROOT_INODE}" ]]; then
+                    "${host_owner_identity}:700:${ARM_SHARD_ROOT_INODE}" ]]; then
               return 1
             fi
           }
@@ -711,7 +714,7 @@ jobs:
                [[ -L "${crun_directory}" || ! -d "${crun_directory}" || \
                   ! "${ARM_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$ || \
                   "$(stat -c '%u:%g:%a:%d:%i' "${crun_directory}")" != \
-                    "${user_id}:${user_group}:700:${ARM_CRUN_DIRECTORY_INODE}" ]]; then
+                    "${host_owner_identity}:700:${ARM_CRUN_DIRECTORY_INODE}" ]]; then
               return 1
             fi
           }
@@ -724,7 +727,7 @@ jobs:
                   ! -f "${ARM_CRUN_PATH}" || -L "${ARM_CRUN_PATH}" || \
                   ! -x "${ARM_CRUN_PATH}" || \
                   "$(stat -c '%u:%g:%a:%s:%d:%i' "${ARM_CRUN_PATH}")" != \
-                    "${user_id}:${user_group}:700:3298128:${ARM_CRUN_INODE}" ]]; then
+                    "${host_owner_identity}:700:3298128:${ARM_CRUN_INODE}" ]]; then
               return 1
             fi
             if ! printf '%s  %s\n' "${ARM_CRUN_SHA256}" "${ARM_CRUN_PATH}" | \
@@ -888,8 +891,8 @@ jobs:
             '[engine.platform_to_oci_runtime]' \
             '"linux/arm64"="crun"' > "${containers_conf}"
           if [[ ! -f "${containers_conf}" || -L "${containers_conf}" || \
-                "$(stat -c '%u' "${containers_conf}")" != "${user_id}" || \
-                "$(stat -c '%a' "${containers_conf}")" != "600" ]]; then
+                "$(stat -c '%u:%g:%a' "${containers_conf}")" != \
+                  "${host_owner_identity}:600" ]]; then
             echo "ERROR: the isolated Podman configuration is not a private runner-owned file." >&2
             exit 1
           fi
@@ -901,16 +904,16 @@ jobs:
           chmod 0700 "${podman_local}"
           if [[ ! -f "${podman_local}" || -L "${podman_local}" || \
                 ! -x "${podman_local}" || \
-                "$(stat -c '%u' "${podman_local}")" != "${user_id}" || \
-                "$(stat -c '%a' "${podman_local}")" != "700" ]]; then
+                "$(stat -c '%u:%g:%a' "${podman_local}")" != \
+                  "${host_owner_identity}:700" ]]; then
             echo "ERROR: the local-only Podman launcher is not a private runner-owned executable." >&2
             exit 1
           fi
           : > "${podman_info}"
           chmod 0600 "${podman_info}"
           if [[ ! -f "${podman_info}" || -L "${podman_info}" || \
-                "$(stat -c '%u' "${podman_info}")" != "${user_id}" || \
-                "$(stat -c '%a' "${podman_info}")" != "600" ]]; then
+                "$(stat -c '%u:%g:%a' "${podman_info}")" != \
+                  "${host_owner_identity}:600" ]]; then
             echo "ERROR: the native ARM64 Podman info target is not a private runner-owned file." >&2
             exit 1
           fi
@@ -947,12 +950,14 @@ jobs:
               --setenv="SYSWARDEN_CRUN_INODE=${ARM_CRUN_INODE}" \
               --setenv="SYSWARDEN_CRUN_PATH=${ARM_CRUN_PATH}" \
               --setenv="SYSWARDEN_CRUN_SHA256=${ARM_CRUN_SHA256}" \
+              --setenv="SYSWARDEN_HOST_OWNER=${host_owner_identity}" \
+              --setenv="SYSWARDEN_HOST_UID=${user_id}" \
               --setenv="SYSWARDEN_PODMAN_INFO=${podman_info}" \
               --setenv="SYSWARDEN_PODMAN_INFO_INODE=${podman_info_inode}" \
               --setenv="SYSWARDEN_PODMAN_LOCAL=${podman_local}" \
               --setenv="XDG_RUNTIME_DIR=${runtime_dir}" \
               /usr/bin/bash --noprofile --norc -e -o pipefail -c \
-              'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY; if [[ -z "${CONTAINERS_CONF:-}" || -n "${CONTAINERS_CONF_OVERRIDE:-}" ]]; then echo "ERROR: native ARM64 Podman configuration isolation is incomplete." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_LOCAL:-}" || ! -f "${SYSWARDEN_PODMAN_LOCAL}" || -L "${SYSWARDEN_PODMAN_LOCAL}" || ! -x "${SYSWARDEN_PODMAN_LOCAL}" ]]; then echo "ERROR: native ARM64 local-only Podman launcher is unavailable." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_INFO:-}" || -z "${SYSWARDEN_PODMAN_INFO_INODE:-}" || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" ]]; then echo "ERROR: native ARM64 Podman info target is unavailable." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_CRUN_PATH:-}" || "${SYSWARDEN_CRUN_SHA256:-}" != "cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342" || ! "${SYSWARDEN_CRUN_INODE:-}" =~ ^[0-9]+:[0-9]+$ || ! "${SYSWARDEN_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$ ]]; then echo "ERROR: native ARM64 crun delegated identity is incomplete." >&2; exit 1; fi; crun_parent="${SYSWARDEN_CRUN_PATH%/*}"; if [[ ! -d "${crun_parent}" || -L "${crun_parent}" || "$(stat -c "%u:%g:%a:%d:%i" "${crun_parent}")" != "$(id -u):$(id -g):700:${SYSWARDEN_CRUN_DIRECTORY_INODE}" || ! -f "${SYSWARDEN_CRUN_PATH}" || -L "${SYSWARDEN_CRUN_PATH}" || ! -x "${SYSWARDEN_CRUN_PATH}" || "$(stat -c "%u:%g:%a:%s:%d:%i" "${SYSWARDEN_CRUN_PATH}")" != "$(id -u):$(id -g):700:3298128:${SYSWARDEN_CRUN_INODE}" ]]; then echo "ERROR: native ARM64 crun changed identity inside the delegated session." >&2; exit 1; fi; if ! printf "%s  %s\n" "${SYSWARDEN_CRUN_SHA256}" "${SYSWARDEN_CRUN_PATH}" | sha256sum --check --strict >/dev/null; then echo "ERROR: native ARM64 crun changed bytes inside the delegated session." >&2; exit 1; fi; if ! crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --root "${crun_parent}" --version)"; then echo "ERROR: native ARM64 crun is not executable inside the delegated session." >&2; exit 1; fi; mapfile -t crun_version_lines <<< "${crun_version_output}"; if [[ "${#crun_version_lines[@]}" -ne 5 || "${crun_version_lines[0]:-}" != "crun version 1.28" || "${crun_version_lines[1]:-}" != "commit: 54f16ffbefcd022bf032af768b5c5ce075c18bfc" || "${crun_version_lines[2]:-}" != "rundir: ${crun_parent}" || "${crun_version_lines[3]:-}" != "spec: 1.0.0" || ! "${crun_version_lines[4]:-}" =~ (^|[[:space:]])\+SYSTEMD($|[[:space:]]) ]]; then echo "ERROR: native ARM64 crun lacks the exact delegated version or systemd capability." >&2; exit 1; fi; if ! /usr/local/lib/podman/conmon --version >/dev/null; then echo "ERROR: native ARM64 conmon is not executable inside the delegated session." >&2; exit 1; fi; if ! "${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" info --format json; then echo "ERROR: native ARM64 Podman could not attest its isolated runtime configuration." >&2; exit 1; fi; if [[ ! -s "${SYSWARDEN_PODMAN_INFO}" || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" || "$(stat -c "%u:%a" "${SYSWARDEN_PODMAN_INFO}")" != "$(id -u):600" || "$(stat -c "%d:%i" "${SYSWARDEN_PODMAN_INFO}")" != "${SYSWARDEN_PODMAN_INFO_INODE}" ]]; then echo "ERROR: native ARM64 Podman info evidence changed identity or permissions." >&2; exit 1; fi; if ! jq --arg crun_path "${SYSWARDEN_CRUN_PATH}" -e -s '\''length == 1 and .[0].host.conmon.path == "/usr/local/lib/podman/conmon" and .[0].host.ociRuntime.name == "crun" and .[0].host.ociRuntime.path == $crun_path and (.[0].host.ociRuntime.version | type) == "string" and (.[0].host.ociRuntime.version | startswith("crun version 1.28\ncommit: 54f16ffbefcd022bf032af768b5c5ce075c18bfc\n")) and (.[0].host.ociRuntime.version | contains("\nspec: 1.0.0\n")) and (.[0].host.ociRuntime.version | contains("\n+SYSTEMD ")) and .[0].host.cgroupManager == "systemd" and .[0].host.security.rootless == true and .[0].host.serviceIsRemote == false and .[0].host.arch == "arm64" and .[0].host.os == "linux"'\'' "${SYSWARDEN_PODMAN_INFO}" >/dev/null; then echo "ERROR: native ARM64 Podman resolved an unexpected local runtime configuration." >&2; exit 1; fi; exec "$@"' \
+              'unset CONTAINER_HOST CONTAINER_CONNECTION CONTAINER_SSHKEY; if [[ -z "${SYSWARDEN_HOST_UID:-}" || ! "${SYSWARDEN_HOST_UID}" =~ ^[1-9][0-9]*$ || -z "${SYSWARDEN_HOST_OWNER:-}" || ! "${SYSWARDEN_HOST_OWNER}" =~ ^[1-9][0-9]*:[0-9]+$ || "${SYSWARDEN_HOST_OWNER%%:*}" != "${SYSWARDEN_HOST_UID}" ]]; then echo "ERROR: native ARM64 delegated host owner identity is incomplete." >&2; exit 1; fi; delegated_uid="$(id -u)"; if [[ "${delegated_uid}" != "${SYSWARDEN_HOST_UID}" ]]; then printf "ERROR: native ARM64 delegated UID differs from the exported host UID (expected=%s observed=%s).\n" "${SYSWARDEN_HOST_UID}" "${delegated_uid}" >&2; exit 1; fi; if [[ -z "${CONTAINERS_CONF:-}" || -n "${CONTAINERS_CONF_OVERRIDE:-}" || ! -f "${CONTAINERS_CONF}" || -L "${CONTAINERS_CONF}" || "$(stat -c "%u:%g:%a" "${CONTAINERS_CONF}")" != "${SYSWARDEN_HOST_OWNER}:600" ]]; then echo "ERROR: native ARM64 Podman configuration isolation is incomplete." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_LOCAL:-}" || ! -f "${SYSWARDEN_PODMAN_LOCAL}" || -L "${SYSWARDEN_PODMAN_LOCAL}" || ! -x "${SYSWARDEN_PODMAN_LOCAL}" || "$(stat -c "%u:%g:%a" "${SYSWARDEN_PODMAN_LOCAL}")" != "${SYSWARDEN_HOST_OWNER}:700" ]]; then echo "ERROR: native ARM64 local-only Podman launcher is unavailable." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_PODMAN_INFO:-}" || -z "${SYSWARDEN_PODMAN_INFO_INODE:-}" || ! "${SYSWARDEN_PODMAN_INFO_INODE}" =~ ^[0-9]+:[0-9]+$ || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" ]]; then echo "ERROR: native ARM64 Podman info target is unavailable." >&2; exit 1; fi; if [[ -z "${SYSWARDEN_CRUN_PATH:-}" || "${SYSWARDEN_CRUN_SHA256:-}" != "cc1e8ec89aef1422e0741be196f9ed099e2e09d2f48f30f27cd44a22ef1f0342" || ! "${SYSWARDEN_CRUN_INODE:-}" =~ ^[0-9]+:[0-9]+$ || ! "${SYSWARDEN_CRUN_DIRECTORY_INODE:-}" =~ ^[0-9]+:[0-9]+$ ]]; then echo "ERROR: native ARM64 crun delegated identity is incomplete." >&2; exit 1; fi; crun_parent="${SYSWARDEN_CRUN_PATH%/*}"; if [[ ! -d "${crun_parent}" || -L "${crun_parent}" ]]; then echo "ERROR: native ARM64 crun parent is not a real delegated directory." >&2; exit 1; fi; if ! crun_parent_identity="$(stat -c "%u:%g:%a:%d:%i" "${crun_parent}")"; then echo "ERROR: native ARM64 crun parent identity is unavailable inside the delegated session." >&2; exit 1; fi; expected_crun_parent_identity="${SYSWARDEN_HOST_OWNER}:700:${SYSWARDEN_CRUN_DIRECTORY_INODE}"; if [[ "${crun_parent_identity}" != "${expected_crun_parent_identity}" ]]; then printf "ERROR: native ARM64 crun parent identity changed inside the delegated session (expected=%s observed=%s).\n" "${expected_crun_parent_identity}" "${crun_parent_identity}" >&2; exit 1; fi; if [[ ! -f "${SYSWARDEN_CRUN_PATH}" || -L "${SYSWARDEN_CRUN_PATH}" || ! -x "${SYSWARDEN_CRUN_PATH}" ]]; then echo "ERROR: native ARM64 crun is not a real delegated executable." >&2; exit 1; fi; if ! crun_identity="$(stat -c "%u:%g:%a:%s:%d:%i" "${SYSWARDEN_CRUN_PATH}")"; then echo "ERROR: native ARM64 crun identity is unavailable inside the delegated session." >&2; exit 1; fi; expected_crun_identity="${SYSWARDEN_HOST_OWNER}:700:3298128:${SYSWARDEN_CRUN_INODE}"; if [[ "${crun_identity}" != "${expected_crun_identity}" ]]; then printf "ERROR: native ARM64 crun identity changed inside the delegated session (expected=%s observed=%s).\n" "${expected_crun_identity}" "${crun_identity}" >&2; exit 1; fi; if ! printf "%s  %s\n" "${SYSWARDEN_CRUN_SHA256}" "${SYSWARDEN_CRUN_PATH}" | sha256sum --check --strict >/dev/null; then echo "ERROR: native ARM64 crun changed bytes inside the delegated session." >&2; exit 1; fi; if ! crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --root "${crun_parent}" --version)"; then echo "ERROR: native ARM64 crun is not executable inside the delegated session." >&2; exit 1; fi; mapfile -t crun_version_lines <<< "${crun_version_output}"; if [[ "${#crun_version_lines[@]}" -ne 5 || "${crun_version_lines[0]:-}" != "crun version 1.28" || "${crun_version_lines[1]:-}" != "commit: 54f16ffbefcd022bf032af768b5c5ce075c18bfc" || "${crun_version_lines[2]:-}" != "rundir: ${crun_parent}" || "${crun_version_lines[3]:-}" != "spec: 1.0.0" || ! "${crun_version_lines[4]:-}" =~ (^|[[:space:]])\+SYSTEMD($|[[:space:]]) ]]; then echo "ERROR: native ARM64 crun lacks the exact delegated version or systemd capability." >&2; exit 1; fi; if ! /usr/local/lib/podman/conmon --version >/dev/null; then echo "ERROR: native ARM64 conmon is not executable inside the delegated session." >&2; exit 1; fi; if ! "${SYSWARDEN_PODMAN_LOCAL}" --out "${SYSWARDEN_PODMAN_INFO}" info --format json; then echo "ERROR: native ARM64 Podman could not attest its isolated runtime configuration." >&2; exit 1; fi; if [[ ! -s "${SYSWARDEN_PODMAN_INFO}" || ! -f "${SYSWARDEN_PODMAN_INFO}" || -L "${SYSWARDEN_PODMAN_INFO}" ]]; then echo "ERROR: native ARM64 Podman info evidence is not a real non-empty file." >&2; exit 1; fi; if ! podman_info_identity="$(stat -c "%u:%g:%a:%d:%i" "${SYSWARDEN_PODMAN_INFO}")"; then echo "ERROR: native ARM64 Podman info evidence identity is unavailable." >&2; exit 1; fi; expected_podman_info_identity="${SYSWARDEN_HOST_OWNER}:600:${SYSWARDEN_PODMAN_INFO_INODE}"; if [[ "${podman_info_identity}" != "${expected_podman_info_identity}" ]]; then printf "ERROR: native ARM64 Podman info evidence changed identity or permissions (expected=%s observed=%s).\n" "${expected_podman_info_identity}" "${podman_info_identity}" >&2; exit 1; fi; if ! jq --arg crun_path "${SYSWARDEN_CRUN_PATH}" -e -s '\''length == 1 and .[0].host.conmon.path == "/usr/local/lib/podman/conmon" and .[0].host.ociRuntime.name == "crun" and .[0].host.ociRuntime.path == $crun_path and (.[0].host.ociRuntime.version | type) == "string" and (.[0].host.ociRuntime.version | startswith("crun version 1.28\ncommit: 54f16ffbefcd022bf032af768b5c5ce075c18bfc\n")) and (.[0].host.ociRuntime.version | contains("\nspec: 1.0.0\n")) and (.[0].host.ociRuntime.version | contains("\n+SYSTEMD ")) and .[0].host.cgroupManager == "systemd" and .[0].host.security.rootless == true and .[0].host.serviceIsRemote == false and .[0].host.arch == "arm64" and .[0].host.os == "linux"'\'' "${SYSWARDEN_PODMAN_INFO}" >/dev/null; then echo "ERROR: native ARM64 Podman resolved an unexpected local runtime configuration." >&2; exit 1; fi; exec "$@"' \
               syswarden-arm64-lifecycle \
               /usr/bin/python3 "${GITHUB_WORKSPACE}/scripts/ci/package_lifecycle_lab.py" \
               --packages-dir "${ARM_CANDIDATE_PACKAGES_DIR}" \
