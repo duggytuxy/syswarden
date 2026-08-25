@@ -631,7 +631,7 @@ syswarden_attest_approved_systemd_service_dropins() {
         return 1
     fi
     syswarden_retire_machine="$(uname -m 2>/dev/null)" || syswarden_retire_machine=
-    case "${syswarden_retire_machine}" in x86_64|aarch64) ;; *) syswarden_retire_machine=invalid ;; esac
+    case "${syswarden_retire_machine}" in x86_64) ;; *) syswarden_retire_machine=invalid ;; esac
     if [ -L "${syswarden_retire_owner_one}" ] || [ ! -f "${syswarden_retire_owner_one}" ] || \
        [ "$(wc -c < "${syswarden_retire_owner_one}" | tr -d ' ')" -gt 4096 ] || \
        ! awk -F '\t' -v expected_arch="${syswarden_retire_machine}" '

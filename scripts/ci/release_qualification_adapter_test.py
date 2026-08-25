@@ -85,20 +85,6 @@ class AdapterFixture:
             self.bound,
         ):
             directory.mkdir(parents=True, exist_ok=True)
-        self.emulator = self.root / "qemu-aarch64-static"
-        self.emulator.write_bytes(b"synthetic executable aarch64 emulator\n")
-        self.emulator.chmod(0o700)
-        self.binfmt = self.root / "qemu-aarch64-binfmt"
-        self.binfmt.write_text(
-            "enabled\n"
-            f"interpreter {self.emulator}\n"
-            "flags: POCF\n"
-            "offset 0\n"
-            "magic 7f454c46\n"
-            "mask ffffffff\n",
-            encoding="utf-8",
-        )
-        self.binfmt.chmod(0o600)
         self.now = datetime.now(UTC).replace(microsecond=0)
         self._make_repository()
         self.commit = self._git("rev-parse", "HEAD")
@@ -191,7 +177,6 @@ class AdapterFixture:
             "podman": "podman",
             "pull_policy": "never",
             "scenario_timeout": 60,
-            "arm64_emulator": None,
             "qualification_repository": self.repository,
             "qualification_release_sha": self.commit,
             "qualification_release_tag": self.version,
@@ -203,13 +188,9 @@ class AdapterFixture:
             "qualification_candidate_artifact_name": self.candidate_artifact_name,
             "qualification_previous_release_id": str(self.previous_release_id),
             "aggregate_amd64_report": None,
-            "aggregate_arm64_report": None,
         }
         shard_paths: dict[str, Path] = {}
-        for offset, (architecture, host) in enumerate(
-            (("amd64", "x86_64"), ("arm64", "aarch64")),
-            1,
-        ):
+        for offset, (architecture, host) in enumerate((("amd64", "x86_64"),), 1):
             package_args = argparse.Namespace(
                 **common_package_args,
                 architecture_shard=architecture,
@@ -219,8 +200,8 @@ class AdapterFixture:
                 for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
                 if spec.architecture == architecture
             )
-            subordinate_uid = 524_288 if architecture == "amd64" else 624_288
-            subordinate_gid = 524_288 if architecture == "amd64" else 724_288
+            subordinate_uid = 524_288
+            subordinate_gid = 524_288
             shard = package_lifecycle_lab.run_lab(
                 package_args,
                 runner=FakePodmanRunner(
@@ -259,7 +240,6 @@ class AdapterFixture:
                 **common_package_args,
                 "architecture_shard": None,
                 "aggregate_amd64_report": shard_paths["amd64"],
-                "aggregate_arm64_report": shard_paths["arm64"],
             }
         )
         package_report = package_lifecycle_lab.aggregate_native_shard_reports(
@@ -318,7 +298,6 @@ class AdapterFixture:
             "nft_raw": self.raw / "nftables-raw.json",
             "package_raw": self.raw / "package-lifecycle-raw.json",
             "package_amd64_shard": self.raw / "package-lifecycle-amd64.json",
-            "package_arm64_shard": self.raw / "package-lifecycle-arm64.json",
             "expected_repository": self.repository,
             "expected_workflow_run_id": self.workflow_run_id,
             "expected_workflow_run_attempt": self.workflow_run_attempt,
@@ -380,7 +359,6 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             nft_raw=relocated / "raw/nftables-raw.json",
             package_raw=relocated / "raw/package-lifecycle-raw.json",
             package_amd64_shard=relocated / "raw/package-lifecycle-amd64.json",
-            package_arm64_shard=relocated / "raw/package-lifecycle-arm64.json",
             nft_envelope=relocated / "bound/nftables-bound.json",
             package_envelope=relocated / "bound/package-lifecycle-bound.json",
         )
@@ -1222,19 +1200,14 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
     def test_raw_v4_engine_helper_cleanup_and_native_records_are_exact(self) -> None:
         original = self.fixture.load_raw("package-lifecycle-raw.json")
         adapter._validate_package_schema(original)
-        self.assertEqual(len(original["platforms"]), 10)
+        self.assertEqual(len(original["platforms"]), 5)
         native_records = {
             record["architecture"]: record
             for record in original["native_shards"]["reports"]
         }
-        self.assertNotEqual(
-            native_records["amd64"]["uid_map"],
-            native_records["arm64"]["uid_map"],
-        )
-        self.assertNotEqual(
-            native_records["amd64"]["gid_map"],
-            native_records["arm64"]["gid_map"],
-        )
+        self.assertEqual(set(native_records), {"amd64"})
+        self.assertEqual(len(native_records["amd64"]["uid_map"]), 2)
+        self.assertEqual(len(native_records["amd64"]["gid_map"]), 2)
         self.assertEqual(
             {
                 (item["distribution"], item["architecture_id"])
@@ -1253,36 +1226,9 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             with self.assertRaises(adapter.AdapterError):
                 adapter._validate_package_schema(report)
 
-        def swap_native_record_identity_maps(item: dict[str, Any]) -> None:
-            records = item["native_shards"]["reports"]
-            for key in ("effective_uid", "effective_gid", "uid_map", "gid_map"):
-                records[0][key], records[1][key] = records[1][key], records[0][key]
-
         def mismatch_native_effective_uid_map(item: dict[str, Any]) -> None:
             record = item["native_shards"]["reports"][0]
             record["uid_map"][0]["outside_id"] = record["effective_uid"] + 1
-
-        def replace_platform_identity_maps(
-            item: dict[str, Any],
-            *,
-            source_architecture: str,
-            target_architecture: str,
-        ) -> None:
-            records = {
-                record["architecture"]: record
-                for record in item["native_shards"]["reports"]
-            }
-            source = records[source_architecture]
-            target = next(
-                platform
-                for platform in item["platforms"]
-                if platform["architecture_id"] == target_architecture
-            )
-            replace_snapshot_identity_maps(
-                target,
-                source["uid_map"],
-                source["gid_map"],
-            )
 
         mutations = {
             "engine-rootless": lambda item: item["engine"].__setitem__(
@@ -1309,9 +1255,6 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             ),
             "engine-host": lambda item: item["engine"].__setitem__(
                 "host_architecture", "amd64"
-            ),
-            "engine-emulator": lambda item: item["engine"].__setitem__(
-                "arm64_emulator", {}
             ),
             "aggregate-effective-uid": lambda item: item["engine"].__setitem__(
                 "effective_uid", 1000
@@ -1348,12 +1291,6 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 "reports"
             ][0].__setitem__("effective_uid", True),
             "native-effective-id-map-mismatch": mismatch_native_effective_uid_map,
-            "native-map-cross-architecture-swap": swap_native_record_identity_maps,
-            "aggregate-platform-map-only": lambda item: replace_platform_identity_maps(
-                item,
-                source_architecture="arm64",
-                target_architecture="amd64",
-            ),
             "native-helper-binding": lambda item: item["native_shards"][
                 "reports"
             ][0]["lifecycle_helper"].__setitem__("sha256", "f" * 64),
@@ -1408,7 +1345,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                     lambda item: locate(item).__setitem__("unknown", True)
                 )
 
-    def test_fedora_vendor_cron_dropin_is_exact_for_both_architectures(
+    def test_fedora_vendor_cron_dropin_is_exact_for_amd64(
         self,
     ) -> None:
         original = self.fixture.load_raw("package-lifecycle-raw.json")
@@ -1433,42 +1370,35 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             ]
 
         expected = [package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH]
-        for architecture in ("amd64", "arm64"):
-            fedora_snapshots = snapshots(
-                platform(original, "fedora", architecture)
+        fedora_snapshots = snapshots(platform(original, "fedora", "amd64"))
+        self.assertTrue(
+            all(
+                snapshot["cron_dropin_paths"] == expected
+                for snapshot in fedora_snapshots
             )
-            self.assertTrue(
-                all(
-                    snapshot["cron_dropin_paths"] == expected
-                    for snapshot in fedora_snapshots
-                )
+        )
+        self.assertTrue(
+            all(
+                snapshot["cron_executable_path"] == "/usr/bin/crond"
+                for snapshot in fedora_snapshots
             )
-            self.assertTrue(
-                all(
-                    snapshot["cron_executable_path"] == "/usr/bin/crond"
-                    for snapshot in fedora_snapshots
-                )
+        )
+        alma_snapshots = snapshots(platform(original, "almalinux", "amd64"))
+        self.assertTrue(
+            all(
+                snapshot["cron_executable_path"] == "/usr/sbin/crond"
+                for snapshot in alma_snapshots
             )
-        for architecture in ("amd64", "arm64"):
-            alma_snapshots = snapshots(
-                platform(original, "almalinux", architecture)
-            )
-            self.assertTrue(
-                all(
-                    snapshot["cron_executable_path"] == "/usr/sbin/crond"
-                    for snapshot in alma_snapshots
-                )
-            )
+        )
         for distribution in ("debian", "ubuntu", "almalinux", "alpine"):
-            for architecture in ("amd64", "arm64"):
-                self.assertTrue(
-                    all(
-                        snapshot["cron_dropin_paths"] == []
-                        for snapshot in snapshots(
-                            platform(original, distribution, architecture)
-                        )
+            self.assertTrue(
+                all(
+                    snapshot["cron_dropin_paths"] == []
+                    for snapshot in snapshots(
+                        platform(original, distribution, "amd64")
                     )
                 )
+            )
 
         def assert_rejected(
             distribution: str,
@@ -1508,11 +1438,10 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 "amd64",
                 ["/etc/systemd/system/crond.service.d/operator.conf"],
             ),
-            ("cross_arch_missing", "fedora", "arm64", []),
             (
                 "cross_distribution",
                 "almalinux",
-                "arm64",
+                "amd64",
                 [package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH],
             ),
         ):
@@ -1521,9 +1450,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
 
         for name, distribution, architecture, value in (
             ("fedora_alias", "fedora", "amd64", "/usr/sbin/crond"),
-            ("fedora_cross_arch_alias", "fedora", "arm64", "/usr/sbin/crond"),
             ("alma_fedora_path", "almalinux", "amd64", "/usr/bin/crond"),
-            ("alma_cross_arch_fedora_path", "almalinux", "arm64", "/usr/bin/crond"),
         ):
             with self.subTest(mutation=name):
                 report = copy.deepcopy(original)
@@ -1533,29 +1460,25 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 with self.assertRaises(adapter.AdapterError):
                     adapter._validate_package_schema(report)
 
-    def test_arm64_probe_must_be_native_and_report_the_native_uname(self) -> None:
+    def test_amd64_probe_must_report_the_native_uname(self) -> None:
         report = self.fixture.load_raw("package-lifecycle-raw.json")
-        arm64 = next(
+        amd64 = next(
             item
             for item in report["platforms"]
-            if item["architecture_id"] == "arm64"
+            if item["architecture_id"] == "amd64"
         )
-        arm64["architecture_probe"]["actual_uname"] = "x86_64"
+        amd64["architecture_probe"]["actual_uname"] = "unsupported"
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
 
     def test_native_shard_files_and_workflow_binding_are_independently_revalidated(self) -> None:
-        arm_path = self.fixture.raw / "package-lifecycle-arm64.json"
-        arm = self.fixture.load_raw("package-lifecycle-arm64.json")
-        arm["qualification_binding"]["workflow_run_id"] += 1
-        self.fixture.save_raw("package-lifecycle-arm64.json", arm)
+        amd_path = self.fixture.raw / "package-lifecycle-amd64.json"
+        amd = self.fixture.load_raw("package-lifecycle-amd64.json")
+        amd["qualification_binding"]["workflow_run_id"] += 1
+        self.fixture.save_raw("package-lifecycle-amd64.json", amd)
         aggregate = self.fixture.load_raw("package-lifecycle-raw.json")
-        record = next(
-            item
-            for item in aggregate["native_shards"]["reports"]
-            if item["architecture"] == "arm64"
-        )
-        record["report_sha256"] = hashlib.sha256(arm_path.read_bytes()).hexdigest()
+        record = aggregate["native_shards"]["reports"][0]
+        record["report_sha256"] = hashlib.sha256(amd_path.read_bytes()).hexdigest()
         self.fixture.save_raw("package-lifecycle-raw.json", aggregate)
         self.assertAdapterError(self.fixture.args())
 
@@ -1567,27 +1490,14 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture._make_raw_reports()
         self.assertAdapterError(
             self.fixture.args(
-                package_arm64_shard=self.fixture.raw / "package-lifecycle-amd64.json"
+                package_amd64_shard=self.fixture.raw / "package-lifecycle-raw.json"
             )
         )
 
         self.fixture._make_raw_reports()
-        aggregate = self.fixture.load_raw("package-lifecycle-raw.json")
-        aggregate["native_shards"]["reports"].reverse()
-        self.fixture.save_raw("package-lifecycle-raw.json", aggregate)
-        self.assertAdapterError(self.fixture.args())
-
-        self.fixture._make_raw_reports()
         report = self.fixture.load_raw("package-lifecycle-raw.json")
-        arm64 = next(
-            item
-            for item in report["platforms"]
-            if item["architecture_id"] == "arm64"
-        )
-        arm64["architecture_probe"].update(
-            execution_mode="host_binfmt_qemu_aarch64",
-        )
-        arm64["bootstrap_execution"] = "podman_platform_with_validated_host_binfmt"
+        report["platforms"][0]["architecture_probe"]["execution_mode"] = "translated"
+        report["platforms"][0]["bootstrap_execution"] = "cross_architecture"
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
         self.fixture._make_raw_reports()
@@ -1613,49 +1523,24 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.assertAdapterError(self.fixture.args())
 
         self.fixture._make_raw_reports()
-        arm_path = self.fixture.raw / "package-lifecycle-arm64.json"
-        arm = self.fixture.load_raw("package-lifecycle-arm64.json")
-        changed_uid_map = copy.deepcopy(arm["engine"]["uid_map"])
+        amd_path = self.fixture.raw / "package-lifecycle-amd64.json"
+        amd = self.fixture.load_raw("package-lifecycle-amd64.json")
+        changed_uid_map = copy.deepcopy(amd["engine"]["uid_map"])
         changed_uid_map[0]["outside_id"] += 1
-        arm["engine"]["effective_uid"] += 1
-        arm["engine"]["uid_map"] = changed_uid_map
-        for platform in arm["platforms"]:
+        amd["engine"]["effective_uid"] += 1
+        amd["engine"]["uid_map"] = changed_uid_map
+        for platform in amd["platforms"]:
             replace_snapshot_identity_maps(
                 platform,
                 changed_uid_map,
-                arm["engine"]["gid_map"],
+                amd["engine"]["gid_map"],
             )
-        self.fixture.save_raw("package-lifecycle-arm64.json", arm)
+        self.fixture.save_raw("package-lifecycle-amd64.json", amd)
         aggregate = self.fixture.load_raw("package-lifecycle-raw.json")
-        arm_record = next(
-            item
-            for item in aggregate["native_shards"]["reports"]
-            if item["architecture"] == "arm64"
-        )
-        arm_record["report_sha256"] = hashlib.sha256(
-            arm_path.read_bytes()
+        amd_record = aggregate["native_shards"]["reports"][0]
+        amd_record["report_sha256"] = hashlib.sha256(
+            amd_path.read_bytes()
         ).hexdigest()
-        self.fixture.save_raw("package-lifecycle-raw.json", aggregate)
-        self.assertAdapterError(self.fixture.args())
-
-        self.fixture._make_raw_reports()
-        aggregate = self.fixture.load_raw("package-lifecycle-raw.json")
-        records = {
-            record["architecture"]: record
-            for record in aggregate["native_shards"]["reports"]
-        }
-        for key in ("effective_uid", "effective_gid", "uid_map", "gid_map"):
-            records["amd64"][key], records["arm64"][key] = (
-                records["arm64"][key],
-                records["amd64"][key],
-            )
-        for platform in aggregate["platforms"]:
-            record = records[platform["architecture_id"]]
-            replace_snapshot_identity_maps(
-                platform,
-                record["uid_map"],
-                record["gid_map"],
-            )
         self.fixture.save_raw("package-lifecycle-raw.json", aggregate)
         self.assertAdapterError(self.fixture.args())
 

@@ -9,7 +9,7 @@
 ### SECURITY
 
 - **LOT 2 aggregate closure:** Assemble the completed Linux-only surface
-  reduction from LOT 2A, six-package reproducibility from LOT 2B and bounded
+  reduction from LOT 2A, three-package reproducibility from LOT 2B and bounded
   security remediation from LOT 2S. LOT 2 closes only on the exact merged
   commit after the protected main and qualification gates pass. This closure
   does not authorize a tag or public Release.
@@ -56,10 +56,14 @@
   package installation, update or reload paths.
 - **Forward-only release path:** Rebind the historical public v4.02.8 APK
   transition to v4.03.2 because neither v4.03.0 nor v4.03.1 was published.
+- **AMD64-only package scope:** Retire ARM64 and aarch64 build, qualification,
+  updater and publication routes. Distribute exactly one amd64 DEB, one x86_64
+  RPM and one x86_64 APK. Historical v4.02.8 package records remain immutable
+  release evidence and cannot be selected by the current updater.
 - **Evidence boundary:** Retain the successful v4.03.1 qualification as
   technical evidence only. v4.03.2 requires its own protected merge checks,
   attempt-1 pre-tag qualification, immutable signed tag and byte-exact
-  thirteen-asset publisher gates.
+  ten-asset publisher gates.
 - **Residual risk tracking:** Keep remaining non-blocking and deferred findings
   in later remediation lots. This Patch does not claim closure of findings
   outside the explicit LOT 2S acceptance matrix.

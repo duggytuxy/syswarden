@@ -131,11 +131,7 @@ BUNDLE_FILES = {
     "bin/syswarden-cli",
     "bin/syswarden-core",
     "bin/syswarden-tui",
-    "linux-arm64/bin/syswarden-cli",
-    "linux-arm64/bin/syswarden-core",
-    "linux-arm64/bin/syswarden-tui",
     "signatures.json",
-    "linux-arm64/signatures.json",
 }
 
 
@@ -167,11 +163,8 @@ def signed_update_required(tag: str) -> bool:
 def package_names(version: str) -> list[str]:
     return [
         f"syswarden_{version}_amd64.deb",
-        f"syswarden_{version}_arm64.deb",
         f"syswarden-{version}-1.x86_64.rpm",
-        f"syswarden-{version}-1.aarch64.rpm",
         f"syswarden_{version}_x86_64.apk",
-        f"syswarden_{version}_aarch64.apk",
     ]
 
 
@@ -997,6 +990,54 @@ def verify_assets(directory: Path, tag: str, repository: Path | None = None) -> 
         )
 
 
+def verify_github_signed_tag_object(
+    path: Path,
+    expected_tag: str,
+    expected_tag_object_sha: str,
+    expected_commit_sha: str,
+) -> None:
+    parse_tag(expected_tag)
+    for value, label in (
+        (expected_tag_object_sha, "tag object SHA"),
+        (expected_commit_sha, "tag commit SHA"),
+    ):
+        if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            raise ReleaseGateError(f"invalid expected {label}: {value!r}")
+    if expected_tag_object_sha == expected_commit_sha:
+        raise ReleaseGateError("release tag must be an annotated tag object")
+
+    document = _strict_json_file(path.resolve(), "GitHub signed tag object")
+    if not isinstance(document, dict):
+        raise ReleaseGateError("GitHub signed tag object must be a JSON object")
+    target = document.get("object")
+    verification = document.get("verification")
+    tagger = document.get("tagger")
+    if (
+        document.get("tag") != expected_tag
+        or document.get("sha") != expected_tag_object_sha
+        or not isinstance(document.get("message"), str)
+        or not document.get("message")
+        or not isinstance(target, dict)
+        or target.get("type") != "commit"
+        or target.get("sha") != expected_commit_sha
+        or not isinstance(tagger, dict)
+        or not all(
+            isinstance(tagger.get(field), str) and tagger.get(field)
+            for field in ("name", "email", "date")
+        )
+        or not isinstance(verification, dict)
+        or verification.get("verified") is not True
+        or verification.get("reason") != "valid"
+        or not isinstance(verification.get("signature"), str)
+        or not verification.get("signature")
+        or not isinstance(verification.get("payload"), str)
+        or not verification.get("payload")
+    ):
+        raise ReleaseGateError(
+            "GitHub did not verify the exact annotated release tag signature"
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1039,6 +1080,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     signed_update_parser.add_argument("--tag", required=True)
 
+    signed_tag_parser = subparsers.add_parser(
+        "verify-github-signed-tag",
+        help="verify GitHub's signature result for one exact annotated release tag",
+    )
+    signed_tag_parser.add_argument("--tag-object-json", type=Path, required=True)
+    signed_tag_parser.add_argument("--expected-tag", required=True)
+    signed_tag_parser.add_argument("--expected-tag-object-sha", required=True)
+    signed_tag_parser.add_argument("--expected-commit-sha", required=True)
+
     historical_parser = subparsers.add_parser(
         "normalize-v4028-linux-packages",
         help="derive the exact Linux-only checksum view from public v4.02.8 evidence",
@@ -1076,6 +1126,14 @@ def main() -> int:
             print("Source SBOM validation passed")
         elif args.command == "requires-signed-update":
             print("true" if signed_update_required(args.tag) else "false")
+        elif args.command == "verify-github-signed-tag":
+            verify_github_signed_tag_object(
+                args.tag_object_json,
+                args.expected_tag,
+                args.expected_tag_object_sha,
+                args.expected_commit_sha,
+            )
+            print(f"GitHub signed tag validation passed for {args.expected_tag}")
         else:
             provenance = normalize_v4028_linux_packages(
                 repository=args.repository,

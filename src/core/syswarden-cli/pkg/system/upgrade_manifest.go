@@ -319,11 +319,8 @@ func (manifest *updateManifest) validate() error {
 func expectedManifestIdentities() []packageTarget {
 	return []packageTarget{
 		{os: "linux", architecture: "amd64", format: packageFormatDEB},
-		{os: "linux", architecture: "arm64", format: packageFormatDEB},
 		{os: "linux", architecture: "amd64", format: packageFormatRPM},
-		{os: "linux", architecture: "arm64", format: packageFormatRPM},
 		{os: "linux", architecture: "amd64", format: packageFormatAPK},
-		{os: "linux", architecture: "arm64", format: packageFormatAPK},
 	}
 }
 
@@ -356,7 +353,7 @@ func detectPackageTarget(
 	if goos != "linux" {
 		return packageTarget{}, fmt.Errorf("in-place updater does not support operating system %q", goos)
 	}
-	if goarch != "amd64" && goarch != "arm64" {
+	if goarch != "amd64" {
 		return packageTarget{}, fmt.Errorf("in-place updater does not support architecture %q", goarch)
 	}
 	if lookPath == nil {
@@ -419,23 +416,16 @@ func packageFilename(version, format, goarch string) (string, error) {
 	cleanVersion := strings.TrimPrefix(version, "v")
 	switch format {
 	case packageFormatDEB:
-		switch goarch {
-		case "amd64", "arm64":
-			return fmt.Sprintf("syswarden_%s_%s.deb", cleanVersion, goarch), nil
+		if goarch == "amd64" {
+			return fmt.Sprintf("syswarden_%s_amd64.deb", cleanVersion), nil
 		}
 	case packageFormatRPM:
-		switch goarch {
-		case "amd64":
+		if goarch == "amd64" {
 			return fmt.Sprintf("syswarden-%s-1.x86_64.rpm", cleanVersion), nil
-		case "arm64":
-			return fmt.Sprintf("syswarden-%s-1.aarch64.rpm", cleanVersion), nil
 		}
 	case packageFormatAPK:
-		switch goarch {
-		case "amd64":
+		if goarch == "amd64" {
 			return fmt.Sprintf("syswarden_%s_x86_64.apk", cleanVersion), nil
-		case "arm64":
-			return fmt.Sprintf("syswarden_%s_aarch64.apk", cleanVersion), nil
 		}
 	}
 	return "", fmt.Errorf("unsupported package target format=%q architecture=%q", format, goarch)

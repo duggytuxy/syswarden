@@ -199,7 +199,7 @@
   <g transform="translate(70 814)">
     <rect width="1460" height="72" rx="18" fill="#0d2b3e" stroke="#28536d" stroke-width="1.5"/>
     <text x="28" y="30" class="mono">RELEASE GATE</text>
-    <text x="28" y="53" class="small">6 Linux packages | native ARM64 | nftables lab | signed update manifest | exact 13-asset inventory | immutable qualified SHA</text>
+    <text x="28" y="53" class="small">3 Linux packages | native AMD64 | nftables lab | signed update manifest | exact 10-asset inventory | immutable qualified SHA</text>
     <rect x="1192" y="16" width="240" height="40" rx="11" fill="#123a45" stroke="#2dd4bf"/>
     <text x="1312" y="41" text-anchor="middle" class="mono">FAIL CLOSED</text>
   </g>

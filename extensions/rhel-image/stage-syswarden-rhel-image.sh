@@ -932,7 +932,7 @@ RPM_VERSION=${RPM_FIELDS[2]}
 RPM_RELEASE=${RPM_FIELDS[3]}
 [[ "${RPM_NAME}" == syswarden ]] || fail "local RPM package name is not syswarden"
 case "${RPM_ARCH}" in
-    x86_64|aarch64) : ;;
+    x86_64) : ;;
     *) fail "unsupported SysWarden RPM architecture: ${RPM_ARCH}" ;;
 esac
 [[ -n "${RPM_VERSION}" && -n "${RPM_RELEASE}" ]] || fail "local RPM version or release is empty"

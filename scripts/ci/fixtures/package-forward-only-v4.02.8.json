@@ -2,10 +2,6 @@
   "candidate_version": "4.03.2",
   "previous_version": "4.02.8",
   "artifacts": {
-    "aarch64": {
-      "filename": "syswarden_4.02.8_aarch64.apk",
-      "sha256": "80a16b099d299db4053249f7bcb3d7c234ee662ad1e10e7081ae92553d13d275"
-    },
     "x86_64": {
       "filename": "syswarden_4.02.8_x86_64.apk",
       "sha256": "c0869bcb6f9adc1e4ca191ae5f5ed7962c9c89fb2bac9a4d52c0c246b09036d4"

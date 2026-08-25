@@ -12,7 +12,7 @@
     "disk_used_mb": 3072,
     "disk_total_mb": 8192,
     "cores": "8",
-    "arch": "arm64",
+    "arch": "x86_64",
     "os": "futureos",
     "cpu_model": "Forward fixture CPU",
     "server_ip": "2001:db8::30",

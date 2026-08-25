@@ -88,11 +88,8 @@ type semanticVersion struct {
 
 var manifestIdentities = []artifactIdentity{
 	{os: "linux", architecture: "amd64", format: "deb"},
-	{os: "linux", architecture: "arm64", format: "deb"},
 	{os: "linux", architecture: "amd64", format: "rpm"},
-	{os: "linux", architecture: "arm64", format: "rpm"},
 	{os: "linux", architecture: "amd64", format: "apk"},
-	{os: "linux", architecture: "arm64", format: "apk"},
 }
 
 func parseVersion(raw string) (semanticVersion, error) {
@@ -162,22 +159,16 @@ func packageFilename(tag, format, architecture string) (string, error) {
 	version := strings.TrimPrefix(tag, "v")
 	switch format {
 	case "deb":
-		if architecture == "amd64" || architecture == "arm64" {
-			return fmt.Sprintf("syswarden_%s_%s.deb", version, architecture), nil
+		if architecture == "amd64" {
+			return fmt.Sprintf("syswarden_%s_amd64.deb", version), nil
 		}
 	case "rpm":
-		switch architecture {
-		case "amd64":
+		if architecture == "amd64" {
 			return fmt.Sprintf("syswarden-%s-1.x86_64.rpm", version), nil
-		case "arm64":
-			return fmt.Sprintf("syswarden-%s-1.aarch64.rpm", version), nil
 		}
 	case "apk":
-		switch architecture {
-		case "amd64":
+		if architecture == "amd64" {
 			return fmt.Sprintf("syswarden_%s_x86_64.apk", version), nil
-		case "arm64":
-			return fmt.Sprintf("syswarden_%s_aarch64.apk", version), nil
 		}
 	}
 	return "", fmt.Errorf("unsupported package target %s/%s", format, architecture)
@@ -190,11 +181,8 @@ func packageNames(tag string) ([]string, error) {
 	version := strings.TrimPrefix(tag, "v")
 	return []string{
 		fmt.Sprintf("syswarden_%s_amd64.deb", version),
-		fmt.Sprintf("syswarden_%s_arm64.deb", version),
 		fmt.Sprintf("syswarden-%s-1.x86_64.rpm", version),
-		fmt.Sprintf("syswarden-%s-1.aarch64.rpm", version),
 		fmt.Sprintf("syswarden_%s_x86_64.apk", version),
-		fmt.Sprintf("syswarden_%s_aarch64.apk", version),
 	}, nil
 }
 

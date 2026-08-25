@@ -707,11 +707,12 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
         count = family_counts.get(family, 0)
         return number_words.get(count, str(count))
 
+    apk_package_noun = "package" if family_counts.get("APK") == 1 else "packages"
     expected_inventory_phrases = {
         "wiki/Deployment-Tutorial.md": (
             "The package workflow is configured to generate "
             f"{count_word('DEB')} DEB, {count_word('RPM')} RPM "
-            f"and {count_word('APK')} APK packages plus "
+            f"and {count_word('APK')} APK {apk_package_noun} plus "
             "`SHA256SUMS.txt`."
         )
     }
@@ -893,7 +894,7 @@ def validate_active_public_surfaces(
             isinstance(asset, str) and asset for asset in expected_assets
         ):
             errors.append("public report expected_assets must be a string list")
-        elif len(expected_assets) != 13 or set(expected_assets) != release_assets:
+        elif len(expected_assets) != 10 or set(expected_assets) != release_assets:
             errors.append(
                 "public report asset contract differs from the exact release gate; "
                 f"release={sorted(release_assets)}, report={sorted(expected_assets)}"
@@ -965,10 +966,10 @@ def validate_active_public_surfaces(
     package_count = surface.get("package_count")
     asset_count = surface.get("public_asset_count")
     release_version = version.removeprefix("v")
-    if package_count != 6 or len(release_gate.package_names(release_version)) != 6:
-        errors.append("active surface package count must equal the six-package release gate")
-    if asset_count != 13 or len(release_gate.expected_release_assets(version)) != 13:
-        errors.append("active surface asset count must equal the thirteen-asset release gate")
+    if package_count != 3 or len(release_gate.package_names(release_version)) != 3:
+        errors.append("active surface package count must equal the three-package release gate")
+    if asset_count != 10 or len(release_gate.expected_release_assets(version)) != 10:
+        errors.append("active surface asset count must equal the ten-asset release gate")
     return errors
 
 
