@@ -46,6 +46,7 @@ var (
 	approvedSHA256            = regexp.MustCompile(`^[A-Fa-f0-9]{64}$`)
 	errFeedRedirect           = errors.New("feed redirects are disabled")
 	errUnauthenticatedASNFeed = errors.New("unauthenticated RADB WHOIS data is non-authoritative for firewall policy")
+	errNonPublicFeedPrefix    = errors.New("non-public or special-use prefix")
 	reservedFeedPrefixes      = []netip.Prefix{
 		netip.MustParsePrefix("0.0.0.0/8"),
 		netip.MustParsePrefix("10.0.0.0/8"),
@@ -93,6 +94,7 @@ type cidrFeedPolicy struct {
 	minimumIPv6PrefixBits  int
 	requireHostPrefixes    bool
 	requirePublicAddresses bool
+	skipNonPublicEntries   bool
 }
 
 type feedPublicationPolicy struct {
@@ -106,8 +108,9 @@ type feedPublicationPolicy struct {
 }
 
 type canonicalCIDRFeed struct {
-	content  []byte
-	prefixes []netip.Prefix
+	content                 []byte
+	prefixes                []netip.Prefix
+	ignoredNonPublicEntries int
 }
 
 type feedFileTarget struct {
@@ -811,7 +814,7 @@ func parseCanonicalFeedPrefix(line string, policy cidrFeedPolicy) (netip.Prefix,
 		return netip.Prefix{}, fmt.Errorf("source must contain host prefixes only")
 	}
 	if policy.requirePublicAddresses && !isPublicFeedPrefix(prefix) {
-		return netip.Prefix{}, fmt.Errorf("non-public or special-use prefix")
+		return netip.Prefix{}, errNonPublicFeedPrefix
 	}
 	return prefix, nil
 }
@@ -848,6 +851,7 @@ func canonicalizeCIDRFeed(content []byte, policy cidrFeedPolicy) (canonicalCIDRF
 	scanner := bufio.NewScanner(strings.NewReader(string(content)))
 	scanner.Buffer(make([]byte, 1024), 4096)
 	prefixes := make([]netip.Prefix, 0)
+	ignoredNonPublicEntries := 0
 	for lineNumber := 1; scanner.Scan(); lineNumber++ {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
@@ -855,6 +859,10 @@ func canonicalizeCIDRFeed(content []byte, policy cidrFeedPolicy) (canonicalCIDRF
 		}
 		prefix, err := parseCanonicalFeedPrefix(line, policy)
 		if err != nil {
+			if policy.skipNonPublicEntries && errors.Is(err, errNonPublicFeedPrefix) {
+				ignoredNonPublicEntries++
+				continue
+			}
 			return canonicalCIDRFeed{}, fmt.Errorf("invalid CIDR at line %d: %w", lineNumber, err)
 		}
 		prefixes = append(prefixes, prefix)
@@ -870,11 +878,15 @@ func canonicalizeCIDRFeed(content []byte, policy cidrFeedPolicy) (canonicalCIDRF
 		return canonicalCIDRFeed{}, fmt.Errorf("feed exceeds the %d-entry canonicalization limit", maximumCanonicalFeedEntries)
 	}
 	if len(feed.prefixes) < policy.minimumEntries {
+		if ignoredNonPublicEntries > 0 {
+			return canonicalCIDRFeed{}, fmt.Errorf("feed contains %d canonical entries after ignoring %d non-public or special-use entries, minimum is %d", len(feed.prefixes), ignoredNonPublicEntries, policy.minimumEntries)
+		}
 		return canonicalCIDRFeed{}, fmt.Errorf("feed contains %d canonical entries, minimum is %d", len(feed.prefixes), policy.minimumEntries)
 	}
 	if len(feed.prefixes) == 0 {
 		return canonicalCIDRFeed{}, fmt.Errorf("feed contains no canonical CIDR entries")
 	}
+	feed.ignoredNonPublicEntries = ignoredNonPublicEntries
 	return feed, nil
 }
 
@@ -1085,6 +1097,17 @@ func feedOrigin(rawURL string) (string, error) {
 
 func reportNonAuthoritativeFeed(label string) {
 	_, _ = fmt.Fprintf(os.Stderr, "[WARNING] %s is configured but has no authenticated authority; last-known-good files were preserved.\n", label)
+}
+
+func reportIgnoredOSINTEntries(writer io.Writer, origin string, count int) {
+	if count <= 0 {
+		return
+	}
+	entryLabel := "entries"
+	if count == 1 {
+		entryLabel = "entry"
+	}
+	_, _ = fmt.Fprintf(writer, "[WARNING] OSINT source %s ignored %d non-public or special-use CIDR %s.\n", origin, count, entryLabel)
 }
 
 func downloadMirrorQuorumWithClient(ctx context.Context, client *http.Client, mirrors []string, target feedFileTarget, suffix string, quorum int, validation cidrFeedPolicy, publication feedPublicationPolicy) error {
@@ -1540,6 +1563,7 @@ func downloadOSINTWithClient(ctx context.Context, client *http.Client, urls []st
 		minimumIPv6PrefixBits:  128,
 		requireHostPrefixes:    true,
 		requirePublicAddresses: true,
+		skipNonPublicEntries:   true,
 	}
 	origins := make(map[string]struct{}, len(urls))
 	presence := make(map[netip.Prefix]int)
@@ -1556,6 +1580,7 @@ func downloadOSINTWithClient(ctx context.Context, client *http.Client, urls []st
 		if err != nil {
 			return fmt.Errorf("validate OSINT source: %w", err)
 		}
+		reportIgnoredOSINTEntries(os.Stderr, origin, candidate.ignoredNonPublicEntries)
 		for _, prefix := range candidate.prefixes {
 			presence[prefix]++
 		}

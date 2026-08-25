@@ -48,7 +48,7 @@
   ],
   "required_readme_phrases": [
     "Current source version: **{version}**.",
-    "The source describes the v4.03.2 candidate and does not claim that the release has been qualified, tagged or published.",
+    "The source describes the v4.03.3 candidate and does not claim that the release has been qualified, tagged or published.",
     "SysWarden is an open-source Linux security orchestrator",
     "SysWarden is not an inline HTTP proxy, a traffic sanitizer or a regulatory certification product.",
     "Authoritative nftables enforcement with bounded firewalld and UFW compatibility",
@@ -67,7 +67,7 @@
     "keep refuses policy mutation while an iptables-services or netfilter-persistent service is active or enabled.",
     "Operational mutation requires an active, unambiguous supported service manager; offline package hooks defer install and reload.",
     "nftables requires an active and enabled nftables service and refuses active or enabled firewalld, UFW, iptables-services or netfilter-persistent frontends.",
-    "iptables is parseable but refused by operational policy mutation paths in v4.03.2.",
+    "iptables is parseable but refused by operational policy mutation paths in v4.03.3.",
     "SysWarden commits authoritative nftables policy and may reconcile one already active firewalld or UFW compatibility frontend.",
     "WireGuard requires the explicit nftables backend and is not opened through the firewalld or UFW compatibility path.",
     "Native TUI: no listening port.",
@@ -93,11 +93,12 @@
   ],
   "required_wiki_phrases": {
     "Home.md": [
-      "The v4.03.2 contract targets three candidate Linux packages:",
+      "The v4.03.3 contract targets three candidate Linux packages:",
       "The complete public Release contains exactly ten assets: the three packages,",
       "No package, updater or qualification route exists outside this AMD64/x86_64 Linux matrix.",
       "The optional RHEL-compatible image staging extension is additive",
-      "Offline staging is not runtime-readiness evidence."
+      "Offline staging is not runtime-readiness evidence.",
+      "Version-specific runbook: [v4.03.2 to v4.03.3 migration](Migration-v4.03.2-to-v4.03.3)"
     ],
     "Deployment-Tutorial.md": [
       "The package workflow is configured to generate one DEB, one RPM and one APK package plus `SHA256SUMS.txt`.",
@@ -118,12 +119,18 @@
       "The core opens them descriptor-relative without following links and revalidates the file identity and type after every rotation",
       "operators must keep every parent directory protected against untrusted replacement",
       "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars",
-      "SSH/HA port separation while WireGuard is enabled."
+      "SSH/HA port separation while WireGuard is enabled.",
+      "[version-specific v4.03.2 to v4.03.3 migration runbook](Migration-v4.03.2-to-v4.03.3)"
     ],
     "Use-cases.md": [
       "Use Linux hosts matching one of the three candidate packages and retain verified console access.",
       "## 9. Stage a fresh RHEL-compatible image root",
-      "No product binary, service manager, firewall tool, kernel-policy tool, cron command, network endpoint or process signal runs during offline staging."
+      "No product binary, service manager, firewall tool, kernel-policy tool, cron command, network endpoint or process signal runs during offline staging.",
+      "## 10. Qualify real WAAP and HA ban propagation",
+      "Do not append a synthetic line directly to the log.",
+      "the native command synchronizes only durable entries from the persistent blocklists",
+      "This API check does not claim that a local WAAP event is automatically forwarded",
+      "owner-scoped deletes one separately owned temporary entry"
     ],
     "BunkerWeb-Integration.md": [
       "`DELETE {{\"bans\": [...]}}` removes provenance ledger entries only",
@@ -145,9 +152,19 @@
       "Keep verified local console or SSH recovery access throughout the migration.",
       "SysWarden package rollback is an explicit package and configuration recovery procedure, not a general host-state reversal."
     ],
+    "Migration-v4.03.2-to-v4.03.3.md": [
+      "This runbook covers the supported AMD64 Linux package transition from the published v4.03.2 release to the v4.03.3 Patch candidate.",
+      "The Ubuntu 26.04 installation through a deterministic local TLS fixture on supported OSINT source paths is a pending manual release-owner gate.",
+      "SysWarden maintains the same logical dynamic bans in four interval sets:",
+      "The candidate reload must demonstrate that it can inspect the old state, preserve only unambiguous valid dynamic bans and discard ambiguous legacy intervals.",
+      "Each warned interval must be absent from all four post-upgrade sets.",
+      "Rolling back to v4.03.2 is unsafe while any ban producer is active.",
+      "There is no qualified in-place package downgrade for this correction.",
+      "Uninstall is destructive removal, not rollback."
+    ],
     "RHEL-9-Image-Extensions.md": [
       "The offline RPM staging extension is the only currently available RHEL 9+ image extension.",
-      "The runtime-only, package-owned system-integration extension is not available in v4.03.2.",
+      "The runtime-only, package-owned system-integration extension is not available in v4.03.3.",
       "The future extension must keep the Go binaries runtime-only while the RPM owns firewall and systemd configuration.",
       "Offline staging does not establish runtime readiness or widen the qualified package matrix."
     ]
@@ -158,7 +175,7 @@
       "stream": "stdout",
       "reason": "Advance the minor version while preserving the bounded built-in operator reference.",
       "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
-      "after": "SYSWARDEN v4.03.2 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+      "after": "SYSWARDEN v4.03.3 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
     },
     {
       "case": "help:syswarden",
@@ -659,26 +676,26 @@
           [
             "Debian or Ubuntu",
             "amd64",
-            "`syswarden_4.03.2_amd64.deb`"
+            "`syswarden_4.03.3_amd64.deb`"
           ],
           [
             "Fedora or RHEL family",
             "x86_64",
-            "`syswarden-4.03.2-1.x86_64.rpm`"
+            "`syswarden-4.03.3-1.x86_64.rpm`"
           ],
           [
             "Alpine",
             "x86_64",
-            "`syswarden_4.03.2_x86_64.apk`"
+            "`syswarden_4.03.3_x86_64.apk`"
           ]
         ]
       }
     }
   },
   "public_report_contract": {
-    "path": "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.2.md",
+    "path": "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.3.md",
     "required_phrases": [
-      "| Candidate | v4.03.2 |",
+      "| Candidate | v4.03.3 |",
       "| Distribution boundary | Linux packages only |",
       "| Public package count | 3 |",
       "| Public release asset count | 10 |",
@@ -700,7 +717,7 @@
       "Every SSH exception is rendered only for the effective SSH port.",
       "candidate nftables application fails closed",
       "## Firewall backend selection and compatibility",
-      "SysWarden v4.03.2 uses nftables as its single authoritative Linux policy engine.",
+      "SysWarden v4.03.3 uses nftables as its single authoritative Linux policy engine.",
       "Fresh configurations default to `core.firewall_backend = \"keep\"`",
       "The `nftables` value is a validation-only assertion.",
       "The `iptables` value remains parseable for configuration compatibility",
@@ -716,12 +733,12 @@
       "The bounded LOT 2S scope targets closure of H1 through H5",
       "The self-hosted native qualification job has no release-signing environment",
       "The remote qualification environment must require exactly one owner review",
-      "The v4.03.2 candidate remains NO-GO"
+      "The v4.03.3 candidate remains NO-GO"
     ],
     "expected_assets": [
-      "syswarden_4.03.2_amd64.deb",
-      "syswarden-4.03.2-1.x86_64.rpm",
-      "syswarden_4.03.2_x86_64.apk",
+      "syswarden_4.03.3_amd64.deb",
+      "syswarden-4.03.3-1.x86_64.rpm",
+      "syswarden_4.03.3_x86_64.apk",
       "SHA256SUMS.txt",
       "RELEASE_SHA256SUMS.txt",
       "syswarden-release.tar.gz",
@@ -741,7 +758,7 @@
       "README.md",
       "changelog.md",
       "docs/maintainers/LOCAL_RELEASE_PREFLIGHT.md",
-      "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.2.md",
+      "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.3.md",
       "assets/syswarden_hero.svg",
       "assets/syswarden_architecture.svg",
       "extensions/rhel-image/README.md"

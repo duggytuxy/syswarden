@@ -12,6 +12,6 @@ If you discover any issue regarding security, please disclose the information re
 
 ## Release Readiness
 
-- [SysWarden v4.03.2 Public Release Readiness Report](docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.2.md)
+- [SysWarden v4.03.3 Public Release Readiness Report](docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.3.md)
 
 Please note that I do not currently offer a bug bounty program.

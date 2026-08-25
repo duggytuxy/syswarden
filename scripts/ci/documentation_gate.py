@@ -72,6 +72,7 @@ REQUIRED_OPERATIONAL_WIKI_PAGES = frozenset(
         "Deployment-Tutorial.md",
         "BunkerWeb-Integration.md",
         "Migration-v4.02.8-to-v4.03.2.md",
+        "Migration-v4.03.2-to-v4.03.3.md",
         "RHEL-9-Image-Extensions.md",
     }
 )
@@ -1176,10 +1177,15 @@ def validate_markdown(
         if pattern.search(text):
             errors.append(f"{label}: possible real {secret_name} in documentation")
 
+    version_specific_heading_versions: set[str] = set()
+    if re.search(r"^> Status: Version-specific\s*$", text, re.MULTILINE):
+        first_heading = next((line for line in lines if line.startswith("# ")), "")
+        version_specific_heading_versions.update(VERSION_RE.findall(first_heading))
+
     for line_number, line in enumerate(lines, 1):
         versions = VERSION_RE.findall(line)
         for version in versions:
-            if version == current_version:
+            if version == current_version or version in version_specific_heading_versions:
                 continue
             context = line.casefold()
             if not any(word in context for word in ("historical", "archive", "obsolete", "version-specific")):
@@ -1331,11 +1337,31 @@ def validate_wiki(
     for record in markdown_records:
         path = wiki_root / record.path
         text = read_text(path)
-        if not re.search(r"^> Status: (?:Current|Version-specific|Obsolete|Archive)\s*$", text, re.MULTILINE):
+        status_match = re.search(
+            r"^> Status: (Current|Version-specific|Obsolete|Archive)\s*$",
+            text,
+            re.MULTILINE,
+        )
+        if status_match is None:
             errors.append(f"{path}: missing reviewed wiki status banner")
-        expected_baseline = f"> Documentation baseline: {version}"
-        if expected_baseline not in text:
-            errors.append(f"{path}: missing baseline banner {expected_baseline!r}")
+        baseline_match = re.search(
+            r"^> Documentation baseline: (v[0-9]+\.[0-9]{2}\.[0-9]+)\s*$",
+            text,
+            re.MULTILINE,
+        )
+        if baseline_match is None:
+            errors.append(f"{path}: missing canonical documentation baseline banner")
+            document_version = version
+        else:
+            document_version = baseline_match.group(1)
+            if (
+                status_match is not None
+                and status_match.group(1) == "Current"
+                and document_version != version
+            ):
+                errors.append(
+                    f"{path}: current page baseline {document_version} does not match {version}"
+                )
         errors.extend(
             validate_markdown(
                 path,
@@ -1343,7 +1369,7 @@ def validate_wiki(
                 known_commands,
                 known_config_keys,
                 forbidden_phrases,
-                version,
+                document_version,
                 wiki_root,
             )
         )
@@ -1363,7 +1389,7 @@ def validate_wiki(
                 require_phrases(
                     text,
                     page_required,
-                    version,
+                    document_version,
                     f"wiki/{record.path}",
                 )
             )

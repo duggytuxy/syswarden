@@ -379,6 +379,39 @@ type nftablesLayer struct {
 	set  *nftables.Set
 }
 
+func nftablesIntervalElements(entry firewallEntry, timeout time.Duration) []nftables.SetElement {
+	start := nftables.SetElement{
+		Key:     append([]byte(nil), entry.key...),
+		Timeout: timeout,
+	}
+	elements := []nftables.SetElement{start}
+
+	inclusiveEnd := entry.key
+	if len(entry.keyEnd) > 0 {
+		inclusiveEnd = entry.keyEnd
+	}
+	exclusiveEnd, ok := nextNftablesAddress(inclusiveEnd)
+	if ok {
+		elements = append(elements, nftables.SetElement{
+			Key:         exclusiveEnd,
+			IntervalEnd: true,
+		})
+	}
+	return elements
+}
+
+func nextNftablesAddress(address []byte) ([]byte, bool) {
+	next := append([]byte(nil), address...)
+	for index := len(next) - 1; index >= 0; index-- {
+		if next[index] != 0xff {
+			next[index]++
+			return next, true
+		}
+		next[index] = 0
+	}
+	return nil, false
+}
+
 func (m *NftablesManager) Name() string {
 	return "nftables (Native Netlink)"
 }
@@ -503,16 +536,25 @@ func (m *NftablesManager) applyMutationLocked(entry firewallEntry, add bool, ttl
 			continue
 		}
 		available++
-		current, present, err := m.elementStateLocked(layer.set, entry)
+		current, present, unterminated, err := m.elementStateLocked(layer.set, entry)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s preflight: %w", layer.name, err))
 			continue
 		}
 
-		element := nftables.SetElement{
-			Key:    append([]byte(nil), entry.key...),
-			KeyEnd: append([]byte(nil), entry.keyEnd...),
+		if unterminated {
+			incomplete := nftables.SetElement{
+				Key:         append([]byte(nil), current.Key...),
+				IntervalEnd: current.IntervalEnd,
+			}
+			if err := m.conn.SetDeleteElements(layer.set, []nftables.SetElement{incomplete}); err != nil {
+				errs = append(errs, fmt.Errorf("%s queue incomplete interval repair: %w", layer.name, err))
+				continue
+			}
+			queued++
 		}
+
+		elements := nftablesIntervalElements(entry, 0)
 		if add {
 			alreadyDesired := present && permanent && current.Timeout == 0 && current.Expires == 0
 			strongerPermanent := present && !permanent && !exactTTL && current.Timeout == 0 && current.Expires == 0
@@ -526,26 +568,31 @@ func (m *NftablesManager) applyMutationLocked(entry firewallEntry, add bool, ttl
 				continue
 			}
 			if present {
-				if err := m.conn.SetDeleteElements(layer.set, []nftables.SetElement{element}); err != nil {
+				if err := m.conn.SetDeleteElements(layer.set, elements); err != nil {
 					errs = append(errs, fmt.Errorf("%s queue ban replacement delete: %w", layer.name, err))
 					continue
 				}
 				queued++
 			}
 			if !permanent {
-				element.Timeout = ttl
+				elements[0].Timeout = ttl
 			}
-			if err := m.conn.SetAddElements(layer.set, []nftables.SetElement{element}); err != nil {
+			if err := m.conn.SetAddElements(layer.set, elements); err != nil {
 				errs = append(errs, fmt.Errorf("%s queue mutation: %w", layer.name, err))
 				continue
 			}
 			renewed[layer.name] = true
 		} else {
-			if !present {
+			if !present && !unterminated {
 				continue
 			}
-			if err := m.conn.SetDeleteElements(layer.set, []nftables.SetElement{element}); err != nil {
-				errs = append(errs, fmt.Errorf("%s queue mutation: %w", layer.name, err))
+			if present {
+				if err := m.conn.SetDeleteElements(layer.set, elements); err != nil {
+					errs = append(errs, fmt.Errorf("%s queue mutation: %w", layer.name, err))
+					continue
+				}
+			}
+			if unterminated {
 				continue
 			}
 		}
@@ -568,9 +615,13 @@ func (m *NftablesManager) applyMutationLocked(entry firewallEntry, add bool, ttl
 		if layer.set == nil {
 			continue
 		}
-		element, present, err := m.elementStateLocked(layer.set, entry)
+		element, present, unterminated, err := m.elementStateLocked(layer.set, entry)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s verify mutation: %w", layer.name, err))
+			continue
+		}
+		if unterminated {
+			errs = append(errs, fmt.Errorf("%s verification failed: interval has incomplete boundary state", layer.name))
 			continue
 		}
 		if present != add {
@@ -626,17 +677,52 @@ func (m *NftablesManager) layersForKeyLocked(key []byte) []nftablesLayer {
 	return []nftablesLayer{{name: "inet6", set: m.inetSet6}, {name: "netdev6", set: m.netdevSet6}}
 }
 
-func (m *NftablesManager) elementStateLocked(set *nftables.Set, entry firewallEntry) (nftables.SetElement, bool, error) {
+func (m *NftablesManager) elementStateLocked(set *nftables.Set, entry firewallEntry) (nftables.SetElement, bool, bool, error) {
 	elements, err := m.conn.GetSetElements(set)
 	if err != nil {
-		return nftables.SetElement{}, false, err
+		return nftables.SetElement{}, false, false, err
 	}
+	expected := nftablesIntervalElements(entry, 0)
+	var start nftables.SetElement
+	startPresent := false
+	endPresent := len(expected) == 1
+	otherBoundaryAfterStart := false
+	interiorBoundary := false
 	for _, element := range elements {
-		if bytes.Equal(element.Key, entry.key) && bytes.Equal(element.KeyEnd, entry.keyEnd) {
-			return element, true, nil
+		if !element.IntervalEnd && bytes.Equal(element.Key, entry.key) {
+			if len(element.KeyEnd) != 0 {
+				return nftables.SetElement{}, false, false, fmt.Errorf("entry uses unsupported direct KeyEnd interval encoding")
+			}
+			start = element
+			startPresent = true
+		}
+		if len(expected) == 2 && element.IntervalEnd && bytes.Equal(element.Key, expected[1].Key) {
+			endPresent = true
+		}
+		if len(expected) == 2 && bytes.Compare(element.Key, entry.key) > 0 && bytes.Compare(element.Key, expected[1].Key) < 0 {
+			interiorBoundary = true
+		}
+		if len(expected) == 2 && bytes.Compare(element.Key, entry.key) > 0 && !bytes.Equal(element.Key, expected[1].Key) {
+			otherBoundaryAfterStart = true
 		}
 	}
-	return nftables.SetElement{}, false, nil
+	if interiorBoundary {
+		return nftables.SetElement{}, false, false, fmt.Errorf("entry contains an existing internal interval boundary")
+	}
+	if !startPresent && endPresent && len(expected) == 2 {
+		// The kernel can retain an exclusive end marker after its timed start
+		// stops matching. Treat that commit-driven GC residue as absent. A later
+		// add queues the complete pair atomically and a remove is already
+		// functionally satisfied.
+		return nftables.SetElement{}, false, false, nil
+	}
+	if startPresent && !endPresent {
+		if otherBoundaryAfterStart {
+			return nftables.SetElement{}, false, false, fmt.Errorf("entry start is shared with a differently bounded or ambiguous interval")
+		}
+		return start, false, true, nil
+	}
+	return start, startPresent && endPresent, false, nil
 }
 
 func (m *NftablesManager) refreshHandlesLocked() error {

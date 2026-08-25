@@ -1676,7 +1676,7 @@ func renderWireGuardConfigurations(input wireGuardRenderInput) (string, string, 
 	case "keep":
 		return "", "", fmt.Errorf("WireGuard requires the explicit nftables backend; keep does not mutate operator-managed firewalld or UFW forwarding policy")
 	case "iptables":
-		return "", "", fmt.Errorf("iptables is not an operational WireGuard firewall mode in v4.03.2")
+		return "", "", fmt.Errorf("iptables is not an operational WireGuard firewall mode in v4.03.3")
 	default:
 		return "", "", fmt.Errorf("unsupported WireGuard firewall backend %q", input.Backend)
 	}

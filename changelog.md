@@ -1,10 +1,77 @@
+# Release v4.03.3
+
+> Candidate status: v4.03.3 is the Patch candidate for observed webhook,
+> nftables interval and OSINT installation defects. This block does not
+> authorize a tag or public Release.
+
+### FIXED
+
+- **Provider-bound webhook serialization:** Select Discord, Microsoft Teams and
+  Slack wire formats from the configured provider field instead of matching URL
+  hostname text. Build a Microsoft Teams Adaptive Card 1.2 message envelope for
+  `teams_url` without assuming the legacy `webhook.office.com` hostname, while
+  preserving Discord embeds and Slack text payloads. Keep credential-bearing
+  endpoint details out of transport-failure logs.
+- **Regression coverage:** Add HTTP contract tests for ban, detected, allow,
+  shadow/insider and local-check drift/OK alerts across all three providers on
+  one synthetic hostname. Assert that Teams payloads are not Discord-shaped and
+  that transport-failure logs expose neither endpoint hostnames nor credentials.
+- **Kernel-compatible nftables intervals:** Encode IPv4 and IPv6 host or CIDR
+  mutations in nftables interval sets as a start element followed by the exact
+  exclusive end marker expected by the kernel. Detect an unterminated start,
+  repair it before replacement, reject ambiguous forms and any requested
+  interval containing an existing internal boundary, and verify the exact state
+  across every available inet and netdev layer before a mutation can report
+  success. Treat an end-marker residue after timed expiry as absent when the
+  kernel retains it, accept kernels that collect the complete expired interval,
+  and prove that a direct re-ban recreates one exact closed interval without
+  changing a neighbour.
+- **Legacy dynamic-state quarantine:** During transactional reload, detect a
+  non-singleton legacy dynamic interval ending at the address-family maximum in
+  string, prefix or range JSON form. Quarantine the affected family across inet
+  and netdev instead of preserving an ambiguous suffix. Keep pre-commit and
+  completed warnings distinct, and make rollback report that persistent policy
+  was restored while quarantined dynamic family state remained omitted.
+- **Bounded OSINT source filtering:** Keep 6to4, private and other non-public or
+  special-use prefixes inadmissible. For the supported multi-origin OSINT path
+  only, discard a syntactically valid inadmissible entry with a bounded
+  origin-and-count warning, exclude it from consensus and publication, and
+  apply the source minimum after filtering. Malformed syntax and every custom
+  or digest-bound feed remain fail closed.
+- **Installation regression coverage:** Reproduce the upstream `2002::/16`
+  6to4 case, prove that the entry is absent from the canonical IPv6 output and
+  retain failures for malformed entries or an insufficient post-filter source.
+
+### RELEASE GATE
+
+- A real Power Automate endpoint qualification remains required before Teams
+  delivery is claimed as released. The published v4.03.2 assets remain
+  immutable and unchanged.
+- The isolated nftables laboratory must exercise host and CIDR add, timed
+  renewal, permanent replacement, idempotent replay and removal against a real
+  Linux kernel for both address families. It must also prove functional timed
+  expiry, safe direct re-ban whether an exclusive-end residue remains or has
+  already been collected, and conservative rejection both of a singleton that
+  overlaps a CIDR with the same start and of a CIDR that spans separately owned
+  internal intervals.
+- A manual release-owner gate on a disposable Ubuntu 26.04 AMD64 host must
+  complete package configuration while a deterministic local TLS fixture serves
+  one supported OSINT source path containing a syntactically valid `2002::/16`
+  entry. This gate is separate from protected CI and must bind the exact source
+  SHA, workflow artifact identity and package SHA-256. Its evidence must show
+  the bounded warning, absence of the entry from published lists, successful
+  service health and no package left in `iF` state.
+
+---
+
 # Release v4.03.2
 
-> Candidate status: v4.03.2 is the Patch candidate that supersedes the
-> technically qualified but unpublished v4.03.1 candidate. v4.03.1 was
-> deliberately left untagged and no public Release was created. Requirements
-> recorded in the historical v4.03.1 block describe that candidate's original
-> gate and do not authorize or apply to v4.03.2.
+> Release status: v4.03.2 was published at 2026-08-25T14:15:49Z from the
+> signed annotated `v4.03.2` tag, peeled to commit
+> `2eae757bbdee510fdd1058ba7770f2c5564ecb23`. It superseded the technically
+> qualified but unpublished v4.03.1 candidate. Requirements recorded in the
+> historical v4.03.1 block describe that candidate's original gate and do not
+> authorize changing the immutable v4.03.2 tag or assets.
 
 ### SECURITY
 
@@ -70,10 +137,11 @@
 
 ### RELEASE GATE
 
-- v4.03.2 remains NO-GO until the exact merged commit passes every protected
-  main and qualification gate, the qualification environment has the required
-  owner review rule, and the signed-tag rebuild matches the qualified packages
-  byte for byte. No v4.03.2 tag or public Release is authorized by this block.
+- **Historical gate result:** The exact published v4.03.2 commit passed the
+  protected main and qualification gates, the qualification environment owner
+  review requirement and the byte-for-byte signed-tag rebuild comparison. This
+  historical block records that completed gate and does not authorize moving
+  the tag, replacing an asset or reusing its evidence for a later Patch.
 
 ---
 

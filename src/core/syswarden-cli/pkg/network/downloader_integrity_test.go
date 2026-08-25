@@ -175,6 +175,53 @@ func TestCanonicalizeCIDRFeedPublishesExactSortedMaskedContent(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeCIDRFeedSkipsOnlyNonPublicEntriesWhenExplicitlyAllowed(t *testing.T) {
+	t.Parallel()
+	content := []byte("1.1.1.1\n2002:982a:b983::982a:b983\n8.8.8.8\n")
+	policy := cidrFeedPolicy{
+		minimumEntries:         2,
+		minimumIPv4PrefixBits:  32,
+		minimumIPv6PrefixBits:  128,
+		requireHostPrefixes:    true,
+		requirePublicAddresses: true,
+		skipNonPublicEntries:   true,
+	}
+	feed, err := canonicalizeCIDRFeed(content, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(feed.content), "1.1.1.1/32\n8.8.8.8/32\n"; got != want {
+		t.Fatalf("canonical content = %q, want %q", got, want)
+	}
+	if feed.ignoredNonPublicEntries != 1 {
+		t.Fatalf("ignored non-public entries = %d, want 1", feed.ignoredNonPublicEntries)
+	}
+
+	policy.skipNonPublicEntries = false
+	if _, err := canonicalizeCIDRFeed(content, policy); !errors.Is(err, errNonPublicFeedPrefix) {
+		t.Fatalf("strict policy error = %v, want errNonPublicFeedPrefix", err)
+	}
+
+	policy.skipNonPublicEntries = true
+	if _, err := canonicalizeCIDRFeed([]byte("1.1.1.1\nnot-an-address\n8.8.8.8\n"), policy); err == nil {
+		t.Fatal("explicit skip policy accepted a malformed feed entry")
+	}
+
+	policy.minimumEntries = 3
+	if _, err := canonicalizeCIDRFeed(content, policy); err == nil || !strings.Contains(err.Error(), "after ignoring 1") {
+		t.Fatalf("post-filter minimum error = %v", err)
+	}
+}
+
+func TestReportIgnoredOSINTEntriesUsesBoundedDiagnostic(t *testing.T) {
+	t.Parallel()
+	var warning strings.Builder
+	reportIgnoredOSINTEntries(&warning, "https://blocklist.example", 1)
+	if got, want := warning.String(), "[WARNING] OSINT source https://blocklist.example ignored 1 non-public or special-use CIDR entry.\n"; got != want {
+		t.Fatalf("warning = %q, want %q", got, want)
+	}
+}
+
 func TestCollapsedPublicationPreservesLastKnownGoodFeed(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
@@ -390,6 +437,65 @@ func TestOSINTPublishesOnlyCanonicalIntersection(t *testing.T) {
 	}
 	if got, want := string(content), "1.1.1.1/32\n8.8.8.8/32\n208.67.222.222/32\n"; got != want {
 		t.Fatalf("OSINT publication = %q, want %q", got, want)
+	}
+}
+
+func TestOSINTIgnoresSpecialUseSourceEntriesWithoutPublishingThem(t *testing.T) {
+	t.Parallel()
+	first := newTLSCIDRServer(t, "1.1.1.1\n8.8.8.8\n9.9.9.9\n")
+	second := newTLSCIDRServer(t, "8.8.8.8\n2002:982a:b983::982a:b983\n1.1.1.1\n")
+	directory := t.TempDir()
+	v4Target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	v6Target := feedFileTarget{directory: directory, name: "feed.ipv6"}
+	client := newMirrorTestClient(t, map[string]*httptest.Server{
+		"cins.example":      first,
+		"blocklist.example": second,
+	})
+	urls := []string{"https://cins.example/feed", "https://blocklist.example/feed"}
+	if err := downloadOSINTWithClient(t.Context(), client, urls, v4Target, v6Target, 2); err != nil {
+		t.Fatal(err)
+	}
+	content, err := readFeedFileAt(v4Target, ".ipv4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(content), "1.1.1.1/32\n8.8.8.8/32\n"; got != want {
+		t.Fatalf("OSINT publication = %q, want %q", got, want)
+	}
+	if _, err := readFeedFileAt(v6Target, ".ipv6"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("special-use IPv6 entry created an IPv6 feed: %v", err)
+	}
+}
+
+func TestOSINTSpecialUseFilteringBelowMinimumPreservesLastKnownGood(t *testing.T) {
+	t.Parallel()
+	first := newTLSCIDRServer(t, "1.1.1.1\n2002:982a:b983::982a:b983\n")
+	second := newTLSCIDRServer(t, "1.1.1.1\n2002:982a:b983::982a:b983\n")
+	directory := t.TempDir()
+	v4Target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	v6Target := feedFileTarget{directory: directory, name: "feed.ipv6"}
+	old := []byte("208.67.222.222/32\n")
+	if err := writeFeedFileAt(v4Target, ".ipv4", old); err != nil {
+		t.Fatal(err)
+	}
+	client := newMirrorTestClient(t, map[string]*httptest.Server{
+		"cins.example":      first,
+		"blocklist.example": second,
+	})
+	urls := []string{"https://cins.example/feed", "https://blocklist.example/feed"}
+	err := downloadOSINTWithClient(t.Context(), client, urls, v4Target, v6Target, 2)
+	if err == nil || !strings.Contains(err.Error(), "after ignoring 1") {
+		t.Fatalf("post-filter minimum error = %v", err)
+	}
+	content, readErr := readFeedFileAt(v4Target, ".ipv4")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(content) != string(old) {
+		t.Fatalf("post-filter minimum failure changed last-known-good content: %q", content)
+	}
+	if _, statErr := os.Lstat(filepath.Join(directory, v6Target.name)); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("post-filter minimum failure created an IPv6 feed: %v", statErr)
 	}
 }
 

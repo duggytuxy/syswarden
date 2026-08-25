@@ -17,7 +17,7 @@ Run the extension with all three required values:
 ```console
 sudo extensions/rhel-image/stage-syswarden-rhel-image.sh \
   --root /srv/image-root \
-  --rpm /srv/image-input/syswarden-4.03.2-1.x86_64.rpm \
+  --rpm /srv/image-input/syswarden-4.03.3-1.x86_64.rpm \
   --sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
 
@@ -46,7 +46,7 @@ runtime filesystem below that tree.
    ```bash
    set -euo pipefail
    IMAGE_ROOT=/srv/image-root
-   CANDIDATE_RPM=/srv/image-input/syswarden-4.03.2-1.x86_64.rpm
+   CANDIDATE_RPM=/srv/image-input/syswarden-4.03.3-1.x86_64.rpm
    # Copy this value from the independently authenticated package inventory.
    EXPECTED_RPM_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS
 
@@ -93,7 +93,7 @@ runtime filesystem below that tree.
    ```bash
    set -euo pipefail
    IMAGE_ROOT=/srv/image-root
-   CANDIDATE_RPM=/srv/image-input/syswarden-4.03.2-1.x86_64.rpm
+   CANDIDATE_RPM=/srv/image-input/syswarden-4.03.3-1.x86_64.rpm
    # Copy this value from the independently authenticated package inventory.
    EXPECTED_RPM_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS
 

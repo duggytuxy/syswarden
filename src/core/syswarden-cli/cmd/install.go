@@ -147,7 +147,7 @@ var installCmd = &cobra.Command{
 			return installStageError("service setup failed", err)
 		}
 
-		fmt.Println("[SYSWARDEN] v4.03.2 native installation complete.")
+		fmt.Println("[SYSWARDEN] v4.03.3 native installation complete.")
 		return nil
 	},
 }

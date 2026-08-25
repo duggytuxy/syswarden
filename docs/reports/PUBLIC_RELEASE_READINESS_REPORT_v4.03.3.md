@@ -1,54 +1,56 @@
-# SysWarden v4.03.2 Public Release Readiness Report
+# SysWarden v4.03.3 Public Release Readiness Report
 
 ## Document status
 
 | Field | Value |
 |---|---|
-| Candidate | v4.03.2 |
+| Candidate | v4.03.3 |
 | Distribution boundary | Linux packages only |
 | Public package count | 3 |
 | Public release asset count | 10 |
 | Decision | NO-GO until protected qualification passes on the exact merged SHA |
-| Scope | Source, package, firewall, HA migration, documentation and release governance |
+| Scope | Source, webhook delivery, package, firewall, HA migration, documentation and release governance |
 
-This report describes the intended v4.03.2 candidate contract. It is not a
+This report describes the intended v4.03.3 candidate contract. It is not a
 release authorization, does not assert that final qualification has passed and
 does not authorize a tag or public Release.
 
-The historical v4.03.1 candidate completed its protected technical
-qualification but was deliberately left untagged and unpublished. Its evidence
-does not authorize or replace the required v4.03.2 qualification.
+The historical v4.03.2 Release is published and remains immutable. Its evidence
+is the qualified baseline for this Patch but does not authorize or replace the
+required v4.03.3 qualification.
 
 ## Executive summary
 
-v4.03.2 limits the supported distribution surface to three Linux packages,
-removes the network-facing browser terminal while retaining the native local
-TUI, retains the verifiable HA migration fence and targets closure of the LOT
-2S controls selected from security audit BW-SW-2026-002.
+v4.03.3 preserves the published three-package AMD64 Linux surface, native local
+TUI, verifiable HA migration fence and bounded LOT 2 security posture. This
+Patch corrects Microsoft Teams and Power Automate webhook dispatch, nftables
+interval encoding and OSINT installation tolerance without changing the
+supported package or runtime matrix.
 
 The release remains blocked until the exact merged commit passes native AMD64
 package lifecycles, isolated nftables qualification, security and
-supply-chain gates, partner migration acceptance, exact evidence sealing and
-the immutable ten-asset publisher.
+supply-chain gates, exact evidence sealing, real Power Automate endpoint
+delivery qualification, Ubuntu 26.04 OSINT installation evidence and the
+immutable ten-asset publisher.
 
 ## Supported package matrix
 
 | Package family | Architecture | Expected asset |
 |---|---|---|
-| DEB | amd64 | `syswarden_4.03.2_amd64.deb` |
-| RPM | x86_64 | `syswarden-4.03.2-1.x86_64.rpm` |
-| APK | x86_64 | `syswarden_4.03.2_x86_64.apk` |
+| DEB | amd64 | `syswarden_4.03.3_amd64.deb` |
+| RPM | x86_64 | `syswarden-4.03.3-1.x86_64.rpm` |
+| APK | x86_64 | `syswarden_4.03.3_x86_64.apk` |
 
 No current package, updater or qualification route exists outside this
 AMD64/x86_64 matrix.
 
 ## Exact public release inventory
 
-A qualified v4.03.2 Release must contain exactly these ten assets:
+A qualified v4.03.3 Release must contain exactly these ten assets:
 
-1. `syswarden_4.03.2_amd64.deb`
-2. `syswarden-4.03.2-1.x86_64.rpm`
-3. `syswarden_4.03.2_x86_64.apk`
+1. `syswarden_4.03.3_amd64.deb`
+2. `syswarden-4.03.3-1.x86_64.rpm`
+3. `syswarden_4.03.3_x86_64.apk`
 4. `SHA256SUMS.txt`
 5. `RELEASE_SHA256SUMS.txt`
 6. `syswarden-release.tar.gz`
@@ -60,6 +62,70 @@ A qualified v4.03.2 Release must contain exactly these ten assets:
 Every asset must be rebuilt from the exact qualified SHA. The publisher must
 reject missing, duplicate or unexpected assets and must verify both checksum
 inventories plus the detached Ed25519 update signature before publication.
+
+## Webhook provider correction
+
+Webhook serialization is selected from the exact configured provider field.
+A modern Microsoft Teams or Power Automate endpoint therefore receives a
+native Adaptive Card 1.2 message envelope without relying on a legacy hostname.
+Discord embeds and Slack text payloads retain their existing provider-specific
+formats.
+
+The contract tests exercise ban, detected, allow, shadow or insider, local-check
+drift and local-check OK events across all three providers on one synthetic
+hostname. Transport failures must not expose credential-bearing endpoint URLs.
+These deterministic tests do not replace delivery through a real Power
+Automate endpoint, which remains a release gate for this correction.
+
+## nftables interval correction
+
+The native netlink manager represents each IPv4 or IPv6 host or CIDR mutation
+in an nftables interval set with a start element and its exact exclusive end
+marker. It no longer relies on a direct `KeyEnd` representation that the live
+kernel can reject as an interval missing its end marker.
+
+Preflight distinguishes a complete interval from an unterminated start, a
+possible end-marker residue and an unsupported direct-end representation.
+A detected unterminated start is removed before the desired interval is queued.
+A start shared with a differently bounded interval fails closed, as does a
+requested interval containing any existing internal boundary. This prevents
+separately owned adjacent records from being mistaken for their covering CIDR.
+Once a timed start expires, the kernel may retain its raw exclusive marker until
+a later set commit or collect the complete interval immediately. Either state is
+functionally absent, and direct re-ban must recreate one exact closed interval.
+Postcommit verification requires the complete interval in every available inet
+and netdev layer before success is reported.
+
+Transactional reload also detects a non-singleton legacy dynamic interval that
+ends at the IPv4 or IPv6 family maximum, regardless of whether nftables JSON
+renders it as a string, prefix or range. The affected address family is omitted
+from candidate migration across both inet and netdev layers. A detection warning
+does not claim that live state has changed; completed quarantine is reported only
+after application, verification and persistence succeed. If a later step rolls
+back, the previous persistent policy is restored while the quarantined dynamic
+family remains intentionally omitted and the error states that boundary.
+
+Unit tests model the exact element grammar and idempotent mutation behavior, but
+they do not replace the isolated privileged nftables laboratory required below.
+
+## OSINT source-admissibility correction
+
+The supported free OSINT path still requires two distinct HTTPS origins and
+publishes only their canonical intersection. A syntactically valid address or
+host prefix that is private, 6to4 under `2002::/16`, or otherwise non-public or
+special-use remains inadmissible. It is discarded before consensus and can
+never enter an IPv4 or IPv6 output file.
+
+This tolerance is explicit and limited to the multi-origin OSINT source policy.
+Each source emits only a bounded warning containing its normalized origin and
+the number of discarded entries. Raw entries are not copied into that warning.
+Malformed syntax, a wrong prefix shape, an overbroad prefix and an insufficient
+post-filter source remain fatal. Custom and digest-bound feeds retain their
+strict existing behavior.
+
+The DEB package hook invokes the installation pipeline with fail-fast shell
+semantics. Qualification must therefore prove that this bounded upstream data
+condition does not abort package configuration or leave `dpkg` in `iF` state.
 
 ## Local terminal boundary
 
@@ -133,7 +199,7 @@ reconciles the registry from verified recovery access.
 
 ## Firewall backend selection and compatibility
 
-SysWarden v4.03.2 uses nftables as its single authoritative Linux policy engine.
+SysWarden v4.03.3 uses nftables as its single authoritative Linux policy engine.
 Fresh configurations default to `core.firewall_backend = "keep"`, which does
 not start, stop, enable or disable the operator-managed firewall service. It
 refuses policy mutation while an iptables-services or netfilter-persistent
@@ -160,10 +226,10 @@ frontend. It never triggers an automatic service transition. A required
 transition causes the mutation to fail before host changes.
 
 The `iptables` value remains parseable for configuration compatibility but is
-not an operational policy mode in v4.03.2. Operational firewall policy mutation
+not an operational policy mode in v4.03.3. Operational firewall policy mutation
 paths reject this choice before changing persistent policy inputs or kernel
 firewall state. Automatic firewalld, nftables and iptables service migration
-is outside the qualified v4.03.2 contract.
+is outside the qualified v4.03.3 contract.
 
 The protected release qualification includes the isolated nftables kernel
 laboratory. Existing package lifecycle evidence is nftables-oriented and does
@@ -171,10 +237,18 @@ not qualify active firewalld, active UFW, iptables services or automatic service
 migration. Those modes require separate target-host evidence before any future
 support claim can be widened.
 
+The kernel laboratory must exercise IPv4 and IPv6 host and CIDR addition, timed
+renewal, permanent replacement, idempotent replay and removal through the real
+netlink and nftables kernel path. Evidence must show exact start and exclusive
+end markers, functional timed expiry, safe direct re-ban whether an exclusive
+end residue remains or has already been collected, unchanged neighboring
+intervals, conservative rejection of both same-start and internal-boundary
+overlaps, and no success report after a verification failure.
+
 WireGuard requires the explicit `nftables` backend. The bounded firewalld and
 UFW compatibility path does not open the WireGuard UDP port or forwarding
 rules. That combination requires separate operator-managed frontend rules and
-is not part of the v4.03.2 runtime contract.
+is not part of the v4.03.3 runtime contract.
 
 ## Optional RHEL-compatible image staging extension
 
@@ -274,15 +348,40 @@ release. All status files must be regular, owner-controlled, numeric and zero.
 Any invalid status, stale binding, time skew, unexpected file or failed shard
 blocks signing and publication.
 
+Protected package lifecycle automation remains pinned to its declared container
+matrix and does not execute Ubuntu 26.04. A separate, fail-closed release-owner
+gate must therefore run on a disposable Ubuntu 26.04 AMD64 host before tagging.
+It uses a deterministic local TLS fixture on one supported OSINT source path,
+binds the exact source SHA, workflow artifact identity and package SHA-256, and
+records package-manager and service state. This host record is manual evidence,
+not a third sealed evidence family and not a protected-check claim.
+
+The package manager must finish in the configured state, the warning must name
+only the normalized origin and discarded-entry count, the syntactically valid
+6to4 entry under `2002::/16` must be absent from published lists, and both
+SysWarden services must pass their normal health checks. Companion negative
+tests must prove that malformed input and an insufficient source after filtering
+still fail closed. Missing or mismatched host evidence blocks the release-owner
+decision even when protected CI is green.
+
+The version-specific migration gate accepts only an installed v4.03.2 package
+on the supported AMD64 or x86_64 architecture. It must attest the exact package
+database state before backup and the exact v4.03.3 version, architecture and
+configured state after upgrade. The online package hook starts or restarts the
+core, so external producers remain paused and the core is stopped again before
+the post-upgrade four-set capture. Any mismatched version, architecture,
+unfinished package transaction or lost producer quiescence fails the migration
+gate.
+
 ## LOT 2S security remediation
 
 The bounded LOT 2S scope targets closure of H1 through H5 and the selected M1,
 M6, M9 and M13 controls from security audit BW-SW-2026-002. Retired
 network-terminal and non-Linux surfaces are outside this scope. The expanded
-v4.03.2 snapshot completed independent local re-audit on the frozen candidate
-tree recorded by the private evidence manifest. The bounded review closed with
-0 P0 and 0 P1. This local result applies only to the reviewed scope and does not
-replace protected CI or release qualification.
+historical v4.03.2 snapshot completed independent local re-audit on the frozen
+candidate tree recorded by the private evidence manifest. The bounded review
+closed with 0 P0 and 0 P1. v4.03.3 inherits those controls unchanged, but this
+local result does not replace protected CI or release qualification.
 
 The reviewed controls establish these boundaries:
 
@@ -292,8 +391,9 @@ The reviewed controls establish these boundaries:
 - SysWarden internal security records use process-local HMAC authentication and
   do not copy raw attacker-controlled payloads back into the ingestion path;
 - custom feeds require an exact SHA-256, supported multi-origin feeds require
-  independent agreement, downloads and stored inputs are bounded, unsafe
-  prefixes are rejected and failed authority preserves the last known good
+  independent agreement, downloads and stored inputs are bounded, inadmissible
+  special-use OSINT entries are discarded before agreement, other validation
+  failures remain closed and failed authority preserves the last known good
   state;
 - WAAP, UDS and HA reject default routes, unsafe networks, local interfaces, HA
   peers and strict-whitelist targets before any firewall mutation;
@@ -307,11 +407,10 @@ lots. This report does not claim closure outside the explicit LOT 2S matrix.
 
 ## LOT 2 closure boundary
 
-LOT 2 combines the completed Linux-only surface reduction in LOT 2A, the
-three-package reproducibility work in LOT 2B and the bounded security remediation
-in LOT 2S. The candidate contains all three sublots. The aggregate decision is
-`LOT 2: CLOSED` only for the exact merged commit after its protected main and
-qualification gates pass.
+LOT 2 closed on the exact historical v4.03.2 Release after its Linux-only
+surface reduction, three-package reproducibility and bounded security
+remediation passed the protected gates. v4.03.3 inherits that baseline without
+reopening or widening the qualified scope.
 
 That technical decision is separate from publication. It does not authorize a
 tag or public Release, does not replace the remaining partner residue evidence
@@ -345,25 +444,31 @@ environment protection fails closed before the secret-bearing job can run.
   verified console access and a ruleset backup.
 - The default `keep` choice preserves service state. `nftables` validates an
   operator-prepared service without transitioning it, while mutating commands
-  reject `iptables` in v4.03.2. Active firewalld and UFW compatibility remains
+  reject `iptables` in v4.03.3. Active firewalld and UFW compatibility remains
   bounded and is not claimed as equivalent privileged qualification.
 - On Alpine Linux, SysWarden does not configure automatic operating-system
   security updates. Repository selection and the `apk` update policy remain
   an explicit operator responsibility.
 - `uninstall` deletes SysWarden configuration, data, logs, services and
   firewall state. It is not a general host rollback.
-- A downgrade is an emergency operation. It requires host-boundary containment
-  of TCP 62027 and must not restore retired authentication material.
+- There is no qualified in-place downgrade from v4.03.3 to historical v4.03.2.
+  The only bounded rollback is a complete pre-upgrade VM or volume snapshot
+  restored under independent network containment while `syswarden-core`, WAAP,
+  UDS, HA, operator automation and every external ban producer remain inactive.
+  Raw nftables text or JSON is not a rollback artifact and must not be restored
+  over live producer activity.
 - No statement in this report is a regulatory certification or a guarantee for
   untested distributions, modified package managers or incomplete HA topology.
 
 ## Release decision
 
-Written partner freeze confirmation was received on 20 August 2026. This
-closes the written partner-confirmation gate only; the technical residue-free
-migration evidence remains pending.
+Written partner freeze confirmation was received on 20 August 2026 for the
+historical v4.03.2 handoff. It remains supporting historical evidence and does
+not replace qualification of this Patch.
 
-The v4.03.2 candidate remains NO-GO until all required gates pass on the exact
-merged commit, no unexplained partner-attributable static residue remains, and
-the publisher verifies exactly ten public assets. Only then may the
-maintainer authorize the immutable tag and public Release.
+The v4.03.3 candidate remains NO-GO until all required gates pass on the exact
+merged commit, delivery through a real Power Automate endpoint is recorded, the
+real-kernel nftables interval gate passes, the Ubuntu 26.04 OSINT installation
+finishes without an `iF` package and the publisher verifies exactly ten public
+assets. Only then may the maintainer authorize the immutable tag and public
+Release.
