@@ -941,9 +941,11 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"${user_id}:${user_group}:700:${CRUN_SIZE_BYTES}"',
             'crun_inode="$(/usr/bin/stat -c \'%d:%i\' "${crun_path}")"',
             '"${crun_inode}" =~ ^[0-9]+:[0-9]+$',
-            'crun_version_output="$("${crun_path}" --version)"',
+            'crun_version_output="$("${crun_path}" --root '
+            '"${runtime_directory}" --version)"',
             '"${crun_version_lines[0]:-}" != "crun version ${CRUN_VERSION}"',
             '"${crun_version_lines[1]:-}" != "commit: ${CRUN_COMMIT}"',
+            '"${crun_version_lines[2]:-}" != "rundir: ${runtime_directory}"',
             '"${crun_version_lines[3]:-}" != "spec: ${CRUN_SPEC_VERSION}"',
             r'\+SYSTEMD($|[[:space:]])',
             "printf 'ARM_CRUN_PATH=%s\\n' \"${crun_path}\"",
@@ -978,7 +980,9 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         destination_digest = script.index(
             "/usr/bin/sha256sum --check --strict", source_digest + 1
         )
-        version = script.index('"${crun_path}" --version')
+        version = script.index(
+            '"${crun_path}" --root "${runtime_directory}" --version'
+        )
         export = script.index("printf 'ARM_CRUN_PATH=%s\\n'")
         mark_complete = script.index("install_completed=true")
         disarm_trap = script.index("trap - EXIT", mark_complete)
@@ -1419,9 +1423,11 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"$(stat -c \'%u:%g:%a:%s:%d:%i\' "${ARM_CRUN_PATH}")" !=',
             '"${user_id}:${user_group}:700:3298128:${ARM_CRUN_INODE}"',
             'printf \'%s  %s\\n\' "${ARM_CRUN_SHA256}" "${ARM_CRUN_PATH}"',
-            'crun_version_output="$("${ARM_CRUN_PATH}" --version)" || return 1',
+            'crun_version_output="$("${ARM_CRUN_PATH}"',
+            '--root "${crun_directory}" --version)" || return 1',
             '"${crun_version_lines[0]:-}" != "crun version 1.28"',
             '"commit: 54f16ffbefcd022bf032af768b5c5ce075c18bfc"',
+            '"${crun_version_lines[2]:-}" != "rundir: ${crun_directory}"',
             '"${crun_version_lines[3]:-}" != "spec: 1.0.0"',
             r'\+SYSTEMD($|[[:space:]])',
             'cleanup_arm_crun_runtime() {',
@@ -1494,7 +1500,9 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             'printf "%s  %s\\n" "${SYSWARDEN_CRUN_SHA256}" '
             '"${SYSWARDEN_CRUN_PATH}"',
             "native ARM64 crun changed bytes inside the delegated session",
-            'crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --version)"',
+            'crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --root '
+            '"${crun_parent}" --version)"',
+            '"${crun_version_lines[2]:-}" != "rundir: ${crun_parent}"',
             "native ARM64 crun is not executable inside the delegated session",
             "native ARM64 crun lacks the exact delegated version or systemd capability",
             "if ! /usr/local/lib/podman/conmon --version >/dev/null",
@@ -1688,7 +1696,8 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             systemd_run,
         )
         crun_probe = script.index(
-            'crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --version)"',
+            'crun_version_output="$("${SYSWARDEN_CRUN_PATH}" --root '
+            '"${crun_parent}" --version)"',
             systemd_run,
         )
         crun_version_verdict = script.index(
