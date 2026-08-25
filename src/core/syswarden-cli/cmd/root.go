@@ -18,6 +18,9 @@ var rootCmd = &cobra.Command{
 	Short: "SYSWARDEN Security Orchestrator",
 	Long:  "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if commandRequiresAutomaticConfigLoad(cmd) {
+			initConfigHook()
+		}
 		if err := enforceRemovalState(cmd); err != nil {
 			return err
 		}
@@ -42,11 +45,24 @@ func Execute() {
 }
 
 func init() {
-	cobra.OnInitialize(func() { initConfigHook() })
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", platformpaths.LegacyConfig, "config file")
 }
 
 var initConfigHook = initConfig
+
+// Configuration inspection and migration commands load their explicitly
+// selected inputs themselves. Loading the process-wide runtime configuration
+// first would let compatibility normalization modify operator files before a
+// read-only validation or dry-run migration starts.
+func commandRequiresAutomaticConfigLoad(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return true
+	}
+	if cmd == configValidateCmd || cmd == configMigrateCmd || cmd == migrateConfigCmd {
+		return false
+	}
+	return true
+}
 
 var inspectRemovalTombstone = system.InspectRemovalTombstone
 

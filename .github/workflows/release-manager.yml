@@ -136,17 +136,87 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_systemd_parent_sha="$(git rev-parse HEAD^)"
+              v4032_docs_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_docs_parent_sha}" != "3d95b9e53fabf01f73ed36b7fb7dcdaaec0dc4a0" ]]; then
+                echo "ERROR: the v4.03.2 read-only and documentation correction is not based on the reviewed PR109 squash." >&2
+                exit 1
+              fi
+              v4032_docs_expected_subject='Security : preserve read-only config preflight and centralize v4.03.2 docs (#110)'
+              if [[ "${commit_subject}" != "${v4032_docs_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 read-only and documentation correction requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_docs_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_docs_head_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 read-only and documentation correction must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 read-only configuration and documentation diff contract
+              expected_v4032_docs_diff=(
+                M ".github/workflows/release-manager.yml"
+                M "README.md"
+                M "assets/syswarden_hero.svg"
+                M "scripts/ci/documentation_contract.json"
+                M "scripts/ci/documentation_gate.py"
+                M "scripts/ci/documentation_gate_test.py"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/workflow_required_checks_test.py"
+                M "src/core/syswarden-cli/cmd/root.go"
+                M "src/core/syswarden-cli/cmd/root_config_guard_test.go"
+              )
+              mapfile -d '' -t actual_v4032_docs_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_docs_diff[@]} != ${#expected_v4032_docs_diff[@]} )); then
+                echo "ERROR: the v4.03.2 read-only and documentation correction must modify exactly the ten reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_docs_diff[@]}; index++)); do
+                if [[ "${actual_v4032_docs_diff[index]}" != "${expected_v4032_docs_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 read-only and documentation correction contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_docs_paths=(
+                ".github/workflows/release-manager.yml"
+                "README.md"
+                "assets/syswarden_hero.svg"
+                "scripts/ci/documentation_contract.json"
+                "scripts/ci/documentation_gate.py"
+                "scripts/ci/documentation_gate_test.py"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/workflow_required_checks_test.py"
+                "src/core/syswarden-cli/cmd/root.go"
+                "src/core/syswarden-cli/cmd/root_config_guard_test.go"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_docs_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 read-only and documentation correction ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 read-only configuration and documentation diff contract
+              v4032_systemd_ref=HEAD^
+              v4032_systemd_parent_sha="$(git rev-parse "${v4032_systemd_ref}^")"
               if [[ "${v4032_systemd_parent_sha}" != "540bab73a477c76d6301d276383602db06d36acd" ]]; then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction is not based on the reviewed PR105 squash." >&2
                 exit 1
               fi
               v4032_systemd_expected_subject='Qualification : seal systemd-capable ARM64 crun runtime (#109)'
-              if [[ "${commit_subject}" != "${v4032_systemd_expected_subject}" ]]; then
+              v4032_systemd_subject="$(git log -1 --format=%s "${v4032_systemd_ref}")"
+              if [[ "${v4032_systemd_subject}" != "${v4032_systemd_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_systemd_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_systemd_head_line <<< "$(git rev-list --parents -n 1 "${v4032_systemd_ref}")"
               if (( ${#v4032_systemd_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction must be one linear commit." >&2
                 exit 1
@@ -159,7 +229,8 @@ jobs:
                 M "scripts/ci/release_qualification_workflow_test.py"
               )
               mapfile -d '' -t actual_v4032_systemd_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_systemd_ref}^" "${v4032_systemd_ref}"
               )
               if (( ${#actual_v4032_systemd_diff[@]} != ${#expected_v4032_systemd_diff[@]} )); then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction must modify exactly the four reviewed files." >&2
@@ -177,7 +248,7 @@ jobs:
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/release_qualification_workflow_test.py"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_systemd_ref}^" "${v4032_systemd_ref}"; do
                 for fix_path in "${v4032_systemd_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -192,7 +263,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 systemd-capable ARM64 crun runtime correction diff contract
-              v4032_cli_toml_ref=HEAD^
+              v4032_cli_toml_ref="${v4032_systemd_ref}^"
               v4032_cli_toml_parent_sha="$(git rev-parse "${v4032_cli_toml_ref}^")"
               if [[ "${v4032_cli_toml_parent_sha}" != "4eacbae34561ae09611a7adb1f78717ca56e52a6" ]]; then
                 echo "ERROR: the reviewed syswarden-cli go-toml dependency update is not based on the reviewed PR106 squash." >&2
@@ -247,7 +318,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 syswarden-cli go-toml dependency diff contract
-              v4032_core_toml_ref=HEAD^^
+              v4032_core_toml_ref="${v4032_cli_toml_ref}^"
               v4032_core_toml_parent_sha="$(git rev-parse "${v4032_core_toml_ref}^")"
               if [[ "${v4032_core_toml_parent_sha}" != "3513acaee928cdd0aa235024f6ebfc5b2efe1dff" ]]; then
                 echo "ERROR: the reviewed syswarden-core go-toml dependency update is not based on the reviewed PR108 squash." >&2
@@ -302,7 +373,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 syswarden-core go-toml dependency diff contract
-              v4032_crun_ref=HEAD^^^
+              v4032_crun_ref="${v4032_core_toml_ref}^"
               v4032_crun_parent_sha="$(git rev-parse "${v4032_crun_ref}^")"
               if [[ "${v4032_crun_parent_sha}" != "b74756b71e26e39b98c7fa60b65a3486adfde3e8" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 crun runtime restoration is not based on the reviewed PR104 squash." >&2
@@ -1496,17 +1567,87 @@ jobs:
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
             if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
-              v4032_systemd_parent_sha="$(git rev-parse HEAD^)"
+              v4032_docs_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4032_docs_parent_sha}" != "3d95b9e53fabf01f73ed36b7fb7dcdaaec0dc4a0" ]]; then
+                echo "ERROR: the v4.03.2 read-only and documentation correction is not based on the reviewed PR109 squash." >&2
+                exit 1
+              fi
+              v4032_docs_expected_subject='Security : preserve read-only config preflight and centralize v4.03.2 docs (#110)'
+              if [[ "${commit_subject}" != "${v4032_docs_expected_subject}" ]]; then
+                echo "ERROR: the v4.03.2 read-only and documentation correction requires the exact reviewed squash subject." >&2
+                exit 1
+              fi
+              read -r -a v4032_docs_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              if (( ${#v4032_docs_head_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.2 read-only and documentation correction must be one linear commit." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.2 read-only configuration and documentation diff contract
+              expected_v4032_docs_diff=(
+                M ".github/workflows/release-manager.yml"
+                M "README.md"
+                M "assets/syswarden_hero.svg"
+                M "scripts/ci/documentation_contract.json"
+                M "scripts/ci/documentation_gate.py"
+                M "scripts/ci/documentation_gate_test.py"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/ci/workflow_required_checks_test.py"
+                M "src/core/syswarden-cli/cmd/root.go"
+                M "src/core/syswarden-cli/cmd/root_config_guard_test.go"
+              )
+              mapfile -d '' -t actual_v4032_docs_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4032_docs_diff[@]} != ${#expected_v4032_docs_diff[@]} )); then
+                echo "ERROR: the v4.03.2 read-only and documentation correction must modify exactly the ten reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4032_docs_diff[@]}; index++)); do
+                if [[ "${actual_v4032_docs_diff[index]}" != "${expected_v4032_docs_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.2 read-only and documentation correction contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4032_docs_paths=(
+                ".github/workflows/release-manager.yml"
+                "README.md"
+                "assets/syswarden_hero.svg"
+                "scripts/ci/documentation_contract.json"
+                "scripts/ci/documentation_gate.py"
+                "scripts/ci/documentation_gate_test.py"
+                "scripts/ci/release_gate_test.py"
+                "scripts/ci/workflow_required_checks_test.py"
+                "src/core/syswarden-cli/cmd/root.go"
+                "src/core/syswarden-cli/cmd/root_config_guard_test.go"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4032_docs_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.2 read-only and documentation correction ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.2 read-only configuration and documentation diff contract
+              v4032_systemd_ref=HEAD^
+              v4032_systemd_parent_sha="$(git rev-parse "${v4032_systemd_ref}^")"
               if [[ "${v4032_systemd_parent_sha}" != "540bab73a477c76d6301d276383602db06d36acd" ]]; then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction is not based on the reviewed PR105 squash." >&2
                 exit 1
               fi
               v4032_systemd_expected_subject='Qualification : seal systemd-capable ARM64 crun runtime (#109)'
-              if [[ "${commit_subject}" != "${v4032_systemd_expected_subject}" ]]; then
+              v4032_systemd_subject="$(git log -1 --format=%s "${v4032_systemd_ref}")"
+              if [[ "${v4032_systemd_subject}" != "${v4032_systemd_expected_subject}" ]]; then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction requires the exact reviewed squash subject." >&2
                 exit 1
               fi
-              read -r -a v4032_systemd_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4032_systemd_head_line <<< "$(git rev-list --parents -n 1 "${v4032_systemd_ref}")"
               if (( ${#v4032_systemd_head_line[@]} != 2 )); then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction must be one linear commit." >&2
                 exit 1
@@ -1519,7 +1660,8 @@ jobs:
                 M "scripts/ci/release_qualification_workflow_test.py"
               )
               mapfile -d '' -t actual_v4032_systemd_diff < <(
-                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                git diff-tree --no-commit-id --name-status -r --no-renames -z \
+                  "${v4032_systemd_ref}^" "${v4032_systemd_ref}"
               )
               if (( ${#actual_v4032_systemd_diff[@]} != ${#expected_v4032_systemd_diff[@]} )); then
                 echo "ERROR: the v4.03.2 systemd-capable ARM64 crun runtime correction must modify exactly the four reviewed files." >&2
@@ -1537,7 +1679,7 @@ jobs:
                 "scripts/ci/release_gate_test.py"
                 "scripts/ci/release_qualification_workflow_test.py"
               )
-              for tree_ref in HEAD^ HEAD; do
+              for tree_ref in "${v4032_systemd_ref}^" "${v4032_systemd_ref}"; do
                 for fix_path in "${v4032_systemd_paths[@]}"; do
                   tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
                   IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
@@ -1552,7 +1694,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 systemd-capable ARM64 crun runtime correction diff contract
-              v4032_cli_toml_ref=HEAD^
+              v4032_cli_toml_ref="${v4032_systemd_ref}^"
               v4032_cli_toml_parent_sha="$(git rev-parse "${v4032_cli_toml_ref}^")"
               if [[ "${v4032_cli_toml_parent_sha}" != "4eacbae34561ae09611a7adb1f78717ca56e52a6" ]]; then
                 echo "ERROR: the reviewed syswarden-cli go-toml dependency update is not based on the reviewed PR106 squash." >&2
@@ -1607,7 +1749,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 syswarden-cli go-toml dependency diff contract
-              v4032_core_toml_ref=HEAD^^
+              v4032_core_toml_ref="${v4032_cli_toml_ref}^"
               v4032_core_toml_parent_sha="$(git rev-parse "${v4032_core_toml_ref}^")"
               if [[ "${v4032_core_toml_parent_sha}" != "3513acaee928cdd0aa235024f6ebfc5b2efe1dff" ]]; then
                 echo "ERROR: the reviewed syswarden-core go-toml dependency update is not based on the reviewed PR108 squash." >&2
@@ -1662,7 +1804,7 @@ jobs:
                 done
               done
               # END exact v4.03.2 syswarden-core go-toml dependency diff contract
-              v4032_crun_ref=HEAD^^^
+              v4032_crun_ref="${v4032_core_toml_ref}^"
               v4032_crun_parent_sha="$(git rev-parse "${v4032_crun_ref}^")"
               if [[ "${v4032_crun_parent_sha}" != "b74756b71e26e39b98c7fa60b65a3486adfde3e8" ]]; then
                 echo "ERROR: the v4.03.2 ARM64 crun runtime restoration is not based on the reviewed PR104 squash." >&2
