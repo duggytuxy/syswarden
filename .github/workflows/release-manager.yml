@@ -135,7 +135,95 @@ jobs:
               --base-ref HEAD^ \
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
-            if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
+            if [[ "${RELEASE_TAG}" == "v4.03.3" ]]; then
+              # v4.03.3 was already versioned by the reviewed PR118 squash.
+              # Authorize one exact follow-up that seals the single-use
+              # changelog rewrite policy without changing release version
+              # targets or changelog.
+              v4033_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4033_parent_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
+                echo "ERROR: the v4.03.3 candidate is not based on the reviewed PR118 squash." >&2
+                exit 1
+              fi
+              v4033_base_sha="$(git rev-parse HEAD^^)"
+              if [[ "${v4033_base_sha}" != "b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449" ]]; then
+                echo "ERROR: the reviewed PR118 squash is not based on the reviewed PR117 squash." >&2
+                exit 1
+              fi
+              v4033_parent_subject="$(git log -1 --format=%s HEAD^)"
+              v4033_expected_parent_subject='Patch : correct webhook, firewall and OSINT handling (#118)'
+              if [[ "${v4033_parent_subject}" != "${v4033_expected_parent_subject}" ]]; then
+                echo "ERROR: the reviewed PR118 squash subject is not exact." >&2
+                exit 1
+              fi
+              v4033_followup_subject_pattern='^CI : bind one-time v4.03.3 changelog seal \(#[1-9][0-9]*\)$'
+              if [[ ! "${commit_subject}" =~ ${v4033_followup_subject_pattern} ]]; then
+                echo "ERROR: the v4.03.3 follow-up requires the exact reviewed CI subject." >&2
+                exit 1
+              fi
+              read -r -a v4033_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4033_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+              if (( ${#v4033_head_line[@]} != 2 || ${#v4033_parent_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.3 follow-up and reviewed PR118 squash must both be linear." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.3 changelog-seal diff contract
+              expected_v4033_followup_diff=(
+                M ".github/workflows/release-manager.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/versionctl/repository.go"
+                M "scripts/versionctl/repository_test.go"
+              )
+              mapfile -d '' -t actual_v4033_followup_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4033_followup_diff[@]} != ${#expected_v4033_followup_diff[@]} )); then
+                echo "ERROR: the v4.03.3 follow-up must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4033_followup_diff[@]}; index++)); do
+                if [[ "${actual_v4033_followup_diff[index]}" != "${expected_v4033_followup_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.3 follow-up contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4033_followup_paths=(
+                ".github/workflows/release-manager.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/versionctl/repository.go"
+                "scripts/versionctl/repository_test.go"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4033_followup_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.3 follow-up path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.3 changelog-seal diff contract
+              git diff --quiet HEAD^ HEAD -- \
+                changelog.md \
+                README.md \
+                src/core/syswarden-cli/pkg/system/upgrade.go \
+                src/core/syswarden-tui/main.go \
+                src/core/syswarden-cli/cmd/install.go \
+                src/core/syswarden-cli/config/default.go \
+                src/core/syswarden-cli/pkg/integration/webhook.go \
+                src/core/syswarden-core/webhook/discord.go
+              v4033_parent_message="$(git log -1 --format=%B HEAD^)"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4033_base_sha}" \
+                --tag-phase \
+                --commit-message "${v4033_parent_message}"
+            elif [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               # The protected qualification, package byte comparison, signed
               # update manifest, tag resolution and origin/main ancestry bind
               # the release to one exact reviewed three-commit chain. Keep this
@@ -699,7 +787,95 @@ jobs:
               --base-ref HEAD^ \
               --commit-message "${commit_message}"
             commit_subject="$(git log -1 --format=%s HEAD)"
-            if [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
+            if [[ "${RELEASE_TAG}" == "v4.03.3" ]]; then
+              # v4.03.3 was already versioned by the reviewed PR118 squash.
+              # Authorize one exact follow-up that seals the single-use
+              # changelog rewrite policy without changing release version
+              # targets or changelog.
+              v4033_parent_sha="$(git rev-parse HEAD^)"
+              if [[ "${v4033_parent_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
+                echo "ERROR: the v4.03.3 candidate is not based on the reviewed PR118 squash." >&2
+                exit 1
+              fi
+              v4033_base_sha="$(git rev-parse HEAD^^)"
+              if [[ "${v4033_base_sha}" != "b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449" ]]; then
+                echo "ERROR: the reviewed PR118 squash is not based on the reviewed PR117 squash." >&2
+                exit 1
+              fi
+              v4033_parent_subject="$(git log -1 --format=%s HEAD^)"
+              v4033_expected_parent_subject='Patch : correct webhook, firewall and OSINT handling (#118)'
+              if [[ "${v4033_parent_subject}" != "${v4033_expected_parent_subject}" ]]; then
+                echo "ERROR: the reviewed PR118 squash subject is not exact." >&2
+                exit 1
+              fi
+              v4033_followup_subject_pattern='^CI : bind one-time v4.03.3 changelog seal \(#[1-9][0-9]*\)$'
+              if [[ ! "${commit_subject}" =~ ${v4033_followup_subject_pattern} ]]; then
+                echo "ERROR: the v4.03.3 follow-up requires the exact reviewed CI subject." >&2
+                exit 1
+              fi
+              read -r -a v4033_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+              read -r -a v4033_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+              if (( ${#v4033_head_line[@]} != 2 || ${#v4033_parent_line[@]} != 2 )); then
+                echo "ERROR: the v4.03.3 follow-up and reviewed PR118 squash must both be linear." >&2
+                exit 1
+              fi
+              # BEGIN exact v4.03.3 changelog-seal diff contract
+              expected_v4033_followup_diff=(
+                M ".github/workflows/release-manager.yml"
+                M "scripts/ci/release_gate_test.py"
+                M "scripts/versionctl/repository.go"
+                M "scripts/versionctl/repository_test.go"
+              )
+              mapfile -d '' -t actual_v4033_followup_diff < <(
+                git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+              )
+              if (( ${#actual_v4033_followup_diff[@]} != ${#expected_v4033_followup_diff[@]} )); then
+                echo "ERROR: the v4.03.3 follow-up must modify exactly the four reviewed files." >&2
+                exit 1
+              fi
+              for ((index = 0; index < ${#expected_v4033_followup_diff[@]}; index++)); do
+                if [[ "${actual_v4033_followup_diff[index]}" != "${expected_v4033_followup_diff[index]}" ]]; then
+                  echo "ERROR: the v4.03.3 follow-up contains an unauthorized path, status, or rename." >&2
+                  exit 1
+                fi
+              done
+              v4033_followup_paths=(
+                ".github/workflows/release-manager.yml"
+                "scripts/ci/release_gate_test.py"
+                "scripts/versionctl/repository.go"
+                "scripts/versionctl/repository_test.go"
+              )
+              for tree_ref in HEAD^ HEAD; do
+                for fix_path in "${v4033_followup_paths[@]}"; do
+                  tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                  IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                  if [[ "${tree_mode}" != "100644" || \
+                        "${tree_type}" != "blob" || \
+                        ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                        "${tree_path}" != "${fix_path}" || \
+                        -n "${tree_extra:-}" ]]; then
+                    echo "ERROR: reviewed v4.03.3 follow-up path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                    exit 1
+                  fi
+                done
+              done
+              # END exact v4.03.3 changelog-seal diff contract
+              git diff --quiet HEAD^ HEAD -- \
+                changelog.md \
+                README.md \
+                src/core/syswarden-cli/pkg/system/upgrade.go \
+                src/core/syswarden-tui/main.go \
+                src/core/syswarden-cli/cmd/install.go \
+                src/core/syswarden-cli/config/default.go \
+                src/core/syswarden-cli/pkg/integration/webhook.go \
+                src/core/syswarden-core/webhook/discord.go
+              v4033_parent_message="$(git log -1 --format=%B HEAD^)"
+              ./scripts/versioning.sh validate-commit \
+                --repo "${GITHUB_WORKSPACE}" \
+                --base-ref "${v4033_base_sha}" \
+                --tag-phase \
+                --commit-message "${v4033_parent_message}"
+            elif [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               # The protected qualification, package byte comparison, signed
               # update manifest, tag resolution and origin/main ancestry bind
               # the release to one exact reviewed three-commit chain. Keep this

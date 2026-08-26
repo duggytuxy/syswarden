@@ -39,6 +39,61 @@ func TestChangelogHistoryResetIsSingleUseAndDigestBound(t *testing.T) {
 	}
 }
 
+func TestChangelogHistoryRewriteIsSingleUseAndDigestBound(t *testing.T) {
+	t.Parallel()
+	base := validChangelog("v4.03.2")
+	history := bytes.Replace(base, []byte("Validate the version contract"), []byte("Seal the published release status"), 1)
+	candidate := prependRelease("v4.03.3", history)
+	previous, _ := parseVersion("v4.03.2")
+	next, _ := parseVersion("v4.03.3")
+	policy := changelogRewritePolicy{
+		From:          previous.String(),
+		To:            next.String(),
+		BaseSHA256:    fmt.Sprintf("%x", sha256.Sum256(base)),
+		HistorySHA256: fmt.Sprintf("%x", sha256.Sum256(history)),
+	}
+	validate := func(base, candidate []byte, previous, next Version) error {
+		return validateChangelogHistoryTransitionWithPolicies(
+			base,
+			candidate,
+			previous,
+			next,
+			changelogResetPolicy{},
+			policy,
+		)
+	}
+	if err := validate(base, candidate, previous, next); err != nil {
+		t.Fatalf("approved rewrite rejected: %v", err)
+	}
+
+	wrongBase := append([]byte(nil), base...)
+	wrongBase[0] ^= 1
+	if err := validate(wrongBase, candidate, previous, next); err == nil {
+		t.Fatal("rewrite accepted a different baseline digest")
+	}
+
+	wrongHistory := bytes.Replace(base, []byte("Validate the version contract"), []byte("Apply a different historical rewrite"), 1)
+	wrongSuffix := prependRelease("v4.03.3", wrongHistory)
+	if err := validate(base, wrongSuffix, previous, next); err == nil {
+		t.Fatal("rewrite accepted a different historical suffix digest")
+	}
+
+	otherNext, _ := parseVersion("v4.03.4")
+	if err := validate(base, candidate, previous, otherNext); err == nil {
+		t.Fatal("rewrite policy was reusable for another transition")
+	}
+	otherPrevious, _ := parseVersion("v4.03.1")
+	if err := validate(base, candidate, otherPrevious, next); err == nil {
+		t.Fatal("rewrite policy was reusable from another baseline version")
+	}
+
+	mutatedCandidate := append([]byte(nil), candidate...)
+	mutatedCandidate[len(mutatedCandidate)-2] ^= 1
+	if err := validate(base, mutatedCandidate, previous, next); err == nil {
+		t.Fatal("rewrite accepted a one-byte historical mutation")
+	}
+}
+
 func fixtureSnapshot(version string) snapshot {
 	contents := make(snapshot, len(versionTargets))
 	for _, item := range versionTargets {
