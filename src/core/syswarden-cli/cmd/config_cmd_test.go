@@ -142,12 +142,12 @@ func TestConfigGetUsesValidatedDescriptorRootedLoader_SW_CFG_002(t *testing.T) {
 		t.Fatalf("config-get output = %q", output.String())
 	}
 	networkPath := filepath.Join(root, "modules", "10-network.toml")
-	networkContent, err := os.ReadFile(networkPath)
+	networkContent, err := os.ReadFile(networkPath) // #nosec G304 G703 -- networkPath is a fixed filename beneath t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
 	networkContent = []byte(strings.Replace(string(networkContent), "blocked_countries = []", `blocked_countries = ["kp", "us"]`, 1))
-	if err := os.WriteFile(networkPath, networkContent, 0600); err != nil {
+	if err := os.WriteFile(networkPath, networkContent, 0600); err != nil { // #nosec G703 -- networkPath is a fixed filename beneath t.TempDir
 		t.Fatal(err)
 	}
 	output.Reset()
@@ -168,13 +168,13 @@ func TestConfigValidateAndGetHonorUserArrayPriority_SW_CFG_002(t *testing.T) {
 		t.Fatal(err)
 	}
 	networkPath := filepath.Join(root, "modules", "10-network.toml")
-	networkContent, err := os.ReadFile(networkPath)
+	networkContent, err := os.ReadFile(networkPath) // #nosec G304 G703 -- networkPath is a fixed filename beneath t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
 	networkContent = []byte(strings.Replace(string(networkContent), "blocked_countries = []", `blocked_countries = ["be"]`, 1))
 	networkContent = []byte(strings.Replace(string(networkContent), "blocked_asns = []", `blocked_asns = ["AS64500"]`, 1))
-	if err := os.WriteFile(networkPath, networkContent, 0600); err != nil {
+	if err := os.WriteFile(networkPath, networkContent, 0600); err != nil { // #nosec G703 -- networkPath is a fixed filename beneath t.TempDir
 		t.Fatal(err)
 	}
 

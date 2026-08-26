@@ -209,7 +209,7 @@ func newSELinuxLifecycleFixture(
 	root := t.TempDir()
 	parent := filepath.Join(root, "etc")
 	workspace := filepath.Join(root, "workspace")
-	if err := os.Mkdir(parent, 0755); err != nil {
+	if err := os.Mkdir(parent, 0755); err != nil { // #nosec G301 -- fixture models the root-owned system rsyslog directory mode
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(workspace, 0700); err != nil {
@@ -403,7 +403,7 @@ func TestSELinuxModuleProvenanceIsCanonicalPrivateAndRejectsSymlink_SW2_PKG_001(
 	if err := os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
-	directory, err := os.Open(filepath.Join(parent, wafRsyslogDirectoryName))
+	directory, err := os.Open(filepath.Join(parent, wafRsyslogDirectoryName)) // #nosec G304 -- the fixed child is beneath the private test root
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +477,7 @@ func TestRsyslogBridgeRollbackRestoresExactExternalBaseline_SW2_PKG_001(t *testi
 			if activations != 1 {
 				t.Fatalf("bridge rollback activations = %d, want 1", activations)
 			}
-			directory, err := os.Open(filepath.Join(parent, wafRsyslogDirectoryName))
+			directory, err := os.Open(filepath.Join(parent, wafRsyslogDirectoryName)) // #nosec G304 -- the fixed child is beneath the private test root
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -524,7 +524,7 @@ func TestRsyslogBridgeRollbackPreservesConcurrentOperatorChange_SW2_PKG_001(t *t
 	if activated {
 		t.Fatal("coordinated rollback activated rsyslog after refusing an operator bridge")
 	}
-	directory, err := os.Open(filepath.Join(parent, wafRsyslogDirectoryName))
+	directory, err := os.Open(filepath.Join(parent, wafRsyslogDirectoryName)) // #nosec G304 -- the fixed child is beneath the private test root
 	if err != nil {
 		t.Fatal(err)
 	}

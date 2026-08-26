@@ -31,14 +31,14 @@ func InstallDependencies() error {
 		}
 	} else if _, err := exec.LookPath("dnf"); err == nil {
 		fmt.Println(" -> Detected RHEL/Alma/Rocky/Oracle (DNF)")
-		cmd := exec.CommandContext(ctx, "dnf", "install", "-y", "nftables", "wireguard-tools", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec
+		cmd := exec.CommandContext(ctx, "dnf", "install", "-y", "nftables", "wireguard-tools", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec G204 -- executable and package arguments are fixed constants
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("DNF installation failed: %w", err)
 		}
 		fmt.Println("[INFO] Terminal WireGuard QR rendering is optional on RHEL-family systems and is enabled only when qrencode is already available from an operator-approved repository.")
 	} else if _, err := exec.LookPath("yum"); err == nil {
 		fmt.Println(" -> Detected CentOS/Legacy RHEL (YUM)")
-		cmd := exec.CommandContext(ctx, "yum", "install", "-y", "nftables", "wireguard-tools", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec
+		cmd := exec.CommandContext(ctx, "yum", "install", "-y", "nftables", "wireguard-tools", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec G204 -- executable and package arguments are fixed constants
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("YUM installation failed: %w", err)
 		}

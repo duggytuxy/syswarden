@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "baseline_commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
-  "policy": "The 56 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
+  "policy": "The 52 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
   "legacy": [
     {
       "count": 2,
@@ -117,22 +117,6 @@
     {
       "file": "src/core/syswarden-cli/pkg/system/dependencies.go",
       "source_sha256": "5b35f6201747123ac2c2f1137ea1247a5190ec5d9a2d81c088fb562d5c18bd41"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/dependencies.go",
-      "source_sha256": "8ab2152a0b0dab91e8523080234db713d902ee7a7c3677f0097248051c73ecf8"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/dependencies.go",
-      "source_sha256": "bb0084cc2fe103f4cb73dd595911a5a546971cab9708b98aa1ec80688cafede3"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/dependencies.go",
-      "source_sha256": "be114fd2ad159e97eb953ac3cc1cceb7b7055d6e941e82caf7dc119c5e3f2870"
-    },
-    {
-      "file": "src/core/syswarden-cli/pkg/system/dependencies.go",
-      "source_sha256": "c575714b1e9619ada46d91ceda2505a180bcf75f13dadc56f36b6e61df8d5d4a"
     },
     {
       "file": "src/core/syswarden-core/engine/ahocorasick.go",

@@ -32,8 +32,8 @@ func TestRemovePreparedFirewallRuntimeLockRemovesOnlyExactUnlockedArtifact_SW2_P
 	var warnings bytes.Buffer
 	err := removePreparedFirewallRuntimeLockAt(
 		path,
-		uint32(os.Geteuid()),
-		uint32(os.Getegid()),
+		systemTestUID(t),
+		systemTestGID(t),
 		func() error {
 			reattestCalls++
 			return nil
@@ -62,6 +62,11 @@ func TestRemovePreparedFirewallRuntimeLockRemovesOnlyExactUnlockedArtifact_SW2_P
 }
 
 func TestRemovePreparedFirewallRuntimeLockPreservesUnsafeArtifacts_SW2_PKG_001(t *testing.T) {
+	currentUID, currentGID := systemTestIdentity(t)
+	wrongUID := currentUID + 1
+	if currentUID == ^uint32(0) {
+		wrongUID = currentUID - 1
+	}
 	for _, testCase := range []struct {
 		name  string
 		build func(*testing.T, string)
@@ -113,8 +118,8 @@ func TestRemovePreparedFirewallRuntimeLockPreservesUnsafeArtifacts_SW2_PKG_001(t
 			build: func(t *testing.T, path string) {
 				writeFirewallRuntimeLockFixture(t, path, 0600, nil)
 			},
-			uid: uint32(os.Geteuid()) + 1,
-			gid: uint32(os.Getegid()),
+			uid: wrongUID,
+			gid: currentGID,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -124,8 +129,8 @@ func TestRemovePreparedFirewallRuntimeLockPreservesUnsafeArtifacts_SW2_PKG_001(t
 			uid := testCase.uid
 			gid := testCase.gid
 			if testCase.name != "wrong-owner-attestation" {
-				uid = uint32(os.Geteuid())
-				gid = uint32(os.Getegid())
+				uid = currentUID
+				gid = currentGID
 			}
 			reattestCalls := 0
 			var warnings bytes.Buffer
@@ -151,7 +156,7 @@ func TestRemovePreparedFirewallRuntimeLockRejectsBusyArtifact_SW2_PKG_001(t *tes
 	directory := t.TempDir()
 	path := filepath.Join(directory, "syswarden-firewall.lock")
 	writeFirewallRuntimeLockFixture(t, path, 0600, nil)
-	lock, err := os.OpenFile(path, os.O_RDWR, 0)
+	lock, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- path is confined to this test's private temporary directory
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,8 +169,8 @@ func TestRemovePreparedFirewallRuntimeLockRejectsBusyArtifact_SW2_PKG_001(t *tes
 	var warnings bytes.Buffer
 	err = removePreparedFirewallRuntimeLockAt(
 		path,
-		uint32(os.Geteuid()),
-		uint32(os.Getegid()),
+		systemTestUID(t),
+		systemTestGID(t),
 		func() error { t.Fatal("busy lock reached process reattestation"); return nil },
 		&warnings,
 	)
@@ -189,8 +194,8 @@ func TestRemovePreparedFirewallRuntimeLockRestoresOnFinalReattestationFailure_SW
 	var warnings bytes.Buffer
 	err := removePreparedFirewallRuntimeLockAt(
 		path,
-		uint32(os.Geteuid()),
-		uint32(os.Getegid()),
+		systemTestUID(t),
+		systemTestGID(t),
 		func() error {
 			reattestCalls++
 			if reattestCalls == 2 {
@@ -226,8 +231,8 @@ func TestRemovePreparedFirewallRuntimeLockPreservesQuarantineWhenPathIsRecreated
 	var warnings bytes.Buffer
 	err := removePreparedFirewallRuntimeLockAt(
 		path,
-		uint32(os.Geteuid()),
-		uint32(os.Getegid()),
+		systemTestUID(t),
+		systemTestGID(t),
 		func() error {
 			reattestCalls++
 			if reattestCalls == 2 {
@@ -240,7 +245,7 @@ func TestRemovePreparedFirewallRuntimeLockPreservesQuarantineWhenPathIsRecreated
 	if err == nil || !strings.Contains(err.Error(), "recreated") {
 		t.Fatalf("recreated runtime lock result = %v", err)
 	}
-	content, readErr := os.ReadFile(path)
+	content, readErr := os.ReadFile(path) // #nosec G304 -- path is confined to this test's private temporary directory
 	if readErr != nil || string(content) != "new-owner" {
 		t.Fatalf("recreated runtime lock was changed: content=%q err=%v", content, readErr)
 	}
@@ -267,8 +272,8 @@ func TestRemovePreparedFirewallRuntimeLockDoesNothingWhenAbsent_SW2_PKG_001(t *t
 	reattestCalls := 0
 	if err := removePreparedFirewallRuntimeLockAt(
 		path,
-		uint32(os.Geteuid()),
-		uint32(os.Getegid()),
+		systemTestUID(t),
+		systemTestGID(t),
 		func() error { reattestCalls++; return nil },
 		ioDiscardForRuntimeLockTest{},
 	); err != nil {
@@ -282,8 +287,8 @@ func TestRemovePreparedFirewallRuntimeLockDoesNothingWhenAbsent_SW2_PKG_001(t *t
 func TestRemovePreparedFirewallRuntimeLockRejectsFilesystemRoot_SW2_PKG_001(t *testing.T) {
 	err := removePreparedFirewallRuntimeLockAt(
 		string(filepath.Separator),
-		uint32(os.Geteuid()),
-		uint32(os.Getegid()),
+		systemTestUID(t),
+		systemTestGID(t),
 		func() error { return nil },
 		ioDiscardForRuntimeLockTest{},
 	)
