@@ -308,11 +308,11 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
         self.inspect_memory = inspect_memory
         self.inspect_pids_limit = inspect_pids_limit
         self.uid_map = uid_map if uid_map is not None else [
-            {"container_id": 0, "host_id": 1000, "size": 1},
+            {"container_id": 0, "host_id": os.geteuid(), "size": 1},
             {"container_id": 1, "host_id": 524288, "size": 65536},
         ]
         self.gid_map = gid_map if gid_map is not None else [
-            {"container_id": 0, "host_id": 1000, "size": 1},
+            {"container_id": 0, "host_id": os.getegid(), "size": 1},
             {"container_id": 1, "host_id": 524288, "size": 65536},
         ]
         self.containers: dict[str, dict[str, object]] = {}
@@ -792,19 +792,15 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
 
 class PackageLifecycleLabTests(unittest.TestCase):
     def setUp(self) -> None:
-        effective_uid = mock.patch.object(os, "geteuid", return_value=1000)
-        effective_gid = mock.patch.object(os, "getegid", return_value=1000)
-        effective_uid.start()
-        effective_gid.start()
-        self.addCleanup(effective_gid.stop)
-        self.addCleanup(effective_uid.stop)
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.root = Path(self.temporary_directory.name)
         self.candidate = self.root / "candidate"
         self.previous = self.root / "previous"
+        self.package_tmp = self.root / "package-tmp"
         self.candidate.mkdir()
         self.previous.mkdir()
+        self.package_tmp.mkdir(mode=0o700)
         self.create_package_set(self.candidate, b"candidate", "4.02.8")
         self.create_package_set(self.previous, b"previous", "4.02.7")
 
@@ -832,6 +828,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
             "podman": "podman",
             "pull_policy": "never",
             "scenario_timeout": 60,
+            "package_tmp_dir": self.package_tmp,
         }
         values.update(overrides)
         return argparse.Namespace(**values)
@@ -1270,6 +1267,91 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 self.previous,
                 package_lifecycle_lab.DEFAULT_PLATFORMS,
             )
+
+    def test_package_temporary_directory_is_private_real_and_owner_bound(self) -> None:
+        self.assertEqual(
+            package_lifecycle_lab.require_private_directory(
+                self.package_tmp, "package temporary directory"
+            ),
+            self.package_tmp.absolute(),
+        )
+
+        self.package_tmp.chmod(0o755)
+        try:
+            with self.assertRaisesRegex(
+                package_lifecycle_lab.LifecycleLabError, "mode 0700"
+            ):
+                package_lifecycle_lab.require_private_directory(
+                    self.package_tmp, "package temporary directory"
+                )
+        finally:
+            self.package_tmp.chmod(0o700)
+
+        direct_link = self.root / "package-tmp-link"
+        direct_link.symlink_to(self.package_tmp, target_is_directory=True)
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError, "real directory"
+        ):
+            package_lifecycle_lab.require_private_directory(
+                direct_link, "package temporary directory"
+            )
+
+        ancestor_link = self.root / "root-link"
+        ancestor_link.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError, "symlinked path components"
+        ):
+            package_lifecycle_lab.require_private_directory(
+                ancestor_link / self.package_tmp.name,
+                "package temporary directory",
+            )
+
+        with mock.patch.object(
+            os, "geteuid", return_value=os.geteuid() + 1
+        ), self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError, "owned by effective uid"
+        ):
+            package_lifecycle_lab.require_private_directory(
+                self.package_tmp, "package temporary directory"
+            )
+
+    def test_unsafe_package_temporary_directory_fails_before_podman(self) -> None:
+        unsafe = self.root / "unsafe-package-tmp"
+        unsafe.mkdir(mode=0o755)
+        unsafe.chmod(0o755)
+        runner = FakePodmanRunner()
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError, "mode 0700"
+        ):
+            package_lifecycle_lab.run_lab(
+                self.args(package_tmp_dir=unsafe), runner=runner
+            )
+        self.assertEqual(runner.calls, [])
+
+        missing_runner = FakePodmanRunner()
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError,
+            "--package-tmp-dir is required",
+        ):
+            package_lifecycle_lab.run_lab(
+                self.args(package_tmp_dir=None), runner=missing_runner
+            )
+        self.assertEqual(missing_runner.calls, [])
+
+    def test_workspace_is_created_beneath_explicit_package_temporary_directory(
+        self,
+    ) -> None:
+        runner = FakePodmanRunner()
+        report = package_lifecycle_lab.run_lab(self.args(), runner=runner)
+        self.assertEqual(report["status"], "pass")
+        build_calls = [call for call in runner.calls if call[1] == "build"]
+        self.assertEqual(len(build_calls), len(package_lifecycle_lab.DEFAULT_PLATFORMS))
+        for call in build_calls:
+            with self.subTest(call=call):
+                self.assertTrue(
+                    Path(call[-1]).is_relative_to(self.package_tmp),
+                    call[-1],
+                )
 
     def test_containerfile_uses_exact_base_and_bootstrap_only(self) -> None:
         spec = package_lifecycle_lab.DEFAULT_PLATFORMS[0]
@@ -3472,15 +3554,24 @@ probe
         self.assertIn("'[network]' 'interfaces = \"lo\"'", token_writer)
         self.assertNotIn('interfaces = "eth0"', token_writer)
 
-    def test_previous_package_is_installed_and_probed_before_operator_seed(self) -> None:
+    def test_networkless_preconfiguration_precedes_previous_install_and_full_seed_follows_probe(
+        self,
+    ) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
         initial = source[
             source.index("scenario_upgrade_rollback_initial() {") : source.index(
                 "\nscenario_upgrade_rollback_restart_one() {"
             )
         ]
+        networkless = initial.index(
+            "seed_and_attest_preinstall_networkless_config || return"
+        )
+        prepare = initial.index("prepare_package_transition || return")
         install = initial.index(
             'run_install_step install.previous "${PREVIOUS_PACKAGE}"'
+        )
+        postinstall_attestation = initial.index(
+            "attest_preinstall_networkless_config_after_previous || return"
         )
         probes = (
             initial.index("probe_forward_only_apk_payload previous"),
@@ -3491,7 +3582,12 @@ probe
         candidate = initial.index(
             'run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}"'
         )
-        self.assertTrue(all(install < probe < seed for probe in probes))
+        self.assertLess(networkless, prepare)
+        self.assertLess(prepare, install)
+        self.assertLess(install, postinstall_attestation)
+        self.assertTrue(
+            all(postinstall_attestation < probe < seed for probe in probes)
+        )
         self.assertLess(seed, preserved)
         self.assertLess(preserved, candidate)
 
@@ -3625,6 +3721,8 @@ probe
             'EXPECTED_CANDIDATE_VERSION="4.03.2"\n'
             'FORWARD_ONLY_APK_TRANSITION="1"\n'
             "prepare_expected_payloads() { return 0; }\n"
+            "seed_and_attest_preinstall_networkless_config() { :; }\n"
+            "attest_preinstall_networkless_config_after_previous() { :; }\n"
             "seed_state() { :; }\n"
             "seed_legacy_webtui_upgrade_state() { :; }\n"
             "seed_live_legacy_webtui_process() { :; }\n"
@@ -3685,6 +3783,8 @@ probe
             "FAILURES=0\n"
             "probe_execution_architecture() { return 0; }\n"
             "prepare_package_transition() { return 0; }\n"
+            "seed_and_attest_preinstall_networkless_config() { return 0; }\n"
+            "attest_preinstall_networkless_config_after_previous() { return 0; }\n"
             "prepare_alma_v4028_rpm_rsyslog_fixture() { return 0; }\n"
             "attest_alma_v4028_rpm_rsyslog_fixture() { return 0; }\n"
             "attest_alma_v4028_rpm_rsyslog_after_previous() { return 0; }\n"
@@ -4860,6 +4960,7 @@ probe
         baseline = package_lifecycle_lab.run_lab(
             self.args(), runner=FakePodmanRunner()
         )
+        different_uid = os.geteuid() + 1
 
         def isolation(item: dict[str, object]) -> dict[str, object]:
             return item["platforms"][0]["scenarios"][0]["isolation"]
@@ -4870,8 +4971,8 @@ probe
             ]
 
         def engine_valid_but_different(item: dict[str, object]) -> None:
-            item["engine"]["effective_uid"] = 1001
-            item["engine"]["uid_map"][0]["outside_id"] = 1001
+            item["engine"]["effective_uid"] = different_uid
+            item["engine"]["uid_map"][0]["outside_id"] = different_uid
 
         def engine_overlapping_map(item: dict[str, object]) -> None:
             item["engine"]["effective_uid"] = 524289
@@ -4910,7 +5011,7 @@ probe
                 userns_mode="private-explicit"
             ),
             "engine_effective_uid_only": lambda item: item["engine"].update(
-                effective_uid=1001
+                effective_uid=different_uid
             ),
             "engine_only_valid_map": engine_valid_but_different,
             "engine_host_root_map": lambda item: item["engine"]["uid_map"][0].update(
@@ -4925,7 +5026,7 @@ probe
                 extra=1
             ),
             "scenario_only_map": lambda item: snapshot(item)["pid1_uid_map"][0].update(
-                outside_id=1001
+                outside_id=different_uid
             ),
             "scenario_map_host_root": lambda item: snapshot(item)[
                 "pid1_gid_map"
@@ -4967,6 +5068,7 @@ probe
             self.args(), runner=FakePodmanRunner()
         )
         platform_result = baseline["platforms"][0]
+        different_uid = os.geteuid() + 1
 
         def scenario_copy() -> tuple[dict[str, object], dict[str, object]]:
             platform = json.loads(json.dumps(platform_result))
@@ -4978,7 +5080,7 @@ probe
             del platform
             scenario["boots"][0]["post_exec"]["pid1_uid_map"][0][
                 "outside_id"
-            ] = 1001
+            ] = different_uid
 
         cases["pre_post_map"] = post_map
 
@@ -5013,7 +5115,7 @@ probe
             for phase in ("pre_exec", "post_exec"):
                 scenario["boots"][1][phase]["pid1_uid_map"][0][
                     "outside_id"
-                ] = 1001
+                ] = different_uid
 
         cases["inter_boot_map"] = inter_boot
 
@@ -5042,8 +5144,9 @@ probe
 
         def shard_only_map(item: dict[str, object]) -> None:
             record = item["native_shards"]["reports"][0]
-            record["effective_uid"] = 1001
-            record["uid_map"][0]["outside_id"] = 1001
+            different_uid = int(record["effective_uid"]) + 1
+            record["effective_uid"] = different_uid
+            record["uid_map"][0]["outside_id"] = different_uid
 
         mutations = {
             "shard_only_map": shard_only_map,
@@ -5494,6 +5597,151 @@ probe
         for key in ("opt_root", "config_root", "data_root", "log_root"):
             self.assertIn(f"purge.purge.state.{key}", direct_purge)
 
+    def test_owned_cron_seed_state_exception_is_exact_and_fail_closed(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("attest_owned_cron_seed_state() {")
+        end = source.index("\n}\n\nseed_generated_runtime_artifacts() {", start)
+        function = source[start : end + 2]
+        self.assertIn("deb:remove:remove-before-purge)", function)
+        self.assertEqual(function.count("deb:remove:remove-before-purge)"), 1)
+        self.assertIn('[ ! -e "${syswarden_owned_cron_path}" ]', function)
+        self.assertIn('[ ! -L "${syswarden_owned_cron_path}" ]', function)
+        self.assertIn('[ -f "${syswarden_owned_cron_path}" ]', function)
+
+        harness = (
+            function
+            + '\nattest_owned_cron_seed_state "${TEST_CRON_PATH}" "${TEST_LABEL}"\n'
+        )
+        cases = (
+            ("first-regular", "deb", "remove", "remove", "regular", 0),
+            ("first-absent", "deb", "remove", "remove", "absent", 1),
+            ("first-directory", "deb", "remove", "remove", "directory", 1),
+            ("first-symlink", "deb", "remove", "remove", "symlink", 1),
+            (
+                "second-absent",
+                "deb",
+                "remove",
+                "remove-before-purge",
+                "absent",
+                0,
+            ),
+            (
+                "second-regular",
+                "deb",
+                "remove",
+                "remove-before-purge",
+                "regular",
+                1,
+            ),
+            (
+                "second-directory",
+                "deb",
+                "remove",
+                "remove-before-purge",
+                "directory",
+                1,
+            ),
+            (
+                "second-symlink",
+                "deb",
+                "remove",
+                "remove-before-purge",
+                "symlink",
+                1,
+            ),
+            (
+                "second-broken-symlink",
+                "deb",
+                "remove",
+                "remove-before-purge",
+                "broken-symlink",
+                1,
+            ),
+            (
+                "wrong-family",
+                "rpm",
+                "remove",
+                "remove-before-purge",
+                "absent",
+                1,
+            ),
+            (
+                "wrong-scenario",
+                "deb",
+                "purge",
+                "remove-before-purge",
+                "absent",
+                1,
+            ),
+            (
+                "wrong-label",
+                "deb",
+                "remove",
+                "other",
+                "absent",
+                1,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "syswarden"
+            symlink_target = root / "operator-cron"
+            symlink_target.write_text("operator\n", encoding="ascii")
+            for label, family, scenario, evidence, path_kind, expected in cases:
+                with self.subTest(case=label):
+                    if target.is_symlink() or target.is_file():
+                        target.unlink()
+                    elif target.is_dir():
+                        target.rmdir()
+                    if path_kind == "regular":
+                        target.write_text("managed\n", encoding="ascii")
+                    elif path_kind == "directory":
+                        target.mkdir()
+                    elif path_kind == "symlink":
+                        target.symlink_to(symlink_target)
+                    elif path_kind == "broken-symlink":
+                        target.symlink_to(root / "missing-operator-cron")
+                    elif path_kind != "absent":
+                        self.fail(f"unsupported path fixture: {path_kind}")
+                    environment = os.environ.copy()
+                    environment.update(
+                        {
+                            "PACKAGE_FAMILY": family,
+                            "SCENARIO": scenario,
+                            "TEST_CRON_PATH": str(target),
+                            "TEST_LABEL": evidence,
+                        }
+                    )
+                    result = subprocess.run(
+                        ["/bin/sh", "-eu", "-c", harness],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                    )
+                    self.assertEqual(result.returncode, expected, result.stderr)
+
+        seed_start = source.index("seed_generated_runtime_artifacts() {")
+        seed_end = source.index(
+            "\n}\n\nassert_generated_runtime_artifact_contract() {", seed_start
+        )
+        seed = source[seed_start:seed_end]
+        self.assertEqual(seed.count("attest_owned_cron_seed_state \\"), 1)
+        self.assertIn('/etc/cron.d/syswarden "${evidence_label}"', seed)
+        pending = "printf '%s' '# Managed by' > /etc/cron.d/.syswarden.pending-v1"
+        root_crontab_attestation = (
+            "cmp -s /tmp/syswarden-root-cron-before "
+            "/tmp/syswarden-root-cron-confirmed"
+        )
+        cron_seed_attestation = "attest_owned_cron_seed_state \\"
+        self.assertIn(pending, seed)
+        self.assertIn(root_crontab_attestation, seed)
+        self.assertLess(
+            seed.index(root_crontab_attestation),
+            seed.index(cron_seed_attestation),
+        )
+        self.assertLess(seed.index(cron_seed_attestation), seed.index(pending))
+
     def test_rpm_and_apk_final_removal_require_dedicated_roots_absent(self) -> None:
         for family, scenario, label in (
             ("rpm", "remove", "final-removal"),
@@ -5562,9 +5810,53 @@ probe
         self.assertIn(".syswarden-rsyslog-provenance-v1", exact)
         self.assertIn("syswarden-rsyslog-provenance-v1", exact)
         self.assertIn("*.* @127.0.0.1:5514", exact)
-        self.assertIn('File="/var/log/syswarden/waf.json"', exact)
-        self.assertIn('Tag="syswarden-waf-json"', exact)
-        self.assertIn('Facility="local7"', exact)
+        forbidden_start = exact.index("for forbidden_fragment in")
+        forbidden_end = exact.index("\n            done", forbidden_start)
+        forbidden = exact[forbidden_start:forbidden_end]
+        for fragment in (
+            "'imfile'",
+            "'/var/log/syswarden/waf.json'",
+            "'syswarden-waf-json'",
+            "'Facility=\"local7\"'",
+        ):
+            self.assertIn(fragment, forbidden)
+        self.assertIn("99-syswarden-siem.conf", forbidden)
+        self.assertNotIn("99-syswarden-waf-bridge.conf", forbidden)
+        self.assertIn("waf_telemetry_input_block", exact)
+        telemetry_start = exact.index("for telemetry_fragment in")
+        telemetry_end = exact.index("\n            done", telemetry_start)
+        telemetry = exact[telemetry_start:telemetry_end]
+        self.assertIn("waf_telemetry_input_block", telemetry)
+        for fragment in (
+            'File="/var/log/syswarden/waf.json"',
+            'Tag="syswarden-waf-json"',
+            'Facility="local7"',
+        ):
+            self.assertIn(fragment, telemetry)
+        module_count_start = exact.index(
+            "grep -F -x -c 'module(load=\"imfile\")'"
+        )
+        module_count_end = exact.index("|| return 1", module_count_start)
+        self.assertIn(
+            "99-syswarden-waf-bridge.conf",
+            exact[module_count_start:module_count_end],
+        )
+        telemetry_input_start = exact.index(
+            "grep -F -x -c 'input(type=\"imfile\"'"
+        )
+        telemetry_input_end = exact.index("|| return 1", telemetry_input_start)
+        self.assertIn(
+            "99-syswarden-waf-bridge.conf",
+            exact[telemetry_input_start:telemetry_input_end],
+        )
+        ruleset_guard_start = exact.index(
+            "! printf '%s\\n' \"${waf_telemetry_input_block}\""
+        )
+        ruleset_guard_end = exact.index("|| return 1", ruleset_guard_start)
+        self.assertIn(
+            'ruleset="waf_bridge"',
+            exact[ruleset_guard_start:ruleset_guard_end],
+        )
         self.assertIn('module(load="omuxsock")', exact)
         self.assertIn("$OMUxSockSocket /var/run/syswarden.sock", exact)
         self.assertIn('/var/log/nginx/*.log', exact)
@@ -6014,36 +6306,59 @@ probe
 
     def test_systemd_enablement_target_depends_on_scenario_provenance(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
-        start = source.index("expected_systemd_enablement_prefix() {")
+        start = source.index("v4028_to_v4032_transition_selected() {")
         end = source.index("\nprobe_postinstall_contract() {", start)
-        function = source[start:end]
-        cases = {
-            **{
-                ("upgrade-rollback", label): "/etc/systemd/system"
-                for label in (
-                    "previous",
-                    "candidate",
-                    "reinstall",
-                    "restart-one",
-                    "restart-two",
-                    "rollback",
-                    "recovery",
-                )
-            },
-            ("remove", "fresh"): "..",
-            ("remove", "reinstall-after-remove"): "..",
-            ("purge", "fresh"): "..",
-        }
-        for (scenario, label), expected in cases.items():
-            with self.subTest(scenario=scenario, label=label):
+        functions = source[start:end]
+        command = (
+            functions
+            + '\nSCENARIO="$1"; EXPECTED_PREVIOUS_VERSION="$2"; '
+            'EXPECTED_CANDIDATE_VERSION="$3"; '
+            'expected_systemd_enablement_prefix "$4"'
+        )
+        upgrade_labels = (
+            "previous",
+            "candidate",
+            "reinstall",
+            "restart-one",
+            "restart-two",
+            "rollback",
+            "recovery",
+        )
+        cases = [
+            *(
+                ("upgrade-rollback", "4.02.8", "4.03.2", label, "/etc/systemd/system")
+                for label in upgrade_labels
+            ),
+            *(
+                ("upgrade-rollback", "4.03.2", "4.03.3", label, "..")
+                for label in upgrade_labels
+            ),
+            ("remove", "4.03.2", "4.03.3", "fresh", ".."),
+            (
+                "remove",
+                "4.03.2",
+                "4.03.3",
+                "reinstall-after-remove",
+                "..",
+            ),
+            ("purge", "4.03.2", "4.03.3", "fresh", ".."),
+        ]
+        for scenario, previous, candidate, label, expected in cases:
+            with self.subTest(
+                scenario=scenario,
+                previous=previous,
+                candidate=candidate,
+                label=label,
+            ):
                 result = subprocess.run(
                     [
                         "/bin/sh",
                         "-c",
-                        function
-                        + '\nSCENARIO="$1"; expected_systemd_enablement_prefix "$2"',
+                        command,
                         "probe",
                         scenario,
+                        previous,
+                        candidate,
                         label,
                     ],
                     check=False,
@@ -6053,21 +6368,36 @@ probe
                 self.assertEqual(result.returncode, 0, result)
                 self.assertEqual(result.stdout.strip(), expected)
 
-        rejected = subprocess.run(
-            [
-                "/bin/sh",
-                "-c",
-                function
-                + '\nSCENARIO="$1"; expected_systemd_enablement_prefix "$2"',
-                "probe",
-                "remove",
-                "candidate",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        rejected = (
+            ("upgrade-rollback", "4.03.1", "4.03.3", "previous"),
+            ("upgrade-rollback", "4.03.2", "4.03.4", "candidate"),
+            ("upgrade-rollback", "4.02.8", "4.03.3", "rollback"),
+            ("upgrade-rollback", "4.03.2", "4.03.3", "unknown"),
+            ("remove", "4.03.2", "4.03.3", "candidate"),
         )
-        self.assertNotEqual(rejected.returncode, 0, rejected)
+        for scenario, previous, candidate, label in rejected:
+            with self.subTest(
+                rejected_scenario=scenario,
+                previous=previous,
+                candidate=candidate,
+                label=label,
+            ):
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        command,
+                        "probe",
+                        scenario,
+                        previous,
+                        candidate,
+                        label,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0, result)
 
     def test_cleanup_shell_events_match_declared_contract_exactly(self) -> None:
         script = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -6969,6 +7299,96 @@ prepare_package_transition
                 )
                 self.assertEqual(result.returncode, expected, result.stderr)
 
+    def test_preinstall_networkless_configuration_is_minimal_exact_and_attested(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        writer_start = source.index("write_preinstall_networkless_config() {")
+        writer_end = source.index(
+            "\nseed_and_attest_preinstall_networkless_config() {", writer_start
+        )
+        writer = source[writer_start:writer_end]
+        destination = self.root / "preinstall-networkless.toml"
+        expected = (
+            b'# Lifecycle-only network-isolation override; production defaults remain list_choice = "1".\n'
+            b'[network.blocklists]\n'
+            b'list_choice = "4"\n'
+            b'custom_url = ""\n'
+            b'custom_url_ipv6 = ""\n'
+            b'custom_hash = ""\n'
+            b'custom_hash_ipv6 = ""\n'
+            b'use_spamhaus = false\n\n'
+        )
+        rendered = subprocess.run(
+            [
+                "/bin/sh",
+                "-c",
+                writer + '\nwrite_preinstall_networkless_config "$1"',
+                "preinstall",
+                str(destination),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        self.assertEqual(destination.read_bytes(), expected)
+        self.assertEqual(
+            hashlib.sha256(expected).hexdigest(),
+            "e0a6d764d1786c3661c6f25fa7b688bd8c8922d8fd0a00135925ae982f274d68",
+        )
+        self.assertNotIn("[network.saas]", writer)
+        self.assertNotIn("[user]", writer)
+        attester = source[
+            writer_end : source.index("\nwrite_seeded_operator_token() {", writer_end)
+        ]
+        for contract in (
+            "stat -c '%u:%g:%a:%h'",
+            "0:0:640:1",
+            "[ ! -L",
+            "${PREFIX}.preinstall.networkless_config",
+            "e0a6d764d1786c3661c6f25fa7b688bd8c8922d8fd0a00135925ae982f274d68",
+        ):
+            self.assertIn(contract, attester)
+        seed_attester = source[
+            source.index("seed_and_attest_preinstall_networkless_config() {") : source.index(
+                "\nattest_preinstall_networkless_config_after_previous() {"
+            )
+        ]
+        publication = seed_attester.index(
+            'write_preinstall_networkless_config "${preinstall_networkless_path}"'
+        )
+        self.assertLess(
+            seed_attester.index('[ -e "${preinstall_networkless_path}" ]'),
+            publication,
+        )
+        self.assertLess(
+            seed_attester.index('[ -L "${preinstall_networkless_path}" ]'),
+            publication,
+        )
+        for directory in (
+            "/etc/syswarden",
+            "/etc/syswarden/config",
+            "/etc/syswarden/config/modules",
+        ):
+            self.assertIn(directory, seed_attester)
+        self.assertGreaterEqual(seed_attester.count("!= 0:0"), 2)
+        checks = package_lifecycle_lab.expected_event_checks(
+            "deb", "upgrade-rollback"
+        )
+        self.assertLess(
+            checks.index("upgrade-rollback.preinstall.networkless_config"),
+            checks.index("upgrade-rollback.install.previous"),
+        )
+        self.assertLess(
+            checks.index("upgrade-rollback.install.previous.maintainer_script"),
+            checks.index("upgrade-rollback.previous.networkless_config_preserved"),
+        )
+        self.assertLess(
+            checks.index("upgrade-rollback.previous.networkless_config_preserved"),
+            checks.index("upgrade-rollback.previous.version"),
+        )
+
     def test_seed_scopes_legacy_saas_and_exact_networkless_feed_override(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
         writer_start = source.index("write_seeded_operator_token() {")
@@ -7345,13 +7765,254 @@ prepare_package_transition
         self.assertIn('length(secret) != 32', contract)
         self.assertIn('credentials != 1', contract)
         self.assertIn('! grep -Fq "${rollback_secret}" "${COMMAND_LOG}"', contract)
-        self.assertIn('upgrade-rollback:rollback:deb', contract)
-        self.assertIn('upgrade-rollback:rollback:rpm', contract)
+        self.assertIn("if v4028_to_v4032_transition_selected; then", contract)
+        self.assertIn("elif v4032_to_v4033_transition_selected; then", contract)
+        self.assertIn("historical-webtui-credential", contract)
+        self.assertIn("byte-exact", contract)
+        self.assertIn(
+            'record_unsupported_rollback_token_contract "${label}"', contract
+        )
         self.assertIn(
             'assert_preserved "${label}" token /etc/syswarden/config/modules/99-user.toml',
             contract,
         )
         self.assertIn('[REDACTED]', source)
+
+    def test_upgrade_rollback_token_contract_is_exactly_version_bound(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        predicates_start = source.index("v4028_to_v4032_transition_selected() {")
+        predicates_end = source.index(
+            "\nexpected_systemd_enablement_prefix() {", predicates_start
+        )
+        contract_start = source.index(
+            "expected_upgrade_rollback_token_contract() {"
+        )
+        contract_end = source.index(
+            "\nrecord_unsupported_rollback_token_contract() {", contract_start
+        )
+        functions = (
+            source[predicates_start:predicates_end]
+            + "\n"
+            + source[contract_start:contract_end]
+        )
+        command = (
+            functions
+            + '\nSCENARIO="$1"; EXPECTED_PREVIOUS_VERSION="$2"; '
+            'EXPECTED_CANDIDATE_VERSION="$3"; PACKAGE_FAMILY="$4"; '
+            'expected_upgrade_rollback_token_contract "$5"'
+        )
+        accepted = (
+            (
+                "upgrade-rollback",
+                "4.02.8",
+                "4.03.2",
+                family,
+                "rollback",
+                "historical-webtui-credential",
+            )
+            for family in ("deb", "rpm")
+        )
+        current = (
+            (
+                "upgrade-rollback",
+                "4.03.2",
+                "4.03.3",
+                family,
+                "rollback",
+                "byte-exact",
+            )
+            for family in ("deb", "rpm")
+        )
+        for scenario, previous, candidate, family, label, expected in (
+            *accepted,
+            *current,
+        ):
+            with self.subTest(
+                scenario=scenario,
+                previous=previous,
+                candidate=candidate,
+                family=family,
+                label=label,
+            ):
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        command,
+                        "token-contract",
+                        scenario,
+                        previous,
+                        candidate,
+                        family,
+                        label,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result)
+                self.assertEqual(result.stdout.strip(), expected)
+
+        rejected = (
+            ("upgrade-rollback", "4.03.1", "4.03.3", "deb", "rollback"),
+            ("upgrade-rollback", "4.03.2", "4.03.4", "rpm", "rollback"),
+            ("upgrade-rollback", "4.02.8", "4.03.3", "deb", "rollback"),
+            ("upgrade-rollback", "4.03.2", "4.03.3", "apk", "rollback"),
+            ("upgrade-rollback", "4.03.2", "4.03.3", "deb", "recovery"),
+            ("remove", "4.03.2", "4.03.3", "deb", "rollback"),
+        )
+        for scenario, previous, candidate, family, label in rejected:
+            with self.subTest(
+                rejected_scenario=scenario,
+                previous=previous,
+                candidate=candidate,
+                family=family,
+                label=label,
+            ):
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        command,
+                        "token-contract",
+                        scenario,
+                        previous,
+                        candidate,
+                        family,
+                        label,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0, result)
+
+    def test_v4032_rollback_token_state_is_byte_exact_and_fail_closed(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("assert_preserved() {")
+        end = source.index("\nlive_telemetry_schema_valid() {", start)
+        function = source[start:end]
+        fixture = (
+            b'[network]\ninterfaces = "lo"\n\n'
+            b'[network.saas]\nallow_monitors = true\n\n'
+            b'# Lifecycle-only network-isolation override; production defaults remain list_choice = "1".\n'
+            b'[network.blocklists]\n'
+            b'list_choice = "4"\n'
+            b'custom_url = ""\n'
+            b'custom_url_ipv6 = ""\n'
+            b'custom_hash = ""\n'
+            b'custom_hash_ipv6 = ""\n'
+            b'use_spamhaus = false\n\n'
+            b'[user]\nprofile_name = "lifecycle-operator"\n'
+        )
+        expected_hash = hashlib.sha256(fixture).hexdigest()
+        self.assertEqual(
+            expected_hash,
+            "75ba724333aa74769db97901ad0efc8c2724364cfbb860a7ac2ae02538892a69",
+        )
+        harness = (
+            function
+            + r'''
+hash_file() {
+    sha256sum "$1" | awk '{ print $1 }'
+}
+file_mode() {
+    /usr/bin/stat -c '%a' "$1"
+}
+stat() {
+    if [ "$1" = -c ] && [ "$2" = '%u:%g' ]; then
+        printf '%s\n' "${TEST_OWNER}"
+    else
+        command stat "$@"
+    fi
+}
+check_equal() {
+    if [ "$2" = "$3" ]; then
+        status=pass
+    else
+        status=fail
+    fi
+    printf '%s\t%s\n' "${status}" "$1"
+}
+PREFIX=upgrade-rollback
+assert_preserved rollback token "$1" "$2" 640
+'''
+        )
+
+        def run_state(
+            kind: str,
+            *,
+            content: bytes = fixture,
+            mode: int = 0o640,
+            owner: str = "0:0",
+        ) -> dict[str, str]:
+            with tempfile.TemporaryDirectory(dir=self.root) as temporary:
+                root = Path(temporary)
+                token = root / "99-user.toml"
+                if kind == "regular":
+                    token.write_bytes(content)
+                    token.chmod(mode)
+                elif kind == "symlink":
+                    target = root / "operator-token.toml"
+                    target.write_bytes(content)
+                    target.chmod(mode)
+                    token.symlink_to(target)
+                elif kind == "directory":
+                    token.mkdir()
+                elif kind != "missing":
+                    self.fail(f"unknown token state {kind}")
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        harness,
+                        "token-state",
+                        str(token),
+                        expected_hash,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "TEST_OWNER": owner},
+                )
+                self.assertEqual(result.returncode, 0, result)
+                return {
+                    check: status
+                    for status, check in (
+                        line.split("\t", 1)
+                        for line in result.stdout.splitlines()
+                    )
+                }
+
+        exact = run_state("regular")
+        self.assertEqual(set(exact.values()), {"pass"})
+
+        retired_hex_value = b"01234567" * 4
+        adversarial = (
+            ("changed-bytes", "regular", fixture + b"# drift\n", 0o640, "0:0", "rollback.state.token.hash"),
+            (
+                "retired-credential",
+                "regular",
+                fixture + b'webtui_password = "' + retired_hex_value + b'"\n',
+                0o640,
+                "0:0",
+                "rollback.state.token.hash",
+            ),
+            ("wrong-mode", "regular", fixture, 0o600, "0:0", "rollback.state.token.mode"),
+            ("wrong-owner", "regular", fixture, 0o640, "1:1", "rollback.state.token.owner"),
+            ("symlink", "symlink", fixture, 0o640, "0:0", "rollback.state.token.type"),
+            ("directory", "directory", fixture, 0o640, "0:0", "rollback.state.token.type"),
+            ("missing", "missing", fixture, 0o640, "0:0", "rollback.state.token.type"),
+        )
+        for name, kind, content, mode, owner, failed_check in adversarial:
+            with self.subTest(state=name):
+                statuses = run_state(
+                    kind,
+                    content=content,
+                    mode=mode,
+                    owner=owner,
+                )
+                self.assertEqual(statuses[failed_check], "fail")
 
     def test_historical_rollback_token_sanitizer_restores_exact_seed_bytes(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -7423,6 +8084,202 @@ prepare_package_transition
                     text=True,
                 )
                 self.assertNotEqual(result.returncode, 0)
+
+    def test_v4032_to_v4033_previous_webtui_retirement_is_exact_and_fail_closed(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        functions_start = source.index("legacy_webtui_runtime_absent() {")
+        functions_end = source.index(
+            "\n\nalpine_apk_owner_version() {", functions_start
+        )
+        transitions_start = source.index(
+            "v4028_to_v4032_transition_selected() {"
+        )
+        transitions_end = source.index(
+            "\nexpected_systemd_enablement_prefix() {", transitions_start
+        )
+        transitions = source[transitions_start:transitions_end]
+        functions = transitions + "\n" + source[functions_start:functions_end]
+        quiesce_start = source.index("quiesce_previous_webtui_runtime() {")
+        quiesce_end = source.index(
+            "\n}\n\nlifecycle_seed_hex_prefix() {", quiesce_start
+        )
+        quiesce = source[quiesce_start:quiesce_end]
+        probe_start = source.index("probe_postinstall_contract() {")
+        probe_end = source.index("\n}\n\nverify_installed_inventory() {", probe_start)
+        probe = source[probe_start:probe_end]
+
+        exact_transition = (
+            '[ "${SCENARIO}" = upgrade-rollback ] && \\\n'
+            '        [ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.2 ] && \\\n'
+            '        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.3 ]'
+        )
+        self.assertIn(exact_transition, transitions)
+        self.assertIn(
+            "v4032_to_v4033_upgrade_selected() {\n"
+            "    v4032_to_v4033_transition_selected && \\\n"
+            '        [ "$(installed_version 2>/dev/null || true)" = 4.03.2 ]\n'
+            "}",
+            functions,
+        )
+        self.assertIn(
+            'legacy_webtui_runtime_absent "${previous_webtui_root}" || return 1',
+            functions,
+        )
+        self.assertIn("syswarden_verify_no_exact_webtui_process \\", functions)
+        self.assertIn("for previous_webtui_port in 62027 62028", functions)
+        self.assertIn(
+            "if v4032_to_v4033_upgrade_selected; then\n"
+            "        attest_v4032_previous_webtui_retirement || return 1\n"
+            "        return 0\n"
+            "    fi",
+            quiesce,
+        )
+        self.assertIn(
+            "if v4032_to_v4033_upgrade_selected; then\n"
+            "            attest_v4032_previous_webtui_retirement || \\\n"
+            "                mark_postinstall_failure previous-webtui-retirement\n"
+            "        else",
+            probe,
+        )
+        for legacy_fragment in (
+            "/etc/systemd/system/syswarden-webtui.service",
+            "/etc/init.d/syswarden-webtui",
+            "syswarden_read_exact_webtui_unit",
+        ):
+            self.assertIn(legacy_fragment, quiesce)
+
+        harness = (
+            "#!/bin/sh\nset -u\n"
+            + functions
+            + r'''
+installed_version() {
+    printf '%s\n' "${TEST_INSTALLED_VERSION:-4.03.2}"
+}
+syswarden_verify_no_exact_webtui_process() {
+    [ "${TEST_PROCESS_STATE:-absent}" = absent ]
+}
+ss() {
+    case "${TEST_SS_FAILURE:-none}" in
+        nonzero) return 42 ;;
+        stderr)
+            printf '%s\n' 'netlink attestation unavailable' >&2
+            return 0
+            ;;
+    esac
+    case "$*" in
+        *":${TEST_LISTENER_PORT:-none}"*) printf '%s\n' listener ;;
+    esac
+}
+attest_v4032_previous_webtui_retirement "${TEST_ROOT}" "${TEST_ROOT}/proc"
+'''
+        )
+
+        def run_case(
+            overrides: dict[str, str] | None = None,
+            *,
+            residual: tuple[str, str] | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            temporary = tempfile.TemporaryDirectory(dir=self.root)
+            self.addCleanup(temporary.cleanup)
+            root = Path(temporary.name)
+            (root / "proc").mkdir()
+            if residual is not None:
+                relative, kind = residual
+                path = root / relative.lstrip("/")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if kind == "directory":
+                    path.mkdir()
+                elif kind == "symlink":
+                    path.symlink_to(root / "missing-operator-target")
+                else:
+                    path.write_text("operator-residual\n", encoding="ascii")
+            environment = {
+                **os.environ,
+                "SCENARIO": "upgrade-rollback",
+                "EXPECTED_PREVIOUS_VERSION": "4.03.2",
+                "EXPECTED_CANDIDATE_VERSION": "4.03.3",
+                "TEST_INSTALLED_VERSION": "4.03.2",
+                "TEST_ROOT": str(root),
+            }
+            environment.update(overrides or {})
+            return subprocess.run(
+                [shutil.which("dash") or "/bin/sh", "-c", harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+        accepted = run_case()
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        bounds = (
+            ("scenario", {"SCENARIO": "remove"}),
+            ("previous", {"EXPECTED_PREVIOUS_VERSION": "4.03.1"}),
+            ("candidate", {"EXPECTED_CANDIDATE_VERSION": "4.03.4"}),
+            ("installed", {"TEST_INSTALLED_VERSION": "4.03.1"}),
+        )
+        for label, overrides in bounds:
+            with self.subTest(bound=label):
+                self.assertNotEqual(run_case(overrides).returncode, 0)
+
+        residuals = (
+            ("systemd-unit", "/etc/systemd/system/syswarden-webtui.service", "file"),
+            (
+                "systemd-retiring",
+                "/etc/systemd/system/syswarden-webtui.service.syswarden-retiring",
+                "file",
+            ),
+            (
+                "systemd-dropin",
+                "/etc/systemd/system/syswarden-webtui.service.d",
+                "directory",
+            ),
+            (
+                "systemd-enablement",
+                "/etc/systemd/system/multi-user.target.wants/syswarden-webtui.service",
+                "symlink",
+            ),
+            ("runtime-unit", "/run/systemd/system/syswarden-webtui.service", "file"),
+            (
+                "runtime-dropin",
+                "/run/systemd/system/syswarden-webtui.service.d",
+                "directory",
+            ),
+            ("openrc-unit", "/etc/init.d/syswarden-webtui", "file"),
+            ("openrc-config", "/etc/conf.d/syswarden-webtui", "file"),
+            (
+                "openrc-enablement",
+                "/etc/runlevels/default/syswarden-webtui",
+                "symlink",
+            ),
+            ("pidfile", "/run/syswarden-webtui.pid", "file"),
+        )
+        for label, relative, kind in residuals:
+            with self.subTest(residual=label):
+                self.assertNotEqual(
+                    run_case(residual=(relative, kind)).returncode,
+                    0,
+                )
+
+        self.assertNotEqual(
+            run_case({"TEST_PROCESS_STATE": "present"}).returncode,
+            0,
+        )
+        for port in ("62027", "62028"):
+            with self.subTest(listener=port):
+                self.assertNotEqual(
+                    run_case({"TEST_LISTENER_PORT": port}).returncode,
+                    0,
+                )
+        for failure in ("nonzero", "stderr"):
+            with self.subTest(ss_failure=failure):
+                self.assertNotEqual(
+                    run_case({"TEST_SS_FAILURE": failure}).returncode,
+                    0,
+                )
 
     def test_upgrade_seeds_and_proves_exact_browser_retirement_with_port_isolation(self) -> None:
         script = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -7533,6 +8390,7 @@ prepare_package_transition
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             script,
         )
+
         probe = script[
             script.index("operator_listener_preservation_required() {") : script.index(
                 "\nverify_installed_inventory() {"
@@ -7588,6 +8446,144 @@ prepare_package_transition
             package_lifecycle_lab.APK_BOOTSTRAP,
         ):
             self.assertRegex(bootstrap, r"(?:^|\s)socat(?:\s|$)")
+
+    def test_v4032_to_v4033_skips_only_the_impossible_live_webtui_seed(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        guard_start = source.index("v4032_to_v4033_upgrade_selected() {")
+        guard_end = source.index(
+            "\n}\n\nattest_v4032_previous_webtui_retirement() {", guard_start
+        ) + 2
+        guard = source[guard_start:guard_end]
+        transition_start = source.index(
+            "v4032_to_v4033_transition_selected() {"
+        )
+        transition_end = source.index(
+            "\n}\n\nexpected_systemd_enablement_prefix() {", transition_start
+        ) + 2
+        transition = source[transition_start:transition_end]
+        seed_start = source.index("seed_live_legacy_webtui_process() {")
+        seed_end = source.index("\n}\n\nload_state_contract() {", seed_start) + 2
+        seed = source[seed_start:seed_end]
+        scenario_start = source.index("scenario_upgrade_rollback_initial() {")
+        scenario_end = source.index(
+            "\n}\n\nscenario_upgrade_rollback_restart_one() {", scenario_start
+        ) + 2
+        scenario = source[scenario_start:scenario_end]
+
+        exact_skip = (
+            "if v4032_to_v4033_upgrade_selected; then\n"
+            "        return 0\n"
+            "    fi"
+        )
+        self.assertEqual(seed.count(exact_skip), 1)
+        self.assertLess(
+            seed.index(exact_skip),
+            seed.index("/opt/syswarden/bin/syswarden-cli web-tui"),
+        )
+        self.assertLess(
+            scenario.index("seed_legacy_webtui_upgrade_state || return"),
+            scenario.index("seed_live_legacy_webtui_process || return"),
+        )
+        self.assertLess(
+            scenario.index("seed_live_legacy_webtui_process || return"),
+            scenario.index('run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}"'),
+        )
+
+        command = "/opt/syswarden/bin/syswarden-cli web-tui"
+        self.assertEqual(seed.count(command), 1)
+        fake_command = self.root / "legacy-webtui-command"
+        fake_command.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$*\" > \"${TEST_LIVE_SEED_MARKER}\"\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        fake_command.chmod(0o700)
+        fake_bin = self.root / "live-seed-bin"
+        fake_bin.mkdir()
+        fake_curl = fake_bin / "curl"
+        fake_curl.write_text("#!/bin/sh\nprintf '%s' 000\n", encoding="utf-8")
+        fake_curl.chmod(0o700)
+        seed_log = self.root / "legacy-webtui-process.log"
+        seed = seed.replace(command, f"{shlex.quote(str(fake_command))} web-tui")
+        seed = seed.replace(
+            "/tmp/syswarden-legacy-webtui-process.log", str(seed_log)
+        )
+        persist = self.root / "live-seed-persist"
+        persist.mkdir()
+        marker = self.root / "live-seed-invoked"
+        harness = (
+            "#!/bin/sh\nset -u\n"
+            + transition
+            + "\n"
+            + guard
+            + "\n"
+            + seed
+            + r'''
+installed_version() {
+    printf '%s\n' "${TEST_INSTALLED_VERSION}"
+}
+record_lifecycle_seed_failure() {
+    :
+}
+stop_lifecycle_seed_process() {
+    wait "$1" 2>/dev/null || true
+}
+seed_live_legacy_webtui_process
+'''
+        )
+
+        def run_case(
+            *,
+            family: str = "deb",
+            scenario_name: str = "upgrade-rollback",
+            previous: str = "4.03.2",
+            candidate: str = "4.03.3",
+            installed: str = "4.03.2",
+        ) -> subprocess.CompletedProcess[str]:
+            marker.unlink(missing_ok=True)
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "PACKAGE_FAMILY": family,
+                "SCENARIO": scenario_name,
+                "EXPECTED_PREVIOUS_VERSION": previous,
+                "EXPECTED_CANDIDATE_VERSION": candidate,
+                "TEST_INSTALLED_VERSION": installed,
+                "TEST_LIVE_SEED_MARKER": str(marker),
+                "PERSIST_ROOT": str(persist),
+            }
+            return subprocess.run(
+                [shutil.which("dash") or "/bin/sh", "-c", harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+        for family in ("deb", "rpm"):
+            with self.subTest(exact_family=family):
+                exact = run_case(family=family)
+                self.assertEqual(exact.returncode, 0, exact.stderr)
+                self.assertFalse(marker.exists())
+
+        bounds = (
+            ("scenario", {"scenario_name": "remove"}),
+            ("previous", {"previous": "4.03.1"}),
+            ("candidate", {"candidate": "4.03.4"}),
+            ("installed", {"installed": "4.03.1"}),
+        )
+        for label, overrides in bounds:
+            with self.subTest(bound=label):
+                rejected = run_case(**overrides)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stderr)
+                self.assertTrue(marker.is_file())
+
+        apk = run_case(family="apk", previous="4.02.8")
+        self.assertEqual(apk.returncode, 0, apk.stderr)
+        self.assertFalse(marker.exists())
 
     def test_lifecycle_seed_failure_diagnostic_is_bounded_hex_and_fail_closed(
         self,
@@ -7871,6 +8867,149 @@ prepare_package_transition
             package_lifecycle_lab.APK_BOOTSTRAP,
         )
         self.assertIn("test -x /usr/bin/gpasswd", package_lifecycle_lab.APK_BOOTSTRAP)
+
+    def test_v4032_rpm_transition_restores_only_historical_lab_dependencies(
+        self,
+    ) -> None:
+        fedora = next(
+            spec
+            for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if spec.distribution == "fedora"
+        )
+        alma = next(
+            spec
+            for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if spec.distribution == "almalinux"
+        )
+        common_images = {
+            spec.distribution: (
+                f"localhost/syswarden-lifecycle-{package_lifecycle_lab.platform_slug(spec)}-"
+                + "a" * 32
+            )
+            for spec in (fedora, alma)
+        }
+        fedora_common = package_lifecycle_lab.build_containerfile(fedora)
+        alma_common = package_lifecycle_lab.build_containerfile(alma)
+        for common in (fedora_common, alma_common):
+            self.assertNotIn("dnf -y install qrencode", common)
+            self.assertNotIn("dnf -y install epel-release", common)
+            self.assertIn(
+                "! rpm -q qrencode >/dev/null 2>&1 && "
+                "! rpm -q epel-release >/dev/null 2>&1",
+                common,
+            )
+
+        fedora_v4032 = package_lifecycle_lab.build_historical_transition_containerfile(
+            fedora, "4.03.2", common_images["fedora"]
+        )
+        alma_v4032 = package_lifecycle_lab.build_historical_transition_containerfile(
+            alma, "4.03.2", common_images["almalinux"]
+        )
+        self.assertIsInstance(fedora_v4032, str)
+        self.assertIsInstance(alma_v4032, str)
+        assert fedora_v4032 is not None
+        assert alma_v4032 is not None
+        self.assertTrue(fedora_v4032.startswith(f"FROM {common_images['fedora']}\n"))
+        self.assertTrue(alma_v4032.startswith(f"FROM {common_images['almalinux']}\n"))
+        self.assertIn(
+            "RUN dnf -y install qrencode && rpm -q qrencode >/dev/null && "
+            "! rpm -q epel-release >/dev/null 2>&1 && dnf clean all\n",
+            fedora_v4032,
+        )
+        self.assertIn(
+            "RUN dnf -y install epel-release && dnf -y install qrencode && "
+            "rpm -q epel-release >/dev/null && rpm -q qrencode >/dev/null && "
+            "dnf clean all\n",
+            alma_v4032,
+        )
+
+        for spec in (fedora, alma):
+            with self.subTest(distribution=spec.distribution, previous="4.03.3"):
+                self.assertIsNone(
+                    package_lifecycle_lab.build_historical_transition_containerfile(
+                        spec, "4.03.3", common_images[spec.distribution]
+                    )
+                )
+        for spec in package_lifecycle_lab.DEFAULT_PLATFORMS:
+            if spec.family == "rpm":
+                continue
+            with self.subTest(distribution=spec.distribution):
+                self.assertEqual(
+                    package_lifecycle_lab.historical_transition_bootstrap(
+                        spec, "4.03.2"
+                    ),
+                    "",
+                )
+
+        unsupported = replace(fedora, distribution="unsupported-rpm")
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError,
+            "unsupported RPM distribution",
+        ):
+            package_lifecycle_lab.historical_transition_bootstrap(
+                unsupported, "4.03.2"
+            )
+
+        for spec in (fedora, alma):
+            with self.subTest(distribution=spec.distribution, routing=True):
+                runner = FakePodmanRunner()
+                transition = package_lifecycle_lab.historical_transition_bootstrap(
+                    spec, "4.03.2"
+                )
+                with mock.patch.object(
+                    package_lifecycle_lab,
+                    "historical_transition_bootstrap",
+                    return_value=transition,
+                ):
+                    report = package_lifecycle_lab.run_lab(
+                        self.args(),
+                        runner=runner,
+                        platforms=(spec,),
+                        host_architecture="x86_64",
+                    )
+                self.assertEqual(
+                    report["platforms"][0]["status"],
+                    "pass",
+                    report["platforms"][0],
+                )
+                builds = [call for call in runner.calls if call[1] == "build"]
+                self.assertEqual(len(builds), 2)
+                common_tag = builds[0][builds[0].index("--tag") + 1]
+                historical_tag = builds[1][builds[1].index("--tag") + 1]
+                self.assertNotEqual(common_tag, historical_tag)
+                self.assertTrue(historical_tag.endswith("-historical-upgrade"))
+                creates = [
+                    call
+                    for call in runner.calls
+                    if call[1] == "create"
+                    and any(value.endswith(":/results:rw") for value in call)
+                ]
+                scenario_images = {
+                    next(
+                        value.removeprefix("SCENARIO=")
+                        for index, value in enumerate(call)
+                        if call[index - 1] == "--env"
+                        and value.startswith("SCENARIO=")
+                    ): call[-1]
+                    for call in creates
+                }
+                self.assertEqual(
+                    scenario_images,
+                    {
+                        "upgrade-rollback": historical_tag,
+                        "remove": common_tag,
+                    },
+                )
+                removed_tags = [
+                    call[-1]
+                    for call in runner.calls
+                    if call[1:3] == ("image", "rm")
+                ]
+                self.assertEqual(removed_tags, [historical_tag, common_tag])
+                for tag in (common_tag, historical_tag):
+                    self.assertIn(
+                        ("podman", "image", "exists", tag), runner.calls
+                    )
 
     def test_failed_event_fails_platform_and_overall_report(self) -> None:
         runner = FakePodmanRunner(event_status="fail")

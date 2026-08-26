@@ -113,14 +113,11 @@ var installCmd = &cobra.Command{
 
 		// Phase 3: External Integrations & Log Bridges
 		fmt.Println("[SYSWARDEN] Starting Integrations & Log Bridges...")
-		if err := integration.SetupWAFLogForwarder(); err != nil {
-			return installStageError("WAF log bridge failed", err)
+		if err := setupRsyslogIntegrationsForInstall(); err != nil {
+			return err
 		}
 		if err := integration.SetupWebhooks(); err != nil {
 			return installStageError("webhook configuration failed", err)
-		}
-		if err := integration.SetupSIEM(); err != nil {
-			return installStageError("SIEM configuration failed", err)
 		}
 		if err := integration.SetupWazuh(); err != nil {
 			return installStageError("Wazuh configuration failed", err)
@@ -165,12 +162,24 @@ var installConfigPreflight = prepareInstallConfiguration
 var removeExactLegacyCompletionAfterInstall = integration.RemoveExactLegacyBashCompletion
 var quarantineLegacyDynamicBanIntervals = firewall.QuarantineLegacyDynamicBanIntervals
 var restartCoreServiceForInstall = restartCoreService
+var setupSIEMForInstall = integration.SetupSIEM
+var setupWAFForInstall = integration.SetupWAFLogForwarder
 var hostFirewallBackendPreflight = system.PreflightHostFirewallBackend
 var inspectInstallFirewallCompatibility = config.InspectHistoricalDefaultFirewallCompatibility
 var applyInstallFirewallCompatibility = config.ApplyHistoricalDefaultFirewallCompatibility
 var hostCronSchedulingPreflight = func(haEnabled bool) error {
 	_, err := system.PreflightRuntimeCronScheduling(haEnabled)
 	return err
+}
+
+func setupRsyslogIntegrationsForInstall() error {
+	if err := setupSIEMForInstall(); err != nil {
+		return installStageError("SIEM configuration failed", err)
+	}
+	if err := setupWAFForInstall(); err != nil {
+		return installStageError("WAF log bridge failed", err)
+	}
+	return nil
 }
 
 func preflightConfiguredCronScheduling() error {

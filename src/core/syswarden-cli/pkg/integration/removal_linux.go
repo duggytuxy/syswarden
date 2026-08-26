@@ -346,6 +346,44 @@ func inspectExactOwnedArtifact(
 	return inspection, nil
 }
 
+func selectExactOwnedArtifactAlternativeInDirectory(
+	directory *os.File,
+	name, label string,
+	uid, gid uint32,
+	alternatives ...[]byte,
+) (exactOwnedArtifactExpectation, bool, bool, error) {
+	if directory == nil || !validOwnedArtifactName(name) {
+		return exactOwnedArtifactExpectation{}, false, false, fmt.Errorf("invalid exact-artifact alternative selection")
+	}
+	present := false
+	inspected := false
+	for _, content := range alternatives {
+		if content == nil {
+			continue
+		}
+		inspected = true
+		expectation := exactContentExpectation(label, name, content, 0600)
+		inspection, err := inspectExactOwnedArtifact(directory, name, expectation, uid, gid)
+		if err != nil {
+			return exactOwnedArtifactExpectation{}, present, false, err
+		}
+		if !inspection.identity.exists {
+			if present {
+				return exactOwnedArtifactExpectation{}, false, false, fmt.Errorf("%s changed while selecting an exact generated variant", label)
+			}
+			return exactOwnedArtifactExpectation{}, false, false, nil
+		}
+		present = true
+		if inspection.exact {
+			return expectation, true, true, nil
+		}
+	}
+	if !inspected {
+		return exactOwnedArtifactExpectation{}, false, false, fmt.Errorf("no exact generated variants are available for %s", label)
+	}
+	return exactOwnedArtifactExpectation{}, present, false, nil
+}
+
 func exactArtifactQuarantineName(name string) string {
 	return "." + name + exactArtifactQuarantineSuffix
 }
@@ -891,25 +929,46 @@ func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
 		return err
 	}
 
-	wafExpectation, hasWAFProvenance := exactOwnedArtifactExpectation{}, false
+	wafExpectation, hasWAFExpectation := exactOwnedArtifactExpectation{}, false
 	if record, exists := provenance.records[wafRsyslogConfigName]; exists {
 		wafExpectation = provenanceExpectation(
 			"SysWarden WAF rsyslog bridge", wafRsyslogConfigName, record,
 		)
-		hasWAFProvenance = true
+		hasWAFExpectation = true
 	}
-	if !hasWAFProvenance {
-		waf, _, renderErr := renderWAFRsyslogConfig(activeConfig.ModsecLogs)
+	if !hasWAFExpectation {
+		waf, _, renderErr := renderWAFRsyslogConfig(
+			activeConfig.ModsecLogs,
+			activeConfig.SiemEnabled,
+		)
 		if renderErr != nil {
 			options.warn(fmt.Sprintf("Preserving the WAF rsyslog bridge: cannot render expected bytes: %v", renderErr))
 		} else {
-			wafExpectation = exactContentExpectation(
-				"SysWarden WAF rsyslog bridge", wafRsyslogConfigName, []byte(waf), 0600,
+			legacyWAF, _, legacyRenderErr := renderLegacyV4032WAFRsyslogConfig(activeConfig.ModsecLogs)
+			if legacyRenderErr != nil {
+				return legacyRenderErr
+			}
+			selected, present, exact, selectErr := selectExactOwnedArtifactAlternativeInDirectory(
+				directory,
+				wafRsyslogConfigName,
+				"SysWarden WAF rsyslog bridge",
+				uid,
+				gid,
+				[]byte(waf),
+				[]byte(legacyWAF),
 			)
-			hasWAFProvenance = true
+			if selectErr != nil {
+				return fmt.Errorf("select exact WAF rsyslog variant before removal: %w", selectErr)
+			}
+			if exact {
+				wafExpectation = selected
+				hasWAFExpectation = true
+			} else if present {
+				options.warn("Preserving the WAF rsyslog bridge: bytes do not match the current or v4.03.2 generated variant.")
+			}
 		}
 	}
-	if hasWAFProvenance {
+	if hasWAFExpectation {
 		removed, err := removeExpectedRsyslogArtifactInDirectoryUsing(
 			directory, uid, gid,
 			wafExpectation,
@@ -929,14 +988,14 @@ func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
 		}
 	}
 
-	siemExpectation, hasSIEMProvenance := exactOwnedArtifactExpectation{}, false
+	siemExpectation, hasSIEMExpectation := exactOwnedArtifactExpectation{}, false
 	if record, exists := provenance.records[rsyslogSIEMConfigName]; exists {
 		siemExpectation = provenanceExpectation(
 			"SysWarden SIEM rsyslog forwarder", rsyslogSIEMConfigName, record,
 		)
-		hasSIEMProvenance = true
+		hasSIEMExpectation = true
 	}
-	if !hasSIEMProvenance && activeConfig.SiemEnabled {
+	if !hasSIEMExpectation && activeConfig.SiemEnabled {
 		siem, renderErr := renderSIEMRsyslogConfig(
 			activeConfig.SiemIP, activeConfig.SiemPort,
 			activeConfig.SiemProto, activeConfig.SiemTLSCA,
@@ -944,13 +1003,34 @@ func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
 		if renderErr != nil {
 			options.warn(fmt.Sprintf("Preserving the SIEM rsyslog forwarder: cannot render expected bytes: %v", renderErr))
 		} else {
-			siemExpectation = exactContentExpectation(
-				"SysWarden SIEM rsyslog forwarder", rsyslogSIEMConfigName, []byte(siem), 0600,
+			legacySIEM, legacyRenderErr := renderLegacyV4032SIEMRsyslogConfig(
+				activeConfig.SiemIP, activeConfig.SiemPort,
+				activeConfig.SiemProto, activeConfig.SiemTLSCA,
 			)
-			hasSIEMProvenance = true
+			if legacyRenderErr != nil {
+				return legacyRenderErr
+			}
+			selected, present, exact, selectErr := selectExactOwnedArtifactAlternativeInDirectory(
+				directory,
+				rsyslogSIEMConfigName,
+				"SysWarden SIEM rsyslog forwarder",
+				uid,
+				gid,
+				[]byte(siem),
+				[]byte(legacySIEM),
+			)
+			if selectErr != nil {
+				return fmt.Errorf("select exact SIEM rsyslog variant before removal: %w", selectErr)
+			}
+			if exact {
+				siemExpectation = selected
+				hasSIEMExpectation = true
+			} else if present {
+				options.warn("Preserving the SIEM rsyslog forwarder: bytes do not match the current or v4.03.2 generated variant.")
+			}
 		}
 	}
-	if hasSIEMProvenance {
+	if hasSIEMExpectation {
 		removed, err := removeExpectedRsyslogArtifactInDirectoryUsing(
 			directory, uid, gid, siemExpectation, rsyslogOptions,
 		)

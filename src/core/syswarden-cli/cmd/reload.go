@@ -47,7 +47,7 @@ var reloadCmd = &cobra.Command{
 			fmt.Println("[WARN] WireGuard reload skipped because the authoritative firewall transaction failed.")
 		}
 
-		// Reconcile the WAF bridge first, then the optional SIEM forwarder.
+		// Reconcile the optional SIEM forwarder before its WAF-owned imfile input.
 		failures = append(failures, reloadRsyslogIntegrations()...)
 
 		// Re-apply AbuseIPDB / Telemetry configuration
@@ -86,13 +86,13 @@ var reloadCmd = &cobra.Command{
 
 func reloadRsyslogIntegrations() []error {
 	var failures []error
-	if err := setupWAFForReload(); err != nil {
-		fmt.Printf("[ERROR] WAF Log Bridge reload failed: %v\n", err)
-		failures = append(failures, fmt.Errorf("WAF log bridge reload: %w", err))
-	}
 	if err := setupSIEMForReload(); err != nil {
 		fmt.Printf("[ERROR] SIEM integration reload failed: %v\n", err)
 		failures = append(failures, fmt.Errorf("SIEM integration reload: %w", err))
+	}
+	if err := setupWAFForReload(); err != nil {
+		fmt.Printf("[ERROR] WAF Log Bridge reload failed: %v\n", err)
+		failures = append(failures, fmt.Errorf("WAF log bridge reload: %w", err))
 	}
 	return failures
 }

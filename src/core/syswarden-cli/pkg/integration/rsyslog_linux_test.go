@@ -80,7 +80,7 @@ func TestRsyslogRenderersDoNotPermitContextBreakout_SW_CFG_002(t *testing.T) {
 	if err := os.WriteFile(pattern, []byte("fixture\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	waf, active, err := renderWAFRsyslogConfig(pattern)
+	waf, active, err := renderWAFRsyslogConfig(pattern, false)
 	if err != nil || active != 1 {
 		t.Fatalf("renderWAFRsyslogConfig() active=%d error=%v", active, err)
 	}
@@ -108,8 +108,69 @@ func TestRsyslogRenderersDoNotPermitContextBreakout_SW_CFG_002(t *testing.T) {
 	}
 }
 
+func TestRsyslogRenderersGiveWAFExclusiveImfileOwnership_SW2_PKG_001(t *testing.T) {
+	siem, err := renderSIEMRsyslogConfig("192.0.2.40", "514", "udp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(siem, "imfile") || strings.Contains(siem, "/var/log/syswarden/waf.json") {
+		t.Fatalf("SIEM forwarding config retained input-module ownership:\n%s", siem)
+	}
+
+	wafWithoutSIEM, active, err := renderWAFRsyslogConfig("", false)
+	if err != nil || active != 0 {
+		t.Fatalf("render WAF without SIEM telemetry = active %d, %v", active, err)
+	}
+	if strings.Contains(wafWithoutSIEM, "/var/log/syswarden/waf.json") {
+		t.Fatalf("disabled SIEM telemetry remains in WAF config:\n%s", wafWithoutSIEM)
+	}
+
+	wafWithSIEM, active, err := renderWAFRsyslogConfig("", true)
+	if err != nil || active != 0 {
+		t.Fatalf("render WAF with SIEM telemetry = active %d, %v", active, err)
+	}
+	if strings.Count(wafWithSIEM, `module(load="imfile"`) != 1 {
+		t.Fatalf("WAF config does not own exactly one imfile load:\n%s", wafWithSIEM)
+	}
+	if strings.Count(siem+wafWithSIEM, `module(load="imfile"`) != 1 {
+		t.Fatalf("combined SIEM and WAF config does not contain exactly one imfile load:\n%s\n%s", siem, wafWithSIEM)
+	}
+	if strings.Count(wafWithSIEM, `File="/var/log/syswarden/waf.json"`) != 1 ||
+		strings.Count(wafWithSIEM, `Tag="syswarden-waf-json"`) != 1 {
+		t.Fatalf("WAF config does not contain exactly one SIEM telemetry input:\n%s", wafWithSIEM)
+	}
+	telemetryStart := strings.Index(wafWithSIEM, "# SYSWARDEN WAAP Native JSON Telemetry")
+	if telemetryStart < 0 {
+		t.Fatalf("WAF SIEM telemetry block is incomplete:\n%s", wafWithSIEM)
+	}
+	telemetryEnd := strings.Index(wafWithSIEM[telemetryStart:], "template(name=\"SYSWARDENRaw\"")
+	if telemetryEnd < 0 {
+		t.Fatalf("WAF SIEM telemetry block is incomplete:\n%s", wafWithSIEM)
+	}
+	telemetry := wafWithSIEM[telemetryStart : telemetryStart+telemetryEnd]
+	if strings.Contains(telemetry, `ruleset="waf_bridge"`) {
+		t.Fatalf("SIEM telemetry would recurse through the WAF ruleset:\n%s", telemetry)
+	}
+
+	legacy, err := renderLegacyV4032SIEMRsyslogConfig("192.0.2.40", "514", "udp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLegacy := "*.* @192.0.2.40:514\n\n" +
+		"# SYSWARDEN WAAP Native JSON Telemetry\n" +
+		"module(load=\"imfile\" PollingInterval=\"10\")\n" +
+		"input(type=\"imfile\"\n" +
+		"      File=\"/var/log/syswarden/waf.json\"\n" +
+		"      Tag=\"syswarden-waf-json\"\n" +
+		"      Severity=\"alert\"\n" +
+		"      Facility=\"local7\")\n"
+	if legacy != wantLegacy {
+		t.Fatalf("legacy v4.03.2 SIEM bytes changed:\nwant:\n%s\ngot:\n%s", wantLegacy, legacy)
+	}
+}
+
 func TestWAFRsyslogBridgeStopsAllSysWardenOwnedMarkers_SW2_H2(t *testing.T) {
-	waf, active, err := renderWAFRsyslogConfig("")
+	waf, active, err := renderWAFRsyslogConfig("", false)
 	if err != nil || active != 0 {
 		t.Fatalf("renderWAFRsyslogConfig() active=%d error=%v", active, err)
 	}

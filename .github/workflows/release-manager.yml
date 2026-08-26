@@ -141,10 +141,130 @@ jobs:
               # changelog rewrite policy without changing release version
               # targets or changelog.
               v4033_parent_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4033_parent_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
+              if [[ "${v4033_parent_sha}" == "19e4add763e935a29219c20c86586b3557a441c9" ]]; then
+                # Authorize exactly one linear qualification repair after the
+                # reviewed PR119 seal. The exact parent makes this exception
+                # non-replayable after any later commit, while the immutable
+                # PR118 and PR117 ancestry replays the versioning transition.
+                v4033_repair_base_sha="$(git rev-parse HEAD^^)"
+                if [[ "${v4033_repair_base_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
+                  echo "ERROR: the reviewed PR119 squash is not based on the reviewed PR118 squash." >&2
+                  exit 1
+                fi
+                v4033_repair_release_base_sha="$(git rev-parse HEAD^^^)"
+                if [[ "${v4033_repair_release_base_sha}" != "b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449" ]]; then
+                  echo "ERROR: the reviewed PR118 squash is not based on the reviewed PR117 squash." >&2
+                  exit 1
+                fi
+                v4033_repair_parent_subject="$(git log -1 --format=%s HEAD^)"
+                v4033_expected_repair_parent_subject='CI : bind one-time v4.03.3 changelog seal (#119)'
+                if [[ "${v4033_repair_parent_subject}" != "${v4033_expected_repair_parent_subject}" ]]; then
+                  echo "ERROR: the reviewed PR119 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_repair_base_subject="$(git log -1 --format=%s HEAD^^)"
+                v4033_expected_repair_base_subject='Patch : correct webhook, firewall and OSINT handling (#118)'
+                if [[ "${v4033_repair_base_subject}" != "${v4033_expected_repair_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR118 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_repair_release_base_subject="$(git log -1 --format=%s HEAD^^^)"
+                v4033_expected_repair_release_base_subject='CI : make release inventory comparison portable (#117)'
+                if [[ "${v4033_repair_release_base_subject}" != "${v4033_expected_repair_release_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR117 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_repair_subject_pattern='^Qualification : repair v4.03.3 lifecycle qualification \(#[1-9][0-9]*\)$'
+                if [[ ! "${commit_subject}" =~ ${v4033_repair_subject_pattern} ]]; then
+                  echo "ERROR: the v4.03.3 lifecycle repair requires the exact reviewed Qualification subject." >&2
+                  exit 1
+                fi
+                read -r -a v4033_repair_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+                read -r -a v4033_repair_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+                read -r -a v4033_repair_base_line <<< "$(git rev-list --parents -n 1 HEAD^^)"
+                read -r -a v4033_repair_release_base_line <<< "$(git rev-list --parents -n 1 HEAD^^^)"
+                if (( ${#v4033_repair_head_line[@]} != 2 ||
+                      ${#v4033_repair_parent_line[@]} != 2 ||
+                      ${#v4033_repair_base_line[@]} != 2 ||
+                      ${#v4033_repair_release_base_line[@]} != 2 )); then
+                  echo "ERROR: the v4.03.3 lifecycle repair and reviewed PR119/PR118/PR117 chain must be linear." >&2
+                  exit 1
+                fi
+                # BEGIN exact v4.03.3 lifecycle-repair diff contract
+                expected_v4033_repair_diff=(
+                  M ".github/workflows/release-manager.yml"
+                  M ".github/workflows/release-qualification.yml"
+                  M "scripts/ci/package_lifecycle_lab.py"
+                  M "scripts/ci/package_lifecycle_lab_test.py"
+                  M "scripts/ci/release_gate_test.py"
+                  M "scripts/ci/release_qualification_adapter_test.py"
+                  M "scripts/ci/release_qualification_workflow_test.py"
+                  M "src/core/syswarden-cli/cmd/install.go"
+                  M "src/core/syswarden-cli/cmd/reload.go"
+                  M "src/core/syswarden-cli/cmd/reload_test.go"
+                  M "src/core/syswarden-cli/pkg/integration/removal_linux.go"
+                  M "src/core/syswarden-cli/pkg/integration/removal_linux_test.go"
+                  M "src/core/syswarden-cli/pkg/integration/rsyslog_linux_test.go"
+                  M "src/core/syswarden-cli/pkg/integration/rsyslog_provenance_linux_test.go"
+                  M "src/core/syswarden-cli/pkg/integration/siem_linux.go"
+                  M "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go"
+                )
+                mapfile -d '' -t actual_v4033_repair_diff < <(
+                  git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                )
+                if (( ${#actual_v4033_repair_diff[@]} != ${#expected_v4033_repair_diff[@]} )); then
+                  echo "ERROR: the v4.03.3 lifecycle repair must modify exactly the sixteen reviewed files." >&2
+                  exit 1
+                fi
+                for ((index = 0; index < ${#expected_v4033_repair_diff[@]}; index++)); do
+                  if [[ "${actual_v4033_repair_diff[index]}" != "${expected_v4033_repair_diff[index]}" ]]; then
+                    echo "ERROR: the v4.03.3 lifecycle repair contains an unauthorized path, status, or rename." >&2
+                    exit 1
+                  fi
+                done
+                v4033_repair_paths=(
+                  ".github/workflows/release-manager.yml"
+                  ".github/workflows/release-qualification.yml"
+                  "scripts/ci/package_lifecycle_lab.py"
+                  "scripts/ci/package_lifecycle_lab_test.py"
+                  "scripts/ci/release_gate_test.py"
+                  "scripts/ci/release_qualification_adapter_test.py"
+                  "scripts/ci/release_qualification_workflow_test.py"
+                  "src/core/syswarden-cli/cmd/install.go"
+                  "src/core/syswarden-cli/cmd/reload.go"
+                  "src/core/syswarden-cli/cmd/reload_test.go"
+                  "src/core/syswarden-cli/pkg/integration/removal_linux.go"
+                  "src/core/syswarden-cli/pkg/integration/removal_linux_test.go"
+                  "src/core/syswarden-cli/pkg/integration/rsyslog_linux_test.go"
+                  "src/core/syswarden-cli/pkg/integration/rsyslog_provenance_linux_test.go"
+                  "src/core/syswarden-cli/pkg/integration/siem_linux.go"
+                  "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go"
+                )
+                for tree_ref in HEAD^ HEAD; do
+                  for fix_path in "${v4033_repair_paths[@]}"; do
+                    tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                    IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                    if [[ "${tree_mode}" != "100644" || \
+                          "${tree_type}" != "blob" || \
+                          ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                          "${tree_path}" != "${fix_path}" || \
+                          -n "${tree_extra:-}" ]]; then
+                      echo "ERROR: reviewed v4.03.3 lifecycle-repair path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                      exit 1
+                    fi
+                  done
+                done
+                # END exact v4.03.3 lifecycle-repair diff contract
+                v4033_repair_versioning_message="$(git log -1 --format=%B HEAD^^)"
+                ./scripts/versioning.sh validate-commit \
+                  --repo "${GITHUB_WORKSPACE}" \
+                  --base-ref "${v4033_repair_release_base_sha}" \
+                  --tag-phase \
+                  --commit-message "${v4033_repair_versioning_message}"
+              elif [[ "${v4033_parent_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
                 echo "ERROR: the v4.03.3 candidate is not based on the reviewed PR118 squash." >&2
                 exit 1
-              fi
+              else
               v4033_base_sha="$(git rev-parse HEAD^^)"
               if [[ "${v4033_base_sha}" != "b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449" ]]; then
                 echo "ERROR: the reviewed PR118 squash is not based on the reviewed PR117 squash." >&2
@@ -223,6 +343,7 @@ jobs:
                 --base-ref "${v4033_base_sha}" \
                 --tag-phase \
                 --commit-message "${v4033_parent_message}"
+              fi
             elif [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               # The protected qualification, package byte comparison, signed
               # update manifest, tag resolution and origin/main ancestry bind
@@ -793,10 +914,130 @@ jobs:
               # changelog rewrite policy without changing release version
               # targets or changelog.
               v4033_parent_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4033_parent_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
+              if [[ "${v4033_parent_sha}" == "19e4add763e935a29219c20c86586b3557a441c9" ]]; then
+                # Authorize exactly one linear qualification repair after the
+                # reviewed PR119 seal. The exact parent makes this exception
+                # non-replayable after any later commit, while the immutable
+                # PR118 and PR117 ancestry replays the versioning transition.
+                v4033_repair_base_sha="$(git rev-parse HEAD^^)"
+                if [[ "${v4033_repair_base_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
+                  echo "ERROR: the reviewed PR119 squash is not based on the reviewed PR118 squash." >&2
+                  exit 1
+                fi
+                v4033_repair_release_base_sha="$(git rev-parse HEAD^^^)"
+                if [[ "${v4033_repair_release_base_sha}" != "b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449" ]]; then
+                  echo "ERROR: the reviewed PR118 squash is not based on the reviewed PR117 squash." >&2
+                  exit 1
+                fi
+                v4033_repair_parent_subject="$(git log -1 --format=%s HEAD^)"
+                v4033_expected_repair_parent_subject='CI : bind one-time v4.03.3 changelog seal (#119)'
+                if [[ "${v4033_repair_parent_subject}" != "${v4033_expected_repair_parent_subject}" ]]; then
+                  echo "ERROR: the reviewed PR119 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_repair_base_subject="$(git log -1 --format=%s HEAD^^)"
+                v4033_expected_repair_base_subject='Patch : correct webhook, firewall and OSINT handling (#118)'
+                if [[ "${v4033_repair_base_subject}" != "${v4033_expected_repair_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR118 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_repair_release_base_subject="$(git log -1 --format=%s HEAD^^^)"
+                v4033_expected_repair_release_base_subject='CI : make release inventory comparison portable (#117)'
+                if [[ "${v4033_repair_release_base_subject}" != "${v4033_expected_repair_release_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR117 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_repair_subject_pattern='^Qualification : repair v4.03.3 lifecycle qualification \(#[1-9][0-9]*\)$'
+                if [[ ! "${commit_subject}" =~ ${v4033_repair_subject_pattern} ]]; then
+                  echo "ERROR: the v4.03.3 lifecycle repair requires the exact reviewed Qualification subject." >&2
+                  exit 1
+                fi
+                read -r -a v4033_repair_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+                read -r -a v4033_repair_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+                read -r -a v4033_repair_base_line <<< "$(git rev-list --parents -n 1 HEAD^^)"
+                read -r -a v4033_repair_release_base_line <<< "$(git rev-list --parents -n 1 HEAD^^^)"
+                if (( ${#v4033_repair_head_line[@]} != 2 ||
+                      ${#v4033_repair_parent_line[@]} != 2 ||
+                      ${#v4033_repair_base_line[@]} != 2 ||
+                      ${#v4033_repair_release_base_line[@]} != 2 )); then
+                  echo "ERROR: the v4.03.3 lifecycle repair and reviewed PR119/PR118/PR117 chain must be linear." >&2
+                  exit 1
+                fi
+                # BEGIN exact v4.03.3 lifecycle-repair diff contract
+                expected_v4033_repair_diff=(
+                  M ".github/workflows/release-manager.yml"
+                  M ".github/workflows/release-qualification.yml"
+                  M "scripts/ci/package_lifecycle_lab.py"
+                  M "scripts/ci/package_lifecycle_lab_test.py"
+                  M "scripts/ci/release_gate_test.py"
+                  M "scripts/ci/release_qualification_adapter_test.py"
+                  M "scripts/ci/release_qualification_workflow_test.py"
+                  M "src/core/syswarden-cli/cmd/install.go"
+                  M "src/core/syswarden-cli/cmd/reload.go"
+                  M "src/core/syswarden-cli/cmd/reload_test.go"
+                  M "src/core/syswarden-cli/pkg/integration/removal_linux.go"
+                  M "src/core/syswarden-cli/pkg/integration/removal_linux_test.go"
+                  M "src/core/syswarden-cli/pkg/integration/rsyslog_linux_test.go"
+                  M "src/core/syswarden-cli/pkg/integration/rsyslog_provenance_linux_test.go"
+                  M "src/core/syswarden-cli/pkg/integration/siem_linux.go"
+                  M "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go"
+                )
+                mapfile -d '' -t actual_v4033_repair_diff < <(
+                  git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                )
+                if (( ${#actual_v4033_repair_diff[@]} != ${#expected_v4033_repair_diff[@]} )); then
+                  echo "ERROR: the v4.03.3 lifecycle repair must modify exactly the sixteen reviewed files." >&2
+                  exit 1
+                fi
+                for ((index = 0; index < ${#expected_v4033_repair_diff[@]}; index++)); do
+                  if [[ "${actual_v4033_repair_diff[index]}" != "${expected_v4033_repair_diff[index]}" ]]; then
+                    echo "ERROR: the v4.03.3 lifecycle repair contains an unauthorized path, status, or rename." >&2
+                    exit 1
+                  fi
+                done
+                v4033_repair_paths=(
+                  ".github/workflows/release-manager.yml"
+                  ".github/workflows/release-qualification.yml"
+                  "scripts/ci/package_lifecycle_lab.py"
+                  "scripts/ci/package_lifecycle_lab_test.py"
+                  "scripts/ci/release_gate_test.py"
+                  "scripts/ci/release_qualification_adapter_test.py"
+                  "scripts/ci/release_qualification_workflow_test.py"
+                  "src/core/syswarden-cli/cmd/install.go"
+                  "src/core/syswarden-cli/cmd/reload.go"
+                  "src/core/syswarden-cli/cmd/reload_test.go"
+                  "src/core/syswarden-cli/pkg/integration/removal_linux.go"
+                  "src/core/syswarden-cli/pkg/integration/removal_linux_test.go"
+                  "src/core/syswarden-cli/pkg/integration/rsyslog_linux_test.go"
+                  "src/core/syswarden-cli/pkg/integration/rsyslog_provenance_linux_test.go"
+                  "src/core/syswarden-cli/pkg/integration/siem_linux.go"
+                  "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go"
+                )
+                for tree_ref in HEAD^ HEAD; do
+                  for fix_path in "${v4033_repair_paths[@]}"; do
+                    tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                    IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                    if [[ "${tree_mode}" != "100644" || \
+                          "${tree_type}" != "blob" || \
+                          ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                          "${tree_path}" != "${fix_path}" || \
+                          -n "${tree_extra:-}" ]]; then
+                      echo "ERROR: reviewed v4.03.3 lifecycle-repair path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                      exit 1
+                    fi
+                  done
+                done
+                # END exact v4.03.3 lifecycle-repair diff contract
+                v4033_repair_versioning_message="$(git log -1 --format=%B HEAD^^)"
+                ./scripts/versioning.sh validate-commit \
+                  --repo "${GITHUB_WORKSPACE}" \
+                  --base-ref "${v4033_repair_release_base_sha}" \
+                  --tag-phase \
+                  --commit-message "${v4033_repair_versioning_message}"
+              elif [[ "${v4033_parent_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
                 echo "ERROR: the v4.03.3 candidate is not based on the reviewed PR118 squash." >&2
                 exit 1
-              fi
+              else
               v4033_base_sha="$(git rev-parse HEAD^^)"
               if [[ "${v4033_base_sha}" != "b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449" ]]; then
                 echo "ERROR: the reviewed PR118 squash is not based on the reviewed PR117 squash." >&2
@@ -875,6 +1116,7 @@ jobs:
                 --base-ref "${v4033_base_sha}" \
                 --tag-phase \
                 --commit-message "${v4033_parent_message}"
+              fi
             elif [[ "${RELEASE_TAG}" == "v4.03.2" ]]; then
               # The protected qualification, package byte comparison, signed
               # update manifest, tag resolution and origin/main ancestry bind

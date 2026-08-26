@@ -40,14 +40,25 @@ func renderSIEMRsyslogConfig(ip, port, protocol, tlsCA string) (string, error) {
 		return "", fmt.Errorf("unsupported rsyslog transport %q", protocol)
 	}
 
-	rendered.WriteString("\n# SYSWARDEN WAAP Native JSON Telemetry\n")
-	rendered.WriteString("module(load=\"imfile\" PollingInterval=\"10\")\n")
-	rendered.WriteString("input(type=\"imfile\"\n")
-	rendered.WriteString("      File=\"/var/log/syswarden/waf.json\"\n")
-	rendered.WriteString("      Tag=\"syswarden-waf-json\"\n")
-	rendered.WriteString("      Severity=\"alert\"\n")
-	rendered.WriteString("      Facility=\"local7\")\n")
 	return rendered.String(), nil
+}
+
+const rsyslogLegacyV4032SIEMTelemetryInput = `
+# SYSWARDEN WAAP Native JSON Telemetry
+module(load="imfile" PollingInterval="10")
+input(type="imfile"
+      File="/var/log/syswarden/waf.json"
+      Tag="syswarden-waf-json"
+      Severity="alert"
+      Facility="local7")
+`
+
+func renderLegacyV4032SIEMRsyslogConfig(ip, port, protocol, tlsCA string) (string, error) {
+	rendered, err := renderSIEMRsyslogConfig(ip, port, protocol, tlsCA)
+	if err != nil {
+		return "", err
+	}
+	return rendered + rsyslogLegacyV4032SIEMTelemetryInput, nil
 }
 
 func reconcileSIEMRsyslogConfigAtUsing(
@@ -68,20 +79,28 @@ func reconcileSIEMRsyslogConfigAtUsing(
 }
 
 func disableSIEMRsyslogForwarder() error {
-	var historicalExpected []byte
+	var untrackedExpected [][]byte
 	if rendered, err := renderSIEMRsyslogConfig(
 		config.GlobalConfig.SiemIP,
 		config.GlobalConfig.SiemPort,
 		config.GlobalConfig.SiemProto,
 		config.GlobalConfig.SiemTLSCA,
 	); err == nil {
-		historicalExpected = []byte(rendered)
+		untrackedExpected = append(untrackedExpected, []byte(rendered))
+	}
+	if rendered, err := renderLegacyV4032SIEMRsyslogConfig(
+		config.GlobalConfig.SiemIP,
+		config.GlobalConfig.SiemPort,
+		config.GlobalConfig.SiemProto,
+		config.GlobalConfig.SiemTLSCA,
+	); err == nil {
+		untrackedExpected = append(untrackedExpected, []byte(rendered))
 	}
 	return disableSIEMRsyslogForwarderAtUsing(
 		wafRsyslogParentDirectory,
 		0,
 		0,
-		historicalExpected,
+		untrackedExpected,
 		defaultExactOwnedArtifactRemovalOptions(),
 		reconcileWAFRsyslogService,
 		requireRsyslogMutationWithoutRemovalBarrier,
@@ -91,7 +110,7 @@ func disableSIEMRsyslogForwarder() error {
 func disableSIEMRsyslogForwarderAtUsing(
 	parentPath string,
 	uid, gid uint32,
-	historicalExpected []byte,
+	untrackedExpected [][]byte,
 	options exactOwnedArtifactRemovalOptions,
 	activate func(bool) error,
 	preflight rsyslogMutationPreflight,
@@ -122,21 +141,35 @@ func disableSIEMRsyslogForwarderAtUsing(
 		expectation = provenanceExpectation(
 			"SysWarden SIEM rsyslog forwarder", rsyslogSIEMConfigName, record,
 		)
-	} else if historicalExpected != nil {
-		expectation = exactContentExpectation(
-			"historical SysWarden SIEM rsyslog forwarder",
-			rsyslogSIEMConfigName,
-			historicalExpected,
-			0600,
-		)
 	} else {
-		if err := requireOwnedArtifactAbsent(
-			directory, rsyslogSIEMConfigName, "untracked SysWarden SIEM rsyslog forwarder",
-		); err != nil {
-			options.warn("Preserving the SIEM rsyslog forwarder because no exact SysWarden provenance is available.")
-			return fmt.Errorf("cannot safely disable untracked SIEM rsyslog forwarder: %w", err)
+		if len(untrackedExpected) == 0 {
+			if err := requireOwnedArtifactAbsent(
+				directory, rsyslogSIEMConfigName, "untracked SysWarden SIEM rsyslog forwarder",
+			); err != nil {
+				options.warn("Preserving the SIEM rsyslog forwarder because no exact SysWarden provenance is available.")
+				return fmt.Errorf("cannot safely disable untracked SIEM rsyslog forwarder: %w", err)
+			}
+			return nil
 		}
-		return nil
+		selected, present, exact, selectErr := selectExactOwnedArtifactAlternativeInDirectory(
+			directory,
+			rsyslogSIEMConfigName,
+			"untracked SysWarden SIEM rsyslog forwarder",
+			uid,
+			gid,
+			untrackedExpected...,
+		)
+		if selectErr != nil {
+			return fmt.Errorf("select exact untracked SIEM rsyslog variant: %w", selectErr)
+		}
+		if !present {
+			return nil
+		}
+		if !exact {
+			options.warn("Preserving the SIEM rsyslog forwarder because no exact SysWarden provenance is available.")
+			return fmt.Errorf("cannot safely disable untracked SIEM rsyslog forwarder: bytes do not match the current or v4.03.2 generated variant")
+		}
+		expectation = selected
 	}
 	removalOptions := options
 	removalOptions.beforeCommit = func() error {

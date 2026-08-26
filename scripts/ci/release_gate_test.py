@@ -26,6 +26,24 @@ RELEASE_MANAGER_WORKFLOW = (
 )
 RETIRED_PLATFORM = "free" + "bsd"
 RETIRED_PACKAGE_SUFFIX = "." + "txz"
+V4033_LIFECYCLE_REPAIR_PATHS = (
+    ".github/workflows/release-manager.yml",
+    ".github/workflows/release-qualification.yml",
+    "scripts/ci/package_lifecycle_lab.py",
+    "scripts/ci/package_lifecycle_lab_test.py",
+    "scripts/ci/release_gate_test.py",
+    "scripts/ci/release_qualification_adapter_test.py",
+    "scripts/ci/release_qualification_workflow_test.py",
+    "src/core/syswarden-cli/cmd/install.go",
+    "src/core/syswarden-cli/cmd/reload.go",
+    "src/core/syswarden-cli/cmd/reload_test.go",
+    "src/core/syswarden-cli/pkg/integration/removal_linux.go",
+    "src/core/syswarden-cli/pkg/integration/removal_linux_test.go",
+    "src/core/syswarden-cli/pkg/integration/rsyslog_linux_test.go",
+    "src/core/syswarden-cli/pkg/integration/rsyslog_provenance_linux_test.go",
+    "src/core/syswarden-cli/pkg/integration/siem_linux.go",
+    "src/core/syswarden-cli/pkg/integration/waf_logs_linux.go",
+)
 
 
 def workflow_step_script(workflow: str, step_name: str) -> str:
@@ -1467,10 +1485,10 @@ class ReleaseGateTests(unittest.TestCase):
             2,
         )
         self.assertEqual(
-            workflow.count("git rev-list --parents -n 1 HEAD)"), 8
+            workflow.count("git rev-list --parents -n 1 HEAD)"), 10
         )
         self.assertEqual(
-            workflow.count("git rev-list --parents -n 1 HEAD^)"), 8
+            workflow.count("git rev-list --parents -n 1 HEAD^)"), 10
         )
         self.assertEqual(
             workflow.count(
@@ -1510,8 +1528,8 @@ class ReleaseGateTests(unittest.TestCase):
             2,
         )
         for script in scripts:
-            self.assertEqual(script.count("--tag-phase"), 4)
-            self.assertEqual(script.count("./scripts/versioning.sh validate-commit"), 6)
+            self.assertEqual(script.count("--tag-phase"), 5)
+            self.assertEqual(script.count("./scripts/versioning.sh validate-commit"), 7)
             self.assertEqual(
                 script.count("# BEGIN exact second preserved-version fix diff contract"),
                 1,
@@ -1524,18 +1542,18 @@ class ReleaseGateTests(unittest.TestCase):
                 script.count(
                     "git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD"
                 ),
-                3,
+                4,
             )
-            self.assertEqual(script.count('for tree_ref in HEAD^ HEAD; do'), 3)
+            self.assertEqual(script.count('for tree_ref in HEAD^ HEAD; do'), 4)
             self.assertEqual(
                 script.count('tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"'),
-                3,
+                4,
             )
-            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 3)
-            self.assertEqual(script.count('"${tree_type}" != "blob"'), 3)
+            self.assertEqual(script.count('"${tree_mode}" != "100644"'), 4)
+            self.assertEqual(script.count('"${tree_type}" != "blob"'), 4)
             expected_path_counts = {
-                ".github/workflows/release-manager.yml": 6,
-                "scripts/ci/release_gate_test.py": 6,
+                ".github/workflows/release-manager.yml": 8,
+                "scripts/ci/release_gate_test.py": 8,
                 "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go": 2,
             }
             for path, count in expected_path_counts.items():
@@ -1616,17 +1634,29 @@ class ReleaseGateTests(unittest.TestCase):
                 "--tag-phase",
                 '--commit-message "${v4033_parent_message}"',
             )
+            shared_with_lifecycle_repair = {
+                "git diff-tree --no-commit-id --name-status -r "
+                "--no-renames -z HEAD^ HEAD",
+                'for tree_ref in HEAD^ HEAD; do',
+                'tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"',
+                '"${tree_mode}" != "100644"',
+                '"${tree_type}" != "blob"',
+                "--tag-phase",
+            }
             for contract in required:
-                self.assertEqual(block.count(contract), 1, contract)
-            expected_followup_paths = (
-                ".github/workflows/release-manager.yml",
-                "scripts/ci/release_gate_test.py",
-                "scripts/versionctl/repository.go",
-                "scripts/versionctl/repository_test.go",
-            )
-            for path in expected_followup_paths:
-                self.assertEqual(block.count(f'M "{path}"'), 1, path)
-                self.assertEqual(block.count(f'"{path}"'), 2, path)
+                expected_count = 2 if contract in shared_with_lifecycle_repair else 1
+                self.assertEqual(block.count(contract), expected_count, contract)
+            expected_followup_path_counts = {
+                ".github/workflows/release-manager.yml": (2, 4),
+                "scripts/ci/release_gate_test.py": (2, 4),
+                "scripts/versionctl/repository.go": (1, 2),
+                "scripts/versionctl/repository_test.go": (1, 2),
+            }
+            for path, (status_count, quoted_count) in (
+                expected_followup_path_counts.items()
+            ):
+                self.assertEqual(block.count(f'M "{path}"'), status_count, path)
+                self.assertEqual(block.count(f'"{path}"'), quoted_count, path)
             protected_release_paths = (
                 "changelog.md",
                 "README.md",
@@ -1638,9 +1668,14 @@ class ReleaseGateTests(unittest.TestCase):
                 "src/core/syswarden-core/webhook/discord.go",
             )
             for path in protected_release_paths:
-                self.assertEqual(block.count(path), 1, path)
-            self.assertEqual(block.count("./scripts/versioning.sh validate-commit"), 1)
-            self.assertEqual(block.count("--tag-phase"), 1)
+                expected_count = (
+                    3
+                    if path == "src/core/syswarden-cli/cmd/install.go"
+                    else 1
+                )
+                self.assertEqual(block.count(path), expected_count, path)
+            self.assertEqual(block.count("./scripts/versioning.sh validate-commit"), 2)
+            self.assertEqual(block.count("--tag-phase"), 2)
 
     def v4033_followup_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -1720,6 +1755,180 @@ class ReleaseGateTests(unittest.TestCase):
         subprocess.run(["git", "-C", repository, "add", "--all"], check=True)
         subprocess.run(
             ["git", "-C", repository, "commit", "-q", "-m", "reviewed fix"],
+            check=True,
+        )
+        return repository
+
+    def v4033_lifecycle_repair_blocks(self, workflow: str) -> list[str]:
+        recovery_blocks = self.v4033_recovery_blocks(workflow)
+        start = (
+            'if [[ "${v4033_parent_sha}" == '
+            '"19e4add763e935a29219c20c86586b3557a441c9" ]]; then\n'
+        )
+        end = (
+            '\n    elif [[ "${v4033_parent_sha}" != '
+            '"689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then\n'
+        )
+        blocks = []
+        for recovery_block in recovery_blocks:
+            self.assertEqual(recovery_block.count(start), 1)
+            remainder = recovery_block.split(start, 1)[1]
+            self.assertIn(end, remainder)
+            blocks.append(start + remainder.split(end, 1)[0])
+        self.assertEqual(blocks[0], blocks[1])
+        return blocks
+
+    def assert_v4033_lifecycle_repair_contract(self, workflow: str) -> None:
+        repair_blocks = self.v4033_lifecycle_repair_blocks(workflow)
+        for block in repair_blocks:
+            required = (
+                '"19e4add763e935a29219c20c86586b3557a441c9"',
+                'v4033_repair_base_sha="$(git rev-parse HEAD^^)"',
+                '"${v4033_repair_base_sha}" != '
+                '"689871803bdef1bc2a25d3eece0a7c35fdb5c447"',
+                'v4033_repair_release_base_sha="$(git rev-parse HEAD^^^)"',
+                '"${v4033_repair_release_base_sha}" != '
+                '"b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449"',
+                'v4033_repair_parent_subject="$(git log -1 --format=%s HEAD^)"',
+                "v4033_expected_repair_parent_subject="
+                "'CI : bind one-time v4.03.3 changelog seal (#119)'",
+                '"${v4033_repair_parent_subject}" != '
+                '"${v4033_expected_repair_parent_subject}"',
+                'v4033_repair_base_subject="$(git log -1 --format=%s HEAD^^)"',
+                "v4033_expected_repair_base_subject="
+                "'Patch : correct webhook, firewall and OSINT handling (#118)'",
+                '"${v4033_repair_base_subject}" != '
+                '"${v4033_expected_repair_base_subject}"',
+                'v4033_repair_release_base_subject="$(git log -1 --format=%s HEAD^^^)"',
+                "v4033_expected_repair_release_base_subject="
+                "'CI : make release inventory comparison portable (#117)'",
+                '"${v4033_repair_release_base_subject}" != '
+                '"${v4033_expected_repair_release_base_subject}"',
+                "v4033_repair_subject_pattern="
+                "'^Qualification : repair v4.03.3 lifecycle qualification "
+                "\\(#[1-9][0-9]*\\)$'",
+                '[[ ! "${commit_subject}" =~ ${v4033_repair_subject_pattern} ]]',
+                'v4033_repair_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+                'v4033_repair_parent_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+                'v4033_repair_base_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^^)"',
+                'v4033_repair_release_base_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^^^)"',
+                "${#v4033_repair_head_line[@]} != 2",
+                "${#v4033_repair_parent_line[@]} != 2",
+                "${#v4033_repair_base_line[@]} != 2",
+                "${#v4033_repair_release_base_line[@]} != 2",
+                "# BEGIN exact v4.03.3 lifecycle-repair diff contract",
+                "# END exact v4.03.3 lifecycle-repair diff contract",
+                "expected_v4033_repair_diff=(",
+                "git diff-tree --no-commit-id --name-status -r "
+                "--no-renames -z HEAD^ HEAD",
+                "${#actual_v4033_repair_diff[@]} != "
+                "${#expected_v4033_repair_diff[@]}",
+                'for tree_ref in HEAD^ HEAD; do',
+                'tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"',
+                '"${tree_mode}" != "100644"',
+                '"${tree_type}" != "blob"',
+                'v4033_repair_versioning_message="$(git log -1 --format=%B HEAD^^)"',
+                '--base-ref "${v4033_repair_release_base_sha}"',
+                "--tag-phase",
+                '--commit-message "${v4033_repair_versioning_message}"',
+            )
+            for contract in required:
+                self.assertEqual(block.count(contract), 1, contract)
+            self.assertEqual(len(V4033_LIFECYCLE_REPAIR_PATHS), 16)
+            for path in V4033_LIFECYCLE_REPAIR_PATHS:
+                self.assertEqual(block.count(f'M "{path}"'), 1, path)
+                self.assertEqual(block.count(f'"{path}"'), 2, path)
+            for protected_path in (
+                "changelog.md",
+                "README.md",
+                "docs/",
+                "scripts/versionctl/repository.go",
+                "scripts/versionctl/repository_test.go",
+            ):
+                self.assertNotIn(protected_path, block)
+            self.assertEqual(block.count("./scripts/versioning.sh validate-commit"), 1)
+
+    def v4033_lifecycle_repair_subject_gate_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4033_lifecycle_repair_blocks(workflow)[0]
+        start = "v4033_repair_subject_pattern="
+        end = (
+            'read -r -a v4033_repair_head_line <<< '
+            '"$(git rev-list --parents -n 1 HEAD)"'
+        )
+        self.assertEqual(block.count(start), 1)
+        self.assertEqual(block.count(end), 1)
+        fragment = start + block.split(start, 1)[1].split(end, 1)[0]
+        return 'set -euo pipefail\ncommit_subject="${COMMIT_SUBJECT:?}"\n' + fragment
+
+    def exact_v4033_lifecycle_repair_diff_script(self) -> str:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        block = self.v4033_lifecycle_repair_blocks(workflow)[0]
+        begin = "# BEGIN exact v4.03.3 lifecycle-repair diff contract\n"
+        end = "# END exact v4.03.3 lifecycle-repair diff contract"
+        self.assertEqual(block.count(begin), 1)
+        self.assertEqual(block.count(end), 1)
+        return "set -euo pipefail\n" + block.split(begin, 1)[1].split(end, 1)[0]
+
+    def make_v4033_lifecycle_repair_diff_repository(
+        self, name: str, mutation: str | None
+    ) -> Path:
+        repository = self.root / name
+        repository.mkdir()
+        subprocess.run(["git", "init", "-q", repository], check=True)
+        subprocess.run(
+            ["git", "-C", repository, "config", "user.name", "Release Gate Test"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                repository,
+                "config",
+                "user.email",
+                "release-gate@example.invalid",
+            ],
+            check=True,
+        )
+        repair_paths = [repository / path for path in V4033_LIFECYCLE_REPAIR_PATHS]
+        protected_paths = {
+            "changelog": repository / "changelog.md",
+            "readme": repository / "README.md",
+            "documentation": repository / "docs/maintainers/release.md",
+            "version target": repository
+            / "src/core/syswarden-cli/pkg/system/upgrade.go",
+        }
+        for path in [*repair_paths, *protected_paths.values()]:
+            self.write_file(path, b"reviewed PR119 parent\n")
+        subprocess.run(["git", "-C", repository, "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", repository, "commit", "-q", "-m", "reviewed PR119"],
+            check=True,
+        )
+        for path in repair_paths:
+            if mutation != "unchanged path" or path != repair_paths[-1]:
+                path.write_bytes(b"reviewed v4.03.3 lifecycle repair\n")
+        if mutation in protected_paths:
+            protected_paths[mutation].write_bytes(b"unauthorized release drift\n")
+        elif mutation == "extra file":
+            self.write_file(repository / "unauthorized.txt", b"unexpected\n")
+        elif mutation == "mode":
+            repair_paths[0].chmod(0o755)
+        elif mutation == "symlink":
+            repair_paths[4].unlink()
+            repair_paths[4].symlink_to("unauthorized-target")
+        elif mutation == "rename":
+            repair_paths[-1].rename(
+                repair_paths[-1].with_name("renamed_waf_logs_linux.go")
+            )
+        subprocess.run(["git", "-C", repository, "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", repository, "commit", "-q", "-m", "reviewed repair"],
             check=True,
         )
         return repository
@@ -1955,6 +2164,7 @@ class ReleaseGateTests(unittest.TestCase):
     ) -> None:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         self.assert_v4033_preserved_version_recovery_contract(workflow)
+        self.assert_v4033_lifecycle_repair_contract(workflow)
 
     def test_release_manager_v4033_contract_rejects_mutations(self) -> None:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -2147,6 +2357,271 @@ class ReleaseGateTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                 else:
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_release_manager_v4033_lifecycle_repair_contract_rejects_mutations(
+        self,
+    ) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        mutations = {
+            "exact PR119 parent": workflow.replace(
+                "19e4add763e935a29219c20c86586b3557a441c9",
+                "29e4add763e935a29219c20c86586b3557a441c9",
+            ),
+            "PR118 resolution": workflow.replace(
+                'v4033_repair_base_sha="$(git rev-parse HEAD^^)"',
+                'v4033_repair_base_sha="$(git rev-parse HEAD^^^)"',
+            ),
+            "exact PR118": workflow.replace(
+                '"${v4033_repair_base_sha}" != '
+                '"689871803bdef1bc2a25d3eece0a7c35fdb5c447"',
+                '"${v4033_repair_base_sha}" != '
+                '"789871803bdef1bc2a25d3eece0a7c35fdb5c447"',
+            ),
+            "PR117 resolution": workflow.replace(
+                'v4033_repair_release_base_sha="$(git rev-parse HEAD^^^)"',
+                'v4033_repair_release_base_sha="$(git rev-parse HEAD^^)"',
+            ),
+            "exact PR117": workflow.replace(
+                '"${v4033_repair_release_base_sha}" != '
+                '"b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449"',
+                '"${v4033_repair_release_base_sha}" != '
+                '"c9fbfe2ee292a53e6e19dd3e27a071f78fe2f449"',
+            ),
+            "PR119 subject": workflow.replace(
+                "CI : bind one-time v4.03.3 changelog seal (#119)",
+                "CI : bind reusable v4.03.3 changelog seal (#119)",
+            ),
+            "PR118 subject": workflow.replace(
+                "Patch : correct webhook, firewall and OSINT handling (#118)",
+                "Patch : correct webhook and firewall handling (#118)",
+            ),
+            "PR117 subject": workflow.replace(
+                "CI : make release inventory comparison portable (#117)",
+                "CI : make release inventory comparison broad (#117)",
+            ),
+            "repair subject": workflow.replace(
+                "Qualification : repair v4.03.3 lifecycle qualification",
+                "Qualification : repair reusable lifecycle qualification",
+            ),
+            "repair subject comparison": workflow.replace(
+                '[[ ! "${commit_subject}" =~ ${v4033_repair_subject_pattern} ]]',
+                '[[ "${commit_subject}" =~ ${v4033_repair_subject_pattern} ]]',
+            ),
+            "linear head": workflow.replace(
+                'v4033_repair_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD)"',
+                'v4033_repair_head_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+            ),
+            "linear PR119": workflow.replace(
+                'v4033_repair_parent_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^)"',
+                'v4033_repair_parent_line <<< '
+                '"$(git rev-list --parents -n 1 HEAD^^)"',
+            ),
+            "linear comparison": workflow.replace(
+                "${#v4033_repair_release_base_line[@]} != 2",
+                "${#v4033_repair_release_base_line[@]} == 2",
+            ),
+            "diff rename policy": workflow.replace(
+                "git diff-tree --no-commit-id --name-status -r "
+                "--no-renames -z HEAD^ HEAD",
+                "git diff-tree --no-commit-id --name-status -r -z HEAD^ HEAD",
+            ),
+            "diff status": workflow.replace(
+                'M "scripts/ci/package_lifecycle_lab.py"',
+                'A "scripts/ci/package_lifecycle_lab.py"',
+            ),
+            "diff path": workflow.replace(
+                'M "scripts/ci/release_qualification_workflow_test.py"',
+                'M "scripts/ci/release_workflow_test.py"',
+            ),
+            "diff count comparison": workflow.replace(
+                "${#actual_v4033_repair_diff[@]} != "
+                "${#expected_v4033_repair_diff[@]}",
+                "${#actual_v4033_repair_diff[@]} == "
+                "${#expected_v4033_repair_diff[@]}",
+            ),
+            "blob mode": workflow.replace(
+                '"${tree_mode}" != "100644"',
+                '"${tree_mode}" != "100755"',
+            ),
+            "replay base": workflow.replace(
+                '--base-ref "${v4033_repair_release_base_sha}"',
+                '--base-ref HEAD^',
+            ),
+            "replay subject": workflow.replace(
+                'v4033_repair_versioning_message="$(git log -1 --format=%B HEAD^^)"',
+                'v4033_repair_versioning_message="$(git log -1 --format=%B HEAD^)"',
+            ),
+        }
+        mutations["duplicated block divergence"] = workflow.replace(
+            "19e4add763e935a29219c20c86586b3557a441c9",
+            "29e4add763e935a29219c20c86586b3557a441c9",
+            1,
+        )
+        for name, mutation in mutations.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(mutation, workflow)
+                with self.assertRaises(AssertionError):
+                    self.assert_v4033_lifecycle_repair_contract(mutation)
+
+    def test_release_manager_v4033_lifecycle_repair_subject_is_exact(self) -> None:
+        script = self.v4033_lifecycle_repair_subject_gate_script()
+        cases = {
+            "valid": (
+                "Qualification : repair v4.03.3 lifecycle qualification (#120)",
+                True,
+            ),
+            "bare": (
+                "Qualification : repair v4.03.3 lifecycle qualification",
+                False,
+            ),
+            "zero": (
+                "Qualification : repair v4.03.3 lifecycle qualification (#0)",
+                False,
+            ),
+            "leading zero": (
+                "Qualification : repair v4.03.3 lifecycle qualification (#0120)",
+                False,
+            ),
+            "non-numeric": (
+                "Qualification : repair v4.03.3 lifecycle qualification (#PR)",
+                False,
+            ),
+            "wrong category": (
+                "CI : repair v4.03.3 lifecycle qualification (#120)",
+                False,
+            ),
+            "wrong version": (
+                "Qualification : repair v4.03.4 lifecycle qualification (#120)",
+                False,
+            ),
+            "double space": (
+                "Qualification : repair v4.03.3 lifecycle qualification  (#120)",
+                False,
+            ),
+            "trailing space": (
+                "Qualification : repair v4.03.3 lifecycle qualification (#120) ",
+                False,
+            ),
+            "extra text": (
+                "Qualification : repair v4.03.3 lifecycle qualification (#120) extra",
+                False,
+            ),
+        }
+        for name, (subject, accepted) in cases.items():
+            with self.subTest(name=name):
+                environment = dict(os.environ)
+                environment["COMMIT_SUBJECT"] = subject
+                result = subprocess.run(
+                    ["/bin/bash", "-c", script],
+                    cwd=REPOSITORY,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
+    def test_release_manager_v4033_lifecycle_repair_diff_is_exact(self) -> None:
+        script = self.exact_v4033_lifecycle_repair_diff_script()
+        mutations = (
+            None,
+            "extra file",
+            "changelog",
+            "readme",
+            "documentation",
+            "version target",
+            "unchanged path",
+            "mode",
+            "symlink",
+            "rename",
+        )
+        for index, mutation in enumerate(mutations):
+            with self.subTest(mutation=mutation or "exact"):
+                repository = self.make_v4033_lifecycle_repair_diff_repository(
+                    f"v4033-lifecycle-repair-diff-{index}", mutation
+                )
+                result = subprocess.run(
+                    ["/bin/bash", "-c", script],
+                    cwd=repository,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if mutation is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_v4033_lifecycle_repair_subject_preserves_version_contract(self) -> None:
+        repository = self.root / "v4033-version-contract"
+        repository.mkdir()
+        subprocess.run(["git", "init", "-q", repository], check=True)
+        subprocess.run(
+            ["git", "-C", repository, "config", "user.name", "Release Gate Test"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                repository,
+                "config",
+                "user.email",
+                "release-gate@example.invalid",
+            ],
+            check=True,
+        )
+        version_paths = (
+            "src/core/syswarden-cli/pkg/system/upgrade.go",
+            "src/core/syswarden-tui/main.go",
+            "src/core/syswarden-cli/cmd/install.go",
+            "src/core/syswarden-cli/config/default.go",
+            "src/core/syswarden-cli/pkg/integration/webhook.go",
+            "src/core/syswarden-core/webhook/discord.go",
+            "README.md",
+            "changelog.md",
+        )
+        for relative in version_paths:
+            self.write_file(repository / relative, (REPOSITORY / relative).read_bytes())
+        subprocess.run(["git", "-C", repository, "add", "--all"], check=True)
+        subprocess.run(
+            ["git", "-C", repository, "commit", "-q", "-m", "v4.03.3 baseline"],
+            check=True,
+        )
+        go_cache = self.root / "go-cache"
+        go_tmp = self.root / "go-tmp"
+        go_cache.mkdir(mode=0o700)
+        go_tmp.mkdir(mode=0o700)
+        environment = dict(os.environ)
+        environment.update({"GOCACHE": str(go_cache), "GOTMPDIR": str(go_tmp)})
+        result = subprocess.run(
+            [
+                str(REPOSITORY / "scripts/versioning.sh"),
+                "validate-commit",
+                "--repo",
+                str(repository),
+                "--base-ref",
+                "HEAD",
+                "--commit-message",
+                "Qualification : repair v4.03.3 lifecycle qualification (#120)",
+            ],
+            cwd=REPOSITORY,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "Commit validation passed: non-versioning commit preserves v4.03.3",
+            result.stdout,
+        )
 
     def test_release_manager_bounds_v4032_to_current_amd64_candidate(
         self,

@@ -283,6 +283,7 @@ jobs:
           aggregate_dir="${artifact_root}/aggregate"
           status_dir="${qualification_root}/status-internal"
           nftables_tmp_dir="${qualification_root}/nftables-tmp"
+          package_tmp_dir="${qualification_root}/package-tmp"
           transition_dir="${qualification_root}/historical-transition"
           install -d -m 0700 \
             "${artifact_root}" \
@@ -294,6 +295,7 @@ jobs:
             "${artifact_root}/status" \
             "${status_dir}" \
             "${nftables_tmp_dir}" \
+            "${package_tmp_dir}" \
             "${transition_dir}"
           test -d "${nftables_tmp_dir}"
           test ! -L "${nftables_tmp_dir}"
@@ -305,6 +307,16 @@ jobs:
           test ! -L "${nftables_tmp_probe}"
           rm -f -- "${nftables_tmp_probe}"
           test ! -e "${nftables_tmp_probe}"
+          test -d "${package_tmp_dir}"
+          test ! -L "${package_tmp_dir}"
+          [[ -O "${package_tmp_dir}" ]]
+          test "$(stat -c '%a' "${package_tmp_dir}")" = "700"
+          package_tmp_probe="$(mktemp \
+            "${package_tmp_dir}/.write-probe.XXXXXX")"
+          test -f "${package_tmp_probe}"
+          test ! -L "${package_tmp_probe}"
+          rm -f -- "${package_tmp_probe}"
+          test ! -e "${package_tmp_probe}"
 
           {
             printf 'QUALIFICATION_ROOT=%s\n' "${qualification_root}"
@@ -316,6 +328,7 @@ jobs:
             printf 'AGGREGATE_DIR=%s\n' "${aggregate_dir}"
             printf 'STATUS_DIR=%s\n' "${status_dir}"
             printf 'NFTABLES_TMP_DIR=%s\n' "${nftables_tmp_dir}"
+            printf 'PACKAGE_TMP_DIR=%s\n' "${package_tmp_dir}"
             printf 'TRANSITION_DIR=%s\n' "${transition_dir}"
           } >> "${GITHUB_ENV}"
           {
@@ -573,6 +586,23 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          umask 077
+          test -n "${PACKAGE_TMP_DIR:-}"
+          test "${PACKAGE_TMP_DIR}" = "${QUALIFICATION_ROOT}/package-tmp"
+          test -d "${QUALIFICATION_ROOT}"
+          test ! -L "${QUALIFICATION_ROOT}"
+          [[ -O "${QUALIFICATION_ROOT}" ]]
+          test "$(stat -c '%a' "${QUALIFICATION_ROOT}")" = "700"
+          test -d "${PACKAGE_TMP_DIR}"
+          test ! -L "${PACKAGE_TMP_DIR}"
+          [[ -O "${PACKAGE_TMP_DIR}" ]]
+          test "$(stat -c '%a' "${PACKAGE_TMP_DIR}")" = "700"
+          package_tmp_probe="$(mktemp \
+            "${PACKAGE_TMP_DIR}/.write-probe.XXXXXX")"
+          test -f "${package_tmp_probe}"
+          test ! -L "${package_tmp_probe}"
+          rm -f -- "${package_tmp_probe}"
+          test ! -e "${package_tmp_probe}"
           common_binding_arguments=(
             --qualification-repository "${GITHUB_REPOSITORY}"
             --qualification-release-sha "${RELEASE_SHA}"
@@ -586,15 +616,24 @@ jobs:
             --qualification-previous-release-id "${PREVIOUS_RELEASE_ID}"
           )
           set +e
+          TMPDIR="${PACKAGE_TMP_DIR}" \
+          TMP="${PACKAGE_TMP_DIR}" \
+          TEMP="${PACKAGE_TMP_DIR}" \
+          GOTMPDIR="${PACKAGE_TMP_DIR}" \
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_lifecycle_lab.py \
             --packages-dir "${CANDIDATE_PACKAGES_DIR}" \
             --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}" \
+            --package-tmp-dir "${PACKAGE_TMP_DIR}" \
             --architecture-shard amd64 \
             "${common_binding_arguments[@]}" \
             --pull-policy never \
             --output "${RAW_DIR}/package-lifecycle-amd64.json" \
             --pretty
           amd64_rc=$?
+          TMPDIR="${PACKAGE_TMP_DIR}" \
+          TMP="${PACKAGE_TMP_DIR}" \
+          TEMP="${PACKAGE_TMP_DIR}" \
+          GOTMPDIR="${PACKAGE_TMP_DIR}" \
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_lifecycle_lab.py \
             --packages-dir "${CANDIDATE_PACKAGES_DIR}" \
             --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}" \
@@ -872,6 +911,26 @@ jobs:
             rmdir -- "${NFTABLES_TMP_DIR}"
             test ! -e "${NFTABLES_TMP_DIR}"
             test ! -L "${NFTABLES_TMP_DIR}"
+          fi
+          if [[ -n "${PACKAGE_TMP_DIR:-}" ]]; then
+            if [[ -z "${QUALIFICATION_ROOT:-}" || \
+                  "${QUALIFICATION_ROOT}" != "${RUNNER_TEMP%/}"/syswarden-release-qualification.* || \
+                  "${PACKAGE_TMP_DIR}" != "${QUALIFICATION_ROOT}/package-tmp" ]]; then
+              echo "ERROR: refusing unsafe package temporary-directory cleanup." >&2
+              exit 1
+            fi
+            test -d "${QUALIFICATION_ROOT}"
+            test ! -L "${QUALIFICATION_ROOT}"
+            [[ -O "${QUALIFICATION_ROOT}" ]]
+            test "$(stat -c '%a' "${QUALIFICATION_ROOT}")" = "700"
+            test -d "${PACKAGE_TMP_DIR}"
+            test ! -L "${PACKAGE_TMP_DIR}"
+            [[ -O "${PACKAGE_TMP_DIR}" ]]
+            test "$(stat -c '%a' "${PACKAGE_TMP_DIR}")" = "700"
+            find -P "${PACKAGE_TMP_DIR}" -xdev -mindepth 1 -delete
+            rmdir -- "${PACKAGE_TMP_DIR}"
+            test ! -e "${PACKAGE_TMP_DIR}"
+            test ! -L "${PACKAGE_TMP_DIR}"
           fi
           if [[ -n "${TRANSITION_DIR:-}" ]]; then
             if [[ -z "${QUALIFICATION_ROOT:-}" || \

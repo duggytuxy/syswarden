@@ -636,7 +636,7 @@ func TestExactOwnedArtifactRemovalAcceptsGeneratedConfigBeyond64KiB_SW2_PKG_001(
 			0600,
 		)
 	}
-	rendered, active, err := renderWAFRsyslogConfig(filepath.Join(logDirectory, "*.log"))
+	rendered, active, err := renderWAFRsyslogConfig(filepath.Join(logDirectory, "*.log"), false)
 	if err != nil || active != logCount {
 		t.Fatalf("render large WAF glob = %d, %v", active, err)
 	}
@@ -845,7 +845,7 @@ func TestGeneratedRsyslogRemovalReactivatesAndPropagatesServiceFailure_SW2_PKG_0
 	}
 	stat := parentInfo.Sys().(*syscall.Stat_t)
 	activeConfig := config.NewFailSafeConfig()
-	waf, _, err := renderWAFRsyslogConfig(activeConfig.ModsecLogs)
+	waf, _, err := renderWAFRsyslogConfig(activeConfig.ModsecLogs, activeConfig.SiemEnabled)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -919,6 +919,65 @@ func TestGeneratedRsyslogRemovalSkipsDisabledSIEMArtifact_SW2_PKG_001(t *testing
 	}
 	if got, err := os.ReadFile(siemPath); err != nil || !bytes.Equal(got, operatorSIEM) { // #nosec G304 -- siemPath is confined to the private disabled-SIEM fixture root
 		t.Fatalf("disabled SIEM artifact = %q, %v", got, err)
+	}
+}
+
+func TestGeneratedRsyslogRemovalAcceptsCurrentAndV4032WAFWithoutProvenanceWhenSIEMEnabled_SW2_PKG_001(t *testing.T) {
+	activeConfig := config.NewFailSafeConfig()
+	activeConfig.SiemEnabled = true
+	activeConfig.SiemIP = "192.0.2.40"
+	activeConfig.SiemPort = "514"
+	activeConfig.SiemProto = "udp"
+	current, _, err := renderWAFRsyslogConfig(activeConfig.ModsecLogs, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, _, err := renderLegacyV4032WAFRsyslogConfig(activeConfig.ModsecLogs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current == legacy {
+		t.Fatal("current SIEM-enabled and legacy WAF fixtures are identical")
+	}
+	for name, rendered := range map[string]string{
+		"current":        current,
+		"legacy v4.03.2": legacy,
+	} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			directory := filepath.Join(parent, wafRsyslogDirectoryName)
+			if err := os.Mkdir(directory, 0750); err != nil {
+				t.Fatal(err)
+			}
+			parentInfo, err := os.Stat(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stat := parentInfo.Sys().(*syscall.Stat_t)
+			path := filepath.Join(directory, wafRsyslogConfigName)
+			writeOwnedArtifactFixture(t, path, []byte(rendered), 0600)
+			activationCalls := 0
+			removeErr := removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
+				activeConfig,
+				parent,
+				stat.Uid,
+				stat.Gid,
+				defaultExactOwnedArtifactRemovalOptions(),
+				func(changed bool) error {
+					if !changed {
+						t.Fatal("WAF removal did not request changed-state activation")
+					}
+					activationCalls++
+					return nil
+				},
+			)
+			if removeErr != nil || activationCalls != 1 {
+				t.Fatalf("remove unprovenanced WAF variant = calls %d, %v", activationCalls, removeErr)
+			}
+			if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("unprovenanced WAF variant remains: %v", statErr)
+			}
+		})
 	}
 }
 

@@ -1099,6 +1099,81 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         self.assertIn("nftables-lab.rc", verdict)
         self.assertIn("all(.[]; . == 0)", verdict)
 
+    def test_package_lifecycle_uses_private_explicit_tmpdir_and_safe_cleanup(
+        self,
+    ) -> None:
+        def assert_contract(workflow: str) -> None:
+            workspace = workflow_step_script(
+                workflow, "Create Isolated Qualification Workspace"
+            )
+            lifecycle = workflow_step_script(
+                workflow, "Run and Aggregate Native AMD64 Package Lifecycle Shard"
+            )
+            cleanup = workflow_step_script(
+                workflow, "Remove Ephemeral Qualification Material"
+            )
+            for contract in (
+                'package_tmp_dir="${qualification_root}/package-tmp"',
+                'test ! -L "${package_tmp_dir}"',
+                '[[ -O "${package_tmp_dir}" ]]',
+                'test "$(stat -c \'%a\' "${package_tmp_dir}")" = "700"',
+                "printf 'PACKAGE_TMP_DIR=%s\\n' \"${package_tmp_dir}\"",
+            ):
+                self.assertIn(contract, workspace)
+            self.assertEqual(lifecycle.count('--package-tmp-dir "${PACKAGE_TMP_DIR}"'), 1)
+            for variable in ("TMPDIR", "TMP", "TEMP", "GOTMPDIR"):
+                self.assertEqual(
+                    len(
+                        re.findall(
+                            rf'(?m)^{variable}="\$\{{PACKAGE_TMP_DIR\}}" \\$',
+                            lifecycle,
+                        )
+                    ),
+                    2,
+                    variable,
+                )
+            for contract in (
+                'test "${PACKAGE_TMP_DIR}" = "${QUALIFICATION_ROOT}/package-tmp"',
+                'test ! -L "${PACKAGE_TMP_DIR}"',
+                '[[ -O "${PACKAGE_TMP_DIR}" ]]',
+                'test "$(stat -c \'%a\' "${PACKAGE_TMP_DIR}")" = "700"',
+                '"${PACKAGE_TMP_DIR}/.write-probe.XXXXXX"',
+            ):
+                self.assertIn(contract, lifecycle)
+            for contract in (
+                '"${PACKAGE_TMP_DIR}" != "${QUALIFICATION_ROOT}/package-tmp"',
+                'test ! -L "${PACKAGE_TMP_DIR}"',
+                '[[ -O "${PACKAGE_TMP_DIR}" ]]',
+                'test "$(stat -c \'%a\' "${PACKAGE_TMP_DIR}")" = "700"',
+                'find -P "${PACKAGE_TMP_DIR}" -xdev -mindepth 1 -delete',
+                'rmdir -- "${PACKAGE_TMP_DIR}"',
+                'test ! -e "${PACKAGE_TMP_DIR}"',
+            ):
+                self.assertIn(contract, cleanup)
+            self.assertNotIn('PACKAGE_TMP_DIR="/tmp', workflow)
+
+        assert_contract(self.workflow)
+        for old, new in (
+            (
+                'package_tmp_dir="${qualification_root}/package-tmp"',
+                'package_tmp_dir="/tmp/syswarden-package-tmp"',
+            ),
+            ('--package-tmp-dir "${PACKAGE_TMP_DIR}"', ""),
+            ('TMPDIR="${PACKAGE_TMP_DIR}"', 'TMPDIR="/tmp"'),
+            ('[[ -O "${PACKAGE_TMP_DIR}" ]]', ":"),
+            (
+                'test "$(stat -c \'%a\' "${PACKAGE_TMP_DIR}")" = "700"',
+                ":",
+            ),
+            ('test ! -L "${PACKAGE_TMP_DIR}"', ":"),
+            (
+                'find -P "${PACKAGE_TMP_DIR}" -xdev -mindepth 1 -delete',
+                'find -P /tmp -mindepth 1 -delete',
+            ),
+        ):
+            with self.subTest(mutation=old), self.assertRaises(AssertionError):
+                assert_contract(self.workflow.replace(old, new, 1))
+
     def test_unsigned_failure_evidence_uploads_before_x64_verdict(self) -> None:
         x64 = workflow_job(self.workflow, "qualify-release")
         upload = x64.index("Upload Exact Unsigned Qualification Evidence")
