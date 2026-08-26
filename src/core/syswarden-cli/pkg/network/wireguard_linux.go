@@ -2082,9 +2082,11 @@ func SetupWireguard() (resultErr error) {
 	fmt.Println("\n=======================================================")
 	fmt.Println("             WIREGUARD CLIENT CONFIGURATION            ")
 	fmt.Println("=======================================================")
-	fmt.Println("Scan the QR Code below with your WireGuard mobile app:")
+	fmt.Println("Optional WireGuard mobile-client QR code:")
 
-	_ = wireGuardQRCodeRender(string(clientBytes))
+	if err := wireGuardQRCodeRender(string(clientBytes)); err != nil {
+		fmt.Fprintf(os.Stderr, "[WARN] WireGuard QR rendering is unavailable; use the protected client configuration file instead: %v\n", err)
+	}
 
 	fmt.Println("=======================================================")
 	fmt.Println("Client config saved at: " + wireguardstate.ClientConfigurationPath)

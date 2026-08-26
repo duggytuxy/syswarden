@@ -5372,6 +5372,15 @@ probe
         self.assertIn("remove.final-removal.service_manager_calls", checks)
         self.assertIn("remove.final-removal.generated.openrc_webtui", checks)
         self.assertIn("remove.final-removal.generated.runtime_socket", checks)
+        self.assertIn("remove.final-removal.generated.runtime_lock", checks)
+        self.assertIn(
+            "remove.final-removal.generated.rsyslog_antiforging_exact_removed",
+            checks,
+        )
+        self.assertIn(
+            "remove.final-removal.generated.rsyslog_selinux_provenance_removed",
+            checks,
+        )
         self.assertIn("remove.final-removal.generated.completion_residual", checks)
         self.assertIn("remove.final-removal.generated.cron_d_owned", checks)
         self.assertIn("remove.final-removal.generated.cron_d_pending", checks)
@@ -7825,7 +7834,7 @@ prepare_package_transition
                 package_lifecycle_lab.RPM_BOOTSTRAP,
                 {
                     "nftables", "ipset", "wget", "rsyslog", "cronie",
-                    "bash-completion", "wireguard-tools", "qrencode", "jq",
+                    "bash-completion", "wireguard-tools", "jq",
                     "checkpolicy", "policycoreutils-python-utils",
                     "dnf-automatic", "procps-ng",
                     "e2fsprogs",
@@ -7850,7 +7859,8 @@ prepare_package_transition
                         bootstrap,
                         rf"(?:^|\s){re.escape(dependency)}(?:\s|$)",
                     )
-        self.assertIn("epel-release", package_lifecycle_lab.RPM_BOOTSTRAP)
+        self.assertNotIn("epel-release", package_lifecycle_lab.RPM_BOOTSTRAP)
+        self.assertNotIn("qrencode", package_lifecycle_lab.RPM_BOOTSTRAP)
         self.assertIn(
             "apk add --no-cache openrc openrc-init && apk add --no-cache",
             package_lifecycle_lab.APK_BOOTSTRAP,

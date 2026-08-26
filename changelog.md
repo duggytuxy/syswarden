@@ -29,9 +29,16 @@
 - **Legacy dynamic-state quarantine:** During transactional reload, detect a
   non-singleton legacy dynamic interval ending at the address-family maximum in
   string, prefix or range JSON form. Quarantine the affected family across inet
-  and netdev instead of preserving an ambiguous suffix. Keep pre-commit and
-  completed warnings distinct, and make rollback report that persistent policy
-  was restored while quarantined dynamic family state remained omitted.
+  and netdev instead of preserving an ambiguous suffix. The packaged install
+  path performs the same exact volatile-set quarantine before its own
+  network-dependent configuration, restarts the packaged core service when a
+  repair was required and performs a final pass to close the restart race. Keep
+  pre-commit and completed warnings distinct, and make rollback report that
+  persistent policy was restored while quarantined dynamic family state
+  remained omitted. Because the already-published v4.03.2 updater must reach
+  GitHub before the candidate package runs, document a bounded producer-stop
+  and exact dynamic-set bootstrap for an affected host whose DNS or GitHub
+  return traffic is already blocked.
 - **Bounded OSINT source filtering:** Keep 6to4, private and other non-public or
   special-use prefixes inadmissible. For the supported multi-origin OSINT path
   only, discard a syntactically valid inadmissible entry with a bounded
@@ -41,6 +48,20 @@
 - **Installation regression coverage:** Reproduce the upstream `2002::/16`
   6to4 case, prove that the entry is absent from the canonical IPv6 output and
   retain failures for malformed entries or an insufficient post-filter source.
+- **Observable command failures and typed configuration output:** Return a
+  non-zero result when any requested `block` or `unblock` transaction fails,
+  while continuing the bounded argument set and emitting an alert only for a
+  committed ban. Render strings directly and all other validated
+  `config-get` values as compact JSON so empty and non-empty GEO or ASN arrays
+  remain distinguishable and honor `99-user.toml` priority.
+- **RHEL dependency boundary:** Remove `qrencode` and the implicit EPEL enablement
+  from the RPM, package lab, manual DNF or YUM dependency path and RHEL image
+  recipe. WireGuard keeps its protected client configuration when terminal QR
+  rendering is unavailable and reports that rendering as an optional feature.
+- **Alpine scheduler preflight:** Require committed `cronie` and
+  `cronie-openrc`, active Cronie in the default OpenRC runlevel and an inactive,
+  unassigned BusyBox `crond` before an online APK transaction can create any
+  SysWarden installation state. Offline package staging remains deferred.
 - **Package-owned shell completion:** Install Bash completion as an immutable
   package payload under `/usr/share/bash-completion/completions/syswarden`.
   Stop package hooks from writing `/etc/bash_completion.d` or `/root/.bashrc`,
@@ -55,6 +76,17 @@
   root-controlled directories, publish and quarantine atomically, recover a
   bounded interrupted operation, reactivate rsyslog before commit and preserve
   every concurrent or ambiguous replacement together with its provenance.
+- **Exact final-removal closure:** Remove the byte-exact rsyslog anti-forging
+  fragment, the attributable priority-400 `syswarden_rsyslog` SELinux module and
+  its private checksum provenance, and the exact unlocked root-owned runtime
+  firewall lock. Preserve modified, unprovenanced, differently prioritized,
+  busy or otherwise ambiguous operator state. Scan the normal core only after
+  managed services are stopped so a healthy service can be stopped while a
+  manually launched residual core still blocks deletion. The `semodule` CLI has
+  no checksum-conditional removal primitive, so SysWarden double-reattests the
+  module and provenance immediately before priority-400 removal and verifies
+  the result, but does not claim atomicity against an external store replacement
+  inside that final comparison-to-command boundary.
 - **Explicit package purge semantics:** Keep Debian `remove` non-destructive for
   `/etc/syswarden`, `/var/lib/syswarden` and `/var/log/syswarden`. Treat Debian
   `purge`, final RPM erase and APK post-deinstall as destructive removal of
@@ -91,6 +123,11 @@
   destructive removal contract. The Ubuntu host must additionally exercise
   isolated GEO, ASN and WAAP threshold policy without writing synthetic events
   to a real authentication log or leaving test bans behind.
+- The pre-tag Ubuntu migration gate must cover the exact workflow artifact after
+  the documented contained bootstrap for a v4.03.2 legacy interval that already
+  blocks DNS or GitHub return traffic. The Alpine gate must prove that a fresh
+  online transaction fails before product state when the committed Cronie
+  prerequisite is absent, then succeeds after that prerequisite is established.
 
 ### POST-PUBLICATION CHECK
 
@@ -100,6 +137,10 @@
   root, signed manifest, selected AMD64 package digest, installed v4.03.3
   package record and service health. This smoke test cannot be fabricated or
   claimed before publication.
+- The post-publication smoke must use a connected v4.03.2 state for the signed
+  updater itself. If the retained snapshot contains the blocking legacy suffix,
+  first execute and record the qualified contained bootstrap from the migration
+  runbook; no unsigned fallback is permitted.
 
 ---
 

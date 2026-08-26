@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/security"
 
 	"golang.org/x/sys/unix"
 )
@@ -24,6 +25,7 @@ const (
 	legacyCompletionSize            = 16339
 	legacyCompletionSHA256          = "c23c9f6c54b91105e9ecd8ad4431a9a11ad26ba3437bcd20ec2cef1a96e51d21"
 	rsyslogSIEMConfigName           = "99-syswarden-siem.conf"
+	rsyslogAntiForgingConfigName    = "99-syswarden-antiforging.conf"
 	exactArtifactQuarantineSuffix   = ".syswarden-removal-v1"
 	exactArtifactRecreationSuffix   = ".syswarden-recreation-v1"
 )
@@ -823,13 +825,16 @@ func exactOwnedArtifactStillExistsInDirectory(
 // RemoveOwnedGeneratedArtifactsForPackageRemoval removes only byte-exact
 // generated integrations while the installed binary and configuration exist.
 func RemoveOwnedGeneratedArtifactsForPackageRemoval() error {
-	return removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
+	if err := removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
 		config.GlobalConfig,
 		wafRsyslogParentDirectory,
 		0, 0,
 		defaultExactOwnedArtifactRemovalOptions(),
 		reconcileWAFRsyslogService,
-	)
+	); err != nil {
+		return err
+	}
+	return removeOwnedRsyslogSELinuxPolicyForPackageRemoval()
 }
 
 func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
@@ -873,6 +878,18 @@ func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
 		return nil
 	}
 	preserveProvenance := false
+
+	antiForgingExpectation := exactContentExpectation(
+		"SysWarden rsyslog anti-forging policy",
+		rsyslogAntiForgingConfigName,
+		[]byte(security.RsyslogAntiForgingPolicy),
+		0600,
+	)
+	if _, err := removeExpectedRsyslogArtifactInDirectoryUsing(
+		directory, uid, gid, antiForgingExpectation, rsyslogOptions,
+	); err != nil {
+		return err
+	}
 
 	wafExpectation, hasWAFProvenance := exactOwnedArtifactExpectation{}, false
 	if record, exists := provenance.records[wafRsyslogConfigName]; exists {

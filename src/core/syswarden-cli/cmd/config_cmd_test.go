@@ -141,7 +141,115 @@ func TestConfigGetUsesValidatedDescriptorRootedLoader_SW_CFG_002(t *testing.T) {
 	if strings.TrimSpace(output.String()) != "keep" {
 		t.Fatalf("config-get output = %q", output.String())
 	}
+	networkPath := filepath.Join(root, "modules", "10-network.toml")
+	networkContent, err := os.ReadFile(networkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkContent = []byte(strings.Replace(string(networkContent), "blocked_countries = []", `blocked_countries = ["kp", "us"]`, 1))
+	if err := os.WriteFile(networkPath, networkContent, 0600); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := configGetCmd.RunE(configGetCmd, []string{"network.geo.blocked_countries"}); err != nil {
+		t.Fatalf("config-get array error = %v", err)
+	}
+	if strings.TrimSpace(output.String()) != `["kp","us"]` {
+		t.Fatalf("config-get array output = %q", output.String())
+	}
 	if err := configGetCmd.RunE(configGetCmd, []string{"missing.value"}); err == nil {
 		t.Fatal("config-get reported success for a missing key")
+	}
+}
+
+func TestConfigValidateAndGetHonorUserArrayPriority_SW_CFG_002(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "config")
+	if err := config.InitializeDefaults(root); err != nil {
+		t.Fatal(err)
+	}
+	networkPath := filepath.Join(root, "modules", "10-network.toml")
+	networkContent, err := os.ReadFile(networkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkContent = []byte(strings.Replace(string(networkContent), "blocked_countries = []", `blocked_countries = ["be"]`, 1))
+	networkContent = []byte(strings.Replace(string(networkContent), "blocked_asns = []", `blocked_asns = ["AS64500"]`, 1))
+	if err := os.WriteFile(networkPath, networkContent, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	previousRoot := configGetRoot
+	configGetRoot = root
+	t.Cleanup(func() { configGetRoot = previousRoot })
+	pathFlag := configValidateCmd.Flags().Lookup("path")
+	previousPath := pathFlag.Value.String()
+	if err := configValidateCmd.Flags().Set("path", root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = configValidateCmd.Flags().Set("path", previousPath) })
+
+	validate := func() {
+		t.Helper()
+		var output bytes.Buffer
+		configValidateCmd.SetOut(&output)
+		if err := configValidateCmd.RunE(configValidateCmd, nil); err != nil {
+			t.Fatalf("config validate error = %v", err)
+		}
+		if !strings.Contains(output.String(), "Configuration is valid") {
+			t.Fatalf("config validate output = %q", output.String())
+		}
+	}
+	get := func(key string) string {
+		t.Helper()
+		var output bytes.Buffer
+		configGetCmd.SetOut(&output)
+		if err := configGetCmd.RunE(configGetCmd, []string{key}); err != nil {
+			t.Fatalf("config-get %s error = %v", key, err)
+		}
+		return strings.TrimSpace(output.String())
+	}
+
+	userPath := filepath.Join(root, "modules", "99-user.toml")
+	for _, test := range []struct {
+		name    string
+		content string
+		wantGeo string
+		wantASN string
+	}{
+		{
+			name: "non-empty override",
+			content: `[network.geo]
+blocked_countries = ["jp", "kp"]
+
+[network.asn]
+blocked_asns = ["AS15169", "AS13335"]
+`,
+			wantGeo: `["jp","kp"]`,
+			wantASN: `["AS15169","AS13335"]`,
+		},
+		{
+			name: "empty override",
+			content: `[network.geo]
+blocked_countries = []
+
+[network.asn]
+blocked_asns = []
+`,
+			wantGeo: `[]`,
+			wantASN: `[]`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(userPath, []byte(test.content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			validate()
+			if got := get("network.geo.blocked_countries"); got != test.wantGeo {
+				t.Fatalf("config-get GEO = %q, want %q", got, test.wantGeo)
+			}
+			if got := get("network.asn.blocked_asns"); got != test.wantASN {
+				t.Fatalf("config-get ASN = %q, want %q", got, test.wantASN)
+			}
+		})
 	}
 }

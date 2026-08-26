@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -228,7 +229,15 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 	if !v.IsSet(key) {
 		return "", false, nil
 	}
-	return v.GetString(key), true, nil
+	value := v.Get(key)
+	if text, ok := value.(string); ok {
+		return text, true, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", false, fmt.Errorf("encode configuration value %q: %w", key, err)
+	}
+	return string(encoded), true, nil
 }
 
 func parseTOMLDocument(content []byte, relative string) (map[string]any, error) {

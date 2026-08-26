@@ -430,6 +430,35 @@ func TestNftablesTransactionPreservesDynamicBansAndRemainingExpiry_SW_FW_001(t *
 	}
 }
 
+func TestCompareNFTDynamicSnapshotsAnchorsExpiryAtSuccessfulApply_SW_FW_001(t *testing.T) {
+	renderedAt := time.Unix(100, 0)
+	appliedAt := renderedAt.Add(4 * time.Second)
+	observedAt := appliedAt.Add(100 * time.Millisecond)
+	key := nftObjectKey{family: "inet", table: "syswarden", name: "banned_ips"}
+	expected := newNFTDynamicSnapshot(renderedAt)
+	expected.sets[key]["8.8.4.4-8.8.4.4"] = nftDynamicBan{
+		start:   netip.MustParseAddr("8.8.4.4"),
+		end:     netip.MustParseAddr("8.8.4.4"),
+		timeout: time.Hour,
+		expires: 30 * time.Minute,
+	}
+	observed := newNFTDynamicSnapshot(observedAt)
+	observed.sets[key]["8.8.4.4-8.8.4.4"] = nftDynamicBan{
+		start:   netip.MustParseAddr("8.8.4.4"),
+		end:     netip.MustParseAddr("8.8.4.4"),
+		timeout: time.Hour,
+		expires: 30 * time.Minute,
+	}
+
+	if err := compareNFTDynamicSnapshots(expected, observed, observedAt); err == nil {
+		t.Fatal("pre-validation expiry anchor unexpectedly accepted a four-second false drift")
+	}
+	expected.capturedAt = appliedAt
+	if err := compareNFTDynamicSnapshots(expected, observed, observedAt); err != nil {
+		t.Fatalf("successful-apply expiry anchor rejected exact restored expiry: %v", err)
+	}
+}
+
 func TestNftablesTransactionDropsAmbiguousLegacyOpenInterval_SW_FW_001(t *testing.T) {
 	stateDirectory := t.TempDir()
 	plan := minimalVerificationPlan(0)
@@ -465,6 +494,79 @@ func TestNftablesTransactionDropsAmbiguousLegacyOpenInterval_SW_FW_001(t *testin
 		if bytes.Contains(persistent, discarded) {
 			t.Fatalf("dynamic migration state leaked into persistent policy:\n%s", persistent)
 		}
+	}
+}
+
+func TestLegacyDynamicBanQuarantineFlushesOnlyAffectedVolatileSets_SW_FW_001(t *testing.T) {
+	plan := minimalVerificationPlan(0)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+	runner := newFakeNFTRunner(plan,
+		nftTableTarget{family: "inet", name: "syswarden"},
+		nftTableTarget{family: "netdev", name: "syswarden_hw_drop"},
+	)
+	withUnaffectedIPv6 := func(content []byte) []byte {
+		var document struct {
+			NFTables []map[string]any `json:"nftables"`
+		}
+		if err := json.Unmarshal(content, &document); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []nftObjectKey{
+			{family: "inet", table: "syswarden", name: "banned_ips6"},
+			{family: "netdev", table: "syswarden_hw_drop", name: "banned_ips6"},
+		} {
+			document.NFTables = append(document.NFTables, map[string]any{"element": map[string]any{
+				"family": key.family,
+				"table":  key.table,
+				"name":   key.name,
+				"elem":   []any{"2001:db8:ffff::9"},
+			}})
+		}
+		rendered, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rendered
+	}
+	runner.rulesetDocuments = [][]byte{
+		withUnaffectedIPv6(nftVerificationJSONWithLegacyOpenSuffix(plan, time.Hour)),
+		withUnaffectedIPv6(nftVerificationJSONWithoutDynamicBans(plan)),
+	}
+	repaired, err := quarantineLegacyDynamicBanIntervals(context.Background(), runner, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repaired {
+		t.Fatal("ambiguous legacy interval was not quarantined")
+	}
+	for _, statement := range []string{
+		"flush set inet syswarden banned_ips\n",
+		"flush set netdev syswarden_hw_drop banned_ips\n",
+	} {
+		if !strings.Contains(runner.lastCandidate, statement) {
+			t.Fatalf("quarantine transaction omitted %q:\n%s", statement, runner.lastCandidate)
+		}
+	}
+	for _, forbidden := range []string{"banned_ips6", "delete table", "add element"} {
+		if strings.Contains(runner.lastCandidate, forbidden) {
+			t.Fatalf("quarantine transaction contains forbidden %q:\n%s", forbidden, runner.lastCandidate)
+		}
+	}
+}
+
+func TestLegacyDynamicBanQuarantineLeavesCleanStateUntouched_SW_FW_001(t *testing.T) {
+	plan := minimalVerificationPlan(0)
+	runner := newFakeNFTRunner(plan, nftTableTarget{family: "inet", name: "syswarden"})
+	runner.rulesetDocuments = [][]byte{nftVerificationJSONWithoutDynamicBans(plan)}
+	repaired, err := quarantineLegacyDynamicBanIntervals(context.Background(), runner, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired || runner.mainApplyCalls != 0 || runner.lastCandidate != "" {
+		t.Fatalf("clean state changed: repaired=%t applies=%d candidate=%q", repaired, runner.mainApplyCalls, runner.lastCandidate)
 	}
 }
 

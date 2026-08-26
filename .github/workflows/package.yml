@@ -327,9 +327,11 @@ jobs:
           set -euo pipefail
           cat scripts/ci/package_webtui_retirement.sh > "${PACKAGE_SCRIPTS}/preinst.sh"
           cat scripts/ci/package_deferred_purge_postinstall.sh >> "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat scripts/ci/package_alpine_cronie_preflight.sh >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/preinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
+          syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
           secure_private_directory() {
               path="$1"
@@ -710,7 +712,7 @@ jobs:
             --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
             --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
-            -d "wireguard-tools" -d "qrencode" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
+            -d "wireguard-tools" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
             -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
             --before-install "${PACKAGE_RPM_SCRIPTS}/preinst.sh" \
             --after-install "${PACKAGE_RPM_SCRIPTS}/postinst.sh" \

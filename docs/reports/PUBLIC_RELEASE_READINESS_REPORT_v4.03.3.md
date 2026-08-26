@@ -25,7 +25,10 @@ v4.03.3 preserves the published three-package AMD64 Linux surface, native local
 TUI, verifiable HA migration fence and bounded LOT 2 security posture. This
 Patch corrects Microsoft Teams and Power Automate webhook dispatch, nftables
 interval encoding, OSINT installation tolerance and package lifecycle recovery
-without changing the supported package or runtime matrix.
+without changing the supported package or runtime matrix. Native-host review
+also identified and now covers truthful block and unblock exit status, typed
+configuration output, optional RHEL QR rendering, the Alpine Cronie transaction
+boundary and exact final-removal residues.
 
 The release remains blocked until the exact merged commit passes native AMD64
 package lifecycles, isolated nftables qualification, security and
@@ -108,6 +111,12 @@ family remains intentionally omitted and the error states that boundary.
 Unit tests model the exact element grammar and idempotent mutation behavior, but
 they do not replace the isolated privileged nftables laboratory required below.
 
+The packaged candidate performs this bounded volatile-state quarantine before
+its own network-dependent configuration. If a repair is committed, it restarts
+the packaged core and repeats the check to close the final-mutation race.
+Expiry verification is anchored to the successful atomic apply, not to the
+earlier and potentially expensive nftables validation pass.
+
 ## OSINT source-admissibility correction
 
 The supported free OSINT path still requires two distinct HTTPS origins and
@@ -130,12 +139,12 @@ condition does not abort package configuration or leave `dpkg` in `iF` state.
 ## Signed update path from historical v4.03.2 to v4.03.3
 
 After publication, the normal operator transition is `sudo syswarden update`
-from the installed historical v4.03.2 CLI. That updater embeds the canonical
-Ed25519 release trust-root inventory. It obtains `releases/latest`, requires
-v4.03.3 to be newer than the installed version, authenticates the canonical
-manifest and detached signature, binds the trusted key identity and release
-version, then selects exactly one AMD64 package for the detected native package
-manager.
+from an installed historical v4.03.2 CLI that still has working DNS and GitHub
+connectivity. That updater embeds the canonical Ed25519 release trust-root
+inventory. It obtains `releases/latest`, requires v4.03.3 to be newer than the
+installed version, authenticates the canonical manifest and detached signature,
+binds the trusted key identity and release version, then selects exactly one
+AMD64 package for the detected native package manager.
 
 Before installation, the updater verifies the selected filename, platform,
 format, size and SHA-256 inside a private workspace and reattests the package
@@ -143,11 +152,23 @@ immediately before invoking the package manager. There is no unsigned fallback.
 Direct package installation remains a pre-tag qualification mechanism or a
 separately approved recovery path, not the normal published migration.
 
+The historical, already-published v4.03.2 binary necessarily downloads release
+metadata, signature and package before any v4.03.3 code can run. A host whose legacy open
+interval already blocks DNS or GitHub return traffic cannot repair that network
+path through `syswarden update` alone. The version-specific runbook therefore
+requires external containment, a complete four-set capture, stopped ban
+producers and an exact affected-family dynamic-set flush before retrying the
+signed updater. This bootstrap changes no persistent blocklist and is permitted
+only for the identified legacy suffix. The candidate package still repeats its
+own bounded quarantine before network-dependent configuration.
+
 The exact post-publication route cannot be claimed from a candidate artifact.
 One disposable host must remain on the published historical v4.03.2 package
 until GitHub resolves the latest Release to v4.03.3. Its evidence must bind the
 signed manifest, selected package digest, resulting native v4.03.3 package
-record and service health.
+record and service health. Use a connected baseline for the updater itself. If
+the retained state contains the blocking suffix, first execute the separately
+qualified contained bootstrap; no unsigned fallback is permitted.
 
 ## Package ownership and removal recovery
 
@@ -173,6 +194,22 @@ registry. Reload and removal may delete only the exact recorded file identity
 and bytes. An obsolete enabled-to-disabled SIEM fragment is removed through the
 same contract. Any modified, replaced, linked or concurrently changed fragment
 is preserved together with its provenance for explicit recovery.
+
+Final removal also targets only the byte-exact rsyslog anti-forging fragment,
+an enabled priority-400 `syswarden_rsyslog` SELinux module whose SHA-256 identity
+matches private provenance, and the exact unlocked root-owned mode-0600 empty
+firewall runtime lock. A historical unprovenanced module is adopted only when
+its extracted policy package is byte-identical to the freshly compiled policy.
+Any module with another priority, changed checksum, missing tracked identity,
+modified file, busy lock or other ambiguity is preserved. The normal managed
+core is ignored before service stop and prohibited by the repeated post-stop
+process attestations.
+
+The `semodule` CLI exposes no checksum-conditional removal primitive. SysWarden
+therefore double-reattests the priority-400 module and its private provenance
+immediately before removal and verifies the resulting store state. The mutation
+uses the libsemanage transaction lock, but atomicity against an external module
+replacement inside the final comparison-to-command boundary is not claimed.
 
 ## Local terminal boundary
 
@@ -238,6 +275,13 @@ They reject hostnames, address zones, IPv4-mapped IPv6 values, invalid ports,
 control characters and family mismatches. The command
 `syswarden whitelist <IP-or-CIDR> --port <PORT>` limits an entry to that TCP
 service; omitting `--port` keeps the entry address-wide.
+
+`syswarden config-get` prints string values directly and encodes arrays, maps,
+booleans and numbers as compact JSON. Empty arrays therefore remain visible as
+`[]`, and both empty and non-empty GEO or ASN arrays in `99-user.toml` override
+lower-priority module values. `block` and `unblock` return a non-zero command
+status when any requested transaction fails; a ban alert is emitted only for a
+successfully committed address.
 
 Every SSH exception is rendered only for the effective SSH port. An explicit
 port must match it. If the effective SSH port changes while a stale qualified
@@ -321,6 +365,11 @@ This extension stages an image filesystem only. It does not establish runtime
 readiness, qualify a target-host firewalld deployment, build or sign an ISO, or
 expand the protected release matrix. Those activities require separate
 image-builder and target-host evidence.
+
+The RPM does not require `qrencode` or enable EPEL. Terminal WireGuard QR
+rendering is optional on RHEL-family systems; the protected client
+configuration file remains the authoritative output when an operator-approved
+repository has not supplied that utility.
 
 ## HA ownership and migration contract
 
@@ -420,6 +469,13 @@ the post-upgrade four-set capture. Any mismatched version, architecture,
 unfinished package transaction or lost producer quiescence fails the migration
 gate.
 
+The pre-tag Ubuntu migration must also reproduce a captured legacy suffix that
+blocks DNS or candidate-host network traffic, prove that the old updater cannot
+repair connectivity before download, apply only the documented affected-family
+dynamic-set bootstrap under external containment, and then install the exact
+workflow artifact. This procedure is migration evidence, not a claim that the
+post-publication signed updater was exercised before the Release exists.
+
 Native package evidence must also cover Debian remove, reinstall after remove,
 purge, final RPM erase and APK post-deinstall, including bounded crashes around
 the durable removal barrier. It must prove that mounted descendants cause zero
@@ -427,6 +483,14 @@ removal-state mutation, that ambiguous integration artifacts and provenance are
 preserved, and that package-owned completion has the contracted bytes. The
 post-publication `syswarden update` smoke remains a separate release follow-up
 because no signed v4.03.3 Release exists during pre-tag qualification.
+
+For Alpine online installation, `cronie` and `cronie-openrc` must already be
+committed in a completed APK transaction, Cronie must be active and assigned
+only to the default OpenRC runlevel, and BusyBox `crond` must be inactive and
+unassigned. The package pre-install check runs before any SysWarden directory or
+removal barrier is created. Qualification must prove this clean refusal, then a
+successful install after the documented prerequisite is established. Offline
+package staging may defer runtime convergence.
 
 ## LOT 2S security remediation
 
@@ -503,7 +567,8 @@ environment protection fails closed before the secret-bearing job can run.
   bounded and is not claimed as equivalent privileged qualification.
 - On Alpine Linux, SysWarden does not configure automatic operating-system
   security updates. Repository selection and the `apk` update policy remain
-  an explicit operator responsibility.
+  an explicit operator responsibility. An online fresh install additionally
+  requires the documented committed and active Cronie prerequisite.
 - `uninstall` deletes SysWarden configuration, data, logs, services and
   firewall state. It is not a general host rollback.
 - There is no qualified in-place downgrade from v4.03.3 to historical v4.03.2.

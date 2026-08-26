@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
@@ -66,6 +67,11 @@ var installCmd = &cobra.Command{
 
 		if err := system.InstallDependencies(); err != nil {
 			return installStageError("dependency installation failed", err)
+		}
+		if os.Getenv("SYSWARDEN_PKG_INSTALL") == "1" {
+			if err := preparePackagedLegacyDynamicBanUpgrade(); err != nil {
+				return installStageError("legacy dynamic firewall recovery failed", err)
+			}
 		}
 
 		if err := system.ConfigureSSH(); err != nil {
@@ -157,6 +163,8 @@ var installCmd = &cobra.Command{
 
 var installConfigPreflight = prepareInstallConfiguration
 var removeExactLegacyCompletionAfterInstall = integration.RemoveExactLegacyBashCompletion
+var quarantineLegacyDynamicBanIntervals = firewall.QuarantineLegacyDynamicBanIntervals
+var restartCoreServiceForInstall = restartCoreService
 var hostFirewallBackendPreflight = system.PreflightHostFirewallBackend
 var inspectInstallFirewallCompatibility = config.InspectHistoricalDefaultFirewallCompatibility
 var applyInstallFirewallCompatibility = config.ApplyHistoricalDefaultFirewallCompatibility
@@ -172,6 +180,25 @@ func preflightConfiguredCronScheduling() error {
 
 func preflightConfiguredFirewallBackend() error {
 	return hostFirewallBackendPreflight(configuredFirewallBackend())
+}
+
+func preparePackagedLegacyDynamicBanUpgrade() error {
+	repaired, err := quarantineLegacyDynamicBanIntervals()
+	if err != nil {
+		return err
+	}
+	if !repaired {
+		return nil
+	}
+	if err := restartCoreServiceForInstall(); err != nil {
+		return fmt.Errorf("restart the packaged core after legacy dynamic-ban quarantine: %w", err)
+	}
+	// A final pass closes the narrow race in which the historical process had
+	// already queued one last mutation before the service restart completed.
+	if _, err := quarantineLegacyDynamicBanIntervals(); err != nil {
+		return fmt.Errorf("verify legacy dynamic-ban quarantine after core restart: %w", err)
+	}
+	return nil
 }
 
 func configuredFirewallBackend() string {

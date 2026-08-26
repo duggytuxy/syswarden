@@ -300,6 +300,31 @@ func TestSetupWireGuardPublishesAttestedTransactionBeforeMutation_SW2_WGSTATE_00
 	}
 }
 
+func TestSetupWireGuardKeepsProtectedClientFileWhenOptionalQRRendererIsAbsent_SW2_WGSTATE_001(t *testing.T) {
+	harness := installWireGuardTransactionHarness(t)
+	wireGuardQRCodeRender = func(string) error {
+		harness.events = append(harness.events, "qr-unavailable")
+		return errors.New("qrencode is not installed")
+	}
+	if err := SetupWireguard(); err != nil {
+		t.Fatalf("optional QR renderer failure aborted WireGuard setup: %v", err)
+	}
+	if !strings.Contains(strings.Join(harness.events, ","), "qr-unavailable") {
+		t.Fatalf("optional QR renderer was not attempted: %v", harness.events)
+	}
+	inventory, err := wireguardstate.Inspect(harness.root)
+	clientPresent := false
+	for _, path := range inventory.Artifacts {
+		if path == wireguardstate.ClientConfigurationPath {
+			clientPresent = true
+			break
+		}
+	}
+	if err != nil || !clientPresent {
+		t.Fatalf("protected client configuration is unavailable after QR warning: inventory=%#v err=%v", inventory, err)
+	}
+}
+
 func TestSetupWireGuardReusesOnlyFullyAttestedState_SW2_WGSTATE_001(t *testing.T) {
 	harness := installWireGuardTransactionHarness(t)
 	if err := SetupWireguard(); err != nil {

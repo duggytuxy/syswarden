@@ -771,6 +771,82 @@ func snapshotNFTDynamicBans(ctx context.Context, runner nftCommandRunner, captur
 	return extractNFTDynamicSnapshot(document, capturedAt)
 }
 
+// QuarantineLegacyDynamicBanIntervals removes only volatile address-family
+// state that is ambiguous because an inherited interval ends at the address
+// maximum. Persistent operator lists and the surrounding firewall policy are
+// not changed. This is an availability recovery step for package upgrades from
+// the affected historical encoder, before the candidate installation performs
+// any network-dependent configuration.
+func QuarantineLegacyDynamicBanIntervals() (bool, error) {
+	lock, err := acquireNFTReloadGuard()
+	if err != nil {
+		return false, fmt.Errorf("acquire legacy dynamic-ban quarantine lock: %w", err)
+	}
+	defer releaseNFTReloadGuard(lock)
+
+	runner, err := newExecNFTCommandRunner()
+	if err != nil {
+		return false, fmt.Errorf("prepare legacy dynamic-ban quarantine runner: %w", err)
+	}
+	workDirectory, err := os.MkdirTemp("", "syswarden-dynamic-quarantine-")
+	if err != nil {
+		return false, fmt.Errorf("create legacy dynamic-ban quarantine directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(workDirectory) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return quarantineLegacyDynamicBanIntervals(ctx, runner, workDirectory)
+}
+
+func quarantineLegacyDynamicBanIntervals(
+	ctx context.Context,
+	runner nftCommandRunner,
+	workDirectory string,
+) (bool, error) {
+	snapshot, err := snapshotNFTDynamicBans(ctx, runner, time.Now())
+	if err != nil {
+		return false, fmt.Errorf("snapshot legacy dynamic bans before quarantine: %w", err)
+	}
+	if len(nftDynamicSnapshotQuarantinedFamilies(snapshot)) == 0 {
+		return false, nil
+	}
+
+	var transaction strings.Builder
+	for _, key := range nftDynamicBanSets {
+		if len(snapshot.discarded[key]) == 0 {
+			continue
+		}
+		_, _ = fmt.Fprintf(&transaction, "flush set %s %s %s\n", key.family, key.table, key.name)
+	}
+	if transaction.Len() == 0 {
+		return false, fmt.Errorf("legacy dynamic-ban quarantine selected no exact set")
+	}
+	transactionPath := filepath.Join(workDirectory, "quarantine.nft")
+	if err := writePrivateFile(transactionPath, []byte(transaction.String())); err != nil {
+		return false, fmt.Errorf("write legacy dynamic-ban quarantine transaction: %w", err)
+	}
+	if output, checkErr := runner.Run(ctx, nil, "-c", "-f", transactionPath); checkErr != nil {
+		return false, fmt.Errorf("validate legacy dynamic-ban quarantine transaction: %w: %s", checkErr, strings.TrimSpace(string(output)))
+	}
+	if output, applyErr := runner.Run(ctx, nil, "-f", transactionPath); applyErr != nil {
+		return false, fmt.Errorf("apply legacy dynamic-ban quarantine transaction: %w: %s", applyErr, strings.TrimSpace(string(output)))
+	}
+
+	observedAt := time.Now()
+	observed, err := snapshotNFTDynamicBans(ctx, runner, observedAt)
+	if err != nil {
+		return true, fmt.Errorf("legacy dynamic-ban quarantine committed but verification failed: %w", err)
+	}
+	if len(nftDynamicSnapshotQuarantinedFamilies(observed)) != 0 {
+		return true, fmt.Errorf("legacy dynamic-ban quarantine committed but an ambiguous maximum-ending interval remains")
+	}
+	if err := compareNFTDynamicSnapshots(snapshot, observed, observedAt); err != nil {
+		return true, fmt.Errorf("legacy dynamic-ban quarantine committed but exact state verification failed: %w", err)
+	}
+	writeNFTDynamicSnapshotWarnings(os.Stderr, snapshot, true)
+	return true, nil
+}
+
 func buildNFTDynamicBanRules(snapshot nftDynamicSnapshot, renderedAt time.Time) (string, nftDynamicSnapshot, error) {
 	elapsed := renderedAt.Sub(snapshot.capturedAt)
 	if elapsed < 0 {
@@ -1344,6 +1420,12 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 	if output, applyErr := runner.Run(ctx, nil, "-f", transactionPath); applyErr != nil {
 		return fail("candidate apply failed: %v: %s", applyErr, strings.TrimSpace(string(output)))
 	}
+	// The expiry values in expectedDynamicBans are the exact relative values
+	// submitted to the successful atomic apply. Start their verification clock
+	// when that apply completes. Anchoring them before the potentially expensive
+	// `nft -c` validation incorrectly treats validation time as elapsed kernel
+	// lifetime and can reject an otherwise exact restored element.
+	expectedDynamicBans.capturedAt = time.Now()
 
 	if err := verifyNftablesStateWithDynamicBans(ctx, runner, verification, &expectedDynamicBans); err != nil {
 		rollbackErr := rollbackNftables(runner, rollbackRules, dynamicSnapshot)

@@ -214,51 +214,54 @@ func SetupWAFLogForwarder() error {
 		fmt.Println("[WARN] SELinux runtime state is indeterminate; applying the Rsyslog policy defensively.")
 	}
 
-	// SELinux Hardening (RHEL/Alma) - Compile and install policy to allow rsyslog -> UDS communication.
+	reconcileBridge := func() error {
+		return reconcileRsyslogArtifactWithProvenanceAtUsing(
+			wafRsyslogParentDirectory,
+			0,
+			0,
+			wafRsyslogConfigName,
+			"WAF bridge",
+			[]byte(rsyslogConf),
+			reconcileWAFRsyslogService,
+			recordRsyslogArtifactProvenance,
+			requireRsyslogMutationWithoutRemovalBarrier,
+		)
+	}
+
+	// SELinux hardening (RHEL/Alma): keep the private package and any exact
+	// pre-existing policy available until the rsyslog publication transaction
+	// succeeds, so a later validation or activation failure can be rolled back.
 	if configureSELinuxPolicy {
 		fmt.Println("[INFO] Compiling and injecting SELinux policy for Rsyslog UDS bridge...")
 		if err := withPrivateSELinuxPolicyWorkspace("", func(workspace string) error {
-			if err := runSELinuxPolicyCommand(
-				workspace,
-				"compile SELinux policy",
-				trustedCheckmodulePath,
-				"-M", "-m", "-o", "syswarden_rsyslog.mod", "syswarden_rsyslog.te",
-			); err != nil {
+			transaction, err := installRsyslogSELinuxPolicyWithProvenance(workspace)
+			if err != nil {
 				return err
 			}
-			if err := runSELinuxPolicyCommand(
-				workspace,
-				"package SELinux policy",
-				trustedSemodulePackagePath,
-				"-o", "syswarden_rsyslog.pp", "-m", "syswarden_rsyslog.mod",
-			); err != nil {
-				return err
+			bridgeBaseline, err := captureRsyslogBridgeRollbackBaselineAt(
+				wafRsyslogParentDirectory,
+				0,
+				0,
+				[]byte(rsyslogConf),
+			)
+			if err != nil {
+				return errors.Join(err, transaction.Rollback())
 			}
-			if err := runSELinuxPolicyCommand(
-				workspace,
-				"install SELinux policy",
-				trustedSemodulePath,
-				"-i", "syswarden_rsyslog.pp",
-			); err != nil {
-				return err
+			if err := reconcileBridge(); err != nil {
+				return errors.Join(
+					err,
+					bridgeBaseline.Rollback(reconcileWAFRsyslogService),
+					transaction.Rollback(),
+				)
+			}
+			if err := transaction.Commit(); err != nil {
+				return errors.Join(err, bridgeBaseline.Rollback(reconcileWAFRsyslogService))
 			}
 			return nil
 		}); err != nil {
 			return fmt.Errorf("install Rsyslog SELinux policy before writing WAF bridge config: %w", err)
 		}
-	}
-
-	if err := reconcileRsyslogArtifactWithProvenanceAtUsing(
-		wafRsyslogParentDirectory,
-		0,
-		0,
-		wafRsyslogConfigName,
-		"WAF bridge",
-		[]byte(rsyslogConf),
-		reconcileWAFRsyslogService,
-		recordRsyslogArtifactProvenance,
-		requireRsyslogMutationWithoutRemovalBarrier,
-	); err != nil {
+	} else if err := reconcileBridge(); err != nil {
 		return err
 	}
 
@@ -1029,31 +1032,6 @@ func shouldConfigureRsyslogSELinuxPolicy(
 		return false, errors.Join(causes...)
 	}
 	return true, nil
-}
-
-func runSELinuxPolicyCommand(
-	directory string,
-	operation string,
-	name string,
-	args ...string,
-) error {
-	output, err := runManagedServiceCommandUsing(
-		context.Background(),
-		managedServiceCommandTimeout,
-		validateTrustedExecutable,
-		func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return executeManagedServiceCommandInDirectory(ctx, directory, name, args...)
-		},
-		name,
-		args...,
-	)
-	if err == nil {
-		return nil
-	}
-	return newManagedServiceDiagnosticError(
-		fmt.Sprintf("%s: %s", operation, managedServiceEvidence(err, output)),
-		err,
-	)
 }
 
 func restartManagedServiceUsing(

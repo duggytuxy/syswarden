@@ -59,7 +59,7 @@ runtime filesystem below that tree.
    sudo dnf -y --installroot="${IMAGE_ROOT}" --releasever=9 \
      --setopt=install_weak_deps=False install \
      nftables ipset curl wget rsyslog cronie bash-completion \
-     wireguard-tools qrencode jq checkpolicy policycoreutils-python-utils \
+     wireguard-tools jq checkpolicy policycoreutils-python-utils \
      dnf-automatic procps-ng e2fsprogs firewalld
    ```
 
@@ -70,6 +70,10 @@ runtime filesystem below that tree.
    9+ `/usr/lib/os-release` metadata. Stop on any failure. It performs no image
    or host mutation and does not require RPM tooling or installed image
    dependencies.
+
+   `qrencode` is optional on RHEL-family images. Install it from an explicitly
+   approved repository only when terminal QR rendering is required; WireGuard
+   client configuration remains available as a protected file without it.
 
    Enable Cronie and the preferred RHEL firewall frontend in the image without
    starting either service on the builder:

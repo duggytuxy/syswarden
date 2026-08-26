@@ -17,6 +17,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// RsyslogAntiForgingPolicy is the byte-exact SysWarden-owned logging policy
+// shared by hardening setup and attributed package removal.
+const RsyslogAntiForgingPolicy = "# --- SYSWARDEN: Anti Log Forging & CRLF Mitigation ---\n" +
+	"$EscapeControlCharactersOnReceive on\n" +
+	"$DropTrailingLFOnReception on\n"
+
 // ApplyOSHardening enforces OS-level access and logging restrictions natively.
 func ApplyOSHardening() error {
 	if !config.GlobalConfig.Hardening {
@@ -423,7 +429,7 @@ func applyLogAntiForgingOn(host hardeningHost) error {
 		failures = append(failures, err)
 	} else if rsyslog {
 		applied = true
-		content := []byte("# --- SYSWARDEN: Anti Log Forging & CRLF Mitigation ---\n$EscapeControlCharactersOnReceive on\n$DropTrailingLFOnReception on\n")
+		content := []byte(RsyslogAntiForgingPolicy)
 		logical := "/etc/rsyslog.d/99-syswarden-antiforging.conf"
 		reconcile := func() error { return reconcileRsyslogService(host) }
 		validate := func() error { return host.executor.run("rsyslogd", "-N1") }

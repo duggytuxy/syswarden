@@ -379,7 +379,8 @@ func newFirewallRemovalTestHost(
 			validate: func(string) error { return nil },
 			output:   manager.output,
 		},
-		processScan: func() error { return nil },
+		processScan:         func() error { return nil },
+		postStopProcessScan: func() error { return nil },
 		attestWireGuard: func() (firewallRemovalWireGuardEvidence, error) {
 			return firewallRemovalWireGuardEvidence{present: configPresent}, nil
 		},
@@ -438,6 +439,7 @@ func TestOfflinePackageRemovalUsesBarrierScansWithoutManagerCalls_SW2_FWBACKEND_
 		scans++
 		return nil
 	}
+	host.postStopProcessScan = host.processScan
 	managerCalls := 0
 	host.executor.output = func(string, ...string) ([]byte, error) {
 		managerCalls++

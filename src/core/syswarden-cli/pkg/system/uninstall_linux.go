@@ -29,6 +29,7 @@ type firewallRemovalPreparationHost struct {
 	classifyRuntime            func(bool) (serviceManagerState, error)
 	executor                   firewallManagerExecutor
 	processScan                func() error
+	postStopProcessScan        func() error
 	attestWireGuard            func() (firewallRemovalWireGuardEvidence, error)
 	verifyWireGuardStopConfig  func() error
 	resolveWireGuardExe        func() (string, error)
@@ -72,6 +73,7 @@ func productionFirewallRemovalPreparationHost() firewallRemovalPreparationHost {
 		classifyRuntime:            classifyServiceManagerRuntime,
 		executor:                   hostFirewallExecutor(),
 		processScan:                scanExactRootSysWardenCLIMutators,
+		postStopProcessScan:        scanExactRootSysWardenProcessesAfterServiceStop,
 		attestWireGuard:            attestFirewallRemovalWireGuardState,
 		verifyWireGuardStopConfig:  verifyWireGuardServerBeforeRemovalStop,
 		resolveWireGuardExe:        resolveWireGuardRemovalExecutable,
@@ -90,7 +92,8 @@ func (host firewallRemovalPreparationHost) validate() error {
 		return fmt.Errorf("firewall removal preparation must be executed as root")
 	}
 	if host.classifyRuntime == nil || host.executor.lookPath == nil || host.executor.validate == nil ||
-		host.executor.output == nil || host.processScan == nil || host.attestWireGuard == nil ||
+		host.executor.output == nil || host.processScan == nil || host.postStopProcessScan == nil ||
+		host.attestWireGuard == nil ||
 		host.verifyWireGuardStopConfig == nil || host.resolveWireGuardExe == nil ||
 		host.wireGuardInterface == nil || host.attestSystemdUnit == nil ||
 		host.attestSystemdDropIns == nil ||
@@ -610,7 +613,7 @@ func (host firewallRemovalPreparationHost) reattestWithManager(
 	if interfacePresent {
 		return fmt.Errorf("WireGuard interface wg-syswarden remains active after service preparation")
 	}
-	if err := host.processScan(); err != nil {
+	if err := host.postStopProcessScan(); err != nil {
 		return fmt.Errorf("scan concurrent SysWarden CLI mutators: %w", err)
 	}
 	return nil
@@ -649,7 +652,7 @@ func (host firewallRemovalPreparationHost) prepare() error {
 		if !sameFirewallRemovalWireGuardEvidence(confirmedWireGuard, wireGuard) {
 			return fmt.Errorf("WireGuard state changed during offline removal preparation")
 		}
-		if err := host.processScan(); err != nil {
+		if err := host.postStopProcessScan(); err != nil {
 			return fmt.Errorf("scan concurrent SysWarden CLI mutators during offline removal: %w", err)
 		}
 		return nil
@@ -729,7 +732,7 @@ func (host firewallRemovalPreparationHost) reattest() error {
 		if interfacePresent {
 			return fmt.Errorf("WireGuard interface wg-syswarden is active during offline removal")
 		}
-		if err := host.processScan(); err != nil {
+		if err := host.postStopProcessScan(); err != nil {
 			return fmt.Errorf("scan concurrent SysWarden CLI mutators during offline removal: %w", err)
 		}
 		confirmedWireGuard, err := host.attestWireGuard()

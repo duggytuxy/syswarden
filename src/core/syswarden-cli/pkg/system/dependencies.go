@@ -31,18 +31,18 @@ func InstallDependencies() error {
 		}
 	} else if _, err := exec.LookPath("dnf"); err == nil {
 		fmt.Println(" -> Detected RHEL/Alma/Rocky/Oracle (DNF)")
-		_ = exec.CommandContext(ctx, "dnf", "install", "-y", "epel-release").Run()                                                                                                 // #nosec
-		cmd := exec.CommandContext(ctx, "dnf", "install", "-y", "nftables", "wireguard-tools", "qrencode", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec
+		cmd := exec.CommandContext(ctx, "dnf", "install", "-y", "nftables", "wireguard-tools", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("DNF installation failed: %w", err)
 		}
+		fmt.Println("[INFO] Terminal WireGuard QR rendering is optional on RHEL-family systems and is enabled only when qrencode is already available from an operator-approved repository.")
 	} else if _, err := exec.LookPath("yum"); err == nil {
 		fmt.Println(" -> Detected CentOS/Legacy RHEL (YUM)")
-		_ = exec.CommandContext(ctx, "yum", "install", "-y", "epel-release").Run()                                                                                                 // #nosec
-		cmd := exec.CommandContext(ctx, "yum", "install", "-y", "nftables", "wireguard-tools", "qrencode", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec
+		cmd := exec.CommandContext(ctx, "yum", "install", "-y", "nftables", "wireguard-tools", "curl", "jq", "rsyslog", "checkpolicy", "policycoreutils-python-utils") // #nosec
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("YUM installation failed: %w", err)
 		}
+		fmt.Println("[INFO] Terminal WireGuard QR rendering is optional on RHEL-family systems and is enabled only when qrencode is already available from an operator-approved repository.")
 	} else if _, err := exec.LookPath("apk"); err == nil {
 		fmt.Println(" -> Detected Alpine Linux (APK)")
 		cmd := exec.CommandContext(ctx, "apk", "add", "--no-cache", "nftables", "wireguard-tools", "libqrencode-tools", "curl", "jq", "rsyslog", "rsyslog-uxsock") // #nosec

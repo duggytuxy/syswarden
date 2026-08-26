@@ -120,6 +120,8 @@
       "operators must keep every parent directory protected against untrusted replacement",
       "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars",
       "SSH/HA port separation while WireGuard is enabled.",
+      "The APK pre-install check requires committed `cronie` and `cronie-openrc`",
+      "`qrencode` is optional on RHEL-family images.",
       "[version-specific v4.03.2 to v4.03.3 migration runbook](Migration-v4.03.2-to-v4.03.3)"
     ],
     "Use-cases.md": [
@@ -157,6 +159,8 @@
       "The Ubuntu 26.04 installation through a deterministic local TLS fixture on supported OSINT source paths is a pending manual release-owner gate.",
       "SysWarden maintains the same logical dynamic bans in four interval sets:",
       "The candidate reload must demonstrate that it can inspect the old state, preserve only unambiguous valid dynamic bans and discard ambiguous legacy intervals.",
+      "`syswarden update` cannot repair that path by itself.",
+      "flush set inet \"syswarden\" banned_ips",
       "Each warned interval must be absent from all four post-upgrade sets.",
       "Rolling back to v4.03.2 is unsafe while any ban producer is active.",
       "There is no qualified in-place package downgrade for this correction.",

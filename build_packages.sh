@@ -335,9 +335,11 @@ prepare_rpm_build_id_links \
 # Pre-Install / Pre-Upgrade script
 cat "${REPOSITORY_ROOT}/scripts/ci/package_webtui_retirement.sh" > preinst.sh
 cat "${REPOSITORY_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> preinst.sh
+cat "${REPOSITORY_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> preinst.sh
 cat << 'EOF' >> preinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
+syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
 secure_private_directory() {
     path="$1"
@@ -717,7 +719,7 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
         --rpm-changelog "${RPM_CHANGELOG}" \
         -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
-        -d "wireguard-tools" -d "qrencode" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
+        -d "wireguard-tools" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
         -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
         --before-install "${RPM_SCRIPTS}/preinst.sh" \
         --after-install "${RPM_SCRIPTS}/postinst.sh" \

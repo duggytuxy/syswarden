@@ -139,10 +139,8 @@ DEB_BOOTSTRAP = (
     "rm -rf /var/lib/apt/lists/*"
 )
 RPM_BOOTSTRAP = (
-    "if grep -Eq '^ID=\"?almalinux\"?$' /etc/os-release; then "
-    "dnf -y install epel-release; fi && "
     "dnf -y install systemd iproute nftables ipset curl-minimal wget rsyslog cronie "
-    "bash-completion wireguard-tools qrencode jq checkpolicy "
+    "bash-completion wireguard-tools jq checkpolicy "
     "policycoreutils-python-utils dnf-automatic procps-ng e2fsprogs socat binutils "
     "cpio diffutils file util-linux && dnf clean all"
 )
@@ -650,6 +648,9 @@ def _generated_cleanup_event_checks(
         "openrc_core_enablement",
         "openrc_firewall_enablement",
         "runtime_socket",
+        "runtime_lock",
+        "rsyslog_antiforging_exact_removed",
+        "rsyslog_selinux_provenance_removed",
         "completion_residual",
     ]
     if exact_rsyslog:
@@ -1735,7 +1736,7 @@ expected_runtime_dependencies() {
             printf '%s\n' apt-listchanges bash-completion cron curl e2fsprogs ipset jq nftables procps qrencode rsyslog unattended-upgrades wget wireguard-tools
             ;;
         rpm)
-            printf '%s\n' bash-completion checkpolicy cronie curl dnf-automatic e2fsprogs ipset jq nftables policycoreutils-python-utils procps-ng qrencode rsyslog wget wireguard-tools
+            printf '%s\n' bash-completion checkpolicy cronie curl dnf-automatic e2fsprogs ipset jq nftables policycoreutils-python-utils procps-ng rsyslog wget wireguard-tools
             ;;
         apk)
             printf '%s\n' bash-completion cronie cronie-openrc curl e2fsprogs-extra jq libqrencode-tools nftables openrc procps-ng rsyslog rsyslog-uxsock shadow wget wireguard-tools
@@ -4305,6 +4306,11 @@ assert_generated_runtime_artifact_contract() {
     check_absent "${label}.generated.openrc_core_enablement" /etc/runlevels/default/syswarden-core
     check_absent "${label}.generated.openrc_firewall_enablement" /etc/runlevels/default/syswarden-firewall
     check_absent "${label}.generated.runtime_socket" /run/syswarden.sock
+    check_absent "${label}.generated.runtime_lock" /run/syswarden-firewall.lock
+    check_absent "${label}.generated.rsyslog_antiforging_exact_removed" \
+        /etc/rsyslog.d/99-syswarden-antiforging.conf
+    check_absent "${label}.generated.rsyslog_selinux_provenance_removed" \
+        /etc/rsyslog.d/.syswarden-rsyslog-selinux-provenance-v1
     if [ -f /etc/bash_completion.d/syswarden ] && [ ! -L /etc/bash_completion.d/syswarden ] && \
        [ "$(hash_file /etc/bash_completion.d/syswarden 2>/dev/null || true)" = "$(cat /tmp/syswarden-completion-before)" ]; then
         record pass "${PREFIX}.${label}.generated.completion_residual" "ambiguous shell completion is preserved for manual recovery"

@@ -14,6 +14,7 @@ func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBAC
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	previousUninstall := uninstallHostSystem
 	t.Cleanup(func() {
 		beginRemoval = previousBegin
@@ -23,6 +24,7 @@ func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBAC
 		cleanupFirewallStateForRemoval = previousCleanup
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 		uninstallHostSystem = previousUninstall
 	})
 
@@ -40,6 +42,7 @@ func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBAC
 		return nil
 	}
 	removePreparedServiceArtifacts = func() error { return nil }
+	removePreparedFirewallRuntimeLock = func() error { return nil }
 	uninstallHostSystem = func() error {
 		uninstallCalls++
 		return nil
@@ -63,6 +66,7 @@ func TestUninstallRefusesBeforeServiceOrFirewallMutationWhenTombstonePublication
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	previousUninstall := uninstallHostSystem
 	t.Cleanup(func() {
 		beginRemoval = previousBegin
@@ -71,6 +75,7 @@ func TestUninstallRefusesBeforeServiceOrFirewallMutationWhenTombstonePublication
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
 		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 		uninstallHostSystem = previousUninstall
 	})
 
@@ -85,6 +90,7 @@ func TestUninstallRefusesBeforeServiceOrFirewallMutationWhenTombstonePublication
 	removeOwnedWireGuardStateForRemoval = func() error { wireGuardCalls++; return nil }
 	cleanupFirewallStateForRemoval = func() error { cleanupCalls++; return nil }
 	removePreparedServiceArtifacts = func() error { return nil }
+	removePreparedFirewallRuntimeLock = func() error { return nil }
 	uninstallHostSystem = func() error { uninstallCalls++; return nil }
 	err := uninstallCmd.RunE(uninstallCmd, nil)
 	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "durable removal barrier is published") {
@@ -102,6 +108,7 @@ func TestUninstallRefusesBeforeHostMutationWhenFirewallCleanupFails_SW2_FWBACKEN
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	previousUninstall := uninstallHostSystem
 	t.Cleanup(func() {
 		beginRemoval = previousBegin
@@ -110,6 +117,7 @@ func TestUninstallRefusesBeforeHostMutationWhenFirewallCleanupFails_SW2_FWBACKEN
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
 		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 		uninstallHostSystem = previousUninstall
 	})
 
@@ -121,6 +129,7 @@ func TestUninstallRefusesBeforeHostMutationWhenFirewallCleanupFails_SW2_FWBACKEN
 	removeOwnedWireGuardStateForRemoval = func() error { return nil }
 	cleanupFirewallStateForRemoval = func() error { return sentinel }
 	removePreparedServiceArtifacts = func() error { return nil }
+	removePreparedFirewallRuntimeLock = func() error { return nil }
 	uninstallHostSystem = func() error {
 		uninstallCalls++
 		return nil
@@ -141,6 +150,7 @@ func TestRemovalScansProcessesBeforeCronStateRemoval_SW2_FWBACKEND_001(t *testin
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	t.Cleanup(func() {
 		beginRemoval = previousBegin
 		removeOwnedCronStateForRemoval = previousCron
@@ -148,6 +158,7 @@ func TestRemovalScansProcessesBeforeCronStateRemoval_SW2_FWBACKEND_001(t *testin
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
 		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 	})
 
 	sentinel := errors.New("synthetic unsafe cron.d artifact")
@@ -160,6 +171,7 @@ func TestRemovalScansProcessesBeforeCronStateRemoval_SW2_FWBACKEND_001(t *testin
 	removeOwnedWireGuardStateForRemoval = func() error { wireGuardCalls++; return nil }
 	cleanupFirewallStateForRemoval = func() error { cleanupCalls++; return nil }
 	removePreparedServiceArtifacts = func() error { return nil }
+	removePreparedFirewallRuntimeLock = func() error { return nil }
 	err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil)
 	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "before exact cron.d cleanup") {
 		t.Fatalf("cron state refusal = %v", err)
@@ -177,6 +189,7 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	previousUninstall := uninstallHostSystem
 	t.Cleanup(func() {
 		beginRemoval = previousBegin
@@ -186,6 +199,7 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 		cleanupFirewallStateForRemoval = previousCleanup
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 		uninstallHostSystem = previousUninstall
 	})
 
@@ -218,6 +232,10 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 		order = append(order, "service-artifact-removal")
 		return nil
 	}
+	removePreparedFirewallRuntimeLock = func() error {
+		order = append(order, "runtime-lock-removal")
+		return nil
+	}
 	uninstallHostSystem = func() error {
 		order = append(order, "host-removal")
 		return nil
@@ -225,7 +243,7 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 	if err := uninstallCmd.RunE(uninstallCmd, nil); err != nil {
 		t.Fatalf("verified uninstall: %v", err)
 	}
-	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,integration-artifact-removal,service-artifact-removal,host-removal" {
+	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,integration-artifact-removal,service-artifact-removal,runtime-lock-removal,host-removal" {
 		t.Fatalf("uninstall order = %q", got)
 	}
 }
@@ -238,6 +256,7 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	t.Cleanup(func() {
 		beginRemoval = previousBegin
 		removeOwnedCronStateForRemoval = previousCron
@@ -246,6 +265,7 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 		cleanupFirewallStateForRemoval = previousCleanup
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 	})
 
 	var order []string
@@ -277,10 +297,14 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 		order = append(order, "service-artifact-removal")
 		return nil
 	}
+	removePreparedFirewallRuntimeLock = func() error {
+		order = append(order, "runtime-lock-removal")
+		return nil
+	}
 	if err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil); err != nil {
 		t.Fatalf("prepare-package-removal: %v", err)
 	}
-	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,integration-artifact-removal,service-artifact-removal" {
+	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,integration-artifact-removal,service-artifact-removal,runtime-lock-removal" {
 		t.Fatalf("package removal preparation order = %q", got)
 	}
 }
@@ -293,6 +317,7 @@ func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	t.Cleanup(func() {
 		beginRemoval = previousBegin
 		removeOwnedCronStateForRemoval = previousCron
@@ -301,6 +326,7 @@ func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *
 		cleanupFirewallStateForRemoval = previousCleanup
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 	})
 
 	sentinel := errors.New("synthetic rsyslog recovery failure")
@@ -315,6 +341,7 @@ func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *
 		serviceArtifactCalls++
 		return nil
 	}
+	removePreparedFirewallRuntimeLock = func() error { return nil }
 	err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil)
 	if err == nil || !errors.Is(err, sentinel) ||
 		!strings.Contains(err.Error(), "durable removal barrier is retained") {
@@ -322,6 +349,43 @@ func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *
 	}
 	if serviceArtifactCalls != 0 {
 		t.Fatalf("service artifacts removed after integration failure: %d", serviceArtifactCalls)
+	}
+}
+
+func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *testing.T) {
+	previousBegin := beginRemoval
+	previousCron := removeOwnedCronStateForRemoval
+	previousPrepare := prepareFirewallStateForRemoval
+	previousWireGuard := removeOwnedWireGuardStateForRemoval
+	previousCleanup := cleanupFirewallStateForRemoval
+	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
+	t.Cleanup(func() {
+		beginRemoval = previousBegin
+		removeOwnedCronStateForRemoval = previousCron
+		prepareFirewallStateForRemoval = previousPrepare
+		removeOwnedWireGuardStateForRemoval = previousWireGuard
+		cleanupFirewallStateForRemoval = previousCleanup
+		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
+	})
+
+	sentinel := errors.New("synthetic busy runtime lock")
+	beginRemoval = func() error { return nil }
+	prepareFirewallStateForRemoval = func() error { return nil }
+	removeOwnedCronStateForRemoval = func() error { return nil }
+	removeOwnedWireGuardStateForRemoval = func() error { return nil }
+	cleanupFirewallStateForRemoval = func() error { return nil }
+	removeOwnedIntegrationArtifactsForRemoval = func() error { return nil }
+	removePreparedServiceArtifacts = func() error { return nil }
+	removePreparedFirewallRuntimeLock = func() error { return sentinel }
+	err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil)
+	if err == nil || !errors.Is(err, sentinel) ||
+		!strings.Contains(err.Error(), "exact runtime lock could not be removed") ||
+		!strings.Contains(err.Error(), "durable removal barrier is retained") {
+		t.Fatalf("runtime lock cleanup refusal = %v", err)
 	}
 }
 

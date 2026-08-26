@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/security"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -918,6 +919,46 @@ func TestGeneratedRsyslogRemovalSkipsDisabledSIEMArtifact_SW2_PKG_001(t *testing
 	}
 	if got, err := os.ReadFile(siemPath); err != nil || !bytes.Equal(got, operatorSIEM) { // #nosec G304 -- siemPath is confined to the private disabled-SIEM fixture root
 		t.Fatalf("disabled SIEM artifact = %q, %v", got, err)
+	}
+}
+
+func TestGeneratedRsyslogRemovalDeletesExactAntiForgingPolicy_SW2_PKG_001(t *testing.T) {
+	parent := t.TempDir()
+	directory := filepath.Join(parent, wafRsyslogDirectoryName)
+	if err := os.Mkdir(directory, 0750); err != nil {
+		t.Fatal(err)
+	}
+	parentInfo, err := os.Stat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat := parentInfo.Sys().(*syscall.Stat_t)
+	path := filepath.Join(directory, rsyslogAntiForgingConfigName)
+	writeOwnedArtifactFixture(t, path, []byte(security.RsyslogAntiForgingPolicy), 0600)
+
+	activationCalls := 0
+	err = removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
+		config.NewFailSafeConfig(),
+		parent,
+		stat.Uid,
+		stat.Gid,
+		defaultExactOwnedArtifactRemovalOptions(),
+		func(changed bool) error {
+			activationCalls++
+			if !changed {
+				t.Fatal("anti-forging removal did not request changed-state activation")
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activationCalls != 1 {
+		t.Fatalf("rsyslog activation calls = %d, want 1", activationCalls)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("anti-forging policy remains after exact removal: %v", err)
 	}
 }
 

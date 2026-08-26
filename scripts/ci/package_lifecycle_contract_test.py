@@ -33,8 +33,17 @@ WEBTUI_RETIREMENT_HELPER = REPOSITORY / "scripts" / "ci" / "package_webtui_retir
 DEFERRED_PURGE_POSTINSTALL_HELPER = (
     REPOSITORY / "scripts" / "ci" / "package_deferred_purge_postinstall.sh"
 )
+ALPINE_CRONIE_PREFLIGHT_HELPER = (
+    REPOSITORY / "scripts" / "ci" / "package_alpine_cronie_preflight.sh"
+)
 REMOVAL_STATE_HELPER = REPOSITORY / "scripts" / "ci" / "package_removal_state.sh"
 SERVICE_SOURCE = REPOSITORY / "src" / "core" / "syswarden-cli" / "pkg" / "system" / "service_linux.go"
+DEPENDENCIES_SOURCE = (
+    REPOSITORY / "src" / "core" / "syswarden-cli" / "pkg" / "system" / "dependencies.go"
+)
+INSTALL_COMMAND_SOURCE = (
+    REPOSITORY / "src" / "core" / "syswarden-cli" / "cmd" / "install.go"
+)
 
 
 def workflow_step_script(workflow: str, step_name: str) -> str:
@@ -127,6 +136,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
             prefix = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
             if name in {"preinst.sh", "postinst.sh"}:
                 prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
+            if name == "preinst.sh":
+                prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
             body = prefix + body
@@ -193,6 +204,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
             prefix = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
             if name in {"preinst.sh", "postinst.sh"}:
                 prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
+            if name == "preinst.sh":
+                prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
             body = prefix + body
@@ -837,6 +850,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         self.assertIn("set -e", preinstall)
         self.assertIn('export SYSWARDEN_PKG_INSTALL=1', preinstall)
+        self.assertIn("syswarden_preflight_alpine_cronie", preinstall)
+        self.assertLess(
+            preinstall.index("syswarden_preflight_alpine_cronie\n"),
+            preinstall.index("syswarden_preflight_install_barriers\n"),
+        )
         self.assertLess(
             preinstall.index('export SYSWARDEN_PKG_INSTALL=1'),
             preinstall.index("syswarden_retire_legacy_webtui / || exit 1"),
@@ -864,6 +882,37 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertNotRegex(postinstall, r"migrate-config[^\n]*\|\|\s*true")
         self.assertIn('/opt/syswarden/bin/syswarden-cli install', postinstall)
         self.assertIn('[ -f /etc/alpine-release ]', postinstall)
+
+    def test_alpine_cronie_runlevel_parser_matches_openrc_verbose_output(self) -> None:
+        node04_runlevels = (
+            "                crond |                                        \n"
+            "               cronie |      default                           \n"
+        )
+        crond_enabled = (
+            "                crond |      default                           \n"
+            "               cronie |      default                           \n"
+        )
+
+        def validate(runlevels: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '. "$1"; printf "%s" "$2" | '
+                    "syswarden_validate_alpine_cronie_runlevels",
+                    "probe",
+                    str(ALPINE_CRONIE_PREFLIGHT_HELPER),
+                    runlevels,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        accepted = validate(node04_runlevels)
+        self.assertEqual(accepted.returncode, 0, accepted)
+        rejected = validate(crond_enabled)
+        self.assertNotEqual(rejected.returncode, 0, rejected)
 
     def test_package_preinstall_tightens_directories_and_rejects_links(self) -> None:
         for script_name in ("preinst.sh",):
@@ -3262,6 +3311,20 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         self.assertEqual(
             self.workflow.count(
+                'cat scripts/ci/package_alpine_cronie_preflight.sh >> '
+                '"${PACKAGE_SCRIPTS}/preinst.sh"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            local_source.count(
+                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'package_alpine_cronie_preflight.sh" >> preinst.sh'
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.workflow.count(
                 'cat scripts/ci/package_removal_state.sh >> '
                 '"${PACKAGE_SCRIPTS}/postrm.sh"'
             ),
@@ -4479,16 +4542,13 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertLess(revalidate, offline_branch)
 
     def test_linux_packages_declare_every_runtime_dependency(self) -> None:
-        for dependency in (
-            "wireguard-tools",
-            "qrencode",
-            "jq",
-        ):
+        for dependency in ("wireguard-tools", "jq"):
             self.assertGreaterEqual(
                 self.workflow.count(f'-d "{dependency}"'),
                 2,
                 dependency,
             )
+        self.assertEqual(self.workflow.count('-d "qrencode"'), 1)
         for dependency in ("checkpolicy", "policycoreutils-python-utils"):
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 1)
         for dependency in (
@@ -4506,6 +4566,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             )
 
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(local.count('-d "qrencode"'), 1)
         for dependency in ("unattended-upgrades", "apt-listchanges", "procps"):
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 1, dependency)
             self.assertEqual(local.count(f'-d "{dependency}"'), 1, dependency)
@@ -4516,6 +4577,29 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertEqual(local.count("  - procps-ng\n"), 1)
         self.assertEqual(self.workflow.count("            - shadow\n"), 1)
         self.assertEqual(local.count("  - shadow\n"), 1)
+
+    def test_rhel_dependency_resolution_does_not_require_epel_for_optional_qr(self) -> None:
+        source = DEPENDENCIES_SOURCE.read_text(encoding="utf-8")
+        dnf_branch = source.split('exec.LookPath("dnf")', 1)[1].split(
+            'exec.LookPath("yum")', 1
+        )[0]
+        yum_branch = source.split('exec.LookPath("yum")', 1)[1].split(
+            'exec.LookPath("apk")', 1
+        )[0]
+        for branch in (dnf_branch, yum_branch):
+            self.assertNotIn('"epel-release"', branch)
+            self.assertNotIn('"qrencode",', branch)
+            self.assertIn("operator-approved repository", branch)
+
+    def test_packaged_legacy_dynamic_quarantine_precedes_network_configuration(self) -> None:
+        source = INSTALL_COMMAND_SOURCE.read_text(encoding="utf-8")
+        dependency_check = source.index("system.InstallDependencies()")
+        package_guard = source.index('os.Getenv("SYSWARDEN_PKG_INSTALL") == "1"')
+        quarantine = source.index("preparePackagedLegacyDynamicBanUpgrade()")
+        ssh_configuration = source.index("system.ConfigureSSH()")
+        self.assertLess(dependency_check, package_guard)
+        self.assertLess(package_guard, quarantine)
+        self.assertLess(quarantine, ssh_configuration)
 
     def test_runtime_dependency_sets_match_all_package_generators_and_lab(self) -> None:
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
