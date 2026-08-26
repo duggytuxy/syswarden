@@ -194,8 +194,10 @@ jobs:
             echo "Fuzzing ${module}/${package}: ${target}"
             (
               cd "${module}"
+              # Avoid the Go 1.26 deadline race tracked by golang/go#75804.
+              # A fixed execution budget still fails on every crash or panic.
               go test -mod=readonly -run '^$' \
-                -fuzz "^${target}$" -fuzztime=5s -parallel=2 "${package}"
+                -fuzz "^${target}$" -fuzztime=100000x -parallel=2 "${package}"
             )
           }
           fuzz_target src/core/syswarden-cli ./config FuzzMigratorParseFromMemory

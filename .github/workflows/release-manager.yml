@@ -261,6 +261,114 @@ jobs:
                   --base-ref "${v4033_repair_release_base_sha}" \
                   --tag-phase \
                   --commit-message "${v4033_repair_versioning_message}"
+              elif [[ "${v4033_parent_sha}" == "4ca08128cdf553ec7af0db7f1c8c5febb704e188" ]]; then
+                # Authorize exactly one fuzz-budget repair after the reviewed
+                # PR120 lifecycle repair. The exact parent and four-file diff
+                # keep this Go 1.26 workaround bounded and non-replayable.
+                v4033_fuzz_repair_base_sha="$(git rev-parse HEAD^^)"
+                if [[ "${v4033_fuzz_repair_base_sha}" != "19e4add763e935a29219c20c86586b3557a441c9" ]]; then
+                  echo "ERROR: the reviewed PR120 squash is not based on the reviewed PR119 squash." >&2
+                  exit 1
+                fi
+                v4033_fuzz_version_base_sha="$(git rev-parse HEAD^^^)"
+                if [[ "${v4033_fuzz_version_base_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
+                  echo "ERROR: the reviewed PR119 squash is not based on the reviewed PR118 squash." >&2
+                  exit 1
+                fi
+                v4033_fuzz_release_base_sha="$(git rev-parse HEAD^^^^)"
+                if [[ "${v4033_fuzz_release_base_sha}" != "b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449" ]]; then
+                  echo "ERROR: the reviewed PR118 squash is not based on the reviewed PR117 squash." >&2
+                  exit 1
+                fi
+                v4033_fuzz_parent_subject="$(git log -1 --format=%s HEAD^)"
+                v4033_expected_fuzz_parent_subject='Qualification : repair v4.03.3 lifecycle qualification (#120)'
+                if [[ "${v4033_fuzz_parent_subject}" != "${v4033_expected_fuzz_parent_subject}" ]]; then
+                  echo "ERROR: the reviewed PR120 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_fuzz_repair_base_subject="$(git log -1 --format=%s HEAD^^)"
+                v4033_expected_fuzz_repair_base_subject='CI : bind one-time v4.03.3 changelog seal (#119)'
+                if [[ "${v4033_fuzz_repair_base_subject}" != "${v4033_expected_fuzz_repair_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR119 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_fuzz_version_base_subject="$(git log -1 --format=%s HEAD^^^)"
+                v4033_expected_fuzz_version_base_subject='Patch : correct webhook, firewall and OSINT handling (#118)'
+                if [[ "${v4033_fuzz_version_base_subject}" != "${v4033_expected_fuzz_version_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR118 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_fuzz_release_base_subject="$(git log -1 --format=%s HEAD^^^^)"
+                v4033_expected_fuzz_release_base_subject='CI : make release inventory comparison portable (#117)'
+                if [[ "${v4033_fuzz_release_base_subject}" != "${v4033_expected_fuzz_release_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR117 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_fuzz_subject_pattern='^CI : avoid Go 1\.26 fuzz deadline race \(#[1-9][0-9]*\)$'
+                if [[ ! "${commit_subject}" =~ ${v4033_fuzz_subject_pattern} ]]; then
+                  echo "ERROR: the v4.03.3 fuzz repair requires the exact reviewed CI subject." >&2
+                  exit 1
+                fi
+                read -r -a v4033_fuzz_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+                read -r -a v4033_fuzz_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+                read -r -a v4033_fuzz_repair_base_line <<< "$(git rev-list --parents -n 1 HEAD^^)"
+                read -r -a v4033_fuzz_version_base_line <<< "$(git rev-list --parents -n 1 HEAD^^^)"
+                read -r -a v4033_fuzz_release_base_line <<< "$(git rev-list --parents -n 1 HEAD^^^^)"
+                if (( ${#v4033_fuzz_head_line[@]} != 2 ||
+                      ${#v4033_fuzz_parent_line[@]} != 2 ||
+                      ${#v4033_fuzz_repair_base_line[@]} != 2 ||
+                      ${#v4033_fuzz_version_base_line[@]} != 2 ||
+                      ${#v4033_fuzz_release_base_line[@]} != 2 )); then
+                  echo "ERROR: the v4.03.3 fuzz repair and reviewed PR120/PR119/PR118/PR117 chain must be linear." >&2
+                  exit 1
+                fi
+                # BEGIN exact v4.03.3 fuzz-budget diff contract
+                expected_v4033_fuzz_diff=(
+                  M ".github/workflows/release-manager.yml"
+                  M ".github/workflows/security-audit.yml"
+                  M "scripts/ci/release_gate_test.py"
+                  M "scripts/ci/security_gate_test.py"
+                )
+                mapfile -d '' -t actual_v4033_fuzz_diff < <(
+                  git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                )
+                if (( ${#actual_v4033_fuzz_diff[@]} != ${#expected_v4033_fuzz_diff[@]} )); then
+                  echo "ERROR: the v4.03.3 fuzz repair must modify exactly the four reviewed files." >&2
+                  exit 1
+                fi
+                for ((index = 0; index < ${#expected_v4033_fuzz_diff[@]}; index++)); do
+                  if [[ "${actual_v4033_fuzz_diff[index]}" != "${expected_v4033_fuzz_diff[index]}" ]]; then
+                    echo "ERROR: the v4.03.3 fuzz repair contains an unauthorized path, status, or rename." >&2
+                    exit 1
+                  fi
+                done
+                v4033_fuzz_paths=(
+                  ".github/workflows/release-manager.yml"
+                  ".github/workflows/security-audit.yml"
+                  "scripts/ci/release_gate_test.py"
+                  "scripts/ci/security_gate_test.py"
+                )
+                for tree_ref in HEAD^ HEAD; do
+                  for fix_path in "${v4033_fuzz_paths[@]}"; do
+                    tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                    IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                    if [[ "${tree_mode}" != "100644" || \
+                          "${tree_type}" != "blob" || \
+                          ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                          "${tree_path}" != "${fix_path}" || \
+                          -n "${tree_extra:-}" ]]; then
+                      echo "ERROR: reviewed v4.03.3 fuzz-repair path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                      exit 1
+                    fi
+                  done
+                done
+                # END exact v4.03.3 fuzz-budget diff contract
+                v4033_fuzz_versioning_message="$(git log -1 --format=%B HEAD^^^)"
+                ./scripts/versioning.sh validate-commit \
+                  --repo "${GITHUB_WORKSPACE}" \
+                  --base-ref "${v4033_fuzz_release_base_sha}" \
+                  --tag-phase \
+                  --commit-message "${v4033_fuzz_versioning_message}"
               elif [[ "${v4033_parent_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
                 echo "ERROR: the v4.03.3 candidate is not based on the reviewed PR118 squash." >&2
                 exit 1
@@ -1034,6 +1142,114 @@ jobs:
                   --base-ref "${v4033_repair_release_base_sha}" \
                   --tag-phase \
                   --commit-message "${v4033_repair_versioning_message}"
+              elif [[ "${v4033_parent_sha}" == "4ca08128cdf553ec7af0db7f1c8c5febb704e188" ]]; then
+                # Authorize exactly one fuzz-budget repair after the reviewed
+                # PR120 lifecycle repair. The exact parent and four-file diff
+                # keep this Go 1.26 workaround bounded and non-replayable.
+                v4033_fuzz_repair_base_sha="$(git rev-parse HEAD^^)"
+                if [[ "${v4033_fuzz_repair_base_sha}" != "19e4add763e935a29219c20c86586b3557a441c9" ]]; then
+                  echo "ERROR: the reviewed PR120 squash is not based on the reviewed PR119 squash." >&2
+                  exit 1
+                fi
+                v4033_fuzz_version_base_sha="$(git rev-parse HEAD^^^)"
+                if [[ "${v4033_fuzz_version_base_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
+                  echo "ERROR: the reviewed PR119 squash is not based on the reviewed PR118 squash." >&2
+                  exit 1
+                fi
+                v4033_fuzz_release_base_sha="$(git rev-parse HEAD^^^^)"
+                if [[ "${v4033_fuzz_release_base_sha}" != "b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449" ]]; then
+                  echo "ERROR: the reviewed PR118 squash is not based on the reviewed PR117 squash." >&2
+                  exit 1
+                fi
+                v4033_fuzz_parent_subject="$(git log -1 --format=%s HEAD^)"
+                v4033_expected_fuzz_parent_subject='Qualification : repair v4.03.3 lifecycle qualification (#120)'
+                if [[ "${v4033_fuzz_parent_subject}" != "${v4033_expected_fuzz_parent_subject}" ]]; then
+                  echo "ERROR: the reviewed PR120 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_fuzz_repair_base_subject="$(git log -1 --format=%s HEAD^^)"
+                v4033_expected_fuzz_repair_base_subject='CI : bind one-time v4.03.3 changelog seal (#119)'
+                if [[ "${v4033_fuzz_repair_base_subject}" != "${v4033_expected_fuzz_repair_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR119 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_fuzz_version_base_subject="$(git log -1 --format=%s HEAD^^^)"
+                v4033_expected_fuzz_version_base_subject='Patch : correct webhook, firewall and OSINT handling (#118)'
+                if [[ "${v4033_fuzz_version_base_subject}" != "${v4033_expected_fuzz_version_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR118 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_fuzz_release_base_subject="$(git log -1 --format=%s HEAD^^^^)"
+                v4033_expected_fuzz_release_base_subject='CI : make release inventory comparison portable (#117)'
+                if [[ "${v4033_fuzz_release_base_subject}" != "${v4033_expected_fuzz_release_base_subject}" ]]; then
+                  echo "ERROR: the reviewed PR117 squash subject is not exact." >&2
+                  exit 1
+                fi
+                v4033_fuzz_subject_pattern='^CI : avoid Go 1\.26 fuzz deadline race \(#[1-9][0-9]*\)$'
+                if [[ ! "${commit_subject}" =~ ${v4033_fuzz_subject_pattern} ]]; then
+                  echo "ERROR: the v4.03.3 fuzz repair requires the exact reviewed CI subject." >&2
+                  exit 1
+                fi
+                read -r -a v4033_fuzz_head_line <<< "$(git rev-list --parents -n 1 HEAD)"
+                read -r -a v4033_fuzz_parent_line <<< "$(git rev-list --parents -n 1 HEAD^)"
+                read -r -a v4033_fuzz_repair_base_line <<< "$(git rev-list --parents -n 1 HEAD^^)"
+                read -r -a v4033_fuzz_version_base_line <<< "$(git rev-list --parents -n 1 HEAD^^^)"
+                read -r -a v4033_fuzz_release_base_line <<< "$(git rev-list --parents -n 1 HEAD^^^^)"
+                if (( ${#v4033_fuzz_head_line[@]} != 2 ||
+                      ${#v4033_fuzz_parent_line[@]} != 2 ||
+                      ${#v4033_fuzz_repair_base_line[@]} != 2 ||
+                      ${#v4033_fuzz_version_base_line[@]} != 2 ||
+                      ${#v4033_fuzz_release_base_line[@]} != 2 )); then
+                  echo "ERROR: the v4.03.3 fuzz repair and reviewed PR120/PR119/PR118/PR117 chain must be linear." >&2
+                  exit 1
+                fi
+                # BEGIN exact v4.03.3 fuzz-budget diff contract
+                expected_v4033_fuzz_diff=(
+                  M ".github/workflows/release-manager.yml"
+                  M ".github/workflows/security-audit.yml"
+                  M "scripts/ci/release_gate_test.py"
+                  M "scripts/ci/security_gate_test.py"
+                )
+                mapfile -d '' -t actual_v4033_fuzz_diff < <(
+                  git diff-tree --no-commit-id --name-status -r --no-renames -z HEAD^ HEAD
+                )
+                if (( ${#actual_v4033_fuzz_diff[@]} != ${#expected_v4033_fuzz_diff[@]} )); then
+                  echo "ERROR: the v4.03.3 fuzz repair must modify exactly the four reviewed files." >&2
+                  exit 1
+                fi
+                for ((index = 0; index < ${#expected_v4033_fuzz_diff[@]}; index++)); do
+                  if [[ "${actual_v4033_fuzz_diff[index]}" != "${expected_v4033_fuzz_diff[index]}" ]]; then
+                    echo "ERROR: the v4.03.3 fuzz repair contains an unauthorized path, status, or rename." >&2
+                    exit 1
+                  fi
+                done
+                v4033_fuzz_paths=(
+                  ".github/workflows/release-manager.yml"
+                  ".github/workflows/security-audit.yml"
+                  "scripts/ci/release_gate_test.py"
+                  "scripts/ci/security_gate_test.py"
+                )
+                for tree_ref in HEAD^ HEAD; do
+                  for fix_path in "${v4033_fuzz_paths[@]}"; do
+                    tree_entry="$(git ls-tree "${tree_ref}" -- "${fix_path}")"
+                    IFS=$' \t' read -r tree_mode tree_type tree_object tree_path tree_extra <<< "${tree_entry}"
+                    if [[ "${tree_mode}" != "100644" || \
+                          "${tree_type}" != "blob" || \
+                          ! "${tree_object}" =~ ^[0-9a-f]{40}$ || \
+                          "${tree_path}" != "${fix_path}" || \
+                          -n "${tree_extra:-}" ]]; then
+                      echo "ERROR: reviewed v4.03.3 fuzz-repair path ${fix_path} is not one exact 100644 blob at ${tree_ref}." >&2
+                      exit 1
+                    fi
+                  done
+                done
+                # END exact v4.03.3 fuzz-budget diff contract
+                v4033_fuzz_versioning_message="$(git log -1 --format=%B HEAD^^^)"
+                ./scripts/versioning.sh validate-commit \
+                  --repo "${GITHUB_WORKSPACE}" \
+                  --base-ref "${v4033_fuzz_release_base_sha}" \
+                  --tag-phase \
+                  --commit-message "${v4033_fuzz_versioning_message}"
               elif [[ "${v4033_parent_sha}" != "689871803bdef1bc2a25d3eece0a7c35fdb5c447" ]]; then
                 echo "ERROR: the v4.03.3 candidate is not based on the reviewed PR118 squash." >&2
                 exit 1
