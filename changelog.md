@@ -48,6 +48,16 @@
 - **Installation regression coverage:** Reproduce the upstream `2002::/16`
   6to4 case, prove that the entry is absent from the canonical IPv6 output and
   retain failures for malformed entries or an insufficient post-filter source.
+- **Data-Shield availability boundary:** Keep the two-independent-origin quorum
+  mandatory for every newly published Data-Shield candidate. During package
+  installation only, tolerate a validly configured external mirror outage,
+  rejected remote candidates or content disagreement by preserving an exact
+  validated last-known-good feed, or by omitting the optional Data-Shield
+  contribution when no such file exists. Never publish one mirror alone, and
+  keep invalid mirror configuration, caller cancellation, unsafe local state
+  and publication failures fatal. Explicit and scheduled feed updates still
+  return failure after safely reapplying the validated policy so monitoring
+  remains truthful.
 - **Observable command failures and typed configuration output:** Return a
   non-zero result when any requested `block` or `unblock` transaction fails,
   while continuing the bounded argument set and emitting an alert only for a
@@ -58,10 +68,17 @@
   from the RPM, package lab, manual DNF or YUM dependency path and RHEL image
   recipe. WireGuard keeps its protected client configuration when terminal QR
   rendering is unavailable and reports that rendering as an optional feature.
-- **Alpine scheduler preflight:** Require committed `cronie` and
-  `cronie-openrc`, active Cronie in the default OpenRC runlevel and an inactive,
-  unassigned BusyBox `crond` before an online APK transaction can create any
-  SysWarden installation state. Offline package staging remains deferred.
+- **Alpine scheduler activation boundary:** Account for apk-tools 3 behavior
+  that can commit package payload after a failed pre-install script. A fresh
+  online transaction without prepared Cronie now completes with an unbroken,
+  payload-only SysWarden package while both package hooks exit before creating
+  configuration, data, logs, runtime state, cron state, services, processes or
+  firewall policy. The package-owned payload includes its immutable launchers.
+  The package prints bounded activation steps that remove BusyBox `crond` from
+  all runlevels, keep Cronie active only in `default` and run the packaged
+  installer. Prepared fresh installs remain automatic,
+  scheduler-mismatched upgrades stop before configuration and are reported as
+  broken rather than falsely rolled back, and offline staging remains deferred.
 - **Package-owned shell completion:** Install Bash completion as an immutable
   package payload under `/usr/share/bash-completion/completions/syswarden`.
   Stop package hooks from writing `/etc/bash_completion.d` or `/root/.bashrc`,
@@ -126,8 +143,11 @@
 - The pre-tag Ubuntu migration gate must cover the exact workflow artifact after
   the documented contained bootstrap for a v4.03.2 legacy interval that already
   blocks DNS or GitHub return traffic. The Alpine gate must prove that a fresh
-  online transaction fails before product state when the committed Cronie
-  prerequisite is absent, then succeeds after that prerequisite is established.
+  online transaction without prepared Cronie leaves only an unbroken,
+  payload-only inactive package and no generated configuration, data, logs,
+  runtime, cron, service, process or firewall state. It must then prove the
+  documented activation path and the normal automatic path with Cronie prepared
+  before installation.
 
 ### POST-PUBLICATION CHECK
 

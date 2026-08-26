@@ -28,7 +28,7 @@ interval encoding, OSINT installation tolerance and package lifecycle recovery
 without changing the supported package or runtime matrix. Native-host review
 also identified and now covers truthful block and unblock exit status, typed
 configuration output, optional RHEL QR rendering, the Alpine Cronie transaction
-boundary and exact final-removal residues.
+boundary, Data-Shield mirror availability and exact final-removal residues.
 
 The release remains blocked until the exact merged commit passes native AMD64
 package lifecycles, isolated nftables qualification, security and
@@ -484,13 +484,19 @@ preserved, and that package-owned completion has the contracted bytes. The
 post-publication `syswarden update` smoke remains a separate release follow-up
 because no signed v4.03.3 Release exists during pre-tag qualification.
 
-For Alpine online installation, `cronie` and `cronie-openrc` must already be
-committed in a completed APK transaction, Cronie must be active and assigned
-only to the default OpenRC runlevel, and BusyBox `crond` must be inactive and
-unassigned. The package pre-install check runs before any SysWarden directory or
-removal barrier is created. Qualification must prove this clean refusal, then a
-successful install after the documented prerequisite is established. Offline
-package staging may defer runtime convergence.
+For the automatic Alpine online path, `cronie` and `cronie-openrc` must already
+be committed, Cronie must be active and assigned only to the default OpenRC
+runlevel, and BusyBox `crond` must be inactive and unassigned. apk-tools 3 can
+commit package payload after a failed pre-install script, so a fresh transaction
+without that prepared state now exits both package hooks successfully before
+SysWarden configuration, data, logs, runtime state, cron state, services,
+processes or firewall policy are created. It leaves an unbroken, payload-only
+inactive package, including its package-owned launchers, and prints the bounded
+activation procedure. Qualification must prove that deferred path, its
+documented activation, and the normal automatic path with Cronie prepared. A
+scheduler-mismatched upgrade stops before configuration but apk-tools may still
+commit payload and mark the transaction broken; this is a failed gate, not a
+transactional rollback. Offline package staging may defer runtime convergence.
 
 ## LOT 2S security remediation
 
@@ -567,8 +573,10 @@ environment protection fails closed before the secret-bearing job can run.
   bounded and is not claimed as equivalent privileged qualification.
 - On Alpine Linux, SysWarden does not configure automatic operating-system
   security updates. Repository selection and the `apk` update policy remain
-  an explicit operator responsibility. An online fresh install additionally
-  requires the documented committed and active Cronie prerequisite.
+  an explicit operator responsibility. Automatic fresh activation additionally
+  requires the documented committed and active Cronie prerequisite; otherwise
+  the package remains payload-only and inactive until the operator completes
+  the printed bounded activation procedure.
 - `uninstall` deletes SysWarden configuration, data, logs, services and
   firewall state. It is not a general host rollback.
 - There is no qualified in-place downgrade from v4.03.3 to historical v4.03.2.

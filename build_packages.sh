@@ -394,9 +394,11 @@ EOF
 # Global Execution Symlink handled via postinst script
 cat "${REPOSITORY_ROOT}/scripts/ci/package_webtui_retirement.sh" > postinst.sh
 cat "${REPOSITORY_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> postinst.sh
+cat "${REPOSITORY_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> postinst.sh
 cat << 'EOF' >> postinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
+syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
 ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
 ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui

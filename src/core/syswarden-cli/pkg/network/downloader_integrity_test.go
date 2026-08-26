@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newTLSCIDRServer(t *testing.T, content string) *httptest.Server {
@@ -29,6 +31,12 @@ func newTLSCIDRServer(t *testing.T, content string) *httptest.Server {
 type mirrorRouteTransport struct {
 	targets    map[string]*url.URL
 	transports map[string]http.RoundTripper
+}
+
+type feedRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip feedRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
 }
 
 func (transport *mirrorRouteTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -277,8 +285,8 @@ func TestMirrorQuorumRejectsDisagreementAndPreservesLastKnownGood(t *testing.T) 
 		"https://mirror-three.example/feed",
 	}
 	err := downloadMirrorQuorumWithClient(t.Context(), client, urls, target, ".ipv4", 2, testIPv4FeedPolicy(2), feedPublicationPolicy{})
-	if err == nil || !strings.Contains(err.Error(), "quorum") {
-		t.Fatalf("mirror disagreement error = %v", err)
+	if !errors.Is(err, errFeedMirrorQuorum) {
+		t.Fatalf("mirror disagreement error = %v, want errFeedMirrorQuorum", err)
 	}
 	content, err := readFeedFileAt(target, ".ipv4")
 	if err != nil {
@@ -286,6 +294,358 @@ func TestMirrorQuorumRejectsDisagreementAndPreservesLastKnownGood(t *testing.T) 
 	}
 	if got, want := string(content), "208.67.222.222/32\n"; got != want {
 		t.Fatalf("last-known-good content = %q, want %q", got, want)
+	}
+}
+
+func TestDataShieldLifecyclePreservesValidatedLastKnownGoodOnQuorumDisagreement(t *testing.T) {
+	t.Parallel()
+	servers := []*httptest.Server{
+		newTLSCIDRServer(t, "1.1.1.1\n8.8.8.8\n"),
+		newTLSCIDRServer(t, "9.9.9.9\n8.8.4.4\n"),
+		newTLSCIDRServer(t, "4.2.2.1\n4.2.2.2\n"),
+	}
+	directory := t.TempDir()
+	target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	old := []byte("208.67.222.222/32\n")
+	if err := writeFeedFileAt(target, ".ipv4", old); err != nil {
+		t.Fatal(err)
+	}
+	client := newMirrorTestClient(t, map[string]*httptest.Server{
+		"mirror-one.example":   servers[0],
+		"mirror-two.example":   servers[1],
+		"mirror-three.example": servers[2],
+	})
+	urls := []string{
+		"https://mirror-one.example/feed",
+		"https://mirror-two.example/feed",
+		"https://mirror-three.example/feed",
+	}
+	outcome, err := downloadDataShieldForLifecycleWithClient(
+		t.Context(), client, urls, target, ".ipv4", 2,
+		testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != dataShieldFeedPreserved {
+		t.Fatalf("outcome = %d, want preserved", outcome)
+	}
+	content, err := readFeedFileAt(target, ".ipv4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(old) {
+		t.Fatalf("last-known-good content changed: %q", content)
+	}
+
+	outcome, err = downloadDataShieldForLifecycleWithClient(
+		t.Context(), client, urls, target, ".ipv4", 2,
+		testIPv4FeedPolicy(2), feedPublicationPolicy{}, false,
+	)
+	if !errors.Is(err, errFeedMirrorQuorum) {
+		t.Fatalf("explicit update error = %v, want errFeedMirrorQuorum", err)
+	}
+	if outcome != dataShieldFeedPreserved {
+		t.Fatalf("explicit update outcome = %d, want preserved", outcome)
+	}
+	content, err = readFeedFileAt(target, ".ipv4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(old) {
+		t.Fatalf("explicit update changed last-known-good content: %q", content)
+	}
+}
+
+func TestDataShieldLifecycleOmitsFreshFeedWithoutPublishingSingleMirror(t *testing.T) {
+	t.Parallel()
+	servers := []*httptest.Server{
+		newTLSCIDRServer(t, "1.1.1.1\n8.8.8.8\n"),
+		newTLSCIDRServer(t, "9.9.9.9\n8.8.4.4\n"),
+		newTLSCIDRServer(t, "4.2.2.1\n4.2.2.2\n"),
+	}
+	directory := t.TempDir()
+	target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	client := newMirrorTestClient(t, map[string]*httptest.Server{
+		"mirror-one.example":   servers[0],
+		"mirror-two.example":   servers[1],
+		"mirror-three.example": servers[2],
+	})
+	urls := []string{
+		"https://mirror-one.example/feed",
+		"https://mirror-two.example/feed",
+		"https://mirror-three.example/feed",
+	}
+	outcome, err := downloadDataShieldForLifecycleWithClient(
+		t.Context(), client, urls, target, ".ipv4", 2,
+		testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != dataShieldFeedOmitted {
+		t.Fatalf("outcome = %d, want omitted", outcome)
+	}
+	if _, err := readFeedFileAt(target, ".ipv4"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("quorum disagreement published a fresh feed: %v", err)
+	}
+}
+
+func TestDataShieldLifecycleKeepsInvalidMirrorConfigurationFatal(t *testing.T) {
+	t.Parallel()
+	target := feedFileTarget{directory: t.TempDir(), name: "feed.ipv4"}
+	for name, mirrors := range map[string][]string{
+		"invalid URL": {
+			"http://mirror-one.example/feed",
+			"https://mirror-two.example/feed",
+		},
+		"insufficient distinct origins": {
+			"https://mirror-one.example/feed-a",
+			"https://mirror-one.example./feed-b",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			outcome, err := downloadDataShieldForLifecycleWithClient(
+				t.Context(), &http.Client{}, mirrors, target, ".ipv4", 2,
+				testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+			)
+			if err == nil {
+				t.Fatal("invalid mirror configuration was tolerated")
+			}
+			if errors.Is(err, errFeedMirrorQuorum) {
+				t.Fatalf("configuration error was classified as external quorum unavailability: %v", err)
+			}
+			if outcome != dataShieldFeedOmitted {
+				t.Fatalf("outcome = %d, want omitted", outcome)
+			}
+		})
+	}
+}
+
+func TestDataShieldLifecycleKeepsCallerContextTerminationFatal(t *testing.T) {
+	t.Parallel()
+	urls := []string{
+		"https://mirror-one.example/feed",
+		"https://mirror-two.example/feed",
+	}
+	for name, newContext := range map[string]func() (context.Context, context.CancelFunc){
+		"canceled": func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			return ctx, func() {}
+		},
+		"deadline": func() (context.Context, context.CancelFunc) {
+			return context.WithDeadline(t.Context(), time.Unix(1, 0))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := newContext()
+			defer cancel()
+			outcome, err := downloadDataShieldForLifecycleWithClient(
+				ctx, &http.Client{}, urls,
+				feedFileTarget{directory: t.TempDir(), name: "feed.ipv4"},
+				".ipv4", 2, testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+			)
+			if err == nil || (!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)) {
+				t.Fatalf("caller context error = %v", err)
+			}
+			if errors.Is(err, errFeedMirrorQuorum) {
+				t.Fatalf("caller context error was classified as external quorum unavailability: %v", err)
+			}
+			if outcome != dataShieldFeedOmitted {
+				t.Fatalf("outcome = %d, want omitted", outcome)
+			}
+		})
+	}
+	t.Run("during download", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(t.Context())
+		client := &http.Client{Transport: feedRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			cancel()
+			<-request.Context().Done()
+			return nil, request.Context().Err()
+		})}
+		outcome, err := downloadDataShieldForLifecycleWithClient(
+			ctx, client, urls,
+			feedFileTarget{directory: t.TempDir(), name: "feed.ipv4"},
+			".ipv4", 2, testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+		)
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("caller cancellation during download error = %v", err)
+		}
+		if errors.Is(err, errFeedMirrorQuorum) {
+			t.Fatalf("caller cancellation during download was classified as external quorum unavailability: %v", err)
+		}
+		if outcome != dataShieldFeedOmitted {
+			t.Fatalf("outcome = %d, want omitted", outcome)
+		}
+	})
+}
+
+func TestDataShieldInstallFallbackAcceptsOnlyExternalFetchOrCanonicalizationFailure(t *testing.T) {
+	t.Parallel()
+	urls := []string{
+		"https://mirror-one.example/feed",
+		"https://mirror-two.example/feed",
+	}
+	t.Run("fetch", func(t *testing.T) {
+		t.Parallel()
+		client := &http.Client{Transport: feedRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errFeedRedirect
+		})}
+		target := feedFileTarget{directory: t.TempDir(), name: "feed.ipv4"}
+		outcome, err := downloadDataShieldForLifecycleWithClient(
+			t.Context(), client, urls, target, ".ipv4", 2,
+			testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome != dataShieldFeedOmitted {
+			t.Fatalf("outcome = %d, want omitted", outcome)
+		}
+	})
+	t.Run("canonicalization", func(t *testing.T) {
+		t.Parallel()
+		first := newTLSCIDRServer(t, "not-a-cidr\n")
+		second := newTLSCIDRServer(t, "also-not-a-cidr\n")
+		client := newMirrorTestClient(t, map[string]*httptest.Server{
+			"mirror-one.example": first,
+			"mirror-two.example": second,
+		})
+		target := feedFileTarget{directory: t.TempDir(), name: "feed.ipv4"}
+		outcome, err := downloadDataShieldForLifecycleWithClient(
+			t.Context(), client, urls, target, ".ipv4", 2,
+			testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome != dataShieldFeedOmitted {
+			t.Fatalf("outcome = %d, want omitted", outcome)
+		}
+	})
+}
+
+func TestDataShieldLifecycleFailsClosedOnInvalidLastKnownGood(t *testing.T) {
+	t.Parallel()
+	servers := []*httptest.Server{
+		newTLSCIDRServer(t, "1.1.1.1\n8.8.8.8\n"),
+		newTLSCIDRServer(t, "9.9.9.9\n8.8.4.4\n"),
+	}
+	directory := t.TempDir()
+	target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	invalid := []byte("1.1.1.1/32\nnot-a-cidr\n")
+	if err := writeFeedFileAt(target, ".ipv4", invalid); err != nil {
+		t.Fatal(err)
+	}
+	client := newMirrorTestClient(t, map[string]*httptest.Server{
+		"mirror-one.example": servers[0],
+		"mirror-two.example": servers[1],
+	})
+	urls := []string{
+		"https://mirror-one.example/feed",
+		"https://mirror-two.example/feed",
+	}
+	outcome, err := downloadDataShieldForLifecycleWithClient(
+		t.Context(), client, urls, target, ".ipv4", 2,
+		testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+	)
+	if err == nil || !strings.Contains(err.Error(), "last-known-good attestation failed") {
+		t.Fatalf("invalid last-known-good error = %v", err)
+	}
+	if outcome != dataShieldFeedOmitted {
+		t.Fatalf("outcome = %d, want omitted", outcome)
+	}
+	content, readErr := readFeedFileAt(target, ".ipv4")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(content) != string(invalid) {
+		t.Fatalf("invalid last-known-good content changed: %q", content)
+	}
+}
+
+func TestDataShieldLifecycleRequiresExactLastKnownGoodMode(t *testing.T) {
+	t.Parallel()
+	servers := []*httptest.Server{
+		newTLSCIDRServer(t, "1.1.1.1\n8.8.8.8\n"),
+		newTLSCIDRServer(t, "9.9.9.9\n8.8.4.4\n"),
+	}
+	client := newMirrorTestClient(t, map[string]*httptest.Server{
+		"mirror-one.example": servers[0],
+		"mirror-two.example": servers[1],
+	})
+	urls := []string{
+		"https://mirror-one.example/feed",
+		"https://mirror-two.example/feed",
+	}
+	for name, mode := range map[string]fs.FileMode{
+		"group readable": 0640,
+		"setuid":         0600 | os.ModeSetuid,
+		"setgid":         0600 | os.ModeSetgid,
+		"sticky":         0600 | os.ModeSticky,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			directory := t.TempDir()
+			target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+			if err := writeFeedFileAt(target, ".ipv4", []byte("208.67.222.222/32\n")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(filepath.Join(directory, target.name), mode); err != nil {
+				t.Fatal(err)
+			}
+			outcome, err := downloadDataShieldForLifecycleWithClient(
+				t.Context(), client, urls, target, ".ipv4", 2,
+				testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+			)
+			if err == nil || !strings.Contains(err.Error(), "last-known-good attestation failed") {
+				t.Fatalf("unsafe last-known-good mode error = %v", err)
+			}
+			if outcome != dataShieldFeedOmitted {
+				t.Fatalf("outcome = %d, want omitted", outcome)
+			}
+		})
+	}
+}
+
+func TestDataShieldLifecycleDoesNotDowngradePublicationFailure(t *testing.T) {
+	t.Parallel()
+	content := "1.1.1.1\n8.8.8.8\n"
+	first := newTLSCIDRServer(t, content)
+	second := newTLSCIDRServer(t, content)
+	directory := t.TempDir()
+	target := feedFileTarget{directory: directory, name: "feed.ipv4"}
+	outside := filepath.Join(t.TempDir(), "outside.ipv4")
+	if err := os.WriteFile(outside, []byte("9.9.9.9/32\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(directory, target.name)); err != nil {
+		t.Fatal(err)
+	}
+	client := newMirrorTestClient(t, map[string]*httptest.Server{
+		"mirror-one.example": first,
+		"mirror-two.example": second,
+	})
+	urls := []string{
+		"https://mirror-one.example/feed",
+		"https://mirror-two.example/feed",
+	}
+	outcome, err := downloadDataShieldForLifecycleWithClient(
+		t.Context(), client, urls, target, ".ipv4", 2,
+		testIPv4FeedPolicy(2), feedPublicationPolicy{}, true,
+	)
+	if err == nil {
+		t.Fatal("publication failure was downgraded")
+	}
+	if errors.Is(err, errFeedMirrorQuorum) {
+		t.Fatalf("publication failure was misclassified as quorum unavailability: %v", err)
+	}
+	if outcome != dataShieldFeedOmitted {
+		t.Fatalf("outcome = %d, want omitted", outcome)
 	}
 }
 
@@ -594,12 +954,30 @@ func TestGitHubRawAndJSDelivrShareOneMirrorTrustDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cdn, err := feedOrigin("https://cdn.jsdelivr.net/gh/example/repository@main/feed.txt")
+	cdn, err := feedOrigin("https://cdn.jsdelivr.net./gh/example/repository@main/feed.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if raw != cdn {
 		t.Fatalf("trust domains differ: raw=%q cdn=%q", raw, cdn)
+	}
+}
+
+func TestTrailingDNSDotDoesNotCreateAnotherMirrorTrustDomain(t *testing.T) {
+	t.Parallel()
+	plain, err := feedOrigin("https://mirror.example/feed.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotted, err := feedOrigin("https://mirror.example./feed.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain != dotted {
+		t.Fatalf("trailing DNS dot created another trust domain: plain=%q dotted=%q", plain, dotted)
+	}
+	if _, err := feedOrigin("https://mirror.example../feed.txt"); err == nil {
+		t.Fatal("multiple trailing DNS root markers were accepted")
 	}
 }
 

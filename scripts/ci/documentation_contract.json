@@ -120,7 +120,7 @@
       "operators must keep every parent directory protected against untrusted replacement",
       "Rsyslog strings and WireGuard values are validated and encoded for their destination grammars",
       "SSH/HA port separation while WireGuard is enabled.",
-      "The APK pre-install check requires committed `cronie` and `cronie-openrc`",
+      "A fresh APK transaction without prepared Cronie remains payload-only and inactive",
       "`qrencode` is optional on RHEL-family images.",
       "[version-specific v4.03.2 to v4.03.3 migration runbook](Migration-v4.03.2-to-v4.03.3)"
     ],

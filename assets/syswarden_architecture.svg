@@ -133,9 +133,9 @@
   </g>
 
   <path d="M420 301 H478" stroke="#38bdf8" stroke-width="4" marker-end="url(#arrowCyan)"/>
-  <text x="449" y="283" text-anchor="middle" class="small">logs</text>
+  <text x="449" y="270" text-anchor="middle" class="small">logs</text>
   <path d="M1102 301 H1158" stroke="#2dd4bf" stroke-width="4" marker-end="url(#arrowTeal)"/>
-  <text x="1130" y="283" text-anchor="middle" class="small">policy</text>
+  <text x="1130" y="270" text-anchor="middle" class="small">policy</text>
 
   <g transform="translate(70 530)" filter="url(#shadow)">
     <rect width="480" height="208" rx="22" class="panel"/>

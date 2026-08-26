@@ -7305,12 +7305,15 @@ prepare_package_transition
         install = repository.joinpath(
             "src/core/syswarden-cli/cmd/install.go"
         ).read_text(encoding="utf-8")
+        update_feeds = repository.joinpath(
+            "src/core/syswarden-cli/cmd/update_feeds.go"
+        ).read_text(encoding="utf-8")
 
         self.assertIn(
             'legacyValue(oldConfig, "SYSWARDEN_LIST_CHOICE", "1")',
             migrator,
         )
-        download = install.index("if err := network.DownloadFeeds(")
+        download = install.index("if err := network.DownloadFeedsForInstall(")
         fatal = install.index(
             'return installStageError("failed to download threat intelligence feeds", err)',
             download,
@@ -7318,6 +7321,8 @@ prepare_package_transition
         cron = install.index("if err := network.SetupFeedsCron()", fatal)
         self.assertLess(download, fatal)
         self.assertLess(fatal, cron)
+        self.assertIn("return network.DownloadFeeds(", update_feeds)
+        self.assertNotIn("DownloadFeedsForInstall", update_feeds)
 
     def test_postinstall_failure_detail_codes_keep_existing_event_ids(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT

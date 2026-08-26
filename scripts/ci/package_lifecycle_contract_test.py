@@ -136,7 +136,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             prefix = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
             if name in {"preinst.sh", "postinst.sh"}:
                 prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
-            if name == "preinst.sh":
+            if name in {"preinst.sh", "postinst.sh"}:
                 prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
@@ -204,7 +204,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             prefix = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
             if name in {"preinst.sh", "postinst.sh"}:
                 prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
-            if name == "preinst.sh":
+            if name in {"preinst.sh", "postinst.sh"}:
                 prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
@@ -861,6 +861,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         self.assertIn('export SYSWARDEN_PKG_INSTALL=1', postinstall)
         self.assertIn("set -e", postinstall)
+        self.assertIn("syswarden_preflight_alpine_cronie", postinstall)
+        self.assertLess(
+            postinstall.index("syswarden_preflight_alpine_cronie\n"),
+            postinstall.index("syswarden_preflight_install_barriers\n"),
+        )
         self.assertIn('[ "$1" = "2" ]', postinstall)
         self.assertIn('[ "$1" = "configure" ]', postinstall)
         self.assertIn("syswarden_classify_service_manager", postinstall)
@@ -913,6 +918,368 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertEqual(accepted.returncode, 0, accepted)
         rejected = validate(crond_enabled)
         self.assertNotEqual(rejected.returncode, 0, rejected)
+
+    def test_alpine_apk_hook_matrix_defers_fresh_activation_without_broken_or_partial_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            mock_bin = Path(temporary)
+            (mock_bin / "apk").write_text(
+                "#!/bin/sh\n"
+                "[ \"${SYSWARDEN_TEST_APK_READY:-0}\" = 1 ] || exit 1\n"
+                "case \"$*\" in\n"
+                "  'info --installed cronie'|'info --installed cronie-openrc') exit 0 ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            (mock_bin / "rc-service").write_text(
+                "#!/bin/sh\n"
+                "case \"$*\" in\n"
+                "  '--exists cronie') exit 0 ;;\n"
+                "  'cronie status') [ \"${SYSWARDEN_TEST_CRONIE_ACTIVE:-0}\" = 1 ] ;;\n"
+                "  '--exists crond') exit 0 ;;\n"
+                "  'crond status') [ \"${SYSWARDEN_TEST_CROND_ACTIVE:-0}\" = 1 ] ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            (mock_bin / "rc-update").write_text(
+                "#!/bin/sh\n"
+                "[ \"$*\" = 'show -v' ] || exit 1\n"
+                "printf '%s\\n' \"${SYSWARDEN_TEST_RUNLEVELS:-}\"\n",
+                encoding="utf-8",
+            )
+            for command in ("apk", "rc-service", "rc-update"):
+                (mock_bin / command).chmod(0o700)
+
+            def run_hook(
+                script_name: str,
+                apk_script: str,
+                *,
+                packages_ready: bool,
+                cronie_active: bool,
+            ) -> subprocess.CompletedProcess[str]:
+                script = self.script(script_name)
+                invocation = "\nsyswarden_preflight_alpine_cronie\n"
+                end = script.index(invocation) + len(invocation)
+                prefix = script[:end].replace(
+                    "[ -f /etc/alpine-release ] || return 0",
+                    '[ "${SYSWARDEN_TEST_ALPINE:-}" = 1 ] || return 0',
+                ).replace(
+                    "syswarden_classify_service_manager / openrc",
+                    "printf '%s\\n' ACTIVE",
+                )
+                probe = prefix + "printf '%s\\n' partial-configuration-reached; exit 97\n"
+                return subprocess.run(
+                    ["/bin/sh", "-c", probe, f"{apk_script}-contract", "4.3.3"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{mock_bin}:{os.environ['PATH']}",
+                        "APK_PACKAGE": "syswarden",
+                        "APK_SCRIPT": apk_script,
+                        "SYSWARDEN_TEST_ALPINE": "1",
+                        "SYSWARDEN_TEST_APK_READY": "1" if packages_ready else "0",
+                        "SYSWARDEN_TEST_CRONIE_ACTIVE": "1" if cronie_active else "0",
+                        "SYSWARDEN_TEST_CROND_ACTIVE": "0",
+                        "SYSWARDEN_TEST_RUNLEVELS": "crond |\ncronie | default",
+                    },
+                )
+
+            deferred = (
+                ("preinst.sh", "pre-install", False, False),
+                # Dependencies can be visible later in the fresh transaction,
+                # while Cronie still is not enabled or started.
+                ("postinst.sh", "post-install", True, False),
+            )
+            for script_name, apk_script, packages_ready, cronie_active in deferred:
+                with self.subTest(hook=apk_script, state="deferred"):
+                    result = run_hook(
+                        script_name,
+                        apk_script,
+                        packages_ready=packages_ready,
+                        cronie_active=cronie_active,
+                    )
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertNotIn("partial-configuration-reached", result.stdout)
+                    self.assertIn("activation is deferred", result.stderr)
+                    self.assertIn(
+                        "SYSWARDEN_PKG_INSTALL=1 /opt/syswarden/bin/syswarden-cli install",
+                        result.stderr,
+                    )
+                    self.assertNotIn("ln -sf", result.stderr)
+                    self.assertIn(
+                        "syswarden_remove_openrc_runlevels crond",
+                        result.stderr,
+                    )
+                    self.assertIn(
+                        "syswarden_remove_openrc_runlevels cronie",
+                        result.stderr,
+                    )
+                    self.assertNotIn("rc-update del crond 2>/dev/null", result.stderr)
+
+            strict_upgrades = (
+                ("preinst.sh", "pre-upgrade", False, False),
+                ("postinst.sh", "post-upgrade", True, False),
+            )
+            for script_name, apk_script, packages_ready, cronie_active in strict_upgrades:
+                with self.subTest(hook=apk_script, state="strict"):
+                    result = run_hook(
+                        script_name,
+                        apk_script,
+                        packages_ready=packages_ready,
+                        cronie_active=cronie_active,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result)
+                    self.assertNotIn("partial-configuration-reached", result.stdout)
+                    self.assertNotIn("activation is deferred", result.stderr)
+
+            for script_name, apk_script in (
+                ("preinst.sh", "pre-install"),
+                ("postinst.sh", "post-install"),
+                ("preinst.sh", "pre-upgrade"),
+                ("postinst.sh", "post-upgrade"),
+            ):
+                with self.subTest(hook=apk_script, state="ready"):
+                    result = run_hook(
+                        script_name,
+                        apk_script,
+                        packages_ready=True,
+                        cronie_active=True,
+                    )
+                    self.assertEqual(result.returncode, 97, result)
+                    self.assertEqual(result.stdout, "partial-configuration-reached\n")
+
+    def test_alpine_deferred_activation_removes_every_bounded_openrc_runlevel(
+        self,
+    ) -> None:
+        helper = ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+        activation = helper.split(
+            "/bin/sh -eu <<'SYSWARDEN_ACTIVATE'\n", 1
+        )[1].split("\nSYSWARDEN_ACTIVATE\n", 1)[0]
+        activation = activation.replace(
+            "SYSWARDEN_PKG_INSTALL=1 /opt/syswarden/bin/syswarden-cli install",
+            "SYSWARDEN_PKG_INSTALL=1 syswarden-test-install",
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mock_bin = root / "bin"
+            mock_bin.mkdir(mode=0o700)
+            log = root / "calls"
+            crond_state = root / "crond-state"
+            cronie_state = root / "cronie-state"
+            crond_runlevels = root / "crond-runlevels"
+            cronie_runlevels = root / "cronie-runlevels"
+            (mock_bin / "rc-update").write_text(
+                "#!/bin/sh\n"
+                "case \"$1\" in\n"
+                "  show)\n"
+                "    [ \"${2:-}\" = -v ] || exit 1\n"
+                "    printf 'crond | %s\\ncronie | %s\\n' \\\n"
+                "      \"$(cat \"${SYSWARDEN_TEST_CROND_RUNLEVELS}\")\" \\\n"
+                "      \"$(cat \"${SYSWARDEN_TEST_CRONIE_RUNLEVELS}\")\"\n"
+                "    ;;\n"
+                "  del)\n"
+                "    [ \"$#\" -eq 3 ] || exit 1\n"
+                "    printf 'rc-update:%s\\n' \"$*\" >> \"${SYSWARDEN_TEST_LOG}\"\n"
+                "    case \"$2\" in\n"
+                "      crond) state=${SYSWARDEN_TEST_CROND_RUNLEVELS} ;;\n"
+                "      cronie) state=${SYSWARDEN_TEST_CRONIE_RUNLEVELS} ;;\n"
+                "      *) exit 1 ;;\n"
+                "    esac\n"
+                "    next=\n"
+                "    for candidate in $(cat \"${state}\"); do\n"
+                "      [ \"${candidate}\" = \"$3\" ] || next=\"${next}${next:+ }${candidate}\"\n"
+                "    done\n"
+                "    printf '%s\\n' \"${next}\" > \"${state}\"\n"
+                "    ;;\n"
+                "  add)\n"
+                "    [ \"$#\" -eq 3 ] && [ \"$2\" = cronie ] || exit 1\n"
+                "    printf 'rc-update:%s\\n' \"$*\" >> \"${SYSWARDEN_TEST_LOG}\"\n"
+                "    state=${SYSWARDEN_TEST_CRONIE_RUNLEVELS}\n"
+                "    current=$(cat \"${state}\")\n"
+                "    case \" ${current} \" in\n"
+                "      *\" $3 \"*) ;;\n"
+                "      *) printf '%s\\n' \"${current}${current:+ }$3\" > \"${state}\" ;;\n"
+                "    esac\n"
+                "    ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            (mock_bin / "rc-service").write_text(
+                "#!/bin/sh\n"
+                "printf 'rc-service:%s\\n' \"$*\" >> \"${SYSWARDEN_TEST_LOG}\"\n"
+                "case \"$*\" in\n"
+                "  '--exists crond'|'--exists cronie') exit 0 ;;\n"
+                "  'crond status')\n"
+                "    [ \"$(cat \"${SYSWARDEN_TEST_CROND_STATE}\")\" = active ] && exit 0\n"
+                "    exit 3\n"
+                "    ;;\n"
+                "  'crond stop')\n"
+                "    [ \"$(cat \"${SYSWARDEN_TEST_CROND_STATE}\")\" = active ] || exit 1\n"
+                "    [ \"${SYSWARDEN_TEST_CROND_STOP_FAIL:-0}\" != 1 ] || exit 41\n"
+                "    printf '%s\\n' inactive > \"${SYSWARDEN_TEST_CROND_STATE}\"\n"
+                "    ;;\n"
+                "  'cronie status')\n"
+                "    [ \"$(cat \"${SYSWARDEN_TEST_CRONIE_STATE}\")\" = active ] && exit 0\n"
+                "    exit 3\n"
+                "    ;;\n"
+                "  'cronie start')\n"
+                "    printf '%s\\n' active > \"${SYSWARDEN_TEST_CRONIE_STATE}\"\n"
+                "    ;;\n"
+                "  'cronie stop') exit 42 ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            (mock_bin / "syswarden-test-install").write_text(
+                "#!/bin/sh\n"
+                "printf 'install:%s\\n' \"${SYSWARDEN_PKG_INSTALL:-unset}\" >> \"${SYSWARDEN_TEST_LOG}\"\n",
+                encoding="utf-8",
+            )
+            for command in (
+                "rc-update",
+                "rc-service",
+                "syswarden-test-install",
+            ):
+                (mock_bin / command).chmod(0o700)
+
+            def run_activation(
+                crond_levels: str,
+                cronie_levels: str,
+                *,
+                crond_active: bool,
+                cronie_active: bool,
+                crond_stop_fails: bool = False,
+            ) -> subprocess.CompletedProcess[str]:
+                log.unlink(missing_ok=True)
+                crond_state.write_text(
+                    "active\n" if crond_active else "inactive\n", encoding="ascii"
+                )
+                cronie_state.write_text(
+                    "active\n" if cronie_active else "inactive\n", encoding="ascii"
+                )
+                crond_runlevels.write_text(f"{crond_levels}\n", encoding="ascii")
+                cronie_runlevels.write_text(f"{cronie_levels}\n", encoding="ascii")
+                return subprocess.run(
+                    ["/bin/sh", "-eu", "-c", activation],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{mock_bin}:{os.environ['PATH']}",
+                        "SYSWARDEN_TEST_LOG": str(log),
+                        "SYSWARDEN_TEST_CROND_STATE": str(crond_state),
+                        "SYSWARDEN_TEST_CRONIE_STATE": str(cronie_state),
+                        "SYSWARDEN_TEST_CROND_RUNLEVELS": str(crond_runlevels),
+                        "SYSWARDEN_TEST_CRONIE_RUNLEVELS": str(cronie_runlevels),
+                        "SYSWARDEN_TEST_CROND_STOP_FAIL": (
+                            "1" if crond_stop_fails else "0"
+                        ),
+                    },
+                )
+
+            accepted = run_activation(
+                "boot default custom-runlevel",
+                "boot default",
+                crond_active=True,
+                cronie_active=False,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted)
+            self.assertEqual(
+                log.read_text(encoding="utf-8").splitlines(),
+                [
+                    "rc-service:--exists cronie",
+                    "rc-service:cronie status",
+                    "rc-service:--exists crond",
+                    "rc-service:crond status",
+                    "rc-service:crond stop",
+                    "rc-update:del crond boot",
+                    "rc-update:del crond default",
+                    "rc-update:del crond custom-runlevel",
+                    "rc-update:del cronie boot",
+                    "rc-update:del cronie default",
+                    "rc-update:add cronie default",
+                    "rc-service:cronie start",
+                    "rc-service:--exists crond",
+                    "rc-service:crond status",
+                    "rc-service:--exists cronie",
+                    "rc-service:cronie status",
+                    "install:1",
+                ],
+            )
+            self.assertEqual(crond_state.read_text(encoding="ascii"), "inactive\n")
+            self.assertEqual(cronie_state.read_text(encoding="ascii"), "active\n")
+            self.assertEqual(crond_runlevels.read_text(encoding="ascii"), "\n")
+            self.assertEqual(cronie_runlevels.read_text(encoding="ascii"), "default\n")
+
+            failed_stop = run_activation(
+                "default",
+                "",
+                crond_active=True,
+                cronie_active=False,
+                crond_stop_fails=True,
+            )
+            self.assertEqual(failed_stop.returncode, 41, failed_stop)
+            failed_stop_calls = log.read_text(encoding="utf-8")
+            self.assertIn("rc-service:crond stop", failed_stop_calls)
+            self.assertNotIn("rc-update:del", failed_stop_calls)
+            self.assertNotIn("install:1", failed_stop_calls)
+
+            too_many_cronie = " ".join(
+                f"cronie-level{index}" for index in range(33)
+            )
+            for case_name, invalid_cronie in (
+                ("malformed", "default invalid/runlevel"),
+                ("over-bound", too_many_cronie),
+            ):
+                with self.subTest(cronie_preflight=case_name):
+                    rejected_cronie = run_activation(
+                        "default",
+                        invalid_cronie,
+                        crond_active=True,
+                        cronie_active=True,
+                    )
+                    self.assertNotEqual(
+                        rejected_cronie.returncode, 0, rejected_cronie
+                    )
+                    preflight_calls = (
+                        log.read_text(encoding="utf-8") if log.exists() else ""
+                    )
+                    self.assertEqual(preflight_calls, "")
+
+            already_active = run_activation(
+                "boot",
+                "boot",
+                crond_active=False,
+                cronie_active=True,
+            )
+            self.assertEqual(already_active.returncode, 0, already_active)
+            active_calls = log.read_text(encoding="utf-8")
+            self.assertNotIn("rc-service:crond stop", active_calls)
+            self.assertNotIn("rc-service:cronie stop", active_calls)
+            self.assertNotIn("rc-service:cronie start", active_calls)
+            self.assertEqual(crond_runlevels.read_text(encoding="ascii"), "\n")
+            self.assertEqual(cronie_runlevels.read_text(encoding="ascii"), "default\n")
+
+            too_many = " ".join(f"level{index}" for index in range(33))
+            rejected = run_activation(
+                too_many,
+                "default",
+                crond_active=False,
+                cronie_active=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0, rejected)
+            bounded_calls = log.read_text(encoding="utf-8") if log.exists() else ""
+            self.assertNotIn("rc-service:", bounded_calls)
+            self.assertNotIn("rc-update:del", bounded_calls)
+            self.assertNotIn("rc-update:add", bounded_calls)
 
     def test_package_preinstall_tightens_directories_and_rejects_links(self) -> None:
         for script_name in ("preinst.sh",):
@@ -3317,9 +3684,23 @@ class PackageLifecycleContractTests(unittest.TestCase):
             1,
         )
         self.assertEqual(
+            self.workflow.count(
+                'cat scripts/ci/package_alpine_cronie_preflight.sh >> '
+                '"${PACKAGE_SCRIPTS}/postinst.sh"'
+            ),
+            1,
+        )
+        self.assertEqual(
             local_source.count(
                 'cat "${REPOSITORY_ROOT}/scripts/ci/'
                 'package_alpine_cronie_preflight.sh" >> preinst.sh'
+            ),
+            1,
+        )
+        self.assertEqual(
+            local_source.count(
+                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'package_alpine_cronie_preflight.sh" >> postinst.sh'
             ),
             1,
         )
@@ -4882,7 +5263,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
         ):
             with self.subTest(script=script_name), tempfile.TemporaryDirectory() as temporary:
                 postinstall = self.script(script_name)
-                self.assertLess(postinstall.index("set -e"), postinstall.index(install_command))
+                # The deferred Alpine activation notice intentionally prints
+                # the same command for the operator. The executable package
+                # invocation remains the final occurrence and stays under
+                # fail-fast shell semantics.
+                self.assertLess(postinstall.index("set -e"), postinstall.rindex(install_command))
                 self.assertNotIn(f"{install_command} || true", postinstall)
 
                 fake_cli = Path(temporary) / "syswarden-cli"
