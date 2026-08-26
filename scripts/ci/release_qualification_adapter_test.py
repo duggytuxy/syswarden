@@ -75,16 +75,19 @@ class AdapterFixture:
         self.evidence = root / "evidence"
         self.candidate = self.evidence / "packages" / "candidate"
         self.previous = self.evidence / "packages" / "previous"
+        self.package_tmp = self.evidence / "package-tmp"
         self.raw = self.evidence / "raw"
         self.bound = self.evidence / "bound"
         for directory in (
             self.repo,
             self.candidate,
             self.previous,
+            self.package_tmp,
             self.raw,
             self.bound,
         ):
             directory.mkdir(parents=True, exist_ok=True)
+        self.package_tmp.chmod(0o700)
         self.now = datetime.now(UTC).replace(microsecond=0)
         self._make_repository()
         self.commit = self._git("rev-parse", "HEAD")
@@ -201,6 +204,7 @@ class AdapterFixture:
             "podman": "podman",
             "pull_policy": "never",
             "scenario_timeout": 60,
+            "package_tmp_dir": self.package_tmp,
             "qualification_repository": self.repository,
             "qualification_release_sha": self.commit,
             "qualification_release_tag": self.version,

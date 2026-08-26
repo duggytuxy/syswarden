@@ -144,6 +144,24 @@ RPM_BOOTSTRAP = (
     "policycoreutils-python-utils dnf-automatic procps-ng e2fsprogs socat binutils "
     "cpio diffutils file util-linux && dnf clean all"
 )
+RPM_COMMON_IMAGE_DEPENDENCY_GUARD = (
+    "RUN ! rpm -q qrencode >/dev/null 2>&1 && "
+    "! rpm -q epel-release >/dev/null 2>&1\n"
+)
+HISTORICAL_RPM_TRANSITION_VERSION = "4.03.2"
+HISTORICAL_RPM_TRANSITION_BOOTSTRAPS = {
+    "fedora": (
+        "dnf -y install qrencode && "
+        "rpm -q qrencode >/dev/null && "
+        "! rpm -q epel-release >/dev/null 2>&1 && dnf clean all"
+    ),
+    "almalinux": (
+        "dnf -y install epel-release && "
+        "dnf -y install qrencode && "
+        "rpm -q epel-release >/dev/null && "
+        "rpm -q qrencode >/dev/null && dnf clean all"
+    ),
+}
 APK_BOOTSTRAP = (
     "apk add --no-cache openrc openrc-init && "
     "apk add --no-cache iproute2 nftables cronie cronie-openrc curl wget rsyslog rsyslog-uxsock "
@@ -743,9 +761,14 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
 
     checks = list(_preparation_event_checks(scenario))
 
-    def installed(command: str, label: str) -> None:
+    def installed(
+        command: str,
+        label: str,
+        before_phase_checks: tuple[str, ...] = (),
+    ) -> None:
         checks.append(f"{scenario}.{command}")
         checks.append(f"{scenario}.{command}.maintainer_script")
+        checks.extend(before_phase_checks)
         checks.extend(_installed_phase_event_checks(scenario, label))
         checks.extend(_state_event_checks(scenario, label))
 
@@ -782,7 +805,12 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
         )
 
     if scenario == "upgrade-rollback":
-        installed("install.previous", "previous")
+        checks.append(f"{scenario}.preinstall.networkless_config")
+        installed(
+            "install.previous",
+            "previous",
+            (f"{scenario}.previous.networkless_config_preserved",),
+        )
         installed("upgrade.candidate", "candidate")
         installed("reinstall.candidate", "reinstall")
         checks.extend(_installed_phase_event_checks(scenario, "restart-one"))
@@ -1118,6 +1146,26 @@ def require_real_directory(path: Path, label: str) -> Path:
     return absolute
 
 
+def require_private_directory(path: Path, label: str) -> Path:
+    absolute = require_real_directory(path, label)
+    try:
+        resolved = absolute.resolve(strict=True)
+        metadata = absolute.lstat()
+    except OSError as exc:
+        raise LifecycleLabError(f"cannot resolve {label} {absolute}: {exc}") from exc
+    if resolved != absolute:
+        raise LifecycleLabError(
+            f"{label} must not contain symlinked path components: {absolute}"
+        )
+    if metadata.st_uid != os.geteuid():
+        raise LifecycleLabError(
+            f"{label} must be owned by effective uid {os.geteuid()}: {absolute}"
+        )
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise LifecycleLabError(f"{label} must have mode 0700: {absolute}")
+    return absolute
+
+
 def read_checksum(checksum_file: Path, package_name: str) -> str:
     try:
         metadata = checksum_file.lstat()
@@ -1414,6 +1462,21 @@ def validate_inputs(
     return candidate_root, previous_root, pairs
 
 
+def historical_transition_bootstrap(
+    spec: PlatformSpec, previous_version: str
+) -> str:
+    parse_syswarden_version(previous_version)
+    if spec.family != "rpm" or previous_version != HISTORICAL_RPM_TRANSITION_VERSION:
+        return ""
+    command = HISTORICAL_RPM_TRANSITION_BOOTSTRAPS.get(spec.distribution)
+    if command is None:
+        raise LifecycleLabError(
+            "unsupported RPM distribution for the exact v4.03.2 transition "
+            f"bootstrap: {spec.distribution!r}"
+        )
+    return f"RUN {command}\n"
+
+
 def build_containerfile(spec: PlatformSpec) -> str:
     validate_image_reference(spec.image)
     helper_encoded = base64.b64encode(LAB_NETWORK_HELPER.encode("utf-8")).decode(
@@ -1532,8 +1595,27 @@ def build_containerfile(spec: PlatformSpec) -> str:
         f"FROM {spec.image}\n"
         "ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 container=podman\n"
         f"RUN {spec.bootstrap_command}\n"
+        + (RPM_COMMON_IMAGE_DEPENDENCY_GUARD if spec.family == "rpm" else "")
         + init_contract
     )
+
+
+def build_historical_transition_containerfile(
+    spec: PlatformSpec,
+    previous_version: str,
+    common_image: str,
+) -> str | None:
+    if re.fullmatch(
+        r"localhost/syswarden-lifecycle-[a-z0-9-]+-[0-9a-f]{32}",
+        common_image,
+    ) is None:
+        raise LifecycleLabError(
+            f"unsafe common lifecycle image reference: {common_image!r}"
+        )
+    transition_bootstrap = historical_transition_bootstrap(spec, previous_version)
+    if not transition_bootstrap:
+        return None
+    return f"FROM {common_image}\n{transition_bootstrap}"
 
 
 LIFECYCLE_SCRIPT = r'''#!/bin/sh
@@ -2298,6 +2380,45 @@ legacy_webtui_runtime_absent() {
     done
 }
 
+v4032_to_v4033_upgrade_selected() {
+    v4032_to_v4033_transition_selected && \
+        [ "$(installed_version 2>/dev/null || true)" = 4.03.2 ]
+}
+
+attest_v4032_previous_webtui_retirement() {
+    previous_webtui_root="${1:-/}"
+    previous_webtui_root="${previous_webtui_root%/}"
+    previous_webtui_proc_root="${2:-${previous_webtui_root}/proc}"
+    previous_webtui_executable="${previous_webtui_root}/opt/syswarden/bin/syswarden-cli"
+
+    v4032_to_v4033_upgrade_selected || return 1
+    legacy_webtui_runtime_absent "${previous_webtui_root}" || return 1
+    syswarden_verify_no_exact_webtui_process \
+        "${previous_webtui_root}" "${previous_webtui_proc_root}" \
+        "${previous_webtui_executable}" || return 1
+    previous_webtui_ss_stderr="$(
+        mktemp /tmp/syswarden-previous-webtui-ss.XXXXXX
+    )" || return 1
+    for previous_webtui_port in 62027 62028; do
+        : > "${previous_webtui_ss_stderr}" || {
+            rm -f "${previous_webtui_ss_stderr}"
+            return 1
+        }
+        previous_webtui_ss_output="$(
+            ss -H -ltn "sport = :${previous_webtui_port}" \
+                2>"${previous_webtui_ss_stderr}"
+        )"
+        previous_webtui_ss_status=$?
+        if [ "${previous_webtui_ss_status}" -ne 0 ] || \
+           [ -s "${previous_webtui_ss_stderr}" ] || \
+           [ -n "${previous_webtui_ss_output}" ]; then
+            rm -f "${previous_webtui_ss_stderr}"
+            return 1
+        fi
+    done
+    rm -f "${previous_webtui_ss_stderr}" || return 1
+}
+
 alpine_apk_owner_version() {
     syswarden_owner_path="$1"
     syswarden_owner_package="$2"
@@ -2630,13 +2751,31 @@ prepare_package_transition() {
     esac
 }
 
+v4028_to_v4032_transition_selected() {
+    [ "${SCENARIO}" = upgrade-rollback ] && \
+        [ "${EXPECTED_PREVIOUS_VERSION}" = 4.02.8 ] && \
+        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.2 ]
+}
+
+v4032_to_v4033_transition_selected() {
+    [ "${SCENARIO}" = upgrade-rollback ] && \
+        [ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.2 ] && \
+        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.3 ]
+}
+
 expected_systemd_enablement_prefix() {
     label="$1"
     case "${SCENARIO}:${label}" in
         upgrade-rollback:previous|upgrade-rollback:candidate|upgrade-rollback:reinstall|\
         upgrade-rollback:restart-one|upgrade-rollback:restart-two|upgrade-rollback:rollback|\
         upgrade-rollback:recovery)
-            printf '%s\n' /etc/systemd/system
+            if v4028_to_v4032_transition_selected; then
+                printf '%s\n' /etc/systemd/system
+            elif v4032_to_v4033_transition_selected; then
+                printf '%s\n' ..
+            else
+                return 1
+            fi
             ;;
         remove:fresh|remove:reinstall-after-remove|purge:fresh)
             printf '%s\n' ..
@@ -3029,17 +3168,22 @@ probe_postinstall_contract() {
         fi
         probe_seeded_operator_listener_preservation "${label}" || mark_postinstall_failure operator-listener
     elif [ "${actual_version}" = "${EXPECTED_PREVIOUS_VERSION}" ]; then
-        case "${PACKAGE_FAMILY}" in
-            deb|rpm)
-                [ -f /etc/systemd/system/syswarden-webtui.service ] && \
-                    grep -Fq '/opt/syswarden/bin/syswarden-cli web-tui' \
-                        /etc/systemd/system/syswarden-webtui.service || mark_postinstall_failure previous-webtui
-                ;;
-            apk)
-                [ -f /etc/init.d/syswarden-webtui ] && \
-                    grep -Fq 'command_args="web-tui"' /etc/init.d/syswarden-webtui || mark_postinstall_failure previous-webtui
-                ;;
-        esac
+        if v4032_to_v4033_upgrade_selected; then
+            attest_v4032_previous_webtui_retirement || \
+                mark_postinstall_failure previous-webtui-retirement
+        else
+            case "${PACKAGE_FAMILY}" in
+                deb|rpm)
+                    [ -f /etc/systemd/system/syswarden-webtui.service ] && \
+                        grep -Fq '/opt/syswarden/bin/syswarden-cli web-tui' \
+                            /etc/systemd/system/syswarden-webtui.service || mark_postinstall_failure previous-webtui
+                    ;;
+                apk)
+                    [ -f /etc/init.d/syswarden-webtui ] && \
+                        grep -Fq 'command_args="web-tui"' /etc/init.d/syswarden-webtui || mark_postinstall_failure previous-webtui
+                    ;;
+            esac
+        fi
     else
         mark_postinstall_failure installed-version
     fi
@@ -3145,6 +3289,108 @@ probe_payload() {
         record fail "${PREFIX}.${label}.elf_contract" "payload binaries violate the exact package-family ELF contract"
     fi
     probe_postinstall_contract "${label}"
+}
+
+write_preinstall_networkless_config() {
+    preinstall_networkless_config="$1"
+    printf '%s\n' \
+        '# Lifecycle-only network-isolation override; production defaults remain list_choice = "1".' \
+        '[network.blocklists]' \
+        'list_choice = "4"' \
+        'custom_url = ""' \
+        'custom_url_ipv6 = ""' \
+        'custom_hash = ""' \
+        'custom_hash_ipv6 = ""' \
+        'use_spamhaus = false' \
+        '' > "${preinstall_networkless_config}"
+}
+
+seed_and_attest_preinstall_networkless_config() {
+    preinstall_networkless_path=/etc/syswarden/config/modules/99-user.toml
+    for preinstall_networkless_directory in \
+        /etc/syswarden \
+        /etc/syswarden/config \
+        /etc/syswarden/config/modules; do
+        if [ -e "${preinstall_networkless_directory}" ] || \
+           [ -L "${preinstall_networkless_directory}" ]; then
+            if [ ! -d "${preinstall_networkless_directory}" ] || \
+               [ -L "${preinstall_networkless_directory}" ] || \
+               [ "$(stat -c '%u:%g' \
+                   "${preinstall_networkless_directory}" 2>/dev/null || true)" != 0:0 ]; then
+                record fail "${PREFIX}.preinstall.networkless_config" \
+                    "refusing a non-directory, symlinked, or non-root-owned configuration ancestor"
+                return 1
+            fi
+        fi
+    done
+    if [ -e "${preinstall_networkless_path}" ] || \
+       [ -L "${preinstall_networkless_path}" ]; then
+        record fail "${PREFIX}.preinstall.networkless_config" \
+            "refusing to replace a pre-existing networkless configuration path"
+        return 1
+    fi
+    mkdir -p /etc/syswarden/config/modules || return 1
+    for preinstall_networkless_directory in \
+        /etc/syswarden \
+        /etc/syswarden/config \
+        /etc/syswarden/config/modules; do
+        if [ ! -d "${preinstall_networkless_directory}" ] || \
+           [ -L "${preinstall_networkless_directory}" ] || \
+           [ "$(stat -c '%u:%g' \
+               "${preinstall_networkless_directory}" 2>/dev/null || true)" != 0:0 ]; then
+            record fail "${PREFIX}.preinstall.networkless_config" \
+                "configuration ancestors failed their real root-owned directory attestation"
+            return 1
+        fi
+    done
+    if [ -e "${preinstall_networkless_path}" ] || \
+       [ -L "${preinstall_networkless_path}" ]; then
+        record fail "${PREFIX}.preinstall.networkless_config" \
+            "networkless configuration path appeared before publication"
+        return 1
+    fi
+    write_preinstall_networkless_config "${preinstall_networkless_path}" || return 1
+    chmod 0640 "${preinstall_networkless_path}" || return 1
+    preinstall_networkless_identity="$(
+        stat -c '%u:%g:%a:%h' "${preinstall_networkless_path}" 2>/dev/null || true
+    )"
+    preinstall_networkless_hash="$(
+        hash_file "${preinstall_networkless_path}" 2>/dev/null || true
+    )"
+    if [ -f "${preinstall_networkless_path}" ] && \
+       [ ! -L "${preinstall_networkless_path}" ] && \
+       [ "${preinstall_networkless_identity}" = 0:0:640:1 ] && \
+       [ "${preinstall_networkless_hash}" = \
+         e0a6d764d1786c3661c6f25fa7b688bd8c8922d8fd0a00135925ae982f274d68 ]; then
+        record pass "${PREFIX}.preinstall.networkless_config" \
+            "exact option-4 networkless configuration is installed before the previous package"
+        return 0
+    fi
+    record fail "${PREFIX}.preinstall.networkless_config" \
+        "option-4 networkless configuration failed its exact pre-install attestation"
+    return 1
+}
+
+attest_preinstall_networkless_config_after_previous() {
+    preinstall_networkless_path=/etc/syswarden/config/modules/99-user.toml
+    preinstall_networkless_identity="$(
+        stat -c '%u:%g:%a:%h' "${preinstall_networkless_path}" 2>/dev/null || true
+    )"
+    preinstall_networkless_hash="$(
+        hash_file "${preinstall_networkless_path}" 2>/dev/null || true
+    )"
+    if [ -f "${preinstall_networkless_path}" ] && \
+       [ ! -L "${preinstall_networkless_path}" ] && \
+       [ "${preinstall_networkless_identity}" = 0:0:640:1 ] && \
+       [ "${preinstall_networkless_hash}" = \
+         e0a6d764d1786c3661c6f25fa7b688bd8c8922d8fd0a00135925ae982f274d68 ]; then
+        record pass "${PREFIX}.previous.networkless_config_preserved" \
+            "the previous package preserved the exact option-4 networkless configuration"
+        return 0
+    fi
+    record fail "${PREFIX}.previous.networkless_config_preserved" \
+        "the previous package changed the exact option-4 networkless configuration"
+    return 1
 }
 
 write_seeded_operator_token() {
@@ -3286,6 +3532,10 @@ write_exclusive_root_pidfile() {
 
 quiesce_previous_webtui_runtime() {
     prepare_service_runtime_fixture || return 1
+    if v4032_to_v4033_upgrade_selected; then
+        attest_v4032_previous_webtui_retirement || return 1
+        return 0
+    fi
     case "${PACKAGE_FAMILY}" in
         deb|rpm)
             previous_webtui_unit=/etc/systemd/system/syswarden-webtui.service
@@ -3641,6 +3891,9 @@ seed_live_legacy_webtui_process() {
         deb|rpm) ;;
         *) return 0 ;;
     esac
+    if v4032_to_v4033_upgrade_selected; then
+        return 0
+    fi
     /opt/syswarden/bin/syswarden-cli web-tui \
         --bind=127.0.0.1:62028 --token=lot0-lifecycle-live-retired-token \
         >/tmp/syswarden-legacy-webtui-process.log 2>&1 &
@@ -3983,12 +4236,49 @@ assert_historical_rollback_token() {
     rm -f "${sanitized}" "${secret_file}"
 }
 
+expected_upgrade_rollback_token_contract() {
+    label="$1"
+    [ "${SCENARIO}:${label}" = upgrade-rollback:rollback ] || return 1
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm) ;;
+        *) return 1 ;;
+    esac
+    if v4028_to_v4032_transition_selected; then
+        printf '%s\n' historical-webtui-credential
+    elif v4032_to_v4033_transition_selected; then
+        printf '%s\n' byte-exact
+    else
+        return 1
+    fi
+}
+
+record_unsupported_rollback_token_contract() {
+    label="$1"
+    check_equal "${label}.state.token.type" regular unsupported-transition
+    check_equal "${label}.state.token.hash" "${STATE_TOKEN_HASH}" unsupported-transition
+    check_equal "${label}.state.token.mode" 640 unsupported-transition
+    check_equal "${label}.state.token.owner" 0:0 unsupported-transition
+}
+
 assert_all_state_preserved() {
     label="$1"
     assert_preserved "${label}" config /etc/syswarden/config/lifecycle-operator.conf "${STATE_CONFIG_HASH}" 640
     if [ "${SCENARIO}:${label}:${PACKAGE_FAMILY}" = upgrade-rollback:rollback:deb ] || \
        [ "${SCENARIO}:${label}:${PACKAGE_FAMILY}" = upgrade-rollback:rollback:rpm ]; then
-        assert_historical_rollback_token "${label}"
+        rollback_token_contract="$(
+            expected_upgrade_rollback_token_contract "${label}" 2>/dev/null || true
+        )"
+        case "${rollback_token_contract}" in
+            historical-webtui-credential)
+                assert_historical_rollback_token "${label}"
+                ;;
+            byte-exact)
+                assert_preserved "${label}" token /etc/syswarden/config/modules/99-user.toml "${STATE_TOKEN_HASH}" 640
+                ;;
+            *)
+                record_unsupported_rollback_token_contract "${label}"
+                ;;
+        esac
     else
         assert_preserved "${label}" token /etc/syswarden/config/modules/99-user.toml "${STATE_TOKEN_HASH}" 640
     fi
@@ -4136,6 +4426,21 @@ rsyslog_reactivation_mode() {
     return 1
 }
 
+attest_owned_cron_seed_state() {
+    syswarden_owned_cron_path="$1"
+    syswarden_owned_cron_evidence_label="$2"
+    case "${PACKAGE_FAMILY}:${SCENARIO}:${syswarden_owned_cron_evidence_label}" in
+        deb:remove:remove-before-purge)
+            [ ! -e "${syswarden_owned_cron_path}" ] && \
+                [ ! -L "${syswarden_owned_cron_path}" ] || return 1
+            ;;
+        *)
+            [ -f "${syswarden_owned_cron_path}" ] && \
+                [ ! -L "${syswarden_owned_cron_path}" ] || return 1
+            ;;
+    esac
+}
+
 seed_generated_runtime_artifacts() {
     rsyslog_contract="${1:-ambiguous-rsyslog}"
     evidence_label="${2:-}"
@@ -4151,15 +4456,35 @@ seed_generated_runtime_artifacts() {
                 [ -f "${path}" ] && [ ! -L "${path}" ] || return 1
                 [ "$(stat -c '%u:%g:%a:%h' "${path}" 2>/dev/null || true)" = 0:0:600:1 ] || return 1
             done
-            grep -F -x -q '*.* @127.0.0.1:5514' \
-                /etc/rsyslog.d/99-syswarden-siem.conf || return 1
-            for fragment in \
+            [ "$(grep -F -x -c '*.* @127.0.0.1:5514' \
+                /etc/rsyslog.d/99-syswarden-siem.conf || true)" = 1 ] || return 1
+            for forbidden_fragment in \
+                'imfile' \
+                '/var/log/syswarden/waf.json' \
+                'syswarden-waf-json' \
+                'Facility="local7"'; do
+                ! grep -F -q "${forbidden_fragment}" \
+                    /etc/rsyslog.d/99-syswarden-siem.conf || return 1
+            done
+            [ "$(grep -F -x -c 'module(load="imfile")' \
+                /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true)" = 1 ] || return 1
+            [ "$(grep -F -x -c 'input(type="imfile"' \
+                /etc/rsyslog.d/99-syswarden-waf-bridge.conf || true)" = 1 ] || return 1
+            waf_telemetry_input_block="$(
+                sed -n \
+                    '/^input(type="imfile"$/,/^[[:space:]]*Facility="local7")[[:space:]]*$/p' \
+                    /etc/rsyslog.d/99-syswarden-waf-bridge.conf
+            )" || return 1
+            [ -n "${waf_telemetry_input_block}" ] || return 1
+            for telemetry_fragment in \
                 'File="/var/log/syswarden/waf.json"' \
                 'Tag="syswarden-waf-json"' \
                 'Facility="local7"'; do
-                grep -F -q "${fragment}" \
-                    /etc/rsyslog.d/99-syswarden-siem.conf || return 1
+                [ "$(printf '%s\n' "${waf_telemetry_input_block}" | \
+                    grep -F -c "${telemetry_fragment}" || true)" = 1 ] || return 1
             done
+            ! printf '%s\n' "${waf_telemetry_input_block}" | \
+                grep -F -q 'ruleset="waf_bridge"' || return 1
             for fragment in \
                 'module(load="omuxsock")' \
                 '$OMUxSockSocket /var/run/syswarden.sock' \
@@ -4282,7 +4607,8 @@ seed_generated_runtime_artifacts() {
     fi
     LC_ALL=C crontab -l > /tmp/syswarden-root-cron-confirmed 2>/tmp/syswarden-root-cron-confirmed.error || return 1
     cmp -s /tmp/syswarden-root-cron-before /tmp/syswarden-root-cron-confirmed || return 1
-    [ -f /etc/cron.d/syswarden ] && [ ! -L /etc/cron.d/syswarden ] || return 1
+    attest_owned_cron_seed_state \
+        /etc/cron.d/syswarden "${evidence_label}" || return 1
     printf '%s' '# Managed by' > /etc/cron.d/.syswarden.pending-v1 || return 1
     chmod 0600 /etc/cron.d/.syswarden.pending-v1 || return 1
 }
@@ -4460,10 +4786,12 @@ probe_execution_architecture() {
 
 scenario_upgrade_rollback_initial() {
     prepare_expected_payloads || return
+    seed_and_attest_preinstall_networkless_config || return
     prepare_package_transition || return
     prepare_alma_v4028_rpm_rsyslog_fixture \
         /proc /etc/systemd/system 0:0 /usr/sbin/rsyslogd || return
     run_install_step install.previous "${PREVIOUS_PACKAGE}" || return
+    attest_preinstall_networkless_config_after_previous || return
     attest_alma_v4028_rpm_rsyslog_after_previous \
         /proc /etc/systemd/system 0:0 /usr/sbin/rsyslogd || return
     if [ "${FORWARD_ONLY_APK_TRANSITION}" = "1" ]; then
@@ -7437,11 +7765,33 @@ def run_platform(
         "scenarios": [],
     }
     image_tag = f"localhost/syswarden-lifecycle-{slug}-{uuid.uuid4().hex}"
+    historical_image_tag = f"{image_tag}-historical-upgrade"
     context = workspace / f"build-{slug}"
     context.mkdir(mode=0o700)
     containerfile = context / "Containerfile"
     containerfile.write_text(build_containerfile(spec), encoding="utf-8")
     containerfile.chmod(0o600)
+    historical_containerfile_text = (
+        build_historical_transition_containerfile(
+            spec,
+            pair.previous.version,
+            image_tag,
+        )
+        if "upgrade-rollback" in spec.scenarios
+        else None
+    )
+    historical_context: Path | None = None
+    historical_containerfile: Path | None = None
+    image_tags = [image_tag]
+    if historical_containerfile_text is not None:
+        historical_context = workspace / f"build-{slug}-historical-upgrade"
+        historical_context.mkdir(mode=0o700)
+        historical_containerfile = historical_context / "Containerfile"
+        historical_containerfile.write_text(
+            historical_containerfile_text, encoding="utf-8"
+        )
+        historical_containerfile.chmod(0o600)
+        image_tags.append(historical_image_tag)
     image_cleanup_failed = False
 
     try:
@@ -7474,6 +7824,27 @@ def run_platform(
             timeout=900,
         )
         require_success(build, f"bootstrap {spec.name} lifecycle image")
+        if historical_containerfile is not None and historical_context is not None:
+            historical_build = runner.run(
+                (
+                    podman,
+                    "build",
+                    "--pull=never",
+                    "--layers=false",
+                    "--platform",
+                    spec.podman_platform,
+                    "--tag",
+                    historical_image_tag,
+                    "--file",
+                    str(historical_containerfile),
+                    str(historical_context),
+                ),
+                timeout=900,
+            )
+            require_success(
+                historical_build,
+                f"bootstrap {spec.name} historical upgrade lifecycle image",
+            )
 
         script_path = workspace / "package-lifecycle.sh"
         for scenario in spec.scenarios:
@@ -7484,7 +7855,12 @@ def run_platform(
             )
             run_args = container_run_arguments(
                 podman,
-                image_tag,
+                (
+                    historical_image_tag
+                    if scenario == "upgrade-rollback"
+                    and historical_containerfile is not None
+                    else image_tag
+                ),
                 container_name,
                 candidate_root,
                 previous_root,
@@ -7735,22 +8111,37 @@ def run_platform(
         platform_result["error"] = str(exc)
         return platform_result
     finally:
-        image_cleanup = runner.run(
-            (podman, "image", "rm", "--force", image_tag), timeout=120
+        cleanup_results: list[tuple[int, int]] = []
+        for cleanup_tag in reversed(image_tags):
+            image_cleanup = runner.run(
+                (podman, "image", "rm", "--force", cleanup_tag), timeout=120
+            )
+            image_exists = runner.run(
+                (podman, "image", "exists", cleanup_tag), timeout=30
+            )
+            cleanup_results.append(
+                (image_cleanup.returncode, image_exists.returncode)
+            )
+        cleanup_remove_exit = next(
+            (remove for remove, _ in cleanup_results if remove != 0), 0
         )
-        image_exists = runner.run(
-            (podman, "image", "exists", image_tag), timeout=30
+        cleanup_exists_exit = next(
+            (exists for _, exists in cleanup_results if exists != 1), 1
+        )
+        cleanup_absent = all(
+            remove == 0 and exists == 1
+            for remove, exists in cleanup_results
         )
         platform_result["bootstrap_image_cleanup"] = {
-            "remove_exit_code": image_cleanup.returncode,
-            "exists_probe_exit_code": image_exists.returncode,
-            "absent_after_cleanup": image_exists.returncode == 1,
+            "remove_exit_code": cleanup_remove_exit,
+            "exists_probe_exit_code": cleanup_exists_exit,
+            "absent_after_cleanup": cleanup_absent,
         }
-        if image_cleanup.returncode != 0 or image_exists.returncode != 1:
+        if not cleanup_absent:
             image_cleanup_failed = True
             cleanup_error = (
                 "bootstrap image cleanup did not attest exact object absence: "
-                f"rm={image_cleanup.returncode}, exists={image_exists.returncode}"
+                f"rm={cleanup_remove_exit}, exists={cleanup_exists_exit}"
             )
             existing_error = platform_result.get("error")
             platform_result["error"] = (
@@ -9435,6 +9826,12 @@ def run_lab(
     candidate_root, previous_root, pairs = validate_inputs(
         args.packages_dir, args.previous_packages_dir, platforms
     )
+    package_tmp_dir = getattr(args, "package_tmp_dir", None)
+    if package_tmp_dir is None:
+        raise LifecycleLabError("--package-tmp-dir is required outside aggregate mode")
+    package_tmp_root = require_private_directory(
+        package_tmp_dir, "package lifecycle temporary directory"
+    )
     actual_host_architecture = host_architecture or platform.machine()
     normalized_host = normalize_host_architecture(actual_host_architecture)
     if architecture_shard is not None and normalized_host != architecture_shard:
@@ -9446,7 +9843,9 @@ def run_lab(
         active_runner, args.podman, actual_host_architecture
     )
 
-    with tempfile.TemporaryDirectory(prefix="syswarden-package-lifecycle-") as raw:
+    with tempfile.TemporaryDirectory(
+        prefix="syswarden-package-lifecycle-", dir=package_tmp_root
+    ) as raw:
         workspace = Path(raw)
         script_path = workspace / "package-lifecycle.sh"
         script_path.write_text(LIFECYCLE_SCRIPT, encoding="utf-8")
@@ -10230,6 +10629,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--podman", default="podman")
     parser.add_argument("--architecture-shard", choices=("amd64",))
     parser.add_argument("--aggregate-amd64-report", type=Path)
+    parser.add_argument("--package-tmp-dir", type=Path)
     parser.add_argument("--qualification-repository")
     parser.add_argument("--qualification-release-sha")
     parser.add_argument("--qualification-release-tag")

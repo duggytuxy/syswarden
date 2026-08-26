@@ -328,44 +328,162 @@ func TestSIEMDisableServiceFailureRestoresForwarderAndKeepsProvenance_SW2_PKG_00
 	}
 }
 
-func TestSIEMDisableRemovesExactPreRegistryV4028ForwarderFromRetainedFields_SW2_PKG_001(t *testing.T) {
+func TestSIEMDisableRemovesExactUntrackedCurrentAndV4032Forwarders_SW2_PKG_001(t *testing.T) {
+	current, err := renderSIEMRsyslogConfig("192.0.2.40", "514", "udp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := renderLegacyV4032SIEMRsyslogConfig("192.0.2.40", "514", "udp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alternatives := [][]byte{[]byte(current), []byte(legacy)}
+	for name, rendered := range map[string]string{
+		"current action-only": current,
+		"legacy v4.03.2":      legacy,
+	} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			uid, gid := testOwnedParentIdentity(t, parent)
+			directory := filepath.Join(parent, wafRsyslogDirectoryName)
+			if err := os.Mkdir(directory, 0750); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(directory, rsyslogSIEMConfigName)
+			writeOwnedArtifactFixture(t, path, []byte(rendered), 0600)
+			activationCalls := 0
+			err := disableSIEMRsyslogForwarderAtUsing(
+				parent,
+				uid,
+				gid,
+				alternatives,
+				defaultExactOwnedArtifactRemovalOptions(),
+				func(changed bool) error {
+					if !changed {
+						t.Fatal("untracked SIEM disable did not request changed-state activation")
+					}
+					activationCalls++
+					return nil
+				},
+				allowTestRsyslogMutation,
+			)
+			if err != nil || activationCalls != 1 {
+				t.Fatalf("untracked SIEM disable = calls %d, %v", activationCalls, err)
+			}
+			if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("untracked SIEM forwarder remains: %v", statErr)
+			}
+			registry, readErr := readRsyslogProvenanceRegistryAtUsing(parent, uid, gid)
+			if readErr != nil || registry.exists {
+				t.Fatalf("untracked SIEM disable invented provenance = %#v, %v", registry, readErr)
+			}
+		})
+	}
+}
+
+func TestSIEMDisablePreservesUntrackedNonGeneratedBytes_SW2_PKG_001(t *testing.T) {
 	parent := t.TempDir()
 	uid, gid := testOwnedParentIdentity(t, parent)
 	directory := filepath.Join(parent, wafRsyslogDirectoryName)
 	if err := os.Mkdir(directory, 0750); err != nil {
 		t.Fatal(err)
 	}
-	rendered, err := renderSIEMRsyslogConfig("192.0.2.40", "514", "udp", "")
+	current, err := renderSIEMRsyslogConfig("192.0.2.40", "514", "udp", "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacy, err := renderLegacyV4032SIEMRsyslogConfig("192.0.2.40", "514", "udp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := []byte("operator-owned SIEM bytes\n")
 	path := filepath.Join(directory, rsyslogSIEMConfigName)
-	writeOwnedArtifactFixture(t, path, []byte(rendered), 0600)
+	writeOwnedArtifactFixture(t, path, operator, 0600)
+	warnings := []string{}
+	options := defaultExactOwnedArtifactRemovalOptions()
+	options.warn = func(message string) { warnings = append(warnings, message) }
 	activationCalls := 0
 	err = disableSIEMRsyslogForwarderAtUsing(
 		parent,
 		uid,
 		gid,
-		[]byte(rendered),
-		defaultExactOwnedArtifactRemovalOptions(),
+		[][]byte{[]byte(current), []byte(legacy)},
+		options,
+		func(bool) error { activationCalls++; return nil },
+		allowTestRsyslogMutation,
+	)
+	if err == nil || !strings.Contains(err.Error(), "do not match the current or v4.03.2") {
+		t.Fatalf("untracked operator SIEM disable error = %v", err)
+	}
+	if activationCalls != 0 {
+		t.Fatalf("untracked operator SIEM triggered %d activations", activationCalls)
+	}
+	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, operator) { // #nosec G304 -- path is confined to the private untracked SIEM fixture root
+		t.Fatalf("untracked operator SIEM bytes = %q, %v", got, readErr)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("untracked operator SIEM warnings = %v", warnings)
+	}
+}
+
+func TestSIEMProducerMigratesV4032ConfigAndRecordsCurrentProvenanceBeforeWAF_SW2_PKG_001(t *testing.T) {
+	parent := t.TempDir()
+	uid, gid := testOwnedParentIdentity(t, parent)
+	directory := filepath.Join(parent, wafRsyslogDirectoryName)
+	if err := os.Mkdir(directory, 0750); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := renderLegacyV4032SIEMRsyslogConfig("192.0.2.40", "514", "udp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := renderSIEMRsyslogConfig("192.0.2.40", "514", "udp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, rsyslogSIEMConfigName)
+	writeOwnedArtifactFixture(t, path, []byte(legacy), 0600)
+	record := func(directory *os.File, name string, content []byte) error {
+		return recordRsyslogArtifactProvenanceInDirectoryUsing(
+			directory,
+			uid,
+			gid,
+			name,
+			content,
+			func(directory *os.File) error { return directory.Sync() },
+		)
+	}
+	activationCalls := 0
+	err = reconcileRsyslogArtifactWithProvenanceAtUsing(
+		parent,
+		uid,
+		gid,
+		rsyslogSIEMConfigName,
+		"SIEM forwarder",
+		[]byte(current),
 		func(changed bool) error {
 			if !changed {
-				t.Fatal("pre-registry SIEM disable did not request changed-state activation")
+				t.Fatal("legacy SIEM migration was not reported as changed")
 			}
 			activationCalls++
 			return nil
 		},
+		record,
 		allowTestRsyslogMutation,
 	)
 	if err != nil || activationCalls != 1 {
-		t.Fatalf("pre-registry SIEM disable = calls %d, %v", activationCalls, err)
+		t.Fatalf("migrate v4.03.2 SIEM config = calls %d, %v", activationCalls, err)
 	}
-	if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("pre-registry SIEM forwarder remains: %v", statErr)
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != current { // #nosec G304 -- path is confined to the private SIEM migration fixture root
+		t.Fatalf("migrated SIEM config = %q, %v", got, readErr)
 	}
 	registry, readErr := readRsyslogProvenanceRegistryAtUsing(parent, uid, gid)
-	if readErr != nil || registry.exists {
-		t.Fatalf("pre-registry SIEM disable invented provenance = %#v, %v", registry, readErr)
+	if readErr != nil || !registry.exists {
+		t.Fatalf("migrated SIEM provenance = %#v, %v", registry, readErr)
+	}
+	recorded, exists := registry.records[rsyslogSIEMConfigName]
+	if !exists || recorded.size != int64(len(current)) || recorded.digest != sha256.Sum256([]byte(current)) {
+		t.Fatalf("migrated SIEM provenance record = %#v", recorded)
 	}
 }
 

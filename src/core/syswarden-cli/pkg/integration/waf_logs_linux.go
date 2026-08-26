@@ -157,6 +157,15 @@ input(type="imfile" File="/var/log/syslog" Tag="syswarden-waf" ruleset="waf_brid
 input(type="imfile" File="/var/log/messages" Tag="syswarden-waf" ruleset="waf_bridge")
 `
 
+const rsyslogSIEMTelemetryInput = `
+# SYSWARDEN WAAP Native JSON Telemetry
+input(type="imfile"
+      File="/var/log/syswarden/waf.json"
+      Tag="syswarden-waf-json"
+      Severity="alert"
+      Facility="local7")
+`
+
 const rsyslogWAFRuleset = `
 template(name="SYSWARDENRaw" type="string" string="%msg%\n")
 
@@ -168,7 +177,7 @@ ruleset(name="waf_bridge") {
 }
 `
 
-func renderWAFRsyslogConfig(rawPatterns string) (string, int, error) {
+func renderWAFRsyslogConfig(rawPatterns string, includeSIEMTelemetry bool) (string, int, error) {
 	patterns, err := validatedRsyslogLogPatterns(rawPatterns)
 	if err != nil {
 		return "", 0, err
@@ -185,15 +194,25 @@ func renderWAFRsyslogConfig(rawPatterns string) (string, int, error) {
 		}
 		fmt.Fprintf(&rendered, "input(type=\"imfile\" File=%s Tag=\"syswarden-waf\" ruleset=\"waf_bridge\")\n", quoted)
 	}
+	if includeSIEMTelemetry {
+		rendered.WriteString(rsyslogSIEMTelemetryInput)
+	}
 	rendered.WriteString(rsyslogWAFRuleset)
 	return rendered.String(), len(patterns), nil
+}
+
+func renderLegacyV4032WAFRsyslogConfig(rawPatterns string) (string, int, error) {
+	return renderWAFRsyslogConfig(rawPatterns, false)
 }
 
 // SetupWAFLogForwarder configures Rsyslog to bridge local Web/Docker logs into the Go WAF Socket
 func SetupWAFLogForwarder() error {
 	fmt.Println("[INFO] Configuring WAF Multi-Tenant Log Bridge (Rsyslog -> UDS)...")
 
-	rsyslogConf, activePatterns, err := renderWAFRsyslogConfig(config.GlobalConfig.ModsecLogs)
+	rsyslogConf, activePatterns, err := renderWAFRsyslogConfig(
+		config.GlobalConfig.ModsecLogs,
+		config.GlobalConfig.SiemEnabled,
+	)
 	if err != nil {
 		return fmt.Errorf("render WAF bridge config: %w", err)
 	}
