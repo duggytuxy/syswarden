@@ -1083,6 +1083,56 @@ syswarden_webtui_process_matches() {
     return 0
 }
 
+# Retry only the indeterminate status. A short-lived packaged CLI process can
+# exit between the executable, start-time, and command-line attestations while
+# syswarden-core runs its startup audit. A vanished or replaced process is a
+# non-match; a process that remains indeterminate after the bounded retries is
+# still rejected fail-closed.
+syswarden_webtui_process_matches_bounded() {
+    syswarden_webtui_match_attempt=0
+    while [ "${syswarden_webtui_match_attempt}" -lt 3 ]; do
+        if syswarden_webtui_process_matches "$@"; then
+            return 0
+        else
+            syswarden_webtui_match_status=$?
+        fi
+        [ "${syswarden_webtui_match_status}" -eq 2 ] || \
+            return "${syswarden_webtui_match_status}"
+        syswarden_webtui_match_attempt=$((syswarden_webtui_match_attempt + 1))
+        [ "${syswarden_webtui_match_attempt}" -lt 3 ] || return 2
+        sleep 0.05 || return 2
+    done
+    return 2
+}
+
+# Apply the same bounded rule to an executable that was replaced during a
+# package transition. The deleted executable link must remain byte-for-byte
+# identical throughout every attempt; replacement or disappearance is a
+# non-match, while persistent unreadability remains fail-closed.
+syswarden_deleted_webtui_process_matches_bounded() {
+    syswarden_deleted_process_root="$1"
+    syswarden_deleted_expected_link="$2"
+    syswarden_deleted_match_attempt=0
+    while [ "${syswarden_deleted_match_attempt}" -lt 3 ]; do
+        syswarden_deleted_actual_link="$(
+            readlink "${syswarden_deleted_process_root}/exe" 2>/dev/null || true
+        )"
+        [ "${syswarden_deleted_actual_link}" = "${syswarden_deleted_expected_link}" ] || \
+            return 1
+        if syswarden_webtui_cmdline_matches "${syswarden_deleted_process_root}"; then
+            return 0
+        else
+            syswarden_deleted_match_status=$?
+        fi
+        [ "${syswarden_deleted_match_status}" -eq 2 ] || \
+            return "${syswarden_deleted_match_status}"
+        syswarden_deleted_match_attempt=$((syswarden_deleted_match_attempt + 1))
+        [ "${syswarden_deleted_match_attempt}" -lt 3 ] || return 2
+        sleep 0.05 || return 2
+    done
+    return 2
+}
+
 syswarden_find_exact_webtui_processes() {
     syswarden_retire_root="$1"
     syswarden_retire_proc_root="${2:-/proc}"
@@ -1090,14 +1140,20 @@ syswarden_find_exact_webtui_processes() {
     SYSWARDEN_MATCHED_WEBTUI_PROCESSES=
     for syswarden_retire_proc in "${syswarden_retire_proc_root}"/[0-9]*; do
         [ -d "${syswarden_retire_proc}" ] || continue
+        syswarden_retire_deleted_link="${syswarden_retire_executable} (deleted)"
         syswarden_retire_exe_link="$(readlink "${syswarden_retire_proc}/exe" 2>/dev/null || true)"
-        [ "${syswarden_retire_exe_link}" = "${syswarden_retire_executable} (deleted)" ] || continue
-        if syswarden_webtui_cmdline_matches "${syswarden_retire_proc}"; then
+        [ "${syswarden_retire_exe_link}" = "${syswarden_retire_deleted_link}" ] || continue
+        if syswarden_deleted_webtui_process_matches_bounded \
+            "${syswarden_retire_proc}" "${syswarden_retire_deleted_link}"; then
             printf '%s\n' 'A deleted legacy Web-TUI executable is still live and cannot be identity-attested' >&2
             return 2
         else
             syswarden_retire_cmdline_status=$?
-            [ "${syswarden_retire_cmdline_status}" -ne 2 ] || return 2
+            [ "${syswarden_retire_cmdline_status}" -ne 2 ] || {
+                printf 'Unable to safely inspect deleted SysWarden CLI process %s while proving Web-TUI retirement\n' \
+                    "${syswarden_retire_proc##*/}" >&2
+                return 2
+            }
         fi
     done
     if [ -L "${syswarden_retire_executable}" ]; then
@@ -1118,13 +1174,17 @@ syswarden_find_exact_webtui_processes() {
         case "${syswarden_retire_pid}" in
             ''|*[!0-9]*) continue ;;
         esac
-        if syswarden_webtui_process_matches \
+        if syswarden_webtui_process_matches_bounded \
             "${syswarden_retire_pid}" "${syswarden_retire_proc_root}" \
             "${syswarden_retire_executable}" "${syswarden_retire_expected_identity}"; then
             SYSWARDEN_MATCHED_WEBTUI_PROCESSES="${SYSWARDEN_MATCHED_WEBTUI_PROCESSES} ${syswarden_retire_pid}:${SYSWARDEN_MATCHED_WEBTUI_STARTTIME}"
         else
             syswarden_retire_match_status=$?
-            [ "${syswarden_retire_match_status}" -ne 2 ] || return 2
+            [ "${syswarden_retire_match_status}" -ne 2 ] || {
+                printf 'Unable to safely inspect SysWarden CLI process %s while proving Web-TUI retirement\n' \
+                    "${syswarden_retire_pid}" >&2
+                return 2
+            }
         fi
     done
     return 0
@@ -1149,7 +1209,7 @@ syswarden_retire_exact_webtui_processes() {
                 LC_ALL=C awk -F ':' 'NR == 1 { print $1; exit }'
         )" || return 1
         syswarden_retire_starttime="${syswarden_retire_process#*:}"
-        if syswarden_webtui_process_matches \
+        if syswarden_webtui_process_matches_bounded \
             "${syswarden_retire_pid}" "${syswarden_retire_proc_root}" \
             "${syswarden_retire_executable}" "${syswarden_retire_expected_identity}"; then
             [ "${SYSWARDEN_MATCHED_WEBTUI_STARTTIME}" = "${syswarden_retire_starttime}" ] || continue
@@ -1161,7 +1221,7 @@ syswarden_retire_exact_webtui_processes() {
         fi
         syswarden_retire_wait=0
         while [ "${syswarden_retire_wait}" -lt 20 ]; do
-            if syswarden_webtui_process_matches \
+            if syswarden_webtui_process_matches_bounded \
                 "${syswarden_retire_pid}" "${syswarden_retire_proc_root}" \
                 "${syswarden_retire_executable}" "${syswarden_retire_expected_identity}"; then
                 [ "${SYSWARDEN_MATCHED_WEBTUI_STARTTIME}" = "${syswarden_retire_starttime}" ] || break
@@ -1173,7 +1233,7 @@ syswarden_retire_exact_webtui_processes() {
             sleep 0.1
             syswarden_retire_wait=$((syswarden_retire_wait + 1))
         done
-        if syswarden_webtui_process_matches \
+        if syswarden_webtui_process_matches_bounded \
             "${syswarden_retire_pid}" "${syswarden_retire_proc_root}" \
             "${syswarden_retire_executable}" "${syswarden_retire_expected_identity}" && \
            [ "${SYSWARDEN_MATCHED_WEBTUI_STARTTIME}" = "${syswarden_retire_starttime}" ]; then

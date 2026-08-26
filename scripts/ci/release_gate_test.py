@@ -1534,8 +1534,8 @@ class ReleaseGateTests(unittest.TestCase):
             2,
         )
         for script in scripts:
-            self.assertEqual(script.count("--tag-phase"), 6)
-            self.assertEqual(script.count("./scripts/versioning.sh validate-commit"), 8)
+            self.assertEqual(script.count("--tag-phase"), 7)
+            self.assertEqual(script.count("./scripts/versioning.sh validate-commit"), 9)
             self.assertEqual(
                 script.count("# BEGIN exact second preserved-version fix diff contract"),
                 1,
@@ -1583,6 +1583,113 @@ class ReleaseGateTests(unittest.TestCase):
             blocks.append(start + remainder.split(end, 1)[0])
         self.assertEqual(blocks[0], blocks[1])
         return blocks
+
+    def v4033_maintenance_blocks(self, workflow: str) -> list[str]:
+        recovery_blocks = self.v4033_recovery_blocks(workflow)
+        start = (
+            "v4033_maintenance_anchor_sha="
+            "'01964815f926408e903587a9cc7f2bb2d0a1f8d8'\n"
+        )
+        end = (
+            '\n    elif [[ "${v4033_parent_sha}" == '
+            '"19e4add763e935a29219c20c86586b3557a441c9" ]]; then\n'
+        )
+        blocks = []
+        for recovery_block in recovery_blocks:
+            self.assertEqual(recovery_block.count(start), 1)
+            remainder = recovery_block.split(start, 1)[1]
+            self.assertIn(end, remainder)
+            blocks.append(start + remainder.split(end, 1)[0])
+        self.assertEqual(blocks[0], blocks[1])
+        return blocks
+
+    def assert_v4033_anchored_maintenance_contract(self, workflow: str) -> None:
+        blocks = self.v4033_maintenance_blocks(workflow)
+        required = (
+            "01964815f926408e903587a9cc7f2bb2d0a1f8d8",
+            'git merge-base --is-ancestor "${v4033_maintenance_anchor_sha}" HEAD',
+            'git log -1 --format=%s "${v4033_maintenance_anchor_sha}"',
+            "v4033_expected_maintenance_anchor_subject="
+            "'CI : avoid Go 1.26 fuzz deadline race (#121)'",
+            '"${v4033_maintenance_anchor_subject}" != \\',
+            '"${v4033_expected_maintenance_anchor_subject}" ]]; then',
+            'git rev-list --parents -n 1 "${v4033_maintenance_anchor_sha}"',
+            "${#v4033_maintenance_anchor_line[@]} != 2",
+            'git rev-list --parents "${v4033_maintenance_anchor_sha}..HEAD"',
+            "${#v4033_maintenance_fields[@]} != 2",
+            'git rev-list --count "${v4033_maintenance_anchor_sha}..HEAD"',
+            '[[ ! "${v4033_maintenance_count}" =~ ^[0-9]+$ ]]',
+            "(( v4033_maintenance_count < 1 ||",
+            "v4033_maintenance_count > 16 )); then",
+            'git diff --quiet "${v4033_maintenance_anchor_sha}" HEAD --',
+            "changelog.md",
+            "v4033_maintenance_release_base_sha="
+            "'b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449'",
+            "git log -1 --format=%B 689871803bdef1bc2a25d3eece0a7c35fdb5c447",
+            '--base-ref "${v4033_maintenance_release_base_sha}"',
+            "--tag-phase",
+            '--commit-message "${v4033_maintenance_versioning_message}"',
+        )
+        for block in blocks:
+            for contract in required:
+                self.assertEqual(block.count(contract), 1, contract)
+            self.assertEqual(block.count("./scripts/versioning.sh validate-commit"), 1)
+
+    def test_release_manager_v4033_maintenance_contract_rejects_mutations(
+        self,
+    ) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        mutations = {
+            "anchor": workflow.replace(
+                "01964815f926408e903587a9cc7f2bb2d0a1f8d8",
+                "11964815f926408e903587a9cc7f2bb2d0a1f8d8",
+            ),
+            "ancestry direction": workflow.replace(
+                'git merge-base --is-ancestor "${v4033_maintenance_anchor_sha}" HEAD',
+                'git merge-base --is-ancestor HEAD "${v4033_maintenance_anchor_sha}"',
+            ),
+            "anchor subject": workflow.replace(
+                "CI : avoid Go 1.26 fuzz deadline race (#121)",
+                "CI : avoid fuzz deadline race (#121)",
+            ),
+            "subject comparison": workflow.replace(
+                '"${v4033_maintenance_anchor_subject}" != \\',
+                '"${v4033_maintenance_anchor_subject}" == \\',
+            ),
+            "linear range": workflow.replace(
+                'git rev-list --parents "${v4033_maintenance_anchor_sha}..HEAD"',
+                'git rev-list --parents "${v4033_maintenance_anchor_sha}...HEAD"',
+            ),
+            "linearity comparison": workflow.replace(
+                "${#v4033_maintenance_fields[@]} != 2",
+                "${#v4033_maintenance_fields[@]} == 2",
+            ),
+            "zero-count chain": workflow.replace(
+                "(( v4033_maintenance_count < 1 ||",
+                "(( v4033_maintenance_count < 0 ||",
+            ),
+            "unbounded chain": workflow.replace(
+                "v4033_maintenance_count > 16 )); then",
+                "v4033_maintenance_count > 160 )); then",
+            ),
+            "changelog scope": workflow.replace(
+                "                    changelog.md; then",
+                "                    README.md; then",
+            ),
+            "release base": workflow.replace(
+                "b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449",
+                "c9fbfe2ee292a53e6e19dd3e27a071f78fe2f449",
+            ),
+            "versioning anchor": workflow.replace(
+                "689871803bdef1bc2a25d3eece0a7c35fdb5c447",
+                "789871803bdef1bc2a25d3eece0a7c35fdb5c447",
+            ),
+            "tag phase": workflow.replace("--tag-phase", "--no-tag-phase"),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name):
+                with self.assertRaises(AssertionError):
+                    self.assert_v4033_anchored_maintenance_contract(mutation)
 
     def assert_v4033_preserved_version_recovery_contract(
         self, workflow: str
@@ -1652,11 +1759,14 @@ class ReleaseGateTests(unittest.TestCase):
                 "--tag-phase",
             }
             for contract in required:
-                expected_count = (
-                    3
-                    if contract in shared_with_lifecycle_and_fuzz_repairs
-                    else 1
-                )
+                if contract == "--tag-phase":
+                    expected_count = 4
+                else:
+                    expected_count = (
+                        3
+                        if contract in shared_with_lifecycle_and_fuzz_repairs
+                        else 1
+                    )
                 self.assertEqual(block.count(contract), expected_count, contract)
             expected_followup_path_counts = {
                 ".github/workflows/release-manager.yml": (3, 6),
@@ -1682,14 +1792,15 @@ class ReleaseGateTests(unittest.TestCase):
                 "src/core/syswarden-core/webhook/discord.go",
             )
             for path in protected_release_paths:
-                expected_count = (
-                    3
-                    if path == "src/core/syswarden-cli/cmd/install.go"
-                    else 1
-                )
+                if path == "src/core/syswarden-cli/cmd/install.go":
+                    expected_count = 3
+                elif path == "changelog.md":
+                    expected_count = 2
+                else:
+                    expected_count = 1
                 self.assertEqual(block.count(path), expected_count, path)
-            self.assertEqual(block.count("./scripts/versioning.sh validate-commit"), 3)
-            self.assertEqual(block.count("--tag-phase"), 3)
+            self.assertEqual(block.count("./scripts/versioning.sh validate-commit"), 4)
+            self.assertEqual(block.count("--tag-phase"), 4)
 
     def v4033_followup_subject_gate_script(self) -> str:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
@@ -2364,6 +2475,7 @@ class ReleaseGateTests(unittest.TestCase):
         self,
     ) -> None:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        self.assert_v4033_anchored_maintenance_contract(workflow)
         self.assert_v4033_preserved_version_recovery_contract(workflow)
         self.assert_v4033_lifecycle_repair_contract(workflow)
         self.assert_v4033_fuzz_budget_contract(workflow)
