@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -429,6 +430,518 @@ func TestNftablesTransactionPreservesDynamicBansAndRemainingExpiry_SW_FW_001(t *
 	}
 }
 
+func TestCompareNFTDynamicSnapshotsAnchorsExpiryAtSuccessfulApply_SW_FW_001(t *testing.T) {
+	renderedAt := time.Unix(100, 0)
+	appliedAt := renderedAt.Add(4 * time.Second)
+	observedAt := appliedAt.Add(100 * time.Millisecond)
+	key := nftObjectKey{family: "inet", table: "syswarden", name: "banned_ips"}
+	expected := newNFTDynamicSnapshot(renderedAt)
+	expected.sets[key]["8.8.4.4-8.8.4.4"] = nftDynamicBan{
+		start:   netip.MustParseAddr("8.8.4.4"),
+		end:     netip.MustParseAddr("8.8.4.4"),
+		timeout: time.Hour,
+		expires: 30 * time.Minute,
+	}
+	observed := newNFTDynamicSnapshot(observedAt)
+	observed.sets[key]["8.8.4.4-8.8.4.4"] = nftDynamicBan{
+		start:   netip.MustParseAddr("8.8.4.4"),
+		end:     netip.MustParseAddr("8.8.4.4"),
+		timeout: time.Hour,
+		expires: 30 * time.Minute,
+	}
+
+	if err := compareNFTDynamicSnapshots(expected, observed, observedAt); err == nil {
+		t.Fatal("pre-validation expiry anchor unexpectedly accepted a four-second false drift")
+	}
+	expected.capturedAt = appliedAt
+	if err := compareNFTDynamicSnapshots(expected, observed, observedAt); err != nil {
+		t.Fatalf("successful-apply expiry anchor rejected exact restored expiry: %v", err)
+	}
+}
+
+func TestNftablesTransactionDropsAmbiguousLegacyOpenInterval_SW_FW_001(t *testing.T) {
+	stateDirectory := t.TempDir()
+	plan := minimalVerificationPlan(0)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+	runner := newFakeNFTRunner(plan,
+		nftTableTarget{family: "inet", name: "syswarden"},
+		nftTableTarget{family: "netdev", name: "syswarden_hw_drop"},
+	)
+	runner.rulesetDocuments = [][]byte{
+		nftVerificationJSONWithLegacyOpenSuffix(plan, time.Hour),
+		nftVerificationJSONWithoutDynamicBans(plan),
+	}
+	if _, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan); err != nil {
+		t.Fatalf("reload with ambiguous legacy interval: %v", err)
+	}
+	for _, discarded := range []string{
+		"5.6.7.9-45.87.249.144",
+		"45.87.249.145-255.255.255.255",
+		"203.0.113.9",
+	} {
+		if strings.Contains(runner.lastCandidate, discarded) {
+			t.Fatalf("candidate preserved quarantined IPv4 dynamic element %s:\n%s", discarded, runner.lastCandidate)
+		}
+	}
+	persistent, err := readRootedNFTFile(filepath.Join(stateDirectory, "syswarden.nft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, discarded := range [][]byte{[]byte("5.6.7.9"), []byte("45.87.249.145"), []byte("203.0.113.9")} {
+		if bytes.Contains(persistent, discarded) {
+			t.Fatalf("dynamic migration state leaked into persistent policy:\n%s", persistent)
+		}
+	}
+}
+
+func TestLegacyDynamicBanQuarantineFlushesOnlyAffectedVolatileSets_SW_FW_001(t *testing.T) {
+	plan := minimalVerificationPlan(0)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+	runner := newFakeNFTRunner(plan,
+		nftTableTarget{family: "inet", name: "syswarden"},
+		nftTableTarget{family: "netdev", name: "syswarden_hw_drop"},
+	)
+	withUnaffectedIPv6 := func(content []byte) []byte {
+		var document struct {
+			NFTables []map[string]any `json:"nftables"`
+		}
+		if err := json.Unmarshal(content, &document); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []nftObjectKey{
+			{family: "inet", table: "syswarden", name: "banned_ips6"},
+			{family: "netdev", table: "syswarden_hw_drop", name: "banned_ips6"},
+		} {
+			document.NFTables = append(document.NFTables, map[string]any{"element": map[string]any{
+				"family": key.family,
+				"table":  key.table,
+				"name":   key.name,
+				"elem":   []any{"2001:db8:ffff::9"},
+			}})
+		}
+		rendered, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rendered
+	}
+	runner.rulesetDocuments = [][]byte{
+		withUnaffectedIPv6(nftVerificationJSONWithLegacyOpenSuffix(plan, time.Hour)),
+		withUnaffectedIPv6(nftVerificationJSONWithoutDynamicBans(plan)),
+	}
+	repaired, err := quarantineLegacyDynamicBanIntervals(context.Background(), runner, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repaired {
+		t.Fatal("ambiguous legacy interval was not quarantined")
+	}
+	for _, statement := range []string{
+		"flush set inet syswarden banned_ips\n",
+		"flush set netdev syswarden_hw_drop banned_ips\n",
+	} {
+		if !strings.Contains(runner.lastCandidate, statement) {
+			t.Fatalf("quarantine transaction omitted %q:\n%s", statement, runner.lastCandidate)
+		}
+	}
+	for _, forbidden := range []string{"banned_ips6", "delete table", "add element"} {
+		if strings.Contains(runner.lastCandidate, forbidden) {
+			t.Fatalf("quarantine transaction contains forbidden %q:\n%s", forbidden, runner.lastCandidate)
+		}
+	}
+}
+
+func TestLegacyDynamicBanQuarantineLeavesCleanStateUntouched_SW_FW_001(t *testing.T) {
+	plan := minimalVerificationPlan(0)
+	runner := newFakeNFTRunner(plan, nftTableTarget{family: "inet", name: "syswarden"})
+	runner.rulesetDocuments = [][]byte{nftVerificationJSONWithoutDynamicBans(plan)}
+	repaired, err := quarantineLegacyDynamicBanIntervals(context.Background(), runner, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired || runner.mainApplyCalls != 0 || runner.lastCandidate != "" {
+		t.Fatalf("clean state changed: repaired=%t applies=%d candidate=%q", repaired, runner.mainApplyCalls, runner.lastCandidate)
+	}
+}
+
+func TestNftablesTransactionRejectsLegacyOpenIntervalStillObservedAfterApply_SW_FW_001(t *testing.T) {
+	stateDirectory := t.TempDir()
+	plan := minimalVerificationPlan(0)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+	runner := newFakeNFTRunner(plan,
+		nftTableTarget{family: "inet", name: "syswarden"},
+		nftTableTarget{family: "netdev", name: "syswarden_hw_drop"},
+	)
+	runner.rulesetDocuments = [][]byte{
+		nftVerificationJSONWithLegacyOpenSuffix(plan, time.Hour),
+		nftVerificationJSONWithLegacyOpenSuffix(plan, time.Hour-time.Second),
+	}
+	_, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan)
+	if err == nil || !strings.Contains(err.Error(), "still contains ambiguous maximum-ending interval state after apply") {
+		t.Fatalf("transaction error = %v, want ambiguous post-apply state rejection", err)
+	}
+	if runner.rollbackApplyCalls != 1 {
+		t.Fatalf("rollback calls = %d, want 1", runner.rollbackApplyCalls)
+	}
+	if strings.Contains(err.Error(), "5.6.7.9") || strings.Contains(err.Error(), "45.87.249.145") {
+		t.Fatalf("bounded verification error leaked a dynamic identity: %v", err)
+	}
+}
+
+func TestNftablesDynamicSnapshotWarnsForDroppedLegacyOpenInterval_SW_FW_001(t *testing.T) {
+	plan := minimalVerificationPlan(0)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+	document, err := decodeNFTJSON(nftVerificationJSONWithLegacyOpenSuffix(plan, time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := extractNFTDynamicSnapshot(document, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := nftObjectKey{family: "netdev", table: "syswarden_hw_drop", name: "banned_ips"}
+	inetKey := nftObjectKey{family: "inet", table: "syswarden", name: "banned_ips"}
+	if len(snapshot.discarded[key]) != 2 || len(snapshot.discarded[inetKey]) != 1 || len(snapshot.sets[key]) != 0 || len(snapshot.sets[inetKey]) != 0 {
+		t.Fatalf("quarantined netdev/inet and retained netdev/inet counts = %d/%d and %d/%d, want 2/1 and 0/0", len(snapshot.discarded[key]), len(snapshot.discarded[inetKey]), len(snapshot.sets[key]), len(snapshot.sets[inetKey]))
+	}
+	var planned bytes.Buffer
+	writeNFTDynamicSnapshotWarnings(&planned, snapshot, false)
+	for _, fragment := range []string{
+		"[WARN] Detected 3 dynamic IPv4 ban elements",
+		"unbounded legacy interval suffix",
+		"sets inet syswarden banned_ips and netdev syswarden_hw_drop banned_ips",
+		"excluded them from the candidate migration",
+		"live firewall state remains unchanged until this transaction commits successfully",
+		"persistent firewall lists were not changed",
+	} {
+		if !strings.Contains(planned.String(), fragment) {
+			t.Fatalf("planned warning %q does not contain %q", planned.String(), fragment)
+		}
+	}
+	if strings.Contains(planned.String(), "Quarantined") {
+		t.Fatalf("pre-commit warning claimed completed quarantine: %s", planned.String())
+	}
+	var committed bytes.Buffer
+	writeNFTDynamicSnapshotWarnings(&committed, snapshot, true)
+	for _, fragment := range []string{
+		"[WARN] Quarantined 3 dynamic IPv4 ban elements from the completed migration",
+		"unbounded legacy interval suffix",
+		"sets inet syswarden banned_ips and netdev syswarden_hw_drop banned_ips",
+		"persistent firewall lists were not changed",
+	} {
+		if !strings.Contains(committed.String(), fragment) {
+			t.Fatalf("committed warning %q does not contain %q", committed.String(), fragment)
+		}
+	}
+	for _, rawIdentity := range []string{"5.6.7.9", "45.87.249.145", "255.255.255.255", "203.0.113.9"} {
+		if strings.Contains(planned.String(), rawIdentity) || strings.Contains(committed.String(), rawIdentity) {
+			t.Fatalf("bounded warning leaked raw dynamic identity %q: planned=%s committed=%s", rawIdentity, planned.String(), committed.String())
+		}
+	}
+}
+
+func TestParseNFTAddressExpressionMarksFamilyMaximumAcrossEncodings_SW_FW_001(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		raw       string
+		ambiguous bool
+	}{
+		{name: "IPv4 exact maximum", raw: `"255.255.255.255"`},
+		{name: "IPv4 prefix suffix", raw: `{"prefix":{"addr":"128.0.0.0","len":1}}`, ambiguous: true},
+		{name: "IPv4 range suffix", raw: `{"range":["203.0.113.9","255.255.255.255"]}`, ambiguous: true},
+		{name: "IPv6 exact maximum", raw: `"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"`},
+		{name: "IPv6 prefix suffix", raw: `{"prefix":{"addr":"8000::","len":1}}`, ambiguous: true},
+		{name: "IPv6 range suffix", raw: `{"range":["2001:db8::1","ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"]}`, ambiguous: true},
+		{name: "bounded IPv4 prefix", raw: `{"prefix":{"addr":"198.51.100.0","len":24}}`},
+		{name: "bounded IPv6 prefix", raw: `{"prefix":{"addr":"2001:db8::","len":64}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, ambiguous, err := parseNFTAddressExpression(json.RawMessage(test.raw))
+			if err != nil {
+				t.Fatalf("parse address expression: %v", err)
+			}
+			if ambiguous != test.ambiguous {
+				t.Fatalf("ambiguous maximum-ending interval = %t, want %t", ambiguous, test.ambiguous)
+			}
+		})
+	}
+}
+
+func TestParseNFTDurationUsesLibnftablesSecondUnits_SW_FW_001(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{name: "one hour", raw: "3600", want: time.Hour},
+		{name: "remaining hour minus one second", raw: "3599", want: time.Hour - time.Second},
+		{name: "zero", raw: "0"},
+		{name: "null", raw: "null"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseNFTDuration(json.RawMessage(test.raw), "fixture")
+			if err != nil {
+				t.Fatalf("parse nftables duration: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("parsed duration = %s, want %s", got, test.want)
+			}
+		})
+	}
+	overflow := int64((time.Duration(1<<63-1) / time.Second) + 1)
+	for _, raw := range []string{"-1", "1.5", fmt.Sprintf("%d", overflow)} {
+		if _, err := parseNFTDuration(json.RawMessage(raw), "fixture"); err == nil {
+			t.Fatalf("invalid nftables duration %q was accepted", raw)
+		}
+	}
+}
+
+func TestNftablesTransactionOmitsImminentlyExpiringJSONElement_SW_FW_001(t *testing.T) {
+	stateDirectory := t.TempDir()
+	plan := minimalVerificationPlan(0)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+	runner := newFakeNFTRunner(plan,
+		nftTableTarget{family: "inet", name: "syswarden"},
+		nftTableTarget{family: "netdev", name: "syswarden_hw_drop"},
+	)
+	var initial struct {
+		NFTables []map[string]any `json:"nftables"`
+	}
+	if err := json.Unmarshal(nftVerificationJSONWithoutDynamicBans(plan), &initial); err != nil {
+		t.Fatal(err)
+	}
+	initial.NFTables = append(initial.NFTables, map[string]any{"element": map[string]any{
+		"family": "inet",
+		"table":  "syswarden",
+		"name":   "banned_ips",
+		"elem": []any{map[string]any{"elem": map[string]any{
+			"val":     "8.8.4.4",
+			"timeout": 2,
+			"expires": 0,
+		}}},
+	}})
+	initialJSON, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.rulesetDocuments = [][]byte{
+		initialJSON,
+		nftVerificationJSONWithoutDynamicBans(plan),
+	}
+	if _, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan); err != nil {
+		t.Fatalf("reload with final-subsecond timed element: %v", err)
+	}
+	if strings.Contains(runner.lastCandidate, "8.8.4.4") {
+		t.Fatalf("candidate reintroduced an imminently expiring element:\n%s", runner.lastCandidate)
+	}
+}
+
+func TestNftablesRollbackDeletesImminentlyExpiringJSONElement_SW_FW_001(t *testing.T) {
+	stateDirectory := t.TempDir()
+	plan := minimalVerificationPlan(0)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+	badPlan := minimalVerificationPlan(1)
+	badPlan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		badPlan.sets[key] = -1
+	}
+	runner := newFakeNFTRunner(plan,
+		nftTableTarget{family: "inet", name: "syswarden"},
+		nftTableTarget{family: "netdev", name: "syswarden_hw_drop"},
+	)
+	var initial struct {
+		NFTables []map[string]any `json:"nftables"`
+	}
+	if err := json.Unmarshal(nftVerificationJSONWithoutDynamicBans(plan), &initial); err != nil {
+		t.Fatal(err)
+	}
+	initial.NFTables = append(initial.NFTables, map[string]any{"element": map[string]any{
+		"family": "inet",
+		"table":  "syswarden",
+		"name":   "banned_ips",
+		"elem": []any{map[string]any{"elem": map[string]any{
+			"val":     "8.8.4.4",
+			"timeout": 2,
+			"expires": 0,
+		}}},
+	}})
+	initialJSON, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.rulesetDocuments = [][]byte{
+		initialJSON,
+		nftVerificationJSONWithoutDynamicBans(badPlan),
+		nftVerificationJSONWithoutDynamicBans(plan),
+	}
+	if _, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan); err == nil {
+		t.Fatal("verification mismatch unexpectedly succeeded")
+	}
+	if strings.Contains(runner.lastCandidate, "8.8.4.4") {
+		t.Fatalf("candidate reintroduced an imminently expiring element:\n%s", runner.lastCandidate)
+	}
+	wantFlush := "flush set inet syswarden banned_ips"
+	if !strings.Contains(runner.lastRollback, wantFlush) {
+		t.Fatalf("rollback did not flush the textual snapshot copy with %q:\n%s", wantFlush, runner.lastRollback)
+	}
+	if strings.Contains(runner.lastRollback, "add element inet syswarden banned_ips { 8.8.4.4") {
+		t.Fatalf("rollback re-added an imminently expiring element:\n%s", runner.lastRollback)
+	}
+}
+
+func TestParseNFTDynamicBanRejectsIncompleteTimeoutMetadata_SW_FW_001(t *testing.T) {
+	for _, raw := range []string{
+		`{"elem":{"val":"8.8.4.4","timeout":2}}`,
+		`{"elem":{"val":"8.8.4.4","expires":1}}`,
+	} {
+		if _, err := parseNFTDynamicBan(json.RawMessage(raw)); err == nil || !strings.Contains(err.Error(), "incomplete timeout and expiry metadata") {
+			t.Fatalf("incomplete metadata %s error = %v", raw, err)
+		}
+	}
+}
+
+func TestCompareNFTDynamicSnapshotsAcceptsFinalSecondZeroExpiry_SW_FW_001(t *testing.T) {
+	capturedAt := time.Unix(100, 0)
+	renderedAt := capturedAt.Add(100 * time.Millisecond)
+	key := nftObjectKey{family: "inet", table: "syswarden", name: "banned_ips"}
+	source := newNFTDynamicSnapshot(capturedAt)
+	source.sets[key]["8.8.4.4-8.8.4.4"] = nftDynamicBan{
+		start:   netip.MustParseAddr("8.8.4.4"),
+		end:     netip.MustParseAddr("8.8.4.4"),
+		timeout: time.Hour,
+		expires: 2 * time.Second,
+	}
+	_, expected, err := buildNFTDynamicBanRules(source, renderedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted := expected.sets[key]["8.8.4.4-8.8.4.4"]
+	if wanted.expires != time.Second {
+		t.Fatalf("rendered expiry = %s, want 1s", wanted.expires)
+	}
+	observed := newNFTDynamicSnapshot(renderedAt)
+	observedBan, err := parseNFTDynamicBan(json.RawMessage(`{"elem":{"val":"8.8.4.4","timeout":3600,"expires":0}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed.sets[key]["8.8.4.4-8.8.4.4"] = observedBan
+	if err := compareNFTDynamicSnapshots(expected, observed, renderedAt); err != nil {
+		t.Fatalf("final-second zero expiry was rejected: %v", err)
+	}
+
+	wanted.expires = 5 * time.Second
+	expected.sets[key]["8.8.4.4-8.8.4.4"] = wanted
+	if err := compareNFTDynamicSnapshots(expected, observed, renderedAt); err == nil || !strings.Contains(err.Error(), "outside the expected final-second tolerance") {
+		t.Fatalf("premature zero expiry error = %v", err)
+	}
+}
+
+func TestNftablesDynamicSnapshotPreservesBoundedClosedRange_SW_FW_001(t *testing.T) {
+	plan := minimalVerificationPlan(0)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+	document, err := decodeNFTJSON(nftVerificationJSONWithBoundedDynamicRange(plan, time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := extractNFTDynamicSnapshot(document, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := nftObjectKey{family: "netdev", table: "syswarden_hw_drop", name: "banned_ips"}
+	if len(snapshot.sets[key]) != 1 || len(snapshot.discarded[key]) != 0 {
+		t.Fatalf("bounded range retained/discarded = %d/%d, want 1/0", len(snapshot.sets[key]), len(snapshot.discarded[key]))
+	}
+	rules, _, err := buildNFTDynamicBanRules(snapshot, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rules, "198.51.100.10-198.51.100.20") {
+		t.Fatalf("bounded range was not rebuilt exactly:\n%s", rules)
+	}
+}
+
+func TestNftablesRollbackDeletesDroppedLegacyOpenInterval_SW_FW_001(t *testing.T) {
+	stateDirectory := t.TempDir()
+	plan := minimalVerificationPlan(1)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+	badPlan := minimalVerificationPlan(0)
+	badPlan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		badPlan.sets[key] = -1
+	}
+	runner := newFakeNFTRunner(plan,
+		nftTableTarget{family: "inet", name: "syswarden"},
+		nftTableTarget{family: "netdev", name: "syswarden_hw_drop"},
+	)
+	runner.rulesetDocuments = [][]byte{
+		nftVerificationJSONWithLegacyOpenSuffix(plan, time.Hour),
+		nftVerificationJSONWithoutDynamicBans(badPlan),
+	}
+	_, err := applyNftablesTransaction(
+		context.Background(),
+		runner,
+		stateDirectory,
+		minimalNftRules(),
+		[]nftSetPopulation{{name: "fixture_set", entries: []string{"192.0.2.1"}}},
+		plan,
+	)
+	if err == nil || !strings.Contains(err.Error(), "contains 0 elements, expected 1") {
+		t.Fatalf("transaction error = %v, want forced verification rollback", err)
+	}
+	for _, fragment := range []string{
+		"restored the previous persistent policy",
+		"quarantined dynamic IPv4 family state was intentionally omitted after rollback",
+	} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("rollback error %q does not describe the surviving state with %q", err, fragment)
+		}
+	}
+	if strings.Contains(err.Error(), "preserved the previous ruleset") {
+		t.Fatalf("rollback error falsely claims full previous-ruleset preservation: %v", err)
+	}
+	for _, flush := range []string{
+		"flush set inet syswarden banned_ips",
+		"flush set netdev syswarden_hw_drop banned_ips",
+	} {
+		if !strings.Contains(runner.lastRollback, flush) {
+			t.Fatalf("rollback did not flush quarantined restored set %q:\n%s", flush, runner.lastRollback)
+		}
+	}
+	for _, forbidden := range []string{
+		"add element netdev syswarden_hw_drop banned_ips { 5.6.7.9-45.87.249.144",
+		"add element netdev syswarden_hw_drop banned_ips { 45.87.249.145-255.255.255.255",
+		"add element inet syswarden banned_ips { 203.0.113.9",
+	} {
+		if strings.Contains(runner.lastRollback, forbidden) {
+			t.Fatalf("rollback re-added quarantined legacy state %q:\n%s", forbidden, runner.lastRollback)
+		}
+	}
+}
+
 func TestNftablesRollbackPreservesDynamicBansWithoutExtendingExpiry_SW_FW_001(t *testing.T) {
 	stateDirectory := t.TempDir()
 	plan := minimalVerificationPlan(1)
@@ -466,8 +979,11 @@ func TestNftablesRollbackPreservesDynamicBansWithoutExtendingExpiry_SW_FW_001(t 
 	if strings.Contains(runner.lastRollback, "expires 3600s") {
 		t.Fatalf("rollback extended a captured one-hour ban:\n%s", runner.lastRollback)
 	}
-	if got := strings.Count(runner.lastRollback, "delete element "); got != 8 {
-		t.Fatalf("rollback dynamic delete statements = %d, want 8:\n%s", got, runner.lastRollback)
+	if got := strings.Count(runner.lastRollback, "flush set "); got != 4 {
+		t.Fatalf("rollback dynamic flush statements = %d, want 4:\n%s", got, runner.lastRollback)
+	}
+	if strings.Contains(runner.lastRollback, "delete element ") {
+		t.Fatalf("rollback used racy per-element deletion:\n%s", runner.lastRollback)
 	}
 	if got := strings.Count(runner.lastRollback, "add element "); got != 8 {
 		t.Fatalf("rollback dynamic add statements = %d, want 8:\n%s", got, runner.lastRollback)
@@ -967,12 +1483,93 @@ func nftVerificationJSONWithDynamicBans(plan nftVerificationPlan, expires time.D
 				permanentValue,
 				map[string]any{"elem": map[string]any{
 					"val":     timedValue,
-					"timeout": int64(time.Hour / time.Millisecond),
-					"expires": int64(expires / time.Millisecond),
+					"timeout": int64(time.Hour / time.Second),
+					"expires": int64(expires / time.Second),
 				}},
 			},
 		}})
 	}
+	content, _ := json.Marshal(document)
+	return content
+}
+
+func nftVerificationJSONWithoutDynamicBans(plan nftVerificationPlan) []byte {
+	var document struct {
+		NFTables []map[string]any `json:"nftables"`
+	}
+	if err := json.Unmarshal(nftVerificationJSON(plan, 0), &document); err != nil {
+		panic(err)
+	}
+	for _, entry := range document.NFTables {
+		set, ok := entry["set"].(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := set["name"].(string)
+		if name == "banned_ips" || name == "banned_ips6" {
+			set["elem"] = []any{}
+		}
+	}
+	content, _ := json.Marshal(document)
+	return content
+}
+
+func nftVerificationJSONWithLegacyOpenSuffix(plan nftVerificationPlan, expires time.Duration) []byte {
+	var document struct {
+		NFTables []map[string]any `json:"nftables"`
+	}
+	if err := json.Unmarshal(nftVerificationJSONWithoutDynamicBans(plan), &document); err != nil {
+		panic(err)
+	}
+	document.NFTables = append(document.NFTables, map[string]any{"element": map[string]any{
+		"family": "inet",
+		"table":  "syswarden",
+		"name":   "banned_ips",
+		"elem": []any{
+			map[string]any{"elem": map[string]any{
+				"val":     "203.0.113.9",
+				"timeout": int64(time.Hour / time.Second),
+				"expires": int64(expires / time.Second),
+			}},
+		},
+	}}, map[string]any{"element": map[string]any{
+		"family": "netdev",
+		"table":  "syswarden_hw_drop",
+		"name":   "banned_ips",
+		"elem": []any{
+			map[string]any{"elem": map[string]any{
+				"val":     map[string]any{"range": []any{"5.6.7.9", "45.87.249.144"}},
+				"timeout": int64(time.Hour / time.Second),
+				"expires": int64(expires / time.Second),
+			}},
+			map[string]any{"elem": map[string]any{
+				"val":     map[string]any{"range": []any{"45.87.249.145", "255.255.255.255"}},
+				"timeout": int64(time.Hour / time.Second),
+				"expires": int64(expires / time.Second),
+			}},
+		},
+	}})
+	content, _ := json.Marshal(document)
+	return content
+}
+
+func nftVerificationJSONWithBoundedDynamicRange(plan nftVerificationPlan, expires time.Duration) []byte {
+	var document struct {
+		NFTables []map[string]any `json:"nftables"`
+	}
+	if err := json.Unmarshal(nftVerificationJSONWithoutDynamicBans(plan), &document); err != nil {
+		panic(err)
+	}
+	document.NFTables = append(document.NFTables, map[string]any{"element": map[string]any{
+		"family": "netdev",
+		"table":  "syswarden_hw_drop",
+		"name":   "banned_ips",
+		"elem": []any{map[string]any{"elem": map[string]any{
+			"val":     map[string]any{"range": []any{"198.51.100.10", "198.51.100.20"}},
+			"timeout": int64(time.Hour / time.Second),
+			"expires": int64(expires / time.Second),
+		}}},
+	}})
 	content, _ := json.Marshal(document)
 	return content
 }

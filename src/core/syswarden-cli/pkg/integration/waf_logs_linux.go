@@ -44,8 +44,11 @@ const (
 	wafRsyslogParentDirectory = "/etc"
 	wafRsyslogDirectoryName   = "rsyslog.d"
 	wafRsyslogConfigName      = "99-syswarden-waf-bridge.conf"
-	wafRsyslogConfigReadLimit = 64 * 1024
-	wafRsyslogStagingAttempts = 128
+	// Keep publication and exact-removal readers on one explicit bound. A
+	// moderately large glob can legitimately expand beyond 64 KiB, while a
+	// finite cap still prevents privileged reads from consuming unbounded memory.
+	rsyslogArtifactContentLimit = 1024 * 1024
+	wafRsyslogStagingAttempts   = 128
 )
 
 type managedServiceRunner func(string, ...string) ([]byte, error)
@@ -211,45 +214,54 @@ func SetupWAFLogForwarder() error {
 		fmt.Println("[WARN] SELinux runtime state is indeterminate; applying the Rsyslog policy defensively.")
 	}
 
-	// SELinux Hardening (RHEL/Alma) - Compile and install policy to allow rsyslog -> UDS communication.
+	reconcileBridge := func() error {
+		return reconcileRsyslogArtifactWithProvenanceAtUsing(
+			wafRsyslogParentDirectory,
+			0,
+			0,
+			wafRsyslogConfigName,
+			"WAF bridge",
+			[]byte(rsyslogConf),
+			reconcileWAFRsyslogService,
+			recordRsyslogArtifactProvenance,
+			requireRsyslogMutationWithoutRemovalBarrier,
+		)
+	}
+
+	// SELinux hardening (RHEL/Alma): keep the private package and any exact
+	// pre-existing policy available until the rsyslog publication transaction
+	// succeeds, so a later validation or activation failure can be rolled back.
 	if configureSELinuxPolicy {
 		fmt.Println("[INFO] Compiling and injecting SELinux policy for Rsyslog UDS bridge...")
 		if err := withPrivateSELinuxPolicyWorkspace("", func(workspace string) error {
-			if err := runSELinuxPolicyCommand(
-				workspace,
-				"compile SELinux policy",
-				trustedCheckmodulePath,
-				"-M", "-m", "-o", "syswarden_rsyslog.mod", "syswarden_rsyslog.te",
-			); err != nil {
+			transaction, err := installRsyslogSELinuxPolicyWithProvenance(workspace)
+			if err != nil {
 				return err
 			}
-			if err := runSELinuxPolicyCommand(
-				workspace,
-				"package SELinux policy",
-				trustedSemodulePackagePath,
-				"-o", "syswarden_rsyslog.pp", "-m", "syswarden_rsyslog.mod",
-			); err != nil {
-				return err
+			bridgeBaseline, err := captureRsyslogBridgeRollbackBaselineAt(
+				wafRsyslogParentDirectory,
+				0,
+				0,
+				[]byte(rsyslogConf),
+			)
+			if err != nil {
+				return errors.Join(err, transaction.Rollback())
 			}
-			if err := runSELinuxPolicyCommand(
-				workspace,
-				"install SELinux policy",
-				trustedSemodulePath,
-				"-i", "syswarden_rsyslog.pp",
-			); err != nil {
-				return err
+			if err := reconcileBridge(); err != nil {
+				return errors.Join(
+					err,
+					bridgeBaseline.Rollback(reconcileWAFRsyslogService),
+					transaction.Rollback(),
+				)
+			}
+			if err := transaction.Commit(); err != nil {
+				return errors.Join(err, bridgeBaseline.Rollback(reconcileWAFRsyslogService))
 			}
 			return nil
 		}); err != nil {
 			return fmt.Errorf("install Rsyslog SELinux policy before writing WAF bridge config: %w", err)
 		}
-	}
-
-	configChanged, publicationErr := reconcileWAFRsyslogConfig([]byte(rsyslogConf))
-	if publicationErr == nil && !configChanged {
-		fmt.Println("[INFO] WAF bridge rsyslog configuration is unchanged; runtime activation will be re-attested.")
-	}
-	if err := finishWAFRsyslogSetup(configChanged, publicationErr, reconcileWAFRsyslogService); err != nil {
+	} else if err := reconcileBridge(); err != nil {
 		return err
 	}
 
@@ -257,10 +269,31 @@ func SetupWAFLogForwarder() error {
 	return nil
 }
 
+func requireRsyslogMutationWithoutRemovalBarrier() error {
+	return requireRsyslogMutationWithoutRemovalBarrierUsing(system.InspectRemovalTombstone)
+}
+
+func requireRsyslogMutationWithoutRemovalBarrierUsing(
+	inspect func() (bool, error),
+) error {
+	if inspect == nil {
+		return fmt.Errorf("removal barrier inspector is unavailable")
+	}
+	present, err := inspect()
+	if err != nil {
+		return fmt.Errorf("inspect durable removal barrier before rsyslog mutation: %w", err)
+	}
+	if present {
+		return fmt.Errorf("durable removal barrier is present")
+	}
+	return nil
+}
+
 type wafRsyslogConfigState struct {
 	exists bool
 	dev    uint64
 	ino    uint64
+	nlink  uint64
 	size   int64
 	mode   uint32
 	uid    uint32
@@ -285,17 +318,26 @@ func finishWAFRsyslogSetup(
 	publicationErr error,
 	activate func(bool) error,
 ) error {
+	return finishRsyslogArtifactSetup("WAF bridge", configChanged, publicationErr, activate)
+}
+
+func finishRsyslogArtifactSetup(
+	label string,
+	configChanged bool,
+	publicationErr error,
+	activate func(bool) error,
+) error {
 	var durabilityErr *wafRsyslogPublicationDurabilityError
 	if publicationErr != nil && !errors.As(publicationErr, &durabilityErr) {
-		return fmt.Errorf("publish WAF bridge rsyslog configuration: %w", publicationErr)
+		return fmt.Errorf("publish %s rsyslog configuration: %w", label, publicationErr)
 	}
 
 	activationErr := activate(configChanged)
 	if activationErr != nil {
-		activationErr = fmt.Errorf("activate WAF bridge rsyslog configuration: %w", activationErr)
+		activationErr = fmt.Errorf("activate %s rsyslog configuration: %w", label, activationErr)
 	}
 	if publicationErr != nil {
-		publicationErr = fmt.Errorf("publish WAF bridge rsyslog configuration: %w", publicationErr)
+		publicationErr = fmt.Errorf("publish %s rsyslog configuration: %w", label, publicationErr)
 	}
 	return errors.Join(publicationErr, activationErr)
 }
@@ -407,6 +449,7 @@ func openWAFRsyslogDirectoryAt(
 func sameWAFRsyslogStat(left, right *unix.Stat_t) bool {
 	return uint64(left.Dev) == uint64(right.Dev) &&
 		uint64(left.Ino) == uint64(right.Ino) &&
+		left.Nlink == right.Nlink &&
 		left.Size == right.Size &&
 		left.Mode == right.Mode &&
 		left.Uid == right.Uid &&
@@ -415,26 +458,35 @@ func sameWAFRsyslogStat(left, right *unix.Stat_t) bool {
 		left.Ctim == right.Ctim
 }
 
-func inspectWAFRsyslogConfig(
+func inspectRsyslogArtifact(
 	directory *os.File,
+	name string,
 	expectedUID, expectedGID uint32,
 ) (wafRsyslogConfigState, []byte, error) {
-	fd, err := unix.Openat(
-		int(directory.Fd()),
-		wafRsyslogConfigName,
-		unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC,
-		0,
-	)
+	if !validOwnedArtifactName(name) {
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("invalid rsyslog artifact name %q", name)
+	}
+	var pathBefore unix.Stat_t
+	err := unix.Fstatat(int(directory.Fd()), name, &pathBefore, unix.AT_SYMLINK_NOFOLLOW)
 	if errors.Is(err, unix.ENOENT) {
 		return wafRsyslogConfigState{}, nil, nil
 	}
+	if err != nil {
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("inspect anchored rsyslog configuration: %w", err)
+	}
+	fd, err := unix.Openat(
+		int(directory.Fd()),
+		name,
+		unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		0,
+	)
 	if err != nil {
 		return wafRsyslogConfigState{}, nil, fmt.Errorf(
 			"open anchored rsyslog configuration without following symlinks: %w",
 			err,
 		)
 	}
-	file := os.NewFile(uintptr(fd), wafRsyslogConfigName)
+	file := os.NewFile(uintptr(fd), name)
 	if file == nil {
 		_ = unix.Close(fd)
 		return wafRsyslogConfigState{}, nil, fmt.Errorf("wrap anchored rsyslog configuration descriptor")
@@ -445,9 +497,20 @@ func inspectWAFRsyslogConfig(
 		_ = file.Close()
 		return wafRsyslogConfigState{}, nil, fmt.Errorf("inspect rsyslog configuration: %w", err)
 	}
+	if !sameWAFRsyslogStat(&pathBefore, &before) {
+		_ = file.Close()
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("rsyslog configuration changed while opening")
+	}
 	if before.Mode&unix.S_IFMT != unix.S_IFREG {
 		_ = file.Close()
 		return wafRsyslogConfigState{}, nil, fmt.Errorf("rsyslog configuration must be a regular file")
+	}
+	if before.Nlink != 1 {
+		_ = file.Close()
+		return wafRsyslogConfigState{}, nil, fmt.Errorf(
+			"rsyslog configuration link count must be 1, got %d",
+			before.Nlink,
+		)
 	}
 	if before.Uid != expectedUID || before.Gid != expectedGID {
 		_ = file.Close()
@@ -463,26 +526,27 @@ func inspectWAFRsyslogConfig(
 			before.Mode&07777,
 		)
 	}
-	if before.Size < 0 || before.Size > wafRsyslogConfigReadLimit {
+	if before.Size < 0 || before.Size > rsyslogArtifactContentLimit {
 		_ = file.Close()
 		return wafRsyslogConfigState{}, nil, fmt.Errorf(
 			"rsyslog configuration size %d exceeds limit %d",
 			before.Size,
-			wafRsyslogConfigReadLimit,
+			rsyslogArtifactContentLimit,
 		)
 	}
 
-	content, readErr := io.ReadAll(io.LimitReader(file, wafRsyslogConfigReadLimit+1))
-	var after unix.Stat_t
+	content, readErr := io.ReadAll(io.LimitReader(file, rsyslogArtifactContentLimit+1))
+	var after, pathAfter unix.Stat_t
 	statErr := unix.Fstat(fd, &after)
 	closeErr := file.Close()
+	pathErr := unix.Fstatat(int(directory.Fd()), name, &pathAfter, unix.AT_SYMLINK_NOFOLLOW)
 	if readErr != nil {
 		return wafRsyslogConfigState{}, nil, fmt.Errorf("read bounded rsyslog configuration: %w", readErr)
 	}
-	if len(content) > wafRsyslogConfigReadLimit {
+	if len(content) > rsyslogArtifactContentLimit {
 		return wafRsyslogConfigState{}, nil, fmt.Errorf(
 			"rsyslog configuration grew beyond limit %d while reading",
-			wafRsyslogConfigReadLimit,
+			rsyslogArtifactContentLimit,
 		)
 	}
 	if statErr != nil {
@@ -491,7 +555,11 @@ func inspectWAFRsyslogConfig(
 	if closeErr != nil {
 		return wafRsyslogConfigState{}, nil, fmt.Errorf("close rsyslog configuration: %w", closeErr)
 	}
-	if !sameWAFRsyslogStat(&before, &after) || int64(len(content)) != before.Size {
+	if pathErr != nil {
+		return wafRsyslogConfigState{}, nil, fmt.Errorf("reinspect rsyslog configuration path: %w", pathErr)
+	}
+	if !sameWAFRsyslogStat(&before, &after) || !sameWAFRsyslogStat(&after, &pathAfter) ||
+		int64(len(content)) != before.Size {
 		return wafRsyslogConfigState{}, nil, fmt.Errorf("rsyslog configuration changed while reading")
 	}
 
@@ -499,6 +567,7 @@ func inspectWAFRsyslogConfig(
 		exists: true,
 		dev:    uint64(after.Dev),
 		ino:    uint64(after.Ino),
+		nlink:  uint64(after.Nlink),
 		size:   after.Size,
 		mode:   after.Mode,
 		uid:    after.Uid,
@@ -509,10 +578,23 @@ func inspectWAFRsyslogConfig(
 	}, content, nil
 }
 
+func inspectWAFRsyslogConfig(
+	directory *os.File,
+	expectedUID, expectedGID uint32,
+) (wafRsyslogConfigState, []byte, error) {
+	return inspectRsyslogArtifact(
+		directory,
+		wafRsyslogConfigName,
+		expectedUID,
+		expectedGID,
+	)
+}
+
 func sameWAFRsyslogConfigState(expected, actual wafRsyslogConfigState) bool {
 	return expected.exists == actual.exists &&
 		expected.dev == actual.dev &&
 		expected.ino == actual.ino &&
+		expected.nlink == actual.nlink &&
 		expected.size == actual.size &&
 		expected.mode == actual.mode &&
 		expected.uid == actual.uid &&
@@ -522,16 +604,20 @@ func sameWAFRsyslogConfigState(expected, actual wafRsyslogConfigState) bool {
 		expected.digest == actual.digest
 }
 
-func createWAFRsyslogStagingFile(
+func createRsyslogStagingFile(
 	directory *os.File,
+	targetName string,
 	expectedUID, expectedGID uint32,
 ) (*os.File, string, error) {
+	if !validOwnedArtifactName(targetName) {
+		return nil, "", fmt.Errorf("invalid rsyslog artifact name %q", targetName)
+	}
 	for range wafRsyslogStagingAttempts {
 		var random [16]byte
 		if _, err := cryptorand.Read(random[:]); err != nil {
 			return nil, "", fmt.Errorf("generate rsyslog staging name: %w", err)
 		}
-		name := "." + wafRsyslogConfigName + ".syswarden-" + hex.EncodeToString(random[:]) + ".tmp"
+		name := "." + targetName + ".syswarden-" + hex.EncodeToString(random[:]) + ".tmp"
 		fd, err := unix.Openat(
 			int(directory.Fd()),
 			name,
@@ -573,16 +659,6 @@ func createWAFRsyslogStagingFile(
 	return nil, "", fmt.Errorf("create rsyslog staging file: too many name collisions")
 }
 
-func reconcileWAFRsyslogConfig(desired []byte) (bool, error) {
-	return reconcileWAFRsyslogConfigAt(
-		wafRsyslogParentDirectory,
-		0,
-		0,
-		desired,
-		nil,
-	)
-}
-
 func reconcileWAFRsyslogConfigAt(
 	parentPath string,
 	expectedUID, expectedGID uint32,
@@ -606,11 +682,32 @@ func reconcileWAFRsyslogConfigAtUsing(
 	beforeRename func() error,
 	syncDirectory func(*os.File) error,
 ) (bool, error) {
-	if len(desired) > wafRsyslogConfigReadLimit {
+	return reconcileRsyslogArtifactAtUsing(
+		parentPath,
+		wafRsyslogConfigName,
+		expectedUID,
+		expectedGID,
+		desired,
+		beforeRename,
+		syncDirectory,
+	)
+}
+
+func reconcileRsyslogArtifactAtUsing(
+	parentPath, name string,
+	expectedUID, expectedGID uint32,
+	desired []byte,
+	beforeRename func() error,
+	syncDirectory func(*os.File) error,
+) (bool, error) {
+	if !validOwnedArtifactName(name) {
+		return false, fmt.Errorf("invalid rsyslog artifact name %q", name)
+	}
+	if len(desired) > rsyslogArtifactContentLimit {
 		return false, fmt.Errorf(
 			"desired rsyslog configuration size %d exceeds limit %d",
 			len(desired),
-			wafRsyslogConfigReadLimit,
+			rsyslogArtifactContentLimit,
 		)
 	}
 	directory, err := openWAFRsyslogDirectoryAt(parentPath, expectedUID, expectedGID)
@@ -619,7 +716,29 @@ func reconcileWAFRsyslogConfigAtUsing(
 	}
 	defer directory.Close()
 
-	initial, existing, err := inspectWAFRsyslogConfig(directory, expectedUID, expectedGID)
+	return reconcileRsyslogArtifactInDirectoryUsing(
+		directory,
+		name,
+		expectedUID,
+		expectedGID,
+		desired,
+		beforeRename,
+		syncDirectory,
+	)
+}
+
+func reconcileRsyslogArtifactInDirectoryUsing(
+	directory *os.File,
+	name string,
+	expectedUID, expectedGID uint32,
+	desired []byte,
+	beforeRename func() error,
+	syncDirectory func(*os.File) error,
+) (bool, error) {
+	if !validOwnedArtifactName(name) || len(desired) > rsyslogArtifactContentLimit || syncDirectory == nil {
+		return false, fmt.Errorf("invalid rsyslog artifact publication input")
+	}
+	initial, existing, err := inspectRsyslogArtifact(directory, name, expectedUID, expectedGID)
 	if err != nil {
 		return false, err
 	}
@@ -634,7 +753,7 @@ func reconcileWAFRsyslogConfigAtUsing(
 		return false, nil
 	}
 
-	staging, stagingName, err := createWAFRsyslogStagingFile(directory, expectedUID, expectedGID)
+	staging, stagingName, err := createRsyslogStagingFile(directory, name, expectedUID, expectedGID)
 	if err != nil {
 		return true, err
 	}
@@ -659,13 +778,19 @@ func reconcileWAFRsyslogConfigAtUsing(
 		return true, fmt.Errorf("close rsyslog staging file: %w", err)
 	}
 	staging = nil
+	stagedState, stagedContent, err := inspectRsyslogArtifact(
+		directory, stagingName, expectedUID, expectedGID,
+	)
+	if err != nil || !stagedState.exists || !bytes.Equal(stagedContent, desired) {
+		return true, errors.Join(fmt.Errorf("rsyslog staging file failed exact re-attestation"), err)
+	}
 
 	if beforeRename != nil {
 		if err := beforeRename(); err != nil {
 			return true, err
 		}
 	}
-	current, _, err := inspectWAFRsyslogConfig(directory, expectedUID, expectedGID)
+	current, _, err := inspectRsyslogArtifact(directory, name, expectedUID, expectedGID)
 	if err != nil {
 		return true, fmt.Errorf("reinspect rsyslog configuration before publication: %w", err)
 	}
@@ -676,7 +801,7 @@ func reconcileWAFRsyslogConfigAtUsing(
 		int(directory.Fd()),
 		stagingName,
 		int(directory.Fd()),
-		wafRsyslogConfigName,
+		name,
 	); err != nil {
 		return true, fmt.Errorf("atomically publish rsyslog configuration: %w", err)
 	}
@@ -907,31 +1032,6 @@ func shouldConfigureRsyslogSELinuxPolicy(
 		return false, errors.Join(causes...)
 	}
 	return true, nil
-}
-
-func runSELinuxPolicyCommand(
-	directory string,
-	operation string,
-	name string,
-	args ...string,
-) error {
-	output, err := runManagedServiceCommandUsing(
-		context.Background(),
-		managedServiceCommandTimeout,
-		validateTrustedExecutable,
-		func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return executeManagedServiceCommandInDirectory(ctx, directory, name, args...)
-		},
-		name,
-		args...,
-	)
-	if err == nil {
-		return nil
-	}
-	return newManagedServiceDiagnosticError(
-		fmt.Sprintf("%s: %s", operation, managedServiceEvidence(err, output)),
-		err,
-	)
 }
 
 func restartManagedServiceUsing(

@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"syswarden-core/utils"
@@ -38,6 +37,58 @@ type DiscordPayload struct {
 	Embeds  []DiscordEmbed `json:"embeds"`
 }
 
+type slackPayload struct {
+	Text string `json:"text"`
+}
+
+type teamsPayload struct {
+	Type        string            `json:"type"`
+	Attachments []teamsAttachment `json:"attachments"`
+}
+
+type teamsAttachment struct {
+	ContentType string            `json:"contentType"`
+	ContentURL  *string           `json:"contentUrl"`
+	Content     teamsAdaptiveCard `json:"content"`
+}
+
+type teamsAdaptiveCard struct {
+	Schema  string             `json:"$schema"`
+	Type    string             `json:"type"`
+	Version string             `json:"version"`
+	Body    []teamsCardElement `json:"body"`
+}
+
+type teamsCardElement struct {
+	Type     string      `json:"type"`
+	Text     string      `json:"text,omitempty"`
+	Weight   string      `json:"weight,omitempty"`
+	Size     string      `json:"size,omitempty"`
+	IsSubtle bool        `json:"isSubtle,omitempty"`
+	Wrap     bool        `json:"wrap,omitempty"`
+	Facts    []teamsFact `json:"facts,omitempty"`
+}
+
+type teamsFact struct {
+	Title string `json:"title"`
+	Value string `json:"value"`
+}
+
+type webhookProvider string
+
+const (
+	providerDiscord webhookProvider = "discord"
+	providerTeams   webhookProvider = "teams"
+	providerSlack   webhookProvider = "slack"
+)
+
+type webhookTarget struct {
+	provider webhookProvider
+	url      string
+}
+
+var webhookHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 type Config struct {
 	Enabled    bool
 	DiscordURL string
@@ -51,6 +102,116 @@ func loadConfig() Config {
 		DiscordURL: viper.GetString("integrations.webhooks.discord_url"),
 		TeamsURL:   viper.GetString("integrations.webhooks.teams_url"),
 		SlackURL:   viper.GetString("integrations.webhooks.slack_url"),
+	}
+}
+
+func configuredTargets(cfg Config) []webhookTarget {
+	return []webhookTarget{
+		{provider: providerDiscord, url: cfg.DiscordURL},
+		{provider: providerTeams, url: cfg.TeamsURL},
+		{provider: providerSlack, url: cfg.SlackURL},
+	}
+}
+
+func newTeamsPayload(embed DiscordEmbed) teamsPayload {
+	body := []teamsCardElement{
+		{
+			Type:   "TextBlock",
+			Text:   embed.Title,
+			Weight: "Bolder",
+			Size:   "Medium",
+			Wrap:   true,
+		},
+	}
+	if embed.Description != "" {
+		body = append(body, teamsCardElement{
+			Type: "TextBlock",
+			Text: embed.Description,
+			Wrap: true,
+		})
+	}
+	if len(embed.Fields) != 0 {
+		facts := make([]teamsFact, 0, len(embed.Fields))
+		for _, field := range embed.Fields {
+			facts = append(facts, teamsFact{Title: field.Name, Value: field.Value})
+		}
+		body = append(body, teamsCardElement{Type: "FactSet", Facts: facts})
+	}
+	if embed.Footer.Text != "" {
+		body = append(body, teamsCardElement{
+			Type:     "TextBlock",
+			Text:     embed.Footer.Text,
+			IsSubtle: true,
+			Wrap:     true,
+		})
+	}
+	if embed.Timestamp != "" {
+		body = append(body, teamsCardElement{
+			Type:     "TextBlock",
+			Text:     embed.Timestamp,
+			IsSubtle: true,
+			Wrap:     true,
+		})
+	}
+
+	return teamsPayload{
+		Type: "message",
+		Attachments: []teamsAttachment{
+			{
+				ContentType: "application/vnd.microsoft.card.adaptive",
+				Content: teamsAdaptiveCard{
+					Schema:  "http://adaptivecards.io/schemas/adaptive-card.json",
+					Type:    "AdaptiveCard",
+					Version: "1.2",
+					Body:    body,
+				},
+			},
+		},
+	}
+}
+
+func sendAlert(cfg Config, payload DiscordPayload, slackText string) {
+	discordData, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[Webhook] Failed to marshal Discord payload: %v", err)
+		return
+	}
+
+	for _, target := range configuredTargets(cfg) {
+		if target.url == "" {
+			continue
+		}
+
+		var (
+			finalData  []byte
+			marshalErr error
+		)
+		switch target.provider {
+		case providerDiscord:
+			finalData = discordData
+		case providerTeams:
+			if len(payload.Embeds) == 0 {
+				log.Printf("[Webhook] Refusing to send an empty Teams alert")
+				continue
+			}
+			finalData, marshalErr = json.Marshal(newTeamsPayload(payload.Embeds[0]))
+		case providerSlack:
+			finalData, marshalErr = json.Marshal(slackPayload{Text: slackText})
+		default:
+			continue
+		}
+		if marshalErr != nil {
+			log.Printf("[Webhook] Failed to marshal %s payload: %v", target.provider, marshalErr)
+			continue
+		}
+
+		resp, postErr := webhookHTTPClient.Post(target.url, "application/json", bytes.NewReader(finalData))
+		if postErr != nil {
+			// Webhook URLs normally contain credentials. Do not include them in logs.
+			log.Printf("[Webhook] Failed to send %s alert", target.provider)
+			continue
+		}
+		_ = resp.Body.Close()
 	}
 }
 
@@ -79,47 +240,14 @@ func SendBanAlert(ip, jail, action string) {
 					{Name: "NODE", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v4.03.2 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v4.03.3 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
 		},
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("[Webhook] Failed to marshal payload: %v", err)
-		return
-	}
-
-	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
-	for _, u := range urls {
-		if u == "" {
-			continue
-		}
-
-		// For Slack, we send a simple text payload to be universally compatible
-		finalData := data
-		if strings.Contains(u, "hooks.slack.com") {
-			slackPayload := map[string]string{
-				"text": "🚨 **SYSWARDEN Security Alert**\nAttacker IP: " + ip + "\nThreat Vector: " + jail + "\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(slackPayload)
-		} else if strings.Contains(u, "webhook.office.com") {
-			teamsPayload := map[string]string{
-				"text": "🚨 SYSWARDEN Security Alert\nAttacker IP: " + ip + "\nThreat Vector: " + jail + "\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(teamsPayload)
-		}
-
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
-		if err != nil {
-			log.Printf("[Webhook] Failed to send alert: %v", err)
-			continue
-		}
-		_ = resp.Body.Close()
-	}
+	sendAlert(cfg, payload, "🚨 **SYSWARDEN Security Alert**\nAttacker IP: "+ip+"\nThreat Vector: "+jail+"\nNODE: "+hostname)
 }
 
 func SendDetectedAlert(ip, jail, action string) {
@@ -147,46 +275,14 @@ func SendDetectedAlert(ip, jail, action string) {
 					{Name: "NODE", Value: hostname, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v4.03.2 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v4.03.3 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
 		},
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("[Webhook] Failed to marshal payload: %v", err)
-		return
-	}
-
-	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
-	for _, u := range urls {
-		if u == "" {
-			continue
-		}
-
-		finalData := data
-		if strings.Contains(u, "hooks.slack.com") {
-			slackPayload := map[string]string{
-				"text": "⚠️ **SYSWARDEN Threat Detected**\nAttacker IP: " + ip + "\nThreat Vector: " + jail + "\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(slackPayload)
-		} else if strings.Contains(u, "webhook.office.com") {
-			teamsPayload := map[string]string{
-				"text": "⚠️ SYSWARDEN Threat Detected\nAttacker IP: " + ip + "\nThreat Vector: " + jail + "\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(teamsPayload)
-		}
-
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
-		if err != nil {
-			log.Printf("[Webhook] Failed to send detected alert: %v", err)
-			continue
-		}
-		_ = resp.Body.Close()
-	}
+	sendAlert(cfg, payload, "⚠️ **SYSWARDEN Threat Detected**\nAttacker IP: "+ip+"\nThreat Vector: "+jail+"\nNODE: "+hostname)
 }
 
 func SendAllowAlert(ip, service string) {
@@ -221,39 +317,7 @@ func SendAllowAlert(ip, service string) {
 		},
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("[Webhook] Failed to marshal payload: %v", err)
-		return
-	}
-
-	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
-	for _, u := range urls {
-		if u == "" {
-			continue
-		}
-
-		finalData := data
-		if strings.Contains(u, "hooks.slack.com") {
-			slackPayload := map[string]string{
-				"text": "✅ **SYSWARDEN Access Granted**\nAllowed IP: " + ip + "\nService: " + service + "\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(slackPayload)
-		} else if strings.Contains(u, "webhook.office.com") {
-			teamsPayload := map[string]string{
-				"text": "✅ SYSWARDEN Access Granted\nAllowed IP: " + ip + "\nService: " + service + "\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(teamsPayload)
-		}
-
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
-		if err != nil {
-			log.Printf("[Webhook] Failed to send alert: %v", err)
-			continue
-		}
-		_ = resp.Body.Close()
-	}
+	sendAlert(cfg, payload, "✅ **SYSWARDEN Access Granted**\nAllowed IP: "+ip+"\nService: "+service+"\nNODE: "+hostname)
 }
 
 func SendShadowAlert(ip, jail string) {
@@ -302,36 +366,7 @@ func SendShadowAlert(ip, jail string) {
 		},
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-
-	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
-	for _, u := range urls {
-		if u == "" {
-			continue
-		}
-
-		finalData := data
-		if strings.Contains(u, "hooks.slack.com") {
-			slackPayload := map[string]string{
-				"text": title + "\n" + ipLabel + ": " + ip + "\nThreat Vector: " + jail + "\nAction: SHADOW-ALERT (Not Banned)\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(slackPayload)
-		} else if strings.Contains(u, "webhook.office.com") {
-			teamsPayload := map[string]string{
-				"text": title + "\n" + ipLabel + ": " + ip + "\nThreat Vector: " + jail + "\nAction: SHADOW-ALERT (Not Banned)\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(teamsPayload)
-		}
-
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
-		if err == nil {
-			_ = resp.Body.Close()
-		}
-	}
+	sendAlert(cfg, payload, title+"\n"+ipLabel+": "+ip+"\nThreat Vector: "+jail+"\nAction: SHADOW-ALERT (Not Banned)\nNODE: "+hostname)
 }
 
 func SendComplianceAlert(msg, status string) {
@@ -359,46 +394,14 @@ func SendComplianceAlert(msg, status string) {
 					{Name: "Status", Value: status, Inline: true},
 				},
 				Footer: EmbedFooter{
-					Text: "SYSWARDEN v4.03.2 - Advanced Agentic Defense",
+					Text: "SYSWARDEN v4.03.3 - Advanced Agentic Defense",
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
 		},
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("[Webhook] Failed to marshal local-check payload: %v", err)
-		return
-	}
-
-	urls := []string{cfg.DiscordURL, cfg.TeamsURL, cfg.SlackURL}
-	for _, u := range urls {
-		if u == "" {
-			continue
-		}
-
-		finalData := data
-		if strings.Contains(u, "hooks.slack.com") {
-			slackPayload := map[string]string{
-				"text": title + "\nMessage: " + msg + "\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(slackPayload)
-		} else if strings.Contains(u, "webhook.office.com") {
-			teamsPayload := map[string]string{
-				"text": title + "\nMessage: " + msg + "\nNODE: " + hostname,
-			}
-			finalData, _ = json.Marshal(teamsPayload)
-		}
-
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Post(u, "application/json", bytes.NewBuffer(finalData))
-		if err != nil {
-			log.Printf("[Webhook] Failed to send local-check alert: %v", err)
-			continue
-		}
-		_ = resp.Body.Close()
-	}
+	sendAlert(cfg, payload, title+"\nMessage: "+msg+"\nNODE: "+hostname)
 }
 
 func localCheckAlertPresentation(status string) (string, int) {

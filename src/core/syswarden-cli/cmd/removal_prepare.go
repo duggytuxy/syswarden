@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"syswarden-cli/pkg/firewall"
+	"syswarden-cli/pkg/integration"
 	"syswarden-cli/pkg/network"
 	"syswarden-cli/pkg/system"
 
@@ -17,6 +18,8 @@ var removeOwnedWireGuardStateForRemoval = func() error {
 	return system.RemoveOwnedWireGuardArtifactsForRemoval(network.CleanupOwnedWireGuardNFTState)
 }
 var removePreparedServiceArtifacts = system.RemovePreparedServiceArtifactsForRemoval
+var removePreparedFirewallRuntimeLock = system.RemovePreparedFirewallRuntimeLockForRemoval
+var removeOwnedIntegrationArtifactsForRemoval = integration.RemoveOwnedGeneratedArtifactsForPackageRemoval
 
 func prepareVerifiedFirewallRemoval() error {
 	if err := beginRemoval(); err != nil {
@@ -46,9 +49,21 @@ func prepareVerifiedFirewallRemoval() error {
 			err,
 		)
 	}
+	if err := removeOwnedIntegrationArtifactsForRemoval(); err != nil {
+		return fmt.Errorf(
+			"refusing removal before exact generated integration cleanup; every ambiguous artifact is preserved and the durable removal barrier is retained: %w",
+			err,
+		)
+	}
 	if err := removePreparedServiceArtifacts(); err != nil {
 		return fmt.Errorf(
 			"refusing removal after verified firewall cleanup because exact service artifacts could not be removed; the durable removal barrier is retained: %w",
+			err,
+		)
+	}
+	if err := removePreparedFirewallRuntimeLock(); err != nil {
+		return fmt.Errorf(
+			"refusing removal after verified firewall cleanup because the exact runtime lock could not be removed; the durable removal barrier is retained: %w",
 			err,
 		)
 	}

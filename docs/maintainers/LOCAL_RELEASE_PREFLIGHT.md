@@ -278,9 +278,10 @@ merged SHA, then run the protected qualification. Compare eligible package
 bytes and semantic evidence contracts with any local rehearsal, never evidence
 file digests. Treat the protected result as authoritative.
 
-After qualification succeeds, create `v4.03.2` locally as an annotated SSH- or
-GPG-signed tag whose peeled commit is the exact qualified `main` SHA. Verify the
-tag locally against the approved signer before pushing only that tag reference.
+After qualification succeeds, create the exact inspected candidate version
+locally as an annotated SSH- or GPG-signed tag whose peeled commit is the exact
+qualified `main` SHA. Verify the tag locally against the approved signer before
+pushing only that tag reference.
 The publisher rejects a lightweight tag, a tag that peels to another commit, or
 a tag object whose signature GitHub does not report as valid.
 

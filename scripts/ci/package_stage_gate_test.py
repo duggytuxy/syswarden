@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import stat
@@ -44,6 +46,67 @@ class PackageStageGateTests(unittest.TestCase):
     def test_accepts_exact_linux_stage(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)
         package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
+
+    def test_accepts_exact_completion_content_contract(self) -> None:
+        self.create_stage(package_stage_gate.LINUX_ENTRIES)
+        completion = self.root / "usr/share/bash-completion/completions/syswarden"
+        payload = completion.read_bytes()
+        contract = package_stage_gate.ContentContract(
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+        )
+        package_stage_gate.validate(
+            self.root,
+            package_stage_gate.LINUX_ENTRIES,
+            contract,
+        )
+
+    def test_rejects_completion_size_or_digest_drift(self) -> None:
+        self.create_stage(package_stage_gate.LINUX_ENTRIES)
+        completion = self.root / "usr/share/bash-completion/completions/syswarden"
+        payload = completion.read_bytes()
+        for contract, message in (
+            (
+                package_stage_gate.ContentContract(
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    size=len(payload) + 1,
+                ),
+                "size mismatch",
+            ),
+            (
+                package_stage_gate.ContentContract(
+                    sha256="0" * 64,
+                    size=len(payload),
+                ),
+                "SHA-256 mismatch",
+            ),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(package_stage_gate.PackageStageError, message):
+                    package_stage_gate.validate(
+                        self.root,
+                        package_stage_gate.LINUX_ENTRIES,
+                        contract,
+                    )
+
+    def test_loads_only_strict_completion_contract_schema(self) -> None:
+        contract_path = Path(self.temporary_directory.name) / "completion.json"
+        valid = {"sha256": "a" * 64, "size": 42}
+        contract_path.write_text(json.dumps(valid) + "\n", encoding="ascii")
+        self.assertEqual(
+            package_stage_gate.load_content_contract(contract_path),
+            package_stage_gate.ContentContract(sha256="a" * 64, size=42),
+        )
+        for document in (
+            {"sha256": "a" * 63, "size": 42},
+            {"sha256": "a" * 64, "size": 0},
+            {"sha256": "a" * 64, "size": True},
+            {"sha256": "a" * 64, "size": 42, "extra": 1},
+        ):
+            with self.subTest(document=document):
+                contract_path.write_text(json.dumps(document), encoding="ascii")
+                with self.assertRaises(package_stage_gate.PackageStageError):
+                    package_stage_gate.load_content_contract(contract_path)
 
     def test_rejects_unexpected_stale_file(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)

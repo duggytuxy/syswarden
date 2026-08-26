@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
+import re
 import stat
 import sys
 from dataclasses import dataclass
@@ -21,6 +24,12 @@ class ExpectedEntry:
     mode: int | None = None
     target: str | None = None
     nonempty: bool = False
+
+
+@dataclass(frozen=True)
+class ContentContract:
+    sha256: str
+    size: int
 
 
 DIRECTORY = ExpectedEntry("directory", mode=0o755)
@@ -50,6 +59,12 @@ LINUX_ENTRIES = {
     ),
     "usr/local/bin/syswarden-tui": ExpectedEntry(
         "symlink", target="/opt/syswarden/bin/syswarden-tui"
+    ),
+    "usr/share": DIRECTORY,
+    "usr/share/bash-completion": DIRECTORY,
+    "usr/share/bash-completion/completions": DIRECTORY,
+    "usr/share/bash-completion/completions/syswarden": ExpectedEntry(
+        "file", mode=0o644, nonempty=True
     ),
 }
 
@@ -100,7 +115,100 @@ def inventory(root: Path) -> dict[str, tuple[Path, os.stat_result]]:
     return entries
 
 
-def validate(root: Path, expected: dict[str, ExpectedEntry]) -> None:
+def validate_exact_content(path: Path, contract: ContentContract) -> None:
+    try:
+        before = path.lstat()
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise PackageStageError(f"cannot open contracted content {path}: {exc}") from exc
+    try:
+        opened_before = os.fstat(descriptor)
+        if not stat.S_ISREG(opened_before.st_mode):
+            raise PackageStageError(f"contracted content is not a regular file: {path}")
+        if (before.st_dev, before.st_ino) != (opened_before.st_dev, opened_before.st_ino):
+            raise PackageStageError(f"contracted content identity changed: {path}")
+        if opened_before.st_size != contract.size:
+            raise PackageStageError(
+                f"contracted content size mismatch for {path}: "
+                f"expected {contract.size}, found {opened_before.st_size}"
+            )
+        digest = hashlib.sha256()
+        consumed = 0
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                break
+            consumed += len(chunk)
+            if consumed > contract.size:
+                raise PackageStageError(f"contracted content grew while reading: {path}")
+            digest.update(chunk)
+        opened_after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    identity_fields = (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_uid",
+        "st_gid",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+    )
+    if any(
+        getattr(opened_before, field) != getattr(opened_after, field)
+        for field in identity_fields
+    ):
+        raise PackageStageError(f"contracted content changed while reading: {path}")
+    if consumed != contract.size:
+        raise PackageStageError(
+            f"contracted content read-size mismatch for {path}: "
+            f"expected {contract.size}, read {consumed}"
+        )
+    if digest.hexdigest() != contract.sha256:
+        raise PackageStageError(f"contracted content SHA-256 mismatch: {path}")
+
+
+def load_content_contract(path: Path) -> ContentContract:
+    try:
+        metadata_before = path.lstat()
+    except OSError as exc:
+        raise PackageStageError(f"cannot inspect content contract {path}: {exc}") from exc
+    if not stat.S_ISREG(metadata_before.st_mode) or stat.S_ISLNK(metadata_before.st_mode):
+        raise PackageStageError(f"content contract is not a regular file: {path}")
+    if metadata_before.st_size > 512:
+        raise PackageStageError(f"content contract is unexpectedly large: {path}")
+    try:
+        raw = path.read_bytes()
+        metadata_after = path.lstat()
+    except OSError as exc:
+        raise PackageStageError(f"cannot read content contract {path}: {exc}") from exc
+    if (metadata_before.st_dev, metadata_before.st_ino, metadata_before.st_size) != (
+        metadata_after.st_dev,
+        metadata_after.st_ino,
+        metadata_after.st_size,
+    ):
+        raise PackageStageError(f"content contract changed while reading: {path}")
+    try:
+        document = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PackageStageError(f"invalid content contract {path}: {exc}") from exc
+    if not isinstance(document, dict) or set(document) != {"sha256", "size"}:
+        raise PackageStageError(f"invalid content contract schema: {path}")
+    digest = document["sha256"]
+    size = document["size"]
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise PackageStageError(f"invalid content contract SHA-256: {path}")
+    if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= 1024 * 1024:
+        raise PackageStageError(f"invalid content contract size: {path}")
+    return ContentContract(sha256=digest, size=size)
+
+
+def validate(
+    root: Path,
+    expected: dict[str, ExpectedEntry],
+    completion_contract: ContentContract | None = None,
+) -> None:
     actual = inventory(root)
     actual_paths = set(actual)
     expected_paths = set(expected)
@@ -146,19 +254,26 @@ def validate(root: Path, expected: dict[str, ExpectedEntry]) -> None:
                     )
     if violations:
         raise PackageStageError("staging contract violation: " + "; ".join(violations))
+    if completion_contract is not None:
+        validate_exact_content(
+            root / "usr/share/bash-completion/completions/syswarden",
+            completion_contract,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("platform", choices=("linux",))
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--completion-contract", type=Path, required=True)
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
     try:
-        validate(args.root, LINUX_ENTRIES)
+        completion_contract = load_content_contract(args.completion_contract)
+        validate(args.root, LINUX_ENTRIES, completion_contract)
     except PackageStageError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

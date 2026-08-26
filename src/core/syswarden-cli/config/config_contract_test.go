@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -190,6 +191,122 @@ profile_name = "production"
 	}
 	if GlobalConfig.LANSubnets != "10.0.0.0/8 2001:db8::/32" || GlobalConfig.HoneyPorts != "23 6379" {
 		t.Fatalf("slice mapping changed: LAN=%q honeyports=%q", GlobalConfig.LANSubnets, GlobalConfig.HoneyPorts)
+	}
+}
+
+func TestUserModuleArrayPriorityContract_SW_CFG_002(t *testing.T) {
+	tests := []struct {
+		name       string
+		userArrays string
+		wantGeo    string
+		wantASN    string
+		wantGeoGet string
+		wantASNGet string
+	}{
+		{
+			name: "non-empty user arrays replace lower-priority arrays",
+			userArrays: `[network.geo]
+blocked_countries = ["jp", "kp"]
+
+[network.asn]
+blocked_asns = ["AS15169", "AS13335"]
+`,
+			wantGeo:    "jp kp",
+			wantASN:    "AS15169 AS13335",
+			wantGeoGet: `["jp","kp"]`,
+			wantASNGet: `["AS15169","AS13335"]`,
+		},
+		{
+			name: "empty user arrays clear lower-priority arrays",
+			userArrays: `[network.geo]
+blocked_countries = []
+
+[network.asn]
+blocked_asns = []
+`,
+			wantGeoGet: `[]`,
+			wantASNGet: `[]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			modules := filepath.Join(root, "modules")
+			if err := os.MkdirAll(modules, 0750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(minimalModularConfig), 0600); err != nil {
+				t.Fatal(err)
+			}
+			lowerPriority := `[network.geo]
+enabled = true
+blocked_countries = ["be"]
+allowed_countries = []
+
+[network.asn]
+enabled = true
+blocked_asns = ["AS64500"]
+allowed_asns = []
+`
+			if err := os.WriteFile(filepath.Join(modules, "10-network.toml"), []byte(lowerPriority), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(modules, "99-user.toml"), []byte(test.userArrays), 0600); err != nil {
+				t.Fatal(err)
+			}
+
+			previous := GlobalConfig
+			previousState := CurrentLoadState()
+			t.Cleanup(func() {
+				GlobalConfig = previous
+				loadStateMu.Lock()
+				loadState = previousState
+				loadStateMu.Unlock()
+			})
+
+			if _, err := ValidateModularConfig(root); err != nil {
+				t.Fatalf("ValidateModularConfig() error = %v", err)
+			}
+			if err := loadModularConfig(root); err != nil {
+				t.Fatalf("loadModularConfig() error = %v", err)
+			}
+			if GlobalConfig.GeoCodes != test.wantGeo || GlobalConfig.ASNList != test.wantASN {
+				t.Fatalf("runtime arrays = GEO %q ASN %q, want GEO %q ASN %q", GlobalConfig.GeoCodes, GlobalConfig.ASNList, test.wantGeo, test.wantASN)
+			}
+
+			geo, found, err := GetValidatedModularValue(root, "network.geo.blocked_countries")
+			if err != nil || !found {
+				t.Fatalf("config-get GEO = %q found=%t err=%v", geo, found, err)
+			}
+			asn, found, err := GetValidatedModularValue(root, "network.asn.blocked_asns")
+			if err != nil || !found {
+				t.Fatalf("config-get ASN = %q found=%t err=%v", asn, found, err)
+			}
+			if geo != test.wantGeoGet || asn != test.wantASNGet {
+				t.Fatalf("config-get arrays = GEO %q ASN %q, want GEO %q ASN %q", geo, asn, test.wantGeoGet, test.wantASNGet)
+			}
+			for key, want := range map[string]string{
+				"network.geo.enabled":       "true",
+				"waap.bruteforce_threshold": "5",
+			} {
+				got, found, err := GetValidatedModularValue(root, key)
+				if err != nil || !found || got != want {
+					t.Fatalf("config-get %s = %q found=%t err=%v, want %q", key, got, found, err, want)
+				}
+			}
+			section, found, err := GetValidatedModularValue(root, "network.geo")
+			if err != nil || !found {
+				t.Fatalf("config-get GEO section = %q found=%t err=%v", section, found, err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal([]byte(section), &decoded); err != nil {
+				t.Fatalf("config-get GEO section is not JSON: %q: %v", section, err)
+			}
+			if enabled, ok := decoded["enabled"].(bool); !ok || !enabled {
+				t.Fatalf("config-get GEO section omitted its typed enabled value: %#v", decoded)
+			}
+		})
 	}
 }
 

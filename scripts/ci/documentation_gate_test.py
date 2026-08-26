@@ -20,7 +20,7 @@ import release_gate
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REPORT = REPO_ROOT / "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.2.md"
+REPORT = REPO_ROOT / "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.3.md"
 ARCHIVE_DIGEST = "a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5"
 
 
@@ -42,12 +42,12 @@ class DocumentationGateTest(unittest.TestCase):
         self.assertTrue(any("missing required operational wiki pages" in error for error in errors))
 
     def test_current_version_and_candidate_status_are_explicit(self) -> None:
-        self.assertEqual(documentation_gate.source_version(REPO_ROOT), "v4.03.2")
+        self.assertEqual(documentation_gate.source_version(REPO_ROOT), "v4.03.3")
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
         report = REPORT.read_text(encoding="utf-8")
         self.assertEqual(
-            readme.splitlines().count("Current source version: **v4.03.2**."),
+            readme.splitlines().count("Current source version: **v4.03.3**."),
             1,
         )
         self.assertIn(
@@ -98,15 +98,15 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                "v4.03.2",
+                "v4.03.3",
             ),
             [],
         )
 
     def test_public_release_contract_is_three_packages_and_ten_assets(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
-        expected_packages = release_gate.package_names("4.03.2")
-        expected_assets = release_gate.expected_release_assets("v4.03.2")
+        expected_packages = release_gate.package_names("4.03.3")
+        expected_assets = release_gate.expected_release_assets("v4.03.3")
         self.assertEqual(len(expected_packages), 3)
         self.assertEqual(len(expected_assets), 10)
         self.assertEqual(
@@ -368,7 +368,7 @@ class DocumentationGateTest(unittest.TestCase):
             documentation_gate.cobra_commands(REPO_ROOT),
             documentation_gate.config_schema(REPO_ROOT),
             changed["forbidden_phrases"],
-            "v4.03.2",
+            "v4.03.3",
         )
         self.assertTrue(any("exact release gate" in error for error in errors))
 
@@ -435,7 +435,7 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                "v4.03.2",
+                "v4.03.3",
             )
         self.assertTrue(any("retired platform" in error for error in errors))
 
@@ -594,6 +594,20 @@ class DocumentationGateTest(unittest.TestCase):
         ):
             self.assertIn(phrase, migration)
 
+        current_migration = documentation_gate.normalized(
+            "\n".join(wiki["Migration-v4.03.2-to-v4.03.3.md"])
+        )
+        for phrase in (
+            "pending manual release-owner gate",
+            "deterministic local TLS fixture",
+            "four interval sets",
+            "discard ambiguous legacy intervals",
+            "unsafe while any ban producer is active",
+            "no qualified in-place package downgrade",
+            "Uninstall is destructive removal, not rollback.",
+        ):
+            self.assertIn(phrase, current_migration)
+
         rhel = documentation_gate.normalized(
             "\n".join(wiki["RHEL-9-Image-Extensions.md"])
         )
@@ -694,7 +708,7 @@ class DocumentationGateTest(unittest.TestCase):
                         self.assertNotIn(":", value)
             self.assertIn("Linux", text)
             if name == "syswarden_architecture.svg":
-                self.assertIn("SysWarden v4.03.2 candidate architecture", text)
+                self.assertIn("SysWarden v4.03.3 candidate architecture", text)
 
     def test_source_assertions_remain_bound_to_runtime(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
@@ -739,6 +753,84 @@ class DocumentationGateTest(unittest.TestCase):
                 wiki_root,
             )
         self.assertEqual(resolved, target)
+
+    def test_version_specific_wiki_page_keeps_its_canonical_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wiki_root = Path(directory)
+            (wiki_root / "Home.md").write_text(
+                "# Home\n\n"
+                "> Status: Current\n"
+                "> Documentation baseline: v4.03.3\n\n"
+                "[Historical migration](Migration-v4.02.8-to-v4.03.2)\n"
+                "[Version-specific current migration](Migration-v4.03.2-to-v4.03.3)\n",
+                encoding="utf-8",
+            )
+            (wiki_root / "Migration-v4.02.8-to-v4.03.2.md").write_text(
+                "# Historical migration from v4.02.8 to v4.03.2\n\n"
+                "> Status: Version-specific\n"
+                "> Documentation baseline: v4.03.2\n",
+                encoding="utf-8",
+            )
+            (wiki_root / "Migration-v4.03.2-to-v4.03.3.md").write_text(
+                "# Migration from v4.03.2 to v4.03.3\n\n"
+                "> Status: Version-specific\n"
+                "> Documentation baseline: v4.03.3\n",
+                encoding="utf-8",
+            )
+            errors = documentation_gate.validate_wiki(
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                set(),
+                set(),
+                [],
+                "v4.03.3",
+                {},
+            )
+        self.assertEqual(errors, [])
+
+    def test_current_wiki_page_rejects_a_stale_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wiki_root = Path(directory)
+            (wiki_root / "Home.md").write_text(
+                "# Home\n\n"
+                "> Status: Current\n"
+                "> Documentation baseline: v4.03.2\n",
+                encoding="utf-8",
+            )
+            errors = documentation_gate.validate_wiki(
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                set(),
+                set(),
+                [],
+                "v4.03.3",
+                {},
+            )
+        self.assertTrue(
+            any(
+                "current page baseline v4.03.2 does not match v4.03.3" in error
+                for error in errors
+            )
+        )
+
+    def test_version_specific_page_allows_only_versions_declared_in_heading(self) -> None:
+        text = (
+            "# Migration from v4.03.2 to v4.03.3\n\n"
+            "> Status: Version-specific\n"
+            "> Documentation baseline: v4.03.3\n\n"
+            "The v4.03.2 source is in scope. v4.03.1 is not declared.\n"
+        )
+        errors = documentation_gate.validate_markdown(
+            Path("Migration-v4.03.2-to-v4.03.3.md"),
+            text,
+            set(),
+            set(),
+            [],
+            "v4.03.3",
+            None,
+        )
+        self.assertFalse(any("non-current version v4.03.2" in error for error in errors))
+        self.assertTrue(any("non-current version v4.03.1" in error for error in errors))
 
     def test_report_writer_is_machine_readable_and_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

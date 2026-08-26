@@ -47,6 +47,7 @@ func newFirewallRemovalProcessScannerForTest(
 		procRoot:    procRoot,
 		cliPath:     cliPath,
 		tuiPath:     filepath.Join(filepath.Dir(cliPath), "syswarden-tui"),
+		corePath:    filepath.Join(filepath.Dir(cliPath), "syswarden-core"),
 		selfPID:     selfPID,
 		readDir:     os.ReadDir,
 		openRoot:    os.OpenRoot,
@@ -174,6 +175,50 @@ func TestFirewallRemovalProcessScanRejectsExactDirectTUI_SW2_FWBACKEND_001(t *te
 	}
 	if exactRemovalProcessExecutable(cliInfo, nil, tuiPath+"-helper (deleted)", tuiPath) {
 		t.Fatal("deleted TUI lookalike path was classified")
+	}
+}
+
+func TestFirewallRemovalProcessScanRejectsExactDirectCore_SW2_FWBACKEND_001(t *testing.T) {
+	root := t.TempDir()
+	procRoot := filepath.Join(root, "proc")
+	if err := os.Mkdir(procRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cliPath := filepath.Join(root, "syswarden-cli")
+	corePath := filepath.Join(root, "syswarden-core")
+	for _, path := range []string{cliPath, corePath} {
+		if err := os.WriteFile(path, []byte(path), 0700); err != nil { // #nosec G306 -- owner-only executable mode is required for isolated process fixtures
+			t.Fatal(err)
+		}
+	}
+	writeFirewallRemovalProcessFixture(
+		t, procRoot, "501", corePath, []string{corePath}, false,
+	)
+	scanner := newFirewallRemovalProcessScannerForTest(t, procRoot, cliPath, 999, "")
+	if err := scanner.scan(); err != nil {
+		t.Fatalf("pre-stop process scan rejected the service-managed core before it could be stopped: %v", err)
+	}
+	scanner.rejectCore = true
+	err := scanner.scan()
+	if err == nil || !strings.Contains(err.Error(), "SysWarden core") || !strings.Contains(err.Error(), "process 501") {
+		t.Fatalf("exact core scan result = %v", err)
+	}
+
+	scanner = newFirewallRemovalProcessScannerForTest(t, procRoot, cliPath, 999, "501")
+	scanner.rejectCore = true
+	if err := scanner.scan(); err != nil {
+		t.Fatalf("non-root exact core process blocked removal: %v", err)
+	}
+
+	cliInfo, err := os.Stat(cliPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exactRemovalProcessExecutable(cliInfo, nil, corePath+" (deleted)", corePath) {
+		t.Fatal("exact deleted core executable path was not classified")
+	}
+	if exactRemovalProcessExecutable(cliInfo, nil, corePath+"-helper (deleted)", corePath) {
+		t.Fatal("deleted core lookalike path was classified")
 	}
 }
 

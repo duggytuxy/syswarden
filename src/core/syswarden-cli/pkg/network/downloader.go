@@ -46,6 +46,8 @@ var (
 	approvedSHA256            = regexp.MustCompile(`^[A-Fa-f0-9]{64}$`)
 	errFeedRedirect           = errors.New("feed redirects are disabled")
 	errUnauthenticatedASNFeed = errors.New("unauthenticated RADB WHOIS data is non-authoritative for firewall policy")
+	errNonPublicFeedPrefix    = errors.New("non-public or special-use prefix")
+	errFeedMirrorQuorum       = errors.New("feed mirror quorum unavailable")
 	reservedFeedPrefixes      = []netip.Prefix{
 		netip.MustParsePrefix("0.0.0.0/8"),
 		netip.MustParsePrefix("10.0.0.0/8"),
@@ -93,6 +95,7 @@ type cidrFeedPolicy struct {
 	minimumIPv6PrefixBits  int
 	requireHostPrefixes    bool
 	requirePublicAddresses bool
+	skipNonPublicEntries   bool
 }
 
 type feedPublicationPolicy struct {
@@ -106,8 +109,9 @@ type feedPublicationPolicy struct {
 }
 
 type canonicalCIDRFeed struct {
-	content  []byte
-	prefixes []netip.Prefix
+	content                 []byte
+	prefixes                []netip.Prefix
+	ignoredNonPublicEntries int
 }
 
 type feedFileTarget struct {
@@ -811,7 +815,7 @@ func parseCanonicalFeedPrefix(line string, policy cidrFeedPolicy) (netip.Prefix,
 		return netip.Prefix{}, fmt.Errorf("source must contain host prefixes only")
 	}
 	if policy.requirePublicAddresses && !isPublicFeedPrefix(prefix) {
-		return netip.Prefix{}, fmt.Errorf("non-public or special-use prefix")
+		return netip.Prefix{}, errNonPublicFeedPrefix
 	}
 	return prefix, nil
 }
@@ -848,6 +852,7 @@ func canonicalizeCIDRFeed(content []byte, policy cidrFeedPolicy) (canonicalCIDRF
 	scanner := bufio.NewScanner(strings.NewReader(string(content)))
 	scanner.Buffer(make([]byte, 1024), 4096)
 	prefixes := make([]netip.Prefix, 0)
+	ignoredNonPublicEntries := 0
 	for lineNumber := 1; scanner.Scan(); lineNumber++ {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
@@ -855,6 +860,10 @@ func canonicalizeCIDRFeed(content []byte, policy cidrFeedPolicy) (canonicalCIDRF
 		}
 		prefix, err := parseCanonicalFeedPrefix(line, policy)
 		if err != nil {
+			if policy.skipNonPublicEntries && errors.Is(err, errNonPublicFeedPrefix) {
+				ignoredNonPublicEntries++
+				continue
+			}
 			return canonicalCIDRFeed{}, fmt.Errorf("invalid CIDR at line %d: %w", lineNumber, err)
 		}
 		prefixes = append(prefixes, prefix)
@@ -870,11 +879,15 @@ func canonicalizeCIDRFeed(content []byte, policy cidrFeedPolicy) (canonicalCIDRF
 		return canonicalCIDRFeed{}, fmt.Errorf("feed exceeds the %d-entry canonicalization limit", maximumCanonicalFeedEntries)
 	}
 	if len(feed.prefixes) < policy.minimumEntries {
+		if ignoredNonPublicEntries > 0 {
+			return canonicalCIDRFeed{}, fmt.Errorf("feed contains %d canonical entries after ignoring %d non-public or special-use entries, minimum is %d", len(feed.prefixes), ignoredNonPublicEntries, policy.minimumEntries)
+		}
 		return canonicalCIDRFeed{}, fmt.Errorf("feed contains %d canonical entries, minimum is %d", len(feed.prefixes), policy.minimumEntries)
 	}
 	if len(feed.prefixes) == 0 {
 		return canonicalCIDRFeed{}, fmt.Errorf("feed contains no canonical CIDR entries")
 	}
+	feed.ignoredNonPublicEntries = ignoredNonPublicEntries
 	return feed, nil
 }
 
@@ -1071,36 +1084,77 @@ type mirrorConsensusGroup struct {
 	origins map[string]struct{}
 }
 
+type dataShieldFeedOutcome uint8
+
+const (
+	dataShieldFeedUpdated dataShieldFeedOutcome = iota
+	dataShieldFeedPreserved
+	dataShieldFeedOmitted
+)
+
 func feedOrigin(rawURL string) (string, error) {
 	parsed, err := validateHTTPSFeedURL(rawURL)
 	if err != nil {
 		return "", err
 	}
-	switch strings.ToLower(parsed.Hostname()) {
+	hostname := strings.ToLower(parsed.Hostname())
+	if strings.HasSuffix(hostname, ".") {
+		hostname = strings.TrimSuffix(hostname, ".")
+		if hostname == "" || strings.HasSuffix(hostname, ".") {
+			return "", fmt.Errorf("feed URL hostname has an invalid trailing DNS root marker")
+		}
+	}
+	switch hostname {
 	case "raw.githubusercontent.com", "cdn.jsdelivr.net":
 		return "github-backed-data-shield", nil
 	}
-	return strings.ToLower(parsed.Scheme + "://" + parsed.Hostname()), nil
+	return strings.ToLower(parsed.Scheme) + "://" + hostname, nil
 }
 
 func reportNonAuthoritativeFeed(label string) {
 	_, _ = fmt.Fprintf(os.Stderr, "[WARNING] %s is configured but has no authenticated authority; last-known-good files were preserved.\n", label)
 }
 
+func reportIgnoredOSINTEntries(writer io.Writer, origin string, count int) {
+	if count <= 0 {
+		return
+	}
+	entryLabel := "entries"
+	if count == 1 {
+		entryLabel = "entry"
+	}
+	_, _ = fmt.Fprintf(writer, "[WARNING] OSINT source %s ignored %d non-public or special-use CIDR %s.\n", origin, count, entryLabel)
+}
+
 func downloadMirrorQuorumWithClient(ctx context.Context, client *http.Client, mirrors []string, target feedFileTarget, suffix string, quorum int, validation cidrFeedPolicy, publication feedPublicationPolicy) error {
 	if quorum < 2 {
 		return fmt.Errorf("mirror quorum must require at least two independent origins")
 	}
-	groups := make(map[[sha256.Size]byte]*mirrorConsensusGroup)
-	failures := 0
-	for _, mirror := range mirrors {
+	origins := make([]string, len(mirrors))
+	distinctOrigins := make(map[string]struct{}, len(mirrors))
+	for index, mirror := range mirrors {
 		origin, err := feedOrigin(mirror)
 		if err != nil {
-			failures++
-			continue
+			return fmt.Errorf("validate mirror URL at index %d: %w", index, err)
 		}
+		origins[index] = origin
+		distinctOrigins[origin] = struct{}{}
+	}
+	if len(distinctOrigins) < quorum {
+		return fmt.Errorf("mirror configuration provides %d distinct HTTPS origins, quorum requires %d", len(distinctOrigins), quorum)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("mirror quorum caller context ended before download: %w", err)
+	}
+	groups := make(map[[sha256.Size]byte]*mirrorConsensusGroup)
+	failures := 0
+	for index, mirror := range mirrors {
+		origin := origins[index]
 		candidate, err := downloadCanonicalCIDRFeed(ctx, client, mirror, "", validation)
 		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return fmt.Errorf("mirror quorum caller context ended during download: %w", contextErr)
+			}
 			failures++
 			continue
 		}
@@ -1111,6 +1165,9 @@ func downloadMirrorQuorumWithClient(ctx context.Context, client *http.Client, mi
 			groups[digest] = group
 		}
 		group.origins[origin] = struct{}{}
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("mirror quorum caller context ended after download: %w", err)
 	}
 
 	var selected *mirrorConsensusGroup
@@ -1127,10 +1184,10 @@ func downloadMirrorQuorumWithClient(ctx context.Context, client *http.Client, mi
 		}
 	}
 	if selected == nil || selectedCount < quorum {
-		return fmt.Errorf("feed mirror quorum not reached: best agreement %d/%d across %d responses and %d failures", selectedCount, quorum, len(mirrors)-failures, failures)
+		return fmt.Errorf("%w: best agreement %d/%d across %d responses and %d failures", errFeedMirrorQuorum, selectedCount, quorum, len(mirrors)-failures, failures)
 	}
 	if tied {
-		return fmt.Errorf("feed mirror quorum is ambiguous between equally supported canonical results")
+		return fmt.Errorf("%w: ambiguous between equally supported canonical results", errFeedMirrorQuorum)
 	}
 	publication.verified = true
 	if err := publishCanonicalFeedAt(target, suffix, selected.feed, validation, publication); err != nil {
@@ -1140,10 +1197,70 @@ func downloadMirrorQuorumWithClient(ctx context.Context, client *http.Client, mi
 	return nil
 }
 
-func downloadDataShieldQuorum(ctx context.Context, listChoice string) error {
+func attestDataShieldLastKnownGood(target feedFileTarget, suffix string, validation cidrFeedPolicy) (bool, error) {
+	directory, err := openFeedDirectory(target, suffix, false)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockFeedDirectory(directory)
+	if err != nil {
+		return false, err
+	}
+	defer unlockFeedDirectory(lockFile)
+
+	content, identity, err := readFeedFileSnapshotInDirectory(directory, target)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if identity.info.Mode() != 0600 {
+		return false, fmt.Errorf("last-known-good feed %s has mode %s, want -rw-------", target.name, identity.info.Mode())
+	}
+	if !identity.ownerKnown || identity.uid != os.Geteuid() || identity.gid != os.Getegid() {
+		return false, fmt.Errorf("last-known-good feed %s is not owned by the effective package identity", target.name)
+	}
+	lastKnownGoodValidation := validation
+	lastKnownGoodValidation.minimumEntries = 1
+	if _, err := canonicalizeCIDRFeed(content, lastKnownGoodValidation); err != nil {
+		return false, fmt.Errorf("validate last-known-good feed %s: %w", target.name, err)
+	}
+	return true, nil
+}
+
+func downloadDataShieldForLifecycleWithClient(ctx context.Context, client *http.Client, mirrors []string, target feedFileTarget, suffix string, quorum int, validation cidrFeedPolicy, publication feedPublicationPolicy, tolerateQuorumUnavailable bool) (dataShieldFeedOutcome, error) {
+	err := downloadMirrorQuorumWithClient(ctx, client, mirrors, target, suffix, quorum, validation, publication)
+	if err == nil {
+		return dataShieldFeedUpdated, nil
+	}
+	if !errors.Is(err, errFeedMirrorQuorum) {
+		return dataShieldFeedOmitted, err
+	}
+	preserved, attestErr := attestDataShieldLastKnownGood(target, suffix, validation)
+	if attestErr != nil {
+		return dataShieldFeedOmitted, fmt.Errorf("Data-Shield quorum unavailable and last-known-good attestation failed: %w", attestErr)
+	}
+	if preserved {
+		if tolerateQuorumUnavailable {
+			return dataShieldFeedPreserved, nil
+		}
+		return dataShieldFeedPreserved, err
+	}
+	if tolerateQuorumUnavailable {
+		return dataShieldFeedOmitted, nil
+	}
+	return dataShieldFeedOmitted, err
+}
+
+func downloadDataShieldQuorum(ctx context.Context, listChoice string, tolerateQuorumUnavailable bool) (dataShieldFeedOutcome, error) {
 	target, err := approvedFeedFileForPath("/etc/syswarden/lists/syswarden_threatintel.ipv4", ".ipv4")
 	if err != nil {
-		return err
+		return dataShieldFeedOmitted, err
 	}
 	validation := cidrFeedPolicy{
 		expectedFamily:         4,
@@ -1157,7 +1274,7 @@ func downloadDataShieldQuorum(ctx context.Context, listChoice string) error {
 		maximumGrowthPercent:        500,
 		plausibilityBaselineEntries: 16,
 	}
-	return downloadMirrorQuorumWithClient(
+	return downloadDataShieldForLifecycleWithClient(
 		ctx,
 		&http.Client{Timeout: feedHTTPTimeout},
 		system.ThreatIntelMirrors(listChoice),
@@ -1166,6 +1283,7 @@ func downloadDataShieldQuorum(ctx context.Context, listChoice string) error {
 		2,
 		validation,
 		publication,
+		tolerateQuorumUnavailable,
 	)
 }
 
@@ -1333,8 +1451,24 @@ func cleanCIDRListV6At(target feedFileTarget) error {
 	return nil
 }
 
-// DownloadFeeds manages the download of GeoIP, ASN, and OSINT feeds
+type feedDownloadPurpose uint8
+
+const (
+	feedDownloadExplicitUpdate feedDownloadPurpose = iota
+	feedDownloadPackageInstall
+)
+
+// DownloadFeeds manages an explicit update of GeoIP, ASN, and OSINT feeds.
 func DownloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
+	return downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed, lanMode, useSpamhaus, feedDownloadExplicitUpdate)
+}
+
+// DownloadFeedsForInstall keeps optional Data-Shield quorum unavailability from breaking package configuration.
+func DownloadFeedsForInstall(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool) error {
+	return downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed, lanMode, useSpamhaus, feedDownloadPackageInstall)
+}
+
+func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool, purpose feedDownloadPurpose) error {
 	fmt.Println("[INFO] Initializing Network Intelligence Feeds...")
 
 	if lanMode {
@@ -1488,11 +1622,24 @@ func DownloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listCho
 		}
 	default:
 		fmt.Printf("Downloading Threat Intel IPv4 Blocklist... ")
-		if err := downloadDataShieldQuorum(ctx, listChoice); err != nil {
-			fmt.Printf("FAILED (%v)\n", err)
+		outcome, err := downloadDataShieldQuorum(ctx, listChoice, purpose == feedDownloadPackageInstall)
+		if err != nil {
+			if errors.Is(err, errFeedMirrorQuorum) && outcome == dataShieldFeedPreserved {
+				fmt.Printf("DEGRADED (%v; validated last-known-good preserved)\n", err)
+			} else if errors.Is(err, errFeedMirrorQuorum) {
+				fmt.Printf("DEGRADED (%v; optional feed omitted)\n", err)
+			} else {
+				fmt.Printf("FAILED (%v)\n", err)
+			}
 			feedErrors = append(feedErrors, fmt.Errorf("Data-Shield mirror quorum: %w", err))
-		} else {
+		} else if outcome == dataShieldFeedUpdated {
 			fmt.Println("OK")
+		} else if outcome == dataShieldFeedPreserved {
+			fmt.Println("SKIPPED (quorum unavailable; validated last-known-good preserved)")
+			_, _ = fmt.Fprintln(os.Stderr, "[WARNING] Data-Shield quorum is unavailable; the validated last-known-good feed was preserved and the hourly updater will retry.")
+		} else {
+			fmt.Println("SKIPPED (quorum unavailable; optional feed omitted)")
+			_, _ = fmt.Fprintln(os.Stderr, "[WARNING] Data-Shield quorum is unavailable and no validated last-known-good feed exists; this optional feed was omitted and the hourly updater will retry.")
 		}
 	}
 
@@ -1540,6 +1687,7 @@ func downloadOSINTWithClient(ctx context.Context, client *http.Client, urls []st
 		minimumIPv6PrefixBits:  128,
 		requireHostPrefixes:    true,
 		requirePublicAddresses: true,
+		skipNonPublicEntries:   true,
 	}
 	origins := make(map[string]struct{}, len(urls))
 	presence := make(map[netip.Prefix]int)
@@ -1556,6 +1704,7 @@ func downloadOSINTWithClient(ctx context.Context, client *http.Client, urls []st
 		if err != nil {
 			return fmt.Errorf("validate OSINT source: %w", err)
 		}
+		reportIgnoredOSINTEntries(os.Stderr, origin, candidate.ignoredNonPublicEntries)
 		for _, prefix := range candidate.prefixes {
 			presence[prefix]++
 		}

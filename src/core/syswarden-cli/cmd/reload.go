@@ -13,6 +13,8 @@ import (
 var noRestart bool
 var applyPoliciesForReload = firewall.ApplyPolicies
 var setupWireGuardForReload = network.SetupWireguard
+var setupWAFForReload = integration.SetupWAFLogForwarder
+var setupSIEMForReload = integration.SetupSIEM
 
 var reloadCmd = &cobra.Command{
 	Use:   "reload",
@@ -45,11 +47,8 @@ var reloadCmd = &cobra.Command{
 			fmt.Println("[WARN] WireGuard reload skipped because the authoritative firewall transaction failed.")
 		}
 
-		// Re-apply WAF Log Bridge (Rsyslog)
-		if err := integration.SetupWAFLogForwarder(); err != nil {
-			fmt.Printf("[ERROR] WAF Log Bridge reload failed: %v\n", err)
-			failures = append(failures, fmt.Errorf("WAF log bridge reload: %w", err))
-		}
+		// Reconcile the WAF bridge first, then the optional SIEM forwarder.
+		failures = append(failures, reloadRsyslogIntegrations()...)
 
 		// Re-apply AbuseIPDB / Telemetry configuration
 		if err := integration.SetupAbuseIPDB(); err != nil {
@@ -83,6 +82,19 @@ var reloadCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func reloadRsyslogIntegrations() []error {
+	var failures []error
+	if err := setupWAFForReload(); err != nil {
+		fmt.Printf("[ERROR] WAF Log Bridge reload failed: %v\n", err)
+		failures = append(failures, fmt.Errorf("WAF log bridge reload: %w", err))
+	}
+	if err := setupSIEMForReload(); err != nil {
+		fmt.Printf("[ERROR] SIEM integration reload failed: %v\n", err)
+		failures = append(failures, fmt.Errorf("SIEM integration reload: %w", err))
+	}
+	return failures
 }
 
 func reloadCompletionMessage(hadReportedError bool) string {

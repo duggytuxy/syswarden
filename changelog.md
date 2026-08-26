@@ -1,10 +1,177 @@
+# Release v4.03.3
+
+> Candidate status: v4.03.3 is the Patch candidate for observed webhook,
+> nftables interval and OSINT installation defects. This block does not
+> authorize a tag or public Release.
+
+### FIXED
+
+- **Provider-bound webhook serialization:** Select Discord, Microsoft Teams and
+  Slack wire formats from the configured provider field instead of matching URL
+  hostname text. Build a Microsoft Teams Adaptive Card 1.2 message envelope for
+  `teams_url` without assuming the legacy `webhook.office.com` hostname, while
+  preserving Discord embeds and Slack text payloads. Keep credential-bearing
+  endpoint details out of transport-failure logs.
+- **Regression coverage:** Add HTTP contract tests for ban, detected, allow,
+  shadow/insider and local-check drift/OK alerts across all three providers on
+  one synthetic hostname. Assert that Teams payloads are not Discord-shaped and
+  that transport-failure logs expose neither endpoint hostnames nor credentials.
+- **Kernel-compatible nftables intervals:** Encode IPv4 and IPv6 host or CIDR
+  mutations in nftables interval sets as a start element followed by the exact
+  exclusive end marker expected by the kernel. Detect an unterminated start,
+  repair it before replacement, reject ambiguous forms and any requested
+  interval containing an existing internal boundary, and verify the exact state
+  across every available inet and netdev layer before a mutation can report
+  success. Treat an end-marker residue after timed expiry as absent when the
+  kernel retains it, accept kernels that collect the complete expired interval,
+  and prove that a direct re-ban recreates one exact closed interval without
+  changing a neighbour.
+- **Legacy dynamic-state quarantine:** During transactional reload, detect a
+  non-singleton legacy dynamic interval ending at the address-family maximum in
+  string, prefix or range JSON form. Quarantine the affected family across inet
+  and netdev instead of preserving an ambiguous suffix. The packaged install
+  path performs the same exact volatile-set quarantine before its own
+  network-dependent configuration, restarts the packaged core service when a
+  repair was required and performs a final pass to close the restart race. Keep
+  pre-commit and completed warnings distinct, and make rollback report that
+  persistent policy was restored while quarantined dynamic family state
+  remained omitted. Because the already-published v4.03.2 updater must reach
+  GitHub before the candidate package runs, document a bounded producer-stop
+  and exact dynamic-set bootstrap for an affected host whose DNS or GitHub
+  return traffic is already blocked.
+- **Bounded OSINT source filtering:** Keep 6to4, private and other non-public or
+  special-use prefixes inadmissible. For the supported multi-origin OSINT path
+  only, discard a syntactically valid inadmissible entry with a bounded
+  origin-and-count warning, exclude it from consensus and publication, and
+  apply the source minimum after filtering. Malformed syntax and every custom
+  or digest-bound feed remain fail closed.
+- **Installation regression coverage:** Reproduce the upstream `2002::/16`
+  6to4 case, prove that the entry is absent from the canonical IPv6 output and
+  retain failures for malformed entries or an insufficient post-filter source.
+- **Data-Shield availability boundary:** Keep the two-independent-origin quorum
+  mandatory for every newly published Data-Shield candidate. During package
+  installation only, tolerate a validly configured external mirror outage,
+  rejected remote candidates or content disagreement by preserving an exact
+  validated last-known-good feed, or by omitting the optional Data-Shield
+  contribution when no such file exists. Never publish one mirror alone, and
+  keep invalid mirror configuration, caller cancellation, unsafe local state
+  and publication failures fatal. Explicit and scheduled feed updates still
+  return failure after safely reapplying the validated policy so monitoring
+  remains truthful.
+- **Observable command failures and typed configuration output:** Return a
+  non-zero result when any requested `block` or `unblock` transaction fails,
+  while continuing the bounded argument set and emitting an alert only for a
+  committed ban. Render strings directly and all other validated
+  `config-get` values as compact JSON so empty and non-empty GEO or ASN arrays
+  remain distinguishable and honor `99-user.toml` priority.
+- **RHEL dependency boundary:** Remove `qrencode` and the implicit EPEL enablement
+  from the RPM, package lab, manual DNF or YUM dependency path and RHEL image
+  recipe. WireGuard keeps its protected client configuration when terminal QR
+  rendering is unavailable and reports that rendering as an optional feature.
+- **Alpine scheduler activation boundary:** Account for apk-tools 3 behavior
+  that can commit package payload after a failed pre-install script. A fresh
+  online transaction without prepared Cronie now completes with an unbroken,
+  payload-only SysWarden package while both package hooks exit before creating
+  configuration, data, logs, runtime state, cron state, services, processes or
+  firewall policy. The package-owned payload includes its immutable launchers.
+  The package prints bounded activation steps that remove BusyBox `crond` from
+  all runlevels, keep Cronie active only in `default` and run the packaged
+  installer. Prepared fresh installs remain automatic,
+  scheduler-mismatched upgrades stop before configuration and are reported as
+  broken rather than falsely rolled back, and offline staging remains deferred.
+- **Package-owned shell completion:** Install Bash completion as an immutable
+  package payload under `/usr/share/bash-completion/completions/syswarden`.
+  Stop package hooks from writing `/etc/bash_completion.d` or `/root/.bashrc`,
+  and remove only the byte-exact historical v4.02.8 through v4.03.2 completion
+  during migration or verified removal. Preserve every modified, linked or
+  otherwise ambiguous operator path.
+- **Attributed integration cleanup:** Remove only byte-exact SysWarden WAF and
+  enabled SIEM rsyslog fragments while the installed binary and configuration
+  can still attest their expected bytes. Record published identities in a
+  private root-owned provenance registry so later configuration changes can
+  remove an exact obsolete fragment without claiming an operator file. Pin
+  root-controlled directories, publish and quarantine atomically, recover a
+  bounded interrupted operation, reactivate rsyslog before commit and preserve
+  every concurrent or ambiguous replacement together with its provenance.
+- **Exact final-removal closure:** Remove the byte-exact rsyslog anti-forging
+  fragment, the attributable priority-400 `syswarden_rsyslog` SELinux module and
+  its private checksum provenance, and the exact unlocked root-owned runtime
+  firewall lock. Preserve modified, unprovenanced, differently prioritized,
+  busy or otherwise ambiguous operator state. Scan the normal core only after
+  managed services are stopped so a healthy service can be stopped while a
+  manually launched residual core still blocks deletion. The `semodule` CLI has
+  no checksum-conditional removal primitive, so SysWarden double-reattests the
+  module and provenance immediately before priority-400 removal and verifies
+  the result, but does not claim atomicity against an external store replacement
+  inside that final comparison-to-command boundary.
+- **Explicit package purge semantics:** Keep Debian `remove` non-destructive for
+  `/etc/syswarden`, `/var/lib/syswarden` and `/var/log/syswarden`. Treat Debian
+  `purge`, final RPM erase and APK post-deinstall as destructive removal of
+  those dedicated namespaces. Refuse mounted roots or descendants before
+  changing removal state, preserve an exact deferred barrier across Debian
+  remove, consume it only after a successful reinstall, and refuse any active
+  or ambiguous barrier. Move the exact final barrier outside the state root
+  before removing that root so a retry or a successful reinstall can recover
+  every bounded crash window without crossing an external mount.
+
+### RELEASE GATE
+
+- A real Power Automate endpoint qualification remains required before Teams
+  delivery is claimed as released. The published v4.03.2 assets remain
+  immutable and unchanged.
+- The isolated nftables laboratory must exercise host and CIDR add, timed
+  renewal, permanent replacement, idempotent replay and removal against a real
+  Linux kernel for both address families. It must also prove functional timed
+  expiry, safe direct re-ban whether an exclusive-end residue remains or has
+  already been collected, and conservative rejection both of a singleton that
+  overlaps a CIDR with the same start and of a CIDR that spans separately owned
+  internal intervals.
+- A manual release-owner gate on a disposable Ubuntu 26.04 AMD64 host must
+  complete package configuration while a deterministic local TLS fixture serves
+  one supported OSINT source path containing a syntactically valid `2002::/16`
+  entry. This gate is separate from protected CI and must bind the exact source
+  SHA, workflow artifact identity and package SHA-256. Its evidence must show
+  the bounded warning, absence of the entry from published lists, successful
+  service health and no package left in `iF` state.
+- Disposable Ubuntu 26.04, AlmaLinux 10 and Alpine 3.24 AMD64 hosts must bind
+  the exact candidate source SHA, workflow run, artifact ID and package digest.
+  Their native package-manager records must prove v4.03.2 to v4.03.3 upgrade,
+  configuration preservation, service health, reload and the family-specific
+  destructive removal contract. The Ubuntu host must additionally exercise
+  isolated GEO, ASN and WAAP threshold policy without writing synthetic events
+  to a real authentication log or leaving test bans behind.
+- The pre-tag Ubuntu migration gate must cover the exact workflow artifact after
+  the documented contained bootstrap for a v4.03.2 legacy interval that already
+  blocks DNS or GitHub return traffic. The Alpine gate must prove that a fresh
+  online transaction without prepared Cronie leaves only an unbroken,
+  payload-only inactive package and no generated configuration, data, logs,
+  runtime, cron, service, process or firewall state. It must then prove the
+  documented activation path and the normal automatic path with Cronie prepared
+  before installation.
+
+### POST-PUBLICATION CHECK
+
+- Keep one disposable host on the exact published v4.03.2 package until the
+  v4.03.3 Release is public. Run `syswarden update` only after GitHub
+  `releases/latest` resolves to v4.03.3, then attest the embedded Ed25519 trust
+  root, signed manifest, selected AMD64 package digest, installed v4.03.3
+  package record and service health. This smoke test cannot be fabricated or
+  claimed before publication.
+- The post-publication smoke must use a connected v4.03.2 state for the signed
+  updater itself. If the retained snapshot contains the blocking legacy suffix,
+  first execute and record the qualified contained bootstrap from the migration
+  runbook; no unsigned fallback is permitted.
+
+---
+
 # Release v4.03.2
 
-> Candidate status: v4.03.2 is the Patch candidate that supersedes the
-> technically qualified but unpublished v4.03.1 candidate. v4.03.1 was
-> deliberately left untagged and no public Release was created. Requirements
-> recorded in the historical v4.03.1 block describe that candidate's original
-> gate and do not authorize or apply to v4.03.2.
+> Release status: v4.03.2 was published at 2026-08-25T14:15:49Z from the
+> signed annotated `v4.03.2` tag, peeled to commit
+> `2eae757bbdee510fdd1058ba7770f2c5564ecb23`. It superseded the technically
+> qualified but unpublished v4.03.1 candidate. Requirements recorded in the
+> historical v4.03.1 block describe that candidate's original gate and do not
+> authorize changing the immutable v4.03.2 tag or assets.
 
 ### SECURITY
 
@@ -70,10 +237,11 @@
 
 ### RELEASE GATE
 
-- v4.03.2 remains NO-GO until the exact merged commit passes every protected
-  main and qualification gate, the qualification environment has the required
-  owner review rule, and the signed-tag rebuild matches the qualified packages
-  byte for byte. No v4.03.2 tag or public Release is authorized by this block.
+- **Historical gate result:** The exact published v4.03.2 commit passed the
+  protected main and qualification gates, the qualification environment owner
+  review requirement and the byte-for-byte signed-tag rebuild comparison. This
+  historical block records that completed gate and does not authorize moving
+  the tag, replacing an asset or reusing its evidence for a later Patch.
 
 ---
 

@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -29,7 +30,20 @@ PACKAGE_WORKFLOW = REPOSITORY / ".github" / "workflows" / "package.yml"
 BUILD_SCRIPT = REPOSITORY / "build.ps1"
 LOCAL_BUILD_SCRIPT = REPOSITORY / "build_packages.sh"
 WEBTUI_RETIREMENT_HELPER = REPOSITORY / "scripts" / "ci" / "package_webtui_retirement.sh"
+DEFERRED_PURGE_POSTINSTALL_HELPER = (
+    REPOSITORY / "scripts" / "ci" / "package_deferred_purge_postinstall.sh"
+)
+ALPINE_CRONIE_PREFLIGHT_HELPER = (
+    REPOSITORY / "scripts" / "ci" / "package_alpine_cronie_preflight.sh"
+)
+REMOVAL_STATE_HELPER = REPOSITORY / "scripts" / "ci" / "package_removal_state.sh"
 SERVICE_SOURCE = REPOSITORY / "src" / "core" / "syswarden-cli" / "pkg" / "system" / "service_linux.go"
+DEPENDENCIES_SOURCE = (
+    REPOSITORY / "src" / "core" / "syswarden-cli" / "pkg" / "system" / "dependencies.go"
+)
+INSTALL_COMMAND_SOURCE = (
+    REPOSITORY / "src" / "core" / "syswarden-cli" / "cmd" / "install.go"
+)
 
 
 def workflow_step_script(workflow: str, step_name: str) -> str:
@@ -119,7 +133,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         body = bodies[0]
         if name in {"preinst.sh", "postinst.sh", "prerm.sh", "postrm.sh"}:
-            body = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8") + "\n" + body
+            prefix = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
+            if name in {"preinst.sh", "postinst.sh"}:
+                prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
+            if name in {"preinst.sh", "postinst.sh"}:
+                prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+            if name == "postrm.sh":
+                prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
+            body = prefix + body
         return body
 
     def test_package_service_cleanup_hashes_match_runtime_service_sources(self) -> None:
@@ -180,7 +201,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         body = bodies[0]
         if name in {"preinst.sh", "postinst.sh", "prerm.sh", "postrm.sh"}:
-            body = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8") + "\n" + body
+            prefix = WEBTUI_RETIREMENT_HELPER.read_text(encoding="utf-8")
+            if name in {"preinst.sh", "postinst.sh"}:
+                prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
+            if name in {"preinst.sh", "postinst.sh"}:
+                prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+            if name == "postrm.sh":
+                prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
+            body = prefix + body
         return body
 
     def seed_systemd_runtime(self, root: Path) -> None:
@@ -822,12 +850,22 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         self.assertIn("set -e", preinstall)
         self.assertIn('export SYSWARDEN_PKG_INSTALL=1', preinstall)
+        self.assertIn("syswarden_preflight_alpine_cronie", preinstall)
+        self.assertLess(
+            preinstall.index("syswarden_preflight_alpine_cronie\n"),
+            preinstall.index("syswarden_preflight_install_barriers\n"),
+        )
         self.assertLess(
             preinstall.index('export SYSWARDEN_PKG_INSTALL=1'),
             preinstall.index("syswarden_retire_legacy_webtui / || exit 1"),
         )
         self.assertIn('export SYSWARDEN_PKG_INSTALL=1', postinstall)
         self.assertIn("set -e", postinstall)
+        self.assertIn("syswarden_preflight_alpine_cronie", postinstall)
+        self.assertLess(
+            postinstall.index("syswarden_preflight_alpine_cronie\n"),
+            postinstall.index("syswarden_preflight_install_barriers\n"),
+        )
         self.assertIn('[ "$1" = "2" ]', postinstall)
         self.assertIn('[ "$1" = "configure" ]', postinstall)
         self.assertIn("syswarden_classify_service_manager", postinstall)
@@ -849,6 +887,399 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertNotRegex(postinstall, r"migrate-config[^\n]*\|\|\s*true")
         self.assertIn('/opt/syswarden/bin/syswarden-cli install', postinstall)
         self.assertIn('[ -f /etc/alpine-release ]', postinstall)
+
+    def test_alpine_cronie_runlevel_parser_matches_openrc_verbose_output(self) -> None:
+        node04_runlevels = (
+            "                crond |                                        \n"
+            "               cronie |      default                           \n"
+        )
+        crond_enabled = (
+            "                crond |      default                           \n"
+            "               cronie |      default                           \n"
+        )
+
+        def validate(runlevels: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '. "$1"; printf "%s" "$2" | '
+                    "syswarden_validate_alpine_cronie_runlevels",
+                    "probe",
+                    str(ALPINE_CRONIE_PREFLIGHT_HELPER),
+                    runlevels,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        accepted = validate(node04_runlevels)
+        self.assertEqual(accepted.returncode, 0, accepted)
+        rejected = validate(crond_enabled)
+        self.assertNotEqual(rejected.returncode, 0, rejected)
+
+    def test_alpine_apk_hook_matrix_defers_fresh_activation_without_broken_or_partial_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            mock_bin = Path(temporary)
+            (mock_bin / "apk").write_text(
+                "#!/bin/sh\n"
+                "[ \"${SYSWARDEN_TEST_APK_READY:-0}\" = 1 ] || exit 1\n"
+                "case \"$*\" in\n"
+                "  'info --installed cronie'|'info --installed cronie-openrc') exit 0 ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            (mock_bin / "rc-service").write_text(
+                "#!/bin/sh\n"
+                "case \"$*\" in\n"
+                "  '--exists cronie') exit 0 ;;\n"
+                "  'cronie status') [ \"${SYSWARDEN_TEST_CRONIE_ACTIVE:-0}\" = 1 ] ;;\n"
+                "  '--exists crond') exit 0 ;;\n"
+                "  'crond status') [ \"${SYSWARDEN_TEST_CROND_ACTIVE:-0}\" = 1 ] ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            (mock_bin / "rc-update").write_text(
+                "#!/bin/sh\n"
+                "[ \"$*\" = 'show -v' ] || exit 1\n"
+                "printf '%s\\n' \"${SYSWARDEN_TEST_RUNLEVELS:-}\"\n",
+                encoding="utf-8",
+            )
+            for command in ("apk", "rc-service", "rc-update"):
+                (mock_bin / command).chmod(0o700)
+
+            def run_hook(
+                script_name: str,
+                apk_script: str,
+                *,
+                packages_ready: bool,
+                cronie_active: bool,
+            ) -> subprocess.CompletedProcess[str]:
+                script = self.script(script_name)
+                invocation = "\nsyswarden_preflight_alpine_cronie\n"
+                end = script.index(invocation) + len(invocation)
+                prefix = script[:end].replace(
+                    "[ -f /etc/alpine-release ] || return 0",
+                    '[ "${SYSWARDEN_TEST_ALPINE:-}" = 1 ] || return 0',
+                ).replace(
+                    "syswarden_classify_service_manager / openrc",
+                    "printf '%s\\n' ACTIVE",
+                )
+                probe = prefix + "printf '%s\\n' partial-configuration-reached; exit 97\n"
+                return subprocess.run(
+                    ["/bin/sh", "-c", probe, f"{apk_script}-contract", "4.3.3"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{mock_bin}:{os.environ['PATH']}",
+                        "APK_PACKAGE": "syswarden",
+                        "APK_SCRIPT": apk_script,
+                        "SYSWARDEN_TEST_ALPINE": "1",
+                        "SYSWARDEN_TEST_APK_READY": "1" if packages_ready else "0",
+                        "SYSWARDEN_TEST_CRONIE_ACTIVE": "1" if cronie_active else "0",
+                        "SYSWARDEN_TEST_CROND_ACTIVE": "0",
+                        "SYSWARDEN_TEST_RUNLEVELS": "crond |\ncronie | default",
+                    },
+                )
+
+            deferred = (
+                ("preinst.sh", "pre-install", False, False),
+                # Dependencies can be visible later in the fresh transaction,
+                # while Cronie still is not enabled or started.
+                ("postinst.sh", "post-install", True, False),
+            )
+            for script_name, apk_script, packages_ready, cronie_active in deferred:
+                with self.subTest(hook=apk_script, state="deferred"):
+                    result = run_hook(
+                        script_name,
+                        apk_script,
+                        packages_ready=packages_ready,
+                        cronie_active=cronie_active,
+                    )
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertNotIn("partial-configuration-reached", result.stdout)
+                    self.assertIn("activation is deferred", result.stderr)
+                    self.assertIn(
+                        "SYSWARDEN_PKG_INSTALL=1 /opt/syswarden/bin/syswarden-cli install",
+                        result.stderr,
+                    )
+                    self.assertNotIn("ln -sf", result.stderr)
+                    self.assertIn(
+                        "syswarden_remove_openrc_runlevels crond",
+                        result.stderr,
+                    )
+                    self.assertIn(
+                        "syswarden_remove_openrc_runlevels cronie",
+                        result.stderr,
+                    )
+                    self.assertNotIn("rc-update del crond 2>/dev/null", result.stderr)
+
+            strict_upgrades = (
+                ("preinst.sh", "pre-upgrade", False, False),
+                ("postinst.sh", "post-upgrade", True, False),
+            )
+            for script_name, apk_script, packages_ready, cronie_active in strict_upgrades:
+                with self.subTest(hook=apk_script, state="strict"):
+                    result = run_hook(
+                        script_name,
+                        apk_script,
+                        packages_ready=packages_ready,
+                        cronie_active=cronie_active,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result)
+                    self.assertNotIn("partial-configuration-reached", result.stdout)
+                    self.assertNotIn("activation is deferred", result.stderr)
+
+            for script_name, apk_script in (
+                ("preinst.sh", "pre-install"),
+                ("postinst.sh", "post-install"),
+                ("preinst.sh", "pre-upgrade"),
+                ("postinst.sh", "post-upgrade"),
+            ):
+                with self.subTest(hook=apk_script, state="ready"):
+                    result = run_hook(
+                        script_name,
+                        apk_script,
+                        packages_ready=True,
+                        cronie_active=True,
+                    )
+                    self.assertEqual(result.returncode, 97, result)
+                    self.assertEqual(result.stdout, "partial-configuration-reached\n")
+
+    def test_alpine_deferred_activation_removes_every_bounded_openrc_runlevel(
+        self,
+    ) -> None:
+        helper = ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+        activation = helper.split(
+            "/bin/sh -eu <<'SYSWARDEN_ACTIVATE'\n", 1
+        )[1].split("\nSYSWARDEN_ACTIVATE\n", 1)[0]
+        activation = activation.replace(
+            "SYSWARDEN_PKG_INSTALL=1 /opt/syswarden/bin/syswarden-cli install",
+            "SYSWARDEN_PKG_INSTALL=1 syswarden-test-install",
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mock_bin = root / "bin"
+            mock_bin.mkdir(mode=0o700)
+            log = root / "calls"
+            crond_state = root / "crond-state"
+            cronie_state = root / "cronie-state"
+            crond_runlevels = root / "crond-runlevels"
+            cronie_runlevels = root / "cronie-runlevels"
+            (mock_bin / "rc-update").write_text(
+                "#!/bin/sh\n"
+                "case \"$1\" in\n"
+                "  show)\n"
+                "    [ \"${2:-}\" = -v ] || exit 1\n"
+                "    printf 'crond | %s\\ncronie | %s\\n' \\\n"
+                "      \"$(cat \"${SYSWARDEN_TEST_CROND_RUNLEVELS}\")\" \\\n"
+                "      \"$(cat \"${SYSWARDEN_TEST_CRONIE_RUNLEVELS}\")\"\n"
+                "    ;;\n"
+                "  del)\n"
+                "    [ \"$#\" -eq 3 ] || exit 1\n"
+                "    printf 'rc-update:%s\\n' \"$*\" >> \"${SYSWARDEN_TEST_LOG}\"\n"
+                "    case \"$2\" in\n"
+                "      crond) state=${SYSWARDEN_TEST_CROND_RUNLEVELS} ;;\n"
+                "      cronie) state=${SYSWARDEN_TEST_CRONIE_RUNLEVELS} ;;\n"
+                "      *) exit 1 ;;\n"
+                "    esac\n"
+                "    next=\n"
+                "    for candidate in $(cat \"${state}\"); do\n"
+                "      [ \"${candidate}\" = \"$3\" ] || next=\"${next}${next:+ }${candidate}\"\n"
+                "    done\n"
+                "    printf '%s\\n' \"${next}\" > \"${state}\"\n"
+                "    ;;\n"
+                "  add)\n"
+                "    [ \"$#\" -eq 3 ] && [ \"$2\" = cronie ] || exit 1\n"
+                "    printf 'rc-update:%s\\n' \"$*\" >> \"${SYSWARDEN_TEST_LOG}\"\n"
+                "    state=${SYSWARDEN_TEST_CRONIE_RUNLEVELS}\n"
+                "    current=$(cat \"${state}\")\n"
+                "    case \" ${current} \" in\n"
+                "      *\" $3 \"*) ;;\n"
+                "      *) printf '%s\\n' \"${current}${current:+ }$3\" > \"${state}\" ;;\n"
+                "    esac\n"
+                "    ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            (mock_bin / "rc-service").write_text(
+                "#!/bin/sh\n"
+                "printf 'rc-service:%s\\n' \"$*\" >> \"${SYSWARDEN_TEST_LOG}\"\n"
+                "case \"$*\" in\n"
+                "  '--exists crond'|'--exists cronie') exit 0 ;;\n"
+                "  'crond status')\n"
+                "    [ \"$(cat \"${SYSWARDEN_TEST_CROND_STATE}\")\" = active ] && exit 0\n"
+                "    exit 3\n"
+                "    ;;\n"
+                "  'crond stop')\n"
+                "    [ \"$(cat \"${SYSWARDEN_TEST_CROND_STATE}\")\" = active ] || exit 1\n"
+                "    [ \"${SYSWARDEN_TEST_CROND_STOP_FAIL:-0}\" != 1 ] || exit 41\n"
+                "    printf '%s\\n' inactive > \"${SYSWARDEN_TEST_CROND_STATE}\"\n"
+                "    ;;\n"
+                "  'cronie status')\n"
+                "    [ \"$(cat \"${SYSWARDEN_TEST_CRONIE_STATE}\")\" = active ] && exit 0\n"
+                "    exit 3\n"
+                "    ;;\n"
+                "  'cronie start')\n"
+                "    printf '%s\\n' active > \"${SYSWARDEN_TEST_CRONIE_STATE}\"\n"
+                "    ;;\n"
+                "  'cronie stop') exit 42 ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            (mock_bin / "syswarden-test-install").write_text(
+                "#!/bin/sh\n"
+                "printf 'install:%s\\n' \"${SYSWARDEN_PKG_INSTALL:-unset}\" >> \"${SYSWARDEN_TEST_LOG}\"\n",
+                encoding="utf-8",
+            )
+            for command in (
+                "rc-update",
+                "rc-service",
+                "syswarden-test-install",
+            ):
+                (mock_bin / command).chmod(0o700)
+
+            def run_activation(
+                crond_levels: str,
+                cronie_levels: str,
+                *,
+                crond_active: bool,
+                cronie_active: bool,
+                crond_stop_fails: bool = False,
+            ) -> subprocess.CompletedProcess[str]:
+                log.unlink(missing_ok=True)
+                crond_state.write_text(
+                    "active\n" if crond_active else "inactive\n", encoding="ascii"
+                )
+                cronie_state.write_text(
+                    "active\n" if cronie_active else "inactive\n", encoding="ascii"
+                )
+                crond_runlevels.write_text(f"{crond_levels}\n", encoding="ascii")
+                cronie_runlevels.write_text(f"{cronie_levels}\n", encoding="ascii")
+                return subprocess.run(
+                    ["/bin/sh", "-eu", "-c", activation],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{mock_bin}:{os.environ['PATH']}",
+                        "SYSWARDEN_TEST_LOG": str(log),
+                        "SYSWARDEN_TEST_CROND_STATE": str(crond_state),
+                        "SYSWARDEN_TEST_CRONIE_STATE": str(cronie_state),
+                        "SYSWARDEN_TEST_CROND_RUNLEVELS": str(crond_runlevels),
+                        "SYSWARDEN_TEST_CRONIE_RUNLEVELS": str(cronie_runlevels),
+                        "SYSWARDEN_TEST_CROND_STOP_FAIL": (
+                            "1" if crond_stop_fails else "0"
+                        ),
+                    },
+                )
+
+            accepted = run_activation(
+                "boot default custom-runlevel",
+                "boot default",
+                crond_active=True,
+                cronie_active=False,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted)
+            self.assertEqual(
+                log.read_text(encoding="utf-8").splitlines(),
+                [
+                    "rc-service:--exists cronie",
+                    "rc-service:cronie status",
+                    "rc-service:--exists crond",
+                    "rc-service:crond status",
+                    "rc-service:crond stop",
+                    "rc-update:del crond boot",
+                    "rc-update:del crond default",
+                    "rc-update:del crond custom-runlevel",
+                    "rc-update:del cronie boot",
+                    "rc-update:del cronie default",
+                    "rc-update:add cronie default",
+                    "rc-service:cronie start",
+                    "rc-service:--exists crond",
+                    "rc-service:crond status",
+                    "rc-service:--exists cronie",
+                    "rc-service:cronie status",
+                    "install:1",
+                ],
+            )
+            self.assertEqual(crond_state.read_text(encoding="ascii"), "inactive\n")
+            self.assertEqual(cronie_state.read_text(encoding="ascii"), "active\n")
+            self.assertEqual(crond_runlevels.read_text(encoding="ascii"), "\n")
+            self.assertEqual(cronie_runlevels.read_text(encoding="ascii"), "default\n")
+
+            failed_stop = run_activation(
+                "default",
+                "",
+                crond_active=True,
+                cronie_active=False,
+                crond_stop_fails=True,
+            )
+            self.assertEqual(failed_stop.returncode, 41, failed_stop)
+            failed_stop_calls = log.read_text(encoding="utf-8")
+            self.assertIn("rc-service:crond stop", failed_stop_calls)
+            self.assertNotIn("rc-update:del", failed_stop_calls)
+            self.assertNotIn("install:1", failed_stop_calls)
+
+            too_many_cronie = " ".join(
+                f"cronie-level{index}" for index in range(33)
+            )
+            for case_name, invalid_cronie in (
+                ("malformed", "default invalid/runlevel"),
+                ("over-bound", too_many_cronie),
+            ):
+                with self.subTest(cronie_preflight=case_name):
+                    rejected_cronie = run_activation(
+                        "default",
+                        invalid_cronie,
+                        crond_active=True,
+                        cronie_active=True,
+                    )
+                    self.assertNotEqual(
+                        rejected_cronie.returncode, 0, rejected_cronie
+                    )
+                    preflight_calls = (
+                        log.read_text(encoding="utf-8") if log.exists() else ""
+                    )
+                    self.assertEqual(preflight_calls, "")
+
+            already_active = run_activation(
+                "boot",
+                "boot",
+                crond_active=False,
+                cronie_active=True,
+            )
+            self.assertEqual(already_active.returncode, 0, already_active)
+            active_calls = log.read_text(encoding="utf-8")
+            self.assertNotIn("rc-service:crond stop", active_calls)
+            self.assertNotIn("rc-service:cronie stop", active_calls)
+            self.assertNotIn("rc-service:cronie start", active_calls)
+            self.assertEqual(crond_runlevels.read_text(encoding="ascii"), "\n")
+            self.assertEqual(cronie_runlevels.read_text(encoding="ascii"), "default\n")
+
+            too_many = " ".join(f"level{index}" for index in range(33))
+            rejected = run_activation(
+                too_many,
+                "default",
+                crond_active=False,
+                cronie_active=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0, rejected)
+            bounded_calls = log.read_text(encoding="utf-8") if log.exists() else ""
+            self.assertNotIn("rc-service:", bounded_calls)
+            self.assertNotIn("rc-update:del", bounded_calls)
+            self.assertNotIn("rc-update:add", bounded_calls)
 
     def test_package_preinstall_tightens_directories_and_rejects_links(self) -> None:
         for script_name in ("preinst.sh",):
@@ -885,6 +1316,116 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 self.assertNotEqual(rejected.returncode, 0, rejected)
                 self.assertIn("Refusing unsafe SysWarden directory", rejected.stderr)
                 self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+
+    def test_install_barrier_preflight_precedes_mutation_and_is_read_only(self) -> None:
+        owner = f"{os.getuid()}:{os.getgid()}"
+        scripts = {
+            "preinst": self.script("preinst.sh"),
+            "postinst": self.script("postinst.sh"),
+        }
+        invocation = "\nsyswarden_preflight_install_barriers\n"
+        prefixes: dict[str, str] = {}
+        for name, script in scripts.items():
+            start = script.index("syswarden_install_path_absent() {")
+            end = script.index(invocation, start) + len(invocation)
+            prefixes[name] = script[start:end]
+        self.assertLess(
+            scripts["preinst"].index(invocation),
+            scripts["preinst"].index("secure_private_directory() {"),
+        )
+        self.assertLess(
+            scripts["postinst"].index(invocation),
+            scripts["postinst"].index(
+                "ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden"
+            ),
+        )
+
+        with tempfile.TemporaryDirectory(prefix="sw-install-barrier-", dir="/tmp") as temporary:
+            root = Path(temporary)
+            state_root = root / "var/lib/syswarden"
+            state_root.mkdir(parents=True, mode=0o750)
+            state_root.chmod(0o750)
+            parent = root / "var/lib"
+            parent.chmod(0o755)
+            active = state_root / "removal-in-progress-v1"
+            deferred = state_root / "removed-awaiting-purge-v1"
+            finalizing = parent / ".syswarden-removal-finalizing-v1"
+            payload = b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n"
+            operator = state_root / "operator.json"
+            operator.write_bytes(b"operator\n")
+            operator.chmod(0o600)
+
+            def prepare(script: str) -> str:
+                executable = script.replace(
+                    "/var/lib/.syswarden-removal-finalizing-v1", str(finalizing)
+                ).replace("/var/lib/syswarden", str(state_root))
+                executable = executable.replace(
+                    "[ ! -L /var/lib ] && [ -d /var/lib ]",
+                    f"[ ! -L {parent} ] && [ -d {parent} ]",
+                ).replace(
+                    '"$(stat -c \'%u:%g:%a\' /var/lib)"',
+                    f'"$(stat -c \'%u:%g:%a\' {parent})"',
+                )
+                return executable.replace(
+                    "0:0:700|0:0:710|0:0:711|0:0:750|0:0:751|0:0:755",
+                    f"{owner}:700|{owner}:710|{owner}:711|{owner}:750|{owner}:751|{owner}:755",
+                ).replace(
+                    "0:0:700|0:0:750|0:0:755",
+                    f"{owner}:700|{owner}:750|{owner}:755",
+                ).replace("'0:0:600:1'", f"'{owner}:600:1'")
+
+            executables = {name: prepare(script) for name, script in prefixes.items()}
+
+            def snapshot() -> tuple[tuple[str, int, bytes | None], ...]:
+                observed = []
+                for path in sorted(root.rglob("*")):
+                    metadata = path.lstat()
+                    observed.append(
+                        (
+                            str(path.relative_to(root)),
+                            stat.S_IMODE(metadata.st_mode),
+                            path.read_bytes() if path.is_file() else None,
+                        )
+                    )
+                return tuple(observed)
+
+            def run(name: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    ("/bin/sh", "-c", executables[name], f"{name}-barrier"),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+            active.write_bytes(payload)
+            active.chmod(0o600)
+            active_snapshot = snapshot()
+            for name in executables:
+                with self.subTest(script=name, barrier="active"):
+                    refused = run(name)
+                    self.assertNotEqual(refused.returncode, 0, refused)
+                    self.assertIn("active package-removal barrier", refused.stderr)
+                    self.assertEqual(snapshot(), active_snapshot)
+
+            active.unlink()
+            deferred.write_bytes(payload)
+            deferred.chmod(0o600)
+            deferred_snapshot = snapshot()
+            for name in executables:
+                with self.subTest(script=name, barrier="deferred"):
+                    accepted = run(name)
+                    self.assertEqual(accepted.returncode, 0, accepted)
+                    self.assertEqual(snapshot(), deferred_snapshot)
+
+            deferred.unlink()
+            finalizing.write_bytes(payload)
+            finalizing.chmod(0o600)
+            finalizing_snapshot = snapshot()
+            for name in executables:
+                with self.subTest(script=name, barrier="finalizing"):
+                    accepted = run(name)
+                    self.assertEqual(accepted.returncode, 0, accepted)
+                    self.assertEqual(snapshot(), finalizing_snapshot)
 
     def test_product_service_enablement_cleanup_accepts_only_exact_release_targets(self) -> None:
         allowed_targets = (
@@ -3107,6 +3648,76 @@ class PackageLifecycleContractTests(unittest.TestCase):
 
     def test_workflow_and_local_maintainer_hooks_are_byte_and_order_identical(self) -> None:
         local_source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(
+            self.workflow.count(
+                'cat scripts/ci/package_deferred_purge_postinstall.sh >> '
+                '"${PACKAGE_SCRIPTS}/postinst.sh"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.workflow.count(
+                'cat scripts/ci/package_deferred_purge_postinstall.sh >> '
+                '"${PACKAGE_SCRIPTS}/preinst.sh"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            local_source.count(
+                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'package_deferred_purge_postinstall.sh" >> preinst.sh'
+            ),
+            1,
+        )
+        self.assertEqual(
+            local_source.count(
+                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'package_deferred_purge_postinstall.sh" >> postinst.sh'
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.workflow.count(
+                'cat scripts/ci/package_alpine_cronie_preflight.sh >> '
+                '"${PACKAGE_SCRIPTS}/preinst.sh"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.workflow.count(
+                'cat scripts/ci/package_alpine_cronie_preflight.sh >> '
+                '"${PACKAGE_SCRIPTS}/postinst.sh"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            local_source.count(
+                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'package_alpine_cronie_preflight.sh" >> preinst.sh'
+            ),
+            1,
+        )
+        self.assertEqual(
+            local_source.count(
+                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'package_alpine_cronie_preflight.sh" >> postinst.sh'
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.workflow.count(
+                'cat scripts/ci/package_removal_state.sh >> '
+                '"${PACKAGE_SCRIPTS}/postrm.sh"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            local_source.count(
+                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'package_removal_state.sh" >> postrm.sh'
+            ),
+            1,
+        )
         for name in ("preinst.sh", "postinst.sh", "prerm.sh", "postrm.sh"):
             with self.subTest(script=name):
                 self.assertEqual(
@@ -3139,7 +3750,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             ("local", self.local_build_script("postrm.sh")),
         ):
             with self.subTest(script=name):
-                tail = postremove[postremove.rindex("export SYSWARDEN_PKG_INSTALL=1") :]
+                tail = postremove[postremove.index("syswarden_attest_state_root() {") :]
                 self.assertEqual(
                     tail.count(
                         "syswarden_verify_legacy_webtui_runtime_absent / || return 1"
@@ -3160,7 +3771,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         matrix = (
             ("deb-remove", "remove", False, True),
             ("rpm-final-erase", "0", False, False),
-            ("apk-post-deinstall", "4.3.2", True, True),
+            ("apk-post-deinstall", "4.3.2", True, False),
         )
         owner = f"{os.getuid()}:{os.getgid()}"
         for source_name, postremove in (
@@ -3182,8 +3793,17 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     runtime_socket = Path(socket_temporary) / "syswarden.sock"
                     self.assertLess(len(os.fsencode(runtime_socket)), 108)
                     state_root = root / "var/lib/syswarden"
+                    log_root = root / "var/log/syswarden"
                     tombstone = state_root / "removal-in-progress-v1"
-                    for path in (opt_root, etc_root, local_bin, runtime_socket.parent):
+                    deferred = state_root / "removed-awaiting-purge-v1"
+                    finalizing = root / "var/lib/.syswarden-removal-finalizing-v1"
+                    for path in (
+                        opt_root,
+                        etc_root,
+                        local_bin,
+                        runtime_socket.parent,
+                        log_root,
+                    ):
                         path.mkdir(parents=True, mode=0o755, exist_ok=True)
                     state_root.mkdir(parents=True, mode=0o750)
                     state_root.chmod(0o750)
@@ -3193,15 +3813,30 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     tombstone.chmod(0o600)
 
                     tail = postremove[
-                        postremove.rindex("export SYSWARDEN_PKG_INSTALL=1") :
+                        postremove.index("syswarden_attest_state_root() {") :
                     ]
                     tail = tail.replace(
                         "[ -f /etc/alpine-release ]",
                         '[ "${SYSWARDEN_TEST_ALPINE:-}" = 1 ]',
                     )
+                    tail = tail.replace(
+                        "[ ! -L /var/lib ] && [ -d /var/lib ]",
+                        f"[ ! -L {root / 'var/lib'} ] && [ -d {root / 'var/lib'} ]",
+                    ).replace(
+                        '"$(stat -c \'%u:%g:%a\' /var/lib)"',
+                        f'"$(stat -c \'%u:%g:%a\' {root / "var/lib"})"',
+                    ).replace(
+                        "0:0:700|0:0:710|0:0:711|0:0:750|0:0:751|0:0:755",
+                        f"{owner}:700|{owner}:710|{owner}:711|{owner}:750|{owner}:751|{owner}:755",
+                    )
                     for source, destination in sorted(
                         (
+                            (
+                                "/var/lib/.syswarden-removal-finalizing-v1",
+                                str(finalizing),
+                            ),
                             ("/var/lib/syswarden", str(state_root)),
+                            ("/var/log/syswarden", str(log_root)),
                             ("/usr/local/bin", str(local_bin)),
                             ("/opt/syswarden", str(opt_root)),
                             ("/etc/syswarden", str(etc_root)),
@@ -3262,8 +3897,18 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     self.assertFalse(runtime_socket.is_symlink())
                     self.assertFalse(tombstone.exists())
                     self.assertFalse(tombstone.is_symlink())
+                    self.assertFalse(finalizing.exists())
+                    self.assertEqual(deferred.exists(), preserve_roots)
+                    if preserve_roots:
+                        self.assertEqual(
+                            deferred.read_bytes(),
+                            b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+                        )
+                        self.assertEqual(deferred.stat().st_mode & 0o777, 0o600)
                     self.assertEqual(opt_root.exists(), preserve_roots)
                     self.assertEqual(etc_root.exists(), preserve_roots)
+                    self.assertEqual(log_root.exists(), preserve_roots)
+                    self.assertEqual(state_root.exists(), preserve_roots)
 
     def test_linux_remove_and_purge_contract(self) -> None:
         preremove = self.script("prerm.sh")
@@ -3288,8 +3933,12 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("syswarden_remove_exact_runtime_socket", postremove)
         self.assertIn("syswarden_remove_exact_runtime_socket /run/syswarden.sock", postremove)
         self.assertIn("/var/lib/syswarden/removal-in-progress-v1", postremove)
+        self.assertIn("/var/lib/syswarden/removed-awaiting-purge-v1", postremove)
         self.assertIn("SYSWARDEN_REMOVAL_V1\\nstate=in-progress\\n", postremove)
-        self.assertIn("syswarden_finalize_removal_tombstone", postremove)
+        self.assertIn("syswarden_transition_to_deferred_purge", postremove)
+        self.assertIn("syswarden_finalize_removal_state_root", postremove)
+        self.assertIn('cmp - "${syswarden_marker_path}"', postremove)
+        self.assertNotIn('$(cat "${syswarden_tombstone}")', postremove)
         self.assertIn("0:0:600:1", postremove)
         removal_tail = postremove[postremove.rindex("export SYSWARDEN_PKG_INSTALL=1") :]
         for forbidden in (
@@ -3330,13 +3979,575 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertEqual(workflow, local)
         for required in (
             "/var/lib/syswarden/removal-in-progress-v1",
+            "/var/lib/syswarden/removed-awaiting-purge-v1",
             "SYSWARDEN_REMOVAL_V1\\nstate=in-progress\\n",
-            "syswarden_attest_removal_tombstone || return 1",
-            "syswarden_finalize_removal_tombstone || exit 1",
+            'cmp - "${syswarden_marker_path}"',
+            "syswarden_refuse_mounted_path_tree",
+            "syswarden_empty_removal_state || exit 1",
+            "syswarden_finalize_removal_state_root || exit 1",
+            "syswarden_transition_to_deferred_purge || exit 1",
+            "syswarden_resume_unmarked_terminal_state || exit 1",
             "0:0:600:1",
             "= '39'",
         ):
             self.assertIn(required, workflow)
+        main = workflow[
+            workflow.rindex(
+                'if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || '
+                '[ "$1" = "remove" ] || [ "$1" = "purge" ]; then'
+            ) :
+        ]
+        self.assertLess(
+            main.index("for syswarden_purge_root in"),
+            main.index("syswarden_remove_dedicated_root /opt/syswarden"),
+        )
+        self.assertLess(
+            main.index("syswarden_remove_dedicated_root /var/log/syswarden"),
+            main.index("syswarden_empty_removal_state || exit 1"),
+        )
+        self.assertLess(
+            main.index("syswarden_empty_removal_state || exit 1"),
+            main.index("syswarden_finalize_removal_state_root || exit 1"),
+        )
+        finalizer_start = workflow.index("syswarden_finalize_removal_state_root() {")
+        finalizer_end = workflow.index(
+            "\nsyswarden_resume_unmarked_terminal_state() {", finalizer_start
+        )
+        finalizer = workflow[finalizer_start:finalizer_end]
+        rename = finalizer.index(
+            'mv -- "${syswarden_active_barrier}" "${syswarden_finalizing_barrier}"'
+        )
+        rmdir = finalizer.index("rmdir -- /var/lib/syswarden")
+        unlink = finalizer.index('rm -f -- "${syswarden_finalizing_barrier}"')
+        self.assertLess(
+            rename,
+            rmdir,
+        )
+        self.assertLess(rmdir, unlink)
+        self.assertGreaterEqual(finalizer.count("sync || return 1"), 3)
+
+    def test_postremove_barrier_is_crash_retryable_and_precedes_deletion(self) -> None:
+        owner = f"{os.getuid()}:{os.getgid()}"
+        postremove = self.script("postrm.sh")
+        tail = postremove[postremove.index("syswarden_attest_state_root() {") :]
+
+        with tempfile.TemporaryDirectory(prefix="sw-postrm-order-", dir="/tmp") as temporary:
+            root = Path(temporary)
+            opt_root = root / "opt/syswarden"
+            etc_root = root / "etc/syswarden"
+            log_root = root / "var/log/syswarden"
+            state_root = root / "var/lib/syswarden"
+            local_bin = root / "usr/local/bin"
+            completion = root / "usr/share/bash-completion/completions/syswarden"
+            runtime_socket = root / "run/syswarden.sock"
+            mountinfo = root / "mountinfo"
+            tombstone = state_root / "removal-in-progress-v1"
+            finalizing = root / "var/lib/.syswarden-removal-finalizing-v1"
+
+            def populate() -> None:
+                for path in (
+                    opt_root,
+                    etc_root,
+                    log_root,
+                    state_root,
+                    local_bin,
+                    runtime_socket.parent,
+                ):
+                    path.mkdir(parents=True, mode=0o750, exist_ok=True)
+                    path.chmod(0o750)
+                (opt_root / "operator.bin").write_bytes(b"opt\n")
+                (etc_root / "operator.conf").write_bytes(b"etc\n")
+                (log_root / "security.log").write_bytes(b"log\n")
+                (state_root / "operator.json").write_bytes(b"state\n")
+                tombstone.write_bytes(b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n")
+                tombstone.chmod(0o600)
+
+            replacements = sorted(
+                (
+                    ("/var/lib/.syswarden-removal-finalizing-v1", str(finalizing)),
+                    ("/usr/share/bash-completion/completions/syswarden", str(completion)),
+                    ("/proc/self/mountinfo", str(mountinfo)),
+                    ("/var/lib/syswarden", str(state_root)),
+                    ("/var/log/syswarden", str(log_root)),
+                    ("/usr/local/bin", str(local_bin)),
+                    ("/opt/syswarden", str(opt_root)),
+                    ("/etc/syswarden", str(etc_root)),
+                    ("/run/syswarden.sock", str(runtime_socket)),
+                ),
+                key=lambda item: len(item[0]),
+                reverse=True,
+            )
+            executable = tail.replace(
+                "[ -f /etc/alpine-release ]",
+                '[ "${SYSWARDEN_TEST_ALPINE:-}" = 1 ]',
+            )
+            executable = executable.replace(
+                "[ ! -L /var/lib ] && [ -d /var/lib ]",
+                f"[ ! -L {root / 'var/lib'} ] && [ -d {root / 'var/lib'} ]",
+            ).replace(
+                '"$(stat -c \'%u:%g:%a\' /var/lib)"',
+                f'"$(stat -c \'%u:%g:%a\' {root / "var/lib"})"',
+            ).replace(
+                "0:0:700|0:0:710|0:0:711|0:0:750|0:0:751|0:0:755",
+                f"{owner}:700|{owner}:710|{owner}:711|{owner}:750|{owner}:751|{owner}:755",
+            )
+            for source, destination in replacements:
+                executable = executable.replace(source, destination)
+            executable = executable.replace(
+                "0:0:700|0:0:750|0:0:755",
+                f"{owner}:700|{owner}:750|{owner}:755",
+            )
+            executable = executable.replace("'0:0:600:1'", f"'{owner}:600:1'")
+            executable = executable.replace("'0:0:1'", f"'{owner}:1'")
+            executable = executable.replace(
+                "        syswarden_finalize_removal_state_root || exit 1\n",
+                "        if [ \"${SYSWARDEN_TEST_FAIL_FINALIZE:-0}\" = 1 ]; then exit 97; fi\n"
+                "        syswarden_finalize_removal_state_root || exit 1\n",
+            )
+            executable = executable.replace(
+                "    syswarden_attest_finalizing_marker || return 1\n"
+                "    syswarden_state_root_is_empty || return 1\n",
+                "    syswarden_attest_finalizing_marker || return 1\n"
+                '    if [ "${SYSWARDEN_TEST_CRASH_AFTER_UNLINK:-0}" = 1 ]; then exit 98; fi\n'
+                "    syswarden_state_root_is_empty || return 1\n",
+            )
+            executable = (
+                "syswarden_verify_legacy_webtui_runtime_absent() { :; }\n" + executable
+            )
+
+            def run(
+                argument: str,
+                *,
+                alpine: bool = False,
+                fail_finalize: bool = False,
+                crash_after_unlink: bool = False,
+            ) -> subprocess.CompletedProcess[str]:
+                environment = {
+                    **os.environ,
+                    "SYSWARDEN_TEST_ALPINE": "1" if alpine else "0",
+                    "SYSWARDEN_TEST_FAIL_FINALIZE": "1" if fail_finalize else "0",
+                    "SYSWARDEN_TEST_CRASH_AFTER_UNLINK": (
+                        "1" if crash_after_unlink else "0"
+                    ),
+                }
+                return subprocess.run(
+                    ("/bin/sh", "-c", executable, "postrm-order", argument),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+
+            mountinfo.write_text(
+                "36 25 0:32 / / rw,relatime - ext4 /dev/root rw\n",
+                encoding="ascii",
+            )
+            populate()
+            interrupted = run("purge", fail_finalize=True)
+            self.assertEqual(interrupted.returncode, 97, interrupted)
+            self.assertFalse(opt_root.exists())
+            self.assertFalse(etc_root.exists())
+            self.assertFalse(log_root.exists())
+            self.assertTrue(tombstone.is_file())
+            self.assertEqual(tuple(path.name for path in state_root.iterdir()), (tombstone.name,))
+            retried = run("purge")
+            self.assertEqual(retried.returncode, 0, retried)
+            self.assertFalse(state_root.exists())
+
+            for case_name, argument, alpine in (
+                ("deb", "purge", False),
+                ("rpm", "0", False),
+                ("apk", "4.03.3", True),
+            ):
+                with self.subTest(crash_retry=case_name):
+                    populate()
+                    crashed = run(
+                        argument,
+                        alpine=alpine,
+                        crash_after_unlink=True,
+                    )
+                    self.assertEqual(crashed.returncode, 98, crashed)
+                    self.assertTrue(state_root.is_dir())
+                    self.assertEqual(tuple(state_root.iterdir()), ())
+                    self.assertEqual(
+                        finalizing.read_bytes(),
+                        b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+                    )
+                    retried = run(argument, alpine=alpine)
+                    self.assertEqual(retried.returncode, 0, retried)
+                    self.assertFalse(state_root.exists())
+                    self.assertFalse(finalizing.exists())
+
+            populate()
+            mounted_child = state_root / "operator-volume"
+            mounted_child.mkdir(mode=0o750)
+            mountinfo.write_text(
+                f"37 36 0:33 / {mounted_child} rw,relatime - ext4 /dev/loop0 rw\n",
+                encoding="ascii",
+            )
+            refused = run("purge")
+            self.assertNotEqual(refused.returncode, 0, refused)
+            self.assertIn("Refusing removal across a mounted product path", refused.stderr)
+            self.assertEqual((opt_root / "operator.bin").read_bytes(), b"opt\n")
+            self.assertEqual((etc_root / "operator.conf").read_bytes(), b"etc\n")
+            self.assertEqual((log_root / "security.log").read_bytes(), b"log\n")
+            self.assertEqual((state_root / "operator.json").read_bytes(), b"state\n")
+            self.assertTrue(tombstone.is_file())
+
+    def test_deb_remove_then_later_purge_or_reinstall_is_retry_safe(self) -> None:
+        owner = f"{os.getuid()}:{os.getgid()}"
+        postremove = self.script("postrm.sh")
+        tail = postremove[postremove.index("syswarden_attest_state_root() {") :]
+        postinstall = self.script("postinst.sh")
+        consumer_start = postinstall.index("syswarden_install_path_absent() {")
+        consumer_end = postinstall.index("\nmodular_config_complete() {", consumer_start)
+        consumer = postinstall[consumer_start:consumer_end]
+
+        with tempfile.TemporaryDirectory(prefix="sw-deb-deferred-", dir="/tmp") as temporary:
+            root = Path(temporary)
+            opt_root = root / "opt/syswarden"
+            etc_root = root / "etc/syswarden"
+            log_root = root / "var/log/syswarden"
+            state_root = root / "var/lib/syswarden"
+            local_bin = root / "usr/local/bin"
+            completion = root / "usr/share/bash-completion/completions/syswarden"
+            runtime_socket = root / "run/syswarden.sock"
+            mountinfo = root / "mountinfo"
+            active = state_root / "removal-in-progress-v1"
+            deferred = state_root / "removed-awaiting-purge-v1"
+            finalizing = root / "var/lib/.syswarden-removal-finalizing-v1"
+
+            def populate() -> None:
+                for path in (opt_root, etc_root, log_root, state_root, local_bin):
+                    path.mkdir(parents=True, mode=0o750, exist_ok=True)
+                    path.chmod(0o750)
+                (opt_root / "operator.bin").write_bytes(b"opt\n")
+                (etc_root / "operator.conf").write_bytes(b"etc\n")
+                (log_root / "security.log").write_bytes(b"log\n")
+                (state_root / "operator.json").write_bytes(b"state\n")
+                active.write_bytes(b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n")
+                active.chmod(0o600)
+
+            replacements = sorted(
+                (
+                    ("/var/lib/.syswarden-removal-finalizing-v1", str(finalizing)),
+                    ("/usr/share/bash-completion/completions/syswarden", str(completion)),
+                    ("/proc/self/mountinfo", str(mountinfo)),
+                    ("/var/lib/syswarden", str(state_root)),
+                    ("/var/log/syswarden", str(log_root)),
+                    ("/usr/local/bin", str(local_bin)),
+                    ("/opt/syswarden", str(opt_root)),
+                    ("/etc/syswarden", str(etc_root)),
+                    ("/run/syswarden.sock", str(runtime_socket)),
+                ),
+                key=lambda item: len(item[0]),
+                reverse=True,
+            )
+            executable = tail.replace(
+                "[ -f /etc/alpine-release ]",
+                '[ "${SYSWARDEN_TEST_ALPINE:-0}" = 1 ]',
+            )
+            executable = executable.replace(
+                "[ ! -L /var/lib ] && [ -d /var/lib ]",
+                f"[ ! -L {root / 'var/lib'} ] && [ -d {root / 'var/lib'} ]",
+            ).replace(
+                '"$(stat -c \'%u:%g:%a\' /var/lib)"',
+                f'"$(stat -c \'%u:%g:%a\' {root / "var/lib"})"',
+            ).replace(
+                "0:0:700|0:0:710|0:0:711|0:0:750|0:0:751|0:0:755",
+                f"{owner}:700|{owner}:710|{owner}:711|{owner}:750|{owner}:751|{owner}:755",
+            )
+            install_consumer = consumer
+            for source, destination in replacements:
+                executable = executable.replace(source, destination)
+                install_consumer = install_consumer.replace(source, destination)
+            install_consumer = install_consumer.replace(
+                "[ ! -L /var/lib ] && [ -d /var/lib ]",
+                f"[ ! -L {root / 'var/lib'} ] && [ -d {root / 'var/lib'} ]",
+            ).replace(
+                '"$(stat -c \'%u:%g:%a\' /var/lib)"',
+                f'"$(stat -c \'%u:%g:%a\' {root / "var/lib"})"',
+            ).replace(
+                "0:0:700|0:0:710|0:0:711|0:0:750|0:0:751|0:0:755",
+                f"{owner}:700|{owner}:710|{owner}:711|{owner}:750|{owner}:751|{owner}:755",
+            )
+            for metadata in ("0:0:700|0:0:750|0:0:755",):
+                executable = executable.replace(
+                    metadata,
+                    f"{owner}:700|{owner}:750|{owner}:755",
+                )
+                install_consumer = install_consumer.replace(
+                    metadata,
+                    f"{owner}:700|{owner}:750|{owner}:755",
+                )
+            executable = executable.replace("'0:0:600:1'", f"'{owner}:600:1'")
+            executable = executable.replace("'0:0:1'", f"'{owner}:1'")
+            install_consumer = install_consumer.replace(
+                "'0:0:600:1'", f"'{owner}:600:1'"
+            )
+            executable = executable.replace(
+                "    syswarden_attest_finalizing_marker || return 1\n"
+                "    syswarden_state_root_is_empty || return 1\n",
+                "    syswarden_attest_finalizing_marker || return 1\n"
+                '    if [ "${SYSWARDEN_TEST_CRASH_AFTER_FINALIZING_MOVE:-0}" = 1 ]; then exit 98; fi\n'
+                "    syswarden_state_root_is_empty || return 1\n",
+            )
+            executable = (
+                "syswarden_verify_legacy_webtui_runtime_absent() { :; }\n" + executable
+            )
+
+            def run_postremove(
+                argument: str, *, crash_after_finalizing_move: bool = False
+            ) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    ("/bin/sh", "-c", executable, "deb-deferred", argument),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "SYSWARDEN_TEST_ALPINE": "0",
+                        "SYSWARDEN_TEST_CRASH_AFTER_FINALIZING_MOVE": (
+                            "1" if crash_after_finalizing_move else "0"
+                        ),
+                    },
+                )
+
+            mountinfo.write_text(
+                "36 25 0:32 / / rw,relatime - ext4 /dev/root rw\n",
+                encoding="ascii",
+            )
+            populate()
+            removed = run_postremove("remove")
+            self.assertEqual(removed.returncode, 0, removed)
+            self.assertFalse(active.exists())
+            self.assertEqual(
+                deferred.read_bytes(),
+                b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+            )
+            self.assertEqual((etc_root / "operator.conf").read_bytes(), b"etc\n")
+            self.assertEqual((state_root / "operator.json").read_bytes(), b"state\n")
+            self.assertEqual((log_root / "security.log").read_bytes(), b"log\n")
+            removed_retry = run_postremove("remove")
+            self.assertEqual(removed_retry.returncode, 0, removed_retry)
+            purged = run_postremove("purge")
+            self.assertEqual(purged.returncode, 0, purged)
+            for product_root in (opt_root, etc_root, log_root, state_root):
+                self.assertFalse(product_root.exists(), product_root)
+
+            populate()
+            removed = run_postremove("remove")
+            self.assertEqual(removed.returncode, 0, removed)
+            consumed = subprocess.run(
+                (
+                    "/bin/sh",
+                    "-c",
+                    install_consumer + "\nsyswarden_consume_deferred_purge_marker\n",
+                    "deb-reinstall-consumer",
+                ),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(consumed.returncode, 0, consumed)
+            self.assertFalse(deferred.exists())
+            self.assertEqual((state_root / "operator.json").read_bytes(), b"state\n")
+            self.assertEqual((etc_root / "operator.conf").read_bytes(), b"etc\n")
+
+            active.write_bytes(b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n")
+            active.chmod(0o600)
+            refused_active = subprocess.run(
+                (
+                    "/bin/sh",
+                    "-c",
+                    install_consumer + "\nsyswarden_consume_deferred_purge_marker\n",
+                    "deb-reinstall-active-consumer",
+                ),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(refused_active.returncode, 0, refused_active)
+            self.assertIn("active package-removal barrier", refused_active.stderr)
+            self.assertEqual(
+                active.read_bytes(),
+                b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+            )
+            active.unlink()
+
+            deferred.write_bytes(b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n")
+            deferred.chmod(0o600)
+            active.write_bytes(b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n")
+            active.chmod(0o600)
+            mounted_reconciliation_child = state_root / "operator-volume"
+            mounted_reconciliation_child.mkdir(mode=0o750)
+            (mounted_reconciliation_child / "operator.bin").write_bytes(b"mounted\n")
+            mountinfo.write_text(
+                f"37 36 0:33 / {mounted_reconciliation_child} rw,relatime - ext4 /dev/loop0 rw\n",
+                encoding="ascii",
+            )
+            refused_mounted_reconciliation = run_postremove("remove")
+            self.assertNotEqual(
+                refused_mounted_reconciliation.returncode,
+                0,
+                refused_mounted_reconciliation,
+            )
+            self.assertEqual(
+                active.read_bytes(),
+                b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+            )
+            self.assertEqual(
+                deferred.read_bytes(),
+                b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+            )
+            self.assertEqual(
+                (mounted_reconciliation_child / "operator.bin").read_bytes(),
+                b"mounted\n",
+            )
+            mountinfo.write_text(
+                "36 25 0:32 / / rw,relatime - ext4 /dev/root rw\n",
+                encoding="ascii",
+            )
+            (mounted_reconciliation_child / "operator.bin").unlink()
+            mounted_reconciliation_child.rmdir()
+            removed_after_stale_reappearance = run_postremove("remove")
+            self.assertEqual(
+                removed_after_stale_reappearance.returncode,
+                0,
+                removed_after_stale_reappearance,
+            )
+            self.assertFalse(active.exists())
+            self.assertEqual(
+                deferred.read_bytes(),
+                b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+            )
+            final_purge = run_postremove("purge")
+            self.assertEqual(final_purge.returncode, 0, final_purge)
+
+            populate()
+            crashed_purge = run_postremove(
+                "purge", crash_after_finalizing_move=True
+            )
+            self.assertEqual(crashed_purge.returncode, 98, crashed_purge)
+            self.assertTrue(state_root.is_dir())
+            self.assertEqual(tuple(state_root.iterdir()), ())
+            self.assertEqual(
+                finalizing.read_bytes(),
+                b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+            )
+            reinstalled = subprocess.run(
+                (
+                    "/bin/sh",
+                    "-c",
+                    install_consumer + "\nsyswarden_consume_deferred_purge_marker\n",
+                    "deb-reinstall-finalizing-consumer",
+                ),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(reinstalled.returncode, 0, reinstalled)
+            self.assertFalse(finalizing.exists())
+            populate()
+            removed_after_reinstall = run_postremove("remove")
+            self.assertEqual(
+                removed_after_reinstall.returncode, 0, removed_after_reinstall
+            )
+            purged_after_reinstall = run_postremove("purge")
+            self.assertEqual(
+                purged_after_reinstall.returncode, 0, purged_after_reinstall
+            )
+
+            populate()
+            crashed_before_failed_reinstall = run_postremove(
+                "purge", crash_after_finalizing_move=True
+            )
+            self.assertEqual(
+                crashed_before_failed_reinstall.returncode,
+                98,
+                crashed_before_failed_reinstall,
+            )
+            self.assertTrue(finalizing.is_file())
+            populate()
+            partial_reinstall_mount = state_root / "partial-reinstall-volume"
+            partial_reinstall_mount.mkdir(mode=0o750)
+            (partial_reinstall_mount / "operator.bin").write_bytes(b"mounted\n")
+            mountinfo.write_text(
+                f"37 36 0:33 / {partial_reinstall_mount} rw,relatime - ext4 /dev/loop0 rw\n",
+                encoding="ascii",
+            )
+            refused_partial_reinstall_purge = run_postremove("purge")
+            self.assertNotEqual(
+                refused_partial_reinstall_purge.returncode,
+                0,
+                refused_partial_reinstall_purge,
+            )
+            self.assertEqual(
+                active.read_bytes(),
+                b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+            )
+            self.assertEqual(
+                finalizing.read_bytes(),
+                b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n",
+            )
+            self.assertEqual(
+                (partial_reinstall_mount / "operator.bin").read_bytes(),
+                b"mounted\n",
+            )
+            mountinfo.write_text(
+                "36 25 0:32 / / rw,relatime - ext4 /dev/root rw\n",
+                encoding="ascii",
+            )
+            (partial_reinstall_mount / "operator.bin").unlink()
+            partial_reinstall_mount.rmdir()
+            resumed_partial_reinstall_purge = run_postremove("purge")
+            self.assertEqual(
+                resumed_partial_reinstall_purge.returncode,
+                0,
+                resumed_partial_reinstall_purge,
+            )
+            self.assertFalse(finalizing.exists())
+            for product_root in (opt_root, etc_root, log_root, state_root):
+                self.assertFalse(product_root.exists(), product_root)
+
+    def test_removal_marker_rejects_same_size_nul_substitution(self) -> None:
+        owner = f"{os.getuid()}:{os.getgid()}"
+        postremove = self.script("postrm.sh")
+        tail = postremove[postremove.index("syswarden_attest_state_root() {") :]
+        start = tail.index("syswarden_attest_state_root() {")
+        end = tail.index("\nsyswarden_assert_product_binaries_absent() {", start)
+        attestation = tail[start:end]
+        with tempfile.TemporaryDirectory(prefix="sw-marker-nul-", dir="/tmp") as temporary:
+            state_root = Path(temporary) / "var/lib/syswarden"
+            state_root.mkdir(parents=True, mode=0o750)
+            state_root.chmod(0o750)
+            marker = state_root / "removal-in-progress-v1"
+            attestation = attestation.replace("/var/lib/syswarden", str(state_root))
+            attestation = attestation.replace(
+                "0:0:700|0:0:750|0:0:755",
+                f"{owner}:700|{owner}:750|{owner}:755",
+            ).replace("'0:0:600:1'", f"'{owner}:600:1'")
+
+            marker.write_bytes(b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\x00")
+            self.assertEqual(marker.stat().st_size, 39)
+            marker.chmod(0o600)
+            refused = subprocess.run(
+                ("/bin/sh", "-c", attestation + "\nsyswarden_attest_removal_tombstone\n"),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(refused.returncode, 0, refused)
+
+            marker.write_bytes(b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n")
+            marker.chmod(0o600)
+            accepted = subprocess.run(
+                ("/bin/sh", "-c", attestation + "\nsyswarden_attest_removal_tombstone\n"),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted)
 
     def test_rpm_artifact_gate_requires_exact_scriptlet_bodies(self) -> None:
         validation_step = workflow_step_script(
@@ -3644,9 +4855,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
             ("local", self.local_build_script("postrm.sh")),
         ):
             with self.subTest(script=name):
-                tail = postremove[postremove.rindex("export SYSWARDEN_PKG_INSTALL=1") :]
+                tail = postremove[postremove.index("syswarden_attest_state_root() {") :]
                 self.assertIn(
-                    "syswarden_finalize_removal_tombstone || exit 1",
+                    "syswarden_finalize_removal_state_root || exit 1",
                     tail,
                 )
                 self.assertIn(
@@ -3654,7 +4865,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     tail,
                 )
                 self.assertIn(
-                    "Preserving root crontab, ambiguous rsyslog bridges, shell completion, and legacy hardening artifacts for manual recovery.",
+                    "Preserving root crontab and every modified or ambiguous legacy host artifact for manual recovery.",
                     tail,
                 )
                 self.assertNotIn("Removal completed", tail)
@@ -3665,16 +4876,33 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 executable_check = tail.index(
                     "for syswarden_binary in \\\n        /opt/syswarden/bin/syswarden-cli"
                 )
-                finalization = tail.index(
-                    "syswarden_finalize_removal_tombstone || exit 1"
+                finalization_function = tail.index(
+                    "syswarden_finalize_removal_state_root() {"
                 )
-                self.assertLess(executable_check, finalization)
+                finalization_call = tail.index(
+                    "syswarden_finalize_removal_state_root || exit 1"
+                )
+                self.assertLess(executable_check, finalization_function)
+                self.assertLess(finalization_function, finalization_call)
                 self.assertEqual(
                     tail.count(
-                        "syswarden_finalize_removal_tombstone || exit 1"
+                        "syswarden_finalize_removal_state_root || exit 1"
                     ),
                     1,
                 )
+                rename = tail.index(
+                    'mv -- "${syswarden_active_barrier}" '
+                    '"${syswarden_finalizing_barrier}"',
+                    finalization_function,
+                )
+                rmdir = tail.index("rmdir -- /var/lib/syswarden", rename)
+                unlink = tail.index(
+                    'rm -f -- "${syswarden_finalizing_barrier}"', rmdir
+                )
+                recovery = tail.index("syswarden_resume_unmarked_terminal_state", rmdir)
+                self.assertLess(rename, rmdir)
+                self.assertLess(rmdir, unlink)
+                self.assertLess(unlink, recovery)
 
     def test_linux_postinstall_does_not_treat_systemctl_presence_as_active_systemd(self) -> None:
         postinstall = self.script("postinst.sh")
@@ -3695,16 +4923,13 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertLess(revalidate, offline_branch)
 
     def test_linux_packages_declare_every_runtime_dependency(self) -> None:
-        for dependency in (
-            "wireguard-tools",
-            "qrencode",
-            "jq",
-        ):
+        for dependency in ("wireguard-tools", "jq"):
             self.assertGreaterEqual(
                 self.workflow.count(f'-d "{dependency}"'),
                 2,
                 dependency,
             )
+        self.assertEqual(self.workflow.count('-d "qrencode"'), 1)
         for dependency in ("checkpolicy", "policycoreutils-python-utils"):
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 1)
         for dependency in (
@@ -3722,6 +4947,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             )
 
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(local.count('-d "qrencode"'), 1)
         for dependency in ("unattended-upgrades", "apt-listchanges", "procps"):
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 1, dependency)
             self.assertEqual(local.count(f'-d "{dependency}"'), 1, dependency)
@@ -3732,6 +4958,29 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertEqual(local.count("  - procps-ng\n"), 1)
         self.assertEqual(self.workflow.count("            - shadow\n"), 1)
         self.assertEqual(local.count("  - shadow\n"), 1)
+
+    def test_rhel_dependency_resolution_does_not_require_epel_for_optional_qr(self) -> None:
+        source = DEPENDENCIES_SOURCE.read_text(encoding="utf-8")
+        dnf_branch = source.split('exec.LookPath("dnf")', 1)[1].split(
+            'exec.LookPath("yum")', 1
+        )[0]
+        yum_branch = source.split('exec.LookPath("yum")', 1)[1].split(
+            'exec.LookPath("apk")', 1
+        )[0]
+        for branch in (dnf_branch, yum_branch):
+            self.assertNotIn('"epel-release"', branch)
+            self.assertNotIn('"qrencode",', branch)
+            self.assertIn("operator-approved repository", branch)
+
+    def test_packaged_legacy_dynamic_quarantine_precedes_network_configuration(self) -> None:
+        source = INSTALL_COMMAND_SOURCE.read_text(encoding="utf-8")
+        dependency_check = source.index("system.InstallDependencies()")
+        package_guard = source.index('os.Getenv("SYSWARDEN_PKG_INSTALL") == "1"')
+        quarantine = source.index("preparePackagedLegacyDynamicBanUpgrade()")
+        ssh_configuration = source.index("system.ConfigureSSH()")
+        self.assertLess(dependency_check, package_guard)
+        self.assertLess(package_guard, quarantine)
+        self.assertLess(quarantine, ssh_configuration)
 
     def test_runtime_dependency_sets_match_all_package_generators_and_lab(self) -> None:
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
@@ -4014,7 +5263,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
         ):
             with self.subTest(script=script_name), tempfile.TemporaryDirectory() as temporary:
                 postinstall = self.script(script_name)
-                self.assertLess(postinstall.index("set -e"), postinstall.index(install_command))
+                # The deferred Alpine activation notice intentionally prints
+                # the same command for the operator. The executable package
+                # invocation remains the final occurrence and stays under
+                # fail-fast shell semantics.
+                self.assertLess(postinstall.index("set -e"), postinstall.rindex(install_command))
                 self.assertNotIn(f"{install_command} || true", postinstall)
 
                 fake_cli = Path(temporary) / "syswarden-cli"
@@ -4038,6 +5291,146 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 self.assertEqual(probe.returncode, 23, probe)
                 self.assertIn("[ERROR] configuration preflight failed", probe.stderr)
                 self.assertNotIn("Installation Complete", probe.stdout)
+
+    def test_completion_is_package_owned_and_postinstall_never_mutates_shell_startup(self) -> None:
+        completion = "/usr/share/bash-completion/completions/syswarden"
+        postinstall = self.script("postinst.sh")
+        for forbidden in (
+            "/etc/bash_completion.d/syswarden",
+            "/root/.bashrc",
+            "SysWarden Auto-Completion Hook",
+            "completion bash > /etc",
+        ):
+            self.assertNotIn(forbidden, postinstall)
+
+        workflow_stage = workflow_step_script(
+            self.workflow, "Prepare Staging Environment (AMD64)"
+        ) + workflow_step_script(self.workflow, "Build and Stage Static Alpine Binaries")
+        self.assertEqual(workflow_stage.count("completion bash >"), 2)
+        self.assertGreaterEqual(workflow_stage.count(completion), 2)
+        local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(local.count("completion bash >"), 2)
+        self.assertGreaterEqual(local.count(completion), 2)
+        self.assertIn(
+            '"usr/share/bash-completion/completions/syswarden": ExpectedEntry(',
+            (REPOSITORY / "scripts/ci/package_stage_gate.py").read_text(
+                encoding="utf-8"
+            ),
+        )
+        self.assertEqual(
+            self.workflow.count(
+                "--completion-contract scripts/ci/package_completion_contract.json"
+            ),
+            2,
+        )
+        self.assertEqual(
+            local.count(
+                '--completion-contract "${REPOSITORY_ROOT}/scripts/ci/'
+                'package_completion_contract.json"'
+            ),
+            2,
+        )
+        stage_gate = (REPOSITORY / "scripts/ci/package_stage_gate.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("validate_exact_content", stage_gate)
+        self.assertIn("contracted content SHA-256 mismatch", stage_gate)
+        lifecycle_lab = (
+            REPOSITORY / "scripts/ci/package_lifecycle_lab.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(
+            "/opt/syswarden/bin/syswarden-cli completion bash > \\\n"
+            "        /etc/bash_completion.d/syswarden",
+            lifecycle_lab,
+        )
+        self.assertIn(
+            "legacy_bash_completion_is_exact() {",
+            lifecycle_lab,
+        )
+        self.assertIn(
+            "package_owned_bash_completion_is_exact() {",
+            lifecycle_lab,
+        )
+        for versioned_legacy_condition in (
+            '[ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.2 ]',
+            '[ "${FORWARD_ONLY_APK_TRANSITION}" = 1 ]',
+            '[ "${EXPECTED_PREVIOUS_VERSION}" = 4.02.8 ]',
+            '[ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.2 ]',
+        ):
+            self.assertIn(versioned_legacy_condition, lifecycle_lab)
+        self.assertIn("completion-legacy-residual", lifecycle_lab)
+        self.assertIn(
+            "operator-owned ambiguous SysWarden completion",
+            lifecycle_lab,
+        )
+
+    def test_final_removal_deletes_dedicated_state_only_for_purge_equivalents(self) -> None:
+        postremove = self.script("postrm.sh")
+        main = postremove[
+            postremove.rindex(
+                'if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || '
+                '[ "$1" = "remove" ] || [ "$1" = "purge" ]; then'
+            ) :
+        ].replace(
+            "[ -f /etc/alpine-release ]",
+            '[ "${SYSWARDEN_TEST_ALPINE:-0}" = 1 ]',
+        )
+        harness = (
+            "cleanup_generated_runtime_artifacts() { printf 'cleanup\\n'; }\n"
+            "syswarden_remove_exact_product_link() { printf 'link:%s\\n' \"$1\"; }\n"
+            "syswarden_remove_exact_runtime_socket() { printf 'socket:%s\\n' \"$1\"; }\n"
+            "syswarden_attest_dedicated_root() { :; }\n"
+            "syswarden_refuse_mounted_path_tree() { :; }\n"
+            "syswarden_select_removal_barrier() { "
+            "syswarden_active_barrier=barrier; printf 'barrier\\n'; }\n"
+            "syswarden_attest_removal_marker() { :; }\n"
+            "syswarden_remove_dedicated_root() { printf 'root:%s\\n' \"$1\"; }\n"
+            "syswarden_empty_removal_state() { printf 'state-empty\\n'; }\n"
+            "syswarden_finalize_removal_state_root() { printf 'tombstone-root\\n'; }\n"
+            "syswarden_resume_unmarked_terminal_state() { printf 'terminal-retry\\n'; }\n"
+            "syswarden_transition_to_deferred_purge() { printf 'deferred\\n'; }\n"
+            + main
+        )
+        matrix = (
+            ("deb-remove", "remove", False, False),
+            ("deb-purge", "purge", False, True),
+            ("rpm-final-erase", "0", False, True),
+            ("rpm-upgrade", "1", False, None),
+            ("apk-post-deinstall", "4.03.3", True, True),
+        )
+        for name, argument, alpine, destructive in matrix:
+            with self.subTest(case=name):
+                environment = {**os.environ, "SYSWARDEN_TEST_ALPINE": "1" if alpine else "0"}
+                result = subprocess.run(
+                    ("/bin/sh", "-c", harness, name, argument),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+                self.assertEqual(result.returncode, 0, result)
+                calls = result.stdout.splitlines()
+                if destructive is None:
+                    self.assertEqual(calls, [])
+                    continue
+                log_call = "root:/var/log/syswarden"
+                if destructive:
+                    self.assertIn("barrier", calls)
+                    self.assertIn("root:/opt/syswarden", calls)
+                    self.assertIn("root:/etc/syswarden", calls)
+                    self.assertIn(log_call, calls)
+                    self.assertIn("state-empty", calls)
+                    self.assertIn("tombstone-root", calls)
+                    self.assertLess(calls.index(log_call), calls.index("state-empty"))
+                    self.assertLess(calls.index("state-empty"), calls.index("tombstone-root"))
+                else:
+                    self.assertIn("deferred", calls)
+                    self.assertNotIn("barrier", calls)
+                    self.assertNotIn("root:/opt/syswarden", calls)
+                    self.assertNotIn("root:/etc/syswarden", calls)
+                    self.assertNotIn(log_call, calls)
+                    self.assertNotIn("state-empty", calls)
+                    self.assertNotIn("tombstone-root", calls)
 
     def test_no_package_rollback_implementation_is_claimed(self) -> None:
         scripts = "\n".join(

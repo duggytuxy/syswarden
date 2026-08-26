@@ -123,10 +123,11 @@ func (c *fakeNftablesConnection) queueMutation(set *nftables.Set, elements []nft
 	}
 	for _, element := range elements {
 		copyElement := nftables.SetElement{
-			Key:     append([]byte(nil), element.Key...),
-			KeyEnd:  append([]byte(nil), element.KeyEnd...),
-			Timeout: element.Timeout,
-			Expires: element.Expires,
+			Key:         append([]byte(nil), element.Key...),
+			KeyEnd:      append([]byte(nil), element.KeyEnd...),
+			IntervalEnd: element.IntervalEnd,
+			Timeout:     element.Timeout,
+			Expires:     element.Expires,
 		}
 		c.queued = append(c.queued, fakeNftMutation{set: set, element: copyElement, add: add})
 	}
@@ -202,7 +203,9 @@ func fakeElementPresent(elements []nftables.SetElement, wanted nftables.SetEleme
 }
 
 func sameFakeElement(left, right nftables.SetElement) bool {
-	return bytes.Equal(left.Key, right.Key) && bytes.Equal(left.KeyEnd, right.KeyEnd)
+	return bytes.Equal(left.Key, right.Key) &&
+		bytes.Equal(left.KeyEnd, right.KeyEnd) &&
+		left.IntervalEnd == right.IntervalEnd
 }
 
 type fakeNftablesFactory struct {
@@ -328,6 +331,314 @@ func TestNftablesManagerCIDRIsAtomicAndIdempotent_SW_FW_003(t *testing.T) {
 	}
 }
 
+func TestNftablesManagerClosesSingletonIntervals_SW_FW_003(t *testing.T) {
+	connection := fullFakeNftablesConnection()
+	manager, err := newNftablesManager(func() nftablesConnection { return connection })
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := parseFirewallEntry("5.6.7.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []nftables.SetElement{
+		{Key: []byte{5, 6, 7, 9}, Timeout: time.Hour},
+		{Key: []byte{5, 6, 7, 10}, IntervalEnd: true},
+	}
+	if err := manager.BanWithTTL(entry.text, time.Hour); err != nil {
+		t.Fatalf("BanWithTTL(%s): %v", entry.text, err)
+	}
+	for _, layer := range manager.layersForKeyLocked(entry.key) {
+		got := connection.elements[fakeNftSetKey(layer.set)]
+		if len(got) != len(want) {
+			t.Fatalf("%s raw element count = %d, want %d: %#v", layer.name, len(got), len(want), got)
+		}
+		for index := range want {
+			if !sameFakeElement(got[index], want[index]) || got[index].Timeout != want[index].Timeout {
+				t.Fatalf("%s raw element %d = %#v, want %#v", layer.name, index, got[index], want[index])
+			}
+			if len(got[index].KeyEnd) != 0 {
+				t.Fatalf("%s raw element %d used unsupported KeyEnd encoding: %#v", layer.name, index, got[index])
+			}
+		}
+	}
+}
+
+func TestNftablesIntervalElementsBoundEveryAddressRange_SW_FW_003(t *testing.T) {
+	tests := []struct {
+		value       string
+		wantCount   int
+		wantEnd     []byte
+		wantEndFlag bool
+	}{
+		{value: "5.6.7.9", wantCount: 2, wantEnd: []byte{5, 6, 7, 10}, wantEndFlag: true},
+		{value: "198.51.100.0/24", wantCount: 2, wantEnd: []byte{198, 51, 101, 0}, wantEndFlag: true},
+		{value: "255.255.255.255", wantCount: 1},
+		{value: "2001:db8::9", wantCount: 2, wantEnd: net.ParseIP("2001:db8::a").To16(), wantEndFlag: true},
+		{value: "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", wantCount: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			entry, err := parseFirewallEntry(test.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			elements := nftablesIntervalElements(entry, time.Hour)
+			if len(elements) != test.wantCount {
+				t.Fatalf("element count = %d, want %d: %#v", len(elements), test.wantCount, elements)
+			}
+			if !bytes.Equal(elements[0].Key, entry.key) || elements[0].IntervalEnd || elements[0].Timeout != time.Hour || len(elements[0].KeyEnd) != 0 {
+				t.Fatalf("invalid interval start: %#v", elements[0])
+			}
+			if test.wantCount == 2 {
+				if !bytes.Equal(elements[1].Key, test.wantEnd) || elements[1].IntervalEnd != test.wantEndFlag || elements[1].Timeout != 0 || len(elements[1].KeyEnd) != 0 {
+					t.Fatalf("invalid exclusive end marker: %#v", elements[1])
+				}
+			}
+		})
+	}
+}
+
+func TestNftablesManagerRepairsUnterminatedHistoricalSingleton_SW_FW_003(t *testing.T) {
+	connection := fullFakeNftablesConnection()
+	manager, err := newNftablesManager(func() nftablesConnection { return connection })
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := parseFirewallEntry("5.6.7.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, layer := range manager.layersForKeyLocked(entry.key) {
+		connection.elements[fakeNftSetKey(layer.set)] = []nftables.SetElement{{
+			Key:     append([]byte(nil), entry.key...),
+			Timeout: time.Hour,
+			Expires: time.Hour,
+		}}
+	}
+	if err := manager.BanWithTTL(entry.text, 2*time.Hour); err != nil {
+		t.Fatalf("repair BanWithTTL(%s): %v", entry.text, err)
+	}
+	for _, layer := range manager.layersForKeyLocked(entry.key) {
+		elements := connection.elements[fakeNftSetKey(layer.set)]
+		if len(elements) != 2 || elements[0].IntervalEnd || !elements[1].IntervalEnd || !bytes.Equal(elements[1].Key, []byte{5, 6, 7, 10}) {
+			t.Fatalf("%s did not replace open interval with one closed singleton: %#v", layer.name, elements)
+		}
+	}
+}
+
+func TestNftablesManagerUnbanRemovesUnterminatedHistoricalSingleton_SW_FW_003(t *testing.T) {
+	connection := fullFakeNftablesConnection()
+	manager, err := newNftablesManager(func() nftablesConnection { return connection })
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := parseFirewallEntry("5.6.7.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, layer := range manager.layersForKeyLocked(entry.key) {
+		connection.elements[fakeNftSetKey(layer.set)] = []nftables.SetElement{{Key: append([]byte(nil), entry.key...)}}
+	}
+	if err := manager.Unban(entry.text); err != nil {
+		t.Fatalf("Unban(%s): %v", entry.text, err)
+	}
+	for _, layer := range manager.layersForKeyLocked(entry.key) {
+		if elements := connection.elements[fakeNftSetKey(layer.set)]; len(elements) != 0 {
+			t.Fatalf("%s retained unterminated interval after unban: %#v", layer.name, elements)
+		}
+	}
+}
+
+func TestNftablesManagerRebansAfterTimedStartLeavesEndMarker_SW_FW_003(t *testing.T) {
+	connection := fullFakeNftablesConnection()
+	manager, err := newNftablesManager(func() nftablesConnection { return connection })
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := parseFirewallEntry("192.0.2.199")
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := nftablesIntervalElements(entry, 0)[1]
+	for _, layer := range manager.layersForKeyLocked(entry.key) {
+		connection.elements[fakeNftSetKey(layer.set)] = []nftables.SetElement{end}
+	}
+	if err := manager.Unban(entry.text); err != nil {
+		t.Fatalf("functionally absent orphan unban: %v", err)
+	}
+	if err := manager.BanWithTTL(entry.text, 2*time.Hour); err != nil {
+		t.Fatalf("re-ban after orphaned end marker: %v", err)
+	}
+	want := nftablesIntervalElements(entry, 0)
+	want[0].Timeout = 2 * time.Hour
+	for _, layer := range manager.layersForKeyLocked(entry.key) {
+		elements := connection.elements[fakeNftSetKey(layer.set)]
+		if len(elements) != len(want) {
+			t.Fatalf("%s raw element count after re-ban = %d, want %d: %#v", layer.name, len(elements), len(want), elements)
+		}
+		for _, wanted := range want {
+			found := false
+			for _, got := range elements {
+				if sameFakeElement(got, wanted) && got.Timeout == wanted.Timeout {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("%s is missing raw element %#v after re-ban: %#v", layer.name, wanted, elements)
+			}
+		}
+	}
+}
+
+func TestNftablesManagerDoesNotRepairExactStartWithDifferentEnd_SW_FW_003(t *testing.T) {
+	connection := fullFakeNftablesConnection()
+	manager, err := newNftablesManager(func() nftablesConnection { return connection })
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleton, err := parseFirewallEntry("5.6.7.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cidr, err := parseFirewallEntry("5.6.7.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cidrElements := nftablesIntervalElements(cidr, time.Hour)
+	for _, layer := range manager.layersForKeyLocked(singleton.key) {
+		connection.elements[fakeNftSetKey(layer.set)] = append([]nftables.SetElement(nil), cidrElements...)
+	}
+
+	err = manager.BanWithTTL(singleton.text, 2*time.Hour)
+	if err == nil || !strings.Contains(err.Error(), "entry start is shared with a differently bounded or ambiguous interval") {
+		t.Fatalf("exact-start conflict error = %v, want conservative rejection", err)
+	}
+	for _, layer := range manager.layersForKeyLocked(singleton.key) {
+		elements := connection.elements[fakeNftSetKey(layer.set)]
+		if len(elements) != len(cidrElements) {
+			t.Fatalf("%s CIDR element count changed after rejected singleton repair: %#v", layer.name, elements)
+		}
+		for index := range cidrElements {
+			if !sameFakeElement(elements[index], cidrElements[index]) || elements[index].Timeout != cidrElements[index].Timeout {
+				t.Fatalf("%s CIDR element %d changed after rejected singleton repair: %#v", layer.name, index, elements[index])
+			}
+		}
+	}
+}
+
+func TestNftablesManagerRejectsCIDRSpanningExistingInternalBoundaries_SW_FW_003(t *testing.T) {
+	whole, err := parseFirewallEntry("198.51.100.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, err := parseFirewallEntry("198.51.100.0/25")
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := parseFirewallEntry("198.51.100.128/25")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := append(nftablesIntervalElements(left, time.Hour), nftablesIntervalElements(right, 2*time.Hour)...)
+
+	for _, action := range []struct {
+		name string
+		run  func(*NftablesManager) error
+	}{
+		{name: "ban", run: func(manager *NftablesManager) error { return manager.BanWithTTL(whole.text, 3*time.Hour) }},
+		{name: "reconcile", run: func(manager *NftablesManager) error { return manager.ReconcileBanTTL(whole.text, 3*time.Hour) }},
+		{name: "unban", run: func(manager *NftablesManager) error { return manager.Unban(whole.text) }},
+	} {
+		t.Run(action.name, func(t *testing.T) {
+			connection := fullFakeNftablesConnection()
+			manager, managerErr := newNftablesManager(func() nftablesConnection { return connection })
+			if managerErr != nil {
+				t.Fatal(managerErr)
+			}
+			for _, layer := range manager.layersForKeyLocked(whole.key) {
+				connection.elements[fakeNftSetKey(layer.set)] = append([]nftables.SetElement(nil), original...)
+			}
+
+			mutationErr := action.run(manager)
+			if mutationErr == nil || !strings.Contains(mutationErr.Error(), "entry contains an existing internal interval boundary") {
+				t.Fatalf("%s error = %v, want conservative internal-boundary rejection", action.name, mutationErr)
+			}
+			if connection.flushCalls != 0 {
+				t.Fatalf("%s reached the kernel after an internal-boundary conflict: %d flushes", action.name, connection.flushCalls)
+			}
+			for _, layer := range manager.layersForKeyLocked(whole.key) {
+				elements := connection.elements[fakeNftSetKey(layer.set)]
+				if len(elements) != len(original) {
+					t.Fatalf("%s changed %s element count after rejection: %#v", action.name, layer.name, elements)
+				}
+				for index := range original {
+					if !sameFakeElement(elements[index], original[index]) || elements[index].Timeout != original[index].Timeout {
+						t.Fatalf("%s changed %s element %d after rejection: %#v", action.name, layer.name, index, elements[index])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestNftablesManagerKeepsAdjacentSingletonLifecyclesIndependent_SW_FW_003(t *testing.T) {
+	for _, order := range []struct {
+		name   string
+		values []string
+	}{
+		{name: "ascending", values: []string{"5.6.7.9", "5.6.7.10"}},
+		{name: "descending", values: []string{"5.6.7.10", "5.6.7.9"}},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			connection := fullFakeNftablesConnection()
+			manager, err := newNftablesManager(func() nftablesConnection { return connection })
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, value := range order.values {
+				ttl := time.Hour
+				if value == "5.6.7.10" {
+					ttl = 2 * time.Hour
+				}
+				if err := manager.BanWithTTL(value, ttl); err != nil {
+					t.Fatalf("BanWithTTL(%s): %v", value, err)
+				}
+			}
+			first, _ := parseFirewallEntry("5.6.7.9")
+			second, _ := parseFirewallEntry("5.6.7.10")
+			for _, layer := range manager.layersForKeyLocked(first.key) {
+				firstElement, firstPresent, firstOpen, firstErr := manager.elementStateLocked(layer.set, first)
+				secondElement, secondPresent, secondOpen, secondErr := manager.elementStateLocked(layer.set, second)
+				if firstErr != nil || secondErr != nil || !firstPresent || !secondPresent || firstOpen || secondOpen {
+					t.Fatalf("%s adjacent state is not two closed singletons: first=%t/%t/%v second=%t/%t/%v", layer.name, firstPresent, firstOpen, firstErr, secondPresent, secondOpen, secondErr)
+				}
+				if firstElement.Timeout != time.Hour || secondElement.Timeout != 2*time.Hour {
+					t.Fatalf("%s adjacent TTLs = %s/%s, want 1h/2h", layer.name, firstElement.Timeout, secondElement.Timeout)
+				}
+			}
+
+			if err := manager.ReconcileBanTTL(first.text, 3*time.Hour); err != nil {
+				t.Fatalf("renew first adjacent singleton: %v", err)
+			}
+			if err := manager.Unban(first.text); err != nil {
+				t.Fatalf("remove first adjacent singleton: %v", err)
+			}
+			for _, layer := range manager.layersForKeyLocked(first.key) {
+				_, firstPresent, firstOpen, firstErr := manager.elementStateLocked(layer.set, first)
+				secondElement, secondPresent, secondOpen, secondErr := manager.elementStateLocked(layer.set, second)
+				if firstErr != nil || firstPresent || firstOpen {
+					t.Fatalf("%s first adjacent singleton survived removal: present=%t open=%t err=%v", layer.name, firstPresent, firstOpen, firstErr)
+				}
+				if secondErr != nil || !secondPresent || secondOpen || secondElement.Timeout != 2*time.Hour {
+					t.Fatalf("%s second adjacent singleton changed after first removal: present=%t open=%t timeout=%s err=%v", layer.name, secondPresent, secondOpen, secondElement.Timeout, secondErr)
+				}
+			}
+		})
+	}
+}
+
 func TestNftablesManagerBanWithTTLBoundsAndExactVerification_SW_FW_003(t *testing.T) {
 	connection := fullFakeNftablesConnection()
 	manager, err := newNftablesManager(func() nftablesConnection { return connection })
@@ -356,7 +667,8 @@ func TestNftablesManagerBanWithTTLBoundsAndExactVerification_SW_FW_003(t *testin
 	entry, _ := parseFirewallEntry("192.0.2.40")
 	for _, set := range []*nftables.Set{manager.inetSet, manager.netdevSet} {
 		elements := connection.elements[fakeNftSetKey(set)]
-		if len(elements) != 1 || !sameFakeElement(elements[0], nftables.SetElement{Key: entry.key, KeyEnd: entry.keyEnd}) {
+		want := nftablesIntervalElements(entry, MaximumBanTTL)
+		if len(elements) != len(want) || !sameFakeElement(elements[0], want[0]) || !sameFakeElement(elements[1], want[1]) {
 			t.Fatalf("renewed element missing from %s", set.Name)
 		}
 		if elements[0].Timeout != MaximumBanTTL {
@@ -383,7 +695,7 @@ func TestNftablesManagerBanWithTTLRenewsIPAndCIDRFamilies_SW_FW_003(t *testing.T
 			elements := connection.elements[fakeNftSetKey(layer.set)]
 			found := false
 			for _, element := range elements {
-				if sameFakeElement(element, nftables.SetElement{Key: parsed.key, KeyEnd: parsed.keyEnd}) {
+				if sameFakeElement(element, nftables.SetElement{Key: parsed.key}) {
 					found = true
 					if element.Timeout != 2*time.Hour {
 						t.Fatalf("%s timeout = %s, want 2h", entry, element.Timeout)
@@ -419,8 +731,8 @@ func TestNftablesManagerPermanentBanDominatesTimedRecords_SW_FW_003(t *testing.T
 	}
 	entry, _ := parseFirewallEntry(entryText)
 	for _, layer := range manager.layersForKeyLocked(entry.key) {
-		element, present, stateErr := manager.elementStateLocked(layer.set, entry)
-		if stateErr != nil || !present {
+		element, present, unterminated, stateErr := manager.elementStateLocked(layer.set, entry)
+		if stateErr != nil || !present || unterminated {
 			t.Fatalf("permanent element missing from %s: %v", layer.name, stateErr)
 		}
 		if element.Timeout != 0 || element.Expires != 0 {
@@ -466,8 +778,8 @@ func TestNftablesManagerReconcilesRemovedMaximumTTLAtomically_SW_FW_003(t *testi
 	}
 	entry, _ := parseFirewallEntry(value)
 	for _, layer := range manager.layersForKeyLocked(entry.key) {
-		element, present, stateErr := manager.elementStateLocked(layer.set, entry)
-		if stateErr != nil || !present {
+		element, present, unterminated, stateErr := manager.elementStateLocked(layer.set, entry)
+		if stateErr != nil || !present || unterminated {
 			t.Fatalf("reconciled ban became absent in %s: %v", layer.name, stateErr)
 		}
 		if element.Timeout != time.Hour || element.Expires != time.Hour {

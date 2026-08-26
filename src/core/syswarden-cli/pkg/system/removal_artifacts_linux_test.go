@@ -4,12 +4,27 @@ package system
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func fakeRemovalMountInfo(mountPoints ...string) []byte {
+	var rendered strings.Builder
+	for index, mountPoint := range mountPoints {
+		fmt.Fprintf(
+			&rendered,
+			"%d 0 0:%d / %s rw - ext4 /dev/fake rw\n",
+			index+1,
+			index+1,
+			mountPoint,
+		)
+	}
+	return []byte(rendered.String())
+}
 
 func TestDedicatedRemovalTreeRefusesSymlinkAndPropagatesDeletionError_SW2_FWBACKEND_001(t *testing.T) {
 	uid, gid := systemTestIdentity(t)
@@ -52,6 +67,56 @@ func TestDedicatedRemovalTreeRefusesSymlinkAndPropagatesDeletionError_SW2_FWBACK
 			t.Fatalf("failed removal lost product root: %v", err)
 		}
 	})
+}
+
+func TestDedicatedRemovalTreeMountPreflightPreservesEveryByteAndAllowsRetry_SW2_PKG_001(t *testing.T) {
+	uid, gid := systemTestIdentity(t)
+	product := filepath.Join(t.TempDir(), "syswarden")
+	nested := filepath.Join(product, "nested")
+	if err := os.MkdirAll(nested, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(nested, "operator-data")
+	if err := os.WriteFile(marker, []byte("preserve exactly"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	operatorCalls := 0
+	removeAll := func(root *os.Root, name string, _ string) error {
+		operatorCalls++
+		return root.RemoveAll(name)
+	}
+	err := removeDedicatedRemovalTreeAtUsingMountInfo(
+		product,
+		uid,
+		gid,
+		removeAll,
+		func() ([]byte, error) { return fakeRemovalMountInfo("/", nested), nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "mount boundary") {
+		t.Fatalf("nested mount preflight error = %v", err)
+	}
+	if operatorCalls != 0 {
+		t.Fatalf("nested mount preflight invoked %d destructive operators", operatorCalls)
+	}
+	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "preserve exactly" { // #nosec G304 -- marker is confined to the private nested-mount fixture root
+		t.Fatalf("nested mount preflight changed marker = %q, %v", got, readErr)
+	}
+	err = removeDedicatedRemovalTreeAtUsingMountInfo(
+		product,
+		uid,
+		gid,
+		removeAll,
+		func() ([]byte, error) { return fakeRemovalMountInfo("/"), nil },
+	)
+	if err != nil {
+		t.Fatalf("mount-free retry: %v", err)
+	}
+	if operatorCalls != 1 {
+		t.Fatalf("mount-free retry destructive operator calls = %d", operatorCalls)
+	}
+	if _, statErr := os.Lstat(product); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("mount-free retry left product tree: %v", statErr)
+	}
 }
 
 func TestExactProductSymlinkRemovalPreservesLookalikes_SW2_FWBACKEND_001(t *testing.T) {
@@ -121,6 +186,88 @@ func TestRemovalStateFailureRetainsExactTombstoneEvidence_SW2_FWBACKEND_001(t *t
 	}
 	if content, readErr := os.ReadFile(stateEntry); readErr != nil || string(content) != "state" { // #nosec G304 -- stateEntry is confined to the private removal-state fixture root
 		t.Fatalf("failed target changed: content=%q err=%v", content, readErr)
+	}
+}
+
+func TestRemovalStateMountPreflightPreservesTombstoneAndDataUntilRetry_SW2_PKG_001(t *testing.T) {
+	path, uid, gid := testRemovalTombstonePath(t)
+	if err := ensureRemovalTombstoneAt(path, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Dir(path)
+	stateEntry := filepath.Join(directory, "data")
+	if err := os.Mkdir(stateEntry, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(stateEntry, "operator-data")
+	if err := os.WriteFile(marker, []byte("preserve exactly"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	operatorCalls := 0
+	removeAll := func(root *os.Root, name string, _ string) error {
+		operatorCalls++
+		return root.RemoveAll(name)
+	}
+	err := removeRemovalStateContentsAtUsingMountInfo(
+		directory,
+		uid,
+		gid,
+		removeAll,
+		func() ([]byte, error) { return fakeRemovalMountInfo("/", filepath.Join(stateEntry, "nested")), nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "mount boundary") {
+		t.Fatalf("state mount preflight error = %v", err)
+	}
+	if operatorCalls != 0 {
+		t.Fatalf("state mount preflight invoked %d destructive operators", operatorCalls)
+	}
+	if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "preserve exactly" { // #nosec G304 -- marker is confined to the private removal-state mount fixture root
+		t.Fatalf("state mount preflight changed marker = %q, %v", got, readErr)
+	}
+	if present, inspectErr := inspectRemovalTombstoneAt(path, uid, gid); inspectErr != nil || !present {
+		t.Fatalf("state mount preflight lost tombstone: %t, %v", present, inspectErr)
+	}
+	err = removeRemovalStateContentsAtUsingMountInfo(
+		directory,
+		uid,
+		gid,
+		removeAll,
+		func() ([]byte, error) { return fakeRemovalMountInfo("/"), nil },
+	)
+	if err != nil {
+		t.Fatalf("state mount-free retry: %v", err)
+	}
+	if operatorCalls != 1 {
+		t.Fatalf("state mount-free retry destructive operator calls = %d", operatorCalls)
+	}
+	if _, statErr := os.Lstat(stateEntry); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("state mount-free retry left data: %v", statErr)
+	}
+	if present, inspectErr := inspectRemovalTombstoneAt(path, uid, gid); inspectErr != nil || !present {
+		t.Fatalf("state retry lost tombstone: %t, %v", present, inspectErr)
+	}
+}
+
+func TestHostRemovalMountPreflightChecksAllRootsInOneSnapshot_SW2_PKG_001(t *testing.T) {
+	roots := []string{
+		"/opt/syswarden",
+		"/etc/syswarden",
+		"/var/log/syswarden",
+		"/var/lib/syswarden",
+	}
+	readCalls := 0
+	err := preflightRemovalMountBoundariesAt(
+		roots,
+		func() ([]byte, error) {
+			readCalls++
+			return fakeRemovalMountInfo("/", "/var/lib/syswarden/operator-bind"), nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "/var/lib/syswarden/operator-bind") {
+		t.Fatalf("four-root mount preflight error = %v", err)
+	}
+	if readCalls != 1 {
+		t.Fatalf("four-root mount preflight snapshots = %d, want 1", readCalls)
 	}
 }
 

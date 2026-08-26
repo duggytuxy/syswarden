@@ -208,7 +208,8 @@ jobs:
           set -euo pipefail
           install -d -m 0755 \
             "${STAGING_AMD64}/opt/syswarden/bin" \
-            "${STAGING_AMD64}/usr/local/bin"
+            "${STAGING_AMD64}/usr/local/bin" \
+            "${STAGING_AMD64}/usr/share/bash-completion/completions"
 
           cp dist/bin/syswarden-cli "${STAGING_AMD64}/opt/syswarden/bin/"
           cp dist/bin/syswarden-core "${STAGING_AMD64}/opt/syswarden/bin/"
@@ -226,6 +227,10 @@ jobs:
             "${STAGING_AMD64}/usr/local/bin/syswarden"
           ln -s /opt/syswarden/bin/syswarden-tui \
             "${STAGING_AMD64}/usr/local/bin/syswarden-tui"
+          "${STAGING_AMD64}/opt/syswarden/bin/syswarden-cli" completion bash > \
+            "${STAGING_AMD64}/usr/share/bash-completion/completions/syswarden"
+          chmod 0644 \
+            "${STAGING_AMD64}/usr/share/bash-completion/completions/syswarden"
 
       - name: Build and Stage Static Alpine Binaries
         shell: bash
@@ -237,7 +242,8 @@ jobs:
             local stage="$2"
             install -d -m 0755 \
               "${stage}/opt/syswarden/bin" \
-              "${stage}/usr/local/bin"
+              "${stage}/usr/local/bin" \
+              "${stage}/usr/share/bash-completion/completions"
             for component in syswarden-cli syswarden-core syswarden-tui; do
               env \
                 CGO_ENABLED=0 \
@@ -258,6 +264,10 @@ jobs:
               "${stage}/usr/local/bin/syswarden"
             ln -s /opt/syswarden/bin/syswarden-tui \
               "${stage}/usr/local/bin/syswarden-tui"
+            "${stage}/opt/syswarden/bin/syswarden-cli" completion bash > \
+              "${stage}/usr/share/bash-completion/completions/syswarden"
+            chmod 0644 \
+              "${stage}/usr/share/bash-completion/completions/syswarden"
           }
 
           validate_static_apk_binary() {
@@ -306,17 +316,23 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
-            linux --root "${STAGING_AMD64}"
+            linux --root "${STAGING_AMD64}" \
+            --completion-contract scripts/ci/package_completion_contract.json
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
-            linux --root "${STAGING_APK_AMD64}"
+            linux --root "${STAGING_APK_AMD64}" \
+            --completion-contract scripts/ci/package_completion_contract.json
 
       - name: Prepare Linux Maintainer Scripts
         run: |
           set -euo pipefail
           cat scripts/ci/package_webtui_retirement.sh > "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat scripts/ci/package_deferred_purge_postinstall.sh >> "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat scripts/ci/package_alpine_cronie_preflight.sh >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/preinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
+          syswarden_preflight_alpine_cronie
+          syswarden_preflight_install_barriers
           secure_private_directory() {
               path="$1"
               if [ -L "${path}" ] || { [ -e "${path}" ] && [ ! -d "${path}" ]; }; then
@@ -368,9 +384,13 @@ jobs:
           EOF
 
           cat scripts/ci/package_webtui_retirement.sh > "${PACKAGE_SCRIPTS}/postinst.sh"
+          cat scripts/ci/package_deferred_purge_postinstall.sh >> "${PACKAGE_SCRIPTS}/postinst.sh"
+          cat scripts/ci/package_alpine_cronie_preflight.sh >> "${PACKAGE_SCRIPTS}/postinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/postinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
+          syswarden_preflight_alpine_cronie
+          syswarden_preflight_install_barriers
           ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
           ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
 
@@ -420,19 +440,6 @@ jobs:
           }
           migrate_legacy_configuration
 
-          mkdir -p /etc/bash_completion.d
-          /opt/syswarden/bin/syswarden-cli completion bash > /etc/bash_completion.d/syswarden 2>/dev/null || true
-
-          if [ -f /etc/debian_version ] && [ -f /root/.bashrc ]; then
-              if ! grep -qE "^[[:space:]]*\.[[:space:]]+/etc/bash_completion" /root/.bashrc; then
-                  echo "" >> /root/.bashrc
-                  echo "# SysWarden Auto-Completion Hook" >> /root/.bashrc
-                  echo "if [ -f /etc/bash_completion ] && ! shopt -oq posix; then" >> /root/.bashrc
-                  echo "    . /etc/bash_completion" >> /root/.bashrc
-                  echo "fi" >> /root/.bashrc
-              fi
-          fi
-
           if [ "$1" = "2" ] || [ "$1" = "1" ] || [ "$1" = "configure" ] || [ -f /etc/alpine-release ]; then
               manager="$(package_service_manager)"
               manager_state="$(syswarden_classify_service_manager / "${manager}")"
@@ -454,19 +461,57 @@ jobs:
               esac
           fi
           syswarden_verify_webtui_retirement /
+          syswarden_consume_deferred_purge_marker
           EOF
 
           cat scripts/ci/package_webtui_retirement.sh > "${PACKAGE_SCRIPTS}/postrm.sh"
+          cat scripts/ci/package_removal_state.sh >> "${PACKAGE_SCRIPTS}/postrm.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/postrm.sh"
           export SYSWARDEN_PKG_INSTALL=1
 
           cleanup_generated_runtime_artifacts() {
               syswarden_verify_legacy_webtui_runtime_absent / || return 1
-              printf '%s\n' 'Preserving root crontab, ambiguous rsyslog bridges, shell completion, and legacy hardening artifacts for manual recovery.' >&2
+              printf '%s\n' 'Preserving root crontab and every modified or ambiguous legacy host artifact for manual recovery.' >&2
           }
 
           syswarden_path_absent() {
               [ ! -e "$1" ] && [ ! -L "$1" ]
+          }
+
+          syswarden_refuse_mounted_path_tree() {
+              syswarden_mount_root="$1"
+              [ -r /proc/self/mountinfo ] || {
+                  printf 'Refusing removal without readable mount topology: %s\n' "${syswarden_mount_root}" >&2
+                  return 1
+              }
+              if ! awk -v root="${syswarden_mount_root}" '
+                  {
+                      mountpoint = $5
+                      gsub(/\\040/, " ", mountpoint)
+                      gsub(/\\011/, "\t", mountpoint)
+                      gsub(/\\012/, "\n", mountpoint)
+                      gsub(/\\134/, "\\", mountpoint)
+                      if (mountpoint == root || index(mountpoint, root "/") == 1) {
+                          exit 42
+                      }
+                  }
+              ' /proc/self/mountinfo; then
+                  printf 'Refusing removal across a mounted product path: %s\n' "${syswarden_mount_root}" >&2
+                  return 1
+              fi
+          }
+
+          syswarden_attest_dedicated_root() {
+              syswarden_root_path="$1"
+              syswarden_path_absent "${syswarden_root_path}" && return 0
+              [ ! -L "${syswarden_root_path}" ] && [ -d "${syswarden_root_path}" ] || {
+                  printf 'Refusing unsafe dedicated product root: %s\n' "${syswarden_root_path}" >&2
+                  return 1
+              }
+              case "$(stat -c '%u:%g:%a' "${syswarden_root_path}")" in
+                  0:0:700|0:0:750|0:0:755) ;;
+                  *) printf 'Refusing unsafe dedicated product root metadata: %s\n' "${syswarden_root_path}" >&2; return 1 ;;
+              esac
           }
 
           syswarden_remove_exact_product_link() {
@@ -503,48 +548,11 @@ jobs:
           syswarden_remove_dedicated_root() {
               syswarden_root_path="$1"
               syswarden_path_absent "${syswarden_root_path}" && return 0
-              [ ! -L "${syswarden_root_path}" ] && [ -d "${syswarden_root_path}" ] || {
-                  printf 'Refusing unsafe dedicated product root: %s\n' "${syswarden_root_path}" >&2
-                  return 1
-              }
-              case "$(stat -c '%u:%g:%a' "${syswarden_root_path}")" in
-                  0:0:700|0:0:750|0:0:755) ;;
-                  *) printf 'Refusing unsafe dedicated product root metadata: %s\n' "${syswarden_root_path}" >&2; return 1 ;;
-              esac
+              syswarden_attest_dedicated_root "${syswarden_root_path}" || return 1
+              syswarden_refuse_mounted_path_tree "${syswarden_root_path}" || return 1
+              syswarden_attest_dedicated_root "${syswarden_root_path}" || return 1
               rm -rf -- "${syswarden_root_path}" || return 1
               syswarden_path_absent "${syswarden_root_path}"
-          }
-
-          syswarden_attest_removal_tombstone() {
-              syswarden_tombstone=/var/lib/syswarden/removal-in-progress-v1
-              [ ! -L /var/lib/syswarden ] && [ -d /var/lib/syswarden ] || return 1
-              case "$(stat -c '%u:%g:%a' /var/lib/syswarden)" in
-                  0:0:700|0:0:750|0:0:755) ;;
-                  *) return 1 ;;
-              esac
-              [ ! -L "${syswarden_tombstone}" ] && [ -f "${syswarden_tombstone}" ] || return 1
-              [ "$(stat -c '%u:%g:%a:%h' "${syswarden_tombstone}")" = '0:0:600:1' ] || return 1
-              [ "$(LC_ALL=C wc -c < "${syswarden_tombstone}" | tr -d '[:space:]')" = '39' ] || return 1
-              syswarden_tombstone_record="$(printf 'SYSWARDEN_REMOVAL_V1\nstate=in-progress\n')"
-              [ "$(cat "${syswarden_tombstone}")" = "${syswarden_tombstone_record}" ]
-          }
-
-          syswarden_finalize_removal_tombstone() {
-              for syswarden_binary in \
-                  /opt/syswarden/bin/syswarden-cli \
-                  /opt/syswarden/bin/syswarden-core \
-                  /opt/syswarden/bin/syswarden-tui; do
-                  syswarden_path_absent "${syswarden_binary}" || {
-                      printf 'Refusing removal finalization while a product binary remains: %s\n' "${syswarden_binary}" >&2
-                      return 1
-                  }
-              done
-              syswarden_tombstone=/var/lib/syswarden/removal-in-progress-v1
-              syswarden_path_absent "${syswarden_tombstone}" && return 0
-              syswarden_attest_removal_tombstone || return 1
-              syswarden_attest_removal_tombstone || return 1
-              rm -f -- "${syswarden_tombstone}" || return 1
-              syswarden_path_absent "${syswarden_tombstone}"
           }
 
           if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
@@ -552,11 +560,35 @@ jobs:
               syswarden_remove_exact_product_link /usr/local/bin/syswarden /opt/syswarden/bin/syswarden-cli || exit 1
               syswarden_remove_exact_product_link /usr/local/bin/syswarden-tui /opt/syswarden/bin/syswarden-tui || exit 1
               syswarden_remove_exact_runtime_socket /run/syswarden.sock || exit 1
-              if [ "$1" = "0" ] || [ "$1" = "purge" ]; then
+              if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "purge" ]; then
+                  syswarden_select_removal_barrier
+                  syswarden_barrier_status=$?
+                  if [ "${syswarden_barrier_status}" -eq 2 ]; then
+                      syswarden_resume_unmarked_terminal_state || exit 1
+                      exit 0
+                  fi
+                  [ "${syswarden_barrier_status}" -eq 0 ] || exit 1
+                  if [ "${syswarden_barrier_kind}" = finalizing ]; then
+                      syswarden_resume_external_finalization || exit 1
+                      exit 0
+                  fi
+                  for syswarden_purge_root in \
+                      /opt/syswarden \
+                      /etc/syswarden \
+                      /var/log/syswarden \
+                      /var/lib/syswarden; do
+                      syswarden_attest_dedicated_root "${syswarden_purge_root}" || exit 1
+                      syswarden_refuse_mounted_path_tree "${syswarden_purge_root}" || exit 1
+                  done
+                  syswarden_attest_removal_marker "${syswarden_active_barrier}" || exit 1
                   syswarden_remove_dedicated_root /opt/syswarden || exit 1
                   syswarden_remove_dedicated_root /etc/syswarden || exit 1
+                  syswarden_remove_dedicated_root /var/log/syswarden || exit 1
+                  syswarden_empty_removal_state || exit 1
+                  syswarden_finalize_removal_state_root || exit 1
+              else
+                  syswarden_transition_to_deferred_purge || exit 1
               fi
-              syswarden_finalize_removal_tombstone || exit 1
           fi
           EOF
 
@@ -682,7 +714,7 @@ jobs:
             --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
             --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
-            -d "wireguard-tools" -d "qrencode" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
+            -d "wireguard-tools" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
             -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
             --before-install "${PACKAGE_RPM_SCRIPTS}/preinst.sh" \
             --after-install "${PACKAGE_RPM_SCRIPTS}/postinst.sh" \

@@ -48,6 +48,9 @@ RAW_TOP_KEYS = {
             "product_status",
             "release_ready",
             "finding_id",
+            "repository_binding",
+            "source_snapshot",
+            "manager_test_binary",
             "summary",
             "engine",
             "network_namespaces",
@@ -74,6 +77,31 @@ RAW_TOP_KEYS = {
         }
     ),
 }
+NFT_SOURCE_BINDING_PATHS = (
+    ".actrc",
+    "src/core/syswarden-cli/config/config_loader.go",
+    "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
+    "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go",
+    "src/core/syswarden-cli/pkg/firewall/honeyports.go",
+    "src/core/syswarden-core/firewall/manager_kernel_integration_linux_test.go",
+    "src/core/syswarden-core/firewall/manager_linux.go",
+    "testdata/firewall/nftables-v4.02.8.nft",
+)
+NFT_BINARY_IDENTITY_KEYS = frozenset(
+    {
+        "sha256",
+        "device",
+        "inode",
+        "mode",
+        "size_bytes",
+        "uid",
+        "gid",
+        "mtime_ns",
+        "ctime_ns",
+        "regular_file",
+        "symlink",
+    }
+)
 
 
 class AdapterError(gate.EvidenceError):
@@ -196,6 +224,156 @@ def _git_blob_bytes(binding: gate.RepositoryBinding, relative: str) -> bytes:
     return process.stdout
 
 
+def _git_archive_bytes(binding: gate.RepositoryBinding) -> bytes:
+    try:
+        process = subprocess.run(
+            (
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "-C",
+                str(binding.root),
+                "archive",
+                "--format=tar",
+                binding.commit_sha,
+            ),
+            check=False,
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AdapterError(
+            f"cannot independently archive Git commit {binding.commit_sha}: {exc}"
+        ) from exc
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", errors="replace").strip()
+        _fail(
+            f"cannot independently archive Git commit {binding.commit_sha}: {detail}"
+        )
+    if not process.stdout:
+        _fail("independent Git archive is empty")
+    return process.stdout
+
+
+def _validate_nft_source_snapshot(
+    value: Any, binding: gate.RepositoryBinding
+) -> dict[str, Any]:
+    snapshot = _exact_keys(
+        value,
+        {
+            "schema_version",
+            "format",
+            "commit_sha",
+            "tree_sha",
+            "archive_sha256",
+            "archive_size_bytes",
+            "critical_files",
+            "read_only",
+            "revalidated_after_container",
+        },
+        "nft.source_snapshot",
+    )
+    archive = _git_archive_bytes(binding)
+    if (
+        _integer(snapshot["schema_version"], "nft.source_snapshot.schema_version")
+        != 1
+        or snapshot["format"] != "git-archive-tar-v1"
+        or snapshot["commit_sha"] != binding.commit_sha
+        or snapshot["tree_sha"] != binding.tree_sha
+        or _sha256(
+            snapshot["archive_sha256"], "nft.source_snapshot.archive_sha256"
+        )
+        != hashlib.sha256(archive).hexdigest()
+        or _integer(
+            snapshot["archive_size_bytes"],
+            "nft.source_snapshot.archive_size_bytes",
+        )
+        != len(archive)
+        or _boolean(snapshot["read_only"], "nft.source_snapshot.read_only")
+        is not True
+        or _boolean(
+            snapshot["revalidated_after_container"],
+            "nft.source_snapshot.revalidated_after_container",
+        )
+        is not True
+    ):
+        _fail("nft source snapshot is not an immutable archive of the exact Git commit")
+    records = _list(snapshot["critical_files"], "nft.source_snapshot.critical_files")
+    if len(records) != len(NFT_SOURCE_BINDING_PATHS):
+        _fail("nft source snapshot critical-file count differs")
+    for index, relative in enumerate(NFT_SOURCE_BINDING_PATHS):
+        record = _exact_keys(
+            records[index],
+            {"path", "sha256", "size_bytes"},
+            f"nft.source_snapshot.critical_files[{index}]",
+        )
+        payload = _git_blob_bytes(binding, relative)
+        if (
+            record["path"] != relative
+            or _sha256(
+                record["sha256"],
+                f"nft.source_snapshot.critical_files[{index}].sha256",
+            )
+            != hashlib.sha256(payload).hexdigest()
+            or _integer(
+                record["size_bytes"],
+                f"nft.source_snapshot.critical_files[{index}].size_bytes",
+            )
+            != len(payload)
+        ):
+            _fail(f"nft source snapshot does not bind exact Git blob {relative}")
+    return snapshot
+
+
+def _validate_nft_binary_identity(value: Any, label: str) -> dict[str, Any]:
+    identity = _exact_keys(value, NFT_BINARY_IDENTITY_KEYS, label)
+    _sha256(identity["sha256"], f"{label}.sha256")
+    if (
+        _integer(identity["device"], f"{label}.device") < 0
+        or _integer(identity["inode"], f"{label}.inode") <= 0
+        or identity["mode"] != "0500"
+        or _integer(identity["size_bytes"], f"{label}.size_bytes") <= 0
+        or _integer(identity["uid"], f"{label}.uid") < 0
+        or _integer(identity["gid"], f"{label}.gid") < 0
+        or _integer(identity["mtime_ns"], f"{label}.mtime_ns") <= 0
+        or _integer(identity["ctime_ns"], f"{label}.ctime_ns") <= 0
+        or _boolean(identity["regular_file"], f"{label}.regular_file") is not True
+        or _boolean(identity["symlink"], f"{label}.symlink") is not False
+    ):
+        _fail(f"{label} does not prove a non-empty immutable regular executable")
+    return identity
+
+
+def _validate_nft_manager_binary(
+    value: Any, source_snapshot: dict[str, Any]
+) -> dict[str, Any]:
+    binary = _exact_keys(
+        value,
+        {"schema_version", "source_archive_sha256", "before", "after", "identical"},
+        "nft.manager_test_binary",
+    )
+    before = _validate_nft_binary_identity(
+        binary["before"], "nft.manager_test_binary.before"
+    )
+    after = _validate_nft_binary_identity(
+        binary["after"], "nft.manager_test_binary.after"
+    )
+    if (
+        _integer(binary["schema_version"], "nft.manager_test_binary.schema_version")
+        != 1
+        or _sha256(
+            binary["source_archive_sha256"],
+            "nft.manager_test_binary.source_archive_sha256",
+        )
+        != source_snapshot["archive_sha256"]
+        or _boolean(binary["identical"], "nft.manager_test_binary.identical")
+        is not True
+        or before != after
+    ):
+        _fail("nft manager test binary changed or is not bound to the source archive")
+    return binary
+
+
 def _load_raw(
     path: Path,
     label: str,
@@ -217,22 +395,86 @@ def _load_raw(
 
 def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> dict[str, Any]:
     _exact_keys(document, RAW_TOP_KEYS["nft"], "nft raw report")
-    if _integer(document["schema_version"], "nft.schema_version") != 1:
-        _fail("nft raw report schema version must be 1")
+    if _integer(document["schema_version"], "nft.schema_version") != 3:
+        _fail("nft raw report schema version must be 3")
+    repository_binding = _exact_keys(
+        document["repository_binding"],
+        {"schema_version", "commit_sha", "tree_sha", "worktree_clean"},
+        "nft.repository_binding",
+    )
+    if (
+        _integer(
+            repository_binding["schema_version"],
+            "nft.repository_binding.schema_version",
+        )
+        != 1
+        or repository_binding["commit_sha"] != binding.commit_sha
+        or repository_binding["tree_sha"] != binding.tree_sha
+        or _boolean(
+            repository_binding["worktree_clean"],
+            "nft.repository_binding.worktree_clean",
+        )
+        is not True
+    ):
+        _fail("nft raw report is not bound to the exact clean Git commit and tree")
+    source_snapshot = _validate_nft_source_snapshot(
+        document["source_snapshot"], binding
+    )
+    _validate_nft_manager_binary(
+        document["manager_test_binary"], source_snapshot
+    )
     engine = _exact_keys(
         document["engine"],
-        {"name", "version", "rootless", "image", "network", "nftables"},
+        {
+            "name",
+            "client_version",
+            "rootless",
+            "service_is_remote",
+            "local_os",
+            "local_architecture",
+            "server_os",
+            "server_architecture",
+            "server_kernel",
+            "container_architecture",
+            "container_kernel",
+            "image",
+            "network",
+            "nftables",
+        },
         "nft.engine",
     )
-    for key in ("name", "version", "image", "network", "nftables"):
+    for key in (
+        "name",
+        "client_version",
+        "local_os",
+        "local_architecture",
+        "server_os",
+        "server_architecture",
+        "server_kernel",
+        "container_architecture",
+        "container_kernel",
+        "image",
+        "network",
+        "nftables",
+    ):
         _string(engine[key], f"nft.engine.{key}")
     if (
         engine["name"] != "podman"
         or _boolean(engine["rootless"], "nft.engine.rootless") is not True
+        or _boolean(
+            engine["service_is_remote"], "nft.engine.service_is_remote"
+        )
+        is not False
+        or engine["local_os"] != "linux"
+        or engine["server_os"] != "linux"
+        or engine["local_architecture"] != "amd64"
+        or engine["server_architecture"] != "amd64"
+        or engine["container_architecture"] != "amd64"
+        or engine["container_kernel"] != engine["server_kernel"]
         or engine["network"] != "none"
         or re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", engine["image"]) is None
     ):
-        _fail("nft engine isolation/pinning evidence is invalid")
+        _fail("nft engine is not a local native Linux AMD64 server-bound endpoint")
     namespaces = _exact_keys(
         document["network_namespaces"], {"host", "container"}, "nft.network_namespaces"
     )
@@ -241,12 +483,16 @@ def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> 
     if host_namespace == lab_namespace:
         _fail("nft laboratory namespace is not distinct from the host namespace")
     condition_keys = {
+        "local_native_podman_server",
+        "container_kernel_matches_server",
+        "immutable_git_source_revalidated",
+        "manager_test_binary_revalidated",
         "separate_network_namespace",
         "historical_concatenation_rejected_before_mutation",
         "kernel_reported_invalid_port",
         "corrected_ruleset_applied",
         "current_generator_contract_passed",
-        "dynamic_timeout_replication_applied",
+        "native_manager_interval_contract_passed",
         "isolated_ruleset_cleanup_succeeded",
     }
     conditions = _exact_keys(document["conditions"], condition_keys, "nft.conditions")
@@ -255,7 +501,12 @@ def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> 
     if "Service out of range" not in _string(document["kernel_error"], "nft.kernel_error"):
         _fail("nft kernel error does not prove the reviewed invalid-port rejection")
     _string(document["summary"], "nft.summary")
-    derived_harness = all(conditions.values()) and engine["rootless"] is True
+    derived_harness = (
+        all(conditions.values())
+        and engine["rootless"] is True
+        and engine["service_is_remote"] is False
+        and engine["container_kernel"] == engine["server_kernel"]
+    )
     if (
         document["harness_status"] != ("pass" if derived_harness else "fail")
         or document["product_status"] != "pass"
@@ -295,6 +546,7 @@ def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> 
             "network_namespace_isolated": conditions["separate_network_namespace"],
             "host_namespace_untouched": (
                 engine["rootless"] is True
+                and engine["service_is_remote"] is False
                 and engine["network"] == "none"
                 and host_namespace != lab_namespace
             ),

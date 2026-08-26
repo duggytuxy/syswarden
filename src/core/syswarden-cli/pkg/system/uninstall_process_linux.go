@@ -46,6 +46,8 @@ type firewallRemovalProcessScanner struct {
 	procRoot    string
 	cliPath     string
 	tuiPath     string
+	corePath    string
+	rejectCore  bool
 	selfPID     int
 	readDir     func(string) ([]os.DirEntry, error)
 	openRoot    func(string) (*os.Root, error)
@@ -61,6 +63,7 @@ func productionFirewallRemovalProcessScanner() firewallRemovalProcessScanner {
 		procRoot:    "/proc",
 		cliPath:     platformpaths.CLI,
 		tuiPath:     platformpaths.TUI,
+		corePath:    filepath.Join(platformpaths.InstallRoot, "bin/syswarden-core"),
 		selfPID:     os.Getpid(),
 		readDir:     os.ReadDir,
 		openRoot:    os.OpenRoot,
@@ -192,6 +195,11 @@ func (scanner firewallRemovalProcessScanner) validate() error {
 		scanner.tuiPath == scanner.cliPath {
 		return fmt.Errorf("SysWarden TUI path is not distinct, clean, and absolute")
 	}
+	if scanner.corePath == "" || !filepath.IsAbs(scanner.corePath) ||
+		filepath.Clean(scanner.corePath) != scanner.corePath || scanner.corePath == scanner.cliPath ||
+		scanner.corePath == scanner.tuiPath {
+		return fmt.Errorf("SysWarden core path is not distinct, clean, and absolute")
+	}
 	if scanner.selfPID <= 0 || scanner.readDir == nil || scanner.openRoot == nil || scanner.lstat == nil ||
 		scanner.stat == nil || scanner.readlink == nil || scanner.validateCLI == nil || scanner.ownerUID == nil {
 		return fmt.Errorf("process inventory dependencies are incomplete")
@@ -242,6 +250,13 @@ func (scanner firewallRemovalProcessScanner) scan() error {
 	tuiInfo, err := scanner.attestOptionalInstalledExecutable(scanner.tuiPath)
 	if err != nil {
 		return fmt.Errorf("attest installed SysWarden TUI executable: %w", err)
+	}
+	var coreInfo os.FileInfo
+	if scanner.rejectCore {
+		coreInfo, err = scanner.attestOptionalInstalledExecutable(scanner.corePath)
+		if err != nil {
+			return fmt.Errorf("attest installed SysWarden core executable: %w", err)
+		}
 	}
 	entries, err := scanner.readDir(scanner.procRoot)
 	if err != nil {
@@ -302,16 +317,27 @@ func (scanner firewallRemovalProcessScanner) scan() error {
 		}
 		exactCLI := exactRemovalProcessExecutable(executableInfo, cliInfo, executableTarget, scanner.cliPath)
 		exactTUI := exactRemovalProcessExecutable(executableInfo, tuiInfo, executableTarget, scanner.tuiPath)
-		if !exactCLI && !exactTUI {
+		exactCore := scanner.rejectCore && exactRemovalProcessExecutable(
+			executableInfo, coreInfo, executableTarget, scanner.corePath,
+		)
+		if !exactCLI && !exactTUI && !exactCore {
 			continue
 		}
-		if exactTUI {
+		if exactTUI || exactCore {
+			processName := "TUI"
+			installedInfo := tuiInfo
+			targetPath := scanner.tuiPath
+			if exactCore {
+				processName = "core"
+				installedInfo = coreInfo
+				targetPath = scanner.corePath
+			}
 			after, err := scanner.lstat(processPath)
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 			if err != nil {
-				return fmt.Errorf("reattest exact SysWarden TUI process %d: %w", pid, err)
+				return fmt.Errorf("reattest exact SysWarden %s process %d: %w", processName, pid, err)
 			}
 			if !os.SameFile(before, after) {
 				continue
@@ -319,15 +345,15 @@ func (scanner firewallRemovalProcessScanner) scan() error {
 			confirmedExecutable, statErr := scanner.stat(executablePath)
 			confirmedTarget, readlinkErr := scanner.readlink(executablePath)
 			if statErr != nil || readlinkErr != nil ||
-				!exactRemovalProcessExecutable(confirmedExecutable, tuiInfo, confirmedTarget, scanner.tuiPath) ||
+				!exactRemovalProcessExecutable(confirmedExecutable, installedInfo, confirmedTarget, targetPath) ||
 				executableTarget != confirmedTarget {
 				return errors.Join(
-					fmt.Errorf("exact SysWarden TUI process %d changed during attestation", pid),
+					fmt.Errorf("exact SysWarden %s process %d changed during attestation", processName, pid),
 					statErr,
 					readlinkErr,
 				)
 			}
-			return fmt.Errorf("root-owned SysWarden TUI is active as process %d", pid)
+			return fmt.Errorf("root-owned SysWarden %s is active as process %d", processName, pid)
 		}
 		relativeCmdline := filepath.Join(entry.Name(), "cmdline")
 		firstCmdline, err := readBoundedFirewallRemovalProcFile(
@@ -384,4 +410,10 @@ func (scanner firewallRemovalProcessScanner) scan() error {
 
 func scanExactRootSysWardenCLIMutators() error {
 	return productionFirewallRemovalProcessScanner().scan()
+}
+
+func scanExactRootSysWardenProcessesAfterServiceStop() error {
+	scanner := productionFirewallRemovalProcessScanner()
+	scanner.rejectCore = true
+	return scanner.scan()
 }

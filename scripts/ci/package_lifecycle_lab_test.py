@@ -90,6 +90,7 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
             "/opt/syswarden/bin/syswarden-core": "750",
             "/opt/syswarden/bin/syswarden-tui": "750",
             "/opt/syswarden/signatures.json": "640",
+            package_lifecycle_lab.BASH_COMPLETION_PATH: "644",
         }
         link_targets = {
             "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
@@ -885,6 +886,11 @@ class PackageLifecycleLabTests(unittest.TestCase):
         family: str,
         manifest_lines: list[str],
         inventory_lines: list[str] | None = None,
+        *,
+        role: str = "candidate",
+        version: str = "4.03.3",
+        candidate_version: str = "4.03.3",
+        forward_only_apk: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         manifest = self.root / f"{family}-manifest.tsv"
         inventory = self.root / f"{family}-inventory.tsv"
@@ -902,12 +908,20 @@ class PackageLifecycleLabTests(unittest.TestCase):
             )
         ]
         shell = self.root / f"validate-{family}-inventory.sh"
+        expected_previous_version = (
+            "4.02.8"
+            if forward_only_apk
+            else (version if role == "previous" else "4.03.2")
+        )
         validation = (
             f'PACKAGE_FAMILY={family}\n'
+            + f'EXPECTED_PREVIOUS_VERSION={expected_previous_version}\n'
+            + f'EXPECTED_CANDIDATE_VERSION={candidate_version}\n'
+            + f'FORWARD_ONLY_APK_TRANSITION={1 if forward_only_apk else 0}\n'
             + functions
-            + '\nvalidate_manifest_contract "$1"\n'
+            + f'\nvalidate_manifest_contract "$1" {role}\n'
             + (
-                'validate_inventory_contract "$2"\n'
+                f'validate_inventory_contract "$2" {role}\n'
                 if inventory_lines is not None
                 else ""
             )
@@ -3811,6 +3825,7 @@ probe
             "/opt/syswarden/signatures.json",
             "/usr/local/bin/syswarden",
             "/usr/local/bin/syswarden-tui",
+            package_lifecycle_lab.BASH_COMPLETION_PATH,
         ]
         deb = payload + [
             "/opt",
@@ -3820,6 +3835,8 @@ probe
             "/usr/local",
             "/usr/local/bin",
             "/usr/share",
+            "/usr/share/bash-completion",
+            "/usr/share/bash-completion/completions",
             "/usr/share/doc",
             "/usr/share/doc/syswarden",
             "/usr/share/doc/syswarden/changelog.gz",
@@ -3848,6 +3865,15 @@ probe
                     family, [*manifest, manifest[-1]]
                 )
                 self.assertNotEqual(duplicate.returncode, 0)
+                missing_completion = self.run_embedded_inventory_contract(
+                    family,
+                    [
+                        path
+                        for path in manifest
+                        if path != package_lifecycle_lab.BASH_COMPLETION_PATH
+                    ],
+                )
+                self.assertNotEqual(missing_completion.returncode, 0)
 
     def test_rpm_build_id_prefix_collision_requires_exact_unique_parents(
         self,
@@ -3867,7 +3893,13 @@ probe
             ]
         )
 
-        package_lifecycle_lab._validate_manager_paths("rpm", valid)
+        package_lifecycle_lab._validate_manager_paths(
+            "rpm",
+            valid,
+            role="candidate",
+            version="4.03.3",
+            candidate_version="4.03.3",
+        )
         accepted = self.run_embedded_inventory_contract("rpm", valid)
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
@@ -3890,7 +3922,11 @@ probe
                     package_lifecycle_lab.LifecycleLabError
                 ):
                     package_lifecycle_lab._validate_manager_paths(
-                        "rpm", adversarial
+                        "rpm",
+                        adversarial,
+                        role="candidate",
+                        version="4.03.3",
+                        candidate_version="4.03.3",
                     )
                 rejected = self.run_embedded_inventory_contract(
                     "rpm", adversarial
@@ -3908,6 +3944,7 @@ probe
             f"/opt/syswarden/signatures.json\tfile\t640\t0\t0\t{digest}",
             "/usr/local/bin/syswarden\tsymlink\t777\t0\t0\t/opt/syswarden/bin/syswarden-cli",
             "/usr/local/bin/syswarden-tui\tsymlink\t777\t0\t0\t/opt/syswarden/bin/syswarden-tui",
+            f"{package_lifecycle_lab.BASH_COMPLETION_PATH}\tfile\t644\t0\t0\t{digest}",
             "/usr/lib/.build-id\tdirectory\t755\t0\t0\t-",
         ]
         manifest = [line.split("\t", 1)[0] for line in inventory]
@@ -3929,6 +3966,50 @@ probe
             "rpm", manifest, inventory
         )
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        legacy_manifest = [
+            path
+            for path in manifest
+            if path != package_lifecycle_lab.BASH_COMPLETION_PATH
+        ]
+        legacy_inventory = [
+            line
+            for line in inventory
+            if not line.startswith(
+                package_lifecycle_lab.BASH_COMPLETION_PATH + "\t"
+            )
+        ]
+        accepted_previous = self.run_embedded_inventory_contract(
+            "rpm",
+            legacy_manifest,
+            legacy_inventory,
+            role="previous",
+            version="4.03.2",
+            candidate_version="4.03.3",
+        )
+        self.assertEqual(
+            accepted_previous.returncode, 0, accepted_previous.stderr
+        )
+        previous_filesystem = []
+        for line in sorted(legacy_inventory):
+            path, kind, mode, uid, gid, value = line.split("\t")
+            previous_filesystem.append(
+                {
+                    "path": path,
+                    "type": kind,
+                    "mode": mode,
+                    "uid": int(uid),
+                    "gid": int(gid),
+                    "value": value,
+                }
+            )
+        package_lifecycle_lab.validate_inventory_snapshot(
+            "rpm",
+            sorted(legacy_manifest),
+            previous_filesystem,
+            role="previous",
+            version="4.03.2",
+            candidate_version="4.03.3",
+        )
         mutations = {
             "type": [
                 line.replace("\tfile\t750\t", "\tdirectory\t750\t", 1)
@@ -3954,6 +4035,14 @@ probe
                     "/tmp/forged-cli",
                 )
                 if line.startswith("/usr/local/bin/syswarden\t")
+                else line
+                for line in inventory
+            ],
+            "completion-mode": [
+                line.replace("\t644\t", "\t600\t", 1)
+                if line.startswith(
+                    package_lifecycle_lab.BASH_COMPLETION_PATH + "\t"
+                )
                 else line
                 for line in inventory
             ],
@@ -4274,7 +4363,7 @@ probe
                     "manager_paths"
                 ]
             ),
-            16,
+            19,
         )
         self.assertEqual(
             report["scope"]["architectures_completed"],
@@ -5112,6 +5201,19 @@ probe
             for event in scenario["events"]:
                 if event["check"] in details:
                     event["detail"] = details[event["check"]]
+            for inventory_scenario in platform_result["scenarios"]:
+                for phase in inventory_scenario["inventory_evidence"].values():
+                    phase["manager_paths"] = [
+                        path
+                        for path in phase["manager_paths"]
+                        if path != package_lifecycle_lab.BASH_COMPLETION_PATH
+                    ]
+                    phase["filesystem"] = [
+                        entry
+                        for entry in phase["filesystem"]
+                        if entry["path"]
+                        != package_lifecycle_lab.BASH_COMPLETION_PATH
+                    ]
 
         classification = package_lifecycle_lab.classify_lifecycle_evidence(
             platforms
@@ -5270,12 +5372,37 @@ probe
         self.assertIn("remove.final-removal.service_manager_calls", checks)
         self.assertIn("remove.final-removal.generated.openrc_webtui", checks)
         self.assertIn("remove.final-removal.generated.runtime_socket", checks)
+        self.assertIn("remove.final-removal.generated.runtime_lock", checks)
+        self.assertIn(
+            "remove.final-removal.generated.rsyslog_antiforging_exact_removed",
+            checks,
+        )
+        self.assertIn(
+            "remove.final-removal.generated.rsyslog_selinux_provenance_removed",
+            checks,
+        )
         self.assertIn("remove.final-removal.generated.completion_residual", checks)
         self.assertIn("remove.final-removal.generated.cron_d_owned", checks)
         self.assertIn("remove.final-removal.generated.cron_d_pending", checks)
         self.assertIn("remove.final-removal.generated.root_crontab_bytes", checks)
         self.assertIn(
             "remove.final-removal.generated.root_crontab_legacy_residual", checks
+        )
+        for key in ("opt_root", "config_root", "data_root", "log_root"):
+            self.assertIn(f"remove.final-removal.state.{key}", checks)
+        self.assertFalse(
+            any(
+                check.startswith(
+                    "remove.final-removal.state.operator_data."
+                )
+                for check in checks
+            )
+        )
+        self.assertFalse(
+            any(
+                check.startswith("remove.final-removal.state.telemetry.")
+                for check in checks
+            )
         )
         self.assertFalse(any("not_applicable" in check for check in checks))
         report = package_lifecycle_lab.run_lab(
@@ -5300,6 +5427,591 @@ probe
         self.assertIn("assert_generated_runtime_artifact_contract", script)
         self.assertIn("/etc/systemd/system/syswarden-firewall.service", script)
 
+    def test_deb_remove_qualifies_reinstall_then_deferred_purge(self) -> None:
+        checks = package_lifecycle_lab.expected_event_checks("deb", "remove")
+        ordered = (
+            "remove.install.candidate",
+            "remove.remove",
+            "remove.remove.state.deferred_purge_marker.hash",
+            "remove.reinstall-after-remove.candidate",
+            "remove.reinstall-after-remove.state.deferred_purge_marker",
+            "remove.remove-before-purge",
+            "remove.remove-before-purge.state.deferred_purge_marker.hash",
+            "remove.purge-after-remove",
+            "remove.purge-after-remove.state.opt_root",
+            "remove.purge-after-remove.state.config_root",
+            "remove.purge-after-remove.state.data_root",
+            "remove.purge-after-remove.state.log_root",
+        )
+        positions = [checks.index(check) for check in ordered]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(
+            package_lifecycle_lab.expected_inventory_phase_labels("remove"),
+            ("fresh",),
+        )
+
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("scenario_remove() {")
+        end = source.index("\nscenario_purge() {", start)
+        scenario = source[start:end]
+        sequence = (
+            'run_step remove remove_package',
+            'run_install_step reinstall-after-remove.candidate',
+            'run_step remove-before-purge remove_package',
+            'run_step purge-after-remove purge_package',
+        )
+        sequence_positions = [scenario.index(fragment) for fragment in sequence]
+        self.assertEqual(sequence_positions, sorted(sequence_positions))
+        self.assertIn("assert_all_state_preserved remove", scenario)
+        self.assertIn("assert_deb_removal_log_preserved remove", scenario)
+        self.assertIn("assert_deferred_purge_marker remove", scenario)
+        self.assertIn(
+            "reinstall-after-remove.state.deferred_purge_marker", scenario
+        )
+        self.assertIn(
+            "assert_dedicated_roots_absent purge-after-remove", scenario
+        )
+        self.assertIn(
+            'probe_payload reinstall-after-remove candidate "${CANDIDATE_VERSION}" 0',
+            scenario,
+        )
+
+        marker = b"SYSWARDEN_REMOVAL_V1\nstate=in-progress\n"
+        self.assertEqual(len(marker), 39)
+        self.assertIn(hashlib.sha256(marker).hexdigest(), source)
+        roots_start = source.index("assert_dedicated_roots_absent() {")
+        roots_end = source.index("\n}\n\nassert_package_absent() {", roots_start)
+        roots = source[roots_start:roots_end]
+        for path in (
+            "/opt/syswarden",
+            "/etc/syswarden",
+            "/var/lib/syswarden",
+            "/var/log/syswarden",
+        ):
+            self.assertIn(path, roots)
+
+        direct_purge = package_lifecycle_lab.expected_event_checks("deb", "purge")
+        for key in ("opt_root", "config_root", "data_root", "log_root"):
+            self.assertIn(f"purge.purge.state.{key}", direct_purge)
+
+    def test_rpm_and_apk_final_removal_require_dedicated_roots_absent(self) -> None:
+        for family, scenario, label in (
+            ("rpm", "remove", "final-removal"),
+            ("apk", "remove", "remove"),
+            ("apk", "purge", "purge"),
+        ):
+            with self.subTest(family=family, scenario=scenario):
+                checks = package_lifecycle_lab.expected_event_checks(
+                    family, scenario
+                )
+                for key in ("opt_root", "config_root", "data_root", "log_root"):
+                    self.assertIn(
+                        f"{scenario}.{label}.state.{key}", checks
+                    )
+                self.assertFalse(
+                    any(
+                        check.startswith(
+                            f"{scenario}.{label}.state.operator_data."
+                        )
+                        for check in checks
+                    )
+                )
+                self.assertFalse(
+                    any(
+                        check.startswith(
+                            f"{scenario}.{label}.state.telemetry."
+                        )
+                        for check in checks
+                    )
+                )
+
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        remove_start = source.index("scenario_remove() {")
+        remove_end = source.index("\nscenario_purge() {", remove_start)
+        remove = source[remove_start:remove_end]
+        self.assertGreaterEqual(
+            remove.count("assert_dedicated_roots_absent"), 3
+        )
+        purge = source[remove_end:]
+        self.assertGreaterEqual(
+            purge.count("assert_dedicated_roots_absent"), 2
+        )
+
+    def test_exact_generated_rsyslog_cleanup_is_separate_from_ambiguity(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        seed_start = source.index("seed_generated_runtime_artifacts() {")
+        seed_end = source.index(
+            "\n}\n\nassert_generated_runtime_artifact_contract() {",
+            seed_start,
+        )
+        seed = source[seed_start:seed_end]
+        exact_start = seed.index("exact-rsyslog)")
+        ambiguous_start = seed.index("ambiguous-rsyslog)", exact_start)
+        exact = seed[exact_start:ambiguous_start]
+        ambiguous = seed[ambiguous_start:]
+        for path in (
+            "/etc/rsyslog.d/99-syswarden-siem.conf",
+            "/etc/rsyslog.d/99-syswarden-waf-bridge.conf",
+        ):
+            self.assertIn(path, exact)
+            self.assertNotIn(f"> {path}", exact)
+            self.assertRegex(
+                ambiguous,
+                rf"> \\\n\s+{re.escape(path)}",
+            )
+        self.assertIn(".syswarden-rsyslog-provenance-v1", exact)
+        self.assertIn("syswarden-rsyslog-provenance-v1", exact)
+        self.assertIn("*.* @127.0.0.1:5514", exact)
+        self.assertIn('File="/var/log/syswarden/waf.json"', exact)
+        self.assertIn('Tag="syswarden-waf-json"', exact)
+        self.assertIn('Facility="local7"', exact)
+        self.assertIn('module(load="omuxsock")', exact)
+        self.assertIn("$OMUxSockSocket /var/run/syswarden.sock", exact)
+        self.assertIn('/var/log/nginx/*.log', exact)
+        self.assertIn('/var/log/auth.log', exact)
+        self.assertIn("*.* :omuxsock:;SYSWARDENRaw", exact)
+        self.assertIn("/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf", exact)
+        self.assertIn("operator-owned ambiguous SIEM bridge", ambiguous)
+        self.assertIn("operator-owned ambiguous WAF bridge", ambiguous)
+
+        assertion_start = source.index(
+            "assert_generated_runtime_artifact_contract() {"
+        )
+        assertion_end = source.index(
+            "\n}\n\nprepare_expected_payloads() {", assertion_start
+        )
+        assertion = source[assertion_start:assertion_end]
+        exact_assertion_start = assertion.index("exact-rsyslog)")
+        ambiguous_assertion_start = assertion.index(
+            "ambiguous-rsyslog)", exact_assertion_start
+        )
+        exact_assertion = assertion[
+            exact_assertion_start:ambiguous_assertion_start
+        ]
+        ambiguous_assertion = assertion[ambiguous_assertion_start:]
+        self.assertIn("/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf", assertion)
+        self.assertIn("-p ExecReload --value", assertion)
+        self.assertNotIn("ReloadResult", source)
+        self.assertIn("-p ActiveEnterTimestampMonotonic --value", source)
+        self.assertIn("rsyslog_reactivation_mode", exact_assertion)
+        self.assertIn("rsyslog_siem_exact_removed", assertion)
+        self.assertIn("rsyslog_waf_bridge_exact_removed", assertion)
+        self.assertIn("rsyslog_siem_residual", assertion)
+        self.assertIn("rsyslog_waf_bridge_residual", assertion)
+        self.assertIn("rsyslog_provenance_removed", exact_assertion)
+        self.assertNotIn("rsyslog_provenance_residual", exact_assertion)
+        self.assertIn("rsyslog_provenance_residual", ambiguous_assertion)
+        self.assertNotIn("rsyslog_provenance_removed", ambiguous_assertion)
+
+        remove_checks = package_lifecycle_lab.expected_event_checks(
+            "deb", "remove"
+        )
+        for label in ("remove", "remove-before-purge"):
+            for key in (
+                "rsyslog_siem_exact_generated",
+                "rsyslog_waf_bridge_exact_generated",
+                "rsyslog_provenance_exact",
+            ):
+                self.assertIn(
+                    f"remove.{label}.generated.{key}", remove_checks
+                )
+            for key in (
+                "rsyslog_siem_exact_removed",
+                "rsyslog_waf_bridge_exact_removed",
+                "rsyslog_provenance_removed",
+                "rsyslog_configuration_valid",
+                "rsyslog_reactivated",
+            ):
+                self.assertIn(
+                    f"remove.{label}.generated.{key}", remove_checks
+                )
+        purge_checks = package_lifecycle_lab.expected_event_checks("deb", "purge")
+        self.assertIn("purge.purge.generated.rsyslog_siem_residual", purge_checks)
+        self.assertIn(
+            "purge.purge.generated.rsyslog_waf_bridge_residual", purge_checks
+        )
+        self.assertIn(
+            "purge.purge.generated.rsyslog_provenance_residual", purge_checks
+        )
+        self.assertIn(
+            "/tmp/syswarden-rsyslog-provenance-before", ambiguous
+        )
+        self.assertIn(
+            "/tmp/syswarden-rsyslog-provenance-before",
+            ambiguous_assertion,
+        )
+
+        writer_start = source.index("write_seeded_operator_token() {")
+        writer_end = source.index("\nseed_state() {", writer_start)
+        writer = source[writer_start:writer_end]
+        token = self.root / "deb-removal-token.toml"
+        result = subprocess.run(
+            [
+                "/bin/sh",
+                "-c",
+                writer
+                + '\nPACKAGE_FAMILY=deb; SCENARIO=remove; '
+                + 'write_seeded_operator_token "$1"',
+                "deb-removal-token",
+                str(token),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = token.read_text(encoding="utf-8")
+        self.assertIn("[integrations.siem]", rendered)
+        self.assertIn("enabled = true", rendered)
+        self.assertIn('ip = "127.0.0.1"', rendered)
+        self.assertIn('port = "5514"', rendered)
+        self.assertIn('protocol = "udp"', rendered)
+
+    def test_rsyslog_reactivation_proof_is_systemd_255_257_compatible(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        helpers_start = source.index("rsyslog_exec_reload_succeeded() {")
+        helpers_end = source.index(
+            "\nseed_generated_runtime_artifacts() {", helpers_start
+        )
+        helpers = source[helpers_start:helpers_end]
+        self.assertNotIn("ReloadResult", helpers)
+        self.assertIn("code=exited", helpers)
+        self.assertIn("status=0", helpers)
+        self.assertIn("start_time=[n/a]", helpers)
+        self.assertIn("stop_time=[n/a]", helpers)
+
+        def reload_record(
+            pid: int,
+            *,
+            start: str = "Tue 2026-08-25 12:00:00 UTC",
+            stop: str = "Tue 2026-08-25 12:00:01 UTC",
+            code: str = "exited",
+            status: str = "0/SUCCESS",
+        ) -> str:
+            return (
+                "{ path=/bin/kill ; argv[]=/bin/kill -HUP 4242 ; "
+                "ignore_errors=no ; "
+                f"start_time=[{start}] ; stop_time=[{stop}] ; "
+                f"pid={pid} ; code={code} ; status={status} }}"
+            )
+
+        def run_success_predicate(value: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    helpers + '\nrsyslog_exec_reload_succeeded "$1"',
+                    "rsyslog-exec-reload",
+                    value,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        successful_records = (
+            reload_record(500),
+            reload_record(501, status="0"),
+            reload_record(502) + "\n" + reload_record(503),
+        )
+        for value in successful_records:
+            with self.subTest(success=value):
+                result = run_success_predicate(value)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+        adversarial_records = {
+            "empty": "",
+            "whitespace": " ",
+            "start-not-run": reload_record(500, start="n/a"),
+            "stop-not-run": reload_record(500, stop="n/a"),
+            "pid-zero": reload_record(0),
+            "pid-one": reload_record(1),
+            "wrong-code": reload_record(500, code="killed"),
+            "failed-status": reload_record(500, status="1/FAILURE"),
+            "missing-open": reload_record(500)[1:],
+            "suffix": reload_record(500) + " forged",
+            "missing-argv": reload_record(500).replace(
+                "argv[]=/bin/kill -HUP 4242 ; ", ""
+            ),
+            "mixed-records": reload_record(500) + "\nforged",
+        }
+        for name, value in adversarial_records.items():
+            with self.subTest(adversarial=name):
+                self.assertNotEqual(
+                    run_success_predicate(value).returncode,
+                    0,
+                )
+
+        old_reload = reload_record(500)
+        new_reload = reload_record(
+            501,
+            start="Tue 2026-08-25 12:01:00 UTC",
+            stop="Tue 2026-08-25 12:01:01 UTC",
+        )
+        failed_reload = reload_record(
+            502,
+            start="Tue 2026-08-25 12:02:00 UTC",
+            stop="Tue 2026-08-25 12:02:01 UTC",
+            status="1/FAILURE",
+        )
+
+        def run_mode(
+            before: str,
+            after: str,
+            pid_before: str,
+            pid_after: str,
+            active_before: str,
+            active_after: str,
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    helpers
+                    + '\nrsyslog_reactivation_mode "$1" "$2" "$3" '
+                    + '"$4" "$5" "$6"',
+                    "rsyslog-reactivation",
+                    before,
+                    after,
+                    pid_before,
+                    pid_after,
+                    active_before,
+                    active_after,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        accepted_modes = (
+            (old_reload, new_reload, "100", "100", "1000", "1000", "reload"),
+            ("", "", "100", "101", "1000", "1001", "restart"),
+            (
+                old_reload,
+                failed_reload,
+                "100",
+                "101",
+                "1000",
+                "1001",
+                "restart",
+            ),
+        )
+        for before, after, pid_before, pid_after, active_before, active_after, mode in accepted_modes:
+            with self.subTest(accepted_mode=mode, after=after):
+                result = run_mode(
+                    before,
+                    after,
+                    pid_before,
+                    pid_after,
+                    active_before,
+                    active_after,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, mode + "\n")
+
+        rejected_modes = (
+            ("", "", "100", "100", "1000", "1000"),
+            (old_reload, old_reload, "100", "100", "1000", "1000"),
+            (old_reload, "forged", "100", "100", "1000", "1000"),
+            (old_reload, new_reload, "100", "101", "1000", "1000"),
+            ("", "", "100", "101", "1000", "999"),
+            ("", "", "invalid", "101", "1000", "1001"),
+            ("", "", "100", "101", "", "1001"),
+        )
+        for case in rejected_modes:
+            with self.subTest(rejected_mode=case):
+                self.assertNotEqual(run_mode(*case).returncode, 0)
+
+    def test_completion_is_package_owned_and_legacy_path_is_only_ambiguous(self) -> None:
+        completion = package_lifecycle_lab.BASH_COMPLETION_PATH
+        legacy_completion = package_lifecycle_lab.LEGACY_BASH_COMPLETION_PATH
+        self.assertIn(completion, package_lifecycle_lab.PACKAGE_PAYLOAD_PATHS)
+        self.assertNotIn(
+            completion, package_lifecycle_lab.LEGACY_PACKAGE_PAYLOAD_PATHS
+        )
+        self.assertIn(completion, package_lifecycle_lab.DEB_PACKAGE_PATHS)
+        self.assertNotIn(
+            completion, package_lifecycle_lab.LEGACY_DEB_PACKAGE_PATHS
+        )
+        self.assertIn(completion, package_lifecycle_lab.APK_PACKAGE_PATHS)
+        self.assertNotIn(
+            completion, package_lifecycle_lab.LEGACY_APK_PACKAGE_PATHS
+        )
+
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        postinstall_start = source.index("probe_postinstall_contract() {")
+        postinstall_end = source.index(
+            "\n}\n\nverify_installed_inventory() {", postinstall_start
+        )
+        postinstall = source[postinstall_start:postinstall_end]
+        self.assertIn(completion, postinstall)
+        self.assertIn("0:0:644:1", postinstall)
+        self.assertIn("legacy_bash_completion_is_exact", postinstall)
+        self.assertIn(legacy_completion, source)
+        self.assertIn(
+            package_lifecycle_lab.LEGACY_BASH_COMPLETION_SHA256,
+            source,
+        )
+        self.assertIn("0:0:644:1:16339", source)
+        self.assertIn("completion-legacy-residual", postinstall)
+        self.assertIn("completion-package-owned-residual", postinstall)
+
+        seed_start = source.index("seed_generated_runtime_artifacts() {")
+        seed_end = source.index(
+            "\n}\n\nassert_generated_runtime_artifact_contract() {",
+            seed_start,
+        )
+        seed = source[seed_start:seed_end]
+        self.assertIn("/etc/bash_completion.d/syswarden", seed)
+        self.assertIn("operator-owned ambiguous SysWarden completion", seed)
+
+        manifest_start = source.index("validate_manifest_contract() {")
+        manifest_end = source.index(
+            "\n}\n\ninventory_has_exact_entry() {", manifest_start
+        )
+        manifest_contract = source[manifest_start:manifest_end]
+        self.assertIn(completion, manifest_contract)
+        self.assertIn("package_uses_legacy_completion_payload", manifest_contract)
+        inventory_start = source.index("validate_inventory_contract() {")
+        inventory_end = source.index(
+            "\n}\n\nverify_package_artifact() {", inventory_start
+        )
+        inventory_contract = source[inventory_start:inventory_end]
+        self.assertIn(completion, inventory_contract)
+        self.assertIn("file 644", inventory_contract)
+
+    def test_completion_manifest_exception_is_bound_to_previous_v4032(self) -> None:
+        current_by_family = {
+            "deb": sorted(package_lifecycle_lab.DEB_PACKAGE_PATHS),
+            "apk": sorted(package_lifecycle_lab.APK_PACKAGE_PATHS),
+        }
+        legacy_by_family = {
+            "deb": sorted(package_lifecycle_lab.LEGACY_DEB_PACKAGE_PATHS),
+            "apk": sorted(package_lifecycle_lab.LEGACY_APK_PACKAGE_PATHS),
+        }
+        rpm_build_ids = {
+            "/usr/lib/.build-id",
+            "/usr/lib/.build-id/11",
+            "/usr/lib/.build-id/11/" + "1" * 38,
+            "/usr/lib/.build-id/22",
+            "/usr/lib/.build-id/22/" + "2" * 38,
+            "/usr/lib/.build-id/33",
+            "/usr/lib/.build-id/33/" + "3" * 38,
+        }
+        current_by_family["rpm"] = sorted(
+            set(package_lifecycle_lab.PACKAGE_PAYLOAD_PATHS) | rpm_build_ids
+        )
+        legacy_by_family["rpm"] = sorted(
+            set(package_lifecycle_lab.LEGACY_PACKAGE_PAYLOAD_PATHS)
+            | rpm_build_ids
+        )
+
+        for family in ("deb", "rpm", "apk"):
+            with self.subTest(family=family):
+                legacy = legacy_by_family[family]
+                current = current_by_family[family]
+                accepted_previous = self.run_embedded_inventory_contract(
+                    family,
+                    legacy,
+                    role="previous",
+                    version="4.03.2",
+                    candidate_version="4.03.3",
+                )
+                self.assertEqual(
+                    accepted_previous.returncode,
+                    0,
+                    accepted_previous.stderr,
+                )
+                self.assertNotEqual(
+                    self.run_embedded_inventory_contract(
+                        family,
+                        current,
+                        role="previous",
+                        version="4.03.2",
+                        candidate_version="4.03.3",
+                    ).returncode,
+                    0,
+                )
+                self.assertNotEqual(
+                    self.run_embedded_inventory_contract(
+                        family,
+                        legacy,
+                        role="candidate",
+                        version="4.03.3",
+                        candidate_version="4.03.3",
+                    ).returncode,
+                    0,
+                )
+                self.assertNotEqual(
+                    self.run_embedded_inventory_contract(
+                        family,
+                        legacy,
+                        role="previous",
+                        version="4.03.1",
+                        candidate_version="4.03.3",
+                    ).returncode,
+                    0,
+                )
+
+                package_lifecycle_lab._validate_manager_paths(
+                    family,
+                    legacy,
+                    role="previous",
+                    version="4.03.2",
+                    candidate_version="4.03.3",
+                )
+                for role, version, paths in (
+                    ("previous", "4.03.2", current),
+                    ("candidate", "4.03.3", legacy),
+                    ("previous", "4.03.1", legacy),
+                ):
+                    with self.assertRaises(
+                        package_lifecycle_lab.LifecycleLabError
+                    ):
+                        package_lifecycle_lab._validate_manager_paths(
+                            family,
+                            paths,
+                            role=role,
+                            version=version,
+                            candidate_version="4.03.3",
+                        )
+
+        legacy_apk = sorted(package_lifecycle_lab.LEGACY_APK_PACKAGE_PATHS)
+        current_apk = sorted(package_lifecycle_lab.APK_PACKAGE_PATHS)
+        for role, version in (
+            ("previous", "4.02.8"),
+            ("candidate", "4.03.2"),
+        ):
+            with self.subTest(forward_only_apk_role=role):
+                accepted = self.run_embedded_inventory_contract(
+                    "apk",
+                    legacy_apk,
+                    role=role,
+                    version=version,
+                    candidate_version="4.03.2",
+                    forward_only_apk=True,
+                )
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+                self.assertNotEqual(
+                    self.run_embedded_inventory_contract(
+                        "apk",
+                        current_apk,
+                        role=role,
+                        version=version,
+                        candidate_version="4.03.2",
+                        forward_only_apk=True,
+                    ).returncode,
+                    0,
+                )
+                package_lifecycle_lab._validate_manager_paths(
+                    "apk",
+                    legacy_apk,
+                    role=role,
+                    version=version,
+                    candidate_version="4.03.2",
+                    forward_only_apk=True,
+                )
+
     def test_systemd_enablement_target_depends_on_scenario_provenance(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
         start = source.index("expected_systemd_enablement_prefix() {")
@@ -5319,6 +6031,7 @@ probe
                 )
             },
             ("remove", "fresh"): "..",
+            ("remove", "reinstall-after-remove"): "..",
             ("purge", "fresh"): "..",
         }
         for (scenario, label), expected in cases.items():
@@ -5365,13 +6078,22 @@ probe
                 re.findall(r"\$\{label\}\.([a-z0-9_.-]+)", script[start:end])
             )
         )
-        declared = [
-            check.removeprefix("remove.remove.")
-            for check in package_lifecycle_lab.expected_event_checks("deb", "remove")
-            if check.startswith("remove.remove.generated.")
-            or check == "remove.remove.service_manager_calls"
-        ]
-        self.assertEqual(emitted, declared)
+        declared = {
+            "service_manager_calls",
+            *(
+                check.removeprefix("remove.remove.")
+                for check in package_lifecycle_lab._generated_cleanup_event_checks(
+                    "remove", "remove", exact_rsyslog=True
+                )
+            ),
+            *(
+                check.removeprefix("remove.remove.")
+                for check in package_lifecycle_lab._generated_cleanup_event_checks(
+                    "remove", "remove"
+                )
+            ),
+        }
+        self.assertEqual(set(emitted), declared)
 
     def test_package_lab_enforces_active_init_and_alpine_crond_provider(self) -> None:
         script = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -5506,34 +6228,36 @@ probe
             with self.subTest(family=family, scenario=scenario):
                 checks = package_lifecycle_lab.expected_event_checks(family, scenario)
                 generated = [check for check in checks if ".generated." in check]
-                label = "final-removal" if family == "rpm" else scenario
+                if family == "deb" and scenario == "remove":
+                    labels = ("remove", "remove-before-purge")
+                    exact_rsyslog = True
+                else:
+                    labels = (
+                        "final-removal" if family == "rpm" else scenario,
+                    )
+                    exact_rsyslog = False
                 expected_generated = [
-                    f"{scenario}.{label}.generated.{key}"
-                    for key in (
-                        "systemd_core",
-                        "systemd_firewall",
-                        "systemd_webtui",
-                        "openrc_core",
-                        "openrc_firewall",
-                        "openrc_webtui",
-                        "systemd_core_enablement",
-                        "systemd_firewall_enablement",
-                        "openrc_core_enablement",
-                        "openrc_firewall_enablement",
-                        "runtime_socket",
-                        "completion_residual",
-                        "rsyslog_siem_residual",
-                        "rsyslog_waf_bridge_residual",
-                        "cron_d_owned",
-                        "cron_d_pending",
-                        "root_crontab_bytes",
-                        "root_crontab_legacy_residual",
+                    check
+                    for label in labels
+                    for check in (
+                        package_lifecycle_lab._generated_rsyslog_pre_removal_event_checks(
+                            scenario,
+                            label,
+                        )
+                        if exact_rsyslog
+                        else ()
+                    )
+                    + package_lifecycle_lab._generated_cleanup_event_checks(
+                            scenario,
+                            label,
+                            exact_rsyslog=exact_rsyslog,
                     )
                 ]
                 self.assertEqual(generated, expected_generated)
-                self.assertIn(
-                    f"{scenario}.{label}.service_manager_calls", checks
-                )
+                for label in labels:
+                    self.assertIn(
+                        f"{scenario}.{label}.service_manager_calls", checks
+                    )
 
     def test_alma_v4028_rpm_rsyslog_transition_fixture_is_exact_and_fail_closed(
         self,
@@ -6222,6 +6946,7 @@ prepare_package_transition
             ("upgrade-rollback", "reinstall"): 0,
             ("upgrade-rollback", "recovery"): 0,
             ("remove", "fresh"): 0,
+            ("remove", "reinstall-after-remove"): 0,
             ("purge", "fresh"): 0,
             ("upgrade-rollback", "restart-one"): 1,
             ("upgrade-rollback", "restart-two"): 1,
@@ -6580,12 +7305,15 @@ prepare_package_transition
         install = repository.joinpath(
             "src/core/syswarden-cli/cmd/install.go"
         ).read_text(encoding="utf-8")
+        update_feeds = repository.joinpath(
+            "src/core/syswarden-cli/cmd/update_feeds.go"
+        ).read_text(encoding="utf-8")
 
         self.assertIn(
             'legacyValue(oldConfig, "SYSWARDEN_LIST_CHOICE", "1")',
             migrator,
         )
-        download = install.index("if err := network.DownloadFeeds(")
+        download = install.index("if err := network.DownloadFeedsForInstall(")
         fatal = install.index(
             'return installStageError("failed to download threat intelligence feeds", err)',
             download,
@@ -6593,6 +7321,8 @@ prepare_package_transition
         cron = install.index("if err := network.SetupFeedsCron()", fatal)
         self.assertLess(download, fatal)
         self.assertLess(fatal, cron)
+        self.assertIn("return network.DownloadFeeds(", update_feeds)
+        self.assertNotIn("DownloadFeedsForInstall", update_feeds)
 
     def test_postinstall_failure_detail_codes_keep_existing_event_ids(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -7109,7 +7839,7 @@ prepare_package_transition
                 package_lifecycle_lab.RPM_BOOTSTRAP,
                 {
                     "nftables", "ipset", "wget", "rsyslog", "cronie",
-                    "bash-completion", "wireguard-tools", "qrencode", "jq",
+                    "bash-completion", "wireguard-tools", "jq",
                     "checkpolicy", "policycoreutils-python-utils",
                     "dnf-automatic", "procps-ng",
                     "e2fsprogs",
@@ -7134,7 +7864,8 @@ prepare_package_transition
                         bootstrap,
                         rf"(?:^|\s){re.escape(dependency)}(?:\s|$)",
                     )
-        self.assertIn("epel-release", package_lifecycle_lab.RPM_BOOTSTRAP)
+        self.assertNotIn("epel-release", package_lifecycle_lab.RPM_BOOTSTRAP)
+        self.assertNotIn("qrencode", package_lifecycle_lab.RPM_BOOTSTRAP)
         self.assertIn(
             "apk add --no-cache openrc openrc-init && apk add --no-cache",
             package_lifecycle_lab.APK_BOOTSTRAP,

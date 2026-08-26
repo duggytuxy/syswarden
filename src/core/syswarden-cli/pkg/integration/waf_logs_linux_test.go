@@ -678,7 +678,7 @@ func TestReconcileWAFRsyslogConfigRejectsUnsafeMetadataAndOversize(t *testing.T)
 		path := writeWAFRsyslogTestConfig(
 			t,
 			parent,
-			[]byte(strings.Repeat("x", wafRsyslogConfigReadLimit+1)),
+			[]byte(strings.Repeat("x", rsyslogArtifactContentLimit+1)),
 			0600,
 		)
 		if _, err := reconcileWAFRsyslogConfigAt(parent, uid, gid, []byte("managed\n"), nil); err == nil ||
@@ -686,7 +686,7 @@ func TestReconcileWAFRsyslogConfigRejectsUnsafeMetadataAndOversize(t *testing.T)
 			t.Fatalf("oversize rsyslog configuration error = %v", err)
 		}
 		info, err := os.Stat(path)
-		if err != nil || info.Size() != wafRsyslogConfigReadLimit+1 {
+		if err != nil || info.Size() != rsyslogArtifactContentLimit+1 {
 			t.Fatalf("oversize rsyslog file was modified: info=%v error=%v", info, err)
 		}
 	})

@@ -17,7 +17,7 @@ Run the extension with all three required values:
 ```console
 sudo extensions/rhel-image/stage-syswarden-rhel-image.sh \
   --root /srv/image-root \
-  --rpm /srv/image-input/syswarden-4.03.2-1.x86_64.rpm \
+  --rpm /srv/image-input/syswarden-4.03.3-1.x86_64.rpm \
   --sha256 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
 
@@ -46,7 +46,7 @@ runtime filesystem below that tree.
    ```bash
    set -euo pipefail
    IMAGE_ROOT=/srv/image-root
-   CANDIDATE_RPM=/srv/image-input/syswarden-4.03.2-1.x86_64.rpm
+   CANDIDATE_RPM=/srv/image-input/syswarden-4.03.3-1.x86_64.rpm
    # Copy this value from the independently authenticated package inventory.
    EXPECTED_RPM_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS
 
@@ -59,7 +59,7 @@ runtime filesystem below that tree.
    sudo dnf -y --installroot="${IMAGE_ROOT}" --releasever=9 \
      --setopt=install_weak_deps=False install \
      nftables ipset curl wget rsyslog cronie bash-completion \
-     wireguard-tools qrencode jq checkpolicy policycoreutils-python-utils \
+     wireguard-tools jq checkpolicy policycoreutils-python-utils \
      dnf-automatic procps-ng e2fsprogs firewalld
    ```
 
@@ -70,6 +70,10 @@ runtime filesystem below that tree.
    9+ `/usr/lib/os-release` metadata. Stop on any failure. It performs no image
    or host mutation and does not require RPM tooling or installed image
    dependencies.
+
+   `qrencode` is optional on RHEL-family images. Install it from an explicitly
+   approved repository only when terminal QR rendering is required; WireGuard
+   client configuration remains available as a protected file without it.
 
    Enable Cronie and the preferred RHEL firewall frontend in the image without
    starting either service on the builder:
@@ -93,7 +97,7 @@ runtime filesystem below that tree.
    ```bash
    set -euo pipefail
    IMAGE_ROOT=/srv/image-root
-   CANDIDATE_RPM=/srv/image-input/syswarden-4.03.2-1.x86_64.rpm
+   CANDIDATE_RPM=/srv/image-input/syswarden-4.03.3-1.x86_64.rpm
    # Copy this value from the independently authenticated package inventory.
    EXPECTED_RPM_SHA256=REPLACE_WITH_64_LOWERCASE_HEX_CHARACTERS
 

@@ -110,6 +110,21 @@ class AdapterFixture:
             "git", "-c", "core.fsmonitor=false", *arguments, cwd=self.repo
         )
 
+    def _git_bytes(self, *arguments: str) -> bytes:
+        process = subprocess.run(
+            ("git", "-c", "core.fsmonitor=false", *arguments),
+            cwd=self.repo,
+            check=False,
+            capture_output=True,
+            env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1"},
+        )
+        if process.returncode != 0:
+            raise AssertionError(
+                process.stderr.decode("utf-8", errors="replace")
+                or process.stdout.decode("utf-8", errors="replace")
+            )
+        return process.stdout
+
     def _make_repository(self) -> None:
         self._run("git", "init", "-q", cwd=self.repo)
         self._git("config", "user.email", "adapter-tests@example.invalid")
@@ -149,6 +164,15 @@ class AdapterFixture:
         )
         (linux.parent / "honeyports.go").write_text(
             'strings.Join(canonical, ", ")\n', encoding="utf-8"
+        )
+        (linux.parent / "firewall_linux_golden_test.go").write_text(
+            "func TestNftablesRulesGolden_SW_QA_001() {}\n", encoding="utf-8"
+        )
+        manager = self.repo / "src/core/syswarden-core/firewall/manager_linux.go"
+        manager.parent.mkdir(parents=True, exist_ok=True)
+        manager.write_text("package firewall\n", encoding="utf-8")
+        (manager.parent / "manager_kernel_integration_linux_test.go").write_text(
+            "package firewall\n", encoding="utf-8"
         )
         self._git("add", ".")
         self._git("commit", "-qm", "fixture")
@@ -247,18 +271,75 @@ class AdapterFixture:
         )
         package_report["generated_at"] = (self.now + timedelta(seconds=11)).isoformat()
 
+        archive = self._git_bytes("archive", "--format=tar", self.commit)
+        critical_files = []
+        for relative in adapter.NFT_SOURCE_BINDING_PATHS:
+            payload = self._git_bytes("show", f"{self.commit}:{relative}")
+            critical_files.append(
+                {
+                    "path": relative,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "size_bytes": len(payload),
+                }
+            )
+        binary_identity = {
+            "sha256": hashlib.sha256(b"manager binary").hexdigest(),
+            "device": 42,
+            "inode": 84,
+            "mode": "0500",
+            "size_bytes": len(b"manager binary"),
+            "uid": os.geteuid(),
+            "gid": os.getegid(),
+            "mtime_ns": int(self.now.timestamp() * 1_000_000_000),
+            "ctime_ns": int(self.now.timestamp() * 1_000_000_000),
+            "regular_file": True,
+            "symlink": False,
+        }
+        archive_sha256 = hashlib.sha256(archive).hexdigest()
         nft_report = {
-            "schema_version": 1,
+            "schema_version": 3,
             "generated_at": self.now.isoformat(),
             "harness_status": "pass",
             "product_status": "pass",
             "release_ready": True,
             "finding_id": "SW-FW-004",
+            "repository_binding": {
+                "schema_version": 1,
+                "commit_sha": self.commit,
+                "tree_sha": self._git("rev-parse", "HEAD^{tree}"),
+                "worktree_clean": True,
+            },
+            "source_snapshot": {
+                "schema_version": 1,
+                "format": "git-archive-tar-v1",
+                "commit_sha": self.commit,
+                "tree_sha": self._git("rev-parse", "HEAD^{tree}"),
+                "archive_sha256": archive_sha256,
+                "archive_size_bytes": len(archive),
+                "critical_files": critical_files,
+                "read_only": True,
+                "revalidated_after_container": True,
+            },
+            "manager_test_binary": {
+                "schema_version": 1,
+                "source_archive_sha256": archive_sha256,
+                "before": copy.deepcopy(binary_identity),
+                "after": copy.deepcopy(binary_identity),
+                "identical": True,
+            },
             "summary": "The corrected honeyport serialization is accepted by the kernel.",
             "engine": {
                 "name": "podman",
-                "version": "5.6.0",
+                "client_version": "5.6.0",
                 "rootless": True,
+                "service_is_remote": False,
+                "local_os": "linux",
+                "local_architecture": "amd64",
+                "server_os": "linux",
+                "server_architecture": "amd64",
+                "server_kernel": "6.17.0-test",
+                "container_architecture": "amd64",
+                "container_kernel": "6.17.0-test",
                 "image": ACT_IMAGE,
                 "network": "none",
                 "nftables": "nftables v1.1.6",
@@ -268,12 +349,16 @@ class AdapterFixture:
                 "container": "net:[200]",
             },
             "conditions": {
+                "local_native_podman_server": True,
+                "container_kernel_matches_server": True,
+                "immutable_git_source_revalidated": True,
+                "manager_test_binary_revalidated": True,
                 "separate_network_namespace": True,
                 "historical_concatenation_rejected_before_mutation": True,
                 "kernel_reported_invalid_port": True,
                 "corrected_ruleset_applied": True,
                 "current_generator_contract_passed": True,
-                "dynamic_timeout_replication_applied": True,
+                "native_manager_interval_contract_passed": True,
                 "isolated_ruleset_cleanup_succeeded": True,
             },
             "kernel_error": "Service out of range",
@@ -1589,6 +1674,67 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         report["engine"]["unknown"] = "value"
         self.fixture.save_raw("nftables-raw.json", report)
         self.assertAdapterError(self.fixture.args())
+
+    def test_nft_report_requires_exact_clean_repository_binding(self) -> None:
+        for key, value in (
+            ("commit_sha", "0" * 40),
+            ("tree_sha", "0" * 40),
+            ("worktree_clean", False),
+        ):
+            report = self.fixture.load_raw("nftables-raw.json")
+            report["repository_binding"][key] = value
+            self.fixture.save_raw("nftables-raw.json", report)
+            self.assertAdapterError(self.fixture.args())
+            self.fixture._make_raw_reports()
+
+    def test_nft_report_requires_exact_immutable_source_archive_and_blobs(self) -> None:
+        mutations = (
+            ("archive_sha256", "0" * 64),
+            ("archive_size_bytes", 1),
+            ("read_only", False),
+            ("revalidated_after_container", False),
+        )
+        for key, value in mutations:
+            report = self.fixture.load_raw("nftables-raw.json")
+            report["source_snapshot"][key] = value
+            self.fixture.save_raw("nftables-raw.json", report)
+            self.assertAdapterError(self.fixture.args())
+            self.fixture._make_raw_reports()
+
+        report = self.fixture.load_raw("nftables-raw.json")
+        report["source_snapshot"]["critical_files"][0]["sha256"] = "0" * 64
+        self.fixture.save_raw("nftables-raw.json", report)
+        self.assertAdapterError(self.fixture.args())
+
+    def test_nft_report_requires_unchanged_source_bound_manager_binary(self) -> None:
+        for mutation in ("digest", "mode", "identity", "claim"):
+            report = self.fixture.load_raw("nftables-raw.json")
+            if mutation == "digest":
+                report["manager_test_binary"]["source_archive_sha256"] = "0" * 64
+            elif mutation == "mode":
+                report["manager_test_binary"]["before"]["mode"] = "0700"
+            elif mutation == "identity":
+                report["manager_test_binary"]["after"]["inode"] += 1
+            else:
+                report["manager_test_binary"]["identical"] = False
+            self.fixture.save_raw("nftables-raw.json", report)
+            self.assertAdapterError(self.fixture.args())
+            self.fixture._make_raw_reports()
+
+    def test_nft_report_rejects_remote_non_native_or_unbound_engine(self) -> None:
+        mutations = (
+            ("service_is_remote", True),
+            ("server_os", "freebsd"),
+            ("server_architecture", "arm64"),
+            ("container_architecture", "arm64"),
+            ("container_kernel", "different-kernel"),
+        )
+        for key, value in mutations:
+            report = self.fixture.load_raw("nftables-raw.json")
+            report["engine"][key] = value
+            self.fixture.save_raw("nftables-raw.json", report)
+            self.assertAdapterError(self.fixture.args())
+            self.fixture._make_raw_reports()
 
     def test_toctou_raw_change_is_detected_before_output(self) -> None:
         original = gate.revalidate

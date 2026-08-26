@@ -69,7 +69,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("keep refuses policy mutation while an iptables-services or netfilter-persistent service is active or enabled.\n")
 		fmt.Printf("Operational mutation requires an active, unambiguous supported service manager; offline package hooks defer install and reload.\n")
 		fmt.Printf("nftables requires an active and enabled nftables service and refuses active or enabled firewalld, UFW, iptables-services or netfilter-persistent frontends.\n")
-		fmt.Printf("iptables is parseable but refused by operational policy mutation paths in v4.03.2.\n")
+		fmt.Printf("iptables is parseable but refused by operational policy mutation paths in v4.03.3.\n")
 		fmt.Printf("SysWarden commits authoritative nftables policy and may reconcile one already active firewalld or UFW compatibility frontend.\n")
 		fmt.Printf("WireGuard requires the explicit nftables backend and is not opened through the firewalld or UFW compatibility path.\n")
 		fmt.Printf("%s[network]%s whitelist_infra, lan_subnets, whitelist_ips, interfaces\n", ansiCyan, ansiReset)
@@ -118,7 +118,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %sUPDATE:%s v4.02.9+ requires a trusted Ed25519 release manifest; v4.02.8 needs a separately verified manual first hop to the qualified v4.03.2 Linux package.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sUNINSTALL:%s configuration, data, logs, services and firewall tables are deleted; it is not a rollback.\n", ansiRed, ansiReset)
 		fmt.Printf("  %sALPINE:%s dedicated CGO-free static APK binaries are built for x86_64; install only an exact release-qualified artifact.\n", ansiRed, ansiReset)
-		fmt.Printf("  %sPLATFORMS:%s v4.03.2 supports the qualified Linux DEB, RPM and APK package matrix only.\n\n", ansiRed, ansiReset)
+		fmt.Printf("  %sPLATFORMS:%s v4.03.3 supports the qualified Linux DEB, RPM and APK package matrix only.\n\n", ansiRed, ansiReset)
 
 		fmt.Printf("%s================================================================================%s\n", ansiCyan, ansiReset)
 		fmt.Printf("%sRead README.md and the command-specific --help output before a host-mutating action.%s\n", ansiWhite, ansiReset)
