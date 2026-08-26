@@ -45,6 +45,11 @@ const (
 	approvedChangelogResetTo     = "v4.03.0"
 	approvedChangelogArchiveHash = "a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5"
 	approvedChangelogArchiveLine = "Archived pre-v4.03.0 changelog SHA-256: " + approvedChangelogArchiveHash + "\n"
+
+	approvedChangelogRewriteFrom        = "v4.03.2"
+	approvedChangelogRewriteTo          = "v4.03.3"
+	approvedChangelogRewriteBaseHash    = "f978c898c30b0d40a476c09c91fc4b6d13648bc4e9298fb117593cf6e9a4d53f"
+	approvedChangelogRewriteHistoryHash = "77189b49b1c78c745f6b8d351c9837e4d7bed1bc281daec0a87249a8e6d341fa"
 )
 
 type changelogResetPolicy struct {
@@ -59,6 +64,23 @@ var approvedChangelogReset = changelogResetPolicy{
 	To:            approvedChangelogResetTo,
 	BaseSHA256:    approvedChangelogArchiveHash,
 	ArchiveSuffix: approvedChangelogArchiveLine,
+}
+
+type changelogRewritePolicy struct {
+	From          string
+	To            string
+	BaseSHA256    string
+	HistorySHA256 string
+}
+
+// approvedChangelogRewrite is a single-use exception for the exact v4.03.2
+// post-publication history seal merged with v4.03.3. Binding both byte streams
+// prevents this exception from authorizing any other historical rewrite.
+var approvedChangelogRewrite = changelogRewritePolicy{
+	From:          approvedChangelogRewriteFrom,
+	To:            approvedChangelogRewriteTo,
+	BaseSHA256:    approvedChangelogRewriteBaseHash,
+	HistorySHA256: approvedChangelogRewriteHistoryHash,
 }
 
 type snapshot map[string][]byte
@@ -285,10 +307,19 @@ func changelogHistory(data []byte) ([]byte, error) {
 }
 
 func validateChangelogHistoryTransition(base, candidate []byte, previous, next Version) error {
-	return validateChangelogHistoryTransitionWithPolicy(base, candidate, previous, next, approvedChangelogReset)
+	return validateChangelogHistoryTransitionWithPolicies(base, candidate, previous, next, approvedChangelogReset, approvedChangelogRewrite)
 }
 
 func validateChangelogHistoryTransitionWithPolicy(base, candidate []byte, previous, next Version, policy changelogResetPolicy) error {
+	return validateChangelogHistoryTransitionWithPolicies(base, candidate, previous, next, policy, changelogRewritePolicy{})
+}
+
+func validateChangelogHistoryTransitionWithPolicies(
+	base, candidate []byte,
+	previous, next Version,
+	resetPolicy changelogResetPolicy,
+	rewritePolicy changelogRewritePolicy,
+) error {
 	history, err := changelogHistory(candidate)
 	if err != nil {
 		return err
@@ -296,14 +327,25 @@ func validateChangelogHistoryTransitionWithPolicy(base, candidate []byte, previo
 	if bytes.Equal(history, base) {
 		return nil
 	}
-	if previous.String() != policy.From || next.String() != policy.To {
+	if previous.String() == rewritePolicy.From && next.String() == rewritePolicy.To {
+		baseDigest := sha256.Sum256(base)
+		if hex.EncodeToString(baseDigest[:]) != rewritePolicy.BaseSHA256 {
+			return errors.New("approved changelog rewrite baseline digest does not match")
+		}
+		historyDigest := sha256.Sum256(history)
+		if hex.EncodeToString(historyDigest[:]) != rewritePolicy.HistorySHA256 {
+			return errors.New("approved changelog rewrite history digest does not match")
+		}
+		return nil
+	}
+	if previous.String() != resetPolicy.From || next.String() != resetPolicy.To {
 		return errors.New("candidate changelog must preserve the complete baseline changelog byte-for-byte after the new release separator")
 	}
 	digest := sha256.Sum256(base)
-	if hex.EncodeToString(digest[:]) != policy.BaseSHA256 {
+	if hex.EncodeToString(digest[:]) != resetPolicy.BaseSHA256 {
 		return errors.New("approved changelog reset baseline digest does not match")
 	}
-	if !bytes.Equal(history, []byte(policy.ArchiveSuffix)) {
+	if !bytes.Equal(history, []byte(resetPolicy.ArchiveSuffix)) {
 		return errors.New("approved changelog reset must contain only the exact archived-history digest line after the release separator")
 	}
 	return nil
