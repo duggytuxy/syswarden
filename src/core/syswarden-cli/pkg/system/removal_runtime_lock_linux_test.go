@@ -164,7 +164,7 @@ func TestRemovePreparedFirewallRuntimeLockRejectsBusyArtifact_SW2_PKG_001(t *tes
 	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN) //nolint:errcheck -- best-effort test cleanup
+	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
 
 	var warnings bytes.Buffer
 	err = removePreparedFirewallRuntimeLockAt(
