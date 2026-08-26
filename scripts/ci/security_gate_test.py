@@ -826,7 +826,9 @@ class ActFixtureTests(unittest.TestCase):
             self.repository / ".github" / "workflows" / "security-audit.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("Run bounded parser and network fuzz campaigns", workflow)
-        self.assertIn("-fuzztime=5s -parallel=2", workflow)
+        self.assertEqual(workflow.count("-fuzztime="), 1)
+        self.assertEqual(workflow.count("-fuzztime=100000x -parallel=2"), 1)
+        self.assertNotIn("-fuzztime=5s", workflow)
         for target in (
             "FuzzMigratorParseFromMemory",
             "FuzzIPCIDRPortValidators",
