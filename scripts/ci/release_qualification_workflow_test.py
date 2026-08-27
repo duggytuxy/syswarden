@@ -12,11 +12,21 @@ import textwrap
 import unittest
 from pathlib import Path
 
+try:
+    from scripts.ci import package_lifecycle_lab
+    from scripts.ci import package_qualification_matrix
+except ModuleNotFoundError:  # Direct execution from scripts/ci.
+    import package_lifecycle_lab
+    import package_qualification_matrix
+
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 WORKFLOW = REPOSITORY / ".github" / "workflows" / "release-qualification.yml"
 PACKAGE_WORKFLOW = REPOSITORY / ".github" / "workflows" / "package.yml"
 PACKAGE_LAB = REPOSITORY / "scripts" / "ci" / "package_lifecycle_lab.py"
+PACKAGE_QUALIFICATION_MATRIX = (
+    REPOSITORY / "scripts" / "ci" / "package_qualification_matrix.json"
+)
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 ACTION = re.compile(r"(?m)^\s*uses:\s*([^@\s]+)@([^\s#]+)")
 RETIRED_PLATFORM = "free" + "bsd"
@@ -294,6 +304,9 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
         cls.package_workflow = PACKAGE_WORKFLOW.read_text(encoding="utf-8")
         cls.package_lab = PACKAGE_LAB.read_text(encoding="utf-8")
+        cls.package_qualification_matrix = package_qualification_matrix.load_matrix(
+            PACKAGE_QUALIFICATION_MATRIX
+        )
 
     def assert_read_only(self, workflow: str) -> None:
         self.assertIn("permissions:\n  actions: read\n  contents: read", workflow)
@@ -887,14 +900,41 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 assert_contract(self.workflow.replace(old, new, 1))
 
     def test_three_packages_and_five_native_platforms_are_exact(self) -> None:
-        matrix = self.package_lab.split("DEFAULT_PLATFORMS = (", 1)[1].split(
-            "\n)\n\nREQUIRED_PLATFORM_COORDINATES", 1
-        )[0]
-        self.assertEqual(matrix.count("PlatformSpec("), 5)
-        for name in ("Debian", "Ubuntu", "Fedora", "AlmaLinux", "Alpine"):
-            self.assertEqual(matrix.count(f'name="{name}"'), 1, name)
+        catalog = self.package_qualification_matrix
+        cells = catalog["cells"]
+        self.assertEqual(catalog["target_release"], "v4.04.0")
         self.assertEqual(
-            len(re.findall(r'(?m)^\s{8}architecture="amd64",$', matrix)), 5
+            catalog["architecture"],
+            package_qualification_matrix.EXPECTED_ARCHITECTURE,
+        )
+        self.assertEqual(len(cells), 8)
+        self.assertEqual(
+            tuple(cell["id"] for cell in cells),
+            tuple(
+                contract.identifier
+                for contract in package_qualification_matrix.EXPECTED_CELLS
+            ),
+        )
+        self.assertEqual(
+            tuple(cell["image"] for cell in cells),
+            tuple(
+                contract.image
+                for contract in package_qualification_matrix.EXPECTED_CELLS
+            ),
+        )
+
+        runtime_platforms = package_lifecycle_lab.DEFAULT_PLATFORMS
+        self.assertEqual(len(runtime_platforms), 5)
+        self.assertEqual(
+            tuple(platform.name for platform in runtime_platforms),
+            ("Debian", "Ubuntu", "Fedora", "AlmaLinux", "Alpine"),
+        )
+        self.assertEqual(
+            {platform.distribution for platform in runtime_platforms},
+            {"debian", "ubuntu", "fedora", "almalinux", "alpine"},
+        )
+        self.assertTrue(
+            all(platform.architecture == "amd64" for platform in runtime_platforms)
         )
         self.assertIn('REQUIRED_FAMILIES = ("deb", "rpm", "apk")', self.package_lab)
 
@@ -1068,12 +1108,45 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.package_workflow, "Test Package and Release Validators"
         )
         for test_file in (
+            "scripts/ci/package_qualification_matrix_test.py",
             "scripts/ci/package_lifecycle_lab_test.py",
             "scripts/ci/release_qualification_adapter_test.py",
             "scripts/ci/release_qualification_gate_test.py",
             "scripts/ci/release_qualification_workflow_test.py",
         ):
             self.assertEqual(step.count(test_file), 1, test_file)
+
+    def test_frozen_package_matrix_is_validated_before_costly_labs(self) -> None:
+        step_name = "Validate Frozen Package Qualification Matrix"
+        script = workflow_step_script(self.workflow, step_name)
+        expected = (
+            "set -euo pipefail\n"
+            "PYTHONDONTWRITEBYTECODE=1 python3 "
+            "scripts/ci/package_qualification_matrix.py \\\n"
+            '  --expected-target-release "${RELEASE_TAG}"\n'
+        )
+        self.assertEqual(script, expected)
+        step = workflow_step(self.workflow, step_name)
+        self.assertEqual(
+            step.count("        env:\n          RELEASE_TAG: ${{ inputs.release_tag }}\n"),
+            1,
+        )
+        self.assertEqual(
+            self.workflow.count("scripts/ci/package_qualification_matrix.py"), 1
+        )
+        qualify = workflow_job(self.workflow, "qualify-release")
+        self.assertLess(
+            qualify.index("Validate Manual Main Pre-Tag Context"),
+            qualify.index(step_name),
+        )
+        self.assertLess(
+            qualify.index(step_name),
+            qualify.index("Qualify Optional RHEL Image Extension Offline Contract"),
+        )
+        self.assertLess(
+            qualify.index(step_name),
+            qualify.index("Run and Aggregate Native AMD64 Package Lifecycle Shard"),
+        )
 
     def test_nftables_uses_private_verified_tmpdir_and_safe_cleanup(self) -> None:
         for contract in (

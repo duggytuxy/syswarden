@@ -1,0 +1,290 @@
+{
+  "schema_version": 1,
+  "matrix_id": "syswarden-package-qualification/v1",
+  "target_release": "v4.04.0",
+  "architecture": {
+    "oci_platform": "linux/amd64",
+    "kernel": "x86_64",
+    "deb": "amd64",
+    "rpm": "x86_64",
+    "apk": "x86_64"
+  },
+  "package_sources": {
+    "candidate": {
+      "workflow": "package.yml",
+      "successful_run_count": 1,
+      "commit_binding": "same-candidate-commit",
+      "local_rebuild_allowed": false
+    },
+    "baseline": {
+      "release": "v4.03.3",
+      "commit": "cdd66600a1505bae1f1e754dea096ee71e9cee82",
+      "release_id": 377680978,
+      "release_state": "public-stable",
+      "asset_selection": "github-asset-id",
+      "assets": [
+        {
+          "name": "SHA256SUMS.txt",
+          "id": 532015727,
+          "size": 283,
+          "architecture": "metadata",
+          "sha256": "91c89428bf20d2386adf0d7529dc5edb26da6d490db872fab0771ddfce5364c2"
+        },
+        {
+          "name": "syswarden_4.03.3_amd64.deb",
+          "id": 532015759,
+          "size": 13874730,
+          "architecture": "amd64",
+          "sha256": "4d17e74b16022be31a3e6db8851386f8c0df14772ea38f04f7df45540c818c9b"
+        },
+        {
+          "name": "syswarden-4.03.3-1.x86_64.rpm",
+          "id": 532015720,
+          "size": 14160347,
+          "architecture": "x86_64",
+          "sha256": "42e207f7f5ae47384c0c35764cf4da179feed1cac34f4fb3bfbd3b59aee8881e"
+        },
+        {
+          "name": "syswarden_4.03.3_x86_64.apk",
+          "id": 532015763,
+          "size": 14039148,
+          "architecture": "x86_64",
+          "sha256": "73f2d1cf67f62e781dc3d78cc9f9b2d5732ec876fee6587b305aeaaa3830f3d5"
+        }
+      ]
+    },
+    "artifact_inventory": [
+      "deb:amd64",
+      "rpm:x86_64",
+      "apk:x86_64",
+      "SHA256SUMS.txt"
+    ]
+  },
+  "budgets": {
+    "protected_qualification_seconds": 21600,
+    "package_build_or_extract_seconds": 900,
+    "lifecycle_scenario_seconds": 600,
+    "kernel_lab": {
+      "seconds": 240,
+      "pids": 128,
+      "memory_mib": 512,
+      "tmpfs_mib": 64
+    },
+    "container_cell_seconds": 2700,
+    "real_host_cell_seconds": 5400,
+    "post_reboot_ready_seconds": 600,
+    "updater_download_seconds": 600,
+    "updater_install_seconds": 1800
+  },
+  "required_evidence": [
+    "immutable-base-identity",
+    "kernel-architecture-and-package-manager",
+    "candidate-source-commit",
+    "candidate-workflow-run-id",
+    "candidate-artifact-id",
+    "baseline-release-asset-id",
+    "package-name-size-and-sha256",
+    "package-inventory-before-and-after",
+    "redacted-configuration-before-and-after",
+    "services-and-init-system",
+    "nftables-state-and-rule-ownership",
+    "selinux-and-firewalld-when-required",
+    "openrc-and-cronie-when-required",
+    "lifecycle-scenario-results",
+    "owned-residue-absence",
+    "required-real-reboots",
+    "complete-private-logs",
+    "redacted-public-summary",
+    "same-candidate-commit-verdict"
+  ],
+  "cells": [
+    {
+      "id": "DEB-13",
+      "distribution": "debian",
+      "version": "13",
+      "family": "deb",
+      "image": "docker.io/library/debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132",
+      "container_scenarios": [
+        "upgrade-rollback",
+        "remove",
+        "purge"
+      ],
+      "required_checks": [
+        "install",
+        "upgrade",
+        "rollback",
+        "remove",
+        "reinstall",
+        "purge"
+      ],
+      "real_host": {
+        "mode": "required",
+        "reboot_count": 2
+      }
+    },
+    {
+      "id": "DEB-U2404",
+      "distribution": "ubuntu",
+      "version": "24.04",
+      "family": "deb",
+      "image": "docker.io/library/ubuntu:24.04@sha256:019e8eb29a85e74d64925745884f2ec79aa27e3feab36353d24656f4d6b89467",
+      "container_scenarios": [
+        "upgrade-rollback",
+        "remove",
+        "purge"
+      ],
+      "required_checks": [
+        "install",
+        "upgrade",
+        "confined-recovery",
+        "remove",
+        "reinstall",
+        "purge"
+      ],
+      "real_host": {
+        "mode": "none",
+        "reboot_count": 0
+      }
+    },
+    {
+      "id": "DEB-U2604",
+      "distribution": "ubuntu",
+      "version": "26.04",
+      "family": "deb",
+      "image": "docker.io/library/ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b",
+      "container_scenarios": [
+        "upgrade-rollback",
+        "remove",
+        "purge"
+      ],
+      "required_checks": [
+        "install",
+        "signed-updater",
+        "confined-recovery",
+        "remove",
+        "reinstall",
+        "purge"
+      ],
+      "real_host": {
+        "mode": "required",
+        "reboot_count": 2
+      }
+    },
+    {
+      "id": "RPM-F44",
+      "distribution": "fedora",
+      "version": "44",
+      "family": "rpm",
+      "image": "docker.io/library/fedora:44@sha256:89f61a124414261868224666aa7fb8df1b78397a53623774bdfb105d1612b48b",
+      "container_scenarios": [
+        "upgrade-rollback",
+        "remove"
+      ],
+      "required_checks": [
+        "install",
+        "upgrade",
+        "nftables",
+        "cronie",
+        "remove"
+      ],
+      "real_host": {
+        "mode": "conditional",
+        "reboot_count": 1
+      }
+    },
+    {
+      "id": "RPM-A9",
+      "distribution": "almalinux",
+      "version": "9",
+      "family": "rpm",
+      "image": "docker.io/library/almalinux:9@sha256:28db580abb508f7ccbc0ac6d53e1d8da9d42a26c77fa3dcc26ac2726673fbe3e",
+      "container_scenarios": [
+        "upgrade-rollback",
+        "remove"
+      ],
+      "required_checks": [
+        "install",
+        "upgrade",
+        "selinux-enforcing",
+        "firewalld",
+        "remove"
+      ],
+      "real_host": {
+        "mode": "none",
+        "reboot_count": 0
+      }
+    },
+    {
+      "id": "RPM-A10",
+      "distribution": "almalinux",
+      "version": "10",
+      "family": "rpm",
+      "image": "docker.io/library/almalinux:10@sha256:cc24bc5b6ac7e284f2f62a07bdaa1b15d3319fdcf46413c6b8fe9fa245068ddd",
+      "container_scenarios": [
+        "upgrade-rollback",
+        "remove"
+      ],
+      "required_checks": [
+        "install",
+        "upgrade",
+        "selinux-enforcing",
+        "firewalld",
+        "remove"
+      ],
+      "real_host": {
+        "mode": "required",
+        "reboot_count": 2
+      }
+    },
+    {
+      "id": "APK-322",
+      "distribution": "alpine",
+      "version": "3.22",
+      "family": "apk",
+      "image": "docker.io/library/alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6",
+      "container_scenarios": [
+        "upgrade-rollback",
+        "remove",
+        "purge"
+      ],
+      "required_checks": [
+        "payload-only",
+        "activation",
+        "upgrade",
+        "openrc",
+        "cronie",
+        "remove",
+        "purge"
+      ],
+      "real_host": {
+        "mode": "none",
+        "reboot_count": 0
+      }
+    },
+    {
+      "id": "APK-324",
+      "distribution": "alpine",
+      "version": "3.24",
+      "family": "apk",
+      "image": "docker.io/library/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b",
+      "container_scenarios": [
+        "upgrade-rollback",
+        "remove",
+        "purge"
+      ],
+      "required_checks": [
+        "payload-only",
+        "activation",
+        "upgrade",
+        "openrc",
+        "cronie",
+        "remove",
+        "purge"
+      ],
+      "real_host": {
+        "mode": "required",
+        "reboot_count": 2
+      }
+    }
+  ]
+}

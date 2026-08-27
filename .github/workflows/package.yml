@@ -55,6 +55,7 @@ jobs:
           set -euo pipefail
           (cd scripts/versionctl && GOWORK=off go test ./...)
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+            scripts/ci/package_qualification_matrix_test.py \
             scripts/ci/package_lifecycle_contract_test.py \
             scripts/ci/package_lifecycle_lab_test.py \
             scripts/ci/package_stage_gate_test.py \
