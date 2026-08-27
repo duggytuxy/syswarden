@@ -230,6 +230,15 @@ jobs:
           git merge-base --is-ancestor "${previous_sha}" "${RELEASE_SHA}"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
+      - name: Validate Frozen Package Qualification Matrix
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_qualification_matrix.py \
+            --expected-target-release "${RELEASE_TAG}"
+
       - name: Qualify Optional RHEL Image Extension Offline Contract
         shell: bash
         run: |
