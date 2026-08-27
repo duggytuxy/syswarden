@@ -60,7 +60,7 @@ func readUserModuleIdentity(configDir string) ([]byte, *secureFileIdentity, erro
 }
 
 func ImportValidatedUserModule(configDir, sourcePath string) error {
-	content, err := readSecureFileByPath(sourcePath)
+	content, err := readSecureFileByPathBounded(sourcePath, maximumUserModuleSize)
 	if err != nil {
 		return fmt.Errorf("read import source securely: %w", err)
 	}
@@ -100,6 +100,9 @@ func WriteValidatedUserModule(configDir string, content []byte) error {
 }
 
 func writeValidatedUserModuleLocked(configDir string, content []byte, expected *secureFileIdentity) error {
+	if int64(len(content)) > maximumUserModuleSize {
+		return fmt.Errorf("operator user module exceeds the %d-byte limit", maximumUserModuleSize)
+	}
 	if err := rejectMigrationInProgress(configDir); err != nil {
 		return err
 	}
@@ -124,6 +127,9 @@ func writeValidatedUserModuleLocked(configDir string, content []byte, expected *
 }
 
 func validateModularUserCandidate(configDir string, userContent []byte, expectedUser *secureFileIdentity) (*mergedConfigSnapshot, error) {
+	if err := rejectOperatorPolicyEnvironment(); err != nil {
+		return nil, err
+	}
 	root, err := openConfigDirectory(configDir, false, 0)
 	if err != nil {
 		return nil, err

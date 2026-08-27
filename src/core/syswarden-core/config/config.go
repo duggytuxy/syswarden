@@ -37,13 +37,14 @@ type Diagnostics struct {
 }
 
 type runtimeConfig struct {
-	SchemaVersion int                `mapstructure:"schema_version"`
-	Core          coreConfig         `mapstructure:"core"`
-	Network       networkConfig      `mapstructure:"network"`
-	Security      securityConfig     `mapstructure:"security"`
-	WAAP          waapConfig         `mapstructure:"waap"`
-	Integrations  integrationsConfig `mapstructure:"integrations"`
-	User          userConfig         `mapstructure:"user"`
+	SchemaVersion  int                  `mapstructure:"schema_version"`
+	Core           coreConfig           `mapstructure:"core"`
+	Network        networkConfig        `mapstructure:"network"`
+	Security       securityConfig       `mapstructure:"security"`
+	WAAP           waapConfig           `mapstructure:"waap"`
+	Integrations   integrationsConfig   `mapstructure:"integrations"`
+	OperatorPolicy OperatorPolicyConfig `mapstructure:"operator_policy"`
+	User           userConfig           `mapstructure:"user"`
 }
 
 type coreConfig struct {
@@ -229,11 +230,18 @@ func LoadConfigDirectory(configPath string) (Diagnostics, error) {
 	if err := target.MergeConfigMap(candidate.AllSettings()); err != nil {
 		return diagnostics, fmt.Errorf("publish validated runtime configuration: %w", err)
 	}
+	// An explicit Viper value has higher precedence than AutomaticEnv. Keep the
+	// validated file-backed policy authoritative even if the process environment
+	// changes after the preflight check.
+	target.Set("operator_policy", candidate.Get("operator_policy"))
 	return diagnostics, nil
 }
 
 func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 	diagnostics := Diagnostics{}
+	if err := rejectOperatorPolicyEnvironment(); err != nil {
+		return nil, diagnostics, err
+	}
 	root, err := openSecureDirectory(configPath)
 	if err != nil {
 		return nil, diagnostics, fmt.Errorf("open configuration root: %w", err)
@@ -332,6 +340,9 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 	if err := validateRuntimeConfig(&typed); err != nil {
 		return nil, diagnostics, err
 	}
+	// Freeze the strictly decoded file-backed representation above any later
+	// environment lookup performed by Viper.
+	candidate.Set("operator_policy", typed.OperatorPolicy)
 	return candidate, diagnostics, nil
 }
 
@@ -342,6 +353,9 @@ func configureEnvironment(v *viper.Viper) {
 	known := make(map[string]struct{})
 	collectKnownKeys(reflect.TypeOf(runtimeConfig{}), "", known)
 	for key := range known {
+		if key == "operator_policy" || strings.HasPrefix(key, "operator_policy.") {
+			continue
+		}
 		_ = v.BindEnv(key)
 	}
 	_ = v.BindEnv("integrations.saas.enabled")
@@ -396,6 +410,9 @@ func parseDocument(content []byte, relative string) (map[string]any, error) {
 			return nil, fmt.Errorf("%s has unsupported schema_version %d", relative, version)
 		}
 	}
+	if err := validateOperatorPolicyDocument(relative, document); err != nil {
+		return nil, err
+	}
 	return document, nil
 }
 
@@ -436,6 +453,10 @@ func readSecureRegularFile(root *os.Root, name, display string) ([]byte, error) 
 	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Mode().Perm()&0037 != 0 {
 		return nil, fmt.Errorf("configuration file %s is not a secure regular file", display)
 	}
+	limitedOperatorModule := name == operatorPolicyModuleName
+	if limitedOperatorModule && before.Size() > maximumOperatorPolicyModuleBytes {
+		return nil, fmt.Errorf("configuration file %s exceeds the %d-byte limit", display, maximumOperatorPolicyModuleBytes)
+	}
 	file, err := root.Open(name)
 	if err != nil {
 		return nil, err
@@ -445,13 +466,33 @@ func readSecureRegularFile(root *os.Root, name, display string) ([]byte, error) 
 	if err != nil || !os.SameFile(before, opened) {
 		return nil, fmt.Errorf("configuration file %s changed while opening", display)
 	}
-	content, err := io.ReadAll(file)
+	if limitedOperatorModule && opened.Size() > maximumOperatorPolicyModuleBytes {
+		return nil, fmt.Errorf("configuration file %s exceeds the %d-byte limit", display, maximumOperatorPolicyModuleBytes)
+	}
+	reader := io.Reader(file)
+	if limitedOperatorModule {
+		reader = io.LimitReader(file, maximumOperatorPolicyModuleBytes+1)
+	}
+	content, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
-	after, err := root.Lstat(name)
-	if err != nil || !os.SameFile(opened, after) || opened.Mode() != after.Mode() {
+	if limitedOperatorModule && int64(len(content)) > maximumOperatorPolicyModuleBytes {
+		return nil, fmt.Errorf("configuration file %s exceeds the %d-byte limit while reading", display, maximumOperatorPolicyModuleBytes)
+	}
+	openedAfter, err := file.Stat()
+	if err != nil {
 		return nil, fmt.Errorf("configuration file %s changed while reading", display)
+	}
+	after, err := root.Lstat(name)
+	if err != nil || !os.SameFile(opened, openedAfter) || !os.SameFile(openedAfter, after) ||
+		opened.Mode() != openedAfter.Mode() || openedAfter.Mode() != after.Mode() ||
+		opened.Size() != openedAfter.Size() || openedAfter.Size() != after.Size() ||
+		!opened.ModTime().Equal(openedAfter.ModTime()) || !openedAfter.ModTime().Equal(after.ModTime()) {
+		return nil, fmt.Errorf("configuration file %s changed while reading", display)
+	}
+	if limitedOperatorModule && openedAfter.Size() > maximumOperatorPolicyModuleBytes {
+		return nil, fmt.Errorf("configuration file %s exceeds the %d-byte limit while reading", display, maximumOperatorPolicyModuleBytes)
 	}
 	return content, nil
 }
@@ -459,6 +500,9 @@ func readSecureRegularFile(root *os.Root, name, display string) ([]byte, error) 
 func validateRuntimeConfig(value *runtimeConfig) error {
 	if value.SchemaVersion < 0 || value.SchemaVersion > CurrentSchemaVersion {
 		return fmt.Errorf("unsupported schema_version %d", value.SchemaVersion)
+	}
+	if err := validateOperatorPolicy(value.OperatorPolicy); err != nil {
+		return err
 	}
 	if !validAbsolutePath(value.Core.ConfigDir, false) {
 		return fmt.Errorf("core.config_dir must be an absolute clean path")

@@ -34,6 +34,8 @@ class FakeRunner(nftables_kernel_lab.CommandRunner):
         container_architecture: str = "x86_64",
         container_kernel: str | None = None,
         mutate_binary: bool = False,
+        marker_overrides: dict[str, str] | None = None,
+        omitted_markers: frozenset[str] = frozenset(),
     ) -> None:
         self.calls: list[tuple[str, ...]] = []
         self.service_is_remote = service_is_remote
@@ -43,6 +45,8 @@ class FakeRunner(nftables_kernel_lab.CommandRunner):
         self.container_architecture = container_architecture
         self.container_kernel = container_kernel or self.server_kernel
         self.mutate_binary = mutate_binary
+        self.marker_overrides = marker_overrides or {}
+        self.omitted_markers = omitted_markers
 
     def run(self, args: tuple[str, ...], *, timeout: int) -> nftables_kernel_lab.CommandResult:
         del timeout
@@ -96,24 +100,37 @@ class FakeRunner(nftables_kernel_lab.CommandRunner):
                 binary.write_bytes(b"changed binary")
                 binary.chmod(0o500)
             host_netns = os.readlink("/proc/self/ns/net")
+            markers = {
+                name: "0"
+                for name in nftables_kernel_lab.EXPECTED_CONTAINER_MARKERS
+            }
+            markers.update({
+                "NETNS": f"{host_netns}-isolated",
+                "KERNEL_VERSION": self.container_kernel,
+                "KERNEL_MACHINE": self.container_architecture,
+                "NFT_VERSION": "nftables v1.0.9 (Old Doc Yak #3)",
+                "LEGACY_CHECK_RC": "1",
+                "CANDIDATE_OBJECTS": "42",
+                "MANAGER_KERNEL_PASS": "1",
+                "MANAGER_RAW_INTERVALS_OK": "1",
+                "V404_GOLDEN_CHAIN_COUNT": "1",
+                "V404_GOLDEN_CT_STATE_OP": "in",
+                "V404_POPULATED_CHAIN_COUNT": "1",
+                "V404_POPULATED_RULE_COUNT": "3",
+                "V404_POPULATED_IPV4_SHAPE": "host-32",
+                "V404_POPULATED_IPV6_SHAPE": "prefix-48",
+            })
+            markers.update(self.marker_overrides)
+            marker_lines = [
+                f"{name}={value}"
+                for name, value in markers.items()
+                if name not in self.omitted_markers
+            ]
             return nftables_kernel_lab.CommandResult(
                 0,
                 "\n".join(
-                    (
-                        f"NETNS={host_netns}-isolated",
-                        f"KERNEL_VERSION={self.container_kernel}",
-                        f"KERNEL_MACHINE={self.container_architecture}",
-                        "NFT_VERSION=nftables v1.1.6 (Commodore Bullmoose #2)",
-                        "LEGACY_CHECK_RC=1",
-                        "LEGACY_LIST_RC=0",
-                        "LEGACY_OBJECTS=0",
-                        "CANDIDATE_APPLY_RC=0",
-                        "CANDIDATE_LIST_RC=0",
-                        "CANDIDATE_OBJECTS=42",
-                        "MANAGER_KERNEL_RC=0",
-                        "MANAGER_KERNEL_PASS=1",
-                        "MANAGER_RAW_INTERVALS_OK=1",
-                        "CLEANUP_RC=0",
+                    tuple(marker_lines)
+                    + (
                         "ERROR_BEGIN",
                         "/fixture/syswarden.nft:81: Service out of range",
                         "ERROR_END",
@@ -168,6 +185,26 @@ class NftablesKernelLabTests(unittest.TestCase):
         (manager.parent / "manager_kernel_integration_linux_test.go").write_text(
             "package firewall\n", encoding="utf-8"
         )
+        v404_golden = self.root / "testdata/firewall/nftables-v4.04.0.nft"
+        v404_golden.write_text(
+            "table inet syswarden { chain operator-policy { return comment "
+            '"syswarden:operator-policy:v1:return" } }\n',
+            encoding="utf-8",
+        )
+        operator_policy = (
+            self.root / "testdata/firewall/operator-policy-v4.04.0.nft"
+        )
+        operator_policy.write_text(
+            "chain operator-policy { return comment "
+            '"syswarden:operator-policy:v1:return" }\n',
+            encoding="utf-8",
+        )
+        for relative in nftables_kernel_lab.SOURCE_BINDING_PATHS:
+            source = self.root / relative
+            if source.exists():
+                continue
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(f"fixture for {relative}\n", encoding="utf-8")
         subprocess.run(("git", "init", "-q"), cwd=self.root, check=True)
         subprocess.run(
             ("git", "config", "user.email", "nft-lab-tests@example.invalid"),
@@ -192,7 +229,7 @@ class NftablesKernelLabTests(unittest.TestCase):
         self.assertEqual(report["harness_status"], "pass")
         self.assertEqual(report["product_status"], "pass")
         self.assertEqual(report["finding_id"], "SW-FW-004")
-        self.assertEqual(report["schema_version"], 3)
+        self.assertEqual(report["schema_version"], 4)
         self.assertIs(report["release_ready"], True)
         self.assertTrue(all(report["conditions"].values()))
         self.assertIs(
@@ -243,14 +280,41 @@ class NftablesKernelLabTests(unittest.TestCase):
             "--tmpfs=/tmp:rw,nodev,nosuid,noexec,size=64m,mode=1777", run
         )
         self.assertNotIn("--privileged", run)
-        self.assertEqual(sum(value.endswith(":ro") for value in run), 3)
+        self.assertEqual(sum(value.endswith(":ro") for value in run), 5)
         self.assertTrue(
             any(
                 value.endswith(":/fixture/syswarden-core-firewall.test:ro")
                 for value in run
             )
         )
+        self.assertTrue(
+            any(
+                value.endswith(":/fixture/nftables-v4.04.0.nft:ro")
+                for value in run
+            )
+        )
+        self.assertTrue(
+            any(
+                value.endswith(
+                    ":/fixture/operator-policy-v4.04.0.nft:ro"
+                )
+                for value in run
+            )
+        )
         self.assertNotIn("nft add element", nftables_kernel_lab.CONTAINER_SCRIPT)
+        self.assertIn(
+            "create-dummy eth-test0", nftables_kernel_lab.CONTAINER_SCRIPT
+        )
+        self.assertIn(
+            "create-dummy eth-test1", nftables_kernel_lab.CONTAINER_SCRIPT
+        )
+        self.assertIn(
+            "nft -c -f /fixture/nftables-v4.04.0.nft",
+            nftables_kernel_lab.CONTAINER_SCRIPT,
+        )
+        self.assertIn(
+            '"op": "in"', nftables_kernel_lab.CONTAINER_SCRIPT
+        )
         generator = next(
             call
             for call in runner.calls
@@ -288,7 +352,7 @@ class NftablesKernelLabTests(unittest.TestCase):
         runner = FakeRunner(container_kernel="different-kernel")
         with self.assertRaisesRegex(
             nftables_kernel_lab.NftablesLabError,
-            "does not prove the corrected honeyport contract",
+            "does not prove the complete isolated kernel contract",
         ):
             nftables_kernel_lab.run_lab(
                 self.root, "podman", "never", runner=runner
@@ -334,30 +398,83 @@ class NftablesKernelLabTests(unittest.TestCase):
         self.assertNotIn("tcp dport { 23, 6379 }", text)
 
     def test_rejects_non_isolated_or_partial_kernel_evidence(self) -> None:
-        output = "\n".join(
-            (
-                f"NETNS={os.readlink('/proc/self/ns/net')}",
-                f"KERNEL_VERSION={platform.release()}",
-                "KERNEL_MACHINE=x86_64",
-                "NFT_VERSION=nftables v1.1.6 (Commodore Bullmoose #2)",
-                "LEGACY_CHECK_RC=1",
-                "LEGACY_LIST_RC=0",
-                "LEGACY_OBJECTS=1",
-                "CANDIDATE_APPLY_RC=0",
-                "CANDIDATE_LIST_RC=0",
-                "CANDIDATE_OBJECTS=42",
-                "MANAGER_KERNEL_RC=0",
-                "MANAGER_KERNEL_PASS=1",
-                "MANAGER_RAW_INTERVALS_OK=1",
-                "CLEANUP_RC=0",
-                "ERROR_BEGIN",
-                "Service out of range",
-                "ERROR_END",
-            )
-        )
+        output = FakeRunner(
+            marker_overrides={
+                "NETNS": os.readlink("/proc/self/ns/net"),
+                "LEGACY_OBJECTS": "1",
+            }
+        ).run(("podman", "run"), timeout=1).stdout
         markers, error = nftables_kernel_lab.parse_container_output(output)
         self.assertEqual(markers["LEGACY_OBJECTS"], "1")
-        self.assertEqual(error, "Service out of range")
+        self.assertIn("Service out of range", error)
+
+    def test_rejects_wrong_real_ct_state_operator(self) -> None:
+        runner = FakeRunner(
+            marker_overrides={"V404_GOLDEN_CT_STATE_OP": "=="}
+        )
+        with self.assertRaisesRegex(
+            nftables_kernel_lab.NftablesLabError,
+            "does not prove the complete isolated kernel contract",
+        ):
+            nftables_kernel_lab.run_lab(
+                self.root, "podman", "never", runner=runner
+            )
+
+    def test_rejects_wrong_populated_ipv6_shape(self) -> None:
+        runner = FakeRunner(
+            marker_overrides={"V404_POPULATED_IPV6_SHAPE": "host-128"}
+        )
+        with self.assertRaisesRegex(
+            nftables_kernel_lab.NftablesLabError,
+            "does not prove the complete isolated kernel contract",
+        ):
+            nftables_kernel_lab.run_lab(
+                self.root, "podman", "never", runner=runner
+            )
+
+    def test_parser_requires_exact_marker_set(self) -> None:
+        output = FakeRunner(
+            omitted_markers=frozenset({"V404_GOLDEN_ATTEST_RC"})
+        ).run(("podman", "run"), timeout=1).stdout
+        with self.assertRaisesRegex(
+            nftables_kernel_lab.NftablesLabError, "markers differ"
+        ):
+            nftables_kernel_lab.parse_container_output(output)
+
+    def test_parser_rejects_noncanonical_decimal(self) -> None:
+        output = FakeRunner(
+            marker_overrides={"V404_FINAL_OBJECTS": "00"}
+        ).run(("podman", "run"), timeout=1).stdout
+        with self.assertRaisesRegex(
+            nftables_kernel_lab.NftablesLabError, "canonical decimal"
+        ):
+            nftables_kernel_lab.parse_container_output(output)
+
+    def test_parser_rejects_duplicate_marker(self) -> None:
+        output = FakeRunner().run(("podman", "run"), timeout=1).stdout
+        output = output.replace(
+            "ERROR_BEGIN", "V404_FINAL_OBJECTS=0\nERROR_BEGIN", 1
+        )
+        with self.assertRaisesRegex(
+            nftables_kernel_lab.NftablesLabError, "duplicate"
+        ):
+            nftables_kernel_lab.parse_container_output(output)
+
+    def test_parser_rejects_unrecognized_stdout(self) -> None:
+        output = FakeRunner().run(("podman", "run"), timeout=1).stdout
+        output = "unexpected output\n" + output
+        with self.assertRaisesRegex(
+            nftables_kernel_lab.NftablesLabError, "unrecognized"
+        ):
+            nftables_kernel_lab.parse_container_output(output)
+
+    def test_parser_requires_complete_error_trailer(self) -> None:
+        output = FakeRunner().run(("podman", "run"), timeout=1).stdout
+        output = output.replace("ERROR_END\n", "", 1)
+        with self.assertRaisesRegex(
+            nftables_kernel_lab.NftablesLabError, "delimiters are incomplete"
+        ):
+            nftables_kernel_lab.parse_container_output(output)
 
     def test_requires_exact_digest_pinned_act_image(self) -> None:
         (self.root / ".actrc").write_text(

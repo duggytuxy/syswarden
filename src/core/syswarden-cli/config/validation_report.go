@@ -31,6 +31,9 @@ var deprecatedModularKeys = map[string]string{ // #nosec G101 -- keys name retir
 // ValidateModularConfig validates descriptor-rooted file reads without applying environment overrides, rewriting compatibility state, or changing the process-global configuration.
 func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	report := ValidationReport{}
+	if err := rejectOperatorPolicyEnvironment(); err != nil {
+		return report, err
+	}
 	root, err := openConfigDirectory(configDir, false, 0)
 	if err != nil {
 		return report, fmt.Errorf("open modular config directory: %w", err)
@@ -139,6 +142,9 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 // schema and policy validation used by the runtime loader. All files are read
 // through descriptor-rooted paths and module precedence is deterministic.
 func GetValidatedModularValue(configDir, key string) (string, bool, error) {
+	if err := rejectOperatorPolicyEnvironment(); err != nil {
+		return "", false, err
+	}
 	if key == "" || strings.IndexFunc(key, func(character rune) bool {
 		return !(character == '.' || character == '-' || character == '_' ||
 			character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
@@ -253,6 +259,9 @@ func parseTOMLDocument(content []byte, relative string) (map[string]any, error) 
 		if version < 0 || version > int64(CurrentSchemaVersion) {
 			return nil, fmt.Errorf("%s has unsupported schema_version %d", relative, version)
 		}
+	}
+	if err := validateOperatorPolicyDocument(relative, document); err != nil {
+		return nil, err
 	}
 	return document, nil
 }

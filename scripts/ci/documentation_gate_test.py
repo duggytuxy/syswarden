@@ -20,7 +20,11 @@ import release_gate
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REPORT = REPO_ROOT / "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.3.md"
+SOURCE_CANDIDATE_VERSION = "v4.04.0"
+STABLE_PUBLIC_VERSION = "v4.03.3"
+REPORT = REPO_ROOT / (
+    f"docs/reports/PUBLIC_RELEASE_READINESS_REPORT_{STABLE_PUBLIC_VERSION}.md"
+)
 ARCHIVE_DIGEST = "a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5"
 
 
@@ -42,17 +46,26 @@ class DocumentationGateTest(unittest.TestCase):
         self.assertTrue(any("missing required operational wiki pages" in error for error in errors))
 
     def test_current_version_and_release_status_are_explicit(self) -> None:
-        self.assertEqual(documentation_gate.source_version(REPO_ROOT), "v4.03.3")
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        self.assertEqual(
+            documentation_gate.source_version(REPO_ROOT), SOURCE_CANDIDATE_VERSION
+        )
+        self.assertEqual(
+            documentation_gate.stable_public_version(contract), STABLE_PUBLIC_VERSION
+        )
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
         report = REPORT.read_text(encoding="utf-8")
         self.assertEqual(
-            readme.splitlines().count("Current source version: **v4.03.3**."),
+            readme.splitlines().count(
+                f"Current source version: **{SOURCE_CANDIDATE_VERSION}**."
+            ),
             1,
         )
         self.assertIn(
             "The latest qualified, stable public release is "
-            "[v4.03.3](https://github.com/duggytuxy/syswarden/releases/tag/v4.03.3).",
+            f"[{STABLE_PUBLIC_VERSION}](https://github.com/duggytuxy/syswarden/"
+            f"releases/tag/{STABLE_PUBLIC_VERSION}).",
             documentation_gate.normalized(readme),
         )
         self.assertEqual(report.count("## Post-publication record"), 1)
@@ -70,6 +83,70 @@ class DocumentationGateTest(unittest.TestCase):
             documentation_gate.normalized(changelog),
         )
         self.assertIn("does not authorize a tag or public Release", report)
+
+    def test_stable_public_version_contract_fails_closed(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        self.assertEqual(
+            documentation_gate.stable_public_version(contract), STABLE_PUBLIC_VERSION
+        )
+        for invalid in (None, "", "4.03.3", "v4.3.3", "v4.03"):
+            changed = json.loads(json.dumps(contract))
+            if invalid is None:
+                changed.pop("stable_public_version")
+            else:
+                changed["stable_public_version"] = invalid
+            with self.subTest(invalid=invalid), self.assertRaises(
+                documentation_gate.DocumentationGateError
+            ):
+                documentation_gate.stable_public_version(changed)
+
+    def test_stable_public_version_cannot_lead_the_source_candidate(self) -> None:
+        self.assertEqual(
+            documentation_gate.validate_public_version_order(
+                SOURCE_CANDIDATE_VERSION, STABLE_PUBLIC_VERSION
+            ),
+            [],
+        )
+        errors = documentation_gate.validate_public_version_order(
+            SOURCE_CANDIDATE_VERSION, "v4.04.1"
+        )
+        self.assertTrue(any("cannot be newer" in error for error in errors))
+
+    def test_readme_accepts_only_the_candidate_and_bound_stable_versions(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        readme_path = REPO_ROOT / "README.md"
+        readme = readme_path.read_text(encoding="utf-8")
+        common = (
+            readme_path,
+            readme,
+            documentation_gate.cobra_commands(REPO_ROOT),
+            documentation_gate.config_schema(REPO_ROOT),
+            contract["forbidden_phrases"],
+            SOURCE_CANDIDATE_VERSION,
+            None,
+        )
+        errors = documentation_gate.validate_markdown(
+            *common, (STABLE_PUBLIC_VERSION,)
+        )
+        self.assertFalse(any("non-current version" in error for error in errors))
+
+        errors = documentation_gate.validate_markdown(*common)
+        self.assertTrue(
+            any(
+                f"non-current version {STABLE_PUBLIC_VERSION}" in error
+                for error in errors
+            )
+        )
+        self.assertEqual(
+            documentation_gate.require_phrases(
+                readme,
+                contract["required_readme_phrases"],
+                SOURCE_CANDIDATE_VERSION,
+                "README.md",
+                stable_public_version_value=STABLE_PUBLIC_VERSION,
+            ),
+            [],
+        )
 
     def test_v4032_release_notes_match_the_amd64_only_inventory(self) -> None:
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
@@ -109,15 +186,18 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                "v4.03.3",
+                SOURCE_CANDIDATE_VERSION,
             ),
             [],
         )
 
     def test_public_release_contract_is_three_packages_and_ten_assets(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
-        expected_packages = release_gate.package_names("4.03.3")
-        expected_assets = release_gate.expected_release_assets("v4.03.3")
+        stable_version = documentation_gate.stable_public_version(contract)
+        expected_packages = release_gate.package_names(
+            stable_version.removeprefix("v")
+        )
+        expected_assets = release_gate.expected_release_assets(stable_version)
         self.assertEqual(len(expected_packages), 3)
         self.assertEqual(len(expected_assets), 10)
         self.assertEqual(
@@ -401,16 +481,43 @@ class DocumentationGateTest(unittest.TestCase):
             documentation_gate.cobra_commands(REPO_ROOT),
             documentation_gate.config_schema(REPO_ROOT),
             changed["forbidden_phrases"],
-            "v4.03.3",
+            SOURCE_CANDIDATE_VERSION,
         )
         self.assertTrue(any("exact release gate" in error for error in errors))
+
+    def test_stable_version_mutation_breaks_report_assets_and_matrix(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        changed = json.loads(json.dumps(contract))
+        changed["stable_public_version"] = SOURCE_CANDIDATE_VERSION
+        errors = documentation_gate.validate_active_public_surfaces(
+            REPO_ROOT,
+            changed,
+            documentation_gate.cobra_commands(REPO_ROOT),
+            documentation_gate.config_schema(REPO_ROOT),
+            changed["forbidden_phrases"],
+            SOURCE_CANDIDATE_VERSION,
+        )
+        self.assertTrue(
+            any("report path is not bound" in error for error in errors), errors
+        )
+        self.assertTrue(any("exact release gate" in error for error in errors), errors)
+
+        matrix_errors = documentation_gate.validate_package_source_contract(
+            REPO_ROOT,
+            changed["package_platform_contract"],
+            SOURCE_CANDIDATE_VERSION,
+        )
+        self.assertTrue(
+            any("package table contract" in error for error in matrix_errors),
+            matrix_errors,
+        )
 
     def test_package_contract_matches_workflow_and_wiki_contract(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
         package_contract = contract["package_platform_contract"]
         self.assertEqual(
             documentation_gate.validate_package_source_contract(
-                REPO_ROOT, package_contract
+                REPO_ROOT, package_contract, STABLE_PUBLIC_VERSION
             ),
             [],
         )
@@ -442,7 +549,9 @@ class DocumentationGateTest(unittest.TestCase):
 
         changed = json.loads(json.dumps(package_contract))
         changed["artifacts"][0]["architecture"] = "s390x"
-        errors = documentation_gate.validate_package_source_contract(REPO_ROOT, changed)
+        errors = documentation_gate.validate_package_source_contract(
+            REPO_ROOT, changed, STABLE_PUBLIC_VERSION
+        )
         self.assertTrue(any("naming/architecture mismatch" in error for error in errors))
 
     def test_native_tui_and_retired_current_surface_gate(self) -> None:
@@ -468,7 +577,7 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                "v4.03.3",
+                SOURCE_CANDIDATE_VERSION,
             )
         self.assertTrue(any("retired platform" in error for error in errors))
 
@@ -741,7 +850,10 @@ class DocumentationGateTest(unittest.TestCase):
                         self.assertNotIn(":", value)
             self.assertIn("Linux", text)
             if name == "syswarden_architecture.svg":
-                self.assertIn("SysWarden v4.03.3 candidate architecture", text)
+                self.assertIn(
+                    f"SysWarden {SOURCE_CANDIDATE_VERSION} candidate architecture",
+                    text,
+                )
 
     def test_source_assertions_remain_bound_to_runtime(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
@@ -844,6 +956,33 @@ class DocumentationGateTest(unittest.TestCase):
                 "current page baseline v4.03.2 does not match v4.03.3" in error
                 for error in errors
             )
+        )
+
+    def test_current_wiki_remains_bound_to_the_stable_public_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wiki_root = Path(directory)
+            (wiki_root / "Home.md").write_text(
+                "# Home\n\n"
+                "> Status: Current\n"
+                f"> Documentation baseline: {SOURCE_CANDIDATE_VERSION}\n",
+                encoding="utf-8",
+            )
+            errors = documentation_gate.validate_wiki(
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                set(),
+                set(),
+                [],
+                STABLE_PUBLIC_VERSION,
+                {},
+            )
+        self.assertTrue(
+            any(
+                f"current page baseline {SOURCE_CANDIDATE_VERSION} does not match "
+                f"{STABLE_PUBLIC_VERSION}" in error
+                for error in errors
+            ),
+            errors,
         )
 
     def test_version_specific_page_allows_only_versions_declared_in_heading(self) -> None:

@@ -56,6 +56,9 @@ func validateConfig(config *ModularConfig) error {
 	if err := validate.Struct(config); err != nil {
 		return err
 	}
+	if err := ValidateOperatorPolicy(config.OperatorPolicy); err != nil {
+		return err
+	}
 	if hasDuplicateStrings(config.Security.Honeyports) {
 		return fmt.Errorf("security.honeyports must not contain duplicate ports")
 	}

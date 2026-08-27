@@ -1,0 +1,5 @@
+	chain operator-policy {
+		ip saddr 198.51.100.42/32 ip protocol icmp icmp type echo-request counter accept comment "syswarden:operator-policy:v1:53b3f493316102c36599e619fe35858bddcb782cdd64345fae287bcb6ebb60a5"
+		ip6 saddr 2001:db8:abcd::/48 icmpv6 type echo-request counter accept comment "syswarden:operator-policy:v1:b536c1fb81e05e6090583ae03d31760249d7ebf07f9bce6c864d0fcab85b16d3"
+		return comment "syswarden:operator-policy:v1:return"
+	}

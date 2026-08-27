@@ -452,6 +452,46 @@ def source_version(repo_root: Path) -> str:
     return version
 
 
+def stable_public_version(contract: dict[str, object]) -> str:
+    """Return the explicit stable release baseline or fail closed."""
+
+    value = contract.get("stable_public_version")
+    if not isinstance(value, str) or VERSION_RE.fullmatch(value) is None:
+        raise DocumentationGateError(
+            "documentation contract stable_public_version must be a canonical "
+            "version such as v4.03.3"
+        )
+    return value
+
+
+def version_components(version: str) -> tuple[int, int, int]:
+    """Return numeric version components for an already canonical version."""
+
+    match = re.fullmatch(r"v([0-9]+)\.([0-9]{2})\.([0-9]+)", version)
+    if match is None:
+        raise DocumentationGateError(f"invalid canonical version: {version!r}")
+    return tuple(int(component) for component in match.groups())
+
+
+def validate_public_version_order(
+    source_candidate_version: str, public_version: str
+) -> list[str]:
+    """Reject a stable release baseline newer than the checked source."""
+
+    try:
+        source_components = version_components(source_candidate_version)
+        public_components = version_components(public_version)
+    except DocumentationGateError as exc:
+        return [str(exc)]
+    if public_components > source_components:
+        return [
+            "documentation contract stable_public_version cannot be newer than "
+            f"the source candidate; stable={public_version}, "
+            f"source={source_candidate_version}"
+        ]
+    return []
+
+
 def extract_fenced_blocks(text: str, label: str, errors: list[str]) -> list[tuple[str, str]]:
     blocks: list[tuple[str, str]] = []
     opener: tuple[str, int, str] | None = None
@@ -627,11 +667,17 @@ def markdown_table(text: str, heading: str) -> tuple[list[str], list[list[str]]]
     return header, rows
 
 
-def validate_package_source_contract(repo_root: Path, value: object) -> list[str]:
-    """Bind the documented package matrix to package.yml and release_gate.py."""
+def validate_package_source_contract(
+    repo_root: Path, value: object, public_version: str
+) -> list[str]:
+    """Bind the documented stable package matrix to package.yml and release_gate.py."""
 
     if not isinstance(value, dict):
         return ["documentation contract package_platform_contract must be an object"]
+    if VERSION_RE.fullmatch(public_version) is None:
+        return [
+            "documentation package matrix requires a canonical stable public version"
+        ]
     artifacts = value.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         return ["documentation package artifact contract must be a non-empty list"]
@@ -641,7 +687,7 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
     workflow_names: list[str] = []
     table_rows: list[list[str]] = []
     coordinates: set[tuple[str, str]] = set()
-    current_version = source_version(repo_root).removeprefix("v")
+    documented_version = public_version.removeprefix("v")
     for index, artifact in enumerate(artifacts):
         if not isinstance(artifact, dict) or not all(
             isinstance(artifact.get(key), str) and artifact[key]
@@ -686,7 +732,7 @@ def validate_package_source_contract(repo_root: Path, value: object) -> list[str
                 [
                     distribution,
                     architecture,
-                    f"`{artifact['release_name'].format(version=current_version)}`",
+                    f"`{artifact['release_name'].format(version=documented_version)}`",
                 ]
             )
 
@@ -815,11 +861,18 @@ def validate_active_public_surfaces(
     known_commands: set[str],
     known_config_keys: set[str],
     forbidden_phrases: Iterable[str],
-    version: str,
+    source_candidate_version: str,
 ) -> list[str]:
-    """Validate the exact current report, changelog and diagram inventory."""
+    """Validate candidate surfaces and the exact stable public release record."""
 
     errors: list[str] = []
+    try:
+        public_version = stable_public_version(contract)
+    except DocumentationGateError as exc:
+        return [str(exc)]
+    errors.extend(
+        validate_public_version_order(source_candidate_version, public_version)
+    )
     surface = contract.get("active_surface_contract")
     report_contract = contract.get("public_report_contract")
     if not isinstance(surface, dict):
@@ -857,6 +910,14 @@ def validate_active_public_surfaces(
                 if path.is_file() and not path.is_symlink()
             )
             report_path = report_contract.get("path")
+            expected_report_path = (
+                f"docs/reports/PUBLIC_RELEASE_READINESS_REPORT_{public_version}.md"
+            )
+            if report_path != expected_report_path:
+                errors.append(
+                    "public report path is not bound to stable_public_version; "
+                    f"expected={expected_report_path!r}, actual={report_path!r}"
+                )
             expected_reports = [report_path] if isinstance(report_path, str) else []
             if actual_reports != expected_reports:
                 errors.append(
@@ -877,7 +938,7 @@ def validate_active_public_surfaces(
                 known_commands,
                 known_config_keys,
                 [*forbidden_phrases, *CURRENT_SURFACE_RETIRED_TERMS],
-                version,
+                public_version,
                 None,
             )
         )
@@ -887,10 +948,18 @@ def validate_active_public_surfaces(
         ):
             errors.append("public report required_phrases must be a string list")
         else:
-            errors.extend(require_phrases(report, required, version, report_relative))
+            errors.extend(
+                require_phrases(
+                    report,
+                    required,
+                    public_version,
+                    report_relative,
+                    stable_public_version_value=public_version,
+                )
+            )
 
         expected_assets = report_contract.get("expected_assets")
-        release_assets = release_gate.expected_release_assets(version)
+        release_assets = release_gate.expected_release_assets(public_version)
         if not isinstance(expected_assets, list) or not all(
             isinstance(asset, str) and asset for asset in expected_assets
         ):
@@ -966,10 +1035,10 @@ def validate_active_public_surfaces(
 
     package_count = surface.get("package_count")
     asset_count = surface.get("public_asset_count")
-    release_version = version.removeprefix("v")
+    release_version = public_version.removeprefix("v")
     if package_count != 3 or len(release_gate.package_names(release_version)) != 3:
         errors.append("active surface package count must equal the three-package release gate")
-    if asset_count != 10 or len(release_gate.expected_release_assets(version)) != 10:
+    if asset_count != 10 or len(release_gate.expected_release_assets(public_version)) != 10:
         errors.append("active surface asset count must equal the ten-asset release gate")
     return errors
 
@@ -1031,6 +1100,7 @@ def validate_markdown(
     forbidden_phrases: Iterable[str],
     current_version: str,
     wiki_root: Path | None,
+    accepted_version_references: Iterable[str] = (),
 ) -> list[str]:
     errors: list[str] = []
     label = path.as_posix()
@@ -1177,6 +1247,7 @@ def validate_markdown(
         if pattern.search(text):
             errors.append(f"{label}: possible real {secret_name} in documentation")
 
+    accepted_versions = set(accepted_version_references)
     version_specific_heading_versions: set[str] = set()
     if re.search(r"^> Status: Version-specific\s*$", text, re.MULTILINE):
         first_heading = next((line for line in lines if line.startswith("# ")), "")
@@ -1185,7 +1256,11 @@ def validate_markdown(
     for line_number, line in enumerate(lines, 1):
         versions = VERSION_RE.findall(line)
         for version in versions:
-            if version == current_version or version in version_specific_heading_versions:
+            if (
+                version == current_version
+                or version in accepted_versions
+                or version in version_specific_heading_versions
+            ):
                 continue
             context = line.casefold()
             if not any(word in context for word in ("historical", "archive", "obsolete", "version-specific")):
@@ -1203,16 +1278,24 @@ def load_contract(repo_root: Path) -> dict[str, object]:
         raise DocumentationGateError(f"invalid documentation contract: {exc}") from exc
     if not isinstance(contract, dict) or contract.get("schema_version") != 1:
         raise DocumentationGateError("unsupported documentation contract schema")
+    stable_public_version(contract)
     return contract
 
 
 def require_phrases(
-    text: str, phrases: Iterable[str], version: str, label: str
+    text: str,
+    phrases: Iterable[str],
+    version: str,
+    label: str,
+    stable_public_version_value: str | None = None,
 ) -> list[str]:
     haystack = normalized(text)
     errors: list[str] = []
     for raw in phrases:
-        phrase = raw.format(version=version)
+        phrase = raw.format(
+            version=version,
+            stable_public_version=(stable_public_version_value or version),
+        )
         if normalized(phrase) not in haystack:
             errors.append(f"{label}: required reviewed statement is missing: {phrase!r}")
     return errors
@@ -1426,6 +1509,7 @@ def validate_repository(
     repo_root = repo_root.resolve()
     contract = load_contract(repo_root)
     version = source_version(repo_root)
+    public_version = stable_public_version(contract)
     source_commands = cobra_commands(repo_root)
     snapshot_records = snapshot_command_records(repo_root)
     baseline_metadata = contract.get("cli_baseline", {})
@@ -1441,6 +1525,7 @@ def validate_repository(
     commands = snapshots
     config_keys = config_schema(repo_root)
     errors: list[str] = []
+    errors.extend(validate_public_version_order(version, public_version))
     errors.extend(validate_cli_baseline_metadata(repo_root, contract, version))
     expected_snapshot_commands = source_commands | {"completion", "help"}
     if expected_snapshot_commands != snapshots:
@@ -1492,7 +1577,9 @@ def validate_repository(
             f"{sorted(source_commands & COBRA_UTILITY_COMMANDS)}"
         )
     errors.extend(
-        validate_package_source_contract(repo_root, package_platform_contract)
+        validate_package_source_contract(
+            repo_root, package_platform_contract, public_version
+        )
     )
 
     errors.extend(
@@ -1551,10 +1638,27 @@ def validate_repository(
             current_forbidden,
             version,
             None,
+            (public_version,),
         )
     )
-    errors.extend(require_phrases(readme, readme_required, version, "README.md"))
-    errors.extend(require_phrases(manual, manual_required, version, "manual.go"))
+    errors.extend(
+        require_phrases(
+            readme,
+            readme_required,
+            version,
+            "README.md",
+            stable_public_version_value=public_version,
+        )
+    )
+    errors.extend(
+        require_phrases(
+            manual,
+            manual_required,
+            version,
+            "manual.go",
+            stable_public_version_value=public_version,
+        )
+    )
     errors.extend(validate_source_assertions(repo_root, contract))
     errors.extend(
         validate_active_public_surfaces(
@@ -1604,7 +1708,7 @@ def validate_repository(
                 commands,
                 config_keys,
                 current_forbidden,
-                version,
+                public_version,
                 wiki_required,
             )
         )

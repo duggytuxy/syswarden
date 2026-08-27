@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "stable_public_version": "v4.03.3",
   "cli_baseline": {
     "version": "v4.02.8",
     "commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
@@ -48,7 +49,7 @@
   ],
   "required_readme_phrases": [
     "Current source version: **{version}**.",
-    "The latest qualified, stable public release is [v4.03.3](https://github.com/duggytuxy/syswarden/releases/tag/v4.03.3).",
+    "The latest qualified, stable public release is [{stable_public_version}](https://github.com/duggytuxy/syswarden/releases/tag/{stable_public_version}).",
     "SysWarden is an open-source Linux security orchestrator",
     "SysWarden is not an inline HTTP proxy, a traffic sanitizer or a regulatory certification product.",
     "Authoritative nftables enforcement with bounded firewalld and UFW compatibility",
@@ -67,7 +68,8 @@
     "keep refuses policy mutation while an iptables-services or netfilter-persistent service is active or enabled.",
     "Operational mutation requires an active, unambiguous supported service manager; offline package hooks defer install and reload.",
     "nftables requires an active and enabled nftables service and refuses active or enabled firewalld, UFW, iptables-services or netfilter-persistent frontends.",
-    "iptables is parseable but refused by operational policy mutation paths in v4.03.3.",
+    "iptables is parseable but refused by operational policy mutation paths.",
+    "The current source targets the Linux DEB, RPM and APK AMD64 package matrix only.",
     "SysWarden commits authoritative nftables policy and may reconcile one already active firewalld or UFW compatibility frontend.",
     "WireGuard requires the explicit nftables backend and is not opened through the firewalld or UFW compatibility path.",
     "Native TUI: no listening port.",
@@ -93,7 +95,7 @@
   ],
   "required_wiki_phrases": {
     "Home.md": [
-      "The v4.03.3 contract targets three candidate Linux packages:",
+      "The {stable_public_version} contract targets three candidate Linux packages:",
       "The complete public Release contains exactly ten assets: the three packages,",
       "No package, updater or qualification route exists outside this AMD64/x86_64 Linux matrix.",
       "The optional RHEL-compatible image staging extension is additive",
@@ -168,7 +170,7 @@
     ],
     "RHEL-9-Image-Extensions.md": [
       "The offline RPM staging extension is the only currently available RHEL 9+ image extension.",
-      "The runtime-only, package-owned system-integration extension is not available in v4.03.3.",
+      "The runtime-only, package-owned system-integration extension is not available in {stable_public_version}.",
       "The future extension must keep the Go binaries runtime-only while the RPM owns firewall and systemd configuration.",
       "Offline staging does not establish runtime readiness or widen the qualified package matrix."
     ]
@@ -179,7 +181,7 @@
       "stream": "stdout",
       "reason": "Advance the minor version while preserving the bounded built-in operator reference.",
       "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
-      "after": "SYSWARDEN v4.03.3 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+      "after": "SYSWARDEN v4.04.0 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
     },
     {
       "case": "help:syswarden",
@@ -703,7 +705,7 @@
       "| State | Public, stable and qualified |",
       "| Published | 2026-08-27T08:51:29Z |",
       "| Qualified commit | `cdd66600a1505bae1f1e754dea096ee71e9cee82` |",
-      "| Tag | Verified SSH-signed annotated `v4.03.3` tag |",
+      "| Tag | Verified SSH-signed annotated `{stable_public_version}` tag |",
       "| Public asset inventory | 10 exact assets |",
       "| Protected qualification | Run `33051943140`, success |",
       "| Tag-scoped package gate | Run `33054742004`, success |",
@@ -711,7 +713,7 @@
       "| Tag-scoped security gate | Run `33054742070`, success |",
       "| Protected publisher | Run `33055618733`, success |",
       "The `NO-GO` decision and candidate wording retained below are the historical pre-publication contract.",
-      "| Candidate | v4.03.3 |",
+      "| Candidate | {stable_public_version} |",
       "| Distribution boundary | Linux packages only |",
       "| Public package count | 3 |",
       "| Public release asset count | 10 |",
@@ -733,7 +735,7 @@
       "Every SSH exception is rendered only for the effective SSH port.",
       "candidate nftables application fails closed",
       "## Firewall backend selection and compatibility",
-      "SysWarden v4.03.3 uses nftables as its single authoritative Linux policy engine.",
+      "SysWarden {stable_public_version} uses nftables as its single authoritative Linux policy engine.",
       "Fresh configurations default to `core.firewall_backend = \"keep\"`",
       "The `nftables` value is a validation-only assertion.",
       "The `iptables` value remains parseable for configuration compatibility",
@@ -749,7 +751,7 @@
       "The bounded LOT 2S scope targets closure of H1 through H5",
       "The self-hosted native qualification job has no release-signing environment",
       "The remote qualification environment must require exactly one owner review",
-      "The v4.03.3 candidate remains NO-GO"
+      "The {stable_public_version} candidate remains NO-GO"
     ],
     "expected_assets": [
       "syswarden_4.03.3_amd64.deb",

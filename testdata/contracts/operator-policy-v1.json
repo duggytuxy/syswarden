@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "module_path": "modules/99-user.toml",
+  "limits": {
+    "maximum_rules": 64,
+    "maximum_module_bytes": 262144
+  },
+  "raw_cases": [
+    {
+      "name": "accept-closed-rule",
+      "relative_path": "modules/99-user.toml",
+      "toml": "[[operator_policy.rules]]\nid = \"allow-icmp-v4\"\nfamily = \"ipv4\"\ndirection = \"ingress\"\nprotocol = \"icmp\"\ntype = \"echo-request\"\nsource = \"192.0.2.10\"\naction = \"accept\"\n",
+      "want_error": ""
+    },
+    {
+      "name": "reject-wrong-module",
+      "relative_path": "modules/10-network.toml",
+      "toml": "[[operator_policy.rules]]\nid = \"allow-icmp-v4\"\nfamily = \"ipv4\"\ndirection = \"ingress\"\nprotocol = \"icmp\"\ntype = \"echo-request\"\nsource = \"192.0.2.10\"\naction = \"accept\"\n",
+      "want_error": "may be declared only in modules/99-user.toml"
+    },
+    {
+      "name": "reject-unknown-policy-field",
+      "relative_path": "modules/99-user.toml",
+      "toml": "[operator_policy]\nmode = \"merge\"\n",
+      "want_error": "unknown key"
+    },
+    {
+      "name": "reject-unknown-rule-field",
+      "relative_path": "modules/99-user.toml",
+      "toml": "[[operator_policy.rules]]\nid = \"allow-icmp-v4\"\nfamily = \"ipv4\"\ndirection = \"ingress\"\nprotocol = \"icmp\"\ntype = \"echo-request\"\nsource = \"192.0.2.10\"\naction = \"accept\"\nexpression = \"raw nft\"\n",
+      "want_error": "unknown key"
+    },
+    {
+      "name": "reject-missing-action",
+      "relative_path": "modules/99-user.toml",
+      "toml": "[[operator_policy.rules]]\nid = \"allow-icmp-v4\"\nfamily = \"ipv4\"\ndirection = \"ingress\"\nprotocol = \"icmp\"\ntype = \"echo-request\"\nsource = \"192.0.2.10\"\n",
+      "want_error": "missing required key \"action\""
+    },
+    {
+      "name": "reject-non-string-action",
+      "relative_path": "modules/99-user.toml",
+      "toml": "[[operator_policy.rules]]\nid = \"allow-icmp-v4\"\nfamily = \"ipv4\"\ndirection = \"ingress\"\nprotocol = \"icmp\"\ntype = \"echo-request\"\nsource = \"192.0.2.10\"\naction = true\n",
+      "want_error": "must be a string"
+    },
+    {
+      "name": "reject-case-lookalike-root",
+      "relative_path": "modules/99-user.toml",
+      "toml": "[Operator_Policy]\nrules = []\n",
+      "want_error": "non-canonical operator_policy key"
+    },
+    {
+      "name": "reject-hyphen-lookalike-root",
+      "relative_path": "modules/99-user.toml",
+      "toml": "[operator-policy]\nrules = []\n",
+      "want_error": "non-canonical operator_policy key"
+    }
+  ],
+  "semantic_cases": [
+    {
+      "name": "accept-ipv4-host",
+      "rules": [
+        {"id": "allow-icmp-v4", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10", "action": "accept"}
+      ],
+      "want_error": ""
+    },
+    {
+      "name": "accept-ipv6-prefix",
+      "rules": [
+        {"id": "allow-icmp-v6", "family": "ipv6", "direction": "ingress", "protocol": "icmpv6", "type": "echo-request", "source": "2001:db8::/64", "action": "accept"}
+      ],
+      "want_error": ""
+    },
+    {
+      "name": "accept-explicit-ipv4-default-prefix",
+      "rules": [
+        {"id": "allow-public-v4", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "0.0.0.0/0", "action": "accept"}
+      ],
+      "want_error": ""
+    },
+    {
+      "name": "accept-explicit-ipv6-default-prefix",
+      "rules": [
+        {"id": "allow-public-v6", "family": "ipv6", "direction": "ingress", "protocol": "icmpv6", "type": "echo-request", "source": "::/0", "action": "accept"}
+      ],
+      "want_error": ""
+    },
+    {
+      "name": "reject-uppercase-id",
+      "rules": [
+        {"id": "Allow-icmp", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "must match"
+    },
+    {
+      "name": "reject-egress",
+      "rules": [
+        {"id": "allow-icmp-v4", "family": "ipv4", "direction": "egress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "direction must be \"ingress\""
+    },
+    {
+      "name": "reject-icmp-type",
+      "rules": [
+        {"id": "allow-icmp-v4", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-reply", "source": "192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "type must be \"echo-request\""
+    },
+    {
+      "name": "reject-action",
+      "rules": [
+        {"id": "allow-icmp-v4", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10", "action": "drop"}
+      ],
+      "want_error": "action must be \"accept\""
+    },
+    {
+      "name": "reject-family",
+      "rules": [
+        {"id": "allow-icmp", "family": "inet", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "family must be"
+    },
+    {
+      "name": "reject-ipv4-protocol-mismatch",
+      "rules": [
+        {"id": "allow-icmp-v4", "family": "ipv4", "direction": "ingress", "protocol": "icmpv6", "type": "echo-request", "source": "192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "requires protocol \"icmp\""
+    },
+    {
+      "name": "reject-ipv6-protocol-mismatch",
+      "rules": [
+        {"id": "allow-icmp-v6", "family": "ipv6", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "2001:db8::10", "action": "accept"}
+      ],
+      "want_error": "requires protocol \"icmpv6\""
+    },
+    {
+      "name": "reject-source-family-mismatch",
+      "rules": [
+        {"id": "allow-icmp-v6", "family": "ipv6", "direction": "ingress", "protocol": "icmpv6", "type": "echo-request", "source": "192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "does not match \"ipv6\""
+    },
+    {
+      "name": "reject-whitespace-source",
+      "rules": [
+        {"id": "allow-icmp-v4", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": " 192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "whitespace padded"
+    },
+    {
+      "name": "reject-host-bits",
+      "rules": [
+        {"id": "allow-icmp-v4", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10/24", "action": "accept"}
+      ],
+      "want_error": "canonical"
+    },
+    {
+      "name": "reject-noncanonical-ipv6",
+      "rules": [
+        {"id": "allow-icmp-v6", "family": "ipv6", "direction": "ingress", "protocol": "icmpv6", "type": "echo-request", "source": "2001:0db8::1", "action": "accept"}
+      ],
+      "want_error": "canonical"
+    },
+    {
+      "name": "reject-ipv6-zone",
+      "rules": [
+        {"id": "allow-icmp-v6", "family": "ipv6", "direction": "ingress", "protocol": "icmpv6", "type": "echo-request", "source": "fe80::1%eth0", "action": "accept"}
+      ],
+      "want_error": "zone"
+    },
+    {
+      "name": "reject-ipv4-mapped-ipv6",
+      "rules": [
+        {"id": "allow-icmp-v6", "family": "ipv6", "direction": "ingress", "protocol": "icmpv6", "type": "echo-request", "source": "::ffff:192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "IPv4-mapped IPv6"
+    },
+    {
+      "name": "reject-duplicate-id",
+      "rules": [
+        {"id": "allow-icmp-v4", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10", "action": "accept"},
+        {"id": "allow-icmp-v4", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "198.51.100.10", "action": "accept"}
+      ],
+      "want_error": "duplicate id"
+    },
+    {
+      "name": "reject-equivalent-source",
+      "rules": [
+        {"id": "allow-host", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10", "action": "accept"},
+        {"id": "allow-host-prefix", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10/32", "action": "accept"}
+      ],
+      "want_error": "equivalent or overlapping"
+    },
+    {
+      "name": "reject-overlapping-source",
+      "rules": [
+        {"id": "allow-prefix", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.0/24", "action": "accept"},
+        {"id": "allow-host", "family": "ipv4", "direction": "ingress", "protocol": "icmp", "type": "echo-request", "source": "192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "equivalent or overlapping"
+    }
+  ],
+  "rule_count_cases": [
+    {"name": "accept-64-rules", "count": 64, "want_error": ""},
+    {"name": "reject-65-rules", "count": 65, "want_error": "64-rule limit"}
+  ],
+  "module_size_cases": [
+    {"name": "accept-262144-bytes", "size": 262144, "want_error": ""},
+    {"name": "reject-262145-bytes", "size": 262145, "want_error": "262144-byte limit"}
+  ],
+  "environment_names": [
+    "SYSWARDEN_OPERATOR_POLICY",
+    "SYSWARDEN_OPERATOR_POLICY_RULES_0_SOURCE",
+    "SYSWARDEN_OPERATOR_POLICYX"
+  ]
+}

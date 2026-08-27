@@ -52,6 +52,8 @@ var firewallCleanupEffectiveUserID = os.Geteuid
 
 var uninstallNFTRunnerFactory = newExecNFTCommandRunner
 
+var firewallRecoveryNFTRunnerFactory = newExecNFTCommandRunner
+
 var firewallRemovalServiceReattest = system.ReattestFirewallStatePreparedForRemoval
 
 var applyLinuxFirewallWrappersForUninstall = applyLinuxFirewallWrappersLocked
@@ -95,6 +97,52 @@ func preflightConfiguredFirewallBackendMutation() (string, error) {
 func PreflightConfiguredBackendMutation() error {
 	_, err := preflightConfiguredFirewallBackendMutation()
 	return err
+}
+
+// RecoverPendingAuthoritativeTransaction resolves an interrupted nftables
+// commit before callers inspect or mutate any new configuration input. The
+// final transaction path repeats this check under its own lock, closing the
+// race with another process that may start after this early barrier.
+func RecoverPendingAuthoritativeTransaction() error {
+	return recoverPendingAuthoritativeTransactionAt(nftStateDirectory, firewallRecoveryNFTRunnerFactory)
+}
+
+func recoverPendingAuthoritativeTransactionAt(
+	stateDirectory string,
+	runnerFactory func() (nftCommandRunner, error),
+) error {
+	lock, err := acquireNFTReloadGuard()
+	if err != nil {
+		return fmt.Errorf("acquire early firewall recovery lock: %w", err)
+	}
+	defer releaseNFTReloadGuard(lock)
+
+	if _, err := os.Lstat(stateDirectory); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect early firewall recovery directory: %w", err)
+	}
+	if err := attestNFTStateDirectory(stateDirectory); err != nil {
+		return fmt.Errorf("attest early firewall recovery directory: %w", err)
+	}
+	if _, err := os.Lstat(nftTransactionJournalPath(stateDirectory)); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect early firewall recovery journal: %w", err)
+	}
+	if runnerFactory == nil {
+		return fmt.Errorf("prepare early firewall recovery runner: factory is nil")
+	}
+	runner, err := runnerFactory()
+	if err != nil {
+		return fmt.Errorf("prepare early firewall recovery runner: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := recoverPendingNftablesTransaction(ctx, runner, stateDirectory); err != nil {
+		return fmt.Errorf("recover interrupted authoritative firewall transaction before new preparation: %w", err)
+	}
+	return nil
 }
 
 // CleanupOwnedCompatibilityRulesForUninstall removes only compatibility
@@ -151,9 +199,22 @@ func validateLinuxWrapperBackendConstraint(backend string, activePaths map[strin
 
 // ApplyPolicies triggers the main Linux firewall injection using native Netlink / CLI Nftables
 func ApplyPolicies() error {
+	if err := RecoverPendingAuthoritativeTransaction(); err != nil {
+		return err
+	}
 	firewallBackend, err := preflightConfiguredFirewallBackendMutation()
 	if err != nil {
 		return err
+	}
+	if err := config.ValidateOperatorPolicy(config.GlobalConfig.OperatorPolicy); err != nil {
+		return fmt.Errorf("validate operator policy before firewall mutation: %w", err)
+	}
+	if err := config.ReattestOperatorPolicySource(config.GlobalConfig); err != nil {
+		return fmt.Errorf("reattest operator policy source before firewall mutation: %w", err)
+	}
+	operatorPolicy, err := compileOperatorPolicy(config.GlobalConfig.OperatorPolicy.Rules)
+	if err != nil {
+		return fmt.Errorf("compile operator policy: %w", err)
 	}
 	fmt.Println("[INFO] Applying Firewall Rules (nftables atomic transaction)...")
 
@@ -294,6 +355,10 @@ func ApplyPolicies() error {
 		return fmt.Errorf("split LAN subnets by address family: %w", err)
 	}
 
+	// The operator-owned chain is always present so reloads and upgrades retain
+	// one stable topology. It can only return to the product-owned input chain.
+	_, _ = nftRules.WriteString(operatorPolicy.chain)
+
 	// Stateful L4 Protections (Host Input)
 	_, _ = nftRules.WriteString("\tchain stateful_protect {\n\t\ttype filter hook input priority -10; policy drop;\n")
 	_, _ = nftRules.WriteString("\t\tiifname \"lo\" accept\n")
@@ -430,6 +495,11 @@ func ApplyPolicies() error {
 		}
 	}
 
+	// Operator policy is deliberately the final permission surface. Mandatory
+	// product refusals and every existing permission path run first; a non-match
+	// returns here and still reaches the product-owned catch-all deny below.
+	_, _ = nftRules.WriteString(operatorPolicyDispatchRule())
+
 	// CATCH-ALL Default Deny Logging
 	_, _ = nftRules.WriteString("\t\tct state new limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-BLOCK] [CATCH-ALL] \"\n")
 	_, _ = nftRules.WriteString("\t\tct state new counter drop\n")
@@ -497,7 +567,7 @@ func ApplyPolicies() error {
 	if err != nil {
 		return fmt.Errorf("failed to prepare nftables sets: %w", err)
 	}
-	verification := buildNftVerificationPlan(populations, config.GlobalConfig.ArpProtect)
+	verification := buildNftVerificationPlan(populations, config.GlobalConfig.ArpProtect, operatorPolicy.verificationPlan())
 	runner, err := newExecNFTCommandRunner()
 	if err != nil {
 		return fmt.Errorf("prepare authoritative nftables runner: %w", err)
@@ -513,9 +583,18 @@ func ApplyPolicies() error {
 		func() error {
 			var prepareErr error
 			wrapperPlan, prepareErr = prepareLinuxFirewallWrapperReconciliationForBackend(firewallBackend, validLANSubnets, wrapperPorts)
-			return prepareErr
+			if prepareErr != nil {
+				return prepareErr
+			}
+			return validateOperatorPolicyWrapperCompatibility(operatorPolicy, wrapperPlan.paths)
 		},
 		func() error {
+			if err := config.ValidateOperatorPolicy(config.GlobalConfig.OperatorPolicy); err != nil {
+				return fmt.Errorf("revalidate operator policy at commit boundary: %w", err)
+			}
+			if err := config.ReattestOperatorPolicySource(config.GlobalConfig); err != nil {
+				return fmt.Errorf("reattest operator policy source at commit boundary: %w", err)
+			}
 			if err := firewallBackendPreflight(firewallBackend); err != nil {
 				return fmt.Errorf("reattest configured firewall backend before commit: %w", err)
 			}
@@ -576,6 +655,15 @@ func applyNftablesPolicyWithWrappers(
 		return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: acquire reload lock: %w", transactionID, err)
 	}
 	defer releaseNFTReloadGuard(lock)
+	if err := os.MkdirAll(stateDirectory, 0750); err != nil {
+		return transactionID, fmt.Errorf("firewall transaction %s cannot prepare recovery state: %w", transactionID, err)
+	}
+	if err := attestNFTStateDirectory(stateDirectory); err != nil {
+		return transactionID, fmt.Errorf("firewall transaction %s cannot attest recovery state: %w", transactionID, err)
+	}
+	if err := recoverPendingNftablesTransaction(ctx, runner, stateDirectory); err != nil {
+		return transactionID, fmt.Errorf("firewall transaction %s cannot recover an interrupted authoritative transaction: %w", transactionID, err)
+	}
 	if preflightWrappers != nil {
 		if err := preflightWrappers(); err != nil {
 			return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: compatibility wrapper preflight: %w", transactionID, err)
@@ -1137,7 +1225,7 @@ func isASCIIDigits(value string) bool {
 	return true
 }
 
-func buildNftVerificationPlan(populations []nftSetPopulation, arpProtect bool) nftVerificationPlan {
+func buildNftVerificationPlan(populations []nftSetPopulation, arpProtect bool, operatorPolicy operatorPolicyVerification) nftVerificationPlan {
 	plan := nftVerificationPlan{
 		tables: map[nftObjectKey]struct{}{
 			{family: "inet", name: "syswarden"}:           {},
@@ -1149,7 +1237,8 @@ func buildNftVerificationPlan(populations []nftSetPopulation, arpProtect bool) n
 			{family: "inet", table: "syswarden", name: "docker_protect"}:              "forward",
 			{family: "netdev", table: "syswarden_hw_drop", name: "ingress_frontline"}: "ingress",
 		},
-		sets: make(map[nftObjectKey]int),
+		sets:           make(map[nftObjectKey]int),
+		operatorPolicy: operatorPolicy,
 	}
 	if arpProtect {
 		plan.tables[nftObjectKey{family: "arp", name: "syswarden_arp"}] = struct{}{}
