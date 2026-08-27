@@ -48,7 +48,7 @@
   ],
   "required_readme_phrases": [
     "Current source version: **{version}**.",
-    "The source describes the v4.03.3 candidate and does not claim that the release has been qualified, tagged or published.",
+    "The latest qualified, stable public release is [v4.03.3](https://github.com/duggytuxy/syswarden/releases/tag/v4.03.3).",
     "SysWarden is an open-source Linux security orchestrator",
     "SysWarden is not an inline HTTP proxy, a traffic sanitizer or a regulatory certification product.",
     "Authoritative nftables enforcement with bounded firewalld and UFW compatibility",
@@ -699,6 +699,18 @@
   "public_report_contract": {
     "path": "docs/reports/PUBLIC_RELEASE_READINESS_REPORT_v4.03.3.md",
     "required_phrases": [
+      "## Post-publication record",
+      "| State | Public, stable and qualified |",
+      "| Published | 2026-08-27T08:51:29Z |",
+      "| Qualified commit | `cdd66600a1505bae1f1e754dea096ee71e9cee82` |",
+      "| Tag | Verified SSH-signed annotated `v4.03.3` tag |",
+      "| Public asset inventory | 10 exact assets |",
+      "| Protected qualification | Run `33051943140`, success |",
+      "| Tag-scoped package gate | Run `33054742004`, success |",
+      "| Tag-scoped Plumber gate | Run `33054742031`, success |",
+      "| Tag-scoped security gate | Run `33054742070`, success |",
+      "| Protected publisher | Run `33055618733`, success |",
+      "The `NO-GO` decision and candidate wording retained below are the historical pre-publication contract.",
       "| Candidate | v4.03.3 |",
       "| Distribution boundary | Linux packages only |",
       "| Public package count | 3 |",

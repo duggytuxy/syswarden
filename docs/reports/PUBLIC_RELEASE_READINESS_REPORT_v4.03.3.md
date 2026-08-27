@@ -1,5 +1,25 @@
 # SysWarden v4.03.3 Public Release Readiness Report
 
+## Post-publication record
+
+| Field | Value |
+|---|---|
+| Release | v4.03.3 |
+| State | Public, stable and qualified |
+| Published | 2026-08-27T08:51:29Z |
+| Qualified commit | `cdd66600a1505bae1f1e754dea096ee71e9cee82` |
+| Tag | Verified SSH-signed annotated `v4.03.3` tag |
+| Public asset inventory | 10 exact assets |
+| Protected qualification | Run `33051943140`, success |
+| Tag-scoped package gate | Run `33054742004`, success |
+| Tag-scoped Plumber gate | Run `33054742031`, success |
+| Tag-scoped security gate | Run `33054742070`, success |
+| Protected publisher | Run `33055618733`, success |
+
+The `NO-GO` decision and candidate wording retained below are the historical
+pre-publication contract. They no longer describe the current release status
+and do not authorize changing the immutable tag or public assets.
+
 ## Document status
 
 | Field | Value |

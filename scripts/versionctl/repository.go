@@ -115,6 +115,18 @@ func readWorktree(repo string) (snapshot, error) {
 	return contents, nil
 }
 
+func readSnapshotAtRef(git gitClient, repo, ref string) (snapshot, error) {
+	contents := make(snapshot, len(versionTargets))
+	for _, item := range versionTargets {
+		data, err := git.fileAtRef(repo, ref, item.Path)
+		if err != nil {
+			return nil, err
+		}
+		contents[item.Path] = data
+	}
+	return contents, nil
+}
+
 func openRepositoryRoot(repo string) (*os.Root, error) {
 	root, err := os.OpenRoot(repo)
 	if err != nil {
@@ -498,6 +510,8 @@ type gitClient interface {
 	fileAtRef(repo, ref, path string) ([]byte, error)
 	tagExists(repo, tag string) (bool, error)
 	tagMatchesHead(repo, tag string) (bool, error)
+	commitParents(repo, ref string) ([]string, error)
+	commitMessage(repo, ref string) (string, error)
 	lockPath(repo string) (string, error)
 	capturePrepareState(repo, expectedHead string) (gitPrepareState, error)
 	verifyPrepareState(repo string, expected gitPrepareState) error
@@ -589,6 +603,43 @@ func (realGit) tagMatchesHead(repo, tag string) (bool, error) {
 		return false, err
 	}
 	return head == tagCommit, nil
+}
+
+func (realGit) commitParents(repo, ref string) ([]string, error) {
+	if err := validateGitRef(ref); err != nil {
+		return nil, err
+	}
+	// #nosec G204 -- Git is fixed and ref is validated above; exec.Command does not invoke a shell.
+	command := exec.Command("git", "-C", repo, "rev-list", "--parents", "-n", "1", ref)
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("read parents of Git ref %s: %w", ref, err)
+	}
+	fields := strings.Fields(string(output))
+	if len(fields) == 0 || !fullGitSHA.MatchString(fields[0]) {
+		return nil, fmt.Errorf("Git ref %s did not resolve to one commit", ref)
+	}
+	parents := make([]string, 0, len(fields)-1)
+	for _, parent := range fields[1:] {
+		if !fullGitSHA.MatchString(parent) {
+			return nil, fmt.Errorf("Git ref %s returned an invalid parent SHA %q", ref, parent)
+		}
+		parents = append(parents, parent)
+	}
+	return parents, nil
+}
+
+func (realGit) commitMessage(repo, ref string) (string, error) {
+	if err := validateGitRef(ref); err != nil {
+		return "", err
+	}
+	// #nosec G204 -- Git is fixed and ref is validated above; exec.Command does not invoke a shell.
+	command := exec.Command("git", "-C", repo, "show", "-s", "--no-show-signature", "--format=%B", ref)
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("read message of Git ref %s: %w", ref, err)
+	}
+	return string(output), nil
 }
 
 func (realGit) lockPath(repo string) (string, error) {

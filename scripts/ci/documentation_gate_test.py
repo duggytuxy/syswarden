@@ -41,7 +41,7 @@ class DocumentationGateTest(unittest.TestCase):
         errors = documentation_gate.validate_wiki_phrase_contract(changed)
         self.assertTrue(any("missing required operational wiki pages" in error for error in errors))
 
-    def test_current_version_and_candidate_status_are_explicit(self) -> None:
+    def test_current_version_and_release_status_are_explicit(self) -> None:
         self.assertEqual(documentation_gate.source_version(REPO_ROOT), "v4.03.3")
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
@@ -51,8 +51,19 @@ class DocumentationGateTest(unittest.TestCase):
             1,
         )
         self.assertIn(
-            "does not claim that the release has been qualified, tagged or published",
+            "The latest qualified, stable public release is "
+            "[v4.03.3](https://github.com/duggytuxy/syswarden/releases/tag/v4.03.3).",
             documentation_gate.normalized(readme),
+        )
+        self.assertEqual(report.count("## Post-publication record"), 1)
+        self.assertLess(
+            report.index("## Post-publication record"),
+            report.index("## Document status"),
+        )
+        self.assertIn(
+            "The `NO-GO` decision and candidate wording retained below are the "
+            "historical pre-publication contract.",
+            documentation_gate.normalized(report),
         )
         self.assertIn(
             "does not authorize a tag or publication",
@@ -144,8 +155,30 @@ class DocumentationGateTest(unittest.TestCase):
             "Only the protected remote sequence may authorize a lot closure, tag or Release",
             normalized,
         )
-        self.assertIn("single `Patch :` transition commit", normalized)
-        self.assertIn("amend and re-sign the single `Patch :` candidate commit", normalized)
+        self.assertIn(
+            "exactly one recognized `Patch :`, `Minor :`, `Major :` or "
+            "`Upgrade :` transition",
+            normalized,
+        )
+        self.assertIn(
+            "only non-versioning follow-ups that preserve every version target "
+            "and `changelog.md` byte-for-byte",
+            normalized,
+        )
+        self.assertIn(
+            "The release validator must trace that chain back to the exact transition.",
+            normalized,
+        )
+        self.assertIn(
+            "This generic chain contract validates v4.03.3 and later releases.",
+            normalized,
+        )
+        self.assertIn(
+            "Earlier immutable releases are revalidated from their published tag, "
+            "asset and digest evidence, not replayed through the current release "
+            "orchestrator.",
+            normalized,
+        )
         self.assertIn("complete mandatory pre-push gate", normalized)
         self.assertIn("tracked `.github/act/push.json` fixture is test-only", normalized)
         self.assertIn("Pass `--eventpath \"${SW_EVENT}\"` explicitly", normalized)
