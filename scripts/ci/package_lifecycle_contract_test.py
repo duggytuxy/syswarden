@@ -3406,6 +3406,110 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, expected_status, result)
 
+    def test_process_match_retries_only_bounded_indeterminate_state(self) -> None:
+        cases = (
+            ("immediate-nonmatch", (1,), 1, 1),
+            ("immediate-webtui", (0,), 0, 1),
+            ("exiting-audit", (2, 1), 1, 2),
+            ("delayed-webtui", (2, 0), 0, 2),
+            ("stable-unreadable", (2, 2, 2, 0), 2, 3),
+        )
+        wrappers = (
+            (
+                "current",
+                "syswarden_webtui_process_matches",
+                "syswarden_webtui_process_matches_bounded 4242 /proc "
+                '"/opt/syswarden/bin/syswarden-cli" "1:2"',
+            ),
+            (
+                "deleted",
+                "syswarden_webtui_cmdline_matches",
+                "syswarden_deleted_webtui_process_matches_bounded "
+                '"$2" "$3"',
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            process_root = Path(temporary) / "proc/4242"
+            process_root.mkdir(parents=True)
+            deleted_link = "/opt/syswarden/bin/syswarden-cli (deleted)"
+            (process_root / "exe").symlink_to(deleted_link)
+
+            for wrapper, matcher, invocation in wrappers:
+                for name, statuses, expected_status, expected_calls in cases:
+                    branches = " ".join(
+                        f"{index}) return {status} ;;"
+                        for index, status in enumerate(statuses, start=1)
+                    )
+                    command = (
+                        '. "$1"; '
+                        "syswarden_test_calls=0; "
+                        f"{matcher}() {{ "
+                        "syswarden_test_calls=$((syswarden_test_calls + 1)); "
+                        f'case "${{syswarden_test_calls}}" in {branches} '
+                        "*) return 99 ;; esac; }; "
+                        "sleep() { :; }; "
+                        f"{invocation}; "
+                        "syswarden_test_status=$?; "
+                        "printf '%s\\n' \"${syswarden_test_calls}\"; "
+                        'exit "${syswarden_test_status}"'
+                    )
+                    with self.subTest(wrapper=wrapper, case=name):
+                        result = subprocess.run(
+                            [
+                                "/bin/sh",
+                                "-c",
+                                command,
+                                "probe",
+                                str(WEBTUI_RETIREMENT_HELPER),
+                                str(process_root),
+                                deleted_link,
+                            ],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertEqual(result.returncode, expected_status, result)
+                        self.assertEqual(result.stdout, f"{expected_calls}\n")
+
+    def test_process_retirement_tolerates_exit_during_revalidation(self) -> None:
+        command = (
+            '. "$1"; '
+            "syswarden_test_find_calls=0; "
+            "syswarden_test_match_calls=0; "
+            "syswarden_find_exact_webtui_processes() { "
+            "syswarden_test_find_calls=$((syswarden_test_find_calls + 1)); "
+            'if [ "${syswarden_test_find_calls}" -eq 1 ]; then '
+            'SYSWARDEN_MATCHED_WEBTUI_PROCESSES="4242:17"; else '
+            "SYSWARDEN_MATCHED_WEBTUI_PROCESSES=; fi; }; "
+            "syswarden_webtui_process_matches() { "
+            "syswarden_test_match_calls=$((syswarden_test_match_calls + 1)); "
+            'case "${syswarden_test_match_calls}" in '
+            "1) SYSWARDEN_MATCHED_WEBTUI_STARTTIME=17; return 0 ;; "
+            "2) return 2 ;; *) return 1 ;; esac; }; "
+            "stat() { printf '%s\\n' '1:2'; }; "
+            "sleep() { :; }; "
+            "kill() { printf 'signal:%s\\n' \"$1\"; }; "
+            'syswarden_retire_exact_webtui_processes "" /proc /fake/syswarden-cli; '
+            "syswarden_test_status=$?; "
+            "printf 'matches:%s finds:%s\\n' "
+            '"${syswarden_test_match_calls}" "${syswarden_test_find_calls}"; '
+            'exit "${syswarden_test_status}"'
+        )
+        result = subprocess.run(
+            [
+                "/bin/sh",
+                "-c",
+                command,
+                "probe",
+                str(WEBTUI_RETIREMENT_HELPER),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result)
+        self.assertEqual(result.stdout, "signal:-TERM\nmatches:4 finds:2\n")
+
     def test_deleted_old_process_with_replaced_binary_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             executable = Path(temporary) / "syswarden-cli"

@@ -45,7 +45,7 @@ func runComplianceAudit(l *logger.Logger) {
 
 	// Check rp_filter
 	rp, err := os.ReadFile("/proc/sys/net/ipv4/conf/all/rp_filter")
-	if err == nil && !strings.Contains(string(rp), "1") {
+	if err == nil && !rpFilterEnabled(rp) {
 		l.LogComplianceDrift("rp_filter is disabled (0). Anti-spoofing altered!")
 		driftFound = true
 	}
@@ -66,5 +66,16 @@ func runComplianceAudit(l *logger.Logger) {
 
 	if !driftFound {
 		l.LogComplianceOK(localHardeningCheckOK)
+	}
+}
+
+// rpFilterEnabled accepts Linux strict mode (1) and loose mode (2). Both modes
+// perform reverse-path source validation; only mode 0 disables it.
+func rpFilterEnabled(raw []byte) bool {
+	switch strings.TrimSpace(string(raw)) {
+	case "1", "2":
+		return true
+	default:
+		return false
 	}
 }

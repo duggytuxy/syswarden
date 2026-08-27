@@ -141,7 +141,59 @@ jobs:
               # changelog rewrite policy without changing release version
               # targets or changelog.
               v4033_parent_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4033_parent_sha}" == "19e4add763e935a29219c20c86586b3557a441c9" ]]; then
+              v4033_maintenance_anchor_sha='01964815f926408e903587a9cc7f2bb2d0a1f8d8'
+              if git merge-base --is-ancestor "${v4033_maintenance_anchor_sha}" HEAD; then
+                # Allow reviewed, non-versioning maintenance after the exact
+                # PR121 anchor without adding a new one-off exception for every
+                # repair. The final source is still qualified at its exact SHA,
+                # while the reviewed candidate changelog remains byte-exact.
+                v4033_maintenance_anchor_subject="$(
+                  git log -1 --format=%s "${v4033_maintenance_anchor_sha}"
+                )"
+                v4033_expected_maintenance_anchor_subject='CI : avoid Go 1.26 fuzz deadline race (#121)'
+                if [[ "${v4033_maintenance_anchor_subject}" != \
+                      "${v4033_expected_maintenance_anchor_subject}" ]]; then
+                  echo "ERROR: the v4.03.3 maintenance anchor subject is not exact." >&2
+                  exit 1
+                fi
+                read -r -a v4033_maintenance_anchor_line <<< "$(
+                  git rev-list --parents -n 1 "${v4033_maintenance_anchor_sha}"
+                )"
+                if (( ${#v4033_maintenance_anchor_line[@]} != 2 )); then
+                  echo "ERROR: the v4.03.3 maintenance anchor must be linear." >&2
+                  exit 1
+                fi
+                while IFS= read -r v4033_maintenance_line; do
+                  read -r -a v4033_maintenance_fields <<< "${v4033_maintenance_line}"
+                  if (( ${#v4033_maintenance_fields[@]} != 2 )); then
+                    echo "ERROR: v4.03.3 maintenance after PR121 must remain linear." >&2
+                    exit 1
+                  fi
+                done < <(git rev-list --parents "${v4033_maintenance_anchor_sha}..HEAD")
+                v4033_maintenance_count="$(
+                  git rev-list --count "${v4033_maintenance_anchor_sha}..HEAD"
+                )"
+                if [[ ! "${v4033_maintenance_count}" =~ ^[0-9]+$ ]] || \
+                   (( v4033_maintenance_count < 1 || \
+                      v4033_maintenance_count > 16 )); then
+                  echo "ERROR: the v4.03.3 maintenance chain exceeds its bounded length." >&2
+                  exit 1
+                fi
+                if ! git diff --quiet "${v4033_maintenance_anchor_sha}" HEAD -- \
+                    changelog.md; then
+                  echo "ERROR: v4.03.3 maintenance changed the sealed changelog." >&2
+                  exit 1
+                fi
+                v4033_maintenance_release_base_sha='b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449'
+                v4033_maintenance_versioning_message="$(
+                  git log -1 --format=%B 689871803bdef1bc2a25d3eece0a7c35fdb5c447
+                )"
+                ./scripts/versioning.sh validate-commit \
+                  --repo "${GITHUB_WORKSPACE}" \
+                  --base-ref "${v4033_maintenance_release_base_sha}" \
+                  --tag-phase \
+                  --commit-message "${v4033_maintenance_versioning_message}"
+              elif [[ "${v4033_parent_sha}" == "19e4add763e935a29219c20c86586b3557a441c9" ]]; then
                 # Authorize exactly one linear qualification repair after the
                 # reviewed PR119 seal. The exact parent makes this exception
                 # non-replayable after any later commit, while the immutable
@@ -1022,7 +1074,59 @@ jobs:
               # changelog rewrite policy without changing release version
               # targets or changelog.
               v4033_parent_sha="$(git rev-parse HEAD^)"
-              if [[ "${v4033_parent_sha}" == "19e4add763e935a29219c20c86586b3557a441c9" ]]; then
+              v4033_maintenance_anchor_sha='01964815f926408e903587a9cc7f2bb2d0a1f8d8'
+              if git merge-base --is-ancestor "${v4033_maintenance_anchor_sha}" HEAD; then
+                # Allow reviewed, non-versioning maintenance after the exact
+                # PR121 anchor without adding a new one-off exception for every
+                # repair. The final source is still qualified at its exact SHA,
+                # while the reviewed candidate changelog remains byte-exact.
+                v4033_maintenance_anchor_subject="$(
+                  git log -1 --format=%s "${v4033_maintenance_anchor_sha}"
+                )"
+                v4033_expected_maintenance_anchor_subject='CI : avoid Go 1.26 fuzz deadline race (#121)'
+                if [[ "${v4033_maintenance_anchor_subject}" != \
+                      "${v4033_expected_maintenance_anchor_subject}" ]]; then
+                  echo "ERROR: the v4.03.3 maintenance anchor subject is not exact." >&2
+                  exit 1
+                fi
+                read -r -a v4033_maintenance_anchor_line <<< "$(
+                  git rev-list --parents -n 1 "${v4033_maintenance_anchor_sha}"
+                )"
+                if (( ${#v4033_maintenance_anchor_line[@]} != 2 )); then
+                  echo "ERROR: the v4.03.3 maintenance anchor must be linear." >&2
+                  exit 1
+                fi
+                while IFS= read -r v4033_maintenance_line; do
+                  read -r -a v4033_maintenance_fields <<< "${v4033_maintenance_line}"
+                  if (( ${#v4033_maintenance_fields[@]} != 2 )); then
+                    echo "ERROR: v4.03.3 maintenance after PR121 must remain linear." >&2
+                    exit 1
+                  fi
+                done < <(git rev-list --parents "${v4033_maintenance_anchor_sha}..HEAD")
+                v4033_maintenance_count="$(
+                  git rev-list --count "${v4033_maintenance_anchor_sha}..HEAD"
+                )"
+                if [[ ! "${v4033_maintenance_count}" =~ ^[0-9]+$ ]] || \
+                   (( v4033_maintenance_count < 1 || \
+                      v4033_maintenance_count > 16 )); then
+                  echo "ERROR: the v4.03.3 maintenance chain exceeds its bounded length." >&2
+                  exit 1
+                fi
+                if ! git diff --quiet "${v4033_maintenance_anchor_sha}" HEAD -- \
+                    changelog.md; then
+                  echo "ERROR: v4.03.3 maintenance changed the sealed changelog." >&2
+                  exit 1
+                fi
+                v4033_maintenance_release_base_sha='b9fbfe2ee292a53e6e19dd3e27a071f78fe2f449'
+                v4033_maintenance_versioning_message="$(
+                  git log -1 --format=%B 689871803bdef1bc2a25d3eece0a7c35fdb5c447
+                )"
+                ./scripts/versioning.sh validate-commit \
+                  --repo "${GITHUB_WORKSPACE}" \
+                  --base-ref "${v4033_maintenance_release_base_sha}" \
+                  --tag-phase \
+                  --commit-message "${v4033_maintenance_versioning_message}"
+              elif [[ "${v4033_parent_sha}" == "19e4add763e935a29219c20c86586b3557a441c9" ]]; then
                 # Authorize exactly one linear qualification repair after the
                 # reviewed PR119 seal. The exact parent makes this exception
                 # non-replayable after any later commit, while the immutable
