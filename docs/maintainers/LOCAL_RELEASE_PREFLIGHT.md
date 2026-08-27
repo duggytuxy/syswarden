@@ -28,10 +28,14 @@ Before starting:
 
 1. Identify one full candidate commit SHA and verify its signature against the
    approved maintainer key.
-2. Require that candidate to be the single `Patch :` transition commit after
-   the current reviewed base `main` commit. Do not stack an unchanged-version
-   follow-up commit that would make the final tag-phase check use the wrong
-   parent.
+2. Require exactly one recognized `Patch :`, `Minor :`, `Major :` or
+   `Upgrade :` transition after the current reviewed release version. Any later
+   candidate commits must form one linear, non-versioning chain, preserve every
+   version target and keep `changelog.md` byte-for-byte identical. The release
+   validator must trace that chain back to the exact transition. This generic
+   chain contract validates v4.03.3 and later releases. Earlier immutable
+   releases are revalidated from their published tag, asset and digest evidence,
+   not replayed through the current release orchestrator.
 3. Require a clean main repository worktree and a clean, explicit wiki
    checkout.
 4. Confirm that no candidate tag or public Release exists.
@@ -52,7 +56,7 @@ remains mandatory on the exact GitHub candidate or merged SHA.
 
 | Workflow | Mandatory or available local evidence | Remote-only evidence |
 | --- | --- | --- |
-| `auto-versioning.yml` | Version inspection, single-commit Patch validation and candidate-bound Act event | Actual `main` push identity and protected branch result |
+| `auto-versioning.yml` | Version inspection, recognized transition validation and candidate-bound Act event | Actual `main` push identity and protected branch result |
 | `security-audit.yml` | Hygiene, tests, race, vet, fuzz, lint, gosec, nosec debt, Gitleaks, Trivy, SBOM, bundle and isolated golden test | Exact Ubuntu AppArmor host proof when unavailable locally, SARIF upload, OIDC attestation and GitHub artifact identity |
 | `package.yml` | Validators, reproducible AMD64 builds, three package files, metadata, inventory and checksums in the pinned build environment | Unique successful `main` run and immutable GitHub package artifact identity |
 | `scorecard.yml` | Workflow and policy contract tests | GitHub repository posture, Scorecard service result and SARIF publication |
@@ -153,7 +157,8 @@ Run the following groups before every push that can affect a release PR.
 - `git diff --check` and an exact clean-worktree check;
 - signed-commit verification against the approved SSH allowed-signers file;
 - versionctl tests and vet with `GOWORK=off`;
-- candidate version inspection and Patch commit-message validation;
+- candidate version inspection and recognized transition commit-message
+  validation;
 - secret scanning over both Git history and the checked-out candidate;
 - validation that ignored private evidence and build outputs are not tracked.
 
@@ -257,7 +262,9 @@ If any local group fails:
 1. preserve the failing log and its SHA-256;
 2. fix only the demonstrated cause;
 3. rerun the affected group;
-4. amend and re-sign the single `Patch :` candidate commit;
+4. rebuild and sign a linear candidate history with exactly one recognized
+   version transition and only non-versioning follow-ups that preserve every
+   version target and `changelog.md` byte-for-byte;
 5. rerun the complete mandatory pre-push gate on that exact clean commit
    because the candidate bytes and SHA changed;
 6. push only the green commit, then request a fresh last-push review.

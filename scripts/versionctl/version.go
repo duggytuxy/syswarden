@@ -18,6 +18,16 @@ func (v Version) String() string {
 	return fmt.Sprintf("v%d.%02d.%d", v.Major, v.Minor, v.Patch)
 }
 
+func versionLess(left, right Version) bool {
+	if left.Major != right.Major {
+		return left.Major < right.Major
+	}
+	if left.Minor != right.Minor {
+		return left.Minor < right.Minor
+	}
+	return left.Patch < right.Patch
+}
+
 type BumpType string
 
 const (

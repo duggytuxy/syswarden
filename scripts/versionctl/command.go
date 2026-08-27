@@ -12,9 +12,11 @@ import (
 )
 
 type application struct {
-	git    gitClient
-	out    io.Writer
-	getenv func(string) string
+	git                  gitClient
+	out                  io.Writer
+	getenv               func(string) string
+	releaseResetPolicy   *changelogResetPolicy
+	releaseRewritePolicy *changelogRewritePolicy
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
@@ -24,7 +26,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 func (app application) run(args []string, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: versionctl <inspect|dry-run|apply|validate-commit|validate-tag> [options]")
+		return errors.New("usage: versionctl <inspect|dry-run|apply|validate-commit|validate-release|validate-tag> [options]")
 	}
 	switch args[0] {
 	case "inspect":
@@ -33,13 +35,187 @@ func (app application) run(args []string, stderr io.Writer) error {
 		return app.runPrepare(args[0], args[1:], stderr)
 	case "validate-commit":
 		return app.runValidateCommit(args[1:], stderr)
+	case "validate-release":
+		return app.runValidateRelease(args[1:], stderr)
 	case "validate-tag":
 		return app.runValidateTag(args[1:], stderr)
 	case "help", "--help", "-h":
-		fmt.Fprintln(app.out, "usage: versionctl <inspect|dry-run|apply|validate-commit|validate-tag> [options]")
+		fmt.Fprintln(app.out, "usage: versionctl <inspect|dry-run|apply|validate-commit|validate-release|validate-tag> [options]")
 		return nil
 	default:
 		return fmt.Errorf("unknown mode %q", args[0])
+	}
+}
+
+func (app application) runValidateRelease(args []string, stderr io.Writer) error {
+	set := newFlagSet("validate-release", stderr)
+	repoFlag := set.String("repo", ".", "repository root")
+	tag := set.String("tag", "", "candidate Git tag")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 0 {
+		return errors.New("validate-release accepts options only")
+	}
+	repo, err := cleanRepoPath(*repoFlag)
+	if err != nil {
+		return err
+	}
+	expected, err := parseVersion(*tag)
+	if err != nil {
+		return err
+	}
+	minimum := Version{Major: 4, Minor: 3, Patch: 3}
+	if versionLess(expected, minimum) {
+		return fmt.Errorf(
+			"release %s predates the generic release-chain contract introduced at %s; use immutable published evidence for historical revalidation",
+			expected,
+			minimum,
+		)
+	}
+
+	exists, err := app.git.tagExists(repo, expected.String())
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("Git tag %s does not exist in the checked-out repository", expected)
+	}
+	matchesHead, err := app.git.tagMatchesHead(repo, expected.String())
+	if err != nil {
+		return err
+	}
+	if !matchesHead {
+		return fmt.Errorf("Git tag %s does not resolve to the checked-out HEAD commit", expected)
+	}
+
+	headContents, err := readSnapshotAtRef(app.git, repo, "HEAD")
+	if err != nil {
+		return err
+	}
+	headVersion, err := inspectSnapshot(headContents)
+	if err != nil {
+		return fmt.Errorf("invalid release source at HEAD: %w", err)
+	}
+	if headVersion != expected {
+		return fmt.Errorf("tag %s does not match source version %s at HEAD", expected, headVersion)
+	}
+	headChangelog, err := app.git.fileAtRef(repo, "HEAD", changelogPath)
+	if err != nil {
+		return err
+	}
+	if err := validateChangelog(headChangelog, expected); err != nil {
+		return fmt.Errorf("invalid changelog at HEAD: %w", err)
+	}
+
+	worktreeContents, err := readWorktree(repo)
+	if err != nil {
+		return err
+	}
+	if !snapshotEqual(worktreeContents, headContents) {
+		return errors.New("managed version targets in the worktree do not match HEAD")
+	}
+	worktreeChangelog, err := readRepoFile(repo, changelogPath)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(worktreeChangelog, headChangelog) {
+		return errors.New("worktree changelog.md does not match HEAD")
+	}
+
+	currentRef := "HEAD"
+	currentVersion := headVersion
+	currentChangelog := headChangelog
+	followups := 0
+	seen := map[string]bool{}
+	for {
+		parents, err := app.git.commitParents(repo, currentRef)
+		if err != nil {
+			return err
+		}
+		if len(parents) == 0 {
+			return fmt.Errorf("release %s has no versioning transition before repository root", expected)
+		}
+		if len(parents) != 1 {
+			return fmt.Errorf("release chain commit %s has %d parents; expected exactly one", currentRef, len(parents))
+		}
+		parentRef := parents[0]
+		if seen[parentRef] {
+			return fmt.Errorf("release chain repeats Git commit %s", parentRef)
+		}
+		seen[parentRef] = true
+
+		parentContents, err := readSnapshotAtRef(app.git, repo, parentRef)
+		if err != nil {
+			return err
+		}
+		parentVersion, err := inspectBaselineSnapshot(parentContents)
+		if err != nil {
+			return fmt.Errorf("invalid release source at %s: %w", parentRef, err)
+		}
+		parentChangelog, err := app.git.fileAtRef(repo, parentRef, changelogPath)
+		if err != nil {
+			return err
+		}
+		if err := validateChangelog(parentChangelog, parentVersion); err != nil {
+			return fmt.Errorf("invalid changelog at %s: %w", parentRef, err)
+		}
+		message, err := app.git.commitMessage(repo, currentRef)
+		if err != nil {
+			return err
+		}
+		bump, recognized, err := parseCommitMessage(message)
+		if err != nil {
+			return fmt.Errorf("invalid release-chain commit %s: %w", currentRef, err)
+		}
+
+		if parentVersion == currentVersion {
+			if _, err := inspectSnapshot(parentContents); err != nil {
+				return fmt.Errorf("invalid non-versioning release source at %s: %w", parentRef, err)
+			}
+			if recognized {
+				return fmt.Errorf("release follow-up %s uses %s but preserves version %s", currentRef, bump, currentVersion)
+			}
+			if !bytes.Equal(currentChangelog, parentChangelog) {
+				return fmt.Errorf("non-versioning release follow-up %s changed changelog.md", currentRef)
+			}
+			currentRef = parentRef
+			currentVersion = parentVersion
+			currentChangelog = parentChangelog
+			followups++
+			continue
+		}
+
+		if !recognized {
+			return fmt.Errorf("release transition %s changed version from %s to %s without a Patch, Minor, Major, or Upgrade prefix", currentRef, parentVersion, currentVersion)
+		}
+		next, err := nextVersion(parentVersion, bump)
+		if err != nil {
+			return err
+		}
+		if next != currentVersion {
+			return fmt.Errorf("%s release transition %s requires %s from %s; commit contains %s", bump, currentRef, next, parentVersion, currentVersion)
+		}
+		resetPolicy := approvedChangelogReset
+		if app.releaseResetPolicy != nil {
+			resetPolicy = *app.releaseResetPolicy
+		}
+		rewritePolicy := approvedChangelogRewrite
+		if app.releaseRewritePolicy != nil {
+			rewritePolicy = *app.releaseRewritePolicy
+		}
+		if err := validateChangelogHistoryTransitionWithPolicies(
+			parentChangelog,
+			currentChangelog,
+			parentVersion,
+			currentVersion,
+			resetPolicy,
+			rewritePolicy,
+		); err != nil {
+			return fmt.Errorf("invalid changelog transition at %s: %w", currentRef, err)
+		}
+		fmt.Fprintf(app.out, "Release validation passed: %s -> %s (%s), %d non-versioning follow-up commit(s)\n", parentVersion, currentVersion, bump, followups)
+		return nil
 	}
 }
 

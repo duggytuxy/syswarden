@@ -48,6 +48,14 @@ func (git *fakeGit) tagMatchesHead(_ string, _ string) (bool, error) {
 	return git.headMatchesTag, nil
 }
 
+func (git *fakeGit) commitParents(_ string, _ string) ([]string, error) {
+	return nil, errors.New("fake Git history is not configured")
+}
+
+func (git *fakeGit) commitMessage(_ string, _ string) (string, error) {
+	return "", errors.New("fake Git history is not configured")
+}
+
 func (git *fakeGit) lockPath(_ string) (string, error) {
 	if git.lockErr != nil {
 		return "", git.lockErr
@@ -528,7 +536,7 @@ func TestValidateTag(t *testing.T) {
 func TestCommandUsageErrors(t *testing.T) {
 	t.Parallel()
 	app := application{git: &fakeGit{}, out: &bytes.Buffer{}}
-	for _, args := range [][]string{nil, {"unknown"}, {"dry-run", "--commit-message", "Docs only"}, {"validate-tag", "--tag", "bad"}} {
+	for _, args := range [][]string{nil, {"unknown"}, {"dry-run", "--commit-message", "Docs only"}, {"validate-release", "--tag", "bad"}, {"validate-tag", "--tag", "bad"}} {
 		if err := app.run(args, &bytes.Buffer{}); err == nil {
 			t.Errorf("app.run(%q) unexpectedly succeeded", args)
 		}
