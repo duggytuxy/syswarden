@@ -1010,6 +1010,73 @@ class PackageLifecycleLabTests(unittest.TestCase):
                     spec, tampered
                 )
 
+    def test_historical_ubuntu_deb_recovery_pair_is_exactly_byte_bound(self) -> None:
+        ubuntu = next(
+            spec
+            for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if spec.distribution == "ubuntu"
+        )
+        debian = next(
+            spec
+            for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if spec.distribution == "debian"
+        )
+        historical = package_lifecycle_lab.HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS
+        pair = package_lifecycle_lab.PackagePair(
+            candidate=package_lifecycle_lab.PackageArtifact(
+                self.candidate / "syswarden_4.03.3_amd64.deb",
+                "4.03.3",
+                "a" * 64,
+            ),
+            previous=package_lifecycle_lab.PackageArtifact(
+                self.previous / historical["filename"],
+                "4.03.2",
+                historical["sha256"],
+            ),
+        )
+        self.assertTrue(
+            package_lifecycle_lab.validate_historical_ubuntu_deb_recovery_pair(
+                ubuntu, pair
+            )
+        )
+        self.assertFalse(
+            package_lifecycle_lab.validate_historical_ubuntu_deb_recovery_pair(
+                debian, pair
+            )
+        )
+
+        mutations = (
+            package_lifecycle_lab.PackagePair(
+                candidate=pair.candidate,
+                previous=package_lifecycle_lab.PackageArtifact(
+                    pair.previous.path, pair.previous.version, "0" * 64
+                ),
+            ),
+            package_lifecycle_lab.PackagePair(
+                candidate=package_lifecycle_lab.PackageArtifact(
+                    self.candidate / "syswarden_4.03.4_amd64.deb",
+                    "4.03.3",
+                    pair.candidate.sha256,
+                ),
+                previous=pair.previous,
+            ),
+            package_lifecycle_lab.PackagePair(
+                candidate=pair.candidate,
+                previous=package_lifecycle_lab.PackageArtifact(
+                    pair.previous.path, "4.03.1", pair.previous.sha256
+                ),
+            ),
+        )
+        for tampered in mutations:
+            with self.subTest(tampered=tampered):
+                with self.assertRaisesRegex(
+                    package_lifecycle_lab.LifecycleLabError,
+                    "exact byte-bound",
+                ):
+                    package_lifecycle_lab.validate_historical_ubuntu_deb_recovery_pair(
+                        ubuntu, tampered
+                    )
+
     def test_syswarden_version_parser_is_canonical_and_numeric(self) -> None:
         self.assertEqual(
             package_lifecycle_lab.parse_syswarden_version("4.02.10"),
@@ -3698,6 +3765,208 @@ probe
         )
         self.assertNotIn("${PREVIOUS_VERSION}", probe)
 
+    def test_historical_ubuntu_deb_recovery_is_bounded_and_fail_closed(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        functions = source[
+            source.index("record() {") : source.index("\ncheck_equal() {")
+        ]
+        recovery = source[
+            source.index("is_exact_historical_ubuntu_deb_recovery() {") : source.index(
+                "\nrun_install_step() {"
+            )
+        ]
+        self.assertEqual(recovery.count("dpkg --configure syswarden"), 1)
+        self.assertNotIn("dpkg --configure -a", recovery)
+        self.assertNotIn("kill ", recovery)
+        self.assertNotIn("pkill", recovery)
+        self.assertIn('"${syswarden_historical_wait_attempt}" -lt 20', recovery)
+        self.assertIn('"${syswarden_historical_clean_scans}" -lt 2', recovery)
+        self.assertIn("syswarden_verify_webtui_retirement / || return 1", recovery)
+
+        previous = self.root / "syswarden_4.03.2_amd64.deb"
+        candidate = self.root / "syswarden_4.03.3_amd64.deb"
+        previous.write_bytes(b"historical deb fixture")
+        candidate.write_bytes(b"candidate deb fixture")
+        persist = self.root / "persist"
+        persist.mkdir()
+        shell = self.root / "historical-deb-recovery.sh"
+        shell.write_text(
+            "#!/bin/sh\n"
+            "set -u\n"
+            'RESULT_FILE="$1"\n'
+            'COMMAND_LOG="$2"\n'
+            'CONFIGURE_CALLS="$3"\n'
+            'CONFIGURED_STATE="$4"\n'
+            'PREVIOUS_PACKAGE="$5"\n'
+            'CANDIDATE_PACKAGE="$6"\n'
+            'PERSIST_ROOT="$7"\n'
+            'PREFIX="upgrade-rollback"\n'
+            'INVOCATION="initial"\n'
+            'FAILURES=0\n'
+            + functions
+            + "\n"
+            "hash_file() {\n"
+            '    case "$1" in\n'
+            '        "${PREVIOUS_PACKAGE}") printf "%s\\n" "${MOCK_PREVIOUS_HASH}" ;;\n'
+            '        "${CANDIDATE_PACKAGE}") printf "%s\\n" "${EXPECTED_CANDIDATE_SHA256}" ;;\n'
+            '        *) printf "%s\\n" "${MOCK_CLI_HASH}" ;;\n'
+            "    esac\n"
+            "}\n"
+            "historical_ubuntu_deb_package_state() {\n"
+            '    if [ -f "${CONFIGURED_STATE}" ]; then cat "${CONFIGURED_STATE}"; '
+            'else printf "%s" "${MOCK_INITIAL_STATE}"; fi\n'
+            "}\n"
+            "historical_ubuntu_deb_cli_payload_is_exact() {\n"
+            '    return "${MOCK_PAYLOAD_RC}"\n'
+            "}\n"
+            "historical_ubuntu_deb_wait_for_cli_quiescence() {\n"
+            '    return "${MOCK_WAIT_RC}"\n'
+            "}\n"
+            "syswarden_verify_webtui_retirement() {\n"
+            '    return "${MOCK_HELPER_RC}"\n'
+            "}\n"
+            "dpkg() {\n"
+            '    printf "%s\\n" "$*" >> "${CONFIGURE_CALLS}"\n'
+            '    [ "$*" = "--configure syswarden" ] || return 97\n'
+            '    [ "${MOCK_CONFIGURE_RC}" -eq 0 ] || return "${MOCK_CONFIGURE_RC}"\n'
+            '    printf "%s" "${MOCK_FINAL_STATE}" > "${CONFIGURED_STATE}"\n'
+            "}\n"
+            "install_package() {\n"
+            '    if [ "${MOCK_DIAGNOSTIC}" = exact ]; then\n'
+            "        printf '%s\\n' \\\n"
+            "            '[SYSWARDEN] v4.03.2 native installation complete.' \\\n"
+            "            'dpkg: error processing package syswarden (--install):' \\\n"
+            "            ' installed syswarden package post-installation script subprocess returned error exit status 1'\n"
+            "    else\n"
+            "        printf '%s\\n' 'different package failure'\n"
+            "    fi\n"
+            '    return "${MOCK_INSTALL_RC}"\n'
+            "}\n"
+            'run_install_step rollback.previous "${PREVIOUS_PACKAGE}"\n',
+            encoding="utf-8",
+        )
+        shell.chmod(0o700)
+
+        exact_sha = package_lifecycle_lab.HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS[
+            "sha256"
+        ]
+        installed = "ii |install ok installed|4.03.2|amd64"
+        half_configured = "iF |install ok half-configured|4.03.2|amd64"
+        cases = {
+            "normal-success": ({"MOCK_INSTALL_RC": "0"}, 0, 0, "command completed"),
+            "exact-recovery": ({}, 0, 1, package_lifecycle_lab.HISTORICAL_UBUNTU_DEB_RECOVERY_DETAIL),
+            "wrong-distribution": ({"EXPECTED_DISTRIBUTION": "debian"}, 1, 0, "command failed with exit code 1"),
+            "wrong-hash": ({"EXPECTED_PREVIOUS_SHA256": "0" * 64}, 1, 0, "command failed with exit code 1"),
+            "wrong-diagnostic": ({"MOCK_DIAGNOSTIC": "other"}, 1, 0, "command failed with exit code 1"),
+            "wrong-initial-rc": ({"MOCK_INSTALL_RC": "2"}, 2, 0, "command failed with exit code 2"),
+            "wrong-state": ({"MOCK_INITIAL_STATE": installed}, 1, 0, "command failed with exit code 1"),
+            "payload-invalid": ({"MOCK_PAYLOAD_RC": "1"}, 1, 0, "command failed with exit code 1"),
+            "quiescence-invalid": ({"MOCK_WAIT_RC": "1"}, 1, 0, "command failed with exit code 1"),
+            "helper-invalid": ({"MOCK_HELPER_RC": "1"}, 1, 0, "command failed with exit code 1"),
+            "configure-failed": ({"MOCK_CONFIGURE_RC": "1"}, 1, 1, "command failed with exit code 1"),
+            "final-state-invalid": ({"MOCK_FINAL_STATE": half_configured}, 1, 1, "command failed with exit code 1"),
+        }
+        for name, (overrides, expected_rc, configure_count, expected_detail) in cases.items():
+            with self.subTest(name=name):
+                events = self.root / f"{name}.events"
+                commands = self.root / f"{name}.commands"
+                configure_calls = self.root / f"{name}.configure"
+                configured_state = self.root / f"{name}.state"
+                env = os.environ.copy()
+                env.update(
+                    {
+                        "PACKAGE_FAMILY": "deb",
+                        "SCENARIO": "upgrade-rollback",
+                        "EXPECTED_DISTRIBUTION": "ubuntu",
+                        "EXPECTED_PACKAGE_ARCHITECTURE": "amd64",
+                        "HISTORICAL_UBUNTU_DEB_RECOVERY": "1",
+                        "FORWARD_ONLY_APK_TRANSITION": "0",
+                        "EXPECTED_PREVIOUS_VERSION": "4.03.2",
+                        "EXPECTED_CANDIDATE_VERSION": "4.03.3",
+                        "EXPECTED_PREVIOUS_SHA256": exact_sha,
+                        "EXPECTED_CANDIDATE_SHA256": "c" * 64,
+                        "MOCK_PREVIOUS_HASH": exact_sha,
+                        "MOCK_CLI_HASH": "d" * 64,
+                        "MOCK_DIAGNOSTIC": "exact",
+                        "MOCK_INSTALL_RC": "1",
+                        "MOCK_INITIAL_STATE": half_configured,
+                        "MOCK_FINAL_STATE": installed,
+                        "MOCK_PAYLOAD_RC": "0",
+                        "MOCK_WAIT_RC": "0",
+                        "MOCK_HELPER_RC": "0",
+                        "MOCK_CONFIGURE_RC": "0",
+                    }
+                )
+                env.update(overrides)
+                result = subprocess.run(
+                    (
+                        str(shell),
+                        str(events),
+                        str(commands),
+                        str(configure_calls),
+                        str(configured_state),
+                        str(previous),
+                        str(candidate),
+                        str(persist),
+                    ),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+                self.assertEqual(result.returncode, expected_rc, result)
+                calls = (
+                    configure_calls.read_text(encoding="utf-8").splitlines()
+                    if configure_calls.exists()
+                    else []
+                )
+                self.assertEqual(calls, ["--configure syswarden"] * configure_count)
+                event = events.read_text(encoding="utf-8").splitlines()[0].split("\t")
+                self.assertEqual(event[0], "pass" if expected_rc == 0 else "fail")
+                self.assertEqual(event[1], "upgrade-rollback.rollback.previous")
+                self.assertEqual(event[2], expected_detail)
+
+    def test_historical_ubuntu_deb_process_wait_uses_exact_inode_identity(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        inventory = source[
+            source.index("historical_ubuntu_deb_cli_process_inventory_empty() {") : source.index(
+                "\nhistorical_ubuntu_deb_wait_for_cli_quiescence() {"
+            )
+        ]
+        proc_root = self.root / "proc"
+        proc_root.mkdir()
+        cli = self.root / "syswarden-cli"
+        other = self.root / "other-cli"
+        cli.write_bytes(b"exact cli")
+        other.write_bytes(b"other cli")
+        shell = self.root / "historical-process-inventory.sh"
+        shell.write_text(
+            "#!/bin/sh\nset -u\n"
+            "syswarden_webtui_process_starttime() { sed -n 's/^start=//p' \"$1\"; }\n"
+            + inventory
+            + '\nhistorical_ubuntu_deb_cli_process_inventory_empty "$1" "$2"\n',
+            encoding="utf-8",
+        )
+        shell.chmod(0o700)
+
+        def probe() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                (str(shell), str(proc_root), str(cli)),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(probe().returncode, 0)
+        process = proc_root / "4242"
+        process.mkdir()
+        (process / "stat").write_text("start=17\n", encoding="utf-8")
+        (process / "exe").symlink_to(other)
+        self.assertEqual(probe().returncode, 0)
+        (process / "exe").unlink()
+        (process / "exe").symlink_to(cli)
+        self.assertEqual(probe().returncode, 1)
+
     def test_forward_only_shell_invokes_historical_and_recovery_package_steps(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
         functions = source[
@@ -5353,6 +5622,122 @@ probe
         rejected = package_lifecycle_lab.classify_lifecycle_evidence(wrong_hash)
         self.assertFalse(rejected["harness_complete"])
         self.assertTrue(rejected["unexpected_failed_checks"])
+
+    def test_historical_ubuntu_deb_recovery_evidence_is_exactly_sealed(self) -> None:
+        historical = package_lifecycle_lab.HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS
+        platform_result: dict[str, object] = {
+            "family": "deb",
+            "distribution": "ubuntu",
+            "architecture_id": "amd64",
+            "package_architecture": "amd64",
+            "previous_version": "4.03.2",
+            "candidate_version": "4.03.3",
+            "previous": {
+                "filename": historical["filename"],
+                "version": "4.03.2",
+                "sha256": historical["sha256"],
+            },
+            "candidate": {
+                "filename": "syswarden_4.03.3_amd64.deb",
+                "version": "4.03.3",
+                "sha256": "c" * 64,
+            },
+        }
+        detail = package_lifecycle_lab.HISTORICAL_UBUNTU_DEB_RECOVERY_DETAIL
+        scenario_result: dict[str, object] = {
+            "name": "upgrade-rollback",
+            "events": [
+                {
+                    "status": "pass",
+                    "check": "upgrade-rollback.rollback.previous",
+                    "detail": detail,
+                },
+                {
+                    "status": "pass",
+                    "check": "upgrade-rollback.rollback.previous.maintainer_script",
+                    "detail": "maintainer script emitted no Go panic or fatal runtime diagnostic",
+                },
+                {
+                    "status": "pass",
+                    "check": "upgrade-rollback.recovery.candidate",
+                    "detail": "command completed",
+                },
+                {
+                    "status": "pass",
+                    "check": "upgrade-rollback.recovery.candidate.maintainer_script",
+                    "detail": "maintainer script emitted no Go panic or fatal runtime diagnostic",
+                },
+            ],
+        }
+        self.assertEqual(
+            package_lifecycle_lab.validate_historical_ubuntu_deb_recovery_events(
+                platform_result, scenario_result
+            ),
+            [],
+        )
+
+        normal = json.loads(json.dumps(scenario_result))
+        normal["events"][0]["detail"] = "command completed"
+        self.assertEqual(
+            package_lifecycle_lab.validate_historical_ubuntu_deb_recovery_events(
+                platform_result, normal
+            ),
+            [],
+        )
+
+        mutations = {
+            "wrong-hash": (
+                lambda platform, scenario: platform["previous"].update(
+                    sha256="0" * 64
+                )
+            ),
+            "wrong-distribution": (
+                lambda platform, scenario: platform.update(distribution="debian")
+            ),
+            "missing-candidate-recovery": (
+                lambda platform, scenario: scenario["events"][2].update(
+                    detail="candidate recovery skipped"
+                )
+            ),
+            "arbitrary-rollback-detail": (
+                lambda platform, scenario: scenario["events"][0].update(
+                    detail="recovery accepted"
+                )
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                changed_platform = json.loads(json.dumps(platform_result))
+                changed_scenario = json.loads(json.dumps(scenario_result))
+                mutate(changed_platform, changed_scenario)
+                self.assertTrue(
+                    package_lifecycle_lab.validate_historical_ubuntu_deb_recovery_events(
+                        changed_platform, changed_scenario
+                    )
+                )
+
+        report = package_lifecycle_lab.run_lab(
+            self.args(), runner=FakePodmanRunner()
+        )
+        platforms = json.loads(json.dumps(report["platforms"]))
+        rollback = next(
+            event
+            for platform in platforms
+            if platform["distribution"] == "ubuntu"
+            for scenario in platform["scenarios"]
+            if scenario["name"] == "upgrade-rollback"
+            for event in scenario["events"]
+            if event["check"] == "upgrade-rollback.rollback.previous"
+        )
+        rollback["detail"] = detail
+        rejected = package_lifecycle_lab.classify_lifecycle_evidence(platforms)
+        self.assertFalse(rejected["harness_complete"])
+        self.assertTrue(
+            any(
+                "historical-ubuntu-deb-recovery-binding-not-exact" in failure
+                for failure in rejected["unexpected_failed_checks"]
+            )
+        )
 
     def test_config_panics_are_unexpected_after_cfg_closure(self) -> None:
         report = package_lifecycle_lab.run_lab(

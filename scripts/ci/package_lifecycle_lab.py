@@ -593,6 +593,16 @@ FORWARD_ONLY_APK_PREVIOUS = {
         "sha256": "c0869bcb6f9adc1e4ca191ae5f5ed7962c9c89fb2bac9a4d52c0c246b09036d4",
     },
 }
+HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION = "4.03.3"
+HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS_VERSION = "4.03.2"
+HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS = {
+    "filename": "syswarden_4.03.2_amd64.deb",
+    "sha256": "e499370fbed0e40968a6377f4e3cd9a8718993352deccc181a4fb43333289019",
+}
+HISTORICAL_UBUNTU_DEB_RECOVERY_DETAIL = (
+    "exact byte-bound v4.03.2 Ubuntu DEB postinstall race recovered by one "
+    "bounded dpkg reconfiguration"
+)
 LEGACY_DEB_PACKAGE_PATHS = frozenset(
     (*LEGACY_PACKAGE_PAYLOAD_PATHS,)
     + (
@@ -919,6 +929,56 @@ def validate_forward_only_apk_pair(spec: PlatformSpec, pair: PackagePair) -> boo
             f"{spec.package_architecture}"
         )
     return forward_only
+
+
+def is_historical_ubuntu_deb_recovery_pair(
+    spec: PlatformSpec, pair: PackagePair
+) -> bool:
+    expected = HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS
+    return (
+        spec.family == "deb"
+        and spec.distribution == "ubuntu"
+        and spec.architecture == "amd64"
+        and spec.package_architecture == "amd64"
+        and pair.candidate.version
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION
+        and pair.candidate.path.name
+        == f"syswarden_{HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION}_amd64.deb"
+        and pair.previous.version
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS_VERSION
+        and pair.previous.path.name == expected["filename"]
+        and pair.previous.sha256 == expected["sha256"]
+    )
+
+
+def validate_historical_ubuntu_deb_recovery_pair(
+    spec: PlatformSpec, pair: PackagePair
+) -> bool:
+    if not (
+        spec.family == "deb"
+        and spec.distribution == "ubuntu"
+        and spec.architecture == "amd64"
+        and spec.package_architecture == "amd64"
+    ):
+        return False
+    expected = HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS
+    historical_binding_touched = (
+        pair.candidate.version
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION
+        or pair.candidate.path.name
+        == f"syswarden_{HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION}_amd64.deb"
+        or pair.previous.version
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS_VERSION
+        or pair.previous.path.name == expected["filename"]
+        or pair.previous.sha256 == expected["sha256"]
+    )
+    exact = is_historical_ubuntu_deb_recovery_pair(spec, pair)
+    if historical_binding_touched and not exact:
+        raise LifecycleLabError(
+            "historical Ubuntu DEB recovery must be the exact byte-bound "
+            "v4.03.2 -> v4.03.3 amd64 contract"
+        )
+    return exact
 
 
 @dataclass(frozen=True)
@@ -1458,7 +1518,9 @@ def validate_inputs(
             pairs[coordinate] = pair
     build_package_version_contract(pairs)
     for spec in platforms:
-        validate_forward_only_apk_pair(spec, pairs[package_coordinate(spec)])
+        pair = pairs[package_coordinate(spec)]
+        validate_forward_only_apk_pair(spec, pair)
+        validate_historical_ubuntu_deb_recovery_pair(spec, pair)
     return candidate_root, previous_root, pairs
 
 
@@ -1677,6 +1739,165 @@ run_step() {
     fi
 }
 
+is_exact_historical_ubuntu_deb_recovery() {
+    syswarden_historical_check="$1"
+    syswarden_historical_package="$2"
+    [ "${PACKAGE_FAMILY}" = deb ] || return 1
+    [ "${SCENARIO}" = upgrade-rollback ] || return 1
+    [ "${EXPECTED_DISTRIBUTION}" = ubuntu ] || return 1
+    [ "${EXPECTED_PACKAGE_ARCHITECTURE}" = amd64 ] || return 1
+    [ "${HISTORICAL_UBUNTU_DEB_RECOVERY}" = 1 ] || return 1
+    [ "${FORWARD_ONLY_APK_TRANSITION}" = 0 ] || return 1
+    [ "${syswarden_historical_check}" = rollback.previous ] || return 1
+    [ "${syswarden_historical_package}" = "${PREVIOUS_PACKAGE}" ] || return 1
+    [ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.2 ] || return 1
+    [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.3 ] || return 1
+    [ "${PREVIOUS_PACKAGE##*/}" = syswarden_4.03.2_amd64.deb ] || return 1
+    [ "${CANDIDATE_PACKAGE##*/}" = syswarden_4.03.3_amd64.deb ] || return 1
+    [ -f "${PREVIOUS_PACKAGE}" ] && [ ! -L "${PREVIOUS_PACKAGE}" ] || return 1
+    [ -f "${CANDIDATE_PACKAGE}" ] && [ ! -L "${CANDIDATE_PACKAGE}" ] || return 1
+    [ "${EXPECTED_PREVIOUS_SHA256}" = e499370fbed0e40968a6377f4e3cd9a8718993352deccc181a4fb43333289019 ] || return 1
+    [ "$(hash_file "${PREVIOUS_PACKAGE}" 2>/dev/null || true)" = "${EXPECTED_PREVIOUS_SHA256}" ] || return 1
+    [ "$(hash_file "${CANDIDATE_PACKAGE}" 2>/dev/null || true)" = "${EXPECTED_CANDIDATE_SHA256}" ]
+}
+
+historical_ubuntu_deb_diagnostic_is_exact() {
+    syswarden_historical_diagnostic="$1"
+    [ -f "${syswarden_historical_diagnostic}" ] && \
+        [ ! -L "${syswarden_historical_diagnostic}" ] || return 1
+    [ "$(LC_ALL=C grep -Fxc -- \
+        '[SYSWARDEN] v4.03.2 native installation complete.' \
+        "${syswarden_historical_diagnostic}" 2>/dev/null || true)" = 1 ] || return 1
+    [ "$(LC_ALL=C grep -Fxc -- \
+        'dpkg: error processing package syswarden (--install):' \
+        "${syswarden_historical_diagnostic}" 2>/dev/null || true)" = 1 ] || return 1
+    [ "$(LC_ALL=C grep -Fxc -- \
+        ' installed syswarden package post-installation script subprocess returned error exit status 1' \
+        "${syswarden_historical_diagnostic}" 2>/dev/null || true)" = 1 ] || return 1
+    ! grep -Eq '(^|[[:space:]])panic:|fatal error:|SIGSEGV|segmentation violation' \
+        "${syswarden_historical_diagnostic}"
+}
+
+historical_ubuntu_deb_package_state() {
+    LC_ALL=C dpkg-query --show \
+        '--showformat=${db:Status-Abbrev}|${Status}|${Version}|${Architecture}' \
+        syswarden 2>/dev/null
+}
+
+historical_ubuntu_deb_cli_payload_is_exact() {
+    syswarden_historical_cli=/opt/syswarden/bin/syswarden-cli
+    syswarden_historical_expected_cli="${PERSIST_ROOT}/expected-previous/opt/syswarden/bin/syswarden-cli"
+    [ -f "${syswarden_historical_cli}" ] && \
+        [ ! -L "${syswarden_historical_cli}" ] && \
+        [ -x "${syswarden_historical_cli}" ] || return 1
+    [ -f "${syswarden_historical_expected_cli}" ] && \
+        [ ! -L "${syswarden_historical_expected_cli}" ] || return 1
+    [ "$(stat -c '%f:%u:%g:%a:%h' "${syswarden_historical_cli}" 2>/dev/null || true)" = \
+        81e8:0:0:750:1 ] || return 1
+    syswarden_historical_expected_cli_sha="$({
+        hash_file "${syswarden_historical_expected_cli}" 2>/dev/null || true
+    })"
+    [ -n "${syswarden_historical_expected_cli_sha}" ] || return 1
+    [ "$(hash_file "${syswarden_historical_cli}" 2>/dev/null || true)" = \
+        "${syswarden_historical_expected_cli_sha}" ]
+}
+
+# Return 0 only for an empty exact CLI inventory, 1 while the exact installed
+# CLI inode is stable and running, and 2 if that exact identity becomes
+# unreadable without the process disappearing.
+historical_ubuntu_deb_cli_process_inventory_empty() {
+    syswarden_historical_proc_root="$1"
+    syswarden_historical_cli="$2"
+    [ -d "${syswarden_historical_proc_root}" ] && \
+        [ ! -L "${syswarden_historical_proc_root}" ] || return 2
+    syswarden_historical_expected_identity="$(
+        stat -L -c '%d:%i' "${syswarden_historical_cli}" 2>/dev/null
+    )" || return 2
+    for syswarden_historical_proc in "${syswarden_historical_proc_root}"/[0-9]*; do
+        [ -d "${syswarden_historical_proc}" ] || continue
+        syswarden_historical_identity_before="$(
+            stat -L -c '%d:%i' "${syswarden_historical_proc}/exe" 2>/dev/null || true
+        )"
+        [ "${syswarden_historical_identity_before}" = \
+            "${syswarden_historical_expected_identity}" ] || continue
+        syswarden_historical_start_before="$(
+            syswarden_webtui_process_starttime \
+                "${syswarden_historical_proc}/stat" 2>/dev/null || true
+        )"
+        if [ -z "${syswarden_historical_start_before}" ]; then
+            [ ! -d "${syswarden_historical_proc}" ] && continue
+            return 2
+        fi
+        syswarden_historical_identity_after="$(
+            stat -L -c '%d:%i' "${syswarden_historical_proc}/exe" 2>/dev/null || true
+        )"
+        syswarden_historical_start_after="$(
+            syswarden_webtui_process_starttime \
+                "${syswarden_historical_proc}/stat" 2>/dev/null || true
+        )"
+        if [ -z "${syswarden_historical_identity_after}" ] || \
+           [ -z "${syswarden_historical_start_after}" ]; then
+            [ ! -d "${syswarden_historical_proc}" ] && continue
+            return 2
+        fi
+        if [ "${syswarden_historical_identity_after}" != \
+             "${syswarden_historical_expected_identity}" ]; then
+            continue
+        fi
+        return 1
+    done
+    return 0
+}
+
+historical_ubuntu_deb_wait_for_cli_quiescence() {
+    syswarden_historical_proc_root="$1"
+    syswarden_historical_cli="$2"
+    syswarden_historical_wait_attempt=0
+    syswarden_historical_clean_scans=0
+    while [ "${syswarden_historical_wait_attempt}" -lt 20 ]; do
+        if historical_ubuntu_deb_cli_process_inventory_empty \
+            "${syswarden_historical_proc_root}" "${syswarden_historical_cli}"; then
+            syswarden_historical_clean_scans=$((syswarden_historical_clean_scans + 1))
+            [ "${syswarden_historical_clean_scans}" -lt 2 ] || return 0
+        else
+            syswarden_historical_inventory_status=$?
+            case "${syswarden_historical_inventory_status}" in
+                1|2) ;;
+                *) return 1 ;;
+            esac
+            syswarden_historical_clean_scans=0
+        fi
+        syswarden_historical_wait_attempt=$((syswarden_historical_wait_attempt + 1))
+        sleep 0.05 || return 1
+    done
+    return 1
+}
+
+recover_exact_historical_ubuntu_deb_postinstall() {
+    syswarden_historical_check="$1"
+    syswarden_historical_package="$2"
+    syswarden_historical_diagnostic="$3"
+    is_exact_historical_ubuntu_deb_recovery \
+        "${syswarden_historical_check}" "${syswarden_historical_package}" || return 1
+    historical_ubuntu_deb_diagnostic_is_exact \
+        "${syswarden_historical_diagnostic}" || return 1
+    [ "$(historical_ubuntu_deb_package_state 2>/dev/null || true)" = \
+        'iF |install ok half-configured|4.03.2|amd64' ] || return 1
+    historical_ubuntu_deb_cli_payload_is_exact || return 1
+    historical_ubuntu_deb_wait_for_cli_quiescence \
+        /proc /opt/syswarden/bin/syswarden-cli || return 1
+    syswarden_verify_webtui_retirement / || return 1
+    printf '%s\n' \
+        'HISTORICAL v4.03.2 POSTINSTALL RECOVERY: one exact dpkg reconfiguration' \
+        >> "${syswarden_historical_diagnostic}" || return 1
+    DEBIAN_FRONTEND=noninteractive dpkg --configure syswarden \
+        >> "${syswarden_historical_diagnostic}" 2>&1 || return 1
+    [ "$(historical_ubuntu_deb_package_state 2>/dev/null || true)" = \
+        'ii |install ok installed|4.03.2|amd64' ] || return 1
+    historical_ubuntu_deb_cli_payload_is_exact || return 1
+    syswarden_verify_webtui_retirement /
+}
+
 run_install_step() {
     check="$1"
     package="$2"
@@ -1684,10 +1905,23 @@ run_install_step() {
     printf 'COMMAND %s\n' "${check}" >> "${COMMAND_LOG}"
     if install_package "${package}" "${check}" > "${diagnostic}" 2>&1; then
         command_rc=0
-        record pass "${PREFIX}.${check}" "command completed"
+        command_detail="command completed"
     else
         command_rc=$?
-        record fail "${PREFIX}.${check}" "command failed with exit code ${command_rc}"
+        if [ "${command_rc}" -eq 1 ] && \
+           [ "${HISTORICAL_UBUNTU_DEB_RECOVERY:-0}" = 1 ] && \
+           recover_exact_historical_ubuntu_deb_postinstall \
+               "${check}" "${package}" "${diagnostic}"; then
+            command_rc=0
+            command_detail="exact byte-bound v4.03.2 Ubuntu DEB postinstall race recovered by one bounded dpkg reconfiguration"
+        else
+            command_detail="command failed with exit code ${command_rc}"
+        fi
+    fi
+    if [ "${command_rc}" -eq 0 ]; then
+        record pass "${PREFIX}.${check}" "${command_detail}"
+    else
+        record fail "${PREFIX}.${check}" "${command_detail}"
     fi
     sed 's/^\([[:space:]]*Password:[[:space:]]*\)[0-9a-f]\{32\}$/\1[REDACTED]/' \
         "${diagnostic}" >> "${COMMAND_LOG}"
@@ -6172,6 +6406,13 @@ def container_run_arguments(
         "FORWARD_ONLY_APK_TRANSITION="
         + ("1" if is_forward_only_apk_pair(spec, pair) else "0"),
         "--env",
+        "HISTORICAL_UBUNTU_DEB_RECOVERY="
+        + (
+            "1"
+            if is_historical_ubuntu_deb_recovery_pair(spec, pair)
+            else "0"
+        ),
+        "--env",
         f"SCENARIO={scenario}",
         "--env",
         f"CANDIDATE_PACKAGE=/candidate/{pair.candidate.path.name}",
@@ -8255,6 +8496,112 @@ def validate_forward_only_apk_events(
     ]
 
 
+def historical_ubuntu_deb_recovery_report_contract(
+    platform_result: dict[str, object],
+) -> tuple[bool, list[str]]:
+    if not (
+        platform_result.get("family") == "deb"
+        and platform_result.get("distribution") == "ubuntu"
+        and platform_result.get("architecture_id") == "amd64"
+        and platform_result.get("package_architecture") == "amd64"
+    ):
+        return False, []
+    previous = platform_result.get("previous")
+    candidate = platform_result.get("candidate")
+    if not isinstance(previous, dict) or not isinstance(candidate, dict):
+        return False, ["historical-ubuntu-deb-artifact-binding-absent"]
+    expected = HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS
+    candidate_filename = (
+        f"syswarden_{HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION}_amd64.deb"
+    )
+    historical_binding_touched = (
+        previous.get("version")
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS_VERSION
+        or previous.get("filename") == expected["filename"]
+        or previous.get("sha256") == expected["sha256"]
+        or candidate.get("version")
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION
+        or candidate.get("filename") == candidate_filename
+        or platform_result.get("previous_version")
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS_VERSION
+        or platform_result.get("candidate_version")
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION
+    )
+    candidate_sha256 = candidate.get("sha256")
+    exact = (
+        historical_binding_touched
+        and previous
+        == {
+            "filename": expected["filename"],
+            "version": HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS_VERSION,
+            "sha256": expected["sha256"],
+        }
+        and candidate.get("filename") == candidate_filename
+        and candidate.get("version")
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION
+        and isinstance(candidate_sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", candidate_sha256) is not None
+        and platform_result.get("previous_version")
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_PREVIOUS_VERSION
+        and platform_result.get("candidate_version")
+        == HISTORICAL_UBUNTU_DEB_RECOVERY_CANDIDATE_VERSION
+    )
+    if historical_binding_touched and not exact:
+        return False, ["historical-ubuntu-deb-binding-not-exact"]
+    return exact, []
+
+
+def validate_historical_ubuntu_deb_recovery_events(
+    platform_result: dict[str, object], scenario_result: dict[str, object]
+) -> list[str]:
+    exact, problems = historical_ubuntu_deb_recovery_report_contract(
+        platform_result
+    )
+    if scenario_result.get("name") != "upgrade-rollback":
+        return problems
+    events = scenario_result.get("events")
+    if not isinstance(events, list):
+        return problems + ["historical-ubuntu-deb-events-absent"]
+    by_check = {
+        item.get("check"): item
+        for item in events
+        if isinstance(item, dict) and isinstance(item.get("check"), str)
+    }
+    rollback_check = "upgrade-rollback.rollback.previous"
+    rollback = by_check.get(rollback_check)
+    recovery_used = (
+        isinstance(rollback, dict)
+        and rollback.get("detail") == HISTORICAL_UBUNTU_DEB_RECOVERY_DETAIL
+    )
+    if exact and (
+        not isinstance(rollback, dict)
+        or rollback.get("status") != "pass"
+        or rollback.get("detail")
+        not in {"command completed", HISTORICAL_UBUNTU_DEB_RECOVERY_DETAIL}
+    ):
+        problems.append("historical-ubuntu-deb-rollback-detail-invalid")
+    if not recovery_used:
+        return problems
+    if not exact:
+        return problems + ["historical-ubuntu-deb-recovery-binding-not-exact"]
+    expected_details = {
+        rollback_check: HISTORICAL_UBUNTU_DEB_RECOVERY_DETAIL,
+        "upgrade-rollback.rollback.previous.maintainer_script": (
+            "maintainer script emitted no Go panic or fatal runtime diagnostic"
+        ),
+        "upgrade-rollback.recovery.candidate": "command completed",
+        "upgrade-rollback.recovery.candidate.maintainer_script": (
+            "maintainer script emitted no Go panic or fatal runtime diagnostic"
+        ),
+    }
+    return [
+        f"historical-ubuntu-deb-evidence-mismatch:{check}"
+        for check, detail in expected_details.items()
+        if by_check.get(check)
+        != {"status": "pass", "check": check, "detail": detail}
+    ]
+
+
 def _platform_spec_from_result(platform_result: dict[str, object]) -> PlatformSpec:
     matches = [
         spec
@@ -9066,6 +9413,12 @@ def classify_lifecycle_evidence(
             coordinate_structural.extend(
                 f"{coordinate_name}:{problem}" for problem in binding_problems
             )
+            _, binding_problems = historical_ubuntu_deb_recovery_report_contract(
+                platform_result
+            )
+            coordinate_structural.extend(
+                f"{coordinate_name}:{problem}" for problem in binding_problems
+            )
             scenarios = platform_result.get("scenarios")
             if not isinstance(scenarios, list) or [
                 item.get("name") if isinstance(item, dict) else None
@@ -9110,6 +9463,12 @@ def classify_lifecycle_evidence(
                 coordinate_structural.extend(
                     f"{coordinate_name}:{scenario_name}:{problem}"
                     for problem in validate_forward_only_apk_events(
+                        platform_result, scenario_result
+                    )
+                )
+                coordinate_structural.extend(
+                    f"{coordinate_name}:{scenario_name}:{problem}"
+                    for problem in validate_historical_ubuntu_deb_recovery_events(
                         platform_result, scenario_result
                     )
                 )
