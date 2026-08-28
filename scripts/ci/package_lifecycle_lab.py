@@ -29,8 +29,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
 
+try:
+    from scripts.ci import package_qualification_matrix as qualification_matrix
+except ModuleNotFoundError:  # Direct execution from scripts/ci.
+    import package_qualification_matrix as qualification_matrix
 
-SCHEMA_VERSION = 4
+
+SCHEMA_VERSION = 5
 LOG_TAIL_LIMIT = 12_000
 NAMESPACE_DIAGNOSTIC_PREFIX_BYTES = 256
 MAX_VERSION_COMPONENT = 2_147_483_647
@@ -76,6 +81,8 @@ class LifecycleLabError(RuntimeError):
 
 @dataclass(frozen=True)
 class PlatformSpec:
+    cell_id: str
+    version: str
     name: str
     distribution: str
     family: str
@@ -118,6 +125,22 @@ ACTIVE_RESTART_CONTRACT = (
     "a non-copy-up /run tmpfs and revalidates native and filesystem "
     "inventories plus operator state"
 )
+AVAILABLE_ARCHITECTURE_PROBE_KEYS = frozenset(
+    {
+        "status",
+        "execution_mode",
+        "podman_platform",
+        "expected_uname",
+        "actual_uname",
+        "expected_distribution",
+        "actual_distribution",
+        "expected_distribution_version",
+        "actual_distribution_version",
+        "container_exit_code",
+        "network",
+        "filesystem",
+    }
+)
 
 OFFICIAL_REPOSITORIES = {
     "debian": "docker.io/library/debian",
@@ -126,6 +149,11 @@ OFFICIAL_REPOSITORIES = {
     "almalinux": "docker.io/library/almalinux",
     "alpine": "docker.io/library/alpine",
 }
+
+EXACT_OS_RELEASE_VERSION_DISTRIBUTIONS = frozenset(
+    {"debian", "ubuntu", "fedora"}
+)
+OS_RELEASE_VERSION_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+)*$")
 
 DEB_BOOTSTRAP = (
     "apt-get update && "
@@ -415,101 +443,72 @@ syswarden_namespace_file_record() {{
 """
 
 
-DEFAULT_PLATFORMS = (
-    PlatformSpec(
-        name="Debian",
-        distribution="debian",
-        family="deb",
-        architecture="amd64",
-        package_architecture="amd64",
-        podman_platform="linux/amd64",
-        uname_architecture="x86_64",
-        official_repository=OFFICIAL_REPOSITORIES["debian"],
-        image=(
-            "docker.io/library/debian:stable-slim@sha256:"
-            "0ef0f77425e6677ead26f893cb61707f7fc44467a480625d8974feb7ab2085fe"
-        ),
-        package_pattern=r"^syswarden_[0-9][0-9.]*_amd64\.deb$",
-        bootstrap_command=DEB_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove", "purge"),
-        purge_semantics=DEB_PURGE_SEMANTICS,
-    ),
-    PlatformSpec(
-        name="Ubuntu",
-        distribution="ubuntu",
-        family="deb",
-        architecture="amd64",
-        package_architecture="amd64",
-        podman_platform="linux/amd64",
-        uname_architecture="x86_64",
-        official_repository=OFFICIAL_REPOSITORIES["ubuntu"],
-        image=(
-            "docker.io/library/ubuntu:24.04@sha256:"
-            "019e8eb29a85e74d64925745884f2ec79aa27e3feab36353d24656f4d6b89467"
-        ),
-        package_pattern=r"^syswarden_[0-9][0-9.]*_amd64\.deb$",
-        bootstrap_command=DEB_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove", "purge"),
-        purge_semantics=DEB_PURGE_SEMANTICS,
-    ),
-    PlatformSpec(
-        name="Fedora",
-        distribution="fedora",
-        family="rpm",
-        architecture="amd64",
-        package_architecture="x86_64",
-        podman_platform="linux/amd64",
-        uname_architecture="x86_64",
-        official_repository=OFFICIAL_REPOSITORIES["fedora"],
-        image=(
-            "docker.io/library/fedora:44@sha256:"
-            "89f61a124414261868224666aa7fb8df1b78397a53623774bdfb105d1612b48b"
-        ),
-        package_pattern=r"^syswarden-[0-9][0-9.]*-1\.x86_64\.rpm$",
-        bootstrap_command=RPM_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove"),
-        purge_semantics=RPM_PURGE_SEMANTICS,
-    ),
-    PlatformSpec(
-        name="AlmaLinux",
-        distribution="almalinux",
-        family="rpm",
-        architecture="amd64",
-        package_architecture="x86_64",
-        podman_platform="linux/amd64",
-        uname_architecture="x86_64",
-        official_repository=OFFICIAL_REPOSITORIES["almalinux"],
-        image=(
-            "docker.io/library/almalinux:9@sha256:"
-            "28db580abb508f7ccbc0ac6d53e1d8da9d42a26c77fa3dcc26ac2726673fbe3e"
-        ),
-        package_pattern=r"^syswarden-[0-9][0-9.]*-1\.x86_64\.rpm$",
-        bootstrap_command=RPM_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove"),
-        purge_semantics=RPM_PURGE_SEMANTICS,
-    ),
-    PlatformSpec(
-        name="Alpine",
-        distribution="alpine",
-        family="apk",
-        architecture="amd64",
-        package_architecture="x86_64",
-        podman_platform="linux/amd64",
-        uname_architecture="x86_64",
-        official_repository=OFFICIAL_REPOSITORIES["alpine"],
-        image=(
-            "docker.io/library/alpine:3.22@sha256:"
-            "7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6"
-        ),
-        package_pattern=r"^syswarden_[0-9][0-9.]*_x86_64\.apk$",
-        bootstrap_command=APK_BOOTSTRAP,
-        scenarios=("upgrade-rollback", "remove", "purge"),
-        purge_semantics=APK_PURGE_SEMANTICS,
-    ),
+QUALIFICATION_MATRIX_PATH = qualification_matrix.DEFAULT_MATRIX
+QUALIFICATION_MATRIX_DOCUMENT, QUALIFICATION_MATRIX_SHA256 = (
+    qualification_matrix.load_matrix_snapshot(QUALIFICATION_MATRIX_PATH)
 )
+QUALIFICATION_MATRIX_ID = str(QUALIFICATION_MATRIX_DOCUMENT["matrix_id"])
+
+_PLATFORM_NAMES = {
+    "debian": "Debian",
+    "ubuntu": "Ubuntu",
+    "fedora": "Fedora",
+    "almalinux": "AlmaLinux",
+    "alpine": "Alpine",
+}
+_BOOTSTRAP_COMMANDS = {
+    "deb": DEB_BOOTSTRAP,
+    "rpm": RPM_BOOTSTRAP,
+    "apk": APK_BOOTSTRAP,
+}
+_PURGE_SEMANTICS = {
+    "deb": DEB_PURGE_SEMANTICS,
+    "rpm": RPM_PURGE_SEMANTICS,
+    "apk": APK_PURGE_SEMANTICS,
+}
+
+
+def _platform_from_matrix_cell(cell: dict[str, object]) -> PlatformSpec:
+    distribution = str(cell["distribution"])
+    family = str(cell["family"])
+    architecture = "amd64"
+    return PlatformSpec(
+        cell_id=str(cell["id"]),
+        version=str(cell["version"]),
+        name=_PLATFORM_NAMES[distribution],
+        distribution=distribution,
+        family=family,
+        architecture=architecture,
+        package_architecture=EXPECTED_PACKAGE_ARCHITECTURES[
+            (family, architecture)
+        ],
+        podman_platform=str(
+            QUALIFICATION_MATRIX_DOCUMENT["architecture"]["oci_platform"]
+        ),
+        uname_architecture=str(
+            QUALIFICATION_MATRIX_DOCUMENT["architecture"]["kernel"]
+        ),
+        official_repository=OFFICIAL_REPOSITORIES[distribution],
+        image=str(cell["image"]),
+        package_pattern=EXPECTED_PACKAGE_PATTERNS[(family, architecture)],
+        bootstrap_command=_BOOTSTRAP_COMMANDS[family],
+        scenarios=tuple(str(item) for item in cell["container_scenarios"]),
+        purge_semantics=_PURGE_SEMANTICS[family],
+    )
+
+
+DEFAULT_PLATFORMS = tuple(
+    _platform_from_matrix_cell(cell)
+    for cell in QUALIFICATION_MATRIX_DOCUMENT["cells"]
+)
+if len(DEFAULT_PLATFORMS) != 8:
+    raise LifecycleLabError("frozen qualification matrix must contain exactly 8 cells")
 
 REQUIRED_PLATFORM_COORDINATES = frozenset(
-    (spec.distribution, spec.architecture) for spec in DEFAULT_PLATFORMS
+    (spec.cell_id, spec.architecture) for spec in DEFAULT_PLATFORMS
+)
+REQUIRED_PLATFORM_COORDINATE_ORDER = tuple(
+    (spec.cell_id, spec.architecture) for spec in DEFAULT_PLATFORMS
 )
 REQUIRED_PACKAGE_COORDINATES = frozenset(
     f"{spec.family}:{spec.package_architecture}" for spec in DEFAULT_PLATFORMS
@@ -520,6 +519,30 @@ PACKAGE_COORDINATE_PATTERNS = {
 }
 REQUIRED_FAMILIES = ("deb", "rpm", "apk")
 NATIVE_AGGREGATE_HOST = "native-shards:amd64"
+QUALIFICATION_MATRIX_KEYS = frozenset({"matrix_id", "sha256"})
+SCOPE_KEYS = frozenset(
+    {
+        "evidence_kind",
+        "coverage_kind",
+        "real_host_evidence_included",
+        "required_checks_complete",
+        "covered_scenarios",
+        "container_lab_complete",
+        "coordinate_classification",
+        "host_architecture",
+        "network_during_image_bootstrap",
+        "network_during_package_operations",
+        "host_mutation",
+        "architectures_completed",
+        "architectures_incomplete_or_failed",
+        "architecture_coverage",
+        "family_architecture_coverage",
+        "required_platform_coordinates",
+        "missing_platform_coordinates",
+        "architecture_coverage_policy",
+        "rollback_model",
+    }
+)
 QUALIFICATION_BINDING_KEYS = frozenset(
     {
         "schema_version",
@@ -548,6 +571,46 @@ NATIVE_SHARD_RECORD_KEYS = frozenset(
         "engine_version",
     }
 )
+
+
+def qualification_matrix_binding(path: Path) -> dict[str, str]:
+    """Load and byte-bind the exact frozen matrix used by this lab run."""
+
+    try:
+        document, digest = qualification_matrix.load_matrix_snapshot(path)
+    except qualification_matrix.QualificationMatrixError as exc:
+        raise LifecycleLabError(f"qualification matrix is invalid: {exc}") from exc
+    if document != QUALIFICATION_MATRIX_DOCUMENT:
+        raise LifecycleLabError(
+            "qualification matrix differs from the frozen lifecycle contract"
+        )
+    if digest != QUALIFICATION_MATRIX_SHA256:
+        raise LifecycleLabError(
+            "qualification matrix bytes differ from the frozen lifecycle contract"
+        )
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise LifecycleLabError("qualification matrix SHA-256 is invalid")
+    return {"matrix_id": QUALIFICATION_MATRIX_ID, "sha256": digest}
+
+
+def validate_qualification_matrix_binding(value: object) -> dict[str, str]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != QUALIFICATION_MATRIX_KEYS
+        or value.get("matrix_id") != QUALIFICATION_MATRIX_ID
+        or not isinstance(value.get("sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256"))) is None
+        or value.get("sha256") != QUALIFICATION_MATRIX_SHA256
+    ):
+        raise LifecycleLabError("qualification matrix report binding is invalid")
+    return {"matrix_id": str(value["matrix_id"]), "sha256": str(value["sha256"])}
+
+
+def qualification_matrix_container_scenarios() -> list[dict[str, object]]:
+    return [
+        {"cell_id": spec.cell_id, "scenarios": list(spec.scenarios)}
+        for spec in DEFAULT_PLATFORMS
+    ]
 
 OPERATOR_STATE_KEYS = (
     "config",
@@ -1356,11 +1419,11 @@ def package_coordinate(spec: PlatformSpec) -> str:
 
 
 def platform_coordinate(spec: PlatformSpec) -> tuple[str, str]:
-    return spec.distribution, spec.architecture
+    return spec.cell_id, spec.architecture
 
 
 def platform_slug(spec: PlatformSpec) -> str:
-    slug = f"{spec.distribution}-{spec.architecture}"
+    slug = f"{spec.cell_id.casefold()}-{spec.architecture}"
     if re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug) is None:
         raise LifecycleLabError(f"unsafe platform coordinate: {slug!r}")
     return slug
@@ -1398,6 +1461,23 @@ def validate_platforms(platforms: Sequence[PlatformSpec]) -> None:
         if spec.architecture not in ARCHITECTURE_LABELS:
             raise LifecycleLabError(
                 f"unsupported package lifecycle architecture: {spec.architecture!r}"
+            )
+        expected_spec = next(
+            (
+                item
+                for item in DEFAULT_PLATFORMS
+                if platform_coordinate(item) == coordinate
+            ),
+            None,
+        )
+        if expected_spec is None:
+            raise LifecycleLabError(
+                f"unsupported package lifecycle matrix cell: {coordinate!r}"
+            )
+        if spec.version != expected_spec.version:
+            raise LifecycleLabError(
+                f"matrix cell version mismatch for {coordinate}: expected "
+                f"{expected_spec.version!r}, found {spec.version!r}"
             )
         expected_platform = f"linux/{spec.architecture}"
         if spec.podman_platform != expected_platform:
@@ -1444,10 +1524,24 @@ def validate_platforms(platforms: Sequence[PlatformSpec]) -> None:
                 f"platform {coordinate} must use official image repository "
                 f"{expected_repository!r}"
             )
+        if spec.image != expected_spec.image:
+            raise LifecycleLabError(
+                f"frozen image identity mismatch for {coordinate}: expected "
+                f"{expected_spec.image!r}, found {spec.image!r}"
+            )
         if not spec.bootstrap_command.strip() or "\n" in spec.bootstrap_command:
             raise LifecycleLabError(f"invalid bootstrap command for {coordinate}")
         if not spec.purge_semantics.strip():
             raise LifecycleLabError(f"missing purge semantics for {coordinate}")
+        if spec != expected_spec:
+            raise LifecycleLabError(
+                f"matrix cell runtime contract differs from the frozen "
+                f"definition for {coordinate}"
+            )
+        if spec != expected_spec:
+            raise LifecycleLabError(
+                f"platform specification differs from frozen matrix cell {coordinate}"
+            )
         platform_slug(spec)
 
 
@@ -1732,6 +1826,37 @@ set -u
 [ -r /lab/package-webtui-retirement.sh ] || exit 90
 # shellcheck source=package_webtui_retirement.sh
 . /lab/package-webtui-retirement.sh
+
+[ -r /etc/os-release ] || exit 92
+case "${EXPECTED_DISTRIBUTION_VERSION}" in
+    ''|*[!0-9.]*|.*|*..*|*.) exit 92 ;;
+esac
+ACTUAL_DISTRIBUTION_ID="$(
+    . /etc/os-release
+    printf '%s' "${ID-}"
+)" || exit 92
+ACTUAL_DISTRIBUTION_VERSION="$(
+    . /etc/os-release
+    printf '%s' "${VERSION_ID-}"
+)" || exit 92
+[ "${ACTUAL_DISTRIBUTION_ID}" = "${EXPECTED_DISTRIBUTION}" ] || exit 92
+case "${ACTUAL_DISTRIBUTION_VERSION}" in
+    ''|*[!0-9.]*|.*|*..*|*.) exit 92 ;;
+esac
+case "${EXPECTED_DISTRIBUTION}" in
+    debian|ubuntu|fedora)
+        [ "${ACTUAL_DISTRIBUTION_VERSION}" = "${EXPECTED_DISTRIBUTION_VERSION}" ] || exit 92
+        ;;
+    almalinux)
+        [ "${ACTUAL_DISTRIBUTION_VERSION%%.*}" = "${EXPECTED_DISTRIBUTION_VERSION}" ] || exit 92
+        ;;
+    alpine)
+        actual_distribution_tail="${ACTUAL_DISTRIBUTION_VERSION#*.}"
+        actual_distribution_major_minor="${ACTUAL_DISTRIBUTION_VERSION%%.*}.${actual_distribution_tail%%.*}"
+        [ "${actual_distribution_major_minor}" = "${EXPECTED_DISTRIBUTION_VERSION}" ] || exit 92
+        ;;
+    *) exit 92 ;;
+esac
 
 RESULT_FILE="/results/events.tsv"
 COMMAND_LOG="/results/commands.log"
@@ -6224,6 +6349,42 @@ def ensure_image(
         )
 
 
+def distribution_version_matches(
+    distribution: str,
+    expected_version: str,
+    actual_version: str,
+) -> bool:
+    """Match an os-release VERSION_ID against the frozen distribution line.
+
+    Debian, Ubuntu, and Fedora matrix cells identify an exact VERSION_ID.
+    AlmaLinux tags identify a major release line, while Alpine tags identify a
+    major.minor release line.  Both line-based forms still reject malformed
+    values and adjacent lines; the immutable image digest remains exact.
+    """
+
+    if (
+        OS_RELEASE_VERSION_PATTERN.fullmatch(expected_version) is None
+        or OS_RELEASE_VERSION_PATTERN.fullmatch(actual_version) is None
+    ):
+        return False
+    expected_components = expected_version.split(".")
+    actual_components = actual_version.split(".")
+    if distribution in EXACT_OS_RELEASE_VERSION_DISTRIBUTIONS:
+        return actual_version == expected_version
+    if distribution == "almalinux":
+        return (
+            len(expected_components) == 1
+            and actual_components[0] == expected_components[0]
+        )
+    if distribution == "alpine":
+        return (
+            len(expected_components) == 2
+            and len(actual_components) >= 2
+            and actual_components[:2] == expected_components
+        )
+    return False
+
+
 def architecture_probe_arguments(
     podman: str,
     spec: PlatformSpec,
@@ -6244,8 +6405,36 @@ def architecture_probe_arguments(
         "--pids-limit=64",
         "--memory=128m",
         "--tmpfs=/tmp:rw,nodev,nosuid,size=16m",
+        "--env",
+        f"EXPECTED_DISTRIBUTION={spec.distribution}",
+        "--env",
+        f"EXPECTED_DISTRIBUTION_VERSION={spec.version}",
     ]
-    arguments.extend((spec.image, "/bin/uname", "-m"))
+    probe = (
+        "set -eu\n"
+        ". /etc/os-release\n"
+        "actual_uname=\"$(uname -m)\"\n"
+        "actual_distribution=\"${ID-}\"\n"
+        "actual_version=\"${VERSION_ID-}\"\n"
+        "printf '%s\\t%s\\t%s\\n' \"${actual_uname}\" "
+        "\"${actual_distribution}\" \"${actual_version}\"\n"
+        "[ \"${actual_distribution}\" = \"${EXPECTED_DISTRIBUTION}\" ]\n"
+        "case \"${actual_version}\" in "
+        "''|*[!0-9.]*|.*|*..*|*.) exit 1 ;; esac\n"
+        "[ -n \"${actual_version}\" ]\n"
+        "case \"${EXPECTED_DISTRIBUTION}\" in\n"
+        "  debian|ubuntu|fedora) "
+        "[ \"${actual_version}\" = \"${EXPECTED_DISTRIBUTION_VERSION}\" ] ;;\n"
+        "  almalinux) "
+        "[ \"${actual_version%%.*}\" = \"${EXPECTED_DISTRIBUTION_VERSION}\" ] ;;\n"
+        "  alpine)\n"
+        "    actual_tail=\"${actual_version#*.}\"\n"
+        "    actual_major_minor=\"${actual_version%%.*}.${actual_tail%%.*}\"\n"
+        "    [ \"${actual_major_minor}\" = \"${EXPECTED_DISTRIBUTION_VERSION}\" ] ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n"
+    )
+    arguments.extend((spec.image, "/bin/sh", "-ceu", probe))
     return tuple(arguments)
 
 
@@ -6298,18 +6487,35 @@ def probe_platform_execution(
             "expected_uname": spec.uname_architecture,
             "reason": str(exc),
         }
-    actual_uname = result.stdout.strip()
-    if result.returncode != 0 or actual_uname != spec.uname_architecture:
+    fields = result.stdout.rstrip("\n").split("\t")
+    actual_uname = fields[0] if len(fields) == 3 else ""
+    actual_distribution = fields[1] if len(fields) == 3 else ""
+    actual_distribution_version = fields[2] if len(fields) == 3 else ""
+    if (
+        result.returncode != 0
+        or len(fields) != 3
+        or actual_uname != spec.uname_architecture
+        or actual_distribution != spec.distribution
+        or not distribution_version_matches(
+            spec.distribution,
+            spec.version,
+            actual_distribution_version,
+        )
+    ):
         return {
             "status": "unavailable",
             "execution_mode": "native",
             "podman_platform": spec.podman_platform,
             "expected_uname": spec.uname_architecture,
             "actual_uname": actual_uname,
+            "expected_distribution": spec.distribution,
+            "actual_distribution": actual_distribution,
+            "expected_distribution_version": spec.version,
+            "actual_distribution_version": actual_distribution_version,
             "container_exit_code": result.returncode,
             "reason": (
-                "the pinned image did not execute with the requested architecture; "
-                "native AMD64 execution is required"
+                "the pinned image did not prove the requested native architecture "
+                "and closed /etc/os-release ID and VERSION_ID identity"
             ),
             "log_tail": command_log_tail(result),
         }
@@ -6319,10 +6525,46 @@ def probe_platform_execution(
         "podman_platform": spec.podman_platform,
         "expected_uname": spec.uname_architecture,
         "actual_uname": actual_uname,
+        "expected_distribution": spec.distribution,
+        "actual_distribution": actual_distribution,
+        "expected_distribution_version": spec.version,
+        "actual_distribution_version": actual_distribution_version,
         "container_exit_code": result.returncode,
         "network": "disabled",
         "filesystem": "read-only with bounded /tmp tmpfs",
     }
+
+
+def validate_available_architecture_probe(
+    value: object, spec: PlatformSpec
+) -> dict[str, object]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != AVAILABLE_ARCHITECTURE_PROBE_KEYS
+        or value.get("status") != "available"
+        or value.get("execution_mode") != "native"
+        or value.get("podman_platform") != spec.podman_platform
+        or value.get("expected_uname") != spec.uname_architecture
+        or value.get("actual_uname") != spec.uname_architecture
+        or value.get("expected_distribution") != spec.distribution
+        or value.get("actual_distribution") != spec.distribution
+        or value.get("expected_distribution_version") != spec.version
+        or not isinstance(value.get("actual_distribution_version"), str)
+        or not distribution_version_matches(
+            spec.distribution,
+            spec.version,
+            value["actual_distribution_version"],
+        )
+        or type(value.get("container_exit_code")) is not int
+        or value.get("container_exit_code") != 0
+        or value.get("network") != "disabled"
+        or value.get("filesystem") != "read-only with bounded /tmp tmpfs"
+    ):
+        raise LifecycleLabError(
+            f"architecture and distribution-version evidence is invalid for "
+            f"{platform_coordinate(spec)}"
+        )
+    return value
 
 
 def _capability_has_bit(value: str, bit: int) -> bool:
@@ -6601,6 +6843,8 @@ def container_run_arguments(
         f"EXPECTED_UNAME_ARCHITECTURE={spec.uname_architecture}",
         "--env",
         f"EXPECTED_DISTRIBUTION={spec.distribution}",
+        "--env",
+        f"EXPECTED_DISTRIBUTION_VERSION={spec.version}",
         "--env",
         f"EXPECTED_CANDIDATE_VERSION={pair.candidate.version}",
         "--env",
@@ -8184,6 +8428,8 @@ def run_platform(
 ) -> dict[str, object]:
     slug = platform_slug(spec)
     platform_result: dict[str, object] = {
+        "cell_id": spec.cell_id,
+        "version": spec.version,
         "name": spec.name,
         "distribution": spec.distribution,
         "family": spec.family,
@@ -8818,7 +9064,9 @@ def _platform_spec_from_result(platform_result: dict[str, object]) -> PlatformSp
     matches = [
         spec
         for spec in DEFAULT_PLATFORMS
-        if spec.distribution == platform_result.get("distribution")
+        if spec.cell_id == platform_result.get("cell_id")
+        and spec.version == platform_result.get("version")
+        and spec.distribution == platform_result.get("distribution")
         and spec.architecture == platform_result.get("architecture_id")
         and spec.family == platform_result.get("family")
     ]
@@ -9559,7 +9807,7 @@ def classify_lifecycle_evidence(
     *,
     required_platform_coordinates: frozenset[tuple[str, str]] = REQUIRED_PLATFORM_COORDINATES,
 ) -> dict[str, object]:
-    """Recompute release readiness without a generic product waiver."""
+    """Recompute compatibility verdicts for container scenarios only."""
 
     if (
         not required_platform_coordinates
@@ -9569,34 +9817,52 @@ def classify_lifecycle_evidence(
 
     structural_failures: list[str] = []
     results_by_coordinate = {
-        (str(result.get("distribution")), str(result.get("architecture_id"))): result
+        (str(result.get("cell_id")), str(result.get("architecture_id"))): result
         for result in results
     }
     if len(results_by_coordinate) != len(results):
         structural_failures.append("matrix:duplicate-platform-coordinate")
-    for distribution, architecture in sorted(
+    for cell_id, architecture in sorted(
         set(results_by_coordinate) - required_platform_coordinates
     ):
         structural_failures.append(
-            f"matrix:unexpected-platform-coordinate:{distribution}/{architecture}"
+            f"matrix:unexpected-platform-coordinate:{cell_id}/{architecture}"
         )
     observed_failures: dict[str, str] = {}
     coordinate_classification: list[dict[str, object]] = []
 
-    for distribution, architecture in sorted(required_platform_coordinates):
-        coordinate_name = f"{distribution}/{architecture}"
-        platform_result = results_by_coordinate.get((distribution, architecture))
+    required_coordinate_order = [
+        coordinate
+        for coordinate in REQUIRED_PLATFORM_COORDINATE_ORDER
+        if coordinate in required_platform_coordinates
+    ]
+    for cell_id, architecture in required_coordinate_order:
+        coordinate_name = f"{cell_id}/{architecture}"
+        platform_result = results_by_coordinate.get((cell_id, architecture))
         coordinate_structural: list[str] = []
         coordinate_failures: dict[str, str] = {}
+        expected_spec = next(
+            spec
+            for spec in DEFAULT_PLATFORMS
+            if platform_coordinate(spec) == (cell_id, architecture)
+        )
         if platform_result is None:
             coordinate_structural.append(f"{coordinate_name}:platform-result-missing")
-            family = next(
-                spec.family
-                for spec in DEFAULT_PLATFORMS
-                if platform_coordinate(spec) == (distribution, architecture)
-            )
+            family = expected_spec.family
         else:
             family = str(platform_result.get("family"))
+            if any(
+                platform_result.get(key) != value
+                for key, value in {
+                    "cell_id": expected_spec.cell_id,
+                    "version": expected_spec.version,
+                    "distribution": expected_spec.distribution,
+                    "family": expected_spec.family,
+                }.items()
+            ):
+                coordinate_structural.append(
+                    f"{coordinate_name}:matrix-cell-identity-invalid"
+                )
             if platform_result.get("runtime_mode") != "active-real-init":
                 coordinate_structural.append(
                     f"{coordinate_name}:runtime-mode-not-active-real-init"
@@ -9745,7 +10011,7 @@ def classify_lifecycle_evidence(
             coordinate_status = "incomplete"
         coordinate_classification.append(
             {
-                "distribution": distribution,
+                "cell_id": cell_id,
                 "architecture_id": architecture,
                 "family": family,
                 "status": coordinate_status,
@@ -10025,6 +10291,7 @@ def validate_report_version_contract(
         raise LifecycleLabError(
             f"package lifecycle report schema must be {SCHEMA_VERSION}"
         )
+    validate_qualification_matrix_binding(report.get("qualification_matrix"))
     contract = report.get("package_version_contract")
     if not isinstance(contract, dict):
         raise LifecycleLabError("package lifecycle report lacks a version contract")
@@ -10072,6 +10339,26 @@ def validate_report_version_contract(
     for platform_result in platforms:
         if not isinstance(platform_result, dict):
             raise LifecycleLabError("package lifecycle platform result must be an object")
+        spec = _platform_spec_from_result(platform_result)
+        expected_platform_metadata = {
+            "cell_id": spec.cell_id,
+            "version": spec.version,
+            "distribution": spec.distribution,
+            "family": spec.family,
+            "architecture": ARCHITECTURE_LABELS[spec.architecture],
+            "architecture_id": spec.architecture,
+            "package_architecture": spec.package_architecture,
+            "podman_platform": spec.podman_platform,
+            "image": spec.image,
+        }
+        if any(
+            platform_result.get(key) != value
+            for key, value in expected_platform_metadata.items()
+        ):
+            raise LifecycleLabError(
+                f"package lifecycle matrix-cell evidence is invalid at "
+                f"{platform_coordinate(spec)}"
+            )
         family = platform_result.get("family")
         package_architecture = platform_result.get("package_architecture")
         if not isinstance(family, str) or not isinstance(package_architecture, str):
@@ -10104,6 +10391,9 @@ def validate_report_version_contract(
             expected_gid_map = native_gid_map
         scenarios = platform_result.get("scenarios")
         if platform_result.get("status") == "pass":
+            validate_available_architecture_probe(
+                platform_result.get("architecture_probe"), spec
+            )
             if not isinstance(scenarios, list) or [
                 item.get("name") if isinstance(item, dict) else None
                 for item in scenarios
@@ -10242,6 +10532,13 @@ def validate_report_version_contract(
     scope = report.get("scope")
     if (
         not isinstance(scope, dict)
+        or set(scope) != SCOPE_KEYS
+        or scope.get("evidence_kind") != "container-lifecycle"
+        or scope.get("coverage_kind") != "container_scenarios_only"
+        or scope.get("real_host_evidence_included") is not False
+        or scope.get("required_checks_complete") is not False
+        or scope.get("covered_scenarios")
+        != qualification_matrix_container_scenarios()
         or scope.get("coordinate_classification")
         != classification["coordinate_classification"]
         or scope.get("container_lab_complete")
@@ -10390,6 +10687,10 @@ def run_lab(
     host_architecture: str | None = None,
 ) -> dict[str, object]:
     active_runner = runner or CommandRunner()
+    matrix_path = Path(
+        getattr(args, "qualification_matrix", QUALIFICATION_MATRIX_PATH)
+    )
+    matrix_binding = qualification_matrix_binding(matrix_path)
     architecture_shard = getattr(args, "architecture_shard", None)
     required_platform_coordinates = (
         required_coordinates_for_architecture(architecture_shard)
@@ -10399,12 +10700,22 @@ def run_lab(
     observed_platform_coordinates = frozenset(
         platform_coordinate(spec) for spec in platforms
     )
+    observed_platform_coordinate_order = tuple(
+        platform_coordinate(spec) for spec in platforms
+    )
+    required_platform_coordinate_order = tuple(
+        coordinate
+        for coordinate in REQUIRED_PLATFORM_COORDINATE_ORDER
+        if coordinate in required_platform_coordinates
+    )
     if architecture_shard is not None and (
         observed_platform_coordinates != required_platform_coordinates
         or len(platforms) != len(required_platform_coordinates)
+        or observed_platform_coordinate_order != required_platform_coordinate_order
     ):
         raise LifecycleLabError(
-            f"{architecture_shard} shard must contain its exact five platform coordinates"
+            f"{architecture_shard} shard must contain its exact eight matrix cells "
+            f"in canonical order"
         )
     candidate_root, previous_root, pairs = validate_inputs(
         args.packages_dir, args.previous_packages_dir, platforms
@@ -10456,19 +10767,26 @@ def run_lab(
         )
 
     results_by_coordinate = {
-        (str(result["distribution"]), str(result["architecture_id"])): result
+        (str(result["cell_id"]), str(result["architecture_id"])): result
         for result in platform_results
     }
-    missing_coordinates = sorted(
-        required_platform_coordinates - set(results_by_coordinate)
-    )
+    required_coordinate_order = [
+        coordinate
+        for coordinate in REQUIRED_PLATFORM_COORDINATE_ORDER
+        if coordinate in required_platform_coordinates
+    ]
+    missing_coordinates = [
+        coordinate
+        for coordinate in required_coordinate_order
+        if coordinate not in results_by_coordinate
+    ]
     architecture_coverage: list[dict[str, object]] = []
     for architecture in sorted({item[1] for item in required_platform_coordinates}):
-        expected = sorted(
+        expected = [
             coordinate
-            for coordinate in required_platform_coordinates
+            for coordinate in required_coordinate_order
             if coordinate[1] == architecture
-        )
+        ]
         present = [
             results_by_coordinate[coordinate]
             for coordinate in expected
@@ -10480,17 +10798,23 @@ def run_lab(
                 "architecture": ARCHITECTURE_LABELS[architecture],
                 "architecture_id": architecture,
                 "status": status,
-                "required_distributions": [item[0] for item in expected],
-                "completed_distributions": sorted(
-                    str(result["distribution"])
-                    for result in present
-                    if result["status"] == "pass"
-                ),
-                "incomplete_or_failed_distributions": sorted(
-                    str(result["distribution"])
-                    for result in present
-                    if result["status"] != "pass"
-                ),
+                "required_cells": [item[0] for item in expected],
+                "completed_cells": [
+                    cell_id
+                    for cell_id, item_architecture in expected
+                    if results_by_coordinate.get((cell_id, item_architecture), {}).get(
+                        "status"
+                    )
+                    == "pass"
+                ],
+                "incomplete_or_failed_cells": [
+                    cell_id
+                    for cell_id, item_architecture in expected
+                    if results_by_coordinate.get((cell_id, item_architecture), {}).get(
+                        "status"
+                    )
+                    != "pass"
+                ],
             }
         )
 
@@ -10515,14 +10839,15 @@ def run_lab(
                     "architecture": ARCHITECTURE_LABELS[architecture],
                     "architecture_id": architecture,
                     "status": coverage_status(present, len(expected_specs)),
-                    "required_distributions": [
-                        spec.distribution for spec in expected_specs
+                    "required_cells": [spec.cell_id for spec in expected_specs],
+                    "completed_cells": [
+                        spec.cell_id
+                        for spec in expected_specs
+                        if results_by_coordinate.get(platform_coordinate(spec), {}).get(
+                            "status"
+                        )
+                        == "pass"
                     ],
-                    "completed_distributions": sorted(
-                        str(result["distribution"])
-                        for result in present
-                        if result["status"] == "pass"
-                    ),
                 }
             )
 
@@ -10550,7 +10875,7 @@ def run_lab(
         {
             "architecture": item["architecture"],
             "status": item["status"],
-            "reason": "not every required distribution completed every lifecycle scenario",
+            "reason": "not every required matrix cell completed every lifecycle scenario",
         }
         for item in architecture_coverage
         if item["status"] != "pass"
@@ -10570,8 +10895,14 @@ def run_lab(
         "unexpected_failed_checks": classification[
             "unexpected_failed_checks"
         ],
+        "qualification_matrix": matrix_binding,
         "package_version_contract": version_contract,
         "scope": {
+            "evidence_kind": "container-lifecycle",
+            "coverage_kind": "container_scenarios_only",
+            "real_host_evidence_included": False,
+            "required_checks_complete": False,
+            "covered_scenarios": qualification_matrix_container_scenarios(),
             "container_lab_complete": container_status == "pass",
             "coordinate_classification": classification[
                 "coordinate_classification"
@@ -10585,16 +10916,18 @@ def run_lab(
             "architecture_coverage": architecture_coverage,
             "family_architecture_coverage": family_architecture_coverage,
             "required_platform_coordinates": [
-                {"distribution": distribution, "architecture": architecture}
-                for distribution, architecture in sorted(required_platform_coordinates)
+                {"cell_id": cell_id, "architecture": architecture}
+                for cell_id, architecture in required_coordinate_order
             ],
             "missing_platform_coordinates": [
-                {"distribution": distribution, "architecture": architecture}
-                for distribution, architecture in missing_coordinates
+                {"cell_id": cell_id, "architecture": architecture}
+                for cell_id, architecture in missing_coordinates
             ],
             "architecture_coverage_policy": (
-                "qualification requires the exact five-platform AMD64 matrix "
-                "on a native AMD64 host; native execution is mandatory"
+                "container lifecycle qualification requires every declared "
+                "container_scenario in the exact eight-cell AMD64 matrix on a "
+                "native AMD64 host; it does not close real-host, updater, or "
+                "reboot obligations"
             ),
             "rollback_model": (
                 "external package-manager downgrade to the separately supplied, "
@@ -10657,6 +10990,7 @@ def validate_native_shard_report(
         "release_ready",
         "blocker_ids",
         "unexpected_failed_checks",
+        "qualification_matrix",
         "package_version_contract",
         "scope",
         "engine",
@@ -10667,6 +11001,7 @@ def validate_native_shard_report(
     }
     if set(report) != expected_top_keys:
         raise LifecycleLabError("native shard report top-level schema is not exact")
+    validate_qualification_matrix_binding(report.get("qualification_matrix"))
     required_coordinates = required_coordinates_for_architecture(architecture)
     validate_qualification_binding(
         report.get("qualification_binding"), expected=expected_binding
@@ -10686,8 +11021,9 @@ def validate_native_shard_report(
     ) != architecture:
         raise LifecycleLabError("native shard host architecture is inconsistent")
     expected_coordinates_json = [
-        {"distribution": distribution, "architecture": item_architecture}
-        for distribution, item_architecture in sorted(required_coordinates)
+        {"cell_id": cell_id, "architecture": item_architecture}
+        for cell_id, item_architecture in REQUIRED_PLATFORM_COORDINATE_ORDER
+        if (cell_id, item_architecture) in required_coordinates
     ]
     if (
         scope.get("required_platform_coordinates") != expected_coordinates_json
@@ -10743,7 +11079,7 @@ def validate_native_shard_report(
         if not isinstance(platform_result, dict):
             raise LifecycleLabError("native shard platform result is invalid")
         coordinate = (
-            str(platform_result.get("distribution")),
+            str(platform_result.get("cell_id")),
             str(platform_result.get("architecture_id")),
         )
         if coordinate in seen or coordinate not in required_coordinates:
@@ -10754,6 +11090,9 @@ def validate_native_shard_report(
         observed_order.append(coordinate)
         spec = specs[coordinate]
         expected_platform_metadata = {
+            "cell_id": spec.cell_id,
+            "version": spec.version,
+            "distribution": spec.distribution,
             "family": spec.family,
             "architecture": ARCHITECTURE_LABELS[spec.architecture],
             "package_architecture": spec.package_architecture,
@@ -10769,33 +11108,9 @@ def validate_native_shard_report(
             raise LifecycleLabError(
                 f"native shard platform metadata is invalid at {coordinate}"
             )
-        probe = platform_result.get("architecture_probe")
-        if (
-            not isinstance(probe, dict)
-            or set(probe)
-            != {
-                "status",
-                "execution_mode",
-                "podman_platform",
-                "expected_uname",
-                "actual_uname",
-                "container_exit_code",
-                "network",
-                "filesystem",
-            }
-            or probe.get("status") != "available"
-            or probe.get("execution_mode") != "native"
-            or probe.get("podman_platform") != spec.podman_platform
-            or probe.get("expected_uname") != spec.uname_architecture
-            or probe.get("actual_uname") != spec.uname_architecture
-            or type(probe.get("container_exit_code")) is not int
-            or probe.get("container_exit_code") != 0
-            or probe.get("network") != "disabled"
-            or probe.get("filesystem") != "read-only with bounded /tmp tmpfs"
-        ):
-            raise LifecycleLabError(
-                f"native shard execution evidence is invalid at {coordinate}"
-            )
+        validate_available_architecture_probe(
+            platform_result.get("architecture_probe"), spec
+        )
     if seen != required_coordinates:
         raise LifecycleLabError("native shard platform coordinate set is incomplete")
     expected_order = [
@@ -10861,7 +11176,7 @@ def _aggregate_matrix_summary(
     platform_results: Sequence[dict[str, object]],
 ) -> tuple[str, dict[str, object], dict[str, object]]:
     results_by_coordinate = {
-        (str(result.get("distribution")), str(result.get("architecture_id"))): result
+        (str(result.get("cell_id")), str(result.get("architecture_id"))): result
         for result in platform_results
     }
     if len(results_by_coordinate) != len(platform_results):
@@ -10871,28 +11186,30 @@ def _aggregate_matrix_summary(
     architecture_coverage: list[dict[str, object]] = []
     family_architecture_coverage: list[dict[str, object]] = []
     for architecture in ARCHITECTURE_LABELS:
-        expected = sorted(
+        expected = [
             coordinate
-            for coordinate in REQUIRED_PLATFORM_COORDINATES
+            for coordinate in REQUIRED_PLATFORM_COORDINATE_ORDER
             if coordinate[1] == architecture
-        )
+        ]
         present = [results_by_coordinate[coordinate] for coordinate in expected]
         architecture_coverage.append(
             {
                 "architecture": ARCHITECTURE_LABELS[architecture],
                 "architecture_id": architecture,
                 "status": coverage_status(present, len(expected)),
-                "required_distributions": [item[0] for item in expected],
-                "completed_distributions": sorted(
-                    str(result["distribution"])
-                    for result in present
-                    if result["status"] == "pass"
-                ),
-                "incomplete_or_failed_distributions": sorted(
-                    str(result["distribution"])
-                    for result in present
-                    if result["status"] != "pass"
-                ),
+                "required_cells": [item[0] for item in expected],
+                "completed_cells": [
+                    cell_id
+                    for cell_id, item_architecture in expected
+                    if results_by_coordinate[(cell_id, item_architecture)]["status"]
+                    == "pass"
+                ],
+                "incomplete_or_failed_cells": [
+                    cell_id
+                    for cell_id, item_architecture in expected
+                    if results_by_coordinate[(cell_id, item_architecture)]["status"]
+                    != "pass"
+                ],
             }
         )
         for family in REQUIRED_FAMILIES:
@@ -10910,12 +11227,13 @@ def _aggregate_matrix_summary(
                     "architecture": ARCHITECTURE_LABELS[architecture],
                     "architecture_id": architecture,
                     "status": coverage_status(family_results, len(specs)),
-                    "required_distributions": [spec.distribution for spec in specs],
-                    "completed_distributions": sorted(
-                        str(result["distribution"])
-                        for result in family_results
-                        if result["status"] == "pass"
-                    ),
+                    "required_cells": [spec.cell_id for spec in specs],
+                    "completed_cells": [
+                        spec.cell_id
+                        for spec in specs
+                        if results_by_coordinate[platform_coordinate(spec)]["status"]
+                        == "pass"
+                    ],
                 }
             )
     if any(result.get("status") == "fail" for result in platform_results):
@@ -10926,6 +11244,11 @@ def _aggregate_matrix_summary(
         status = "pass"
     classification = classify_lifecycle_evidence(platform_results)
     scope = {
+        "evidence_kind": "container-lifecycle",
+        "coverage_kind": "container_scenarios_only",
+        "real_host_evidence_included": False,
+        "required_checks_complete": False,
+        "covered_scenarios": qualification_matrix_container_scenarios(),
         "container_lab_complete": status == "pass",
         "coordinate_classification": classification["coordinate_classification"],
         "host_architecture": NATIVE_AGGREGATE_HOST,
@@ -10945,7 +11268,7 @@ def _aggregate_matrix_summary(
                 "architecture": item["architecture"],
                 "status": item["status"],
                 "reason": (
-                    "not every required distribution completed every lifecycle scenario"
+                    "not every required matrix cell completed every lifecycle scenario"
                 ),
             }
             for item in architecture_coverage
@@ -10954,13 +11277,15 @@ def _aggregate_matrix_summary(
         "architecture_coverage": architecture_coverage,
         "family_architecture_coverage": family_architecture_coverage,
         "required_platform_coordinates": [
-            {"distribution": distribution, "architecture": architecture}
-            for distribution, architecture in sorted(REQUIRED_PLATFORM_COORDINATES)
+            {"cell_id": cell_id, "architecture": architecture}
+            for cell_id, architecture in REQUIRED_PLATFORM_COORDINATE_ORDER
         ],
         "missing_platform_coordinates": [],
         "architecture_coverage_policy": (
-            "qualification requires the exact five-platform AMD64 matrix on the "
-            "native AMD64 shard; native execution is mandatory"
+            "container lifecycle qualification requires every declared "
+            "container_scenario in the exact eight-cell AMD64 matrix on the "
+            "native AMD64 shard; it does not close real-host, updater, or "
+            "reboot obligations"
         ),
         "rollback_model": (
             "external package-manager downgrade to the separately supplied, "
@@ -10972,6 +11297,10 @@ def _aggregate_matrix_summary(
 
 
 def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object]:
+    matrix_path = Path(
+        getattr(args, "qualification_matrix", QUALIFICATION_MATRIX_PATH)
+    )
+    matrix_binding = qualification_matrix_binding(matrix_path)
     candidate_root, previous_root, pairs = validate_inputs(
         args.packages_dir,
         args.previous_packages_dir,
@@ -11000,6 +11329,10 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
             architecture=architecture,
             expected_binding=expected_binding,
         )
+        if report.get("qualification_matrix") != matrix_binding:
+            raise LifecycleLabError(
+                "native shard qualification matrix differs from aggregate inputs"
+            )
         shard_reports[architecture] = report
         shard_digests[architecture] = digest
 
@@ -11136,6 +11469,7 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
         "release_ready": classification["release_ready"],
         "blocker_ids": classification["blocker_ids"],
         "unexpected_failed_checks": classification["unexpected_failed_checks"],
+        "qualification_matrix": matrix_binding,
         "package_version_contract": version_contract,
         "scope": scope,
         "engine": {
@@ -11212,6 +11546,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--podman", default="podman")
     parser.add_argument("--architecture-shard", choices=("amd64",))
     parser.add_argument("--aggregate-amd64-report", type=Path)
+    parser.add_argument(
+        "--qualification-matrix",
+        type=Path,
+        default=QUALIFICATION_MATRIX_PATH,
+    )
     parser.add_argument("--package-tmp-dir", type=Path)
     parser.add_argument("--qualification-repository")
     parser.add_argument("--qualification-release-sha")
@@ -11227,49 +11566,74 @@ def build_parser() -> argparse.ArgumentParser:
         "--pull-policy", choices=("never", "missing", "always"), default="missing"
     )
     parser.add_argument("--scenario-timeout", type=int, default=600)
-    defaults = {
-        platform_coordinate(spec): spec.image for spec in DEFAULT_PLATFORMS
-    }
+    defaults = {spec.cell_id: spec.image for spec in DEFAULT_PLATFORMS}
     parser.add_argument(
         "--debian-image",
         "--debian-amd64-image",
-        dest="debian_amd64_image",
-        default=defaults[("debian", "amd64")],
+        "--debian-13-image",
+        dest="deb_13_image",
+        default=defaults["DEB-13"],
     )
     parser.add_argument(
-        "--ubuntu-amd64-image", default=defaults[("ubuntu", "amd64")]
+        "--ubuntu-amd64-image",
+        "--ubuntu-2404-image",
+        dest="deb_u2404_image",
+        default=defaults["DEB-U2404"],
+    )
+    parser.add_argument(
+        "--ubuntu-2604-image",
+        dest="deb_u2604_image",
+        default=defaults["DEB-U2604"],
     )
     parser.add_argument(
         "--fedora-image",
         "--fedora-amd64-image",
-        dest="fedora_amd64_image",
-        default=defaults[("fedora", "amd64")],
+        "--fedora-44-image",
+        dest="rpm_f44_image",
+        default=defaults["RPM-F44"],
     )
     parser.add_argument(
-        "--almalinux-amd64-image", default=defaults[("almalinux", "amd64")]
+        "--almalinux-amd64-image",
+        "--almalinux-9-image",
+        dest="rpm_a9_image",
+        default=defaults["RPM-A9"],
+    )
+    parser.add_argument(
+        "--almalinux-10-image",
+        dest="rpm_a10_image",
+        default=defaults["RPM-A10"],
     )
     parser.add_argument(
         "--alpine-image",
         "--alpine-amd64-image",
-        dest="alpine_amd64_image",
-        default=defaults[("alpine", "amd64")],
+        "--alpine-322-image",
+        dest="apk_322_image",
+        default=defaults["APK-322"],
+    )
+    parser.add_argument(
+        "--alpine-324-image",
+        dest="apk_324_image",
+        default=defaults["APK-324"],
     )
     return parser
 
 
 def configured_platforms(args: argparse.Namespace) -> tuple[PlatformSpec, ...]:
     images = {
-        ("debian", "amd64"): args.debian_amd64_image,
-        ("ubuntu", "amd64"): args.ubuntu_amd64_image,
-        ("fedora", "amd64"): args.fedora_amd64_image,
-        ("almalinux", "amd64"): args.almalinux_amd64_image,
-        ("alpine", "amd64"): args.alpine_amd64_image,
+        "DEB-13": args.deb_13_image,
+        "DEB-U2404": args.deb_u2404_image,
+        "DEB-U2604": args.deb_u2604_image,
+        "RPM-F44": args.rpm_f44_image,
+        "RPM-A9": args.rpm_a9_image,
+        "RPM-A10": args.rpm_a10_image,
+        "APK-322": args.apk_322_image,
+        "APK-324": args.apk_324_image,
     }
     return tuple(
         PlatformSpec(
             **{
                 **asdict(spec),
-                "image": images[platform_coordinate(spec)],
+                "image": images[spec.cell_id],
             }
         )
         for spec in DEFAULT_PLATFORMS
@@ -11287,6 +11651,10 @@ def error_report(exc: Exception) -> dict[str, object]:
         "release_ready": False,
         "blocker_ids": [],
         "unexpected_failed_checks": [f"harness:{exc}"],
+        "qualification_matrix": {
+            "matrix_id": QUALIFICATION_MATRIX_ID,
+            "sha256": QUALIFICATION_MATRIX_SHA256,
+        },
         "error": str(exc),
     }
 

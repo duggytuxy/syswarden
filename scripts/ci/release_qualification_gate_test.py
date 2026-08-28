@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,11 +20,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import release_qualification_gate as gate
+import package_qualification_matrix as qualification_matrix
 
 
 class QualificationFixture:
-    version = "v4.02.8"
-    previous_version = "v4.02.7"
+    version = "v4.04.0"
+    previous_version = "v4.03.3"
 
     def __init__(self, root: Path, *, profile: str = "release") -> None:
         self.root = root
@@ -78,6 +80,9 @@ class QualificationFixture:
             f"# Release {self.version}\n\n### TEST\n- qualification\n\n---\n",
             encoding="utf-8",
         )
+        matrix_path = self.repo / gate.QUALIFICATION_MATRIX_PATH
+        matrix_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(qualification_matrix.DEFAULT_MATRIX, matrix_path)
         self._git("add", ".")
         self._git("commit", "-qm", "fixture")
 
@@ -113,13 +118,19 @@ class QualificationFixture:
 
     def lifecycle(self, kind: str) -> dict[str, object]:
         previous_checksums = {
-            name: hashlib.sha256(f"previous:{name}\n".encode()).hexdigest()
-            for name in gate.package_names(self.previous_version)
+            asset.name: asset.sha256
+            for asset in qualification_matrix.EXPECTED_BASELINE_ASSETS
+            if asset.name != "SHA256SUMS.txt"
         }
+        previous_manifest_sha256 = next(
+            asset.sha256
+            for asset in qualification_matrix.EXPECTED_BASELINE_ASSETS
+            if asset.name == "SHA256SUMS.txt"
+        )
         return {
             "previous_version": self.previous_version,
             "candidate_version": self.version,
-            "runtime_mode": "active-real-init",
+            "runtime_mode": "active-container-init",
             "active_service_manager": True,
             "active_postinstall": True,
             "legacy_runtime_retirement": True,
@@ -129,18 +140,43 @@ class QualificationFixture:
             "rollback": True,
             "remove": True,
             "purge": True,
-            "second_restart": True,
+            "second_container_restart": True,
+            "previous_manifest_sha256": previous_manifest_sha256,
             "previous_package_checksums": previous_checksums,
         }
 
     def linux_coordinates(self, *, blocker: bool = False) -> list[dict[str, str]]:
         result = []
-        for platform in ("almalinux", "alpine", "debian", "fedora", "ubuntu"):
+        for cell_id in gate.QUALIFICATION_CELL_IDS:
             status = "blocker" if blocker else "pass"
             result.append(
-                {"platform": platform, "architecture": "amd64", "status": status}
+                {"cell_id": cell_id, "architecture": "amd64", "status": status}
             )
         return result
+
+    def qualification_matrix_binding(self) -> dict[str, str]:
+        payload = (self.repo / gate.QUALIFICATION_MATRIX_PATH).read_bytes()
+        document = qualification_matrix.validate_document(
+            gate.strict_json(payload, "fixture qualification matrix")
+        )
+        return {
+            "matrix_id": str(document["matrix_id"]),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    def evidence_scope(self) -> dict[str, object]:
+        return {
+            "coverage_kind": "container_scenarios_only",
+            "real_host_evidence_included": False,
+            "required_checks_complete": False,
+            "covered_scenarios": [
+                {
+                    "cell_id": cell.identifier,
+                    "scenarios": list(cell.container_scenarios),
+                }
+                for cell in qualification_matrix.EXPECTED_CELLS
+            ],
+        }
 
     def report(self, kind: str, profile: str) -> dict[str, object]:
         blockers = {
@@ -178,6 +214,9 @@ class QualificationFixture:
         return gate.build_bound_report(
             **common,
             coordinates=coordinates,
+            evidence_kind="container-lifecycle",
+            evidence_scope=self.evidence_scope(),
+            qualification_matrix_binding=self.qualification_matrix_binding(),
             lifecycle=self.lifecycle(kind),
         )
 
@@ -234,7 +273,90 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         self.assertTrue(aggregate["release_ready"])
         self.assertEqual(aggregate["bindings"]["commit_sha"], self.fixture.commit)
         self.assertEqual(set(aggregate["reports"]), set(self.fixture.reports))
+        self.assertEqual(
+            aggregate["bindings"]["qualification_matrix"],
+            self.fixture.qualification_matrix_binding(),
+        )
+        self.assertEqual(
+            aggregate["reports"]["linux_package_lifecycle"]["evidence_kind"],
+            "container-lifecycle",
+        )
+        self.assertEqual(
+            aggregate["reports"]["linux_package_lifecycle"]["evidence_scope"],
+            self.fixture.evidence_scope(),
+        )
+        self.assertEqual(
+            aggregate["bindings"]["previous_manifest_sha256"],
+            self.fixture.lifecycle("linux_package_lifecycle")[
+                "previous_manifest_sha256"
+            ],
+        )
         self.assertTrue(self.fixture.args().output.is_file())
+
+    def test_matrix_binding_scope_and_exact_eight_cell_order_are_fail_closed(self) -> None:
+        original = self.fixture.load_report("linux_package_lifecycle")
+        self.assertEqual(
+            [item["cell_id"] for item in original["coverage"]["coordinates"]],
+            list(gate.QUALIFICATION_CELL_IDS),
+        )
+        mutations = {
+            "matrix-id": lambda item: item["qualification_matrix"].__setitem__(
+                "matrix_id", "syswarden-package-qualification/forged"
+            ),
+            "matrix-sha": lambda item: item["qualification_matrix"].__setitem__(
+                "sha256", "0" * 64
+            ),
+            "host-scope": lambda item: item.__setitem__(
+                "evidence_kind", "real-host-lifecycle"
+            ),
+            "host-evidence": lambda item: item["evidence_scope"].__setitem__(
+                "real_host_evidence_included", True
+            ),
+            "required-checks": lambda item: item["evidence_scope"].__setitem__(
+                "required_checks_complete", True
+            ),
+            "coverage-kind": lambda item: item["evidence_scope"].__setitem__(
+                "coverage_kind", "all-required-checks"
+            ),
+            "covered-scenario": lambda item: item["evidence_scope"][
+                "covered_scenarios"
+            ][0]["scenarios"].pop(),
+            "missing-cell": lambda item: item["coverage"]["coordinates"].pop(),
+            "duplicate-cell": lambda item: item["coverage"]["coordinates"][1].__setitem__(
+                "cell_id", item["coverage"]["coordinates"][0]["cell_id"]
+            ),
+            "reordered-cells": lambda item: item["coverage"]["coordinates"].reverse(),
+            "baseline-manifest-digest": lambda item: item["lifecycle"].__setitem__(
+                "previous_manifest_sha256", "0" * 64
+            ),
+            "baseline-package-digest": lambda item: item["lifecycle"][
+                "previous_package_checksums"
+            ].__setitem__(
+                next(iter(item["lifecycle"]["previous_package_checksums"])),
+                "0" * 64,
+            ),
+            "coherent-baseline-replacement": lambda item: (
+                item["lifecycle"].__setitem__(
+                    "previous_manifest_sha256", "1" * 64
+                ),
+                item["lifecycle"].__setitem__(
+                    "previous_package_checksums",
+                    {
+                        name: f"{index + 2:x}" * 64
+                        for index, name in enumerate(
+                            item["lifecycle"]["previous_package_checksums"]
+                        )
+                    },
+                ),
+            ),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(mutation=name):
+                document = json.loads(json.dumps(original))
+                mutation(document)
+                self.fixture.save_report("linux_package_lifecycle", document)
+                self.assertEvidenceError(self.fixture.args())
+        self.fixture.save_report("linux_package_lifecycle", original)
 
     def test_characterization_accepts_only_the_exact_canonical_allowlist(self) -> None:
         self.fixture.write_reports("characterization")
@@ -414,7 +536,7 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         args.expected_sha = self.fixture._git("rev-parse", "HEAD")
         self.assertEvidenceError(args)
 
-    def test_incomplete_harness_platform_architecture_vm_and_unknown_blocker_block(self) -> None:
+    def test_incomplete_harness_matrix_cell_and_unknown_blocker_block(self) -> None:
         document = self.fixture.load_report("nftables_kernel")
         document["harness_complete"] = False
         self.fixture.save_report("nftables_kernel", document)
@@ -426,8 +548,7 @@ class ReleaseQualificationGateTests(unittest.TestCase):
         document = self.fixture.load_report("linux_package_lifecycle")
         document["coverage"]["coordinates"].pop()
         self.fixture.save_report("linux_package_lifecycle", document)
-        code, _ = gate.run_gate(self.fixture.args(), now=self.fixture.now)
-        self.assertEqual(code, 1)
+        self.assertEvidenceError(self.fixture.args())
 
         self.fixture.write_reports("characterization")
         document = self.fixture.load_report("nftables_kernel")
@@ -459,7 +580,7 @@ class ReleaseQualificationGateTests(unittest.TestCase):
 
     def test_active_runtime_mode_and_every_derived_claim_are_mandatory(self) -> None:
         package = self.fixture.load_report("linux_package_lifecycle")
-        package["lifecycle"]["runtime_mode"] = "offline"
+        package["lifecycle"]["runtime_mode"] = "active-real-init"
         self.fixture.save_report("linux_package_lifecycle", package)
         self.assertEvidenceError(self.fixture.args())
 
@@ -467,6 +588,7 @@ class ReleaseQualificationGateTests(unittest.TestCase):
             "previous_version",
             "candidate_version",
             "runtime_mode",
+            "previous_manifest_sha256",
             "previous_package_checksums",
         }
         for claim in sorted(boolean_claims):

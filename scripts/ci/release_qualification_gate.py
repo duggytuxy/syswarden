@@ -25,11 +25,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Sequence
 
+import package_qualification_matrix as qualification_matrix
 
-SCHEMA_VERSION = 1
+
+SCHEMA_VERSION = 2
 REPORT_SCHEMA_VERSIONS = {
     "nftables_kernel": 1,
-    "linux_package_lifecycle": 4,
+    "linux_package_lifecycle": 5,
 }
 REPORT_LIMIT = 8 * 1024 * 1024
 PACKAGE_LIMIT = 128 * 1024 * 1024
@@ -246,6 +248,22 @@ def _git(root: Path, *arguments: str) -> str:
     return process.stdout.strip()
 
 
+def _git_bytes(root: Path, *arguments: str) -> bytes:
+    try:
+        process = subprocess.run(
+            ("git", "-c", "core.fsmonitor=false", "-C", str(root), *arguments),
+            check=False,
+            capture_output=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise EvidenceError(f"cannot execute Git: {exc}") from exc
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", errors="replace").strip()
+        raise EvidenceError(f"Git {' '.join(arguments)} failed: {detail}")
+    return process.stdout
+
+
 SOURCE_TARGETS = (
     ("src/core/syswarden-cli/pkg/system/upgrade.go", 1),
     ("src/core/syswarden-tui/main.go", 1),
@@ -304,6 +322,33 @@ def verify_repository(repo_root: Path, expected_sha: str, expected_version: str)
         raise EvidenceError(f"Git returned an invalid tree SHA: {tree!r}")
     verify_source_version(root, expected_version)
     return RepositoryBinding(root, head, tree, expected_version)
+
+
+def qualification_matrix_binding(
+    binding: RepositoryBinding,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    payload = _git_bytes(
+        binding.root,
+        "show",
+        f"{binding.commit_sha}:{QUALIFICATION_MATRIX_PATH}",
+    )
+    try:
+        document = qualification_matrix.validate_document(
+            strict_json(payload, "committed package qualification matrix")
+        )
+    except qualification_matrix.QualificationMatrixError as exc:
+        raise EvidenceError(f"committed package qualification matrix is invalid: {exc}") from exc
+    if document["target_release"] != binding.version:
+        raise EvidenceError(
+            "committed package qualification matrix target differs from the release"
+        )
+    return (
+        {
+            "matrix_id": str(document["matrix_id"]),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        },
+        document,
+    )
 
 
 def package_names(version: str) -> tuple[str, ...]:
@@ -388,7 +433,14 @@ COMMON_REPORT_KEYS = frozenset(
 REPORT_KEYS = {
     "nftables_kernel": COMMON_REPORT_KEYS
     | {"conditions", "network_namespaces"},
-    "linux_package_lifecycle": COMMON_REPORT_KEYS | {"coverage", "lifecycle"},
+    "linux_package_lifecycle": COMMON_REPORT_KEYS
+    | {
+        "coverage",
+        "lifecycle",
+        "evidence_kind",
+        "evidence_scope",
+        "qualification_matrix",
+    },
 }
 BINDING_KEYS = frozenset(
     {
@@ -401,7 +453,18 @@ BINDING_KEYS = frozenset(
     }
 )
 COVERAGE_KEYS = frozenset({"coordinates"})
-COORDINATE_KEYS = frozenset({"platform", "architecture", "status"})
+COORDINATE_KEYS = frozenset({"cell_id", "architecture", "status"})
+QUALIFICATION_MATRIX_BINDING_KEYS = frozenset({"matrix_id", "sha256"})
+QUALIFICATION_MATRIX_PATH = "scripts/ci/package_qualification_matrix.json"
+EVIDENCE_SCOPE_KEYS = frozenset(
+    {
+        "coverage_kind",
+        "real_host_evidence_included",
+        "required_checks_complete",
+        "covered_scenarios",
+    }
+)
+COVERED_SCENARIO_KEYS = frozenset({"cell_id", "scenarios"})
 NFT_CONDITION_KEYS = frozenset(
     {
         "network_namespace_isolated",
@@ -425,7 +488,8 @@ LIFECYCLE_KEYS = frozenset(
         "rollback",
         "remove",
         "purge",
-        "second_restart",
+        "second_container_restart",
+        "previous_manifest_sha256",
         "previous_package_checksums",
     }
 )
@@ -454,6 +518,9 @@ def build_bound_report(
     blocker_ids: Sequence[str],
     coordinates: Sequence[dict[str, str]] = (),
     lifecycle: dict[str, Any] | None = None,
+    evidence_kind: str | None = None,
+    evidence_scope: dict[str, Any] | None = None,
+    qualification_matrix_binding: dict[str, str] | None = None,
     conditions: dict[str, bool] | None = None,
     network_namespaces: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -483,16 +550,35 @@ def build_bound_report(
             raise EvidenceError(
                 "nftables envelope requires conditions and network namespaces"
             )
-        if lifecycle is not None or coordinates:
-            raise EvidenceError("nftables envelope cannot claim package lifecycle or VM coverage")
+        if (
+            lifecycle is not None
+            or coordinates
+            or evidence_kind is not None
+            or evidence_scope is not None
+            or qualification_matrix_binding is not None
+        ):
+            raise EvidenceError(
+                "nftables envelope cannot claim package lifecycle or container scenario coverage"
+            )
         envelope["conditions"] = conditions
         envelope["network_namespaces"] = network_namespaces
     else:
         if lifecycle is None:
             raise EvidenceError(f"{kind} envelope requires package lifecycle evidence")
+        if (
+            evidence_kind != "container-lifecycle"
+            or evidence_scope is None
+            or qualification_matrix_binding is None
+        ):
+            raise EvidenceError(
+                f"{kind} envelope requires an exact container-lifecycle matrix binding"
+            )
         if conditions is not None or network_namespaces is not None:
             raise EvidenceError(f"{kind} envelope cannot contain nftables namespace evidence")
         envelope["coverage"] = {"coordinates": list(coordinates)}
+        envelope["evidence_kind"] = evidence_kind
+        envelope["evidence_scope"] = evidence_scope
+        envelope["qualification_matrix"] = qualification_matrix_binding
         envelope["lifecycle"] = lifecycle
     return envelope
 
@@ -525,7 +611,88 @@ def _validate_nft_evidence(document: dict[str, Any]) -> None:
         raise EvidenceError("nftables laboratory did not use a separate network namespace")
 
 
-def _validate_coverage(kind: str, document: dict[str, Any]) -> None:
+def _validate_package_matrix_evidence(
+    kind: str,
+    document: dict[str, Any],
+    binding: RepositoryBinding,
+) -> dict[str, Any]:
+    if document["evidence_kind"] != "container-lifecycle":
+        raise EvidenceError(
+            f"{kind}.evidence_kind must be exactly container-lifecycle"
+        )
+    report_matrix = document["qualification_matrix"]
+    if not isinstance(report_matrix, dict):
+        raise EvidenceError(f"{kind}.qualification_matrix must be an object")
+    _exact_keys(
+        report_matrix,
+        QUALIFICATION_MATRIX_BINDING_KEYS,
+        f"{kind}.qualification_matrix",
+    )
+    if (
+        not isinstance(report_matrix["matrix_id"], str)
+        or not isinstance(report_matrix["sha256"], str)
+        or SHA256_RE.fullmatch(report_matrix["sha256"]) is None
+    ):
+        raise EvidenceError(f"{kind}.qualification_matrix is not canonical")
+    expected, matrix_document = qualification_matrix_binding(binding)
+    if report_matrix != expected:
+        raise EvidenceError(
+            f"{kind}.qualification_matrix differs from the exact committed bytes"
+        )
+    evidence_scope = document["evidence_scope"]
+    if not isinstance(evidence_scope, dict):
+        raise EvidenceError(f"{kind}.evidence_scope must be an object")
+    _exact_keys(evidence_scope, EVIDENCE_SCOPE_KEYS, f"{kind}.evidence_scope")
+    if (
+        evidence_scope["coverage_kind"] != "container_scenarios_only"
+        or type(evidence_scope["real_host_evidence_included"]) is not bool
+        or evidence_scope["real_host_evidence_included"] is not False
+        or type(evidence_scope["required_checks_complete"]) is not bool
+        or evidence_scope["required_checks_complete"] is not False
+    ):
+        raise EvidenceError(
+            f"{kind}.evidence_scope overstates container lifecycle coverage"
+        )
+    covered = evidence_scope["covered_scenarios"]
+    if not isinstance(covered, list):
+        raise EvidenceError(f"{kind}.evidence_scope.covered_scenarios must be an array")
+    expected_covered = [
+        {
+            "cell_id": str(cell["id"]),
+            "scenarios": list(cell["container_scenarios"]),
+        }
+        for cell in matrix_document["cells"]
+    ]
+    for index, record in enumerate(covered):
+        if not isinstance(record, dict):
+            raise EvidenceError(
+                f"{kind}.evidence_scope.covered_scenarios[{index}] must be an object"
+            )
+        _exact_keys(
+            record,
+            COVERED_SCENARIO_KEYS,
+            f"{kind}.evidence_scope.covered_scenarios[{index}]",
+        )
+        if (
+            not isinstance(record["cell_id"], str)
+            or not isinstance(record["scenarios"], list)
+            or any(not isinstance(item, str) for item in record["scenarios"])
+        ):
+            raise EvidenceError(
+                f"{kind}.evidence_scope.covered_scenarios[{index}] has invalid types"
+            )
+    if covered != expected_covered:
+        raise EvidenceError(
+            f"{kind}.evidence_scope.covered_scenarios differs from the ordered matrix"
+        )
+    return matrix_document
+
+
+def _validate_coverage(
+    kind: str,
+    document: dict[str, Any],
+    matrix_document: dict[str, Any],
+) -> None:
     coverage = document["coverage"]
     if not isinstance(coverage, dict):
         raise EvidenceError(f"{kind}.coverage must be an object")
@@ -533,6 +700,11 @@ def _validate_coverage(kind: str, document: dict[str, Any]) -> None:
     if not isinstance(coverage["coordinates"], list):
         raise EvidenceError(f"{kind}.coverage has invalid types")
     seen: set[tuple[str, str]] = set()
+    expected_cell_ids = [str(cell["id"]) for cell in matrix_document["cells"]]
+    if len(coverage["coordinates"]) != len(expected_cell_ids):
+        raise EvidenceError(
+            f"{kind}.coverage must contain exactly {len(expected_cell_ids)} matrix cells"
+        )
     for index, coordinate in enumerate(coverage["coordinates"]):
         if not isinstance(coordinate, dict):
             raise EvidenceError(
@@ -547,10 +719,15 @@ def _validate_coverage(kind: str, document: dict[str, Any]) -> None:
             raise EvidenceError(
                 f"{kind}.coverage.coordinates[{index}] values must be strings"
             )
-        key = (coordinate["platform"], coordinate["architecture"])
+        key = (coordinate["cell_id"], coordinate["architecture"])
         if key in seen:
             raise EvidenceError(f"duplicate {kind} coverage coordinate: {key}")
         seen.add(key)
+        if key != (expected_cell_ids[index], "amd64"):
+            raise EvidenceError(
+                f"{kind}.coverage coordinate at index {index} differs from the "
+                "frozen matrix cell order"
+            )
         if coordinate["status"] not in {"pass", "blocker"}:
             raise EvidenceError(f"{kind} coverage status cannot be skipped/unknown")
 
@@ -560,6 +737,7 @@ def _validate_lifecycle(
     document: dict[str, Any],
     binding: RepositoryBinding,
     packages: PackageManifest,
+    matrix_document: dict[str, Any],
 ) -> tuple[str, dict[str, str]]:
     lifecycle = document["lifecycle"]
     if not isinstance(lifecycle, dict):
@@ -569,6 +747,7 @@ def _validate_lifecycle(
         "previous_version",
         "candidate_version",
         "runtime_mode",
+        "previous_manifest_sha256",
         "previous_package_checksums",
     }
     for key in boolean_keys:
@@ -580,9 +759,9 @@ def _validate_lifecycle(
         raise EvidenceError(f"{kind} lifecycle versions must be strings")
     if candidate != binding.version or version_tuple(previous) >= version_tuple(candidate):
         raise EvidenceError(f"{kind} lifecycle must prove previous_version < candidate_version")
-    if lifecycle["runtime_mode"] != "active-real-init":
+    if lifecycle["runtime_mode"] != "active-container-init":
         raise EvidenceError(
-            f"{kind} lifecycle runtime_mode must be active-real-init"
+            f"{kind} lifecycle runtime_mode must be active-container-init"
         )
     previous_checksums = lifecycle["previous_package_checksums"]
     if not isinstance(previous_checksums, dict):
@@ -598,6 +777,36 @@ def _validate_lifecycle(
         for digest in previous_checksums.values()
     ):
         raise EvidenceError(f"{kind} previous package checksums are invalid")
+    previous_manifest_sha256 = lifecycle["previous_manifest_sha256"]
+    if (
+        not isinstance(previous_manifest_sha256, str)
+        or SHA256_RE.fullmatch(previous_manifest_sha256) is None
+    ):
+        raise EvidenceError(f"{kind} previous package manifest SHA256 is invalid")
+    baseline = matrix_document["package_sources"]["baseline"]
+    if previous != baseline["release"]:
+        raise EvidenceError(
+            f"{kind} previous version differs from the frozen baseline release"
+        )
+    baseline_assets = {
+        asset["name"]: asset for asset in baseline["assets"]
+    }
+    expected_baseline_names = expected_previous_names | {"SHA256SUMS.txt"}
+    if set(baseline_assets) != expected_baseline_names:
+        raise EvidenceError(
+            f"{kind} qualification matrix baseline asset inventory is incomplete"
+        )
+    expected_previous_checksums = {
+        name: baseline_assets[name]["sha256"] for name in expected_previous_names
+    }
+    if previous_checksums != expected_previous_checksums:
+        raise EvidenceError(
+            f"{kind} previous package checksums differ from the frozen baseline assets"
+        )
+    if previous_manifest_sha256 != baseline_assets["SHA256SUMS.txt"]["sha256"]:
+        raise EvidenceError(
+            f"{kind} previous package manifest differs from the frozen baseline asset"
+        )
     for previous_name, candidate_name in pairs:
         if previous_checksums[previous_name] == packages.checksums[candidate_name]:
             raise EvidenceError(
@@ -664,9 +873,12 @@ def parse_report(
         previous: str | None = None
         previous_checksums: dict[str, str] = {}
     else:
-        _validate_coverage(kind, document)
+        matrix_document = _validate_package_matrix_evidence(
+            kind, document, binding
+        )
+        _validate_coverage(kind, document, matrix_document)
         previous, previous_checksums = _validate_lifecycle(
-            kind, document, binding, packages
+            kind, document, binding, packages, matrix_document
         )
     return ReportEvidence(
         kind,
@@ -681,9 +893,15 @@ def parse_report(
     )
 
 
-LINUX_BASE_PLATFORMS = frozenset({"debian", "ubuntu", "fedora", "alpine"})
-RHEL_PLATFORMS = frozenset({"rhel", "almalinux", "rocky"})
 ARCHITECTURES = frozenset({"amd64"})
+QUALIFICATION_CELL_IDS = tuple(
+    cell.identifier for cell in qualification_matrix.EXPECTED_CELLS
+)
+ALPINE_CELL_IDS = frozenset(
+    cell.identifier
+    for cell in qualification_matrix.EXPECTED_CELLS
+    if cell.family == "apk"
+)
 
 
 def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[str]:
@@ -710,29 +928,23 @@ def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[st
             reasons.append("combined previous package checksum inventory is incomplete")
     linux = by_kind["linux_package_lifecycle"].document["coverage"]
     linux_coordinates = {
-        (item["platform"], item["architecture"]): item["status"]
+        (item["cell_id"], item["architecture"]): item["status"]
         for item in linux["coordinates"]
     }
-    required_base = {(platform, architecture) for platform in LINUX_BASE_PLATFORMS for architecture in ARCHITECTURES}
-    if not required_base.issubset(linux_coordinates):
-        reasons.append("Linux coverage is missing Debian, Ubuntu, Fedora, or Alpine architecture coordinates")
-    chosen_rhel = {
-        platform for platform in RHEL_PLATFORMS if all((platform, arch) in linux_coordinates for arch in ARCHITECTURES)
+    expected_linux_coordinates = {
+        (cell_id, architecture)
+        for cell_id in QUALIFICATION_CELL_IDS
+        for architecture in ARCHITECTURES
     }
-    if len(chosen_rhel) != 1:
+    if set(linux_coordinates) != expected_linux_coordinates:
         reasons.append(
-            "Linux coverage must contain exactly one complete RHEL-compatible AMD64 target"
+            "Linux container coverage must contain exactly the eight frozen AMD64 cells"
         )
-    allowed_linux = LINUX_BASE_PLATFORMS | RHEL_PLATFORMS
-    if any(platform not in allowed_linux or architecture not in ARCHITECTURES for platform, architecture in linux_coordinates):
-        reasons.append("Linux coverage contains an unknown platform or architecture")
-    if len(linux_coordinates) != 5:
-        reasons.append("Linux coverage must contain exactly five required coordinates")
     package_blockers = set(by_kind["linux_package_lifecycle"].blockers)
     alpine_statuses = {
         status
-        for (platform, _), status in linux_coordinates.items()
-        if platform == "alpine"
+        for (cell_id, _), status in linux_coordinates.items()
+        if cell_id in ALPINE_CELL_IDS
     }
     if "SW-PKG-001" in package_blockers and alpine_statuses != {"blocker"}:
         reasons.append("SW-PKG-001 must be bound to the Alpine AMD64 blocker")
@@ -740,8 +952,8 @@ def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[st
         reasons.append("Alpine blocker coverage lacks canonical SW-PKG-001")
     config_statuses = {
         status
-        for (platform, _), status in linux_coordinates.items()
-        if platform != "alpine"
+        for (cell_id, _), status in linux_coordinates.items()
+        if cell_id not in ALPINE_CELL_IDS
     }
     if "SW-CFG-001" in package_blockers and config_statuses != {"blocker"}:
         reasons.append(
@@ -764,6 +976,7 @@ def policy_reasons(profile: str, reports: tuple[ReportEvidence, ...]) -> list[st
                     "previous_version",
                     "candidate_version",
                     "runtime_mode",
+                    "previous_manifest_sha256",
                     "previous_package_checksums",
                 }
             ):
@@ -884,6 +1097,9 @@ def evaluate_gate(
     for report in lifecycle_reports:
         previous_checksums.update(report.previous_checksums)
     passed = not reasons
+    package_report = next(
+        report for report in reports if report.kind == "linux_package_lifecycle"
+    )
     aggregate = {
         "schema_version": SCHEMA_VERSION,
         "profile": args.profile,
@@ -897,7 +1113,13 @@ def evaluate_gate(
             "package_manifest_sha256": packages.sha256,
             "package_checksums": packages.checksums,
             "previous_version": previous_version,
+            "previous_manifest_sha256": package_report.document["lifecycle"][
+                "previous_manifest_sha256"
+            ],
             "previous_package_checksums": previous_checksums,
+            "qualification_matrix": package_report.document[
+                "qualification_matrix"
+            ],
         },
         "reports": {
             report.kind: {
@@ -907,6 +1129,17 @@ def evaluate_gate(
                 "generated_at": report.generated_at.isoformat(),
                 "harness_complete": report.harness_complete,
                 "release_ready": report.release_ready,
+                **(
+                    {
+                        "evidence_kind": report.document["evidence_kind"],
+                        "evidence_scope": report.document["evidence_scope"],
+                        "qualification_matrix": report.document[
+                            "qualification_matrix"
+                        ],
+                    }
+                    if report.kind == "linux_package_lifecycle"
+                    else {}
+                ),
             }
             for report in reports
         },
@@ -959,7 +1192,9 @@ def verify_aggregate(
         or document["reasons"] != []
         or document["allowlisted_findings"] != []
     ):
-        raise EvidenceError("aggregate is not an unqualified release PASS verdict")
+        raise EvidenceError(
+            "aggregate is not an exact container-lifecycle-scoped release gate PASS verdict"
+        )
     generated_at = parse_timestamp(document["generated_at"], "aggregate.generated_at")
     expires_at = parse_timestamp(document["expires_at"], "aggregate.expires_at")
     if generated_at > current + timedelta(seconds=FUTURE_SKEW_SECONDS):

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import package_lifecycle_lab as package_lab
+import package_qualification_matrix as qualification_matrix
 import release_qualification_gate as gate
 
 
@@ -73,6 +74,7 @@ RAW_TOP_KEYS = {
             "package_roots",
             "platforms",
             "qualification_binding",
+            "qualification_matrix",
             "native_shards",
         }
     ),
@@ -123,12 +125,21 @@ class RawReport:
 
 
 @dataclass(frozen=True)
+class QualificationMatrix:
+    snapshot: gate.FileSnapshot
+    document: dict[str, Any]
+    matrix_id: str
+    sha256: str
+
+
+@dataclass(frozen=True)
 class ValidatedInputs:
     binding: gate.RepositoryBinding
     candidate: gate.PackageManifest
     previous: gate.PackageManifest
     raws: dict[str, RawReport]
     package_shards: dict[str, RawReport]
+    qualification_matrix: QualificationMatrix
     envelopes: dict[str, dict[str, Any]]
 
 
@@ -601,6 +612,11 @@ PACKAGE_CONTRACT_COORDINATE_KEYS = frozenset(
 )
 PACKAGE_SCOPE_KEYS = frozenset(
     {
+        "evidence_kind",
+        "coverage_kind",
+        "real_host_evidence_included",
+        "required_checks_complete",
+        "covered_scenarios",
         "container_lab_complete",
         "coordinate_classification",
         "host_architecture",
@@ -634,6 +650,8 @@ PACKAGE_QUALIFICATION_BINDING_KEYS = frozenset(
         "previous_manifest_sha256",
     }
 )
+PACKAGE_QUALIFICATION_MATRIX_KEYS = frozenset({"matrix_id", "sha256"})
+PACKAGE_QUALIFICATION_MATRIX_PATH = "scripts/ci/package_qualification_matrix.json"
 PACKAGE_NATIVE_SHARDS_KEYS = frozenset({"schema_version", "mode", "reports"})
 PACKAGE_NATIVE_SHARD_RECORD_KEYS = frozenset(
     {
@@ -694,8 +712,10 @@ PACKAGE_NATIVE_SHARD_NAMES = {
 PACKAGE_NATIVE_AGGREGATE_HOST = "native-shards:amd64"
 PACKAGE_PLATFORM_KEYS = frozenset(
     {
+        "cell_id",
         "name",
         "distribution",
+        "version",
         "family",
         "architecture",
         "architecture_id",
@@ -883,8 +903,8 @@ LIFECYCLE_CLAIM_KEYS = (
 
 def _package_versions(document: dict[str, Any], expected_version: str) -> tuple[str, str]:
     _exact_keys(document, RAW_TOP_KEYS["package"], "package raw report")
-    if _integer(document["schema_version"], "package.schema_version") != 4:
-        _fail("package raw report schema version must be 4")
+    if _integer(document["schema_version"], "package.schema_version") != 5:
+        _fail("package raw report schema version must be 5")
     contract = _exact_keys(
         document["package_version_contract"], PACKAGE_CONTRACT_KEYS, "package.version_contract"
     )
@@ -939,6 +959,58 @@ def _validate_package_qualification_binding(
     for key in ("candidate_manifest_sha256", "previous_manifest_sha256"):
         _sha256(binding[key], f"package.qualification_binding.{key}")
     return binding
+
+
+def _load_qualification_matrix(
+    path: Path,
+    binding: gate.RepositoryBinding,
+) -> QualificationMatrix:
+    expected_path = gate._absolute_without_symlinks(
+        binding.root / PACKAGE_QUALIFICATION_MATRIX_PATH,
+        "repository package qualification matrix",
+    )
+    supplied_path = gate._absolute_without_symlinks(
+        path,
+        "package qualification matrix",
+    )
+    if supplied_path != expected_path:
+        _fail(
+            "package qualification matrix must be the exact repository contract "
+            f"at {PACKAGE_QUALIFICATION_MATRIX_PATH}"
+        )
+    snapshot = gate.read_snapshot(supplied_path, "package qualification matrix")
+    committed_payload = _git_blob_bytes(binding, PACKAGE_QUALIFICATION_MATRIX_PATH)
+    if snapshot.payload != committed_payload:
+        _fail("package qualification matrix bytes differ from the exact Git commit")
+    try:
+        document = qualification_matrix.validate_document(
+            gate.strict_json(snapshot.payload, "package qualification matrix")
+        )
+    except (qualification_matrix.QualificationMatrixError, gate.EvidenceError) as exc:
+        raise AdapterError(f"invalid package qualification matrix: {exc}") from exc
+    digest = hashlib.sha256(snapshot.payload).hexdigest()
+    matrix_id = _string(document["matrix_id"], "package qualification matrix id")
+    if document["target_release"] != binding.version:
+        _fail("package qualification matrix target differs from the exact release")
+    return QualificationMatrix(snapshot, document, matrix_id, digest)
+
+
+def _validate_package_qualification_matrix_binding(
+    value: Any,
+    expected: QualificationMatrix,
+    *,
+    label: str = "package.qualification_matrix",
+) -> dict[str, Any]:
+    matrix_binding = _exact_keys(
+        value,
+        PACKAGE_QUALIFICATION_MATRIX_KEYS,
+        label,
+    )
+    matrix_id = _string(matrix_binding["matrix_id"], f"{label}.matrix_id")
+    digest = _sha256(matrix_binding["sha256"], f"{label}.sha256")
+    if matrix_id != expected.matrix_id or digest != expected.sha256:
+        _fail(f"{label} differs from the exact Git-bound qualification matrix")
+    return matrix_binding
 
 
 def _validate_lifecycle_helper(
@@ -1144,18 +1216,28 @@ def _validate_package_shard_binding(
     document: dict[str, Any],
     package_shards: dict[str, RawReport],
     expected_binding: dict[str, Any],
+    expected_matrix: QualificationMatrix,
 ) -> None:
     binding = _validate_package_qualification_binding(
         document["qualification_binding"]
     )
     if binding != expected_binding:
         _fail("package qualification binding differs from the exact workflow inputs")
+    _validate_package_qualification_matrix_binding(
+        document["qualification_matrix"],
+        expected_matrix,
+    )
     records = _validate_package_native_shards(document["native_shards"])
     if set(package_shards) != {"amd64"}:
         _fail("package native shard file inventory is incomplete")
     for architecture in ("amd64",):
         raw = package_shards[architecture]
         record = records[architecture]
+        _validate_package_qualification_matrix_binding(
+            raw.document["qualification_matrix"],
+            expected_matrix,
+            label=f"package.{architecture}.qualification_matrix",
+        )
         if raw.snapshot.path.name != PACKAGE_NATIVE_SHARD_NAMES[architecture]:
             _fail(f"package {architecture} shard basename is invalid")
         if raw.snapshot.sha256 != record["report_sha256"]:
@@ -1903,9 +1985,11 @@ def _validate_runtime_scenario(
     scenario: str,
     label: str,
     *,
+    candidate_version: str,
     expected_uid_map: list[dict[str, Any]] | None = None,
     expected_gid_map: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    candidate_version = _string(candidate_version, f"{label}.candidate_version")
     result = _exact_keys(value, PACKAGE_SCENARIO_KEYS, label)
     required_boots = 3 if scenario == "upgrade-rollback" else 1
     exec_exit_codes = _list(
@@ -1954,7 +2038,12 @@ def _validate_runtime_scenario(
             event["detail"], f"{label}.events[{event_index}].detail", empty=True
         )
     try:
-        package_lab.validate_event_contract(events, spec.family, scenario)
+        package_lab.validate_event_contract(
+            events,
+            spec.family,
+            scenario,
+            candidate_version=candidate_version,
+        )
     except package_lab.LifecycleLabError as exc:
         raise AdapterError(f"{label} event contract is invalid: {exc}") from exc
     _string(result["log_tail"], f"{label}.log_tail", empty=True)
@@ -2186,8 +2275,15 @@ def _derive_platform_lifecycle_claims(
     }
 
 
-def _validate_package_schema(document: dict[str, Any]) -> None:
+def _validate_package_schema(
+    document: dict[str, Any],
+    expected_matrix: QualificationMatrix,
+) -> None:
     _validate_package_qualification_binding(document["qualification_binding"])
+    _validate_package_qualification_matrix_binding(
+        document["qualification_matrix"],
+        expected_matrix,
+    )
     native_records = _validate_package_native_shards(document["native_shards"])
     contract = _exact_keys(
         document["package_version_contract"], PACKAGE_CONTRACT_KEYS, "package.version_contract"
@@ -2213,7 +2309,54 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
                 _fail("package coordinate numeric version is invalid")
 
     scope = _exact_keys(document["scope"], PACKAGE_SCOPE_KEYS, "package.scope")
-    _boolean(scope["container_lab_complete"], "package.scope.container_lab_complete")
+    if (
+        _boolean(
+            scope["container_lab_complete"],
+            "package.scope.container_lab_complete",
+        )
+        is not True
+    ):
+        _fail("package container lifecycle scope is not complete")
+    if scope["evidence_kind"] != "container-lifecycle":
+        _fail("package scope must be limited to container-lifecycle evidence")
+    if scope["coverage_kind"] != "container_scenarios_only":
+        _fail("package scope must cover container scenarios only")
+    if (
+        _boolean(
+            scope["real_host_evidence_included"],
+            "package.scope.real_host_evidence_included",
+        )
+        is not False
+        or _boolean(
+            scope["required_checks_complete"],
+            "package.scope.required_checks_complete",
+        )
+        is not False
+    ):
+        _fail("package scope may not claim real-host or complete required-check evidence")
+    covered_scenarios = _list(
+        scope["covered_scenarios"], "package.scope.covered_scenarios"
+    )
+    expected_covered_scenarios = [
+        {
+            "cell_id": cell["id"],
+            "scenarios": list(cell["container_scenarios"]),
+        }
+        for cell in expected_matrix.document["cells"]
+    ]
+    for index, value in enumerate(covered_scenarios):
+        entry = _exact_keys(
+            value,
+            {"cell_id", "scenarios"},
+            f"package.scope.covered_scenarios[{index}]",
+        )
+        _string(entry["cell_id"], f"package.scope.covered_scenarios[{index}].cell_id")
+        _string_list(
+            entry["scenarios"],
+            f"package.scope.covered_scenarios[{index}].scenarios",
+        )
+    if covered_scenarios != expected_covered_scenarios:
+        _fail("package covered scenarios differ from the exact ordered matrix contract")
     for key in (
         "host_architecture",
         "network_during_image_bootstrap",
@@ -2231,18 +2374,37 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
         _fail("package report must identify the exact AMD64 native shard model")
     if scope["network_during_package_operations"] != "disabled":
         _fail("package operations were not network-isolated")
+    if scope["architecture_coverage_policy"] != (
+        "container lifecycle qualification requires every declared "
+        "container_scenario in the exact eight-cell AMD64 matrix on the native "
+        "AMD64 shard; it does not close real-host, updater, or reboot obligations"
+    ):
+        _fail("package architecture coverage policy is not the exact scoped contract")
     classification = _list(scope["coordinate_classification"], "package.scope.coordinate_classification")
-    if len(classification) != 5:
-        _fail("package coordinate classification must contain exactly five coordinates")
+    expected_cell_ids = [cell["id"] for cell in expected_matrix.document["cells"]]
+    if len(classification) != len(expected_cell_ids):
+        _fail("package coordinate classification must contain exactly eight cells")
     for index, item in enumerate(classification):
         entry = _exact_keys(
             item,
-            {"distribution", "architecture_id", "family", "status", "blocker_ids"},
+            {"cell_id", "architecture_id", "family", "status", "blocker_ids"},
             f"package.scope.coordinate_classification[{index}]",
         )
-        for key in ("distribution", "architecture_id", "family", "status"):
+        for key in ("cell_id", "architecture_id", "family", "status"):
             _string(entry[key], f"package.scope.coordinate_classification[{index}].{key}")
         _string_list(entry["blocker_ids"], f"package.scope.coordinate_classification[{index}].blocker_ids", sorted_unique=True)
+        expected_cell = expected_matrix.document["cells"][index]
+        if (
+            entry["cell_id"] != expected_cell_ids[index]
+            or entry["architecture_id"] != "amd64"
+            or entry["family"] != expected_cell["family"]
+            or entry["status"] != "pass"
+            or entry["blocker_ids"] != []
+        ):
+            _fail(
+                "package coordinate classification differs from the frozen "
+                f"cell at index {index}"
+            )
     for key in ("architectures_completed",):
         _string_list(scope[key], f"package.scope.{key}")
     incomplete = _list(scope["architectures_incomplete_or_failed"], "package.scope.architectures_incomplete_or_failed")
@@ -2250,30 +2412,63 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
         entry = _exact_keys(item, {"architecture", "status", "reason"}, f"package.scope.architectures_incomplete_or_failed[{index}]")
         for key in entry:
             _string(entry[key], f"package.scope.architectures_incomplete_or_failed[{index}].{key}")
+    if scope["architectures_completed"] != [
+        package_lab.ARCHITECTURE_LABELS["amd64"]
+    ] or incomplete != []:
+        _fail("package completed architecture scope is not exact")
     architecture_coverage = _list(scope["architecture_coverage"], "package.scope.architecture_coverage")
     if len(architecture_coverage) != 1:
         _fail("package architecture coverage must contain AMD64 only")
     for index, item in enumerate(architecture_coverage):
-        entry = _exact_keys(item, {"architecture", "architecture_id", "status", "required_distributions", "completed_distributions", "incomplete_or_failed_distributions"}, f"package.scope.architecture_coverage[{index}]")
+        entry = _exact_keys(item, {"architecture", "architecture_id", "status", "required_cells", "completed_cells", "incomplete_or_failed_cells"}, f"package.scope.architecture_coverage[{index}]")
         for key in ("architecture", "architecture_id", "status"):
             _string(entry[key], f"package.scope.architecture_coverage[{index}].{key}")
-        for key in ("required_distributions", "completed_distributions", "incomplete_or_failed_distributions"):
+        for key in ("required_cells", "completed_cells", "incomplete_or_failed_cells"):
             _string_list(entry[key], f"package.scope.architecture_coverage[{index}].{key}")
+        if (
+            entry["architecture"] != package_lab.ARCHITECTURE_LABELS["amd64"]
+            or entry["architecture_id"] != "amd64"
+            or entry["status"] != "pass"
+            or entry["required_cells"] != expected_cell_ids
+            or entry["completed_cells"] != expected_cell_ids
+            or entry["incomplete_or_failed_cells"] != []
+        ):
+            _fail("package AMD64 coverage is not the exact eight-cell matrix")
     family_coverage = _list(scope["family_architecture_coverage"], "package.scope.family_architecture_coverage")
     if len(family_coverage) != 3:
         _fail("package family/architecture coverage must contain three coordinates")
     for index, item in enumerate(family_coverage):
-        entry = _exact_keys(item, {"family", "architecture", "architecture_id", "status", "required_distributions", "completed_distributions"}, f"package.scope.family_architecture_coverage[{index}]")
+        entry = _exact_keys(item, {"family", "architecture", "architecture_id", "status", "required_cells", "completed_cells"}, f"package.scope.family_architecture_coverage[{index}]")
         for key in ("family", "architecture", "architecture_id", "status"):
             _string(entry[key], f"package.scope.family_architecture_coverage[{index}].{key}")
-        for key in ("required_distributions", "completed_distributions"):
+        for key in ("required_cells", "completed_cells"):
             _string_list(entry[key], f"package.scope.family_architecture_coverage[{index}].{key}")
+        expected_family = package_lab.REQUIRED_FAMILIES[index]
+        expected_family_cells = [
+            cell["id"]
+            for cell in expected_matrix.document["cells"]
+            if cell["family"] == expected_family
+        ]
+        if (
+            entry["family"] != expected_family
+            or entry["architecture"] != package_lab.ARCHITECTURE_LABELS["amd64"]
+            or entry["architecture_id"] != "amd64"
+            or entry["status"] != "pass"
+            or entry["required_cells"] != expected_family_cells
+            or entry["completed_cells"] != expected_family_cells
+        ):
+            _fail(f"package {expected_family} coverage is not matrix-exact")
     for key in ("required_platform_coordinates", "missing_platform_coordinates"):
         entries = _list(scope[key], f"package.scope.{key}")
         for index, item in enumerate(entries):
-            entry = _exact_keys(item, {"distribution", "architecture"}, f"package.scope.{key}[{index}]")
-            _string(entry["distribution"], f"package.scope.{key}[{index}].distribution")
+            entry = _exact_keys(item, {"cell_id", "architecture"}, f"package.scope.{key}[{index}]")
+            _string(entry["cell_id"], f"package.scope.{key}[{index}].cell_id")
             _string(entry["architecture"], f"package.scope.{key}[{index}].architecture")
+    if scope["required_platform_coordinates"] != [
+        {"cell_id": cell_id, "architecture": "amd64"}
+        for cell_id in expected_cell_ids
+    ] or scope["missing_platform_coordinates"] != []:
+        _fail("package scope does not prove the exact complete eight-cell inventory")
 
     engine = _validate_package_engine(
         document["engine"], "package.engine", architecture="native-shards"
@@ -2307,30 +2502,51 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
         _fail("package roots were not mounted read-only")
 
     platforms = _list(document["platforms"], "package.platforms")
-    if len(platforms) != 5:
-        _fail("package report must contain exactly five platform results")
-    seen: set[tuple[str, str]] = set()
-    specs = {(item.distribution, item.architecture): item for item in package_lab.DEFAULT_PLATFORMS}
+    matrix_cells = expected_matrix.document["cells"]
+    expected_cell_ids = [cell["id"] for cell in matrix_cells]
+    if len(platforms) != len(expected_cell_ids):
+        _fail(
+            "package report must contain exactly one result for each of the "
+            f"{len(expected_cell_ids)} qualification cells"
+        )
+    seen_cell_ids: set[str] = set()
+    specs = {item.cell_id: item for item in package_lab.DEFAULT_PLATFORMS}
+    if list(specs) != expected_cell_ids:
+        _fail("package laboratory platform order differs from the frozen matrix")
     for index, item in enumerate(platforms):
         platform = _exact_keys(item, PACKAGE_PLATFORM_KEYS, f"package.platforms[{index}]")
-        for key in ("name", "distribution", "family", "architecture", "architecture_id", "package_architecture", "podman_platform", "image", "purge_semantics", "candidate_version", "previous_version", "bootstrap_execution", "lifecycle_network", "runtime_mode", "restart_contract", "status"):
+        for key in ("cell_id", "name", "distribution", "version", "family", "architecture", "architecture_id", "package_architecture", "podman_platform", "image", "purge_semantics", "candidate_version", "previous_version", "bootstrap_execution", "lifecycle_network", "runtime_mode", "restart_contract", "status"):
             _string(platform[key], f"package.platforms[{index}].{key}")
-        coordinate = (platform["distribution"], platform["architecture_id"])
-        if coordinate in seen or coordinate not in specs:
-            _fail(f"package platform coordinate is duplicate or unsupported: {coordinate}")
-        seen.add(coordinate)
-        spec = specs[coordinate]
+        cell_id = platform["cell_id"]
+        if cell_id in seen_cell_ids or cell_id != expected_cell_ids[index]:
+            _fail(
+                "package platform cell identity is duplicate, missing, or out of "
+                f"frozen order at index {index}: {cell_id!r}"
+            )
+        seen_cell_ids.add(cell_id)
+        spec = specs[cell_id]
+        cell = matrix_cells[index]
+        coordinate = (cell_id, platform["architecture_id"])
         expected = {
             "name": spec.name,
+            "distribution": cell["distribution"],
+            "version": cell["version"],
             "family": spec.family,
             "architecture": package_lab.ARCHITECTURE_LABELS[spec.architecture],
+            "architecture_id": spec.architecture,
             "package_architecture": spec.package_architecture,
             "podman_platform": spec.podman_platform,
-            "image": spec.image,
+            "image": cell["image"],
             "purge_semantics": spec.purge_semantics,
         }
         if any(platform[key] != value for key, value in expected.items()):
             _fail(f"package platform metadata differs from the pinned matrix at {coordinate}")
+        if (
+            tuple(spec.scenarios) != tuple(cell["container_scenarios"])
+            or tuple(package_lab.EXPECTED_SCENARIOS[spec.family])
+            != tuple(cell["container_scenarios"])
+        ):
+            _fail(f"package platform scenario contract differs from the matrix at {coordinate}")
         if (
             platform["lifecycle_network"] != "disabled"
             or platform["runtime_mode"] != "active-real-init"
@@ -2351,9 +2567,15 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
             _string(artifact["filename"], f"package.platforms[{index}].{artifact_key}.filename")
             _string(artifact["version"], f"package.platforms[{index}].{artifact_key}.version")
             _sha256(artifact["sha256"], f"package.platforms[{index}].{artifact_key}.sha256")
-        probe = _exact_keys(platform["architecture_probe"], {"status", "execution_mode", "podman_platform", "expected_uname", "actual_uname", "container_exit_code", "network", "filesystem"}, f"package.platforms[{index}].architecture_probe")
-        for key in ("status", "execution_mode", "podman_platform", "expected_uname", "actual_uname", "network", "filesystem"):
+        probe = _exact_keys(platform["architecture_probe"], {"status", "execution_mode", "podman_platform", "expected_uname", "actual_uname", "expected_distribution", "actual_distribution", "expected_distribution_version", "actual_distribution_version", "container_exit_code", "network", "filesystem"}, f"package.platforms[{index}].architecture_probe")
+        for key in ("status", "execution_mode", "podman_platform", "expected_uname", "actual_uname", "expected_distribution", "actual_distribution", "expected_distribution_version", "actual_distribution_version", "network", "filesystem"):
             _string(probe[key], f"package.platforms[{index}].architecture_probe.{key}")
+        try:
+            package_lab.validate_available_architecture_probe(probe, spec)
+        except package_lab.LifecycleLabError as exc:
+            raise AdapterError(
+                f"package architecture execution probe is invalid at {coordinate}: {exc}"
+            ) from exc
         if (
             probe["status"] != "available"
             or probe["network"] != "disabled"
@@ -2365,6 +2587,9 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
             or probe["podman_platform"] != spec.podman_platform
             or probe["expected_uname"] != spec.uname_architecture
             or probe["actual_uname"] != spec.uname_architecture
+            or probe["expected_distribution"] != cell["distribution"]
+            or probe["actual_distribution"] != cell["distribution"]
+            or probe["expected_distribution_version"] != cell["version"]
             or probe["execution_mode"] != "native"
             or platform["bootstrap_execution"] != "native_container_build"
         ):
@@ -2385,6 +2610,7 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
                 spec,
                 expected_scenarios[scenario_index],
                 scenario_label,
+                candidate_version=platform["candidate_version"],
                 expected_uid_map=native_records[spec.architecture]["uid_map"],
                 expected_gid_map=native_records[spec.architecture]["gid_map"],
             )
@@ -2403,8 +2629,8 @@ def _validate_package_schema(document: dict[str, Any]) -> None:
                         _string(entry[key], f"package inventory filesystem.{key}", empty=key == "value")
                     for key in ("uid", "gid"):
                         _integer(entry[key], f"package inventory filesystem.{key}")
-    if seen != package_lab.REQUIRED_PLATFORM_COORDINATES:
-        _fail("package platform matrix is incomplete")
+    if seen_cell_ids != set(expected_cell_ids):
+        _fail("package platform matrix cell inventory is incomplete")
 
 
 def _validate_package(
@@ -2414,12 +2640,14 @@ def _validate_package(
     previous: gate.PackageManifest,
     package_shards: dict[str, RawReport],
     expected_qualification_binding: dict[str, Any],
+    expected_matrix: QualificationMatrix,
 ) -> dict[str, Any]:
-    _validate_package_schema(document)
+    _validate_package_schema(document, expected_matrix)
     _validate_package_shard_binding(
         document,
         package_shards,
         expected_qualification_binding,
+        expected_matrix,
     )
     try:
         package_lab.validate_report_version_contract(document)
@@ -2472,14 +2700,11 @@ def _validate_package(
                 _fail(f"package platform artifact binding is invalid at index {index}/{side}")
         if platform["candidate"]["sha256"] == platform["previous"]["sha256"]:
             _fail("package previous and candidate bytes are identical")
-    specs = {
-        (item.distribution, item.architecture): item
-        for item in package_lab.DEFAULT_PLATFORMS
-    }
+    specs = {item.cell_id: item for item in package_lab.DEFAULT_PLATFORMS}
     coordinate_claims = [
         _derive_platform_lifecycle_claims(
             platform,
-            specs[(platform["distribution"], platform["architecture_id"])],
+            specs[platform["cell_id"]],
         )
         for platform in document["platforms"]
     ]
@@ -2497,17 +2722,24 @@ def _validate_package(
         _fail("package lifecycle evidence is not exclusively ACTIVE real-init")
     coordinates = [
         {
-            "platform": item["distribution"],
+            "cell_id": item["cell_id"],
             "architecture": item["architecture_id"],
             "status": item["status"],
         }
         for item in classification["coordinate_classification"]
     ]
+    lifecycle_claims = {
+        key: value
+        for key, value in derived_claims.items()
+        if key != "second_restart"
+    }
     lifecycle = {
         "previous_version": "v" + previous_version,
         "candidate_version": "v" + candidate_version,
-        "runtime_mode": next(iter(runtime_modes)),
-        **derived_claims,
+        "runtime_mode": "active-container-init",
+        **lifecycle_claims,
+        "second_container_restart": derived_claims["second_restart"],
+        "previous_manifest_sha256": previous.sha256,
         "previous_package_checksums": {
             name: digest
             for name, digest in previous.checksums.items()
@@ -2518,6 +2750,23 @@ def _validate_package(
         "release_ready": classification["release_ready"],
         "blocker_ids": blockers,
         "coordinates": coordinates,
+        "evidence_kind": "container-lifecycle",
+        "evidence_scope": {
+            "coverage_kind": "container_scenarios_only",
+            "real_host_evidence_included": False,
+            "required_checks_complete": False,
+            "covered_scenarios": [
+                {
+                    "cell_id": cell["id"],
+                    "scenarios": list(cell["container_scenarios"]),
+                }
+                for cell in expected_matrix.document["cells"]
+            ],
+        },
+        "qualification_matrix_binding": {
+            "matrix_id": expected_matrix.matrix_id,
+            "sha256": expected_matrix.sha256,
+        },
         "lifecycle": lifecycle,
     }
 
@@ -2526,13 +2775,57 @@ def _package_identity_set(*manifests: gate.PackageManifest) -> set[tuple[int, in
     return {(item.device, item.inode) for manifest in manifests for item in manifest.snapshots}
 
 
+def _validate_baseline_package_assets(
+    previous: gate.PackageManifest,
+    baseline: dict[str, Any],
+) -> None:
+    expected_assets = _list(baseline["assets"], "qualification matrix baseline.assets")
+    expected_by_name: dict[str, dict[str, Any]] = {}
+    for index, value in enumerate(expected_assets):
+        asset = _exact_keys(
+            value,
+            {"name", "id", "size", "architecture", "sha256"},
+            f"qualification matrix baseline.assets[{index}]",
+        )
+        name = _string(asset["name"], f"qualification matrix baseline.assets[{index}].name")
+        if name in expected_by_name:
+            _fail(f"qualification matrix baseline asset is duplicated: {name!r}")
+        _integer(asset["id"], f"qualification matrix baseline.assets[{index}].id")
+        _integer(asset["size"], f"qualification matrix baseline.assets[{index}].size")
+        _string(
+            asset["architecture"],
+            f"qualification matrix baseline.assets[{index}].architecture",
+        )
+        _sha256(asset["sha256"], f"qualification matrix baseline.assets[{index}].sha256")
+        expected_by_name[name] = asset
+    actual_by_name = {snapshot.path.name: snapshot for snapshot in previous.snapshots}
+    if set(actual_by_name) != set(expected_by_name):
+        _fail("previous package asset inventory differs from the frozen baseline")
+    for name, expected in expected_by_name.items():
+        snapshot = actual_by_name[name]
+        if snapshot.size != expected["size"] or snapshot.sha256 != expected["sha256"]:
+            _fail(
+                f"previous package asset {name!r} size/SHA256 differs from the frozen baseline"
+            )
+    manifest = expected_by_name.get("SHA256SUMS.txt")
+    if manifest is None or previous.sha256 != manifest["sha256"]:
+        _fail("previous package manifest digest differs from the frozen baseline")
+
+
 def _revalidate_all(
     binding: gate.RepositoryBinding,
     candidate: gate.PackageManifest,
     previous: gate.PackageManifest,
     raws: dict[str, RawReport],
     package_shards: dict[str, RawReport],
+    matrix: QualificationMatrix,
 ) -> None:
+    gate.revalidate(matrix.snapshot, "package qualification matrix")
+    if (
+        matrix.snapshot.payload
+        != _git_blob_bytes(binding, PACKAGE_QUALIFICATION_MATRIX_PATH)
+    ):
+        _fail("package qualification matrix changed after validation")
     for raw in (*raws.values(), *package_shards.values()):
         gate.revalidate(raw.snapshot, f"{raw.label} raw report")
     for manifest, label in ((candidate, "candidate package evidence"), (previous, "previous package evidence")):
@@ -2556,6 +2849,10 @@ def _revalidate_all(
     )
     if current_candidate != candidate or current_previous != previous:
         _fail("package directory inventory changed after validation")
+    _validate_baseline_package_assets(
+        current_previous,
+        matrix.document["package_sources"]["baseline"],
+    )
     current = gate.verify_repository(binding.root, binding.commit_sha, binding.version)
     if current != binding:
         _fail("Git binding changed during adapter validation")
@@ -2568,6 +2865,7 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
         _fail("max report skew must be between 0 and 3600 seconds")
     current = (now or datetime.now(UTC)).astimezone(UTC)
     binding = gate.verify_repository(args.repo_root, args.expected_sha, args.expected_version)
+    matrix = _load_qualification_matrix(args.qualification_matrix, binding)
     candidate = gate.verify_packages(args.candidate_packages_dir, binding)
     raw_paths = {"nft": args.nft_raw, "package": args.package_raw}
     raws = {key: _load_raw(path, key, binding.root, current, args.max_age_seconds) for key, path in raw_paths.items()}
@@ -2614,6 +2912,15 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
         "previous_manifest_sha256": previous.sha256,
     }
     _validate_package_qualification_binding(expected_qualification_binding)
+    baseline = matrix.document["package_sources"]["baseline"]
+    if (
+        baseline["release"] != previous_binding.version
+        or baseline["release_id"] != args.expected_previous_release_id
+    ):
+        _fail(
+            "previous package release inputs differ from the frozen qualification matrix"
+        )
+    _validate_baseline_package_assets(previous, baseline)
     if args.expected_candidate_artifact_name != (
         "syswarden-packages-" + binding.version.removeprefix("v")
     ):
@@ -2658,6 +2965,7 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
         previous,
         package_shards,
         expected_qualification_binding,
+        matrix,
     )
     generated_at = min(timestamps).isoformat()
     bindings = {
@@ -2672,13 +2980,14 @@ def build_expected(args: argparse.Namespace, *, now: datetime | None = None) -> 
         "nft": gate.build_bound_report(kind="nftables_kernel", generated_at=generated_at, raw_report_sha256=raws["nft"].snapshot.sha256, bindings=bindings, **nft),
         "package": gate.build_bound_report(kind="linux_package_lifecycle", generated_at=generated_at, raw_report_sha256=raws["package"].snapshot.sha256, bindings=bindings, **package),
     }
-    _revalidate_all(binding, candidate, previous, raws, package_shards)
+    _revalidate_all(binding, candidate, previous, raws, package_shards, matrix)
     return ValidatedInputs(
         binding,
         candidate,
         previous,
         raws,
         package_shards,
+        matrix,
         envelopes,
     )
 
@@ -2694,7 +3003,12 @@ def _validate_destinations(paths: dict[str, Path], state: ValidatedInputs, *, mu
     protected = {
         (item.snapshot.device, item.snapshot.inode)
         for item in (*state.raws.values(), *state.package_shards.values())
-    } | _package_identity_set(state.candidate, state.previous)
+    } | _package_identity_set(state.candidate, state.previous) | {
+        (
+            state.qualification_matrix.snapshot.device,
+            state.qualification_matrix.snapshot.inode,
+        )
+    }
     existing: set[tuple[int, int]] = set()
     for key, path in paths.items():
         if path.name != OUTPUT_NAMES[key]:
@@ -2738,6 +3052,7 @@ def run_build(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
         state.previous,
         state.raws,
         state.package_shards,
+        state.qualification_matrix,
     )
     return state.envelopes
 
@@ -2760,6 +3075,7 @@ def run_verify(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
         state.previous,
         state.raws,
         state.package_shards,
+        state.qualification_matrix,
     )
     return state.envelopes
 
@@ -2773,6 +3089,7 @@ def _common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--nft-raw", type=Path, required=True)
     parser.add_argument("--package-raw", type=Path, required=True)
     parser.add_argument("--package-amd64-shard", type=Path, required=True)
+    parser.add_argument("--qualification-matrix", type=Path, required=True)
     parser.add_argument("--expected-repository", required=True)
     parser.add_argument("--expected-workflow-run-id", type=int, required=True)
     parser.add_argument("--expected-workflow-run-attempt", type=int, required=True)

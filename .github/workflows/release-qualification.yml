@@ -34,6 +34,7 @@ jobs:
       candidate_artifact_id: ${{ steps.candidate.outputs.artifact_id }}
       candidate_artifact_name: ${{ steps.candidate.outputs.artifact_name }}
       candidate_run_id: ${{ steps.candidate.outputs.run_id }}
+      previous_commit_sha: ${{ steps.previous.outputs.commit_sha }}
       previous_release_id: ${{ steps.previous.outputs.release_id }}
       signed_update_required: ${{ steps.update_contract.outputs.required }}
       unsigned_artifact_name: ${{ steps.inventory.outputs.artifact_name }}
@@ -468,6 +469,18 @@ jobs:
           assets_json="$(gh api --paginate --slurp --method GET \
             "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
             -f per_page=100)"
+          matrix_path="${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json"
+          baseline_release="$(jq -er '.package_sources.baseline.release' "${matrix_path}")"
+          baseline_commit="$(jq -er '.package_sources.baseline.commit' "${matrix_path}")"
+          baseline_release_id="$(jq -er '.package_sources.baseline.release_id' "${matrix_path}")"
+          previous_commit="$(git rev-parse --verify "refs/tags/${PREVIOUS_TAG}^{commit}")"
+          if [[ "${PREVIOUS_TAG}" != "${baseline_release}" || \
+                "${release_id}" != "${baseline_release_id}" || \
+                "${previous_commit}" != "${baseline_commit}" || \
+                "$(jq '.package_sources.baseline.assets | length' "${matrix_path}")" != "4" ]]; then
+            echo "ERROR: previous release identity differs from the frozen baseline." >&2
+            exit 1
+          fi
           transition_required=false
           transition_metadata="${TRANSITION_DIR}/public-release-assets.json"
           transition_source_manifest="${TRANSITION_DIR}/public-SHA256SUMS.txt"
@@ -497,10 +510,20 @@ jobs:
             asset_id="$(jq -r '.[0].id' <<< "${matches}")"
             asset_state="$(jq -r '.[0].state' <<< "${matches}")"
             asset_size="$(jq -r '.[0].size' <<< "${matches}")"
+            expected_asset="$(jq -ce --arg name "${asset_name}" '
+              [.package_sources.baseline.assets[] | select(.name == $name)]
+              | if length == 1 then .[0]
+                else error("baseline asset is absent or ambiguous") end
+            ' "${matrix_path}")"
+            expected_asset_id="$(jq -r '.id' <<< "${expected_asset}")"
+            expected_asset_size="$(jq -r '.size' <<< "${expected_asset}")"
+            expected_asset_sha256="$(jq -r '.sha256' <<< "${expected_asset}")"
             if [[ ! "${asset_id}" =~ ^[0-9]+$ || \
                   "${asset_state}" != "uploaded" || \
-                  ! "${asset_size}" =~ ^[1-9][0-9]*$ ]]; then
-              echo "ERROR: previous release asset ${asset_name} is not a non-empty uploaded asset." >&2
+                  ! "${asset_size}" =~ ^[1-9][0-9]*$ || \
+                  "${asset_id}" != "${expected_asset_id}" || \
+                  "${asset_size}" != "${expected_asset_size}" ]]; then
+              echo "ERROR: previous release asset ${asset_name} identity/size differs from the frozen uploaded asset." >&2
               exit 1
             fi
             destination="${PREVIOUS_PACKAGES_DIR}/${asset_name}"
@@ -515,6 +538,12 @@ jobs:
             test -s "${destination}"
             test -f "${destination}"
             test ! -L "${destination}"
+            if [[ "$(stat -c '%s' "${destination}")" != "${expected_asset_size}" || \
+                  "$(sha256sum "${destination}" | awk '{print $1}')" != \
+                    "${expected_asset_sha256}" ]]; then
+              echo "ERROR: previous release asset ${asset_name} bytes differ from the frozen baseline." >&2
+              exit 1
+            fi
             chmod 0600 "${destination}"
             asset_records="$(jq \
               --arg name "${asset_name}" \
@@ -522,6 +551,7 @@ jobs:
               '. + [{name: $name, id: $id}]' \
               <<< "${asset_records}")"
           done
+          printf 'commit_sha=%s\n' "${previous_commit}" >> "${GITHUB_OUTPUT}"
           printf 'release_id=%s\n' "${release_id}" >> "${GITHUB_OUTPUT}"
           printf 'asset_ids=%s\n' "$(jq -c -S . <<< "${asset_records}")" \
             >> "${GITHUB_OUTPUT}"
@@ -552,6 +582,7 @@ jobs:
           CANDIDATE_ARTIFACT_NAME: ${{ steps.candidate.outputs.artifact_name }}
           CANDIDATE_RUN_ID: ${{ steps.candidate.outputs.run_id }}
           PREVIOUS_ASSET_IDS: ${{ steps.previous.outputs.asset_ids }}
+          PREVIOUS_COMMIT_SHA: ${{ steps.previous.outputs.commit_sha }}
           PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.release_id }}
           PREVIOUS_TAG: ${{ inputs.previous_tag }}
           RELEASE_SHA: ${{ inputs.release_sha }}
@@ -563,17 +594,19 @@ jobs:
             --arg release_tag "${RELEASE_TAG}" \
             --arg release_sha "${RELEASE_SHA}" \
             --arg previous_tag "${PREVIOUS_TAG}" \
+            --arg previous_commit_sha "${PREVIOUS_COMMIT_SHA}" \
             --argjson candidate_run_id "${CANDIDATE_RUN_ID}" \
             --argjson candidate_artifact_id "${CANDIDATE_ARTIFACT_ID}" \
             --arg candidate_artifact_name "${CANDIDATE_ARTIFACT_NAME}" \
             --argjson previous_release_id "${PREVIOUS_RELEASE_ID}" \
             --argjson previous_asset_ids "${PREVIOUS_ASSET_IDS}" \
             '{
-              schema_version: 1,
+              schema_version: 2,
               repository: $repository,
               release_tag: $release_tag,
               release_sha: $release_sha,
               previous_tag: $previous_tag,
+              previous_commit_sha: $previous_commit_sha,
               candidate_package_workflow: "package.yml",
               candidate_package_run_id: $candidate_run_id,
               candidate_package_artifact_id: $candidate_artifact_id,
@@ -633,6 +666,7 @@ jobs:
             --packages-dir "${CANDIDATE_PACKAGES_DIR}" \
             --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}" \
             --package-tmp-dir "${PACKAGE_TMP_DIR}" \
+            --qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
             --architecture-shard amd64 \
             "${common_binding_arguments[@]}" \
             --pull-policy never \
@@ -646,6 +680,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_lifecycle_lab.py \
             --packages-dir "${CANDIDATE_PACKAGES_DIR}" \
             --previous-packages-dir "${PREVIOUS_PACKAGES_DIR}" \
+            --qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
             --aggregate-amd64-report "${RAW_DIR}/package-lifecycle-amd64.json" \
             "${common_binding_arguments[@]}" \
             --output "${RAW_DIR}/package-lifecycle-raw.json" \
@@ -715,6 +750,7 @@ jobs:
             --nft-raw "${RAW_DIR}/nftables-raw.json"
             --package-raw "${RAW_DIR}/package-lifecycle-raw.json"
             --package-amd64-shard "${RAW_DIR}/package-lifecycle-amd64.json"
+            --qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json"
             --expected-repository "${GITHUB_REPOSITORY}"
             --expected-workflow-run-id "${GITHUB_RUN_ID}"
             --expected-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}"
@@ -976,6 +1012,7 @@ jobs:
           summarize_raw_report() {
             local label="$1"
             local path="$2"
+            local qualification_matrix_sha256
             local size
             local summary
             if [[ ! -f "${path}" || -L "${path}" ]]; then
@@ -989,7 +1026,15 @@ jobs:
                 '{label: $label, parse_status: "invalid"}'
               return
             fi
-            if ! summary="$(jq -cS --arg label "${label}" '
+            qualification_matrix_sha256="$(sha256sum \
+              "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" |
+              awk '{print $1}')"
+            if ! summary="$(jq -cS \
+              --arg label "${label}" \
+              --arg qualification_matrix_sha256 \
+                "${qualification_matrix_sha256}" \
+              --slurpfile qualification_matrix \
+                "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" '
               if type != "object" then error("report is not an object") else . end
               | . as $report
               | {
@@ -1008,7 +1053,24 @@ jobs:
                     then $report.status else null end
                   ),
                   release_ready: (
-                    if ($report.release_ready | type) == "boolean"
+                    if $label == "package-lifecycle" then null
+                    elif ($report.release_ready | type) == "boolean"
+                    then $report.release_ready else null end
+                  ),
+                  container_lifecycle_release_ready: (
+                    if $label == "package-lifecycle" and
+                      ($report.release_ready | type) == "boolean" and
+                      $report.scope.evidence_kind == "container-lifecycle" and
+                      $report.scope.coverage_kind == "container_scenarios_only" and
+                      $report.scope.real_host_evidence_included == false and
+                      $report.scope.required_checks_complete == false and
+                      $report.scope.covered_scenarios ==
+                        [$qualification_matrix[0].cells[] |
+                          {cell_id: .id, scenarios: .container_scenarios}] and
+                      $report.qualification_matrix == {
+                        matrix_id: $qualification_matrix[0].matrix_id,
+                        sha256: $qualification_matrix_sha256
+                      }
                     then $report.release_ready else null end
                   ),
                   blocker_count: (
@@ -1108,6 +1170,7 @@ jobs:
             --nft-raw "${RAW_DIR}/nftables-raw.json" \
             --package-raw "${RAW_DIR}/package-lifecycle-raw.json" \
             --package-amd64-shard "${RAW_DIR}/package-lifecycle-amd64.json" \
+            --qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
             --expected-repository "${GITHUB_REPOSITORY}" \
             --expected-workflow-run-id "${GITHUB_RUN_ID}" \
             --expected-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
@@ -1533,6 +1596,7 @@ jobs:
           EXPECTED_CANDIDATE_ARTIFACT_ID: ${{ needs.qualify-release.outputs.candidate_artifact_id }}
           EXPECTED_CANDIDATE_ARTIFACT_NAME: ${{ needs.qualify-release.outputs.candidate_artifact_name }}
           EXPECTED_CANDIDATE_RUN_ID: ${{ needs.qualify-release.outputs.candidate_run_id }}
+          EXPECTED_PREVIOUS_COMMIT_SHA: ${{ needs.qualify-release.outputs.previous_commit_sha }}
           EXPECTED_PREVIOUS_RELEASE_ID: ${{ needs.qualify-release.outputs.previous_release_id }}
           EXPECTED_SIGNED_UPDATE_REQUIRED: ${{ needs.qualify-release.outputs.signed_update_required }}
           PREVIOUS_TAG: ${{ inputs.previous_tag }}
@@ -1643,16 +1707,20 @@ jobs:
             --arg release_tag "${RELEASE_TAG}" \
             --arg release_sha "${RELEASE_SHA}" \
             --arg previous_tag "${PREVIOUS_TAG}" \
+            --arg previous_commit_sha "${EXPECTED_PREVIOUS_COMMIT_SHA}" \
             --arg candidate_artifact_name "${CANDIDATE_ARTIFACT_NAME}" \
             --argjson candidate_run_id "${CANDIDATE_RUN_ID}" \
             --argjson candidate_artifact_id "${CANDIDATE_ARTIFACT_ID}" \
-            --argjson previous_release_id "${EXPECTED_PREVIOUS_RELEASE_ID}" '
+            --argjson previous_release_id "${EXPECTED_PREVIOUS_RELEASE_ID}" \
+            --slurpfile qualification_matrix \
+              "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" '
               (keys | sort) == ([
                 "candidate_package_artifact_id",
                 "candidate_package_artifact_name",
                 "candidate_package_run_id",
                 "candidate_package_workflow",
                 "previous_package_asset_ids",
+                "previous_commit_sha",
                 "previous_release_id",
                 "previous_tag",
                 "release_sha",
@@ -1660,16 +1728,23 @@ jobs:
                 "repository",
                 "schema_version"
               ] | sort) and
-              .schema_version == 1 and
+              .schema_version == 2 and
               .repository == $repository and
               .release_tag == $release_tag and
               .release_sha == $release_sha and
               .previous_tag == $previous_tag and
+              .previous_commit_sha == $previous_commit_sha and
               .candidate_package_workflow == "package.yml" and
               .candidate_package_run_id == $candidate_run_id and
               .candidate_package_artifact_id == $candidate_artifact_id and
               .candidate_package_artifact_name == $candidate_artifact_name and
               .previous_release_id == $previous_release_id and
+              $qualification_matrix[0].package_sources.baseline.release ==
+                $previous_tag and
+              $qualification_matrix[0].package_sources.baseline.commit ==
+                $previous_commit_sha and
+              $qualification_matrix[0].package_sources.baseline.release_id ==
+                $previous_release_id and
               (.previous_package_asset_ids | type == "array" and length == 4) and
               ([.previous_package_asset_ids[].name] | sort) == ([
                 "SHA256SUMS.txt",
@@ -1679,7 +1754,10 @@ jobs:
               ] | sort) and
               all(.previous_package_asset_ids[];
                 (.id | type == "number" and . > 0 and floor == .) and
-                (.name | type == "string" and length > 0))
+                (.name | type == "string" and length > 0)) and
+              (.previous_package_asset_ids | sort_by(.name)) ==
+                ($qualification_matrix[0].package_sources.baseline.assets |
+                  map({name, id}) | sort_by(.name))
             ' "${UNSIGNED_EVIDENCE_ROOT}/qualification-context.json" >/dev/null; then
             echo "ERROR: unsigned qualification context is not bound to hosted signing inputs." >&2
             exit 1
@@ -1750,6 +1828,7 @@ jobs:
             --nft-raw "${UNSIGNED_EVIDENCE_ROOT}/raw/nftables-raw.json" \
             --package-raw "${UNSIGNED_EVIDENCE_ROOT}/raw/package-lifecycle-raw.json" \
             --package-amd64-shard "${UNSIGNED_EVIDENCE_ROOT}/raw/package-lifecycle-amd64.json" \
+            --qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
             --expected-repository "${GITHUB_REPOSITORY}" \
             --expected-workflow-run-id "${GITHUB_RUN_ID}" \
             --expected-workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \

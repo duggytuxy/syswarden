@@ -67,30 +67,28 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
 
     @staticmethod
     def write_inventory_evidence(
-        result_root: Path, family: str, scenario: str
+        result_root: Path,
+        family: str,
+        scenario: str,
+        previous_version: str,
+        candidate_version: str,
     ) -> None:
-        if family == "deb":
-            paths = sorted(package_lifecycle_lab.DEB_PACKAGE_PATHS)
-        elif family == "apk":
-            paths = sorted(package_lifecycle_lab.APK_PACKAGE_PATHS)
-        else:
-            paths = sorted(
-                set(package_lifecycle_lab.PACKAGE_PAYLOAD_PATHS)
-                | {
-                    "/usr/lib/.build-id",
-                    "/usr/lib/.build-id/11",
-                    "/usr/lib/.build-id/11/" + "1" * 38,
-                    "/usr/lib/.build-id/11/" + "2" * 38,
-                    "/usr/lib/.build-id/33",
-                    "/usr/lib/.build-id/33/" + "3" * 38,
-                }
-            )
         file_modes = {
             "/opt/syswarden/bin/syswarden-cli": "750",
             "/opt/syswarden/bin/syswarden-core": "750",
             "/opt/syswarden/bin/syswarden-tui": "750",
             "/opt/syswarden/signatures.json": "640",
             package_lifecycle_lab.BASH_COMPLETION_PATH: "644",
+            package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH: "644",
+            package_lifecycle_lab.PROJECT_LICENSE_PATH: "644",
+        }
+        file_digests = {
+            package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH: (
+                package_lifecycle_lab.GEOIP_DATA_LICENSE_SHA256
+            ),
+            package_lifecycle_lab.PROJECT_LICENSE_PATH: (
+                package_lifecycle_lab.PROJECT_LICENSE_SHA256
+            ),
         }
         link_targets = {
             "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
@@ -107,26 +105,76 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
                 "../../../../opt/syswarden/bin/syswarden-tui"
             ),
         }
-        filesystem = []
-        for path in paths:
-            if path in file_modes:
-                kind, mode, value = "file", file_modes[path], "a" * 64
-            elif path in link_targets:
-                kind, mode, value = "symlink", "777", link_targets[path]
-            elif path == "/usr/share/doc/syswarden/changelog.gz":
-                kind, mode, value = "file", "644", "b" * 64
-            elif path in build_targets:
-                kind, mode, value = "symlink", "777", build_targets[path]
-            else:
-                kind, mode, value = "directory", "755", "-"
-            filesystem.append(
-                f"{path}\t{kind}\t{mode}\t0\t0\t{value}\n"
+
+        def render(version: str) -> tuple[list[str], list[str]]:
+            licensed = (
+                package_lifecycle_lab.parse_syswarden_version(version)
+                >= package_lifecycle_lab.parse_syswarden_version("4.04.0")
             )
+            if family == "deb":
+                paths = sorted(
+                    package_lifecycle_lab.LICENSED_DEB_PACKAGE_PATHS
+                    if licensed
+                    else package_lifecycle_lab.DEB_PACKAGE_PATHS
+                )
+            elif family == "apk":
+                paths = sorted(
+                    package_lifecycle_lab.LICENSED_APK_PACKAGE_PATHS
+                    if licensed
+                    else package_lifecycle_lab.APK_PACKAGE_PATHS
+                )
+            else:
+                paths = sorted(
+                    set(
+                        package_lifecycle_lab.LICENSED_PACKAGE_PAYLOAD_PATHS
+                        if licensed
+                        else package_lifecycle_lab.PACKAGE_PAYLOAD_PATHS
+                    )
+                    | {
+                        "/usr/lib/.build-id",
+                        "/usr/lib/.build-id/11",
+                        "/usr/lib/.build-id/11/" + "1" * 38,
+                        "/usr/lib/.build-id/11/" + "2" * 38,
+                        "/usr/lib/.build-id/33",
+                        "/usr/lib/.build-id/33/" + "3" * 38,
+                    }
+                )
+            filesystem: list[str] = []
+            for path in paths:
+                if path in file_modes:
+                    kind, mode, value = (
+                        "file",
+                        file_modes[path],
+                        file_digests.get(path, "a" * 64),
+                    )
+                elif path in link_targets:
+                    kind, mode, value = "symlink", "777", link_targets[path]
+                elif path == "/usr/share/doc/syswarden/changelog.gz":
+                    kind, mode, value = "file", "644", "b" * 64
+                elif path in build_targets:
+                    kind, mode, value = "symlink", "777", build_targets[path]
+                else:
+                    kind, mode, value = "directory", "755", "-"
+                filesystem.append(
+                    f"{path}\t{kind}\t{mode}\t0\t0\t{value}\n"
+                )
+            return paths, filesystem
+
+        snapshots = {
+            "previous": render(previous_version),
+            "candidate": render(candidate_version),
+        }
         inventory_root = result_root / "inventories"
         inventory_root.mkdir()
         for label in package_lifecycle_lab.expected_inventory_phase_labels(
             scenario
         ):
+            role = (
+                "previous"
+                if label in {"previous", "rollback"}
+                else "candidate"
+            )
+            paths, filesystem = snapshots[role]
             inventory_root.joinpath(
                 f"{scenario}-{label}-manager.tsv"
             ).write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
@@ -221,9 +269,21 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
                 for value in environment
                 if value.startswith("SCENARIO=")
             )
+            candidate_version = next(
+                value.split("=", 1)[1]
+                for value in environment
+                if value.startswith("EXPECTED_CANDIDATE_VERSION=")
+            )
+            previous_version = next(
+                value.split("=", 1)[1]
+                for value in environment
+                if value.startswith("EXPECTED_PREVIOUS_VERSION=")
+            )
             self.containers[name] = {
                 "family": family,
                 "scenario": scenario,
+                "previous_version": previous_version,
+                "candidate_version": candidate_version,
                 "result_root": result_root,
                 "starts": 0,
             }
@@ -242,7 +302,9 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
                 family = str(container["family"])
                 scenario = str(container["scenario"])
                 checks = package_lifecycle_lab.expected_event_checks(
-                    family, scenario
+                    family,
+                    scenario,
+                    candidate_version=str(container["candidate_version"]),
                 )
                 result_root.joinpath("events.tsv").write_text(
                     "".join(
@@ -254,7 +316,13 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
                 result_root.joinpath("commands.log").write_text(
                     "fake lifecycle commands\n", encoding="utf-8"
                 )
-                self.write_inventory_evidence(result_root, family, scenario)
+                self.write_inventory_evidence(
+                    result_root,
+                    family,
+                    scenario,
+                    str(container["previous_version"]),
+                    str(container["candidate_version"]),
+                )
             if container["scenario"] == "upgrade-rollback":
                 result_root.joinpath("restart-state").write_text(
                     ("restart-one", "restart-two", "complete")[
@@ -279,13 +347,15 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
 
 
 class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
-    """Exact stateful Podman double for ACTIVE raw-v4 lifecycle evidence."""
+    """Exact stateful Podman double for ACTIVE raw-v5 lifecycle evidence."""
 
     def __init__(
         self,
         event_status: str = "pass",
         unavailable_architectures: set[str] | None = None,
         reported_architectures: dict[str, str] | None = None,
+        reported_distributions: dict[str, str] | None = None,
+        reported_distribution_versions: dict[str, str] | None = None,
         host_architecture: str = "amd64",
         namespace_failures: int = 0,
         namespace_failure_stderr: str = "runtime not ready\n",
@@ -300,6 +370,8 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
         self.event_status = event_status
         self.unavailable_architectures = unavailable_architectures or set()
         self.reported_architectures = reported_architectures or {}
+        self.reported_distributions = reported_distributions or {}
+        self.reported_distribution_versions = reported_distribution_versions or {}
         self.host_architecture = host_architecture
         self.namespace_failures = namespace_failures
         self.namespace_failure_stderr = namespace_failure_stderr
@@ -582,7 +654,11 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
                 else {"fresh"}
             )
             records: list[str] = []
-            for check in package_lifecycle_lab.expected_event_checks(family, scenario):
+            for check in package_lifecycle_lab.expected_event_checks(
+                family,
+                scenario,
+                candidate_version=str(container["candidate_version"]),
+            ):
                 detail = "fake verified evidence"
                 if self.event_status == "pass" and check.endswith(
                     ".postinstall_contract"
@@ -603,7 +679,13 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
             result_root.joinpath("commands.log").write_text(
                 "fake lifecycle commands\n", encoding="utf-8"
             )
-            self.write_inventory_evidence(result_root, family, scenario)
+            self.write_inventory_evidence(
+                result_root,
+                family,
+                scenario,
+                str(container["previous_version"]),
+                str(container["candidate_version"]),
+            )
         invocation_index = int(container["invocation_index"])
         if scenario == "upgrade-rollback":
             result_root.joinpath("restart-state").write_text(
@@ -665,14 +747,41 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
         elif command[1] == "run":
             platform_name = command[command.index("--platform") + 1]
             architecture = platform_name.split("/", 1)[1]
+            spec = self._spec_from_image(
+                next(
+                    value
+                    for value in command
+                    if value.startswith("docker.io/") and "@sha256:" in value
+                )
+            )
             if architecture in self.unavailable_architectures:
                 returncode = 126
                 stderr = "exec format error\n"
             else:
-                stdout = self.reported_architectures.get(
-                    architecture,
-                    "x86_64",
-                ) + "\n"
+                reported_version = self.reported_distribution_versions.get(
+                    spec.cell_id, spec.version
+                )
+                reported_distribution = self.reported_distributions.get(
+                    spec.cell_id, spec.distribution
+                )
+                stdout = (
+                    self.reported_architectures.get(architecture, "x86_64")
+                    + "\t"
+                    + reported_distribution
+                    + "\t"
+                    + reported_version
+                    + "\n"
+                )
+                if (
+                    reported_distribution != spec.distribution
+                    or not package_lifecycle_lab.distribution_version_matches(
+                        spec.distribution,
+                        spec.version,
+                        reported_version,
+                    )
+                ):
+                    returncode = 1
+                    stderr = "distribution os-release identity mismatch\n"
         elif command[1] == "create":
             volumes = self._volume_values(command)
             result_mount = next(
@@ -687,6 +796,12 @@ class FakePodmanRunner(package_lifecycle_lab.CommandRunner):
                 self.containers[name] = {
                     "family": environment["PACKAGE_FAMILY"],
                     "scenario": environment["SCENARIO"],
+                    "previous_version": environment[
+                        "EXPECTED_PREVIOUS_VERSION"
+                    ],
+                    "candidate_version": environment[
+                        "EXPECTED_CANDIDATE_VERSION"
+                    ],
                     "spec": self._spec_from_image(command[-1]),
                     "result_root": Path(result_mount.removesuffix(":/results:rw")),
                     "volumes": volumes,
@@ -1246,7 +1361,54 @@ class PackageLifecycleLabTests(unittest.TestCase):
 
     def test_default_matrix_is_official_digest_pinned_and_complete(self) -> None:
         platforms = package_lifecycle_lab.DEFAULT_PLATFORMS
-        self.assertEqual(len(platforms), 5)
+        self.assertEqual(len(platforms), 8)
+        self.assertEqual(
+            [spec.cell_id for spec in platforms],
+            [
+                "DEB-13",
+                "DEB-U2404",
+                "DEB-U2604",
+                "RPM-F44",
+                "RPM-A9",
+                "RPM-A10",
+                "APK-322",
+                "APK-324",
+            ],
+        )
+        self.assertEqual(
+            [(spec.distribution, spec.version) for spec in platforms],
+            [
+                ("debian", "13"),
+                ("ubuntu", "24.04"),
+                ("ubuntu", "26.04"),
+                ("fedora", "44"),
+                ("almalinux", "9"),
+                ("almalinux", "10"),
+                ("alpine", "3.22"),
+                ("alpine", "3.24"),
+            ],
+        )
+        self.assertEqual(
+            package_lifecycle_lab.QUALIFICATION_MATRIX_SHA256,
+            hashlib.sha256(
+                package_lifecycle_lab.QUALIFICATION_MATRIX_PATH.read_bytes()
+            ).hexdigest(),
+        )
+        for spec, cell in zip(
+            platforms,
+            package_lifecycle_lab.QUALIFICATION_MATRIX_DOCUMENT["cells"],
+            strict=True,
+        ):
+            with self.subTest(cell_id=spec.cell_id):
+                self.assertEqual(spec.cell_id, cell["id"])
+                self.assertEqual(spec.distribution, cell["distribution"])
+                self.assertEqual(spec.version, cell["version"])
+                self.assertEqual(spec.family, cell["family"])
+                self.assertEqual(spec.image, cell["image"])
+                self.assertEqual(
+                    spec.scenarios,
+                    tuple(cell["container_scenarios"]),
+                )
         self.assertEqual(
             {package_lifecycle_lab.platform_coordinate(spec) for spec in platforms},
             package_lifecycle_lab.REQUIRED_PLATFORM_COORDINATES,
@@ -1312,6 +1474,28 @@ class PackageLifecycleLabTests(unittest.TestCase):
             "lifecycle scenario contract mismatch",
         ):
             package_lifecycle_lab.validate_platforms((missing_scenario,))
+
+        altered_runtime = replace(
+            baseline,
+            bootstrap_command=baseline.bootstrap_command + " && true",
+        )
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError,
+            "runtime contract differs from the frozen definition",
+        ):
+            package_lifecycle_lab.validate_platforms((altered_runtime,))
+
+    def test_matrix_binding_rejects_semantically_equal_but_different_bytes(self) -> None:
+        rewritten = self.root / "qualification-matrix.json"
+        rewritten.write_text(
+            json.dumps(package_lifecycle_lab.QUALIFICATION_MATRIX_DOCUMENT),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError,
+            "matrix bytes differ",
+        ):
+            package_lifecycle_lab.qualification_matrix_binding(rewritten)
 
     def test_removed_arm64_architecture_is_rejected(self) -> None:
         removed = replace(
@@ -3453,6 +3637,15 @@ probe
         self.assertNotIn("--cap-add", probe)
         self.assertNotIn("--privileged", probe)
         self.assertNotIn("--volume", probe)
+        self.assertIn(
+            f"EXPECTED_DISTRIBUTION_VERSION={spec.version}", probe
+        )
+        self.assertIn(f"EXPECTED_DISTRIBUTION={spec.distribution}", probe)
+        self.assertEqual(probe[-3:-1], ("/bin/sh", "-ceu"))
+        self.assertIn("/etc/os-release", probe[-1])
+        self.assertIn("actual_distribution", probe[-1])
+        self.assertIn("almalinux)", probe[-1])
+        self.assertIn("alpine)", probe[-1])
 
         self.assertNotIn("--entrypoint", probe)
         pair = package_lifecycle_lab.PackagePair(
@@ -3485,6 +3678,9 @@ probe
         )
         self.assertIn("EXPECTED_PACKAGE_ARCHITECTURE=x86_64", lifecycle)
         self.assertIn("EXPECTED_UNAME_ARCHITECTURE=x86_64", lifecycle)
+        self.assertIn(
+            f"EXPECTED_DISTRIBUTION_VERSION={spec.version}", lifecycle
+        )
         self.assertIn("--cap-add=NET_ADMIN", lifecycle)
         self.assertIn("--cap-add=SYS_BOOT", lifecycle)
         self.assertNotIn("--cap-add=SYS_ADMIN", lifecycle)
@@ -3496,6 +3692,194 @@ probe
         )
 
         self.assertNotIn("--entrypoint", lifecycle)
+
+    def test_distribution_version_line_matching_is_closed(self) -> None:
+        accepted = (
+            ("debian", "13", "13"),
+            ("ubuntu", "24.04", "24.04"),
+            ("fedora", "44", "44"),
+            ("almalinux", "9", "9"),
+            ("almalinux", "9", "9.7"),
+            ("almalinux", "10", "10.1"),
+            ("alpine", "3.22", "3.22"),
+            ("alpine", "3.22", "3.22.5"),
+            ("alpine", "3.24", "3.24.1"),
+        )
+        rejected = (
+            ("debian", "13", "13.1"),
+            ("ubuntu", "24.04", "24.04.1"),
+            ("fedora", "44", "44.1"),
+            ("almalinux", "9", "10"),
+            ("almalinux", "9", "90.1"),
+            ("almalinux", "9.0", "9.0"),
+            ("alpine", "3.22", "3.23"),
+            ("alpine", "3.22", "3.220.1"),
+            ("alpine", "3.22", "3.22x"),
+            ("alpine", "3.22", "3.22."),
+            ("unknown", "1", "1"),
+        )
+        for distribution, expected, actual in accepted:
+            with self.subTest(
+                verdict="accepted",
+                distribution=distribution,
+                expected=expected,
+                actual=actual,
+            ):
+                self.assertTrue(
+                    package_lifecycle_lab.distribution_version_matches(
+                        distribution, expected, actual
+                    )
+                )
+        for distribution, expected, actual in rejected:
+            with self.subTest(
+                verdict="rejected",
+                distribution=distribution,
+                expected=expected,
+                actual=actual,
+            ):
+                self.assertFalse(
+                    package_lifecycle_lab.distribution_version_matches(
+                        distribution, expected, actual
+                    )
+                )
+
+    def test_runtime_distribution_line_patch_versions_are_accepted(self) -> None:
+        observed_versions = {
+            "RPM-A9": "9.7",
+            "RPM-A10": "10.1",
+            "APK-322": "3.22.5",
+            "APK-324": "3.24.1",
+        }
+        for spec in package_lifecycle_lab.DEFAULT_PLATFORMS:
+            if spec.cell_id not in observed_versions:
+                continue
+            observed = observed_versions[spec.cell_id]
+            with self.subTest(cell_id=spec.cell_id, observed=observed):
+                report = package_lifecycle_lab.run_lab(
+                    self.args(),
+                    runner=FakePodmanRunner(
+                        reported_distribution_versions={spec.cell_id: observed}
+                    ),
+                    platforms=(spec,),
+                    host_architecture="x86_64",
+                )
+                platform = report["platforms"][0]
+                self.assertEqual(platform["status"], "pass")
+                probe = platform["architecture_probe"]
+                self.assertEqual(probe["status"], "available")
+                self.assertEqual(probe["actual_distribution"], spec.distribution)
+                self.assertEqual(probe["actual_distribution_version"], observed)
+
+    def test_runtime_probe_shell_enforces_distribution_line_boundaries(self) -> None:
+        cases = (
+            ("RPM-A9", "almalinux", "9.8", 0),
+            ("RPM-A9", "almalinux", "10.0", 1),
+            ("RPM-A9", "alpine", "9.8", 1),
+            ("APK-322", "alpine", "3.22.5", 0),
+            ("APK-322", "alpine", "3.23.0", 1),
+            ("DEB-U2404", "ubuntu", "24.04", 0),
+            ("DEB-U2404", "ubuntu", "24.04.1", 1),
+        )
+        specs = {
+            spec.cell_id: spec
+            for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
+        }
+        for index, (cell_id, actual_id, actual_version, expected_rc) in enumerate(
+            cases
+        ):
+            with self.subTest(
+                cell_id=cell_id,
+                actual_id=actual_id,
+                actual_version=actual_version,
+            ):
+                spec = specs[cell_id]
+                os_release = self.root / f"probe-os-release-{index}"
+                os_release.write_text(
+                    f"ID={actual_id}\nVERSION_ID={actual_version}\n",
+                    encoding="ascii",
+                )
+                probe = package_lifecycle_lab.architecture_probe_arguments(
+                    "podman", spec
+                )[-1].replace('. /etc/os-release', '. "$1"', 1)
+                lifecycle_source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+                lifecycle_guard = lifecycle_source[
+                    lifecycle_source.index("[ -r /etc/os-release ]") :
+                    lifecycle_source.index('\nRESULT_FILE="/results/events.tsv"')
+                ]
+                lifecycle_guard = lifecycle_guard.replace(
+                    "[ -r /etc/os-release ]", '[ -r "$1" ]'
+                ).replace(". /etc/os-release", '. "$1"')
+                environment = {
+                    **os.environ,
+                    "EXPECTED_DISTRIBUTION": spec.distribution,
+                    "EXPECTED_DISTRIBUTION_VERSION": spec.version,
+                }
+                for script_kind, script in (
+                    ("architecture-probe", probe),
+                    ("lifecycle-guard", lifecycle_guard),
+                ):
+                    result = subprocess.run(
+                        (
+                            shutil.which("dash") or "/bin/sh",
+                            "-ceu",
+                            script,
+                            "distribution-probe",
+                            str(os_release),
+                        ),
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                    )
+                    self.assertEqual(
+                        result.returncode == 0,
+                        expected_rc == 0,
+                        f"{script_kind}: {result.stderr}",
+                    )
+
+    def test_runtime_distribution_version_mismatch_is_fail_closed(self) -> None:
+        for spec in package_lifecycle_lab.DEFAULT_PLATFORMS:
+            with self.subTest(cell_id=spec.cell_id):
+                report = package_lifecycle_lab.run_lab(
+                    self.args(),
+                    runner=FakePodmanRunner(
+                        reported_distribution_versions={spec.cell_id: "0"}
+                    ),
+                    platforms=(spec,),
+                    host_architecture="x86_64",
+                )
+                platform = report["platforms"][0]
+                self.assertEqual(platform["status"], "incomplete")
+                probe = platform["architecture_probe"]
+                self.assertEqual(probe["status"], "unavailable")
+                self.assertEqual(
+                    probe["expected_distribution_version"], spec.version
+                )
+                self.assertEqual(probe["actual_distribution_version"], "0")
+                self.assertIn("VERSION_ID", probe["reason"])
+
+    def test_runtime_distribution_id_mismatch_is_fail_closed(self) -> None:
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.cell_id == "RPM-A9"
+        )
+        report = package_lifecycle_lab.run_lab(
+            self.args(),
+            runner=FakePodmanRunner(
+                reported_distributions={spec.cell_id: "alpine"}
+            ),
+            platforms=(spec,),
+            host_architecture="x86_64",
+        )
+        platform = report["platforms"][0]
+        self.assertEqual(platform["status"], "incomplete")
+        probe = platform["architecture_probe"]
+        self.assertEqual(probe["status"], "unavailable")
+        self.assertEqual(probe["expected_distribution"], "almalinux")
+        self.assertEqual(probe["actual_distribution"], "alpine")
+        self.assertIn("ID", probe["reason"])
+
     def test_amd64_pull_is_explicitly_platform_selected_and_digest_checked(self) -> None:
         spec = next(
             item
@@ -3582,6 +3966,20 @@ probe
             [script.index(fragment) for fragment in lifecycle_order],
             sorted(script.index(fragment) for fragment in lifecycle_order),
         )
+
+    def test_lifecycle_shell_is_syntactically_valid(self) -> None:
+        script = self.root / "package-lifecycle-syntax.sh"
+        script.write_text(
+            package_lifecycle_lab.LIFECYCLE_SCRIPT,
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            (shutil.which("dash") or "/bin/sh", "-n", str(script)),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_candidate_native_license_metadata_is_versioned_and_exact(self) -> None:
         check = "upgrade-rollback.metadata.candidate.license"
@@ -5038,6 +5436,13 @@ probe
         self.assertEqual(
             report["schema_version"], package_lifecycle_lab.SCHEMA_VERSION
         )
+        self.assertEqual(
+            report["qualification_matrix"],
+            {
+                "matrix_id": package_lifecycle_lab.QUALIFICATION_MATRIX_ID,
+                "sha256": package_lifecycle_lab.QUALIFICATION_MATRIX_SHA256,
+            },
+        )
         version_contract = report["package_version_contract"]
         self.assertEqual(version_contract["previous_version"], "4.02.7")
         self.assertEqual(version_contract["candidate_version"], "4.02.8")
@@ -5062,7 +5467,25 @@ probe
             {item["distribution"] for item in report["platforms"]},
             {"debian", "ubuntu", "fedora", "almalinux", "alpine"},
         )
-        self.assertEqual(len(report["platforms"]), 5)
+        self.assertEqual(len(report["platforms"]), 8)
+        self.assertEqual(
+            [item["cell_id"] for item in report["platforms"]],
+            [spec.cell_id for spec in package_lifecycle_lab.DEFAULT_PLATFORMS],
+        )
+        self.assertTrue(
+            all(
+                item["version"]
+                == item["architecture_probe"]["actual_distribution_version"]
+                for item in report["platforms"]
+            )
+        )
+        self.assertTrue(
+            all(
+                item["distribution"]
+                == item["architecture_probe"]["actual_distribution"]
+                for item in report["platforms"]
+            )
+        )
         self.assertTrue(all(item["status"] == "pass" for item in report["platforms"]))
         deb_upgrade = next(
             scenario
@@ -5092,6 +5515,20 @@ probe
             ["amd64/x86_64"],
         )
         self.assertEqual(report["scope"]["missing_platform_coordinates"], [])
+        self.assertEqual(report["scope"]["evidence_kind"], "container-lifecycle")
+        self.assertEqual(
+            report["scope"]["coverage_kind"], "container_scenarios_only"
+        )
+        self.assertIs(report["scope"]["real_host_evidence_included"], False)
+        self.assertIs(report["scope"]["required_checks_complete"], False)
+        self.assertEqual(
+            report["scope"]["covered_scenarios"],
+            package_lifecycle_lab.qualification_matrix_container_scenarios(),
+        )
+        self.assertEqual(
+            report["scope"]["architecture_coverage"][0]["required_cells"],
+            [spec.cell_id for spec in package_lifecycle_lab.DEFAULT_PLATFORMS],
+        )
         family_coverage = {
             item["family"]: item["status"]
             for item in report["scope"]["family_architecture_coverage"]
@@ -5102,7 +5539,7 @@ probe
         )
         self.assertIn("not a SysWarden product rollback", report["scope"]["rollback_model"])
         run_calls = [call for call in runner.calls if call[1] == "run"]
-        self.assertEqual(len(run_calls), 5)
+        self.assertEqual(len(run_calls), 8)
         lifecycle_creates = [
             call
             for call in runner.calls
@@ -5110,7 +5547,7 @@ probe
                 value.endswith(":/results:rw") for value in call
             )
         ]
-        self.assertEqual(len(lifecycle_creates), 13)
+        self.assertEqual(len(lifecycle_creates), 21)
         self.assertTrue(all("--network=none" in call for call in lifecycle_creates))
         bootstrap_creates = [
             call
@@ -5126,16 +5563,51 @@ probe
             if call[1] == "exec"
             and "exec /bin/sh /lab/package-lifecycle.sh" in call[-1]
         ]
-        self.assertEqual(len(start_calls), 13)
-        self.assertEqual(len(restart_calls), 10)
-        self.assertEqual(len(lifecycle_execs), 23)
+        self.assertEqual(len(start_calls), 21)
+        self.assertEqual(len(restart_calls), 16)
+        self.assertEqual(len(lifecycle_execs), 37)
         self.assertEqual(
             len([call for call in runner.calls if call[1] == "commit"]), 0
         )
         build_calls = [call for call in runner.calls if call[1] == "build"]
-        self.assertEqual(len(build_calls), 5)
+        self.assertEqual(len(build_calls), 8)
         self.assertTrue(all("--platform" in call for call in build_calls))
         self.assertTrue(all("--network=host" not in call for call in build_calls))
+
+    def test_v4040_fake_matrix_distinguishes_previous_and_licensed_candidate(self) -> None:
+        candidate = self.root / "candidate-v4040"
+        previous = self.root / "previous-v4033"
+        candidate.mkdir()
+        previous.mkdir()
+        self.create_package_set(candidate, b"candidate-v4040", "4.04.0")
+        self.create_package_set(previous, b"previous-v4033", "4.03.3")
+        report = package_lifecycle_lab.run_lab(
+            self.args(
+                packages_dir=candidate,
+                previous_packages_dir=previous,
+            ),
+            runner=FakePodmanRunner(),
+        )
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(len(report["platforms"]), 8)
+        for platform in report["platforms"]:
+            upgrade = next(
+                item
+                for item in platform["scenarios"]
+                if item["name"] == "upgrade-rollback"
+            )
+            previous_paths = upgrade["inventory_evidence"]["previous"][
+                "manager_paths"
+            ]
+            candidate_paths = upgrade["inventory_evidence"]["candidate"][
+                "manager_paths"
+            ]
+            self.assertNotIn(
+                package_lifecycle_lab.PROJECT_LICENSE_PATH, previous_paths
+            )
+            self.assertIn(
+                package_lifecycle_lab.PROJECT_LICENSE_PATH, candidate_paths
+            )
 
     def test_native_shard_covers_exact_amd64_architecture(self) -> None:
         report = self.native_shard_report()
@@ -5148,13 +5620,33 @@ probe
             {item["architecture_id"] for item in report["platforms"]},
             {"amd64"},
         )
-        self.assertEqual(len(report["platforms"]), 5)
+        self.assertEqual(len(report["platforms"]), 8)
         self.assertTrue(
             all(
                 item["architecture_probe"]["execution_mode"] == "native"
                 for item in report["platforms"]
             )
         )
+
+    def test_native_shard_rejects_missing_duplicate_or_reordered_cells(self) -> None:
+        platforms = package_lifecycle_lab.DEFAULT_PLATFORMS
+        invalid_matrices = {
+            "missing": platforms[:-1],
+            "duplicate": platforms[:-1] + (platforms[0],),
+            "reordered": tuple(reversed(platforms)),
+        }
+        for name, matrix in invalid_matrices.items():
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(
+                    package_lifecycle_lab.LifecycleLabError,
+                    "exact eight matrix cells in canonical order",
+                ):
+                    package_lifecycle_lab.run_lab(
+                        self.qualification_args("amd64"),
+                        runner=FakePodmanRunner(),
+                        platforms=matrix,
+                        host_architecture="x86_64",
+                    )
 
     def test_native_shard_rejects_non_amd64_host(self) -> None:
         amd64_platforms = tuple(
@@ -5190,7 +5682,7 @@ probe
             aggregate["scope"]["host_architecture"],
             package_lifecycle_lab.NATIVE_AGGREGATE_HOST,
         )
-        self.assertEqual(len(aggregate["platforms"]), 5)
+        self.assertEqual(len(aggregate["platforms"]), 8)
         self.assertEqual(
             [item["architecture"] for item in aggregate["native_shards"]["reports"]],
             ["amd64"],
@@ -5250,6 +5742,15 @@ probe
             "wrong native uname": lambda report: report["platforms"][0][
                 "architecture_probe"
             ].__setitem__("actual_uname", "unsupported"),
+            "wrong distribution version": lambda report: report["platforms"][0][
+                "architecture_probe"
+            ].__setitem__("actual_distribution_version", "12"),
+            "wrong distribution id": lambda report: report["platforms"][0][
+                "architecture_probe"
+            ].__setitem__("actual_distribution", "alpine"),
+            "matrix digest mismatch": lambda report: report[
+                "qualification_matrix"
+            ].__setitem__("sha256", "0" * 64),
             "missing coordinate": lambda report: report["platforms"].pop(),
             "duplicate coordinate": lambda report: report["platforms"].__setitem__(
                 -1, dict(report["platforms"][0])
@@ -5326,7 +5827,7 @@ probe
             self.assertEqual(package_lifecycle_lab.main(arguments), 0)
         written = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(written["status"], "pass")
-        self.assertEqual(len(written["platforms"]), 5)
+        self.assertEqual(len(written["platforms"]), 8)
         stdout.write.assert_called_once()
 
     def test_report_version_contract_rejects_schema_order_and_platform_tampering(
@@ -5337,12 +5838,45 @@ probe
         )
         mutations = {
             "schema": lambda item: item.update(schema_version=2),
+            "matrix_id": lambda item: item["qualification_matrix"].update(
+                matrix_id="syswarden-package-qualification/v2"
+            ),
+            "matrix_sha256": lambda item: item["qualification_matrix"].update(
+                sha256="0" * 64
+            ),
+            "coverage_kind": lambda item: item["scope"].update(
+                coverage_kind="full-qualification"
+            ),
+            "real_host_scope": lambda item: item["scope"].update(
+                real_host_evidence_included=True
+            ),
+            "required_checks_scope": lambda item: item["scope"].update(
+                required_checks_complete=True
+            ),
+            "scope_extra_key": lambda item: item["scope"].update(
+                global_qualification_complete=True
+            ),
+            "covered_scenarios": lambda item: item["scope"][
+                "covered_scenarios"
+            ].reverse(),
             "order": lambda item: item["package_version_contract"].update(
                 candidate_version="4.02.7", candidate_numeric=[4, 2, 7]
             ),
             "platform": lambda item: item["platforms"][0].update(
                 candidate_version="4.02.9"
             ),
+            "cell_id": lambda item: item["platforms"][0].update(
+                cell_id="DEB-U2404"
+            ),
+            "distribution_version": lambda item: item["platforms"][0].update(
+                version="12"
+            ),
+            "runtime_distribution_version": lambda item: item["platforms"][0][
+                "architecture_probe"
+            ].update(actual_distribution_version="12"),
+            "runtime_distribution_id": lambda item: item["platforms"][0][
+                "architecture_probe"
+            ].update(actual_distribution="alpine"),
             "coordinate": lambda item: item["package_version_contract"][
                 "coordinates"
             ][0].update(candidate_numeric=[4, 2, 9]),
@@ -5825,7 +6359,7 @@ probe
         alpine_coordinates = [
             item
             for item in classification["coordinate_classification"]
-            if item["distribution"] == "alpine"
+            if item["cell_id"] in {"APK-322", "APK-324"}
         ]
         self.assertTrue(
             all(item["status"] == "incomplete" for item in alpine_coordinates)
@@ -6195,7 +6729,7 @@ probe
         self.assertFalse(rejected["harness_complete"])
         self.assertEqual(rejected["blocker_ids"], [])
         self.assertIn(
-            f"ubuntu/amd64:{drifted['check']}",
+            f"DEB-U2404/amd64:{drifted['check']}",
             rejected["unexpected_failed_checks"],
         )
 
@@ -9765,7 +10299,7 @@ seed_live_legacy_webtui_process
         )
         self.assertEqual(report["status"], "incomplete")
         self.assertFalse(report["scope"]["container_lab_complete"])
-        self.assertEqual(len(report["scope"]["missing_platform_coordinates"]), 3)
+        self.assertEqual(len(report["scope"]["missing_platform_coordinates"]), 6)
         self.assertEqual(report["scope"]["architectures_completed"], [])
 
     def test_image_inspection_architecture_mismatch_is_rejected(self) -> None:
@@ -9891,7 +10425,11 @@ seed_live_legacy_webtui_process
             )
         )
         configured = package_lifecycle_lab.configured_platforms(args)
-        self.assertEqual(len(configured), 5)
+        self.assertEqual(
+            args.qualification_matrix,
+            package_lifecycle_lab.QUALIFICATION_MATRIX_PATH,
+        )
+        self.assertEqual(len(configured), 8)
         self.assertEqual(
             {package_lifecycle_lab.platform_coordinate(spec) for spec in configured},
             package_lifecycle_lab.REQUIRED_PLATFORM_COORDINATES,
@@ -9909,7 +10447,7 @@ seed_live_legacy_webtui_process
             )
         )
         shard_configured = package_lifecycle_lab.configured_platforms(amd64_shard)
-        self.assertEqual(len(shard_configured), 5)
+        self.assertEqual(len(shard_configured), 8)
         self.assertEqual(
             {spec.architecture for spec in shard_configured},
             {"amd64"},
@@ -9932,9 +10470,16 @@ seed_live_legacy_webtui_process
             spec
             for spec in package_lifecycle_lab.configured_platforms(overridden)
             if package_lifecycle_lab.platform_coordinate(spec)
-            == ("ubuntu", "amd64")
+            == ("DEB-U2404", "amd64")
         )
         self.assertEqual(ubuntu_amd64.image, replacement_image)
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError,
+            "frozen image identity mismatch",
+        ):
+            package_lifecycle_lab.validate_platforms(
+                package_lifecycle_lab.configured_platforms(overridden)
+            )
 
 
 if __name__ == "__main__":
