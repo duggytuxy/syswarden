@@ -899,7 +899,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             with self.subTest(mutation=old), self.assertRaises(AssertionError):
                 assert_contract(self.workflow.replace(old, new, 1))
 
-    def test_three_packages_and_five_native_platforms_are_exact(self) -> None:
+    def test_three_packages_and_eight_native_matrix_cells_are_exact(self) -> None:
         catalog = self.package_qualification_matrix
         cells = catalog["cells"]
         self.assertEqual(catalog["target_release"], "v4.04.0")
@@ -924,10 +924,18 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         )
 
         runtime_platforms = package_lifecycle_lab.DEFAULT_PLATFORMS
-        self.assertEqual(len(runtime_platforms), 5)
+        self.assertEqual(len(runtime_platforms), 8)
         self.assertEqual(
-            tuple(platform.name for platform in runtime_platforms),
-            ("Debian", "Ubuntu", "Fedora", "AlmaLinux", "Alpine"),
+            tuple(platform.cell_id for platform in runtime_platforms),
+            tuple(cell["id"] for cell in cells),
+        )
+        self.assertEqual(
+            tuple(platform.version for platform in runtime_platforms),
+            tuple(cell["version"] for cell in cells),
+        )
+        self.assertEqual(
+            tuple(platform.image for platform in runtime_platforms),
+            tuple(cell["image"] for cell in cells),
         )
         self.assertEqual(
             {platform.distribution for platform in runtime_platforms},
@@ -971,7 +979,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_inventories(self.workflow.replace(removed, "", 1))
 
-    def test_previous_v4028_release_transition_and_asset_ids_are_fail_closed(self) -> None:
+    def test_frozen_previous_release_assets_and_transition_are_fail_closed(self) -> None:
         script = workflow_step_script(
             self.workflow, "Download Latest Public Previous Packages by Asset ID"
         )
@@ -991,6 +999,15 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '"repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"',
             "-H 'Accept: application/octet-stream'",
             '"${asset_state}" != "uploaded"',
+            'baseline_commit="$(jq -er \'.package_sources.baseline.commit\'',
+            'previous_commit="$(git rev-parse --verify "refs/tags/${PREVIOUS_TAG}^{commit}")"',
+            '"${previous_commit}" != "${baseline_commit}"',
+            '"${asset_id}" != "${expected_asset_id}"',
+            '"${asset_size}" != "${expected_asset_size}"',
+            '"${expected_asset_sha256}"',
+            "sha256sum \"${destination}\"",
+            "stat -c '%s' \"${destination}\"",
+            "printf 'commit_sha=%s\\n'",
             'verify-packages',
         ):
             self.assertIn(contract, script)
@@ -1006,6 +1023,21 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.assertEqual(expected_assets.count(asset), 1, asset)
         self.assertEqual(script.count("normalize-v4028-linux-packages"), 1)
         self.assertEqual(script.count("verify-packages"), 1)
+        for contract in (
+            '"${previous_commit}" != "${baseline_commit}"',
+            '"${asset_id}" != "${expected_asset_id}"',
+            '"${asset_size}" != "${expected_asset_size}"',
+            '"$(sha256sum "${destination}" | awk \'{print $1}\')" !=',
+        ):
+            with self.subTest(fail_closed_contract=contract), self.assertRaises(
+                AssertionError
+            ):
+                mutated = self.workflow.replace(contract, "false", 1)
+                mutated_script = workflow_step_script(
+                    mutated,
+                    "Download Latest Public Previous Packages by Asset ID",
+                )
+                self.assertIn(contract, mutated_script)
 
     def test_native_runtime_is_isolated_and_has_no_pull_fallback(self) -> None:
         for contract in (
@@ -1074,14 +1106,32 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "--expected-previous-release-id",
         ):
             self.assertEqual(self.workflow.count(argument), 3, argument)
+        matrix_argument = (
+            '--qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/'
+            'package_qualification_matrix.json"'
+        )
+        self.assertEqual(lifecycle.count(matrix_argument), 2)
+        self.assertEqual(self.workflow.count(matrix_argument), 5)
+        for step_name in (
+            "Build and Verify Bound Laboratory Envelopes",
+            "Enforce Final Release Qualification Verdict",
+            "Require Successful Qualification Before Release Signing",
+        ):
+            self.assertIn(
+                matrix_argument,
+                workflow_step_script(self.workflow, step_name),
+                step_name,
+            )
         provenance = workflow_step_script(
             self.workflow, "Record Qualification Provenance Context"
         )
+        self.assertIn("schema_version: 2", provenance)
         for key in (
             "repository",
             "release_tag",
             "release_sha",
             "previous_tag",
+            "previous_commit_sha",
             "candidate_package_run_id",
             "candidate_package_artifact_id",
             "candidate_package_artifact_name",
@@ -1102,6 +1152,29 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             '("syswarden_" + ($previous_tag | ltrimstr("v")) + "_x86_64.apk")',
         ):
             self.assertIn(exact_name, self.workflow)
+        for matrix_binding in (
+            "$qualification_matrix[0].package_sources.baseline.commit",
+            "$qualification_matrix[0].package_sources.baseline.release_id",
+            "map({name, id}) | sort_by(.name)",
+        ):
+            self.assertIn(matrix_binding, self.workflow)
+        self.assertEqual(self.workflow.count(".schema_version == 2"), 1)
+
+    def test_raw_package_failure_summary_never_claims_global_release_readiness(self) -> None:
+        script = workflow_step_script(
+            self.workflow, "Enforce Final Release Qualification Verdict"
+        )
+        for contract in (
+            'if $label == "package-lifecycle" then null',
+            "container_lifecycle_release_ready",
+            '$report.scope.evidence_kind == "container-lifecycle"',
+            '$report.scope.coverage_kind == "container_scenarios_only"',
+            "$report.scope.real_host_evidence_included == false",
+            "$report.scope.required_checks_complete == false",
+            "$report.scope.covered_scenarios ==",
+            "sha256: $qualification_matrix_sha256",
+        ):
+            self.assertIn(contract, script)
 
     def test_premerge_package_workflow_runs_every_qualification_validator(self) -> None:
         step = workflow_step(

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -60,15 +61,15 @@ def replace_snapshot_identity_maps(
 
 
 class AdapterFixture:
-    version = "v4.02.8"
-    previous_version = "v4.02.7"
+    version = "v4.04.0"
+    previous_version = "v4.03.3"
     repository = "duggytuxy/syswarden"
     workflow_run_id = 1001
     workflow_run_attempt = 1
     candidate_run_id = 900
     candidate_artifact_id = 901
-    candidate_artifact_name = "syswarden-packages-4.02.8"
-    previous_release_id = 800
+    candidate_artifact_name = "syswarden-packages-4.04.0"
+    previous_release_id = 377680978
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -92,8 +93,8 @@ class AdapterFixture:
         self.now = datetime.now(UTC).replace(microsecond=0)
         self._make_repository()
         self.commit = self._git("rev-parse", "HEAD")
-        self._make_package_set(self.candidate, "4.02.8", b"candidate")
-        self._make_package_set(self.previous, "4.02.7", b"previous")
+        self._make_package_set(self.candidate, "4.04.0", b"candidate")
+        self._make_package_set(self.previous, "4.03.3", b"previous")
         self._make_raw_reports()
 
     def _run(self, *arguments: str, cwd: Path | None = None) -> str:
@@ -184,6 +185,9 @@ class AdapterFixture:
                 continue
             source.parent.mkdir(parents=True, exist_ok=True)
             source.write_text(f"fixture for {relative}\n", encoding="utf-8")
+        matrix_path = self.repo / adapter.PACKAGE_QUALIFICATION_MATRIX_PATH
+        matrix_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(adapter.qualification_matrix.DEFAULT_MATRIX, matrix_path)
         self._git("add", ".")
         self._git("commit", "-qm", "fixture")
 
@@ -212,6 +216,8 @@ class AdapterFixture:
             "pull_policy": "never",
             "scenario_timeout": 60,
             "package_tmp_dir": self.package_tmp,
+            "qualification_matrix": self.repo
+            / adapter.PACKAGE_QUALIFICATION_MATRIX_PATH,
             "qualification_repository": self.repository,
             "qualification_release_sha": self.commit,
             "qualification_release_tag": self.version,
@@ -401,6 +407,8 @@ class AdapterFixture:
             "nft_raw": self.raw / "nftables-raw.json",
             "package_raw": self.raw / "package-lifecycle-raw.json",
             "package_amd64_shard": self.raw / "package-lifecycle-amd64.json",
+            "qualification_matrix": self.repo
+            / adapter.PACKAGE_QUALIFICATION_MATRIX_PATH,
             "expected_repository": self.repository,
             "expected_workflow_run_id": self.workflow_run_id,
             "expected_workflow_run_attempt": self.workflow_run_attempt,
@@ -426,12 +434,27 @@ class AdapterFixture:
             json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
 
+    def matrix_binding(self) -> adapter.QualificationMatrix:
+        binding = gate.verify_repository(self.repo, self.commit, self.version)
+        return adapter._load_qualification_matrix(
+            self.repo / adapter.PACKAGE_QUALIFICATION_MATRIX_PATH,
+            binding,
+        )
+
 
 class ReleaseQualificationAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.fixture = AdapterFixture(Path(self.temporary.name))
+        self.baseline_validator = adapter._validate_baseline_package_assets
+        baseline_patcher = mock.patch.object(
+            adapter,
+            "_validate_baseline_package_assets",
+            return_value=None,
+        )
+        baseline_patcher.start()
+        self.addCleanup(baseline_patcher.stop)
 
     def assertAdapterError(self, args: argparse.Namespace) -> None:
         with self.assertRaises(gate.EvidenceError):
@@ -464,11 +487,186 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         envelopes = adapter.run_build(self.fixture.args())
         expected_time = self.fixture.now.isoformat()
         self.assertEqual({item["generated_at"] for item in envelopes.values()}, {expected_time})
+        self.assertEqual(
+            envelopes["package"]["lifecycle"]["runtime_mode"],
+            "active-container-init",
+        )
         verified = adapter.run_verify(self.fixture.args("verify"))
         self.assertEqual(verified, envelopes)
         for key, name in adapter.OUTPUT_NAMES.items():
             payload = (self.fixture.bound / name).read_bytes()
             self.assertEqual(payload, adapter._canonical(envelopes[key]))
+
+    def test_matrix_binding_scope_and_exact_eight_cells_are_fail_closed(self) -> None:
+        original = self.fixture.load_raw("package-lifecycle-raw.json")
+        expected_binding = self.fixture.matrix_binding()
+        self.assertEqual(
+            original["qualification_matrix"],
+            {
+                "matrix_id": expected_binding.matrix_id,
+                "sha256": expected_binding.sha256,
+            },
+        )
+        self.assertEqual(
+            [item["cell_id"] for item in original["platforms"]],
+            [cell.identifier for cell in adapter.qualification_matrix.EXPECTED_CELLS],
+        )
+        self.assertEqual(original["scope"]["evidence_kind"], "container-lifecycle")
+        self.assertEqual(
+            original["scope"]["coverage_kind"], "container_scenarios_only"
+        )
+        self.assertIs(original["scope"]["real_host_evidence_included"], False)
+        self.assertIs(original["scope"]["required_checks_complete"], False)
+        mutations = {
+            "matrix-id": lambda item: item["qualification_matrix"].__setitem__(
+                "matrix_id", "syswarden-package-qualification/forged"
+            ),
+            "matrix-sha": lambda item: item["qualification_matrix"].__setitem__(
+                "sha256", "0" * 64
+            ),
+            "host-scope": lambda item: item["scope"].__setitem__(
+                "evidence_kind", "real-host-lifecycle"
+            ),
+            "host-evidence": lambda item: item["scope"].__setitem__(
+                "real_host_evidence_included", True
+            ),
+            "required-checks": lambda item: item["scope"].__setitem__(
+                "required_checks_complete", True
+            ),
+            "coverage-kind": lambda item: item["scope"].__setitem__(
+                "coverage_kind", "all-required-checks"
+            ),
+            "container-lab-incomplete": lambda item: item["scope"].__setitem__(
+                "container_lab_complete", False
+            ),
+            "covered-scenario": lambda item: item["scope"][
+                "covered_scenarios"
+            ][0]["scenarios"].pop(),
+            "coordinate-incomplete": lambda item: item["scope"][
+                "coordinate_classification"
+            ][0].__setitem__("status", "incomplete"),
+            "completed-architectures": lambda item: item["scope"].__setitem__(
+                "architectures_completed", []
+            ),
+            "architecture-status": lambda item: item["scope"][
+                "architecture_coverage"
+            ][0].__setitem__("status", "incomplete"),
+            "family-status": lambda item: item["scope"][
+                "family_architecture_coverage"
+            ][0].__setitem__("status", "incomplete"),
+            "missing-cell": lambda item: item["platforms"].pop(),
+            "duplicate-cell": lambda item: item["platforms"][1].__setitem__(
+                "cell_id", item["platforms"][0]["cell_id"]
+            ),
+            "reordered-cells": lambda item: item["platforms"].reverse(),
+            "cell-version": lambda item: item["platforms"][0].__setitem__(
+                "version", "forged"
+            ),
+            "expected-runtime-distribution": lambda item: item["platforms"][0][
+                "architecture_probe"
+            ].__setitem__("expected_distribution", "forged"),
+            "actual-runtime-distribution": lambda item: item["platforms"][0][
+                "architecture_probe"
+            ].__setitem__("actual_distribution", "forged"),
+            "expected-runtime-version": lambda item: item["platforms"][0][
+                "architecture_probe"
+            ].__setitem__("expected_distribution_version", "forged"),
+            "actual-runtime-version": lambda item: item["platforms"][0][
+                "architecture_probe"
+            ].__setitem__("actual_distribution_version", "forged"),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(mutation=name):
+                report = copy.deepcopy(original)
+                mutation(report)
+                with self.assertRaises(adapter.AdapterError):
+                    adapter._validate_package_schema(report, expected_binding)
+
+    def test_matrix_path_and_raw_bytes_must_match_the_exact_commit(self) -> None:
+        args = self.fixture.args()
+        canonical_path = self.fixture.repo / adapter.PACKAGE_QUALIFICATION_MATRIX_PATH
+        original = canonical_path.read_bytes()
+        try:
+            canonical_path.write_bytes(original + b"\n")
+            self.assertAdapterError(args)
+        finally:
+            canonical_path.write_bytes(original)
+
+        alternate = self.fixture.root / "package_qualification_matrix.json"
+        alternate.write_bytes(original)
+        args.qualification_matrix = alternate
+        self.assertAdapterError(args)
+
+    def test_frozen_baseline_assets_reject_size_digest_and_coherent_replacement(self) -> None:
+        baseline = self.fixture.matrix_binding().document["package_sources"][
+            "baseline"
+        ]
+        snapshots = tuple(
+            gate.FileSnapshot(
+                Path(asset["name"]),
+                1,
+                index + 1,
+                asset["size"],
+                1,
+                asset["sha256"],
+                b"",
+            )
+            for index, asset in enumerate(baseline["assets"])
+        )
+        manifest_sha256 = next(
+            item["sha256"]
+            for item in baseline["assets"]
+            if item["name"] == "SHA256SUMS.txt"
+        )
+        previous = gate.PackageManifest(
+            Path("baseline"),
+            manifest_sha256,
+            {
+                item["name"]: item["sha256"]
+                for item in baseline["assets"]
+                if item["name"] != "SHA256SUMS.txt"
+            },
+            snapshots,
+        )
+        self.baseline_validator(previous, baseline)
+
+        size_drift = replace(
+            previous,
+            snapshots=(replace(snapshots[0], size=snapshots[0].size + 1),)
+            + snapshots[1:],
+        )
+        digest_drift = replace(
+            previous,
+            snapshots=(replace(snapshots[0], sha256="0" * 64),) + snapshots[1:],
+            sha256="0" * 64,
+        )
+        replacement_snapshots = tuple(
+            replace(
+                snapshot,
+                size=snapshot.size + index + 1,
+                sha256=f"{index + 1:x}" * 64,
+            )
+            for index, snapshot in enumerate(snapshots)
+        )
+        coherent_replacement = replace(
+            previous,
+            sha256=replacement_snapshots[0].sha256,
+            checksums={
+                snapshot.path.name: snapshot.sha256
+                for snapshot in replacement_snapshots
+                if snapshot.path.name != "SHA256SUMS.txt"
+            },
+            snapshots=replacement_snapshots,
+        )
+        for name, changed in (
+            ("size", size_drift),
+            ("digest", digest_drift),
+            ("coherent-replacement", coherent_replacement),
+        ):
+            with self.subTest(mutation=name), self.assertRaises(
+                adapter.AdapterError
+            ):
+                self.baseline_validator(changed, baseline)
 
     def test_evidence_bundle_can_be_relocated_before_verify(self) -> None:
         adapter.run_build(self.fixture.args())
@@ -617,12 +815,16 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         spec = next(
             item
             for item in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if item.distribution == platform["distribution"]
+            if item.cell_id == platform["cell_id"]
             and item.architecture == platform["architecture_id"]
         )
         original = platform["scenarios"][0]
         adapter._validate_runtime_scenario(
-            original, spec, original["name"], "fixture.scenario"
+            original,
+            spec,
+            original["name"],
+            "fixture.scenario",
+            candidate_version=platform["candidate_version"],
         )
         restarted_rsyslog = copy.deepcopy(original)
         restarted_rsyslog["boots"][0]["post_exec"]["rsyslog_main_pid"] += 1
@@ -631,6 +833,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             spec,
             restarted_rsyslog["name"],
             "fixture.rsyslog-restart",
+            candidate_version=platform["candidate_version"],
         )
         debian_lib_fragment = copy.deepcopy(original)
         for boot in debian_lib_fragment["boots"]:
@@ -643,6 +846,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             spec,
             debian_lib_fragment["name"],
             "fixture.debian-lib-fragment",
+            candidate_version=platform["candidate_version"],
         )
 
         def change_identity_mode(
@@ -658,7 +862,11 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             mutator(scenario)
             with self.assertRaises(adapter.AdapterError):
                 adapter._validate_runtime_scenario(
-                    scenario, spec, original["name"], "fixture.scenario"
+                    scenario,
+                    spec,
+                    original["name"],
+                    "fixture.scenario",
+                    candidate_version=platform["candidate_version"],
                 )
 
         mutations = {
@@ -999,13 +1207,18 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                             spec,
                             original["name"],
                             "fixture.scenario",
+                            candidate_version=platform["candidate_version"],
                         )
             with self.subTest(schema=object_name, extra="unknown"):
                 scenario = copy.deepcopy(original)
                 locate(scenario)["unknown"] = True
                 with self.assertRaises(adapter.AdapterError):
                     adapter._validate_runtime_scenario(
-                        scenario, spec, original["name"], "fixture.scenario"
+                        scenario,
+                        spec,
+                        original["name"],
+                        "fixture.scenario",
+                        candidate_version=platform["candidate_version"],
                     )
 
     def test_adapter_rejects_every_capability_process_boundary_bit(self) -> None:
@@ -1014,7 +1227,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         spec = next(
             item
             for item in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if item.distribution == platform["distribution"]
+            if item.cell_id == platform["cell_id"]
             and item.architecture == platform["architecture_id"]
         )
         original = platform["scenarios"][0]
@@ -1082,6 +1295,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                                 spec,
                                 original["name"],
                                 "fixture.scenario",
+                                candidate_version=platform["candidate_version"],
                             )
 
     def test_alpine_cron_fragment_mode_is_family_bound(self) -> None:
@@ -1092,13 +1306,17 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         spec = next(
             item
             for item in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if item.distribution == platform["distribution"]
+            if item.cell_id == platform["cell_id"]
             and item.architecture == platform["architecture_id"]
         )
         original = copy.deepcopy(platform["scenarios"][0])
         scenario = copy.deepcopy(original)
         adapter._validate_runtime_scenario(
-            scenario, spec, scenario["name"], "fixture.alpine"
+            scenario,
+            spec,
+            scenario["name"],
+            "fixture.alpine",
+            candidate_version=platform["candidate_version"],
         )
         snapshot = scenario["boots"][0]["pre_exec"]
         self.assertIn(":81ed:0:0|", snapshot["cron_fragment_identity"])
@@ -1107,7 +1325,11 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         ].replace(":81ed:0:0|", ":81a4:0:0|")
         with self.assertRaises(adapter.AdapterError):
             adapter._validate_runtime_scenario(
-                scenario, spec, scenario["name"], "fixture.alpine"
+                scenario,
+                spec,
+                scenario["name"],
+                "fixture.alpine",
+                candidate_version=platform["candidate_version"],
             )
 
         systemd_platform = next(
@@ -1181,7 +1403,11 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 mutation(changed)
                 with self.assertRaises(adapter.AdapterError):
                     adapter._validate_runtime_scenario(
-                        changed, spec, changed["name"], "fixture.alpine"
+                        changed,
+                        spec,
+                        changed["name"],
+                        "fixture.alpine",
+                        candidate_version=platform["candidate_version"],
                     )
 
     def test_lifecycle_claims_are_derived_from_active_event_evidence(self) -> None:
@@ -1190,11 +1416,11 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             coordinate_spec = next(
                 item
                 for item in package_lifecycle_lab.DEFAULT_PLATFORMS
-                if item.distribution == coordinate_platform["distribution"]
+                if item.cell_id == coordinate_platform["cell_id"]
                 and item.architecture == coordinate_platform["architecture_id"]
             )
             with self.subTest(
-                distribution=coordinate_platform["distribution"],
+                cell_id=coordinate_platform["cell_id"],
                 architecture=coordinate_platform["architecture_id"],
             ):
                 coordinate_claims = adapter._derive_platform_lifecycle_claims(
@@ -1205,7 +1431,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         spec = next(
             item
             for item in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if item.distribution == platform["distribution"]
+            if item.cell_id == platform["cell_id"]
             and item.architecture == platform["architecture_id"]
         )
         claims = adapter._derive_platform_lifecycle_claims(platform, spec)
@@ -1320,10 +1546,10 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 )
                 self.assertFalse(changed[claim])
 
-    def test_raw_v4_engine_helper_cleanup_and_native_records_are_exact(self) -> None:
+    def test_raw_v5_matrix_engine_helper_cleanup_and_native_records_are_exact(self) -> None:
         original = self.fixture.load_raw("package-lifecycle-raw.json")
-        adapter._validate_package_schema(original)
-        self.assertEqual(len(original["platforms"]), 5)
+        adapter._validate_package_schema(original, self.fixture.matrix_binding())
+        self.assertEqual(len(original["platforms"]), 8)
         native_records = {
             record["architecture"]: record
             for record in original["native_shards"]["reports"]
@@ -1333,7 +1559,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.assertEqual(len(native_records["amd64"]["gid_map"]), 2)
         self.assertEqual(
             {
-                (item["distribution"], item["architecture_id"])
+                (item["cell_id"], item["architecture_id"])
                 for item in original["platforms"]
             },
             package_lifecycle_lab.REQUIRED_PLATFORM_COORDINATES,
@@ -1347,7 +1573,9 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             report = copy.deepcopy(original)
             mutator(report)
             with self.assertRaises(adapter.AdapterError):
-                adapter._validate_package_schema(report)
+                adapter._validate_package_schema(
+                    report, self.fixture.matrix_binding()
+                )
 
         def mismatch_native_effective_uid_map(item: dict[str, Any]) -> None:
             record = item["native_shards"]["reports"][0]
@@ -1472,15 +1700,15 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self,
     ) -> None:
         original = self.fixture.load_raw("package-lifecycle-raw.json")
-        adapter._validate_package_schema(original)
+        adapter._validate_package_schema(original, self.fixture.matrix_binding())
 
         def platform(
-            report: dict[str, Any], distribution: str, architecture: str
+            report: dict[str, Any], cell_id: str, architecture: str
         ) -> dict[str, Any]:
             return next(
                 item
                 for item in report["platforms"]
-                if item["distribution"] == distribution
+                if item["cell_id"] == cell_id
                 and item["architecture_id"] == architecture
             )
 
@@ -1493,7 +1721,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             ]
 
         expected = [package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH]
-        fedora_snapshots = snapshots(platform(original, "fedora", "amd64"))
+        fedora_snapshots = snapshots(platform(original, "RPM-F44", "amd64"))
         self.assertTrue(
             all(
                 snapshot["cron_dropin_paths"] == expected
@@ -1506,40 +1734,51 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 for snapshot in fedora_snapshots
             )
         )
-        alma_snapshots = snapshots(platform(original, "almalinux", "amd64"))
-        self.assertTrue(
-            all(
-                snapshot["cron_executable_path"] == "/usr/sbin/crond"
-                for snapshot in alma_snapshots
+        for cell_id in ("RPM-A9", "RPM-A10"):
+            alma_snapshots = snapshots(platform(original, cell_id, "amd64"))
+            self.assertTrue(
+                all(
+                    snapshot["cron_executable_path"] == "/usr/sbin/crond"
+                    for snapshot in alma_snapshots
+                )
             )
-        )
-        for distribution in ("debian", "ubuntu", "almalinux", "alpine"):
+        for cell_id in (
+            "DEB-13",
+            "DEB-U2404",
+            "DEB-U2604",
+            "RPM-A9",
+            "RPM-A10",
+            "APK-322",
+            "APK-324",
+        ):
             self.assertTrue(
                 all(
                     snapshot["cron_dropin_paths"] == []
                     for snapshot in snapshots(
-                        platform(original, distribution, "amd64")
+                        platform(original, cell_id, "amd64")
                     )
                 )
             )
 
         def assert_rejected(
-            distribution: str,
+            cell_id: str,
             architecture: str,
             value: list[str],
         ) -> None:
             report = copy.deepcopy(original)
-            snapshots(platform(report, distribution, architecture))[0][
+            snapshots(platform(report, cell_id, architecture))[0][
                 "cron_dropin_paths"
             ] = value
             with self.assertRaises(adapter.AdapterError):
-                adapter._validate_package_schema(report)
+                adapter._validate_package_schema(
+                    report, self.fixture.matrix_binding()
+                )
 
-        for name, distribution, architecture, value in (
-            ("missing", "fedora", "amd64", []),
+        for name, cell_id, architecture, value in (
+            ("missing", "RPM-F44", "amd64", []),
             (
                 "extra",
-                "fedora",
+                "RPM-F44",
                 "amd64",
                 [
                     package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH,
@@ -1548,7 +1787,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             ),
             (
                 "duplicate",
-                "fedora",
+                "RPM-F44",
                 "amd64",
                 [
                     package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH,
@@ -1557,31 +1796,33 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
             ),
             (
                 "wrong",
-                "fedora",
+                "RPM-F44",
                 "amd64",
                 ["/etc/systemd/system/crond.service.d/operator.conf"],
             ),
             (
                 "cross_distribution",
-                "almalinux",
+                "RPM-A9",
                 "amd64",
                 [package_lifecycle_lab.FEDORA_CRON_DROPIN_PATH],
             ),
         ):
             with self.subTest(mutation=name):
-                assert_rejected(distribution, architecture, value)
+                assert_rejected(cell_id, architecture, value)
 
-        for name, distribution, architecture, value in (
-            ("fedora_alias", "fedora", "amd64", "/usr/sbin/crond"),
-            ("alma_fedora_path", "almalinux", "amd64", "/usr/bin/crond"),
+        for name, cell_id, architecture, value in (
+            ("fedora_alias", "RPM-F44", "amd64", "/usr/sbin/crond"),
+            ("alma_fedora_path", "RPM-A9", "amd64", "/usr/bin/crond"),
         ):
             with self.subTest(mutation=name):
                 report = copy.deepcopy(original)
-                snapshots(platform(report, distribution, architecture))[0][
+                snapshots(platform(report, cell_id, architecture))[0][
                     "cron_executable_path"
                 ] = value
                 with self.assertRaises(adapter.AdapterError):
-                    adapter._validate_package_schema(report)
+                    adapter._validate_package_schema(
+                        report, self.fixture.matrix_binding()
+                    )
 
     def test_amd64_probe_must_report_the_native_uname(self) -> None:
         report = self.fixture.load_raw("package-lifecycle-raw.json")
@@ -1640,7 +1881,7 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         self.fixture._make_raw_reports()
         report = self.fixture.load_raw("package-lifecycle-raw.json")
         report["scope"]["architecture_coverage"][0][
-            "completed_distributions"
+            "completed_cells"
         ].reverse()
         self.fixture.save_raw("package-lifecycle-raw.json", report)
         self.assertAdapterError(self.fixture.args())
@@ -1685,6 +1926,13 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
         os.link(original, alias)
         self.assertAdapterError(self.fixture.args())
         alias.unlink()
+        matrix_alias = self.fixture.bound / "package-lifecycle-bound.json"
+        os.link(
+            self.fixture.repo / adapter.PACKAGE_QUALIFICATION_MATRIX_PATH,
+            matrix_alias,
+        )
+        self.assertAdapterError(self.fixture.args())
+        matrix_alias.unlink()
         self.assertAdapterError(
             self.fixture.args(nft_output=self.fixture.repo / "nftables-bound.json")
         )
