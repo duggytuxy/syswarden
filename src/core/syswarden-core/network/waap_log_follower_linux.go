@@ -19,7 +19,6 @@ import (
 
 const (
 	defaultWAAPLogPollInterval = 100 * time.Millisecond
-	maxWAAPLogLineBytes        = 1 << 20
 	waapLogReadBufferBytes     = 64 << 10
 )
 

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newTestEngine(t *testing.T) *Engine {
@@ -43,6 +44,107 @@ func newTestEngine(t *testing.T) *Engine {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 	return engine
+}
+
+func assertIngressCorrelationInvariants(t *testing.T, engine *Engine) {
+	t.Helper()
+	engine.ingressMu.Lock()
+	defer engine.ingressMu.Unlock()
+
+	if engine.ingressOrder == nil {
+		t.Fatal("ingress order is nil")
+	}
+	if engine.ingressCount < 0 || engine.ingressCount > ingressPendingLimit {
+		t.Fatalf("ingress count = %d, want 0..%d", engine.ingressCount, ingressPendingLimit)
+	}
+	if engine.ingressOrder.Len() != engine.ingressCount {
+		t.Fatalf("ingress order = %d, count = %d", engine.ingressOrder.Len(), engine.ingressCount)
+	}
+	if len(engine.ingressPending) > engine.ingressCount {
+		t.Fatalf("ingress fingerprints = %d, count = %d", len(engine.ingressPending), engine.ingressCount)
+	}
+
+	orderIndex := make(map[*ingressObservation]int, engine.ingressCount)
+	index := 0
+	for element := engine.ingressOrder.Front(); element != nil; element = element.Next() {
+		observation, ok := element.Value.(*ingressObservation)
+		if !ok || observation == nil {
+			t.Fatalf("global ingress entry %d has invalid observation %#v", index, element.Value)
+		}
+		if observation.orderEntry != element {
+			t.Fatalf("global ingress entry %d has mismatched list element", index)
+		}
+		if _, duplicate := orderIndex[observation]; duplicate {
+			t.Fatalf("global ingress entry %d duplicates observation %p", index, observation)
+		}
+		orderIndex[observation] = index
+		index++
+	}
+
+	queued := make(map[*ingressObservation]struct{}, engine.ingressCount)
+	queuedCount := 0
+	for fingerprint, pair := range engine.ingressPending {
+		if pair == nil {
+			t.Fatalf("fingerprint %x has a nil pair", fingerprint)
+		}
+		udsLen := pair.uds.len()
+		directLen := pair.direct.len()
+		if udsLen == 0 && directLen == 0 {
+			t.Fatalf("fingerprint %x retained an empty pair", fingerprint)
+		}
+		if udsLen > 0 && directLen > 0 {
+			t.Fatalf("fingerprint %x retained both UDS=%d and direct=%d observations", fingerprint, udsLen, directLen)
+		}
+
+		checkQueue := func(source IngressSource, queue *ingressQueue) {
+			t.Helper()
+			if queue.head < 0 || queue.head > len(queue.items) {
+				t.Fatalf("fingerprint %x source %d has invalid head %d/%d", fingerprint, source, queue.head, len(queue.items))
+			}
+			if queue.head >= 64 && queue.head*2 >= len(queue.items) {
+				t.Fatalf("fingerprint %x source %d retained an uncompacted queue head=%d items=%d", fingerprint, source, queue.head, len(queue.items))
+			}
+			for stale := 0; stale < queue.head; stale++ {
+				if queue.items[stale] != nil {
+					t.Fatalf("fingerprint %x source %d retained a live prefix entry at %d", fingerprint, source, stale)
+				}
+			}
+			previousOrder := -1
+			for itemIndex := queue.head; itemIndex < len(queue.items); itemIndex++ {
+				observation := queue.items[itemIndex]
+				if observation == nil {
+					t.Fatalf("fingerprint %x source %d has nil active entry at %d", fingerprint, source, itemIndex)
+				}
+				if observation.fingerprint != fingerprint || observation.source != source {
+					t.Fatalf("fingerprint %x source %d has mismatched observation %#v", fingerprint, source, observation)
+				}
+				position, active := orderIndex[observation]
+				if !active {
+					t.Fatalf("fingerprint %x source %d observation %p is absent from global order", fingerprint, source, observation)
+				}
+				if position <= previousOrder {
+					t.Fatalf("fingerprint %x source %d queue order regressed from %d to %d", fingerprint, source, previousOrder, position)
+				}
+				previousOrder = position
+				if _, duplicate := queued[observation]; duplicate {
+					t.Fatalf("observation %p appears in more than one ingress queue", observation)
+				}
+				queued[observation] = struct{}{}
+				queuedCount++
+			}
+		}
+
+		checkQueue(IngressSourceUDS, &pair.uds)
+		checkQueue(IngressSourceDirect, &pair.direct)
+	}
+	if queuedCount != engine.ingressCount {
+		t.Fatalf("queued observations = %d, count = %d", queuedCount, engine.ingressCount)
+	}
+	for observation := range orderIndex {
+		if _, present := queued[observation]; !present {
+			t.Fatalf("global observation %p is absent from ingress queues", observation)
+		}
+	}
 }
 
 func newProductionTestEngine(t *testing.T) *Engine {
@@ -107,6 +209,32 @@ func TestNewEngineRejectsInvalidInputs(t *testing.T) {
 	}
 	if _, err := NewEngine(duplicateTrustedCapture, 5, 60); err == nil {
 		t.Fatal("NewEngine() accepted multiple trusted host captures")
+	}
+}
+
+func TestNewEngineRejectsAmbiguousRuleCatalogs_SW_KPI_001(t *testing.T) {
+	tests := []struct {
+		name    string
+		catalog string
+	}{
+		{name: "duplicate rule ID", catalog: `{"rules":[{"id":"same","type":"aho-corasick","patterns":["a"],"service":"http"},{"id":"same","type":"aho-corasick","patterns":["b"],"service":"http"}]}`},
+		{name: "unsupported action", catalog: `{"rules":[{"id":"bad","type":"aho-corasick","patterns":["a"],"service":"http","action":"alert"}]}`},
+		{name: "unsupported type", catalog: `{"rules":[{"id":"bad","type":"glob","patterns":["a"],"service":"http"}]}`},
+		{name: "negative threshold", catalog: `{"rules":[{"id":"bad","type":"aho-corasick","patterns":["a"],"service":"http","action":"track","threshold":-1}]}`},
+		{name: "immediate rule threshold", catalog: `{"rules":[{"id":"bad","type":"aho-corasick","patterns":["a"],"service":"http","action":"ban","threshold":2,"window":60}]}`},
+		{name: "incomplete risk mapping", catalog: `{"catalog_version":"v1","risk_model_version":"sw-risk-v1","risk_categories":{"exploit":["only"]},"rules":[{"id":"only","type":"aho-corasick","patterns":["a"],"service":"http"}]}`},
+		{name: "unsupported risk model", catalog: `{"catalog_version":"v1","risk_model_version":"sw-risk-v2","risk_categories":{"exploit":["a"],"brute_force":["b"],"reconnaissance":["c"],"denial_of_service":["d"],"abuse":["e"]},"rules":[{"id":"a","type":"aho-corasick","patterns":["a"],"service":"http"},{"id":"b","type":"aho-corasick","patterns":["b"],"service":"http"},{"id":"c","type":"aho-corasick","patterns":["c"],"service":"http"},{"id":"d","type":"aho-corasick","patterns":["d"],"service":"http"},{"id":"e","type":"aho-corasick","patterns":["e"],"service":"http"}]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "signatures.json")
+			if err := os.WriteFile(path, []byte(test.catalog), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewEngine(path, 5, 60); err == nil {
+				t.Fatal("NewEngine accepted an ambiguous rule catalog")
+			}
+		})
 	}
 }
 
@@ -694,4 +822,447 @@ func TestDetectionPipelineContract_SW_WAAP_001(t *testing.T) {
 		}(index)
 	}
 	group.Wait()
+}
+
+func TestScanIngressPairsOnlyCrossCollectorDuplicates_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	now := time.Unix(1_787_900_000, 0)
+	engine.ingressNow = func() time.Time { return now }
+	line := "192.0.2.44 Failed password for root from 192.0.2.44 port 22"
+
+	if match := engine.ScanIngress(IngressSourceUDS, line); match == nil {
+		t.Fatal("first UDS delivery was suppressed")
+	}
+	if match := engine.ScanIngress(IngressSourceUDS, line); match == nil {
+		t.Fatal("repeated UDS record was suppressed as though it were a duplicate collector")
+	}
+	if match := engine.ScanIngress(IngressSourceDirect, line); match != nil {
+		t.Fatal("first paired direct delivery was not suppressed")
+	}
+	if match := engine.ScanIngress(IngressSourceDirect, line); match != nil {
+		t.Fatal("second paired direct delivery was not suppressed")
+	}
+	if match := engine.ScanIngress(IngressSourceDirect, line); match == nil {
+		t.Fatal("new direct-only record was suppressed after all pairs were consumed")
+	}
+}
+
+func TestScanIngressExpiresUnpairedCollectorRecord_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	now := time.Unix(1_787_900_000, 0)
+	engine.ingressNow = func() time.Time { return now }
+	line := "192.0.2.45 Failed password for root from 192.0.2.45 port 22"
+
+	if match := engine.ScanIngress(IngressSourceUDS, line); match == nil {
+		t.Fatal("first UDS delivery was suppressed")
+	}
+	now = now.Add(ingressDedupWindow + time.Nanosecond)
+	if match := engine.ScanIngress(IngressSourceDirect, line); match == nil {
+		t.Fatal("independent record outside the pairing window was suppressed")
+	}
+	assertIngressCorrelationInvariants(t, engine)
+}
+
+func TestScanIngressPairsAtExactWindowBoundary_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	base := time.Unix(1_787_900_050, 0)
+	now := base
+	engine.ingressNow = func() time.Time { return now }
+	line := "192.0.2.45 Failed password for root from 192.0.2.45 port 22"
+
+	if match := engine.ScanIngress(IngressSourceUDS, line); match == nil {
+		t.Fatal("first UDS delivery was suppressed")
+	}
+	now = base.Add(ingressDedupWindow)
+	if match := engine.ScanIngress(IngressSourceDirect, line); match != nil {
+		t.Fatal("counterpart at the exact correlation boundary was not suppressed")
+	}
+	assertIngressCorrelationInvariants(t, engine)
+	if engine.ingressCount != 0 || engine.ingressOrder.Len() != 0 || len(engine.ingressPending) != 0 {
+		t.Fatalf("exact-boundary pair retained state: count=%d order=%d fingerprints=%d", engine.ingressCount, engine.ingressOrder.Len(), len(engine.ingressPending))
+	}
+}
+
+func TestScanIngressDoesNotPairDistinctRecords_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	first := "192.0.2.46 Failed password for root from 192.0.2.46 port 22"
+	second := "192.0.2.46 Failed password for admin from 192.0.2.46 port 22"
+
+	if match := engine.ScanIngress(IngressSourceUDS, first); match == nil {
+		t.Fatal("first UDS delivery was suppressed")
+	}
+	if match := engine.ScanIngress(IngressSourceDirect, second); match == nil {
+		t.Fatal("distinct direct delivery was suppressed")
+	}
+}
+
+func TestScanIngressUsesPerSourceTimestampQueues_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	now := time.Unix(1_787_900_000, 0)
+	engine.ingressNow = func() time.Time { return now }
+	line := "192.0.2.47 Failed password for root from 192.0.2.47 port 22"
+
+	if engine.ScanIngress(IngressSourceUDS, line) == nil {
+		t.Fatal("first UDS record was suppressed")
+	}
+	now = now.Add(4 * time.Second)
+	if engine.ScanIngress(IngressSourceUDS, line) == nil {
+		t.Fatal("second UDS record was suppressed")
+	}
+	now = now.Add(2 * time.Second)
+	if engine.ScanIngress(IngressSourceDirect, line) != nil {
+		t.Fatal("recent UDS record was not paired after the older record expired")
+	}
+	if engine.ScanIngress(IngressSourceDirect, line) == nil {
+		t.Fatal("late independent direct record was suppressed")
+	}
+}
+
+func TestScanIngressNormalizesOnlyTransportTermination_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	line := "192.0.2.48 /../etc/passwd"
+	if engine.ScanIngress(IngressSourceUDS, line+"\r\n") == nil {
+		t.Fatal("CRLF record was suppressed")
+	}
+	if engine.ScanIngress(IngressSourceDirect, line) != nil {
+		t.Fatal("transport-equivalent direct record was not paired")
+	}
+	if engine.ScanIngress(IngressSourceUDS, line+" ") == nil {
+		t.Fatal("record carrying a meaningful trailing space was suppressed")
+	}
+	if engine.ScanIngress(IngressSourceDirect, line) == nil {
+		t.Fatal("record without the meaningful trailing space was incorrectly paired")
+	}
+}
+
+func TestScanIngressSaturationFailsOpenAndStaysBounded_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	now := time.Unix(1_787_900_060, 0)
+	engine.ingressNow = func() time.Time { return now }
+	for index := 0; index < ingressPendingLimit; index++ {
+		line := fmt.Sprintf("192.0.2.49 /../etc/passwd?request=%d", index)
+		if engine.ScanIngress(IngressSourceUDS, line) == nil {
+			t.Fatalf("record %d was suppressed before saturation", index)
+		}
+	}
+	if engine.ingressCount != ingressPendingLimit {
+		t.Fatalf("pending observation count = %d, want %d", engine.ingressCount, ingressPendingLimit)
+	}
+	if engine.ingressOrder.Len() != ingressPendingLimit {
+		t.Fatalf("pending observation order = %d, want %d", engine.ingressOrder.Len(), ingressPendingLimit)
+	}
+	if match := engine.ScanIngress(IngressSourceDirect, "192.0.2.50 /../etc/passwd?overflow=true"); match == nil {
+		t.Fatal("cache saturation suppressed a genuine detection")
+	} else if match.ObservationModel != IngressCorrelationDegradedModel {
+		t.Fatalf("saturated observation model = %q, want %q", match.ObservationModel, IngressCorrelationDegradedModel)
+	}
+	if engine.ingressCount != ingressPendingLimit {
+		t.Fatalf("saturated cache grew to %d observations", engine.ingressCount)
+	}
+	if want := now.Add(ingressDedupWindow); !engine.ingressDegradedUntil.Equal(want) {
+		t.Fatalf("degraded deadline = %s, want %s", engine.ingressDegradedUntil, want)
+	}
+	if match := engine.ScanIngress(IngressSourceUDS, "192.0.2.50 /../etc/passwd?overflow=true\n"); match != nil {
+		t.Fatal("saturated cache did not retain pairing state for the newest record")
+	}
+	assertIngressCorrelationInvariants(t, engine)
+}
+
+func TestScanIngressDegradedModelIncludesExactBoundary_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	base := time.Unix(1_787_900_075, 0)
+	now := base.Add(ingressDedupWindow)
+	engine.ingressNow = func() time.Time { return now }
+	engine.ingressDegradedUntil = now
+
+	exactLine := "192.0.2.51 /../etc/passwd?degraded=exact"
+	match := engine.ScanIngress(IngressSourceUDS, exactLine)
+	if match == nil || match.ObservationModel != IngressCorrelationDegradedModel {
+		t.Fatalf("exact degraded-boundary match = %#v", match)
+	}
+	if duplicate := engine.ScanIngress(IngressSourceDirect, exactLine); duplicate != nil {
+		t.Fatal("exact degraded-boundary counterpart was not suppressed")
+	}
+
+	now = now.Add(time.Nanosecond)
+	after := engine.ScanIngress(IngressSourceUDS, "192.0.2.51 /../etc/passwd?degraded=after")
+	if after == nil || after.ObservationModel != IngressCorrelationModel {
+		t.Fatalf("post-degraded-boundary match = %#v", after)
+	}
+	assertIngressCorrelationInvariants(t, engine)
+}
+
+func TestScanIngressChurnKeepsGlobalOrderStrictlyBounded_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	engine.ingressNow = func() time.Time { return time.Unix(1_787_900_100, 0) }
+	head := "192.0.2.60 /../etc/passwd?unpaired=head"
+	if engine.ScanIngress(IngressSourceUDS, head) == nil {
+		t.Fatal("unpaired head was suppressed")
+	}
+	for index := 0; index < ingressPendingLimit*2; index++ {
+		line := fmt.Sprintf("192.0.2.61 /../etc/passwd?paired=%d", index)
+		if engine.ScanIngress(IngressSourceUDS, line) == nil {
+			t.Fatalf("paired UDS record %d was suppressed", index)
+		}
+		if engine.ScanIngress(IngressSourceDirect, line) != nil {
+			t.Fatalf("paired direct record %d was retained", index)
+		}
+		if engine.ingressOrder.Len() > ingressPendingLimit || engine.ingressCount > ingressPendingLimit {
+			t.Fatalf("dedup state grew past limit: order=%d active=%d", engine.ingressOrder.Len(), engine.ingressCount)
+		}
+	}
+	if engine.ingressOrder.Len() != 1 || engine.ingressCount != 1 || len(engine.ingressPending) != 1 {
+		t.Fatalf("paired churn retained state: order=%d active=%d fingerprints=%d", engine.ingressOrder.Len(), engine.ingressCount, len(engine.ingressPending))
+	}
+}
+
+func TestScanIngressIdenticalSaturationUsesFIFOWithoutLosingNewestPair_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	engine.ingressNow = func() time.Time { return time.Unix(1_787_900_200, 0) }
+	line := "192.0.2.62 /../etc/passwd?identical=true"
+	for index := 0; index < ingressPendingLimit; index++ {
+		if engine.ScanIngress(IngressSourceUDS, line) == nil {
+			t.Fatalf("identical UDS record %d was suppressed", index)
+		}
+	}
+	if engine.ScanIngress(IngressSourceDirect, line) != nil {
+		t.Fatal("oldest identical cross-collector record was not paired")
+	}
+	if engine.ingressCount != ingressPendingLimit-1 || engine.ingressOrder.Len() != ingressPendingLimit-1 {
+		t.Fatalf("pairing did not remove exactly one record: active=%d order=%d", engine.ingressCount, engine.ingressOrder.Len())
+	}
+	if engine.ScanIngress(IngressSourceUDS, line) == nil {
+		t.Fatal("new identical physical record was suppressed")
+	}
+	if engine.ScanIngress(IngressSourceDirect, line) != nil {
+		t.Fatal("newest identical record did not retain a counterpart")
+	}
+}
+
+func TestScanIngressReinsertsFingerprintEvictedDuringReservation_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	engine.ingressNow = func() time.Time { return time.Unix(1_787_900_300, 0) }
+	line := "192.0.2.63 /../etc/passwd?oldest=fingerprint"
+	if engine.ScanIngress(IngressSourceUDS, line) == nil {
+		t.Fatal("oldest fingerprint was suppressed")
+	}
+	for index := 1; index < ingressPendingLimit; index++ {
+		filler := fmt.Sprintf("192.0.2.64 /../etc/passwd?filler=%d", index)
+		if engine.ScanIngress(IngressSourceUDS, filler) == nil {
+			t.Fatalf("filler %d was suppressed", index)
+		}
+	}
+	if engine.ScanIngress(IngressSourceUDS, line) == nil {
+		t.Fatal("new record was suppressed at saturation")
+	}
+	if engine.ScanIngress(IngressSourceDirect, line) != nil {
+		t.Fatal("new record was orphaned after its old fingerprint was evicted")
+	}
+	assertIngressCorrelationInvariants(t, engine)
+}
+
+func TestScanIngressConcurrentMultisetNN_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	engine.ingressNow = func() time.Time { return time.Unix(1_787_900_400, 0) }
+	line := "192.0.2.70 Failed password for root from 192.0.2.70 port 22"
+	const deliveries = 128
+
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	var accepted atomic.Int64
+	launch := func(source IngressSource) {
+		for range deliveries {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				<-start
+				if engine.ScanIngress(source, line) != nil {
+					accepted.Add(1)
+				}
+			}()
+		}
+	}
+	launch(IngressSourceUDS)
+	launch(IngressSourceDirect)
+	close(start)
+	group.Wait()
+
+	if got := accepted.Load(); got != deliveries {
+		t.Fatalf("N/N accepted observations = %d, want %d", got, deliveries)
+	}
+	assertIngressCorrelationInvariants(t, engine)
+	if engine.ingressCount != 0 || engine.ingressOrder.Len() != 0 || len(engine.ingressPending) != 0 {
+		t.Fatalf("N/N multiset retained state: count=%d order=%d fingerprints=%d", engine.ingressCount, engine.ingressOrder.Len(), len(engine.ingressPending))
+	}
+}
+
+func TestScanIngressConcurrentMultisetNM_SW_WAAP_001(t *testing.T) {
+	tests := []struct {
+		name          string
+		uds           int
+		direct        int
+		pendingSource IngressSource
+	}{
+		{name: "UDS majority", uds: 97, direct: 43, pendingSource: IngressSourceUDS},
+		{name: "direct majority", uds: 31, direct: 79, pendingSource: IngressSourceDirect},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine := newTestEngine(t)
+			engine.ingressNow = func() time.Time { return time.Unix(1_787_900_450, 0) }
+			line := "192.0.2.71 Failed password for root from 192.0.2.71 port 22"
+			start := make(chan struct{})
+			var group sync.WaitGroup
+			var accepted atomic.Int64
+
+			launch := func(source IngressSource, count int) {
+				for range count {
+					group.Add(1)
+					go func() {
+						defer group.Done()
+						<-start
+						if engine.ScanIngress(source, line) != nil {
+							accepted.Add(1)
+						}
+					}()
+				}
+			}
+			launch(IngressSourceUDS, test.uds)
+			launch(IngressSourceDirect, test.direct)
+			close(start)
+			group.Wait()
+
+			wantAccepted := test.uds
+			if test.direct > wantAccepted {
+				wantAccepted = test.direct
+			}
+			wantPending := test.uds - test.direct
+			if wantPending < 0 {
+				wantPending = -wantPending
+			}
+			if got := accepted.Load(); got != int64(wantAccepted) {
+				t.Fatalf("N/M accepted observations = %d, want %d", got, wantAccepted)
+			}
+			assertIngressCorrelationInvariants(t, engine)
+
+			engine.ingressMu.Lock()
+			pendingCount := engine.ingressCount
+			pendingOrder := engine.ingressOrder.Len()
+			fingerprintCount := len(engine.ingressPending)
+			udsPending := 0
+			directPending := 0
+			for _, pair := range engine.ingressPending {
+				udsPending = pair.uds.len()
+				directPending = pair.direct.len()
+			}
+			engine.ingressMu.Unlock()
+
+			if pendingCount != wantPending || pendingOrder != wantPending || fingerprintCount != 1 {
+				t.Fatalf("N/M pending state: count=%d order=%d fingerprints=%d, want %d/1", pendingCount, pendingOrder, fingerprintCount, wantPending)
+			}
+			if test.pendingSource == IngressSourceUDS && (udsPending != wantPending || directPending != 0) {
+				t.Fatalf("UDS-majority pending queues = %d/%d, want %d/0", udsPending, directPending, wantPending)
+			}
+			if test.pendingSource == IngressSourceDirect && (directPending != wantPending || udsPending != 0) {
+				t.Fatalf("direct-majority pending queues = %d/%d, want %d/0", directPending, udsPending, wantPending)
+			}
+		})
+	}
+}
+
+func TestScanIngressConcurrentSaturationRemainsBounded_SW_WAAP_001(t *testing.T) {
+	engine := newTestEngine(t)
+	engine.ingressNow = func() time.Time { return time.Unix(1_787_900_500, 0) }
+	const overflow = 512
+	const workers = 32
+	total := ingressPendingLimit + overflow
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	var next atomic.Int64
+	var accepted atomic.Int64
+	var degraded atomic.Int64
+
+	for range workers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			for {
+				index := int(next.Add(1) - 1)
+				if index >= total {
+					return
+				}
+				line := fmt.Sprintf("192.0.2.72 /../etc/passwd?concurrent=%d", index)
+				match := engine.ScanIngress(IngressSourceUDS, line)
+				if match == nil {
+					continue
+				}
+				accepted.Add(1)
+				if match.ObservationModel == IngressCorrelationDegradedModel {
+					degraded.Add(1)
+				}
+			}
+		}()
+	}
+	close(start)
+	group.Wait()
+
+	if got := accepted.Load(); got != int64(total) {
+		t.Fatalf("saturated accepted observations = %d, want %d", got, total)
+	}
+	if got := degraded.Load(); got != overflow {
+		t.Fatalf("degraded observations = %d, want %d", got, overflow)
+	}
+	assertIngressCorrelationInvariants(t, engine)
+	if engine.ingressCount != ingressPendingLimit || engine.ingressOrder.Len() != ingressPendingLimit || len(engine.ingressPending) != ingressPendingLimit {
+		t.Fatalf("concurrent saturation state: count=%d order=%d fingerprints=%d", engine.ingressCount, engine.ingressOrder.Len(), len(engine.ingressPending))
+	}
+}
+
+func TestProductionCatalogMatchCarriesAttestedRiskPolicy_SW_KPI_001(t *testing.T) {
+	engine := newProductionTestEngine(t)
+	match := engine.Scan("192.0.2.51 GET /?q=UNION%20SELECT HTTP/1.1")
+	if match == nil {
+		t.Fatal("production SQL injection record did not match")
+	}
+	if match.RuleID != "sqli" || match.Action != "ban" || match.RiskCategory != "exploit" || !match.MetricEligible {
+		t.Fatalf("production risk policy = %#v", match)
+	}
+	if match.Threshold != 1 || match.Window != 0 || match.CatalogVersion != "sw-signatures-v1" || match.RiskModelVersion != "sw-risk-v1" || len(match.CatalogDigest) != 64 {
+		t.Fatalf("production catalog attestation = %#v", match)
+	}
+	if engine.RuleCount() != 194 {
+		t.Fatalf("compiled pattern count = %d, want 194", engine.RuleCount())
+	}
+}
+
+func TestProductionCatalogExploitOutranksGenericTrackMatch_SW_KPI_001(t *testing.T) {
+	detector := newProductionTestEngine(t)
+	tests := []string{
+		`198.51.100.78 - - [28/Aug/2026:12:00:00 +0000] "POST /auth?x=javascript:alert HTTP/1.1" 401 12`,
+		`198.51.100.78:443 POST /login?q=<script>alert HTTP/1.1 403`,
+	}
+	for _, line := range tests {
+		match := detector.Scan(line)
+		if match == nil || match.Action != "track" || match.RiskAttributionRuleID != "owasp-a03-xss" ||
+			match.RiskAttributionCategory != "exploit" || match.RiskAttributionAction != "detect" {
+			t.Fatalf("multi-signature exploit was hidden by a generic rule: %#v for %q", match, line)
+		}
+		attribution := &Match{Action: match.RiskAttributionAction, Threshold: match.RiskAttributionThreshold, RiskCategory: match.RiskAttributionCategory}
+		if got := matchInitialRiskScore(attribution); got != 70 {
+			t.Fatalf("initial exploit risk score = %d, want 70", got)
+		}
+	}
+}
+
+func TestProductionCatalogRiskAttributionNeverDowngradesEnforcement_SW_KPI_001(t *testing.T) {
+	detector := newProductionTestEngine(t)
+	line := `198.51.100.79 - - [28/Aug/2026:12:00:00 +0000] "GET /phpmyadmin?x=<script>alert HTTP/1.1" 403 12`
+	match := detector.Scan(line)
+	if match == nil || match.RuleID != "phpmyadmin" || match.Action != "ban" {
+		t.Fatalf("risk attribution downgraded ban enforcement: %#v", match)
+	}
+	if match.RiskAttributionRuleID != "owasp-a03-xss" || match.RiskAttributionCategory != "exploit" || match.RiskAttributionAction != "detect" {
+		t.Fatalf("highest-risk attribution was not retained: %#v", match)
+	}
 }

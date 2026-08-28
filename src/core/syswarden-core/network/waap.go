@@ -29,6 +29,8 @@ type WAAPConfig struct {
 	Mode      string
 }
 
+const maxWAAPLogLineBytes = 1 << 20
+
 type WAAPEngine struct {
 	config                  WAAPConfig
 	fw                      firewall.Manager
@@ -230,7 +232,7 @@ func (w *WAAPEngine) processLogLine(text string) {
 	if w.engine == nil {
 		return
 	}
-	match := w.engine.Scan(text)
+	match := w.engine.ScanIngress(engine.IngressSourceDirect, text)
 	if match == nil {
 		return
 	}
@@ -239,7 +241,7 @@ func (w *WAAPEngine) processLogLine(text string) {
 	}
 	ip := match.Host.String()
 	if match.Action == "detect" {
-		w.logDetected(ip, match.RuleID, text)
+		w.logDetected(ip, match, match.Payload)
 		return
 	}
 
@@ -247,7 +249,7 @@ func (w *WAAPEngine) processLogLine(text string) {
 	if match.Action == "track" {
 		shouldBan = w.engine.EvaluateThreshold(ip, match.RuleID, match.Threshold, match.Window)
 		if !shouldBan {
-			w.logShadow(ip, match.RuleID, text)
+			w.logShadow(ip, match, match.Payload)
 		}
 	}
 	if !shouldBan {
@@ -256,35 +258,35 @@ func (w *WAAPEngine) processLogLine(text string) {
 	canonical, err := w.canonicalWAAPFirewallTarget(ip)
 	if err != nil {
 		if errors.Is(err, utils.ErrProtectedFirewallTarget) {
-			w.logShadow(ip, match.RuleID, text)
+			w.logShadow(ip, match, match.Payload)
 		} else {
 			w.logError("WAAP firewall target policy failed closed", err)
-			w.logDetected(ip, match.RuleID, text)
+			w.logDetected(ip, match, match.Payload)
 		}
 		return
 	}
 	switch w.config.Mode {
 	case "audit":
-		w.logSimulatedBan(canonical, match.RuleID, text)
+		w.logSimulatedBan(canonical, match, match.Payload)
 		return
 	case "enforcing":
 		// Continue to the only firewall mutation below.
 	default:
 		w.logError("WAAP enforcement mode is invalid", errors.New("unsupported enforcement mode"))
-		w.logDetected(canonical, match.RuleID, text)
+		w.logDetected(canonical, match, match.Payload)
 		return
 	}
 	if w.fw == nil {
 		w.logError("WAAP firewall is unavailable", errors.New("missing firewall manager"))
-		w.logDetected(canonical, match.RuleID, text)
+		w.logDetected(canonical, match, match.Payload)
 		return
 	}
 	if err := w.fw.Ban(canonical); err != nil {
 		w.logError("Failed to ban IP, logging as DETECTED", err)
-		w.logDetected(canonical, match.RuleID, text)
+		w.logDetected(canonical, match, match.Payload)
 		return
 	}
-	w.logBan(canonical, match.RuleID, text)
+	w.logBan(canonical, match, match.Payload)
 }
 
 func (w *WAAPEngine) canonicalWAAPFirewallTarget(value string) (string, error) {
@@ -306,27 +308,27 @@ func (w *WAAPEngine) canonicalWAAPFirewallTarget(value string) (string, error) {
 	})
 }
 
-func (w *WAAPEngine) logDetected(ip, ruleID, line string) {
+func (w *WAAPEngine) logDetected(ip string, match *engine.Match, line string) {
 	if w.logger != nil {
-		w.logger.LogDetected(ip, ruleID, line)
+		w.logger.LogDetectedWithRule(ip, match.RuleID, line, loggerRuleContext(match))
 	}
 }
 
-func (w *WAAPEngine) logShadow(ip, ruleID, line string) {
+func (w *WAAPEngine) logShadow(ip string, match *engine.Match, line string) {
 	if w.logger != nil {
-		w.logger.LogShadowAlert(ip, ruleID, line)
+		w.logger.LogShadowAlertWithRule(ip, match.RuleID, line, loggerRuleContext(match))
 	}
 }
 
-func (w *WAAPEngine) logSimulatedBan(ip, ruleID, line string) {
+func (w *WAAPEngine) logSimulatedBan(ip string, match *engine.Match, line string) {
 	if w.logger != nil {
-		w.logger.LogSimulatedBan(ip, ruleID, line)
+		w.logger.LogSimulatedBanWithRule(ip, match.RuleID, line, loggerRuleContext(match))
 	}
 }
 
-func (w *WAAPEngine) logBan(ip, ruleID, line string) {
+func (w *WAAPEngine) logBan(ip string, match *engine.Match, line string) {
 	if w.logger != nil {
-		w.logger.LogBan(ip, ruleID, line)
+		w.logger.LogBanWithRule(ip, match.RuleID, line, loggerRuleContext(match))
 	}
 }
 

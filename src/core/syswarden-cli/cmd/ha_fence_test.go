@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +40,11 @@ func TestHAFenceCommandContract(t *testing.T) {
 			t.Fatalf("manifest create lacks --%s", flagName)
 		}
 	}
+	for _, required := range []string{`"schema_version": 1`, `"membership_scope": "one_receiving_api_endpoint_per_syswarden_node"`, `"legacy_writer_ids"`, `"members"`, "--assert-complete"} {
+		if !strings.Contains(create.Long+create.Example, required) {
+			t.Fatalf("manifest create help omits %q", required)
+		}
+	}
 	release, _, err := command.Find([]string{"release"})
 	if err != nil {
 		t.Fatal(err)
@@ -46,6 +52,11 @@ func TestHAFenceCommandContract(t *testing.T) {
 	for _, flagName := range []string{"manifest", "writer-closure"} {
 		if release.Flags().Lookup(flagName) == nil {
 			t.Fatalf("release lacks --%s", flagName)
+		}
+	}
+	for _, required := range []string{`"legacy_retry_queue_drained": true`, `"closure_generation"`, `"evidence_sha256"`, "migrated_enriched_only"} {
+		if !strings.Contains(release.Long+release.Example, required) {
+			t.Fatalf("release help omits %q", required)
 		}
 	}
 	status, _, err := command.Find([]string{"status"})

@@ -8,12 +8,13 @@ import (
 )
 
 const (
-	ansiCyan   = "\033[1;36m"
-	ansiGreen  = "\033[1;32m"
-	ansiYellow = "\033[1;33m"
-	ansiRed    = "\033[1;31m"
-	ansiWhite  = "\033[1;37m"
-	ansiReset  = "\033[0m"
+	ansiCyan                       = "\033[1;36m"
+	ansiGreen                      = "\033[1;32m"
+	ansiYellow                     = "\033[1;33m"
+	ansiRed                        = "\033[1;31m"
+	ansiWhite                      = "\033[1;37m"
+	ansiReset                      = "\033[0m"
+	haAuthenticationManualContract = "All HA routes require the bearer token. Enabling HA requires a non-empty bearer token at configuration validation; a rejected reload leaves the previous valid configuration active."
 )
 
 var manualCmd = &cobra.Command{
@@ -94,7 +95,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  TUI and ha-sync trust: /etc/syswarden/ha-ca.pem when present, otherwise system roots. Restart clients after trust changes.\n")
 		fmt.Printf("  An explicit HA CA bundle is exclusive and must contain only valid CERTIFICATE blocks; malformed input fails closed.\n")
 		fmt.Printf("  Transfer server.crt through a trusted out-of-band channel and verify its fingerprint before trusting it.\n")
-		fmt.Printf("  All HA routes require the bearer token; an empty token prevents the listener from starting.\n")
+		fmt.Printf("  %s\n", haAuthenticationManualContract)
 		fmt.Printf("  Exact peer IPs are outbound destinations; canonical CIDRs authorize inbound peers only and are never dialed.\n")
 		fmt.Printf("  Enriched temporary-ban batches are limited to 500 entries with TTLs from one second to 30 days.\n")
 		fmt.Printf("  BunkerWeb can use the authenticated HA API; docker_protect covers forwarded container traffic.\n")

@@ -261,12 +261,17 @@ func SendDetectedAlert(ip, jail, action string) {
 		hostname = "SYSWARDEN-NODE"
 	}
 
+	description := "An intrusion attempt was detected but NOT blocked (Alert-Only mode or firewall failure)."
+	if action == "Kernel Packet Dropped (No Source Ban)" {
+		description = "A kernel-level rule dropped the observed packet; no durable source ban was claimed."
+	}
+
 	payload := DiscordPayload{
 		Content: nil,
 		Embeds: []DiscordEmbed{
 			{
 				Title:       "⚠️ SYSWARDEN Threat Detected",
-				Description: "An intrusion attempt was detected but NOT blocked (Alert-Only mode or firewall failure).",
+				Description: description,
 				Color:       16753920, // Orange
 				Fields: []EmbedField{
 					{Name: "Attacker IP", Value: ip, Inline: true},

@@ -320,7 +320,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertEqual(source.count('"${GO_BIN}" -C'), 3)
         self.assertIn("export GOWORK=off", source)
         self.assertIn("mod download", source)
-        self.assertIn("-mod=readonly -buildmode=pie", source)
+        self.assertIn("-mod=readonly -trimpath -buildmode=pie", source)
         self.assertIn("staging/usr/local/bin", source)
         self.assertIn("install -d -m 0755", source)
         self.assertIn(
@@ -5607,6 +5607,12 @@ class PackageLifecycleContractTests(unittest.TestCase):
         build_script = BUILD_SCRIPT.read_text(encoding="utf-8")
         local_builder = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("BuildMode = 'pie'", build_script)
+        self.assertIn(
+            "$BuildArguments = @('build', '-mod=readonly', '-trimpath')",
+            build_script,
+        )
+        self.assertIn("$TrimPathPattern", build_script)
+        self.assertIn("path-independent compilation", build_script)
         self.assertNotIn("-ldflags=-s -w -d", build_script)
         self.assertIn("validate_linux_pie", self.workflow)
         self.assertIn("validate_static_apk_binary", self.workflow)
@@ -5631,8 +5637,21 @@ class PackageLifecycleContractTests(unittest.TestCase):
             local_builder.index("\ndone\n", local_builder.index('echo " -> Compiling static Alpine ${module}..."'))
         ]
         self.assertIn('dist/bin-apk/${module}', static_build)
-        self.assertIn("-mod=readonly -ldflags", static_build)
+        self.assertIn("-mod=readonly -trimpath -ldflags", static_build)
         self.assertNotIn("-buildmode=pie", static_build)
+        self.assertEqual(local_builder.count("-mod=readonly -trimpath"), 2)
+        self.assertEqual(local_builder.count("-trimpath=true"), 1)
+        self.assertIn("validate_trimpath_binary()", local_builder)
+        self.assertEqual(local_builder.count("path-independent compilation"), 1)
+        apk_workflow = workflow_step_script(
+            self.workflow, "Build and Stage Static Alpine Binaries"
+        )
+        self.assertEqual(apk_workflow.count("-trimpath \\\n"), 1)
+        self.assertEqual(apk_workflow.count("-trimpath=true"), 1)
+        linux_validation = workflow_step_script(
+            self.workflow, "Validate Compiled Inventory"
+        )
+        self.assertIn("-trimpath=true", linux_validation)
         self.assertIn("validate_static_apk_binary()", local_builder)
         self.assertIn('[ "${elf_type}" = "EXEC" ]', local_builder)
         self.assertIn("CGO_ENABLED=0", local_builder)

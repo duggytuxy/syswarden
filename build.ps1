@@ -110,6 +110,7 @@ function Assert-GoArtifact {
     $ExpectedOSPattern = '(?m)^\s*build\s+GOOS=' + [regex]::Escape($ExpectedOS) + '\s*$'
     $ExpectedArchPattern = '(?m)^\s*build\s+GOARCH=' + [regex]::Escape($ExpectedArch) + '\s*$'
     $CgoPattern = '(?m)^\s*build\s+CGO_ENABLED=0\s*$'
+    $TrimPathPattern = '(?m)^\s*build\s+-trimpath=true\s*$'
 
     if ($BuildInfo -notmatch $ExpectedOSPattern) {
         throw "Generated artifact has the wrong target OS (expected $ExpectedOS): $DisplayPath"
@@ -121,6 +122,10 @@ function Assert-GoArtifact {
 
     if ($BuildInfo -notmatch $CgoPattern) {
         throw "Generated artifact was not built with CGO_ENABLED=0: $DisplayPath"
+    }
+
+    if ($BuildInfo -notmatch $TrimPathPattern) {
+        throw "Generated artifact does not attest path-independent compilation: $DisplayPath"
     }
 }
 
@@ -141,7 +146,7 @@ function Invoke-GoBuild {
         Remove-Item -LiteralPath $TemporaryOutputPath -Force
     }
 
-    $BuildArguments = @('build', '-mod=readonly')
+    $BuildArguments = @('build', '-mod=readonly', '-trimpath')
     if ($null -ne $Target.BuildMode) {
         $BuildArguments += "-buildmode=$($Target.BuildMode)"
     }

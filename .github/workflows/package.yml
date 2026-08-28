@@ -149,6 +149,10 @@ jobs:
               echo "ERROR: Linux artifact was not built with CGO_ENABLED=0: ${artifact}" >&2
               exit 1
             }
+            go version -m "${artifact}" | grep -Eq '^[[:space:]]*build[[:space:]]+-trimpath=true$' || {
+              echo "ERROR: Linux artifact does not attest path-independent compilation: ${artifact}" >&2
+              exit 1
+            }
           }
 
           for artifact in \
@@ -258,6 +262,7 @@ jobs:
                 GOFLAGS=-mod=readonly \
                 go -C "src/core/${component}" build \
                   -mod=readonly \
+                  -trimpath \
                   -ldflags='-s -w' \
                   -o "${stage}/opt/syswarden/bin/${component}" \
                   .
@@ -304,6 +309,10 @@ jobs:
             }
             go version -m "${artifact}" | grep -Eq '^[[:space:]]*build[[:space:]]+CGO_ENABLED=0$' || {
               echo "ERROR: Alpine artifact was not built with CGO_ENABLED=0: ${artifact}" >&2
+              exit 1
+            }
+            go version -m "${artifact}" | grep -Eq '^[[:space:]]*build[[:space:]]+-trimpath=true$' || {
+              echo "ERROR: Alpine artifact does not attest path-independent compilation: ${artifact}" >&2
               exit 1
             }
           }

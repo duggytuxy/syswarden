@@ -184,12 +184,27 @@ for module in syswarden-cli syswarden-core syswarden-tui; do
     "${GO_BIN}" -C "${REPOSITORY_ROOT}/src/core/${module}" mod download
     echo " -> Compiling ${module}..."
     "${GO_BIN}" -C "${REPOSITORY_ROOT}/src/core/${module}" build \
-        -mod=readonly -buildmode=pie -ldflags="-s -w" \
+        -mod=readonly -trimpath -buildmode=pie -ldflags="-s -w" \
         -o "${PACKAGE_WORKSPACE}/dist/bin/${module}" .
     echo " -> Compiling static Alpine ${module}..."
     "${GO_BIN}" -C "${REPOSITORY_ROOT}/src/core/${module}" build \
-        -mod=readonly -ldflags="-s -w" \
+        -mod=readonly -trimpath -ldflags="-s -w" \
         -o "${PACKAGE_WORKSPACE}/dist/bin-apk/${module}" .
+done
+
+validate_trimpath_binary() {
+    artifact="$1"
+    "${GO_BIN}" version -m "${artifact}" | grep -Eq \
+        '^[[:space:]]*build[[:space:]]+-trimpath=true$' || {
+        echo "[-] Binary does not attest path-independent compilation: ${artifact}" >&2
+        return 1
+    }
+}
+
+for artifact in \
+    "${PACKAGE_WORKSPACE}"/dist/bin/* \
+    "${PACKAGE_WORKSPACE}"/dist/bin-apk/*; do
+    validate_trimpath_binary "${artifact}"
 done
 
 echo "[+] Linux Compilation successful."

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 
 	"syswarden-core/engine"
 	"syswarden-core/firewall"
@@ -21,7 +22,7 @@ import (
 
 type UDSServer struct {
 	socketPath              string
-	conn                    net.PacketConn
+	conn                    *net.UnixConn
 	engine                  *engine.Engine
 	fw                      firewall.Manager
 	logger                  *logger.Logger
@@ -66,7 +67,7 @@ func (s *UDSServer) Start() error {
 		_ = os.Remove(s.socketPath)
 	}
 
-	conn, err := net.ListenPacket("unixgram", s.socketPath)
+	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: s.socketPath, Net: "unixgram"})
 	if err != nil {
 		return fmt.Errorf("failed to listen on uds socket: %w", err)
 	}
@@ -93,11 +94,13 @@ func (s *UDSServer) readLoop() {
 		}
 	}()
 
-	// Buffer for massive HTTP payloads
-	buf := make([]byte, 64*1024)
+	// Match the direct follower's one MiB line plus a possible CRLF transport
+	// terminator. ReadMsgUnix exposes MSG_TRUNC so an incomplete record is never
+	// scanned or correlated as though it were authoritative.
+	buf := make([]byte, maxWAAPLogLineBytes+2)
 
 	for {
-		n, _, err := s.conn.ReadFrom(buf)
+		n, _, flags, _, err := s.conn.ReadMsgUnix(buf, nil)
 		if err != nil {
 			select {
 			case <-s.ctx.Done():
@@ -107,9 +110,17 @@ func (s *UDSServer) readLoop() {
 				return // socket closed
 			}
 		}
+		if !completeUDSDatagram(n, flags) {
+			log.Printf("[UDS] Refusing truncated or oversized datagram")
+			continue
+		}
 
 		s.processLogLine(string(buf[:n]))
 	}
+}
+
+func completeUDSDatagram(size, flags int) bool {
+	return size >= 0 && size <= maxWAAPLogLineBytes+2 && flags&syscall.MSG_TRUNC == 0
 }
 
 func (s *UDSServer) processLogLine(line string) {
@@ -119,13 +130,13 @@ func (s *UDSServer) processLogLine(line string) {
 	if s.engine == nil {
 		return
 	}
-	match := s.engine.Scan(line)
+	match := s.engine.ScanIngress(engine.IngressSourceUDS, line)
 	if match == nil || !match.Host.IsValid() {
 		return
 	}
 	ip := match.Host.String()
 	if match.Action == "detect" {
-		s.logDetected(ip, match.RuleID, line)
+		s.logDetected(ip, match, match.Payload)
 		return
 	}
 
@@ -133,7 +144,7 @@ func (s *UDSServer) processLogLine(line string) {
 	if match.Action == "track" {
 		shouldBan = s.engine.EvaluateThreshold(ip, match.RuleID, match.Threshold, match.Window)
 		if !shouldBan {
-			s.logShadow(ip, match.RuleID, line)
+			s.logShadow(ip, match, match.Payload)
 		}
 	}
 	if !shouldBan {
@@ -142,41 +153,41 @@ func (s *UDSServer) processLogLine(line string) {
 	canonical, err := s.canonicalUDSFirewallTarget(ip)
 	if err != nil {
 		if errors.Is(err, utils.ErrProtectedFirewallTarget) {
-			s.logShadow(ip, match.RuleID, line)
+			s.logShadow(ip, match, match.Payload)
 		} else {
 			s.logError("UDS firewall target policy failed closed", err)
-			s.logDetected(ip, match.RuleID, line)
+			s.logDetected(ip, match, match.Payload)
 		}
 		return
 	}
 	if s.enforcementMode == nil {
 		s.logError("UDS enforcement mode is unavailable", errors.New("missing enforcement mode provider"))
-		s.logDetected(canonical, match.RuleID, line)
+		s.logDetected(canonical, match, match.Payload)
 		return
 	}
 	switch s.enforcementMode() {
 	case "audit":
-		s.logSimulatedBan(canonical, match.RuleID, line)
+		s.logSimulatedBan(canonical, match, match.Payload)
 		return
 	case "enforcing":
 		// Continue to the only firewall mutation below.
 	default:
 		s.logError("UDS enforcement mode is invalid", errors.New("unsupported enforcement mode"))
-		s.logDetected(canonical, match.RuleID, line)
+		s.logDetected(canonical, match, match.Payload)
 		return
 	}
 	if s.fw == nil {
 		s.logError("UDS firewall is unavailable", errors.New("missing firewall manager"))
-		s.logDetected(canonical, match.RuleID, line)
+		s.logDetected(canonical, match, match.Payload)
 		return
 	}
 	if err := s.fw.Ban(canonical); err != nil {
 		s.logError("Failed to ban IP, logging as DETECTED", err)
-		s.logDetected(canonical, match.RuleID, line)
+		s.logDetected(canonical, match, match.Payload)
 		return
 	}
 	if s.logger != nil {
-		s.logger.LogBan(canonical, match.RuleID, line)
+		s.logger.LogBanWithRule(canonical, match.RuleID, match.Payload, loggerRuleContext(match))
 	}
 }
 
@@ -199,21 +210,21 @@ func (s *UDSServer) canonicalUDSFirewallTarget(value string) (string, error) {
 	})
 }
 
-func (s *UDSServer) logDetected(ip, ruleID, line string) {
+func (s *UDSServer) logDetected(ip string, match *engine.Match, line string) {
 	if s.logger != nil {
-		s.logger.LogDetected(ip, ruleID, line)
+		s.logger.LogDetectedWithRule(ip, match.RuleID, line, loggerRuleContext(match))
 	}
 }
 
-func (s *UDSServer) logShadow(ip, ruleID, line string) {
+func (s *UDSServer) logShadow(ip string, match *engine.Match, line string) {
 	if s.logger != nil {
-		s.logger.LogShadowAlert(ip, ruleID, line)
+		s.logger.LogShadowAlertWithRule(ip, match.RuleID, line, loggerRuleContext(match))
 	}
 }
 
-func (s *UDSServer) logSimulatedBan(ip, ruleID, line string) {
+func (s *UDSServer) logSimulatedBan(ip string, match *engine.Match, line string) {
 	if s.logger != nil {
-		s.logger.LogSimulatedBan(ip, ruleID, line)
+		s.logger.LogSimulatedBanWithRule(ip, match.RuleID, line, loggerRuleContext(match))
 	}
 }
 
