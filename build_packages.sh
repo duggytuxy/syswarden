@@ -208,6 +208,8 @@ install -d -m 0755 \
     staging/usr/share \
     staging/usr/share/bash-completion \
     staging/usr/share/bash-completion/completions \
+    staging/usr/share/doc \
+    staging/usr/share/doc/syswarden \
     staging-apk \
     staging-apk/opt \
     staging-apk/opt/syswarden \
@@ -217,7 +219,9 @@ install -d -m 0755 \
     staging-apk/usr/local/bin \
     staging-apk/usr/share \
     staging-apk/usr/share/bash-completion \
-    staging-apk/usr/share/bash-completion/completions
+    staging-apk/usr/share/bash-completion/completions \
+    staging-apk/usr/share/doc \
+    staging-apk/usr/share/doc/syswarden
 
 # Copy files
 cp "${REPOSITORY_ROOT}/src/core/syswarden-core/signatures.json" staging/opt/syswarden/
@@ -226,12 +230,18 @@ ln -s /opt/syswarden/bin/syswarden-cli staging/usr/local/bin/syswarden
 ln -s /opt/syswarden/bin/syswarden-tui staging/usr/local/bin/syswarden-tui
 staging/opt/syswarden/bin/syswarden-cli completion bash > \
     staging/usr/share/bash-completion/completions/syswarden
+install -m 0644 \
+    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
+    staging/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt
 cp "${REPOSITORY_ROOT}/src/core/syswarden-core/signatures.json" staging-apk/opt/syswarden/
 cp dist/bin-apk/syswarden-cli dist/bin-apk/syswarden-core dist/bin-apk/syswarden-tui staging-apk/opt/syswarden/bin/
 ln -s /opt/syswarden/bin/syswarden-cli staging-apk/usr/local/bin/syswarden
 ln -s /opt/syswarden/bin/syswarden-tui staging-apk/usr/local/bin/syswarden-tui
 staging-apk/opt/syswarden/bin/syswarden-cli completion bash > \
     staging-apk/usr/share/bash-completion/completions/syswarden
+install -m 0644 \
+    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
+    staging-apk/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt
 
 # Permissions
 chmod 750 staging/opt/syswarden/bin/*
@@ -243,11 +253,19 @@ chmod 644 staging-apk/usr/share/bash-completion/completions/syswarden
 PYTHONDONTWRITEBYTECODE=1 python3 \
     "${REPOSITORY_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging \
-    --completion-contract "${REPOSITORY_ROOT}/scripts/ci/package_completion_contract.json"
+    --completion-contract "${REPOSITORY_ROOT}/scripts/ci/package_completion_contract.json" \
+    --geoip-data-license-contract \
+    "${REPOSITORY_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
+    --geoip-data-license-source \
+    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt"
 PYTHONDONTWRITEBYTECODE=1 python3 \
     "${REPOSITORY_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging-apk \
-    --completion-contract "${REPOSITORY_ROOT}/scripts/ci/package_completion_contract.json"
+    --completion-contract "${REPOSITORY_ROOT}/scripts/ci/package_completion_contract.json" \
+    --geoip-data-license-contract \
+    "${REPOSITORY_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
+    --geoip-data-license-source \
+    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt"
 
 validate_static_apk_binary() {
     artifact="$1"

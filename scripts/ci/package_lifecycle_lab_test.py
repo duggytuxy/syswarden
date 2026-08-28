@@ -4244,6 +4244,112 @@ probe
                 )
                 self.assertNotEqual(missing_completion.returncode, 0)
 
+    def test_v4040_packages_require_exact_geoip_data_license_payload(self) -> None:
+        build_id_paths = {
+            "/usr/lib/.build-id",
+            "/usr/lib/.build-id/11",
+            "/usr/lib/.build-id/11/" + "1" * 38,
+            "/usr/lib/.build-id/22",
+            "/usr/lib/.build-id/22/" + "2" * 38,
+            "/usr/lib/.build-id/33",
+            "/usr/lib/.build-id/33/" + "3" * 38,
+        }
+        manifests = {
+            "deb": sorted(package_lifecycle_lab.GEOIP_LICENSE_DEB_PACKAGE_PATHS),
+            "apk": sorted(package_lifecycle_lab.GEOIP_LICENSE_APK_PACKAGE_PATHS),
+            "rpm": sorted(
+                set(package_lifecycle_lab.GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS)
+                | build_id_paths
+            ),
+        }
+        file_modes = {
+            "/opt/syswarden/bin/syswarden-cli": "750",
+            "/opt/syswarden/bin/syswarden-core": "750",
+            "/opt/syswarden/bin/syswarden-tui": "750",
+            "/opt/syswarden/signatures.json": "640",
+            package_lifecycle_lab.BASH_COMPLETION_PATH: "644",
+            package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH: "644",
+        }
+        link_targets = {
+            "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
+            "/usr/local/bin/syswarden-tui": "/opt/syswarden/bin/syswarden-tui",
+            "/usr/lib/.build-id/11/" + "1" * 38: (
+                "../../../../opt/syswarden/bin/syswarden-cli"
+            ),
+            "/usr/lib/.build-id/22/" + "2" * 38: (
+                "../../../../opt/syswarden/bin/syswarden-core"
+            ),
+            "/usr/lib/.build-id/33/" + "3" * 38: (
+                "../../../../opt/syswarden/bin/syswarden-tui"
+            ),
+        }
+        for family, manifest in manifests.items():
+            inventory = []
+            for path in manifest:
+                if path in file_modes:
+                    value = (
+                        package_lifecycle_lab.GEOIP_DATA_LICENSE_SHA256
+                        if path == package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH
+                        else "a" * 64
+                    )
+                    kind, mode = "file", file_modes[path]
+                elif path == "/usr/share/doc/syswarden/changelog.gz":
+                    kind, mode, value = "file", "644", "b" * 64
+                elif path in link_targets:
+                    kind, mode, value = "symlink", "777", link_targets[path]
+                else:
+                    kind, mode, value = "directory", "755", "-"
+                inventory.append(f"{path}\t{kind}\t{mode}\t0\t0\t{value}")
+            with self.subTest(family=family):
+                package_lifecycle_lab._validate_manager_paths(
+                    family,
+                    manifest,
+                    role="candidate",
+                    version="4.04.0",
+                    candidate_version="4.04.0",
+                )
+                accepted = self.run_embedded_inventory_contract(
+                    family,
+                    manifest,
+                    inventory,
+                    version="4.04.0",
+                    candidate_version="4.04.0",
+                )
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+                without_attribution = [
+                    path
+                    for path in manifest
+                    if path != package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH
+                ]
+                self.assertNotEqual(
+                    self.run_embedded_inventory_contract(
+                        family,
+                        without_attribution,
+                        version="4.04.0",
+                        candidate_version="4.04.0",
+                    ).returncode,
+                    0,
+                )
+
+                altered_inventory = [
+                    line.replace(
+                        package_lifecycle_lab.GEOIP_DATA_LICENSE_SHA256,
+                        "0" * 64,
+                    )
+                    for line in inventory
+                ]
+                self.assertNotEqual(
+                    self.run_embedded_inventory_contract(
+                        family,
+                        manifest,
+                        altered_inventory,
+                        version="4.04.0",
+                        candidate_version="4.04.0",
+                    ).returncode,
+                    0,
+                )
+
     def test_rpm_build_id_prefix_collision_requires_exact_unique_parents(
         self,
     ) -> None:

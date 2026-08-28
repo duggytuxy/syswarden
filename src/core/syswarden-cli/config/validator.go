@@ -14,10 +14,10 @@ import (
 	"unicode"
 
 	"github.com/go-playground/validator/v10"
+	"syswarden-cli/pkg/geoip"
 )
 
 var validate *validator.Validate
-var countryCodeRegex = regexp.MustCompile("^[a-zA-Z]{2}$")
 var interfaceNameRegex = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,15}$`)
 
 func init() {
@@ -52,6 +52,12 @@ func validateConfig(config *ModularConfig) error {
 	}
 	if config.SchemaVersion < 0 || config.SchemaVersion > CurrentSchemaVersion {
 		return fmt.Errorf("unsupported schema_version %d", config.SchemaVersion)
+	}
+	if err := validateGeoIPCountryList("network.geo.blocked_countries", config.Network.Geo.BlockedCountries); err != nil {
+		return err
+	}
+	if err := validateGeoIPCountryList("network.geo.allowed_countries", config.Network.Geo.AllowedCountries); err != nil {
+		return err
 	}
 	if err := validate.Struct(config); err != nil {
 		return err
@@ -309,19 +315,34 @@ func validateCountryCode(fl validator.FieldLevel) bool {
 	if code == "" {
 		return true
 	}
-	return countryCodeRegex.MatchString(code)
+	return isSupportedCountryCode(code)
 }
 
 func validateCountryCodeSlice(fl validator.FieldLevel) bool {
 	for _, code := range fl.Field().Interface().([]string) {
-		if code == "" {
-			return false
-		}
-		if !countryCodeRegex.MatchString(code) {
+		if !isSupportedCountryCode(code) {
 			return false
 		}
 	}
 	return true
+}
+
+func validateGeoIPCountryList(field string, codes []string) error {
+	for _, code := range codes {
+		normalized, err := geoip.ValidateCountryCodes(code)
+		if err != nil {
+			return fmt.Errorf("%s: %w", field, err)
+		}
+		if len(normalized) != 1 || !strings.EqualFold(code, normalized[0]) {
+			return fmt.Errorf("%s: invalid ISO 3166 alpha-2 country code %q", field, code)
+		}
+	}
+	return nil
+}
+
+func isSupportedCountryCode(code string) bool {
+	normalized, err := geoip.ValidateCountryCodes(code)
+	return err == nil && len(normalized) == 1 && strings.EqualFold(code, normalized[0])
 }
 
 func validateDuration(fl validator.FieldLevel) bool {

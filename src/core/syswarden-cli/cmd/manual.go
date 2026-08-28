@@ -46,7 +46,7 @@ var manualCmd = &cobra.Command{
 		fmt.Printf("  %suninstall%s           : Deletes SysWarden services, rules, configuration, data and logs.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %sunwhitelist%s         : Removes one or more addresses or CIDRs from the whitelist.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %supdate%s              : Installs an update only after signed-manifest and package verification.\n", ansiGreen, ansiReset)
-		fmt.Printf("  %supdate-feeds%s        : Downloads configured feeds and reapplies firewall policy.\n", ansiGreen, ansiReset)
+		fmt.Printf("  %supdate-feeds%s        : Refreshes remote feeds, validates embedded GeoIP data and reapplies firewall policy.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %swhitelist%s           : Adds canonical addresses or CIDRs, optionally scoped by --port to one TCP service.\n", ansiGreen, ansiReset)
 		fmt.Printf("  %swhitelist-infra%s     : Detects and adds local infrastructure addresses.\n\n", ansiGreen, ansiReset)
 

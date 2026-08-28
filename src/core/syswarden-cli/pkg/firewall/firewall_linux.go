@@ -216,6 +216,10 @@ func ApplyPolicies() error {
 	if err != nil {
 		return fmt.Errorf("compile operator policy: %w", err)
 	}
+	strictAllow := normalizeStrictAllowConfiguration(
+		config.GlobalConfig.GeoAllowed,
+		config.GlobalConfig.ASNAllowed,
+	)
 	fmt.Println("[INFO] Applying Firewall Rules (nftables atomic transaction)...")
 
 	// Create configuration dynamically (Secure string building)
@@ -383,20 +387,7 @@ func ApplyPolicies() error {
 	_, _ = nftRules.WriteString("\t\ttcp flags & (fin|syn|rst|ack) != syn ct state new counter drop\n")
 
 	// ZERO-TRUST MODE: Drop everything that is not in the Zero-Trust allowed GEO/ASN list
-	if config.GlobalConfig.GeoAllowed != "" || config.GlobalConfig.ASNAllowed != "" {
-		// LAN Bypass: Explicitly allow internal private subnets to bypass Zero-Trust
-		if len(validLANSubnets4) > 0 {
-			_, _ = fmt.Fprintf(&nftRules, "\t\tip saddr { %s } accept\n", strings.Join(validLANSubnets4, ", "))
-		}
-		if len(validLANSubnets6) > 0 {
-			_, _ = fmt.Fprintf(&nftRules, "\t\tip6 saddr { %s } accept\n", strings.Join(validLANSubnets6, ", "))
-		}
-
-		_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ZERO-TRUST] \"\n")
-		_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed drop\n")
-		_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ZERO-TRUST] \"\n")
-		_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 drop\n")
-	}
+	appendStrictAllowInputRules(&nftRules, strictAllow.configured, validLANSubnets4, validLANSubnets6)
 	sshPort, err := effectiveSSHPort(config.GlobalConfig.SSHPort)
 	if err != nil {
 		return err
@@ -536,10 +527,7 @@ func ApplyPolicies() error {
 	}
 
 	// ZERO-TRUST MODE: Drop everything that is not in the allowed GEO/ASN list (Forward chain for Docker)
-	if config.GlobalConfig.GeoAllowed != "" || config.GlobalConfig.ASNAllowed != "" {
-		_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed counter drop\n")
-		_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 counter drop\n")
-	}
+	appendStrictAllowForwardRules(&nftRules, strictAllow.configured)
 	_, _ = nftRules.WriteString("\t}\n}\n\n")
 
 	// 4. ARP Protection Table (L2)
@@ -563,7 +551,7 @@ func ApplyPolicies() error {
 	// wrapper state has been mutated when this phase returns an error.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	populations, err := prepareNftSetPopulations(ctx, sshPort)
+	populations, err := prepareNftSetPopulations(ctx, sshPort, strictAllow)
 	if err != nil {
 		return fmt.Errorf("failed to prepare nftables sets: %w", err)
 	}
@@ -778,7 +766,11 @@ func contains(slice []string, val string) bool {
 	return false
 }
 
-func prepareNftSetPopulations(ctx context.Context, effectiveSSHPort string) ([]nftSetPopulation, error) {
+func prepareNftSetPopulations(
+	ctx context.Context,
+	effectiveSSHPort string,
+	strictAllow strictAllowConfiguration,
+) ([]nftSetPopulation, error) {
 	const listDirectory = "/etc/syswarden/lists"
 	if _, err := maybeAdoptLegacySaaSListPair(listDirectory, config.GlobalConfig.AllowSaaSMonitors); err != nil {
 		return nil, fmt.Errorf("adopt the legacy SaaS monitor lists: %w", err)
@@ -803,26 +795,42 @@ func prepareNftSetPopulations(ctx context.Context, effectiveSSHPort string) ([]n
 	blacklist4 := []nftListSource{optional("syswarden_blacklist.ipv4"), optional("syswarden_threatintel.ipv4")}
 	blacklist6 := []nftListSource{optional("syswarden_blacklist.ipv6"), optional("syswarden_threatintel.ipv6")}
 
-	zt4, zt6, ztErr := configuredNftSources(listDirectory, config.GlobalConfig.GeoAllowed, config.GlobalConfig.ASNAllowed, true)
-	geo4, geo6, geoErr := configuredNftSources(listDirectory, config.GlobalConfig.GeoCodes, "", false)
-	asn4, asn6, asnErr := configuredNftSources(listDirectory, "", config.GlobalConfig.ASNList, false)
+	ztASN4, ztASN6, ztASNSourceErr := configuredASNNftSources(listDirectory, strictAllow.asns, true)
+	asn4, asn6, asnErr := configuredASNNftSources(listDirectory, config.GlobalConfig.ASNList, false)
 	whitelistAddress4, whitelistPorts4, whitelist4Err := populateWhitelistSets(ctx, whitelist4, "syswarden_whitelist", "syswarden_whitelist_ports")
 	whitelistAddress6, whitelistPorts6, whitelist6Err := populateWhitelistSets(ctx, whitelist6, "syswarden_whitelist6", "syswarden_whitelist_ports6")
 	sshBypass4, sshBypass6, sshBypassErr := populateSSHBypassSets(ctx, nftListSource{path: SSHBypass}, effectiveSSHPort)
-
-	requests := []struct {
-		name    string
-		sources []nftListSource
-		enabled bool
-	}{
-		{name: "syswarden_zt_allowed", sources: zt4, enabled: true},
-		{name: "syswarden_zt_allowed6", sources: zt6, enabled: true},
-		{name: "syswarden_blacklist", sources: blacklist4, enabled: true},
-		{name: "syswarden_blacklist6", sources: blacklist6, enabled: true},
-		{name: "syswarden_geoip", sources: geo4, enabled: config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != ""},
-		{name: "syswarden_geoip6", sources: geo6, enabled: config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != ""},
-		{name: "syswarden_asn", sources: asn4, enabled: config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != ""},
-		{name: "syswarden_asn6", sources: asn6, enabled: config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != ""},
+	ztASN4Population, ztASN4Err := populateSet(ctx, ztASN4, "syswarden_zt_allowed")
+	ztASN6Population, ztASN6Err := populateSet(ctx, ztASN6, "syswarden_zt_allowed6")
+	ztGeo4Population := nftSetPopulation{name: "syswarden_zt_allowed"}
+	ztGeo6Population := nftSetPopulation{name: "syswarden_zt_allowed6"}
+	var ztGeoErr error
+	if strictAllow.countries != "" {
+		ztGeo4Population, ztGeo6Population, ztGeoErr = configuredAuthenticatedGeoIPPopulations(
+			strictAllow.countries,
+			"syswarden_zt_allowed",
+			"syswarden_zt_allowed6",
+		)
+	}
+	zt4Population, zt4MergeErr := mergeNFTAddressPopulations("syswarden_zt_allowed", ztASN4Population, ztGeo4Population)
+	zt6Population, zt6MergeErr := mergeNFTAddressPopulations("syswarden_zt_allowed6", ztASN6Population, ztGeo6Population)
+	strictAllowPopulationErr := validateStrictAllowPopulations(
+		strictAllow.configured,
+		zt4Population,
+		zt6Population,
+	)
+	blacklist4Population, blacklist4Err := populateSet(ctx, blacklist4, "syswarden_blacklist")
+	blacklist6Population, blacklist6Err := populateSet(ctx, blacklist6, "syswarden_blacklist6")
+	geoEnabled := config.GlobalConfig.EnableGeo && config.GlobalConfig.GeoCodes != ""
+	geo4Population := nftSetPopulation{name: "syswarden_geoip"}
+	geo6Population := nftSetPopulation{name: "syswarden_geoip6"}
+	var geoErr error
+	if geoEnabled {
+		geo4Population, geo6Population, geoErr = configuredAuthenticatedGeoIPPopulations(
+			config.GlobalConfig.GeoCodes,
+			"syswarden_geoip",
+			"syswarden_geoip6",
+		)
 	}
 
 	populations := []nftSetPopulation{
@@ -832,19 +840,96 @@ func prepareNftSetPopulations(ctx context.Context, effectiveSSHPort string) ([]n
 		whitelistPorts6,
 		sshBypass4,
 		sshBypass6,
+		zt4Population,
+		zt6Population,
+		blacklist4Population,
+		blacklist6Population,
 	}
-	errs := []error{ztErr, geoErr, asnErr, saasPairErr, whitelist4Err, whitelist6Err, sshBypassErr}
-	for _, request := range requests {
-		if !request.enabled {
-			continue
-		}
-		population, err := populateSet(ctx, request.sources, request.name)
-		populations = append(populations, population)
-		if err != nil {
-			errs = append(errs, err)
-		}
+	if geoEnabled {
+		populations = append(populations, geo4Population, geo6Population)
+	}
+	var asn4Err, asn6Err error
+	if config.GlobalConfig.EnableASN && config.GlobalConfig.ASNList != "" {
+		asn4Population, err := populateSet(ctx, asn4, "syswarden_asn")
+		populations = append(populations, asn4Population)
+		asn4Err = err
+		asn6Population, err := populateSet(ctx, asn6, "syswarden_asn6")
+		populations = append(populations, asn6Population)
+		asn6Err = err
+	}
+	errs := []error{
+		ztASNSourceErr, ztASN4Err, ztASN6Err, ztGeoErr, zt4MergeErr, zt6MergeErr, strictAllowPopulationErr,
+		blacklist4Err, blacklist6Err, geoErr, asnErr, asn4Err, asn6Err,
+		saasPairErr, whitelist4Err, whitelist6Err, sshBypassErr,
 	}
 	return populations, errors.Join(errs...)
+}
+
+func validateStrictAllowPopulations(configured bool, ipv4, ipv6 nftSetPopulation) error {
+	if !configured || len(ipv4.entries) > 0 || len(ipv6.entries) > 0 {
+		return nil
+	}
+	return fmt.Errorf("strict allow policy is configured but the merged GeoIP and ASN allow populations are empty for both IPv4 and IPv6")
+}
+
+type strictAllowConfiguration struct {
+	countries  string
+	asns       string
+	configured bool
+}
+
+func normalizeStrictAllowConfiguration(countries, asns string) strictAllowConfiguration {
+	normalizedCountries := authenticatedGeoIPCountryInput(countries)
+	normalizedASNs := authenticatedASNInput(asns)
+	return strictAllowConfiguration{
+		countries:  normalizedCountries,
+		asns:       normalizedASNs,
+		configured: normalizedCountries != "" || normalizedASNs != "",
+	}
+}
+
+func hasConfiguredStrictAllowSelection(countries, asns string) bool {
+	return normalizeStrictAllowConfiguration(countries, asns).configured
+}
+
+func authenticatedASNInput(raw string) string {
+	selected := make([]string, 0)
+	for _, candidate := range strings.Fields(strings.ReplaceAll(raw, ",", " ")) {
+		if !strings.EqualFold(candidate, "none") && !strings.EqualFold(candidate, "auto") {
+			selected = append(selected, candidate)
+		}
+	}
+	return strings.Join(selected, " ")
+}
+
+func appendStrictAllowInputRules(
+	nftRules *strings.Builder,
+	configured bool,
+	validLANSubnets4 []string,
+	validLANSubnets6 []string,
+) {
+	if !configured {
+		return
+	}
+	// LAN Bypass: Explicitly allow internal private subnets to bypass Zero-Trust.
+	if len(validLANSubnets4) > 0 {
+		_, _ = fmt.Fprintf(nftRules, "\t\tip saddr { %s } accept\n", strings.Join(validLANSubnets4, ", "))
+	}
+	if len(validLANSubnets6) > 0 {
+		_, _ = fmt.Fprintf(nftRules, "\t\tip6 saddr { %s } accept\n", strings.Join(validLANSubnets6, ", "))
+	}
+	_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ZERO-TRUST] \"\n")
+	_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed drop\n")
+	_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-ZERO-TRUST] \"\n")
+	_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 drop\n")
+}
+
+func appendStrictAllowForwardRules(nftRules *strings.Builder, configured bool) {
+	if !configured {
+		return
+	}
+	_, _ = nftRules.WriteString("\t\tip saddr != @syswarden_zt_allowed counter drop\n")
+	_, _ = nftRules.WriteString("\t\tip6 saddr != @syswarden_zt_allowed6 counter drop\n")
 }
 
 func whitelistNftSources(directory string, allowSaaSMonitors bool) ([]nftListSource, []nftListSource) {
@@ -1168,25 +1253,13 @@ func unlockNftListSnapshot(file *os.File) {
 	_ = file.Close()
 }
 
-func configuredNftSources(directory, countries, asns string, allowed bool) ([]nftListSource, []nftListSource, error) {
+func configuredASNNftSources(directory, asns string, allowed bool) ([]nftListSource, []nftListSource, error) {
 	var ipv4 []nftListSource
 	var ipv6 []nftListSource
 	var errs []error
 	prefix := ""
 	if allowed {
 		prefix = "allowed_"
-	}
-	for _, country := range strings.Fields(strings.ReplaceAll(countries, ",", " ")) {
-		if strings.EqualFold(country, "none") {
-			continue
-		}
-		if len(country) != 2 || !isASCIILetters(country) {
-			errs = append(errs, fmt.Errorf("invalid country list identifier %q", country))
-			continue
-		}
-		base := prefix + strings.ToLower(country)
-		ipv4 = append(ipv4, nftListSource{path: filepath.Join(directory, base+".ipv4"), required: true})
-		ipv6 = append(ipv6, nftListSource{path: filepath.Join(directory, base+".ipv6"), required: true})
 	}
 	for _, configuredASN := range strings.Fields(strings.ReplaceAll(asns, ",", " ")) {
 		if strings.EqualFold(configuredASN, "none") || strings.EqualFold(configuredASN, "auto") {
@@ -1205,15 +1278,6 @@ func configuredNftSources(directory, countries, asns string, allowed bool) ([]nf
 		ipv6 = append(ipv6, nftListSource{path: filepath.Join(directory, base+".ipv6"), required: true})
 	}
 	return ipv4, ipv6, errors.Join(errs...)
-}
-
-func isASCIILetters(value string) bool {
-	for _, r := range value {
-		if r < 'A' || r > 'Z' && r < 'a' || r > 'z' {
-			return false
-		}
-	}
-	return true
 }
 
 func isASCIIDigits(value string) bool {

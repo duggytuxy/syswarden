@@ -313,10 +313,20 @@ func TestCoreValidatorMatchesCLIParityContract_SW_CFG_002(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "baseline"},
-		{name: "custom choice with URL", module: "[network.blocklists]\nlist_choice = \"3\"\ncustom_url = \"https://example.invalid/list\"\n"},
+		{name: "custom choice with pinned IPv4 URL", module: "[network.blocklists]\nlist_choice = \"3\"\ncustom_url = \"https://example.invalid/list\"\ncustom_hash = \"sha256:" + digest + "\"\n"},
+		{name: "custom choice with pinned IPv6 URL", module: "[network.blocklists]\nlist_choice = \"3\"\ncustom_url_ipv6 = \"https://example.invalid/list6\"\ncustom_hash_ipv6 = \"sha256:" + digest + "\"\n"},
+		{name: "custom choice with unpinned IPv4 URL", module: "[network.blocklists]\nlist_choice = \"3\"\ncustom_url = \"https://example.invalid/list\"\n", wantErr: true},
+		{name: "custom choice with unpinned IPv6 URL", module: "[network.blocklists]\nlist_choice = \"3\"\ncustom_url_ipv6 = \"https://example.invalid/list6\"\n", wantErr: true},
+		{name: "custom choice with partially pinned URLs", module: "[network.blocklists]\nlist_choice = \"3\"\ncustom_url = \"https://example.invalid/list\"\ncustom_hash = \"sha256:" + digest + "\"\ncustom_url_ipv6 = \"https://example.invalid/list6\"\n", wantErr: true},
 		{name: "custom choice without URL", module: "[network.blocklists]\nlist_choice = \"3\"\ncustom_url = \"\"\ncustom_url_ipv6 = \"\"\n", wantErr: true},
 		{name: "hash with matching URL", module: "[network.blocklists]\ncustom_url = \"https://example.invalid/list\"\ncustom_hash = \"sha256:" + digest + "\"\n"},
+		{name: "non-custom choice with unpinned URL", module: "[network.blocklists]\nlist_choice = \"4\"\ncustom_url = \"https://example.invalid/list\"\n", wantErr: true},
 		{name: "hash without matching URL", module: "[network.blocklists]\ncustom_url = \"\"\ncustom_hash = \"sha256:" + digest + "\"\n", wantErr: true},
+		{name: "supported GeoIP country", module: "[network.geo]\nblocked_countries = [\"bv\", \"RU\"]\nallowed_countries = [\"fr\"]\n"},
+		{name: "unsupported EU pseudo-country", module: "[network.geo]\nblocked_countries = [\"eu\"]\n", wantErr: true},
+		{name: "unsupported unknown pseudo-country", module: "[network.geo]\nallowed_countries = [\"zz\"]\n", wantErr: true},
+		{name: "unsupported arbitrary letter pair", module: "[network.geo]\nblocked_countries = [\"qq\"]\n", wantErr: true},
+		{name: "invalid long country code", module: "[network.geo]\nblocked_countries = [\"BEL\"]\n", wantErr: true},
 		{name: "complete Wazuh", module: "[integrations.wazuh]\nenabled = true\nip = \"192.0.2.20\"\ncomm_port = \"1514\"\nenroll_port = \"1515\"\n"},
 		{name: "Wazuh missing communication port", module: "[integrations.wazuh]\nenabled = true\nip = \"192.0.2.20\"\ncomm_port = \"\"\nenroll_port = \"1515\"\n", wantErr: true},
 		{name: "Wazuh missing enrollment port", module: "[integrations.wazuh]\nenabled = true\nip = \"192.0.2.20\"\ncomm_port = \"1514\"\nenroll_port = \"\"\n", wantErr: true},
@@ -345,5 +355,25 @@ func TestCoreValidatorMatchesCLIParityContract_SW_CFG_002(t *testing.T) {
 				t.Fatalf("LoadConfigDirectory() error = %v, wantErr %t", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestSupportedGeoIPCountryCodeContractMatchesEmbeddedSnapshot(t *testing.T) {
+	if len(supportedGeoIPCountryCodes) != 249 {
+		t.Fatalf("supported GeoIP country count = %d, want 249", len(supportedGeoIPCountryCodes))
+	}
+	for index, code := range supportedGeoIPCountryCodes {
+		if len(code) != 2 || code != strings.ToLower(code) ||
+			index > 0 && supportedGeoIPCountryCodes[index-1] >= code {
+			t.Fatalf("supported GeoIP country contract is not canonical at %d: %q", index, code)
+		}
+		if !validGeoIPCountryCode(code) || !validGeoIPCountryCode(strings.ToUpper(code)) {
+			t.Fatalf("supported GeoIP country %q was rejected", code)
+		}
+	}
+	for _, code := range []string{"", "r", "BEL", "eu", "zz", "qq", "r1", "é"} {
+		if validGeoIPCountryCode(code) {
+			t.Fatalf("unsupported GeoIP country %q was accepted", code)
+		}
 	}
 }

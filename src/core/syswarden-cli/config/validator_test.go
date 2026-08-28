@@ -40,6 +40,9 @@ func TestCustomValidators(t *testing.T) {
 		{name: "mapped HA peer", value: []string{"::ffff:192.0.2.10"}, tag: "ha_peer_slice", wantErr: true},
 		{name: "zoned HA peer", value: []string{"fe80::1%eth0"}, tag: "ha_peer_slice", wantErr: true},
 		{name: "country list", value: []string{"be", "FR"}, tag: "country_code_slice"},
+		{name: "supported country without allocations", value: []string{"bv"}, tag: "country_code_slice"},
+		{name: "unsupported EU pseudo-country", value: []string{"eu"}, tag: "country_code_slice", wantErr: true},
+		{name: "unsupported unknown pseudo-country", value: []string{"zz"}, tag: "country_code_slice", wantErr: true},
 		{name: "long country", value: []string{"BEL"}, tag: "country_code_slice", wantErr: true},
 		{name: "maximum ASN", value: []string{"AS4294967295"}, tag: "asn_slice"},
 		{name: "negative ASN", value: []string{"AS-1"}, tag: "asn_slice", wantErr: true},
@@ -66,6 +69,39 @@ func TestCustomValidators(t *testing.T) {
 				t.Fatalf("validate.Var(%v, %q) error = %v, wantErr %t", test.value, test.tag, err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidateConfigRejectsUnsupportedGeoIPCountriesBeforePolicyMutation(t *testing.T) {
+	base := &ModularConfig{}
+	base.Core.ConfigDir = "/etc/syswarden/config/modules"
+	base.Core.LogLevel = "INFO"
+	base.Core.FirewallBackend = "keep"
+	base.Core.SSHPort = "2222"
+	base.Network.Wireguard.Port = "51820"
+	base.Network.Wireguard.Subnet = "10.10.0.0/24"
+	base.Security.Compliance.CheckInterval = "24h"
+	base.WAAP.EnforcementMode = "enforcing"
+	base.WAAP.BruteforceThreshold = 5
+	base.WAAP.BruteforceWindowSeconds = 60
+	base.Integrations.HA.PeerPort = 62026
+
+	blocked := *base
+	blocked.Network.Geo.BlockedCountries = []string{"eu"}
+	if err := validateConfig(&blocked); err == nil || err.Error() != `network.geo.blocked_countries: unsupported ISO 3166 alpha-2 country code "eu"` {
+		t.Fatalf("unsupported blocked country error = %v", err)
+	}
+
+	allowed := *base
+	allowed.Network.Geo.AllowedCountries = []string{"zz"}
+	if err := validateConfig(&allowed); err == nil || err.Error() != `network.geo.allowed_countries: unsupported ISO 3166 alpha-2 country code "zz"` {
+		t.Fatalf("unsupported allowed country error = %v", err)
+	}
+
+	validEmptyAllocation := *base
+	validEmptyAllocation.Network.Geo.BlockedCountries = []string{"bv"}
+	if err := validateConfig(&validEmptyAllocation); err != nil {
+		t.Fatalf("supported empty-allocation country was rejected: %v", err)
 	}
 }
 

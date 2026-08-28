@@ -567,6 +567,11 @@ LIVE_TELEMETRY_STATE_ATTRIBUTES = (
 )
 
 BASH_COMPLETION_PATH = "/usr/share/bash-completion/completions/syswarden"
+GEOIP_DATA_LICENSE_PATH = "/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
+GEOIP_DATA_LICENSE_FIRST_VERSION = "4.04.0"
+GEOIP_DATA_LICENSE_SHA256 = (
+    "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+)
 LEGACY_BASH_COMPLETION_PATH = "/etc/bash_completion.d/syswarden"
 LEGACY_BASH_COMPLETION_VERSION = "4.03.2"
 LEGACY_BASH_COMPLETION_SIZE = 16_339
@@ -584,6 +589,10 @@ LEGACY_PACKAGE_PAYLOAD_PATHS = (
 PACKAGE_PAYLOAD_PATHS = (
     *LEGACY_PACKAGE_PAYLOAD_PATHS,
     BASH_COMPLETION_PATH,
+)
+GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS = (
+    *PACKAGE_PAYLOAD_PATHS,
+    GEOIP_DATA_LICENSE_PATH,
 )
 FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.03.2"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
@@ -626,8 +635,14 @@ DEB_PACKAGE_PATHS = frozenset(
         "/usr/share/bash-completion/completions",
     )
 )
+GEOIP_LICENSE_DEB_PACKAGE_PATHS = frozenset(
+    (*DEB_PACKAGE_PATHS, GEOIP_DATA_LICENSE_PATH)
+)
 LEGACY_APK_PACKAGE_PATHS = frozenset(LEGACY_PACKAGE_PAYLOAD_PATHS)
 APK_PACKAGE_PATHS = frozenset(PACKAGE_PAYLOAD_PATHS)
+GEOIP_LICENSE_APK_PACKAGE_PATHS = frozenset(
+    GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS
+)
 RPM_BUILD_ID_DIRECTORY_PATTERN = re.compile(r"^/usr/lib/\.build-id/[0-9a-f]{2}$")
 RPM_BUILD_ID_LINK_PATTERN = re.compile(
     r"^/usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38}$"
@@ -2367,6 +2382,24 @@ package_uses_legacy_completion_payload() {
     esac
 }
 
+package_uses_geoip_data_license_payload() {
+    artifact_role="$1"
+    case "${artifact_role}" in
+        candidate) artifact_version="${EXPECTED_CANDIDATE_VERSION}" ;;
+        previous) artifact_version="${EXPECTED_PREVIOUS_VERSION}" ;;
+        *) return 2 ;;
+    esac
+    artifact_major="${artifact_version%%.*}"
+    artifact_remainder="${artifact_version#*.}"
+    artifact_minor="${artifact_remainder%%.*}"
+    case "${artifact_major}:${artifact_minor}" in
+        *[!0-9:]*|:*) return 2 ;;
+    esac
+    [ "${artifact_major}" -gt 4 ] || {
+        [ "${artifact_major}" -eq 4 ] && [ "${artifact_minor}" -ge 4 ]
+    }
+}
+
 validate_manifest_contract() {
     manifest="$1"
     artifact_role="$2"
@@ -2392,12 +2425,26 @@ validate_manifest_contract() {
         required_manifest_path "${manifest}" \
             /usr/share/bash-completion/completions/syswarden || return 1
     fi
+    geoip_data_license_payload=0
+    if package_uses_geoip_data_license_payload "${artifact_role}"; then
+        geoip_data_license_payload=1
+        required_manifest_path "${manifest}" \
+            /usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt || return 1
+    else
+        geoip_data_license_rc=$?
+        [ "${geoip_data_license_rc}" -eq 1 ] || return 1
+        required_manifest_path "${manifest}" \
+            /usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt && return 1
+    fi
 
     case "${PACKAGE_FAMILY}" in
         deb)
             if [ "${legacy_completion_payload}" -eq 1 ]; then
                 allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=16
+            elif [ "${geoip_data_license_payload}" -eq 1 ]; then
+                allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/(changelog\.gz|GEOIP-DATA-LICENSE\.txt)|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
+                expected_manifest_count=20
             else
                 allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=19
@@ -2410,6 +2457,9 @@ validate_manifest_contract() {
             if [ "${legacy_completion_payload}" -eq 1 ]; then
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=6
+            elif [ "${geoip_data_license_payload}" -eq 1 ]; then
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/GEOIP-DATA-LICENSE\.txt)$'
+                expected_manifest_count=8
             else
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden)$'
                 expected_manifest_count=7
@@ -2421,6 +2471,8 @@ validate_manifest_contract() {
         rpm)
             if [ "${legacy_completion_payload}" -eq 1 ]; then
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+            elif [ "${geoip_data_license_payload}" -eq 1 ]; then
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/GEOIP-DATA-LICENSE\.txt|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             else
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             fi
@@ -2492,6 +2544,14 @@ validate_inventory_contract() {
         [ "${legacy_completion_rc}" -eq 1 ] || return 1
         completion_hash="$(awk -F '\t' '$1 == "/usr/share/bash-completion/completions/syswarden" { print $6 }' "${inventory}")"
         inventory_has_exact_entry "${inventory}" /usr/share/bash-completion/completions/syswarden file 644 "${completion_hash}" || return 1
+    fi
+    if package_uses_geoip_data_license_payload "${artifact_role}"; then
+        inventory_has_exact_entry "${inventory}" \
+            /usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt file 644 \
+            a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499 || return 1
+    else
+        geoip_data_license_rc=$?
+        [ "${geoip_data_license_rc}" -eq 1 ] || return 1
     fi
     if awk -F '\t' '$2 == "missing" || $2 == "unsupported" { found = 1 } END { exit found ? 0 : 1 }' "${inventory}"; then
         return 1
@@ -5328,6 +5388,17 @@ def _uses_legacy_completion_payload(
     return False
 
 
+def _uses_geoip_data_license_payload(
+    role: str,
+    version: str,
+) -> bool:
+    if role not in {"previous", "candidate"}:
+        raise LifecycleLabError(f"unsupported package artifact role: {role!r}")
+    return parse_syswarden_version(version) >= parse_syswarden_version(
+        GEOIP_DATA_LICENSE_FIRST_VERSION
+    )
+
+
 def _validate_manager_paths(
     family: str,
     paths: list[str],
@@ -5359,21 +5430,38 @@ def _validate_manager_paths(
         candidate_version,
         forward_only_apk=forward_only_apk,
     )
+    geoip_data_license = _uses_geoip_data_license_payload(role, version)
     expected_payload_paths = set(
         LEGACY_PACKAGE_PAYLOAD_PATHS
         if legacy_completion
-        else PACKAGE_PAYLOAD_PATHS
+        else (
+            GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS
+            if geoip_data_license
+            else PACKAGE_PAYLOAD_PATHS
+        )
     )
     if family == "deb":
         expected = (
-            LEGACY_DEB_PACKAGE_PATHS if legacy_completion else DEB_PACKAGE_PATHS
+            LEGACY_DEB_PACKAGE_PATHS
+            if legacy_completion
+            else (
+                GEOIP_LICENSE_DEB_PACKAGE_PATHS
+                if geoip_data_license
+                else DEB_PACKAGE_PATHS
+            )
         )
         if observed != expected:
             raise LifecycleLabError("DEB native package inventory is not exact")
         return
     if family == "apk":
         expected = (
-            LEGACY_APK_PACKAGE_PATHS if legacy_completion else APK_PACKAGE_PATHS
+            LEGACY_APK_PACKAGE_PATHS
+            if legacy_completion
+            else (
+                GEOIP_LICENSE_APK_PACKAGE_PATHS
+                if geoip_data_license
+                else APK_PACKAGE_PATHS
+            )
         )
         if observed != expected:
             raise LifecycleLabError("APK native package inventory is not exact")
@@ -5430,6 +5518,7 @@ def validate_inventory_snapshot(
         candidate_version,
         forward_only_apk=forward_only_apk,
     )
+    geoip_data_license = _uses_geoip_data_license_payload(role, version)
     if len(filesystem) != len(manager_paths):
         raise LifecycleLabError(
             "filesystem inventory does not cover every native package path"
@@ -5490,6 +5579,16 @@ def validate_inventory_snapshot(
             raise LifecycleLabError(
                 f"package file type/mode/digest contract failed at {path}"
             )
+    if geoip_data_license:
+        attribution = entries[GEOIP_DATA_LICENSE_PATH]
+        if (
+            attribution["type"] != "file"
+            or attribution["mode"] != "644"
+            or attribution["value"] != GEOIP_DATA_LICENSE_SHA256
+        ):
+            raise LifecycleLabError(
+                "GeoIP data license payload is not the pinned intact source"
+            )
     link_targets = {
         "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
         "/usr/local/bin/syswarden-tui": "/opt/syswarden/bin/syswarden-tui",
@@ -5506,12 +5605,22 @@ def validate_inventory_snapshot(
             )
     if family == "deb":
         expected_paths = (
-            LEGACY_DEB_PACKAGE_PATHS if legacy_completion else DEB_PACKAGE_PATHS
+            LEGACY_DEB_PACKAGE_PATHS
+            if legacy_completion
+            else (
+                GEOIP_LICENSE_DEB_PACKAGE_PATHS
+                if geoip_data_license
+                else DEB_PACKAGE_PATHS
+            )
         )
         expected_payload_paths = set(
             LEGACY_PACKAGE_PAYLOAD_PATHS
             if legacy_completion
-            else PACKAGE_PAYLOAD_PATHS
+            else (
+                GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS
+                if geoip_data_license
+                else PACKAGE_PAYLOAD_PATHS
+            )
         )
         for path in expected_paths - expected_payload_paths - {
             "/usr/share/doc/syswarden/changelog.gz"

@@ -24,8 +24,10 @@ import (
 	"strings"
 	"syscall"
 	"syswarden-cli/pkg/cronstate"
+	"syswarden-cli/pkg/geoip"
 	"syswarden-cli/pkg/system"
 	"time"
+	"unicode"
 )
 
 const approvedFeedDirectory = "/etc/syswarden/lists"
@@ -42,7 +44,6 @@ const (
 var (
 	approvedFeedBasename      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*\.ipv[46]$`)
 	approvedASN               = regexp.MustCompile(`^AS[0-9]{1,10}$`)
-	approvedCountryCode       = regexp.MustCompile(`^[A-Za-z]{2}$`)
 	approvedSHA256            = regexp.MustCompile(`^[A-Fa-f0-9]{64}$`)
 	errFeedRedirect           = errors.New("feed redirects are disabled")
 	errUnauthenticatedASNFeed = errors.New("unauthenticated RADB WHOIS data is non-authoritative for firewall policy")
@@ -624,6 +625,37 @@ func canonicalSHA256Digest(digest string) (string, error) {
 	return strings.ToLower(digest), nil
 }
 
+func validateCustomFeedContract(listChoice, customURL, customURLIPv6, customHash, customHashIPv6 string) error {
+	if listChoice != "3" {
+		return nil
+	}
+	if customURL == "" && customURLIPv6 == "" {
+		return fmt.Errorf("custom blocklist choice 3 requires at least one HTTPS URL with a matching SHA-256 digest")
+	}
+	for _, feed := range []struct {
+		family string
+		url    string
+		hash   string
+	}{
+		{family: "IPv4", url: customURL, hash: customHash},
+		{family: "IPv6", url: customURLIPv6, hash: customHashIPv6},
+	} {
+		if (feed.url == "") != (feed.hash == "") {
+			return fmt.Errorf("custom %s blocklist requires an HTTPS URL and SHA-256 digest as a matching pair", feed.family)
+		}
+		if feed.url == "" {
+			continue
+		}
+		if _, err := validateHTTPSFeedURL(feed.url); err != nil {
+			return fmt.Errorf("custom %s blocklist URL: %w", feed.family, err)
+		}
+		if err := validateSHA256Digest(feed.hash); err != nil {
+			return fmt.Errorf("custom %s blocklist digest: %w", feed.family, err)
+		}
+	}
+	return nil
+}
+
 func strictFeedHTTPClient(base *http.Client) *http.Client {
 	if base == nil {
 		base = &http.Client{Timeout: feedHTTPTimeout}
@@ -1112,7 +1144,49 @@ func feedOrigin(rawURL string) (string, error) {
 }
 
 func reportNonAuthoritativeFeed(label string) {
-	_, _ = fmt.Fprintf(os.Stderr, "[WARNING] %s is configured but has no authenticated authority; last-known-good files were preserved.\n", label)
+	reportNonAuthoritativeFeedTo(os.Stderr, label)
+}
+
+func reportNonAuthoritativeFeedTo(writer io.Writer, label string) {
+	_, _ = fmt.Fprintf(writer, "[WARNING] %s is configured but has no authenticated authority; no update was published and any existing operator-provisioned files remain unchanged.\n", label)
+}
+
+func normalizeLegacyGeoIPSelection(raw string) string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+	selected := fields[:0]
+	for _, field := range fields {
+		if strings.EqualFold(field, "none") {
+			continue
+		}
+		selected = append(selected, field)
+	}
+	return strings.Join(selected, " ")
+}
+
+func selectEmbeddedGeoIPPolicy(writer io.Writer, policy, raw string) (geoip.Selection, error) {
+	raw = normalizeLegacyGeoIPSelection(raw)
+	if raw == "" {
+		return geoip.Selection{}, nil
+	}
+	selection, err := geoip.Select(raw)
+	if err != nil {
+		return geoip.Selection{}, fmt.Errorf("validate GeoIP %s selection against embedded release-bound snapshot %s: %w", policy, geoip.SnapshotID(), err)
+	}
+	if selection.SnapshotID == "" || selection.SnapshotID != geoip.SnapshotID() {
+		return geoip.Selection{}, fmt.Errorf("validate GeoIP %s selection: embedded snapshot identity mismatch", policy)
+	}
+	_, _ = fmt.Fprintf(
+		writer,
+		"[INFO] GeoIP %s selection validated from embedded release-bound snapshot %s: %d countries, %d IPv4 prefixes, %d IPv6 prefixes.\n",
+		policy,
+		selection.SnapshotID,
+		len(selection.Countries),
+		len(selection.IPv4),
+		len(selection.IPv6),
+	)
+	return selection, nil
 }
 
 func reportIgnoredOSINTEntries(writer io.Writer, origin string, count int) {
@@ -1470,9 +1544,18 @@ func DownloadFeedsForInstall(mirrorURL, customURLIPv6, customHash, customHashIPv
 
 func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool, purpose feedDownloadPurpose) error {
 	fmt.Println("[INFO] Initializing Network Intelligence Feeds...")
+	if err := validateCustomFeedContract(listChoice, mirrorURL, customURLIPv6, customHash, customHashIPv6); err != nil {
+		return err
+	}
+	if _, err := selectEmbeddedGeoIPPolicy(os.Stdout, "deny", geoCodes); err != nil {
+		return err
+	}
+	if _, err := selectEmbeddedGeoIPPolicy(os.Stdout, "allow", geoAllowed); err != nil {
+		return err
+	}
 
 	if lanMode {
-		fmt.Println("[INFO] LAN Mode is ENABLED. Skipping public Data-Shield, GeoIP, ASN, and OSINT feeds to conserve local resources.")
+		fmt.Println("[INFO] LAN Mode is ENABLED. Skipping public Data-Shield, ASN, and OSINT feed refreshes; embedded GeoIP selections require no network access.")
 		return nil
 	}
 
@@ -1481,21 +1564,6 @@ func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listCho
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	var feedErrors []error
-
-	if geoCodes != "" {
-		codes := strings.Split(geoCodes, " ")
-		for _, code := range codes {
-			code = strings.TrimSpace(code)
-			if code == "" || code == "none" {
-				continue
-			}
-			if !approvedCountryCode.MatchString(code) {
-				feedErrors = append(feedErrors, fmt.Errorf("invalid GeoIP country code %q", code))
-				continue
-			}
-			reportNonAuthoritativeFeed("GeoIP deny source " + strings.ToUpper(code))
-		}
-	}
 
 	// Build the deduplicated list of ASNs to drop
 	asnSet := make(map[string]bool)
@@ -1525,42 +1593,6 @@ func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listCho
 
 	for _, asn := range asnsToDrop {
 		reportNonAuthoritativeFeed("RADB ASN deny source " + asn)
-	}
-
-	// Download GeoIP ALLOW lists (Zero-Trust Mode)
-	if geoAllowed != "" {
-		codes := strings.Split(geoAllowed, " ")
-		for _, code := range codes {
-			code = strings.TrimSpace(code)
-			if code == "" || code == "none" {
-				continue
-			}
-			if !approvedCountryCode.MatchString(code) {
-				feedErrors = append(feedErrors, fmt.Errorf("invalid GeoIP allow-list country code %q", code))
-				continue
-			}
-			// Download IPv4
-			url := fmt.Sprintf("https://www.ipdeny.com/ipblocks/data/countries/%s.zone", strings.ToLower(code))
-			dest := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv4", strings.ToLower(code))
-			fmt.Printf("Downloading GeoIP ALLOW [%s] (IPv4)... ", code)
-			if err := SecureDownloader(ctx, url, dest, ""); err != nil {
-				fmt.Printf("FAILED (%v)\n", err)
-				feedErrors = append(feedErrors, fmt.Errorf("GeoIP allow-list %s IPv4: %w", code, err))
-			} else {
-				fmt.Println("OK")
-			}
-
-			// Download IPv6
-			urlV6 := fmt.Sprintf("https://www.ipdeny.com/ipv6/ipaddresses/blocks/%s.zone", strings.ToLower(code))
-			destV6 := fmt.Sprintf("/etc/syswarden/lists/allowed_%s.ipv6", strings.ToLower(code))
-			fmt.Printf("Downloading GeoIP ALLOW [%s] (IPv6)... ", code)
-			if err := SecureDownloader(ctx, urlV6, destV6, ""); err != nil {
-				fmt.Printf("FAILED (%v)\n", err)
-				feedErrors = append(feedErrors, fmt.Errorf("GeoIP allow-list %s IPv6: %w", code, err))
-			} else {
-				fmt.Println("OK")
-			}
-		}
 	}
 
 	// Download ASN ALLOW lists (Zero-Trust Mode)

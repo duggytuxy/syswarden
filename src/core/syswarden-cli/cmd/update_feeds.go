@@ -12,9 +12,9 @@ import (
 
 var updateFeedsCmd = &cobra.Command{
 	Use:   "update-feeds",
-	Short: "Download configured threat-intelligence feeds and reapply firewall policy",
+	Short: "Refresh remote intelligence, validate embedded GeoIP data, and reapply firewall policy",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("[*] Updating Threat Intelligence Feeds...")
+		fmt.Println("[*] Refreshing Threat Intelligence and Embedded GeoIP Policy Data...")
 
 		mirrorURL := config.GlobalConfig.CustomURL
 		if mirrorURL == "" && config.GlobalConfig.ListChoice != "3" {
@@ -41,13 +41,13 @@ func runFeedUpdateGuarded(preflight func() error, download func() error, apply f
 func runFeedUpdate(download func() error, apply func() error) error {
 	downloadErr := download()
 	if downloadErr == nil {
-		fmt.Println("[*] Feeds downloaded successfully. Reloading SYSWARDEN firewall engine in memory...")
+		fmt.Println("[*] Threat intelligence refreshed and validated. Reloading SYSWARDEN firewall engine in memory...")
 	} else {
-		fmt.Println("[WARNING] One or more feed updates failed. Reapplying validated last-known-good policy before returning failure...")
+		fmt.Println("[WARNING] Threat-intelligence refresh or validation failed. Reapplying configured policy before returning failure...")
 	}
 	applyErr := apply()
 	if downloadErr == nil && applyErr == nil {
-		fmt.Println("[SUCCESS] Threat Intelligence successfully updated and applied.")
+		fmt.Println("[SUCCESS] Threat Intelligence successfully refreshed, validated, and applied.")
 		return nil
 	}
 	var failures []error

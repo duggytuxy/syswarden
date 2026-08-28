@@ -27,7 +27,14 @@ import (
 
 const CurrentSchemaVersion = 1
 
-var loadMu sync.Mutex
+// supportedGeoIPCountryCodeText mirrors the release-bound ISO 3166 alpha-2
+// contract validated by the CLI's embedded GeoIP snapshot.
+const supportedGeoIPCountryCodeText = "ad ae af ag ai al am ao aq ar as at au aw ax az ba bb bd be bf bg bh bi bj bl bm bn bo bq br bs bt bv bw by bz ca cc cd cf cg ch ci ck cl cm cn co cr cu cv cw cx cy cz de dj dk dm do dz ec ee eg eh er es et fi fj fk fm fo fr ga gb gd ge gf gg gh gi gl gm gn gp gq gr gs gt gu gw gy hk hm hn hr ht hu id ie il im in io iq ir is it je jm jo jp ke kg kh ki km kn kp kr kw ky kz la lb lc li lk lr ls lt lu lv ly ma mc md me mf mg mh mk ml mm mn mo mp mq mr ms mt mu mv mw mx my mz na nc ne nf ng ni nl no np nr nu nz om pa pe pf pg ph pk pl pm pn pr ps pt pw py qa re ro rs ru rw sa sb sc sd se sg sh si sj sk sl sm sn so sr ss st sv sx sy sz tc td tf tg th tj tk tl tm tn to tr tt tv tw tz ua ug um us uy uz va vc ve vg vi vn vu wf ws ye yt za zm zw"
+
+var (
+	loadMu                     sync.Mutex
+	supportedGeoIPCountryCodes = strings.Fields(supportedGeoIPCountryCodeText)
+)
 
 type Diagnostics struct {
 	SchemaVersion  int
@@ -526,10 +533,9 @@ func validateRuntimeConfig(value *runtimeConfig) error {
 			return fmt.Errorf("invalid whitelist entry %q", entry)
 		}
 	}
-	countryPattern := regexp.MustCompile(`^[A-Za-z]{2}$`)
 	for _, code := range append(append([]string{}, value.Network.Geo.Blocked...), value.Network.Geo.Allowed...) {
-		if !countryPattern.MatchString(code) {
-			return fmt.Errorf("invalid country code %q", code)
+		if !validGeoIPCountryCode(code) {
+			return fmt.Errorf("unsupported ISO 3166 alpha-2 country code %q", code)
 		}
 	}
 	for _, asn := range append(append([]string{}, value.Network.ASN.Blocked...), value.Network.ASN.Allowed...) {
@@ -567,9 +573,9 @@ func validateRuntimeConfig(value *runtimeConfig) error {
 	if value.Network.Blocklists.ListChoice == "3" && value.Network.Blocklists.CustomURL == "" && value.Network.Blocklists.CustomURL6 == "" {
 		return fmt.Errorf("network.blocklists.list_choice=3 requires at least one custom HTTPS URL")
 	}
-	if value.Network.Blocklists.CustomHash != "" && value.Network.Blocklists.CustomURL == "" ||
-		value.Network.Blocklists.CustomHash6 != "" && value.Network.Blocklists.CustomURL6 == "" {
-		return fmt.Errorf("network.blocklists SHA-256 values require their matching custom URL")
+	if (value.Network.Blocklists.CustomURL == "") != (value.Network.Blocklists.CustomHash == "") ||
+		(value.Network.Blocklists.CustomURL6 == "") != (value.Network.Blocklists.CustomHash6 == "") {
+		return fmt.Errorf("network.blocklists custom HTTPS URLs and SHA-256 values must be configured in matching pairs")
 	}
 	seenPorts := make(map[string]struct{}, len(value.Security.Honeyports))
 	for _, port := range value.Security.Honeyports {
@@ -659,6 +665,17 @@ func validateRuntimeConfig(value *runtimeConfig) error {
 		return fmt.Errorf("enabled webhooks require an HTTPS URL")
 	}
 	return nil
+}
+
+func validGeoIPCountryCode(code string) bool {
+	if len(code) != 2 ||
+		(code[0] < 'A' || code[0] > 'Z') && (code[0] < 'a' || code[0] > 'z') ||
+		(code[1] < 'A' || code[1] > 'Z') && (code[1] < 'a' || code[1] > 'z') {
+		return false
+	}
+	normalized := strings.ToLower(code)
+	index := sort.SearchStrings(supportedGeoIPCountryCodes, normalized)
+	return index < len(supportedGeoIPCountryCodes) && supportedGeoIPCountryCodes[index] == normalized
 }
 
 func historicalHAState(value *runtimeConfig) bool {
