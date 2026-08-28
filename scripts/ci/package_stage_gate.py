@@ -66,6 +66,11 @@ LINUX_ENTRIES = {
     "usr/share/bash-completion/completions/syswarden": ExpectedEntry(
         "file", mode=0o644, nonempty=True
     ),
+    "usr/share/doc": DIRECTORY,
+    "usr/share/doc/syswarden": DIRECTORY,
+    "usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt": ExpectedEntry(
+        "file", mode=0o644, nonempty=True
+    ),
 }
 
 def entry_kind(metadata: os.stat_result) -> str:
@@ -208,6 +213,7 @@ def validate(
     root: Path,
     expected: dict[str, ExpectedEntry],
     completion_contract: ContentContract | None = None,
+    geoip_data_license_contract: ContentContract | None = None,
 ) -> None:
     actual = inventory(root)
     actual_paths = set(actual)
@@ -259,6 +265,11 @@ def validate(
             root / "usr/share/bash-completion/completions/syswarden",
             completion_contract,
         )
+    if geoip_data_license_contract is not None:
+        validate_exact_content(
+            root / "usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt",
+            geoip_data_license_contract,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -266,6 +277,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("platform", choices=("linux",))
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--completion-contract", type=Path, required=True)
+    parser.add_argument("--geoip-data-license-contract", type=Path, required=True)
+    parser.add_argument("--geoip-data-license-source", type=Path, required=True)
     return parser
 
 
@@ -273,7 +286,18 @@ def main() -> int:
     args = build_parser().parse_args()
     try:
         completion_contract = load_content_contract(args.completion_contract)
-        validate(args.root, LINUX_ENTRIES, completion_contract)
+        geoip_data_license_contract = load_content_contract(
+            args.geoip_data_license_contract
+        )
+        validate_exact_content(
+            args.geoip_data_license_source, geoip_data_license_contract
+        )
+        validate(
+            args.root,
+            LINUX_ENTRIES,
+            completion_contract,
+            geoip_data_license_contract,
+        )
     except PackageStageError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

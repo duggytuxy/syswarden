@@ -5468,6 +5468,42 @@ class PackageLifecycleContractTests(unittest.TestCase):
             lifecycle_lab,
         )
 
+    def test_geoip_data_license_is_byte_pinned_in_every_linux_package_stage(self) -> None:
+        source = REPOSITORY / "src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt"
+        contract_path = (
+            REPOSITORY / "scripts/ci/package_geoip_data_license_contract.json"
+        )
+        contract = json.loads(contract_path.read_text(encoding="ascii"))
+        payload = source.read_bytes()
+        self.assertEqual(contract["size"], len(payload))
+        self.assertEqual(contract["sha256"], hashlib.sha256(payload).hexdigest())
+        self.assertEqual(
+            contract["sha256"], package_lifecycle_lab.GEOIP_DATA_LICENSE_SHA256
+        )
+
+        workflow_stage = workflow_step_script(
+            self.workflow, "Prepare Staging Environment (AMD64)"
+        ) + workflow_step_script(
+            self.workflow, "Build and Stage Static Alpine Binaries"
+        )
+        self.assertEqual(workflow_stage.count("GEOIP-DATA-LICENSE.txt"), 2)
+        self.assertEqual(
+            workflow_stage.count(
+                "src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt"
+            ),
+            2,
+        )
+        self.assertEqual(workflow_stage.count("install -m 0644"), 2)
+
+        local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(local.count("GEOIP-DATA-LICENSE.txt"), 2)
+        self.assertEqual(self.workflow.count("--geoip-data-license-contract"), 2)
+        self.assertEqual(local.count("--geoip-data-license-contract"), 2)
+        self.assertEqual(
+            self.workflow.count("package_geoip_data_license_contract.json"), 2
+        )
+        self.assertEqual(local.count("package_geoip_data_license_contract.json"), 2)
+
     def test_final_removal_deletes_dedicated_state_only_for_purge_equivalents(self) -> None:
         postremove = self.script("postrm.sh")
         main = postremove[

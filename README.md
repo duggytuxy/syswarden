@@ -71,6 +71,16 @@ The latest qualified, stable public release is
 | Operations | Local CLI and TUI, modular configuration, audit and lifecycle controls |
 | Supply chain | Checksummed Linux packages, signed update metadata and release evidence |
 
+## Intelligence Sources
+
+| Source | Use and trust boundary |
+| --- | --- |
+| [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Official maintainer-curated IPv4 feed for the standard and critical profiles; SysWarden accepts it locally only after canonical validation and quorum controls |
+| [IPverse country IP blocks](https://github.com/ipverse/country-ip-blocks) | Pinned CC0-1.0 RIR allocation snapshot embedded in the release-bound CLI; allocation country is not physical or current operational geolocation |
+| [CINS Score](https://cinsscore.com/list/ci-badguys.txt) and [blocklist.de](https://lists.blocklist.de/lists/all.txt) | Only exact entries found at both independent origins are published |
+| [Spamhaus](https://www.spamhaus.org/) and [RADB](https://www.radb.net/) | Signals may be operator-provisioned; neither source is accepted as firewall authority by itself |
+| Custom HTTPS feed | Choice 3 requires an HTTPS URL and its exact SHA-256 digest for each configured address family |
+
 ## Why Choose SysWarden
 
 - **Host-local by design.** Security decisions stay close to the protected

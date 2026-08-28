@@ -61,6 +61,63 @@ class PackageStageGateTests(unittest.TestCase):
             contract,
         )
 
+    def test_accepts_exact_geoip_data_license_source(self) -> None:
+        self.create_stage(package_stage_gate.LINUX_ENTRIES)
+        copyright_path = (
+            self.root / "usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
+        )
+        payload = copyright_path.read_bytes()
+        contract = package_stage_gate.ContentContract(
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+        )
+        package_stage_gate.validate(
+            self.root,
+            package_stage_gate.LINUX_ENTRIES,
+            geoip_data_license_contract=contract,
+        )
+
+    def test_rejects_geoip_data_license_content_drift(self) -> None:
+        self.create_stage(package_stage_gate.LINUX_ENTRIES)
+        copyright_path = (
+            self.root / "usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
+        )
+        payload = copyright_path.read_bytes()
+        contract = package_stage_gate.ContentContract(
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+        )
+        copyright_path.write_bytes(b"altered attribution\n")
+        with self.assertRaisesRegex(
+            package_stage_gate.PackageStageError, "size mismatch|SHA-256 mismatch"
+        ):
+            package_stage_gate.validate(
+                self.root,
+                package_stage_gate.LINUX_ENTRIES,
+                geoip_data_license_contract=contract,
+            )
+
+    def test_rejects_symlinked_geoip_data_license_source(self) -> None:
+        source = Path(self.temporary_directory.name) / "LICENSE-CC0-1.0.txt"
+        source.symlink_to("/tmp/external-copyright")
+        with self.assertRaises(package_stage_gate.PackageStageError):
+            package_stage_gate.validate_exact_content(
+                source,
+                package_stage_gate.ContentContract(sha256="0" * 64, size=1),
+            )
+
+    def test_repository_geoip_data_license_matches_pinned_contract(self) -> None:
+        repository_root = Path(__file__).resolve().parents[2]
+        contract = package_stage_gate.load_content_contract(
+            repository_root
+            / "scripts/ci/package_geoip_data_license_contract.json"
+        )
+        package_stage_gate.validate_exact_content(
+            repository_root
+            / "src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt",
+            contract,
+        )
+
     def test_rejects_completion_size_or_digest_drift(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)
         completion = self.root / "usr/share/bash-completion/completions/syswarden"

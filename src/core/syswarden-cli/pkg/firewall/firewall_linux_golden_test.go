@@ -51,6 +51,17 @@ func TestNftablesRulesGolden_SW_QA_001(t *testing.T) {
 	if bytes.Count(got, []byte("\tchain operator-policy {\n")) != 1 {
 		t.Fatal("generated nftables rules must contain exactly one operator-policy chain")
 	}
+	for _, legacy := range []struct {
+		setName string
+		entry   string
+	}{
+		{setName: "syswarden_geoip", entry: "203.0.113.0/24"},
+		{setName: "syswarden_geoip6", entry: "2001:db8:3::/64"},
+		{setName: "syswarden_zt_allowed", entry: "192.0.2.0/24"},
+		{setName: "syswarden_zt_allowed6", entry: "2001:db8:1::/64"},
+	} {
+		assertNFTPopulationOmitsEntry(t, got, legacy.setName, legacy.entry)
+	}
 	dispatchAndCatchAll := []byte(operatorPolicyDispatchRule() + "\t\tct state new limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-BLOCK] [CATCH-ALL] \"\n")
 	if !bytes.Contains(got, dispatchAndCatchAll) {
 		t.Fatal("operator-policy dispatch is not immediately before the product catch-all")
@@ -81,6 +92,17 @@ func TestNftablesRulesGolden_SW_QA_001(t *testing.T) {
 	wantRuntime := append(append([]byte(nil), want...), '\n')
 	if !bytes.Equal(structuralRules, wantRuntime) {
 		t.Fatalf("nftables rules changed; review and approve the complete golden diff before updating %s", wantPath)
+	}
+}
+
+func assertNFTPopulationOmitsEntry(t *testing.T, rules []byte, setName, entry string) {
+	t.Helper()
+	for _, line := range bytes.Split(rules, []byte("\n")) {
+		if bytes.HasPrefix(line, []byte("add element ")) &&
+			bytes.Contains(line, []byte(" "+setName+" { ")) &&
+			bytes.Contains(line, []byte(entry)) {
+			t.Fatalf("legacy country file entry %s reached authenticated set %s: %s", entry, setName, line)
+		}
 	}
 }
 
@@ -460,6 +482,30 @@ func writeLinuxFirewallTestTools(t *testing.T, toolDir string) {
 		t.Fatalf("reset fake nftables apply marker: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(linuxFirewallFakeNFTAppliedMarker) })
+	geo4, geo6, err := configuredAuthenticatedGeoIPPopulations("be", "syswarden_geoip", "syswarden_geoip6")
+	if err != nil {
+		t.Fatalf("prepare authenticated blocked GeoIP fixture: %v", err)
+	}
+	ztGeo4, ztGeo6, err := configuredAuthenticatedGeoIPPopulations("fr", "syswarden_zt_allowed", "syswarden_zt_allowed6")
+	if err != nil {
+		t.Fatalf("prepare authenticated strict-allow GeoIP fixture: %v", err)
+	}
+	zt4, err := mergeNFTAddressPopulations(
+		"syswarden_zt_allowed",
+		nftSetPopulation{name: "syswarden_zt_allowed", entries: []string{"198.51.100.0/24"}},
+		ztGeo4,
+	)
+	if err != nil {
+		t.Fatalf("merge strict-allow IPv4 fixture: %v", err)
+	}
+	zt6, err := mergeNFTAddressPopulations(
+		"syswarden_zt_allowed6",
+		nftSetPopulation{name: "syswarden_zt_allowed6", entries: []string{"2001:db8:2::/64"}},
+		ztGeo6,
+	)
+	if err != nil {
+		t.Fatalf("merge strict-allow IPv6 fixture: %v", err)
+	}
 	populations := []nftSetPopulation{
 		{name: "syswarden_whitelist"},
 		{name: "syswarden_whitelist6"},
@@ -467,21 +513,14 @@ func writeLinuxFirewallTestTools(t *testing.T, toolDir string) {
 		{name: "syswarden_whitelist_ports6", kind: nftAddressPortPopulation},
 		{name: "syswarden_ssh_bypass", inetOnly: true},
 		{name: "syswarden_ssh_bypass6", inetOnly: true},
-		{name: "syswarden_zt_allowed", entries: []string{"192.0.2.0/24", "198.51.100.0/24"}},
-		{name: "syswarden_zt_allowed6", entries: []string{"2001:db8:1::/64", "2001:db8:2::/64"}},
+		zt4,
+		zt6,
 		{name: "syswarden_blacklist"},
 		{name: "syswarden_blacklist6"},
-		{name: "syswarden_geoip", entries: []string{"203.0.113.0/24"}},
-		{name: "syswarden_geoip6", entries: []string{"2001:db8:3::/64"}},
+		geo4,
+		geo6,
 		{name: "syswarden_asn", entries: []string{linuxFirewallFakeASNIPv4Prefix}},
 		{name: "syswarden_asn6", entries: []string{"2001:db8:4::/64"}},
-	}
-	for index := range populations {
-		normalized, err := normalizeNFTIntervals(populations[index].name, populations[index].entries)
-		if err != nil {
-			t.Fatalf("normalize fake kernel population %s: %v", populations[index].name, err)
-		}
-		populations[index].entries = normalized
 	}
 	emptyOperatorPolicy, err := compileOperatorPolicy(nil)
 	if err != nil {

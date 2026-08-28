@@ -520,10 +520,15 @@ func countLinesInFile(path string) int {
 }
 
 func getLayer3Stats() Layer3 {
-	if time.Since(lastL3Fetch) < 2*time.Minute && cachedL3.GlobalBlocked > 0 {
+	if !lastL3Fetch.IsZero() && time.Since(lastL3Fetch) < 2*time.Minute {
 		return cachedL3
 	}
+	cachedL3 = collectLayer3Stats("/etc/syswarden/lists", liveNftGeoIPBlockedCount)
+	lastL3Fetch = time.Now()
+	return cachedL3
+}
 
+func collectLayer3Stats(listDirectory string, geoIPBlockedCount func() int) Layer3 {
 	var l3 Layer3
 
 	if len(viper.GetStringSlice("network.geo.allowed_countries")) > 0 {
@@ -533,23 +538,20 @@ func getLayer3Stats() Layer3 {
 		l3.ZeroTrustMode = true
 	}
 
-	l3.L7Banned = countLinesInFile("/etc/syswarden/lists/syswarden_blacklist.ipv4") + countLinesInFile("/etc/syswarden/lists/syswarden_blacklist.ipv6")
-	l3.GlobalBlocked = l3.L7Banned + countLinesInFile("/etc/syswarden/lists/syswarden_threatintel.ipv4") + countLinesInFile("/etc/syswarden/lists/syswarden_threatintel.ipv6")
+	l3.L7Banned = countLinesInFile(filepath.Join(listDirectory, "syswarden_blacklist.ipv4")) + countLinesInFile(filepath.Join(listDirectory, "syswarden_blacklist.ipv6"))
+	l3.GlobalBlocked = l3.L7Banned + countLinesInFile(filepath.Join(listDirectory, "syswarden_threatintel.ipv4")) + countLinesInFile(filepath.Join(listDirectory, "syswarden_threatintel.ipv6"))
 
-	if matches, err := filepath.Glob("/etc/syswarden/lists/AS*.ipv*"); err == nil {
+	if matches, err := filepath.Glob(filepath.Join(listDirectory, "AS*.ipv*")); err == nil {
 		for _, m := range matches {
 			l3.ASNBlocked += countLinesInFile(m)
 		}
 	}
 
-	if matches, err := filepath.Glob("/etc/syswarden/lists/??.ipv*"); err == nil {
-		for _, m := range matches {
-			l3.GeoIPBlocked += countLinesInFile(m)
-		}
+	// GeoIP policy is embedded in the signed CLI and applied directly to the
+	// kernel. Retained country files are legacy artifacts, not active policy.
+	if geoIPBlockedCount != nil {
+		l3.GeoIPBlocked = geoIPBlockedCount()
 	}
-
-	cachedL3 = l3
-	lastL3Fetch = time.Now()
 	return l3
 }
 

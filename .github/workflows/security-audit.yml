@@ -120,6 +120,18 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
             -s scripts/ci -p '*_test.py' -v
 
+      - name: Test GeoIP snapshot generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          generator_files=(
+            scripts/ci/geoip_snapshot.go
+            scripts/ci/geoip_snapshot_test.go
+          )
+          test -z "$(gofmt -l "${generator_files[@]}")"
+          GOFLAGS=-mod=readonly go test -count=1 "${generator_files[@]}"
+          GOFLAGS=-mod=readonly go vet "${generator_files[@]}"
+
       - name: Compare frozen and candidate CLI process contracts
         shell: bash
         run: |

@@ -1175,7 +1175,7 @@
   {
     "path": "syswarden update-feeds",
     "use": "update-feeds",
-    "short": "Download configured threat-intelligence feeds and reapply firewall policy",
+    "short": "Refresh remote intelligence, validate embedded GeoIP data, and reapply firewall policy",
     "flags": [
       {
         "name": "config",
