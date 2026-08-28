@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -314,14 +315,14 @@ printf '%s' '{"nftables":[]}'
 		t.Fatalf("create nftables executable alias: %v", err)
 	}
 
-	source, err := newCommandNftGeoIPSetJSONSourceForCandidate(alias, nftGeoIPTestAttestor(root))
+	source, err := newCommandNftGeoIPSetJSONSourceForCandidate(alias, nftGeoIPTestAttestor(t, root))
 	if err != nil {
 		t.Fatalf("pin trusted nftables executable: %v", err)
 	}
 	if source.executable != executable {
 		t.Fatalf("canonical executable = %q, want %q", source.executable, executable)
 	}
-	if source.identity.uid != uint32(os.Geteuid()) || source.identity.size <= 0 || source.identity.inode == 0 {
+	if source.identity.uid != nftGeoIPTestUID(t, root) || source.identity.size <= 0 || source.identity.inode == 0 {
 		t.Fatalf("incomplete executable identity: %#v", source.identity)
 	}
 	if source.identity.mode.Perm() != 0755 {
@@ -342,7 +343,7 @@ if [ "$#" -ne 7 ] || [ "$1" != "--json" ] || [ "$2" != "--numeric" ] ||
 fi
 printf '%s' '{"nftables":[]}'
 `)
-	source, err := newCommandNftGeoIPSetJSONSourceForCandidate(executable, nftGeoIPTestAttestor(root))
+	source, err := newCommandNftGeoIPSetJSONSourceForCandidate(executable, nftGeoIPTestAttestor(t, root))
 	if err != nil {
 		t.Fatalf("pin trusted nftables executable: %v", err)
 	}
@@ -358,14 +359,14 @@ printf '%s' '{"nftables":[]}'
 
 func TestCommandNftGeoIPSourceRejectsUnsafeExecutableIdentity(t *testing.T) {
 	tests := []struct {
-		name        string
-		mode        os.FileMode
-		expectedUID uint32
+		name       string
+		mode       os.FileMode
+		wrongOwner bool
 	}{
-		{name: "not executable", mode: 0644, expectedUID: uint32(os.Geteuid())},
-		{name: "group writable", mode: 0775, expectedUID: uint32(os.Geteuid())},
-		{name: "other writable", mode: 0757, expectedUID: uint32(os.Geteuid())},
-		{name: "wrong owner", mode: 0755, expectedUID: uint32(os.Geteuid()) + 1},
+		{name: "not executable", mode: 0644},
+		{name: "group writable", mode: 0775},
+		{name: "other writable", mode: 0757},
+		{name: "wrong owner", mode: 0755, wrongOwner: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -374,8 +375,10 @@ func TestCommandNftGeoIPSourceRejectsUnsafeExecutableIdentity(t *testing.T) {
 			if err := os.Chmod(executable, test.mode); err != nil {
 				t.Fatalf("set unsafe executable mode: %v", err)
 			}
-			attestor := nftGeoIPTestAttestor(root)
-			attestor.expectedUID = test.expectedUID
+			attestor := nftGeoIPTestAttestor(t, root)
+			if test.wrongOwner {
+				attestor.expectedUID ^= 1
+			}
 			if _, err := newCommandNftGeoIPSetJSONSourceForCandidate(executable, attestor); err == nil {
 				t.Fatal("unsafe nftables executable identity was accepted")
 			}
@@ -386,10 +389,10 @@ func TestCommandNftGeoIPSourceRejectsUnsafeExecutableIdentity(t *testing.T) {
 func TestCommandNftGeoIPSourceRejectsUnsafeParent(t *testing.T) {
 	root := newNftGeoIPTrustedRoot(t)
 	executable := writeNftGeoIPExecutable(t, root, "bin/nft", "#!/bin/sh\nexit 0\n")
-	if err := os.Chmod(filepath.Dir(executable), 0775); err != nil {
+	if err := os.Chmod(filepath.Dir(executable), 0775); err != nil { // #nosec G302 -- this test requires an intentionally unsafe parent
 		t.Fatalf("make executable parent group writable: %v", err)
 	}
-	if _, err := newCommandNftGeoIPSetJSONSourceForCandidate(executable, nftGeoIPTestAttestor(root)); err == nil {
+	if _, err := newCommandNftGeoIPSetJSONSourceForCandidate(executable, nftGeoIPTestAttestor(t, root)); err == nil {
 		t.Fatal("nftables executable below an unsafe parent was accepted")
 	}
 }
@@ -402,7 +405,7 @@ func TestCommandNftGeoIPSourceReattestsIdentityImmediatelyBeforeExecution(t *tes
 	executable := writeNftGeoIPExecutable(t, root, "bin/nft", `#!/bin/sh
 printf '%s' '{"nftables":[]}'
 `)
-	source, err := newCommandNftGeoIPSetJSONSourceForCandidate(executable, nftGeoIPTestAttestor(root))
+	source, err := newCommandNftGeoIPSetJSONSourceForCandidate(executable, nftGeoIPTestAttestor(t, root))
 	if err != nil {
 		t.Fatalf("pin trusted nftables executable: %v", err)
 	}
@@ -422,11 +425,11 @@ printf '%s' '{"foreign":true}'
 func TestCommandNftGeoIPSourceReattestsParentsImmediatelyBeforeExecution(t *testing.T) {
 	root := newNftGeoIPTrustedRoot(t)
 	executable := writeNftGeoIPExecutable(t, root, "bin/nft", "#!/bin/sh\nexit 0\n")
-	source, err := newCommandNftGeoIPSetJSONSourceForCandidate(executable, nftGeoIPTestAttestor(root))
+	source, err := newCommandNftGeoIPSetJSONSourceForCandidate(executable, nftGeoIPTestAttestor(t, root))
 	if err != nil {
 		t.Fatalf("pin trusted nftables executable: %v", err)
 	}
-	if err := os.Chmod(filepath.Dir(executable), 0775); err != nil {
+	if err := os.Chmod(filepath.Dir(executable), 0775); err != nil { // #nosec G302 -- this test requires an intentionally unsafe parent
 		t.Fatalf("make executable parent group writable: %v", err)
 	}
 	if _, err := source.listGeoIPSet(context.Background(), nftGeoIPSetSpecs[0]); err == nil ||
@@ -438,32 +441,46 @@ func TestCommandNftGeoIPSourceReattestsParentsImmediatelyBeforeExecution(t *test
 func newNftGeoIPTrustedRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.Chmod(root, 0755); err != nil {
+	if err := os.Chmod(root, 0755); err != nil { // #nosec G302 -- executable fixture parents must be traversable
 		t.Fatalf("secure trusted root: %v", err)
 	}
 	return root
 }
 
-func nftGeoIPTestAttestor(root string) nftGeoIPExecutableAttestor {
+func nftGeoIPTestAttestor(t *testing.T, root string) nftGeoIPExecutableAttestor {
+	t.Helper()
 	return nftGeoIPExecutableAttestor{
-		expectedUID: uint32(os.Geteuid()),
+		expectedUID: nftGeoIPTestUID(t, root),
 		trustedRoot: root,
 	}
+}
+
+func nftGeoIPTestUID(t *testing.T, path string) uint32 {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("inspect test owner: %v", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("test owner identity is unavailable")
+	}
+	return stat.Uid
 }
 
 func writeNftGeoIPExecutable(t *testing.T, root, relative, content string) string {
 	t.Helper()
 	path := filepath.Join(root, relative)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil { // #nosec G301 -- executable fixture parents must be traversable
 		t.Fatalf("create nftables executable parent: %v", err)
 	}
-	if err := os.Chmod(filepath.Dir(path), 0755); err != nil {
+	if err := os.Chmod(filepath.Dir(path), 0755); err != nil { // #nosec G302 -- executable fixture parents must be traversable
 		t.Fatalf("secure nftables executable parent: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0755); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0755); err != nil { // #nosec G306 -- this fixture must be executable
 		t.Fatalf("write nftables executable: %v", err)
 	}
-	if err := os.Chmod(path, 0755); err != nil {
+	if err := os.Chmod(path, 0755); err != nil { // #nosec G302 -- this fixture must be executable
 		t.Fatalf("secure nftables executable: %v", err)
 	}
 	return path
