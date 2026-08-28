@@ -572,6 +572,11 @@ GEOIP_DATA_LICENSE_FIRST_VERSION = "4.04.0"
 GEOIP_DATA_LICENSE_SHA256 = (
     "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
 )
+PROJECT_LICENSE_PATH = "/usr/share/doc/syswarden/LICENSE.txt"
+PROJECT_LICENSE_SHA256 = (
+    "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+)
+PROJECT_LICENSE_EXPRESSION = "GPL-3.0-or-later"
 LEGACY_BASH_COMPLETION_PATH = "/etc/bash_completion.d/syswarden"
 LEGACY_BASH_COMPLETION_VERSION = "4.03.2"
 LEGACY_BASH_COMPLETION_SIZE = 16_339
@@ -590,9 +595,10 @@ PACKAGE_PAYLOAD_PATHS = (
     *LEGACY_PACKAGE_PAYLOAD_PATHS,
     BASH_COMPLETION_PATH,
 )
-GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS = (
+LICENSED_PACKAGE_PAYLOAD_PATHS = (
     *PACKAGE_PAYLOAD_PATHS,
     GEOIP_DATA_LICENSE_PATH,
+    PROJECT_LICENSE_PATH,
 )
 FORWARD_ONLY_APK_CANDIDATE_VERSION = "4.03.2"
 FORWARD_ONLY_APK_PREVIOUS_VERSION = "4.02.8"
@@ -635,13 +641,13 @@ DEB_PACKAGE_PATHS = frozenset(
         "/usr/share/bash-completion/completions",
     )
 )
-GEOIP_LICENSE_DEB_PACKAGE_PATHS = frozenset(
-    (*DEB_PACKAGE_PATHS, GEOIP_DATA_LICENSE_PATH)
+LICENSED_DEB_PACKAGE_PATHS = frozenset(
+    (*DEB_PACKAGE_PATHS, GEOIP_DATA_LICENSE_PATH, PROJECT_LICENSE_PATH)
 )
 LEGACY_APK_PACKAGE_PATHS = frozenset(LEGACY_PACKAGE_PAYLOAD_PATHS)
 APK_PACKAGE_PATHS = frozenset(PACKAGE_PAYLOAD_PATHS)
-GEOIP_LICENSE_APK_PACKAGE_PATHS = frozenset(
-    GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS
+LICENSED_APK_PACKAGE_PATHS = frozenset(
+    LICENSED_PACKAGE_PAYLOAD_PATHS
 )
 RPM_BUILD_ID_DIRECTORY_PATTERN = re.compile(r"^/usr/lib/\.build-id/[0-9a-f]{2}$")
 RPM_BUILD_ID_LINK_PATTERN = re.compile(
@@ -757,8 +763,12 @@ def expected_inventory_phase_labels(scenario: str) -> tuple[str, ...]:
     raise LifecycleLabError(f"unsupported inventory scenario: {scenario!r}")
 
 
-def _preparation_event_checks(scenario: str) -> tuple[str, ...]:
-    return (
+def _preparation_event_checks(
+    scenario: str,
+    *,
+    candidate_version: str | None = None,
+) -> tuple[str, ...]:
+    checks = [
         f"{scenario}.platform.uname",
         f"{scenario}.extract.previous",
         f"{scenario}.extract.candidate",
@@ -768,15 +778,29 @@ def _preparation_event_checks(scenario: str) -> tuple[str, ...]:
         f"{scenario}.metadata.candidate.version",
         f"{scenario}.metadata.previous.architecture",
         f"{scenario}.metadata.candidate.architecture",
-        f"{scenario}.metadata.previous.manager_manifest",
-        f"{scenario}.metadata.previous.payload_inventory",
-        f"{scenario}.metadata.candidate.manager_manifest",
-        f"{scenario}.metadata.candidate.payload_inventory",
-        f"{scenario}.metadata.candidate.runtime_dependencies",
+    ]
+    if candidate_version is not None and _uses_geoip_data_license_payload(
+        "candidate", candidate_version
+    ):
+        checks.append(f"{scenario}.metadata.candidate.license")
+    checks.extend(
+        (
+            f"{scenario}.metadata.previous.manager_manifest",
+            f"{scenario}.metadata.previous.payload_inventory",
+            f"{scenario}.metadata.candidate.manager_manifest",
+            f"{scenario}.metadata.candidate.payload_inventory",
+            f"{scenario}.metadata.candidate.runtime_dependencies",
+        )
     )
+    return tuple(checks)
 
 
-def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
+def expected_event_checks(
+    family: str,
+    scenario: str,
+    *,
+    candidate_version: str | None = None,
+) -> tuple[str, ...]:
     """Return the exact ordered evidence contract for one lifecycle scenario."""
 
     if family not in EXPECTED_SCENARIOS or scenario not in EXPECTED_SCENARIOS[family]:
@@ -784,7 +808,12 @@ def expected_event_checks(family: str, scenario: str) -> tuple[str, ...]:
             f"unsupported lifecycle evidence coordinate: {family}/{scenario}"
         )
 
-    checks = list(_preparation_event_checks(scenario))
+    checks = list(
+        _preparation_event_checks(
+            scenario,
+            candidate_version=candidate_version,
+        )
+    )
 
     def installed(
         command: str,
@@ -2061,6 +2090,37 @@ package_architecture() {
     esac
 }
 
+package_license() {
+    package="$1"
+    case "${PACKAGE_FAMILY}" in
+        deb)
+            dpkg-deb --field "${package}" License
+            ;;
+        rpm)
+            rpm -qp --queryformat '%{LICENSE}' "${package}"
+            ;;
+        apk)
+            members="$(tar --list --file "${package}")" || return 1
+            member_count="$(
+                printf '%s\n' "${members}" | \
+                    awk '$0 == ".PKGINFO" { count++ } END { print count + 0 }'
+            )" || return 1
+            [ "${member_count}" -eq 1 ] || return 1
+            metadata="$(tar --extract --to-stdout --file "${package}" .PKGINFO)" || \
+                return 1
+            license_count="$(
+                printf '%s\n' "${metadata}" | \
+                    awk '$0 ~ /^license = / { count++ } END { print count + 0 }'
+            )" || return 1
+            [ "${license_count}" -eq 1 ] || return 1
+            printf '%s\n' "${metadata}" | sed -n 's/^license = //p'
+            ;;
+        *)
+            return 2
+            ;;
+    esac
+}
+
 expected_runtime_dependencies() {
     case "${PACKAGE_FAMILY}" in
         deb)
@@ -2430,11 +2490,15 @@ validate_manifest_contract() {
         geoip_data_license_payload=1
         required_manifest_path "${manifest}" \
             /usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt || return 1
+        required_manifest_path "${manifest}" \
+            /usr/share/doc/syswarden/LICENSE.txt || return 1
     else
         geoip_data_license_rc=$?
         [ "${geoip_data_license_rc}" -eq 1 ] || return 1
         required_manifest_path "${manifest}" \
             /usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt && return 1
+        required_manifest_path "${manifest}" \
+            /usr/share/doc/syswarden/LICENSE.txt && return 1
     fi
 
     case "${PACKAGE_FAMILY}" in
@@ -2443,8 +2507,8 @@ validate_manifest_contract() {
                 allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=16
             elif [ "${geoip_data_license_payload}" -eq 1 ]; then
-                allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/(changelog\.gz|GEOIP-DATA-LICENSE\.txt)|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
-                expected_manifest_count=20
+                allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/(changelog\.gz|GEOIP-DATA-LICENSE\.txt|LICENSE\.txt)|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
+                expected_manifest_count=21
             else
                 allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=19
@@ -2458,8 +2522,8 @@ validate_manifest_contract() {
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=6
             elif [ "${geoip_data_license_payload}" -eq 1 ]; then
-                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/GEOIP-DATA-LICENSE\.txt)$'
-                expected_manifest_count=8
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt)$'
+                expected_manifest_count=9
             else
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden)$'
                 expected_manifest_count=7
@@ -2472,7 +2536,7 @@ validate_manifest_contract() {
             if [ "${legacy_completion_payload}" -eq 1 ]; then
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             elif [ "${geoip_data_license_payload}" -eq 1 ]; then
-                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/GEOIP-DATA-LICENSE\.txt|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             else
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             fi
@@ -2549,6 +2613,9 @@ validate_inventory_contract() {
         inventory_has_exact_entry "${inventory}" \
             /usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt file 644 \
             a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499 || return 1
+        inventory_has_exact_entry "${inventory}" \
+            /usr/share/doc/syswarden/LICENSE.txt file 644 \
+            3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986 || return 1
     else
         geoip_data_license_rc=$?
         [ "${geoip_data_license_rc}" -eq 1 ] || return 1
@@ -5067,6 +5134,20 @@ prepare_expected_payloads() {
        [ "${CANDIDATE_ARCHITECTURE}" != "${EXPECTED_PACKAGE_ARCHITECTURE}" ]; then
         return 1
     fi
+    if package_uses_geoip_data_license_payload candidate; then
+        if ! CANDIDATE_LICENSE="$(
+            package_license "${CANDIDATE_PACKAGE}" 2>> "${COMMAND_LOG}"
+        )"; then
+            record fail "${PREFIX}.metadata.candidate.license" \
+                "native package license metadata could not be read exactly"
+            return 1
+        fi
+        check_equal metadata.candidate.license GPL-3.0-or-later "${CANDIDATE_LICENSE}"
+        [ "${CANDIDATE_LICENSE}" = GPL-3.0-or-later ] || return 1
+    else
+        license_contract_rc=$?
+        [ "${license_contract_rc}" -eq 1 ] || return 1
+    fi
     verify_package_artifact previous "${PREVIOUS_PACKAGE}" "${PERSIST_ROOT}/expected-previous"
     verify_package_artifact candidate "${CANDIDATE_PACKAGE}" "${PERSIST_ROOT}/expected-candidate"
     return 0
@@ -5298,11 +5379,19 @@ def parse_events(path: Path) -> list[dict[str, str]]:
 
 
 def validate_event_contract(
-    events: Sequence[dict[str, str]], family: str, scenario: str
+    events: Sequence[dict[str, str]],
+    family: str,
+    scenario: str,
+    *,
+    candidate_version: str | None = None,
 ) -> None:
     """Reject missing, duplicated, reordered, synthetic, or informational evidence."""
 
-    expected = expected_event_checks(family, scenario)
+    expected = expected_event_checks(
+        family,
+        scenario,
+        candidate_version=candidate_version,
+    )
     observed: list[str] = []
     for index, event in enumerate(events):
         if not isinstance(event, dict):
@@ -5430,13 +5519,13 @@ def _validate_manager_paths(
         candidate_version,
         forward_only_apk=forward_only_apk,
     )
-    geoip_data_license = _uses_geoip_data_license_payload(role, version)
+    license_payloads = _uses_geoip_data_license_payload(role, version)
     expected_payload_paths = set(
         LEGACY_PACKAGE_PAYLOAD_PATHS
         if legacy_completion
         else (
-            GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS
-            if geoip_data_license
+            LICENSED_PACKAGE_PAYLOAD_PATHS
+            if license_payloads
             else PACKAGE_PAYLOAD_PATHS
         )
     )
@@ -5445,8 +5534,8 @@ def _validate_manager_paths(
             LEGACY_DEB_PACKAGE_PATHS
             if legacy_completion
             else (
-                GEOIP_LICENSE_DEB_PACKAGE_PATHS
-                if geoip_data_license
+                LICENSED_DEB_PACKAGE_PATHS
+                if license_payloads
                 else DEB_PACKAGE_PATHS
             )
         )
@@ -5458,8 +5547,8 @@ def _validate_manager_paths(
             LEGACY_APK_PACKAGE_PATHS
             if legacy_completion
             else (
-                GEOIP_LICENSE_APK_PACKAGE_PATHS
-                if geoip_data_license
+                LICENSED_APK_PACKAGE_PATHS
+                if license_payloads
                 else APK_PACKAGE_PATHS
             )
         )
@@ -5518,7 +5607,7 @@ def validate_inventory_snapshot(
         candidate_version,
         forward_only_apk=forward_only_apk,
     )
-    geoip_data_license = _uses_geoip_data_license_payload(role, version)
+    license_payloads = _uses_geoip_data_license_payload(role, version)
     if len(filesystem) != len(manager_paths):
         raise LifecycleLabError(
             "filesystem inventory does not cover every native package path"
@@ -5579,7 +5668,7 @@ def validate_inventory_snapshot(
             raise LifecycleLabError(
                 f"package file type/mode/digest contract failed at {path}"
             )
-    if geoip_data_license:
+    if license_payloads:
         attribution = entries[GEOIP_DATA_LICENSE_PATH]
         if (
             attribution["type"] != "file"
@@ -5588,6 +5677,15 @@ def validate_inventory_snapshot(
         ):
             raise LifecycleLabError(
                 "GeoIP data license payload is not the pinned intact source"
+            )
+        project_license = entries[PROJECT_LICENSE_PATH]
+        if (
+            project_license["type"] != "file"
+            or project_license["mode"] != "644"
+            or project_license["value"] != PROJECT_LICENSE_SHA256
+        ):
+            raise LifecycleLabError(
+                "project license payload is not the pinned intact source"
             )
     link_targets = {
         "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
@@ -5608,8 +5706,8 @@ def validate_inventory_snapshot(
             LEGACY_DEB_PACKAGE_PATHS
             if legacy_completion
             else (
-                GEOIP_LICENSE_DEB_PACKAGE_PATHS
-                if geoip_data_license
+                LICENSED_DEB_PACKAGE_PATHS
+                if license_payloads
                 else DEB_PACKAGE_PATHS
             )
         )
@@ -5617,8 +5715,8 @@ def validate_inventory_snapshot(
             LEGACY_PACKAGE_PAYLOAD_PATHS
             if legacy_completion
             else (
-                GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS
-                if geoip_data_license
+                LICENSED_PACKAGE_PAYLOAD_PATHS
+                if license_payloads
                 else PACKAGE_PAYLOAD_PATHS
             )
         )
@@ -8395,7 +8493,12 @@ def run_platform(
             command_log = result_root / "commands.log"
             try:
                 events = parse_events(event_file)
-                validate_event_contract(events, spec.family, scenario)
+                validate_event_contract(
+                    events,
+                    spec.family,
+                    scenario,
+                    candidate_version=pair.candidate.version,
+                )
                 inventory_evidence = parse_scenario_inventory_evidence(
                     result_root,
                     spec.family,
@@ -9563,7 +9666,14 @@ def classify_lifecycle_evidence(
                 try:
                     if not isinstance(events, list):
                         raise LifecycleLabError("scenario event list is absent")
-                    validate_event_contract(events, family, scenario_name)
+                    validate_event_contract(
+                        events,
+                        family,
+                        scenario_name,
+                        candidate_version=str(
+                            platform_result.get("candidate_version", "")
+                        ),
+                    )
                 except LifecycleLabError:
                     coordinate_structural.append(
                         f"{coordinate_name}:{scenario_name}:event-contract-invalid"
@@ -10023,7 +10133,12 @@ def validate_report_version_contract(
                     raise LifecycleLabError(
                         "package lifecycle scenario lacks event evidence"
                     )
-                validate_event_contract(scenario_events, family, scenario_name)
+                validate_event_contract(
+                    scenario_events,
+                    family,
+                    scenario_name,
+                    candidate_version=candidate_version,
+                )
         expected_coordinates.add(f"{family}:{package_architecture}")
         candidate = platform_result.get("candidate")
         previous = platform_result.get("previous")

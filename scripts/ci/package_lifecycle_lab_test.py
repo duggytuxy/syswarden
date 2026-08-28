@@ -3583,6 +3583,170 @@ probe
             sorted(script.index(fragment) for fragment in lifecycle_order),
         )
 
+    def test_candidate_native_license_metadata_is_versioned_and_exact(self) -> None:
+        check = "upgrade-rollback.metadata.candidate.license"
+        baseline = package_lifecycle_lab.expected_event_checks(
+            "deb",
+            "upgrade-rollback",
+            candidate_version="4.03.3",
+        )
+        candidate = package_lifecycle_lab.expected_event_checks(
+            "deb",
+            "upgrade-rollback",
+            candidate_version="4.04.0",
+        )
+        future = package_lifecycle_lab.expected_event_checks(
+            "deb",
+            "upgrade-rollback",
+            candidate_version="5.00.0",
+        )
+        self.assertNotIn(check, baseline)
+        self.assertIn(check, candidate)
+        self.assertIn(check, future)
+        self.assertNotIn("upgrade-rollback.metadata.previous.license", candidate)
+        self.assertLess(
+            candidate.index("upgrade-rollback.metadata.candidate.architecture"),
+            candidate.index(check),
+        )
+        self.assertLess(
+            candidate.index(check),
+            candidate.index("upgrade-rollback.metadata.previous.manager_manifest"),
+        )
+
+        events = [
+            {"status": "pass", "check": item, "detail": "verified"}
+            for item in candidate
+        ]
+        package_lifecycle_lab.validate_event_contract(
+            events,
+            "deb",
+            "upgrade-rollback",
+            candidate_version="4.04.0",
+        )
+        without_license = [event for event in events if event["check"] != check]
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError,
+            "event contract mismatch",
+        ):
+            package_lifecycle_lab.validate_event_contract(
+                without_license,
+                "deb",
+                "upgrade-rollback",
+                candidate_version="4.04.0",
+            )
+
+    def test_native_package_license_extraction_is_fail_closed_for_all_families(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        function = source[
+            source.index("package_license() {") : source.index(
+                "\nexpected_runtime_dependencies() {"
+            )
+        ]
+        fake_bin = self.root / "license-bin"
+        fake_bin.mkdir()
+        tool = (
+            "#!/bin/sh\n"
+            "case \"${0##*/}:$1\" in\n"
+            "  dpkg-deb:--field|rpm:-qp)\n"
+            "    printf '%s' \"${TEST_LICENSE-}\"\n"
+            "    exit \"${TEST_STATUS-0}\"\n"
+            "    ;;\n"
+            "  tar:--list)\n"
+            "    printf '%s' \"${TEST_APK_MEMBERS-}\"\n"
+            "    exit \"${TEST_LIST_STATUS-0}\"\n"
+            "    ;;\n"
+            "  tar:--extract)\n"
+            "    printf '%s' \"${TEST_APK_METADATA-}\"\n"
+            "    exit \"${TEST_EXTRACT_STATUS-0}\"\n"
+            "    ;;\n"
+            "esac\n"
+            "exit 90\n"
+        )
+        for name in ("dpkg-deb", "rpm", "tar"):
+            path = fake_bin / name
+            path.write_text(tool, encoding="ascii")
+            path.chmod(0o700)
+
+        harness = self.root / "package-license.sh"
+        harness.write_text(
+            "#!/bin/sh\n"
+            "set -eu\n"
+            + function
+            + "\nactual=\"$(package_license \"$1\")\"\n"
+            + "[ \"${actual}\" = GPL-3.0-or-later ]\n",
+            encoding="ascii",
+        )
+        harness.chmod(0o700)
+
+        def validate(
+            family: str,
+            *,
+            license_value: str = package_lifecycle_lab.PROJECT_LICENSE_EXPRESSION,
+            status: str = "0",
+            members: str = ".PKGINFO\n",
+            metadata: str | None = None,
+            list_status: str = "0",
+            extract_status: str = "0",
+        ) -> subprocess.CompletedProcess[bytes]:
+            environment = {
+                **os.environ,
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "PACKAGE_FAMILY": family,
+                "TEST_LICENSE": license_value,
+                "TEST_STATUS": status,
+                "TEST_APK_MEMBERS": members,
+                "TEST_APK_METADATA": (
+                    f"license = {license_value}\n"
+                    if metadata is None
+                    else metadata
+                ),
+                "TEST_LIST_STATUS": list_status,
+                "TEST_EXTRACT_STATUS": extract_status,
+            }
+            return subprocess.run(
+                ("/bin/sh", str(harness), str(self.root / "package")),
+                check=False,
+                capture_output=True,
+                env=environment,
+            )
+
+        for family in ("deb", "rpm", "apk"):
+            with self.subTest(family=family, mutation="accepted"):
+                self.assertEqual(validate(family).returncode, 0)
+            with self.subTest(family=family, mutation="wrong-license"):
+                self.assertNotEqual(
+                    validate(family, license_value="unknown").returncode,
+                    0,
+                )
+            with self.subTest(family=family, mutation="missing-license"):
+                self.assertNotEqual(
+                    validate(family, license_value="").returncode,
+                    0,
+                )
+            with self.subTest(family=family, mutation="metadata-command-failure"):
+                kwargs = (
+                    {"extract_status": "42"}
+                    if family == "apk"
+                    else {"status": "42"}
+                )
+                self.assertNotEqual(validate(family, **kwargs).returncode, 0)
+
+        for name, arguments in {
+            "missing-license": {"metadata": "pkgname = syswarden\n"},
+            "duplicate-license": {
+                "metadata": (
+                    "license = GPL-3.0-or-later\n"
+                    "license = GPL-3.0-or-later\n"
+                )
+            },
+            "duplicate-pkginfo": {"members": ".PKGINFO\n.PKGINFO\n"},
+            "list-failure": {"list_status": "42"},
+        }.items():
+            with self.subTest(family="apk", mutation=name):
+                self.assertNotEqual(validate("apk", **arguments).returncode, 0)
+
     def test_seed_state_uses_separate_address_family_files(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
         seed = source[
@@ -4244,7 +4408,7 @@ probe
                 )
                 self.assertNotEqual(missing_completion.returncode, 0)
 
-    def test_v4040_packages_require_exact_geoip_data_license_payload(self) -> None:
+    def test_v4040_packages_require_exact_license_payloads(self) -> None:
         build_id_paths = {
             "/usr/lib/.build-id",
             "/usr/lib/.build-id/11",
@@ -4255,10 +4419,10 @@ probe
             "/usr/lib/.build-id/33/" + "3" * 38,
         }
         manifests = {
-            "deb": sorted(package_lifecycle_lab.GEOIP_LICENSE_DEB_PACKAGE_PATHS),
-            "apk": sorted(package_lifecycle_lab.GEOIP_LICENSE_APK_PACKAGE_PATHS),
+            "deb": sorted(package_lifecycle_lab.LICENSED_DEB_PACKAGE_PATHS),
+            "apk": sorted(package_lifecycle_lab.LICENSED_APK_PACKAGE_PATHS),
             "rpm": sorted(
-                set(package_lifecycle_lab.GEOIP_LICENSE_PACKAGE_PAYLOAD_PATHS)
+                set(package_lifecycle_lab.LICENSED_PACKAGE_PAYLOAD_PATHS)
                 | build_id_paths
             ),
         }
@@ -4269,6 +4433,7 @@ probe
             "/opt/syswarden/signatures.json": "640",
             package_lifecycle_lab.BASH_COMPLETION_PATH: "644",
             package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH: "644",
+            package_lifecycle_lab.PROJECT_LICENSE_PATH: "644",
         }
         link_targets = {
             "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
@@ -4290,7 +4455,11 @@ probe
                     value = (
                         package_lifecycle_lab.GEOIP_DATA_LICENSE_SHA256
                         if path == package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH
-                        else "a" * 64
+                        else (
+                            package_lifecycle_lab.PROJECT_LICENSE_SHA256
+                            if path == package_lifecycle_lab.PROJECT_LICENSE_PATH
+                            else "a" * 64
+                        )
                     )
                     kind, mode = "file", file_modes[path]
                 elif path == "/usr/share/doc/syswarden/changelog.gz":
@@ -4301,9 +4470,28 @@ probe
                     kind, mode, value = "directory", "755", "-"
                 inventory.append(f"{path}\t{kind}\t{mode}\t0\t0\t{value}")
             with self.subTest(family=family):
+                filesystem = [
+                    {
+                        "path": fields[0],
+                        "type": fields[1],
+                        "mode": fields[2],
+                        "uid": int(fields[3]),
+                        "gid": int(fields[4]),
+                        "value": fields[5],
+                    }
+                    for fields in (line.split("\t") for line in inventory)
+                ]
                 package_lifecycle_lab._validate_manager_paths(
                     family,
                     manifest,
+                    role="candidate",
+                    version="4.04.0",
+                    candidate_version="4.04.0",
+                )
+                package_lifecycle_lab.validate_inventory_snapshot(
+                    family,
+                    manifest,
+                    filesystem,
                     role="candidate",
                     version="4.04.0",
                     candidate_version="4.04.0",
@@ -4332,6 +4520,21 @@ probe
                     0,
                 )
 
+                without_project_license = [
+                    path
+                    for path in manifest
+                    if path != package_lifecycle_lab.PROJECT_LICENSE_PATH
+                ]
+                self.assertNotEqual(
+                    self.run_embedded_inventory_contract(
+                        family,
+                        without_project_license,
+                        version="4.04.0",
+                        candidate_version="4.04.0",
+                    ).returncode,
+                    0,
+                )
+
                 altered_inventory = [
                     line.replace(
                         package_lifecycle_lab.GEOIP_DATA_LICENSE_SHA256,
@@ -4344,6 +4547,50 @@ probe
                         family,
                         manifest,
                         altered_inventory,
+                        version="4.04.0",
+                        candidate_version="4.04.0",
+                    ).returncode,
+                    0,
+                )
+
+                altered_project_license_inventory = [
+                    line.replace(
+                        package_lifecycle_lab.PROJECT_LICENSE_SHA256,
+                        "0" * 64,
+                    )
+                    for line in inventory
+                ]
+                altered_project_filesystem = [
+                    {
+                        "path": fields[0],
+                        "type": fields[1],
+                        "mode": fields[2],
+                        "uid": int(fields[3]),
+                        "gid": int(fields[4]),
+                        "value": fields[5],
+                    }
+                    for fields in (
+                        line.split("\t")
+                        for line in altered_project_license_inventory
+                    )
+                ]
+                with self.assertRaisesRegex(
+                    package_lifecycle_lab.LifecycleLabError,
+                    "project license payload",
+                ):
+                    package_lifecycle_lab.validate_inventory_snapshot(
+                        family,
+                        manifest,
+                        altered_project_filesystem,
+                        role="candidate",
+                        version="4.04.0",
+                        candidate_version="4.04.0",
+                    )
+                self.assertNotEqual(
+                    self.run_embedded_inventory_contract(
+                        family,
+                        manifest,
+                        altered_project_license_inventory,
                         version="4.04.0",
                         candidate_version="4.04.0",
                     ).returncode,
