@@ -20,6 +20,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import nftables_kernel_lab
 import package_lifecycle_lab
 import release_qualification_adapter as adapter
 import release_qualification_gate as gate
@@ -177,6 +178,12 @@ class AdapterFixture:
         (manager.parent / "manager_kernel_integration_linux_test.go").write_text(
             "package firewall\n", encoding="utf-8"
         )
+        for relative in adapter.NFT_SOURCE_BINDING_PATHS:
+            source = self.repo / relative
+            if source.exists():
+                continue
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(f"fixture for {relative}\n", encoding="utf-8")
         self._git("add", ".")
         self._git("commit", "-qm", "fixture")
 
@@ -301,7 +308,7 @@ class AdapterFixture:
         }
         archive_sha256 = hashlib.sha256(archive).hexdigest()
         nft_report = {
-            "schema_version": 3,
+            "schema_version": 4,
             "generated_at": self.now.isoformat(),
             "harness_status": "pass",
             "product_status": "pass",
@@ -363,6 +370,13 @@ class AdapterFixture:
                 "corrected_ruleset_applied": True,
                 "current_generator_contract_passed": True,
                 "native_manager_interval_contract_passed": True,
+                "v404_dummy_interfaces_created": True,
+                "v404_preflight_ruleset_empty": True,
+                "v404_full_golden_check_is_non_mutating": True,
+                "v404_full_golden_kernel_contract_passed": True,
+                "v404_full_golden_cleanup_proved_empty": True,
+                "v404_populated_fragment_check_is_non_mutating": True,
+                "v404_populated_kernel_contract_passed": True,
                 "isolated_ruleset_cleanup_succeeded": True,
             },
             "kernel_error": "Service out of range",
@@ -425,6 +439,26 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 adapter.run_build(args)
             else:
                 adapter.run_verify(args)
+
+    def test_nft_source_bindings_match_the_lab_exactly(self) -> None:
+        self.assertEqual(
+            adapter.NFT_SOURCE_BINDING_PATHS,
+            nftables_kernel_lab.SOURCE_BINDING_PATHS,
+        )
+
+    def test_nft_report_requires_every_v404_proof(self) -> None:
+        original = self.fixture.load_raw("nftables-raw.json")
+        proof_names = tuple(
+            key for key in original["conditions"] if key.startswith("v404_")
+        )
+        self.assertEqual(len(proof_names), 7)
+        for proof_name in proof_names:
+            with self.subTest(proof_name=proof_name):
+                report = copy.deepcopy(original)
+                del report["conditions"][proof_name]
+                self.fixture.save_raw("nftables-raw.json", report)
+                self.assertAdapterError(self.fixture.args())
+        self.fixture.save_raw("nftables-raw.json", original)
 
     def test_build_and_verify_are_canonical_and_use_earliest_raw_timestamp(self) -> None:
         envelopes = adapter.run_build(self.fixture.args())

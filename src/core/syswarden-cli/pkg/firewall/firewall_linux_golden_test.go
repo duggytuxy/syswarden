@@ -21,6 +21,7 @@ const (
 	linuxFirewallHelperEnvironment     = "SYSWARDEN_LINUX_FIREWALL_GOLDEN_HELPER"
 	linuxFirewallTargetDirectory       = "/etc/syswarden"
 	linuxFirewallTargetFile            = "/etc/syswarden/syswarden.nft"
+	linuxFirewallFakeNFTAppliedMarker  = "/tmp/syswarden-firewall-golden-applied"
 	// This documentation prefix is consumed only by the isolated fake nft helper.
 	// It is never committed to a kernel ruleset.
 	linuxFirewallFakeASNIPv4Prefix = "192.0.2.128/25"
@@ -47,25 +48,24 @@ func TestNftablesRulesGolden_SW_QA_001(t *testing.T) {
 	if bytes.Contains(got, []byte("ct state new tcp dport { 443, 2222")) {
 		t.Fatal("the detected SSH listener bypassed SSH-only source policy")
 	}
+	if bytes.Count(got, []byte("\tchain operator-policy {\n")) != 1 {
+		t.Fatal("generated nftables rules must contain exactly one operator-policy chain")
+	}
+	dispatchAndCatchAll := []byte(operatorPolicyDispatchRule() + "\t\tct state new limit rate 2/second burst 5 packets log prefix \"[SYSWARDEN-BLOCK] [CATCH-ALL] \"\n")
+	if !bytes.Contains(got, dispatchAndCatchAll) {
+		t.Fatal("operator-policy dispatch is not immediately before the product catch-all")
+	}
 	structuralRules := got
 	if populationStart := bytes.Index(structuralRules, []byte("add element ")); populationStart >= 0 {
 		structuralRules = structuralRules[:populationStart]
 	}
 
-	wantPath := filepath.Join("..", "..", "..", "..", "..", "testdata", "firewall", "nftables-v4.02.8.nft")
+	wantPath := filepath.Join("..", "..", "..", "..", "..", "testdata", "firewall", "nftables-v4.04.0.nft")
 	if !bytes.HasSuffix(structuralRules, []byte("\n\n")) || bytes.HasSuffix(structuralRules, []byte("\n\n\n")) {
 		t.Fatal("nftables output must end with exactly one blank separator line")
 	}
 	if os.Getenv("SYSWARDEN_UPDATE_CONTRACT_GOLDENS") == "1" {
 		fixture := structuralRules[:len(structuralRules)-1]
-		fixture = bytes.ReplaceAll(
-			fixture,
-			[]byte("tcp dport { 23, 6379 }"),
-			[]byte("tcp dport { 236379 }"),
-		)
-		if bytes.Count(fixture, []byte("tcp dport { 236379 }")) != 2 {
-			t.Fatal("updated nftables golden does not preserve the two historical SW-FW-004 characterization rules")
-		}
 		if err := os.WriteFile(wantPath, fixture, 0600); err != nil { // #nosec G703 -- wantPath is a fixed repository fixture behind the explicit golden-update gate
 			t.Fatalf("update nftables golden: %v", err)
 		}
@@ -79,8 +79,6 @@ func TestNftablesRulesGolden_SW_QA_001(t *testing.T) {
 		t.Fatal("nftables golden must end with one newline and no blank line at EOF")
 	}
 	wantRuntime := append(append([]byte(nil), want...), '\n')
-	wantRuntime = bytes.ReplaceAll(wantRuntime, []byte("flags timeout;"), []byte("flags interval,timeout;"))
-	wantRuntime = bytes.ReplaceAll(wantRuntime, []byte("tcp dport { 236379 }"), []byte("tcp dport { 23, 6379 }"))
 	if !bytes.Equal(structuralRules, wantRuntime) {
 		t.Fatalf("nftables rules changed; review and approve the complete golden diff before updating %s", wantPath)
 	}
@@ -458,6 +456,10 @@ func TestActContainerIsolationRequirementContract_SW_QA_001(t *testing.T) {
 
 func writeLinuxFirewallTestTools(t *testing.T, toolDir string) {
 	t.Helper()
+	if err := os.Remove(linuxFirewallFakeNFTAppliedMarker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reset fake nftables apply marker: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(linuxFirewallFakeNFTAppliedMarker) })
 	populations := []nftSetPopulation{
 		{name: "syswarden_whitelist"},
 		{name: "syswarden_whitelist6"},
@@ -481,7 +483,11 @@ func writeLinuxFirewallTestTools(t *testing.T, toolDir string) {
 		}
 		populations[index].entries = normalized
 	}
-	verificationPlan := buildNftVerificationPlan(populations, false)
+	emptyOperatorPolicy, err := compileOperatorPolicy(nil)
+	if err != nil {
+		t.Fatalf("compile empty operator policy verification fixture: %v", err)
+	}
+	verificationPlan := buildNftVerificationPlan(populations, false, emptyOperatorPolicy.verificationPlan())
 	// Runtime-owned ban sets are intentionally empty in this isolated generator
 	// fixture. A negative cardinality in the verification plan means
 	// existence-only, but the generic JSON helper uses placeholder strings for
@@ -495,13 +501,25 @@ func writeLinuxFirewallTestTools(t *testing.T, toolDir string) {
 	verificationJSON := string(nftVerificationJSON(verificationPlan, 0))
 	nftScript := `#!/bin/sh
 if [ "$*" = "-j list tables" ]; then
-    printf '%s\n' '{"nftables":[]}'
+    if [ -f ` + linuxFirewallFakeNFTAppliedMarker + ` ]; then
+        printf '%s\n' '{"nftables":[{"table":{"family":"inet","name":"syswarden"}},{"table":{"family":"netdev","name":"syswarden_hw_drop"}}]}'
+    else
+        printf '%s\n' '{"nftables":[]}'
+    fi
     exit 0
 fi
 if [ "$*" = "-j list ruleset" ]; then
+    if [ ! -f ` + linuxFirewallFakeNFTAppliedMarker + ` ]; then
+        printf '%s\n' '{"nftables":[]}'
+        exit 0
+    fi
     /bin/cat <<'EOF'
 ` + verificationJSON + `
 EOF
+    exit 0
+fi
+if [ "$*" = "-f /proc/self/fd/4" ]; then
+    : > ` + linuxFirewallFakeNFTAppliedMarker + `
     exit 0
 fi
 exit 0

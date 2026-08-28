@@ -7,13 +7,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"syscall"
 )
 
 type secureFileIdentity struct {
 	info   os.FileInfo
 	digest [sha256.Size]byte
 }
+
+const maximumUserModuleSize int64 = 256 * 1024
 
 func newSecureFileIdentity(content []byte, info os.FileInfo) *secureFileIdentity {
 	return &secureFileIdentity{info: info, digest: sha256.Sum256(content)}
@@ -27,6 +31,7 @@ func (identity *secureFileIdentity) matches(content []byte, info os.FileInfo) bo
 	currentUID, currentGID, currentOK := fileOwnerUIDGID(info)
 	return expectedOK && currentOK && expectedUID == currentUID && expectedGID == currentGID &&
 		os.SameFile(identity.info, info) && identity.info.Mode() == info.Mode() &&
+		identity.info.Size() == info.Size() &&
 		identity.digest == sha256.Sum256(content)
 }
 
@@ -145,6 +150,23 @@ func readSecureRegularFileIdentity(root *os.Root, name, displayPath string) ([]b
 }
 
 func readSecureRegularFileSnapshot(root *os.Root, name, displayPath string) ([]byte, os.FileInfo, error) {
+	maximumBytes := int64(0)
+	if name == userModuleName {
+		maximumBytes = maximumUserModuleSize
+	}
+	return readSecureRegularFileSnapshotBounded(root, name, displayPath, maximumBytes)
+}
+
+func readSecureRegularFileSnapshotBounded(root *os.Root, name, displayPath string, maximumBytes int64) ([]byte, os.FileInfo, error) {
+	return readSecureRegularFileSnapshotBoundedWithHook(root, name, displayPath, maximumBytes, nil)
+}
+
+func readSecureRegularFileSnapshotBoundedWithHook(
+	root *os.Root,
+	name, displayPath string,
+	maximumBytes int64,
+	afterOpenedStat func() error,
+) ([]byte, os.FileInfo, error) {
 	if name == "" || filepath.Base(name) != name {
 		return nil, nil, fmt.Errorf("invalid configuration filename %q", name)
 	}
@@ -158,6 +180,9 @@ func readSecureRegularFileSnapshot(root *os.Root, name, displayPath string) ([]b
 	if before.Mode().Perm()&0037 != 0 {
 		return nil, nil, fmt.Errorf("configuration file %s has unsafe mode %#o", displayPath, before.Mode().Perm())
 	}
+	if maximumBytes > 0 && before.Size() > maximumBytes {
+		return nil, nil, fmt.Errorf("configuration file %s exceeds the %d-byte limit", displayPath, maximumBytes)
+	}
 
 	file, err := root.Open(name)
 	if err != nil {
@@ -168,32 +193,109 @@ func readSecureRegularFileSnapshot(root *os.Root, name, displayPath string) ([]b
 	if err != nil {
 		return nil, nil, fmt.Errorf("inspect opened configuration file %s: %w", displayPath, err)
 	}
-	if !openedBefore.Mode().IsRegular() || !os.SameFile(before, openedBefore) {
+	if !openedBefore.Mode().IsRegular() || !sameSecureFileMetadata(before, openedBefore) {
 		return nil, nil, fmt.Errorf("configuration file %s changed while opening", displayPath)
 	}
+	if maximumBytes > 0 && openedBefore.Size() > maximumBytes {
+		return nil, nil, fmt.Errorf("configuration file %s exceeds the %d-byte limit", displayPath, maximumBytes)
+	}
 
-	content, err := io.ReadAll(file)
+	reader := io.Reader(file)
+	if maximumBytes > 0 {
+		reader = io.LimitReader(file, maximumBytes+1)
+	}
+	content, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read configuration file %s: %w", displayPath, err)
+	}
+	if maximumBytes > 0 && int64(len(content)) > maximumBytes {
+		return nil, nil, fmt.Errorf("configuration file %s exceeds the %d-byte limit", displayPath, maximumBytes)
 	}
 	openedAfter, err := file.Stat()
 	if err != nil {
 		return nil, nil, fmt.Errorf("reinspect opened configuration file %s: %w", displayPath, err)
+	}
+	if afterOpenedStat != nil {
+		if err := afterOpenedStat(); err != nil {
+			return nil, nil, fmt.Errorf("run configuration file %s read-boundary check: %w", displayPath, err)
+		}
 	}
 	after, err := root.Lstat(name)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reinspect configuration file %s: %w", displayPath, err)
 	}
 	if after.Mode()&os.ModeSymlink != 0 || after.Mode().Perm()&0037 != 0 ||
-		!os.SameFile(openedBefore, openedAfter) || !os.SameFile(openedAfter, after) ||
-		openedBefore.Size() != openedAfter.Size() || !openedBefore.ModTime().Equal(openedAfter.ModTime()) {
+		!sameSecureFileMetadata(openedBefore, openedAfter) ||
+		!sameSecureFileMetadata(openedAfter, after) {
 		return nil, nil, fmt.Errorf("configuration file %s changed while reading", displayPath)
 	}
 	return bytes.Clone(content), openedAfter, nil
 }
 
+func sameSecureFileMetadata(left, right os.FileInfo) bool {
+	if left == nil || right == nil || !os.SameFile(left, right) ||
+		left.Mode() != right.Mode() || left.Size() != right.Size() ||
+		!left.ModTime().Equal(right.ModTime()) {
+		return false
+	}
+	leftStat, leftOK := left.Sys().(*syscall.Stat_t)
+	rightStat, rightOK := right.Sys().(*syscall.Stat_t)
+	leftCTimeSec, leftCTimeNsec, leftCTimeOK := secureFileChangeTime(left)
+	rightCTimeSec, rightCTimeNsec, rightCTimeOK := secureFileChangeTime(right)
+	return leftOK && rightOK && leftStat.Uid == rightStat.Uid &&
+		leftStat.Gid == rightStat.Gid && leftStat.Nlink == rightStat.Nlink &&
+		leftCTimeOK && rightCTimeOK && leftCTimeSec == rightCTimeSec &&
+		leftCTimeNsec == rightCTimeNsec
+}
+
+func secureFileChangeTime(info os.FileInfo) (int64, int64, bool) {
+	if info == nil || info.Sys() == nil {
+		return 0, 0, false
+	}
+	value := reflect.ValueOf(info.Sys())
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return 0, 0, false
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return 0, 0, false
+	}
+	for _, fieldName := range []string{"Ctim", "Ctimespec"} {
+		field := value.FieldByName(fieldName)
+		if field.Kind() != reflect.Struct {
+			continue
+		}
+		seconds := field.FieldByName("Sec")
+		nanoseconds := field.FieldByName("Nsec")
+		if seconds.IsValid() && nanoseconds.IsValid() &&
+			seconds.CanInt() && nanoseconds.CanInt() {
+			return seconds.Int(), nanoseconds.Int(), true
+		}
+	}
+	seconds := value.FieldByName("Ctime")
+	nanoseconds := value.FieldByName("Ctimensec")
+	if seconds.IsValid() && nanoseconds.IsValid() &&
+		seconds.CanInt() && nanoseconds.CanInt() {
+		return seconds.Int(), nanoseconds.Int(), true
+	}
+	return 0, 0, false
+}
+
 func readSecureFileByPath(path string) ([]byte, error) {
 	content, _, err := readSecureFileIdentityByPath(path)
+	return content, err
+}
+
+func readSecureFileByPathBounded(path string, maximumBytes int64) ([]byte, error) {
+	parent := filepath.Dir(path)
+	root, err := openDirectoryNoSymlinks(parent, false, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	content, _, err := readSecureRegularFileSnapshotBounded(root, filepath.Base(path), path, maximumBytes)
 	return content, err
 }
 

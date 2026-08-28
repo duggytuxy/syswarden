@@ -26,6 +26,8 @@ type fakeNFTRunner struct {
 	currentTables        []nftTableTarget
 	checkErr             error
 	applyErr             error
+	applyBeforeError     bool
+	rollbackErr          error
 	verificationErr      error
 	verificationCountGap int
 	blockCandidateApply  bool
@@ -182,6 +184,11 @@ func (r *fakeNFTRunner) Run(ctx context.Context, _ []byte, args ...string) ([]by
 			r.mu.Lock()
 			r.rollbackApplyCalls++
 			r.lastRollback = string(content)
+			rollbackErr := r.rollbackErr
+			if rollbackErr != nil {
+				r.mu.Unlock()
+				return []byte(rollbackErr.Error()), rollbackErr
+			}
 			r.currentTables = append([]nftTableTarget(nil), r.initialTables...)
 			r.mu.Unlock()
 			return nil, nil
@@ -207,7 +214,7 @@ func (r *fakeNFTRunner) Run(ctx context.Context, _ []byte, args ...string) ([]by
 		}
 		r.mu.Lock()
 		r.activeApplies--
-		if applyErr == nil {
+		if applyErr == nil || r.applyBeforeError {
 			r.currentTables = expectedTableTargets(r.plan)
 		}
 		r.mu.Unlock()
@@ -271,7 +278,7 @@ func TestNftablesTransactionPreflightPreservesPreviousState_SW_FW_001(t *testing
 	}
 }
 
-func TestNftablesTransactionAtomicApplyFailureDoesNotRollback_SW_FW_001(t *testing.T) {
+func TestNftablesTransactionAtomicApplyFailureRollsBackUnknownOutcome_SW_FW_001(t *testing.T) {
 	stateDirectory := t.TempDir()
 	statePath := filepath.Join(stateDirectory, "syswarden.nft")
 	if err := os.WriteFile(statePath, []byte("known-good\n"), 0600); err != nil {
@@ -284,12 +291,180 @@ func TestNftablesTransactionAtomicApplyFailureDoesNotRollback_SW_FW_001(t *testi
 	if err == nil {
 		t.Fatal("transaction unexpectedly succeeded")
 	}
-	if runner.mainApplyCalls != 1 || runner.rollbackApplyCalls != 0 {
-		t.Fatalf("apply calls = %d, rollback calls = %d, want 1/0", runner.mainApplyCalls, runner.rollbackApplyCalls)
+	if runner.mainApplyCalls != 1 || runner.rollbackApplyCalls != 1 {
+		t.Fatalf("apply calls = %d, rollback calls = %d, want 1/1", runner.mainApplyCalls, runner.rollbackApplyCalls)
 	}
 	content, readErr := readRootedNFTFile(statePath)
 	if readErr != nil || string(content) != "known-good\n" {
 		t.Fatalf("persistent state changed after apply failure: %q, %v", content, readErr)
+	}
+}
+
+func TestNftablesTransactionApplyThenErrorRestoresPreviousState_SW_FW_005(t *testing.T) {
+	stateDirectory := t.TempDir()
+	statePath := filepath.Join(stateDirectory, "syswarden.nft")
+	if err := os.WriteFile(statePath, []byte("known-good\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan := minimalVerificationPlan(0)
+	previousTable := nftTableTarget{family: "inet", name: "syswarden"}
+	runner := newFakeNFTRunner(plan, previousTable)
+	runner.applyErr = errors.New("outcome unavailable after netlink commit")
+	runner.applyBeforeError = true
+
+	_, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan)
+	if err == nil || !strings.Contains(err.Error(), "indeterminate result") {
+		t.Fatalf("transaction error = %v, want indeterminate-result rollback", err)
+	}
+	if runner.mainApplyCalls != 1 || runner.rollbackApplyCalls != 1 || !reflect.DeepEqual(runner.currentTables, runner.initialTables) {
+		t.Fatalf("apply/rollback/current = %d/%d/%v, want 1/1/%v", runner.mainApplyCalls, runner.rollbackApplyCalls, runner.currentTables, runner.initialTables)
+	}
+	content, readErr := readPrivateRootedNFTFile(statePath, maximumNFTJournalFieldBytes)
+	if readErr != nil || string(content) != "known-good\n" {
+		t.Fatalf("persistent state after ambiguous apply = %q, %v", content, readErr)
+	}
+	if _, statErr := os.Lstat(nftTransactionJournalPath(stateDirectory)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("journal remains after verified rollback: %v", statErr)
+	}
+}
+
+func TestNftablesTransactionApplyThenErrorRetainsJournalWhenRollbackFails_SW_FW_005(t *testing.T) {
+	stateDirectory := t.TempDir()
+	plan := minimalVerificationPlan(0)
+	runner := newFakeNFTRunner(plan, nftTableTarget{family: "inet", name: "syswarden"})
+	runner.applyErr = errors.New("outcome unavailable after netlink commit")
+	runner.applyBeforeError = true
+	runner.rollbackErr = errors.New("rollback netlink acknowledgement unavailable")
+
+	_, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan)
+	if err == nil || !strings.Contains(err.Error(), "durable recovery journal retained") {
+		t.Fatalf("transaction error = %v, want retained-journal error", err)
+	}
+	if runner.mainApplyCalls != 1 || runner.rollbackApplyCalls != 1 {
+		t.Fatalf("apply/rollback calls = %d/%d, want 1/1", runner.mainApplyCalls, runner.rollbackApplyCalls)
+	}
+	if _, readErr := readNFTTransactionJournal(stateDirectory); readErr != nil {
+		t.Fatalf("durable journal was not retained after rollback failure: %v", readErr)
+	}
+}
+
+func TestNftablesCommittedJournalUnlinkSyncFailureDoesNotRollback_SW_FW_005(t *testing.T) {
+	stateDirectory := t.TempDir()
+	plan := minimalVerificationPlan(0)
+	runner := newFakeNFTRunner(plan, nftTableTarget{family: "inet", name: "syswarden"})
+	sentinel := errors.New("directory fsync unavailable after unlink")
+	previousSync := nftJournalRemovalDirectorySync
+	nftJournalRemovalDirectorySync = func(string) error { return sentinel }
+	defer func() { nftJournalRemovalDirectorySync = previousSync }()
+
+	_, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan)
+	if err == nil || !strings.Contains(err.Error(), "committed, verified and persisted") ||
+		!strings.Contains(err.Error(), "cleanup durability is uncertain") {
+		t.Fatalf("transaction error = %v, want committed cleanup uncertainty", err)
+	}
+	if runner.mainApplyCalls != 1 || runner.rollbackApplyCalls != 0 {
+		t.Fatalf("apply/rollback calls = %d/%d, want 1/0", runner.mainApplyCalls, runner.rollbackApplyCalls)
+	}
+	content, readErr := readPrivateRootedNFTFile(filepath.Join(stateDirectory, "syswarden.nft"), maximumNFTJournalFieldBytes)
+	if readErr != nil || string(content) != minimalNftRules() {
+		t.Fatalf("committed persistent policy = %q, %v", content, readErr)
+	}
+	if _, statErr := os.Lstat(nftTransactionJournalPath(stateDirectory)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("journal path remains after successful unlink: %v", statErr)
+	}
+}
+
+func TestNftablesCommittedJournalRemovalFailureDoesNotRollback_SW_FW_005(t *testing.T) {
+	stateDirectory := t.TempDir()
+	plan := minimalVerificationPlan(0)
+	runner := newFakeNFTRunner(plan, nftTableTarget{family: "inet", name: "syswarden"})
+	sentinel := errors.New("journal unlink temporarily unavailable")
+	previousRemove := nftJournalRemove
+	nftJournalRemove = func(string) error { return sentinel }
+	defer func() { nftJournalRemove = previousRemove }()
+
+	_, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan)
+	if err == nil || !strings.Contains(err.Error(), "committed, verified and persisted") ||
+		!strings.Contains(err.Error(), "cleanup is incomplete and will be retried") {
+		t.Fatalf("transaction error = %v, want committed cleanup retry", err)
+	}
+	if runner.mainApplyCalls != 1 || runner.rollbackApplyCalls != 0 {
+		t.Fatalf("apply/rollback calls = %d/%d, want 1/0", runner.mainApplyCalls, runner.rollbackApplyCalls)
+	}
+	content, readErr := readPrivateRootedNFTFile(filepath.Join(stateDirectory, "syswarden.nft"), maximumNFTJournalFieldBytes)
+	if readErr != nil || string(content) != minimalNftRules() {
+		t.Fatalf("committed persistent policy = %q, %v", content, readErr)
+	}
+	journal, readErr := readNFTTransactionJournal(stateDirectory)
+	if readErr != nil || journal.Phase != nftTransactionPersisted {
+		t.Fatalf("retained committed journal = %#v, %v", journal, readErr)
+	}
+
+	nftJournalRemove = previousRemove
+	if err := recoverPendingNftablesTransaction(context.Background(), runner, stateDirectory); err != nil {
+		t.Fatalf("retry committed journal cleanup: %v", err)
+	}
+	if runner.rollbackApplyCalls != 0 {
+		t.Fatalf("committed cleanup retry rollback calls = %d, want 0", runner.rollbackApplyCalls)
+	}
+	content, readErr = readPrivateRootedNFTFile(filepath.Join(stateDirectory, "syswarden.nft"), maximumNFTJournalFieldBytes)
+	if readErr != nil || string(content) != minimalNftRules() {
+		t.Fatalf("committed persistent policy after cleanup retry = %q, %v", content, readErr)
+	}
+	if _, statErr := os.Lstat(nftTransactionJournalPath(stateDirectory)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("journal path remains after cleanup retry: %v", statErr)
+	}
+}
+
+func TestNftablesPersistedPhaseSyncFailureDoesNotRollback_SW_FW_005(t *testing.T) {
+	stateDirectory := t.TempDir()
+	plan := minimalVerificationPlan(0)
+	runner := newFakeNFTRunner(plan, nftTableTarget{family: "inet", name: "syswarden"})
+	sentinel := errors.New("directory fsync unavailable after persisted phase rename")
+	previousSync := nftJournalWriteDirectorySync
+	syncCalls := 0
+	nftJournalWriteDirectorySync = func(path string) error {
+		syncCalls++
+		if syncCalls == 4 {
+			return sentinel
+		}
+		return previousSync(path)
+	}
+	defer func() { nftJournalWriteDirectorySync = previousSync }()
+
+	_, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan)
+	if err == nil || !strings.Contains(err.Error(), "committed, verified and persisted") ||
+		!strings.Contains(err.Error(), "persisted journal phase durability is uncertain") {
+		t.Fatalf("transaction error = %v, want persisted-phase durability uncertainty", err)
+	}
+	if syncCalls != 4 {
+		t.Fatalf("journal directory sync calls = %d, want 4", syncCalls)
+	}
+	if runner.mainApplyCalls != 1 || runner.rollbackApplyCalls != 0 {
+		t.Fatalf("apply/rollback calls = %d/%d, want 1/0", runner.mainApplyCalls, runner.rollbackApplyCalls)
+	}
+	content, readErr := readPrivateRootedNFTFile(filepath.Join(stateDirectory, "syswarden.nft"), maximumNFTJournalFieldBytes)
+	if readErr != nil || string(content) != minimalNftRules() {
+		t.Fatalf("committed persistent policy = %q, %v", content, readErr)
+	}
+	journal, readErr := readNFTTransactionJournal(stateDirectory)
+	if readErr != nil || journal.Phase != nftTransactionPersisted {
+		t.Fatalf("published persisted journal = %#v, %v", journal, readErr)
+	}
+
+	nftJournalWriteDirectorySync = previousSync
+	if err := recoverPendingNftablesTransaction(context.Background(), runner, stateDirectory); err != nil {
+		t.Fatalf("retry persisted journal cleanup: %v", err)
+	}
+	if runner.rollbackApplyCalls != 0 {
+		t.Fatalf("persisted phase cleanup retry rollback calls = %d, want 0", runner.rollbackApplyCalls)
+	}
+	content, readErr = readPrivateRootedNFTFile(filepath.Join(stateDirectory, "syswarden.nft"), maximumNFTJournalFieldBytes)
+	if readErr != nil || string(content) != minimalNftRules() {
+		t.Fatalf("committed persistent policy after retry = %q, %v", content, readErr)
+	}
+	if _, statErr := os.Lstat(nftTransactionJournalPath(stateDirectory)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("journal path remains after retry: %v", statErr)
 	}
 }
 
@@ -320,7 +495,7 @@ func TestNftablesVerificationAllowsConcurrentDynamicBans_SW_FW_001(t *testing.T)
 	}
 }
 
-func TestNftablesTransactionAtomicTimeoutDoesNotRollback_SW_FW_001(t *testing.T) {
+func TestNftablesTransactionAtomicTimeoutRollsBackUnknownOutcome_SW_FW_001(t *testing.T) {
 	stateDirectory := t.TempDir()
 	plan := minimalVerificationPlan(0)
 	runner := newFakeNFTRunner(plan)
@@ -331,8 +506,8 @@ func TestNftablesTransactionAtomicTimeoutDoesNotRollback_SW_FW_001(t *testing.T)
 	if err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
 		t.Fatalf("transaction error = %v, want deadline error", err)
 	}
-	if runner.rollbackApplyCalls != 0 {
-		t.Fatalf("rollback calls = %d, want 0 after failed atomic apply", runner.rollbackApplyCalls)
+	if runner.rollbackApplyCalls != 1 {
+		t.Fatalf("rollback calls = %d, want 1 after indeterminate atomic apply", runner.rollbackApplyCalls)
 	}
 }
 
@@ -1447,8 +1622,94 @@ func nftVerificationJSON(plan nftVerificationPlan, countGap int) []byte {
 			"family": key.family, "table": key.table, "name": key.name, "elem": elements,
 		}})
 	}
+	if plan.operatorPolicy.chainName != "" {
+		entries = append(entries, map[string]any{"chain": map[string]any{
+			"family": "inet", "table": "syswarden", "name": plan.operatorPolicy.chainName, "handle": 500,
+		}})
+		handle := uint64(501)
+		for _, expectedRule := range plan.operatorPolicy.rules {
+			expressions, err := expectedOperatorPolicyExpressions(expectedRule)
+			if err != nil {
+				panic(err)
+			}
+			for index, expression := range expressions {
+				if value, ok := expression.(map[string]any); ok {
+					if _, counter := value["counter"]; counter {
+						expressions[index] = map[string]any{"counter": map[string]any{"packets": 17, "bytes": 2048}}
+						break
+					}
+				}
+			}
+			entries = append(entries, nftVerificationRuleEntry(
+				"inet",
+				"syswarden",
+				plan.operatorPolicy.chainName,
+				handle,
+				expectedRule.comment,
+				expressions,
+			))
+			handle++
+		}
+		entries = append(entries, nftVerificationRuleEntry(
+			"inet",
+			"syswarden",
+			plan.operatorPolicy.chainName,
+			handle,
+			plan.operatorPolicy.returnComment,
+			[]any{map[string]any{"return": nil}},
+		))
+		handle++
+		entries = append(entries,
+			nftVerificationRuleEntry(
+				"inet",
+				"syswarden",
+				"stateful_protect",
+				handle,
+				plan.operatorPolicy.dispatchComment,
+				[]any{map[string]any{"jump": map[string]any{"target": plan.operatorPolicy.chainName}}},
+			),
+			nftVerificationRuleEntry(
+				"inet",
+				"syswarden",
+				"stateful_protect",
+				handle+1,
+				"",
+				[]any{
+					nftCTStateNewExpression(),
+					map[string]any{"limit": map[string]any{"rate": 2, "per": "second", "burst": 5, "rate_unit": "packets", "burst_unit": "packets"}},
+					map[string]any{"log": map[string]any{"prefix": nftCatchAllLogPrefix}},
+				},
+			),
+			nftVerificationRuleEntry(
+				"inet",
+				"syswarden",
+				"stateful_protect",
+				handle+2,
+				"",
+				[]any{
+					nftCTStateNewExpression(),
+					map[string]any{"counter": map[string]any{"packets": 23, "bytes": 4096}},
+					map[string]any{"drop": nil},
+				},
+			),
+		)
+	}
 	content, _ := json.Marshal(map[string]any{"nftables": entries})
 	return content
+}
+
+func nftVerificationRuleEntry(family, table, chain string, handle uint64, comment string, expressions []any) map[string]any {
+	rule := map[string]any{
+		"family": family,
+		"table":  table,
+		"chain":  chain,
+		"handle": handle,
+		"expr":   expressions,
+	}
+	if comment != "" {
+		rule["comment"] = comment
+	}
+	return map[string]any{"rule": rule}
 }
 
 func nftVerificationJSONWithDynamicBans(plan nftVerificationPlan, expires time.Duration) []byte {

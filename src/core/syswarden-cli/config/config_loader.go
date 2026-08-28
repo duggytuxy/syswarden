@@ -55,6 +55,9 @@ func loadModularConfig(configDir string) (loadErr error) {
 			recordConfigLoadFailure(configDir, loadErr)
 		}
 	}()
+	if err := rejectOperatorPolicyEnvironment(); err != nil {
+		return err
+	}
 
 	configRoot, err := openConfigDirectory(configDir, false, 0)
 	if err != nil {
@@ -161,7 +164,29 @@ func loadModularConfig(configDir string) (loadErr error) {
 		return err
 	}
 
-	commitGlobalConfig(mapModularToLegacy(&modConfig), configDir)
+	candidate := mapModularToLegacy(&modConfig)
+	if len(candidate.OperatorPolicy.Rules) != 0 {
+		var source *modularConfigSource
+		for index := range sources {
+			if sources[index].relative == operatorPolicyModulePath {
+				source = &sources[index]
+				break
+			}
+		}
+		if source == nil || source.identity == nil {
+			return fmt.Errorf("non-empty operator policy has no validated %s source", operatorPolicyModulePath)
+		}
+		modulesDir, err := filepath.Abs(filepath.Join(configDir, "modules"))
+		if err != nil {
+			return fmt.Errorf("resolve operator policy source directory: %w", err)
+		}
+		candidate.operatorPolicySource = &operatorPolicySourceAttestation{
+			modulesDir: filepath.Clean(modulesDir),
+			identity:   source.identity,
+			policy:     cloneOperatorPolicy(candidate.OperatorPolicy),
+		}
+	}
+	commitGlobalConfig(candidate, configDir)
 	return nil
 }
 
@@ -273,5 +298,6 @@ func mapModularToLegacy(m *ModularConfig) *Config {
 	candidate.ArpProtect = m.Security.L2.ARPProtect
 	candidate.LANMode = m.Security.L2.LanMode
 	candidate.LANSubnets = strings.Join(m.Network.LanSubnets, " ")
+	candidate.OperatorPolicy = cloneOperatorPolicy(m.OperatorPolicy)
 	return candidate
 }

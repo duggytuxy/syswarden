@@ -79,13 +79,19 @@ RAW_TOP_KEYS = {
 }
 NFT_SOURCE_BINDING_PATHS = (
     ".actrc",
+    "scripts/ci/nftables_kernel_lab.py",
     "src/core/syswarden-cli/config/config_loader.go",
     "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
     "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go",
     "src/core/syswarden-cli/pkg/firewall/honeyports.go",
+    "src/core/syswarden-cli/pkg/firewall/nft_transaction_linux.go",
+    "src/core/syswarden-cli/pkg/firewall/operator_policy_linux.go",
+    "src/core/syswarden-cli/pkg/firewall/operator_policy_postcheck_linux_test.go",
     "src/core/syswarden-core/firewall/manager_kernel_integration_linux_test.go",
     "src/core/syswarden-core/firewall/manager_linux.go",
     "testdata/firewall/nftables-v4.02.8.nft",
+    "testdata/firewall/nftables-v4.04.0.nft",
+    "testdata/firewall/operator-policy-v4.04.0.nft",
 )
 NFT_BINARY_IDENTITY_KEYS = frozenset(
     {
@@ -395,8 +401,8 @@ def _load_raw(
 
 def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> dict[str, Any]:
     _exact_keys(document, RAW_TOP_KEYS["nft"], "nft raw report")
-    if _integer(document["schema_version"], "nft.schema_version") != 3:
-        _fail("nft raw report schema version must be 3")
+    if _integer(document["schema_version"], "nft.schema_version") != 4:
+        _fail("nft raw report schema version must be 4")
     repository_binding = _exact_keys(
         document["repository_binding"],
         {"schema_version", "commit_sha", "tree_sha", "worktree_clean"},
@@ -493,6 +499,13 @@ def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> 
         "corrected_ruleset_applied",
         "current_generator_contract_passed",
         "native_manager_interval_contract_passed",
+        "v404_dummy_interfaces_created",
+        "v404_preflight_ruleset_empty",
+        "v404_full_golden_check_is_non_mutating",
+        "v404_full_golden_kernel_contract_passed",
+        "v404_full_golden_cleanup_proved_empty",
+        "v404_populated_fragment_check_is_non_mutating",
+        "v404_populated_kernel_contract_passed",
         "isolated_ruleset_cleanup_succeeded",
     }
     conditions = _exact_keys(document["conditions"], condition_keys, "nft.conditions")
@@ -550,8 +563,15 @@ def _validate_nft(document: dict[str, Any], binding: gate.RepositoryBinding) -> 
                 and engine["network"] == "none"
                 and host_namespace != lab_namespace
             ),
-            "kernel_apply_executed": conditions["corrected_ruleset_applied"],
-            "cleanup_complete": conditions["isolated_ruleset_cleanup_succeeded"],
+            "kernel_apply_executed": (
+                conditions["corrected_ruleset_applied"]
+                and conditions["v404_full_golden_kernel_contract_passed"]
+                and conditions["v404_populated_kernel_contract_passed"]
+            ),
+            "cleanup_complete": (
+                conditions["v404_full_golden_cleanup_proved_empty"]
+                and conditions["isolated_ruleset_cleanup_succeeded"]
+            ),
         },
         "network_namespaces": {"host": host_namespace, "laboratory": lab_namespace},
     }

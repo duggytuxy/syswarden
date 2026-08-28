@@ -24,6 +24,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"syswarden-cli/config"
 )
 
 const (
@@ -295,9 +297,10 @@ type nftObjectKey struct {
 }
 
 type nftVerificationPlan struct {
-	tables map[nftObjectKey]struct{}
-	chains map[nftObjectKey]string
-	sets   map[nftObjectKey]int // negative cardinality means existence-only for runtime-owned sets
+	tables         map[nftObjectKey]struct{}
+	chains         map[nftObjectKey]string
+	sets           map[nftObjectKey]int // negative cardinality means existence-only for runtime-owned sets
+	operatorPolicy operatorPolicyVerification
 }
 
 type nftTableTarget struct {
@@ -409,10 +412,33 @@ type nftJSONTable struct {
 }
 
 type nftJSONChain struct {
-	Family string `json:"family"`
-	Table  string `json:"table"`
-	Name   string `json:"name"`
-	Hook   string `json:"hook"`
+	Family  string `json:"family"`
+	Table   string `json:"table"`
+	Name    string `json:"name"`
+	Hook    string `json:"hook"`
+	Handle  uint64 `json:"handle"`
+	present map[string]struct{}
+}
+
+func (chain *nftJSONChain) UnmarshalJSON(content []byte) error {
+	type chainAlias nftJSONChain
+	var decoded chainAlias
+	if err := json.Unmarshal(content, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(content, &fields); err != nil {
+		return err
+	}
+	if rawHandle, exists := fields["handle"]; exists && bytes.Equal(bytes.TrimSpace(rawHandle), []byte("null")) {
+		return fmt.Errorf("nftables chain handle must be an unsigned integer")
+	}
+	decoded.present = make(map[string]struct{}, len(fields))
+	for name := range fields {
+		decoded.present[name] = struct{}{}
+	}
+	*chain = nftJSONChain(decoded)
+	return nil
 }
 
 type nftJSONSet struct {
@@ -435,6 +461,38 @@ type nftJSONRule struct {
 	Chain       string            `json:"chain"`
 	Handle      uint64            `json:"handle"`
 	Expressions []json.RawMessage `json:"expr"`
+	Comment     string            `json:"comment"`
+	unknown     []string
+	present     map[string]struct{}
+}
+
+func (rule *nftJSONRule) UnmarshalJSON(content []byte) error {
+	type ruleAlias nftJSONRule
+	var decoded ruleAlias
+	if err := json.Unmarshal(content, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(content, &fields); err != nil {
+		return err
+	}
+	if rawHandle, exists := fields["handle"]; exists && bytes.Equal(bytes.TrimSpace(rawHandle), []byte("null")) {
+		return fmt.Errorf("nftables rule handle must be an unsigned integer")
+	}
+	decoded.present = make(map[string]struct{}, len(fields))
+	for name := range fields {
+		decoded.present[name] = struct{}{}
+	}
+	for _, name := range []string{"family", "table", "chain", "handle", "expr", "comment"} {
+		delete(fields, name)
+	}
+	decoded.unknown = make([]string, 0, len(fields))
+	for name := range fields {
+		decoded.unknown = append(decoded.unknown, name)
+	}
+	sort.Strings(decoded.unknown)
+	*rule = nftJSONRule(decoded)
+	return nil
 }
 
 type nftDynamicBan struct {
@@ -450,6 +508,7 @@ type nftDynamicSnapshot struct {
 	capturedAt time.Time
 	sets       map[nftObjectKey]map[string]nftDynamicBan
 	discarded  map[nftObjectKey]map[string]nftDynamicBan
+	present    map[nftObjectKey]bool
 }
 
 var nftDynamicBanSets = []nftObjectKey{
@@ -464,6 +523,7 @@ func newNFTDynamicSnapshot(capturedAt time.Time) nftDynamicSnapshot {
 		capturedAt: capturedAt,
 		sets:       make(map[nftObjectKey]map[string]nftDynamicBan, len(nftDynamicBanSets)),
 		discarded:  make(map[nftObjectKey]map[string]nftDynamicBan, len(nftDynamicBanSets)),
+		present:    make(map[nftObjectKey]bool, len(nftDynamicBanSets)),
 	}
 	for _, key := range nftDynamicBanSets {
 		snapshot.sets[key] = make(map[string]nftDynamicBan)
@@ -630,6 +690,9 @@ func extractNFTDynamicSnapshot(document nftJSONDocument, capturedAt time.Time) (
 	for _, entry := range document.NFTables {
 		if entry.Set != nil {
 			key := nftObjectKey{family: entry.Set.Family, table: entry.Set.Table, name: entry.Set.Name}
+			if _, tracked := snapshot.sets[key]; tracked {
+				snapshot.present[key] = true
+			}
 			if err := appendElements(key, entry.Set.Elements); err != nil {
 				return nftDynamicSnapshot{}, err
 			}
@@ -895,14 +958,27 @@ func buildNFTDynamicBanRules(snapshot nftDynamicSnapshot, renderedAt time.Time) 
 // individual delete fail. This keeps rollback atomic while subtracting the time
 // spent validating and applying the failed candidate instead of extending
 // temporary bans back to their captured expiry.
-func buildNFTDynamicBanRollbackRules(snapshot nftDynamicSnapshot, renderedAt time.Time) (string, error) {
-	additions, _, err := buildNFTDynamicBanRules(snapshot, renderedAt)
+func buildNFTDynamicBanRollbackRules(snapshot nftDynamicSnapshot, renderedAt time.Time, previousSets nftDynamicSetPresence) (string, error) {
+	filtered := newNFTDynamicSnapshot(snapshot.capturedAt)
+	for _, key := range nftDynamicBanSets {
+		if !previousSets.contains(key) {
+			continue
+		}
+		filtered.present[key] = true
+		for identity, ban := range snapshot.sets[key] {
+			filtered.sets[key][identity] = ban
+		}
+		for identity, ban := range snapshot.discarded[key] {
+			filtered.discarded[key][identity] = ban
+		}
+	}
+	additions, _, err := buildNFTDynamicBanRules(filtered, renderedAt)
 	if err != nil {
 		return "", err
 	}
 	var builder strings.Builder
 	for _, key := range nftDynamicBanSets {
-		if len(snapshot.sets[key]) > 0 || len(snapshot.discarded[key]) > 0 {
+		if previousSets.contains(key) {
 			_, _ = fmt.Fprintf(&builder, "flush set %s %s %s\n", key.family, key.table, key.name)
 		}
 	}
@@ -1342,6 +1418,12 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 	if err := os.MkdirAll(stateDirectory, 0750); err != nil {
 		return fail("create state directory: %v", err)
 	}
+	if err := attestNFTStateDirectory(stateDirectory); err != nil {
+		return fail("attest state directory: %v", err)
+	}
+	if err := recoverPendingNftablesTransaction(ctx, runner, stateDirectory); err != nil {
+		return fail("recover pending transaction before preparing a candidate: %v", err)
+	}
 	workDirectory, err := os.MkdirTemp(stateDirectory, ".firewall-transaction-"+transactionID+"-")
 	if err != nil {
 		return fail("create private candidate directory: %v", err)
@@ -1416,9 +1498,33 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 			return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: precommit firewall backend reattestation failed: %w", transactionID, err)
 		}
 	}
+	journal, err := newNFTTransactionJournal(
+		stateDirectory,
+		transactionID,
+		rollbackRules,
+		len(existing) > 0,
+		nftDynamicSetPresenceFromSnapshot(dynamicSnapshot),
+		[]byte(persistentRules),
+	)
+	if err != nil {
+		return fail("create durable recovery journal: %v", err)
+	}
 
 	if output, applyErr := runner.Run(ctx, nil, "-f", transactionPath); applyErr != nil {
-		return fail("candidate apply failed: %v: %s", applyErr, strings.TrimSpace(string(output)))
+		rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
+		if rollbackErr != nil {
+			return transactionID, fmt.Errorf(
+				"firewall transaction %s candidate apply returned an indeterminate result (%v: %s) and rollback failed; durable recovery journal retained: %w",
+				transactionID,
+				applyErr,
+				strings.TrimSpace(string(output)),
+				rollbackErr,
+			)
+		}
+		return rollbackRestored(
+			"rolled back after candidate apply returned an indeterminate result",
+			fmt.Errorf("%w: %s", applyErr, strings.TrimSpace(string(output))),
+		)
 	}
 	// The expiry values in expectedDynamicBans are the exact relative values
 	// submitted to the successful atomic apply. Start their verification clock
@@ -1426,17 +1532,31 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 	// `nft -c` validation incorrectly treats validation time as elapsed kernel
 	// lifetime and can reject an otherwise exact restored element.
 	expectedDynamicBans.capturedAt = time.Now()
+	if err := updateNFTTransactionJournal(stateDirectory, journal, nftTransactionApplied); err != nil {
+		rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
+		if rollbackErr != nil {
+			return transactionID, fmt.Errorf("firewall transaction %s could not persist its applied phase (%v) and rollback failed: %w", transactionID, err, rollbackErr)
+		}
+		return rollbackRestored("rolled back after durable applied-phase update failed", err)
+	}
 
 	if err := verifyNftablesStateWithDynamicBans(ctx, runner, verification, &expectedDynamicBans); err != nil {
-		rollbackErr := rollbackNftables(runner, rollbackRules, dynamicSnapshot)
+		rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
 		if rollbackErr != nil {
 			return transactionID, fmt.Errorf("firewall transaction %s verification failed (%v) and rollback failed: %w", transactionID, err, rollbackErr)
 		}
 		return rollbackRestored("post-apply verification failed", err)
 	}
+	if err := updateNFTTransactionJournal(stateDirectory, journal, nftTransactionVerified); err != nil {
+		rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
+		if rollbackErr != nil {
+			return transactionID, fmt.Errorf("firewall transaction %s could not persist its verified phase (%v) and rollback failed: %w", transactionID, err, rollbackErr)
+		}
+		return rollbackRestored("rolled back after durable verified-phase update failed", err)
+	}
 	if precommit != nil {
 		if err := precommit(); err != nil {
-			rollbackErr := rollbackNftables(runner, rollbackRules, dynamicSnapshot)
+			rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
 			if rollbackErr != nil {
 				return transactionID, fmt.Errorf(
 					"firewall transaction %s post-apply backend reattestation failed (%v) and rollback failed: %w",
@@ -1451,11 +1571,46 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 
 	statePath := filepath.Join(stateDirectory, filepath.Base(nftStateFile))
 	if err := publishNftablesFile(stateDirectory, persistentPath, statePath); err != nil {
-		rollbackErr := rollbackNftables(runner, rollbackRules, dynamicSnapshot)
+		rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
 		if rollbackErr != nil {
 			return transactionID, fmt.Errorf("firewall transaction %s persistence failed (%v) and rollback failed: %w", transactionID, err, rollbackErr)
 		}
 		return rollbackRestored("publish verified ruleset", err)
+	}
+	if err := verifyNFTPersistentPolicy(statePath, true, journal.CandidatePersistentSHA256); err != nil {
+		rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
+		if rollbackErr != nil {
+			return transactionID, fmt.Errorf("firewall transaction %s published candidate digest verification failed (%v) and rollback failed: %w", transactionID, err, rollbackErr)
+		}
+		return rollbackRestored("verify published ruleset digest", err)
+	}
+	if err := updateNFTTransactionJournal(stateDirectory, journal, nftTransactionPersisted); err != nil {
+		if nftJournalWriteWasPublished(err) {
+			return transactionID, fmt.Errorf(
+				"firewall transaction %s is committed, verified and persisted; persisted journal phase durability is uncertain and cleanup will be retried: %w",
+				transactionID,
+				err,
+			)
+		}
+		rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
+		if rollbackErr != nil {
+			return transactionID, fmt.Errorf("firewall transaction %s persisted the candidate but could not persist its journal phase (%v) and rollback failed: %w", transactionID, err, rollbackErr)
+		}
+		return rollbackRestored("rolled back after durable persisted-phase update failed", err)
+	}
+	if err := removeNFTTransactionJournal(stateDirectory); err != nil {
+		if nftJournalWasUnlinked(err) {
+			return transactionID, fmt.Errorf(
+				"firewall transaction %s is committed, verified and persisted; recovery journal cleanup durability is uncertain: %w",
+				transactionID,
+				err,
+			)
+		}
+		return transactionID, fmt.Errorf(
+			"firewall transaction %s is committed, verified and persisted; recovery journal cleanup is incomplete and will be retried: %w",
+			transactionID,
+			err,
+		)
 	}
 	writeNFTDynamicSnapshotWarnings(os.Stderr, dynamicSnapshot, true)
 
@@ -1726,6 +1881,13 @@ func snapshotSyswardenTables(ctx context.Context, runner nftCommandRunner, exist
 		if err != nil {
 			return "", fmt.Errorf("snapshot table %s %s: %w: %s", target.family, target.name, err, strings.TrimSpace(string(output)))
 		}
+		separatorBytes := 0
+		if len(output) > 0 && output[len(output)-1] != '\n' {
+			separatorBytes = 1
+		}
+		if len(output) > maximumNFTJournalFieldBytes-snapshot.Len()-separatorBytes {
+			return "", fmt.Errorf("snapshot of SysWarden nftables tables exceeds %d bytes", maximumNFTJournalFieldBytes)
+		}
 		snapshot.Write(output)
 		if len(output) > 0 && output[len(output)-1] != '\n' {
 			snapshot.WriteByte('\n')
@@ -1734,7 +1896,7 @@ func snapshotSyswardenTables(ctx context.Context, runner nftCommandRunner, exist
 	return snapshot.String(), nil
 }
 
-func rollbackNftables(runner nftCommandRunner, snapshot string, dynamicSnapshot nftDynamicSnapshot) error {
+func rollbackNftables(runner nftCommandRunner, snapshot string, dynamicSnapshot nftDynamicSnapshot, previousSets nftDynamicSetPresence) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	existing, err := listExistingSyswardenTables(ctx, runner)
@@ -1748,7 +1910,7 @@ func rollbackNftables(runner nftCommandRunner, snapshot string, dynamicSnapshot 
 		}
 	}
 	rollback.WriteString(snapshot)
-	dynamicRules, err := buildNFTDynamicBanRollbackRules(dynamicSnapshot, time.Now())
+	dynamicRules, err := buildNFTDynamicBanRollbackRules(dynamicSnapshot, time.Now(), previousSets)
 	if err != nil {
 		return fmt.Errorf("prepare rollback dynamic bans: %w", err)
 	}
@@ -1825,6 +1987,11 @@ func verifyNftablesStateWithDynamicBans(ctx context.Context, runner nftCommandRu
 			errs = append(errs, fmt.Errorf("set %s %s %s contains %d elements, expected %d", key.family, key.table, key.name, actual, count))
 		}
 	}
+	if expected.operatorPolicy.chainName != "" {
+		if policyErr := verifyOperatorPolicyNFTState(document, expected.operatorPolicy); policyErr != nil {
+			errs = append(errs, policyErr)
+		}
+	}
 	if expectedDynamic != nil {
 		observedAt := time.Now()
 		observed, snapshotErr := extractNFTDynamicSnapshot(document, observedAt)
@@ -1847,6 +2014,447 @@ func verifyNftablesStateWithDynamicBans(ctx context.Context, runner nftCommandRu
 		}
 	}
 	return errors.Join(errs...)
+}
+
+const nftCatchAllLogPrefix = "[SYSWARDEN-BLOCK] [CATCH-ALL] "
+
+func verifyOperatorPolicyNFTState(document nftJSONDocument, expected operatorPolicyVerification) error {
+	if expected.chainName == "" || expected.chainName != operatorPolicyChainName ||
+		expected.dispatchComment == "" || expected.returnComment == "" {
+		return fmt.Errorf("operator policy verification plan is invalid")
+	}
+
+	var errs []error
+	operatorChainDefinitions := 0
+	var operatorRules []*nftJSONRule
+	var statefulRules []*nftJSONRule
+	var syswardenRules []*nftJSONRule
+	for index := range document.NFTables {
+		entry := &document.NFTables[index]
+		if entry.Chain != nil && entry.Chain.Family == "inet" &&
+			entry.Chain.Table == "syswarden" && entry.Chain.Name == expected.chainName {
+			operatorChainDefinitions++
+			if chainErr := verifyOperatorPolicyChainEnvelope(entry.Chain); chainErr != nil {
+				errs = append(errs, chainErr)
+			}
+		}
+		if entry.Rule == nil {
+			continue
+		}
+		rule := entry.Rule
+		if rule.Family == "inet" && rule.Table == "syswarden" {
+			syswardenRules = append(syswardenRules, rule)
+			if rule.Chain == expected.chainName {
+				operatorRules = append(operatorRules, rule)
+			}
+			if rule.Chain == "stateful_protect" {
+				statefulRules = append(statefulRules, rule)
+			}
+		}
+	}
+
+	if operatorChainDefinitions != 1 {
+		errs = append(errs, fmt.Errorf("operator policy chain definition count is %d, expected 1", operatorChainDefinitions))
+	}
+	if len(operatorRules) != len(expected.rules)+1 {
+		errs = append(errs, fmt.Errorf(
+			"operator policy chain contains %d rules, expected %d policy rules plus one terminal return",
+			len(operatorRules),
+			len(expected.rules),
+		))
+	} else {
+		for index, ruleExpectation := range expected.rules {
+			expressions, expressionErr := expectedOperatorPolicyExpressions(ruleExpectation)
+			if expressionErr != nil {
+				errs = append(errs, fmt.Errorf("operator policy verification rule %d is invalid: %w", index, expressionErr))
+				continue
+			}
+			if ruleErr := verifyNFTJSONRuleExact(
+				operatorRules[index],
+				"inet",
+				"syswarden",
+				expected.chainName,
+				ruleExpectation.comment,
+				expressions,
+			); ruleErr != nil {
+				errs = append(errs, fmt.Errorf("operator policy rule %d mismatch: %w", index, ruleErr))
+			}
+		}
+		terminal := operatorRules[len(operatorRules)-1]
+		if terminalErr := verifyNFTJSONRuleExact(
+			terminal,
+			"inet",
+			"syswarden",
+			expected.chainName,
+			expected.returnComment,
+			[]any{map[string]any{"return": nil}},
+		); terminalErr != nil {
+			errs = append(errs, fmt.Errorf("operator policy terminal return mismatch: %w", terminalErr))
+		}
+	}
+
+	var dispatch *nftJSONRule
+	if len(statefulRules) < 3 {
+		errs = append(errs, fmt.Errorf("stateful_protect contains %d rules and cannot hold the required terminal dispatch/log/drop sequence", len(statefulRules)))
+	} else {
+		dispatch = statefulRules[len(statefulRules)-3]
+		if dispatchErr := verifyNFTJSONRuleExact(
+			dispatch,
+			"inet",
+			"syswarden",
+			"stateful_protect",
+			expected.dispatchComment,
+			[]any{map[string]any{"jump": map[string]any{"target": expected.chainName}}},
+		); dispatchErr != nil {
+			errs = append(errs, fmt.Errorf("operator policy dispatch mismatch: %w", dispatchErr))
+		}
+		if catchAllErr := verifyNFTCatchAllLogRule(statefulRules[len(statefulRules)-2]); catchAllErr != nil {
+			errs = append(errs, fmt.Errorf("operator policy terminal catch-all log mismatch: %w", catchAllErr))
+		}
+		if dropErr := verifyNFTJSONRuleExact(
+			statefulRules[len(statefulRules)-1],
+			"inet",
+			"syswarden",
+			"stateful_protect",
+			"",
+			[]any{
+				nftCTStateNewExpression(),
+				map[string]any{"counter": map[string]any{}},
+				map[string]any{"drop": nil},
+			},
+		); dropErr != nil {
+			errs = append(errs, fmt.Errorf("operator policy terminal catch-all drop mismatch: %w", dropErr))
+		}
+	}
+
+	operatorReferences := 0
+	for _, rule := range syswardenRules {
+		for _, expression := range rule.Expressions {
+			kind, target, found := nftJSONVerdictTarget(expression)
+			if found && target == expected.chainName {
+				operatorReferences++
+				if rule != dispatch || kind != "jump" {
+					errs = append(errs, fmt.Errorf(
+						"operator policy chain has an unexpected %s reference from %s %s %s",
+						kind,
+						rule.Family,
+						rule.Table,
+						rule.Chain,
+					))
+				}
+			}
+		}
+		if strings.Contains(rule.Comment, operatorPolicyCommentPrefix) {
+			inOperatorChain := rule.Family == "inet" && rule.Table == "syswarden" && rule.Chain == expected.chainName
+			if !inOperatorChain && rule != dispatch {
+				errs = append(errs, fmt.Errorf(
+					"operator policy comment marker exists outside the verified policy surface at %s %s %s",
+					rule.Family,
+					rule.Table,
+					rule.Chain,
+				))
+			}
+		}
+	}
+	if operatorReferences != 1 {
+		errs = append(errs, fmt.Errorf("operator policy chain reference count is %d, expected exactly one jump", operatorReferences))
+	}
+
+	return errors.Join(errs...)
+}
+
+func expectedOperatorPolicyExpressions(expected operatorPolicyRuleExpectation) ([]any, error) {
+	var source any = expected.source
+	if strings.Contains(expected.source, "/") {
+		prefix, err := netip.ParsePrefix(expected.source)
+		if err != nil || !prefix.IsValid() || prefix.String() != expected.source {
+			return nil, fmt.Errorf("source %q is not a canonical prefix", expected.source)
+		}
+		if prefix.Bits() == prefix.Addr().BitLen() {
+			source = prefix.Addr().String()
+		} else {
+			source = map[string]any{"prefix": map[string]any{"addr": prefix.Addr().String(), "len": prefix.Bits()}}
+		}
+	}
+
+	sourceProtocol := "ip"
+	transportProtocol := "icmp"
+	protocolExpression := map[string]any{"match": map[string]any{
+		"op":    "==",
+		"left":  map[string]any{"payload": map[string]any{"protocol": "ip", "field": "protocol"}},
+		"right": "icmp",
+	}}
+	if expected.family == config.OperatorPolicyFamilyIPv6 {
+		sourceProtocol = "ip6"
+		transportProtocol = "icmpv6"
+	} else if expected.family != config.OperatorPolicyFamilyIPv4 {
+		return nil, fmt.Errorf("unsupported family %q", expected.family)
+	}
+
+	expressions := []any{
+		map[string]any{"match": map[string]any{
+			"op":    "==",
+			"left":  map[string]any{"payload": map[string]any{"protocol": sourceProtocol, "field": "saddr"}},
+			"right": source,
+		}},
+	}
+	if expected.family == config.OperatorPolicyFamilyIPv4 {
+		expressions = append(expressions, protocolExpression)
+	}
+	expressions = append(expressions,
+		map[string]any{"match": map[string]any{
+			"op":    "==",
+			"left":  map[string]any{"payload": map[string]any{"protocol": transportProtocol, "field": "type"}},
+			"right": "echo-request",
+		}},
+		map[string]any{"counter": map[string]any{}},
+		map[string]any{"accept": nil},
+	)
+	return expressions, nil
+}
+
+func nftCTStateNewExpression() any {
+	return map[string]any{"match": map[string]any{
+		"op":    "in",
+		"left":  map[string]any{"ct": map[string]any{"key": "state"}},
+		"right": "new",
+	}}
+}
+
+func verifyNFTCatchAllLogRule(rule *nftJSONRule) error {
+	if err := verifyNFTJSONRuleEnvelope(rule, "inet", "syswarden", "stateful_protect", ""); err != nil {
+		return err
+	}
+	if len(rule.Expressions) != 3 {
+		return fmt.Errorf("expression count is %d, expected 3", len(rule.Expressions))
+	}
+	if err := verifyNFTJSONExpressionExact(rule.Expressions[0], nftCTStateNewExpression()); err != nil {
+		return fmt.Errorf("ct state new expression: %w", err)
+	}
+	if err := verifyNFTLimitExpression(rule.Expressions[1]); err != nil {
+		return err
+	}
+	if err := verifyNFTJSONExpressionExact(
+		rule.Expressions[2],
+		map[string]any{"log": map[string]any{"prefix": nftCatchAllLogPrefix}},
+	); err != nil {
+		return fmt.Errorf("log prefix expression: %w", err)
+	}
+	return nil
+}
+
+func verifyNFTLimitExpression(raw json.RawMessage) error {
+	object, err := decodeNFTJSONObject(raw)
+	if err != nil {
+		return fmt.Errorf("catch-all limit expression: %w", err)
+	}
+	if len(object) != 1 {
+		return fmt.Errorf("catch-all limit expression has unexpected fields")
+	}
+	value, exists := object["limit"]
+	if !exists {
+		return fmt.Errorf("catch-all limit expression is missing")
+	}
+	limit, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("catch-all limit expression is not an object")
+	}
+	for name := range limit {
+		switch name {
+		case "rate", "per", "burst", "rate_unit", "burst_unit", "inv":
+		default:
+			return fmt.Errorf("catch-all limit contains unexpected field %q", name)
+		}
+	}
+	if !nftJSONExactNumber(limit["rate"], "2") || limit["per"] != "second" || !nftJSONExactNumber(limit["burst"], "5") {
+		return fmt.Errorf("catch-all limit rate/per/burst differs from 2/second burst 5")
+	}
+	if unit, present := limit["rate_unit"]; present && unit != "packets" {
+		return fmt.Errorf("catch-all rate unit is %v, expected packets", unit)
+	}
+	if unit, present := limit["burst_unit"]; present && unit != "packets" {
+		return fmt.Errorf("catch-all burst unit is %v, expected packets", unit)
+	}
+	if inverse, present := limit["inv"]; present && inverse != false {
+		return fmt.Errorf("catch-all limit unexpectedly uses inversion")
+	}
+	return nil
+}
+
+func nftJSONExactNumber(value any, expected string) bool {
+	number, ok := value.(json.Number)
+	return ok && number.String() == expected
+}
+
+func verifyNFTJSONRuleExact(rule *nftJSONRule, family, table, chain, comment string, expectedExpressions []any) error {
+	if err := verifyNFTJSONRuleEnvelope(rule, family, table, chain, comment); err != nil {
+		return err
+	}
+	if len(rule.Expressions) != len(expectedExpressions) {
+		return fmt.Errorf("expression count is %d, expected %d", len(rule.Expressions), len(expectedExpressions))
+	}
+	for index := range expectedExpressions {
+		if err := verifyNFTJSONExpressionExact(rule.Expressions[index], expectedExpressions[index]); err != nil {
+			return fmt.Errorf("expression %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func verifyNFTJSONRuleEnvelope(rule *nftJSONRule, family, table, chain, comment string) error {
+	if rule == nil {
+		return fmt.Errorf("rule is missing")
+	}
+	if len(rule.unknown) != 0 {
+		return fmt.Errorf("rule contains unexpected top-level field %q", rule.unknown[0])
+	}
+	for _, required := range []string{"family", "table", "chain", "handle", "expr"} {
+		if _, present := rule.present[required]; !present {
+			return fmt.Errorf("rule field %q is missing", required)
+		}
+	}
+	_, commentPresent := rule.present["comment"]
+	if comment != "" && !commentPresent {
+		return fmt.Errorf("rule comment field is missing")
+	}
+	if comment == "" && commentPresent {
+		return fmt.Errorf("rule contains an unexpected empty comment field")
+	}
+	if rule.Family != family || rule.Table != table || rule.Chain != chain {
+		return fmt.Errorf(
+			"rule location is %s %s %s, expected %s %s %s",
+			rule.Family,
+			rule.Table,
+			rule.Chain,
+			family,
+			table,
+			chain,
+		)
+	}
+	if rule.Comment != comment {
+		return fmt.Errorf("rule comment is %q, expected %q", rule.Comment, comment)
+	}
+	return nil
+}
+
+func verifyOperatorPolicyChainEnvelope(chain *nftJSONChain) error {
+	if chain == nil {
+		return fmt.Errorf("operator policy chain is missing")
+	}
+	required := map[string]struct{}{
+		"family": {},
+		"table":  {},
+		"name":   {},
+		"handle": {},
+	}
+	for name := range required {
+		if _, present := chain.present[name]; !present {
+			return fmt.Errorf("operator policy chain field %q is missing", name)
+		}
+	}
+	var unexpected []string
+	for name := range chain.present {
+		if _, allowed := required[name]; !allowed {
+			unexpected = append(unexpected, name)
+		}
+	}
+	if len(unexpected) != 0 {
+		sort.Strings(unexpected)
+		return fmt.Errorf("operator policy regular chain contains unexpected field %q", unexpected[0])
+	}
+	return nil
+}
+
+func verifyNFTJSONExpressionExact(raw json.RawMessage, expected any) error {
+	actual, err := canonicalNFTJSONExpression(raw)
+	if err != nil {
+		return err
+	}
+	wanted, err := json.Marshal(expected)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(actual, wanted) {
+		return fmt.Errorf("expression is %s, expected %s", actual, wanted)
+	}
+	return nil
+}
+
+func canonicalNFTJSONExpression(raw json.RawMessage) ([]byte, error) {
+	object, err := decodeNFTJSONObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if counter, exists := object["counter"]; exists {
+		if len(object) != 1 {
+			return nil, fmt.Errorf("counter expression contains sibling fields")
+		}
+		counterObject, ok := counter.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("counter expression is not an object")
+		}
+		if len(counterObject) != 2 {
+			return nil, fmt.Errorf("counter expression must contain exactly packets and bytes")
+		}
+		for _, name := range []string{"packets", "bytes"} {
+			value, present := counterObject[name]
+			if !present {
+				return nil, fmt.Errorf("counter expression field %q is missing", name)
+			}
+			if !nftJSONNonNegativeInteger(value) {
+				return nil, fmt.Errorf("counter expression field %q must be a non-negative integer", name)
+			}
+		}
+		object["counter"] = map[string]any{}
+	}
+	return json.Marshal(object)
+}
+
+func nftJSONNonNegativeInteger(value any) bool {
+	number, ok := value.(json.Number)
+	if !ok {
+		return false
+	}
+	text := number.String()
+	if text == "" || strings.HasPrefix(text, "-") || strings.ContainsAny(text, ".eE+") {
+		return false
+	}
+	_, err := strconv.ParseUint(text, 10, 64)
+	return err == nil
+}
+
+func decodeNFTJSONObject(raw json.RawMessage) (map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("expression is not an object")
+	}
+	return object, nil
+}
+
+func nftJSONVerdictTarget(raw json.RawMessage) (string, string, bool) {
+	object, err := decodeNFTJSONObject(raw)
+	if err != nil || len(object) != 1 {
+		return "", "", false
+	}
+	for _, kind := range []string{"jump", "goto"} {
+		value, exists := object[kind]
+		if !exists {
+			continue
+		}
+		verdict, ok := value.(map[string]any)
+		if !ok {
+			return "", "", false
+		}
+		target, ok := verdict["target"].(string)
+		return kind, target, ok
+	}
+	return "", "", false
 }
 
 func compareNFTDynamicSnapshots(expected, observed nftDynamicSnapshot, observedAt time.Time) error {
@@ -1925,7 +2533,7 @@ func decodeNFTJSON(content []byte) (nftJSONDocument, error) {
 }
 
 func publishNftablesFile(stateDirectory, candidatePath, targetPath string) error {
-	previous, readErr := readRootedNFTFile(targetPath)
+	previous, readErr := readPrivateRootedNFTFile(targetPath, maximumNFTJournalFieldBytes)
 	previousExists := readErr == nil
 	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
 		return readErr

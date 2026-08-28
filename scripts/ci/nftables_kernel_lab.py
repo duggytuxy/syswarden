@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Prove honeyport rules and the real native manager in an isolated namespace.
+"""Prove SysWarden nftables contracts in an isolated network namespace.
 
 This laboratory never applies rules to the host namespace. It also proves that
 the historical 236379 regression is rejected before any ruleset mutation, then
 runs the compiled NftablesManager against the namespace's kernel netlink API.
+The v4.04.0 phase checks and applies the exact golden ruleset and populated
+operator-policy fragment, attests their real kernel JSON, and proves cleanup.
 """
 
 from __future__ import annotations
@@ -25,22 +27,87 @@ from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 FINDING_ID = "SW-FW-004"
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ACT_IMAGE_RE = re.compile(
     r"^-P ubuntu-24\.04=([^\s]+@sha256:[0-9a-f]{64})$"
 )
-MARKER_RE = re.compile(r"^([A-Z_]+)=(.*)$")
+MARKER_RE = re.compile(r"^([A-Z][A-Z0-9_]*)=(.*)$")
 SOURCE_BINDING_PATHS = (
     ".actrc",
+    "scripts/ci/nftables_kernel_lab.py",
     "src/core/syswarden-cli/config/config_loader.go",
     "src/core/syswarden-cli/pkg/firewall/firewall_linux.go",
     "src/core/syswarden-cli/pkg/firewall/firewall_linux_golden_test.go",
     "src/core/syswarden-cli/pkg/firewall/honeyports.go",
+    "src/core/syswarden-cli/pkg/firewall/nft_transaction_linux.go",
+    "src/core/syswarden-cli/pkg/firewall/operator_policy_linux.go",
+    "src/core/syswarden-cli/pkg/firewall/operator_policy_postcheck_linux_test.go",
     "src/core/syswarden-core/firewall/manager_kernel_integration_linux_test.go",
     "src/core/syswarden-core/firewall/manager_linux.go",
     "testdata/firewall/nftables-v4.02.8.nft",
+    "testdata/firewall/nftables-v4.04.0.nft",
+    "testdata/firewall/operator-policy-v4.04.0.nft",
+)
+
+EXPECTED_CONTAINER_MARKERS = frozenset(
+    {
+        "NETNS",
+        "KERNEL_VERSION",
+        "KERNEL_MACHINE",
+        "NFT_VERSION",
+        "LEGACY_CHECK_RC",
+        "LEGACY_LIST_RC",
+        "LEGACY_OBJECTS",
+        "CANDIDATE_APPLY_RC",
+        "CANDIDATE_LIST_RC",
+        "CANDIDATE_OBJECTS",
+        "MANAGER_KERNEL_RC",
+        "MANAGER_KERNEL_PASS",
+        "MANAGER_RAW_INTERVALS_OK",
+        "V404_ATTESTOR_BUILD_RC",
+        "V404_DUMMY_ETH_TEST0_RC",
+        "V404_DUMMY_ETH_TEST1_RC",
+        "V404_PREFLIGHT_FLUSH_RC",
+        "V404_PREFLIGHT_LIST_RC",
+        "V404_PREFLIGHT_OBJECTS",
+        "V404_GOLDEN_CHECK_RC",
+        "V404_GOLDEN_CHECK_LIST_RC",
+        "V404_GOLDEN_CHECK_OBJECTS",
+        "V404_GOLDEN_APPLY_RC",
+        "V404_GOLDEN_LIST_RC",
+        "V404_GOLDEN_ATTEST_RC",
+        "V404_GOLDEN_CHAIN_COUNT",
+        "V404_GOLDEN_CT_STATE_OP",
+        "V404_GOLDEN_FLUSH_RC",
+        "V404_GOLDEN_EMPTY_LIST_RC",
+        "V404_GOLDEN_EMPTY_OBJECTS",
+        "V404_POPULATED_BUILD_RC",
+        "V404_POPULATED_CHECK_RC",
+        "V404_POPULATED_CHECK_LIST_RC",
+        "V404_POPULATED_CHECK_OBJECTS",
+        "V404_POPULATED_APPLY_RC",
+        "V404_POPULATED_LIST_RC",
+        "V404_POPULATED_ATTEST_RC",
+        "V404_POPULATED_CHAIN_COUNT",
+        "V404_POPULATED_RULE_COUNT",
+        "V404_POPULATED_IPV4_SHAPE",
+        "V404_POPULATED_IPV6_SHAPE",
+        "V404_FINAL_FLUSH_RC",
+        "V404_FINAL_LIST_RC",
+        "V404_FINAL_OBJECTS",
+        "CLEANUP_RC",
+    }
+)
+DECIMAL_CONTAINER_MARKERS = frozenset(
+    marker
+    for marker in EXPECTED_CONTAINER_MARKERS
+    if marker.endswith("_RC")
+    or marker.endswith("_OBJECTS")
+    or marker.endswith("_COUNT")
+    or marker.endswith("_PASS")
+    or marker.endswith("_OK")
 )
 
 
@@ -607,8 +674,492 @@ if grep -Fq -- 'SYSWARDEN_MANAGER_KERNEL_RAW_INTERVALS_OK' /tmp/manager.out; the
 else
     printf 'MANAGER_RAW_INTERVALS_OK=0\n'
 fi
-nft flush ruleset >/tmp/flush.out 2>/tmp/flush.err
-printf 'CLEANUP_RC=%s\n' "$?"
+
+cat >/tmp/v404-nft-attestor.py <<'PY'
+import json
+import os
+import socket
+import stat
+import struct
+import sys
+
+OPERATOR_CHAIN = "operator-policy"
+OPERATOR_PREFIX = "syswarden:operator-policy:v1:"
+RETURN_COMMENT = OPERATOR_PREFIX + "return"
+DISPATCH_COMMENT = OPERATOR_PREFIX + "dispatch"
+CATCH_ALL_PREFIX = "[SYSWARDEN-BLOCK] [CATCH-ALL] "
+POPULATED_TABLE = "syswarden_operator_policy_lab"
+IPV4_COMMENT = OPERATOR_PREFIX + "53b3f493316102c36599e619fe35858bddcb782cdd64345fae287bcb6ebb60a5"
+IPV6_COMMENT = OPERATOR_PREFIX + "b536c1fb81e05e6090583ae03d31760249d7ebf07f9bce6c864d0fcab85b16d3"
+ALLOWED_JSON_PATHS = {
+    "/tmp/before.json",
+    "/tmp/after.json",
+    "/tmp/v404-preflight.json",
+    "/tmp/v404-golden-check.json",
+    "/tmp/v404-golden.json",
+    "/tmp/v404-golden-empty.json",
+    "/tmp/v404-populated-check.json",
+    "/tmp/v404-populated.json",
+    "/tmp/v404-final.json",
+}
+
+
+def fail(message):
+    raise ValueError(message)
+
+
+def exact_keys(value, expected, label):
+    if not isinstance(value, dict) or set(value) != set(expected):
+        fail(f"{label} fields differ")
+    return value
+
+
+def positive_handle(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        fail(f"{label} handle is invalid")
+
+
+def load_document(path):
+    if path not in ALLOWED_JSON_PATHS:
+        fail("JSON path is not allowlisted")
+    metadata = os.lstat(path)
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        fail("JSON evidence is not a regular file")
+    if metadata.st_size <= 0 or metadata.st_size > 8 * 1024 * 1024:
+        fail("JSON evidence size is invalid")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        with os.fdopen(descriptor, "r", encoding="utf-8") as source:
+            document = json.load(source)
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+    exact_keys(document, {"nftables"}, "nft document")
+    entries = document["nftables"]
+    if not isinstance(entries, list) or not entries:
+        fail("nftables entry list is empty or invalid")
+    allowed = {"metainfo", "table", "chain", "set", "rule"}
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or len(entry) != 1:
+            fail(f"nftables entry {index} is not a single object")
+        if next(iter(entry)) not in allowed:
+            fail(f"nftables entry {index} has an unknown kind")
+    metainfo = [entry for entry in entries if "metainfo" in entry]
+    if len(metainfo) != 1 or entries[0] is not metainfo[0]:
+        fail("nftables metainfo is not unique and first")
+    return entries
+
+
+def object_count(path):
+    print(len(load_document(path)) - 1)
+
+
+def rule_envelope(rule, family, table, chain, comment, label):
+    fields = {"family", "table", "chain", "handle", "expr"}
+    if comment is not None:
+        fields.add("comment")
+    exact_keys(rule, fields, label)
+    if (rule["family"], rule["table"], rule["chain"]) != (family, table, chain):
+        fail(f"{label} location differs")
+    positive_handle(rule["handle"], label)
+    if comment is not None and rule["comment"] != comment:
+        fail(f"{label} comment differs")
+    if not isinstance(rule["expr"], list):
+        fail(f"{label} expressions are invalid")
+    return rule["expr"]
+
+
+def match(protocol, field, right):
+    return {
+        "match": {
+            "op": "==",
+            "left": {"payload": {"protocol": protocol, "field": field}},
+            "right": right,
+        }
+    }
+
+
+def ct_state_new():
+    return {
+        "match": {
+            "op": "in",
+            "left": {"ct": {"key": "state"}},
+            "right": "new",
+        }
+    }
+
+
+def counter(expression, label):
+    exact_keys(expression, {"counter"}, label)
+    value = exact_keys(expression["counter"], {"packets", "bytes"}, label)
+    for field in ("packets", "bytes"):
+        number = value[field]
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+            fail(f"{label} {field} is invalid")
+
+
+def terminal_return(rule, table, label):
+    expressions = rule_envelope(
+        rule, "inet", table, OPERATOR_CHAIN, RETURN_COMMENT, label
+    )
+    if expressions != [{"return": None}]:
+        fail(f"{label} is not the exact terminal return")
+
+
+def create_dummy(name):
+    if name not in {"eth-test0", "eth-test1"}:
+        fail("dummy interface name is not allowlisted")
+    try:
+        socket.if_nametoindex(name)
+    except OSError:
+        pass
+    else:
+        fail("dummy interface already exists")
+
+    def attribute(kind, payload):
+        length = 4 + len(payload)
+        return (
+            struct.pack("=HH", length, kind)
+            + payload
+            + b"\0" * ((4 - length % 4) % 4)
+        )
+
+    netlink = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE)
+    netlink.settimeout(5)
+    try:
+        sequence = 4040 if name == "eth-test0" else 4041
+        link_info = attribute(1, b"dummy\0")
+        attributes = attribute(3, name.encode("ascii") + b"\0") + attribute(
+            18 | 0x8000, link_info
+        )
+        body = struct.pack("=BBHiII", socket.AF_UNSPEC, 0, 0, 0, 0, 0) + attributes
+        header = struct.pack(
+            "=IHHII", 16 + len(body), 16, 1 | 4 | 0x200 | 0x400, sequence, 0
+        )
+        netlink.send(header + body)
+        response = netlink.recv(65535)
+    finally:
+        netlink.close()
+    if len(response) < 20:
+        fail("netlink response is truncated")
+    length, message_type, _flags, response_sequence, _pid = struct.unpack_from(
+        "=IHHII", response, 0
+    )
+    if length > len(response) or message_type != 2 or response_sequence != sequence:
+        fail("netlink acknowledgement envelope differs")
+    error = struct.unpack_from("=i", response, 16)[0]
+    if error != 0:
+        raise OSError(-error, os.strerror(-error), name)
+    if socket.if_nametoindex(name) <= 0:
+        fail("dummy interface was not created")
+
+
+def attest_full(path):
+    entries = load_document(path)
+    chains = [
+        entry["chain"]
+        for entry in entries
+        if "chain" in entry and entry["chain"].get("name") == OPERATOR_CHAIN
+    ]
+    if len(chains) != 1:
+        fail("full golden operator-policy chain is not unique")
+    chain = exact_keys(
+        chains[0], {"family", "table", "name", "handle"}, "operator chain"
+    )
+    if (chain["family"], chain["table"], chain["name"]) != (
+        "inet",
+        "syswarden",
+        OPERATOR_CHAIN,
+    ):
+        fail("full golden operator-policy chain location differs")
+    positive_handle(chain["handle"], "operator chain")
+
+    operator_rules = [
+        entry["rule"]
+        for entry in entries
+        if "rule" in entry and entry["rule"].get("chain") == OPERATOR_CHAIN
+    ]
+    if len(operator_rules) != 1:
+        fail("empty full golden operator chain contains unexpected rules")
+    terminal_return(operator_rules[0], "syswarden", "full golden terminal")
+
+    stateful_chains = [
+        entry["chain"]
+        for entry in entries
+        if "chain" in entry and entry["chain"].get("name") == "stateful_protect"
+    ]
+    if len(stateful_chains) != 1:
+        fail("stateful_protect chain is not unique")
+    stateful_chain = exact_keys(
+        stateful_chains[0],
+        {"family", "table", "name", "handle", "type", "hook", "prio", "policy"},
+        "stateful_protect chain",
+    )
+    if (
+        stateful_chain["family"],
+        stateful_chain["table"],
+        stateful_chain["name"],
+        stateful_chain["type"],
+        stateful_chain["hook"],
+        stateful_chain["prio"],
+        stateful_chain["policy"],
+    ) != ("inet", "syswarden", "stateful_protect", "filter", "input", -10, "drop"):
+        fail("stateful_protect chain envelope differs")
+    positive_handle(stateful_chain["handle"], "stateful_protect chain")
+
+    stateful_rules = [
+        entry["rule"]
+        for entry in entries
+        if "rule" in entry and entry["rule"].get("chain") == "stateful_protect"
+    ]
+    if len(stateful_rules) < 3:
+        fail("stateful_protect cannot contain the terminal sequence")
+    dispatch, catch_log, catch_drop = stateful_rules[-3:]
+    dispatch_expressions = rule_envelope(
+        dispatch,
+        "inet",
+        "syswarden",
+        "stateful_protect",
+        DISPATCH_COMMENT,
+        "operator dispatch",
+    )
+    if dispatch_expressions != [{"jump": {"target": OPERATOR_CHAIN}}]:
+        fail("operator dispatch expression differs")
+    log_expressions = rule_envelope(
+        catch_log,
+        "inet",
+        "syswarden",
+        "stateful_protect",
+        None,
+        "catch-all log",
+    )
+    if len(log_expressions) != 3 or log_expressions[0] != ct_state_new():
+        fail("catch-all log ct state expression differs")
+    if log_expressions[1] != {"limit": {"rate": 2, "burst": 5, "per": "second"}}:
+        fail("catch-all log rate limit differs")
+    if log_expressions[2] != {"log": {"prefix": CATCH_ALL_PREFIX}}:
+        fail("catch-all log prefix differs")
+    drop_expressions = rule_envelope(
+        catch_drop,
+        "inet",
+        "syswarden",
+        "stateful_protect",
+        None,
+        "catch-all drop",
+    )
+    if len(drop_expressions) != 3 or drop_expressions[0] != ct_state_new():
+        fail("catch-all drop ct state expression differs")
+    counter(drop_expressions[1], "catch-all drop counter")
+    if drop_expressions[2] != {"drop": None}:
+        fail("catch-all drop verdict differs")
+
+    references = []
+    markers = []
+    for entry in entries:
+        rule = entry.get("rule")
+        if not isinstance(rule, dict):
+            continue
+        comment = rule.get("comment")
+        if isinstance(comment, str) and comment.startswith(OPERATOR_PREFIX):
+            markers.append(rule)
+        expressions = rule.get("expr")
+        if not isinstance(expressions, list):
+            continue
+        for expression in expressions:
+            if not isinstance(expression, dict):
+                continue
+            for verdict in ("jump", "goto"):
+                target = expression.get(verdict)
+                if isinstance(target, dict) and target.get("target") == OPERATOR_CHAIN:
+                    references.append((rule, verdict))
+    if references != [(dispatch, "jump")]:
+        fail("operator-policy chain reference is not the unique dispatch")
+    if len(markers) != 2 or dispatch not in markers or operator_rules[0] not in markers:
+        fail("operator-policy comments exist outside the verified surface")
+    print("V404_GOLDEN_CHAIN_COUNT=1")
+    print("V404_GOLDEN_CT_STATE_OP=in")
+
+
+def attest_populated(path):
+    entries = load_document(path)
+    if len(entries) != 6:
+        fail("populated wrapper contains unexpected nftables objects")
+    tables = [entry["table"] for entry in entries if "table" in entry]
+    if len(tables) != 1:
+        fail("populated wrapper table is not unique")
+    table = exact_keys(tables[0], {"family", "name", "handle"}, "wrapper table")
+    if (table["family"], table["name"]) != ("inet", POPULATED_TABLE):
+        fail("populated wrapper table location differs")
+    positive_handle(table["handle"], "wrapper table")
+    chains = [entry["chain"] for entry in entries if "chain" in entry]
+    if len(chains) != 1:
+        fail("populated operator chain is not unique")
+    chain = exact_keys(
+        chains[0], {"family", "table", "name", "handle"}, "populated chain"
+    )
+    if (chain["family"], chain["table"], chain["name"]) != (
+        "inet",
+        POPULATED_TABLE,
+        OPERATOR_CHAIN,
+    ):
+        fail("populated operator chain location differs")
+    positive_handle(chain["handle"], "populated chain")
+    rules = [entry["rule"] for entry in entries if "rule" in entry]
+    if len(rules) != 3:
+        fail("populated operator chain does not contain exactly three rules")
+
+    ipv4 = rule_envelope(
+        rules[0], "inet", POPULATED_TABLE, OPERATOR_CHAIN, IPV4_COMMENT, "IPv4 rule"
+    )
+    expected_v4 = [
+        match("ip", "saddr", "198.51.100.42"),
+        match("ip", "protocol", "icmp"),
+        match("icmp", "type", "echo-request"),
+    ]
+    if len(ipv4) != 5 or ipv4[:3] != expected_v4:
+        fail("IPv4 normalized expression shape differs")
+    counter(ipv4[3], "IPv4 counter")
+    if ipv4[4] != {"accept": None}:
+        fail("IPv4 verdict differs")
+
+    ipv6 = rule_envelope(
+        rules[1], "inet", POPULATED_TABLE, OPERATOR_CHAIN, IPV6_COMMENT, "IPv6 rule"
+    )
+    expected_v6 = [
+        match(
+            "ip6",
+            "saddr",
+            {"prefix": {"addr": "2001:db8:abcd::", "len": 48}},
+        ),
+        match("icmpv6", "type", "echo-request"),
+    ]
+    if len(ipv6) != 4 or ipv6[:2] != expected_v6:
+        fail("IPv6 normalized expression shape differs")
+    counter(ipv6[2], "IPv6 counter")
+    if ipv6[3] != {"accept": None}:
+        fail("IPv6 verdict differs")
+    terminal_return(rules[2], POPULATED_TABLE, "populated terminal")
+    print("V404_POPULATED_CHAIN_COUNT=1")
+    print("V404_POPULATED_RULE_COUNT=3")
+    print("V404_POPULATED_IPV4_SHAPE=host-32")
+    print("V404_POPULATED_IPV6_SHAPE=prefix-48")
+
+
+def main():
+    if len(sys.argv) != 3:
+        fail("attestor requires exactly a mode and an operand")
+    mode, operand = sys.argv[1:]
+    if mode == "create-dummy":
+        create_dummy(operand)
+    elif mode == "objects":
+        object_count(operand)
+    elif mode == "full":
+        attest_full(operand)
+    elif mode == "populated":
+        attest_populated(operand)
+    else:
+        fail("attestor mode is not allowlisted")
+
+
+main()
+PY
+attestor_build_rc=$?
+if [ "$attestor_build_rc" -eq 0 ]; then
+    chmod 0400 /tmp/v404-nft-attestor.py 2>/tmp/v404-attestor-chmod.err
+    attestor_build_rc=$?
+fi
+printf 'V404_ATTESTOR_BUILD_RC=%s\n' "$attestor_build_rc"
+
+python3 /tmp/v404-nft-attestor.py create-dummy eth-test0 >/tmp/v404-dummy0.out 2>/tmp/v404-dummy0.err
+printf 'V404_DUMMY_ETH_TEST0_RC=%s\n' "$?"
+python3 /tmp/v404-nft-attestor.py create-dummy eth-test1 >/tmp/v404-dummy1.out 2>/tmp/v404-dummy1.err
+printf 'V404_DUMMY_ETH_TEST1_RC=%s\n' "$?"
+
+nft flush ruleset >/tmp/v404-preflight-flush.out 2>/tmp/v404-preflight-flush.err
+printf 'V404_PREFLIGHT_FLUSH_RC=%s\n' "$?"
+nft -j list ruleset >/tmp/v404-preflight.json 2>/tmp/v404-preflight-list.err
+printf 'V404_PREFLIGHT_LIST_RC=%s\n' "$?"
+preflight_objects="$(python3 /tmp/v404-nft-attestor.py objects /tmp/v404-preflight.json 2>/tmp/v404-preflight-parse.err)"
+if [ "$?" -ne 0 ]; then preflight_objects=999999; fi
+printf 'V404_PREFLIGHT_OBJECTS=%s\n' "$preflight_objects"
+
+nft -c -f /fixture/nftables-v4.04.0.nft >/tmp/v404-golden-check.out 2>/tmp/v404-golden-check.err
+printf 'V404_GOLDEN_CHECK_RC=%s\n' "$?"
+nft -j list ruleset >/tmp/v404-golden-check.json 2>/tmp/v404-golden-check-list.err
+printf 'V404_GOLDEN_CHECK_LIST_RC=%s\n' "$?"
+golden_check_objects="$(python3 /tmp/v404-nft-attestor.py objects /tmp/v404-golden-check.json 2>/tmp/v404-golden-check-parse.err)"
+if [ "$?" -ne 0 ]; then golden_check_objects=999999; fi
+printf 'V404_GOLDEN_CHECK_OBJECTS=%s\n' "$golden_check_objects"
+nft -f /fixture/nftables-v4.04.0.nft >/tmp/v404-golden-apply.out 2>/tmp/v404-golden-apply.err
+printf 'V404_GOLDEN_APPLY_RC=%s\n' "$?"
+nft -j list ruleset >/tmp/v404-golden.json 2>/tmp/v404-golden-list.err
+printf 'V404_GOLDEN_LIST_RC=%s\n' "$?"
+python3 /tmp/v404-nft-attestor.py full /tmp/v404-golden.json >/tmp/v404-golden-attest.out 2>/tmp/v404-golden-attest.err
+golden_attest_rc=$?
+printf 'V404_GOLDEN_ATTEST_RC=%s\n' "$golden_attest_rc"
+if [ "$golden_attest_rc" -eq 0 ]; then
+    cat /tmp/v404-golden-attest.out
+else
+    printf 'V404_GOLDEN_CHAIN_COUNT=0\n'
+    printf 'V404_GOLDEN_CT_STATE_OP=unknown\n'
+fi
+
+nft flush ruleset >/tmp/v404-golden-flush.out 2>/tmp/v404-golden-flush.err
+printf 'V404_GOLDEN_FLUSH_RC=%s\n' "$?"
+nft -j list ruleset >/tmp/v404-golden-empty.json 2>/tmp/v404-golden-empty-list.err
+printf 'V404_GOLDEN_EMPTY_LIST_RC=%s\n' "$?"
+golden_empty_objects="$(python3 /tmp/v404-nft-attestor.py objects /tmp/v404-golden-empty.json 2>/tmp/v404-golden-empty-parse.err)"
+if [ "$?" -ne 0 ]; then golden_empty_objects=999999; fi
+printf 'V404_GOLDEN_EMPTY_OBJECTS=%s\n' "$golden_empty_objects"
+
+{
+    printf 'table inet syswarden_operator_policy_lab {\n'
+    cat /fixture/operator-policy-v4.04.0.nft
+    printf '}\n'
+} >/tmp/v404-populated.nft 2>/tmp/v404-populated-build.err
+populated_build_rc=$?
+if [ "$populated_build_rc" -eq 0 ]; then
+    chmod 0400 /tmp/v404-populated.nft 2>>/tmp/v404-populated-build.err
+    populated_build_rc=$?
+fi
+printf 'V404_POPULATED_BUILD_RC=%s\n' "$populated_build_rc"
+nft -c -f /tmp/v404-populated.nft >/tmp/v404-populated-check.out 2>/tmp/v404-populated-check.err
+printf 'V404_POPULATED_CHECK_RC=%s\n' "$?"
+nft -j list ruleset >/tmp/v404-populated-check.json 2>/tmp/v404-populated-check-list.err
+printf 'V404_POPULATED_CHECK_LIST_RC=%s\n' "$?"
+populated_check_objects="$(python3 /tmp/v404-nft-attestor.py objects /tmp/v404-populated-check.json 2>/tmp/v404-populated-check-parse.err)"
+if [ "$?" -ne 0 ]; then populated_check_objects=999999; fi
+printf 'V404_POPULATED_CHECK_OBJECTS=%s\n' "$populated_check_objects"
+nft -f /tmp/v404-populated.nft >/tmp/v404-populated-apply.out 2>/tmp/v404-populated-apply.err
+printf 'V404_POPULATED_APPLY_RC=%s\n' "$?"
+nft -j list ruleset >/tmp/v404-populated.json 2>/tmp/v404-populated-list.err
+printf 'V404_POPULATED_LIST_RC=%s\n' "$?"
+python3 /tmp/v404-nft-attestor.py populated /tmp/v404-populated.json >/tmp/v404-populated-attest.out 2>/tmp/v404-populated-attest.err
+populated_attest_rc=$?
+printf 'V404_POPULATED_ATTEST_RC=%s\n' "$populated_attest_rc"
+if [ "$populated_attest_rc" -eq 0 ]; then
+    cat /tmp/v404-populated-attest.out
+else
+    printf 'V404_POPULATED_CHAIN_COUNT=0\n'
+    printf 'V404_POPULATED_RULE_COUNT=0\n'
+    printf 'V404_POPULATED_IPV4_SHAPE=unknown\n'
+    printf 'V404_POPULATED_IPV6_SHAPE=unknown\n'
+fi
+
+nft flush ruleset >/tmp/v404-final-flush.out 2>/tmp/v404-final-flush.err
+final_flush_rc=$?
+printf 'V404_FINAL_FLUSH_RC=%s\n' "$final_flush_rc"
+nft -j list ruleset >/tmp/v404-final.json 2>/tmp/v404-final-list.err
+printf 'V404_FINAL_LIST_RC=%s\n' "$?"
+final_objects="$(python3 /tmp/v404-nft-attestor.py objects /tmp/v404-final.json 2>/tmp/v404-final-parse.err)"
+if [ "$?" -ne 0 ]; then final_objects=999999; fi
+printf 'V404_FINAL_OBJECTS=%s\n' "$final_objects"
+printf 'CLEANUP_RC=%s\n' "$final_flush_rc"
+
 printf '%s\n' 'ERROR_BEGIN'
 cat /tmp/legacy.err
 cat /tmp/candidate.err
@@ -616,6 +1167,31 @@ if [ "$manager_rc" -ne 0 ]; then
     cat /tmp/manager.out
     cat /tmp/manager.err
 fi
+cat /tmp/v404-attestor-chmod.err
+cat /tmp/v404-dummy0.err
+cat /tmp/v404-dummy1.err
+cat /tmp/v404-preflight-flush.err
+cat /tmp/v404-preflight-list.err
+cat /tmp/v404-preflight-parse.err
+cat /tmp/v404-golden-check.err
+cat /tmp/v404-golden-check-list.err
+cat /tmp/v404-golden-check-parse.err
+cat /tmp/v404-golden-apply.err
+cat /tmp/v404-golden-list.err
+cat /tmp/v404-golden-attest.err
+cat /tmp/v404-golden-flush.err
+cat /tmp/v404-golden-empty-list.err
+cat /tmp/v404-golden-empty-parse.err
+cat /tmp/v404-populated-build.err
+cat /tmp/v404-populated-check.err
+cat /tmp/v404-populated-check-list.err
+cat /tmp/v404-populated-check-parse.err
+cat /tmp/v404-populated-apply.err
+cat /tmp/v404-populated-list.err
+cat /tmp/v404-populated-attest.err
+cat /tmp/v404-final-flush.err
+cat /tmp/v404-final-list.err
+cat /tmp/v404-final-parse.err
 printf '%s\n' 'ERROR_END'
 exit 0
 '''.strip()
@@ -627,6 +1203,8 @@ def container_arguments(
     golden: Path,
     normalized: Path,
     manager_test_binary: Path,
+    v404_golden: Path,
+    operator_policy_fragment: Path,
 ) -> tuple[str, ...]:
     return (
         podman,
@@ -649,6 +1227,10 @@ def container_arguments(
         f"{normalized}:/fixture/honeyports-candidate.nft:ro",
         "--volume",
         f"{manager_test_binary}:/fixture/syswarden-core-firewall.test:ro",
+        "--volume",
+        f"{v404_golden}:/fixture/nftables-v4.04.0.nft:ro",
+        "--volume",
+        f"{operator_policy_fragment}:/fixture/operator-policy-v4.04.0.nft:ro",
         image,
         "bash",
         "-c",
@@ -660,44 +1242,68 @@ def parse_container_output(stdout: str) -> tuple[dict[str, str], str]:
     markers: dict[str, str] = {}
     error_lines: list[str] = []
     in_error = False
+    error_started = False
+    error_ended = False
     for line in stdout.splitlines():
         if line == "ERROR_BEGIN":
+            if in_error or error_started or error_ended:
+                raise NftablesLabError(
+                    "container error evidence begins more than once or out of order"
+                )
             in_error = True
+            error_started = True
             continue
         if line == "ERROR_END":
+            if not in_error or not error_started or error_ended:
+                raise NftablesLabError(
+                    "container error evidence ends more than once or out of order"
+                )
             in_error = False
+            error_ended = True
             continue
         if in_error:
             error_lines.append(line)
             continue
         match = MARKER_RE.fullmatch(line)
-        if match is not None:
-            if match.group(1) in markers:
-                raise NftablesLabError(
-                    f"duplicate container evidence marker: {match.group(1)}"
-                )
-            markers[match.group(1)] = match.group(2)
-    expected = {
+        if match is None:
+            raise NftablesLabError(
+                f"unrecognized container evidence line: {line!r}"
+            )
+        if error_ended:
+            raise NftablesLabError(
+                "container marker exists after the error evidence trailer"
+            )
+        if match.group(1) in markers:
+            raise NftablesLabError(
+                f"duplicate container evidence marker: {match.group(1)}"
+            )
+        markers[match.group(1)] = match.group(2)
+    if in_error or not error_started or not error_ended:
+        raise NftablesLabError("container error evidence delimiters are incomplete")
+    if set(markers) != EXPECTED_CONTAINER_MARKERS:
+        raise NftablesLabError(
+            "container evidence markers differ: expected "
+            f"{sorted(EXPECTED_CONTAINER_MARKERS)}, "
+            f"found {sorted(markers)}"
+        )
+    for marker in DECIMAL_CONTAINER_MARKERS:
+        if re.fullmatch(r"(?:0|[1-9][0-9]*)", markers[marker]) is None:
+            raise NftablesLabError(
+                f"container evidence marker {marker} is not a canonical decimal"
+            )
+    for marker in (
         "NETNS",
         "KERNEL_VERSION",
         "KERNEL_MACHINE",
         "NFT_VERSION",
-        "LEGACY_CHECK_RC",
-        "LEGACY_LIST_RC",
-        "LEGACY_OBJECTS",
-        "CANDIDATE_APPLY_RC",
-        "CANDIDATE_LIST_RC",
-        "CANDIDATE_OBJECTS",
-        "MANAGER_KERNEL_RC",
-        "MANAGER_KERNEL_PASS",
-        "MANAGER_RAW_INTERVALS_OK",
-        "CLEANUP_RC",
-    }
-    if set(markers) != expected:
-        raise NftablesLabError(
-            f"container evidence markers differ: expected {sorted(expected)}, "
-            f"found {sorted(markers)}"
-        )
+        "V404_GOLDEN_CT_STATE_OP",
+        "V404_POPULATED_IPV4_SHAPE",
+        "V404_POPULATED_IPV6_SHAPE",
+    ):
+        if not markers[marker]:
+            raise NftablesLabError(
+                f"container evidence marker {marker} is empty"
+            )
     return markers, "\n".join(error_lines)
 
 
@@ -733,6 +1339,15 @@ def run_lab(
                 snapshot_root / "testdata/firewall/nftables-v4.02.8.nft",
                 "nftables golden",
             )
+            v404_golden = require_regular_file(
+                snapshot_root / "testdata/firewall/nftables-v4.04.0.nft",
+                "v4.04.0 nftables golden",
+            )
+            operator_policy_fragment = require_regular_file(
+                snapshot_root
+                / "testdata/firewall/operator-policy-v4.04.0.nft",
+                "v4.04.0 populated operator-policy fragment",
+            )
             normalized_text = verify_corrected_source_contract(
                 snapshot_root, golden
             )
@@ -756,6 +1371,8 @@ def run_lab(
                     golden,
                     normalized,
                     manager_test_binary,
+                    v404_golden,
+                    operator_policy_fragment,
                 ),
                 timeout=240,
             )
@@ -824,11 +1441,58 @@ def run_lab(
             and markers["MANAGER_KERNEL_PASS"] == "1"
             and markers["MANAGER_RAW_INTERVALS_OK"] == "1"
         ),
-        "isolated_ruleset_cleanup_succeeded": markers["CLEANUP_RC"] == "0",
+        "v404_dummy_interfaces_created": (
+            markers["V404_ATTESTOR_BUILD_RC"] == "0"
+            and markers["V404_DUMMY_ETH_TEST0_RC"] == "0"
+            and markers["V404_DUMMY_ETH_TEST1_RC"] == "0"
+        ),
+        "v404_preflight_ruleset_empty": (
+            markers["V404_PREFLIGHT_FLUSH_RC"] == "0"
+            and markers["V404_PREFLIGHT_LIST_RC"] == "0"
+            and markers["V404_PREFLIGHT_OBJECTS"] == "0"
+        ),
+        "v404_full_golden_check_is_non_mutating": (
+            markers["V404_GOLDEN_CHECK_RC"] == "0"
+            and markers["V404_GOLDEN_CHECK_LIST_RC"] == "0"
+            and markers["V404_GOLDEN_CHECK_OBJECTS"] == "0"
+        ),
+        "v404_full_golden_kernel_contract_passed": (
+            markers["V404_GOLDEN_APPLY_RC"] == "0"
+            and markers["V404_GOLDEN_LIST_RC"] == "0"
+            and markers["V404_GOLDEN_ATTEST_RC"] == "0"
+            and markers["V404_GOLDEN_CHAIN_COUNT"] == "1"
+            and markers["V404_GOLDEN_CT_STATE_OP"] == "in"
+        ),
+        "v404_full_golden_cleanup_proved_empty": (
+            markers["V404_GOLDEN_FLUSH_RC"] == "0"
+            and markers["V404_GOLDEN_EMPTY_LIST_RC"] == "0"
+            and markers["V404_GOLDEN_EMPTY_OBJECTS"] == "0"
+        ),
+        "v404_populated_fragment_check_is_non_mutating": (
+            markers["V404_POPULATED_BUILD_RC"] == "0"
+            and markers["V404_POPULATED_CHECK_RC"] == "0"
+            and markers["V404_POPULATED_CHECK_LIST_RC"] == "0"
+            and markers["V404_POPULATED_CHECK_OBJECTS"] == "0"
+        ),
+        "v404_populated_kernel_contract_passed": (
+            markers["V404_POPULATED_APPLY_RC"] == "0"
+            and markers["V404_POPULATED_LIST_RC"] == "0"
+            and markers["V404_POPULATED_ATTEST_RC"] == "0"
+            and markers["V404_POPULATED_CHAIN_COUNT"] == "1"
+            and markers["V404_POPULATED_RULE_COUNT"] == "3"
+            and markers["V404_POPULATED_IPV4_SHAPE"] == "host-32"
+            and markers["V404_POPULATED_IPV6_SHAPE"] == "prefix-48"
+        ),
+        "isolated_ruleset_cleanup_succeeded": (
+            markers["V404_FINAL_FLUSH_RC"] == "0"
+            and markers["V404_FINAL_LIST_RC"] == "0"
+            and markers["V404_FINAL_OBJECTS"] == "0"
+            and markers["CLEANUP_RC"] == "0"
+        ),
     }
     if not all(conditions.values()):
         raise NftablesLabError(
-            "nftables evidence does not prove the corrected honeyport contract: "
+            "nftables evidence does not prove the complete isolated kernel contract: "
             + json.dumps(conditions, sort_keys=True)
             + "; isolated manager output: "
             + kernel_error[-4000:]
@@ -850,7 +1514,10 @@ def run_lab(
         "summary": (
             "The corrected generator keeps honeyports 23 and 6379 distinct, the isolated "
             "kernel applies the candidate, the historical 236379 form is rejected, and "
-            "the real NftablesManager proves exact interval boundaries in inet and netdev."
+            "the real NftablesManager proves exact interval boundaries in inet and netdev. "
+            "The same isolated kernel also proves the exact v4.04.0 ruleset, terminal "
+            "operator-policy dispatch/catch-all order, real ct-state membership operator, "
+            "and normalized populated IPv4 and IPv6 policy shapes."
         ),
         "engine": {
             "name": "podman",

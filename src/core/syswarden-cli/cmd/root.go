@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/platformpaths"
 	"syswarden-cli/pkg/system"
 
@@ -18,6 +19,11 @@ var rootCmd = &cobra.Command{
 	Short: "SYSWARDEN Security Orchestrator",
 	Long:  "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if commandRequiresEarlyFirewallRecovery(cmd) {
+			if err := recoverPendingFirewallTransactionHook(); err != nil {
+				return fmt.Errorf("[ERROR] authoritative firewall recovery failed before command preparation: %w", err)
+			}
+		}
 		if commandRequiresAutomaticConfigLoad(cmd) {
 			initConfigHook()
 		}
@@ -49,6 +55,44 @@ func init() {
 }
 
 var initConfigHook = initConfig
+var recoverPendingFirewallTransactionHook = firewall.RecoverPendingAuthoritativeTransaction
+
+var earlyFirewallRecoveryCommands = map[string]struct{}{
+	"allow-ssh":               {},
+	"block":                   {},
+	"ha-sync":                 {},
+	"install":                 {},
+	"prepare-package-removal": {},
+	"reload":                  {},
+	"revoke-ssh":              {},
+	"tui":                     {},
+	"unblock":                 {},
+	"uninstall":               {},
+	"unwhitelist":             {},
+	"update":                  {},
+	"update-feeds":            {},
+	"whitelist":               {},
+	"whitelist-infra":         {},
+}
+
+func commandRequiresEarlyFirewallRecovery(cmd *cobra.Command) bool {
+	if cmd == nil || cmd == configValidateCmd {
+		return false
+	}
+	if cmd == configCmd {
+		return true
+	}
+	if cmd == configMigrateCmd || cmd == migrateConfigCmd {
+		dryRun, err := cmd.Flags().GetBool("dry-run")
+		return err != nil || !dryRun
+	}
+	topLevel := topLevelCommand(cmd)
+	if topLevel == nil || topLevel.Parent() == nil {
+		return false
+	}
+	_, required := earlyFirewallRecoveryCommands[topLevel.Name()]
+	return required
+}
 
 // Configuration inspection and migration commands load their explicitly
 // selected inputs themselves. Loading the process-wide runtime configuration
