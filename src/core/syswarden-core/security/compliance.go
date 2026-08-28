@@ -1,9 +1,11 @@
 package security
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"syswarden-core/internal/runtimepaths"
@@ -14,10 +16,19 @@ const localHardeningCheckOK = "The selected local checks found tcp_syncookies an
 
 // StartComplianceWatchdog runs selected local hardening checks on startup and
 // every 24 hours at 2 AM. The result is not a compliance assessment.
-func StartComplianceWatchdog(l *logger.Logger) {
+func StartComplianceWatchdog(ctx context.Context, wg *sync.WaitGroup, l *logger.Logger) {
+	startComplianceWatchdog(ctx, wg, l, runComplianceAudit)
+}
+
+func startComplianceWatchdog(ctx context.Context, wg *sync.WaitGroup, l *logger.Logger, audit func(*logger.Logger)) {
+	if ctx == nil || wg == nil || l == nil || audit == nil {
+		return
+	}
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		// Initial check on startup
-		runComplianceAudit(l)
+		audit(l)
 
 		for {
 			now := time.Now()
@@ -27,8 +38,16 @@ func StartComplianceWatchdog(l *logger.Logger) {
 				next = next.Add(24 * time.Hour)
 			}
 
-			time.Sleep(time.Until(next))
-			runComplianceAudit(l)
+			timer := time.NewTimer(time.Until(next))
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+				audit(l)
+			}
 		}
 	}()
 }

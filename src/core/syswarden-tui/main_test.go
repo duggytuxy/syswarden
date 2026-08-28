@@ -409,6 +409,83 @@ func TestDashboardDataSchemaCompatibility(t *testing.T) {
 	}
 }
 
+func TestDashboardDataDecodesAdditiveKPIEvidence_SW_KPI_001(t *testing.T) {
+	t.Parallel()
+	fixture := []byte(`{
+  "waf": {
+    "kpi_evidence_quality": "degraded",
+    "journal_scan_complete": false,
+    "journal_bytes_total": 4096,
+    "journal_bytes_scanned": 2048,
+    "journal_decode_errors": 2,
+    "metric_rejected_events": 3,
+    "metric_excluded_events": 4,
+    "metric_admitted_events": 5,
+    "top_attackers": [{"ip":"192.0.2.40","recorded_hits":6}]
+  }
+}`)
+	var decoded DashboardData
+	if err := json.Unmarshal(fixture, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	waf := decoded.WAF
+	if waf.KPIEvidenceQuality != "degraded" || waf.JournalScanComplete == nil || *waf.JournalScanComplete ||
+		waf.JournalBytesTotal == nil || *waf.JournalBytesTotal != 4096 ||
+		waf.JournalBytesScanned == nil || *waf.JournalBytesScanned != 2048 ||
+		waf.JournalDecodeErrors == nil || *waf.JournalDecodeErrors != 2 ||
+		waf.MetricRejectedEvents == nil || *waf.MetricRejectedEvents != 3 ||
+		waf.MetricExcludedEvents == nil || *waf.MetricExcludedEvents != 4 ||
+		waf.MetricAdmittedEvents == nil || *waf.MetricAdmittedEvents != 5 ||
+		len(waf.TopAttackers) != 1 || waf.TopAttackers[0].RecordedHits != 6 {
+		t.Fatalf("additive KPI evidence decode = %#v", waf)
+	}
+}
+
+func TestWAAPKPIEvidenceVisibility_SW_KPI_001(t *testing.T) {
+	t.Parallel()
+	complete := true
+	zero := 0
+	bytes := int64(4096)
+	admitted := 4
+	completeWAF := WAF{
+		KPIEvidenceQuality:   "complete",
+		JournalScanComplete:  &complete,
+		JournalBytesTotal:    &bytes,
+		JournalBytesScanned:  &bytes,
+		JournalDecodeErrors:  &zero,
+		MetricRejectedEvents: &zero,
+		MetricExcludedEvents: &zero,
+		MetricAdmittedEvents: &admitted,
+	}
+	if kpiEvidenceDegradedOrUnavailable(completeWAF) {
+		t.Fatal("complete KPI evidence was marked degraded")
+	}
+	if got := topAttackersKPIEvidenceTitle(completeWAF); got != topAttackersTitleNormal {
+		t.Fatalf("complete title = %q", got)
+	}
+	if got, want := waapKPIEvidenceSummary(completeWAF), "quality=complete journal_complete=true scan_bytes=4096/4096 decode_errors=0 rejected_events=0"; got != want {
+		t.Fatalf("complete summary = %q, want %q", got, want)
+	}
+
+	if !kpiEvidenceDegradedOrUnavailable(WAF{}) {
+		t.Fatal("missing additive KPI evidence was not marked unavailable")
+	}
+	if got := topAttackersKPIEvidenceTitle(WAF{}); got != topAttackersTitleDegraded {
+		t.Fatalf("unavailable title = %q", got)
+	}
+	if got, want := waapKPIEvidenceSummary(WAF{}), "quality=unavailable journal_complete=unavailable scan_bytes=unavailable/unavailable decode_errors=unavailable rejected_events=unavailable"; got != want {
+		t.Fatalf("unavailable summary = %q, want %q", got, want)
+	}
+
+	one := 1
+	degraded := completeWAF
+	degraded.KPIEvidenceQuality = "degraded"
+	degraded.MetricRejectedEvents = &one
+	if !kpiEvidenceDegradedOrUnavailable(degraded) || !strings.Contains(topAttackersKPIEvidenceTitle(degraded), "KPI EVIDENCE DEGRADED") {
+		t.Fatal("rejected metric event was not made visible as degraded KPI evidence")
+	}
+}
+
 func TestDashboardDataBackwardAndForwardDecodeContract_SW_QA_001(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

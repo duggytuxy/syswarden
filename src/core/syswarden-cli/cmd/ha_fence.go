@@ -24,7 +24,22 @@ func newHAFenceManifestCreateCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "create",
 		Short: "Create a verified canonical HA fence manifest",
-		Args:  cobra.NoArgs,
+		Long: `Create a verified canonical HA fence manifest from a protected operator inventory.
+
+The inventory must be a root-owned regular JSON file with mode 0600 and this exact schema:
+{
+  "schema_version": 1,
+  "membership_scope": "one_receiving_api_endpoint_per_syswarden_node",
+  "legacy_writer_ids": ["writer-id"],
+  "members": [{"address": "203.0.113.10", "port": 62026}]
+}
+
+Both paths must be absolute. The inventory must be smaller than one MiB. Use an empty legacy_writer_ids array only when the operator has verified that no legacy writer exists. Writer IDs must match [a-z0-9][a-z0-9._-]{0,63}. Addresses must be canonical IP literals, ports must be in 1..65535, endpoint pairs must be unique, and every receiving SysWarden node must appear exactly once. Unknown or duplicate JSON keys are rejected.`,
+		Example: `  syswarden ha-fence manifest create \
+    --inventory /root/syswarden-ha-inventory.json \
+    --output /root/syswarden-ha-manifest.json \
+    --assert-complete`,
+		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			if err := requireHAFenceAdministrator(); err != nil {
 				return err
@@ -147,7 +162,29 @@ func newHAFenceReleaseCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "release",
 		Short: "Release a drained HA fence after durable writer closure",
-		Args:  cobra.NoArgs,
+		Long: `Release a drained HA fence only after every legacy writer has durable terminal evidence.
+
+The writer closure must be a root-owned regular JSON file with mode 0600, canonical indentation and this schema:
+{
+  "schema_version": 1,
+  "epoch": "<manifest epoch>",
+  "membership_sha256": "<manifest membership SHA-256>",
+  "legacy_writer_inventory_sha256": "<manifest writer inventory SHA-256>",
+  "legacy_retry_queue_drained": true,
+  "writers": [{
+    "id": "writer-id",
+    "disposition": "migrated_enriched_only",
+    "closure_generation": "operator-evidence-generation",
+    "closed_at": "2026-08-28T12:00:00Z",
+    "evidence_sha256": "<lowercase evidence SHA-256>"
+  }]
+}
+
+Writer order and identities must exactly match the manifest. Accepted terminal dispositions are migrated_enriched_only, disabled, credential_revoked and network_quarantined. Use an empty writers array only when the manifest has no legacy writers. Unknown or duplicate JSON keys and noncanonical bytes are rejected.`,
+		Example: `  syswarden ha-fence release \
+    --manifest /root/syswarden-ha-manifest.json \
+    --writer-closure /root/syswarden-ha-writer-closure.json`,
+		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, args []string) error {
 			if err := network.ReleaseHAFence(manifestPath, closurePath); err != nil {
 				return err

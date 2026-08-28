@@ -774,6 +774,11 @@ type haMutationRequest struct {
 	temporaries []haTemporaryBanRequest
 }
 
+type haTemporaryDeleteResult struct {
+	Status  string `json:"status"`
+	Deleted int    `json:"deleted"`
+}
+
 func decodeHAMutationPayload(w http.ResponseWriter, r *http.Request) (haMutationRequest, bool) {
 	if r.ContentLength > maxHARequestBytes {
 		http.Error(w, "Payload Too Large", http.StatusRequestEntityTooLarge)
@@ -2024,7 +2029,7 @@ func (api *haAPI) applyHATemporaryUnbans(w http.ResponseWriter, peer haPeerIdent
 		return
 	}
 	if len(byIP) == 0 {
-		writeHAJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeHAJSON(w, http.StatusOK, haTemporaryDeleteResult{Status: "ok", Deleted: 0})
 		return
 	}
 	if api.fwManager == nil {
@@ -2037,6 +2042,7 @@ func (api *haAPI) applyHATemporaryUnbans(w http.ResponseWriter, peer haPeerIdent
 	}
 	sort.Strings(ips)
 	var mutationErrors []error
+	deleted := 0
 	for _, ip := range ips {
 		desired, err := api.reconcileDesiredHABanAfterRemoval(ip, now)
 		if err != nil {
@@ -2047,6 +2053,7 @@ func (api *haAPI) applyHATemporaryUnbans(w http.ResponseWriter, peer haPeerIdent
 			mutationErrors = append(mutationErrors, err)
 			continue
 		}
+		deleted += len(byIP[ip])
 		if desired {
 			log.Printf("[HA Cluster] temporary delete preserved another desired ban origin=%s", peer.IP)
 		}
@@ -2056,7 +2063,7 @@ func (api *haAPI) applyHATemporaryUnbans(w http.ResponseWriter, peer haPeerIdent
 		http.Error(w, "Firewall mutation failed", http.StatusInternalServerError)
 		return
 	}
-	writeHAJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeHAJSON(w, http.StatusOK, haTemporaryDeleteResult{Status: "ok", Deleted: deleted})
 }
 
 func (api *haAPI) reconcileHABansLocked(now time.Time, limit int) error {

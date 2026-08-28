@@ -1,8 +1,14 @@
 package security
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"syswarden-core/logger"
 )
 
 func TestLocalHardeningResultIsBounded_SW_DOC_001(t *testing.T) {
@@ -16,6 +22,31 @@ func TestLocalHardeningResultIsBounded_SW_DOC_001(t *testing.T) {
 			t.Fatalf("local result omits scope boundary %q: %s", required, localHardeningCheckOK)
 		}
 	}
+}
+
+func TestComplianceWatchdogStopsBeforeLoggerLifecycleEnds_SW_KPI_001(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var workers sync.WaitGroup
+	eventLogger := logger.NewLogger(filepath.Join(t.TempDir(), "waf.json"))
+	audited := make(chan struct{}, 1)
+	startComplianceWatchdog(ctx, &workers, eventLogger, func(*logger.Logger) { audited <- struct{}{} })
+	select {
+	case <-audited:
+	case <-time.After(time.Second):
+		t.Fatal("compliance watchdog did not run its initial check")
+	}
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("compliance watchdog did not stop after cancellation")
+	}
+	eventLogger.Close()
 }
 
 func TestRPFilterEnabledModes(t *testing.T) {

@@ -158,7 +158,37 @@ func main() {
 
 	// Start Native Telemetry Worker
 	var wg sync.WaitGroup
-	telemetry.StartWorker(ctx, &wg, fwManager, telemetryLogger.LogAllowed, telemetryLogger.LogBan, telemetryLogger.LogShadowAlert)
+	toLoggerRuleContext := func(evidence telemetry.RuleEvidence) logger.RuleContext {
+		return logger.RuleContext{
+			RuleID:                  evidence.RuleID,
+			RiskCategory:            evidence.RiskCategory,
+			RuleAction:              evidence.RuleAction,
+			EffectiveThreshold:      evidence.EffectiveThreshold,
+			EffectiveWindowSeconds:  evidence.EffectiveWindowSeconds,
+			SignatureCatalogVersion: evidence.SignatureCatalogVersion,
+			SignatureCatalogSHA256:  evidence.SignatureCatalogSHA256,
+			RiskModelVersion:        evidence.RiskModelVersion,
+			MetricEligible:          evidence.MetricEligible,
+			ObservedAt:              evidence.ObservedAt,
+			ObservationModel:        evidence.ObservationModel,
+			ObservationDisposition:  evidence.ObservationDisposition,
+		}
+	}
+	telemetry.StartWorker(
+		ctx,
+		&wg,
+		fwManager,
+		telemetryLogger.LogAllowed,
+		func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
+			telemetryLogger.LogBanWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
+		},
+		func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
+			telemetryLogger.LogShadowAlertWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
+		},
+		func(ip, jail, payload string, evidence telemetry.RuleEvidence) {
+			telemetryLogger.LogDetectedWithRule(ip, jail, payload, toLoggerRuleContext(evidence))
+		},
+	)
 
 	// Start SaaS Monitors Downloader
 	saasDownloader := network.NewSaasMonitorDownloader(telemetryLogger)
@@ -173,7 +203,7 @@ func main() {
 
 	// Start the selected local hardening checks. These checks are not a
 	// compliance assessment.
-	security.StartComplianceWatchdog(telemetryLogger)
+	security.StartComplianceWatchdog(ctx, &wg, telemetryLogger)
 
 	// Handle Graceful Shutdown
 	sigChan := make(chan os.Signal, 1)

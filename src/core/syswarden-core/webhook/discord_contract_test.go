@@ -22,6 +22,36 @@ func TestLocalCheckWebhookPresentation_SW_DOC_001(t *testing.T) {
 	}
 }
 
+func TestKernelDropDetectionDoesNotClaimNoDrop_SW_KPI_001(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	var body []byte
+	previousClient := webhookHTTPClient
+	webhookHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var err error
+		body, err = io.ReadAll(io.LimitReader(request.Body, 64*1024))
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+	})}
+	t.Cleanup(func() { webhookHTTPClient = previousClient })
+	viper.Set("integrations.webhooks.enabled", true)
+	viper.Set("integrations.webhooks.discord_url", "https://webhook.invalid/discord/opaque-test-token")
+
+	SendDetectedAlert("198.51.100.11", "L2-ARP-FLOOD", "Kernel Packet Dropped (No Source Ban)")
+
+	var payload DiscordPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Embeds) != 1 || strings.Contains(payload.Embeds[0].Description, "NOT blocked") ||
+		!strings.Contains(payload.Embeds[0].Description, "dropped the observed packet") {
+		t.Fatalf("kernel detection description = %#v", payload.Embeds)
+	}
+}
+
 type receivedWebhookRequest struct {
 	contentType string
 	body        []byte

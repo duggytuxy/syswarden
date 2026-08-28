@@ -713,7 +713,7 @@ func TestHATemporaryBanLedgerCollisionRenewalAndProvenance_SW_HA_004(t *testing.
 
 	response := requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
 		`{"ip":"8.8.4.44","source":"producer-b"}`, "10.20.30.6:43123")
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"status":"ok","deleted":0}` {
 		t.Fatalf("different-scope temporary DELETE = %d, %q", response.Code, response.Body.String())
 	}
 	ledger, err = fixture.api.readHALedger()
@@ -722,7 +722,7 @@ func TestHATemporaryBanLedgerCollisionRenewalAndProvenance_SW_HA_004(t *testing.
 	}
 	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
 		`{"ip":"8.8.4.44","source":"producer-b"}`, "10.20.30.5:43123")
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"status":"ok","deleted":1}` {
 		t.Fatalf("scoped temporary DELETE = %d, %q", response.Code, response.Body.String())
 	}
 	ledger, err = fixture.api.readHALedger()
@@ -745,7 +745,7 @@ func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
 	noFirewall := newHAAPITestFixture(t, nil, []string{"9.9.9.10"})
 	response := requestDirectHAHandler(t, noFirewall.handler, http.MethodDelete, "Bearer shared-secret",
 		`{"ip":"8.8.4.45","source":"unknown"}`)
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"status":"ok","deleted":0}` {
 		t.Fatalf("unknown DELETE without firewall = %d, %q", response.Code, response.Body.String())
 	}
 	if _, err := os.Lstat(noFirewall.ledger); !errors.Is(err, fs.ErrNotExist) {
@@ -758,7 +758,7 @@ func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
 
 	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
 		`{"ip":"8.8.4.45","source":"unknown"}`, "10.20.30.5:43123")
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"status":"ok","deleted":0}` {
 		t.Fatalf("unknown empty-ledger DELETE = %d, %q", response.Code, response.Body.String())
 	}
 	if _, err := os.Lstat(fixture.ledger); !errors.Is(err, fs.ErrNotExist) {
@@ -796,7 +796,7 @@ func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
 	} {
 		response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
 			request.body, request.remote)
-		if response.Code != http.StatusOK {
+		if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"status":"ok","deleted":0}` {
 			t.Fatalf("%s DELETE = %d, %q", request.label, response.Code, response.Body.String())
 		}
 		ledgerAfter, err := os.ReadFile(fixture.ledger)
@@ -820,7 +820,7 @@ func TestHATemporaryDeleteMutatesOnlyOwnedLedgerClaims_SW_HA_004(t *testing.T) {
 
 	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
 		`{"ip":"8.8.4.45","source":"producer-a"}`, "10.20.30.3:43123")
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"status":"ok","deleted":1}` {
 		t.Fatalf("owned DELETE = %d, %q", response.Code, response.Body.String())
 	}
 	ledger, err := fixture.api.readHALedger()
@@ -852,6 +852,9 @@ func TestHATemporaryDeletePendingClaimRetryConverges_SW_HA_004(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("failed temporary DELETE = %d, %q", response.Code, response.Body.String())
 	}
+	if strings.Contains(response.Body.String(), `"deleted"`) {
+		t.Fatalf("failed temporary DELETE claimed a result: %q", response.Body.String())
+	}
 	ledger, err := fixture.api.readHALedger()
 	if err != nil || len(ledger.Bans) != 1 || ledger.Bans[0].State != haBanPendingDelete {
 		t.Fatalf("failed temporary DELETE ledger = %#v, err=%v", ledger.Bans, err)
@@ -861,7 +864,7 @@ func TestHATemporaryDeletePendingClaimRetryConverges_SW_HA_004(t *testing.T) {
 	manager.mu.Unlock()
 	response = requestDirectHAHandler(t, fixture.handler, http.MethodDelete, "Bearer shared-secret",
 		`{"ip":"8.8.4.47","source":"producer-a"}`)
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"status":"ok","deleted":1}` {
 		t.Fatalf("temporary DELETE retry = %d, %q", response.Code, response.Body.String())
 	}
 	ledger, err = fixture.api.readHALedger()
@@ -1251,8 +1254,8 @@ func TestHATemporaryWireUnionBoundsAndOwnedDeleteBatch_SW_HA_004(t *testing.T) {
 		t.Fatalf("owned POST batch = %d, %q", response.Code, response.Body.String())
 	}
 	response = requestDirectHAPath(t, fixture.handler, http.MethodDelete, "/ha/sync", "Bearer shared-secret",
-		`{"bans":[{"ip":"8.8.4.20","source":"producer-a"}]}`, "10.20.30.3:43123")
-	if response.Code != http.StatusOK {
+		`{"bans":[{"ip":"8.8.4.20","source":"producer-a"},{"ip":"8.8.4.20","source":"unknown-source"}]}`, "10.20.30.3:43123")
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"status":"ok","deleted":1}` {
 		t.Fatalf("owned DELETE batch = %d, %q", response.Code, response.Body.String())
 	}
 	ledger, err := fixture.api.readHALedger()
@@ -1809,9 +1812,20 @@ func TestBunkerWebSchedulerEndToEndContract_SW_HA_004(t *testing.T) {
 	}
 
 	statusCode, wire = schedulerB.request(http.MethodDelete, "/ha/sync", map[string]string{
+		"ip": "45.200.0.1", "source": "unowned-source",
+	})
+	if statusCode != http.StatusOK || strings.TrimSpace(string(wire)) != `{"status":"ok","deleted":0}` {
+		t.Fatalf("scheduler unowned DELETE = %d, %q", statusCode, wire)
+	}
+	ledger, err = fixture.api.readHALedger()
+	if err != nil || len(ledger.Bans) != maxHABansPerRequest {
+		t.Fatalf("unowned DELETE changed ledger = %d records, err=%v", len(ledger.Bans), err)
+	}
+
+	statusCode, wire = schedulerB.request(http.MethodDelete, "/ha/sync", map[string]string{
 		"ip": "45.200.0.1", "source": "bunkerweb-a",
 	})
-	if statusCode != http.StatusOK {
+	if statusCode != http.StatusOK || strings.TrimSpace(string(wire)) != `{"status":"ok","deleted":1}` {
 		t.Fatalf("scheduler owned DELETE = %d, %q", statusCode, wire)
 	}
 	ledger, err = fixture.api.readHALedger()

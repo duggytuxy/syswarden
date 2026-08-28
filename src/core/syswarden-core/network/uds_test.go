@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"syswarden-core/engine"
@@ -119,5 +120,27 @@ func TestConfiguredUDSEnforcementModeUsesWAAPSetting_SW_SEC_M9(t *testing.T) {
 	viper.Set("waap.enforcement_mode", " AUDIT ")
 	if got := configuredUDSEnforcementMode(); got != "audit" {
 		t.Fatalf("configured UDS enforcement mode = %q", got)
+	}
+}
+
+func TestUDSDatagramBoundaryRejectsTruncationAndOversize_SW_KPI_001(t *testing.T) {
+	tests := []struct {
+		name  string
+		size  int
+		flags int
+		want  bool
+	}{
+		{name: "empty", size: 0, want: true},
+		{name: "maximum CRLF record", size: maxWAAPLogLineBytes + 2, want: true},
+		{name: "negative size", size: -1, want: false},
+		{name: "oversize", size: maxWAAPLogLineBytes + 3, want: false},
+		{name: "kernel truncation flag", size: maxWAAPLogLineBytes + 2, flags: syscall.MSG_TRUNC, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := completeUDSDatagram(test.size, test.flags); got != test.want {
+				t.Fatalf("completeUDSDatagram(%d, %d) = %t, want %t", test.size, test.flags, got, test.want)
+			}
+		})
 	}
 }

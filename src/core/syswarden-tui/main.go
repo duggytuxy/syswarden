@@ -359,15 +359,40 @@ type BannedIP struct {
 }
 
 type Attacker struct {
-	IP       string `json:"ip"`
-	Severity string `json:"severity"`
-	Port     string `json:"port"`
-	Country  string `json:"country"`
-	ASN      string `json:"asn"`
-	Threat   string `json:"threat"`
-	Org      string `json:"org"`
-	Hits     int    `json:"hits"`
-	LastSeen string `json:"last_seen"`
+	IP                      string `json:"ip"`
+	Severity                string `json:"severity"`
+	Port                    string `json:"port"`
+	Country                 string `json:"country"`
+	ASN                     string `json:"asn"`
+	Threat                  string `json:"threat"`
+	Org                     string `json:"org"`
+	Hits                    int    `json:"hits"`
+	LastSeen                string `json:"last_seen"`
+	FirstSeen               string `json:"first_seen,omitempty"`
+	PrimaryJail             string `json:"primary_jail,omitempty"`
+	EnforcementJail         string `json:"enforcement_jail,omitempty"`
+	EnforcementAction       string `json:"enforcement_action,omitempty"`
+	JailHits                int    `json:"jail_hits,omitempty"`
+	PolicyHits              int    `json:"policy_hits,omitempty"`
+	AttestedHits            int    `json:"attested_hits,omitempty"`
+	RecordedHits            int    `json:"recorded_hits,omitempty"`
+	LegacyHits              int    `json:"legacy_hits,omitempty"`
+	RiskCategory            string `json:"risk_category,omitempty"`
+	SeverityScore           int    `json:"severity_score,omitempty"`
+	PeakWindowHits          int    `json:"peak_window_hits,omitempty"`
+	EffectiveThreshold      int    `json:"effective_threshold,omitempty"`
+	EffectiveWindowSeconds  *int   `json:"effective_window_seconds,omitempty"`
+	MetricQuality           string `json:"metric_quality,omitempty"`
+	SelectedPolicyQuality   string `json:"selected_policy_quality,omitempty"`
+	ThresholdReached        *bool  `json:"threshold_reached,omitempty"`
+	ThresholdEvidence       string `json:"threshold_evidence,omitempty"`
+	MetricScope             string `json:"metric_scope,omitempty"`
+	HitEvidence             string `json:"hit_evidence,omitempty"`
+	HitQuality              string `json:"hit_quality,omitempty"`
+	DegradedHits            int    `json:"degraded_hits,omitempty"`
+	RiskModelVersion        string `json:"risk_model_version,omitempty"`
+	SignatureCatalogVersion string `json:"signature_catalog_version,omitempty"`
+	SignatureCatalogSHA256  string `json:"signature_catalog_sha256,omitempty"`
 }
 
 type TargetedPort struct {
@@ -378,16 +403,24 @@ type TargetedPort struct {
 }
 
 type WAF struct {
-	TotalBanned      int            `json:"total_banned"`
-	TotalDetected    int            `json:"total_detected"`
-	ActiveSignatures int            `json:"active_signatures"`
-	SignaturesData   []JailData     `json:"signatures_data"`
-	TargetedPorts    []TargetedPort `json:"targeted_ports"`
-	BannedIPs        []BannedIP     `json:"banned_ips"`
-	TopAttackers     []Attacker     `json:"top_attackers"`
-	RiskRadar        []int          `json:"risk_radar"`
-	Sparkline24h     [24]int        `json:"sparkline_24h"`
-	AllowedEvents    []AllowedEvent `json:"allowed_events"`
+	TotalBanned          int            `json:"total_banned"`
+	TotalDetected        int            `json:"total_detected"`
+	ActiveSignatures     int            `json:"active_signatures"`
+	KPIEvidenceQuality   string         `json:"kpi_evidence_quality,omitempty"`
+	JournalScanComplete  *bool          `json:"journal_scan_complete,omitempty"`
+	JournalBytesTotal    *int64         `json:"journal_bytes_total,omitempty"`
+	JournalBytesScanned  *int64         `json:"journal_bytes_scanned,omitempty"`
+	JournalDecodeErrors  *int           `json:"journal_decode_errors,omitempty"`
+	MetricRejectedEvents *int           `json:"metric_rejected_events,omitempty"`
+	MetricExcludedEvents *int           `json:"metric_excluded_events,omitempty"`
+	MetricAdmittedEvents *int           `json:"metric_admitted_events,omitempty"`
+	SignaturesData       []JailData     `json:"signatures_data"`
+	TargetedPorts        []TargetedPort `json:"targeted_ports"`
+	BannedIPs            []BannedIP     `json:"banned_ips"`
+	TopAttackers         []Attacker     `json:"top_attackers"`
+	RiskRadar            []int          `json:"risk_radar"`
+	Sparkline24h         [24]int        `json:"sparkline_24h"`
+	AllowedEvents        []AllowedEvent `json:"allowed_events"`
 }
 
 type Whitelist struct {
@@ -404,6 +437,67 @@ type DashboardData struct {
 	Layer3        Layer3     `json:"layer3"`
 	WAF           WAF        `json:"waf"`
 	Whitelist     Whitelist  `json:"whitelist"`
+}
+
+const (
+	topAttackersTitleNormal   = " [white]❖ TOP ATTACKERS (OSINT HISTORY)[-] "
+	topAttackersTitleDegraded = " [red]❖ TOP ATTACKERS (OSINT HISTORY) - KPI EVIDENCE DEGRADED[-] "
+)
+
+func kpiEvidenceDegradedOrUnavailable(waf WAF) bool {
+	if waf.KPIEvidenceQuality != "complete" || waf.JournalScanComplete == nil || !*waf.JournalScanComplete {
+		return true
+	}
+	if waf.JournalBytesTotal == nil || waf.JournalBytesScanned == nil || waf.JournalDecodeErrors == nil || waf.MetricRejectedEvents == nil ||
+		waf.MetricExcludedEvents == nil || waf.MetricAdmittedEvents == nil {
+		return true
+	}
+	return *waf.JournalBytesTotal < 0 || *waf.JournalBytesScanned < 0 ||
+		*waf.JournalBytesScanned != *waf.JournalBytesTotal ||
+		*waf.JournalDecodeErrors > 0 || *waf.MetricRejectedEvents > 0
+}
+
+func optionalKPIInt(value *int) string {
+	if value == nil {
+		return "unavailable"
+	}
+	return strconv.Itoa(*value)
+}
+
+func optionalKPIInt64(value *int64) string {
+	if value == nil {
+		return "unavailable"
+	}
+	return strconv.FormatInt(*value, 10)
+}
+
+func optionalKPIBool(value *bool) string {
+	if value == nil {
+		return "unavailable"
+	}
+	return strconv.FormatBool(*value)
+}
+
+func waapKPIEvidenceSummary(waf WAF) string {
+	quality := strings.TrimSpace(waf.KPIEvidenceQuality)
+	if quality == "" {
+		quality = "unavailable"
+	}
+	return fmt.Sprintf("quality=%s journal_complete=%s scan_bytes=%s/%s decode_errors=%s rejected_events=%s",
+		quality,
+		optionalKPIBool(waf.JournalScanComplete),
+		optionalKPIInt64(waf.JournalBytesScanned),
+		optionalKPIInt64(waf.JournalBytesTotal),
+		optionalKPIInt(waf.JournalDecodeErrors),
+		optionalKPIInt(waf.MetricRejectedEvents),
+	)
+}
+
+func topAttackersKPIEvidenceTitle(waf WAF) string {
+	if kpiEvidenceDegradedOrUnavailable(waf) {
+		return topAttackersTitleDegraded
+	}
+	return topAttackersTitleNormal
 }
 
 var (
@@ -479,7 +573,7 @@ func main() {
 
 	// 6. Top Attackers Table
 	attackersTable = tview.NewTable().SetBorders(false).SetSelectable(false, false)
-	attackersTable.SetBorder(true).SetTitle(" [white]❖ TOP ATTACKERS (OSINT HISTORY)[-] ").SetBorderColor(tcell.ColorDarkGray)
+	attackersTable.SetBorder(true).SetTitle(topAttackersTitleDegraded).SetBorderColor(tcell.ColorDarkGray)
 
 	midFlex := tview.NewFlex().
 		AddItem(portsTable, 0, 3, false).
@@ -1511,6 +1605,7 @@ func refreshUI() {
 
 	// --- Top Attackers ---
 	attackersTable.Clear()
+	attackersTable.SetTitle(topAttackersKPIEvidenceTitle(d.WAF))
 	attackersTable.SetCell(0, 0, tview.NewTableCell("IP ADDRESS").SetTextColor(tcell.ColorGray))
 	attackersTable.SetCell(0, 1, tview.NewTableCell("HITS").SetTextColor(tcell.ColorGray))
 	attackersTable.SetCell(0, 2, tview.NewTableCell("LAST SEEN").SetTextColor(tcell.ColorGray))
@@ -1522,19 +1617,27 @@ func refreshUI() {
 	attackersTable.SetCell(0, 8, tview.NewTableCell("ORG").SetTextColor(tcell.ColorGray))
 	for i := 0; i < 5 && i < len(d.WAF.TopAttackers); i++ {
 		t := d.WAF.TopAttackers[i]
-		attackersTable.SetCell(i+1, 0, tview.NewTableCell(t.IP).SetTextColor(tcell.ColorRed))
-		attackersTable.SetCell(i+1, 1, tview.NewTableCell(fmt.Sprintf("%d", t.Hits)).SetTextColor(tcell.ColorYellow))
+		attackersTable.SetCell(i+1, 0, tview.NewTableCell(tview.Escape(t.IP)).SetTextColor(tcell.ColorRed))
+		hits := fmt.Sprintf("%d", t.Hits)
+		if t.HitQuality == "legacy-estimate" {
+			hits += " est."
+		} else if t.HitQuality == "mixed" {
+			hits += " mixed"
+		} else if t.HitQuality == "degraded" {
+			hits += " degraded"
+		}
+		attackersTable.SetCell(i+1, 1, tview.NewTableCell(hits).SetTextColor(tcell.ColorYellow))
 		ls := t.LastSeen
 		if len(ls) >= 19 {
 			ls = ls[11:19]
 		}
-		attackersTable.SetCell(i+1, 2, tview.NewTableCell(ls).SetTextColor(tcell.ColorGray))
-		attackersTable.SetCell(i+1, 3, tview.NewTableCell(t.Severity).SetTextColor(tcell.ColorFuchsia))
-		attackersTable.SetCell(i+1, 4, tview.NewTableCell(t.Port).SetTextColor(tcell.ColorYellow))
-		attackersTable.SetCell(i+1, 5, tview.NewTableCell(t.Country).SetTextColor(tcell.ColorWhite))
-		attackersTable.SetCell(i+1, 6, tview.NewTableCell(t.ASN).SetTextColor(tcell.ColorAqua))
-		attackersTable.SetCell(i+1, 7, tview.NewTableCell(t.Threat).SetTextColor(tcell.ColorOrange))
-		attackersTable.SetCell(i+1, 8, tview.NewTableCell(t.Org).SetTextColor(tcell.ColorWhite))
+		attackersTable.SetCell(i+1, 2, tview.NewTableCell(tview.Escape(ls)).SetTextColor(tcell.ColorGray))
+		attackersTable.SetCell(i+1, 3, tview.NewTableCell(tview.Escape(t.Severity)).SetTextColor(tcell.ColorFuchsia))
+		attackersTable.SetCell(i+1, 4, tview.NewTableCell(tview.Escape(t.Port)).SetTextColor(tcell.ColorYellow))
+		attackersTable.SetCell(i+1, 5, tview.NewTableCell(tview.Escape(t.Country)).SetTextColor(tcell.ColorWhite))
+		attackersTable.SetCell(i+1, 6, tview.NewTableCell(tview.Escape(t.ASN)).SetTextColor(tcell.ColorAqua))
+		attackersTable.SetCell(i+1, 7, tview.NewTableCell(tview.Escape(t.Threat)).SetTextColor(tcell.ColorOrange))
+		attackersTable.SetCell(i+1, 8, tview.NewTableCell(tview.Escape(t.Org)).SetTextColor(tcell.ColorWhite))
 	}
 
 	// --- Banned Table ---
@@ -1667,6 +1770,7 @@ func printDashboardText() {
 	fmt.Printf("[SYSTEM] NODE: %s | Uptime: %s | Load: %s\n", d.System.Hostname, d.System.Uptime, load1Str)
 	fmt.Printf("[L3 FIREWALL] Global Blocks: %d (GeoIP: %d | ASN: %d)\n", d.Layer3.GlobalBlocked, d.Layer3.GeoIPBlocked, d.Layer3.ASNBlocked)
 	fmt.Printf("[WAAP L7] Active Bans: %d\n", d.WAF.TotalBanned)
+	fmt.Printf("[WAAP KPI] Evidence: %s\n", waapKPIEvidenceSummary(d.WAF))
 
 	// Format Jails
 	var jails []string
@@ -1685,7 +1789,8 @@ func printDashboardText() {
 	} else {
 		for i := 0; i < len(d.WAF.TopAttackers); i++ {
 			a := d.WAF.TopAttackers[i]
-			fmt.Printf(" - %s (%s / %s / %s)\n", a.IP, a.Country, a.ASN, a.Org)
+			fmt.Printf(" - %s | hits=%d | severity=%s | jail=%s | enforcement=%s/%s | policy_quality=%s | metric_quality=%s | hit_quality=%s | evidence=%s | %s / %s / %s\n",
+				a.IP, a.Hits, a.Severity, a.PrimaryJail, a.EnforcementJail, a.EnforcementAction, a.SelectedPolicyQuality, a.MetricQuality, a.HitQuality, a.HitEvidence, a.Country, a.ASN, a.Org)
 		}
 	}
 }
