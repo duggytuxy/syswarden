@@ -118,6 +118,48 @@ class PackageStageGateTests(unittest.TestCase):
             contract,
         )
 
+    def test_accepts_exact_project_license_source(self) -> None:
+        self.create_stage(package_stage_gate.LINUX_ENTRIES)
+        license_path = self.root / "usr/share/doc/syswarden/LICENSE.txt"
+        payload = license_path.read_bytes()
+        contract = package_stage_gate.ContentContract(
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+        )
+        package_stage_gate.validate(
+            self.root,
+            package_stage_gate.LINUX_ENTRIES,
+            project_license_contract=contract,
+        )
+
+    def test_rejects_project_license_content_drift(self) -> None:
+        self.create_stage(package_stage_gate.LINUX_ENTRIES)
+        license_path = self.root / "usr/share/doc/syswarden/LICENSE.txt"
+        payload = license_path.read_bytes()
+        contract = package_stage_gate.ContentContract(
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+        )
+        license_path.write_bytes(b"altered project license\n")
+        with self.assertRaisesRegex(
+            package_stage_gate.PackageStageError, "size mismatch|SHA-256 mismatch"
+        ):
+            package_stage_gate.validate(
+                self.root,
+                package_stage_gate.LINUX_ENTRIES,
+                project_license_contract=contract,
+            )
+
+    def test_repository_project_license_matches_pinned_contract(self) -> None:
+        repository_root = Path(__file__).resolve().parents[2]
+        contract = package_stage_gate.load_content_contract(
+            repository_root / "scripts/ci/package_project_license_contract.json"
+        )
+        package_stage_gate.validate_exact_content(
+            repository_root / "LICENSE",
+            contract,
+        )
+
     def test_rejects_completion_size_or_digest_drift(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)
         completion = self.root / "usr/share/bash-completion/completions/syswarden"

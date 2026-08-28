@@ -248,6 +248,9 @@ staging/opt/syswarden/bin/syswarden-cli completion bash > \
 install -m 0644 \
     "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
     staging/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt
+install -m 0644 \
+    "${REPOSITORY_ROOT}/LICENSE" \
+    staging/usr/share/doc/syswarden/LICENSE.txt
 cp "${REPOSITORY_ROOT}/src/core/syswarden-core/signatures.json" staging-apk/opt/syswarden/
 cp dist/bin-apk/syswarden-cli dist/bin-apk/syswarden-core dist/bin-apk/syswarden-tui staging-apk/opt/syswarden/bin/
 ln -s /opt/syswarden/bin/syswarden-cli staging-apk/usr/local/bin/syswarden
@@ -257,6 +260,9 @@ staging-apk/opt/syswarden/bin/syswarden-cli completion bash > \
 install -m 0644 \
     "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
     staging-apk/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt
+install -m 0644 \
+    "${REPOSITORY_ROOT}/LICENSE" \
+    staging-apk/usr/share/doc/syswarden/LICENSE.txt
 
 # Permissions
 chmod 750 staging/opt/syswarden/bin/*
@@ -272,7 +278,10 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
     --geoip-data-license-contract \
     "${REPOSITORY_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
     --geoip-data-license-source \
-    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt"
+    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
+    --project-license-contract \
+    "${REPOSITORY_ROOT}/scripts/ci/package_project_license_contract.json" \
+    --project-license-source "${REPOSITORY_ROOT}/LICENSE"
 PYTHONDONTWRITEBYTECODE=1 python3 \
     "${REPOSITORY_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging-apk \
@@ -280,7 +289,10 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
     --geoip-data-license-contract \
     "${REPOSITORY_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
     --geoip-data-license-source \
-    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt"
+    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
+    --project-license-contract \
+    "${REPOSITORY_ROOT}/scripts/ci/package_project_license_contract.json" \
+    --project-license-source "${REPOSITORY_ROOT}/LICENSE"
 
 validate_static_apk_binary() {
     artifact="$1"
@@ -728,6 +740,7 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --vendor "SysWarden Security" \
         --maintainer "SysWarden Engineering" \
         --description "SysWarden Host-based Security Orchestrator for Linux" \
+        --license "GPL-3.0-or-later" \
         --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
         -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
         -d "wireguard-tools" -d "qrencode" -d "jq" -d "unattended-upgrades" -d "apt-listchanges" -d "procps" -d "e2fsprogs" \
@@ -751,6 +764,7 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --vendor "SysWarden Security" \
         --maintainer "SysWarden Engineering" \
         --description "SysWarden Host-based Security Orchestrator for Linux" \
+        --license "GPL-3.0-or-later" \
         --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
         --rpm-changelog "${RPM_CHANGELOG}" \
         -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
@@ -780,6 +794,7 @@ maintainer: "SysWarden Engineering"
 description: "SysWarden Host-based Security Orchestrator for Alpine Linux"
 vendor: "SysWarden Security"
 homepage: "https://github.com/duggytuxy/syswarden"
+license: "GPL-3.0-or-later"
 depends:
   - nftables
   - openrc
@@ -837,6 +852,24 @@ validate_local_deb_changelog() {
     fi
 }
 
+validate_local_deb_license() {
+    local deb_path="$1"
+    local license_lines
+    license_lines="$(
+        ar p "${deb_path}" control.tar.gz |
+            LC_ALL=C tar -xOzf - ./control |
+            LC_ALL=C awk -F ': ' '$1 == "License" { print $2 }'
+    )" || return 1
+    [ "${license_lines}" = GPL-3.0-or-later ]
+}
+
+validate_local_apk_license() {
+    local apk_path="$1"
+    local metadata
+    metadata="$(LC_ALL=C tar -xOzf "${apk_path}" .PKGINFO)" || return 1
+    [ "$(grep -Fxc 'license = GPL-3.0-or-later' <<< "${metadata}")" -eq 1 ]
+}
+
 validate_local_rpm_scriptlet() {
     local rpm_path="$1"
     local tag="$2"
@@ -862,6 +895,7 @@ validate_local_rpm_build_ids() {
     [ "$(rpm -qp --qf '%{BUILDTIME}' "${rpm_path}")" = "${SOURCE_DATE_EPOCH}" ] || return 1
     [ "$(rpm -qp --qf '%{BUILDHOST}' "${rpm_path}")" = syswarden-build.invalid ] || return 1
     [ "$(rpm -qp --qf '%{CHANGELOGTIME}' "${rpm_path}")" = "${RPM_CHANGELOG_EPOCH}" ] || return 1
+    [ "$(rpm -qp --qf '%{LICENSE}' "${rpm_path}")" = GPL-3.0-or-later ] || return 1
     validate_local_rpm_scriptlet "${rpm_path}" PREIN preinst.sh || return 1
     validate_local_rpm_scriptlet "${rpm_path}" POSTIN postinst.sh || return 1
     validate_local_rpm_scriptlet "${rpm_path}" PREUN prerm.sh || return 1
@@ -919,12 +953,22 @@ if ! validate_local_deb_changelog \
     echo "[-] Local Debian archive validation failed." >&2
     exit 1
 fi
+if ! validate_local_deb_license \
+    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb"; then
+    echo "[-] Local Debian license metadata validation failed." >&2
+    exit 1
+fi
 if ! validate_local_rpm_build_ids \
     "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm"; then
     echo "[-] Local RPM build-id validation failed." >&2
     rpm -qp --qf \
         '[%{FILENAMES}\t%{FILEMODES:perms}\t%{FILEUSERNAME}:%{FILEGROUPNAME}\t%{FILELINKTOS}\n]' \
         "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" >&2 || true
+    exit 1
+fi
+if ! validate_local_apk_license \
+    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; then
+    echo "[-] Local Alpine license metadata validation failed." >&2
     exit 1
 fi
 

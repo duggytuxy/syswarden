@@ -240,6 +240,8 @@ jobs:
           install -m 0644 \
             src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt \
             "${STAGING_AMD64}/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
+          install -m 0644 LICENSE \
+            "${STAGING_AMD64}/usr/share/doc/syswarden/LICENSE.txt"
 
       - name: Build and Stage Static Alpine Binaries
         shell: bash
@@ -282,6 +284,8 @@ jobs:
             install -m 0644 \
               src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt \
               "${stage}/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
+            install -m 0644 LICENSE \
+              "${stage}/usr/share/doc/syswarden/LICENSE.txt"
           }
 
           validate_static_apk_binary() {
@@ -339,14 +343,20 @@ jobs:
             --geoip-data-license-contract \
             scripts/ci/package_geoip_data_license_contract.json \
             --geoip-data-license-source \
-            src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt
+            src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt \
+            --project-license-contract \
+            scripts/ci/package_project_license_contract.json \
+            --project-license-source LICENSE
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_APK_AMD64}" \
             --completion-contract scripts/ci/package_completion_contract.json \
             --geoip-data-license-contract \
             scripts/ci/package_geoip_data_license_contract.json \
             --geoip-data-license-source \
-            src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt
+            src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt \
+            --project-license-contract \
+            scripts/ci/package_project_license_contract.json \
+            --project-license-source LICENSE
 
       - name: Prepare Linux Maintainer Scripts
         run: |
@@ -712,6 +722,7 @@ jobs:
             --maintainer "SysWarden Engineering" \
             --description "SysWarden Host-based Security Orchestrator for Linux" \
             --url "https://github.com/${{ github.repository }}" \
+            --license "GPL-3.0-or-later" \
             --architecture amd64 \
             --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
             -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
@@ -733,6 +744,7 @@ jobs:
             --maintainer "SysWarden Engineering" \
             --description "SysWarden Host-based Security Orchestrator for Linux" \
             --url "https://github.com/${{ github.repository }}" \
+            --license "GPL-3.0-or-later" \
             --architecture x86_64 \
             --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
             --rpm-changelog "${RPM_CHANGELOG}" \
@@ -764,6 +776,7 @@ jobs:
           description: "SysWarden Host-based Security Orchestrator for Alpine Linux"
           vendor: "SysWarden Security"
           homepage: "https://github.com/${{ github.repository }}"
+          license: "GPL-3.0-or-later"
           depends:
             - nftables
             - openrc
@@ -811,6 +824,7 @@ jobs:
             local architecture="$2"
             [[ "$(dpkg-deb --field "${path}" Version)" == "${VERSION}" ]]
             [[ "$(dpkg-deb --field "${path}" Architecture)" == "${architecture}" ]]
+            [[ "$(dpkg-deb --field "${path}" License)" == "GPL-3.0-or-later" ]]
           }
 
           validate_rpm_scriptlet() {
@@ -835,6 +849,7 @@ jobs:
             local actual_build_host
             local actual_build_time
             local actual_changelog_time
+            local actual_license
             local actual_version
             local forbidden_crontab_token
             local scriptlets
@@ -843,11 +858,13 @@ jobs:
             actual_build_time="$(rpm --query --package --queryformat '%{BUILDTIME}' "${path}")" || return 1
             actual_build_host="$(rpm --query --package --queryformat '%{BUILDHOST}' "${path}")" || return 1
             actual_changelog_time="$(rpm --query --package --queryformat '%{CHANGELOGTIME}' "${path}")" || return 1
+            actual_license="$(rpm --query --package --queryformat '%{LICENSE}' "${path}")" || return 1
             [[ "${actual_version}" == "${VERSION}" ]]
             [[ "${actual_architecture}" == "${architecture}" ]]
             [[ "${actual_build_time}" == "${SOURCE_DATE_EPOCH}" ]]
             [[ "${actual_build_host}" == "syswarden-build.invalid" ]]
             [[ "${actual_changelog_time}" == "${RPM_CHANGELOG_EPOCH}" ]]
+            [[ "${actual_license}" == "GPL-3.0-or-later" ]]
             scriptlets="$(rpm --query --package --scripts "${path}")" || return 1
             for forbidden_crontab_token in \
               syswarden_cron_candidate \
@@ -888,6 +905,7 @@ jobs:
             [[ "$(grep --count '^depend = openrc$' <<< "${metadata}")" -eq 1 ]]
             [[ "$(grep --count '^depend = cronie$' <<< "${metadata}")" -eq 1 ]]
             [[ "$(grep --count '^depend = cronie-openrc$' <<< "${metadata}")" -eq 1 ]]
+            [[ "$(grep --count '^license = GPL-3.0-or-later$' <<< "${metadata}")" -eq 1 ]]
             mapfile -t preinstall_members < <(
               tar --list --file "${path}" | awk '/(^|\/)\.pre-install$/ { print }'
             )

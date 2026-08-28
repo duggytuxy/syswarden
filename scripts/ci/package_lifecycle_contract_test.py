@@ -4708,6 +4708,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "  '%{BUILDTIME}') printf '%s' \"${SOURCE_DATE_EPOCH}\"; exit \"${RPM_BUILDTIME_EXIT}\" ;;\n"
                 "  '%{BUILDHOST}') printf syswarden-build.invalid; exit \"${RPM_BUILDHOST_EXIT}\" ;;\n"
                 "  '%{CHANGELOGTIME}') printf '%s' \"${RPM_CHANGELOG_EPOCH}\"; exit \"${RPM_CHANGELOGTIME_EXIT}\" ;;\n"
+                "  '%{LICENSE}') printf '%s' \"${RPM_LICENSE}\"; exit \"${RPM_LICENSE_EXIT}\" ;;\n"
                 "  '%{PREIN}') cat \"${RPM_PREIN_FILE}\" ;;\n"
                 "  '%{POSTIN}') cat \"${RPM_POSTIN_FILE}\" ;;\n"
                 "  '%{PREUN}') cat \"${RPM_PREUN_FILE}\" ;;\n"
@@ -4732,6 +4733,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "RPM_BUILDTIME_EXIT": "0",
                 "RPM_BUILDHOST_EXIT": "0",
                 "RPM_CHANGELOGTIME_EXIT": "0",
+                "RPM_LICENSE": "GPL-3.0-or-later",
+                "RPM_LICENSE_EXIT": "0",
             }
             tag_to_name = {
                 "PREIN": "preinst.sh",
@@ -4759,6 +4762,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 programs: dict[str, str] | None = None,
                 program_statuses: dict[str, str] | None = None,
                 metadata_statuses: dict[str, str] | None = None,
+                license_value: str = "GPL-3.0-or-later",
                 scriptlet_payload: str | None = None,
             ) -> subprocess.CompletedProcess[bytes]:
                 sources = source_bodies or canonical_bodies
@@ -4767,6 +4771,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     tag: "0" for tag in tag_to_name
                 }
                 case_environment = dict(environment)
+                case_environment["RPM_LICENSE"] = license_value
                 for field, status in (metadata_statuses or {}).items():
                     case_environment[f"RPM_{field}_EXIT"] = status
                 for tag, name in tag_to_name.items():
@@ -4857,6 +4862,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "BUILDTIME",
                 "BUILDHOST",
                 "CHANGELOGTIME",
+                "LICENSE",
             ):
                 with self.subTest(mutation="metadata-query-failure", field=field):
                     rejected = validate(
@@ -4864,6 +4870,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
                         metadata_statuses={field: "92"},
                     )
                     self.assertNotEqual(rejected.returncode, 0, rejected)
+
+            wrong_license = validate(
+                dict(canonical_bodies), license_value="unknown"
+            )
+            self.assertNotEqual(wrong_license.returncode, 0, wrong_license)
 
             for forbidden in forbidden_tokens:
                 with self.subTest(forbidden=forbidden):
@@ -5187,13 +5198,15 @@ class PackageLifecycleContractTests(unittest.TestCase):
             path: Path,
             architecture: str,
             archive_hooks: dict[str, bytes],
+            licenses: tuple[str, ...] = ("GPL-3.0-or-later",),
         ) -> None:
             members = {
                 ".PKGINFO": (
                     "pkgname = syswarden\n"
                     "pkgver = 4.02.14\n"
                     f"arch = {architecture}\n"
-                    "depend = openrc\n"
+                    + "".join(f"license = {license_name}\n" for license_name in licenses)
+                    + "depend = openrc\n"
                     "depend = cronie\n"
                     "depend = cronie-openrc\n"
                 ).encode("utf-8"),
@@ -5228,6 +5241,20 @@ class PackageLifecycleContractTests(unittest.TestCase):
             write_apk(x86, "x86_64", hooks)
             accepted = validate(x86, "x86_64")
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+            for name, licenses in {
+                "missing-license": (),
+                "wrong-license": ("unknown",),
+                "duplicate-license": (
+                    "GPL-3.0-or-later",
+                    "GPL-3.0-or-later",
+                ),
+            }.items():
+                with self.subTest(mutation=name):
+                    mutated = root / f"{name}.apk"
+                    write_apk(mutated, "x86_64", hooks, licenses)
+                    rejected = validate(mutated, "x86_64")
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
 
             mutations = {
                 "missing-preupgrade": {
@@ -5493,7 +5520,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertEqual(workflow_stage.count("install -m 0644"), 2)
+        self.assertEqual(workflow_stage.count("install -m 0644"), 4)
 
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(local.count("GEOIP-DATA-LICENSE.txt"), 2)
@@ -5503,6 +5530,58 @@ class PackageLifecycleContractTests(unittest.TestCase):
             self.workflow.count("package_geoip_data_license_contract.json"), 2
         )
         self.assertEqual(local.count("package_geoip_data_license_contract.json"), 2)
+
+    def test_project_license_is_declared_and_byte_pinned_in_linux_packages(
+        self,
+    ) -> None:
+        source = REPOSITORY / "LICENSE"
+        contract_path = REPOSITORY / "scripts/ci/package_project_license_contract.json"
+        contract = json.loads(contract_path.read_text(encoding="ascii"))
+        payload = source.read_bytes()
+        self.assertEqual(contract["size"], len(payload))
+        self.assertEqual(contract["sha256"], hashlib.sha256(payload).hexdigest())
+        self.assertEqual(
+            contract["sha256"], package_lifecycle_lab.PROJECT_LICENSE_SHA256
+        )
+
+        workflow_stage = workflow_step_script(
+            self.workflow, "Prepare Staging Environment (AMD64)"
+        ) + workflow_step_script(
+            self.workflow, "Build and Stage Static Alpine Binaries"
+        )
+        self.assertEqual(
+            workflow_stage.count("usr/share/doc/syswarden/LICENSE.txt"), 2
+        )
+        self.assertEqual(workflow_stage.count("install -m 0644 LICENSE"), 2)
+        self.assertEqual(self.workflow.count("--project-license-contract"), 2)
+        self.assertEqual(
+            self.workflow.count("package_project_license_contract.json"), 2
+        )
+        self.assertEqual(self.workflow.count('--license "GPL-3.0-or-later"'), 2)
+        self.assertEqual(self.workflow.count('license: "GPL-3.0-or-later"'), 1)
+        validation_step = workflow_step_script(
+            self.workflow, "Validate Package Metadata"
+        )
+        self.assertIn(
+            'dpkg-deb --field "${path}" License', validation_step
+        )
+        self.assertIn(
+            '[[ "${actual_license}" == "GPL-3.0-or-later" ]]',
+            validation_step,
+        )
+        self.assertIn(
+            "^license = GPL-3.0-or-later$", validation_step
+        )
+
+        local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(local.count("usr/share/doc/syswarden/LICENSE.txt"), 2)
+        self.assertEqual(local.count("--project-license-contract"), 2)
+        self.assertEqual(local.count("package_project_license_contract.json"), 2)
+        self.assertEqual(local.count('--license "GPL-3.0-or-later"'), 2)
+        self.assertEqual(local.count('license: "GPL-3.0-or-later"'), 1)
+        self.assertIn("validate_local_deb_license", local)
+        self.assertIn("validate_local_apk_license", local)
+        self.assertIn("'%{LICENSE}'", local)
 
     def test_final_removal_deletes_dedicated_state_only_for_purge_equivalents(self) -> None:
         postremove = self.script("postrm.sh")
