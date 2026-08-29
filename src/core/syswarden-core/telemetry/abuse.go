@@ -55,6 +55,18 @@ func isKnownIP(ip string) bool {
 	return false
 }
 
+// maxReportedURIPathLength bounds the request path published in an AbuseIPDB comment.
+const maxReportedURIPathLength = 120
+
+// reportedURIPath keeps only the path of a matched request, because the query string
+// carries data belonging to whoever sent it and AbuseIPDB comments are public.
+func reportedURIPath(uri string) string {
+	if idx := strings.IndexByte(uri, '?'); idx != -1 {
+		uri = uri[:idx]
+	}
+	return boundedOSINTText(uri, maxReportedURIPathLength, "/")
+}
+
 // ReportAbuseAsync asynchronously reports a banned IP to AbuseIPDB
 func ReportAbuseAsync(ip, jail, payload string) {
 	abuseOnce.Do(initAbuse)
@@ -116,7 +128,7 @@ func ReportAbuseAsync(ip, jail, payload string) {
 					uri = parts[0]
 				}
 			}
-			comment = fmt.Sprintf("[%s] Attempted Web exploit (%s) on URI '%s' by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, strings.ToUpper(jail), uri, ip)
+			comment = fmt.Sprintf("[%s] Attempted Web exploit (%s) on URI '%s' by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, strings.ToUpper(jail), reportedURIPath(uri), ip)
 		} else {
 			comment = fmt.Sprintf("[%s] Attempted attack (%s) by IP %s (Reported by SysWarden https://github.com/duggytuxy/syswarden)", ts, strings.ToUpper(jail), ip)
 		}
