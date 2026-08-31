@@ -27,6 +27,7 @@ const (
 	packageFormatDEB                 = "deb"
 	packageFormatRPM                 = "rpm"
 	packageFormatAPK                 = "apk"
+	aptDPkgLockTimeoutOption         = "DPkg::Lock::Timeout=300"
 	releaseTrustRootsSchema          = "syswarden-release-trust-roots/v1"
 )
 
@@ -433,7 +434,13 @@ func packageFilename(version, format, goarch string) (string, error) {
 
 func (target packageTarget) installArguments(packagePath string) []string {
 	switch target.format {
-	case packageFormatDEB, packageFormatRPM:
+	case packageFormatDEB:
+		// Wait for ordinary apt-daily contention for at most five minutes. The
+		// exact option and value are also enforced by validateExternalCommand;
+		// the updater never removes locks, terminates package-manager processes,
+		// or retries outside its independent installation deadline.
+		return []string{"-o", aptDPkgLockTimeoutOption, "install", "-y", packagePath}
+	case packageFormatRPM:
 		return []string{"install", "-y", packagePath}
 	case packageFormatAPK:
 		// APK repository signing is not provisioned yet. The independent

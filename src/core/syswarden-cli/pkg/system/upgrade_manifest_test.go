@@ -213,6 +213,31 @@ func TestAPKUnsignedFlagRemainsBehindVerifiedManifestPipeline(t *testing.T) {
 	}
 }
 
+func TestDEBInstallArgumentsUseExactBoundedDPkgLockWait(t *testing.T) {
+	t.Parallel()
+
+	if aptDPkgLockTimeoutOption != "DPkg::Lock::Timeout=300" {
+		t.Fatalf("APT dpkg lock timeout option = %q", aptDPkgLockTimeoutOption)
+	}
+	packagePath := "/var/tmp/syswarden-update-safe/package.deb"
+	arguments := (packageTarget{format: packageFormatDEB}).installArguments(packagePath)
+	if len(arguments) != 5 || arguments[0] != "-o" || arguments[1] != aptDPkgLockTimeoutOption ||
+		arguments[2] != "install" || arguments[3] != "-y" || arguments[4] != packagePath {
+		t.Fatalf("DEB install arguments = %#v", arguments)
+	}
+}
+
+func TestRPMInstallArgumentsRemainUnchanged(t *testing.T) {
+	t.Parallel()
+
+	packagePath := "/var/tmp/syswarden-update-safe/package.rpm"
+	arguments := (packageTarget{format: packageFormatRPM}).installArguments(packagePath)
+	if len(arguments) != 3 || arguments[0] != "install" || arguments[1] != "-y" ||
+		arguments[2] != packagePath {
+		t.Fatalf("RPM install arguments = %#v", arguments)
+	}
+}
+
 func TestDetectPackageTargetRejectsWrongOSArchitectureAndPath(t *testing.T) {
 	t.Parallel()
 
