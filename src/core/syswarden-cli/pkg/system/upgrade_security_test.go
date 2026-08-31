@@ -403,16 +403,25 @@ func TestExternalCommandContractRejectsUnexpectedArguments(t *testing.T) {
 	t.Parallel()
 
 	validPackage := "/var/tmp/syswarden-update-safe/package.deb"
-	if err := validateExternalCommand("/usr/bin/apt-get", []string{"install", "-y", validPackage}); err != nil {
+	validAPT := []string{"-o", aptDPkgLockTimeoutOption, "install", "-y", validPackage}
+	if err := validateExternalCommand("/usr/bin/apt-get", validAPT); err != nil {
 		t.Fatalf("validateExternalCommand() rejected exact installer contract: %v", err)
 	}
 	invalid := []struct {
 		name string
 		args []string
 	}{
-		{name: "/tmp/apt-get", args: []string{"install", "-y", validPackage}},
-		{name: "/usr/bin/apt-get", args: []string{"install", "-y", "/tmp/package.deb"}},
+		{name: "/tmp/apt-get", args: validAPT},
+		{name: "/usr/bin/apt-get", args: []string{"install", "-y", validPackage}},
+		{name: "/usr/bin/apt-get", args: []string{"-o", "DPkg::Lock::Timeout=0", "install", "-y", validPackage}},
+		{name: "/usr/bin/apt-get", args: []string{"-o", "DPkg::Lock::Timeout=-1", "install", "-y", validPackage}},
+		{name: "/usr/bin/apt-get", args: []string{"-o", "DPkg::Lock::Timeout=301", "install", "-y", validPackage}},
+		{name: "/usr/bin/apt-get", args: []string{"-o=" + aptDPkgLockTimeoutOption, "install", "-y", validPackage}},
+		{name: "/usr/bin/apt-get", args: []string{"install", "-y", "-o", aptDPkgLockTimeoutOption, validPackage}},
+		{name: "/usr/bin/apt-get", args: []string{"-o", aptDPkgLockTimeoutOption, "-o", aptDPkgLockTimeoutOption, "install", "-y", validPackage}},
+		{name: "/usr/bin/apt-get", args: []string{"-o", aptDPkgLockTimeoutOption, "install", "-y", "/tmp/package.deb"}},
 		{name: "/usr/bin/apt-get", args: []string{"remove", "-y", validPackage}},
+		{name: "/usr/bin/dnf", args: validAPT},
 		{name: "/sbin/apk", args: []string{"add", "/var/tmp/syswarden-update-safe/package.apk"}},
 		{name: "/usr/sbin/service", args: []string{"syswarden", "stop"}},
 		{name: "/usr/sbin/service", args: []string{"operator-service", "restart"}},
@@ -531,17 +540,18 @@ func TestUpdaterInstallsOnlyVerifiedPackageAndCleansWorkspace(t *testing.T) {
 				return nil
 			}
 			installs.Add(1)
-			if len(args) != 3 || args[0] != "install" || args[1] != "-y" {
+			if len(args) != 5 || args[0] != "-o" || args[1] != aptDPkgLockTimeoutOption ||
+				args[2] != "install" || args[3] != "-y" {
 				t.Fatalf("installer arguments = %#v", args)
 			}
-			content, err := os.ReadFile(args[2])
+			content, err := os.ReadFile(args[4])
 			if err != nil {
 				t.Fatalf("ReadFile(installer package) error = %v", err)
 			}
 			if !bytes.Equal(content, packagePayload) {
 				t.Fatalf("installer package content = %q", content)
 			}
-			info, err := os.Lstat(args[2])
+			info, err := os.Lstat(args[4])
 			if err != nil {
 				t.Fatalf("Lstat(installer package) error = %v", err)
 			}
@@ -557,6 +567,46 @@ func TestUpdaterInstallsOnlyVerifiedPackageAndCleansWorkspace(t *testing.T) {
 	}
 	if installs.Load() != 1 {
 		t.Fatalf("installer was called %d times, want 1", installs.Load())
+	}
+	assertEmptyDirectory(t, tempBase)
+}
+
+func TestUpdaterDoesNotRetryFailedDEBInstallation(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	packagePayload := []byte("verified deb package")
+	manifestBytes := testMarshalManifest(t, testUpdateManifest(t, testUpdateVersion, packagePayload))
+	signature := testSignManifest(privateKey, manifestBytes)
+	client := newUpdaterTestClient(manifestBytes, signature, packagePayload)
+	tempBase := t.TempDir()
+	installFailure := errors.New("dpkg lock wait expired")
+	var installs atomic.Int32
+	u := testUpdater(
+		client,
+		tempBase,
+		"amd64",
+		map[string]ed25519.PublicKey{testReleaseKeyID: publicKey},
+		func(_ context.Context, name string, args ...string) error {
+			if name != "/usr/bin/apt-get" {
+				return nil
+			}
+			installs.Add(1)
+			if len(args) != 5 || args[0] != "-o" || args[1] != "DPkg::Lock::Timeout=300" ||
+				args[2] != "install" || args[3] != "-y" {
+				t.Fatalf("installer arguments = %#v", args)
+			}
+			return installFailure
+		},
+	)
+
+	err = u.run(t.Context())
+	if err == nil || !errors.Is(err, installFailure) || !strings.Contains(err.Error(), "install deb package") {
+		t.Fatalf("updater.run() error = %v, want one wrapped installation failure", err)
+	}
+	if installs.Load() != 1 {
+		t.Fatalf("installer was called %d times after failure, want 1", installs.Load())
 	}
 	assertEmptyDirectory(t, tempBase)
 }

@@ -129,7 +129,12 @@ func runExternalCommand(ctx context.Context, name string, args ...string) error 
 
 func validateExternalCommand(name string, args []string) error {
 	switch name {
-	case "/usr/bin/apt-get", "/usr/bin/dnf", "/usr/bin/yum":
+	case "/usr/bin/apt-get":
+		if len(args) == 5 && args[0] == "-o" && args[1] == aptDPkgLockTimeoutOption &&
+			args[2] == "install" && args[3] == "-y" && validSecurePackageArgument(args[4]) {
+			return nil
+		}
+	case "/usr/bin/dnf", "/usr/bin/yum":
 		if len(args) == 3 && args[0] == "install" && args[1] == "-y" && validSecurePackageArgument(args[2]) {
 			return nil
 		}
