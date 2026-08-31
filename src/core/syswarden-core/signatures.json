@@ -328,7 +328,8 @@
         "DROP TABLE",
         "SELECT * FROM"
       ],
-      "service": "http"
+      "service": "http",
+      "match_scope": "request-target"
     },
     {
       "id": "secretshunter",
@@ -378,7 +379,8 @@
         "/windows/win.ini",
         "/windows/system32"
       ],
-      "service": "http"
+      "service": "http",
+      "match_scope": "request-target"
     },
     {
       "id": "apimapper",
@@ -650,6 +652,7 @@
         "UNION ALL SELECT"
       ],
       "service": "http",
+      "match_scope": "request-target",
       "action": "detect"
     },
     {
@@ -802,6 +805,7 @@
         "etc/shadow"
       ],
       "service": "http",
+      "match_scope": "request-target",
       "action": "detect"
     },
     {

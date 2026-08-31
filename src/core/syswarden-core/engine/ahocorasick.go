@@ -24,6 +24,7 @@ type RuleDef struct {
 	Pattern            string   `json:"pattern,omitempty"`
 	Patterns           []string `json:"patterns,omitempty"`
 	Service            string   `json:"service"`
+	MatchScope         string   `json:"match_scope,omitempty"`
 	Action             string   `json:"action,omitempty"` // "ban" (default), "detect", or "track"
 	Threshold          int      `json:"threshold,omitempty"`
 	Window             int      `json:"window,omitempty"`
@@ -41,9 +42,10 @@ type Config struct {
 }
 
 type Engine struct {
-	ahoMachine    *goahocorasick.Automaton
-	patternToRule map[string][]RuleDef
-	regexRules    []compiledRegex
+	ahoMachine         *goahocorasick.Automaton
+	patternToRule      map[string][]RuleDef
+	regexRules         []compiledRegex
+	requestTargetRules bool
 
 	ahoCount             int
 	defaultThreshold     int
@@ -61,6 +63,13 @@ type Engine struct {
 	catalogDigest        string
 	riskModelVersion     string
 }
+
+const (
+	matchScopeRecord        = "record"
+	matchScopeRequestTarget = "request-target"
+	maxRequestTargetBytes   = 16 * 1024
+	maxScopedRecordBytes    = 1 << 20
+)
 
 // IngressSource identifies an independent delivery path for the same physical
 // log record. It is intentionally limited to the two collectors owned by the
@@ -222,6 +231,17 @@ func normalizeAndValidateRules(config *Config, defaultThreshold, defaultWindow i
 			return fmt.Errorf("rule ID %q is duplicated", rule.ID)
 		}
 		seen[rule.ID] = struct{}{}
+		if rule.MatchScope == "" {
+			rule.MatchScope = matchScopeRecord
+		}
+		switch rule.MatchScope {
+		case matchScopeRecord, matchScopeRequestTarget:
+		default:
+			return fmt.Errorf("rule %q has unsupported match scope %q", rule.ID, rule.MatchScope)
+		}
+		if rule.MatchScope == matchScopeRequestTarget && rule.TrustedHostCapture {
+			return fmt.Errorf("request-target rule %q cannot trust a host capture", rule.ID)
+		}
 		switch rule.Type {
 		case "regex", "aho-corasick":
 		default:
@@ -313,6 +333,9 @@ func NewEngine(configFile string, defaultThreshold, defaultWindow int) (*Engine,
 	ahoBuilder := goahocorasick.NewBuilder()
 
 	for _, rule := range config.Rules {
+		if rule.MatchScope == matchScopeRequestTarget {
+			e.requestTargetRules = true
+		}
 		switch rule.Type {
 		case "aho-corasick":
 			if rule.TrustedHostCapture {
@@ -368,41 +391,61 @@ func (e *Engine) RuleCount() int {
 
 func (e *Engine) Scan(logLine string) *Match {
 	structuralHost := authoritativeRecordHost(logLine)
+	requestTarget, hasRequestTarget := "", false
+	if e.requestTargetRules {
+		requestTarget, hasRequestTarget = extractRequestTarget(logLine)
+	}
 	type regexCandidate struct {
 		match *Match
 		start int
 	}
 	regexCandidates := make([]regexCandidate, 0, len(e.regexRules))
-	for _, rr := range e.regexRules {
-		if indexes := rr.re.FindStringSubmatchIndex(logLine); indexes != nil {
-			hostIdx := rr.re.SubexpIndex("host")
-			host := structuralHost
-			if !host.IsValid() && hostIdx >= 0 && rr.def.TrustedHostCapture {
-				indexOffset := 2 * hostIdx
-				if indexOffset+1 >= len(indexes) || indexes[indexOffset] < 0 || indexes[indexOffset+1] < 0 {
-					continue
-				}
-				var ok bool
-				host, ok = canonicalSourceAddr(logLine[indexes[indexOffset]:indexes[indexOffset+1]])
-				if !ok {
-					continue
-				}
+	addRegexCandidate := func(rr compiledRegex, content string) {
+		indexes := rr.re.FindStringSubmatchIndex(content)
+		if indexes == nil {
+			return
+		}
+		hostIdx := rr.re.SubexpIndex("host")
+		host := structuralHost
+		if !host.IsValid() && hostIdx >= 0 && rr.def.TrustedHostCapture {
+			indexOffset := 2 * hostIdx
+			if indexOffset+1 >= len(indexes) || indexes[indexOffset] < 0 || indexes[indexOffset+1] < 0 {
+				return
 			}
+			var ok bool
+			host, ok = canonicalSourceAddr(content[indexes[indexOffset]:indexes[indexOffset+1]])
+			if !ok {
+				return
+			}
+		}
 
-			regexCandidates = append(regexCandidates, regexCandidate{match: &Match{
-				RuleID:           rr.def.ID,
-				Payload:          logLine,
-				Service:          rr.def.Service,
-				Action:           rr.def.Action,
-				Threshold:        rr.def.Threshold,
-				Window:           rr.def.Window,
-				RiskCategory:     rr.def.RiskCategory,
-				CatalogVersion:   e.catalogVersion,
-				CatalogDigest:    e.catalogDigest,
-				RiskModelVersion: e.riskModelVersion,
-				MetricEligible:   rr.def.MetricEligible,
-				Host:             host,
-			}, start: indexes[0]})
+		regexCandidates = append(regexCandidates, regexCandidate{match: &Match{
+			RuleID:           rr.def.ID,
+			Payload:          logLine,
+			Service:          rr.def.Service,
+			Action:           rr.def.Action,
+			Threshold:        rr.def.Threshold,
+			Window:           rr.def.Window,
+			RiskCategory:     rr.def.RiskCategory,
+			CatalogVersion:   e.catalogVersion,
+			CatalogDigest:    e.catalogDigest,
+			RiskModelVersion: e.riskModelVersion,
+			MetricEligible:   rr.def.MetricEligible,
+			Host:             host,
+		}, start: indexes[0]})
+	}
+	for _, rr := range e.regexRules {
+		if rr.def.MatchScope == matchScopeRecord {
+			addRegexCandidate(rr, logLine)
+			continue
+		}
+		if !hasRequestTarget {
+			continue
+		}
+		addRegexCandidate(rr, requestTarget)
+		decodedTarget, err := url.QueryUnescape(requestTarget)
+		if err == nil && decodedTarget != requestTarget {
+			addRegexCandidate(rr, decodedTarget)
 		}
 	}
 
@@ -435,9 +478,12 @@ func (e *Engine) Scan(logLine string) *Match {
 	}
 
 	if e.ahoMachine != nil {
-		addMatches := func(content []byte) {
+		addMatches := func(content []byte, scope string) {
 			for _, ahoMatch := range e.ahoMachine.FindAllOverlapping(content) {
 				for _, rule := range e.patternToRule[string(e.ahoMachine.Pattern(ahoMatch.PatternID))] {
+					if rule.MatchScope != scope {
+						continue
+					}
 					consider(&Match{
 						RuleID:           rule.ID,
 						Payload:          logLine,
@@ -456,10 +502,17 @@ func (e *Engine) Scan(logLine string) *Match {
 			}
 		}
 
-		addMatches([]byte(logLine))
+		addMatches([]byte(logLine), matchScopeRecord)
 		decodedLine, err := url.QueryUnescape(logLine)
 		if err == nil && decodedLine != logLine {
-			addMatches([]byte(decodedLine))
+			addMatches([]byte(decodedLine), matchScopeRecord)
+		}
+		if hasRequestTarget {
+			addMatches([]byte(requestTarget), matchScopeRequestTarget)
+			decodedTarget, err := url.QueryUnescape(requestTarget)
+			if err == nil && decodedTarget != requestTarget {
+				addMatches([]byte(decodedTarget), matchScopeRequestTarget)
+			}
 		}
 	}
 	if best != nil && riskAttribution != nil && riskAttribution.RuleID != best.RuleID {
@@ -727,6 +780,289 @@ func authoritativeRecordHost(logLine string) netip.Addr {
 		return netip.Addr{}
 	}
 	return address.Unmap()
+}
+
+var jsonRequestTargetFieldNames = map[string]struct{}{
+	"path":           {},
+	"uri":            {},
+	"request_uri":    {},
+	"requestURI":     {},
+	"RequestURI":     {},
+	"RequestPath":    {},
+	"request_target": {},
+	"requestTarget":  {},
+	"RequestTarget":  {},
+}
+
+var jsonRequestLineFieldNames = map[string]struct{}{
+	"request":      {},
+	"request_line": {},
+	"RequestLine":  {},
+}
+
+// extractRequestTarget returns only an unambiguous HTTP request-target. It is
+// intentionally strict: scoped immediate-ban rules must not fall back to the
+// complete record when a supported access-log record is malformed or lacks a
+// target.
+func extractRequestTarget(logLine string) (string, bool) {
+	if len(logLine) == 0 || len(logLine) > maxScopedRecordBytes {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(logLine)
+	if trimmed == "" {
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		return extractTopLevelJSONRequestTarget(trimmed)
+	}
+	if target, ok := extractCommonAccessLogRequestTarget(trimmed); ok {
+		return target, true
+	}
+	return extractPrefixedRequestTarget(trimmed)
+}
+
+// extractCommonAccessLogRequestTarget accepts the Apache/Nginx common and
+// combined access-log prefix:
+//
+//	host ident user [timestamp] "METHOD request-target HTTP/version" status bytes
+//
+// The request field is consumed at its structural position, so later quoted
+// Referer and User-Agent fields can never be mistaken for request data.
+func extractCommonAccessLogRequestTarget(logLine string) (string, bool) {
+	position := 0
+	host, ok := consumeAccessLogToken(logLine, &position)
+	if !ok {
+		return "", false
+	}
+	if _, valid := canonicalSourceAddr(host); !valid {
+		return "", false
+	}
+	if _, ok := consumeAccessLogToken(logLine, &position); !ok {
+		return "", false
+	}
+	if _, ok := consumeAccessLogToken(logLine, &position); !ok {
+		return "", false
+	}
+	consumeAccessLogWhitespace(logLine, &position)
+	if position >= len(logLine) || logLine[position] != '[' {
+		return "", false
+	}
+	timestampEnd := strings.IndexByte(logLine[position+1:], ']')
+	if timestampEnd < 0 || timestampEnd > 128 {
+		return "", false
+	}
+	position += timestampEnd + 2
+	if !consumeAccessLogWhitespace(logLine, &position) || position >= len(logLine) || logLine[position] != '"' {
+		return "", false
+	}
+	position++
+	requestEnd := strings.IndexByte(logLine[position:], '"')
+	if requestEnd < 0 || requestEnd > maxRequestTargetBytes+64 {
+		return "", false
+	}
+	requestLine := logLine[position : position+requestEnd]
+	position += requestEnd + 1
+	target, ok := parseHTTPRequestLine(requestLine)
+	if !ok {
+		return "", false
+	}
+	if !consumeAccessLogWhitespace(logLine, &position) {
+		return "", false
+	}
+	status, ok := consumeAccessLogToken(logLine, &position)
+	if !ok || len(status) != 3 || !allASCIIDigits(status) {
+		return "", false
+	}
+	size, ok := consumeAccessLogToken(logLine, &position)
+	if !ok || size != "-" && !allASCIIDigits(size) {
+		return "", false
+	}
+	return target, true
+}
+
+// extractPrefixedRequestTarget preserves the compact access-record form used
+// by direct collectors and existing integrations: host METHOD target HTTP/x.
+func extractPrefixedRequestTarget(logLine string) (string, bool) {
+	fields := strings.Fields(logLine)
+	if len(fields) < 4 || !isAccessLogSource(fields[0]) {
+		return "", false
+	}
+	return parseHTTPRequestLine(strings.Join(fields[1:4], " "))
+}
+
+func isAccessLogSource(value string) bool {
+	if _, ok := canonicalSourceAddr(value); ok {
+		return true
+	}
+	addressPort, err := netip.ParseAddrPort(value)
+	if err != nil {
+		return false
+	}
+	_, ok := canonicalSourceAddr(addressPort.Addr().String())
+	return ok && addressPort.Port() != 0
+}
+
+func consumeAccessLogToken(input string, position *int) (string, bool) {
+	consumeAccessLogWhitespace(input, position)
+	if *position >= len(input) {
+		return "", false
+	}
+	start := *position
+	for *position < len(input) {
+		switch input[*position] {
+		case ' ', '\t', '\r', '\n':
+			return input[start:*position], *position > start
+		default:
+			(*position)++
+		}
+	}
+	return input[start:*position], *position > start
+}
+
+func consumeAccessLogWhitespace(input string, position *int) bool {
+	start := *position
+	for *position < len(input) && (input[*position] == ' ' || input[*position] == '\t') {
+		(*position)++
+	}
+	return *position > start
+}
+
+func parseHTTPRequestLine(requestLine string) (string, bool) {
+	if len(requestLine) == 0 || len(requestLine) > maxRequestTargetBytes+64 || strings.ContainsAny(requestLine, "\t\r\n") {
+		return "", false
+	}
+	parts := strings.Split(requestLine, " ")
+	if len(parts) != 3 || !validHTTPMethod(parts[0]) || !validHTTPVersion(parts[2]) || !validRequestTarget(parts[1]) {
+		return "", false
+	}
+	return parts[1], true
+}
+
+func validHTTPMethod(method string) bool {
+	if len(method) == 0 || len(method) > 32 {
+		return false
+	}
+	for index := 0; index < len(method); index++ {
+		character := method[index]
+		if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			continue
+		}
+		switch character {
+		case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validHTTPVersion(version string) bool {
+	if !strings.HasPrefix(version, "HTTP/") {
+		return false
+	}
+	number := strings.TrimPrefix(version, "HTTP/")
+	if number == "" {
+		return false
+	}
+	dotSeen := false
+	for index := 0; index < len(number); index++ {
+		if number[index] == '.' && !dotSeen && index > 0 && index+1 < len(number) {
+			dotSeen = true
+			continue
+		}
+		if number[index] < '0' || number[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validRequestTarget(target string) bool {
+	if len(target) == 0 || len(target) > maxRequestTargetBytes {
+		return false
+	}
+	for index := 0; index < len(target); index++ {
+		if target[index] <= ' ' || target[index] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func allASCIIDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func extractTopLevelJSONRequestTarget(logLine string) (string, bool) {
+	decoder := json.NewDecoder(strings.NewReader(logLine))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return "", false
+	}
+
+	seen := make(map[string]struct{})
+	candidate := ""
+	hasCandidate := false
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return "", false
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return "", false
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return "", false
+		}
+		seen[key] = struct{}{}
+
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return "", false
+		}
+		_, directTarget := jsonRequestTargetFieldNames[key]
+		_, requestLine := jsonRequestLineFieldNames[key]
+		if !directTarget && !requestLine {
+			continue
+		}
+		var encoded string
+		if err := json.Unmarshal(value, &encoded); err != nil {
+			return "", false
+		}
+		target := encoded
+		if requestLine {
+			var valid bool
+			target, valid = parseHTTPRequestLine(encoded)
+			if !valid {
+				return "", false
+			}
+		} else if !validRequestTarget(target) {
+			return "", false
+		}
+		if hasCandidate && candidate != target {
+			return "", false
+		}
+		candidate = target
+		hasCandidate = true
+	}
+
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return "", false
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return "", false
+	}
+	return candidate, hasCandidate
 }
 
 // EvaluateThreshold returns true if the IP has reached the limit and should be banned
