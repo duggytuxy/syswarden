@@ -23,6 +23,10 @@ func FuzzEngineNetworkAndURLInput(f *testing.F) {
 		"Failed password for root from 999.0.2.44 port 22",
 		"GET /..%2Fetc%2Fpasswd HTTP/1.1",
 		"GET /..%ZZetc%2Fpasswd HTTP/1.1",
+		`198.51.100.8 - - [31/Aug/2026:08:00:00 +0200] "GET /?q=SLEEP(5) HTTP/1.1" 403 0 "-" "safe"`,
+		`198.51.100.8 - - [31/Aug/2026:08:00:00 +0200] "GET /safe HTTP/1.1" 200 0 "SLEEP(5)" "php://filter"`,
+		`{"client_ip":"198.51.100.8","path":"/?q=SLEEP(5)"}`,
+		`{"client_ip":"198.51.100.8","path":"/safe","request_uri":"/php://filter"}`,
 		"scanner user-agent sqlmap",
 		"\x00\xff%00%ff",
 	}
@@ -93,6 +97,14 @@ func newFuzzEngine(f *testing.F) *Engine {
       "type": "aho-corasick",
       "patterns": ["../etc/passwd", "sqlmap"],
       "service": "http",
+      "action": "ban"
+    },
+    {
+      "id": "scoped-probe",
+      "type": "aho-corasick",
+      "patterns": ["SLEEP(", "php://filter"],
+      "service": "http",
+      "match_scope": "request-target",
       "action": "ban"
     }
   ]
