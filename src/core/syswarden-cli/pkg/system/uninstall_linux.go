@@ -799,6 +799,10 @@ func UninstallSystem() error {
 
 	// Exact core and firewall service artifacts were already removed by the
 	// shared verified preparation while this executable path was available.
+	// That preparation also exclusively owns the rsyslog runtime socket and
+	// policy sequence: it either removed them after an active restart barrier or
+	// attested both already absent without mutation while offline. Do not repeat
+	// either teardown in this host-removal tail.
 
 	// Every reserved firewall table and compatibility permission was already
 	// removed and verified under the firewall lock before this phase. Exact
@@ -829,9 +833,6 @@ func UninstallSystem() error {
 		return err
 	}
 	if err := removeDedicatedRemovalTree("/var/log/syswarden"); err != nil {
-		return err
-	}
-	if err := removeExactRuntimeSocketAt("/run/syswarden.sock", 0, 0); err != nil {
 		return err
 	}
 	if err := removeRemovalStateContents(); err != nil {

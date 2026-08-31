@@ -500,6 +500,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 self.assertEqual(local_rpm.count(flag), 1)
         self.assertEqual(workflow_rpm.count('--rpm-changelog "${RPM_CHANGELOG}"'), 1)
         self.assertEqual(local_rpm.count('--rpm-changelog "${RPM_CHANGELOG}"'), 1)
+        for rpm_block in (workflow_rpm, local_rpm):
+            self.assertEqual(
+                rpm_block.count("--directories /usr/share/doc/syswarden"), 1
+            )
         self.assertIn("prepare_rpm_scriptlet() {", workflow_script_preparation)
         self.assertIn("prepare_rpm_scriptlet() {", local)
         for source in (workflow_script_preparation, local):
@@ -659,6 +663,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("\n    fpm -f -s dir -t rpm", rpm_block)
         self.assertTrue(rpm_block.rstrip().endswith(")"))
         self.assertIn("--directories /usr/lib/.build-id", rpm_block)
+        self.assertIn("--directories /usr/share/doc/syswarden", rpm_block)
         self.assertIn("-C staging-rpm .", rpm_block)
         self.assertNotIn("-C staging .", rpm_block)
         self.assertIn("validate_local_rpm_build_ids()", source)

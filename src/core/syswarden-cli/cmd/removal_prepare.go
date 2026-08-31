@@ -19,7 +19,9 @@ var removeOwnedWireGuardStateForRemoval = func() error {
 }
 var removePreparedServiceArtifacts = system.RemovePreparedServiceArtifactsForRemoval
 var removePreparedFirewallRuntimeLock = system.RemovePreparedFirewallRuntimeLockForRemoval
-var removeOwnedIntegrationArtifactsForRemoval = integration.RemoveOwnedGeneratedArtifactsForPackageRemoval
+var removeOwnedIntegrationArtifactsForRemoval = integration.RemoveOwnedRsyslogArtifactsForPackageRemoval
+var removeExactRuntimeSocketForRemoval = system.RemoveExactRuntimeSocketForPackageRemoval
+var removeOwnedRsyslogSELinuxPolicyForRemoval = integration.RemoveOwnedRsyslogSELinuxPolicyForPackageRemoval
 
 func prepareVerifiedFirewallRemoval() error {
 	if err := beginRemoval(); err != nil {
@@ -49,10 +51,37 @@ func prepareVerifiedFirewallRemoval() error {
 			err,
 		)
 	}
-	if err := removeOwnedIntegrationArtifactsForRemoval(); err != nil {
+	rsyslogOutcome, err := removeOwnedIntegrationArtifactsForRemoval()
+	if err != nil {
 		return fmt.Errorf(
-			"refusing removal before exact generated integration cleanup; every ambiguous artifact is preserved and the durable removal barrier is retained: %w",
+			"refusing removal before exact generated integration cleanup and an attested rsyslog restart; every ambiguous artifact, the runtime socket, and the SELinux policy are preserved; the durable removal barrier is retained: %w",
 			err,
+		)
+	}
+	switch rsyslogOutcome {
+	case integration.RsyslogPackageRemovalActiveQuiesced:
+		if err := removeExactRuntimeSocketForRemoval(); err != nil {
+			return fmt.Errorf(
+				"refusing removal before exact runtime socket cleanup; the rsyslog producer restart is complete, but the SELinux policy and durable removal barrier are retained: %w",
+				err,
+			)
+		}
+		if err := removeOwnedRsyslogSELinuxPolicyForRemoval(); err != nil {
+			return fmt.Errorf(
+				"refusing removal before exact rsyslog SELinux policy cleanup; the producer is quiesced, the runtime socket is absent, and the durable removal barrier is retained: %w",
+				err,
+			)
+		}
+	case integration.RsyslogPackageRemovalOfflineAlreadyComplete:
+		// The integration phase already attested the exact socket, every
+		// SELinux provenance/transaction target, and any installed module
+		// absent. Preserve the OFFLINE read-only contract by never invoking
+		// either related mutator. The independent package-manager cleanup of
+		// prepared service artifacts and the runtime lock remains necessary.
+	default:
+		return fmt.Errorf(
+			"refusing removal after an unrecognized rsyslog package-removal outcome %d; the runtime socket and SELinux policy are retained, and the durable removal barrier is retained",
+			rsyslogOutcome,
 		)
 	}
 	if err := removePreparedServiceArtifacts(); err != nil {

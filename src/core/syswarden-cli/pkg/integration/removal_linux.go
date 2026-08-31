@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/security"
+	"syswarden-cli/pkg/system"
 
 	"golang.org/x/sys/unix"
 )
@@ -63,15 +64,28 @@ func (failure *ownedArtifactDirectoryAmbiguityError) Error() string { return fai
 func (failure *ownedArtifactDirectoryAmbiguityError) Unwrap() error { return failure.cause }
 
 type exactOwnedArtifactRemovalOptions struct {
-	renameat2      func(int, string, int, string, uint) error
-	unlinkat       func(int, string, int) error
-	syncDirectory  func(*os.File) error
-	faultPoint     func(string)
-	recreationStep func(string) error
-	warn           func(string)
-	beforeCommit   func() error
-	afterRestore   func() error
+	renameat2                   func(int, string, int, string, uint) error
+	unlinkat                    func(int, string, int) error
+	syncDirectory               func(*os.File) error
+	faultPoint                  func(string)
+	recreationStep              func(string) error
+	warn                        func(string)
+	beforeCommit                func() error
+	afterRestore                func() error
+	requireSocketProducerAbsent bool
 }
+
+// RsyslogPackageRemovalOutcome tells the package-removal orchestrator whether
+// the rsyslog producer was actively quiesced or whether a read-only offline
+// retry proved that the complete rsyslog/socket/policy teardown had already
+// finished. The zero value is deliberately invalid and must fail closed.
+type RsyslogPackageRemovalOutcome uint8
+
+const (
+	RsyslogPackageRemovalOutcomeUnknown RsyslogPackageRemovalOutcome = iota
+	RsyslogPackageRemovalActiveQuiesced
+	RsyslogPackageRemovalOfflineAlreadyComplete
+)
 
 func defaultExactOwnedArtifactRemovalOptions() exactOwnedArtifactRemovalOptions {
 	return exactOwnedArtifactRemovalOptions{
@@ -860,19 +874,106 @@ func exactOwnedArtifactStillExistsInDirectory(
 	return inspection.identity.exists, nil
 }
 
-// RemoveOwnedGeneratedArtifactsForPackageRemoval removes only byte-exact
-// generated integrations while the installed binary and configuration exist.
-func RemoveOwnedGeneratedArtifactsForPackageRemoval() error {
-	if err := removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
+// RemoveOwnedRsyslogArtifactsForPackageRemoval removes only byte-exact
+// generated integrations while the installed binary and configuration exist,
+// then forces an attested rsyslog restart. The restart is an explicit producer
+// quiescence barrier. Only RsyslogPackageRemovalActiveQuiesced authorizes the
+// caller to remove the runtime socket and then its SELinux policy. An offline
+// invocation is accepted only as a read-only retry after every related teardown
+// target is attested absent; RsyslogPackageRemovalOfflineAlreadyComplete
+// requires callers to skip both mutators.
+func RemoveOwnedRsyslogArtifactsForPackageRemoval() (RsyslogPackageRemovalOutcome, error) {
+	return removeOwnedRsyslogArtifactsForPackageRemovalWithRuntimeAtUsing(
 		config.GlobalConfig,
 		wafRsyslogParentDirectory,
 		0, 0,
 		defaultExactOwnedArtifactRemovalOptions(),
-		reconcileWAFRsyslogService,
+		system.ServiceManagerRuntimeState,
+		attestCompletedRsyslogTeardownForOfflinePackageRemoval,
+		reconcileWAFRsyslogServiceForPackageRemoval,
+	)
+}
+
+func removeOwnedRsyslogArtifactsForPackageRemovalWithRuntimeAtUsing(
+	activeConfig *config.Config,
+	parentPath string,
+	uid, gid uint32,
+	options exactOwnedArtifactRemovalOptions,
+	classify func() (string, error),
+	attestOfflineNoop func() error,
+	restartRsyslog func(bool) error,
+) (RsyslogPackageRemovalOutcome, error) {
+	if classify == nil || attestOfflineNoop == nil {
+		return RsyslogPackageRemovalOutcomeUnknown, fmt.Errorf("rsyslog package-removal runtime controls are unavailable")
+	}
+	state, err := classify()
+	if err != nil {
+		return RsyslogPackageRemovalOutcomeUnknown, fmt.Errorf("classify service-manager runtime before rsyslog package removal: %w", err)
+	}
+	switch state {
+	case "OFFLINE":
+		// An offline manager cannot prove that a producer consumed the updated
+		// configuration. Accept only a read-only retry whose complete teardown
+		// state is already absent; never mutate toward that state while offline.
+		if err := attestOfflineNoop(); err != nil {
+			return RsyslogPackageRemovalOutcomeUnknown, fmt.Errorf(
+				"refusing offline package removal because the completed rsyslog teardown state cannot be attested: %w",
+				err,
+			)
+		}
+		return RsyslogPackageRemovalOfflineAlreadyComplete, nil
+	case "ACTIVE":
+		if err := removeOwnedRsyslogArtifactsForPackageRemovalAtUsing(
+			activeConfig,
+			parentPath,
+			uid,
+			gid,
+			options,
+			restartRsyslog,
+		); err != nil {
+			return RsyslogPackageRemovalOutcomeUnknown, err
+		}
+		return RsyslogPackageRemovalActiveQuiesced, nil
+	default:
+		return RsyslogPackageRemovalOutcomeUnknown, fmt.Errorf("refusing unrecognized service-manager runtime state %q", state)
+	}
+}
+
+func removeOwnedRsyslogArtifactsForPackageRemovalAtUsing(
+	activeConfig *config.Config,
+	parentPath string,
+	uid, gid uint32,
+	options exactOwnedArtifactRemovalOptions,
+	restartRsyslog func(bool) error,
+) error {
+	if restartRsyslog == nil {
+		return fmt.Errorf("rsyslog package-removal restart is unavailable")
+	}
+	options.requireSocketProducerAbsent = true
+	restartCalls := 0
+	trackedRestart := func(changed bool) error {
+		restartCalls++
+		return restartRsyslog(changed)
+	}
+	if err := removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
+		activeConfig,
+		parentPath,
+		uid,
+		gid,
+		options,
+		trackedRestart,
 	); err != nil {
 		return err
 	}
-	return removeOwnedRsyslogSELinuxPolicyForPackageRemoval()
+	// A previous interrupted removal may already have committed every exact
+	// fragment while the old rsyslog process still retains the bridge in memory.
+	// Therefore an otherwise no-op retry still needs one real restart barrier.
+	if restartCalls == 0 {
+		if err := trackedRestart(false); err != nil {
+			return fmt.Errorf("force and attest rsyslog restart after exact package-removal cleanup: %w", err)
+		}
+	}
+	return nil
 }
 
 func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
@@ -987,6 +1088,11 @@ func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
 			preserveProvenance = preserveProvenance || present
 		}
 	}
+	if options.requireSocketProducerAbsent {
+		if err := requireRsyslogSocketProducerAbsentInDirectory(directory); err != nil {
+			return err
+		}
+	}
 
 	siemExpectation, hasSIEMExpectation := exactOwnedArtifactExpectation{}, false
 	if record, exists := provenance.records[rsyslogSIEMConfigName]; exists {
@@ -1067,4 +1173,201 @@ func removeOwnedGeneratedArtifactsForPackageRemovalAtUsing(
 		options,
 	)
 	return err
+}
+
+func requireRsyslogSocketProducerAbsentInDirectory(directory *os.File) error {
+	if directory == nil {
+		return fmt.Errorf("rsyslog directory is unavailable while attesting producer absence")
+	}
+	for _, name := range []string{
+		wafRsyslogConfigName,
+		exactArtifactQuarantineName(wafRsyslogConfigName),
+	} {
+		var stat unix.Stat_t
+		err := unix.Fstatat(int(directory.Fd()), name, &stat, unix.AT_SYMLINK_NOFOLLOW)
+		if errors.Is(err, unix.ENOENT) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("attest SysWarden rsyslog socket producer absence for %s: %w", name, err)
+		}
+		return fmt.Errorf(
+			"refusing package removal while the potential SysWarden rsyslog socket producer %s remains",
+			name,
+		)
+	}
+	return nil
+}
+
+func attestCompletedRsyslogTeardownForOfflinePackageRemoval() error {
+	return attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+		wafRsyslogParentDirectory,
+		0,
+		0,
+		system.AttestRuntimeSocketAbsentForPackageRemoval,
+		inspectTrustedSemoduleForOfflinePackageRemoval,
+		func() ([]selinuxModuleIdentity, error) {
+			return listSELinuxModulesUsing(wafRsyslogParentDirectory, runSELinuxModuleCommand)
+		},
+	)
+}
+
+func attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+	parentPath string,
+	uid, gid uint32,
+	attestSocketAbsent func() error,
+	inspectSemodule func() (bool, error),
+	listSELinuxModules func() ([]selinuxModuleIdentity, error),
+) error {
+	if attestSocketAbsent == nil || inspectSemodule == nil || listSELinuxModules == nil {
+		return fmt.Errorf("offline package-removal absence inspectors are unavailable")
+	}
+	if err := attestLegacyCompletionAbsentForOfflinePackageRemovalAt(
+		parentPath,
+		uid,
+		gid,
+	); err != nil {
+		return err
+	}
+	directory, exists, err := openExistingOwnedArtifactDirectoryAt(
+		parentPath,
+		wafRsyslogDirectoryName,
+		uid,
+		gid,
+	)
+	if err != nil {
+		return fmt.Errorf("attest offline rsyslog teardown directory: %w", err)
+	}
+	if exists {
+		defer directory.Close()
+		if err := unix.Flock(int(directory.Fd()), unix.LOCK_SH); err != nil {
+			return fmt.Errorf("lock offline rsyslog teardown attestation: %w", err)
+		}
+		defer func() { _ = unix.Flock(int(directory.Fd()), unix.LOCK_UN) }()
+		entries, err := directory.Readdirnames(-1)
+		if err != nil {
+			return fmt.Errorf("list offline rsyslog teardown targets: %w", err)
+		}
+		for _, entry := range entries {
+			if isRsyslogPackageRemovalTargetName(entry) {
+				return fmt.Errorf("rsyslog teardown target %q remains", entry)
+			}
+		}
+	}
+	if err := attestSocketAbsent(); err != nil {
+		return fmt.Errorf("attest offline runtime socket absence: %w", err)
+	}
+	semoduleExists, err := inspectSemodule()
+	if err != nil {
+		return fmt.Errorf("attest trusted offline SELinux module tool: %w", err)
+	}
+	if !semoduleExists {
+		// Debian/APK installations do not require policycoreutils. A strict
+		// ENOENT for semodule is therefore sufficient only after every owned
+		// SELinux provenance/transaction artifact and the exact socket were
+		// already attested absent above.
+		return nil
+	}
+	modules, err := listSELinuxModules()
+	if err != nil {
+		return fmt.Errorf("attest offline SELinux module absence: %w", err)
+	}
+	if err := rejectRsyslogSELinuxModuleAtOtherPriority(modules); err != nil {
+		return fmt.Errorf("attest offline SELinux module priority: %w", err)
+	}
+	_, moduleExists, err := exactRsyslogSELinuxModule(modules)
+	if err != nil {
+		return fmt.Errorf("attest exact offline SELinux module identity: %w", err)
+	}
+	if moduleExists {
+		return fmt.Errorf(
+			"priority %d SELinux module %s remains",
+			rsyslogSELinuxModulePriority,
+			rsyslogSELinuxModuleName,
+		)
+	}
+	return nil
+}
+
+func inspectTrustedSemoduleForOfflinePackageRemoval() (bool, error) {
+	return inspectTrustedSemoduleForOfflinePackageRemovalUsing(
+		lstatTrustedPath,
+		os.Readlink,
+	)
+}
+
+func inspectTrustedSemoduleForOfflinePackageRemovalUsing(
+	lstat trustedPathLstat,
+	readlink trustedPathReadlink,
+) (bool, error) {
+	if lstat == nil || readlink == nil {
+		return false, fmt.Errorf("semodule path inspectors are unavailable")
+	}
+	exists, err := inspectTrustedExecutablePresenceUsing(
+		trustedSemodulePath,
+		lstat,
+		readlink,
+	)
+	if err != nil {
+		return false, fmt.Errorf("inspect trusted executable %s: %w", trustedSemodulePath, err)
+	}
+	return exists, nil
+}
+
+func attestLegacyCompletionAbsentForOfflinePackageRemovalAt(
+	parentPath string,
+	uid, gid uint32,
+) error {
+	directory, exists, err := openExistingOwnedArtifactDirectoryAt(
+		parentPath,
+		legacyCompletionDirectoryName,
+		uid,
+		gid,
+	)
+	if err != nil {
+		return fmt.Errorf("attest offline legacy completion directory: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	defer directory.Close()
+	if err := unix.Flock(int(directory.Fd()), unix.LOCK_SH); err != nil {
+		return fmt.Errorf("lock offline legacy completion attestation: %w", err)
+	}
+	defer func() { _ = unix.Flock(int(directory.Fd()), unix.LOCK_UN) }()
+	entries, err := directory.Readdirnames(-1)
+	if err != nil {
+		return fmt.Errorf("list offline legacy completion targets: %w", err)
+	}
+	for _, entry := range entries {
+		if isLegacyCompletionPackageRemovalTargetName(entry) {
+			return fmt.Errorf("legacy completion teardown target %q remains", entry)
+		}
+	}
+	return nil
+}
+
+func isLegacyCompletionPackageRemovalTargetName(name string) bool {
+	return name == legacyCompletionName ||
+		name == exactArtifactQuarantineName(legacyCompletionName) ||
+		name == "."+legacyCompletionName+exactArtifactRecreationSuffix ||
+		strings.HasPrefix(name, "."+legacyCompletionName+".syswarden-") && strings.HasSuffix(name, ".tmp")
+}
+
+func isRsyslogPackageRemovalTargetName(name string) bool {
+	for _, canonical := range []string{
+		rsyslogAntiForgingConfigName,
+		wafRsyslogConfigName,
+		rsyslogSIEMConfigName,
+		rsyslogProvenanceName,
+		rsyslogSELinuxProvenanceName,
+	} {
+		if name == canonical ||
+			name == exactArtifactQuarantineName(canonical) ||
+			name == "."+canonical+exactArtifactRecreationSuffix ||
+			strings.HasPrefix(name, "."+canonical+".syswarden-") && strings.HasSuffix(name, ".tmp") {
+			return true
+		}
+	}
+	return false
 }

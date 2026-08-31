@@ -1388,7 +1388,10 @@ func installRsyslogSELinuxPolicyWithProvenanceAtUsing(
 	return transaction, nil
 }
 
-func removeOwnedRsyslogSELinuxPolicyForPackageRemoval() error {
+// RemoveOwnedRsyslogSELinuxPolicyForPackageRemoval removes only the exact,
+// provenanced priority-400 module. Callers must first attest that rsyslog has
+// restarted without the SysWarden socket producer and remove the exact socket.
+func RemoveOwnedRsyslogSELinuxPolicyForPackageRemoval() error {
 	return removeOwnedRsyslogSELinuxPolicyForPackageRemovalAtUsing(
 		wafRsyslogParentDirectory,
 		0,

@@ -630,6 +630,7 @@ LIVE_TELEMETRY_STATE_ATTRIBUTES = (
 )
 
 BASH_COMPLETION_PATH = "/usr/share/bash-completion/completions/syswarden"
+RPM_DOCUMENTATION_ROOT = "/usr/share/doc/syswarden"
 GEOIP_DATA_LICENSE_PATH = "/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
 GEOIP_DATA_LICENSE_FIRST_VERSION = "4.04.0"
 GEOIP_DATA_LICENSE_SHA256 = (
@@ -973,6 +974,13 @@ def expected_event_checks(
         return tuple(checks)
 
     removal_label = "final-removal" if family == "rpm" else scenario
+    if family == "rpm":
+        checks.extend(
+            _generated_rsyslog_pre_removal_event_checks(
+                scenario,
+                removal_label,
+            )
+        )
     checks.extend(
         (
             f"{scenario}.{removal_label}",
@@ -981,7 +989,13 @@ def expected_event_checks(
         )
     )
     checks.append(f"{scenario}.{removal_label}.service_manager_calls")
-    checks.extend(_generated_cleanup_event_checks(scenario, removal_label))
+    checks.extend(
+        _generated_cleanup_event_checks(
+            scenario,
+            removal_label,
+            exact_rsyslog=family == "rpm",
+        )
+    )
     if family in {"deb", "rpm", "apk"}:
         checks.extend(
             f"{scenario}.{removal_label}.state.{key}"
@@ -2661,7 +2675,9 @@ validate_manifest_contract() {
             if [ "${legacy_completion_payload}" -eq 1 ]; then
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             elif [ "${geoip_data_license_payload}" -eq 1 ]; then
-                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+                required_manifest_path "${manifest}" \
+                    /usr/share/doc/syswarden || return 1
             else
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
             fi
@@ -2741,6 +2757,10 @@ validate_inventory_contract() {
         inventory_has_exact_entry "${inventory}" \
             /usr/share/doc/syswarden/LICENSE.txt file 644 \
             3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986 || return 1
+        if [ "${PACKAGE_FAMILY}" = rpm ]; then
+            inventory_has_exact_entry "${inventory}" \
+                /usr/share/doc/syswarden directory 755 - || return 1
+        fi
     else
         geoip_data_license_rc=$?
         [ "${geoip_data_license_rc}" -eq 1 ] || return 1
@@ -4850,38 +4870,11 @@ assert_package_absent() {
     fi
 }
 
-rsyslog_exec_reload_succeeded() {
-    reload_records="$1"
-    [ -n "${reload_records}" ] || return 1
-    printf '%s\n' "${reload_records}" | LC_ALL=C awk '
-        BEGIN { count = 0 }
-        {
-            count++
-            if ($0 !~ /^[{] path=\/[^;]+ ; argv\[\]=[^;]+ ; ignore_errors=(yes|no) ; start_time=\[[^]]+\] ; stop_time=\[[^]]+\] ; pid=[0-9]+ ; code=exited ; status=0(\/SUCCESS)? [}]$/) {
-                exit 1
-            }
-            if (index($0, "start_time=[n/a]") ||
-                index($0, "stop_time=[n/a]")) {
-                exit 1
-            }
-            pid = $0
-            sub(/^.* ; pid=/, "", pid)
-            sub(/ ; code=.*$/, "", pid)
-            if (pid !~ /^[0-9]+$/ || pid + 0 <= 1) {
-                exit 1
-            }
-        }
-        END { if (count < 1) exit 1 }
-    '
-}
-
 rsyslog_reactivation_mode() {
-    reload_before="$1"
-    reload_after="$2"
-    main_pid_before="$3"
-    main_pid_after="$4"
-    active_enter_before="$5"
-    active_enter_after="$6"
+    main_pid_before="$1"
+    main_pid_after="$2"
+    active_enter_before="$3"
+    active_enter_after="$4"
     for reactivation_number in \
         "${main_pid_before}" \
         "${main_pid_after}" \
@@ -4896,14 +4889,6 @@ rsyslog_reactivation_mode() {
         [ "${active_enter_before}" -gt 0 ] && \
         [ "${active_enter_after}" -gt 0 ] || return 1
 
-    if [ -n "${reload_before}" ] && \
-       [ -n "${reload_after}" ] && \
-       [ "${reload_after}" != "${reload_before}" ] && \
-       rsyslog_exec_reload_succeeded "${reload_after}" && \
-       [ "${main_pid_after}" -eq "${main_pid_before}" ]; then
-        printf '%s\n' reload
-        return 0
-    fi
     if [ "${main_pid_after}" -ne "${main_pid_before}" ] && \
        [ "${active_enter_after}" -gt "${active_enter_before}" ]; then
         printf '%s\n' restart
@@ -4933,7 +4918,7 @@ seed_generated_runtime_artifacts() {
     mkdir -p /etc/rsyslog.d
     case "${rsyslog_contract}" in
         exact-rsyslog)
-            [ "${PACKAGE_FAMILY}" = deb ] || return 1
+            case "${PACKAGE_FAMILY}" in deb|rpm) ;; *) return 1 ;; esac
             [ -n "${evidence_label}" ] || return 1
             for path in \
                 /etc/rsyslog.d/99-syswarden-siem.conf \
@@ -5003,8 +4988,6 @@ seed_generated_runtime_artifacts() {
                 "$(cat /tmp/syswarden-rsyslog-waf-size)" \
                 "$(cat /tmp/syswarden-rsyslog-waf-before)")" \
                 /etc/rsyslog.d/.syswarden-rsyslog-provenance-v1 || return 1
-            LC_ALL=C systemctl show rsyslog.service -p ExecReload --value > \
-                /tmp/syswarden-rsyslog-reload-before || return 1
             LC_ALL=C systemctl show rsyslog.service -p MainPID --value > \
                 /tmp/syswarden-rsyslog-pid-before || return 1
             LC_ALL=C systemctl show rsyslog.service \
@@ -5144,28 +5127,24 @@ assert_generated_runtime_artifact_contract() {
                 record fail "${PREFIX}.${label}.generated.rsyslog_configuration_valid" \
                     "complete rsyslog configuration is invalid after exact generated bridge removal"
             fi
-            rsyslog_reload_before="$(cat /tmp/syswarden-rsyslog-reload-before 2>/dev/null || true)"
-            rsyslog_reload_after="$(LC_ALL=C systemctl show rsyslog.service -p ExecReload --value 2>/dev/null || true)"
             rsyslog_pid_before="$(cat /tmp/syswarden-rsyslog-pid-before 2>/dev/null || true)"
             rsyslog_active_enter_before="$(cat /tmp/syswarden-rsyslog-active-enter-before 2>/dev/null || true)"
             rsyslog_pid_after="$(LC_ALL=C systemctl show rsyslog.service -p MainPID --value 2>/dev/null || true)"
             rsyslog_active_enter_after="$(LC_ALL=C systemctl show rsyslog.service -p ActiveEnterTimestampMonotonic --value 2>/dev/null || true)"
             case "${rsyslog_pid_after}" in ''|*[!0-9]*) rsyslog_pid_after=0 ;; esac
             rsyslog_reactivation_proof="$(rsyslog_reactivation_mode \
-                "${rsyslog_reload_before}" "${rsyslog_reload_after}" \
                 "${rsyslog_pid_before}" "${rsyslog_pid_after}" \
                 "${rsyslog_active_enter_before}" \
                 "${rsyslog_active_enter_after}" 2>/dev/null || true)"
-            if { [ "${rsyslog_reactivation_proof}" = reload ] || \
-                 [ "${rsyslog_reactivation_proof}" = restart ]; } && \
+            if [ "${rsyslog_reactivation_proof}" = restart ] && \
                [ "$(systemctl is-active rsyslog.service 2>/dev/null || true)" = active ] && \
                [ "${rsyslog_pid_after}" -gt 1 ] && \
                kill -0 "${rsyslog_pid_after}" 2>/dev/null; then
                 record pass "${PREFIX}.${label}.generated.rsyslog_reactivated" \
-                    "rsyslog completed a successful ${rsyslog_reactivation_proof} activation and remains active after exact cleanup"
+                    "rsyslog completed a forced restart with a new process identity and remains active after exact cleanup"
             else
                 record fail "${PREFIX}.${label}.generated.rsyslog_reactivated" \
-                    "rsyslog lacks portable evidence of a successful reload or restart fallback after exact cleanup"
+                    "rsyslog lacks proof of a forced restart with a new process identity after exact cleanup"
             fi
             ;;
         ambiguous-rsyslog)
@@ -5404,10 +5383,10 @@ scenario_remove() {
             assert_dedicated_roots_absent remove
             ;;
         rpm)
-            seed_generated_runtime_artifacts || return
+            seed_generated_runtime_artifacts exact-rsyslog final-removal || return
             run_step final-removal remove_package || return
             assert_package_absent final-removal candidate
-            assert_generated_runtime_artifact_contract final-removal
+            assert_generated_runtime_artifact_contract final-removal exact-rsyslog
             assert_dedicated_roots_absent final-removal
             if ! installed_version >/dev/null 2>&1 && [ ! -s /tmp/remaining-final-removal ]; then
                 record pass "${PREFIX}.final-removal.purge-equivalent" "RPM final erase completed its verified purge-equivalent semantics"
@@ -5693,6 +5672,7 @@ def _validate_manager_paths(
     }
     expected = (
         expected_payload_paths
+        | ({RPM_DOCUMENTATION_ROOT} if license_payloads else set())
         | {"/usr/lib/.build-id"}
         | required_build_directories
         | build_links
@@ -5866,6 +5846,18 @@ def validate_inventory_snapshot(
             raise LifecycleLabError("DEB generated changelog inventory is invalid")
     if family == "rpm":
         build_id_targets: set[str] = set()
+        if license_payloads:
+            documentation_root = entries[RPM_DOCUMENTATION_ROOT]
+            if (
+                documentation_root["type"] != "directory"
+                or documentation_root["mode"] != "755"
+                or documentation_root["uid"] != 0
+                or documentation_root["gid"] != 0
+                or documentation_root["value"] != "-"
+            ):
+                raise LifecycleLabError(
+                    "RPM documentation root metadata contract failed"
+                )
         for path, entry in entries.items():
             if path == "/usr/lib/.build-id" or RPM_BUILD_ID_DIRECTORY_PATTERN.fullmatch(
                 path

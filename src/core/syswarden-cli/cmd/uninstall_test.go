@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"strings"
+	"syswarden-cli/pkg/integration"
 	"testing"
 )
 
@@ -13,6 +14,8 @@ func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBAC
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousSocket := removeExactRuntimeSocketForRemoval
+	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	previousUninstall := uninstallHostSystem
@@ -23,6 +26,8 @@ func TestUninstallRefusesBeforeHostMutationWhenServicePreparationFails_SW2_FWBAC
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removeExactRuntimeSocketForRemoval = previousSocket
+		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
 		removePreparedServiceArtifacts = previousRemoveServices
 		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 		uninstallHostSystem = previousUninstall
@@ -188,6 +193,8 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousSocket := removeExactRuntimeSocketForRemoval
+	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	previousUninstall := uninstallHostSystem
@@ -198,6 +205,8 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removeExactRuntimeSocketForRemoval = previousSocket
+		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
 		removePreparedServiceArtifacts = previousRemoveServices
 		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 		uninstallHostSystem = previousUninstall
@@ -224,8 +233,16 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 		order = append(order, "firewall-cleanup")
 		return nil
 	}
-	removeOwnedIntegrationArtifactsForRemoval = func() error {
-		order = append(order, "integration-artifact-removal")
+	removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
+		order = append(order, "rsyslog-artifact-removal-and-restart")
+		return integration.RsyslogPackageRemovalActiveQuiesced, nil
+	}
+	removeExactRuntimeSocketForRemoval = func() error {
+		order = append(order, "runtime-socket-removal")
+		return nil
+	}
+	removeOwnedRsyslogSELinuxPolicyForRemoval = func() error {
+		order = append(order, "rsyslog-selinux-policy-removal")
 		return nil
 	}
 	removePreparedServiceArtifacts = func() error {
@@ -243,7 +260,7 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 	if err := uninstallCmd.RunE(uninstallCmd, nil); err != nil {
 		t.Fatalf("verified uninstall: %v", err)
 	}
-	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,integration-artifact-removal,service-artifact-removal,runtime-lock-removal,host-removal" {
+	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,rsyslog-artifact-removal-and-restart,runtime-socket-removal,rsyslog-selinux-policy-removal,service-artifact-removal,runtime-lock-removal,host-removal" {
 		t.Fatalf("uninstall order = %q", got)
 	}
 }
@@ -255,6 +272,8 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousSocket := removeExactRuntimeSocketForRemoval
+	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	t.Cleanup(func() {
@@ -264,6 +283,8 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removeExactRuntimeSocketForRemoval = previousSocket
+		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
 		removePreparedServiceArtifacts = previousRemoveServices
 		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 	})
@@ -289,8 +310,16 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 		order = append(order, "firewall-cleanup")
 		return nil
 	}
-	removeOwnedIntegrationArtifactsForRemoval = func() error {
-		order = append(order, "integration-artifact-removal")
+	removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
+		order = append(order, "rsyslog-artifact-removal-and-restart")
+		return integration.RsyslogPackageRemovalActiveQuiesced, nil
+	}
+	removeExactRuntimeSocketForRemoval = func() error {
+		order = append(order, "runtime-socket-removal")
+		return nil
+	}
+	removeOwnedRsyslogSELinuxPolicyForRemoval = func() error {
+		order = append(order, "rsyslog-selinux-policy-removal")
 		return nil
 	}
 	removePreparedServiceArtifacts = func() error {
@@ -304,18 +333,20 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 	if err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil); err != nil {
 		t.Fatalf("prepare-package-removal: %v", err)
 	}
-	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,integration-artifact-removal,service-artifact-removal,runtime-lock-removal" {
+	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,rsyslog-artifact-removal-and-restart,runtime-socket-removal,rsyslog-selinux-policy-removal,service-artifact-removal,runtime-lock-removal" {
 		t.Fatalf("package removal preparation order = %q", got)
 	}
 }
 
-func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *testing.T) {
+func TestPackageRemovalBranchesOnTypedRsyslogOutcome_SW2_PKG_001(t *testing.T) {
 	previousBegin := beginRemoval
 	previousCron := removeOwnedCronStateForRemoval
 	previousPrepare := prepareFirewallStateForRemoval
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousSocket := removeExactRuntimeSocketForRemoval
+	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	t.Cleanup(func() {
@@ -325,6 +356,94 @@ func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removeExactRuntimeSocketForRemoval = previousSocket
+		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
+		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
+	})
+
+	configureEarlierPhases := func() {
+		beginRemoval = func() error { return nil }
+		prepareFirewallStateForRemoval = func() error { return nil }
+		removeOwnedCronStateForRemoval = func() error { return nil }
+		removeOwnedWireGuardStateForRemoval = func() error { return nil }
+		cleanupFirewallStateForRemoval = func() error { return nil }
+	}
+
+	t.Run("offline complete skips socket and policy mutators", func(t *testing.T) {
+		configureEarlierPhases()
+		var order []string
+		removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
+			order = append(order, "offline-attestation")
+			return integration.RsyslogPackageRemovalOfflineAlreadyComplete, nil
+		}
+		removeExactRuntimeSocketForRemoval = func() error {
+			order = append(order, "forbidden-socket-mutation")
+			return nil
+		}
+		removeOwnedRsyslogSELinuxPolicyForRemoval = func() error {
+			order = append(order, "forbidden-policy-mutation")
+			return nil
+		}
+		removePreparedServiceArtifacts = func() error {
+			order = append(order, "service-artifact-removal")
+			return nil
+		}
+		removePreparedFirewallRuntimeLock = func() error {
+			order = append(order, "runtime-lock-removal")
+			return nil
+		}
+
+		if err := prepareVerifiedFirewallRemoval(); err != nil {
+			t.Fatalf("offline-complete removal preparation: %v", err)
+		}
+		if got := strings.Join(order, ","); got != "offline-attestation,service-artifact-removal,runtime-lock-removal" {
+			t.Fatalf("offline-complete order = %q", got)
+		}
+	})
+
+	t.Run("unknown outcome fails closed", func(t *testing.T) {
+		configureEarlierPhases()
+		laterCalls := 0
+		removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
+			return integration.RsyslogPackageRemovalOutcomeUnknown, nil
+		}
+		removeExactRuntimeSocketForRemoval = func() error { laterCalls++; return nil }
+		removeOwnedRsyslogSELinuxPolicyForRemoval = func() error { laterCalls++; return nil }
+		removePreparedServiceArtifacts = func() error { laterCalls++; return nil }
+		removePreparedFirewallRuntimeLock = func() error { laterCalls++; return nil }
+
+		err := prepareVerifiedFirewallRemoval()
+		if err == nil || !strings.Contains(err.Error(), "unrecognized rsyslog package-removal outcome") ||
+			!strings.Contains(err.Error(), "durable removal barrier is retained") {
+			t.Fatalf("unknown rsyslog outcome refusal = %v", err)
+		}
+		if laterCalls != 0 {
+			t.Fatalf("unknown rsyslog outcome reached %d later mutators", laterCalls)
+		}
+	})
+}
+
+func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *testing.T) {
+	previousBegin := beginRemoval
+	previousCron := removeOwnedCronStateForRemoval
+	previousPrepare := prepareFirewallStateForRemoval
+	previousWireGuard := removeOwnedWireGuardStateForRemoval
+	previousCleanup := cleanupFirewallStateForRemoval
+	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousSocket := removeExactRuntimeSocketForRemoval
+	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
+	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
+	t.Cleanup(func() {
+		beginRemoval = previousBegin
+		removeOwnedCronStateForRemoval = previousCron
+		prepareFirewallStateForRemoval = previousPrepare
+		removeOwnedWireGuardStateForRemoval = previousWireGuard
+		cleanupFirewallStateForRemoval = previousCleanup
+		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removeExactRuntimeSocketForRemoval = previousSocket
+		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
 		removePreparedServiceArtifacts = previousRemoveServices
 		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 	})
@@ -336,7 +455,9 @@ func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *
 	removeOwnedCronStateForRemoval = func() error { return nil }
 	removeOwnedWireGuardStateForRemoval = func() error { return nil }
 	cleanupFirewallStateForRemoval = func() error { return nil }
-	removeOwnedIntegrationArtifactsForRemoval = func() error { return sentinel }
+	removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
+		return integration.RsyslogPackageRemovalOutcomeUnknown, sentinel
+	}
 	removePreparedServiceArtifacts = func() error {
 		serviceArtifactCalls++
 		return nil
@@ -352,13 +473,15 @@ func TestPackageRemovalRetainsBarrierWhenIntegrationCleanupFails_SW2_PKG_001(t *
 	}
 }
 
-func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *testing.T) {
+func TestPackageRemovalKeepsSELinuxPolicyUntilProducerAndSocketTeardownSucceed_SW2_PKG_001(t *testing.T) {
 	previousBegin := beginRemoval
 	previousCron := removeOwnedCronStateForRemoval
 	previousPrepare := prepareFirewallStateForRemoval
 	previousWireGuard := removeOwnedWireGuardStateForRemoval
 	previousCleanup := cleanupFirewallStateForRemoval
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousSocket := removeExactRuntimeSocketForRemoval
+	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	t.Cleanup(func() {
@@ -368,6 +491,97 @@ func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *
 		removeOwnedWireGuardStateForRemoval = previousWireGuard
 		cleanupFirewallStateForRemoval = previousCleanup
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removeExactRuntimeSocketForRemoval = previousSocket
+		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
+		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
+	})
+
+	for _, test := range []struct {
+		name      string
+		failPhase string
+		wantOrder string
+		wantText  string
+	}{
+		{
+			name:      "runtime socket failure preserves policy",
+			failPhase: "socket",
+			wantOrder: "rsyslog-restart,socket",
+			wantText:  "SELinux policy and durable removal barrier are retained",
+		},
+		{
+			name:      "policy failure stops later cleanup",
+			failPhase: "policy",
+			wantOrder: "rsyslog-restart,socket,policy",
+			wantText:  "runtime socket is absent, and the durable removal barrier is retained",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sentinel := errors.New("synthetic " + test.failPhase + " teardown failure")
+			var order []string
+			beginRemoval = func() error { return nil }
+			prepareFirewallStateForRemoval = func() error { return nil }
+			removeOwnedCronStateForRemoval = func() error { return nil }
+			removeOwnedWireGuardStateForRemoval = func() error { return nil }
+			cleanupFirewallStateForRemoval = func() error { return nil }
+			removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
+				order = append(order, "rsyslog-restart")
+				return integration.RsyslogPackageRemovalActiveQuiesced, nil
+			}
+			removeExactRuntimeSocketForRemoval = func() error {
+				order = append(order, "socket")
+				if test.failPhase == "socket" {
+					return sentinel
+				}
+				return nil
+			}
+			removeOwnedRsyslogSELinuxPolicyForRemoval = func() error {
+				order = append(order, "policy")
+				if test.failPhase == "policy" {
+					return sentinel
+				}
+				return nil
+			}
+			removePreparedServiceArtifacts = func() error {
+				order = append(order, "service-artifacts")
+				return nil
+			}
+			removePreparedFirewallRuntimeLock = func() error {
+				order = append(order, "runtime-lock")
+				return nil
+			}
+
+			err := prepareVerifiedFirewallRemoval()
+			if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), test.wantText) {
+				t.Fatalf("%s refusal = %v", test.failPhase, err)
+			}
+			if got := strings.Join(order, ","); got != test.wantOrder {
+				t.Fatalf("%s failure order = %q, want %q", test.failPhase, got, test.wantOrder)
+			}
+		})
+	}
+}
+
+func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *testing.T) {
+	previousBegin := beginRemoval
+	previousCron := removeOwnedCronStateForRemoval
+	previousPrepare := prepareFirewallStateForRemoval
+	previousWireGuard := removeOwnedWireGuardStateForRemoval
+	previousCleanup := cleanupFirewallStateForRemoval
+	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousSocket := removeExactRuntimeSocketForRemoval
+	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
+	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
+	t.Cleanup(func() {
+		beginRemoval = previousBegin
+		removeOwnedCronStateForRemoval = previousCron
+		prepareFirewallStateForRemoval = previousPrepare
+		removeOwnedWireGuardStateForRemoval = previousWireGuard
+		cleanupFirewallStateForRemoval = previousCleanup
+		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removeExactRuntimeSocketForRemoval = previousSocket
+		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
 		removePreparedServiceArtifacts = previousRemoveServices
 		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 	})
@@ -378,7 +592,11 @@ func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *
 	removeOwnedCronStateForRemoval = func() error { return nil }
 	removeOwnedWireGuardStateForRemoval = func() error { return nil }
 	cleanupFirewallStateForRemoval = func() error { return nil }
-	removeOwnedIntegrationArtifactsForRemoval = func() error { return nil }
+	removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
+		return integration.RsyslogPackageRemovalActiveQuiesced, nil
+	}
+	removeExactRuntimeSocketForRemoval = func() error { return nil }
+	removeOwnedRsyslogSELinuxPolicyForRemoval = func() error { return nil }
 	removePreparedServiceArtifacts = func() error { return nil }
 	removePreparedFirewallRuntimeLock = func() error { return sentinel }
 	err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil)

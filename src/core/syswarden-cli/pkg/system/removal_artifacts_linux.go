@@ -187,6 +187,47 @@ func removeExactRuntimeSocketAt(path string, expectedUID, expectedGID uint32) er
 	return fmt.Errorf("runtime socket remains after removal: %s", path)
 }
 
+// RemoveExactRuntimeSocketForPackageRemoval removes only the root-owned,
+// single-link Unix socket used by the stopped SysWarden core. Package removal
+// calls this only after every rsyslog producer has been restarted without the
+// SysWarden bridge and before the matching SELinux policy is removed.
+func RemoveExactRuntimeSocketForPackageRemoval() error {
+	return removeExactRuntimeSocketForPackageRemovalUsing(removeExactRuntimeSocketAt)
+}
+
+func removeExactRuntimeSocketForPackageRemovalUsing(
+	remove func(string, uint32, uint32) error,
+) error {
+	if remove == nil {
+		return fmt.Errorf("runtime socket removal operator is unavailable")
+	}
+	return remove("/run/syswarden.sock", 0, 0)
+}
+
+// AttestRuntimeSocketAbsentForPackageRemoval provides the read-only half of the
+// exact socket contract. It is used only to accept an already-complete removal
+// retry while the service-manager runtime is offline.
+func AttestRuntimeSocketAbsentForPackageRemoval() error {
+	return attestRuntimeSocketAbsentAt("/run/syswarden.sock", 0, 0)
+}
+
+func attestRuntimeSocketAbsentAt(path string, expectedUID, expectedGID uint32) error {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return fmt.Errorf("runtime socket absence path is not clean and absolute")
+	}
+	parent, err := openAttestedRemovalParent(path, expectedUID, expectedGID)
+	if err != nil {
+		return err
+	}
+	defer parent.close()
+	if _, err := parent.root.Lstat(filepath.Base(path)); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("attest runtime socket absence %s: %w", path, err)
+	}
+	return fmt.Errorf("runtime socket teardown target remains at %s", path)
+}
+
 func removeRemovalStateContentsAt(
 	directoryPath string,
 	expectedUID uint32,
