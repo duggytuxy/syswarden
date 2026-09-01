@@ -762,6 +762,16 @@ def _generated_cleanup_event_checks(
         "openrc_firewall_enablement",
         "runtime_socket",
         "runtime_lock",
+        "cis_filesystems_absent_after_removal",
+        "cis_filesystems_quarantine_absent",
+        "cis_protocols_absent_after_removal",
+        "cis_protocols_quarantine_absent",
+        "cis_limits_absent_after_removal",
+        "cis_limits_quarantine_absent",
+        "cis_sysctl_absent_after_removal",
+        "cis_sysctl_quarantine_absent",
+        "cis_coredump_absent_after_removal",
+        "cis_coredump_quarantine_absent",
         "rsyslog_antiforging_exact_removed",
         "rsyslog_selinux_provenance_removed",
         "completion_residual",
@@ -5102,6 +5112,26 @@ assert_generated_runtime_artifact_contract() {
     check_absent "${label}.generated.openrc_firewall_enablement" /etc/runlevels/default/syswarden-firewall
     check_absent "${label}.generated.runtime_socket" /run/syswarden.sock
     check_absent "${label}.generated.runtime_lock" /run/syswarden-firewall.lock
+    check_absent "${label}.generated.cis_filesystems_absent_after_removal" \
+        /etc/modprobe.d/syswarden-cis-fs.conf
+    check_absent "${label}.generated.cis_filesystems_quarantine_absent" \
+        /etc/modprobe.d/.syswarden-cis-fs.conf.syswarden-removal-v1
+    check_absent "${label}.generated.cis_protocols_absent_after_removal" \
+        /etc/modprobe.d/syswarden-cis-net.conf
+    check_absent "${label}.generated.cis_protocols_quarantine_absent" \
+        /etc/modprobe.d/.syswarden-cis-net.conf.syswarden-removal-v1
+    check_absent "${label}.generated.cis_limits_absent_after_removal" \
+        /etc/security/limits.d/99-syswarden-cis.conf
+    check_absent "${label}.generated.cis_limits_quarantine_absent" \
+        /etc/security/limits.d/.99-syswarden-cis.conf.syswarden-removal-v1
+    check_absent "${label}.generated.cis_sysctl_absent_after_removal" \
+        /etc/sysctl.d/99-syswarden-cis-level2.conf
+    check_absent "${label}.generated.cis_sysctl_quarantine_absent" \
+        /etc/sysctl.d/.99-syswarden-cis-level2.conf.syswarden-removal-v1
+    check_absent "${label}.generated.cis_coredump_absent_after_removal" \
+        /etc/systemd/coredump.conf.d/99-syswarden.conf
+    check_absent "${label}.generated.cis_coredump_quarantine_absent" \
+        /etc/systemd/coredump.conf.d/.99-syswarden.conf.syswarden-removal-v1
     check_absent "${label}.generated.rsyslog_antiforging_exact_removed" \
         /etc/rsyslog.d/99-syswarden-antiforging.conf
     check_absent "${label}.generated.rsyslog_selinux_provenance_removed" \

@@ -195,6 +195,8 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousSocket := removeExactRuntimeSocketForRemoval
 	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
+	previousCISTombstone := requireRemovalTombstoneForCISPolicyRemoval
+	previousCISPolicies := removeExactCISHardeningPoliciesForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	previousUninstall := uninstallHostSystem
@@ -207,6 +209,8 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removeExactRuntimeSocketForRemoval = previousSocket
 		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
+		requireRemovalTombstoneForCISPolicyRemoval = previousCISTombstone
+		removeExactCISHardeningPoliciesForRemoval = previousCISPolicies
 		removePreparedServiceArtifacts = previousRemoveServices
 		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 		uninstallHostSystem = previousUninstall
@@ -245,6 +249,14 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 		order = append(order, "rsyslog-selinux-policy-removal")
 		return nil
 	}
+	requireRemovalTombstoneForCISPolicyRemoval = func() error {
+		order = append(order, "tombstone-reattest")
+		return nil
+	}
+	removeExactCISHardeningPoliciesForRemoval = func() error {
+		order = append(order, "cis-hardening-policy-removal")
+		return nil
+	}
 	removePreparedServiceArtifacts = func() error {
 		order = append(order, "service-artifact-removal")
 		return nil
@@ -260,7 +272,7 @@ func TestUninstallRunsHostRemovalOnlyAfterVerifiedFirewallPreparation_SW2_FWBACK
 	if err := uninstallCmd.RunE(uninstallCmd, nil); err != nil {
 		t.Fatalf("verified uninstall: %v", err)
 	}
-	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,rsyslog-artifact-removal-and-restart,runtime-socket-removal,rsyslog-selinux-policy-removal,service-artifact-removal,runtime-lock-removal,host-removal" {
+	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,rsyslog-artifact-removal-and-restart,runtime-socket-removal,rsyslog-selinux-policy-removal,tombstone-reattest,cis-hardening-policy-removal,service-artifact-removal,runtime-lock-removal,host-removal" {
 		t.Fatalf("uninstall order = %q", got)
 	}
 }
@@ -274,6 +286,8 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousSocket := removeExactRuntimeSocketForRemoval
 	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
+	previousCISTombstone := requireRemovalTombstoneForCISPolicyRemoval
+	previousCISPolicies := removeExactCISHardeningPoliciesForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	t.Cleanup(func() {
@@ -285,6 +299,8 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removeExactRuntimeSocketForRemoval = previousSocket
 		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
+		requireRemovalTombstoneForCISPolicyRemoval = previousCISTombstone
+		removeExactCISHardeningPoliciesForRemoval = previousCISPolicies
 		removePreparedServiceArtifacts = previousRemoveServices
 		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 	})
@@ -322,6 +338,14 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 		order = append(order, "rsyslog-selinux-policy-removal")
 		return nil
 	}
+	requireRemovalTombstoneForCISPolicyRemoval = func() error {
+		order = append(order, "tombstone-reattest")
+		return nil
+	}
+	removeExactCISHardeningPoliciesForRemoval = func() error {
+		order = append(order, "cis-hardening-policy-removal")
+		return nil
+	}
 	removePreparedServiceArtifacts = func() error {
 		order = append(order, "service-artifact-removal")
 		return nil
@@ -333,7 +357,7 @@ func TestPackageRemovalUsesVerifiedFirewallPreparationOnly_SW2_FWBACKEND_001(t *
 	if err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil); err != nil {
 		t.Fatalf("prepare-package-removal: %v", err)
 	}
-	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,rsyslog-artifact-removal-and-restart,runtime-socket-removal,rsyslog-selinux-policy-removal,service-artifact-removal,runtime-lock-removal" {
+	if got := strings.Join(order, ","); got != "tombstone-publish,service-stop,cron-state-removal,wireguard-removal,firewall-cleanup,rsyslog-artifact-removal-and-restart,runtime-socket-removal,rsyslog-selinux-policy-removal,tombstone-reattest,cis-hardening-policy-removal,service-artifact-removal,runtime-lock-removal" {
 		t.Fatalf("package removal preparation order = %q", got)
 	}
 }
@@ -347,6 +371,8 @@ func TestPackageRemovalBranchesOnTypedRsyslogOutcome_SW2_PKG_001(t *testing.T) {
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousSocket := removeExactRuntimeSocketForRemoval
 	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
+	previousCISTombstone := requireRemovalTombstoneForCISPolicyRemoval
+	previousCISPolicies := removeExactCISHardeningPoliciesForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	t.Cleanup(func() {
@@ -358,6 +384,8 @@ func TestPackageRemovalBranchesOnTypedRsyslogOutcome_SW2_PKG_001(t *testing.T) {
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removeExactRuntimeSocketForRemoval = previousSocket
 		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
+		requireRemovalTombstoneForCISPolicyRemoval = previousCISTombstone
+		removeExactCISHardeningPoliciesForRemoval = previousCISPolicies
 		removePreparedServiceArtifacts = previousRemoveServices
 		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 	})
@@ -385,6 +413,14 @@ func TestPackageRemovalBranchesOnTypedRsyslogOutcome_SW2_PKG_001(t *testing.T) {
 			order = append(order, "forbidden-policy-mutation")
 			return nil
 		}
+		requireRemovalTombstoneForCISPolicyRemoval = func() error {
+			order = append(order, "tombstone-reattest")
+			return nil
+		}
+		removeExactCISHardeningPoliciesForRemoval = func() error {
+			order = append(order, "cis-hardening-policy-removal")
+			return nil
+		}
 		removePreparedServiceArtifacts = func() error {
 			order = append(order, "service-artifact-removal")
 			return nil
@@ -397,7 +433,7 @@ func TestPackageRemovalBranchesOnTypedRsyslogOutcome_SW2_PKG_001(t *testing.T) {
 		if err := prepareVerifiedFirewallRemoval(); err != nil {
 			t.Fatalf("offline-complete removal preparation: %v", err)
 		}
-		if got := strings.Join(order, ","); got != "offline-attestation,service-artifact-removal,runtime-lock-removal" {
+		if got := strings.Join(order, ","); got != "offline-attestation,tombstone-reattest,cis-hardening-policy-removal,service-artifact-removal,runtime-lock-removal" {
 			t.Fatalf("offline-complete order = %q", got)
 		}
 	})
@@ -410,6 +446,8 @@ func TestPackageRemovalBranchesOnTypedRsyslogOutcome_SW2_PKG_001(t *testing.T) {
 		}
 		removeExactRuntimeSocketForRemoval = func() error { laterCalls++; return nil }
 		removeOwnedRsyslogSELinuxPolicyForRemoval = func() error { laterCalls++; return nil }
+		requireRemovalTombstoneForCISPolicyRemoval = func() error { laterCalls++; return nil }
+		removeExactCISHardeningPoliciesForRemoval = func() error { laterCalls++; return nil }
 		removePreparedServiceArtifacts = func() error { laterCalls++; return nil }
 		removePreparedFirewallRuntimeLock = func() error { laterCalls++; return nil }
 
@@ -562,7 +600,7 @@ func TestPackageRemovalKeepsSELinuxPolicyUntilProducerAndSocketTeardownSucceed_S
 	}
 }
 
-func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *testing.T) {
+func TestPackageRemovalRefusesCISCleanupWhenTombstoneReattestationFails_SW2_PKG_001(t *testing.T) {
 	previousBegin := beginRemoval
 	previousCron := removeOwnedCronStateForRemoval
 	previousPrepare := prepareFirewallStateForRemoval
@@ -571,6 +609,8 @@ func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *
 	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
 	previousSocket := removeExactRuntimeSocketForRemoval
 	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
+	previousCISTombstone := requireRemovalTombstoneForCISPolicyRemoval
+	previousCISPolicies := removeExactCISHardeningPoliciesForRemoval
 	previousRemoveServices := removePreparedServiceArtifacts
 	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
 	t.Cleanup(func() {
@@ -582,6 +622,159 @@ func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *
 		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
 		removeExactRuntimeSocketForRemoval = previousSocket
 		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
+		requireRemovalTombstoneForCISPolicyRemoval = previousCISTombstone
+		removeExactCISHardeningPoliciesForRemoval = previousCISPolicies
+		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
+	})
+
+	sentinel := errors.New("synthetic removal tombstone loss")
+	var order []string
+	beginRemoval = func() error { return nil }
+	prepareFirewallStateForRemoval = func() error { return nil }
+	removeOwnedCronStateForRemoval = func() error { return nil }
+	removeOwnedWireGuardStateForRemoval = func() error { return nil }
+	cleanupFirewallStateForRemoval = func() error { return nil }
+	removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
+		order = append(order, "rsyslog-restart")
+		return integration.RsyslogPackageRemovalActiveQuiesced, nil
+	}
+	removeExactRuntimeSocketForRemoval = func() error {
+		order = append(order, "runtime-socket")
+		return nil
+	}
+	removeOwnedRsyslogSELinuxPolicyForRemoval = func() error {
+		order = append(order, "rsyslog-selinux-policy")
+		return nil
+	}
+	requireRemovalTombstoneForCISPolicyRemoval = func() error {
+		order = append(order, "tombstone-reattest")
+		return sentinel
+	}
+	removeExactCISHardeningPoliciesForRemoval = func() error {
+		order = append(order, "forbidden-cis-hardening-policy")
+		return nil
+	}
+	removePreparedServiceArtifacts = func() error {
+		order = append(order, "forbidden-service-artifacts")
+		return nil
+	}
+	removePreparedFirewallRuntimeLock = func() error {
+		order = append(order, "forbidden-runtime-lock")
+		return nil
+	}
+
+	err := prepareVerifiedFirewallRemoval()
+	if err == nil || !errors.Is(err, sentinel) ||
+		!strings.Contains(err.Error(), "durable removal barrier could not be reattested") ||
+		!strings.Contains(err.Error(), "CIS policies, prepared service artifacts, and runtime lock are retained") {
+		t.Fatalf("CIS tombstone reattestation refusal = %v", err)
+	}
+	if got := strings.Join(order, ","); got != "rsyslog-restart,runtime-socket,rsyslog-selinux-policy,tombstone-reattest" {
+		t.Fatalf("CIS tombstone reattestation failure order = %q", got)
+	}
+}
+
+func TestPackageRemovalRetainsBarrierWhenCISHardeningPolicyCleanupFails_SW2_PKG_001(t *testing.T) {
+	previousBegin := beginRemoval
+	previousCron := removeOwnedCronStateForRemoval
+	previousPrepare := prepareFirewallStateForRemoval
+	previousWireGuard := removeOwnedWireGuardStateForRemoval
+	previousCleanup := cleanupFirewallStateForRemoval
+	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousSocket := removeExactRuntimeSocketForRemoval
+	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
+	previousCISTombstone := requireRemovalTombstoneForCISPolicyRemoval
+	previousCISPolicies := removeExactCISHardeningPoliciesForRemoval
+	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
+	t.Cleanup(func() {
+		beginRemoval = previousBegin
+		removeOwnedCronStateForRemoval = previousCron
+		prepareFirewallStateForRemoval = previousPrepare
+		removeOwnedWireGuardStateForRemoval = previousWireGuard
+		cleanupFirewallStateForRemoval = previousCleanup
+		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removeExactRuntimeSocketForRemoval = previousSocket
+		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
+		requireRemovalTombstoneForCISPolicyRemoval = previousCISTombstone
+		removeExactCISHardeningPoliciesForRemoval = previousCISPolicies
+		removePreparedServiceArtifacts = previousRemoveServices
+		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
+	})
+
+	sentinel := errors.New("synthetic CIS hardening policy cleanup failure")
+	var order []string
+	beginRemoval = func() error { return nil }
+	prepareFirewallStateForRemoval = func() error { return nil }
+	removeOwnedCronStateForRemoval = func() error { return nil }
+	removeOwnedWireGuardStateForRemoval = func() error { return nil }
+	cleanupFirewallStateForRemoval = func() error { return nil }
+	removeOwnedIntegrationArtifactsForRemoval = func() (integration.RsyslogPackageRemovalOutcome, error) {
+		order = append(order, "rsyslog-restart")
+		return integration.RsyslogPackageRemovalActiveQuiesced, nil
+	}
+	removeExactRuntimeSocketForRemoval = func() error {
+		order = append(order, "runtime-socket")
+		return nil
+	}
+	removeOwnedRsyslogSELinuxPolicyForRemoval = func() error {
+		order = append(order, "rsyslog-selinux-policy")
+		return nil
+	}
+	requireRemovalTombstoneForCISPolicyRemoval = func() error {
+		order = append(order, "tombstone-reattest")
+		return nil
+	}
+	removeExactCISHardeningPoliciesForRemoval = func() error {
+		order = append(order, "cis-hardening-policy")
+		return sentinel
+	}
+	removePreparedServiceArtifacts = func() error {
+		order = append(order, "forbidden-service-artifacts")
+		return nil
+	}
+	removePreparedFirewallRuntimeLock = func() error {
+		order = append(order, "forbidden-runtime-lock")
+		return nil
+	}
+
+	err := prepareVerifiedFirewallRemoval()
+	if err == nil || !errors.Is(err, sentinel) ||
+		!strings.Contains(err.Error(), "before exact CIS hardening policy cleanup") ||
+		!strings.Contains(err.Error(), "durable removal barrier") ||
+		!strings.Contains(err.Error(), "retained for retry") {
+		t.Fatalf("CIS hardening policy cleanup refusal = %v", err)
+	}
+	if got := strings.Join(order, ","); got != "rsyslog-restart,runtime-socket,rsyslog-selinux-policy,tombstone-reattest,cis-hardening-policy" {
+		t.Fatalf("CIS hardening policy cleanup failure order = %q", got)
+	}
+}
+
+func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *testing.T) {
+	previousBegin := beginRemoval
+	previousCron := removeOwnedCronStateForRemoval
+	previousPrepare := prepareFirewallStateForRemoval
+	previousWireGuard := removeOwnedWireGuardStateForRemoval
+	previousCleanup := cleanupFirewallStateForRemoval
+	previousIntegration := removeOwnedIntegrationArtifactsForRemoval
+	previousSocket := removeExactRuntimeSocketForRemoval
+	previousPolicy := removeOwnedRsyslogSELinuxPolicyForRemoval
+	previousCISTombstone := requireRemovalTombstoneForCISPolicyRemoval
+	previousCISPolicies := removeExactCISHardeningPoliciesForRemoval
+	previousRemoveServices := removePreparedServiceArtifacts
+	previousRemoveRuntimeLock := removePreparedFirewallRuntimeLock
+	t.Cleanup(func() {
+		beginRemoval = previousBegin
+		removeOwnedCronStateForRemoval = previousCron
+		prepareFirewallStateForRemoval = previousPrepare
+		removeOwnedWireGuardStateForRemoval = previousWireGuard
+		cleanupFirewallStateForRemoval = previousCleanup
+		removeOwnedIntegrationArtifactsForRemoval = previousIntegration
+		removeExactRuntimeSocketForRemoval = previousSocket
+		removeOwnedRsyslogSELinuxPolicyForRemoval = previousPolicy
+		requireRemovalTombstoneForCISPolicyRemoval = previousCISTombstone
+		removeExactCISHardeningPoliciesForRemoval = previousCISPolicies
 		removePreparedServiceArtifacts = previousRemoveServices
 		removePreparedFirewallRuntimeLock = previousRemoveRuntimeLock
 	})
@@ -597,6 +790,8 @@ func TestPackageRemovalRetainsBarrierWhenRuntimeLockCleanupFails_SW2_PKG_001(t *
 	}
 	removeExactRuntimeSocketForRemoval = func() error { return nil }
 	removeOwnedRsyslogSELinuxPolicyForRemoval = func() error { return nil }
+	requireRemovalTombstoneForCISPolicyRemoval = func() error { return nil }
+	removeExactCISHardeningPoliciesForRemoval = func() error { return nil }
 	removePreparedServiceArtifacts = func() error { return nil }
 	removePreparedFirewallRuntimeLock = func() error { return sentinel }
 	err := preparePackageRemovalCmd.RunE(preparePackageRemovalCmd, nil)

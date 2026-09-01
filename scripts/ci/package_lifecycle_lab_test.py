@@ -6781,6 +6781,19 @@ probe
         self.assertIn("remove.final-removal.generated.openrc_webtui", checks)
         self.assertIn("remove.final-removal.generated.runtime_socket", checks)
         self.assertIn("remove.final-removal.generated.runtime_lock", checks)
+        for key in (
+            "cis_filesystems_absent_after_removal",
+            "cis_filesystems_quarantine_absent",
+            "cis_protocols_absent_after_removal",
+            "cis_protocols_quarantine_absent",
+            "cis_limits_absent_after_removal",
+            "cis_limits_quarantine_absent",
+            "cis_sysctl_absent_after_removal",
+            "cis_sysctl_quarantine_absent",
+            "cis_coredump_absent_after_removal",
+            "cis_coredump_quarantine_absent",
+        ):
+            self.assertIn(f"remove.final-removal.generated.{key}", checks)
         self.assertIn(
             "remove.final-removal.generated.rsyslog_antiforging_exact_removed",
             checks,
@@ -7719,6 +7732,19 @@ probe
         self.assertIn("/etc/init.d/syswarden-firewall", script)
         self.assertIn("/etc/bash_completion.d/syswarden", script)
         self.assertIn("/etc/rsyslog.d/99-syswarden-siem.conf", script)
+        for path in (
+            "/etc/modprobe.d/syswarden-cis-fs.conf",
+            "/etc/modprobe.d/.syswarden-cis-fs.conf.syswarden-removal-v1",
+            "/etc/modprobe.d/syswarden-cis-net.conf",
+            "/etc/modprobe.d/.syswarden-cis-net.conf.syswarden-removal-v1",
+            "/etc/security/limits.d/99-syswarden-cis.conf",
+            "/etc/security/limits.d/.99-syswarden-cis.conf.syswarden-removal-v1",
+            "/etc/sysctl.d/99-syswarden-cis-level2.conf",
+            "/etc/sysctl.d/.99-syswarden-cis-level2.conf.syswarden-removal-v1",
+            "/etc/systemd/coredump.conf.d/99-syswarden.conf",
+            "/etc/systemd/coredump.conf.d/.99-syswarden.conf.syswarden-removal-v1",
+        ):
+            self.assertIn(path, removal_assertion)
         seed = script[
             script.index("seed_generated_runtime_artifacts() {") : script.index(
                 "\n}\n\nassert_generated_runtime_artifact_contract() {"
