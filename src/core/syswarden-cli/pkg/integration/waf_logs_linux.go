@@ -55,6 +55,11 @@ type managedServiceRunner func(string, ...string) ([]byte, error)
 type managedServiceExecutor func(context.Context, string, ...string) ([]byte, error)
 type trustedExecutableValidator func(string) error
 
+type systemdRsyslogIdentity struct {
+	mainPID                       uint64
+	activeEnterTimestampMonotonic uint64
+}
+
 type trustedPathMetadata struct {
 	mode os.FileMode
 	uid  uint32
@@ -843,6 +848,14 @@ func reconcileWAFRsyslogService(configChanged bool) error {
 	)
 }
 
+func reconcileWAFRsyslogServiceForPackageRemoval(_ bool) error {
+	return restartRsyslogForPackageRemovalUsing(
+		system.ServiceManagerRuntimeState,
+		system.IsAlpine,
+		runManagedServiceCommand,
+	)
+}
+
 func restartManagedService(service string) error {
 	return restartManagedServiceUsing(
 		service,
@@ -936,11 +949,33 @@ func validateTrustedExecutableUsing(
 	lstat trustedPathLstat,
 	readlink trustedPathReadlink,
 ) error {
+	exists, err := inspectTrustedExecutablePresenceUsing(path, lstat, readlink)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("trusted executable %s does not exist", path)
+	}
+	return nil
+}
+
+// inspectTrustedExecutablePresenceUsing distinguishes a genuinely absent leaf
+// from an inaccessible or untrusted path. ENOENT is accepted only for the
+// final executable name after every ancestor and any safe usrmerge symlink have
+// been attested. A broken final symlink is ambiguous rather than absent.
+func inspectTrustedExecutablePresenceUsing(
+	path string,
+	lstat trustedPathLstat,
+	readlink trustedPathReadlink,
+) (bool, error) {
+	if lstat == nil || readlink == nil {
+		return false, fmt.Errorf("trusted path inspectors are unavailable")
+	}
 	if !filepath.IsAbs(path) {
-		return fmt.Errorf("path is not absolute")
+		return false, fmt.Errorf("path is not absolute")
 	}
 	if filepath.Clean(path) != path {
-		return fmt.Errorf("path is not canonical")
+		return false, fmt.Errorf("path is not canonical")
 	}
 
 	// This pre-exec check relies on immutable, root-owned ancestors to prevent
@@ -948,24 +983,31 @@ func validateTrustedExecutableUsing(
 	remaining := trustedPathComponents(path)
 	current := string(os.PathSeparator)
 	symlinks := 0
+	followedFinalSymlink := false
 	for {
 		metadata, err := lstat(current)
 		if err != nil {
-			return fmt.Errorf("lstat trusted path component %s: %w", current, err)
+			if errors.Is(err, unix.ENOENT) && len(remaining) == 0 && !followedFinalSymlink {
+				return false, nil
+			}
+			return false, fmt.Errorf("lstat trusted path component %s: %w", current, err)
 		}
 		if metadata.uid != 0 {
-			return fmt.Errorf("trusted path component %s is not root-owned", current)
+			return false, fmt.Errorf("trusted path component %s is not root-owned", current)
 		}
 		if metadata.mode&os.ModeSymlink != 0 {
 			// Linux ignores symlink permission bits, so root-owned 0777 usrmerge
 			// links are safe when their checked parent directories are immutable.
 			symlinks++
 			if symlinks > trustedPathSymlinkLimit {
-				return fmt.Errorf("trusted path exceeds %d symbolic links", trustedPathSymlinkLimit)
+				return false, fmt.Errorf("trusted path exceeds %d symbolic links", trustedPathSymlinkLimit)
+			}
+			if len(remaining) == 0 {
+				followedFinalSymlink = true
 			}
 			target, err := readlink(current)
 			if err != nil {
-				return fmt.Errorf("read trusted symbolic link %s: %w", current, err)
+				return false, fmt.Errorf("read trusted symbolic link %s: %w", current, err)
 			}
 			if !filepath.IsAbs(target) {
 				target = filepath.Join(filepath.Dir(current), target)
@@ -978,19 +1020,19 @@ func validateTrustedExecutableUsing(
 			continue
 		}
 		if metadata.mode.Perm()&0022 != 0 {
-			return fmt.Errorf("trusted path component %s is group/world writable", current)
+			return false, fmt.Errorf("trusted path component %s is group/world writable", current)
 		}
 		if len(remaining) == 0 {
 			if !metadata.mode.IsRegular() {
-				return fmt.Errorf("trusted executable %s is not a regular file", current)
+				return false, fmt.Errorf("trusted executable %s is not a regular file", current)
 			}
 			if metadata.mode.Perm()&0111 == 0 {
-				return fmt.Errorf("trusted executable %s is not executable", current)
+				return false, fmt.Errorf("trusted executable %s is not executable", current)
 			}
-			return nil
+			return true, nil
 		}
 		if !metadata.mode.IsDir() {
-			return fmt.Errorf("trusted path ancestor %s is not a directory", current)
+			return false, fmt.Errorf("trusted path ancestor %s is not a directory", current)
 		}
 		current = filepath.Join(current, remaining[0])
 		remaining = remaining[1:]
@@ -1118,6 +1160,196 @@ func restartManagedServiceUsingConfigState(
 	default:
 		return fmt.Errorf("refusing unrecognized service-manager runtime state %q", state)
 	}
+}
+
+func restartRsyslogForPackageRemovalUsing(
+	classify func() (string, error),
+	isAlpine func() bool,
+	run managedServiceRunner,
+) error {
+	if classify == nil || isAlpine == nil || run == nil {
+		return fmt.Errorf("rsyslog package-removal service controls are unavailable")
+	}
+	state, err := classify()
+	if err != nil {
+		return fmt.Errorf("classify service-manager runtime before rsyslog package-removal restart: %w", err)
+	}
+	switch state {
+	case "OFFLINE":
+		return fmt.Errorf(
+			"refusing package removal while the service-manager runtime is offline; rsyslog producer quiescence cannot be attested",
+		)
+	case "ACTIVE":
+		if isAlpine() {
+			return restartOpenRCRsyslogForPackageRemovalUsing(run)
+		}
+		return restartSystemdRsyslogForPackageRemovalUsing(run)
+	default:
+		return fmt.Errorf("refusing unrecognized service-manager runtime state %q", state)
+	}
+}
+
+func restartOpenRCRsyslogForPackageRemovalUsing(run managedServiceRunner) error {
+	if _, err := run(trustedRsyslogdPath, "-N1", "-f", "/etc/rsyslog.conf"); err != nil {
+		return fmt.Errorf("validate rsyslog configuration before OpenRC package-removal restart: %w", err)
+	}
+	if _, err := run(trustedOpenRCServicePath, "--ifnotstarted", "rsyslog", "start"); err != nil {
+		return fmt.Errorf("conditionally start OpenRC rsyslog before package-removal restart: %w", err)
+	}
+	if _, err := run(trustedOpenRCServicePath, "rsyslog", "status"); err != nil {
+		return fmt.Errorf("attest active OpenRC rsyslog before package-removal restart: %w", err)
+	}
+	if _, err := run(trustedOpenRCServicePath, "--nodeps", "rsyslog", "restart"); err != nil {
+		return fmt.Errorf("restart OpenRC rsyslog without dependency traversal for package removal: %w", err)
+	}
+	if _, err := run(trustedOpenRCServicePath, "rsyslog", "status"); err != nil {
+		return fmt.Errorf("attest restarted OpenRC rsyslog for package removal: %w", err)
+	}
+	return nil
+}
+
+func restartSystemdRsyslogForPackageRemovalUsing(run managedServiceRunner) error {
+	validationOutput, validationErr := run(
+		trustedRsyslogdPath, "-N1", "-f", "/etc/rsyslog.conf",
+	)
+	if validationErr != nil {
+		return newManagedServiceDiagnosticError(
+			fmt.Sprintf(
+				"validate complete rsyslog configuration before systemd package-removal restart: %s",
+				managedServiceEvidence(validationErr, validationOutput),
+			),
+			validationErr,
+		)
+	}
+
+	firstErr := attemptAttestedSystemdRsyslogRestartForPackageRemovalUsing(run)
+	if firstErr == nil {
+		return nil
+	}
+	resetOutput, resetErr := run(trustedSystemctlPath, "reset-failed", "rsyslog")
+	retryErr := attemptAttestedSystemdRsyslogRestartForPackageRemovalUsing(run)
+	if retryErr == nil {
+		fmt.Println("[WARN] Initial rsyslog package-removal restart or identity attestation failed; recovered after one bounded retry.")
+		return nil
+	}
+	journalOutput, journalErr := run(
+		trustedJournalctlPath, "--no-pager", "--quiet", "--boot", "--unit", "rsyslog.service", "--lines=40",
+	)
+	return newManagedServiceDiagnosticError(
+		fmt.Sprintf(
+			"restart and attest systemd rsyslog for package removal failed after one bounded retry: first=%s; reset_failed=%s; retry=%s; journal=%s",
+			managedServiceEvidence(firstErr, nil),
+			managedServiceEvidence(resetErr, resetOutput),
+			managedServiceEvidence(retryErr, nil),
+			managedServiceEvidence(journalErr, journalOutput),
+		),
+		firstErr,
+		resetErr,
+		retryErr,
+		journalErr,
+	)
+}
+
+func attemptAttestedSystemdRsyslogRestartForPackageRemovalUsing(run managedServiceRunner) error {
+	before, beforeErr := readSystemdRsyslogIdentityUsing(run)
+	restartOutput, restartErr := run(trustedSystemctlPath, "restart", "rsyslog")
+	activeOutput, activeErr := run(trustedSystemctlPath, "is-active", "--quiet", "rsyslog")
+	after, afterErr := readSystemdRsyslogIdentityUsing(run)
+	var transitionErr error
+	if beforeErr == nil && afterErr == nil {
+		transitionErr = attestSystemdRsyslogRestartTransition(before, after)
+	} else {
+		transitionErr = fmt.Errorf("systemd rsyslog identity could not be attested on both sides of restart")
+	}
+	if beforeErr == nil && restartErr == nil && activeErr == nil && afterErr == nil && transitionErr == nil {
+		return nil
+	}
+	return newManagedServiceDiagnosticError(
+		fmt.Sprintf(
+			"systemd rsyslog package-removal restart was not attested: before=%s; restart=%s; active=%s; after=%s; transition=%s",
+			systemdRsyslogIdentityEvidence(before, beforeErr),
+			managedServiceEvidence(restartErr, restartOutput),
+			managedServiceEvidence(activeErr, activeOutput),
+			systemdRsyslogIdentityEvidence(after, afterErr),
+			managedServiceEvidence(transitionErr, nil),
+		),
+		beforeErr,
+		restartErr,
+		activeErr,
+		afterErr,
+		transitionErr,
+	)
+}
+
+func readSystemdRsyslogIdentityUsing(run managedServiceRunner) (systemdRsyslogIdentity, error) {
+	pidOutput, pidErr := run(
+		trustedSystemctlPath, "show", "--property=MainPID", "--value", "rsyslog",
+	)
+	timestampOutput, timestampErr := run(
+		trustedSystemctlPath, "show", "--property=ActiveEnterTimestampMonotonic", "--value", "rsyslog",
+	)
+	pid, pidParseErr := parseSystemdRsyslogUintProperty("MainPID", pidOutput)
+	timestamp, timestampParseErr := parseSystemdRsyslogUintProperty(
+		"ActiveEnterTimestampMonotonic",
+		timestampOutput,
+	)
+	if pidErr != nil || timestampErr != nil || pidParseErr != nil || timestampParseErr != nil {
+		return systemdRsyslogIdentity{}, newManagedServiceDiagnosticError(
+			fmt.Sprintf(
+				"read systemd rsyslog identity: MainPID=%s parse=%s; ActiveEnterTimestampMonotonic=%s parse=%s",
+				managedServiceEvidence(pidErr, pidOutput),
+				managedServiceEvidence(pidParseErr, nil),
+				managedServiceEvidence(timestampErr, timestampOutput),
+				managedServiceEvidence(timestampParseErr, nil),
+			),
+			pidErr,
+			timestampErr,
+			pidParseErr,
+			timestampParseErr,
+		)
+	}
+	return systemdRsyslogIdentity{
+		mainPID:                       pid,
+		activeEnterTimestampMonotonic: timestamp,
+	}, nil
+}
+
+func parseSystemdRsyslogUintProperty(label string, output []byte) (uint64, error) {
+	value := strings.TrimSpace(string(output))
+	if value == "" || strings.ContainsAny(value, " \t\r\n") {
+		return 0, fmt.Errorf("invalid %s value %q", label, value)
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s value %q: %w", label, value, err)
+	}
+	return parsed, nil
+}
+
+func attestSystemdRsyslogRestartTransition(before, after systemdRsyslogIdentity) error {
+	var causes []error
+	if after.mainPID <= 1 {
+		causes = append(causes, fmt.Errorf("post-restart MainPID is %d", after.mainPID))
+	}
+	if after.mainPID == before.mainPID {
+		causes = append(causes, fmt.Errorf("MainPID remained %d", after.mainPID))
+	}
+	if after.activeEnterTimestampMonotonic <= before.activeEnterTimestampMonotonic {
+		causes = append(causes, fmt.Errorf(
+			"ActiveEnterTimestampMonotonic did not advance from %d to %d",
+			before.activeEnterTimestampMonotonic,
+			after.activeEnterTimestampMonotonic,
+		))
+	}
+	return errors.Join(causes...)
+}
+
+func systemdRsyslogIdentityEvidence(identity systemdRsyslogIdentity, err error) string {
+	return managedServiceEvidence(err, []byte(fmt.Sprintf(
+		"MainPID=%d ActiveEnterTimestampMonotonic=%d",
+		identity.mainPID,
+		identity.activeEnterTimestampMonotonic,
+	)))
 }
 
 func restartSystemdRsyslogUsing(run managedServiceRunner) error {

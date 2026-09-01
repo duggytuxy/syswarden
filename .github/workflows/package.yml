@@ -758,6 +758,7 @@ jobs:
             --after-install "${PACKAGE_RPM_SCRIPTS}/postinst.sh" \
             --before-remove "${PACKAGE_RPM_SCRIPTS}/prerm.sh" \
             --after-remove "${PACKAGE_RPM_SCRIPTS}/postrm.sh" \
+            --directories /usr/share/doc/syswarden \
             -C "${STAGING_AMD64}" .
 
       - name: Build Alpine Package (.apk)

@@ -287,6 +287,49 @@ func TestExactRuntimeSocketRemovalRefusesRegularLookalike_SW2_FWBACKEND_001(t *t
 
 }
 
+func TestPackageRemovalRuntimeSocketUsesExactRootOwnedPath_SW2_PKG_001(t *testing.T) {
+	sentinel := errors.New("synthetic exact-socket refusal")
+	calls := 0
+	err := removeExactRuntimeSocketForPackageRemovalUsing(
+		func(path string, uid, gid uint32) error {
+			calls++
+			if path != "/run/syswarden.sock" || uid != 0 || gid != 0 {
+				t.Fatalf("package-removal socket target = %q uid %d gid %d", path, uid, gid)
+			}
+			return sentinel
+		},
+	)
+	if calls != 1 || !errors.Is(err, sentinel) {
+		t.Fatalf("package-removal exact socket delegation = calls %d error %v", calls, err)
+	}
+	if err := removeExactRuntimeSocketForPackageRemovalUsing(nil); err == nil {
+		t.Fatal("package-removal socket cleanup accepted a nil exact remover")
+	}
+}
+
+func TestOfflinePackageRemovalSocketAbsenceAttestationIsReadOnlyAndFailClosed_SW2_PKG_001(t *testing.T) {
+	uid, gid := systemTestIdentity(t)
+	parent := t.TempDir()
+	path := filepath.Join(parent, "syswarden.sock")
+	if err := attestRuntimeSocketAbsentAt(path, uid, gid); err != nil {
+		t.Fatalf("attest absent runtime socket: %v", err)
+	}
+	operatorBytes := []byte("operator-owned lookalike")
+	if err := os.WriteFile(path, operatorBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := attestRuntimeSocketAbsentAt(path, uid, gid); err == nil ||
+		!strings.Contains(err.Error(), "teardown target remains") {
+		t.Fatalf("present runtime target attestation = %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(operatorBytes) { // #nosec G304 -- path is confined to the private offline-attestation fixture root
+		t.Fatalf("offline socket attestation mutated target: bytes=%q error=%v", got, err)
+	}
+	if err := attestRuntimeSocketAbsentAt("relative.sock", uid, gid); err == nil {
+		t.Fatal("offline socket attestation accepted a relative path")
+	}
+}
+
 func TestUninstallTailHasNoAmbientCronProfileOrIgnoredRemovalMutation_SW2_FWBACKEND_001(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -304,6 +347,7 @@ func TestUninstallTailHasNoAmbientCronProfileOrIgnoredRemovalMutation_SW2_FWBACK
 		`os.RemoveAll(`,
 		`_ = os.Remove(`,
 		`systemctl", "restart", "rsyslog`,
+		`removeExactRuntimeSocketAt(`,
 	} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("uninstall tail contains forbidden mutation %q", forbidden)

@@ -779,6 +779,7 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
         --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
         --directories /usr/lib/.build-id \
+        --directories /usr/share/doc/syswarden \
         -p "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" \
         -C staging-rpm .
 )

@@ -1253,6 +1253,164 @@ func TestRestartManagedServiceDefersOfflineWithoutCommand_SW_PKG_001(t *testing.
 	}
 }
 
+func TestPackageRemovalRsyslogRestartForcesAndAttestsSystemdProcessReplacement_SW2_PKG_001(t *testing.T) {
+	want := []string{
+		"/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf",
+		"/usr/bin/systemctl show --property=MainPID --value rsyslog",
+		"/usr/bin/systemctl show --property=ActiveEnterTimestampMonotonic --value rsyslog",
+		"/usr/bin/systemctl restart rsyslog",
+		"/usr/bin/systemctl is-active --quiet rsyslog",
+		"/usr/bin/systemctl show --property=MainPID --value rsyslog",
+		"/usr/bin/systemctl show --property=ActiveEnterTimestampMonotonic --value rsyslog",
+	}
+	outputs := [][]byte{
+		nil,
+		[]byte("1056\n"),
+		[]byte("100\n"),
+		nil,
+		[]byte("active\n"),
+		[]byte("2048\n"),
+		[]byte("200\n"),
+	}
+	var calls []string
+	err := restartRsyslogForPackageRemovalUsing(
+		func() (string, error) { return "ACTIVE", nil },
+		func() bool { return false },
+		func(name string, args ...string) ([]byte, error) {
+			call := strings.Join(append([]string{name}, args...), " ")
+			calls = append(calls, call)
+			index := len(calls) - 1
+			if index >= len(outputs) {
+				t.Fatalf("unexpected package-removal command %q", call)
+			}
+			return outputs[index], nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("attested package-removal restart: %v", err)
+	}
+	if got := strings.Join(calls, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("package-removal systemd calls = %q, want %q", got, strings.Join(want, "\n"))
+	}
+	if strings.Contains(strings.Join(calls, "\n"), " reload ") {
+		t.Fatalf("package-removal path used reload: %v", calls)
+	}
+}
+
+func TestPackageRemovalRsyslogRestartRetriesAfterUnchangedSystemdIdentity_SW2_PKG_001(t *testing.T) {
+	responses := []struct {
+		output []byte
+		err    error
+	}{
+		{},                         // validate
+		{output: []byte("1056\n")}, // first before PID
+		{output: []byte("100\n")},  // first before timestamp
+		{},                         // first restart
+		{output: []byte("active\n")},
+		{output: []byte("1056\n")}, // stale PID
+		{output: []byte("100\n")},  // stale timestamp
+		{},                         // reset-failed
+		{output: []byte("1056\n")}, // retry before PID
+		{output: []byte("100\n")},  // retry before timestamp
+		{},                         // retry restart
+		{output: []byte("active\n")},
+		{output: []byte("4096\n")}, // retry after PID
+		{output: []byte("300\n")},  // retry after timestamp
+	}
+	var calls []string
+	err := restartRsyslogForPackageRemovalUsing(
+		func() (string, error) { return "ACTIVE", nil },
+		func() bool { return false },
+		func(name string, args ...string) ([]byte, error) {
+			call := strings.Join(append([]string{name}, args...), " ")
+			calls = append(calls, call)
+			index := len(calls) - 1
+			if index >= len(responses) {
+				t.Fatalf("unexpected bounded-retry command %q", call)
+			}
+			return responses[index].output, responses[index].err
+		},
+	)
+	if err != nil {
+		t.Fatalf("bounded package-removal restart retry: %v", err)
+	}
+	if got := strings.Count(strings.Join(calls, "\n"), "/usr/bin/systemctl restart rsyslog"); got != 2 {
+		t.Fatalf("package-removal restart count = %d, calls %v", got, calls)
+	}
+	if got := strings.Count(strings.Join(calls, "\n"), " reload "); got != 0 {
+		t.Fatalf("package-removal reload count = %d, calls %v", got, calls)
+	}
+}
+
+func TestPackageRemovalRsyslogRestartRejectsUnchangedSystemdIdentity_SW2_PKG_001(t *testing.T) {
+	responses := [][]byte{
+		[]byte("1056\n"),
+		[]byte("100\n"),
+		nil,
+		[]byte("active\n"),
+		[]byte("1056\n"),
+		[]byte("100\n"),
+	}
+	calls := 0
+	err := attemptAttestedSystemdRsyslogRestartForPackageRemovalUsing(
+		func(string, ...string) ([]byte, error) {
+			if calls >= len(responses) {
+				t.Fatal("unexpected identity-attestation command")
+			}
+			output := responses[calls]
+			calls++
+			return output, nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "MainPID remained 1056") ||
+		!strings.Contains(err.Error(), "did not advance from 100 to 100") {
+		t.Fatalf("unchanged systemd identity error = %v", err)
+	}
+}
+
+func TestPackageRemovalRsyslogRestartFailsClosedOfflineWithoutCommand_SW2_PKG_001(t *testing.T) {
+	called := false
+	err := restartRsyslogForPackageRemovalUsing(
+		func() (string, error) { return "OFFLINE", nil },
+		func() bool { return false },
+		func(string, ...string) ([]byte, error) {
+			called = true
+			return nil, nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "producer quiescence cannot be attested") {
+		t.Fatalf("offline package-removal error = %v", err)
+	}
+	if called {
+		t.Fatal("offline package-removal path executed a service command")
+	}
+}
+
+func TestPackageRemovalRsyslogRestartUsesOpenRCNodepsRestart_SW2_PKG_001(t *testing.T) {
+	var calls []string
+	err := restartRsyslogForPackageRemovalUsing(
+		func() (string, error) { return "ACTIVE", nil },
+		func() bool { return true },
+		func(name string, args ...string) ([]byte, error) {
+			calls = append(calls, strings.Join(append([]string{name}, args...), " "))
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("OpenRC package-removal restart: %v", err)
+	}
+	want := strings.Join([]string{
+		"/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf",
+		"/sbin/rc-service --ifnotstarted rsyslog start",
+		"/sbin/rc-service rsyslog status",
+		"/sbin/rc-service --nodeps rsyslog restart",
+		"/sbin/rc-service rsyslog status",
+	}, "\n")
+	if got := strings.Join(calls, "\n"); got != want {
+		t.Fatalf("OpenRC package-removal calls = %q, want %q", got, want)
+	}
+}
+
 func TestRestartManagedServiceFailsClosedOnUnknownStateAndRunnerError_SW_PKG_001(t *testing.T) {
 	t.Run("unknown state", func(t *testing.T) {
 		called := false

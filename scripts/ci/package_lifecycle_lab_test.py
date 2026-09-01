@@ -130,6 +130,11 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
                         if licensed
                         else package_lifecycle_lab.PACKAGE_PAYLOAD_PATHS
                     )
+                    | (
+                        {package_lifecycle_lab.RPM_DOCUMENTATION_ROOT}
+                        if licensed
+                        else set()
+                    )
                     | {
                         "/usr/lib/.build-id",
                         "/usr/lib/.build-id/11",
@@ -4821,6 +4826,7 @@ probe
             "apk": sorted(package_lifecycle_lab.LICENSED_APK_PACKAGE_PATHS),
             "rpm": sorted(
                 set(package_lifecycle_lab.LICENSED_PACKAGE_PAYLOAD_PATHS)
+                | {package_lifecycle_lab.RPM_DOCUMENTATION_ROOT}
                 | build_id_paths
             ),
         }
@@ -4902,6 +4908,33 @@ probe
                     candidate_version="4.04.0",
                 )
                 self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+                if family == "rpm":
+                    without_documentation_root = [
+                        path
+                        for path in manifest
+                        if path != package_lifecycle_lab.RPM_DOCUMENTATION_ROOT
+                    ]
+                    with self.assertRaisesRegex(
+                        package_lifecycle_lab.LifecycleLabError,
+                        "RPM native package inventory is not exact",
+                    ):
+                        package_lifecycle_lab._validate_manager_paths(
+                            family,
+                            without_documentation_root,
+                            role="candidate",
+                            version="4.04.0",
+                            candidate_version="4.04.0",
+                        )
+                    self.assertNotEqual(
+                        self.run_embedded_inventory_contract(
+                            family,
+                            without_documentation_root,
+                            version="4.04.0",
+                            candidate_version="4.04.0",
+                        ).returncode,
+                        0,
+                    )
 
                 without_attribution = [
                     path
@@ -7154,8 +7187,8 @@ probe
         ]
         ambiguous_assertion = assertion[ambiguous_assertion_start:]
         self.assertIn("/usr/sbin/rsyslogd -N1 -f /etc/rsyslog.conf", assertion)
-        self.assertIn("-p ExecReload --value", assertion)
-        self.assertNotIn("ReloadResult", source)
+        self.assertNotIn("-p ExecReload --value", assertion)
+        self.assertNotIn("systemctl reload rsyslog", assertion)
         self.assertIn("-p ActiveEnterTimestampMonotonic --value", source)
         self.assertIn("rsyslog_reactivation_mode", exact_assertion)
         self.assertIn("rsyslog_siem_exact_removed", assertion)
@@ -7204,6 +7237,23 @@ probe
             "/tmp/syswarden-rsyslog-provenance-before",
             ambiguous_assertion,
         )
+        rpm_remove_checks = package_lifecycle_lab.expected_event_checks(
+            "rpm", "remove"
+        )
+        for key in (
+            "rsyslog_siem_exact_generated",
+            "rsyslog_waf_bridge_exact_generated",
+            "rsyslog_provenance_exact",
+            "rsyslog_siem_exact_removed",
+            "rsyslog_waf_bridge_exact_removed",
+            "rsyslog_provenance_removed",
+            "rsyslog_configuration_valid",
+            "rsyslog_reactivated",
+        ):
+            self.assertIn(
+                f"remove.final-removal.generated.{key}",
+                rpm_remove_checks,
+            )
 
         writer_start = source.index("write_seeded_operator_token() {")
         writer_end = source.index("\nseed_state() {", writer_start)
@@ -7231,97 +7281,17 @@ probe
         self.assertIn('port = "5514"', rendered)
         self.assertIn('protocol = "udp"', rendered)
 
-    def test_rsyslog_reactivation_proof_is_systemd_255_257_compatible(self) -> None:
+    def test_rsyslog_removal_requires_a_new_process_identity(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
-        helpers_start = source.index("rsyslog_exec_reload_succeeded() {")
+        helpers_start = source.index("rsyslog_reactivation_mode() {")
         helpers_end = source.index(
             "\nseed_generated_runtime_artifacts() {", helpers_start
         )
         helpers = source[helpers_start:helpers_end]
-        self.assertNotIn("ReloadResult", helpers)
-        self.assertIn("code=exited", helpers)
-        self.assertIn("status=0", helpers)
-        self.assertIn("start_time=[n/a]", helpers)
-        self.assertIn("stop_time=[n/a]", helpers)
-
-        def reload_record(
-            pid: int,
-            *,
-            start: str = "Tue 2026-08-25 12:00:00 UTC",
-            stop: str = "Tue 2026-08-25 12:00:01 UTC",
-            code: str = "exited",
-            status: str = "0/SUCCESS",
-        ) -> str:
-            return (
-                "{ path=/bin/kill ; argv[]=/bin/kill -HUP 4242 ; "
-                "ignore_errors=no ; "
-                f"start_time=[{start}] ; stop_time=[{stop}] ; "
-                f"pid={pid} ; code={code} ; status={status} }}"
-            )
-
-        def run_success_predicate(value: str) -> subprocess.CompletedProcess[str]:
-            return subprocess.run(
-                [
-                    "/bin/sh",
-                    "-c",
-                    helpers + '\nrsyslog_exec_reload_succeeded "$1"',
-                    "rsyslog-exec-reload",
-                    value,
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-
-        successful_records = (
-            reload_record(500),
-            reload_record(501, status="0"),
-            reload_record(502) + "\n" + reload_record(503),
-        )
-        for value in successful_records:
-            with self.subTest(success=value):
-                result = run_success_predicate(value)
-                self.assertEqual(result.returncode, 0, result.stderr)
-
-        adversarial_records = {
-            "empty": "",
-            "whitespace": " ",
-            "start-not-run": reload_record(500, start="n/a"),
-            "stop-not-run": reload_record(500, stop="n/a"),
-            "pid-zero": reload_record(0),
-            "pid-one": reload_record(1),
-            "wrong-code": reload_record(500, code="killed"),
-            "failed-status": reload_record(500, status="1/FAILURE"),
-            "missing-open": reload_record(500)[1:],
-            "suffix": reload_record(500) + " forged",
-            "missing-argv": reload_record(500).replace(
-                "argv[]=/bin/kill -HUP 4242 ; ", ""
-            ),
-            "mixed-records": reload_record(500) + "\nforged",
-        }
-        for name, value in adversarial_records.items():
-            with self.subTest(adversarial=name):
-                self.assertNotEqual(
-                    run_success_predicate(value).returncode,
-                    0,
-                )
-
-        old_reload = reload_record(500)
-        new_reload = reload_record(
-            501,
-            start="Tue 2026-08-25 12:01:00 UTC",
-            stop="Tue 2026-08-25 12:01:01 UTC",
-        )
-        failed_reload = reload_record(
-            502,
-            start="Tue 2026-08-25 12:02:00 UTC",
-            stop="Tue 2026-08-25 12:02:01 UTC",
-            status="1/FAILURE",
-        )
+        self.assertNotIn("reload", helpers.lower())
+        self.assertIn('printf \'%s\\n\' restart', helpers)
 
         def run_mode(
-            before: str,
-            after: str,
             pid_before: str,
             pid_after: str,
             active_before: str,
@@ -7332,11 +7302,8 @@ probe
                     "/bin/sh",
                     "-c",
                     helpers
-                    + '\nrsyslog_reactivation_mode "$1" "$2" "$3" '
-                    + '"$4" "$5" "$6"',
+                    + '\nrsyslog_reactivation_mode "$1" "$2" "$3" "$4"',
                     "rsyslog-reactivation",
-                    before,
-                    after,
                     pid_before,
                     pid_after,
                     active_before,
@@ -7347,40 +7314,18 @@ probe
                 text=True,
             )
 
-        accepted_modes = (
-            (old_reload, new_reload, "100", "100", "1000", "1000", "reload"),
-            ("", "", "100", "101", "1000", "1001", "restart"),
-            (
-                old_reload,
-                failed_reload,
-                "100",
-                "101",
-                "1000",
-                "1001",
-                "restart",
-            ),
-        )
-        for before, after, pid_before, pid_after, active_before, active_after, mode in accepted_modes:
-            with self.subTest(accepted_mode=mode, after=after):
-                result = run_mode(
-                    before,
-                    after,
-                    pid_before,
-                    pid_after,
-                    active_before,
-                    active_after,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout, mode + "\n")
+        result = run_mode("100", "101", "1000", "1001")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "restart\n")
 
         rejected_modes = (
-            ("", "", "100", "100", "1000", "1000"),
-            (old_reload, old_reload, "100", "100", "1000", "1000"),
-            (old_reload, "forged", "100", "100", "1000", "1000"),
-            (old_reload, new_reload, "100", "101", "1000", "1000"),
-            ("", "", "100", "101", "1000", "999"),
-            ("", "", "invalid", "101", "1000", "1001"),
-            ("", "", "100", "101", "", "1001"),
+            ("100", "100", "1000", "1001"),
+            ("100", "101", "1000", "1000"),
+            ("100", "101", "1000", "999"),
+            ("invalid", "101", "1000", "1001"),
+            ("100", "101", "", "1001"),
+            ("1", "101", "1000", "1001"),
+            ("100", "1", "1000", "1001"),
         )
         for case in rejected_modes:
             with self.subTest(rejected_mode=case):
@@ -7837,7 +7782,7 @@ probe
                     labels = (
                         "final-removal" if family == "rpm" else scenario,
                     )
-                    exact_rsyslog = False
+                    exact_rsyslog = family == "rpm" and scenario == "remove"
                 expected_generated = [
                     check
                     for label in labels

@@ -1,0 +1,48 @@
+# GitLab-only Plumber compliance pipeline for isolated environments.
+#
+# Before enabling this pipeline on a self-managed GitLab instance:
+# 1. Mirror https://gitlab.com/getplumber/plumber into the same instance at
+#    infrastructure/ci-components/plumber, preserving the pinned commit below.
+# 2. Mirror getplumber/plumber:0.4.51 into this project's container registry as
+#    $CI_REGISTRY_IMAGE/plumber and verify that the manifest digest remains the
+#    immutable digest pinned below. If the registry rewrites the manifest,
+#    replace the digest with the verified internal-registry digest.
+# 3. Add GITLAB_TOKEN as a masked and hidden CI/CD variable with read_api and
+#    read_repository scopes. Keep publishing inputs disabled unless explicitly
+#    approved and use an api-scoped token only if MR comments are later enabled.
+
+stages:
+  - compliance
+
+workflow:
+  rules:
+    - if: '$GITLAB_CI != "true"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+    - when: never
+
+include:
+  - component: $CI_SERVER_FQDN/infrastructure/ci-components/plumber/plumber@de6c51afb28f0becedc1dcde385321bcb95d8512 # Plumber v0.4.51
+    inputs:
+      stage: compliance
+      image: $CI_REGISTRY_IMAGE/plumber@sha256:de2ce9f239f2069ecb97be599abffd0a2fbbccd89a4e40d5061f31d9bcddd6fc
+      config_file: .plumber.yaml
+      min_points: "100"
+      output_file: plumber-report.json
+      pbom_file: plumber-pbom.json
+      pbom_cyclonedx_file: plumber-cyclonedx-sbom.json
+      glsast_file: gl-sast-report.json
+      print_output: true
+      verbose: false
+      score_push: false
+      mr_comment: false
+      badge: false
+      fail_warnings: true
+      allow_failure: false

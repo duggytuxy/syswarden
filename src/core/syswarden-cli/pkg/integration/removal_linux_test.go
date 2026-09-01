@@ -884,6 +884,679 @@ func TestGeneratedRsyslogRemovalReactivatesAndPropagatesServiceFailure_SW2_PKG_0
 	}
 }
 
+func TestPackageRemovalRsyslogCleanupForcesRestartWhenFragmentsAreAlreadyAbsent_SW2_PKG_001(t *testing.T) {
+	parent := t.TempDir()
+	parentInfo, err := os.Stat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat := parentInfo.Sys().(*syscall.Stat_t)
+	restartCalls := 0
+	err = removeOwnedRsyslogArtifactsForPackageRemovalAtUsing(
+		config.NewFailSafeConfig(),
+		parent,
+		stat.Uid,
+		stat.Gid,
+		defaultExactOwnedArtifactRemovalOptions(),
+		func(changed bool) error {
+			restartCalls++
+			if changed {
+				t.Fatal("already-absent recovery reported a configuration change")
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("already-absent package-removal restart barrier: %v", err)
+	}
+	if restartCalls != 1 {
+		t.Fatalf("already-absent package-removal restart calls = %d, want 1", restartCalls)
+	}
+}
+
+func TestPackageRemovalRsyslogCleanupRefusesRemainingSocketProducer_SW2_PKG_001(t *testing.T) {
+	for _, name := range []string{
+		wafRsyslogConfigName,
+		exactArtifactQuarantineName(wafRsyslogConfigName),
+	} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			directory := filepath.Join(parent, wafRsyslogDirectoryName)
+			if err := os.Mkdir(directory, 0750); err != nil {
+				t.Fatal(err)
+			}
+			parentInfo, err := os.Stat(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stat := parentInfo.Sys().(*syscall.Stat_t)
+			path := filepath.Join(directory, name)
+			operatorBytes := []byte("operator-owned potential omuxsock producer\n")
+			writeOwnedArtifactFixture(t, path, operatorBytes, 0600)
+			restartCalls := 0
+			err = removeOwnedRsyslogArtifactsForPackageRemovalAtUsing(
+				config.NewFailSafeConfig(),
+				parent,
+				stat.Uid,
+				stat.Gid,
+				defaultExactOwnedArtifactRemovalOptions(),
+				func(bool) error {
+					restartCalls++
+					return nil
+				},
+			)
+			if err == nil || !strings.Contains(err.Error(), "potential SysWarden rsyslog socket producer") {
+				t.Fatalf("remaining producer refusal = %v", err)
+			}
+			if restartCalls != 0 {
+				t.Fatalf("remaining producer triggered %d restart calls", restartCalls)
+			}
+			if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, operatorBytes) { // #nosec G304 -- path is confined to the private producer fixture root
+				t.Fatalf("remaining producer changed: bytes=%q error=%v", got, readErr)
+			}
+		})
+	}
+}
+
+func TestOfflinePackageRemovalAcceptsOnlyCompleteAttestedNoopWithoutRestart_SW2_PKG_001(t *testing.T) {
+	attestCalls := 0
+	restartCalls := 0
+	outcome, err := removeOwnedRsyslogArtifactsForPackageRemovalWithRuntimeAtUsing(
+		nil,
+		"/unused",
+		0,
+		0,
+		defaultExactOwnedArtifactRemovalOptions(),
+		func() (string, error) { return "OFFLINE", nil },
+		func() error {
+			attestCalls++
+			return nil
+		},
+		func(bool) error {
+			restartCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("complete offline no-op: %v", err)
+	}
+	if outcome != RsyslogPackageRemovalOfflineAlreadyComplete {
+		t.Fatalf("complete offline no-op outcome = %d", outcome)
+	}
+	if attestCalls != 1 || restartCalls != 0 {
+		t.Fatalf("offline no-op calls = attest %d restart %d", attestCalls, restartCalls)
+	}
+
+	sentinel := errors.New("synthetic incomplete offline teardown")
+	outcome, err = removeOwnedRsyslogArtifactsForPackageRemovalWithRuntimeAtUsing(
+		nil,
+		"/unused",
+		0,
+		0,
+		defaultExactOwnedArtifactRemovalOptions(),
+		func() (string, error) { return "OFFLINE", nil },
+		func() error { return sentinel },
+		func(bool) error {
+			restartCalls++
+			return nil
+		},
+	)
+	if err == nil || !errors.Is(err, sentinel) ||
+		!strings.Contains(err.Error(), "completed rsyslog teardown state cannot be attested") {
+		t.Fatalf("incomplete offline no-op refusal = %v", err)
+	}
+	if outcome != RsyslogPackageRemovalOutcomeUnknown {
+		t.Fatalf("incomplete offline no-op outcome = %d", outcome)
+	}
+	if restartCalls != 0 {
+		t.Fatalf("incomplete offline no-op executed %d restart calls", restartCalls)
+	}
+}
+
+func TestOfflinePackageRemovalAttestationRejectsEveryRsyslogTargetWithoutMutation_SW2_PKG_001(t *testing.T) {
+	canonicals := []string{
+		rsyslogAntiForgingConfigName,
+		wafRsyslogConfigName,
+		rsyslogSIEMConfigName,
+		rsyslogProvenanceName,
+		rsyslogSELinuxProvenanceName,
+	}
+	var targets []string
+	for _, canonical := range canonicals {
+		targets = append(
+			targets,
+			canonical,
+			exactArtifactQuarantineName(canonical),
+			"."+canonical+exactArtifactRecreationSuffix,
+			"."+canonical+".syswarden-0123456789abcdef0123456789abcdef.tmp",
+		)
+	}
+	for _, target := range targets {
+		t.Run(target, func(t *testing.T) {
+			parent := t.TempDir()
+			directory := filepath.Join(parent, wafRsyslogDirectoryName)
+			if err := os.Mkdir(directory, 0750); err != nil {
+				t.Fatal(err)
+			}
+			parentInfo, err := os.Stat(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stat := parentInfo.Sys().(*syscall.Stat_t)
+			path := filepath.Join(directory, target)
+			content := []byte("preserve offline target exactly\n")
+			writeOwnedArtifactFixture(t, path, content, 0600)
+			socketCalls := 0
+			moduleCalls := 0
+			err = attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+				parent,
+				stat.Uid,
+				stat.Gid,
+				func() error {
+					socketCalls++
+					return nil
+				},
+				func() (bool, error) { return true, nil },
+				func() ([]selinuxModuleIdentity, error) {
+					moduleCalls++
+					return nil, nil
+				},
+			)
+			if err == nil || !strings.Contains(err.Error(), "rsyslog teardown target") {
+				t.Fatalf("offline target %s attestation = %v", target, err)
+			}
+			if socketCalls != 0 || moduleCalls != 0 {
+				t.Fatalf("offline target %s reached later inspectors: socket=%d module=%d", target, socketCalls, moduleCalls)
+			}
+			if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) { // #nosec G304 -- path is confined to the private offline-target fixture root
+				t.Fatalf("offline target %s mutated: bytes=%q error=%v", target, got, readErr)
+			}
+		})
+	}
+}
+
+func TestOfflinePackageRemovalAttestationRejectsLegacyCompletionTargetsWithoutMutation_SW2_PKG_001(t *testing.T) {
+	for _, target := range []string{
+		legacyCompletionName,
+		exactArtifactQuarantineName(legacyCompletionName),
+		"." + legacyCompletionName + exactArtifactRecreationSuffix,
+		"." + legacyCompletionName + ".syswarden-0123456789abcdef0123456789abcdef.tmp",
+	} {
+		t.Run(target, func(t *testing.T) {
+			parent := t.TempDir()
+			directory := filepath.Join(parent, legacyCompletionDirectoryName)
+			if err := os.Mkdir(directory, 0750); err != nil {
+				t.Fatal(err)
+			}
+			parentInfo, err := os.Stat(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stat := parentInfo.Sys().(*syscall.Stat_t)
+			path := filepath.Join(directory, target)
+			content := []byte("preserve legacy completion target exactly\n")
+			writeOwnedArtifactFixture(t, path, content, 0600)
+			socketCalls := 0
+			moduleCalls := 0
+			err = attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+				parent,
+				stat.Uid,
+				stat.Gid,
+				func() error {
+					socketCalls++
+					return nil
+				},
+				func() (bool, error) { return true, nil },
+				func() ([]selinuxModuleIdentity, error) {
+					moduleCalls++
+					return nil, nil
+				},
+			)
+			if err == nil || !strings.Contains(err.Error(), "legacy completion teardown target") {
+				t.Fatalf("offline legacy target %s attestation = %v", target, err)
+			}
+			if socketCalls != 0 || moduleCalls != 0 {
+				t.Fatalf("offline legacy target %s reached later inspectors: socket=%d module=%d", target, socketCalls, moduleCalls)
+			}
+			if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, content) { // #nosec G304 -- path is confined to the private legacy-target fixture root
+				t.Fatalf("offline legacy target %s mutated: bytes=%q error=%v", target, got, readErr)
+			}
+		})
+	}
+
+	t.Run("canonical symlink lookalike", func(t *testing.T) {
+		parent := t.TempDir()
+		directory := filepath.Join(parent, legacyCompletionDirectoryName)
+		if err := os.Mkdir(directory, 0750); err != nil {
+			t.Fatal(err)
+		}
+		parentInfo, err := os.Stat(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stat := parentInfo.Sys().(*syscall.Stat_t)
+		operator := filepath.Join(t.TempDir(), "operator-completion")
+		if err := os.WriteFile(operator, []byte("operator"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(directory, legacyCompletionName)
+		if err := os.Symlink(operator, path); err != nil {
+			t.Fatal(err)
+		}
+		err = attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			stat.Uid,
+			stat.Gid,
+			func() error { return nil },
+			func() (bool, error) { return true, nil },
+			func() ([]selinuxModuleIdentity, error) { return nil, nil },
+		)
+		if err == nil || !strings.Contains(err.Error(), "legacy completion teardown target") {
+			t.Fatalf("offline legacy symlink refusal = %v", err)
+		}
+		if target, readErr := os.Readlink(path); readErr != nil || target != operator {
+			t.Fatalf("offline legacy symlink mutated: target=%q error=%v", target, readErr)
+		}
+		if got, readErr := os.ReadFile(operator); readErr != nil || string(got) != "operator" { // #nosec G304 -- operator is confined to the private legacy-symlink fixture root
+			t.Fatalf("offline legacy symlink target mutated: bytes=%q error=%v", got, readErr)
+		}
+	})
+
+	t.Run("ambiguous legacy parent", func(t *testing.T) {
+		parent := t.TempDir()
+		parentInfo, err := os.Stat(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stat := parentInfo.Sys().(*syscall.Stat_t)
+		operator := t.TempDir()
+		marker := filepath.Join(operator, "keep")
+		if err := os.WriteFile(marker, []byte("operator"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(operator, filepath.Join(parent, legacyCompletionDirectoryName)); err != nil {
+			t.Fatal(err)
+		}
+		err = attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			stat.Uid,
+			stat.Gid,
+			func() error { return nil },
+			func() (bool, error) { return true, nil },
+			func() ([]selinuxModuleIdentity, error) { return nil, nil },
+		)
+		if err == nil || !strings.Contains(err.Error(), "legacy completion directory") ||
+			!strings.Contains(err.Error(), "without following symlinks") {
+			t.Fatalf("ambiguous offline legacy directory refusal = %v", err)
+		}
+		if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "operator" { // #nosec G304 -- marker is confined to the private legacy-directory fixture root
+			t.Fatalf("ambiguous offline legacy directory mutated operator target: bytes=%q error=%v", got, readErr)
+		}
+	})
+}
+
+func TestOfflinePackageRemovalAttestationRejectsSocketModuleAndInspectionErrors_SW2_PKG_001(t *testing.T) {
+	newFixture := func(t *testing.T) (string, uint32, uint32) {
+		t.Helper()
+		parent := t.TempDir()
+		if err := os.Mkdir(filepath.Join(parent, wafRsyslogDirectoryName), 0750); err != nil {
+			t.Fatal(err)
+		}
+		parentInfo, err := os.Stat(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stat := parentInfo.Sys().(*syscall.Stat_t)
+		return parent, stat.Uid, stat.Gid
+	}
+	newSemoduleInspectors := func(
+		entries map[string]trustedPathMetadata,
+		links map[string]string,
+	) (trustedPathLstat, trustedPathReadlink) {
+		return func(path string) (trustedPathMetadata, error) {
+				entry, ok := entries[path]
+				if !ok {
+					return trustedPathMetadata{}, &os.PathError{Op: "lstat", Path: path, Err: unix.ENOENT}
+				}
+				return entry, nil
+			}, func(path string) (string, error) {
+				target, ok := links[path]
+				if !ok {
+					return "", &os.PathError{Op: "readlink", Path: path, Err: unix.EINVAL}
+				}
+				return target, nil
+			}
+	}
+	directSemoduleEntries := func() map[string]trustedPathMetadata {
+		return map[string]trustedPathMetadata{
+			"/":                 {uid: 0, mode: os.ModeDir | 0755},
+			"/usr":              {uid: 0, mode: os.ModeDir | 0755},
+			"/usr/sbin":         {uid: 0, mode: os.ModeDir | 0755},
+			trustedSemodulePath: {uid: 0, mode: 0755},
+		}
+	}
+
+	t.Run("complete absence", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		if err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return nil },
+			func() (bool, error) { return true, nil },
+			func() ([]selinuxModuleIdentity, error) { return nil, nil },
+		); err != nil {
+			t.Fatalf("complete offline absence: %v", err)
+		}
+	})
+
+	t.Run("semodule strict ENOENT permits a read-only no-op", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		marker := filepath.Join(parent, "operator-marker")
+		if err := os.WriteFile(marker, []byte("preserve"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		moduleCalls := 0
+		entries := map[string]trustedPathMetadata{
+			"/":         {uid: 0, mode: os.ModeDir | 0755},
+			"/usr":      {uid: 0, mode: os.ModeDir | 0755},
+			"/usr/sbin": {uid: 0, mode: os.ModeSymlink | 0777},
+			"/usr/bin":  {uid: 0, mode: os.ModeDir | 0755},
+		}
+		lstat, readlink := newSemoduleInspectors(entries, map[string]string{"/usr/sbin": "bin"})
+		err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return nil },
+			func() (bool, error) {
+				return inspectTrustedSemoduleForOfflinePackageRemovalUsing(lstat, readlink)
+			},
+			func() ([]selinuxModuleIdentity, error) {
+				moduleCalls++
+				return nil, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("semodule ENOENT offline no-op: %v", err)
+		}
+		if moduleCalls != 0 {
+			t.Fatalf("semodule ENOENT reached listing %d times", moduleCalls)
+		}
+		if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "preserve" { // #nosec G304 -- marker is confined to the private fixture root
+			t.Fatalf("semodule ENOENT no-op mutated marker: bytes=%q error=%v", got, readErr)
+		}
+	})
+
+	for _, test := range []struct {
+		name     string
+		lstatErr error
+	}{
+		{name: "semodule EACCES refuses", lstatErr: unix.EACCES},
+		{name: "semodule non-directory path refuses", lstatErr: unix.ENOTDIR},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parent, uid, gid := newFixture(t)
+			moduleCalls := 0
+			entries := directSemoduleEntries()
+			lstat, readlink := newSemoduleInspectors(entries, nil)
+			err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+				parent,
+				uid,
+				gid,
+				func() error { return nil },
+				func() (bool, error) {
+					return inspectTrustedSemoduleForOfflinePackageRemovalUsing(
+						func(path string) (trustedPathMetadata, error) {
+							if path == trustedSemodulePath {
+								return trustedPathMetadata{}, &os.PathError{Op: "lstat", Path: path, Err: test.lstatErr}
+							}
+							return lstat(path)
+						},
+						readlink,
+					)
+				},
+				func() ([]selinuxModuleIdentity, error) {
+					moduleCalls++
+					return nil, nil
+				},
+			)
+			if err == nil || !errors.Is(err, test.lstatErr) ||
+				!strings.Contains(err.Error(), "trusted offline SELinux module tool") {
+				t.Fatalf("%s = %v", test.name, err)
+			}
+			if moduleCalls != 0 {
+				t.Fatalf("%s reached module listing %d times", test.name, moduleCalls)
+			}
+		})
+	}
+
+	t.Run("untrusted semodule executable refuses", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		moduleCalls := 0
+		entries := directSemoduleEntries()
+		entry := entries[trustedSemodulePath]
+		entry.mode = 0644
+		entries[trustedSemodulePath] = entry
+		lstat, readlink := newSemoduleInspectors(entries, nil)
+		err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return nil },
+			func() (bool, error) {
+				return inspectTrustedSemoduleForOfflinePackageRemovalUsing(lstat, readlink)
+			},
+			func() ([]selinuxModuleIdentity, error) {
+				moduleCalls++
+				return nil, nil
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "not executable") {
+			t.Fatalf("untrusted semodule refusal = %v", err)
+		}
+		if moduleCalls != 0 {
+			t.Fatalf("untrusted semodule reached module listing %d times", moduleCalls)
+		}
+	})
+
+	t.Run("broken final semodule symlink is ambiguous", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		entries := directSemoduleEntries()
+		entries[trustedSemodulePath] = trustedPathMetadata{uid: 0, mode: os.ModeSymlink | 0777}
+		entries["/missing"] = trustedPathMetadata{uid: 0, mode: os.ModeDir | 0755}
+		lstat, readlink := newSemoduleInspectors(
+			entries,
+			map[string]string{trustedSemodulePath: "/missing/semodule"},
+		)
+		moduleCalls := 0
+		err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return nil },
+			func() (bool, error) {
+				return inspectTrustedSemoduleForOfflinePackageRemovalUsing(lstat, readlink)
+			},
+			func() ([]selinuxModuleIdentity, error) {
+				moduleCalls++
+				return nil, nil
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "lstat trusted path component /missing/semodule") {
+			t.Fatalf("broken final semodule symlink refusal = %v", err)
+		}
+		if moduleCalls != 0 {
+			t.Fatalf("broken semodule symlink reached module listing %d times", moduleCalls)
+		}
+	})
+
+	t.Run("trusted semodule requires a complete empty listing", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		moduleCalls := 0
+		lstat, readlink := newSemoduleInspectors(directSemoduleEntries(), nil)
+		err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return nil },
+			func() (bool, error) {
+				return inspectTrustedSemoduleForOfflinePackageRemovalUsing(lstat, readlink)
+			},
+			func() ([]selinuxModuleIdentity, error) {
+				moduleCalls++
+				return nil, nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("trusted semodule with empty listing: %v", err)
+		}
+		if moduleCalls != 1 {
+			t.Fatalf("trusted semodule listing calls = %d", moduleCalls)
+		}
+	})
+
+	t.Run("socket remains", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		sentinel := errors.New("synthetic socket target remains")
+		moduleCalls := 0
+		err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return sentinel },
+			func() (bool, error) { return true, nil },
+			func() ([]selinuxModuleIdentity, error) {
+				moduleCalls++
+				return nil, nil
+			},
+		)
+		if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "runtime socket absence") {
+			t.Fatalf("offline socket refusal = %v", err)
+		}
+		if moduleCalls != 0 {
+			t.Fatalf("offline socket refusal reached module inspection %d times", moduleCalls)
+		}
+	})
+
+	t.Run("SELinux module remains", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return nil },
+			func() (bool, error) { return true, nil },
+			func() ([]selinuxModuleIdentity, error) {
+				return []selinuxModuleIdentity{{
+					priority: rsyslogSELinuxModulePriority,
+					name:     rsyslogSELinuxModuleName,
+				}}, nil
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "SELinux module syswarden_rsyslog remains") {
+			t.Fatalf("offline SELinux module refusal = %v", err)
+		}
+	})
+
+	t.Run("SELinux module exists at another priority", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return nil },
+			func() (bool, error) { return true, nil },
+			func() ([]selinuxModuleIdentity, error) {
+				return []selinuxModuleIdentity{{
+					priority: 300,
+					name:     rsyslogSELinuxModuleName,
+					language: rsyslogSELinuxModuleLanguage,
+					enabled:  true,
+				}}, nil
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "operator instance exists at priority 300") {
+			t.Fatalf("offline alternate-priority module refusal = %v", err)
+		}
+	})
+
+	t.Run("module inspection error", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		sentinel := errors.New("synthetic semodule listing failure")
+		err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return nil },
+			func() (bool, error) { return true, nil },
+			func() ([]selinuxModuleIdentity, error) { return nil, sentinel },
+		)
+		if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "SELinux module absence") {
+			t.Fatalf("offline module inspection refusal = %v", err)
+		}
+	})
+
+	t.Run("ambiguous SELinux module identity", func(t *testing.T) {
+		parent, uid, gid := newFixture(t)
+		identity := selinuxModuleIdentity{
+			priority: rsyslogSELinuxModulePriority,
+			name:     rsyslogSELinuxModuleName,
+		}
+		err := attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			uid,
+			gid,
+			func() error { return nil },
+			func() (bool, error) { return true, nil },
+			func() ([]selinuxModuleIdentity, error) {
+				return []selinuxModuleIdentity{identity, identity}, nil
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "duplicate priority 400 SELinux module identity") {
+			t.Fatalf("ambiguous offline module refusal = %v", err)
+		}
+	})
+
+	t.Run("ambiguous rsyslog directory", func(t *testing.T) {
+		parent := t.TempDir()
+		parentInfo, err := os.Stat(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stat := parentInfo.Sys().(*syscall.Stat_t)
+		operator := t.TempDir()
+		marker := filepath.Join(operator, "keep")
+		if err := os.WriteFile(marker, []byte("operator"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(operator, filepath.Join(parent, wafRsyslogDirectoryName)); err != nil {
+			t.Fatal(err)
+		}
+		socketCalls := 0
+		err = attestCompletedRsyslogTeardownForOfflinePackageRemovalAtUsing(
+			parent,
+			stat.Uid,
+			stat.Gid,
+			func() error {
+				socketCalls++
+				return nil
+			},
+			func() (bool, error) { return true, nil },
+			func() ([]selinuxModuleIdentity, error) { return nil, nil },
+		)
+		if err == nil || !strings.Contains(err.Error(), "without following symlinks") {
+			t.Fatalf("ambiguous offline directory refusal = %v", err)
+		}
+		if socketCalls != 0 {
+			t.Fatalf("ambiguous offline directory reached socket inspection %d times", socketCalls)
+		}
+		if got, readErr := os.ReadFile(marker); readErr != nil || string(got) != "operator" { // #nosec G304 -- marker is confined to the private ambiguity fixture root
+			t.Fatalf("ambiguous offline directory mutated operator target: bytes=%q error=%v", got, readErr)
+		}
+	})
+}
+
 func TestGeneratedRsyslogRemovalSkipsDisabledSIEMArtifact_SW2_PKG_001(t *testing.T) {
 	parent := t.TempDir()
 	directory := filepath.Join(parent, wafRsyslogDirectoryName)
