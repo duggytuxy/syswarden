@@ -5,6 +5,7 @@ import (
 	"syswarden-cli/pkg/firewall"
 	"syswarden-cli/pkg/integration"
 	"syswarden-cli/pkg/network"
+	"syswarden-cli/pkg/security"
 	"syswarden-cli/pkg/system"
 
 	"github.com/spf13/cobra"
@@ -22,6 +23,8 @@ var removePreparedFirewallRuntimeLock = system.RemovePreparedFirewallRuntimeLock
 var removeOwnedIntegrationArtifactsForRemoval = integration.RemoveOwnedRsyslogArtifactsForPackageRemoval
 var removeExactRuntimeSocketForRemoval = system.RemoveExactRuntimeSocketForPackageRemoval
 var removeOwnedRsyslogSELinuxPolicyForRemoval = integration.RemoveOwnedRsyslogSELinuxPolicyForPackageRemoval
+var requireRemovalTombstoneForCISPolicyRemoval = system.RequireRemovalTombstone
+var removeExactCISHardeningPoliciesForRemoval = security.RemoveExactCISHardeningPoliciesForRemoval
 
 func prepareVerifiedFirewallRemoval() error {
 	if err := beginRemoval(); err != nil {
@@ -82,6 +85,18 @@ func prepareVerifiedFirewallRemoval() error {
 		return fmt.Errorf(
 			"refusing removal after an unrecognized rsyslog package-removal outcome %d; the runtime socket and SELinux policy are retained, and the durable removal barrier is retained",
 			rsyslogOutcome,
+		)
+	}
+	if err := requireRemovalTombstoneForCISPolicyRemoval(); err != nil {
+		return fmt.Errorf(
+			"refusing removal before exact CIS hardening policy cleanup because the durable removal barrier could not be reattested; CIS policies, prepared service artifacts, and runtime lock are retained: %w",
+			err,
+		)
+	}
+	if err := removeExactCISHardeningPoliciesForRemoval(); err != nil {
+		return fmt.Errorf(
+			"refusing removal before exact CIS hardening policy cleanup; the durable removal barrier, prepared service artifacts, and runtime lock are retained for retry: %w",
+			err,
 		)
 	}
 	if err := removePreparedServiceArtifacts(); err != nil {

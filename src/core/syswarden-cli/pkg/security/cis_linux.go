@@ -41,6 +41,51 @@ var cisSSHDaemonSignalPaths = []string{
 	"/etc/systemd/system/sockets.target.wants/sshd.socket",
 }
 
+const (
+	cisFilesystemPolicyPath = "/etc/modprobe.d/syswarden-cis-fs.conf"
+	cisFilesystemPolicy     = `# --- SYSWARDEN: CIS Level 2 Filesystem Hardening ---
+install cramfs /bin/true
+install freevxfs /bin/true
+install jffs2 /bin/true
+install hfs /bin/true
+install hfsplus /bin/true
+install squashfs /bin/true
+install udf /bin/true
+`
+	cisNetworkPolicyPath = "/etc/modprobe.d/syswarden-cis-net.conf"
+	cisNetworkPolicy     = `# --- SYSWARDEN: CIS Level 2 Network Protocol Hardening ---
+install dccp /bin/true
+install sctp /bin/true
+install rds /bin/true
+install tipc /bin/true
+`
+	cisSysctlPolicyPath = "/etc/sysctl.d/99-syswarden-cis-level2.conf"
+	cisSysctlPolicy     = `# --- SYSWARDEN: CIS Level 2 Kernel Hardening ---
+fs.suid_dumpable = 0
+kernel.randomize_va_space = 2
+kernel.unprivileged_bpf_disabled = 1
+net.core.bpf_jit_harden = 2
+kernel.dmesg_restrict = 1
+kernel.kptr_restrict = 2
+kernel.yama.ptrace_scope = 1
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.conf.default.secure_redirects = 0
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.tcp_syncookies = 1
+`
+	cisLimitsPolicyPath   = "/etc/security/limits.d/99-syswarden-cis.conf"
+	cisLimitsPolicy       = "# --- SYSWARDEN: CIS Level 2 Limits ---\n* hard core 0\n"
+	cisCoredumpPolicyPath = "/etc/systemd/coredump.conf.d/99-syswarden.conf"
+	cisCoredumpPolicy     = "[Coredump]\nStorage=none\nProcessSizeMax=0\n"
+)
+
 type hardeningStage struct {
 	name string
 	run  func() error
@@ -77,16 +122,7 @@ func ApplyCISHardening() error {
 
 func disableObscureFilesystemsOn(host hardeningHost) error {
 	fmt.Println(" -> Disabling obscure filesystems (CIS 1.1.1.1 - 1.1.1.8)")
-	content := `# --- SYSWARDEN: CIS Level 2 Filesystem Hardening ---
-install cramfs /bin/true
-install freevxfs /bin/true
-install jffs2 /bin/true
-install hfs /bin/true
-install hfsplus /bin/true
-install squashfs /bin/true
-install udf /bin/true
-`
-	if err := host.write("/etc/modprobe.d/syswarden-cis-fs.conf", []byte(content), 0600); err != nil {
+	if err := host.write(cisFilesystemPolicyPath, []byte(cisFilesystemPolicy), 0600); err != nil {
 		return err
 	}
 	active, reason, err := hardeningKernelRuntimeApplicable(host, "kernel module removal")
@@ -102,13 +138,7 @@ install udf /bin/true
 
 func disableUncommonProtocolsOn(host hardeningHost) error {
 	fmt.Println(" -> Disabling uncommon network protocols (CIS 3.3.1 - 3.3.4)")
-	content := `# --- SYSWARDEN: CIS Level 2 Network Protocol Hardening ---
-install dccp /bin/true
-install sctp /bin/true
-install rds /bin/true
-install tipc /bin/true
-`
-	if err := host.write("/etc/modprobe.d/syswarden-cis-net.conf", []byte(content), 0600); err != nil {
+	if err := host.write(cisNetworkPolicyPath, []byte(cisNetworkPolicy), 0600); err != nil {
 		return err
 	}
 	active, reason, err := hardeningKernelRuntimeApplicable(host, "kernel protocol module removal")
@@ -167,27 +197,8 @@ func removeLoadedModules(host hardeningHost, modules []string) error {
 
 func applySysctlOn(host hardeningHost) error {
 	fmt.Println(" -> Applying strict kernel parameters (CIS 1.5, 3.2)")
-	content := `# --- SYSWARDEN: CIS Level 2 Kernel Hardening ---
-fs.suid_dumpable = 0
-kernel.randomize_va_space = 2
-kernel.unprivileged_bpf_disabled = 1
-net.core.bpf_jit_harden = 2
-kernel.dmesg_restrict = 1
-kernel.kptr_restrict = 2
-kernel.yama.ptrace_scope = 1
-net.ipv4.conf.all.accept_source_route = 0
-net.ipv4.conf.default.accept_source_route = 0
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv4.conf.default.accept_redirects = 0
-net.ipv4.conf.all.secure_redirects = 0
-net.ipv4.conf.default.secure_redirects = 0
-net.ipv4.conf.all.log_martians = 1
-net.ipv4.conf.default.log_martians = 1
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.default.rp_filter = 1
-net.ipv4.tcp_syncookies = 1
-`
-	logical := "/etc/sysctl.d/99-syswarden-cis-level2.conf"
+	content := cisSysctlPolicy
+	logical := cisSysctlPolicyPath
 	physical, err := host.path(logical)
 	if err != nil {
 		return err
@@ -310,8 +321,7 @@ func attestSysctlValues(host hardeningHost, expected map[string]string) error {
 
 func restrictCoreDumpsOn(host hardeningHost) error {
 	fmt.Println(" -> Enforcing hard limits on core dumps (CIS 1.5.1)")
-	limitsContent := "# --- SYSWARDEN: CIS Level 2 Limits ---\n* hard core 0\n"
-	if err := host.write("/etc/security/limits.d/99-syswarden-cis.conf", []byte(limitsContent), 0600); err != nil {
+	if err := host.write(cisLimitsPolicyPath, []byte(cisLimitsPolicy), 0600); err != nil {
 		return err
 	}
 	decision, err := host.executionDecision()
@@ -329,7 +339,7 @@ func restrictCoreDumpsOn(host hardeningHost) error {
 		fmt.Println(" -> Systemd coredump policy is not applicable because no complete trusted coredump consumer is installed. The limits policy remains attested; no systemd coredump policy was claimed.")
 		return nil
 	}
-	content := []byte("[Coredump]\nStorage=none\nProcessSizeMax=0\n")
+	content := []byte(cisCoredumpPolicy)
 	validate := func() error {
 		output, err := host.executor.output("systemd-analyze", "cat-config", "systemd/coredump.conf")
 		if err != nil {
@@ -341,7 +351,7 @@ func restrictCoreDumpsOn(host hardeningHost) error {
 		}
 		return nil
 	}
-	logical := "/etc/systemd/coredump.conf.d/99-syswarden.conf"
+	logical := cisCoredumpPolicyPath
 	if !runtimeActive {
 		if err := host.applyManagedFile(logical, content, validate, nil); err != nil {
 			return err
