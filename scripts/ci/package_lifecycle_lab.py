@@ -98,6 +98,18 @@ class PlatformSpec:
     purge_semantics: str
 
 
+@dataclass(frozen=True)
+class AlpineOpenRCContract:
+    package_version: str
+    rc_conf_pre_sha256: str
+    rc_conf_post_sha256: str
+    hostname_init_pre_sha256: str
+    hostname_init_post_sha256: str
+    hostname_keyword_pre_pattern: str
+    hostname_keyword_post_pattern: str
+    hostname_mutation: str
+
+
 ARCHITECTURE_LABELS = {
     "amd64": "amd64/x86_64",
 }
@@ -161,9 +173,18 @@ DEB_BOOTSTRAP = (
     "--no-install-recommends systemd systemd-sysv dbus iproute2 nftables ipset curl wget rsyslog cron "
     "bash-completion wireguard-tools qrencode jq unattended-upgrades util-linux "
     "apt-listchanges procps e2fsprogs socat binutils file && "
-    "if [ -f /etc/dpkg/dpkg.cfg.d/docker ]; then "
-    "sed -i '\\|^path-exclude /usr/share/doc/\\*$|d' "
-    "/etc/dpkg/dpkg.cfg.d/docker; fi && "
+    "if [ -d /etc/dpkg/dpkg.cfg.d ]; then "
+    "for syswarden_dpkg_config in /etc/dpkg/dpkg.cfg.d/*; do "
+    "[ ! -L \"${syswarden_dpkg_config}\" ] || exit 1; "
+    "[ -f \"${syswarden_dpkg_config}\" ] || continue; "
+    "sed -E -i "
+    "'\\%^[[:space:]]*path-exclude([[:space:]]+|[[:space:]]*=[[:space:]]*)"
+    "/usr/share/doc/\\*$%d' \"${syswarden_dpkg_config}\" || exit 1; "
+    "if grep -E -q "
+    "'^[[:space:]]*path-exclude([[:space:]]+|[[:space:]]*=[[:space:]]*)"
+    "/usr/share/doc/\\*$' \"${syswarden_dpkg_config}\"; then "
+    "exit 1; else [ \"$?\" -eq 1 ] || exit 1; fi; "
+    "done; fi && "
     "rm -rf /var/lib/apt/lists/*"
 )
 RPM_BOOTSTRAP = (
@@ -190,8 +211,7 @@ HISTORICAL_RPM_TRANSITION_BOOTSTRAPS = {
         "rpm -q qrencode >/dev/null && dnf clean all"
     ),
 }
-APK_BOOTSTRAP = (
-    "apk add --no-cache openrc openrc-init && "
+APK_BOOTSTRAP_SUFFIX = (
     "apk add --no-cache iproute2 nftables cronie cronie-openrc curl wget rsyslog rsyslog-uxsock "
     "bash-completion wireguard-tools libqrencode-tools jq procps-ng "
     "e2fsprogs-extra shadow socat binutils file && test -x /usr/bin/gpasswd"
@@ -297,6 +317,72 @@ ALPINE_HOSTNAME_INIT_PRE_SHA256 = (
 ALPINE_HOSTNAME_INIT_POST_SHA256 = (
     "11eb8ad952a72d82a63987faf51f8d0248acd765f8327f117436b45a378f4f91"
 )
+ALPINE_OPENRC_CONTRACTS = {
+    "3.22": AlpineOpenRCContract(
+        package_version=ALPINE_OPENRC_VERSION,
+        rc_conf_pre_sha256=ALPINE_RC_CONF_PRE_SHA256,
+        rc_conf_post_sha256=ALPINE_RC_CONF_POST_SHA256,
+        hostname_init_pre_sha256=ALPINE_HOSTNAME_INIT_PRE_SHA256,
+        hostname_init_post_sha256=ALPINE_HOSTNAME_INIT_POST_SHA256,
+        hostname_keyword_pre_pattern=(
+            "^[[:space:]]*keyword -prefix -lxc -docker$"
+        ),
+        hostname_keyword_post_pattern=(
+            "^[[:space:]]*keyword -prefix -lxc -docker -podman$"
+        ),
+        hostname_mutation=(
+            "sed -i 's/^\\([[:space:]]*keyword -prefix -lxc -docker\\)$/"
+            "\\1 -podman/' /etc/init.d/hostname && "
+        ),
+    ),
+    "3.24": AlpineOpenRCContract(
+        package_version="0.63.2-r0",
+        rc_conf_pre_sha256=(
+            "c7ce810693680cca288134adc0c109c192aedd37cbbdef7b4f4dc82c8c38696b"
+        ),
+        rc_conf_post_sha256=(
+            "7efeb86569fa28df86e1b59afa43666330056ebee1a049e365c3beb4625ca3a8"
+        ),
+        hostname_init_pre_sha256=(
+            "b52fa145995729852fa931aef5e7426c4bf1413a105a3e55674fb35342b4705a"
+        ),
+        hostname_init_post_sha256=(
+            "b52fa145995729852fa931aef5e7426c4bf1413a105a3e55674fb35342b4705a"
+        ),
+        hostname_keyword_pre_pattern=(
+            "^[[:space:]]*keyword -docker -podman -lxc -prefix "
+            "-systemd-nspawn -wsl$"
+        ),
+        hostname_keyword_post_pattern=(
+            "^[[:space:]]*keyword -docker -podman -lxc -prefix "
+            "-systemd-nspawn -wsl$"
+        ),
+        hostname_mutation="",
+    ),
+}
+
+
+def alpine_openrc_contract(version: str) -> AlpineOpenRCContract:
+    try:
+        return ALPINE_OPENRC_CONTRACTS[version]
+    except KeyError as exc:
+        raise LifecycleLabError(
+            f"unsupported Alpine OpenRC qualification contract: {version!r}"
+        ) from exc
+
+
+def alpine_bootstrap_command(version: str) -> str:
+    contract = alpine_openrc_contract(version)
+    return (
+        "apk add --no-cache "
+        f"openrc={contract.package_version} "
+        f"openrc-init={contract.package_version} && "
+        + APK_BOOTSTRAP_SUFFIX
+    )
+
+
+# Retained as the canonical Alpine 3.22 bootstrap contract for direct callers.
+APK_BOOTSTRAP = alpine_bootstrap_command("3.22")
 FEDORA_LAB_MASK_TARGETS = (
     "systemd-oomd.service",
     "systemd-oomd.socket",
@@ -313,6 +399,56 @@ FEDORA_LAB_MASKED_UNITS = tuple(
         )
     )
 )
+UBUNTU_2404_LAB_BASE_MASKED_UNITS = (
+    "cryptdisks-early.service",
+    "cryptdisks.service",
+    "hwclock.service",
+    "x11-common.service",
+)
+UBUNTU_2404_LAB_MASK_TARGETS = (
+    "dev-mqueue.mount",
+    "systemd-ask-password-console.path",
+    "systemd-ask-password-wall.path",
+)
+UBUNTU_2404_LAB_MASKED_UNITS = tuple(
+    sorted(
+        (
+            *UBUNTU_2404_LAB_BASE_MASKED_UNITS,
+            *UBUNTU_2404_LAB_MASK_TARGETS,
+        )
+    )
+)
+DEBIAN_13_LAB_BASE_MASKED_UNITS = UBUNTU_2404_LAB_BASE_MASKED_UNITS
+DEBIAN_13_LAB_MASK_TARGETS = (
+    "dev-mqueue.mount",
+    "run-lock.mount",
+    "tmp.mount",
+    "systemd-ask-password-console.path",
+    "systemd-ask-password-wall.path",
+)
+DEBIAN_13_LAB_MASKED_UNITS = tuple(
+    sorted(
+        (
+            *DEBIAN_13_LAB_BASE_MASKED_UNITS,
+            *DEBIAN_13_LAB_MASK_TARGETS,
+        )
+    )
+)
+SYSTEMD_LAB_MASK_TARGETS_BY_CELL = {
+    "DEB-13": DEBIAN_13_LAB_MASK_TARGETS,
+    "DEB-U2404": UBUNTU_2404_LAB_MASK_TARGETS,
+    "RPM-F44": FEDORA_LAB_MASK_TARGETS,
+}
+SYSTEMD_LAB_MASKED_UNITS_BY_CELL = {
+    "DEB-13": DEBIAN_13_LAB_MASKED_UNITS,
+    "DEB-U2404": UBUNTU_2404_LAB_MASKED_UNITS,
+    "RPM-F44": FEDORA_LAB_MASKED_UNITS,
+}
+SYSTEMD_LAB_MASK_PREDICATES_BY_CELL = {
+    "DEB-13": "NS14_DEBIAN_13_MASKS",
+    "DEB-U2404": "NS14_UBUNTU_2404_MASKS",
+    "RPM-F44": "NS14_FEDORA_MASKS",
+}
 # A delegated rootless cgroup namespace may expose its own cgroup2 mount as rw.
 # The caller separately proves the non-host-root ID map, private cgroup namespace,
 # exact non-SYS_ADMIN capabilities, and NoNewPrivs. The Alpine runtime additionally
@@ -459,7 +595,6 @@ _PLATFORM_NAMES = {
 _BOOTSTRAP_COMMANDS = {
     "deb": DEB_BOOTSTRAP,
     "rpm": RPM_BOOTSTRAP,
-    "apk": APK_BOOTSTRAP,
 }
 _PURGE_SEMANTICS = {
     "deb": DEB_PURGE_SEMANTICS,
@@ -471,10 +606,15 @@ _PURGE_SEMANTICS = {
 def _platform_from_matrix_cell(cell: dict[str, object]) -> PlatformSpec:
     distribution = str(cell["distribution"])
     family = str(cell["family"])
+    version = str(cell["version"])
     architecture = "amd64"
+    if family == "apk":
+        bootstrap_command = alpine_bootstrap_command(version)
+    else:
+        bootstrap_command = _BOOTSTRAP_COMMANDS[family]
     return PlatformSpec(
         cell_id=str(cell["id"]),
-        version=str(cell["version"]),
+        version=version,
         name=_PLATFORM_NAMES[distribution],
         distribution=distribution,
         family=family,
@@ -491,7 +631,7 @@ def _platform_from_matrix_cell(cell: dict[str, object]) -> PlatformSpec:
         official_repository=OFFICIAL_REPOSITORIES[distribution],
         image=str(cell["image"]),
         package_pattern=EXPECTED_PACKAGE_PATTERNS[(family, architecture)],
-        bootstrap_command=_BOOTSTRAP_COMMANDS[family],
+        bootstrap_command=bootstrap_command,
         scenarios=tuple(str(item) for item in cell["container_scenarios"]),
         purge_semantics=_PURGE_SEMANTICS[family],
     )
@@ -984,13 +1124,12 @@ def expected_event_checks(
         return tuple(checks)
 
     removal_label = "final-removal" if family == "rpm" else scenario
-    if family == "rpm":
-        checks.extend(
-            _generated_rsyslog_pre_removal_event_checks(
-                scenario,
-                removal_label,
-            )
+    checks.extend(
+        _generated_rsyslog_pre_removal_event_checks(
+            scenario,
+            removal_label,
         )
+    )
     checks.extend(
         (
             f"{scenario}.{removal_label}",
@@ -1003,7 +1142,7 @@ def expected_event_checks(
         _generated_cleanup_event_checks(
             scenario,
             removal_label,
-            exact_rsyslog=family == "rpm",
+            exact_rsyslog=True,
         )
     )
     if family in {"deb", "rpm", "apk"}:
@@ -1712,6 +1851,14 @@ def build_containerfile(spec: PlatformSpec) -> str:
         "/usr/local/libexec/syswarden-lab-network && "
         "chmod 0755 /usr/local/libexec/syswarden-lab-network\n"
     )
+    systemd_mask_targets = SYSTEMD_LAB_MASK_TARGETS_BY_CELL.get(
+        spec.cell_id, ()
+    )
+    systemd_masks = ""
+    if systemd_mask_targets:
+        systemd_masks = "RUN systemctl mask " + " ".join(
+            systemd_mask_targets
+        ) + "\n"
     if spec.family == "deb":
         unit_encoded = base64.b64encode(
             SYSTEMD_LAB_NETWORK_UNIT.encode("utf-8")
@@ -1723,18 +1870,14 @@ def build_containerfile(spec: PlatformSpec) -> str:
             "chmod 0644 /etc/systemd/system/syswarden-lab-network.service\n"
             "RUN systemctl enable syswarden-lab-network.service cron.service "
             "rsyslog.service\n"
-            "STOPSIGNAL SIGRTMIN+3\n"
-            'CMD ["/sbin/init"]\n'
+            + systemd_masks
+            + "STOPSIGNAL SIGRTMIN+3\n"
+            + 'CMD ["/sbin/init"]\n'
         )
     elif spec.family == "rpm":
         unit_encoded = base64.b64encode(
             SYSTEMD_LAB_NETWORK_UNIT.encode("utf-8")
         ).decode("ascii")
-        fedora_masks = ""
-        if spec.distribution == "fedora":
-            fedora_masks = "RUN systemctl mask " + " ".join(
-                FEDORA_LAB_MASK_TARGETS
-            ) + "\n"
         init_contract = (
             helper_step
             + f"RUN printf '%s' {shlex.quote(unit_encoded)} | base64 -d > "
@@ -1742,11 +1885,12 @@ def build_containerfile(spec: PlatformSpec) -> str:
             "chmod 0644 /etc/systemd/system/syswarden-lab-network.service\n"
             "RUN systemctl enable syswarden-lab-network.service crond.service "
             "rsyslog.service\n"
-            + fedora_masks
+            + systemd_masks
             + "STOPSIGNAL SIGRTMIN+3\n"
             + 'CMD ["/sbin/init"]\n'
         )
     elif spec.family == "apk":
+        openrc_contract = alpine_openrc_contract(spec.version)
         try:
             rc_conf_append = base64.b64decode(
                 ALPINE_RC_CONF_APPEND_BASE64, validate=True
@@ -1772,11 +1916,14 @@ def build_containerfile(spec: PlatformSpec) -> str:
         ).decode("ascii")
         init_contract = (
             "RUN apk info -e 'openrc="
-            + ALPINE_OPENRC_VERSION
+            + openrc_contract.package_version
+            + "' && "
+            "apk info -e 'openrc-init="
+            + openrc_contract.package_version
             + "' && "
             "test -f /etc/rc.conf && test ! -L /etc/rc.conf && "
             "test \"$(sha256sum /etc/rc.conf | awk '{ print $1 }')\" = "
-            + ALPINE_RC_CONF_PRE_SHA256
+            + openrc_contract.rc_conf_pre_sha256
             + " && "
             "test \"$(awk '/^[[:space:]]*rc_sys[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf)\" -eq 0 && "
             "test \"$(awk '/^[[:space:]]*rc_cgroup_mode[[:space:]]*=/ { count++ } END { print count + 0 }' /etc/rc.conf)\" -eq 0 && "
@@ -1784,19 +1931,24 @@ def build_containerfile(spec: PlatformSpec) -> str:
             + ALPINE_RC_CONF_APPEND_BASE64
             + " | base64 -d >> /etc/rc.conf && "
             "test \"$(sha256sum /etc/rc.conf | awk '{ print $1 }')\" = "
-            + ALPINE_RC_CONF_POST_SHA256
+            + openrc_contract.rc_conf_post_sha256
             + " && "
             "test \"$(grep -Fxc 'rc_sys=\"podman\"' /etc/rc.conf)\" -eq 1 && "
             "test \"$(grep -Fxc 'rc_cgroup_mode=\"legacy\"' /etc/rc.conf)\" -eq 1 && "
             "test -f /etc/init.d/hostname && test ! -L /etc/init.d/hostname && "
             "test \"$(sha256sum /etc/init.d/hostname | awk '{ print $1 }')\" = "
-            + ALPINE_HOSTNAME_INIT_PRE_SHA256
+            + openrc_contract.hostname_init_pre_sha256
             + " && "
-            "test \"$(grep -Ec '^[[:space:]]*keyword -prefix -lxc -docker$' /etc/init.d/hostname)\" -eq 1 && "
-            "sed -i 's/^\\([[:space:]]*keyword -prefix -lxc -docker\\)$/\\1 -podman/' /etc/init.d/hostname && "
-            "test \"$(sha256sum /etc/init.d/hostname | awk '{ print $1 }')\" = "
-            + ALPINE_HOSTNAME_INIT_POST_SHA256
-            + "\n"
+            "test \"$(grep -Ec '"
+            + openrc_contract.hostname_keyword_pre_pattern
+            + "' /etc/init.d/hostname)\" -eq 1 && "
+            + openrc_contract.hostname_mutation
+            + "test \"$(sha256sum /etc/init.d/hostname | awk '{ print $1 }')\" = "
+            + openrc_contract.hostname_init_post_sha256
+            + " && "
+            "test \"$(grep -Ec '"
+            + openrc_contract.hostname_keyword_post_pattern
+            + "' /etc/init.d/hostname)\" -eq 1\n"
             + helper_step
             + f"RUN printf '%s' {shlex.quote(provider_encoded)} | base64 -d > "
             "/etc/init.d/syswarden-lab-net && "
@@ -2901,13 +3053,17 @@ v4032_to_v4033_upgrade_selected() {
         [ "$(installed_version 2>/dev/null || true)" = 4.03.2 ]
 }
 
-attest_v4032_previous_webtui_retirement() {
+v4033_to_v4040_upgrade_selected() {
+    v4033_to_v4040_transition_selected && \
+        [ "$(installed_version 2>/dev/null || true)" = 4.03.3 ]
+}
+
+attest_previous_webtui_retirement() {
     previous_webtui_root="${1:-/}"
     previous_webtui_root="${previous_webtui_root%/}"
     previous_webtui_proc_root="${2:-${previous_webtui_root}/proc}"
     previous_webtui_executable="${previous_webtui_root}/opt/syswarden/bin/syswarden-cli"
 
-    v4032_to_v4033_upgrade_selected || return 1
     legacy_webtui_runtime_absent "${previous_webtui_root}" || return 1
     syswarden_verify_no_exact_webtui_process \
         "${previous_webtui_root}" "${previous_webtui_proc_root}" \
@@ -2933,6 +3089,16 @@ attest_v4032_previous_webtui_retirement() {
         fi
     done
     rm -f "${previous_webtui_ss_stderr}" || return 1
+}
+
+attest_v4032_previous_webtui_retirement() {
+    v4032_to_v4033_upgrade_selected || return 1
+    attest_previous_webtui_retirement "$@"
+}
+
+attest_v4033_previous_webtui_retirement() {
+    v4033_to_v4040_upgrade_selected || return 1
+    attest_previous_webtui_retirement "$@"
 }
 
 alpine_apk_owner_version() {
@@ -3279,6 +3445,12 @@ v4032_to_v4033_transition_selected() {
         [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.3 ]
 }
 
+v4033_to_v4040_transition_selected() {
+    [ "${SCENARIO}" = upgrade-rollback ] && \
+        [ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.3 ] && \
+        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.04.0 ]
+}
+
 expected_systemd_enablement_prefix() {
     label="$1"
     case "${SCENARIO}:${label}" in
@@ -3287,7 +3459,8 @@ expected_systemd_enablement_prefix() {
         upgrade-rollback:recovery)
             if v4028_to_v4032_transition_selected; then
                 printf '%s\n' /etc/systemd/system
-            elif v4032_to_v4033_transition_selected; then
+            elif v4032_to_v4033_transition_selected || \
+                 v4033_to_v4040_transition_selected; then
                 printf '%s\n' ..
             else
                 return 1
@@ -3684,8 +3857,9 @@ probe_postinstall_contract() {
         fi
         probe_seeded_operator_listener_preservation "${label}" || mark_postinstall_failure operator-listener
     elif [ "${actual_version}" = "${EXPECTED_PREVIOUS_VERSION}" ]; then
-        if v4032_to_v4033_upgrade_selected; then
-            attest_v4032_previous_webtui_retirement || \
+        if v4032_to_v4033_upgrade_selected || \
+           v4033_to_v4040_upgrade_selected; then
+            attest_previous_webtui_retirement || \
                 mark_postinstall_failure previous-webtui-retirement
         else
             case "${PACKAGE_FAMILY}" in
@@ -3926,17 +4100,18 @@ write_seeded_operator_token() {
             'custom_hash_ipv6 = ""' \
             'use_spamhaus = false' \
             ''
-        if [ "${PACKAGE_FAMILY:-}" = deb ] && \
-           { [ "${SCENARIO}" = remove ] || [ "${SCENARIO}" = purge ]; }; then
-            printf '%s\n' \
-                '[integrations.siem]' \
-                'enabled = true' \
-                'ip = "127.0.0.1"' \
-                'port = "5514"' \
-                'protocol = "udp"' \
-                'tls_ca = ""' \
-                ''
-        fi
+        case "${PACKAGE_FAMILY}:${SCENARIO}" in
+            deb:remove|deb:purge|rpm:remove|apk:remove|apk:purge)
+                printf '%s\n' \
+                    '[integrations.siem]' \
+                    'enabled = true' \
+                    'ip = "127.0.0.1"' \
+                    'port = "5514"' \
+                    'protocol = "udp"' \
+                    'tls_ca = ""' \
+                    ''
+                ;;
+        esac
         printf '%s\n' '[user]' 'profile_name = "lifecycle-operator"'
     } > "${seeded_operator_token}"
 }
@@ -4050,6 +4225,10 @@ quiesce_previous_webtui_runtime() {
     prepare_service_runtime_fixture || return 1
     if v4032_to_v4033_upgrade_selected; then
         attest_v4032_previous_webtui_retirement || return 1
+        return 0
+    fi
+    if v4033_to_v4040_upgrade_selected; then
+        attest_v4033_previous_webtui_retirement || return 1
         return 0
     fi
     case "${PACKAGE_FAMILY}" in
@@ -4407,7 +4586,8 @@ seed_live_legacy_webtui_process() {
         deb|rpm) ;;
         *) return 0 ;;
     esac
-    if v4032_to_v4033_upgrade_selected; then
+    if v4032_to_v4033_upgrade_selected || \
+       v4033_to_v4040_upgrade_selected; then
         return 0
     fi
     /opt/syswarden/bin/syswarden-cli web-tui \
@@ -4494,14 +4674,46 @@ assert_preserved() {
     check_equal "${label}.state.${key}.owner" 0:0 "${actual_owner}"
 }
 
+live_telemetry_contract_for_version() {
+    live_telemetry_version="$1"
+    case "${live_telemetry_version}" in *.*) ;; *) return 1 ;; esac
+    live_telemetry_major="${live_telemetry_version%%.*}"
+    live_telemetry_remainder="${live_telemetry_version#*.}"
+    live_telemetry_minor="${live_telemetry_remainder%%.*}"
+    case "${live_telemetry_major}" in ''|*[!0-9]*) return 1 ;; esac
+    case "${live_telemetry_minor}" in ''|*[!0-9]*) return 1 ;; esac
+    if [ "${live_telemetry_major}" -gt 4 ] || \
+       { [ "${live_telemetry_major}" -eq 4 ] && \
+         [ "${live_telemetry_minor}" -ge 4 ]; }; then
+        printf '%s\n' kpi-v1
+    else
+        printf '%s\n' legacy
+    fi
+}
+
 live_telemetry_schema_valid() {
     live_telemetry_path="$1"
+    live_telemetry_contract="$2"
+    case "${live_telemetry_contract}" in legacy|kpi-v1) ;; *) return 1 ;; esac
     [ -f "${live_telemetry_path}" ] && [ ! -L "${live_telemetry_path}" ] || return 1
     live_telemetry_size="$(wc -c < "${live_telemetry_path}" 2>/dev/null | tr -d ' ')" || return 1
     case "${live_telemetry_size}" in ''|*[!0-9]*) return 1 ;; esac
     [ "${live_telemetry_size}" -gt 0 ] && [ "${live_telemetry_size}" -le 8388608 ] || return 1
-    jq -e '
+    jq -e --arg kpi_contract "${live_telemetry_contract}" '
         def integer: type == "number" and (floor == .);
+        def optional_string($key):
+            (has($key) | not) or (.[$key] | type == "string");
+        def optional_nonnegative_integer($key):
+            (has($key) | not) or (.[$key] | integer and . >= 0);
+        def optional_score($key):
+            (has($key) | not) or
+            (.[$key] | integer and . >= 0 and . <= 100);
+        def optional_boolean($key):
+            (has($key) | not) or (.[$key] | type == "boolean");
+        def attacker_base_keys:
+            ["asn", "country", "hits", "ip", "last_seen", "org", "port", "severity", "threat"];
+        def attacker_kpi_optional_keys:
+            ["attested_hits", "degraded_hits", "effective_threshold", "effective_window_seconds", "enforcement_action", "enforcement_jail", "first_seen", "hit_evidence", "hit_quality", "jail_hits", "legacy_hits", "metric_quality", "metric_scope", "peak_window_hits", "policy_hits", "primary_jail", "recorded_hits", "risk_category", "risk_model_version", "selected_policy_quality", "severity_score", "signature_catalog_sha256", "signature_catalog_version", "threshold_evidence", "threshold_reached"];
         type == "object" and
         (keys == ["github_release", "github_stars", "layer3", "profile_name", "system", "timestamp", "waf", "whitelist"]) and
         (has("ha") | not) and
@@ -4547,10 +4759,46 @@ live_telemetry_schema_valid() {
             (.zero_trust_mode | type == "boolean")) and
         (.waf |
             type == "object" and
-            (keys == ["active_signatures", "allowed_events", "banned_ips", "risk_radar", "signatures_data", "sparkline_24h", "targeted_ports", "top_attackers", "total_banned", "total_detected"]) and
+            ((keys - ["journal_bytes_scanned", "journal_bytes_total", "journal_decode_errors", "journal_scan_complete", "kpi_evidence_quality", "metric_admitted_events", "metric_excluded_events", "metric_rejected_events"]) == ["active_signatures", "allowed_events", "banned_ips", "risk_radar", "signatures_data", "sparkline_24h", "targeted_ports", "top_attackers", "total_banned", "total_detected"]) and
             (.total_banned | integer) and
             (.total_detected | integer) and
             (.active_signatures | integer) and
+            (
+                ($kpi_contract == "legacy" and
+                 (has("kpi_evidence_quality") | not) and
+                 (has("journal_scan_complete") | not) and
+                 (has("journal_bytes_total") | not) and
+                 (has("journal_bytes_scanned") | not) and
+                 (has("journal_decode_errors") | not) and
+                 (has("metric_rejected_events") | not) and
+                 (has("metric_excluded_events") | not) and
+                 (has("metric_admitted_events") | not)) or
+                ($kpi_contract == "kpi-v1" and
+                 has("kpi_evidence_quality") and
+                 has("journal_scan_complete") and
+                 has("journal_bytes_total") and
+                 has("journal_bytes_scanned") and
+                 has("journal_decode_errors") and
+                 has("metric_rejected_events") and
+                 has("metric_excluded_events") and
+                 has("metric_admitted_events") and
+                 (.kpi_evidence_quality == "complete" or
+                  .kpi_evidence_quality == "degraded") and
+                 (.journal_scan_complete | type == "boolean") and
+                 (.journal_bytes_total | integer and . >= 0) and
+                 (.journal_bytes_scanned | integer and . >= 0) and
+                 (.journal_decode_errors | integer and . >= 0) and
+                 (.metric_rejected_events | integer and . >= 0) and
+                 (.metric_excluded_events | integer and . >= 0) and
+                 (.metric_admitted_events | integer and . >= 0) and
+                 (.journal_bytes_scanned <= .journal_bytes_total) and
+                 (if .kpi_evidence_quality == "complete" then
+                      .journal_scan_complete and
+                      .journal_bytes_scanned == .journal_bytes_total and
+                      .journal_decode_errors == 0 and
+                      .metric_rejected_events == 0
+                  else true end))
+            ) and
             (.signatures_data | type == "array" and all(.[];
                 type == "object" and
                 (keys == ["count", "mitre", "name"]) and
@@ -4576,7 +4824,9 @@ live_telemetry_schema_valid() {
                 (.action | type == "string"))) and
             (.top_attackers | type == "array" and all(.[];
                 type == "object" and
-                (keys == ["asn", "country", "hits", "ip", "last_seen", "org", "port", "severity", "threat"]) and
+                (($kpi_contract == "legacy" and keys == attacker_base_keys) or
+                 ($kpi_contract == "kpi-v1" and
+                  (keys - attacker_kpi_optional_keys) == attacker_base_keys)) and
                 (.ip | type == "string") and
                 (.severity | type == "string") and
                 (.port | type == "string") and
@@ -4585,7 +4835,32 @@ live_telemetry_schema_valid() {
                 (.threat | type == "string") and
                 (.org | type == "string") and
                 (.hits | integer) and
-                (.last_seen | type == "string"))) and
+                (.last_seen | type == "string") and
+                optional_string("first_seen") and
+                optional_string("primary_jail") and
+                optional_string("enforcement_jail") and
+                optional_string("enforcement_action") and
+                optional_nonnegative_integer("jail_hits") and
+                optional_nonnegative_integer("policy_hits") and
+                optional_nonnegative_integer("attested_hits") and
+                optional_nonnegative_integer("recorded_hits") and
+                optional_nonnegative_integer("legacy_hits") and
+                optional_string("risk_category") and
+                optional_score("severity_score") and
+                optional_nonnegative_integer("peak_window_hits") and
+                optional_nonnegative_integer("effective_threshold") and
+                optional_nonnegative_integer("effective_window_seconds") and
+                optional_string("metric_quality") and
+                optional_string("selected_policy_quality") and
+                optional_boolean("threshold_reached") and
+                optional_string("threshold_evidence") and
+                optional_string("metric_scope") and
+                optional_string("hit_evidence") and
+                optional_string("hit_quality") and
+                optional_nonnegative_integer("degraded_hits") and
+                optional_string("risk_model_version") and
+                optional_string("signature_catalog_version") and
+                optional_string("signature_catalog_sha256"))) and
             (.risk_radar | . == null or (type == "array" and all(.[]; integer))) and
             (.sparkline_24h | type == "array" and length == 24 and all(.[]; integer)) and
             (.allowed_events | . == null or
@@ -4607,6 +4882,7 @@ live_telemetry_schema_valid() {
 assert_live_telemetry_data() {
     label="$1"
     live_telemetry_path="${2:-/var/lib/syswarden/ui/data.json}"
+    live_telemetry_contract="${3:-invalid}"
     if [ -f "${live_telemetry_path}" ] && [ ! -L "${live_telemetry_path}" ]; then
         actual_type=regular
         actual_mode="$(file_mode "${live_telemetry_path}" 2>/dev/null || true)"
@@ -4624,7 +4900,8 @@ assert_live_telemetry_data() {
                 fi
                 ;;
         esac
-        if live_telemetry_schema_valid "${live_telemetry_path}"; then
+        if live_telemetry_schema_valid \
+            "${live_telemetry_path}" "${live_telemetry_contract}"; then
             actual_schema=dashboard-data-v1
         fi
     elif [ -L "${live_telemetry_path}" ]; then
@@ -4761,7 +5038,8 @@ expected_upgrade_rollback_token_contract() {
     esac
     if v4028_to_v4032_transition_selected; then
         printf '%s\n' historical-webtui-credential
-    elif v4032_to_v4033_transition_selected; then
+    elif v4032_to_v4033_transition_selected || \
+         v4033_to_v4040_transition_selected; then
         printf '%s\n' byte-exact
     else
         return 1
@@ -4802,7 +5080,19 @@ assert_all_state_preserved() {
     assert_preserved "${label}" list_ipv6 /etc/syswarden/lists/syswarden_blacklist.ipv6 "${STATE_LIST_IPV6_HASH}" 600
     assert_preserved "${label}" operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600
     assert_preserved "${label}" certificate /etc/syswarden/tls/operator.pem "${STATE_CERT_HASH}" 600
-    assert_live_telemetry_data "${label}"
+    live_telemetry_expected_version="${EXPECTED_CANDIDATE_VERSION}"
+    case "${SCENARIO}:${label}" in
+        upgrade-rollback:previous|upgrade-rollback:rollback)
+            live_telemetry_expected_version="${EXPECTED_PREVIOUS_VERSION}"
+            ;;
+    esac
+    live_telemetry_contract="$(
+        live_telemetry_contract_for_version \
+            "${live_telemetry_expected_version}" 2>/dev/null || true
+    )"
+    assert_live_telemetry_data \
+        "${label}" /var/lib/syswarden/ui/data.json \
+        "${live_telemetry_contract}"
 }
 
 assert_deb_removal_log_preserved() {
@@ -4881,6 +5171,7 @@ assert_package_absent() {
 }
 
 rsyslog_reactivation_mode() {
+    [ "$#" -eq 4 ] || return 1
     main_pid_before="$1"
     main_pid_after="$2"
     active_enter_before="$3"
@@ -4907,6 +5198,38 @@ rsyslog_reactivation_mode() {
     return 1
 }
 
+openrc_rsyslog_runtime_snapshot() {
+    [ "$#" -eq 0 ] || return 1
+    rc-service rsyslog status >/dev/null 2>&1 || return 1
+    openrc_rsyslog_pidfile=/run/rsyslog.pid
+    [ -f "${openrc_rsyslog_pidfile}" ] && \
+        [ ! -L "${openrc_rsyslog_pidfile}" ] || return 1
+    [ "$(LC_ALL=C stat -c '%F:%u:%g:%a:%h' "${openrc_rsyslog_pidfile}" \
+        2>/dev/null || true)" = 'regular file:0:0:644:1' ] || return 1
+    openrc_rsyslog_pidfile_size="$(wc -c < "${openrc_rsyslog_pidfile}" | \
+        tr -d ' ')" || return 1
+    case "${openrc_rsyslog_pidfile_size}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${openrc_rsyslog_pidfile_size}" -gt 0 ] && \
+        [ "${openrc_rsyslog_pidfile_size}" -le 32 ] || return 1
+    openrc_rsyslog_pid="$(cat "${openrc_rsyslog_pidfile}")" || return 1
+    case "${openrc_rsyslog_pid}" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "${openrc_rsyslog_pid}" | \
+        cmp -s - "${openrc_rsyslog_pidfile}" || return 1
+    [ "${openrc_rsyslog_pid}" -gt 1 ] && \
+        kill -0 "${openrc_rsyslog_pid}" 2>/dev/null || return 1
+    [ "$(cat "/proc/${openrc_rsyslog_pid}/comm" \
+        2>/dev/null || true)" = rsyslogd ] || return 1
+    [ "$(readlink "/proc/${openrc_rsyslog_pid}/exe" \
+        2>/dev/null || true)" = /usr/sbin/rsyslogd ] || return 1
+    openrc_rsyslog_starttime="$(
+        awk '{ print $22 }' "/proc/${openrc_rsyslog_pid}/stat" 2>/dev/null
+    )" || return 1
+    case "${openrc_rsyslog_starttime}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${openrc_rsyslog_starttime}" -gt 0 ] || return 1
+    printf '%s:%s\n' \
+        "${openrc_rsyslog_pid}" "${openrc_rsyslog_starttime}"
+}
+
 attest_owned_cron_seed_state() {
     syswarden_owned_cron_path="$1"
     syswarden_owned_cron_evidence_label="$2"
@@ -4923,12 +5246,13 @@ attest_owned_cron_seed_state() {
 }
 
 seed_generated_runtime_artifacts() {
-    rsyslog_contract="${1:-ambiguous-rsyslog}"
-    evidence_label="${2:-}"
+    [ "$#" -eq 2 ] || return 1
+    rsyslog_contract="$1"
+    evidence_label="$2"
     mkdir -p /etc/rsyslog.d
     case "${rsyslog_contract}" in
         exact-rsyslog)
-            case "${PACKAGE_FAMILY}" in deb|rpm) ;; *) return 1 ;; esac
+            case "${PACKAGE_FAMILY}" in deb|rpm|apk) ;; *) return 1 ;; esac
             [ -n "${evidence_label}" ] || return 1
             for path in \
                 /etc/rsyslog.d/99-syswarden-siem.conf \
@@ -4998,11 +5322,25 @@ seed_generated_runtime_artifacts() {
                 "$(cat /tmp/syswarden-rsyslog-waf-size)" \
                 "$(cat /tmp/syswarden-rsyslog-waf-before)")" \
                 /etc/rsyslog.d/.syswarden-rsyslog-provenance-v1 || return 1
-            LC_ALL=C systemctl show rsyslog.service -p MainPID --value > \
-                /tmp/syswarden-rsyslog-pid-before || return 1
-            LC_ALL=C systemctl show rsyslog.service \
-                -p ActiveEnterTimestampMonotonic --value > \
-                /tmp/syswarden-rsyslog-active-enter-before || return 1
+            case "${PACKAGE_FAMILY}" in
+                deb|rpm)
+                    LC_ALL=C systemctl show rsyslog.service \
+                        -p MainPID --value > \
+                        /tmp/syswarden-rsyslog-pid-before || return 1
+                    LC_ALL=C systemctl show rsyslog.service \
+                        -p ActiveEnterTimestampMonotonic --value > \
+                        /tmp/syswarden-rsyslog-active-enter-before || return 1
+                    ;;
+                apk)
+                    openrc_rsyslog_snapshot="$(
+                        openrc_rsyslog_runtime_snapshot
+                    )" || return 1
+                    printf '%s\n' "${openrc_rsyslog_snapshot%%:*}" > \
+                        /tmp/syswarden-rsyslog-pid-before || return 1
+                    printf '%s\n' "${openrc_rsyslog_snapshot#*:}" > \
+                        /tmp/syswarden-rsyslog-active-enter-before || return 1
+                    ;;
+            esac
             rsyslog_pid_before="$(cat /tmp/syswarden-rsyslog-pid-before)"
             rsyslog_active_enter_before="$(
                 cat /tmp/syswarden-rsyslog-active-enter-before
@@ -5093,8 +5431,9 @@ seed_generated_runtime_artifacts() {
 }
 
 assert_generated_runtime_artifact_contract() {
+    [ "$#" -eq 2 ] || return 1
     label="$1"
-    rsyslog_contract="${2:-ambiguous-rsyslog}"
+    rsyslog_contract="$2"
     if prepare_service_runtime_fixture; then
         record pass "${PREFIX}.${label}.service_manager_calls" "real init, active service manager, and enabled cron provider remain attestable"
     else
@@ -5159,15 +5498,39 @@ assert_generated_runtime_artifact_contract() {
             fi
             rsyslog_pid_before="$(cat /tmp/syswarden-rsyslog-pid-before 2>/dev/null || true)"
             rsyslog_active_enter_before="$(cat /tmp/syswarden-rsyslog-active-enter-before 2>/dev/null || true)"
-            rsyslog_pid_after="$(LC_ALL=C systemctl show rsyslog.service -p MainPID --value 2>/dev/null || true)"
-            rsyslog_active_enter_after="$(LC_ALL=C systemctl show rsyslog.service -p ActiveEnterTimestampMonotonic --value 2>/dev/null || true)"
+            rsyslog_active_after=0
+            case "${PACKAGE_FAMILY}" in
+                deb|rpm)
+                    rsyslog_pid_after="$(LC_ALL=C systemctl show \
+                        rsyslog.service -p MainPID --value 2>/dev/null || true)"
+                    rsyslog_active_enter_after="$(LC_ALL=C systemctl show \
+                        rsyslog.service -p ActiveEnterTimestampMonotonic \
+                        --value 2>/dev/null || true)"
+                    [ "$(systemctl is-active rsyslog.service \
+                        2>/dev/null || true)" = active ] && \
+                        rsyslog_active_after=1
+                    ;;
+                apk)
+                    rsyslog_openrc_after="$(
+                        openrc_rsyslog_runtime_snapshot 2>/dev/null || true
+                    )"
+                    rsyslog_pid_after="${rsyslog_openrc_after%%:*}"
+                    rsyslog_active_enter_after="${rsyslog_openrc_after#*:}"
+                    [ -n "${rsyslog_openrc_after}" ] && \
+                        rsyslog_active_after=1
+                    ;;
+                *)
+                    rsyslog_pid_after=0
+                    rsyslog_active_enter_after=0
+                    ;;
+            esac
             case "${rsyslog_pid_after}" in ''|*[!0-9]*) rsyslog_pid_after=0 ;; esac
             rsyslog_reactivation_proof="$(rsyslog_reactivation_mode \
                 "${rsyslog_pid_before}" "${rsyslog_pid_after}" \
                 "${rsyslog_active_enter_before}" \
                 "${rsyslog_active_enter_after}" 2>/dev/null || true)"
             if [ "${rsyslog_reactivation_proof}" = restart ] && \
-               [ "$(systemctl is-active rsyslog.service 2>/dev/null || true)" = active ] && \
+               [ "${rsyslog_active_after}" -eq 1 ] && \
                [ "${rsyslog_pid_after}" -gt 1 ] && \
                kill -0 "${rsyslog_pid_after}" 2>/dev/null; then
                 record pass "${PREFIX}.${label}.generated.rsyslog_reactivated" \
@@ -5406,10 +5769,10 @@ scenario_remove() {
             assert_dedicated_roots_absent purge-after-remove
             ;;
         apk)
-            seed_generated_runtime_artifacts || return
+            seed_generated_runtime_artifacts exact-rsyslog remove || return
             run_step remove remove_package || return
             assert_package_absent remove candidate
-            assert_generated_runtime_artifact_contract remove
+            assert_generated_runtime_artifact_contract remove exact-rsyslog
             assert_dedicated_roots_absent remove
             ;;
         rpm)
@@ -5437,10 +5800,10 @@ scenario_purge() {
     run_install_step install.candidate "${CANDIDATE_PACKAGE}" || return
     probe_payload fresh candidate "${CANDIDATE_VERSION}"
     assert_all_state_preserved fresh
-    seed_generated_runtime_artifacts || return
+    seed_generated_runtime_artifacts exact-rsyslog purge || return
     run_step purge purge_package || return
     assert_package_absent purge candidate
-    assert_generated_runtime_artifact_contract purge
+    assert_generated_runtime_artifact_contract purge exact-rsyslog
     case "${PACKAGE_FAMILY}" in
         deb)
             assert_dedicated_roots_absent purge
@@ -6962,8 +7325,12 @@ syswarden_namespace_expect_status NS06_ETH0_UP "${{syswarden_namespace_status}}"
             + "    syswarden_namespace_fail NS13_FAILED_UNITS \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" ''\n"
             + "fi\n"
         )
-        if spec.distribution == "fedora":
-            expected_masks = "\n".join(FEDORA_LAB_MASKED_UNITS)
+        expected_mask_inventory = SYSTEMD_LAB_MASKED_UNITS_BY_CELL.get(
+            spec.cell_id
+        )
+        if expected_mask_inventory is not None:
+            expected_masks = "\n".join(expected_mask_inventory)
+            mask_predicate = SYSTEMD_LAB_MASK_PREDICATES_BY_CELL[spec.cell_id]
             systemd_runtime += (
                 "syswarden_namespace_status=0\n"
                 "syswarden_namespace_actual=\"$(systemctl list-unit-files --state=masked "
@@ -6973,9 +7340,10 @@ syswarden_namespace_expect_status NS06_ETH0_UP "${{syswarden_namespace_status}}"
                 "else\n"
                 "    actual_masks=\"${syswarden_namespace_actual}\"\n"
                 "fi\n"
-                f"syswarden_namespace_expect_equal NS14_FEDORA_MASKS \"${{syswarden_namespace_status}}\" \"${{actual_masks}}\" \"{expected_masks}\"\n"
+                f"syswarden_namespace_expect_equal {mask_predicate} \"${{syswarden_namespace_status}}\" \"${{actual_masks}}\" \"{expected_masks}\"\n"
             )
         return systemd_runtime
+    openrc_contract = alpine_openrc_contract(spec.version)
     provider_sha256 = hashlib.sha256(
         ALPINE_LAB_NETWORK_PROVIDER.encode("utf-8")
     ).hexdigest()
@@ -6983,10 +7351,11 @@ syswarden_namespace_expect_status NS06_ETH0_UP "${{syswarden_namespace_status}}"
         common
         + "syswarden_apk_info_actual=\"$(\n"
         + "    syswarden_apk_info_status=0\n"
-        + f"    apk info -e 'openrc={ALPINE_OPENRC_VERSION}' 2>&1 || syswarden_apk_info_status=$?\n"
+        + f"    apk info -e 'openrc={openrc_contract.package_version}' 2>&1 || syswarden_apk_info_status=$?\n"
+        + f"    apk info -e 'openrc-init={openrc_contract.package_version}' 2>&1 || syswarden_apk_info_status=$?\n"
         + "    printf 'syswarden-apk-info-rc=%s' \"${syswarden_apk_info_status}\"\n"
         + ")\"\n"
-        + "syswarden_apk_info_expected=\"$(printf 'openrc\\nsyswarden-apk-info-rc=0')\"\n"
+        + "syswarden_apk_info_expected=\"$(printf 'openrc\\nopenrc-init\\nsyswarden-apk-info-rc=0')\"\n"
         + "syswarden_namespace_expect_equal NS15_OPENRC_PACKAGE 0 \"${syswarden_apk_info_actual}\" \"${syswarden_apk_info_expected}\"\n"
         + "syswarden_namespace_status=0\n"
         + "syswarden_namespace_actual=\"$(sha256sum /etc/init.d/syswarden-lab-net 2>&1)\" || syswarden_namespace_status=$?\n"
@@ -6999,7 +7368,7 @@ syswarden_namespace_expect_status NS06_ETH0_UP "${{syswarden_namespace_status}}"
         + "syswarden_namespace_expect_equal NS18_APK_RC_CONF_STAT \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 'regular file:0:0:644'\n"
         + "syswarden_namespace_status=0\n"
         + "syswarden_namespace_actual=\"$(sha256sum /etc/rc.conf 2>&1)\" || syswarden_namespace_status=$?\n"
-        + f"syswarden_namespace_expect_equal NS19_APK_RC_CONF_SHA \"${{syswarden_namespace_status}}\" \"${{syswarden_namespace_actual}}\" \"{ALPINE_RC_CONF_POST_SHA256}  /etc/rc.conf\"\n"
+        + f"syswarden_namespace_expect_equal NS19_APK_RC_CONF_SHA \"${{syswarden_namespace_status}}\" \"${{syswarden_namespace_actual}}\" \"{openrc_contract.rc_conf_post_sha256}  /etc/rc.conf\"\n"
         + "syswarden_namespace_status=0\n"
         + "syswarden_namespace_actual=\"$(grep -Fxc 'rc_sys=\"podman\"' /etc/rc.conf 2>&1)\" || syswarden_namespace_status=$?\n"
         + "syswarden_namespace_expect_integer NS20_APK_RC_SYS_LINE \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
@@ -7038,9 +7407,11 @@ syswarden_namespace_expect_status NS06_ETH0_UP "${{syswarden_namespace_status}}"
         + "syswarden_namespace_expect_equal NS25_APK_HOSTNAME_STAT \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 'regular file:0:0:755'\n"
         + "syswarden_namespace_status=0\n"
         + "syswarden_namespace_actual=\"$(sha256sum /etc/init.d/hostname 2>&1)\" || syswarden_namespace_status=$?\n"
-        + f"syswarden_namespace_expect_equal NS26_APK_HOSTNAME_SHA \"${{syswarden_namespace_status}}\" \"${{syswarden_namespace_actual}}\" \"{ALPINE_HOSTNAME_INIT_POST_SHA256}  /etc/init.d/hostname\"\n"
+        + f"syswarden_namespace_expect_equal NS26_APK_HOSTNAME_SHA \"${{syswarden_namespace_status}}\" \"${{syswarden_namespace_actual}}\" \"{openrc_contract.hostname_init_post_sha256}  /etc/init.d/hostname\"\n"
         + "syswarden_namespace_status=0\n"
-        + "syswarden_namespace_actual=\"$(grep -Ec '^[[:space:]]*keyword -prefix -lxc -docker -podman$' /etc/init.d/hostname 2>&1)\" || syswarden_namespace_status=$?\n"
+        + "syswarden_namespace_actual=\"$(grep -Ec '"
+        + openrc_contract.hostname_keyword_post_pattern
+        + "' /etc/init.d/hostname 2>&1)\" || syswarden_namespace_status=$?\n"
         + "syswarden_namespace_expect_integer NS27_APK_HOSTNAME_KEYWORD \"${syswarden_namespace_status}\" \"${syswarden_namespace_actual}\" 1\n"
         + "syswarden_namespace_status=0\n"
         + "syswarden_namespace_pid1_environment=\"$(tr '\\000' '\\n' < /proc/1/environ 2>&1)\" || syswarden_namespace_status=$?\n"
