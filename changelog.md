@@ -1,3 +1,75 @@
+# Release v4.04.1
+
+> Candidate status: v4.04.1 is the Patch candidate for the release
+> qualification contract correction and includes the complete unpublished
+> v4.04.0 candidate scope. This block does not authorize a tag or public
+> Release.
+
+### ADDED
+
+- **Typed ICMP operator policy:** Add a closed `[[operator_policy.rules]]`
+  schema for inbound IPv4 ICMP and IPv6 ICMPv6 echo requests. Rules are
+  declared only in `modules/99-user.toml`, use canonical IP or CIDR sources and
+  support the bounded `accept` action without exposing raw nftables input.
+- **Deterministic nftables compilation:** Compile validated rules into one
+  dedicated `operator-policy` chain, sort them by canonical identifier and
+  dispatch to the chain immediately before the product-owned catch-all deny.
+  A non-match always returns to the existing terminal policy.
+
+### FIXED
+
+- **Exact qualification schema consumption:** Align both unprivileged and
+  privileged release-manager validators with qualification context schema 2,
+  require the `previous_commit_sha` field and bind it to the frozen baseline
+  commit in the AMD64 qualification matrix.
+- **Release-chain regression coverage:** Require both publisher stages to
+  consume schema 2 and the exact baseline commit binding so producer and
+  consumer drift fails during pre-merge validation.
+
+### SECURITY
+
+- **Closed configuration provenance:** Reject unknown or missing fields,
+  duplicate identifiers, protocol and family mismatches, non-canonical or
+  overlapping sources, IPv4-mapped IPv6 values and every environment variable
+  prefixed with `SYSWARDEN_OPERATOR_POLICY`. Limit the operator module to
+  256 KiB, the policy to 64 rules and the compiled fragment to 64 KiB.
+- **Commit-bound source attestation:** Bind a non-empty policy to the exact
+  validated `99-user.toml` identity and digest, then revalidate and reattest it
+  at the pre-apply commit boundary and again after post-apply verification,
+  before persistent publication.
+- **Exact post-apply verification:** Verify the dedicated chain, ordered rule
+  expressions, provenance comments, terminal return, unique dispatch and
+  catch-all log and drop sequence from nftables JSON. Any mismatch restores the
+  previous policy and prevents publication.
+- **Durable interrupted-transaction recovery:** Journal the previous kernel and
+  persistent firewall state before apply, preserve only live bounded dynamic
+  bans, quarantine legacy maximum-ending intervals and recover an interrupted
+  transaction before a new reload. An indeterminate apply result is rolled back
+  and never treated as an unchanged ruleset.
+- **Frontend ownership boundary:** Refuse a non-empty operator policy when UFW
+  or firewalld is active so nftables remains the sole authoritative policy
+  owner for this capability.
+- **Immutable publication recovery:** Preserve the signed v4.04.0 tag and its
+  successful qualification evidence without moving the tag, rewriting the
+  evidence or bypassing tag-bound provenance. Require v4.04.1 to complete a new
+  qualification, signed tag and protected publication sequence.
+
+### TESTING
+
+- **Shared CLI and daemon contract corpus:** Exercise the same raw TOML,
+  semantic, environment, 64/65-rule and 256 KiB boundary cases in both config
+  implementations without coupling their Go modules.
+- **Real nftables and failure-path coverage:** Add deterministic golden
+  fixtures, validate the generated topology and populated IPv4/IPv6 rules in
+  isolated real-nftables namespaces, and add exact JSON mutation tests plus
+  injected failures for apply, verification, persistence, rollback and restart
+  recovery.
+- **Executable publisher schema regression:** Execute both embedded release
+  manager predicates against a valid schema 2 context and reject schema, key or
+  baseline commit mutations before merge.
+
+---
+
 # Release v4.04.0
 
 > Candidate status: v4.04.0 is the Minor candidate for the typed operator

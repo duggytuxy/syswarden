@@ -1964,6 +1964,10 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             workflow.count("sha256sum --check --strict EVIDENCE_SHA256SUMS.txt"),
             2,
         )
+        self.assertEqual(workflow.count("--slurpfile qualification_matrix"), 2)
+        self.assertEqual(workflow.count('"previous_commit_sha",'), 2)
+        self.assertEqual(workflow.count(".schema_version == 2"), 2)
+        self.assertNotIn(".schema_version == 1", workflow)
         self.assertEqual(
             workflow.count(
                 'gh run download "${qualification_run_id}" \\\n'
@@ -2017,8 +2021,14 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             self.assertIn('.repository == $repository', section)
             self.assertIn('.release_tag == $release_tag', section)
             self.assertIn('.release_sha == $release_sha', section)
+            self.assertIn('(.previous_commit_sha | type) == "string"', section)
             self.assertIn(
                 '.previous_tag == $aggregate[0].bindings.previous_version', section
+            )
+            self.assertIn(
+                ".previous_commit_sha ==\n"
+                "              $qualification_matrix[0].package_sources.baseline.commit",
+                section,
             )
             self.assertIn("(.previous_package_asset_ids | length) == 4", section)
             self.assertIn("all(.[]; . == 0)", section)
@@ -2109,6 +2119,102 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         )[1].split("      - name: Verify Private Draft Assets Before Publication", 1)[0]
         self.assertIn("release_payload/assets/*", release_creation)
         self.assertNotIn("syswarden-release-qualification", release_creation)
+
+    def test_release_manager_executes_schema_v2_context_contract(self) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        validate = workflow.split("  validate-and-stage:", 1)[1].split(
+            "  attest-and-publish:", 1
+        )[0]
+        privileged = workflow.split("  attest-and-publish:", 1)[1]
+        repository = "duggytuxy/syswarden"
+        release_tag = "v4.04.1"
+        release_sha = "a" * 40
+        previous_tag = "v4.03.3"
+        previous_commit_sha = "cdd66600a1505bae1f1e754dea096ee71e9cee82"
+        context = {
+            "schema_version": 2,
+            "repository": repository,
+            "release_tag": release_tag,
+            "release_sha": release_sha,
+            "previous_tag": previous_tag,
+            "previous_commit_sha": previous_commit_sha,
+            "candidate_package_workflow": "package.yml",
+            "candidate_package_run_id": 101,
+            "candidate_package_artifact_id": 102,
+            "candidate_package_artifact_name": "syswarden-packages-4.04.1",
+            "previous_release_id": 103,
+            "previous_package_asset_ids": [
+                {"id": 1, "name": "SHA256SUMS.txt"},
+                {"id": 2, "name": "syswarden-4.03.3-1.x86_64.rpm"},
+                {"id": 3, "name": "syswarden_4.03.3_amd64.deb"},
+                {"id": 4, "name": "syswarden_4.03.3_x86_64.apk"},
+            ],
+        }
+        aggregate = {"bindings": {"previous_version": previous_tag}}
+        qualification_matrix = {
+            "package_sources": {
+                "baseline": {"commit": previous_commit_sha},
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            aggregate_path = root / "aggregate.json"
+            matrix_path = root / "matrix.json"
+            context_path = root / "qualification-context.json"
+            aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+            matrix_path.write_text(json.dumps(qualification_matrix), encoding="utf-8")
+
+            for stage, section in (("validate", validate), ("privileged", privileged)):
+                start_marker = "'(keys | sort) == ["
+                end_marker = "' \"${QUALIFICATION_ROOT}/qualification-context.json\""
+                self.assertEqual(section.count(start_marker), 1, stage)
+                start = section.index(start_marker) + 1
+                end = section.index(end_marker, start)
+                predicate = section[start:end]
+
+                def execute(candidate: dict[str, object]) -> subprocess.CompletedProcess[str]:
+                    context_path.write_text(json.dumps(candidate), encoding="utf-8")
+                    return subprocess.run(
+                        [
+                            "jq",
+                            "--exit-status",
+                            "--slurpfile",
+                            "aggregate",
+                            str(aggregate_path),
+                            "--slurpfile",
+                            "qualification_matrix",
+                            str(matrix_path),
+                            "--arg",
+                            "repository",
+                            repository,
+                            "--arg",
+                            "release_tag",
+                            release_tag,
+                            "--arg",
+                            "release_sha",
+                            release_sha,
+                            predicate,
+                            str(context_path),
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+
+                with self.subTest(stage=stage, mutation="valid"):
+                    result = execute(context)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                for mutation, mutate in (
+                    ("schema", lambda value: value.__setitem__("schema_version", 1)),
+                    ("commit", lambda value: value.__setitem__("previous_commit_sha", "b" * 40)),
+                    ("extra", lambda value: value.__setitem__("unexpected", True)),
+                    ("missing", lambda value: value.pop("previous_commit_sha")),
+                ):
+                    candidate = json.loads(json.dumps(context))
+                    mutate(candidate)
+                    with self.subTest(stage=stage, mutation=mutation):
+                        self.assertNotEqual(execute(candidate).returncode, 0)
 
     def test_privileged_publisher_requires_a_protected_maintainer_environment(self) -> None:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")

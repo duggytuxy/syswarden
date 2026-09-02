@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "matrix_id": "syswarden-package-qualification/v1",
-  "target_release": "v4.04.0",
+  "target_release": "v4.04.1",
   "architecture": {
     "oci_platform": "linux/amd64",
     "kernel": "x86_64",

@@ -634,8 +634,8 @@ def validate_document(document: object) -> dict[str, Any]:
         raise QualificationMatrixError("schema_version must equal integer 1")
     if matrix["matrix_id"] != "syswarden-package-qualification/v1":
         raise QualificationMatrixError("matrix_id does not match the v1 contract")
-    if matrix["target_release"] != "v4.04.0":
-        raise QualificationMatrixError("target_release must equal v4.04.0")
+    if matrix["target_release"] != "v4.04.1":
+        raise QualificationMatrixError("target_release must equal v4.04.1")
     _require_exact_mapping(matrix["architecture"], EXPECTED_ARCHITECTURE, "architecture")
     _validate_package_sources(matrix["package_sources"])
     _validate_budgets(matrix["budgets"])

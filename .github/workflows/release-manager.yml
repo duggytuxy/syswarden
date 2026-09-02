@@ -719,6 +719,8 @@ jobs:
           )
           jq --exit-status \
             --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
+            --slurpfile qualification_matrix \
+              "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
             --arg repository "${GITHUB_REPOSITORY}" \
             --arg release_tag "${RELEASE_TAG}" \
             --arg release_sha "${RELEASE_SHA}" \
@@ -727,6 +729,7 @@ jobs:
               "candidate_package_artifact_name",
               "candidate_package_run_id",
               "candidate_package_workflow",
+              "previous_commit_sha",
               "previous_package_asset_ids",
               "previous_release_id",
               "previous_tag",
@@ -735,7 +738,7 @@ jobs:
               "repository",
               "schema_version"
             ] and
-            .schema_version == 1 and
+            .schema_version == 2 and
             .repository == $repository and
             .release_tag == $release_tag and
             .release_sha == $release_sha and
@@ -750,6 +753,9 @@ jobs:
             .previous_release_id > 0 and
             (.previous_tag | type) == "string" and
             .previous_tag == $aggregate[0].bindings.previous_version and
+            (.previous_commit_sha | type) == "string" and
+            .previous_commit_sha ==
+              $qualification_matrix[0].package_sources.baseline.commit and
             (.previous_package_asset_ids | type) == "array" and
             (.previous_package_asset_ids | length) == 4 and
             ([.previous_package_asset_ids[].name] | sort) == ([
@@ -1257,6 +1263,8 @@ jobs:
           )
           jq --exit-status \
             --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
+            --slurpfile qualification_matrix \
+              "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
             --arg repository "${GITHUB_REPOSITORY}" \
             --arg release_tag "${RELEASE_TAG}" \
             --arg release_sha "${RELEASE_SHA}" \
@@ -1265,6 +1273,7 @@ jobs:
               "candidate_package_artifact_name",
               "candidate_package_run_id",
               "candidate_package_workflow",
+              "previous_commit_sha",
               "previous_package_asset_ids",
               "previous_release_id",
               "previous_tag",
@@ -1273,7 +1282,7 @@ jobs:
               "repository",
               "schema_version"
             ] and
-            .schema_version == 1 and
+            .schema_version == 2 and
             .repository == $repository and
             .release_tag == $release_tag and
             .release_sha == $release_sha and
@@ -1288,6 +1297,9 @@ jobs:
             .previous_release_id > 0 and
             (.previous_tag | type) == "string" and
             .previous_tag == $aggregate[0].bindings.previous_version and
+            (.previous_commit_sha | type) == "string" and
+            .previous_commit_sha ==
+              $qualification_matrix[0].package_sources.baseline.commit and
             (.previous_package_asset_ids | type) == "array" and
             (.previous_package_asset_ids | length) == 4 and
             ([.previous_package_asset_ids[].name] | sort) == ([
