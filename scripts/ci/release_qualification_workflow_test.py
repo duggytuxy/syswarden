@@ -902,7 +902,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
     def test_three_packages_and_eight_native_matrix_cells_are_exact(self) -> None:
         catalog = self.package_qualification_matrix
         cells = catalog["cells"]
-        self.assertEqual(catalog["target_release"], "v4.04.1")
+        self.assertEqual(catalog["target_release"], "v4.04.2")
         self.assertEqual(
             catalog["architecture"],
             package_qualification_matrix.EXPECTED_ARCHITECTURE,

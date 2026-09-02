@@ -39,7 +39,7 @@ class PackageQualificationMatrixTests(unittest.TestCase):
     def test_repository_matrix_is_the_exact_frozen_contract(self) -> None:
         document = self.canonical
         self.assertEqual(document["schema_version"], 1)
-        self.assertEqual(document["target_release"], "v4.04.1")
+        self.assertEqual(document["target_release"], "v4.04.2")
         self.assertEqual(document["architecture"], matrix.EXPECTED_ARCHITECTURE)
         self.assertEqual(
             tuple(cell["id"] for cell in document["cells"]),
@@ -72,7 +72,7 @@ class PackageQualificationMatrixTests(unittest.TestCase):
         for arguments in (
             (),
             ("--check", str(matrix.DEFAULT_MATRIX)),
-            ("--expected-target-release", "v4.04.1"),
+            ("--expected-target-release", "v4.04.2"),
         ):
             with self.subTest(arguments=arguments):
                 stdout = io.StringIO()
@@ -81,7 +81,7 @@ class PackageQualificationMatrixTests(unittest.TestCase):
                     result = matrix.main(arguments)
                 self.assertEqual(result, 0, stderr.getvalue())
                 self.assertEqual(stderr.getvalue(), "")
-                self.assertIn("8 AMD64 cells for v4.04.1", stdout.getvalue())
+                self.assertIn("8 AMD64 cells for v4.04.2", stdout.getvalue())
                 self.assertRegex(stdout.getvalue(), r"sha256=[0-9a-f]{64}\n$")
 
     def test_cli_rejects_a_target_release_mismatch(self) -> None:

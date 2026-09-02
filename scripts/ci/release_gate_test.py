@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import stat
 import subprocess
 import tarfile
@@ -18,6 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 import release_gate
+import release_qualification_adapter
 
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -51,6 +53,30 @@ def workflow_step_scripts(workflow: str, step_name: str) -> list[str]:
     if not scripts:
         raise AssertionError(f"workflow step {step_name} is missing")
     return scripts
+
+
+def continued_shell_commands(script: str, needle: str) -> list[list[str]]:
+    """Return tokenized shell commands, including their continued lines."""
+    lines = script.splitlines()
+    commands: list[list[str]] = []
+    for start, line in enumerate(lines):
+        if needle not in line:
+            continue
+        fragments: list[str] = []
+        index = start
+        while True:
+            fragment = lines[index].strip()
+            continued = fragment.endswith("\\")
+            if continued:
+                fragment = fragment[:-1].rstrip()
+            fragments.append(fragment)
+            if not continued:
+                break
+            index += 1
+            if index >= len(lines):
+                raise AssertionError(f"unterminated shell command containing {needle}")
+        commands.append(shlex.split(" ".join(fragments)))
+    return commands
 
 
 def run_environment_gate(
@@ -2120,6 +2146,82 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         self.assertIn("release_payload/assets/*", release_creation)
         self.assertNotIn("syswarden-release-qualification", release_creation)
 
+    def test_release_manager_adapter_calls_match_the_live_cli_contract(self) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        needle = "python3 scripts/ci/release_qualification_adapter.py verify"
+        commands = continued_shell_commands(workflow, needle)
+        self.assertEqual(len(commands), 2)
+
+        parser = release_qualification_adapter.build_parser()
+        subparsers = next(
+            action
+            for action in parser._actions
+            if "verify" in (getattr(action, "choices", None) or {})
+        )
+        verify_parser = subparsers.choices["verify"]
+        known_options = {
+            option
+            for action in verify_parser._actions
+            for option in action.option_strings
+            if option.startswith("--")
+        }
+        required_options = {
+            option
+            for action in verify_parser._actions
+            if action.required
+            for option in action.option_strings
+            if option.startswith("--")
+        }
+        expected_arguments = {
+            "--repo-root": "${GITHUB_WORKSPACE}",
+            "--expected-sha": "${RELEASE_SHA}",
+            "--expected-version": "${RELEASE_TAG}",
+            "--candidate-packages-dir": "${QUALIFICATION_ROOT}/packages/candidate",
+            "--previous-packages-dir": "${QUALIFICATION_ROOT}/packages/previous",
+            "--nft-raw": "${QUALIFICATION_ROOT}/raw/nftables-raw.json",
+            "--package-raw": "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json",
+            "--package-amd64-shard": (
+                "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json"
+            ),
+            "--qualification-matrix": (
+                "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json"
+            ),
+            "--expected-repository": "${GITHUB_REPOSITORY}",
+            "--expected-workflow-run-id": "${QUALIFICATION_RUN_ID}",
+            "--expected-workflow-run-attempt": "1",
+            "--expected-candidate-run-id": "${candidate_run_id}",
+            "--expected-candidate-artifact-id": "${candidate_artifact_id}",
+            "--expected-candidate-artifact-name": "${candidate_artifact_name}",
+            "--expected-previous-release-id": "${previous_release_id}",
+            "--max-age-seconds": "172800",
+            "--max-report-skew-seconds": "0",
+            "--nft-envelope": "${QUALIFICATION_ROOT}/bound/nftables-bound.json",
+            "--package-envelope": (
+                "${QUALIFICATION_ROOT}/bound/package-lifecycle-bound.json"
+            ),
+        }
+
+        for command in commands:
+            with self.subTest(command=" ".join(command)):
+                verify_index = command.index("verify")
+                argument_tokens = command[verify_index + 1 :]
+                self.assertEqual(len(argument_tokens) % 2, 0)
+                provided_arguments: dict[str, str] = {}
+                for option, value in zip(
+                    argument_tokens[0::2], argument_tokens[1::2], strict=True
+                ):
+                    self.assertTrue(option.startswith("--"), option)
+                    self.assertIn(option, known_options)
+                    self.assertNotIn(option, provided_arguments)
+                    self.assertTrue(value, option)
+                    self.assertFalse(value.startswith("--"), option)
+                    provided_arguments[option] = value
+                self.assertEqual(
+                    required_options - set(provided_arguments),
+                    set(),
+                )
+                self.assertEqual(provided_arguments, expected_arguments)
+
     def test_release_manager_executes_schema_v2_context_contract(self) -> None:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         validate = workflow.split("  validate-and-stage:", 1)[1].split(
@@ -2127,7 +2229,7 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         )[0]
         privileged = workflow.split("  attest-and-publish:", 1)[1]
         repository = "duggytuxy/syswarden"
-        release_tag = "v4.04.1"
+        release_tag = "v4.04.2"
         release_sha = "a" * 40
         previous_tag = "v4.03.3"
         previous_commit_sha = "cdd66600a1505bae1f1e754dea096ee71e9cee82"
@@ -2141,7 +2243,7 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             "candidate_package_workflow": "package.yml",
             "candidate_package_run_id": 101,
             "candidate_package_artifact_id": 102,
-            "candidate_package_artifact_name": "syswarden-packages-4.04.1",
+            "candidate_package_artifact_name": "syswarden-packages-4.04.2",
             "previous_release_id": 103,
             "previous_package_asset_ids": [
                 {"id": 1, "name": "SHA256SUMS.txt"},

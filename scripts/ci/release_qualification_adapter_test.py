@@ -61,14 +61,14 @@ def replace_snapshot_identity_maps(
 
 
 class AdapterFixture:
-    version = "v4.04.1"
+    version = "v4.04.2"
     previous_version = "v4.03.3"
     repository = "duggytuxy/syswarden"
     workflow_run_id = 1001
     workflow_run_attempt = 1
     candidate_run_id = 900
     candidate_artifact_id = 901
-    candidate_artifact_name = "syswarden-packages-4.04.1"
+    candidate_artifact_name = "syswarden-packages-4.04.2"
     previous_release_id = 377680978
 
     def __init__(self, root: Path) -> None:
@@ -93,7 +93,7 @@ class AdapterFixture:
         self.now = datetime.now(UTC).replace(microsecond=0)
         self._make_repository()
         self.commit = self._git("rev-parse", "HEAD")
-        self._make_package_set(self.candidate, "4.04.1", b"candidate")
+        self._make_package_set(self.candidate, "4.04.2", b"candidate")
         self._make_package_set(self.previous, "4.03.3", b"previous")
         self._make_raw_reports()
 

@@ -797,6 +797,7 @@ jobs:
             --nft-raw "${QUALIFICATION_ROOT}/raw/nftables-raw.json" \
             --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
             --package-amd64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json" \
+            --qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
             --expected-repository "${GITHUB_REPOSITORY}" \
             --expected-workflow-run-id "${QUALIFICATION_RUN_ID}" \
             --expected-workflow-run-attempt 1 \
@@ -1341,6 +1342,7 @@ jobs:
             --nft-raw "${QUALIFICATION_ROOT}/raw/nftables-raw.json" \
             --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
             --package-amd64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json" \
+            --qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
             --expected-repository "${GITHUB_REPOSITORY}" \
             --expected-workflow-run-id "${QUALIFICATION_RUN_ID}" \
             --expected-workflow-run-attempt 1 \
