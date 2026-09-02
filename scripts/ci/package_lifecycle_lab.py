@@ -3053,8 +3053,8 @@ v4032_to_v4033_upgrade_selected() {
         [ "$(installed_version 2>/dev/null || true)" = 4.03.2 ]
 }
 
-v4033_to_v4041_upgrade_selected() {
-    v4033_to_v4041_transition_selected && \
+v4033_to_v4042_upgrade_selected() {
+    v4033_to_v4042_transition_selected && \
         [ "$(installed_version 2>/dev/null || true)" = 4.03.3 ]
 }
 
@@ -3097,7 +3097,7 @@ attest_v4032_previous_webtui_retirement() {
 }
 
 attest_v4033_previous_webtui_retirement() {
-    v4033_to_v4041_upgrade_selected || return 1
+    v4033_to_v4042_upgrade_selected || return 1
     attest_previous_webtui_retirement "$@"
 }
 
@@ -3445,10 +3445,10 @@ v4032_to_v4033_transition_selected() {
         [ "${EXPECTED_CANDIDATE_VERSION}" = 4.03.3 ]
 }
 
-v4033_to_v4041_transition_selected() {
+v4033_to_v4042_transition_selected() {
     [ "${SCENARIO}" = upgrade-rollback ] && \
         [ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.3 ] && \
-        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.04.1 ]
+        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.04.2 ]
 }
 
 expected_systemd_enablement_prefix() {
@@ -3460,7 +3460,7 @@ expected_systemd_enablement_prefix() {
             if v4028_to_v4032_transition_selected; then
                 printf '%s\n' /etc/systemd/system
             elif v4032_to_v4033_transition_selected || \
-                 v4033_to_v4041_transition_selected; then
+                 v4033_to_v4042_transition_selected; then
                 printf '%s\n' ..
             else
                 return 1
@@ -3858,7 +3858,7 @@ probe_postinstall_contract() {
         probe_seeded_operator_listener_preservation "${label}" || mark_postinstall_failure operator-listener
     elif [ "${actual_version}" = "${EXPECTED_PREVIOUS_VERSION}" ]; then
         if v4032_to_v4033_upgrade_selected || \
-           v4033_to_v4041_upgrade_selected; then
+           v4033_to_v4042_upgrade_selected; then
             attest_previous_webtui_retirement || \
                 mark_postinstall_failure previous-webtui-retirement
         else
@@ -4227,7 +4227,7 @@ quiesce_previous_webtui_runtime() {
         attest_v4032_previous_webtui_retirement || return 1
         return 0
     fi
-    if v4033_to_v4041_upgrade_selected; then
+    if v4033_to_v4042_upgrade_selected; then
         attest_v4033_previous_webtui_retirement || return 1
         return 0
     fi
@@ -4587,7 +4587,7 @@ seed_live_legacy_webtui_process() {
         *) return 0 ;;
     esac
     if v4032_to_v4033_upgrade_selected || \
-       v4033_to_v4041_upgrade_selected; then
+       v4033_to_v4042_upgrade_selected; then
         return 0
     fi
     /opt/syswarden/bin/syswarden-cli web-tui \
@@ -5039,7 +5039,7 @@ expected_upgrade_rollback_token_contract() {
     if v4028_to_v4032_transition_selected; then
         printf '%s\n' historical-webtui-credential
     elif v4032_to_v4033_transition_selected || \
-         v4033_to_v4041_transition_selected; then
+         v4033_to_v4042_transition_selected; then
         printf '%s\n' byte-exact
     else
         return 1

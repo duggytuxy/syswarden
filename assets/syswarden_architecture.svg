@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="940" viewBox="0 0 1600 940" role="img" aria-labelledby="title description" data-theme="dark" data-theme-status="legacy">
-  <title id="title">SysWarden v4.04.1 candidate architecture</title>
+  <title id="title">SysWarden v4.04.2 candidate architecture</title>
   <desc id="description">Protected Linux workloads emit logs and host telemetry to a local SysWarden core. The core commits authoritative nftables policy and may reconcile one already active UFW or firewalld compatibility frontend. It also manages local telemetry and an authenticated peer-scoped HA API. Operators use a privileged CLI and a local terminal dashboard. A challenge-bound HA fence protects partner migration cleanup.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -57,7 +57,7 @@
   <g transform="translate(30 5) scale(0.68)">
     <use href="#syswardenOfficialLogo"/>
   </g>
-  <text x="475" y="62" class="h1">v4.04.1 candidate architecture</text>
+  <text x="475" y="62" class="h1">v4.04.2 candidate architecture</text>
   <text x="475" y="98" class="body">Linux-only host enforcement, local terminal operations and condition-bound HA migration</text>
 
   <g transform="translate(70 154)" filter="url(#shadow)">

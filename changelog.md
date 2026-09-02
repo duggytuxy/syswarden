@@ -1,3 +1,80 @@
+# Release v4.04.2
+
+> Candidate status: v4.04.2 is the Patch candidate for the publisher CLI
+> contract correction and includes the complete unpublished v4.04.0 and
+> v4.04.1 candidate scope. This block does not authorize a tag or public
+> Release.
+
+### ADDED
+
+- **Typed ICMP operator policy:** Add a closed `[[operator_policy.rules]]`
+  schema for inbound IPv4 ICMP and IPv6 ICMPv6 echo requests. Rules are
+  declared only in `modules/99-user.toml`, use canonical IP or CIDR sources and
+  support the bounded `accept` action without exposing raw nftables input.
+- **Deterministic nftables compilation:** Compile validated rules into one
+  dedicated `operator-policy` chain, sort them by canonical identifier and
+  dispatch to the chain immediately before the product-owned catch-all deny.
+  A non-match always returns to the existing terminal policy.
+
+### FIXED
+
+- **Complete publisher CLI binding:** Pass the frozen qualification matrix to
+  both unprivileged and privileged release-manager adapter invocations so the
+  exact pre-tag evidence can be revalidated before staging and publication.
+- **Exact qualification schema consumption:** Align both release-manager
+  validators with qualification context schema 2, require the
+  `previous_commit_sha` field and bind it to the frozen baseline commit in the
+  AMD64 qualification matrix.
+- **Release-chain regression coverage:** Require both publisher stages to
+  consume schema 2, the exact baseline commit binding and every mandatory
+  adapter option so producer and consumer drift fails during pre-merge
+  validation.
+
+### SECURITY
+
+- **Closed configuration provenance:** Reject unknown or missing fields,
+  duplicate identifiers, protocol and family mismatches, non-canonical or
+  overlapping sources, IPv4-mapped IPv6 values and every environment variable
+  prefixed with `SYSWARDEN_OPERATOR_POLICY`. Limit the operator module to
+  256 KiB, the policy to 64 rules and the compiled fragment to 64 KiB.
+- **Commit-bound source attestation:** Bind a non-empty policy to the exact
+  validated `99-user.toml` identity and digest, then revalidate and reattest it
+  at the pre-apply commit boundary and again after post-apply verification,
+  before persistent publication.
+- **Exact post-apply verification:** Verify the dedicated chain, ordered rule
+  expressions, provenance comments, terminal return, unique dispatch and
+  catch-all log and drop sequence from nftables JSON. Any mismatch restores the
+  previous policy and prevents publication.
+- **Durable interrupted-transaction recovery:** Journal the previous kernel and
+  persistent firewall state before apply, preserve only live bounded dynamic
+  bans, quarantine legacy maximum-ending intervals and recover an interrupted
+  transaction before a new reload. An indeterminate apply result is rolled back
+  and never treated as an unchanged ruleset.
+- **Frontend ownership boundary:** Refuse a non-empty operator policy when UFW
+  or firewalld is active so nftables remains the sole authoritative policy
+  owner for this capability.
+- **Immutable publication recovery:** Preserve the signed v4.04.0 and v4.04.1
+  tags and their successful qualification evidence without moving either tag,
+  rewriting evidence or bypassing tag-bound provenance. Require v4.04.2 to
+  complete a new qualification, signed tag and protected publication sequence.
+
+### TESTING
+
+- **Shared CLI and daemon contract corpus:** Exercise the same raw TOML,
+  semantic, environment, 64/65-rule and 256 KiB boundary cases in both config
+  implementations without coupling their Go modules.
+- **Real nftables and failure-path coverage:** Add deterministic golden
+  fixtures, validate the generated topology and populated IPv4/IPv6 rules in
+  isolated real-nftables namespaces, and add exact JSON mutation tests plus
+  injected failures for apply, verification, persistence, rollback and restart
+  recovery.
+- **Executable publisher contract regression:** Extract both exact continued
+  adapter commands from the release-manager workflow, derive every mandatory
+  option from the live parser and reject missing, unknown, duplicate or
+  valueless options before merge.
+
+---
+
 # Release v4.04.1
 
 > Candidate status: v4.04.1 is the Patch candidate for the release
