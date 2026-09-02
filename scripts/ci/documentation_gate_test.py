@@ -21,14 +21,41 @@ import release_gate
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_CANDIDATE_VERSION = "v4.04.2"
-STABLE_PUBLIC_VERSION = "v4.03.3"
+STABLE_PUBLIC_VERSION = "v4.04.2"
+PUBLIC_REPORT_VERSION = "v4.03.3"
+OPERATIONAL_WIKI_BASELINE_VERSION = "v4.03.3"
 REPORT = REPO_ROOT / (
-    f"docs/reports/PUBLIC_RELEASE_READINESS_REPORT_{STABLE_PUBLIC_VERSION}.md"
+    f"docs/reports/PUBLIC_RELEASE_READINESS_REPORT_{PUBLIC_REPORT_VERSION}.md"
 )
 ARCHIVE_DIGEST = "a6ebcab7a81769c52147be710622995779cedf9523270cf08cf03e275501cde5"
 
 
 class DocumentationGateTest(unittest.TestCase):
+    @staticmethod
+    def _write_current_wiki_shell(
+        wiki_root: Path,
+        stable_version: str,
+        operational_version: str,
+    ) -> None:
+        links = "\n".join(
+            f"- [{page.removesuffix('.md')}]({page.removesuffix('.md')})"
+            for page in sorted(documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES)
+        )
+        (wiki_root / "Home.md").write_text(
+            "# Home\n\n"
+            "> Status: Current\n"
+            f"> Documentation baseline: {stable_version}\n\n"
+            f"{links}\n",
+            encoding="utf-8",
+        )
+        for page in documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES:
+            (wiki_root / page).write_text(
+                f"# {page.removesuffix('.md')}\n\n"
+                "> Status: Current\n"
+                f"> Documentation baseline: {operational_version}\n",
+                encoding="utf-8",
+            )
+
     def test_repository_truth_gate_passes(self) -> None:
         records, errors = documentation_gate.validate_repository(REPO_ROOT)
         self.assertEqual(errors, [])
@@ -45,6 +72,44 @@ class DocumentationGateTest(unittest.TestCase):
         errors = documentation_gate.validate_wiki_phrase_contract(changed)
         self.assertTrue(any("missing required operational wiki pages" in error for error in errors))
 
+    def test_current_operational_wiki_page_inventory_fails_closed(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        self.assertEqual(
+            documentation_gate.current_operational_wiki_pages(contract),
+            documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES,
+        )
+        mutations = {
+            "absent": None,
+            "duplicate": [
+                *contract["current_operational_wiki_pages"],
+                contract["current_operational_wiki_pages"][0],
+            ],
+            "incomplete": contract["current_operational_wiki_pages"][:-1],
+        }
+        for name, value in mutations.items():
+            changed = json.loads(json.dumps(contract))
+            if value is None:
+                changed.pop("current_operational_wiki_pages")
+            else:
+                changed["current_operational_wiki_pages"] = value
+            with self.subTest(name=name), self.assertRaises(
+                documentation_gate.DocumentationGateError
+            ):
+                documentation_gate.current_operational_wiki_pages(changed)
+
+    def test_home_release_status_contract_is_explicit(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        required = contract["required_wiki_phrases"]["Home.md"]
+        self.assertIn(
+            "{stable_public_version} is the latest qualified, stable public release.",
+            required,
+        )
+        self.assertIn(
+            "The {stable_public_version} release is public, stable, non-draft and "
+            "non-prerelease.",
+            required,
+        )
+
     def test_current_version_and_release_status_are_explicit(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
         self.assertEqual(
@@ -52,6 +117,13 @@ class DocumentationGateTest(unittest.TestCase):
         )
         self.assertEqual(
             documentation_gate.stable_public_version(contract), STABLE_PUBLIC_VERSION
+        )
+        self.assertEqual(
+            documentation_gate.public_report_version(contract), PUBLIC_REPORT_VERSION
+        )
+        self.assertEqual(
+            documentation_gate.operational_wiki_baseline_version(contract),
+            OPERATIONAL_WIKI_BASELINE_VERSION,
         )
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (REPO_ROOT / "changelog.md").read_text(encoding="utf-8")
@@ -100,6 +172,27 @@ class DocumentationGateTest(unittest.TestCase):
             ):
                 documentation_gate.stable_public_version(changed)
 
+    def test_historical_documentation_versions_fail_closed(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        getters = (
+            ("public_report_version", documentation_gate.public_report_version),
+            (
+                "operational_wiki_baseline_version",
+                documentation_gate.operational_wiki_baseline_version,
+            ),
+        )
+        for key, getter in getters:
+            for invalid in (None, "", "4.03.3", "v4.3.3", "v4.03"):
+                changed = json.loads(json.dumps(contract))
+                if invalid is None:
+                    changed.pop(key)
+                else:
+                    changed[key] = invalid
+                with self.subTest(key=key, invalid=invalid), self.assertRaises(
+                    documentation_gate.DocumentationGateError
+                ):
+                    getter(changed)
+
     def test_stable_public_version_cannot_lead_the_source_candidate(self) -> None:
         self.assertEqual(
             documentation_gate.validate_public_version_order(
@@ -112,7 +205,113 @@ class DocumentationGateTest(unittest.TestCase):
         )
         self.assertTrue(any("cannot be newer" in error for error in errors))
 
-    def test_readme_accepts_only_the_candidate_and_bound_stable_versions(self) -> None:
+    def test_historical_baselines_cannot_lead_the_stable_release(self) -> None:
+        self.assertEqual(
+            documentation_gate.validate_documentation_version_order(
+                SOURCE_CANDIDATE_VERSION,
+                STABLE_PUBLIC_VERSION,
+                PUBLIC_REPORT_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+            ),
+            [],
+        )
+        for report_version, wiki_version, key in (
+            ("v4.04.3", OPERATIONAL_WIKI_BASELINE_VERSION, "public_report_version"),
+            (PUBLIC_REPORT_VERSION, "v4.04.3", "operational_wiki_baseline_version"),
+        ):
+            errors = documentation_gate.validate_documentation_version_order(
+                SOURCE_CANDIDATE_VERSION,
+                STABLE_PUBLIC_VERSION,
+                report_version,
+                wiki_version,
+            )
+            self.assertTrue(any(key in error for error in errors), errors)
+
+    def test_distinct_stable_report_and_operational_wiki_versions_stay_separate(
+        self,
+    ) -> None:
+        stable_version = "v4.05.0"
+        report_version = "v4.03.3"
+        operational_version = "v4.04.0"
+        self.assertEqual(
+            documentation_gate.validate_documentation_version_order(
+                stable_version,
+                stable_version,
+                report_version,
+                operational_version,
+            ),
+            [],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            wiki_root = Path(directory)
+            self._write_current_wiki_shell(
+                wiki_root,
+                stable_version,
+                operational_version,
+            )
+            common = (
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                set(),
+                set(),
+                [],
+                stable_version,
+                operational_version,
+                documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES,
+                {},
+            )
+            self.assertEqual(documentation_gate.validate_wiki(*common), [])
+
+            home = wiki_root / "Home.md"
+            home.write_text(
+                home.read_text(encoding="utf-8").replace(
+                    f"> Documentation baseline: {stable_version}",
+                    f"> Documentation baseline: {report_version}",
+                ),
+                encoding="utf-8",
+            )
+            errors = documentation_gate.validate_wiki(
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                *common[2:],
+            )
+            self.assertTrue(
+                any(
+                    f"current page baseline {report_version} does not match "
+                    f"{stable_version}" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+            self._write_current_wiki_shell(
+                wiki_root,
+                stable_version,
+                operational_version,
+            )
+            deployment = wiki_root / "Deployment-Tutorial.md"
+            deployment.write_text(
+                deployment.read_text(encoding="utf-8").replace(
+                    f"> Documentation baseline: {operational_version}",
+                    f"> Documentation baseline: {report_version}",
+                ),
+                encoding="utf-8",
+            )
+            errors = documentation_gate.validate_wiki(
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                *common[2:],
+            )
+            self.assertTrue(
+                any(
+                    f"current page baseline {report_version} does not match "
+                    f"{operational_version}" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_readme_binds_the_source_and_stable_release(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
         readme_path = REPO_ROOT / "README.md"
         readme = readme_path.read_text(encoding="utf-8")
@@ -125,15 +324,14 @@ class DocumentationGateTest(unittest.TestCase):
             SOURCE_CANDIDATE_VERSION,
             None,
         )
-        errors = documentation_gate.validate_markdown(
-            *common, (STABLE_PUBLIC_VERSION,)
-        )
+        errors = documentation_gate.validate_markdown(*common)
         self.assertFalse(any("non-current version" in error for error in errors))
 
-        errors = documentation_gate.validate_markdown(*common)
+        stale_common = (common[0], common[1] + "\nThe v4.03.3 release is current.\n", *common[2:])
+        errors = documentation_gate.validate_markdown(*stale_common)
         self.assertTrue(
             any(
-                f"non-current version {STABLE_PUBLIC_VERSION}" in error
+                f"non-current version {PUBLIC_REPORT_VERSION}" in error
                 for error in errors
             )
         )
@@ -186,18 +384,19 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                SOURCE_CANDIDATE_VERSION,
             ),
             [],
         )
 
-    def test_public_release_contract_is_three_packages_and_ten_assets(self) -> None:
+    def test_detailed_release_report_contract_is_three_packages_and_ten_assets(
+        self,
+    ) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
-        stable_version = documentation_gate.stable_public_version(contract)
+        report_version = documentation_gate.public_report_version(contract)
         expected_packages = release_gate.package_names(
-            stable_version.removeprefix("v")
+            report_version.removeprefix("v")
         )
-        expected_assets = release_gate.expected_release_assets(stable_version)
+        expected_assets = release_gate.expected_release_assets(report_version)
         self.assertEqual(len(expected_packages), 3)
         self.assertEqual(len(expected_assets), 10)
         self.assertEqual(
@@ -481,31 +680,41 @@ class DocumentationGateTest(unittest.TestCase):
             documentation_gate.cobra_commands(REPO_ROOT),
             documentation_gate.config_schema(REPO_ROOT),
             changed["forbidden_phrases"],
-            SOURCE_CANDIDATE_VERSION,
         )
         self.assertTrue(any("exact release gate" in error for error in errors))
 
-    def test_stable_version_mutation_breaks_report_assets_and_matrix(self) -> None:
+    def test_stable_release_does_not_rebind_the_historical_report(self) -> None:
+        contract = documentation_gate.load_contract(REPO_ROOT)
+        errors = documentation_gate.validate_active_public_surfaces(
+            REPO_ROOT,
+            contract,
+            documentation_gate.cobra_commands(REPO_ROOT),
+            documentation_gate.config_schema(REPO_ROOT),
+            contract["forbidden_phrases"],
+        )
+        self.assertEqual(errors, [])
+
+    def test_historical_baseline_mutations_break_their_bound_surfaces(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
         changed = json.loads(json.dumps(contract))
-        changed["stable_public_version"] = SOURCE_CANDIDATE_VERSION
+        changed["public_report_version"] = STABLE_PUBLIC_VERSION
         errors = documentation_gate.validate_active_public_surfaces(
             REPO_ROOT,
             changed,
             documentation_gate.cobra_commands(REPO_ROOT),
             documentation_gate.config_schema(REPO_ROOT),
             changed["forbidden_phrases"],
-            SOURCE_CANDIDATE_VERSION,
         )
         self.assertTrue(
             any("report path is not bound" in error for error in errors), errors
         )
         self.assertTrue(any("exact release gate" in error for error in errors), errors)
 
+        changed["operational_wiki_baseline_version"] = STABLE_PUBLIC_VERSION
         matrix_errors = documentation_gate.validate_package_source_contract(
             REPO_ROOT,
             changed["package_platform_contract"],
-            SOURCE_CANDIDATE_VERSION,
+            documentation_gate.operational_wiki_baseline_version(changed),
         )
         self.assertTrue(
             any("package table contract" in error for error in matrix_errors),
@@ -517,7 +726,7 @@ class DocumentationGateTest(unittest.TestCase):
         package_contract = contract["package_platform_contract"]
         self.assertEqual(
             documentation_gate.validate_package_source_contract(
-                REPO_ROOT, package_contract, STABLE_PUBLIC_VERSION
+                REPO_ROOT, package_contract, OPERATIONAL_WIKI_BASELINE_VERSION
             ),
             [],
         )
@@ -550,7 +759,7 @@ class DocumentationGateTest(unittest.TestCase):
         changed = json.loads(json.dumps(package_contract))
         changed["artifacts"][0]["architecture"] = "s390x"
         errors = documentation_gate.validate_package_source_contract(
-            REPO_ROOT, changed, STABLE_PUBLIC_VERSION
+            REPO_ROOT, changed, OPERATIONAL_WIKI_BASELINE_VERSION
         )
         self.assertTrue(any("naming/architecture mismatch" in error for error in errors))
 
@@ -577,7 +786,6 @@ class DocumentationGateTest(unittest.TestCase):
                 documentation_gate.cobra_commands(REPO_ROOT),
                 documentation_gate.config_schema(REPO_ROOT),
                 contract["forbidden_phrases"],
-                SOURCE_CANDIDATE_VERSION,
             )
         self.assertTrue(any("retired platform" in error for error in errors))
 
@@ -902,10 +1110,14 @@ class DocumentationGateTest(unittest.TestCase):
     def test_version_specific_wiki_page_keeps_its_canonical_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             wiki_root = Path(directory)
+            self._write_current_wiki_shell(wiki_root, "v4.03.3", "v4.03.3")
             (wiki_root / "Home.md").write_text(
                 "# Home\n\n"
                 "> Status: Current\n"
                 "> Documentation baseline: v4.03.3\n\n"
+                "[Deployment](Deployment-Tutorial)\n"
+                "[RHEL image extensions](RHEL-9-Image-Extensions)\n"
+                "[Use cases](Use-cases)\n"
                 "[Historical migration](Migration-v4.02.8-to-v4.03.2)\n"
                 "[Version-specific current migration](Migration-v4.03.2-to-v4.03.3)\n",
                 encoding="utf-8",
@@ -929,6 +1141,8 @@ class DocumentationGateTest(unittest.TestCase):
                 set(),
                 [],
                 "v4.03.3",
+                "v4.03.3",
+                documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES,
                 {},
             )
         self.assertEqual(errors, [])
@@ -949,6 +1163,8 @@ class DocumentationGateTest(unittest.TestCase):
                 set(),
                 [],
                 "v4.03.3",
+                "v4.03.3",
+                documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES,
                 {},
             )
         self.assertTrue(
@@ -958,13 +1174,13 @@ class DocumentationGateTest(unittest.TestCase):
             )
         )
 
-    def test_current_wiki_remains_bound_to_the_stable_public_version(self) -> None:
+    def test_wiki_home_remains_bound_to_the_stable_public_version(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             wiki_root = Path(directory)
             (wiki_root / "Home.md").write_text(
                 "# Home\n\n"
                 "> Status: Current\n"
-                f"> Documentation baseline: {SOURCE_CANDIDATE_VERSION}\n",
+                f"> Documentation baseline: {PUBLIC_REPORT_VERSION}\n",
                 encoding="utf-8",
             )
             errors = documentation_gate.validate_wiki(
@@ -974,12 +1190,200 @@ class DocumentationGateTest(unittest.TestCase):
                 set(),
                 [],
                 STABLE_PUBLIC_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+                documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES,
                 {},
             )
         self.assertTrue(
             any(
-                f"current page baseline {SOURCE_CANDIDATE_VERSION} does not match "
+                f"current page baseline {PUBLIC_REPORT_VERSION} does not match "
                 f"{STABLE_PUBLIC_VERSION}" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_wiki_home_archive_and_old_baseline_are_both_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wiki_root = Path(directory)
+            self._write_current_wiki_shell(
+                wiki_root,
+                STABLE_PUBLIC_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+            )
+            home = wiki_root / "Home.md"
+            home.write_text(
+                home.read_text(encoding="utf-8")
+                .replace("> Status: Current", "> Status: Archive")
+                .replace(
+                    f"> Documentation baseline: {STABLE_PUBLIC_VERSION}",
+                    f"> Documentation baseline: {PUBLIC_REPORT_VERSION}",
+                ),
+                encoding="utf-8",
+            )
+            errors = documentation_gate.validate_wiki(
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                set(),
+                set(),
+                [],
+                STABLE_PUBLIC_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+                documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES,
+                {},
+            )
+        self.assertTrue(
+            any("Home.md: reviewed page must declare Status: Current" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any(
+                f"current page baseline {PUBLIC_REPORT_VERSION} does not match "
+                f"{STABLE_PUBLIC_VERSION}" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_wiki_home_rejects_stale_current_claims_but_allows_bounded_history(
+        self,
+    ) -> None:
+        stale = "v4.03.3 is the current stable public release.\n"
+        errors = documentation_gate.validate_markdown(
+            Path("Home.md"),
+            stale,
+            set(),
+            set(),
+            [],
+            STABLE_PUBLIC_VERSION,
+            None,
+        )
+        self.assertTrue(
+            any(
+                f"non-current version {PUBLIC_REPORT_VERSION}" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+        for bounded in (
+            "The historical v4.03.3 readiness report remains immutable.\n",
+            "The version-specific v4.03.3 migration remains available.\n",
+        ):
+            with self.subTest(bounded=bounded):
+                errors = documentation_gate.validate_markdown(
+                    Path("Home.md"),
+                    bounded,
+                    set(),
+                    set(),
+                    [],
+                    STABLE_PUBLIC_VERSION,
+                    None,
+                )
+                self.assertFalse(
+                    any("non-current version" in error for error in errors),
+                    errors,
+                )
+
+    def test_non_home_current_page_uses_the_operational_wiki_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wiki_root = Path(directory)
+            self._write_current_wiki_shell(
+                wiki_root,
+                STABLE_PUBLIC_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+            )
+            errors = documentation_gate.validate_wiki(
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                set(),
+                set(),
+                [],
+                STABLE_PUBLIC_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+                documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES,
+                {},
+            )
+        self.assertEqual(errors, [])
+
+    def test_operational_page_archive_and_stable_baseline_are_both_rejected(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wiki_root = Path(directory)
+            self._write_current_wiki_shell(
+                wiki_root,
+                STABLE_PUBLIC_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+            )
+            deployment = wiki_root / "Deployment-Tutorial.md"
+            deployment.write_text(
+                "# Deployment\n\n"
+                "> Status: Archive\n"
+                f"> Documentation baseline: {STABLE_PUBLIC_VERSION}\n",
+                encoding="utf-8",
+            )
+            errors = documentation_gate.validate_wiki(
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                set(),
+                set(),
+                [],
+                STABLE_PUBLIC_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+                documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES,
+                {},
+            )
+        self.assertTrue(
+            any(
+                "Deployment-Tutorial.md: reviewed page must declare Status: Current"
+                in error
+                for error in errors
+            ),
+            errors,
+        )
+        self.assertTrue(
+            any(
+                f"current page baseline {STABLE_PUBLIC_VERSION} does not match "
+                f"{OPERATIONAL_WIKI_BASELINE_VERSION}" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_unreviewed_extra_page_cannot_declare_current_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wiki_root = Path(directory)
+            self._write_current_wiki_shell(
+                wiki_root,
+                STABLE_PUBLIC_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+            )
+            home = wiki_root / "Home.md"
+            home.write_text(
+                home.read_text(encoding="utf-8") + "- [Extra](Extra)\n",
+                encoding="utf-8",
+            )
+            (wiki_root / "Extra.md").write_text(
+                "# Extra\n\n"
+                "> Status: Current\n"
+                "> Documentation baseline: v9.99.9\n",
+                encoding="utf-8",
+            )
+            errors = documentation_gate.validate_wiki(
+                wiki_root,
+                documentation_gate.inventory(wiki_root, "test wiki"),
+                set(),
+                set(),
+                [],
+                STABLE_PUBLIC_VERSION,
+                OPERATIONAL_WIKI_BASELINE_VERSION,
+                documentation_gate.CURRENT_OPERATIONAL_WIKI_PAGES,
+                {},
+            )
+        self.assertTrue(
+            any(
+                "Extra.md: unreviewed page must not declare Status: Current" in error
                 for error in errors
             ),
             errors,

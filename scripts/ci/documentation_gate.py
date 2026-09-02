@@ -76,6 +76,13 @@ REQUIRED_OPERATIONAL_WIKI_PAGES = frozenset(
         "RHEL-9-Image-Extensions.md",
     }
 )
+CURRENT_OPERATIONAL_WIKI_PAGES = frozenset(
+    {
+        "Deployment-Tutorial.md",
+        "RHEL-9-Image-Extensions.md",
+        "Use-cases.md",
+    }
+)
 FRENCH_RE = re.compile(
     r"[àâçéèêëîïôùûüÿœ]|\b(?:aucune|ceci|cliquez|doit|français|"
     r"installation\s+sécurisée|mise\s+à\s+jour|paramètres|pré-requis|"
@@ -464,6 +471,86 @@ def stable_public_version(contract: dict[str, object]) -> str:
     return value
 
 
+def public_report_version(contract: dict[str, object]) -> str:
+    """Return the immutable detailed public-report release or fail closed."""
+
+    value = contract.get("public_report_version")
+    if not isinstance(value, str) or VERSION_RE.fullmatch(value) is None:
+        raise DocumentationGateError(
+            "documentation contract public_report_version must be a canonical "
+            "version such as v4.03.3"
+        )
+    return value
+
+
+def operational_wiki_baseline_version(contract: dict[str, object]) -> str:
+    """Return the reviewed operational-wiki baseline or fail closed."""
+
+    value = contract.get("operational_wiki_baseline_version")
+    if not isinstance(value, str) or VERSION_RE.fullmatch(value) is None:
+        raise DocumentationGateError(
+            "documentation contract operational_wiki_baseline_version must be a "
+            "canonical version such as v4.03.3"
+        )
+    return value
+
+
+def current_operational_wiki_pages(
+    contract: dict[str, object],
+) -> frozenset[str]:
+    """Return the exact reviewed Current operational page inventory."""
+
+    value = contract.get("current_operational_wiki_pages")
+    if not isinstance(value, list) or not value:
+        raise DocumentationGateError(
+            "documentation contract current_operational_wiki_pages must be a "
+            "non-empty list"
+        )
+    if not all(isinstance(page, str) and page for page in value):
+        raise DocumentationGateError(
+            "documentation contract current_operational_wiki_pages must contain "
+            "non-empty string names"
+        )
+    if len(value) != len(set(value)):
+        raise DocumentationGateError(
+            "documentation contract current_operational_wiki_pages contains duplicates"
+        )
+    invalid = sorted(
+        page
+        for page in value
+        if not page.endswith(".md")
+        or "/" in page
+        or "\\" in page
+        or Path(page).name != page
+    )
+    if invalid:
+        raise DocumentationGateError(
+            "documentation contract current_operational_wiki_pages must contain "
+            f"flat .md names; invalid={invalid}"
+        )
+    pages = frozenset(value)
+    if pages != CURRENT_OPERATIONAL_WIKI_PAGES:
+        raise DocumentationGateError(
+            "documentation contract current_operational_wiki_pages differs from "
+            "the reviewed exact set; "
+            f"expected={sorted(CURRENT_OPERATIONAL_WIKI_PAGES)}, "
+            f"actual={sorted(pages)}"
+        )
+    required_phrases = contract.get("required_wiki_phrases")
+    if not isinstance(required_phrases, dict):
+        raise DocumentationGateError(
+            "documentation contract required_wiki_phrases must be an object before "
+            "current operational pages can be validated"
+        )
+    missing = pages - set(required_phrases)
+    if missing:
+        raise DocumentationGateError(
+            "current operational wiki pages are missing required phrase contracts: "
+            f"{sorted(missing)}"
+        )
+    return pages
+
+
 def version_components(version: str) -> tuple[int, int, int]:
     """Return numeric version components for an already canonical version."""
 
@@ -490,6 +577,32 @@ def validate_public_version_order(
             f"source={source_candidate_version}"
         ]
     return []
+
+
+def validate_documentation_version_order(
+    source_candidate_version: str,
+    stable_version: str,
+    report_version: str,
+    operational_wiki_version: str,
+) -> list[str]:
+    """Reject any report or wiki baseline newer than the stable release."""
+
+    errors = validate_public_version_order(source_candidate_version, stable_version)
+    try:
+        stable_components = version_components(stable_version)
+        baselines = (
+            ("public_report_version", report_version),
+            ("operational_wiki_baseline_version", operational_wiki_version),
+        )
+        for key, value in baselines:
+            if version_components(value) > stable_components:
+                errors.append(
+                    f"documentation contract {key} cannot be newer than "
+                    f"stable_public_version; {key}={value}, stable={stable_version}"
+                )
+    except DocumentationGateError as exc:
+        errors.append(str(exc))
+    return errors
 
 
 def extract_fenced_blocks(text: str, label: str, errors: list[str]) -> list[tuple[str, str]]:
@@ -861,18 +974,14 @@ def validate_active_public_surfaces(
     known_commands: set[str],
     known_config_keys: set[str],
     forbidden_phrases: Iterable[str],
-    source_candidate_version: str,
 ) -> list[str]:
-    """Validate candidate surfaces and the exact stable public release record."""
+    """Validate candidate surfaces and the immutable detailed release record."""
 
     errors: list[str] = []
     try:
-        public_version = stable_public_version(contract)
+        report_version = public_report_version(contract)
     except DocumentationGateError as exc:
         return [str(exc)]
-    errors.extend(
-        validate_public_version_order(source_candidate_version, public_version)
-    )
     surface = contract.get("active_surface_contract")
     report_contract = contract.get("public_report_contract")
     if not isinstance(surface, dict):
@@ -911,11 +1020,11 @@ def validate_active_public_surfaces(
             )
             report_path = report_contract.get("path")
             expected_report_path = (
-                f"docs/reports/PUBLIC_RELEASE_READINESS_REPORT_{public_version}.md"
+                f"docs/reports/PUBLIC_RELEASE_READINESS_REPORT_{report_version}.md"
             )
             if report_path != expected_report_path:
                 errors.append(
-                    "public report path is not bound to stable_public_version; "
+                    "public report path is not bound to public_report_version; "
                     f"expected={expected_report_path!r}, actual={report_path!r}"
                 )
             expected_reports = [report_path] if isinstance(report_path, str) else []
@@ -938,7 +1047,7 @@ def validate_active_public_surfaces(
                 known_commands,
                 known_config_keys,
                 [*forbidden_phrases, *CURRENT_SURFACE_RETIRED_TERMS],
-                public_version,
+                report_version,
                 None,
             )
         )
@@ -952,14 +1061,14 @@ def validate_active_public_surfaces(
                 require_phrases(
                     report,
                     required,
-                    public_version,
+                    report_version,
                     report_relative,
-                    stable_public_version_value=public_version,
+                    stable_public_version_value=report_version,
                 )
             )
 
         expected_assets = report_contract.get("expected_assets")
-        release_assets = release_gate.expected_release_assets(public_version)
+        release_assets = release_gate.expected_release_assets(report_version)
         if not isinstance(expected_assets, list) or not all(
             isinstance(asset, str) and asset for asset in expected_assets
         ):
@@ -1035,10 +1144,10 @@ def validate_active_public_surfaces(
 
     package_count = surface.get("package_count")
     asset_count = surface.get("public_asset_count")
-    release_version = public_version.removeprefix("v")
+    release_version = report_version.removeprefix("v")
     if package_count != 3 or len(release_gate.package_names(release_version)) != 3:
         errors.append("active surface package count must equal the three-package release gate")
-    if asset_count != 10 or len(release_gate.expected_release_assets(public_version)) != 10:
+    if asset_count != 10 or len(release_gate.expected_release_assets(report_version)) != 10:
         errors.append("active surface asset count must equal the ten-asset release gate")
     return errors
 
@@ -1279,6 +1388,9 @@ def load_contract(repo_root: Path) -> dict[str, object]:
     if not isinstance(contract, dict) or contract.get("schema_version") != 1:
         raise DocumentationGateError("unsupported documentation contract schema")
     stable_public_version(contract)
+    public_report_version(contract)
+    operational_wiki_baseline_version(contract)
+    current_operational_wiki_pages(contract)
     return contract
 
 
@@ -1403,13 +1515,22 @@ def validate_wiki(
     known_commands: set[str],
     known_config_keys: set[str],
     forbidden_phrases: Iterable[str],
-    version: str,
+    stable_version: str,
+    operational_baseline_version: str,
+    current_operational_pages: frozenset[str],
     required_phrases: object,
 ) -> list[str]:
     errors: list[str] = []
     markdown_records = [record for record in records if record.path.endswith(".md")]
     if not markdown_records:
         return [f"wiki contains no Markdown pages: {wiki_root}"]
+    markdown_paths = {record.path for record in markdown_records}
+    missing_current_pages = current_operational_pages - markdown_paths
+    if missing_current_pages:
+        errors.append(
+            "wiki inventory is missing reviewed Current operational pages: "
+            f"{sorted(missing_current_pages)}"
+        )
     home_path = wiki_root / "Home.md"
     if not home_path.is_file():
         errors.append(f"wiki Home.md is missing: {wiki_root}")
@@ -1427,6 +1548,23 @@ def validate_wiki(
         )
         if status_match is None:
             errors.append(f"{path}: missing reviewed wiki status banner")
+        required_current = (
+            record.path == "Home.md" or record.path in current_operational_pages
+        )
+        if (
+            status_match is not None
+            and status_match.group(1) == "Current"
+            and not required_current
+        ):
+            errors.append(
+                f"{path}: unreviewed page must not declare Status: Current"
+            )
+        if (
+            required_current
+            and status_match is not None
+            and status_match.group(1) != "Current"
+        ):
+            errors.append(f"{path}: reviewed page must declare Status: Current")
         baseline_match = re.search(
             r"^> Documentation baseline: (v[0-9]+\.[0-9]{2}\.[0-9]+)\s*$",
             text,
@@ -1434,16 +1572,22 @@ def validate_wiki(
         )
         if baseline_match is None:
             errors.append(f"{path}: missing canonical documentation baseline banner")
-            document_version = version
+            document_version = (
+                stable_version
+                if record.path == "Home.md"
+                else operational_baseline_version
+            )
         else:
             document_version = baseline_match.group(1)
-            if (
-                status_match is not None
-                and status_match.group(1) == "Current"
-                and document_version != version
-            ):
+            expected_current_version = (
+                stable_version
+                if record.path == "Home.md"
+                else operational_baseline_version
+            )
+            if required_current and document_version != expected_current_version:
                 errors.append(
-                    f"{path}: current page baseline {document_version} does not match {version}"
+                    f"{path}: current page baseline {document_version} does not match "
+                    f"{expected_current_version}"
                 )
         errors.extend(
             validate_markdown(
@@ -1510,6 +1654,9 @@ def validate_repository(
     contract = load_contract(repo_root)
     version = source_version(repo_root)
     public_version = stable_public_version(contract)
+    report_version = public_report_version(contract)
+    operational_wiki_version = operational_wiki_baseline_version(contract)
+    current_wiki_pages = current_operational_wiki_pages(contract)
     source_commands = cobra_commands(repo_root)
     snapshot_records = snapshot_command_records(repo_root)
     baseline_metadata = contract.get("cli_baseline", {})
@@ -1525,7 +1672,14 @@ def validate_repository(
     commands = snapshots
     config_keys = config_schema(repo_root)
     errors: list[str] = []
-    errors.extend(validate_public_version_order(version, public_version))
+    errors.extend(
+        validate_documentation_version_order(
+            version,
+            public_version,
+            report_version,
+            operational_wiki_version,
+        )
+    )
     errors.extend(validate_cli_baseline_metadata(repo_root, contract, version))
     expected_snapshot_commands = source_commands | {"completion", "help"}
     if expected_snapshot_commands != snapshots:
@@ -1578,7 +1732,7 @@ def validate_repository(
         )
     errors.extend(
         validate_package_source_contract(
-            repo_root, package_platform_contract, public_version
+            repo_root, package_platform_contract, operational_wiki_version
         )
     )
 
@@ -1667,7 +1821,6 @@ def validate_repository(
             commands,
             config_keys,
             forbidden,
-            version,
         )
     )
 
@@ -1709,6 +1862,8 @@ def validate_repository(
                 config_keys,
                 current_forbidden,
                 public_version,
+                operational_wiki_version,
+                current_wiki_pages,
                 wiki_required,
             )
         )

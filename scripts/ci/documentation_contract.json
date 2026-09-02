@@ -1,6 +1,13 @@
 {
   "schema_version": 1,
-  "stable_public_version": "v4.03.3",
+  "stable_public_version": "v4.04.2",
+  "public_report_version": "v4.03.3",
+  "operational_wiki_baseline_version": "v4.03.3",
+  "current_operational_wiki_pages": [
+    "Deployment-Tutorial.md",
+    "RHEL-9-Image-Extensions.md",
+    "Use-cases.md"
+  ],
   "cli_baseline": {
     "version": "v4.02.8",
     "commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
@@ -95,7 +102,9 @@
   ],
   "required_wiki_phrases": {
     "Home.md": [
-      "The {stable_public_version} contract targets three candidate Linux packages:",
+      "{stable_public_version} is the latest qualified, stable public release.",
+      "The {stable_public_version} release is public, stable, non-draft and non-prerelease.",
+      "The {stable_public_version} public release contains three Linux packages:",
       "The complete public Release contains exactly ten assets: the three packages,",
       "No package, updater or qualification route exists outside this AMD64/x86_64 Linux matrix.",
       "The optional RHEL-compatible image staging extension is additive",
