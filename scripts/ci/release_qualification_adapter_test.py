@@ -60,6 +60,44 @@ def replace_snapshot_identity_maps(
                 boot[phase]["pid1_gid_map"] = copy.deepcopy(gid_map)
 
 
+def rewrite_runtime_file_identity(
+    value: str,
+    *,
+    device: int | None = None,
+    inode: int | None = None,
+    mode: str | None = None,
+    uid: int | None = None,
+    gid: int | None = None,
+    sha256: str | None = None,
+) -> str:
+    metadata, digest = value.split("|", 1)
+    fields = metadata.split(":")
+    if len(fields) != 5:
+        raise AssertionError(f"unexpected runtime file identity: {value}")
+    original_device, original_inode, original_mode, original_uid, original_gid = fields
+    return "{}:{}:{}:{}:{}|{}".format(
+        original_device if device is None else device,
+        original_inode if inode is None else inode,
+        original_mode if mode is None else mode,
+        original_uid if uid is None else uid,
+        original_gid if gid is None else gid,
+        digest if sha256 is None else sha256,
+    )
+
+
+def mutate_scenario_runtime_snapshots(
+    platform: dict[str, Any],
+    scenario_name: str,
+    mutation: Any,
+) -> None:
+    scenario = next(
+        item for item in platform["scenarios"] if item["name"] == scenario_name
+    )
+    for boot in scenario["boots"]:
+        for phase in ("pre_exec", "post_exec"):
+            mutation(boot[phase])
+
+
 class AdapterFixture:
     version = "v4.04.2"
     previous_version = "v4.03.3"
@@ -462,6 +500,21 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                 adapter.run_build(args)
             else:
                 adapter.run_verify(args)
+
+    def lifecycle_claim_platform(
+        self, cell_id: str = "DEB-13"
+    ) -> tuple[dict[str, Any], package_lifecycle_lab.PlatformSpec]:
+        report = self.fixture.load_raw("package-lifecycle-raw.json")
+        platform = copy.deepcopy(
+            next(item for item in report["platforms"] if item["cell_id"] == cell_id)
+        )
+        spec = next(
+            item
+            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if item.cell_id == platform["cell_id"]
+            and item.architecture == platform["architecture_id"]
+        )
+        return platform, spec
 
     def test_nft_source_bindings_match_the_lab_exactly(self) -> None:
         self.assertEqual(
@@ -1545,6 +1598,163 @@ class ReleaseQualificationAdapterTests(unittest.TestCase):
                     changed_platform, spec
                 )
                 self.assertFalse(changed[claim])
+
+    def test_active_service_manager_accepts_container_local_device_and_inode(
+        self,
+    ) -> None:
+        platform, spec = self.lifecycle_claim_platform()
+
+        for scenario_index, scenario in enumerate(platform["scenarios"], start=1):
+            device = 700 + scenario_index
+            inode_offset = scenario_index * 100_000
+
+            def rewrite_snapshot(
+                snapshot: dict[str, Any],
+                *,
+                scenario_device: int = device,
+                scenario_inode_offset: int = inode_offset,
+            ) -> None:
+                for key in (
+                    "cron_executable_identity",
+                    "cron_fragment_identity",
+                ):
+                    original = snapshot[key]
+                    inode = int(original.split("|", 1)[0].split(":")[1])
+                    snapshot[key] = rewrite_runtime_file_identity(
+                        original,
+                        device=scenario_device,
+                        inode=inode + scenario_inode_offset,
+                    )
+
+            mutate_scenario_runtime_snapshots(
+                platform,
+                scenario["name"],
+                rewrite_snapshot,
+            )
+
+        claims = adapter._derive_platform_lifecycle_claims(platform, spec)
+        self.assertTrue(claims["active_service_manager"])
+        self.assertTrue(all(claims.values()))
+
+    def test_active_service_manager_rejects_identity_drift_inside_scenario(
+        self,
+    ) -> None:
+        platform, spec = self.lifecycle_claim_platform()
+        scenario = next(
+            item
+            for item in platform["scenarios"]
+            if item["name"] == "upgrade-rollback"
+        )
+        snapshot = scenario["boots"][0]["post_exec"]
+        for key in ("cron_executable_identity", "cron_fragment_identity"):
+            original = snapshot[key]
+            metadata = original.split("|", 1)[0].split(":")
+            snapshot[key] = rewrite_runtime_file_identity(
+                original,
+                device=int(metadata[0]) + 1,
+                inode=int(metadata[1]) + 1,
+            )
+
+        claims = adapter._derive_platform_lifecycle_claims(platform, spec)
+        self.assertFalse(claims["active_service_manager"])
+
+    def test_active_service_manager_rejects_cross_scenario_stable_drift(
+        self,
+    ) -> None:
+        platform, spec = self.lifecycle_claim_platform()
+        stable_mutations = {
+            "executable-mode": lambda snapshot: snapshot.__setitem__(
+                "cron_executable_identity",
+                rewrite_runtime_file_identity(
+                    snapshot["cron_executable_identity"], mode="81ec"
+                ),
+            ),
+            "executable-uid": lambda snapshot: snapshot.__setitem__(
+                "cron_executable_identity",
+                rewrite_runtime_file_identity(
+                    snapshot["cron_executable_identity"], uid=1
+                ),
+            ),
+            "executable-gid": lambda snapshot: snapshot.__setitem__(
+                "cron_executable_identity",
+                rewrite_runtime_file_identity(
+                    snapshot["cron_executable_identity"], gid=1
+                ),
+            ),
+            "executable-sha256": lambda snapshot: snapshot.__setitem__(
+                "cron_executable_identity",
+                rewrite_runtime_file_identity(
+                    snapshot["cron_executable_identity"], sha256="f" * 64
+                ),
+            ),
+            "fragment-mode": lambda snapshot: snapshot.__setitem__(
+                "cron_fragment_identity",
+                rewrite_runtime_file_identity(
+                    snapshot["cron_fragment_identity"], mode="81a0"
+                ),
+            ),
+            "fragment-uid": lambda snapshot: snapshot.__setitem__(
+                "cron_fragment_identity",
+                rewrite_runtime_file_identity(
+                    snapshot["cron_fragment_identity"], uid=1
+                ),
+            ),
+            "fragment-gid": lambda snapshot: snapshot.__setitem__(
+                "cron_fragment_identity",
+                rewrite_runtime_file_identity(
+                    snapshot["cron_fragment_identity"], gid=1
+                ),
+            ),
+            "fragment-sha256": lambda snapshot: snapshot.__setitem__(
+                "cron_fragment_identity",
+                rewrite_runtime_file_identity(
+                    snapshot["cron_fragment_identity"], sha256="e" * 64
+                ),
+            ),
+            "malformed-executable-identity": lambda snapshot: snapshot.__setitem__(
+                "cron_executable_identity", "malformed"
+            ),
+            "executable-path": lambda snapshot: snapshot.__setitem__(
+                "cron_executable_path", "/usr/local/sbin/cron"
+            ),
+            "fragment-path": lambda snapshot: snapshot.__setitem__(
+                "cron_fragment_path", "/etc/systemd/system/cron.service"
+            ),
+            "drop-in-paths": lambda snapshot: snapshot.__setitem__(
+                "cron_dropin_paths",
+                ["/etc/systemd/system/cron.service.d/unexpected.conf"],
+            ),
+            "package-name": lambda snapshot: snapshot.__setitem__(
+                "cron_package_name", "cron-other"
+            ),
+            "package-version": lambda snapshot: snapshot.__setitem__(
+                "cron_package_version", "3.0pl1-198"
+            ),
+            "package-architecture": lambda snapshot: snapshot.__setitem__(
+                "cron_package_architecture", "arm64"
+            ),
+            "fragment-package-name": lambda snapshot: snapshot.__setitem__(
+                "cron_fragment_package_name", "cron-other"
+            ),
+            "fragment-package-version": lambda snapshot: snapshot.__setitem__(
+                "cron_fragment_package_version", "3.0pl1-198"
+            ),
+            "fragment-package-architecture": lambda snapshot: snapshot.__setitem__(
+                "cron_fragment_package_architecture", "arm64"
+            ),
+        }
+        for name, mutation in stable_mutations.items():
+            with self.subTest(stable_drift=name):
+                changed_platform = copy.deepcopy(platform)
+                mutate_scenario_runtime_snapshots(
+                    changed_platform,
+                    "remove",
+                    mutation,
+                )
+                claims = adapter._derive_platform_lifecycle_claims(
+                    changed_platform, spec
+                )
+                self.assertFalse(claims["active_service_manager"])
 
     def test_raw_v5_matrix_engine_helper_cleanup_and_native_records_are_exact(self) -> None:
         original = self.fixture.load_raw("package-lifecycle-raw.json")
