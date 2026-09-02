@@ -8133,7 +8133,7 @@ probe
                 for label in upgrade_labels
             ),
             *(
-                ("upgrade-rollback", "4.03.3", "4.04.0", label, "..")
+                ("upgrade-rollback", "4.03.3", "4.04.1", label, "..")
                 for label in upgrade_labels
             ),
             ("remove", "4.03.2", "4.03.3", "fresh", ".."),
@@ -9813,7 +9813,7 @@ assert_all_state_preserved "$1"
         self.assertIn("if v4028_to_v4032_transition_selected; then", contract)
         self.assertIn(
             "elif v4032_to_v4033_transition_selected || \\\n"
-            "         v4033_to_v4040_transition_selected; then",
+            "         v4033_to_v4041_transition_selected; then",
             contract,
         )
         self.assertIn("historical-webtui-credential", contract)
@@ -9876,7 +9876,7 @@ assert_all_state_preserved "$1"
             (
                 "upgrade-rollback",
                 "4.03.3",
-                "4.04.0",
+                "4.04.1",
                 family,
                 "rollback",
                 "byte-exact",
@@ -10199,7 +10199,7 @@ assert_preserved rollback token "$1" "$2" 640
         )
         self.assertIn(
             "if v4032_to_v4033_upgrade_selected || \\\n"
-            "           v4033_to_v4040_upgrade_selected; then\n"
+            "           v4033_to_v4041_upgrade_selected; then\n"
             "            attest_previous_webtui_retirement || \\\n"
             "                mark_postinstall_failure previous-webtui-retirement\n"
             "        else",
@@ -10343,19 +10343,19 @@ attest_v4032_previous_webtui_retirement "${TEST_ROOT}" "${TEST_ROOT}/proc"
                     0,
                 )
 
-    def test_v4033_to_v4040_previous_webtui_absence_is_exact_and_fail_closed(
+    def test_v4033_to_v4041_previous_webtui_absence_is_exact_and_fail_closed(
         self,
     ) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
         transition_start = source.index(
-            "v4033_to_v4040_transition_selected() {"
+            "v4033_to_v4041_transition_selected() {"
         )
         transition_end = source.index(
             "\n}\n\nexpected_systemd_enablement_prefix() {",
             transition_start,
         ) + 2
         transition = source[transition_start:transition_end]
-        selector_start = source.index("v4033_to_v4040_upgrade_selected() {")
+        selector_start = source.index("v4033_to_v4041_upgrade_selected() {")
         selector_end = source.index(
             "\n}\n\nattest_previous_webtui_retirement() {",
             selector_start,
@@ -10376,12 +10376,12 @@ attest_v4032_previous_webtui_retirement "${TEST_ROOT}" "${TEST_ROOT}/proc"
         self.assertIn(
             '[ "${SCENARIO}" = upgrade-rollback ] && \\\n'
             '        [ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.3 ] && \\\n'
-            '        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.04.0 ]',
+            '        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.04.1 ]',
             transition,
         )
         self.assertIn(
-            "v4033_to_v4040_upgrade_selected() {\n"
-            "    v4033_to_v4040_transition_selected && \\\n"
+            "v4033_to_v4041_upgrade_selected() {\n"
+            "    v4033_to_v4041_transition_selected && \\\n"
             '        [ "$(installed_version 2>/dev/null || true)" = 4.03.3 ]\n'
             "}",
             selector,
@@ -10393,7 +10393,7 @@ attest_v4032_previous_webtui_retirement "${TEST_ROOT}" "${TEST_ROOT}/proc"
         self.assertIn("syswarden_verify_no_exact_webtui_process \\", common)
         self.assertIn("for previous_webtui_port in 62027 62028", common)
         self.assertIn(
-            "if v4033_to_v4040_upgrade_selected; then\n"
+            "if v4033_to_v4041_upgrade_selected; then\n"
             "        attest_v4033_previous_webtui_retirement || return 1\n"
             "        return 0\n"
             "    fi",
@@ -10409,7 +10409,7 @@ attest_v4032_previous_webtui_retirement "${TEST_ROOT}" "${TEST_ROOT}/proc"
 installed_version() {
     printf '%s\n' "${TEST_INSTALLED_VERSION}"
 }
-v4033_to_v4040_upgrade_selected
+v4033_to_v4041_upgrade_selected
 '''
         )
 
@@ -10418,7 +10418,7 @@ v4033_to_v4040_upgrade_selected
                 **os.environ,
                 "SCENARIO": "upgrade-rollback",
                 "EXPECTED_PREVIOUS_VERSION": "4.03.3",
-                "EXPECTED_CANDIDATE_VERSION": "4.04.0",
+                "EXPECTED_CANDIDATE_VERSION": "4.04.1",
                 "TEST_INSTALLED_VERSION": "4.03.3",
             }
             environment.update(overrides or {})
@@ -10435,7 +10435,7 @@ v4033_to_v4040_upgrade_selected
         for label, overrides in (
             ("scenario", {"SCENARIO": "remove"}),
             ("previous", {"EXPECTED_PREVIOUS_VERSION": "4.03.2"}),
-            ("candidate", {"EXPECTED_CANDIDATE_VERSION": "4.04.1"}),
+            ("candidate", {"EXPECTED_CANDIDATE_VERSION": "4.04.0"}),
             ("installed", {"TEST_INSTALLED_VERSION": "4.03.2"}),
         ):
             with self.subTest(bound=label):
@@ -10634,7 +10634,7 @@ v4033_to_v4040_upgrade_selected
 
         exact_skip = (
             "if v4032_to_v4033_upgrade_selected || \\\n"
-            "       v4033_to_v4040_upgrade_selected; then\n"
+            "       v4033_to_v4041_upgrade_selected; then\n"
             "        return 0\n"
             "    fi"
         )
@@ -10733,7 +10733,7 @@ seed_live_legacy_webtui_process
                 current = run_case(
                     family=family,
                     previous="4.03.3",
-                    candidate="4.04.0",
+                    candidate="4.04.1",
                     installed="4.03.3",
                 )
                 self.assertEqual(current.returncode, 0, current.stderr)
