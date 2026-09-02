@@ -1434,12 +1434,92 @@ class PackageLifecycleLabTests(unittest.TestCase):
             {("deb", "amd64"), ("rpm", "x86_64"), ("apk", "x86_64")},
         )
         self.assertIn(
-            "sed -i '\\|^path-exclude /usr/share/doc/\\*$|d'",
+            "path-exclude([[:space:]]+|[[:space:]]*=[[:space:]]*)",
+            package_lifecycle_lab.DEB_BOOTSTRAP,
+        )
+        self.assertIn(
+            "for syswarden_dpkg_config in /etc/dpkg/dpkg.cfg.d/*; do",
+            package_lifecycle_lab.DEB_BOOTSTRAP,
+        )
+        self.assertIn(
+            '[ ! -L "${syswarden_dpkg_config}" ] || exit 1',
+            package_lifecycle_lab.DEB_BOOTSTRAP,
+        )
+        self.assertNotIn(
+            "if [ -f /etc/dpkg/dpkg.cfg.d/docker ]",
             package_lifecycle_lab.DEB_BOOTSTRAP,
         )
         self.assertIn("curl-minimal", package_lifecycle_lab.RPM_BOOTSTRAP)
         self.assertIn("diffutils", package_lifecycle_lab.RPM_BOOTSTRAP)
         self.assertNotIn(" ipset curl wget", package_lifecycle_lab.RPM_BOOTSTRAP)
+
+    def test_deb_bootstrap_removes_both_doc_path_exclude_syntaxes_only(
+        self,
+    ) -> None:
+        config_root = self.root / "dpkg.cfg.d"
+        config_root.mkdir()
+        docker_config = config_root / "docker"
+        excludes_config = config_root / "excludes"
+        other_config = config_root / "other"
+        docker_config.write_text(
+            "path-exclude /usr/share/doc/*\n"
+            "path-exclude=/usr/share/man/*\n"
+            "# path-exclude /usr/share/doc/*\n",
+            encoding="utf-8",
+        )
+        excludes_config.write_text(
+            "  path-exclude = /usr/share/doc/*\n"
+            "path-exclude /usr/share/doc-base/*\n",
+            encoding="utf-8",
+        )
+        other_original = (
+            "path-include=/usr/share/doc/syswarden/*\n"
+            "path-exclude /usr/share/locale/*\n"
+        )
+        other_config.write_text(other_original, encoding="utf-8")
+        production_root = "/etc/dpkg/dpkg.cfg.d"
+        cleanup = package_lifecycle_lab.DEB_BOOTSTRAP.split(
+            f"if [ -d {production_root} ]; then ", 1
+        )[1].split("; fi &&", 1)[0]
+        cleanup = cleanup.replace(
+            production_root,
+            shlex.quote(str(config_root)),
+        )
+        result = subprocess.run(
+            ["/bin/sh", "-eu", "-c", cleanup],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            docker_config.read_text(encoding="utf-8"),
+            "path-exclude=/usr/share/man/*\n"
+            "# path-exclude /usr/share/doc/*\n",
+        )
+        self.assertEqual(
+            excludes_config.read_text(encoding="utf-8"),
+            "path-exclude /usr/share/doc-base/*\n",
+        )
+        self.assertEqual(other_config.read_text(encoding="utf-8"), other_original)
+
+        operator_target = self.root / "operator-dpkg-config"
+        operator_target.write_text(
+            "path-exclude=/usr/share/doc/*\n",
+            encoding="utf-8",
+        )
+        config_root.joinpath("operator-link").symlink_to(operator_target)
+        rejected = subprocess.run(
+            ["/bin/sh", "-eu", "-c", cleanup],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(rejected.returncode, 0, rejected)
+        self.assertEqual(
+            operator_target.read_text(encoding="utf-8"),
+            "path-exclude=/usr/share/doc/*\n",
+        )
 
     def test_rejects_non_official_or_wrong_architecture_platform(self) -> None:
         baseline = package_lifecycle_lab.DEFAULT_PLATFORMS[0]
@@ -1620,8 +1700,8 @@ class PackageLifecycleLabTests(unittest.TestCase):
         self.assertNotIn("/opt/syswarden", containerfile)
         self.assertNotIn("COPY ", containerfile)
 
-    def test_fedora_mask_inventory_is_the_exact_seven_unit_set(self) -> None:
-        expected = (
+    def test_systemd_mask_inventories_are_exact_and_fail_closed(self) -> None:
+        fedora_expected = (
             "dbus-org.freedesktop.oom1.service",
             "dbus-org.freedesktop.resolve1.service",
             "systemd-oomd.service",
@@ -1630,116 +1710,235 @@ class PackageLifecycleLabTests(unittest.TestCase):
             "systemd-resolved-varlink.socket",
             "systemd-resolved.service",
         )
-        self.assertEqual(package_lifecycle_lab.FEDORA_LAB_MASKED_UNITS, expected)
+        ubuntu_base = (
+            "cryptdisks-early.service",
+            "cryptdisks.service",
+            "hwclock.service",
+            "x11-common.service",
+        )
+        ubuntu_targets = (
+            "dev-mqueue.mount",
+            "systemd-ask-password-console.path",
+            "systemd-ask-password-wall.path",
+        )
+        ubuntu_expected = (
+            "cryptdisks-early.service",
+            "cryptdisks.service",
+            "dev-mqueue.mount",
+            "hwclock.service",
+            "systemd-ask-password-console.path",
+            "systemd-ask-password-wall.path",
+            "x11-common.service",
+        )
+        debian_targets = (
+            "dev-mqueue.mount",
+            "run-lock.mount",
+            "tmp.mount",
+            "systemd-ask-password-console.path",
+            "systemd-ask-password-wall.path",
+        )
+        debian_expected = (
+            "cryptdisks-early.service",
+            "cryptdisks.service",
+            "dev-mqueue.mount",
+            "hwclock.service",
+            "run-lock.mount",
+            "systemd-ask-password-console.path",
+            "systemd-ask-password-wall.path",
+            "tmp.mount",
+            "x11-common.service",
+        )
+        self.assertEqual(
+            package_lifecycle_lab.FEDORA_LAB_MASKED_UNITS,
+            fedora_expected,
+        )
         self.assertEqual(
             package_lifecycle_lab.FEDORA_LAB_MASK_TARGETS,
-            expected[2:],
+            fedora_expected[2:],
         )
-        spec = next(
-            item
-            for item in package_lifecycle_lab.DEFAULT_PLATFORMS
-            if item.distribution == "fedora"
+        self.assertEqual(
+            package_lifecycle_lab.UBUNTU_2404_LAB_BASE_MASKED_UNITS,
+            ubuntu_base,
         )
-        containerfile = package_lifecycle_lab.build_containerfile(spec)
-        self.assertIn(
-            "RUN systemctl mask " + " ".join(expected[2:]) + "\n",
-            containerfile,
+        self.assertEqual(
+            package_lifecycle_lab.UBUNTU_2404_LAB_MASK_TARGETS,
+            ubuntu_targets,
         )
-        self.assertNotIn("systemctl mask dbus-org.", containerfile)
-        runtime = package_lifecycle_lab.runtime_namespace_script(spec)
-        expected_masks = "\n".join(expected)
-        self.assertIn(expected_masks, runtime)
-        self.assertNotIn("\\n".join(expected), runtime)
-        self.assertIn("list-unit-files --state=masked", runtime)
-        self.assertNotIn("grep -v", runtime)
-        for predicate in (
-            "NS01_HELPER_SHA",
-            "NS02_HELPER_STAT",
-            "NS03_ETH0_LINK",
-            "NS04_ETH0_DUMMY",
-            "NS05_ETH0_UP_SOURCE",
-            "NS06_ETH0_UP",
-            "NS07_UNIT_SHA",
-            "NS08_UNIT_STAT",
-            "NS09_NET_ENABLED",
-            "NS10_NET_ACTIVE",
-            "NS11_RSYSLOG_ENABLED",
-            "NS12_RSYSLOG_ACTIVE",
-            "NS13_FAILED_UNITS",
-            "NS14_FEDORA_MASKS",
-        ):
-            self.assertEqual(runtime.count(predicate), 1, predicate)
-        syntax = subprocess.run(
-            ["/bin/sh", "-n"],
-            input=package_lifecycle_lab._exec_security_guard_script(spec) + runtime,
-            text=True,
-            capture_output=True,
-            check=False,
+        self.assertEqual(
+            package_lifecycle_lab.UBUNTU_2404_LAB_MASKED_UNITS,
+            ubuntu_expected,
         )
-        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        self.assertEqual(
+            package_lifecycle_lab.DEBIAN_13_LAB_BASE_MASKED_UNITS,
+            ubuntu_base,
+        )
+        self.assertEqual(
+            package_lifecycle_lab.DEBIAN_13_LAB_MASK_TARGETS,
+            debian_targets,
+        )
+        self.assertEqual(
+            package_lifecycle_lab.DEBIAN_13_LAB_MASKED_UNITS,
+            debian_expected,
+        )
+        expected_targets = {
+            "DEB-13": debian_targets,
+            "DEB-U2404": ubuntu_targets,
+            "RPM-F44": fedora_expected[2:],
+        }
+        expected_inventories = {
+            "DEB-13": debian_expected,
+            "DEB-U2404": ubuntu_expected,
+            "RPM-F44": fedora_expected,
+        }
+        expected_predicates = {
+            "DEB-13": "NS14_DEBIAN_13_MASKS",
+            "DEB-U2404": "NS14_UBUNTU_2404_MASKS",
+            "RPM-F44": "NS14_FEDORA_MASKS",
+        }
+        self.assertEqual(
+            package_lifecycle_lab.SYSTEMD_LAB_MASK_TARGETS_BY_CELL,
+            expected_targets,
+        )
+        self.assertEqual(
+            package_lifecycle_lab.SYSTEMD_LAB_MASKED_UNITS_BY_CELL,
+            expected_inventories,
+        )
+        self.assertEqual(
+            package_lifecycle_lab.SYSTEMD_LAB_MASK_PREDICATES_BY_CELL,
+            expected_predicates,
+        )
+        for cell_id, targets in expected_targets.items():
+            with self.subTest(cell_id=cell_id):
+                expected = expected_inventories[cell_id]
+                predicate = expected_predicates[cell_id]
+                spec = next(
+                    item
+                    for item in package_lifecycle_lab.DEFAULT_PLATFORMS
+                    if item.cell_id == cell_id
+                )
+                containerfile = package_lifecycle_lab.build_containerfile(spec)
+                self.assertIn(
+                    "RUN systemctl mask " + " ".join(targets) + "\n",
+                    containerfile,
+                )
+                for inherited_mask in set(expected) - set(targets):
+                    self.assertNotIn(
+                        f"systemctl mask {inherited_mask}",
+                        containerfile,
+                    )
+                runtime = package_lifecycle_lab.runtime_namespace_script(spec)
+                expected_masks = "\n".join(expected)
+                self.assertIn(expected_masks, runtime)
+                self.assertNotIn("\\n".join(expected), runtime)
+                self.assertIn("list-unit-files --state=masked", runtime)
+                self.assertNotIn("grep -v", runtime)
+                for common_predicate in (
+                    "NS01_HELPER_SHA",
+                    "NS02_HELPER_STAT",
+                    "NS03_ETH0_LINK",
+                    "NS04_ETH0_DUMMY",
+                    "NS05_ETH0_UP_SOURCE",
+                    "NS06_ETH0_UP",
+                    "NS07_UNIT_SHA",
+                    "NS08_UNIT_STAT",
+                    "NS09_NET_ENABLED",
+                    "NS10_NET_ACTIVE",
+                    "NS11_RSYSLOG_ENABLED",
+                    "NS12_RSYSLOG_ACTIVE",
+                    "NS13_FAILED_UNITS",
+                    predicate,
+                ):
+                    self.assertEqual(
+                        runtime.count(common_predicate),
+                        1,
+                        common_predicate,
+                    )
+                syntax = subprocess.run(
+                    ["/bin/sh", "-n"],
+                    input=(
+                        package_lifecycle_lab._exec_security_guard_script(spec)
+                        + runtime
+                    ),
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
-        masks_start = runtime.rindex(
-            "syswarden_namespace_status=0\n", 0, runtime.index("actual_masks=")
-        )
-        masks_guard = runtime[masks_start:]
+                masks_start = runtime.rindex(
+                    "syswarden_namespace_status=0\n",
+                    0,
+                    runtime.index("actual_masks="),
+                )
+                masks_guard = runtime[masks_start:]
 
-        def attest_masks(value: str) -> subprocess.CompletedProcess[str]:
-            probe = (
-                package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
-                + "systemctl() { printf '%s\\n' \"${MASK_INVENTORY}\"; }\n"
-                + masks_guard
-            )
-            return subprocess.run(
-                ["/bin/sh", "-eu", "-c", probe],
-                env={**os.environ, "MASK_INVENTORY": value},
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+                def attest_masks(value: str) -> subprocess.CompletedProcess[str]:
+                    probe = (
+                        package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
+                        + "systemctl() { printf '%s\\n' "
+                        '"${MASK_INVENTORY}"; }\n'
+                        + masks_guard
+                    )
+                    return subprocess.run(
+                        ["/bin/sh", "-eu", "-c", probe],
+                        env={**os.environ, "MASK_INVENTORY": value},
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
 
-        canonical = attest_masks(expected_masks)
-        self.assertEqual(canonical.returncode, 0, canonical.stderr)
-        self.assertEqual(canonical.stdout, "")
-        self.assertEqual(canonical.stderr, "")
-        reordered = attest_masks(
-            "\n".join((expected[1], expected[0], *expected[2:]))
-        )
-        self.assertEqual(reordered.returncode, 0, reordered.stderr)
-        for label, adversarial in (
-            ("literal-backslash-n", "\\n".join(expected)),
-            ("missing", "\n".join(expected[:-1])),
-            ("extra", expected_masks + "\noperator.service"),
-            ("duplicate", expected_masks + "\n" + expected[-1]),
-        ):
-            with self.subTest(mask_inventory=label):
-                rejected = attest_masks(adversarial)
-                self.assertEqual(rejected.returncode, 1)
-                self.assertEqual(rejected.stdout, "")
+                canonical = attest_masks(expected_masks)
+                self.assertEqual(canonical.returncode, 0, canonical.stderr)
+                self.assertEqual(canonical.stdout, "")
+                self.assertEqual(canonical.stderr, "")
+                reordered = attest_masks("\n".join(reversed(expected)))
+                self.assertEqual(reordered.returncode, 0, reordered.stderr)
+                for label, adversarial in (
+                    ("literal-backslash-n", "\\n".join(expected)),
+                    ("missing", "\n".join(expected[:-1])),
+                    ("extra", expected_masks + "\noperator.service"),
+                    ("duplicate", expected_masks + "\n" + expected[-1]),
+                ):
+                    with self.subTest(
+                        cell_id=cell_id,
+                        mask_inventory=label,
+                    ):
+                        rejected = attest_masks(adversarial)
+                        self.assertEqual(rejected.returncode, 1)
+                        self.assertEqual(rejected.stdout, "")
+                        self.assertIn(
+                            package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
+                            + f"\tpredicate={predicate}\trc=0\t",
+                            rejected.stderr,
+                        )
+
+                command_failure_probe = (
+                    package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
+                    + "systemctl() { printf 'permission denied\\n'; "
+                    "return 7; }\n"
+                    + masks_guard
+                )
+                command_failure = subprocess.run(
+                    ["/bin/sh", "-eu", "-c", command_failure_probe],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(command_failure.returncode, 1)
                 self.assertIn(
                     package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
-                    + "\tpredicate=NS14_FEDORA_MASKS\trc=0\t",
-                    rejected.stderr,
+                    + f"\tpredicate={predicate}\trc=7"
+                    + "\tactual_bytes=17"
+                    + f"\tactual_hex_prefix={'permission denied'.encode().hex()}",
+                    command_failure.stderr,
                 )
 
-        command_failure_probe = (
-            package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
-            + "systemctl() { printf 'permission denied\\n'; return 7; }\n"
-            + masks_guard
-        )
-        command_failure = subprocess.run(
-            ["/bin/sh", "-eu", "-c", command_failure_probe],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(command_failure.returncode, 1)
-        self.assertIn(
-            package_lifecycle_lab.NAMESPACE_FAILURE_MARKER
-            + "\tpredicate=NS14_FEDORA_MASKS\trc=7"
-            + "\tactual_bytes=17"
-            + f"\tactual_hex_prefix={'permission denied'.encode().hex()}",
-            command_failure.stderr,
-        )
+        for spec in package_lifecycle_lab.DEFAULT_PLATFORMS:
+            if spec.family == "deb" and spec.cell_id not in expected_targets:
+                self.assertNotIn(
+                    "RUN systemctl mask ",
+                    package_lifecycle_lab.build_containerfile(spec),
+                )
 
     def test_namespace_failure_record_is_numbered_hex_and_injection_safe(
         self,
@@ -1855,6 +2054,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
         )
         containerfile = package_lifecycle_lab.build_containerfile(spec)
         self.assertIn("apk info -e 'openrc=0.62.6-r0'", containerfile)
+        self.assertIn("apk info -e 'openrc-init=0.62.6-r0'", containerfile)
         self.assertIn(package_lifecycle_lab.ALPINE_RC_CONF_PRE_SHA256, containerfile)
         self.assertIn(package_lifecycle_lab.ALPINE_RC_CONF_APPEND_BASE64, containerfile)
         self.assertIn(package_lifecycle_lab.ALPINE_RC_CONF_POST_SHA256, containerfile)
@@ -1894,6 +2094,7 @@ class PackageLifecycleLabTests(unittest.TestCase):
         runtime = package_lifecycle_lab.runtime_namespace_script(spec)
         for expected in (
             "openrc=0.62.6-r0",
+            "openrc-init=0.62.6-r0",
             package_lifecycle_lab.ALPINE_RC_CONF_POST_SHA256,
             package_lifecycle_lab.ALPINE_HOSTNAME_INIT_POST_SHA256,
             'container=podman',
@@ -1985,22 +2186,32 @@ class PackageLifecycleLabTests(unittest.TestCase):
             runtime_lines[apk_guard_start : apk_guard_end + 1]
         )
         self.assertIn("NS15_OPENRC_PACKAGE", apk_guard)
-        for output, command_status, accepted in (
-            ("openrc\n", 0, True),
-            ("openrc", 0, False),
-            ("openrc\n\n", 0, False),
-            ("", 0, False),
-            ("OpenRC\n", 0, False),
-            ("openrc\nextra\n", 0, False),
-            ("openrc\n", 7, False),
+        for openrc_output, openrc_init_output, command_status, accepted in (
+            ("openrc\n", "openrc-init\n", 0, True),
+            ("openrc", "openrc-init\n", 0, False),
+            ("openrc\n", "openrc-init", 0, False),
+            ("openrc\n\n", "openrc-init\n", 0, False),
+            ("", "openrc-init\n", 0, False),
+            ("OpenRC\n", "openrc-init\n", 0, False),
+            ("openrc\n", "OpenRC-init\n", 0, False),
+            ("openrc\nextra\n", "openrc-init\n", 0, False),
+            ("openrc\n", "openrc-init\n", 7, False),
         ):
-            with self.subTest(apk_info=output, command_status=command_status):
+            with self.subTest(
+                apk_info=(openrc_output, openrc_init_output),
+                command_status=command_status,
+            ):
                 probe = (
                     "apk() {\n"
                     "    [ \"$#\" -eq 3 ] && [ \"$1\" = info ] && "
-                    "[ \"$2\" = -e ] && "
-                    "[ \"$3\" = 'openrc=0.62.6-r0' ] || return 96\n"
-                    f"    printf '%s' {shlex.quote(output)}\n"
+                    "[ \"$2\" = -e ] || return 96\n"
+                    "    case \"$3\" in\n"
+                    "        openrc=0.62.6-r0) "
+                    f"printf '%s' {shlex.quote(openrc_output)} ;;\n"
+                    "        openrc-init=0.62.6-r0) "
+                    f"printf '%s' {shlex.quote(openrc_init_output)} ;;\n"
+                    "        *) return 96 ;;\n"
+                    "    esac\n"
                     f"    return {command_status}\n"
                     "}\n"
                     + package_lifecycle_lab.NAMESPACE_ATTESTATION_HELPERS
@@ -2092,6 +2303,127 @@ class PackageLifecycleLabTests(unittest.TestCase):
                 "configuration payload is not exact",
             ):
                 package_lifecycle_lab.build_containerfile(spec)
+
+    def test_alpine_openrc_contract_is_total_exact_and_cell_bound(self) -> None:
+        expected_contracts = {
+            "3.22": {
+                "package_version": "0.62.6-r0",
+                "rc_conf_pre_sha256": (
+                    "87799a1b4fa5e3941276e695e8525fcd2c1a08f551d02d1c0b1bdfdd67a71dce"
+                ),
+                "rc_conf_post_sha256": (
+                    "6653be4e72083b79317918a08493ad54671441f83b646555f56c30117a0c0b8f"
+                ),
+                "hostname_init_pre_sha256": (
+                    "29d467628434f1a56b37c0042463ee0253a12ce8743e42f65e9dcbc4ed34ff20"
+                ),
+                "hostname_init_post_sha256": (
+                    "11eb8ad952a72d82a63987faf51f8d0248acd765f8327f117436b45a378f4f91"
+                ),
+                "hostname_keyword_pre_pattern": (
+                    "^[[:space:]]*keyword -prefix -lxc -docker$"
+                ),
+                "hostname_keyword_post_pattern": (
+                    "^[[:space:]]*keyword -prefix -lxc -docker -podman$"
+                ),
+                "hostname_mutation": (
+                    "sed -i 's/^\\([[:space:]]*keyword -prefix -lxc "
+                    "-docker\\)$/\\1 -podman/' /etc/init.d/hostname && "
+                ),
+            },
+            "3.24": {
+                "package_version": "0.63.2-r0",
+                "rc_conf_pre_sha256": (
+                    "c7ce810693680cca288134adc0c109c192aedd37cbbdef7b4f4dc82c8c38696b"
+                ),
+                "rc_conf_post_sha256": (
+                    "7efeb86569fa28df86e1b59afa43666330056ebee1a049e365c3beb4625ca3a8"
+                ),
+                "hostname_init_pre_sha256": (
+                    "b52fa145995729852fa931aef5e7426c4bf1413a105a3e55674fb35342b4705a"
+                ),
+                "hostname_init_post_sha256": (
+                    "b52fa145995729852fa931aef5e7426c4bf1413a105a3e55674fb35342b4705a"
+                ),
+                "hostname_keyword_pre_pattern": (
+                    "^[[:space:]]*keyword -docker -podman -lxc -prefix "
+                    "-systemd-nspawn -wsl$"
+                ),
+                "hostname_keyword_post_pattern": (
+                    "^[[:space:]]*keyword -docker -podman -lxc -prefix "
+                    "-systemd-nspawn -wsl$"
+                ),
+                "hostname_mutation": "",
+            },
+        }
+        apk_specs = tuple(
+            spec
+            for spec in package_lifecycle_lab.DEFAULT_PLATFORMS
+            if spec.family == "apk"
+        )
+        self.assertEqual(
+            [(spec.cell_id, spec.version) for spec in apk_specs],
+            [("APK-322", "3.22"), ("APK-324", "3.24")],
+        )
+        self.assertEqual(
+            set(package_lifecycle_lab.ALPINE_OPENRC_CONTRACTS),
+            set(expected_contracts),
+        )
+
+        for spec in apk_specs:
+            with self.subTest(cell_id=spec.cell_id):
+                contract = package_lifecycle_lab.alpine_openrc_contract(
+                    spec.version
+                )
+                expected = expected_contracts[spec.version]
+                self.assertEqual(
+                    {
+                        field: getattr(contract, field)
+                        for field in expected
+                    },
+                    expected,
+                )
+                pinned_install = (
+                    "apk add --no-cache "
+                    f"openrc={expected['package_version']} "
+                    f"openrc-init={expected['package_version']}"
+                )
+                self.assertIn(pinned_install, spec.bootstrap_command)
+                containerfile = package_lifecycle_lab.build_containerfile(spec)
+                runtime = package_lifecycle_lab.runtime_namespace_script(spec)
+                for expected in (
+                    f"apk info -e 'openrc={expected_contracts[spec.version]['package_version']}'",
+                    f"apk info -e 'openrc-init={expected_contracts[spec.version]['package_version']}'",
+                    expected_contracts[spec.version]["rc_conf_pre_sha256"],
+                    expected_contracts[spec.version]["rc_conf_post_sha256"],
+                    expected_contracts[spec.version]["hostname_init_pre_sha256"],
+                    expected_contracts[spec.version]["hostname_init_post_sha256"],
+                    expected_contracts[spec.version]["hostname_keyword_pre_pattern"],
+                    expected_contracts[spec.version]["hostname_keyword_post_pattern"],
+                ):
+                    self.assertIn(expected, containerfile)
+                for expected in (
+                    f"openrc={expected_contracts[spec.version]['package_version']}",
+                    f"openrc-init={expected_contracts[spec.version]['package_version']}",
+                    expected_contracts[spec.version]["rc_conf_post_sha256"],
+                    expected_contracts[spec.version]["hostname_init_post_sha256"],
+                    expected_contracts[spec.version]["hostname_keyword_post_pattern"],
+                ):
+                    self.assertIn(expected, runtime)
+                mutation = expected_contracts[spec.version]["hostname_mutation"]
+                if mutation:
+                    self.assertIn(mutation, containerfile)
+                else:
+                    self.assertNotIn(
+                        "keyword -prefix -lxc -docker\\)$/\\1 -podman",
+                        containerfile,
+                    )
+
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError,
+            "unsupported Alpine OpenRC qualification contract",
+        ):
+            package_lifecycle_lab.alpine_openrc_contract("3.25")
 
     def test_alpine_rsyslog_readiness_provider_is_fail_closed_and_portable(
         self,
@@ -6847,6 +7179,25 @@ probe
         self.assertIn("seed_generated_runtime_artifacts", script)
         self.assertIn("assert_generated_runtime_artifact_contract", script)
         self.assertIn("/etc/systemd/system/syswarden-firewall.service", script)
+        scenario_start = script.index("scenario_remove() {")
+        scenario_end = script.index(
+            '\nif [ "${INVOCATION}" = "initial" ]; then', scenario_start
+        )
+        scenarios = script[scenario_start:scenario_end]
+        self.assertNotIn("ambiguous-rsyslog", scenarios)
+        self.assertNotIn("seed_generated_runtime_artifacts || return", scenarios)
+        self.assertNotIn(
+            "assert_generated_runtime_artifact_contract purge\n", scenarios
+        )
+        for call in (
+            "seed_generated_runtime_artifacts exact-rsyslog remove || return",
+            "seed_generated_runtime_artifacts exact-rsyslog final-removal || return",
+            "seed_generated_runtime_artifacts exact-rsyslog purge || return",
+            "assert_generated_runtime_artifact_contract remove exact-rsyslog",
+            "assert_generated_runtime_artifact_contract final-removal exact-rsyslog",
+            "assert_generated_runtime_artifact_contract purge exact-rsyslog",
+        ):
+            self.assertIn(call, scenarios)
 
     def test_deb_remove_qualifies_reinstall_then_deferred_purge(self) -> None:
         checks = package_lifecycle_lab.expected_event_checks("deb", "remove")
@@ -7105,6 +7456,21 @@ probe
 
     def test_exact_generated_rsyslog_cleanup_is_separate_from_ambiguity(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        snapshot_start = source.index("openrc_rsyslog_runtime_snapshot() {")
+        snapshot_end = source.index(
+            "\n}\n\nattest_owned_cron_seed_state() {", snapshot_start
+        ) + len("\n}\n")
+        snapshot = source[snapshot_start:snapshot_end]
+        exact_pidfile_check = (
+            "printf '%s' \"${openrc_rsyslog_pid}\" | \\\n"
+            "        cmp -s - \"${openrc_rsyslog_pidfile}\" || return 1"
+        )
+        self.assertIn(exact_pidfile_check, snapshot)
+        self.assertLess(
+            snapshot.index(exact_pidfile_check),
+            snapshot.index('kill -0 "${openrc_rsyslog_pid}"'),
+        )
+        self.assertIn("'regular file:0:0:644:1'", snapshot)
         seed_start = source.index("seed_generated_runtime_artifacts() {")
         seed_end = source.index(
             "\n}\n\nassert_generated_runtime_artifact_contract() {",
@@ -7191,6 +7557,39 @@ probe
             "\n}\n\nprepare_expected_payloads() {", assertion_start
         )
         assertion = source[assertion_start:assertion_end]
+        arity_sources = {
+            "seed_generated_runtime_artifacts": seed,
+            "assert_generated_runtime_artifact_contract": assertion,
+        }
+        for name, function_source in arity_sources.items():
+            self.assertTrue(
+                function_source.startswith(
+                    f"{name}() {{\n"
+                    '    [ "$#" -eq 2 ] || return 1\n'
+                )
+            )
+            guard_lines = function_source.splitlines()[:2]
+            arity_probe = (
+                "\n".join(guard_lines)
+                + "\n"
+                "    return 0\n"
+                "}\n"
+                f'{name} "$@"'
+            )
+            for arguments, accepted in (
+                (("one", "two"), True),
+                ((), False),
+                (("one",), False),
+                (("one", "two", "three"), False),
+            ):
+                with self.subTest(function=name, arguments=arguments):
+                    result = subprocess.run(
+                        ["/bin/sh", "-c", arity_probe, name, *arguments],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode == 0, accepted, result)
         exact_assertion_start = assertion.index("exact-rsyslog)")
         ambiguous_assertion_start = assertion.index(
             "ambiguous-rsyslog)", exact_assertion_start
@@ -7235,14 +7634,41 @@ probe
                 self.assertIn(
                     f"remove.{label}.generated.{key}", remove_checks
                 )
-        purge_checks = package_lifecycle_lab.expected_event_checks("deb", "purge")
-        self.assertIn("purge.purge.generated.rsyslog_siem_residual", purge_checks)
-        self.assertIn(
-            "purge.purge.generated.rsyslog_waf_bridge_residual", purge_checks
-        )
-        self.assertIn(
-            "purge.purge.generated.rsyslog_provenance_residual", purge_checks
-        )
+        for family, scenario, label in (
+            ("deb", "purge", "purge"),
+            ("rpm", "remove", "final-removal"),
+            ("apk", "remove", "remove"),
+            ("apk", "purge", "purge"),
+        ):
+            with self.subTest(
+                exact_rsyslog_family=family,
+                exact_rsyslog_scenario=scenario,
+            ):
+                checks = package_lifecycle_lab.expected_event_checks(
+                    family, scenario
+                )
+                for key in (
+                    "rsyslog_siem_exact_generated",
+                    "rsyslog_waf_bridge_exact_generated",
+                    "rsyslog_provenance_exact",
+                    "rsyslog_siem_exact_removed",
+                    "rsyslog_waf_bridge_exact_removed",
+                    "rsyslog_provenance_removed",
+                    "rsyslog_configuration_valid",
+                    "rsyslog_reactivated",
+                ):
+                    self.assertIn(
+                        f"{scenario}.{label}.generated.{key}", checks
+                    )
+                self.assertFalse(
+                    any(
+                        check.startswith(
+                            f"{scenario}.{label}.generated.rsyslog_"
+                        )
+                        and check.endswith("_residual")
+                        for check in checks
+                    )
+                )
         self.assertIn(
             "/tmp/syswarden-rsyslog-provenance-before", ambiguous
         )
@@ -7250,49 +7676,192 @@ probe
             "/tmp/syswarden-rsyslog-provenance-before",
             ambiguous_assertion,
         )
-        rpm_remove_checks = package_lifecycle_lab.expected_event_checks(
-            "rpm", "remove"
-        )
-        for key in (
-            "rsyslog_siem_exact_generated",
-            "rsyslog_waf_bridge_exact_generated",
-            "rsyslog_provenance_exact",
-            "rsyslog_siem_exact_removed",
-            "rsyslog_waf_bridge_exact_removed",
-            "rsyslog_provenance_removed",
-            "rsyslog_configuration_valid",
-            "rsyslog_reactivated",
-        ):
-            self.assertIn(
-                f"remove.final-removal.generated.{key}",
-                rpm_remove_checks,
-            )
-
         writer_start = source.index("write_seeded_operator_token() {")
         writer_end = source.index("\nseed_state() {", writer_start)
         writer = source[writer_start:writer_end]
-        token = self.root / "deb-removal-token.toml"
-        result = subprocess.run(
+        for family, scenario in (
+            ("deb", "remove"),
+            ("deb", "purge"),
+            ("rpm", "remove"),
+            ("apk", "remove"),
+            ("apk", "purge"),
+        ):
+            with self.subTest(
+                siem_family=family,
+                siem_scenario=scenario,
+            ):
+                token = self.root / f"{family}-{scenario}-token.toml"
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        writer
+                        + f"\nPACKAGE_FAMILY={family}; "
+                        + f"SCENARIO={scenario}; "
+                        + 'write_seeded_operator_token "$1"',
+                        "exact-rsyslog-token",
+                        str(token),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                rendered = token.read_text(encoding="utf-8")
+                self.assertIn("[integrations.siem]", rendered)
+                self.assertIn("enabled = true", rendered)
+                self.assertIn('ip = "127.0.0.1"', rendered)
+                self.assertIn('port = "5514"', rendered)
+                self.assertIn('protocol = "udp"', rendered)
+
+        for family in ("deb", "rpm", "apk"):
+            with self.subTest(
+                siem_absent_family=family,
+                siem_absent_scenario="upgrade-rollback",
+            ):
+                upgrade_token = self.root / f"upgrade-{family}-token.toml"
+                upgrade = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        writer
+                        + f"\nPACKAGE_FAMILY={family}; "
+                        + "SCENARIO=upgrade-rollback; "
+                        + 'write_seeded_operator_token "$1"',
+                        "upgrade-token",
+                        str(upgrade_token),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(upgrade.returncode, 0, upgrade.stderr)
+                self.assertNotIn(
+                    "[integrations.siem]",
+                    upgrade_token.read_text(encoding="utf-8"),
+                )
+
+    def test_openrc_rsyslog_snapshot_rejects_noncanonical_pidfile_bytes(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("openrc_rsyslog_runtime_snapshot() {")
+        end = source.index(
+            "\n}\n\nattest_owned_cron_seed_state() {", start
+        ) + len("\n}\n")
+        function = source[start:end]
+        self.assertTrue(
+            function.startswith(
+                'openrc_rsyslog_runtime_snapshot() {\n'
+                '    [ "$#" -eq 0 ] || return 1\n'
+            )
+        )
+        pid = os.getpid()
+        proc_root = self.root / "proc"
+        process = proc_root / str(pid)
+        process.mkdir(parents=True)
+        process.joinpath("comm").write_text("rsyslogd\n", encoding="utf-8")
+        process.joinpath("exe").symlink_to("/usr/sbin/rsyslogd")
+        process.joinpath("stat").write_text(
+            " ".join(["0"] * 21 + ["12345"]) + "\n",
+            encoding="utf-8",
+        )
+        pidfile = self.root / "rsyslog.pid"
+        function = function.replace(
+            "openrc_rsyslog_pidfile=/run/rsyslog.pid",
+            f"openrc_rsyslog_pidfile={shlex.quote(str(pidfile))}",
+        ).replace(
+            '"/proc/${openrc_rsyslog_pid}/',
+            '"${SYSWARDEN_TEST_PROC}/${openrc_rsyslog_pid}/',
+        ).replace(
+            "'regular file:0:0:644:1'",
+            f"'regular file:{os.getuid()}:{os.getgid()}:644:1'",
+        )
+        mock_bin = self.root / "openrc-rsyslog-mock-bin"
+        mock_bin.mkdir()
+        rc_service = mock_bin / "rc-service"
+        rc_service.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        rc_service.chmod(0o700)
+        environment = {
+            **os.environ,
+            "PATH": f"{mock_bin}:{os.environ['PATH']}",
+            "SYSWARDEN_TEST_PROC": str(proc_root),
+            "LC_ALL": "C",
+        }
+
+        for contents, accepted in (
+            (str(pid), True),
+            (f"{pid}\n", False),
+            (f"{pid}\n\n", False),
+            (f" {pid}\n", False),
+            (f"{pid} \n", False),
+            (f"{pid}\n2\n", False),
+        ):
+            with self.subTest(pidfile_bytes=contents.encode().hex()):
+                pidfile.write_bytes(contents.encode("ascii"))
+                pidfile.chmod(0o644)
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        function + "\nopenrc_rsyslog_runtime_snapshot",
+                        "openrc-rsyslog-snapshot",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+                self.assertEqual(result.returncode == 0, accepted, result)
+                if accepted:
+                    self.assertEqual(result.stdout, f"{pid}:12345\n")
+                    self.assertEqual(result.stderr, "")
+
+        pidfile.write_text(str(pid), encoding="ascii")
+        pidfile.chmod(0o644)
+        extra_argument = subprocess.run(
             [
                 "/bin/sh",
                 "-c",
-                writer
-                + '\nPACKAGE_FAMILY=deb; SCENARIO=remove; '
-                + 'write_seeded_operator_token "$1"',
-                "deb-removal-token",
-                str(token),
+                function + '\nopenrc_rsyslog_runtime_snapshot "$1"',
+                "openrc-rsyslog-snapshot-arity",
+                "unexpected",
             ],
             check=False,
             capture_output=True,
             text=True,
+            env=environment,
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        rendered = token.read_text(encoding="utf-8")
-        self.assertIn("[integrations.siem]", rendered)
-        self.assertIn("enabled = true", rendered)
-        self.assertIn('ip = "127.0.0.1"', rendered)
-        self.assertIn('port = "5514"', rendered)
-        self.assertIn('protocol = "udp"', rendered)
+        self.assertNotEqual(extra_argument.returncode, 0, extra_argument)
+
+    def test_ambiguous_rsyslog_contract_is_adversarial_only(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        seed_start = source.index("seed_generated_runtime_artifacts() {")
+        seed_end = source.index(
+            "\n}\n\nassert_generated_runtime_artifact_contract() {", seed_start
+        )
+        seed = source[seed_start:seed_end]
+        assertion_start = source.index(
+            "assert_generated_runtime_artifact_contract() {"
+        )
+        assertion_end = source.index(
+            "\n}\n\nprepare_expected_payloads() {", assertion_start
+        )
+        assertion = source[assertion_start:assertion_end]
+        scenarios_start = source.index("scenario_remove() {")
+        scenarios_end = source.index(
+            '\nif [ "${INVOCATION}" = "initial" ]; then', scenarios_start
+        )
+        scenarios = source[scenarios_start:scenarios_end]
+
+        self.assertIn("ambiguous-rsyslog)", seed)
+        self.assertIn("ambiguous-rsyslog)", assertion)
+        self.assertIn("operator-owned ambiguous SIEM bridge", seed)
+        self.assertIn("operator-owned ambiguous WAF bridge", seed)
+        self.assertIn("rsyslog_siem_residual", assertion)
+        self.assertIn("rsyslog_waf_bridge_residual", assertion)
+        self.assertIn("rsyslog_provenance_residual", assertion)
+        self.assertNotIn("ambiguous-rsyslog", scenarios)
 
     def test_rsyslog_removal_requires_a_new_process_identity(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -7301,26 +7870,24 @@ probe
             "\nseed_generated_runtime_artifacts() {", helpers_start
         )
         helpers = source[helpers_start:helpers_end]
+        self.assertTrue(
+            helpers.startswith(
+                'rsyslog_reactivation_mode() {\n'
+                '    [ "$#" -eq 4 ] || return 1\n'
+            )
+        )
         self.assertNotIn("reload", helpers.lower())
         self.assertIn('printf \'%s\\n\' restart', helpers)
 
-        def run_mode(
-            pid_before: str,
-            pid_after: str,
-            active_before: str,
-            active_after: str,
-        ) -> subprocess.CompletedProcess[str]:
+        def run_mode(*arguments: str) -> subprocess.CompletedProcess[str]:
             return subprocess.run(
                 [
                     "/bin/sh",
                     "-c",
                     helpers
-                    + '\nrsyslog_reactivation_mode "$1" "$2" "$3" "$4"',
+                    + '\nrsyslog_reactivation_mode "$@"',
                     "rsyslog-reactivation",
-                    pid_before,
-                    pid_after,
-                    active_before,
-                    active_after,
+                    *arguments,
                 ],
                 check=False,
                 capture_output=True,
@@ -7339,6 +7906,8 @@ probe
             ("100", "101", "", "1001"),
             ("1", "101", "1000", "1001"),
             ("100", "1", "1000", "1001"),
+            ("100", "101", "1000"),
+            ("100", "101", "1000", "1001", "extra"),
         )
         for case in rejected_modes:
             with self.subTest(rejected_mode=case):
@@ -7561,6 +8130,10 @@ probe
             ),
             *(
                 ("upgrade-rollback", "4.03.2", "4.03.3", label, "..")
+                for label in upgrade_labels
+            ),
+            *(
+                ("upgrade-rollback", "4.03.3", "4.04.0", label, "..")
                 for label in upgrade_labels
             ),
             ("remove", "4.03.2", "4.03.3", "fresh", ".."),
@@ -7803,12 +8376,11 @@ probe
                 generated = [check for check in checks if ".generated." in check]
                 if family == "deb" and scenario == "remove":
                     labels = ("remove", "remove-before-purge")
-                    exact_rsyslog = True
                 else:
                     labels = (
                         "final-removal" if family == "rpm" else scenario,
                     )
-                    exact_rsyslog = family == "rpm" and scenario == "remove"
+                exact_rsyslog = True
                 expected_generated = [
                     check
                     for label in labels
@@ -8805,7 +9377,12 @@ prepare_package_transition
             'assert_preserved "${label}" operator_data /var/lib/syswarden/ui/lifecycle-operator.json "${STATE_OPERATOR_DATA_HASH}" 600',
             source,
         )
-        self.assertIn('assert_live_telemetry_data "${label}"', source)
+        self.assertIn(
+            'assert_live_telemetry_data \\\n'
+            '        "${label}" /var/lib/syswarden/ui/data.json \\\n'
+            '        "${live_telemetry_contract}"',
+            source,
+        )
         state_contract = source[
             source.index("assert_all_state_preserved() {") : source.index(
                 "\n}\n\nassert_package_absent() {",
@@ -8819,7 +9396,7 @@ prepare_package_transition
             '"${label}" list_ipv6 ',
             '"${label}" operator_data ',
             '"${label}" certificate ',
-            'assert_live_telemetry_data "${label}"',
+            "assert_live_telemetry_data \\",
         )
         positions = [state_contract.index(item) for item in ordered_state_fragments]
         self.assertEqual(positions, sorted(positions))
@@ -8832,6 +9409,99 @@ prepare_package_transition
                 )
             self.assertNotIn(f"remove.{label}.state.telemetry.hash", checks)
 
+    def test_live_telemetry_contract_is_exactly_version_bound(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("live_telemetry_contract_for_version() {")
+        end = source.index("\n}\n\nlive_telemetry_schema_valid() {", start) + 2
+        function = source[start:end]
+
+        def contract(version: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    function + '\nlive_telemetry_contract_for_version "$1"',
+                    "telemetry-version-contract",
+                    version,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        for version in ("4.02.8", "4.03.2", "4.03.3"):
+            with self.subTest(version=version):
+                result = contract(version)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "legacy\n")
+        for version in ("4.04.0", "4.10.0", "5.00.0"):
+            with self.subTest(version=version):
+                result = contract(version)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "kpi-v1\n")
+        for version in ("", "4", "4.x.0", "v4.04.0"):
+            with self.subTest(invalid=version):
+                self.assertNotEqual(contract(version).returncode, 0)
+
+    def test_live_telemetry_contract_tracks_each_upgrade_phase_version(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        start = source.index("assert_all_state_preserved() {")
+        end = source.index(
+            "\n}\n\nassert_deb_removal_log_preserved() {", start
+        ) + len("\n}\n")
+        function = source[start:end]
+        harness = r'''
+assert_preserved() { :; }
+live_telemetry_contract_for_version() {
+    case "$1" in
+        4.03.3) printf '%s\n' legacy ;;
+        4.04.0) printf '%s\n' kpi-v1 ;;
+        *) return 1 ;;
+    esac
+}
+assert_live_telemetry_data() {
+    printf '%s\t%s\n' "$1" "$3"
+}
+SCENARIO=upgrade-rollback
+PACKAGE_FAMILY=apk
+EXPECTED_PREVIOUS_VERSION=4.03.3
+EXPECTED_CANDIDATE_VERSION=4.04.0
+STATE_CONFIG_HASH=config
+STATE_TOKEN_HASH=token
+STATE_LIST_HASH=list
+STATE_LIST_IPV6_HASH=list6
+STATE_OPERATOR_DATA_HASH=operator
+STATE_CERT_HASH=certificate
+assert_all_state_preserved "$1"
+'''
+        expected = {
+            "previous": "legacy",
+            "candidate": "kpi-v1",
+            "reinstall": "kpi-v1",
+            "restart-one": "kpi-v1",
+            "restart-two": "kpi-v1",
+            "rollback": "legacy",
+            "recovery": "kpi-v1",
+        }
+        for label, contract in expected.items():
+            with self.subTest(label=label):
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        function + harness,
+                        "telemetry-phase-contract",
+                        label,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, f"{label}\t{contract}\n")
+
     def test_live_telemetry_schema_is_exact_and_rejects_adversarial_drift(self) -> None:
         source = package_lifecycle_lab.LIFECYCLE_SCRIPT
         start = source.index("live_telemetry_schema_valid() {")
@@ -8843,7 +9513,7 @@ prepare_package_transition
         )
         baseline = json.loads(fixture_path.read_text(encoding="utf-8"))
 
-        def accepted(payload: bytes) -> bool:
+        def accepted(payload: bytes, contract: str) -> bool:
             path = self.root / "live-telemetry.json"
             path.unlink(missing_ok=True)
             path.write_bytes(payload)
@@ -8851,9 +9521,10 @@ prepare_package_transition
                 [
                     "/bin/sh",
                     "-c",
-                    function + '\nlive_telemetry_schema_valid "$1"',
+                    function + '\nlive_telemetry_schema_valid "$1" "$2"',
                     "telemetry-schema",
                     str(path),
+                    contract,
                 ],
                 check=False,
                 capture_output=True,
@@ -8861,7 +9532,56 @@ prepare_package_transition
             )
             return result.returncode == 0
 
-        self.assertTrue(accepted(json.dumps(baseline).encode("utf-8")))
+        legacy_payload = json.dumps(baseline).encode("utf-8")
+        self.assertTrue(accepted(legacy_payload, "legacy"))
+        self.assertFalse(accepted(legacy_payload, "kpi-v1"))
+        self.assertFalse(accepted(legacy_payload, "unsupported"))
+
+        kpi = json.loads(json.dumps(baseline))
+        kpi["waf"].update(
+            {
+                "kpi_evidence_quality": "complete",
+                "journal_scan_complete": True,
+                "journal_bytes_total": 4096,
+                "journal_bytes_scanned": 4096,
+                "journal_decode_errors": 0,
+                "metric_rejected_events": 0,
+                "metric_excluded_events": 2,
+                "metric_admitted_events": 4,
+            }
+        )
+        kpi["waf"]["top_attackers"][0].update(
+            {
+                "first_seen": "earlier",
+                "primary_jail": "BF-SSH",
+                "enforcement_jail": "BF-SSH",
+                "enforcement_action": "drop",
+                "jail_hits": 6,
+                "policy_hits": 5,
+                "attested_hits": 4,
+                "recorded_hits": 6,
+                "legacy_hits": 2,
+                "risk_category": "credential-access",
+                "severity_score": 80,
+                "peak_window_hits": 4,
+                "effective_threshold": 4,
+                "effective_window_seconds": 60,
+                "metric_quality": "attested",
+                "selected_policy_quality": "exact",
+                "threshold_reached": True,
+                "threshold_evidence": "journal",
+                "metric_scope": "source-jail",
+                "hit_evidence": "recorded",
+                "hit_quality": "exact",
+                "degraded_hits": 0,
+                "risk_model_version": "risk-v1",
+                "signature_catalog_version": "catalog-v1",
+                "signature_catalog_sha256": "a" * 64,
+            }
+        )
+        kpi_payload = json.dumps(kpi).encode("utf-8")
+        self.assertTrue(accepted(kpi_payload, "kpi-v1"))
+        self.assertFalse(accepted(kpi_payload, "legacy"))
         assertion_end = source.index(
             "\n}\n\nsanitize_historical_rollback_token() {", start
         ) + 2
@@ -8876,7 +9596,7 @@ prepare_package_transition
                 "file_mode() { stat -c '%a' \"$1\"; }\n"
                 "check_equal() { printf '%s\\t%s\\t%s\\n' \"$1\" \"$2\" \"$3\"; }\n"
                 + assertion_contract
-                + '\nassert_live_telemetry_data phase "$1"',
+                + '\nassert_live_telemetry_data phase "$1" legacy',
                 "telemetry-assertion",
                 str(asserted),
             ],
@@ -8903,12 +9623,14 @@ prepare_package_transition
         changed = json.loads(json.dumps(baseline))
         changed["timestamp"] = "2026-08-23T12:34:56Z"
         changed["system"]["ram_used_mb"] += 1
-        self.assertTrue(accepted(json.dumps(changed).encode("utf-8")))
+        self.assertTrue(accepted(json.dumps(changed).encode("utf-8"), "legacy"))
         nullable_slices = json.loads(json.dumps(baseline))
         nullable_slices["waf"]["targeted_ports"] = None
         nullable_slices["waf"]["risk_radar"] = None
         nullable_slices["waf"]["allowed_events"] = None
-        self.assertTrue(accepted(json.dumps(nullable_slices).encode("utf-8")))
+        self.assertTrue(
+            accepted(json.dumps(nullable_slices).encode("utf-8"), "legacy")
+        )
 
         adversarial: dict[str, bytes] = {"malformed": b"{"}
         variants: dict[str, dict[str, object]] = {}
@@ -8918,6 +9640,13 @@ prepare_package_transition
         unexpected = json.loads(json.dumps(baseline))
         unexpected["ha"] = {}
         variants["HA must remain absent"] = unexpected
+        legacy_enriched_attacker = json.loads(json.dumps(baseline))
+        legacy_enriched_attacker["waf"]["top_attackers"][0][
+            "recorded_hits"
+        ] = 1
+        variants["legacy attacker must not contain one KPI field"] = (
+            legacy_enriched_attacker
+        )
         top_extension = json.loads(json.dumps(baseline))
         top_extension["unexpected"] = True
         variants["unexpected top-level key"] = top_extension
@@ -8937,7 +9666,80 @@ prepare_package_transition
             adversarial[name] = json.dumps(document).encode("utf-8")
         for name, payload in adversarial.items():
             with self.subTest(name=name):
-                self.assertFalse(accepted(payload))
+                self.assertFalse(accepted(payload, "legacy"))
+
+        for field in (
+            "kpi_evidence_quality",
+            "journal_scan_complete",
+            "journal_bytes_total",
+            "journal_bytes_scanned",
+            "journal_decode_errors",
+            "metric_rejected_events",
+            "metric_excluded_events",
+            "metric_admitted_events",
+        ):
+            with self.subTest(kpi_missing=field):
+                partial = json.loads(json.dumps(kpi))
+                del partial["waf"][field]
+                self.assertFalse(
+                    accepted(json.dumps(partial).encode("utf-8"), "kpi-v1")
+                )
+
+        kpi_variants: dict[str, dict[str, object]] = {}
+        invalid_quality = json.loads(json.dumps(kpi))
+        invalid_quality["waf"]["kpi_evidence_quality"] = "unknown"
+        kpi_variants["unknown KPI quality"] = invalid_quality
+        negative_counter = json.loads(json.dumps(kpi))
+        negative_counter["waf"]["metric_rejected_events"] = -1
+        kpi_variants["negative KPI counter"] = negative_counter
+        fractional_counter = json.loads(json.dumps(kpi))
+        fractional_counter["waf"]["journal_bytes_total"] = 1.5
+        kpi_variants["fractional KPI counter"] = fractional_counter
+        oversized_scan = json.loads(json.dumps(kpi))
+        oversized_scan["waf"]["journal_bytes_scanned"] = 4097
+        kpi_variants["scan exceeds total"] = oversized_scan
+        incomplete_complete = json.loads(json.dumps(kpi))
+        incomplete_complete["waf"]["journal_scan_complete"] = False
+        kpi_variants["complete profile is internally inconsistent"] = (
+            incomplete_complete
+        )
+        unknown_attacker = json.loads(json.dumps(kpi))
+        unknown_attacker["waf"]["top_attackers"][0]["unexpected"] = True
+        kpi_variants["unknown attacker key"] = unknown_attacker
+        wrong_attacker_type = json.loads(json.dumps(kpi))
+        wrong_attacker_type["waf"]["top_attackers"][0][
+            "threshold_reached"
+        ] = "true"
+        kpi_variants["wrong attacker optional type"] = wrong_attacker_type
+        for field in (
+            "jail_hits",
+            "policy_hits",
+            "attested_hits",
+            "recorded_hits",
+            "legacy_hits",
+            "peak_window_hits",
+            "effective_threshold",
+            "effective_window_seconds",
+            "degraded_hits",
+        ):
+            negative_attacker_counter = json.loads(json.dumps(kpi))
+            negative_attacker_counter["waf"]["top_attackers"][0][field] = -1
+            kpi_variants[f"negative attacker counter {field}"] = (
+                negative_attacker_counter
+            )
+        for score in (-1, 101):
+            out_of_range_score = json.loads(json.dumps(kpi))
+            out_of_range_score["waf"]["top_attackers"][0][
+                "severity_score"
+            ] = score
+            kpi_variants[f"out-of-range severity score {score}"] = (
+                out_of_range_score
+            )
+        for name, document in kpi_variants.items():
+            with self.subTest(name=name):
+                self.assertFalse(
+                    accepted(json.dumps(document).encode("utf-8"), "kpi-v1")
+                )
 
         target = self.root / "live-telemetry-target.json"
         target.write_text(json.dumps(baseline), encoding="utf-8")
@@ -8947,7 +9749,7 @@ prepare_package_transition
             [
                 "/bin/sh",
                 "-c",
-                function + '\nlive_telemetry_schema_valid "$1"',
+                function + '\nlive_telemetry_schema_valid "$1" legacy',
                 "telemetry-schema",
                 str(link),
             ],
@@ -9009,7 +9811,11 @@ prepare_package_transition
         self.assertIn('credentials != 1', contract)
         self.assertIn('! grep -Fq "${rollback_secret}" "${COMMAND_LOG}"', contract)
         self.assertIn("if v4028_to_v4032_transition_selected; then", contract)
-        self.assertIn("elif v4032_to_v4033_transition_selected; then", contract)
+        self.assertIn(
+            "elif v4032_to_v4033_transition_selected || \\\n"
+            "         v4033_to_v4040_transition_selected; then",
+            contract,
+        )
         self.assertIn("historical-webtui-credential", contract)
         self.assertIn("byte-exact", contract)
         self.assertIn(
@@ -9066,9 +9872,21 @@ prepare_package_transition
             )
             for family in ("deb", "rpm")
         )
+        minor = (
+            (
+                "upgrade-rollback",
+                "4.03.3",
+                "4.04.0",
+                family,
+                "rollback",
+                "byte-exact",
+            )
+            for family in ("deb", "rpm")
+        )
         for scenario, previous, candidate, family, label, expected in (
             *accepted,
             *current,
+            *minor,
         ):
             with self.subTest(
                 scenario=scenario,
@@ -9380,8 +10198,9 @@ assert_preserved rollback token "$1" "$2" 640
             quiesce,
         )
         self.assertIn(
-            "if v4032_to_v4033_upgrade_selected; then\n"
-            "            attest_v4032_previous_webtui_retirement || \\\n"
+            "if v4032_to_v4033_upgrade_selected || \\\n"
+            "           v4033_to_v4040_upgrade_selected; then\n"
+            "            attest_previous_webtui_retirement || \\\n"
             "                mark_postinstall_failure previous-webtui-retirement\n"
             "        else",
             probe,
@@ -9523,6 +10342,104 @@ attest_v4032_previous_webtui_retirement "${TEST_ROOT}" "${TEST_ROOT}/proc"
                     run_case({"TEST_SS_FAILURE": failure}).returncode,
                     0,
                 )
+
+    def test_v4033_to_v4040_previous_webtui_absence_is_exact_and_fail_closed(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        transition_start = source.index(
+            "v4033_to_v4040_transition_selected() {"
+        )
+        transition_end = source.index(
+            "\n}\n\nexpected_systemd_enablement_prefix() {",
+            transition_start,
+        ) + 2
+        transition = source[transition_start:transition_end]
+        selector_start = source.index("v4033_to_v4040_upgrade_selected() {")
+        selector_end = source.index(
+            "\n}\n\nattest_previous_webtui_retirement() {",
+            selector_start,
+        ) + 2
+        selector = source[selector_start:selector_end]
+        common_start = source.index("attest_previous_webtui_retirement() {")
+        common_end = source.index(
+            "\n}\n\nattest_v4032_previous_webtui_retirement() {",
+            common_start,
+        ) + 2
+        common = source[common_start:common_end]
+        quiesce_start = source.index("quiesce_previous_webtui_runtime() {")
+        quiesce_end = source.index(
+            "\n}\n\nlifecycle_seed_hex_prefix() {", quiesce_start
+        )
+        quiesce = source[quiesce_start:quiesce_end]
+
+        self.assertIn(
+            '[ "${SCENARIO}" = upgrade-rollback ] && \\\n'
+            '        [ "${EXPECTED_PREVIOUS_VERSION}" = 4.03.3 ] && \\\n'
+            '        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.04.0 ]',
+            transition,
+        )
+        self.assertIn(
+            "v4033_to_v4040_upgrade_selected() {\n"
+            "    v4033_to_v4040_transition_selected && \\\n"
+            '        [ "$(installed_version 2>/dev/null || true)" = 4.03.3 ]\n'
+            "}",
+            selector,
+        )
+        self.assertIn(
+            'legacy_webtui_runtime_absent "${previous_webtui_root}" || return 1',
+            common,
+        )
+        self.assertIn("syswarden_verify_no_exact_webtui_process \\", common)
+        self.assertIn("for previous_webtui_port in 62027 62028", common)
+        self.assertIn(
+            "if v4033_to_v4040_upgrade_selected; then\n"
+            "        attest_v4033_previous_webtui_retirement || return 1\n"
+            "        return 0\n"
+            "    fi",
+            quiesce,
+        )
+
+        harness = (
+            "#!/bin/sh\nset -u\n"
+            + transition
+            + "\n"
+            + selector
+            + r'''
+installed_version() {
+    printf '%s\n' "${TEST_INSTALLED_VERSION}"
+}
+v4033_to_v4040_upgrade_selected
+'''
+        )
+
+        def selected(overrides: dict[str, str] | None = None) -> bool:
+            environment = {
+                **os.environ,
+                "SCENARIO": "upgrade-rollback",
+                "EXPECTED_PREVIOUS_VERSION": "4.03.3",
+                "EXPECTED_CANDIDATE_VERSION": "4.04.0",
+                "TEST_INSTALLED_VERSION": "4.03.3",
+            }
+            environment.update(overrides or {})
+            result = subprocess.run(
+                [shutil.which("dash") or "/bin/sh", "-c", harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            return result.returncode == 0
+
+        self.assertTrue(selected())
+        for label, overrides in (
+            ("scenario", {"SCENARIO": "remove"}),
+            ("previous", {"EXPECTED_PREVIOUS_VERSION": "4.03.2"}),
+            ("candidate", {"EXPECTED_CANDIDATE_VERSION": "4.04.1"}),
+            ("installed", {"TEST_INSTALLED_VERSION": "4.03.2"}),
+        ):
+            with self.subTest(bound=label):
+                self.assertFalse(selected(overrides))
 
     def test_upgrade_seeds_and_proves_exact_browser_retirement_with_port_isolation(self) -> None:
         script = package_lifecycle_lab.LIFECYCLE_SCRIPT
@@ -9716,7 +10633,8 @@ attest_v4032_previous_webtui_retirement "${TEST_ROOT}" "${TEST_ROOT}/proc"
         scenario = source[scenario_start:scenario_end]
 
         exact_skip = (
-            "if v4032_to_v4033_upgrade_selected; then\n"
+            "if v4032_to_v4033_upgrade_selected || \\\n"
+            "       v4033_to_v4040_upgrade_selected; then\n"
             "        return 0\n"
             "    fi"
         )
@@ -9810,6 +10728,15 @@ seed_live_legacy_webtui_process
             with self.subTest(exact_family=family):
                 exact = run_case(family=family)
                 self.assertEqual(exact.returncode, 0, exact.stderr)
+                self.assertFalse(marker.exists())
+
+                current = run_case(
+                    family=family,
+                    previous="4.03.3",
+                    candidate="4.04.0",
+                    installed="4.03.3",
+                )
+                self.assertEqual(current.returncode, 0, current.stderr)
                 self.assertFalse(marker.exists())
 
         bounds = (
@@ -10089,7 +11016,7 @@ seed_live_legacy_webtui_process
                 {
                     "nftables", "curl", "wget", "rsyslog", "rsyslog-uxsock",
                     "bash-completion", "wireguard-tools", "libqrencode-tools", "jq",
-                    "openrc", "cronie", "cronie-openrc",
+                    "cronie", "cronie-openrc",
                     "procps-ng",
                     "e2fsprogs-extra",
                     "shadow",
@@ -10106,7 +11033,8 @@ seed_live_legacy_webtui_process
         self.assertNotIn("epel-release", package_lifecycle_lab.RPM_BOOTSTRAP)
         self.assertNotIn("qrencode", package_lifecycle_lab.RPM_BOOTSTRAP)
         self.assertIn(
-            "apk add --no-cache openrc openrc-init && apk add --no-cache",
+            "apk add --no-cache openrc=0.62.6-r0 "
+            "openrc-init=0.62.6-r0 && apk add --no-cache",
             package_lifecycle_lab.APK_BOOTSTRAP,
         )
         self.assertIn("test -x /usr/bin/gpasswd", package_lifecycle_lab.APK_BOOTSTRAP)
