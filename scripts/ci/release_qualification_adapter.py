@@ -209,6 +209,27 @@ def _sha256(value: Any, label: str) -> str:
     return result
 
 
+def _portable_runtime_file_identity(
+    value: Any, label: str
+) -> tuple[str, int, int, str]:
+    """Return identity fields that remain meaningful across filesystems.
+
+    Runtime evidence retains the complete ``device:inode:mode:uid:gid|sha256``
+    identity. Device and inode are instance-local filesystem coordinates, so
+    only mode, ownership, and content digest may be compared across independent
+    lifecycle containers.
+    """
+    identity = _string(value, label)
+    match = re.fullmatch(
+        r"[0-9]+:[0-9]+:([0-9a-f]{4}):([0-9]+):([0-9]+)\|([0-9a-f]{64})",
+        identity,
+    )
+    if match is None:
+        _fail(f"{label} must be a complete runtime file identity")
+    mode, uid, gid, digest = match.groups()
+    return mode, int(uid), int(gid), digest
+
+
 def _inside(path: Path, root: Path) -> bool:
     return path == root or root in path.parents
 
@@ -2183,22 +2204,58 @@ def _derive_platform_lifecycle_claims(
         for boot in scenario["boots"]
         for phase in ("pre_exec", "post_exec")
     ]
-    cron_provenance = {
-        (
-            snapshot["cron_executable_path"],
-            snapshot["cron_executable_identity"],
-            snapshot["cron_fragment_path"],
-            snapshot["cron_fragment_identity"],
-            tuple(snapshot["cron_dropin_paths"]),
-            snapshot["cron_package_name"],
-            snapshot["cron_package_version"],
-            snapshot["cron_package_architecture"],
-            snapshot["cron_fragment_package_name"],
-            snapshot["cron_fragment_package_version"],
-            snapshot["cron_fragment_package_architecture"],
-        )
-        for snapshot in runtime_snapshots
-    }
+    cron_provenance: set[tuple[Any, ...]] = set()
+    complete_cron_provenance = True
+    try:
+        for scenario_index, scenario in enumerate(platform["scenarios"]):
+            scenario_provenance: set[tuple[Any, ...]] = set()
+            for boot_index, boot in enumerate(scenario["boots"]):
+                for phase in ("pre_exec", "post_exec"):
+                    snapshot = boot[phase]
+                    label = (
+                        f"platform.scenarios[{scenario_index}].boots[{boot_index}]"
+                        f".{phase}"
+                    )
+                    exact_provenance = (
+                        snapshot["cron_executable_path"],
+                        snapshot["cron_executable_identity"],
+                        snapshot["cron_fragment_path"],
+                        snapshot["cron_fragment_identity"],
+                        tuple(snapshot["cron_dropin_paths"]),
+                        snapshot["cron_package_name"],
+                        snapshot["cron_package_version"],
+                        snapshot["cron_package_architecture"],
+                        snapshot["cron_fragment_package_name"],
+                        snapshot["cron_fragment_package_version"],
+                        snapshot["cron_fragment_package_architecture"],
+                    )
+                    scenario_provenance.add(exact_provenance)
+                    cron_provenance.add(
+                        (
+                            snapshot["cron_executable_path"],
+                            _portable_runtime_file_identity(
+                                snapshot["cron_executable_identity"],
+                                f"{label}.cron_executable_identity",
+                            ),
+                            snapshot["cron_fragment_path"],
+                            _portable_runtime_file_identity(
+                                snapshot["cron_fragment_identity"],
+                                f"{label}.cron_fragment_identity",
+                            ),
+                            tuple(snapshot["cron_dropin_paths"]),
+                            snapshot["cron_package_name"],
+                            snapshot["cron_package_version"],
+                            snapshot["cron_package_architecture"],
+                            snapshot["cron_fragment_package_name"],
+                            snapshot["cron_fragment_package_version"],
+                            snapshot["cron_fragment_package_architecture"],
+                        )
+                    )
+            if len(scenario_provenance) != 1:
+                complete_cron_provenance = False
+    except (AdapterError, KeyError, TypeError, ValueError):
+        complete_cron_provenance = False
+        cron_provenance.clear()
     removal_check = (
         "remove.final-removal.purge-equivalent"
         if spec.family == "rpm"
@@ -2222,6 +2279,7 @@ def _derive_platform_lifecycle_claims(
             and snapshot["capture_count"] == 2
             for snapshot in runtime_snapshots
         )
+        and complete_cron_provenance
         and len(cron_provenance) == 1
         and manager_boundary,
         "active_postinstall": all(
