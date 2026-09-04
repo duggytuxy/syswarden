@@ -511,6 +511,11 @@ type nftDynamicSnapshot struct {
 	present    map[nftObjectKey]bool
 }
 
+type nftDynamicBanRemoval struct {
+	start netip.Addr
+	end   netip.Addr
+}
+
 var nftDynamicBanSets = []nftObjectKey{
 	{family: "inet", table: "syswarden", name: "banned_ips"},
 	{family: "inet", table: "syswarden", name: "banned_ips6"},
@@ -530,6 +535,62 @@ func newNFTDynamicSnapshot(capturedAt time.Time) nftDynamicSnapshot {
 		snapshot.discarded[key] = make(map[string]nftDynamicBan)
 	}
 	return snapshot
+}
+
+func newNFTDynamicBanRemoval(value string) (nftDynamicBanRemoval, error) {
+	interval, err := nftIntervalForEntry(value)
+	if err != nil {
+		return nftDynamicBanRemoval{}, fmt.Errorf("invalid dynamic ban removal target: %w", err)
+	}
+	return nftDynamicBanRemoval{start: interval.start, end: interval.end}, nil
+}
+
+func nftDynamicSnapshotWithoutRemovals(snapshot nftDynamicSnapshot, removals []nftDynamicBanRemoval) nftDynamicSnapshot {
+	filtered := newNFTDynamicSnapshot(snapshot.capturedAt)
+	for _, key := range nftDynamicBanSets {
+		filtered.present[key] = snapshot.present[key]
+		for identity, ban := range snapshot.sets[key] {
+			filtered.sets[key][identity] = ban
+		}
+		for identity, ban := range snapshot.discarded[key] {
+			filtered.discarded[key][identity] = ban
+		}
+	}
+	for _, removal := range removals {
+		for _, key := range nftDynamicBanSets {
+			if removal.start.Is6() != strings.HasSuffix(key.name, "6") {
+				continue
+			}
+			remaining := make(map[string]nftDynamicBan, len(filtered.sets[key]))
+			for _, ban := range filtered.sets[key] {
+				for _, residual := range subtractNFTDynamicBan(ban, removal) {
+					remaining[dynamicBanIdentity(residual)] = residual
+				}
+			}
+			filtered.sets[key] = remaining
+		}
+	}
+	return filtered
+}
+
+func subtractNFTDynamicBan(ban nftDynamicBan, removal nftDynamicBanRemoval) []nftDynamicBan {
+	if ban.start.Is4() != removal.start.Is4() || ban.end.Compare(removal.start) < 0 || removal.end.Compare(ban.start) < 0 {
+		return []nftDynamicBan{ban}
+	}
+	residuals := make([]nftDynamicBan, 0, 2)
+	if ban.start.Compare(removal.start) < 0 {
+		left := ban
+		left.end = removal.start.Prev()
+		left.ambiguousOpenInterval = isAmbiguousNFTMaximumEndingRange(left.start, left.end)
+		residuals = append(residuals, left)
+	}
+	if removal.end.Compare(ban.end) < 0 {
+		right := ban
+		right.start = removal.end.Next()
+		right.ambiguousOpenInterval = isAmbiguousNFTMaximumEndingRange(right.start, right.end)
+		residuals = append(residuals, right)
+	}
+	return residuals
 }
 
 func dynamicBanIdentity(ban nftDynamicBan) string {
@@ -1114,6 +1175,38 @@ func populateWhitelistSets(ctx context.Context, sources []nftListSource, address
 	return addresses, ports, errors.Join(errs...)
 }
 
+// configuredWhitelistAddressPopulations keeps network.whitelist_ips effective
+// on every firewall transaction, including systemd reloads where no interactive
+// SSH environment exists. Persistent list files remain an independent source
+// for entries managed by the whitelist CLI command.
+func configuredWhitelistAddressPopulations(values []string) (nftSetPopulation, nftSetPopulation, error) {
+	ipv4 := nftSetPopulation{name: "configured_syswarden_whitelist"}
+	ipv6 := nftSetPopulation{name: "configured_syswarden_whitelist6"}
+	seen := make(map[string]struct{}, len(values))
+	var errs []error
+	for index, value := range values {
+		if config.IsRetiredUnspecifiedWhitelistEntry(value) {
+			continue
+		}
+		entry, err := parseCanonicalListEntry(value, false)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("network.whitelist_ips[%d]: %w", index, err))
+			continue
+		}
+		familyKey := fmt.Sprintf("%t:%s", entry.isIPv4, entry.network)
+		if _, duplicate := seen[familyKey]; duplicate {
+			continue
+		}
+		seen[familyKey] = struct{}{}
+		if entry.isIPv4 {
+			ipv4.entries = append(ipv4.entries, entry.network)
+		} else {
+			ipv6.entries = append(ipv6.entries, entry.network)
+		}
+	}
+	return ipv4, ipv6, errors.Join(errs...)
+}
+
 func normalizeNFTAddressPortEntries(setName string, entries []string) ([]string, error) {
 	byPort := make(map[string][]string)
 	for _, value := range entries {
@@ -1393,7 +1486,7 @@ func buildPopulationRules(populations []nftSetPopulation) (string, error) {
 	return builder.String(), errors.Join(errs...)
 }
 
-func applyNftablesTransaction(ctx context.Context, runner nftCommandRunner, stateDirectory, baseRules string, populations []nftSetPopulation, verification nftVerificationPlan) (string, error) {
+func applyNftablesTransaction(ctx context.Context, runner nftCommandRunner, stateDirectory, baseRules string, populations []nftSetPopulation, verification nftVerificationPlan, dynamicBanRemovals ...nftDynamicBanRemoval) (string, error) {
 	transactionID, err := newFirewallTransactionID()
 	if err != nil {
 		return "", err
@@ -1403,14 +1496,14 @@ func applyNftablesTransaction(ctx context.Context, runner nftCommandRunner, stat
 		return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: acquire reload lock: %w", transactionID, err)
 	}
 	defer releaseNFTReloadGuard(lock)
-	return applyNftablesTransactionLocked(ctx, runner, stateDirectory, baseRules, populations, verification, transactionID, nil)
+	return applyNftablesTransactionLocked(ctx, runner, stateDirectory, baseRules, populations, verification, transactionID, nil, dynamicBanRemovals...)
 }
 
 // applyNftablesTransactionLocked executes a complete transaction while the
 // caller holds both the in-process mutex and the shared firewall flock. Keeping
 // this split lets ApplyPolicies retain the same lock until its non-authoritative
 // compatibility wrappers have also been reconciled.
-func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner, stateDirectory, baseRules string, populations []nftSetPopulation, verification nftVerificationPlan, transactionID string, precommit func() error) (string, error) {
+func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner, stateDirectory, baseRules string, populations []nftSetPopulation, verification nftVerificationPlan, transactionID string, precommit func() error, dynamicBanRemovals ...nftDynamicBanRemoval) (string, error) {
 	fail := func(format string, args ...any) (string, error) {
 		return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: %s", transactionID, fmt.Sprintf(format, args...))
 	}
@@ -1467,7 +1560,8 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 	if err != nil {
 		return fail("snapshot current tables: %v", err)
 	}
-	dynamicRules, expectedDynamicBans, err := buildNFTDynamicBanRules(dynamicSnapshot, time.Now())
+	candidateDynamicSnapshot := nftDynamicSnapshotWithoutRemovals(dynamicSnapshot, dynamicBanRemovals)
+	dynamicRules, expectedDynamicBans, err := buildNFTDynamicBanRules(candidateDynamicSnapshot, time.Now())
 	if err != nil {
 		return fail("prepare preserved dynamic bans: %v", err)
 	}
@@ -1586,11 +1680,11 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 	}
 	if err := updateNFTTransactionJournal(stateDirectory, journal, nftTransactionPersisted); err != nil {
 		if nftJournalWriteWasPublished(err) {
-			return transactionID, fmt.Errorf(
+			return transactionID, markCommittedFirewallPolicyError(fmt.Errorf(
 				"firewall transaction %s is committed, verified and persisted; persisted journal phase durability is uncertain and cleanup will be retried: %w",
 				transactionID,
 				err,
-			)
+			))
 		}
 		rollbackErr := rollbackJournaledNftables(runner, stateDirectory, journal, dynamicSnapshot)
 		if rollbackErr != nil {
@@ -1600,17 +1694,17 @@ func applyNftablesTransactionLocked(ctx context.Context, runner nftCommandRunner
 	}
 	if err := removeNFTTransactionJournal(stateDirectory); err != nil {
 		if nftJournalWasUnlinked(err) {
-			return transactionID, fmt.Errorf(
+			return transactionID, markCommittedFirewallPolicyError(fmt.Errorf(
 				"firewall transaction %s is committed, verified and persisted; recovery journal cleanup durability is uncertain: %w",
 				transactionID,
 				err,
-			)
+			))
 		}
-		return transactionID, fmt.Errorf(
+		return transactionID, markCommittedFirewallPolicyError(fmt.Errorf(
 			"firewall transaction %s is committed, verified and persisted; recovery journal cleanup is incomplete and will be retried: %w",
 			transactionID,
 			err,
-		)
+		))
 	}
 	writeNFTDynamicSnapshotWarnings(os.Stderr, dynamicSnapshot, true)
 
@@ -1936,7 +2030,9 @@ func verifyNftablesState(ctx context.Context, runner nftCommandRunner, expected 
 }
 
 func verifyNftablesStateWithDynamicBans(ctx context.Context, runner nftCommandRunner, expected nftVerificationPlan, expectedDynamic *nftDynamicSnapshot) error {
+	observationStartedAt := time.Now()
 	output, err := runner.Run(ctx, nil, "-j", "list", "ruleset")
+	observationFinishedAt := time.Now()
 	if err != nil {
 		return fmt.Errorf("list applied ruleset: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -1993,8 +2089,7 @@ func verifyNftablesStateWithDynamicBans(ctx context.Context, runner nftCommandRu
 		}
 	}
 	if expectedDynamic != nil {
-		observedAt := time.Now()
-		observed, snapshotErr := extractNFTDynamicSnapshot(document, observedAt)
+		observed, snapshotErr := extractNFTDynamicSnapshot(document, observationStartedAt)
 		if snapshotErr != nil {
 			errs = append(errs, fmt.Errorf("inspect preserved dynamic bans: %w", snapshotErr))
 		} else {
@@ -2008,7 +2103,7 @@ func verifyNftablesStateWithDynamicBans(ctx context.Context, runner nftCommandRu
 					))
 				}
 			}
-			if comparisonErr := compareNFTDynamicSnapshots(*expectedDynamic, observed, observedAt); comparisonErr != nil {
+			if comparisonErr := compareNFTDynamicSnapshots(*expectedDynamic, observed, observationFinishedAt); comparisonErr != nil {
 				errs = append(errs, comparisonErr)
 			}
 		}
@@ -2458,21 +2553,28 @@ func nftJSONVerdictTarget(raw json.RawMessage) (string, string, bool) {
 }
 
 func compareNFTDynamicSnapshots(expected, observed nftDynamicSnapshot, observedAt time.Time) error {
-	elapsed := observedAt.Sub(expected.capturedAt)
-	if elapsed < 0 {
+	observationStartedAt := observed.capturedAt
+	if observationStartedAt.IsZero() || observedAt.Before(observationStartedAt) {
+		return fmt.Errorf("cannot verify dynamic bans across an invalid observation window")
+	}
+	elapsedAtStart := observationStartedAt.Sub(expected.capturedAt)
+	elapsedAtFinish := observedAt.Sub(expected.capturedAt)
+	if elapsedAtStart < 0 || elapsedAtFinish < 0 {
 		return fmt.Errorf("cannot verify dynamic bans after a backwards clock step")
 	}
-	elapsed = elapsed.Truncate(time.Millisecond)
+	elapsedAtStart = elapsedAtStart.Truncate(time.Millisecond)
+	elapsedAtFinish = elapsedAtFinish.Truncate(time.Millisecond)
 	const expiryTolerance = 1500 * time.Millisecond
 	var errs []error
 	for _, key := range nftDynamicBanSets {
 		activeExpected := make(map[string]nftDynamicBan, len(expected.sets[key]))
 		for identity, ban := range expected.sets[key] {
 			if ban.expires > 0 {
-				if ban.expires <= elapsed {
+				// A timed element that was already beyond the libnftables
+				// rounding tolerance before observation began must be absent.
+				if ban.expires <= elapsedAtStart && elapsedAtStart-ban.expires > expiryTolerance {
 					continue
 				}
-				ban.expires -= elapsed
 			}
 			activeExpected[identity] = ban
 		}
@@ -2480,6 +2582,12 @@ func compareNFTDynamicSnapshots(expected, observed nftDynamicSnapshot, observedA
 		for identity, wanted := range activeExpected {
 			found, exists := actual[identity]
 			if !exists {
+				if wanted.expires > 0 &&
+					(wanted.expires <= elapsedAtFinish || wanted.expires-elapsedAtFinish <= expiryTolerance) {
+					// The element could legitimately have expired while nft was
+					// serializing the ruleset captured by this observation window.
+					continue
+				}
 				errs = append(errs, fmt.Errorf("dynamic set %s %s %s lost %s", key.family, key.table, key.name, identity))
 				continue
 			}
@@ -2494,19 +2602,32 @@ func compareNFTDynamicSnapshots(expected, observed nftDynamicSnapshot, observedA
 				errs = append(errs, fmt.Errorf("dynamic set %s %s %s timeout for %s is %s, expected %s", key.family, key.table, key.name, identity, found.timeout, wanted.timeout))
 			}
 			if found.omitFromMigration {
-				if timeoutMatches && wanted.expires <= expiryTolerance {
+				if timeoutMatches &&
+					(wanted.expires <= elapsedAtFinish || wanted.expires-elapsedAtFinish <= expiryTolerance) {
 					continue
 				}
 				errs = append(errs, fmt.Errorf("dynamic set %s %s %s reached a zero-second reported expiry for %s outside the expected final-second tolerance", key.family, key.table, key.name, identity))
 				continue
 			}
-			minimum := wanted.expires - expiryTolerance
+			minimum := time.Duration(0)
+			if wanted.expires > elapsedAtFinish {
+				minimum = wanted.expires - elapsedAtFinish
+			}
+			minimum -= min(minimum, expiryTolerance)
 			if minimum < time.Millisecond {
 				minimum = time.Millisecond
 			}
-			maximum := wanted.expires + expiryTolerance
+			maximum := time.Duration(0)
+			if wanted.expires > elapsedAtStart {
+				maximum = wanted.expires - elapsedAtStart
+			}
+			if maximum > time.Duration(1<<63-1)-expiryTolerance {
+				maximum = time.Duration(1<<63 - 1)
+			} else {
+				maximum += expiryTolerance
+			}
 			if found.expires < minimum || found.expires > maximum {
-				errs = append(errs, fmt.Errorf("dynamic set %s %s %s remaining expiry for %s is %s, expected %s within %s", key.family, key.table, key.name, identity, found.expires, wanted.expires, expiryTolerance))
+				errs = append(errs, fmt.Errorf("dynamic set %s %s %s remaining expiry for %s is %s, expected between %s and %s across the bounded observation window", key.family, key.table, key.name, identity, found.expires, minimum, maximum))
 			}
 		}
 		for identity := range actual {

@@ -43,9 +43,69 @@ class PackageStageGateTests(unittest.TestCase):
             elif contract.kind == "symlink":
                 path.symlink_to(contract.target)
 
-    def test_accepts_exact_linux_stage(self) -> None:
+    def test_accepts_exact_openrc_linux_stage(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)
         package_stage_gate.validate(self.root, package_stage_gate.LINUX_ENTRIES)
+
+    def test_accepts_exact_systemd_stage_with_ordering_contract(self) -> None:
+        self.create_stage(package_stage_gate.SYSTEMD_LINUX_ENTRIES)
+        ordering = self.root / package_stage_gate.SYSTEMD_ORDERING_PATH
+        payload = ordering.read_bytes()
+        contract = package_stage_gate.ContentContract(
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+        )
+
+        package_stage_gate.validate(
+            self.root,
+            package_stage_gate.SYSTEMD_LINUX_ENTRIES,
+            systemd_ordering_contract=contract,
+        )
+
+    def test_openrc_inventory_rejects_systemd_ordering_artifact(self) -> None:
+        self.create_stage(package_stage_gate.SYSTEMD_LINUX_ENTRIES)
+
+        with self.assertRaisesRegex(
+            package_stage_gate.PackageStageError,
+            "unexpected: usr/lib",
+        ):
+            package_stage_gate.validate(
+                self.root,
+                package_stage_gate.LINUX_ENTRIES,
+            )
+
+    def test_systemd_inventory_rejects_missing_ordering_artifact(self) -> None:
+        self.create_stage(package_stage_gate.SYSTEMD_LINUX_ENTRIES)
+        (self.root / package_stage_gate.SYSTEMD_ORDERING_PATH).unlink()
+
+        with self.assertRaisesRegex(
+            package_stage_gate.PackageStageError,
+            "missing: " + package_stage_gate.SYSTEMD_ORDERING_PATH,
+        ):
+            package_stage_gate.validate(
+                self.root,
+                package_stage_gate.SYSTEMD_LINUX_ENTRIES,
+            )
+
+    def test_systemd_inventory_rejects_ordering_content_drift(self) -> None:
+        self.create_stage(package_stage_gate.SYSTEMD_LINUX_ENTRIES)
+        ordering = self.root / package_stage_gate.SYSTEMD_ORDERING_PATH
+        payload = ordering.read_bytes()
+        contract = package_stage_gate.ContentContract(
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+        )
+        ordering.write_bytes(payload + b"drift\n")
+
+        with self.assertRaisesRegex(
+            package_stage_gate.PackageStageError,
+            "size mismatch",
+        ):
+            package_stage_gate.validate(
+                self.root,
+                package_stage_gate.SYSTEMD_LINUX_ENTRIES,
+                systemd_ordering_contract=contract,
+            )
 
     def test_accepts_exact_completion_content_contract(self) -> None:
         self.create_stage(package_stage_gate.LINUX_ENTRIES)

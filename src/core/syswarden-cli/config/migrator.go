@@ -73,6 +73,13 @@ func (m *Migrator) Run() error {
 	if err != nil {
 		return fmt.Errorf("normalize legacy HA configuration: %w", err)
 	}
+	whitelistIPs, retiredWhitelistEntries := neutralizeRetiredUnspecifiedWhitelistText(
+		legacyValue(oldConfig, "SYSWARDEN_WHITELIST_IPS", ""),
+	)
+	if len(retiredWhitelistEntries) != 0 {
+		oldConfig["SYSWARDEN_WHITELIST_IPS"] = whitelistIPs
+		logRetiredUnspecifiedWhitelistEntries(retiredWhitelistEntries)
+	}
 	modules, err := m.renderModules(oldConfig)
 	if err != nil {
 		return err
@@ -497,6 +504,7 @@ func (m *Migrator) validateRenderedMigration(master string, modules []renderedMo
 	if err := v.Unmarshal(&candidate); err != nil {
 		return fmt.Errorf("decode rendered configuration: %w", err)
 	}
+	neutralizeRetiredUnspecifiedWhitelistConfig(&candidate)
 	return validateConfig(&candidate)
 }
 
@@ -970,7 +978,10 @@ func (m *Migrator) generateNetwork(oldConfig map[string]string) (string, error) 
 	geoAllowedStr := legacySliceText(legacyValue(oldConfig, "SYSWARDEN_GEO_ALLOWED", ""))
 	asnAllowedStr := legacySliceText(legacyValue(oldConfig, "SYSWARDEN_ASN_ALLOWED", ""))
 	lanListStr := legacySliceText(legacyValue(oldConfig, "SYSWARDEN_LAN_SUBNETS", ""))
-	whitelistIPsStr := legacySliceText(legacyValue(oldConfig, "SYSWARDEN_WHITELIST_IPS", ""))
+	whitelistIPs, _ := neutralizeRetiredUnspecifiedWhitelistText(
+		legacyValue(oldConfig, "SYSWARDEN_WHITELIST_IPS", ""),
+	)
+	whitelistIPsStr := legacySliceText(whitelistIPs)
 
 	content := `# [10] NETWORK & THREAT INTELLIGENCE
 # Priority: 10

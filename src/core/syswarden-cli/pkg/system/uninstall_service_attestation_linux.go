@@ -201,7 +201,12 @@ func resolveWireGuardRemovalExecutable() (string, error) {
 	return resolved, nil
 }
 
-func attestRootOwnedFirewallRemovalFile(path string, executable bool) (os.FileInfo, error) {
+func attestFirewallRemovalFileOwner(
+	path string,
+	executable bool,
+	expectedUID uint32,
+	expectedGID uint32,
+) (os.FileInfo, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, fmt.Errorf("firewall removal file path %q is not clean and absolute", path)
 	}
@@ -211,7 +216,8 @@ func attestRootOwnedFirewallRemovalFile(path string, executable bool) (os.FileIn
 	}
 	stat, ok := before.Sys().(*syscall.Stat_t)
 	if !ok || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Mode().Perm()&0022 != 0 ||
-		stat.Uid != 0 || stat.Gid != 0 || stat.Nlink != 1 || before.Size() < 0 || before.Size() > maximumFirewallRemovalUnitSize {
+		stat.Uid != expectedUID || stat.Gid != expectedGID || stat.Nlink != 1 || before.Size() < 0 ||
+		before.Size() > maximumFirewallRemovalUnitSize {
 		return nil, fmt.Errorf("refusing unsafe firewall removal file %s", path)
 	}
 	if executable && before.Mode().Perm()&0111 == 0 {
@@ -235,7 +241,18 @@ func sameFirewallRemovalFileIdentity(first, second os.FileInfo) bool {
 }
 
 func readFirewallRemovalFile(path string, mode os.FileMode) (firewallRemovalFileSnapshot, error) {
-	before, err := attestRootOwnedFirewallRemovalFile(path, mode&0111 != 0)
+	return readFirewallRemovalFileWithOwner(path, mode, 0, 0)
+}
+
+func readFirewallRemovalFileWithOwner(
+	path string,
+	mode os.FileMode,
+	expectedUID uint32,
+	expectedGID uint32,
+) (firewallRemovalFileSnapshot, error) {
+	before, err := attestFirewallRemovalFileOwner(
+		path, mode&0111 != 0, expectedUID, expectedGID,
+	)
 	if err != nil {
 		return firewallRemovalFileSnapshot{}, err
 	}

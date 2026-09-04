@@ -192,6 +192,69 @@ func TestPopulateWhitelistPortSetsNormalizesIPv6Overlap_SW_LIST_001(t *testing.T
 	}
 }
 
+func TestConfiguredWhitelistIsAnEffectiveTransactionSource_SW_LIST_001(t *testing.T) {
+	ipv4, ipv6, err := configuredWhitelistAddressPopulations([]string{
+		"92.222.186.0/24",
+		"92.222.186.42",
+		"2606:4700:4700::1",
+		"92.222.186.0/24",
+	})
+	if err != nil {
+		t.Fatalf("configured whitelist rejected valid entries: %v", err)
+	}
+	fileIPv4 := nftSetPopulation{name: "syswarden_whitelist", entries: []string{"92.222.186.128/25", "198.51.100.10"}}
+	mergedIPv4, err := mergeNFTAddressPopulations("syswarden_whitelist", fileIPv4, ipv4)
+	if err != nil {
+		t.Fatalf("merge configured IPv4 whitelist: %v", err)
+	}
+	if want := []string{"92.222.186.0/24", "198.51.100.10"}; !reflect.DeepEqual(mergedIPv4.entries, want) {
+		t.Fatalf("effective IPv4 whitelist = %#v, want %#v", mergedIPv4.entries, want)
+	}
+	if want := []string{"2606:4700:4700::1"}; !reflect.DeepEqual(ipv6.entries, want) {
+		t.Fatalf("effective IPv6 whitelist = %#v, want %#v", ipv6.entries, want)
+	}
+}
+
+func TestConfiguredWhitelistFailsClosedUnderPersistentListPolicy_SW_LIST_001(t *testing.T) {
+	ipv4, ipv6, err := configuredWhitelistAddressPopulations([]string{
+		"92.222.186.42",
+		"0.0.0.0/0",
+		"fe80::1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "network.whitelist_ips[1]") {
+		t.Fatalf("unsafe configured whitelist error = %v", err)
+	}
+	if want := []string{"92.222.186.42"}; !reflect.DeepEqual(ipv4.entries, want) {
+		t.Fatalf("safe IPv4 candidates = %#v, want %#v", ipv4.entries, want)
+	}
+	if len(ipv6.entries) != 0 {
+		t.Fatalf("special-use IPv6 candidate reached the transaction: %#v", ipv6.entries)
+	}
+}
+
+func TestConfiguredWhitelistNeutralizesRetiredZeroEntries_SW_LIST_001(t *testing.T) {
+	ipv4, ipv6, err := configuredWhitelistAddressPopulations([]string{
+		"0.0.0.0",
+		"10.20.30.40",
+		"10.20.30.0/24",
+		"92.222.186.42",
+		"192.0.2.0/24",
+		"0.0.0.0/32",
+		"fd00:1234::/64",
+		"2606:4700:4700::1",
+		"2001:db8:1234::/64",
+	})
+	if err != nil {
+		t.Fatalf("retired zero whitelist entries were not neutralized: %v", err)
+	}
+	if want := []string{"10.20.30.40", "10.20.30.0/24", "92.222.186.42", "192.0.2.0/24"}; !reflect.DeepEqual(ipv4.entries, want) {
+		t.Fatalf("effective IPv4 whitelist = %#v, want %#v", ipv4.entries, want)
+	}
+	if want := []string{"fd00:1234::/64", "2606:4700:4700::1", "2001:db8:1234::/64"}; !reflect.DeepEqual(ipv6.entries, want) {
+		t.Fatalf("effective IPv6 whitelist = %#v, want %#v", ipv6.entries, want)
+	}
+}
+
 func TestPopulateHistoricalSSHBypassSets_SW_LIST_002(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ssh_whitelist.txt")
 	content := "192.0.2.0/24:2222\n192.0.2.0/24\n[2001:db8::10]:2222\n2001:db8::10\n"

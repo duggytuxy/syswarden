@@ -13,6 +13,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func init() {
+	// Command-pipeline tests inject the earliest package-ordering verdict. The
+	// system package owns the real package-manager and filesystem attestation
+	// tests, so these command tests never depend on the developer host RPM/DPKG
+	// database.
+	preflightSystemdFirewallOrderingForInstall = func() error { return nil }
+}
+
 func stubInstallFirewallCompatibility(t *testing.T) {
 	t.Helper()
 	previousClassifierError := classifyInstallFirewallCompatibilityError
@@ -34,6 +42,52 @@ func stubInstallFirewallCompatibility(t *testing.T) {
 		inspectInstallFirewallCompatibility = previousInspect
 		applyInstallFirewallCompatibility = previousApply
 	})
+}
+
+func TestInstallRejectsMissingManagedSystemdOrderingBeforeHostMutation(t *testing.T) {
+	previousOrdering := preflightSystemdFirewallOrderingForInstall
+	previousCron := hostCronSchedulingPreflight
+	previousFirewall := hostFirewallBackendPreflight
+	previousConfig := installConfigPreflight
+	previousDependencies := installDependenciesForInstall
+	previousForwardingRecovery := recoverPendingWireGuardForwardingForInstall
+	previousWireGuardRecovery := recoverPendingWireGuardForInstall
+	previousWireGuardPreflight := preflightWireGuardForInstall
+	previousSSH := configureSSHForInstall
+	previousPolicies := applyPoliciesForInstall
+	t.Cleanup(func() {
+		preflightSystemdFirewallOrderingForInstall = previousOrdering
+		hostCronSchedulingPreflight = previousCron
+		hostFirewallBackendPreflight = previousFirewall
+		installConfigPreflight = previousConfig
+		installDependenciesForInstall = previousDependencies
+		recoverPendingWireGuardForwardingForInstall = previousForwardingRecovery
+		recoverPendingWireGuardForInstall = previousWireGuardRecovery
+		preflightWireGuardForInstall = previousWireGuardPreflight
+		configureSSHForInstall = previousSSH
+		applyPoliciesForInstall = previousPolicies
+	})
+
+	preflightSystemdFirewallOrderingForInstall = func() error {
+		return errors.New("packaged systemd ordering drop-in is absent")
+	}
+	unexpected := func(label string) {
+		t.Fatalf("%s ran after the earliest ordering preflight refused the host", label)
+	}
+	hostCronSchedulingPreflight = func(bool) error { unexpected("cron preflight"); return nil }
+	hostFirewallBackendPreflight = func(string) error { unexpected("firewall preflight"); return nil }
+	installConfigPreflight = func(string) error { unexpected("configuration repair"); return nil }
+	installDependenciesForInstall = func() error { unexpected("dependency mutation"); return nil }
+	recoverPendingWireGuardForwardingForInstall = func() error { unexpected("forwarding recovery"); return nil }
+	recoverPendingWireGuardForInstall = func() error { unexpected("WireGuard recovery"); return nil }
+	preflightWireGuardForInstall = func() error { unexpected("WireGuard preflight"); return nil }
+	configureSSHForInstall = func() error { unexpected("SSH mutation"); return nil }
+	applyPoliciesForInstall = func() error { unexpected("firewall mutation"); return nil }
+
+	err := installCmd.RunE(installCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "before host mutation") {
+		t.Fatalf("ordering preflight refusal = %v", err)
+	}
 }
 
 func TestInstallCommandReturnsFailureBeforeCompletion_SW_CFG_001(t *testing.T) {
@@ -985,6 +1039,189 @@ func TestReloadRejectsBackendBeforeMutation_SW2_FWBACKEND_009(t *testing.T) {
 	err := reloadCmd.RunE(reloadCmd, nil)
 	if err == nil || !strings.Contains(err.Error(), "before reload mutation") {
 		t.Fatalf("reload backend refusal = %v", err)
+	}
+}
+
+func TestReloadRejectsWireGuardProvenanceMismatchBeforeFirewallMutation_SW2_WG_001(t *testing.T) {
+	previousConfig := config.GlobalConfig
+	previousFirewallPreflight := hostFirewallBackendPreflight
+	previousCronPreflight := hostCronSchedulingPreflight
+	previousWireGuardForwardingRecovery := recoverPendingWireGuardForwardingForReload
+	previousWireGuardRecovery := recoverPendingWireGuardForReload
+	previousWireGuardPreflight := preflightWireGuardForReload
+	previousApply := applyPoliciesForReload
+	config.GlobalConfig = &config.Config{FirewallBackend: "nftables", EnableWG: true}
+	hostCronSchedulingPreflight = func(bool) error { return nil }
+	hostFirewallBackendPreflight = func(string) error { return nil }
+	recoverPendingWireGuardForwardingForReload = func() error { return nil }
+	recoverPendingWireGuardForReload = func() error { return nil }
+	preflightWireGuardForReload = func() error {
+		return errors.New("existing WireGuard nftables table provenance mismatch")
+	}
+	applyPoliciesForReload = func() error {
+		t.Fatal("firewall mutation ran after WireGuard provenance refusal")
+		return nil
+	}
+	t.Cleanup(func() {
+		config.GlobalConfig = previousConfig
+		hostFirewallBackendPreflight = previousFirewallPreflight
+		hostCronSchedulingPreflight = previousCronPreflight
+		recoverPendingWireGuardForwardingForReload = previousWireGuardForwardingRecovery
+		recoverPendingWireGuardForReload = previousWireGuardRecovery
+		preflightWireGuardForReload = previousWireGuardPreflight
+		applyPoliciesForReload = previousApply
+	})
+
+	err := reloadCmd.RunE(reloadCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "WireGuard preflight failed before reload mutation") ||
+		!strings.Contains(err.Error(), "provenance mismatch") {
+		t.Fatalf("reload WireGuard provenance refusal = %v", err)
+	}
+}
+
+func TestInstallWireGuardRecoveryAndPreflightPrecedeSensitiveMutation_SW2_WG_001(t *testing.T) {
+	stubInstallFirewallCompatibility(t)
+	previousConfig := config.GlobalConfig
+	previousConfigPreflight := installConfigPreflight
+	previousDependencies := installDependenciesForInstall
+	previousFirewallPreflight := hostFirewallBackendPreflight
+	previousCronPreflight := hostCronSchedulingPreflight
+	previousForwardingRecovery := recoverPendingWireGuardForwardingForInstall
+	previousRecovery := recoverPendingWireGuardForInstall
+	previousWireGuardPreflight := preflightWireGuardForInstall
+	previousConfigureSSH := configureSSHForInstall
+	previousApply := applyPoliciesForInstall
+	t.Cleanup(func() {
+		config.GlobalConfig = previousConfig
+		installConfigPreflight = previousConfigPreflight
+		installDependenciesForInstall = previousDependencies
+		hostFirewallBackendPreflight = previousFirewallPreflight
+		hostCronSchedulingPreflight = previousCronPreflight
+		recoverPendingWireGuardForwardingForInstall = previousForwardingRecovery
+		recoverPendingWireGuardForInstall = previousRecovery
+		preflightWireGuardForInstall = previousWireGuardPreflight
+		configureSSHForInstall = previousConfigureSSH
+		applyPoliciesForInstall = previousApply
+	})
+	t.Setenv("SYSWARDEN_PKG_INSTALL", "0")
+	config.GlobalConfig = &config.Config{FirewallBackend: "nftables", EnableWG: true}
+	installConfigPreflight = func(string) error { return nil }
+	hostFirewallBackendPreflight = func(string) error { return nil }
+	hostCronSchedulingPreflight = func(bool) error { return nil }
+	events := []string{}
+	installDependenciesForInstall = func() error {
+		events = append(events, "dependencies")
+		return nil
+	}
+	recoverPendingWireGuardForwardingForInstall = func() error {
+		events = append(events, "forwarding-recovery")
+		return nil
+	}
+	recoverPendingWireGuardForInstall = func() error {
+		events = append(events, "recovery")
+		return nil
+	}
+	preflightWireGuardForInstall = func() error {
+		events = append(events, "preflight")
+		return errors.New("existing WireGuard nftables table provenance mismatch")
+	}
+	configureSSHForInstall = func() error {
+		t.Fatal("SSH mutation ran after WireGuard preflight refusal")
+		return nil
+	}
+	applyPoliciesForInstall = func() error {
+		t.Fatal("firewall mutation ran after WireGuard preflight refusal")
+		return nil
+	}
+
+	err := installCmd.RunE(installCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "WireGuard preflight failed before SSH or firewall mutation") ||
+		!strings.Contains(err.Error(), "provenance mismatch") {
+		t.Fatalf("install WireGuard preflight refusal = %v", err)
+	}
+	if got := strings.Join(events, ","); got != "dependencies,forwarding-recovery,recovery,preflight" {
+		t.Fatalf("install recovery/preflight order = %q", got)
+	}
+}
+
+func TestReloadRefusesUnrecoverableWireGuardJournalBeforeReadOnlyPreflightAndFirewallMutation_SW2_WG_001(t *testing.T) {
+	previousConfig := config.GlobalConfig
+	previousFirewallPreflight := hostFirewallBackendPreflight
+	previousCronPreflight := hostCronSchedulingPreflight
+	previousForwardingRecovery := recoverPendingWireGuardForwardingForReload
+	previousRecovery := recoverPendingWireGuardForReload
+	previousWireGuardPreflight := preflightWireGuardForReload
+	previousApply := applyPoliciesForReload
+	t.Cleanup(func() {
+		config.GlobalConfig = previousConfig
+		hostFirewallBackendPreflight = previousFirewallPreflight
+		hostCronSchedulingPreflight = previousCronPreflight
+		recoverPendingWireGuardForwardingForReload = previousForwardingRecovery
+		recoverPendingWireGuardForReload = previousRecovery
+		preflightWireGuardForReload = previousWireGuardPreflight
+		applyPoliciesForReload = previousApply
+	})
+	config.GlobalConfig = &config.Config{FirewallBackend: "nftables", EnableWG: true}
+	hostCronSchedulingPreflight = func(bool) error { return nil }
+	hostFirewallBackendPreflight = func(string) error { return nil }
+	recoverPendingWireGuardForwardingForReload = func() error { return nil }
+	pendingDebt := errors.New("pending WireGuard removal retains an unproven external-runtime reload debt")
+	recoverPendingWireGuardForReload = func() error { return pendingDebt }
+	preflightWireGuardForReload = func() error {
+		t.Fatal("read-only WireGuard preflight ran after recovery refusal")
+		return nil
+	}
+	applyPoliciesForReload = func() error {
+		t.Fatal("firewall mutation ran after recovery refusal")
+		return nil
+	}
+
+	err := reloadCmd.RunE(reloadCmd, nil)
+	if err == nil || !errors.Is(err, pendingDebt) ||
+		!strings.Contains(err.Error(), "transaction recovery failed before reload mutation") {
+		t.Fatalf("reload unrecoverable journal refusal = %v", err)
+	}
+}
+
+func TestReloadRefusesCorruptForwardingJournalBeforeOwnershipRecoveryAndMutation_SW2_WG_001(t *testing.T) {
+	previousConfig := config.GlobalConfig
+	previousFirewallPreflight := hostFirewallBackendPreflight
+	previousCronPreflight := hostCronSchedulingPreflight
+	previousForwardingRecovery := recoverPendingWireGuardForwardingForReload
+	previousRecovery := recoverPendingWireGuardForReload
+	previousWireGuardPreflight := preflightWireGuardForReload
+	previousApply := applyPoliciesForReload
+	t.Cleanup(func() {
+		config.GlobalConfig = previousConfig
+		hostFirewallBackendPreflight = previousFirewallPreflight
+		hostCronSchedulingPreflight = previousCronPreflight
+		recoverPendingWireGuardForwardingForReload = previousForwardingRecovery
+		recoverPendingWireGuardForReload = previousRecovery
+		preflightWireGuardForReload = previousWireGuardPreflight
+		applyPoliciesForReload = previousApply
+	})
+	config.GlobalConfig = &config.Config{FirewallBackend: "nftables", EnableWG: true}
+	hostCronSchedulingPreflight = func(bool) error { return nil }
+	hostFirewallBackendPreflight = func(string) error { return nil }
+	corruptDebt := errors.New("corrupt WireGuard forwarding persistence journal")
+	recoverPendingWireGuardForwardingForReload = func() error { return corruptDebt }
+	recoverPendingWireGuardForReload = func() error {
+		t.Fatal("ownership recovery ran after forwarding journal refusal")
+		return nil
+	}
+	preflightWireGuardForReload = func() error {
+		t.Fatal("read-only WireGuard preflight ran after forwarding journal refusal")
+		return nil
+	}
+	applyPoliciesForReload = func() error {
+		t.Fatal("firewall mutation ran after forwarding journal refusal")
+		return nil
+	}
+
+	err := reloadCmd.RunE(reloadCmd, nil)
+	if err == nil || !errors.Is(err, corruptDebt) ||
+		!strings.Contains(err.Error(), "forwarding persistence recovery failed before reload mutation") {
+		t.Fatalf("reload corrupt forwarding journal refusal = %v", err)
 	}
 }
 

@@ -379,6 +379,7 @@ func mergeHistoricalDefaultFirewallCandidate(
 	v.AutomaticEnv()
 	v.SetEnvPrefix("SYSWARDEN")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+	_ = v.BindEnv("network.whitelist_ips")
 	_ = v.BindEnv("network.saas.allow_monitors")
 	_ = v.BindEnv("integrations.saas.enabled")
 	setDefaults(v, configDir)
@@ -410,6 +411,7 @@ func mergeHistoricalDefaultFirewallCandidate(
 	if err := v.Unmarshal(&candidate); err != nil {
 		return ModularConfig{}, err
 	}
+	neutralizeRetiredUnspecifiedWhitelistConfig(&candidate)
 	if err := validateConfig(&candidate); err != nil {
 		return ModularConfig{}, err
 	}

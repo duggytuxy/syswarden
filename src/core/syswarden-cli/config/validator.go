@@ -19,6 +19,35 @@ import (
 
 var validate *validator.Validate
 var interfaceNameRegex = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,15}$`)
+var deniedConfiguredWhitelistPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.31.196.0/24"),
+	netip.MustParsePrefix("192.52.193.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("192.175.48.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/128"),
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("100:0:0:1::/64"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("2620:4f:8000::/48"),
+	netip.MustParsePrefix("3ffe::/16"),
+	netip.MustParsePrefix("5f00::/16"),
+	netip.MustParsePrefix("fec0::/10"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("ff00::/8"),
+}
 
 func init() {
 	validate = validator.New()
@@ -195,21 +224,107 @@ func validateIPOrCIDRSlice(fl validator.FieldLevel) bool {
 		return false
 	}
 	for _, value := range values {
-		if value == "" || strings.TrimSpace(value) != value {
-			return false
-		}
-		if address, err := netip.ParseAddr(value); err == nil {
-			if address.Is4In6() || address.Zone() != "" {
-				return false
-			}
-			continue
-		}
-		prefix, err := netip.ParsePrefix(value)
-		if err != nil || prefix.Addr().Is4In6() || prefix.Addr().Zone() != "" || prefix != prefix.Masked() {
+		if !validConfiguredWhitelistEntry(value) {
 			return false
 		}
 	}
 	return true
+}
+
+func validConfiguredWhitelistEntry(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value {
+		return false
+	}
+	var prefix netip.Prefix
+	isHost := false
+	if address, err := netip.ParseAddr(value); err == nil {
+		if !address.IsValid() || address.Is4In6() || address.Zone() != "" || address.String() != value {
+			return false
+		}
+		prefix = netip.PrefixFrom(address, address.BitLen())
+		isHost = true
+	} else {
+		parsed, err := netip.ParsePrefix(value)
+		if err != nil || !parsed.IsValid() || parsed.Addr().Is4In6() || parsed.Addr().Zone() != "" || parsed != parsed.Masked() || parsed.String() != value {
+			return false
+		}
+		prefix = parsed
+	}
+	minimumBits := 64
+	if prefix.Addr().Is4() {
+		minimumBits = 24
+	}
+	if !isHost && prefix.Bits() < minimumBits {
+		return false
+	}
+	if !prefix.Addr().IsGlobalUnicast() {
+		return false
+	}
+	for _, denied := range deniedConfiguredWhitelistPrefixes {
+		if prefix.Addr().BitLen() == denied.Addr().BitLen() &&
+			(prefix.Contains(denied.Addr()) || denied.Contains(prefix.Addr())) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsRetiredUnspecifiedWhitelistEntry identifies the two historical spellings
+// that must be neutralized before policy validation. They are never published
+// into a firewall whitelist.
+func IsRetiredUnspecifiedWhitelistEntry(value string) bool {
+	return value == "0.0.0.0" || value == "0.0.0.0/32"
+}
+
+func neutralizeRetiredUnspecifiedWhitelistEntries(values []string) ([]string, []string) {
+	filtered := make([]string, 0, len(values))
+	retired := make([]string, 0, 2)
+	seenRetired := make(map[string]struct{}, 2)
+	for _, value := range values {
+		if IsRetiredUnspecifiedWhitelistEntry(value) {
+			if _, seen := seenRetired[value]; !seen {
+				retired = append(retired, value)
+				seenRetired[value] = struct{}{}
+			}
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	return filtered, retired
+}
+
+// neutralizeRetiredUnspecifiedWhitelistText applies the same compatibility
+// rule to the space- or comma-separated representation used by legacy
+// configuration. Preserve the original text when no retired entry is found so
+// unrelated legacy values remain byte-for-byte subject to their normal path.
+func neutralizeRetiredUnspecifiedWhitelistText(value string) (string, []string) {
+	values := strings.Fields(strings.ReplaceAll(value, ",", " "))
+	filtered, retired := neutralizeRetiredUnspecifiedWhitelistEntries(values)
+	if len(retired) == 0 {
+		return value, nil
+	}
+	return strings.Join(filtered, " "), retired
+}
+
+// neutralizeRetiredUnspecifiedWhitelistConfig applies the compatibility rule
+// at every boundary that constructs and validates an effective modular
+// configuration. All other entries remain available to the strict validator.
+func neutralizeRetiredUnspecifiedWhitelistConfig(value *ModularConfig) []string {
+	if value == nil {
+		return nil
+	}
+	filtered, retired := neutralizeRetiredUnspecifiedWhitelistEntries(value.Network.WhitelistIPs)
+	if len(retired) != 0 {
+		value.Network.WhitelistIPs = filtered
+	}
+	return retired
+}
+
+func retiredUnspecifiedWhitelistDiagnostic(value string) string {
+	return fmt.Sprintf(
+		"network.whitelist_ips value %q (ignored; exact IGMP control traffic is handled internally)",
+		value,
+	)
 }
 
 func validateHAPeerSlice(fl validator.FieldLevel) bool {

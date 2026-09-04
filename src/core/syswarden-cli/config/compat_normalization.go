@@ -31,6 +31,7 @@ func normalizeHistoricalModularHA(candidate *ModularConfig, sources []modularCon
 	normalized := *candidate
 	normalized.Integrations.HA.Enabled = false
 	normalized.Integrations.BunkerWeb.Enabled = false
+	neutralizeRetiredUnspecifiedWhitelistConfig(&normalized)
 	if err := validateConfig(&normalized); err != nil {
 		return fmt.Errorf("historical HA compatibility candidate is otherwise invalid: %w", err)
 	}

@@ -1,3 +1,172 @@
+# Release v4.04.3
+
+> Candidate status: v4.04.3 is the Patch candidate for the stable corrections
+> listed below. This block does not authorize a tag or public Release.
+
+### FIXED
+
+- **Dynamic-ban transaction timing:** Verify preserved nftables timeouts
+  against the bounded start and finish of the kernel observation. Legitimate
+  timeout decay while nftables serializes the ruleset no longer causes
+  `whitelist` or `unblock` to reject a valid transaction, while extensions,
+  premature expiry and missing elements still fail closed.
+- **Transactional whitelist and unblock convergence:** Remove an explicitly
+  unblocked IPv4, IPv6 or CIDR range from both live dynamic-ban layers while
+  preserving every remaining interval and its expiry metadata. Restore the
+  exact prior list content through identity-bound compare-and-swap when a
+  firewall apply fails, and keep port-scoped whitelist entries from removing
+  global bans. If HA delivery fails after the verified local apply, report
+  that the local firewall and list changes remain committed instead of
+  implying a distributed rollback. If compatibility-wrapper reconciliation
+  fails after the authoritative commit, preserve the committed list content
+  and report only the incomplete wrapper instead of creating list drift. If a
+  journal-phase or journal-cleanup error occurs after verified policy
+  persistence, preserve the committed list content and expose the remaining
+  recovery debt.
+- **Declarative whitelist convergence:** Merge `network.whitelist_ips` into
+  every nftables transaction and into the core daemon's protected-target
+  checks. TOML-only whitelist entries now remain effective after reload and
+  reboot, configuration changes invalidate the cache immediately, and unsafe
+  or overly broad entries remain rejected.
+- **IGMP control-plane classification:** Exclude only the exact
+  `SRC=0.0.0.0 DST=224.0.0.1` tuple with either `PROTO=IGMP` or `PROTO=2`, as
+  reported in issue #148, from the generic port-scan telemetry classifier.
+  This does not whitelist `0.0.0.0`, change nftables or alter the
+  authoritative firewall decision; every near-miss remains observable.
+  Neutralize existing `0.0.0.0` and `0.0.0.0/32` entries in
+  `network.whitelist_ips` for upgrade compatibility, with an explicit
+  diagnostic across runtime, validation and migration paths, while all other
+  unsafe entries remain rejected.
+- **Quiet modular configuration loading:** Stop printing the routine modular
+  TOML success message for every CLI command while retaining warnings for
+  legacy configuration and migration paths.
+- **Shared log-parent uninstall convergence:** Accept supported
+  distribution-managed shared `/var/log` layouts without weakening the strict removal
+  policy for `/opt`, `/etc`, `/usr/local/bin`, `/run` or `/var/lib`. Empty the
+  exact root-owned `/var/log/syswarden` tree through pinned directory
+  descriptors and remove only the attested empty directory entry, so
+  `syswarden uninstall` completes without exposing operator data to a
+  recursive path-substitution race. Preflight every fixed removal artifact
+  before the first product-file deletion and remove the executable root last,
+  preventing a deterministic late refusal from leaving a non-retryable
+  partial uninstall.
+- **Package homepage metadata:** Align locally built DEB and RPM homepage
+  fields with the authoritative Package workflow and apply fail-closed
+  validation to every package format. Serialize local artifact publication,
+  invalidate stale checksum evidence before replacing a package, derive the
+  exact manifest from the private build workspace and publish
+  `SHA256SUMS.txt` last.
+- **Attested WireGuard table recovery:** Reconcile only inactive, fully known
+  stale-token or orphaned reserved WireGuard tables after revalidating their
+  ownership marker, complete topology, stable kernel handle, service state and
+  interface state. Active, unmarked, malformed, modified or replaced tables
+  remain protected from automatic deletion.
+- **WireGuard pre-mutation recovery:** Recover only fully attested pending
+  publication, immediate-removal and forwarding-persistence transactions
+  before install or reload can change SSH or firewall state. Publication
+  recovery now holds the shared lifecycle guard, so it cannot roll back a live
+  concurrent publication. Corrupt, ambiguous and external reload-debt states
+  remain fail closed. New forwarding journals and stages are file-synced,
+  reread by exact identity and content, then directory-synced before the next
+  transition boundary.
+- **WireGuard activation persistence rollback:** Arm restoration before
+  publishing changed forwarding persistence so a failure after manifest
+  exchange restores the prior neutral boot setting together with the service,
+  interface and runtime forwarding rollback. A failed re-enable no longer
+  leaves `net.ipv4.ip_forward = 1` persisted.
+- **WireGuard lifecycle serialization:** Hold the shared firewall guard from
+  pending forwarding recovery through ownership, service, table and
+  persistence changes, final runtime attestation and any compensation for
+  both setup and disable. Concurrent lifecycle operations cannot interleave.
+  If guard release fails after a verified commit, retain the attested commit
+  and report the uncertainty without a blind rollback.
+- **WireGuard boot ordering:** Install one exact package-owned systemd drop-in
+  that orders the firewall loader after an independently scheduled
+  `wg-quick@wg-syswarden` job without pulling WireGuard in or creating a
+  dependency cycle. Keep the main systemd and OpenRC firewall units
+  byte-compatible with v4.04.2 so downgrade and rollback remain safe; Alpine
+  receives no systemd-specific artifact.
+- **Retry-safe systemd artifact removal:** Preflight every exact service file,
+  enablement link and the package-owned ordering drop-in before removal, then
+  remove the drop-in last. If an earlier attempt stopped after any monotonic
+  deletion or a failed `daemon-reload`, use the durable removal tombstone and
+  a stable exact disk inventory to refresh only the systemd cache before the
+  normal service-state attestation resumes. Modified links, unsafe parents,
+  orphaned enablements, identity drift and ambiguous manager states remain
+  fail closed.
+- **WireGuard disable and uninstall safety:** Stop and disable only the exact
+  owned service and interface, remove only an attested reserved table, and
+  neutralize the manifest-owned `ip_forward` boot setting transactionally.
+  Preserve keys for reactivation and restore the runtime forwarding baseline
+  only when it is attested. Before inspecting or removing owned state,
+  uninstall recovers any interrupted forwarding-persistence transition.
+
+### SECURITY
+
+- **Exact binary source provenance:** Bind every release binary to the clean
+  candidate commit even when the local builder runs from a linked Git worktree.
+  Package builds now bind both the worktree-specific and common Git metadata,
+  create only an empty controlled discovery sentinel, reject inherited Git
+  redirection and dirty source state, materialize an isolated source tree from
+  the exact commit, use private Go build, module and temporary caches, verify
+  locked modules, and require matching revision, commit time, clean VCS state
+  and an exact provenance field inventory in the binaries extracted from every
+  package before upload.
+- **Exact systemd package provenance:** Reject a managed DEB or RPM installation
+  before any host mutation when the required ordering drop-in is absent or not
+  owned by the exact current package. Permit only the bounded old-and-current
+  or duplicate-current RPM ownership overlap observed during an authenticated
+  upgrade or reinstall transaction, and require SHA-256 RPM file-digest
+  metadata for every accepted owner.
+- **Fail-closed recovery boundaries:** Recheck WireGuard service, interface,
+  table, manifest, forwarding and list-file identities at their final mutation
+  boundaries. Unknown or concurrently replaced state is never deleted or
+  guessed.
+- **Authoritative firewall preservation:** Keep the existing nftables policy
+  authoritative while correcting list convergence and telemetry-only IGMP
+  classification. No broad allow rule or automatic ownership claim is added.
+
+### TESTING
+
+- **Build provenance gates:** Bind repository snapshots to the exact Git HEAD
+  and validate `vcs.revision`, `vcs.time`, `vcs.modified=false` and the baseline
+  AMD64 feature level for every dynamic and static Go binary in local and
+  GitHub package builds. Retain every opened payload descriptor, identity and
+  digest through the final verdict, inspect static binaries through those
+  retained descriptor targets, revalidate them after all inspections, and bind
+  the validated pre-package SHA-256 inventory to the workflow step output.
+  Compare the exact binaries and signature database extracted from DEB, RPM
+  and APK payloads with both that immutable inventory and their staging sources.
+- **Patch qualification baseline:** Bind the eight-cell AMD64 qualification
+  matrix to candidate v4.04.3 and to the immutable public v4.04.2 package
+  assets by release ID, asset ID, size and SHA-256. Add an exact
+  v4.04.2-to-v4.04.3 upgrade and rollback selector while preserving every
+  historical lifecycle transition.
+- **Ordering artifact lifecycle coverage:** Verify exact bytes, SHA-256, mode,
+  owner, package inventory, systemd `DropInPaths` and `After` semantics for DEB
+  and RPM. Verify absence for APK and after v4.04.2 rollback, plus interrupted
+  removal recovery at each of the five deletion boundaries and after a failed
+  systemd reload.
+- **Firewall regression coverage:** Add timeout-window, dynamic range removal,
+  rollback, TOML whitelist, cache invalidation, port-scope and near-miss tests.
+- **WireGuard recovery coverage:** Add interrupted transaction, stale and
+  orphaned table, inactive and failed service, forwarding restoration,
+  uninstall boundary, exact systemd ordering-overlay ownership, unchanged
+  OpenRC payload, complete lifecycle
+  serialization, compensation-before-unlock, release-uncertainty and
+  directory-durability tests, including concurrent publication, recovery and
+  v4.04.2 rollback.
+- **IGMP regression coverage:** Verify both textual IGMP and protocol number 2
+  for the exact all-hosts tuple while keeping different sources, destinations,
+  protocols and incomplete records observable.
+- **Native uninstall regression coverage:** Model a supported shared
+  `/var/log` layout, preserve unrelated log siblings byte for
+  byte, reject shared-parent and target substitution attempts, and exercise
+  the successful CLI uninstall path that package-only purge matrices did not
+  previously cover.
+
+---
+
 # Release v4.04.2
 
 > Candidate status: v4.04.2 is the Patch candidate for the publisher CLI

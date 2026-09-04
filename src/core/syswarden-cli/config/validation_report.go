@@ -128,6 +128,11 @@ func ValidateModularConfig(configDir string) (ValidationReport, error) {
 	report.SchemaVersion = candidate.SchemaVersion
 	report.Historical = candidate.SchemaVersion == 0
 	validationCandidate := candidate
+	retiredWhitelistEntries := neutralizeRetiredUnspecifiedWhitelistConfig(&validationCandidate)
+	for _, entry := range retiredWhitelistEntries {
+		report.DeprecatedKeys = append(report.DeprecatedKeys, retiredUnspecifiedWhitelistDiagnostic(entry))
+	}
+	sort.Strings(report.DeprecatedKeys)
 	if historicalDefaultHAState(&validationCandidate) {
 		validationCandidate.Integrations.HA.Enabled = false
 		validationCandidate.Integrations.BunkerWeb.Enabled = false
@@ -165,6 +170,7 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 	v.AutomaticEnv()
 	v.SetEnvPrefix("SYSWARDEN")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+	_ = v.BindEnv("network.whitelist_ips")
 	setDefaults(v, configDir)
 	merge := func(relative string, content []byte) error {
 		if _, err := parseTOMLDocument(content, relative); err != nil {
@@ -221,9 +227,16 @@ func GetValidatedModularValue(configDir, key string) (string, bool, error) {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", false, err
 	}
+	whitelistWasSet := v.IsSet("network.whitelist_ips")
 	var candidate ModularConfig
 	if err := v.Unmarshal(&candidate); err != nil {
 		return "", false, fmt.Errorf("unmarshal modular configuration: %w", err)
+	}
+	neutralizeRetiredUnspecifiedWhitelistConfig(&candidate)
+	// Freeze the validated whitelist above AutomaticEnv so a concurrent
+	// environment change cannot alter the value returned after validation.
+	if whitelistWasSet {
+		v.Set("network.whitelist_ips", candidate.Network.WhitelistIPs)
 	}
 	if historicalDefaultHAState(&candidate) {
 		candidate.Integrations.HA.Enabled = false

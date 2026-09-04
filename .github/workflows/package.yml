@@ -2,6 +2,14 @@ name: SysWarden Builder and Packager
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GOAMD64: 'v1'
+  GOCACHEPROG: ''
+  GOENV: 'off'
+  GOEXPERIMENT: ''
+  GOFLAGS: '-mod=readonly'
+  GOTOOLCHAIN: 'local'
+  GOWORK: 'off'
+  GIT_NO_REPLACE_OBJECTS: '1'
 
 on:
   push:
@@ -29,6 +37,42 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      - name: Reject Redirected Git Environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          redirected_git_environment=(
+            GIT_DIR
+            GIT_WORK_TREE
+            GIT_COMMON_DIR
+            GIT_INDEX_FILE
+            GIT_OBJECT_DIRECTORY
+            GIT_ALTERNATE_OBJECT_DIRECTORIES
+            GIT_ATTR_SOURCE
+            GIT_CEILING_DIRECTORIES
+            GIT_DISCOVERY_ACROSS_FILESYSTEM
+            GIT_EXEC_PATH
+            GIT_NAMESPACE
+            GIT_REPLACE_REF_BASE
+            GIT_SHALLOW_FILE
+            GIT_GRAFT_FILE
+            GIT_QUARANTINE_PATH
+            GIT_CONFIG_COUNT
+            GIT_CONFIG_PARAMETERS
+            GIT_CONFIG_GLOBAL
+            GIT_CONFIG_SYSTEM
+          )
+          for variable in "${redirected_git_environment[@]}"; do
+            if [[ -v "${variable}" ]]; then
+              echo "ERROR: inherited ${variable} may redirect release provenance." >&2
+              exit 1
+            fi
+          done
+          [[ "${GIT_NO_REPLACE_OBJECTS}" == "1" ]] || {
+            echo "ERROR: Git replacement objects must be disabled." >&2
+            exit 1
+          }
+
       - name: Checkout Source Code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,6 +89,19 @@ jobs:
             src/core/syswarden-core/go.sum
             src/core/syswarden-tui/go.sum
 
+      - name: Validate Hermetic Go Environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(go env GOVERSION)" == "go1.26.6" ]]
+          [[ "${GOWORK}" == "off" ]]
+          [[ "${GOENV}" == "off" ]]
+          [[ "${GOAMD64}" == "v1" ]]
+          [[ -z "${GOCACHEPROG}" ]]
+          [[ "${GOTOOLCHAIN}" == "local" ]]
+          [[ "${GOFLAGS}" == "-mod=readonly" ]]
+          [[ -z "${GOEXPERIMENT}" ]]
+
       - name: Setup pinned PowerShell 7.6.4
         shell: bash
         run: bash scripts/ci/setup_powershell.sh
@@ -55,6 +112,9 @@ jobs:
           set -euo pipefail
           (cd scripts/versionctl && GOWORK=off go test ./...)
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+            scripts/ci/package_binary_provenance_gate_test.py \
+            scripts/ci/package_systemd_ordering_artifact_gate_test.py \
+            scripts/ci/package_systemd_ordering_preflight_test.py \
             scripts/ci/package_qualification_matrix_test.py \
             scripts/ci/package_lifecycle_contract_test.py \
             scripts/ci/package_lifecycle_lab_test.py \
@@ -73,6 +133,31 @@ jobs:
           RELEASE_REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
+          SOURCE_TOPLEVEL="$(git -c core.fsmonitor=false rev-parse --show-toplevel)"
+          if [[ "$(realpath -e "${SOURCE_TOPLEVEL}")" != "$(realpath -e "${GITHUB_WORKSPACE}")" ]]; then
+            echo "ERROR: Git discovered an unexpected release work tree." >&2
+            exit 1
+          fi
+          SOURCE_GIT_DIR="$(git -c core.fsmonitor=false rev-parse --absolute-git-dir)"
+          SOURCE_GIT_COMMON_DIR="$(git -c core.fsmonitor=false rev-parse --path-format=absolute --git-common-dir)"
+          if [[ ! -d "${SOURCE_GIT_DIR}" || ! -d "${SOURCE_GIT_COMMON_DIR}" ]]; then
+            echo "ERROR: Git metadata directories are unavailable." >&2
+            exit 1
+          fi
+          SOURCE_GIT_DIR="$(realpath -e "${SOURCE_GIT_DIR}")"
+          SOURCE_GIT_COMMON_DIR="$(realpath -e "${SOURCE_GIT_COMMON_DIR}")"
+          if [[ "${SOURCE_GIT_COMMON_DIR}" != "${SOURCE_GIT_DIR}" ]]; then
+            echo "ERROR: GitHub packaging requires one canonical Git metadata directory." >&2
+            exit 1
+          fi
+          if ! SOURCE_STATUS="$(git -c core.fsmonitor=false status --porcelain=v1 --untracked-files=all)"; then
+            echo "ERROR: unable to attest the release work tree." >&2
+            exit 1
+          fi
+          if [[ -n "${SOURCE_STATUS}" ]]; then
+            echo "ERROR: release packaging requires an exact clean checkout." >&2
+            exit 1
+          fi
           SOURCE_TAG="$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")"
           if [[ "${RELEASE_REF_TYPE}" == "tag" ]]; then
             ./scripts/versioning.sh validate-tag \
@@ -83,14 +168,24 @@ jobs:
               exit 1
             fi
           fi
-          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          SOURCE_DATE_EPOCH="$(git -c core.fsmonitor=false log -1 --format=%ct HEAD)"
           if [[ ! "${SOURCE_DATE_EPOCH}" =~ ^[1-9][0-9]*$ ]]; then
             echo "ERROR: unable to derive a reproducible source timestamp from HEAD." >&2
             exit 1
           fi
+          SOURCE_COMMIT_SHA="$(git -c core.fsmonitor=false rev-parse --verify 'HEAD^{commit}')"
+          if [[ ! "${SOURCE_COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: unable to derive the exact source commit." >&2
+            exit 1
+          fi
+          SOURCE_VCS_TIME="$(date --utc --date="@${SOURCE_DATE_EPOCH}" '+%Y-%m-%dT%H:%M:%SZ')"
           echo "RELEASE_TAG=${SOURCE_TAG}" >> "${GITHUB_ENV}"
           echo "VERSION=${SOURCE_TAG#v}" >> "${GITHUB_ENV}"
           echo "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" >> "${GITHUB_ENV}"
+          echo "SOURCE_COMMIT_SHA=${SOURCE_COMMIT_SHA}" >> "${GITHUB_ENV}"
+          echo "SOURCE_VCS_TIME=${SOURCE_VCS_TIME}" >> "${GITHUB_ENV}"
+          echo "SOURCE_GIT_DIR=${SOURCE_GIT_DIR}" >> "${GITHUB_ENV}"
+          echo "SOURCE_GIT_COMMON_DIR=${SOURCE_GIT_COMMON_DIR}" >> "${GITHUB_ENV}"
           echo "LC_ALL=C" >> "${GITHUB_ENV}"
           echo "LANG=C" >> "${GITHUB_ENV}"
           echo "TZ=UTC" >> "${GITHUB_ENV}"
@@ -153,6 +248,31 @@ jobs:
               echo "ERROR: Linux artifact does not attest path-independent compilation: ${artifact}" >&2
               exit 1
             }
+            go version -m "${artifact}" | grep -Eq '^[[:space:]]*build[[:space:]]+GOAMD64=v1$' || {
+              echo "ERROR: Linux artifact does not attest the baseline AMD64 level: ${artifact}" >&2
+              exit 1
+            }
+            validate_vcs_provenance "${artifact}"
+          }
+
+          validate_vcs_provenance() {
+            local artifact="$1"
+            if ! go version -m "${artifact}" | LC_ALL=C awk \
+              -v revision="${SOURCE_COMMIT_SHA}" \
+              -v commit_time="${SOURCE_VCS_TIME}" '
+                $1 == "build" && $2 == "vcs=git" { vcs_git++ }
+                $1 == "build" && $2 == "vcs.revision=" revision { vcs_revision++ }
+                $1 == "build" && $2 == "vcs.time=" commit_time { vcs_time++ }
+                $1 == "build" && $2 == "vcs.modified=false" { vcs_clean++ }
+                $1 == "build" && $2 ~ /^vcs(\.|=)/ { vcs_total++ }
+                END {
+                  exit vcs_git == 1 && vcs_revision == 1 && vcs_time == 1 &&
+                       vcs_clean == 1 && vcs_total == 4 ? 0 : 1
+                }
+              '; then
+              echo "ERROR: binary VCS provenance does not match the clean exact source commit: ${artifact}" >&2
+              exit 1
+            fi
           }
 
           for artifact in \
@@ -172,7 +292,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y rpm
+          sudo apt-get install -y cpio rpm
           gem install --no-document fpm -v 1.17.0
 
       - name: Create Isolated Packaging Workspace
@@ -185,26 +305,83 @@ jobs:
           PACKAGE_WORKSPACE="$(mktemp -d "${RUNNER_TEMP%/}/syswarden-package.XXXXXX")"
           STAGING_AMD64="${PACKAGE_WORKSPACE}/staging-amd64"
           STAGING_APK_AMD64="${PACKAGE_WORKSPACE}/staging-apk-amd64"
+          EXACT_SOURCE_ROOT="${PACKAGE_WORKSPACE}/source-exact"
+          EXACT_SOURCE_ARCHIVE="${PACKAGE_WORKSPACE}/source-exact.tar"
           PACKAGE_ASSETS="${PACKAGE_WORKSPACE}/assets"
           PACKAGE_SCRIPTS="${PACKAGE_WORKSPACE}/scripts"
           PACKAGE_RPM_SCRIPTS="${PACKAGE_WORKSPACE}/rpm-scripts"
           PACKAGE_CONFIGS="${PACKAGE_WORKSPACE}/configs"
+          GO_BUILD_CACHE="${PACKAGE_WORKSPACE}/go-build-cache"
+          GO_PATH="${PACKAGE_WORKSPACE}/go-path"
+          GO_MODULE_CACHE="${GO_PATH}/pkg/mod"
+          GO_BUILD_TMP="${PACKAGE_WORKSPACE}/go-tmp"
           install -d -m 0755 \
             "${STAGING_AMD64}" \
             "${STAGING_APK_AMD64}" \
+            "${EXACT_SOURCE_ROOT}" \
             "${PACKAGE_ASSETS}"
           install -d -m 0700 \
             "${PACKAGE_SCRIPTS}" \
             "${PACKAGE_RPM_SCRIPTS}" \
-            "${PACKAGE_CONFIGS}"
+            "${PACKAGE_CONFIGS}" \
+            "${GO_BUILD_CACHE}" \
+            "${GO_PATH}" \
+            "${GO_MODULE_CACHE}" \
+            "${GO_BUILD_TMP}"
+          env \
+            GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \
+            GIT_DIR="${SOURCE_GIT_DIR}" \
+            GIT_WORK_TREE="${GITHUB_WORKSPACE}" \
+            GIT_NO_REPLACE_OBJECTS=1 \
+            git -c core.fsmonitor=false archive \
+              --format=tar \
+              --output="${EXACT_SOURCE_ARCHIVE}" \
+              "${SOURCE_COMMIT_SHA}"
+          tar --extract \
+            --file "${EXACT_SOURCE_ARCHIVE}" \
+            --directory "${EXACT_SOURCE_ROOT}"
+          rm -- "${EXACT_SOURCE_ARCHIVE}"
+          if [[ -e "${EXACT_SOURCE_ROOT}/.git" ]]; then
+            echo "ERROR: the exact source snapshot contains Git metadata." >&2
+            exit 1
+          fi
+          if ! EXACT_SOURCE_STATUS="$(
+            env \
+              GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \
+              GIT_DIR="${SOURCE_GIT_DIR}" \
+              GIT_WORK_TREE="${EXACT_SOURCE_ROOT}" \
+              GIT_NO_REPLACE_OBJECTS=1 \
+              git -c core.fsmonitor=false status \
+                --porcelain=v1 \
+                --untracked-files=all
+          )"; then
+            echo "ERROR: unable to attest the exact source snapshot." >&2
+            exit 1
+          fi
+          if [[ -n "${EXACT_SOURCE_STATUS}" ]]; then
+            echo "ERROR: the source snapshot differs from the exact source commit." >&2
+            exit 1
+          fi
+          mkdir -- "${EXACT_SOURCE_ROOT}/.git"
+          chmod 0500 "${EXACT_SOURCE_ROOT}/.git"
+          if [[ -L "${EXACT_SOURCE_ROOT}/.git" || ! -d "${EXACT_SOURCE_ROOT}/.git" ]] ||
+             [[ -n "$(find "${EXACT_SOURCE_ROOT}/.git" -mindepth 1 -print -quit)" ]]; then
+            echo "ERROR: refusing an unsafe VCS discovery sentinel." >&2
+            exit 1
+          fi
           {
             printf 'PACKAGE_WORKSPACE=%s\n' "${PACKAGE_WORKSPACE}"
             printf 'STAGING_AMD64=%s\n' "${STAGING_AMD64}"
             printf 'STAGING_APK_AMD64=%s\n' "${STAGING_APK_AMD64}"
+            printf 'EXACT_SOURCE_ROOT=%s\n' "${EXACT_SOURCE_ROOT}"
             printf 'PACKAGE_ASSETS=%s\n' "${PACKAGE_ASSETS}"
             printf 'PACKAGE_SCRIPTS=%s\n' "${PACKAGE_SCRIPTS}"
             printf 'PACKAGE_RPM_SCRIPTS=%s\n' "${PACKAGE_RPM_SCRIPTS}"
             printf 'PACKAGE_CONFIGS=%s\n' "${PACKAGE_CONFIGS}"
+            printf 'GOCACHE=%s\n' "${GO_BUILD_CACHE}"
+            printf 'GOMODCACHE=%s\n' "${GO_MODULE_CACHE}"
+            printf 'GOPATH=%s\n' "${GO_PATH}"
+            printf 'GOTMPDIR=%s\n' "${GO_BUILD_TMP}"
           } >> "${GITHUB_ENV}"
           printf 'assets=%s\n' "${PACKAGE_ASSETS}" >> "${GITHUB_OUTPUT}"
 
@@ -213,6 +390,7 @@ jobs:
           set -euo pipefail
           install -d -m 0755 \
             "${STAGING_AMD64}/opt/syswarden/bin" \
+            "${STAGING_AMD64}/usr/lib/systemd/system/syswarden-firewall.service.d" \
             "${STAGING_AMD64}/usr/local/bin" \
             "${STAGING_AMD64}/usr/share/bash-completion/completions" \
             "${STAGING_AMD64}/usr/share/doc/syswarden"
@@ -238,10 +416,13 @@ jobs:
           chmod 0644 \
             "${STAGING_AMD64}/usr/share/bash-completion/completions/syswarden"
           install -m 0644 \
-            src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt \
+            "${EXACT_SOURCE_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
             "${STAGING_AMD64}/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
-          install -m 0644 LICENSE \
+          install -m 0644 "${EXACT_SOURCE_ROOT}/LICENSE" \
             "${STAGING_AMD64}/usr/share/doc/syswarden/LICENSE.txt"
+          install -m 0644 \
+            "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
+            "${STAGING_AMD64}/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf"
 
       - name: Build and Stage Static Alpine Binaries
         shell: bash
@@ -259,18 +440,70 @@ jobs:
             for component in syswarden-cli syswarden-core syswarden-tui; do
               env \
                 CGO_ENABLED=0 \
+                GIT_NO_REPLACE_OBJECTS=1 \
+                GOAMD64=v1 \
+                GOCACHE="${GOCACHE}" \
+                GOCACHEPROG= \
+                GOENV=off \
+                GOEXPERIMENT= \
+                GOFLAGS=-mod=readonly \
+                GOMODCACHE="${GOMODCACHE}" \
+                GOPATH="${GOPATH}" \
+                GOTOOLCHAIN=local \
+                GOTMPDIR="${GOTMPDIR}" \
+                GOWORK=off \
                 GOOS=linux \
                 GOARCH="${goarch}" \
+                go -C "${EXACT_SOURCE_ROOT}/src/core/${component}" mod download
+              env \
+                CGO_ENABLED=0 \
+                GIT_NO_REPLACE_OBJECTS=1 \
+                GOAMD64=v1 \
+                GOCACHE="${GOCACHE}" \
+                GOCACHEPROG= \
+                GOENV=off \
+                GOEXPERIMENT= \
                 GOFLAGS=-mod=readonly \
-                go -C "src/core/${component}" build \
+                GOMODCACHE="${GOMODCACHE}" \
+                GOPATH="${GOPATH}" \
+                GOTOOLCHAIN=local \
+                GOTMPDIR="${GOTMPDIR}" \
+                GOWORK=off \
+                GOOS=linux \
+                GOARCH="${goarch}" \
+                go -C "${EXACT_SOURCE_ROOT}/src/core/${component}" mod verify
+              env \
+                CGO_ENABLED=0 \
+                GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \
+                GIT_CONFIG_COUNT=1 \
+                GIT_CONFIG_KEY_0=core.fsmonitor \
+                GIT_CONFIG_VALUE_0=false \
+                GIT_DIR="${SOURCE_GIT_DIR}" \
+                GIT_NO_REPLACE_OBJECTS=1 \
+                GIT_WORK_TREE="${EXACT_SOURCE_ROOT}" \
+                GOAMD64=v1 \
+                GOCACHE="${GOCACHE}" \
+                GOCACHEPROG= \
+                GOENV=off \
+                GOEXPERIMENT= \
+                GOFLAGS=-mod=readonly \
+                GOMODCACHE="${GOMODCACHE}" \
+                GOPATH="${GOPATH}" \
+                GOTOOLCHAIN=local \
+                GOTMPDIR="${GOTMPDIR}" \
+                GOWORK="${EXACT_SOURCE_ROOT}/go.work" \
+                GOOS=linux \
+                GOARCH="${goarch}" \
+                go -C "${EXACT_SOURCE_ROOT}" build \
+                  -buildvcs=true \
                   -mod=readonly \
                   -trimpath \
                   -ldflags='-s -w' \
                   -o "${stage}/opt/syswarden/bin/${component}" \
-                  .
+                  "./src/core/${component}"
               chmod 0750 "${stage}/opt/syswarden/bin/${component}"
             done
-            cp src/core/syswarden-core/signatures.json \
+            cp "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
               "${stage}/opt/syswarden/signatures.json"
             chmod 0640 "${stage}/opt/syswarden/signatures.json"
             ln -s /opt/syswarden/bin/syswarden-cli \
@@ -282,9 +515,9 @@ jobs:
             chmod 0644 \
               "${stage}/usr/share/bash-completion/completions/syswarden"
             install -m 0644 \
-              src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt \
+              "${EXACT_SOURCE_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
               "${stage}/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt"
-            install -m 0644 LICENSE \
+            install -m 0644 "${EXACT_SOURCE_ROOT}/LICENSE" \
               "${stage}/usr/share/doc/syswarden/LICENSE.txt"
           }
 
@@ -319,6 +552,31 @@ jobs:
               echo "ERROR: Alpine artifact does not attest path-independent compilation: ${artifact}" >&2
               exit 1
             }
+            go version -m "${artifact}" | grep -Eq '^[[:space:]]*build[[:space:]]+GOAMD64=v1$' || {
+              echo "ERROR: Alpine artifact does not attest the baseline AMD64 level: ${artifact}" >&2
+              exit 1
+            }
+            validate_vcs_provenance "${artifact}"
+          }
+
+          validate_vcs_provenance() {
+            local artifact="$1"
+            if ! go version -m "${artifact}" | LC_ALL=C awk \
+              -v revision="${SOURCE_COMMIT_SHA}" \
+              -v commit_time="${SOURCE_VCS_TIME}" '
+                $1 == "build" && $2 == "vcs=git" { vcs_git++ }
+                $1 == "build" && $2 == "vcs.revision=" revision { vcs_revision++ }
+                $1 == "build" && $2 == "vcs.time=" commit_time { vcs_time++ }
+                $1 == "build" && $2 == "vcs.modified=false" { vcs_clean++ }
+                $1 == "build" && $2 ~ /^vcs(\.|=)/ { vcs_total++ }
+                END {
+                  exit vcs_git == 1 && vcs_revision == 1 && vcs_time == 1 &&
+                       vcs_clean == 1 && vcs_total == 4 ? 0 : 1
+                }
+              '; then
+              echo "ERROR: binary VCS provenance does not match the clean exact source commit: ${artifact}" >&2
+              exit 1
+            fi
           }
 
           build_apk_stage amd64 "${STAGING_APK_AMD64}"
@@ -334,41 +592,85 @@ jobs:
             /usr/local/bin/syswarden --help >/dev/null
 
       - name: Validate Exact Linux Staging Inventories
+        id: stage_provenance
         shell: bash
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_AMD64}" \
+            --service-manager systemd \
+            --systemd-ordering-contract \
+            scripts/ci/package_systemd_wireguard_ordering_contract.json \
+            --systemd-ordering-source \
+            "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
             --completion-contract scripts/ci/package_completion_contract.json \
             --geoip-data-license-contract \
             scripts/ci/package_geoip_data_license_contract.json \
             --geoip-data-license-source \
-            src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt \
+            "${EXACT_SOURCE_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
             --project-license-contract \
             scripts/ci/package_project_license_contract.json \
-            --project-license-source LICENSE
+            --project-license-source "${EXACT_SOURCE_ROOT}/LICENSE"
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            scripts/ci/package_systemd_ordering_artifact_gate.py \
+            --format stage \
+            --root "${STAGING_AMD64}" \
+            --source \
+            "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
+            --contract scripts/ci/package_systemd_wireguard_ordering_contract.json
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_stage_gate.py \
             linux --root "${STAGING_APK_AMD64}" \
+            --service-manager openrc \
             --completion-contract scripts/ci/package_completion_contract.json \
             --geoip-data-license-contract \
             scripts/ci/package_geoip_data_license_contract.json \
             --geoip-data-license-source \
-            src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt \
+            "${EXACT_SOURCE_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
             --project-license-contract \
             scripts/ci/package_project_license_contract.json \
-            --project-license-source LICENSE
+            --project-license-source "${EXACT_SOURCE_ROOT}/LICENSE"
+          AMD64_DIGEST_CONTRACT="$(
+            PYTHONDONTWRITEBYTECODE=1 python3 \
+              "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+              --root "${STAGING_AMD64}" \
+              --mode pie \
+              --revision "${SOURCE_COMMIT_SHA}" \
+              --vcs-time "${SOURCE_VCS_TIME}" \
+              --signatures-source \
+              "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+              --print-digest-contract
+          )"
+          APK_AMD64_DIGEST_CONTRACT="$(
+            PYTHONDONTWRITEBYTECODE=1 python3 \
+              "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+              --root "${STAGING_APK_AMD64}" \
+              --mode static \
+              --revision "${SOURCE_COMMIT_SHA}" \
+              --vcs-time "${SOURCE_VCS_TIME}" \
+              --signatures-source \
+              "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+              --print-digest-contract
+          )"
+          [[ "${AMD64_DIGEST_CONTRACT}" == v1\;* ]]
+          [[ "${APK_AMD64_DIGEST_CONTRACT}" == v1\;* ]]
+          printf 'amd64_digest_contract=%s\n' \
+            "${AMD64_DIGEST_CONTRACT}" >> "${GITHUB_OUTPUT}"
+          printf 'apk_amd64_digest_contract=%s\n' \
+            "${APK_AMD64_DIGEST_CONTRACT}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare Linux Maintainer Scripts
         run: |
           set -euo pipefail
-          cat scripts/ci/package_webtui_retirement.sh > "${PACKAGE_SCRIPTS}/preinst.sh"
-          cat scripts/ci/package_deferred_purge_postinstall.sh >> "${PACKAGE_SCRIPTS}/preinst.sh"
-          cat scripts/ci/package_alpine_cronie_preflight.sh >> "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_systemd_ordering_preflight.sh" >> "${PACKAGE_SCRIPTS}/preinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/preinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
           syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
+          syswarden_preflight_systemd_ordering_dropin
           secure_private_directory() {
               path="$1"
               if [ -L "${path}" ] || { [ -e "${path}" ] && [ ! -d "${path}" ]; }; then
@@ -419,9 +721,9 @@ jobs:
           fi
           EOF
 
-          cat scripts/ci/package_webtui_retirement.sh > "${PACKAGE_SCRIPTS}/postinst.sh"
-          cat scripts/ci/package_deferred_purge_postinstall.sh >> "${PACKAGE_SCRIPTS}/postinst.sh"
-          cat scripts/ci/package_alpine_cronie_preflight.sh >> "${PACKAGE_SCRIPTS}/postinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > "${PACKAGE_SCRIPTS}/postinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> "${PACKAGE_SCRIPTS}/postinst.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> "${PACKAGE_SCRIPTS}/postinst.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/postinst.sh"
           set -e
           export SYSWARDEN_PKG_INSTALL=1
@@ -500,10 +802,30 @@ jobs:
           syswarden_consume_deferred_purge_marker
           EOF
 
-          cat scripts/ci/package_webtui_retirement.sh > "${PACKAGE_SCRIPTS}/postrm.sh"
-          cat scripts/ci/package_removal_state.sh >> "${PACKAGE_SCRIPTS}/postrm.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > "${PACKAGE_SCRIPTS}/postrm.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_removal_state.sh" >> "${PACKAGE_SCRIPTS}/postrm.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/postrm.sh"
           export SYSWARDEN_PKG_INSTALL=1
+
+          syswarden_refresh_systemd_after_rpm_payload_transition() {
+              [ "${1:-}" = 1 ] || return 0
+              [ ! -f /etc/alpine-release ] || return 1
+              syswarden_postremove_manager_state="$(
+                  syswarden_classify_service_manager / systemd isolated
+              )" || return 1
+              case "${syswarden_postremove_manager_state}" in
+                  ACTIVE)
+                      command -v systemctl >/dev/null 2>&1 || return 1
+                      systemctl daemon-reload || return 1
+                      [ "$(syswarden_classify_service_manager / systemd isolated)" = ACTIVE ] || return 1
+                      ;;
+                  OFFLINE) ;;
+                  *)
+                      printf '%s\n' 'Refusing an ambiguous systemd runtime after an RPM payload transition.' >&2
+                      return 1
+                      ;;
+              esac
+          }
 
           cleanup_generated_runtime_artifacts() {
               syswarden_verify_legacy_webtui_runtime_absent / || return 1
@@ -626,9 +948,10 @@ jobs:
                   syswarden_transition_to_deferred_purge || exit 1
               fi
           fi
+          syswarden_refresh_systemd_after_rpm_payload_transition "${1:-}" || exit 1
           EOF
 
-          cat scripts/ci/package_webtui_retirement.sh > "${PACKAGE_SCRIPTS}/prerm.sh"
+          cat "${EXACT_SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > "${PACKAGE_SCRIPTS}/prerm.sh"
           cat << 'EOF' >> "${PACKAGE_SCRIPTS}/prerm.sh"
           export SYSWARDEN_PKG_INSTALL=1
           case "${APK_PACKAGE:-}:${APK_SCRIPT:-}:${1:-}" in
@@ -748,6 +1071,9 @@ jobs:
             --architecture x86_64 \
             --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
             --rpm-changelog "${RPM_CHANGELOG}" \
+            --rpm-digest sha256 \
+            --rpm-rpmbuild-define "_binary_filedigest_algorithm 8" \
+            --rpm-rpmbuild-define "_source_filedigest_algorithm 8" \
             --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
             --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
             --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
@@ -826,6 +1152,7 @@ jobs:
             [[ "$(dpkg-deb --field "${path}" Version)" == "${VERSION}" ]]
             [[ "$(dpkg-deb --field "${path}" Architecture)" == "${architecture}" ]]
             [[ "$(dpkg-deb --field "${path}" License)" == "GPL-3.0-or-later" ]]
+            [[ "$(dpkg-deb --field "${path}" Homepage)" == "https://github.com/${{ github.repository }}" ]]
           }
 
           validate_rpm_scriptlet() {
@@ -851,6 +1178,7 @@ jobs:
             local actual_build_time
             local actual_changelog_time
             local actual_license
+            local actual_url
             local actual_version
             local forbidden_crontab_token
             local scriptlets
@@ -860,12 +1188,14 @@ jobs:
             actual_build_host="$(rpm --query --package --queryformat '%{BUILDHOST}' "${path}")" || return 1
             actual_changelog_time="$(rpm --query --package --queryformat '%{CHANGELOGTIME}' "${path}")" || return 1
             actual_license="$(rpm --query --package --queryformat '%{LICENSE}' "${path}")" || return 1
+            actual_url="$(rpm --query --package --queryformat '%{URL}' "${path}")" || return 1
             [[ "${actual_version}" == "${VERSION}" ]]
             [[ "${actual_architecture}" == "${architecture}" ]]
             [[ "${actual_build_time}" == "${SOURCE_DATE_EPOCH}" ]]
             [[ "${actual_build_host}" == "syswarden-build.invalid" ]]
             [[ "${actual_changelog_time}" == "${RPM_CHANGELOG_EPOCH}" ]]
             [[ "${actual_license}" == "GPL-3.0-or-later" ]]
+            [[ "${actual_url}" == "https://github.com/${{ github.repository }}" ]]
             scriptlets="$(rpm --query --package --scripts "${path}")" || return 1
             for forbidden_crontab_token in \
               syswarden_cron_candidate \
@@ -907,6 +1237,7 @@ jobs:
             [[ "$(grep --count '^depend = cronie$' <<< "${metadata}")" -eq 1 ]]
             [[ "$(grep --count '^depend = cronie-openrc$' <<< "${metadata}")" -eq 1 ]]
             [[ "$(grep --count '^license = GPL-3.0-or-later$' <<< "${metadata}")" -eq 1 ]]
+            [[ "$(grep --fixed-strings --line-regexp --count -- 'url = https://github.com/${{ github.repository }}' <<< "${metadata}")" -eq 1 ]]
             mapfile -t preinstall_members < <(
               tar --list --file "${path}" | awk '/(^|\/)\.pre-install$/ { print }'
             )
@@ -978,6 +1309,148 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify-packages \
             --tag "${RELEASE_TAG}" \
             --packages "${PACKAGE_ASSETS}"
+          for format in deb rpm; do
+            case "${format}" in
+              deb) package="${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" ;;
+              rpm) package="${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" ;;
+            esac
+            PYTHONDONTWRITEBYTECODE=1 python3 \
+              scripts/ci/package_systemd_ordering_artifact_gate.py \
+              --format "${format}" \
+              --package "${package}" \
+              --source \
+              "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
+              --contract scripts/ci/package_systemd_wireguard_ordering_contract.json
+          done
+
+      - name: Validate Packaged Binary Provenance
+        shell: bash
+        env:
+          VALIDATED_AMD64_DIGEST_CONTRACT: ${{ steps.stage_provenance.outputs.amd64_digest_contract }}
+          VALIDATED_APK_AMD64_DIGEST_CONTRACT: ${{ steps.stage_provenance.outputs.apk_amd64_digest_contract }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "${VALIDATED_AMD64_DIGEST_CONTRACT}" == v1\;* ]]
+          [[ "${VALIDATED_APK_AMD64_DIGEST_CONTRACT}" == v1\;* ]]
+          PAYLOAD_ATTEST_ROOT="${PACKAGE_WORKSPACE}/payload-attestation"
+          if [[ -e "${PAYLOAD_ATTEST_ROOT}" || -L "${PAYLOAD_ATTEST_ROOT}" ]]; then
+            echo "ERROR: package payload attestation root already exists." >&2
+            exit 1
+          fi
+          install -d -m 0700 \
+            "${PAYLOAD_ATTEST_ROOT}" \
+            "${PAYLOAD_ATTEST_ROOT}/deb/opt/syswarden/bin" \
+            "${PAYLOAD_ATTEST_ROOT}/rpm/opt/syswarden/bin" \
+            "${PAYLOAD_ATTEST_ROOT}/apk/opt/syswarden/bin"
+
+          extract_exact_member() {
+            local format="$1"
+            local package="$2"
+            local relative="$3"
+            local archive_member
+            local count
+            local destination="${PAYLOAD_ATTEST_ROOT}/${format}/${relative}"
+            local temporary="${destination}.tmp"
+            case "${format}" in
+              deb)
+                archive_member="./${relative}"
+                count="$(
+                  dpkg-deb --fsys-tarfile "${package}" |
+                    tar --list --file=- |
+                    awk -v expected="${archive_member}" \
+                      '$0 == expected { count++ } END { print count + 0 }'
+                )"
+                [[ "${count}" == "1" ]]
+                dpkg-deb --fsys-tarfile "${package}" |
+                  tar --extract --to-stdout --file=- "${archive_member}" > \
+                    "${temporary}"
+                ;;
+              rpm)
+                archive_member="./${relative}"
+                count="$(
+                  rpm2cpio "${package}" |
+                    cpio --list --quiet |
+                    awk -v expected="${archive_member}" \
+                      '$0 == expected { count++ } END { print count + 0 }'
+                )"
+                [[ "${count}" == "1" ]]
+                rpm2cpio "${package}" |
+                  cpio --extract --to-stdout --quiet "${archive_member}" > \
+                    "${temporary}"
+                ;;
+              apk)
+                archive_member="${relative}"
+                count="$(
+                  tar --list --file "${package}" |
+                    awk -v expected="${archive_member}" \
+                      '$0 == expected { count++ } END { print count + 0 }'
+                )"
+                [[ "${count}" == "1" ]]
+                tar --extract --to-stdout --file "${package}" \
+                  "${archive_member}" > "${temporary}"
+                ;;
+              *)
+                echo "ERROR: unsupported package format for payload attestation." >&2
+                return 1
+                ;;
+            esac
+            [[ -s "${temporary}" && ! -L "${temporary}" ]]
+            chmod 0600 "${temporary}"
+            mv -T -- "${temporary}" "${destination}"
+          }
+
+          for relative in \
+            opt/syswarden/bin/syswarden-cli \
+            opt/syswarden/bin/syswarden-core \
+            opt/syswarden/bin/syswarden-tui \
+            opt/syswarden/signatures.json; do
+            extract_exact_member deb \
+              "${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" "${relative}"
+            extract_exact_member rpm \
+              "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" "${relative}"
+            extract_exact_member apk \
+              "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" "${relative}"
+          done
+
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+            --root "${PAYLOAD_ATTEST_ROOT}/deb" \
+            --mode pie \
+            --revision "${SOURCE_COMMIT_SHA}" \
+            --vcs-time "${SOURCE_VCS_TIME}" \
+            --signatures-source \
+            "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+            --reference-root "${STAGING_AMD64}" \
+            --expected-digest-contract \
+            "${VALIDATED_AMD64_DIGEST_CONTRACT}"
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+            --root "${PAYLOAD_ATTEST_ROOT}/rpm" \
+            --mode pie \
+            --revision "${SOURCE_COMMIT_SHA}" \
+            --vcs-time "${SOURCE_VCS_TIME}" \
+            --signatures-source \
+            "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+            --reference-root "${STAGING_AMD64}" \
+            --expected-digest-contract \
+            "${VALIDATED_AMD64_DIGEST_CONTRACT}"
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+            --root "${PAYLOAD_ATTEST_ROOT}/apk" \
+            --mode static \
+            --revision "${SOURCE_COMMIT_SHA}" \
+            --vcs-time "${SOURCE_VCS_TIME}" \
+            --signatures-source \
+            "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+            --reference-root "${STAGING_APK_AMD64}" \
+            --expected-digest-contract \
+            "${VALIDATED_APK_AMD64_DIGEST_CONTRACT}"
+          (
+            cd "${PACKAGE_ASSETS}"
+            sha256sum --check --strict SHA256SUMS.txt
+          )
+          find "${PACKAGE_ASSETS}" -maxdepth 1 -type f -exec chmod 0444 -- {} +
 
       - name: Prove Packaging Did Not Mutate Source
         if: always()

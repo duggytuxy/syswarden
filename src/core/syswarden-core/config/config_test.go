@@ -82,6 +82,84 @@ func TestLoadConfigDirectoryCurrentAndHistorical(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDirectoryNeutralizesRetiredZeroWhitelistAcrossSources_SW_SEC_M1(t *testing.T) {
+	whitelistBlock := `[network]
+	whitelist_ips = ["0.0.0.0", "0.0.0.0", "10.20.30.40", "0.0.0.0/32", "0.0.0.0/32", "192.0.2.0/24", "fd00:1234::/64"]
+
+`
+	for _, source := range []string{"master", "module"} {
+		t.Run(source, func(t *testing.T) {
+			t.Cleanup(viper.Reset)
+			master := validMaster("schema_version = 1")
+			var modules map[string]string
+			if source == "master" {
+				master = strings.Replace(master, "[network.blocklists]", whitelistBlock+"[network.blocklists]", 1)
+			} else {
+				modules = map[string]string{"10-network.toml": whitelistBlock}
+			}
+			root := writeConfigFixture(t, master, modules)
+			diagnostics, err := LoadConfigDirectory(root)
+			if err != nil {
+				t.Fatalf("LoadConfigDirectory() error = %v", err)
+			}
+			if got, want := strings.Join(viper.GetStringSlice("network.whitelist_ips"), ","), "10.20.30.40,192.0.2.0/24,fd00:1234::/64"; got != want {
+				t.Fatalf("published whitelist = %q, want %q", got, want)
+			}
+			joinedDiagnostics := strings.Join(diagnostics.DeprecatedKeys, "\n")
+			for _, retired := range []string{"0.0.0.0", "0.0.0.0/32"} {
+				if count := strings.Count(joinedDiagnostics, "value \""+retired+"\" (ignored;"); count != 1 {
+					t.Fatalf("deprecated diagnostics = %q, want ignored %s entry", joinedDiagnostics, retired)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadConfigDirectoryFreezesNeutralizedEnvironmentWhitelist_SW_SEC_M1(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	t.Setenv(
+		"SYSWARDEN_NETWORK_WHITELIST_IPS",
+		"0.0.0.0,10.20.30.40,0.0.0.0/32,192.0.2.0/24",
+	)
+	root := writeConfigFixture(t, validMaster("schema_version = 1"), nil)
+	diagnostics, err := LoadConfigDirectory(root)
+	if err != nil {
+		t.Fatalf("LoadConfigDirectory() environment compatibility error = %v", err)
+	}
+	if got, want := strings.Join(viper.GetStringSlice("network.whitelist_ips"), ","), "10.20.30.40,192.0.2.0/24"; got != want {
+		t.Fatalf("published environment whitelist = %q, want %q", got, want)
+	}
+	joinedDiagnostics := strings.Join(diagnostics.DeprecatedKeys, "\n")
+	for _, retired := range []string{"0.0.0.0", "0.0.0.0/32"} {
+		if count := strings.Count(joinedDiagnostics, "value \""+retired+"\" (ignored;"); count != 1 {
+			t.Fatalf("environment diagnostics = %q, want one ignored %s entry", joinedDiagnostics, retired)
+		}
+	}
+
+	t.Setenv("SYSWARDEN_NETWORK_WHITELIST_IPS", "127.0.0.1")
+	if got, want := strings.Join(viper.GetStringSlice("network.whitelist_ips"), ","), "10.20.30.40,192.0.2.0/24"; got != want {
+		t.Fatalf("published whitelist changed after validation = %q, want %q", got, want)
+	}
+}
+
+func TestLoadConfigDirectoryRejectsOtherUnsafeWhitelistEntries_SW_SEC_M1(t *testing.T) {
+	for _, entry := range []string{"0.0.0.0/24", "127.0.0.1", "169.254.10.20", "224.0.0.1", "8.8.0.0/16"} {
+		t.Run(entry, func(t *testing.T) {
+			t.Cleanup(viper.Reset)
+			master := strings.Replace(
+				validMaster("schema_version = 1"),
+				"[network.blocklists]",
+				fmt.Sprintf("[network]\nwhitelist_ips = [%q]\n\n[network.blocklists]", entry),
+				1,
+			)
+			root := writeConfigFixture(t, master, nil)
+			if _, err := LoadConfigDirectory(root); err == nil {
+				t.Fatalf("LoadConfigDirectory() accepted unsafe whitelist entry %q", entry)
+			}
+		})
+	}
+}
+
 func TestFirewallBackendForMutationRejectsCompatibilityOnlyIptables_SW2_FWBACKEND_001(t *testing.T) {
 	tests := []struct {
 		backend string

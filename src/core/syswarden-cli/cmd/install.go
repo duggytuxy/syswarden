@@ -20,6 +20,9 @@ var installCmd = &cobra.Command{
 	Long:  "Runs the host-mutating installation pipeline for dependencies, SSH configuration, firewall policy, integrations, hardening, services, and scheduled jobs.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Printf("[SYSWARDEN] Starting %s Installation Pipeline...\n", system.Version)
+		if err := preflightSystemdFirewallOrderingForInstall(); err != nil {
+			return installStageError("systemd firewall ordering preflight failed before host mutation", err)
+		}
 
 		if err := preflightConfiguredCronScheduling(); err != nil {
 			return installStageError("cron scheduling preflight failed before configuration repair", err)
@@ -65,8 +68,17 @@ var installCmd = &cobra.Command{
 			return installStageError("firewall backend preflight failed", err)
 		}
 
-		if err := system.InstallDependencies(); err != nil {
+		if err := installDependenciesForInstall(); err != nil {
 			return installStageError("dependency installation failed", err)
+		}
+		if err := recoverPendingWireGuardForwardingForInstall(); err != nil {
+			return installStageError("WireGuard forwarding persistence recovery failed before SSH or firewall mutation", err)
+		}
+		if err := recoverPendingWireGuardForInstall(); err != nil {
+			return installStageError("WireGuard transaction recovery failed before SSH or firewall mutation", err)
+		}
+		if err := preflightWireGuardForInstall(); err != nil {
+			return installStageError("WireGuard preflight failed before SSH or firewall mutation", err)
 		}
 		if os.Getenv("SYSWARDEN_PKG_INSTALL") == "1" {
 			if err := preparePackagedLegacyDynamicBanUpgrade(); err != nil {
@@ -74,7 +86,7 @@ var installCmd = &cobra.Command{
 			}
 		}
 
-		if err := system.ConfigureSSH(); err != nil {
+		if err := configureSSHForInstall(); err != nil {
 			return installStageError("SSH configuration failed", err)
 		}
 
@@ -107,7 +119,7 @@ var installCmd = &cobra.Command{
 			return installStageError("auto-whitelisting failed", err)
 		}
 
-		if err := firewall.ApplyPolicies(); err != nil {
+		if err := applyPoliciesForInstall(); err != nil {
 			return installStageError("failed to apply SYSWARDEN overlay rules", err)
 		}
 
@@ -153,12 +165,14 @@ var installCmd = &cobra.Command{
 			return installStageError("legacy shell completion reconciliation failed", err)
 		}
 
-		fmt.Println("[SYSWARDEN] v4.04.2 native installation complete.")
+		fmt.Println("[SYSWARDEN] v4.04.3 native installation complete.")
 		return nil
 	},
 }
 
 var installConfigPreflight = prepareInstallConfiguration
+var preflightSystemdFirewallOrderingForInstall = system.PreflightSystemdFirewallOrdering
+var installDependenciesForInstall = system.InstallDependencies
 var removeExactLegacyCompletionAfterInstall = integration.RemoveExactLegacyBashCompletion
 var quarantineLegacyDynamicBanIntervals = firewall.QuarantineLegacyDynamicBanIntervals
 var restartCoreServiceForInstall = restartCoreService
@@ -167,6 +181,11 @@ var setupWAFForInstall = integration.SetupWAFLogForwarder
 var hostFirewallBackendPreflight = system.PreflightHostFirewallBackend
 var inspectInstallFirewallCompatibility = config.InspectHistoricalDefaultFirewallCompatibility
 var applyInstallFirewallCompatibility = config.ApplyHistoricalDefaultFirewallCompatibility
+var recoverPendingWireGuardForwardingForInstall = network.RecoverPendingWireGuardForwardingState
+var recoverPendingWireGuardForInstall = network.RecoverPendingWireguardState
+var preflightWireGuardForInstall = network.PreflightWireguard
+var configureSSHForInstall = system.ConfigureSSH
+var applyPoliciesForInstall = firewall.ApplyPolicies
 var hostCronSchedulingPreflight = func(haEnabled bool) error {
 	_, err := system.PreflightRuntimeCronScheduling(haEnabled)
 	return err

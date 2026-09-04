@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"syswarden-cli/config"
 	"syswarden-cli/pkg/wireguardstate"
 	"testing"
+	"time"
 )
 
 type wireGuardTransactionHarness struct {
@@ -32,6 +34,8 @@ type wireGuardTransactionHarness struct {
 	serviceState       wireGuardServiceState
 	sysctlRestoreError error
 	forwardingCloseErr error
+	runtimeForwarding  []string
+	runtimeForwardErr  error
 }
 
 type harnessWireGuardForwarding struct {
@@ -68,6 +72,8 @@ func (forwarding *harnessWireGuardForwarding) Close() error {
 	return forwarding.harness.forwardingCloseErr
 }
 
+func (*harnessWireGuardForwarding) OriginalValue() string { return "0" }
+
 func installWireGuardTransactionHarness(t *testing.T) *wireGuardTransactionHarness {
 	t.Helper()
 	harness := &wireGuardTransactionHarness{root: t.TempDir(), failPreflightAt: -1, expectTransaction: true}
@@ -96,6 +102,7 @@ func installWireGuardTransactionHarness(t *testing.T) *wireGuardTransactionHarne
 	previousOutput := wireGuardCommandOutput
 	previousInputOutput := wireGuardCommandInputOutput
 	previousForwarding := wireGuardForwardingTransactionFactory
+	previousRuntimeForwarding := wireGuardForwardingRuntimeReconciler
 	previousQR := wireGuardQRCodeRender
 	previousServiceDefinition := attestWireGuardServiceDefinition
 	previousHookExecutables := wireGuardServerHookExecutableAttestor
@@ -122,6 +129,7 @@ func installWireGuardTransactionHarness(t *testing.T) *wireGuardTransactionHarne
 		wireGuardCommandOutput = previousOutput
 		wireGuardCommandInputOutput = previousInputOutput
 		wireGuardForwardingTransactionFactory = previousForwarding
+		wireGuardForwardingRuntimeReconciler = previousRuntimeForwarding
 		wireGuardQRCodeRender = previousQR
 		attestWireGuardServiceDefinition = previousServiceDefinition
 		wireGuardServerHookExecutableAttestor = previousHookExecutables
@@ -246,6 +254,10 @@ func installWireGuardTransactionHarness(t *testing.T) *wireGuardTransactionHarne
 	wireGuardForwardingTransactionFactory = func() (wireGuardForwardingTransaction, error) {
 		return &harnessWireGuardForwarding{harness: harness, t: t}, nil
 	}
+	wireGuardForwardingRuntimeReconciler = func(value string) error {
+		harness.runtimeForwarding = append(harness.runtimeForwarding, value)
+		return harness.runtimeForwardErr
+	}
 	wireGuardQRCodeRender = func(string) error {
 		harness.events = append(harness.events, "qr")
 		return nil
@@ -351,9 +363,84 @@ func TestSetupWireGuardReusesOnlyFullyAttestedState_SW2_WGSTATE_001(t *testing.T
 	if harness.commandCalls != commandCalls {
 		t.Fatalf("reuse regenerated key/network inputs: before=%d after=%d", commandCalls, harness.commandCalls)
 	}
-	wantEvents := []string{"preflight:1", "preflight:2", "sysctl", "preflight:3", "activate", "preflight:4", "qr"}
+	wantEvents := []string{"preflight:1", "preflight:2", "sysctl", "preflight:3", "activate", "preflight:4", "preflight:5", "qr"}
 	if !reflect.DeepEqual(harness.events, wantEvents) {
 		t.Fatalf("reuse events:\n got: %v\nwant: %v", harness.events, wantEvents)
+	}
+}
+
+func TestSetupWireGuardReuseFinalAttestationRejectsLateRuntimeDrift_SW2_WGSTATE_001(t *testing.T) {
+	tests := []struct {
+		name         string
+		installDrift func(*testing.T, *wireGuardTransactionHarness) error
+	}{
+		{
+			name: "service",
+			installDrift: func(t *testing.T, harness *wireGuardTransactionHarness) error {
+				t.Helper()
+				inspect := wireGuardServiceInspector
+				calls := 0
+				wireGuardServiceInspector = func() (wireGuardServiceState, error) {
+					calls++
+					if calls == 4 {
+						harness.serviceState = wireGuardServiceState{Alpine: false, Enabled: true}
+					}
+					return inspect()
+				}
+				return errors.New("late service drift must fail final attestation")
+			},
+		},
+		{
+			name: "table",
+			installDrift: func(t *testing.T, _ *wireGuardTransactionHarness) error {
+				t.Helper()
+				sentinel := errors.New("late manifest-bound table drift")
+				preflight := wireGuardNFTActivationPreflight
+				calls := 0
+				wireGuardNFTActivationPreflight = func(expectation wireGuardNFTExpectation) error {
+					calls++
+					if calls == 3 {
+						return sentinel
+					}
+					return preflight(expectation)
+				}
+				return sentinel
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			harness := installWireGuardTransactionHarness(t)
+			if err := SetupWireguard(); err != nil {
+				t.Fatalf("initial setup: %v", err)
+			}
+			baseline := harness.serviceState
+			harness.events = nil
+			harness.preflightCalls = 0
+			harness.rollbackCalls = 0
+			harness.nftCleanupCalls = 0
+			harness.sysctlRestoreCalls = 0
+			harness.expectTransaction = false
+			sentinel := test.installDrift(t, harness)
+
+			err := SetupWireguard()
+			if err == nil || (test.name == "table" && !errors.Is(err, sentinel)) ||
+				!strings.Contains(err.Error(), "final WireGuard runtime attestation") {
+				t.Fatalf("late %s drift result = %v", test.name, err)
+			}
+			if harness.serviceState != baseline || harness.rollbackCalls != 1 ||
+				harness.nftCleanupCalls != 0 || harness.sysctlRestoreCalls != 1 {
+				t.Fatalf(
+					"late %s drift compensation: state=%#v baseline=%#v rollback=%d cleanup=%d forwarding=%d",
+					test.name, harness.serviceState, baseline, harness.rollbackCalls,
+					harness.nftCleanupCalls, harness.sysctlRestoreCalls,
+				)
+			}
+			if strings.Contains(strings.Join(harness.events, ","), "qr") {
+				t.Fatalf("late %s drift emitted success output: %v", test.name, harness.events)
+			}
+		})
 	}
 }
 
@@ -479,6 +566,42 @@ func TestSetupWireGuardInactiveReuseRetiresOnlyManifestBoundTableBeforeRestart_S
 	}
 }
 
+func TestSetupWireGuardInactiveReuseRecoversOnlyExactTokenizedStaleTable_SW2_FWBACKEND_001(t *testing.T) {
+	harness := installWireGuardTransactionHarness(t)
+	if err := SetupWireguard(); err != nil {
+		t.Fatalf("initial setup: %v", err)
+	}
+	harness.serviceState = wireGuardServiceState{Alpine: false}
+	harness.expectTransaction = false
+	markerMismatch := errors.New("ownership marker does not match the manifest-bound token")
+	wireGuardReservedNFTCleanup = func(wireguardstate.ServerConfigurationIdentity) error {
+		harness.events = append(harness.events, "cleanup-current-token")
+		return markerMismatch
+	}
+	previousStaleCleanup := wireGuardStaleNFTCleanup
+	t.Cleanup(func() { wireGuardStaleNFTCleanup = previousStaleCleanup })
+	staleCleanupCalls := 0
+	wireGuardStaleNFTCleanup = func(identity wireguardstate.ServerConfigurationIdentity) error {
+		staleCleanupCalls++
+		harness.events = append(harness.events, "cleanup-stale-token")
+		if identity != exactWireGuardNFTIdentity() {
+			t.Fatalf("stale cleanup identity = %#v", identity)
+		}
+		return nil
+	}
+	if err := SetupWireguard(); err != nil {
+		t.Fatalf("inactive stale-table recovery: %v", err)
+	}
+	if staleCleanupCalls != 1 || !harness.serviceState.ready() {
+		t.Fatalf("stale recovery calls=%d state=%#v", staleCleanupCalls, harness.serviceState)
+	}
+	wantOrder := []string{"cleanup-current-token", "cleanup-stale-token"}
+	joined := strings.Join(harness.events, ",")
+	if !strings.Contains(joined, strings.Join(wantOrder, ",")) {
+		t.Fatalf("stale recovery order = %v", harness.events)
+	}
+}
+
 func TestSetupWireGuardPostActivationDriftRollsBackServiceThenOwnedNFT_SW2_FWBACKEND_001(t *testing.T) {
 	harness := installWireGuardTransactionHarness(t)
 	sentinel := errors.New("firewalld became active")
@@ -598,6 +721,35 @@ func TestSetupWireGuardCommitFailureRollsBackActivationAndSysctl_SW2_WGSTATE_001
 func TestSetupWireGuardPostCommitDriftCannotReturnSuccessOrLeaveUnprovenRuntime_SW2_WGSTATE_001(t *testing.T) {
 	harness := installWireGuardTransactionHarness(t)
 	sentinel := errors.New("backend drifted after ownership commit")
+	locked := false
+	guardAcquisitions := 0
+	guardReleases := 0
+	wireGuardNFTActivationGuard = func() (func() error, error) {
+		guardAcquisitions++
+		if locked {
+			return nil, fmt.Errorf("recursive test guard acquisition")
+		}
+		locked = true
+		return func() error {
+			guardReleases++
+			if !locked {
+				return fmt.Errorf("duplicate test guard release")
+			}
+			if harness.rollbackCalls != 1 || harness.nftCleanupCalls != 1 || harness.sysctlRestoreCalls != 1 {
+				t.Errorf(
+					"guard released before compensation completed: service=%d nft=%d sysctl=%d",
+					harness.rollbackCalls, harness.nftCleanupCalls, harness.sysctlRestoreCalls,
+				)
+			}
+			inventory, inspectErr := wireguardstate.Inspect(harness.root)
+			if inspectErr != nil || !inventory.Empty() {
+				t.Errorf("guard released before ownership cleanup completed: inventory=%#v err=%v", inventory, inspectErr)
+			}
+			harness.events = append(harness.events, "guard-release")
+			locked = false
+			return nil
+		}, nil
+	}
 	tablePresent := false
 	activate := wireGuardServiceActivator
 	wireGuardServiceActivator = func(baseline wireGuardServiceState) error {
@@ -653,7 +805,7 @@ func TestSetupWireGuardPostCommitDriftCannotReturnSuccessOrLeaveUnprovenRuntime_
 	}
 	wantTail := []string{
 		"activate", "preflight:6", "post-commit-drift", "preflight:7",
-		"rollback-service", "cleanup-nft", "restore-sysctl",
+		"rollback-service", "cleanup-nft", "restore-sysctl", "guard-release",
 	}
 	if got := harness.events[len(harness.events)-len(wantTail):]; !reflect.DeepEqual(got, wantTail) {
 		t.Fatalf("post-commit compensation order: got %v want %v", got, wantTail)
@@ -664,6 +816,9 @@ func TestSetupWireGuardPostCommitDriftCannotReturnSuccessOrLeaveUnprovenRuntime_
 	}
 	if strings.Contains(strings.Join(harness.events, ","), "qr") {
 		t.Fatal("post-commit drift was reported as success")
+	}
+	if locked || guardAcquisitions != 1 || guardReleases != 1 {
+		t.Fatalf("complete setup guard lifecycle: locked=%v acquisitions=%d releases=%d", locked, guardAcquisitions, guardReleases)
 	}
 }
 
@@ -760,18 +915,114 @@ func TestSetupWireGuardServiceRollbackFailureStillAttemptsOwnedNFTCleanup_SW2_WG
 	}
 }
 
-func TestSetupWireGuardGuardReleaseFailureRollsBackActivation_SW2_FWBACKEND_001(t *testing.T) {
+func TestSetupWireGuardGuardReleaseFailureRetainsVerifiedCommit_SW2_FWBACKEND_001(t *testing.T) {
 	harness := installWireGuardTransactionHarness(t)
 	sentinel := errors.New("activation guard release failed")
+	acquisitions := 0
+	releases := 0
 	wireGuardNFTActivationGuard = func() (func() error, error) {
-		return func() error { return sentinel }, nil
+		acquisitions++
+		return func() error {
+			releases++
+			return sentinel
+		}, nil
 	}
 	err := SetupWireguard()
-	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "release WireGuard nftables activation guard") {
+	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "after verified commit") {
 		t.Fatalf("activation guard release error = %v", err)
 	}
-	if harness.rollbackCalls != 1 || harness.nftCleanupCalls != 1 || harness.sysctlRestoreCalls != 1 {
-		t.Fatalf("guard release rollback counts: service=%d nft=%d sysctl=%d", harness.rollbackCalls, harness.nftCleanupCalls, harness.sysctlRestoreCalls)
+	if harness.rollbackCalls != 0 || harness.nftCleanupCalls != 0 || harness.sysctlRestoreCalls != 0 {
+		t.Fatalf("verified commit was rolled back after release uncertainty: service=%d nft=%d sysctl=%d", harness.rollbackCalls, harness.nftCleanupCalls, harness.sysctlRestoreCalls)
+	}
+	if !harness.serviceState.ready() {
+		t.Fatalf("verified WireGuard runtime was not retained: %#v", harness.serviceState)
+	}
+	if _, err := wireguardstate.ReadAndVerify(
+		harness.root, networkTestUID(t), networkTestGID(t),
+	); err != nil {
+		t.Fatalf("verified ownership evidence was not retained: %v", err)
+	}
+	if acquisitions != 1 || releases != 1 {
+		t.Fatalf("release uncertainty retried the guard: acquisitions=%d releases=%d", acquisitions, releases)
+	}
+}
+
+func TestSetupWireGuardSerializesCompleteTransitionAgainstDisable_SW2_FWBACKEND_001(t *testing.T) {
+	harness := installWireGuardTransactionHarness(t)
+	token := make(chan struct{}, 1)
+	token <- struct{}{}
+	secondAttempt := make(chan struct{})
+	var acquisitions atomic.Int32
+	wireGuardNFTActivationGuard = func() (func() error, error) {
+		attempt := acquisitions.Add(1)
+		if attempt == 2 {
+			close(secondAttempt)
+		}
+		<-token
+		released := false
+		return func() error {
+			if released {
+				return fmt.Errorf("test WireGuard guard released twice")
+			}
+			released = true
+			token <- struct{}{}
+			return nil
+		}, nil
+	}
+
+	setupPaused := make(chan struct{})
+	resumeSetup := make(chan struct{})
+	wireGuardAfterOwnershipCommit = func() {
+		close(setupPaused)
+		<-resumeSetup
+	}
+	setupDone := make(chan error, 1)
+	go func() { setupDone <- SetupWireguard() }()
+	select {
+	case <-setupPaused:
+	case <-time.After(2 * time.Second):
+		t.Fatal("setup did not reach the ownership commit boundary")
+	}
+
+	disableDone := make(chan error, 1)
+	go func() { disableDone <- reconcileDisabledWireGuard() }()
+	select {
+	case <-secondAttempt:
+	case <-time.After(2 * time.Second):
+		t.Fatal("disable did not attempt to acquire the shared guard")
+	}
+	select {
+	case err := <-disableDone:
+		t.Fatalf("disable escaped the setup guard before setup completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(resumeSetup)
+	select {
+	case err := <-setupDone:
+		if err != nil {
+			t.Fatalf("guarded setup: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("guarded setup did not complete")
+	}
+	select {
+	case err := <-disableDone:
+		if err != nil {
+			t.Fatalf("serialized disable: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serialized disable did not complete after setup released the guard")
+	}
+
+	if acquisitions.Load() != 2 {
+		t.Fatalf("shared guard acquisitions = %d, want one setup and one disable acquisition", acquisitions.Load())
+	}
+	if harness.serviceState.Active || harness.serviceState.Enabled || harness.serviceState.Interface {
+		t.Fatalf("serialized disable did not converge after setup: %#v", harness.serviceState)
+	}
+	if harness.rollbackCalls != 1 || harness.nftCleanupCalls != 1 {
+		t.Fatalf("serialized disable mutations: service=%d nft=%d", harness.rollbackCalls, harness.nftCleanupCalls)
 	}
 }
 
@@ -877,15 +1128,21 @@ func exactWireGuardNFTJSON() []byte {
 
 func TestWireGuardOwnedNFTCleanupDeletesOnlyReservedExactTable_SW2_FWBACKEND_001(t *testing.T) {
 	identity := exactWireGuardNFTIdentity()
-	previousIdentity := wireGuardServerIdentityInspector
-	wireGuardServerIdentityInspector = func() (wireguardstate.ServerConfigurationIdentity, error) { return identity, nil }
-	t.Cleanup(func() { wireGuardServerIdentityInspector = previousIdentity })
+	identityAttestations := 0
+	runtimeAttestations := 0
+	reattestIdentity := func() error { identityAttestations++; return nil }
+	reattestRuntime := func() error { runtimeAttestations++; return nil }
 	runner := &fakeWireGuardNFTRunner{
 		tables: []fakeWireGuardNFTTable{{"inet", "operator", 2}, {"inet", "syswarden_wg", 7}, {"ip", "syswarden_wg", 8}},
 		detail: exactWireGuardNFTJSON(), replace: true,
 	}
-	if err := cleanupWireGuardReservedNFTTableWithRunner(runner, identity); err != nil {
+	if err := cleanupWireGuardReservedNFTTableWithRunner(
+		runner, identity, reattestIdentity, reattestRuntime,
+	); err != nil {
 		t.Fatal(err)
+	}
+	if identityAttestations != 3 || runtimeAttestations != 3 {
+		t.Fatalf("owned cleanup attestations: identity=%d runtime=%d, want 3 each", identityAttestations, runtimeAttestations)
 	}
 	if !reflect.DeepEqual(runner.deleteCalls, [][]string{{"delete", "table", "inet", "handle", "7"}}) {
 		t.Fatalf("delete calls = %v", runner.deleteCalls)
@@ -897,24 +1154,350 @@ func TestWireGuardOwnedNFTCleanupDeletesOnlyReservedExactTable_SW2_FWBACKEND_001
 	residual := &fakeWireGuardNFTRunner{
 		tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}}, detail: exactWireGuardNFTJSON(), retain: true,
 	}
-	if err := cleanupWireGuardReservedNFTTableWithRunner(residual, identity); err == nil || !strings.Contains(err.Error(), "remains") {
+	if err := cleanupWireGuardReservedNFTTableWithRunner(
+		residual, identity, func() error { return nil }, func() error { return nil },
+	); err == nil || !strings.Contains(err.Error(), "remains") {
 		t.Fatalf("residual cleanup error = %v", err)
 	}
 	failure := errors.New("inventory unavailable")
 	failed := &fakeWireGuardNFTRunner{listErr: failure}
-	if err := cleanupWireGuardReservedNFTTableWithRunner(failed, identity); err == nil || !errors.Is(err, failure) || len(failed.deleteCalls) != 0 {
+	if err := cleanupWireGuardReservedNFTTableWithRunner(
+		failed, identity, func() error { return nil }, func() error { return nil },
+	); err == nil || !errors.Is(err, failure) || len(failed.deleteCalls) != 0 {
 		t.Fatalf("inventory failure was not fail closed: err=%v deletes=%v", err, failed.deleteCalls)
 	}
-	wireGuardServerIdentityInspector = func() (wireguardstate.ServerConfigurationIdentity, error) {
-		changed := identity
-		changed.OwnershipToken = strings.Repeat("b", 64)
-		return changed, nil
-	}
+	unlinkedIdentity := errors.New("ownership manifest identity changed")
 	unlinked := &fakeWireGuardNFTRunner{
 		tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}}, detail: exactWireGuardNFTJSON(),
 	}
-	if err := cleanupWireGuardReservedNFTTableWithRunner(unlinked, identity); err == nil || len(unlinked.deleteCalls) != 0 {
+	if err := cleanupWireGuardReservedNFTTableWithRunner(
+		unlinked, identity, func() error { return unlinkedIdentity }, func() error { return nil },
+	); err == nil || !errors.Is(err, unlinkedIdentity) || len(unlinked.deleteCalls) != 0 {
 		t.Fatalf("cleanup without exact linked manifest was not refused: err=%v deletes=%v", err, unlinked.deleteCalls)
+	}
+}
+
+func TestWireGuardOwnedNFTCleanupRejectsLateIdentityAndRuntimeDrift_SW2_FWBACKEND_001(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		identityChanges bool
+		runtimeStarts   bool
+	}{
+		{name: "manifest identity changes", identityChanges: true},
+		{name: "runtime starts immediately before delete", runtimeStarts: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expected := exactWireGuardNFTIdentity()
+			identityAttestations := 0
+			runtimeAttestations := 0
+			sentinel := errors.New("late owned-table cleanup drift")
+			reattestIdentity := func() error {
+				identityAttestations++
+				if test.identityChanges && identityAttestations == 3 {
+					return sentinel
+				}
+				return nil
+			}
+			reattestRuntime := func() error {
+				runtimeAttestations++
+				if test.runtimeStarts && runtimeAttestations == 3 {
+					return sentinel
+				}
+				return nil
+			}
+			runner := &fakeWireGuardNFTRunner{
+				tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}}, detail: exactWireGuardNFTJSON(),
+			}
+			err := cleanupWireGuardReservedNFTTableWithRunner(
+				runner, expected, reattestIdentity, reattestRuntime,
+			)
+			if err == nil || !errors.Is(err, sentinel) || len(runner.deleteCalls) != 0 {
+				t.Fatalf(
+					"late cleanup drift was not fail-closed: err=%v identity=%d runtime=%d deletes=%v",
+					err, identityAttestations, runtimeAttestations, runner.deleteCalls,
+				)
+			}
+		})
+	}
+}
+
+func TestWireGuardAttestedOrphanCleanupDeletesOnlyExactTokenizedTable_SW2_FWBACKEND_001(t *testing.T) {
+	runner := &fakeWireGuardNFTRunner{
+		tables: []fakeWireGuardNFTTable{{"inet", "operator", 2}, {"inet", "syswarden_wg", 7}, {"ip", "syswarden_wg", 8}},
+		detail: exactWireGuardNFTJSON(),
+	}
+	attestations := 0
+	runtimeAttestations := 0
+	if err := cleanupAttestedOrphanedWireGuardNFTTableWithRunner(runner, func() error {
+		attestations++
+		return nil
+	}, func() error {
+		runtimeAttestations++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if attestations != 2 || runtimeAttestations != 2 {
+		t.Fatalf("orphan attestations: ownership=%d runtime=%d, want 2 each", attestations, runtimeAttestations)
+	}
+	if !reflect.DeepEqual(runner.deleteCalls, [][]string{{"delete", "table", "inet", "handle", "7"}}) {
+		t.Fatalf("delete calls = %v", runner.deleteCalls)
+	}
+	if len(runner.tables) != 2 || runner.tables[0].name != "operator" || runner.tables[1].family != "ip" {
+		t.Fatalf("unrelated operator tables were not preserved: %v", runner.tables)
+	}
+}
+
+func TestWireGuardStaleRemovalCleanupUsesGuardedManifestIdentity_SW2_FWBACKEND_001(t *testing.T) {
+	previousGuard := wireGuardNFTActivationGuard
+	previousIdentity := wireGuardServerIdentityInspector
+	previousCleanup := wireGuardStaleNFTCleanup
+	t.Cleanup(func() {
+		wireGuardNFTActivationGuard = previousGuard
+		wireGuardServerIdentityInspector = previousIdentity
+		wireGuardStaleNFTCleanup = previousCleanup
+	})
+
+	identity := wireguardstate.ServerConfigurationIdentity{
+		OwnershipToken:  strings.Repeat("a", 64),
+		ActiveInterface: "ens3",
+	}
+	var order []string
+	wireGuardNFTActivationGuard = func() (func() error, error) {
+		order = append(order, "guard")
+		return func() error {
+			order = append(order, "release")
+			return nil
+		}, nil
+	}
+	wireGuardServerIdentityInspector = func() (wireguardstate.ServerConfigurationIdentity, error) {
+		order = append(order, "identity")
+		return identity, nil
+	}
+	wireGuardStaleNFTCleanup = func(actual wireguardstate.ServerConfigurationIdentity) error {
+		order = append(order, "cleanup")
+		if actual != identity {
+			t.Fatalf("stale cleanup identity = %#v, want %#v", actual, identity)
+		}
+		return nil
+	}
+
+	if err := CleanupAttestedStaleWireGuardNFTStateForRemoval(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(order, ","), "guard,identity,cleanup,release"; got != want {
+		t.Fatalf("stale removal cleanup order = %q, want %q", got, want)
+	}
+}
+
+func TestWireGuardAttestedOrphanCleanupIsNoopWhenReservedTableIsAbsent_SW2_FWBACKEND_001(t *testing.T) {
+	runner := &fakeWireGuardNFTRunner{tables: []fakeWireGuardNFTTable{{"inet", "operator", 2}}}
+	attestations := 0
+	runtimeAttestations := 0
+	if err := cleanupAttestedOrphanedWireGuardNFTTableWithRunner(runner, func() error {
+		attestations++
+		return nil
+	}, func() error {
+		runtimeAttestations++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if attestations != 1 || runtimeAttestations != 1 || len(runner.deleteCalls) != 0 {
+		t.Fatalf("absent table result: ownership=%d runtime=%d deletes=%v", attestations, runtimeAttestations, runner.deleteCalls)
+	}
+}
+
+func TestWireGuardAttestedOrphanCleanupRejectsUnmarkedHistoricalAndChangedState_SW2_FWBACKEND_001(t *testing.T) {
+	exact := string(exactWireGuardNFTJSON())
+	marker := `,"comment":"syswarden-wg-v1:` + strings.Repeat("a", 64) + `"`
+	legacyV4028 := strings.Replace(exact, marker, "", 1)
+	for name, detail := range map[string]string{
+		"v4.02.8 unmarked table": legacyV4028,
+		"uppercase token":        strings.Replace(exact, strings.Repeat("a", 64), strings.Repeat("A", 64), 1),
+		"invalid interface":      strings.Replace(exact, `"right":"ens3"`, `"right":"bad interface"`, 1),
+		"additional rule":        strings.Replace(exact, `]}`, `,{"rule":{"family":"inet","table":"syswarden_wg","chain":"forward","expr":[{"match":{"op":"==","left":{"meta":{"key":"iifname"}},"right":"operator0"}},{"accept":null}],"handle":14}}]}`, 1),
+		"malformed JSON":         `{`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner := &fakeWireGuardNFTRunner{
+				tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}}, detail: []byte(detail),
+			}
+			err := cleanupAttestedOrphanedWireGuardNFTTableWithRunner(
+				runner, func() error { return nil }, func() error { return nil },
+			)
+			if err == nil || len(runner.deleteCalls) != 0 {
+				t.Fatalf("changed orphan state was not preserved: err=%v deletes=%v", err, runner.deleteCalls)
+			}
+		})
+	}
+}
+
+func TestWireGuardAttestedOrphanCleanupReattestsEvidenceAndHandleBeforeMutation_SW2_FWBACKEND_001(t *testing.T) {
+	sentinel := errors.New("ownership evidence appeared")
+	runner := &fakeWireGuardNFTRunner{
+		tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}}, detail: exactWireGuardNFTJSON(),
+	}
+	attestations := 0
+	err := cleanupAttestedOrphanedWireGuardNFTTableWithRunner(runner, func() error {
+		attestations++
+		if attestations == 2 {
+			return sentinel
+		}
+		return nil
+	}, func() error { return nil })
+	if err == nil || !errors.Is(err, sentinel) || len(runner.deleteCalls) != 0 {
+		t.Fatalf("late ownership evidence was not fail-closed: err=%v deletes=%v", err, runner.deleteCalls)
+	}
+
+	mismatch := &fakeWireGuardNFTRunner{
+		tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 8}}, detail: exactWireGuardNFTJSON(),
+	}
+	if err := cleanupAttestedOrphanedWireGuardNFTTableWithRunner(
+		mismatch, func() error { return nil }, func() error { return nil },
+	); err == nil || len(mismatch.deleteCalls) != 0 {
+		t.Fatalf("inventory/detail handle mismatch was not refused: err=%v deletes=%v", err, mismatch.deleteCalls)
+	}
+
+	retained := &fakeWireGuardNFTRunner{
+		tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}}, detail: exactWireGuardNFTJSON(), retain: true,
+	}
+	if err := cleanupAttestedOrphanedWireGuardNFTTableWithRunner(
+		retained, func() error { return nil }, func() error { return nil },
+	); err == nil || !strings.Contains(err.Error(), "remains") {
+		t.Fatalf("retained table result = %v", err)
+	}
+}
+
+func TestWireGuardAttestedOrphanCleanupRejectsRuntimeStartBeforeDelete_SW2_FWBACKEND_001(t *testing.T) {
+	for _, signal := range []string{"service became active", "interface appeared"} {
+		t.Run(signal, func(t *testing.T) {
+			runner := &fakeWireGuardNFTRunner{
+				tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}}, detail: exactWireGuardNFTJSON(),
+			}
+			runtimeAttestations := 0
+			sentinel := errors.New(signal)
+			err := cleanupAttestedOrphanedWireGuardNFTTableWithRunner(
+				runner,
+				func() error { return nil },
+				func() error {
+					runtimeAttestations++
+					if runtimeAttestations == 2 {
+						return sentinel
+					}
+					return nil
+				},
+			)
+			if err == nil || !errors.Is(err, sentinel) || runtimeAttestations != 2 || len(runner.deleteCalls) != 0 {
+				t.Fatalf("external runtime start was not fail-closed: err=%v attestations=%d deletes=%v", err, runtimeAttestations, runner.deleteCalls)
+			}
+		})
+	}
+}
+
+func TestWireGuardAttestedOrphanCleanupRejectsReplacementAfterDelete_SW2_FWBACKEND_001(t *testing.T) {
+	runner := &fakeWireGuardNFTRunner{
+		tables:  []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}},
+		detail:  exactWireGuardNFTJSON(),
+		replace: true,
+	}
+	err := cleanupAttestedOrphanedWireGuardNFTTableWithRunner(
+		runner, func() error { return nil }, func() error { return nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "replacement inet syswarden_wg table") ||
+		!reflect.DeepEqual(runner.deleteCalls, [][]string{{"delete", "table", "inet", "handle", "7"}}) {
+		t.Fatalf("replacement table was not detected: err=%v deletes=%v tables=%v", err, runner.deleteCalls, runner.tables)
+	}
+}
+
+func TestWireGuardInactiveCleanupReconcilesExactStaleTokenOnly_SW2_FWBACKEND_001(t *testing.T) {
+	expected := exactWireGuardNFTIdentity()
+	expected.OwnershipToken = strings.Repeat("b", 64)
+	runner := &fakeWireGuardNFTRunner{
+		tables: []fakeWireGuardNFTTable{{"inet", "operator", 2}, {"inet", "syswarden_wg", 7}},
+		detail: exactWireGuardNFTJSON(),
+	}
+	identityAttestations := 0
+	runtimeAttestations := 0
+	err := cleanupAttestedInactiveWireGuardNFTTableWithRunner(
+		runner,
+		expected,
+		func() error { identityAttestations++; return nil },
+		func() error { runtimeAttestations++; return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identityAttestations != 2 || runtimeAttestations != 3 {
+		t.Fatalf("stale cleanup attestations: identity=%d runtime=%d", identityAttestations, runtimeAttestations)
+	}
+	if !reflect.DeepEqual(runner.deleteCalls, [][]string{{"delete", "table", "inet", "handle", "7"}}) {
+		t.Fatalf("stale cleanup delete calls = %v", runner.deleteCalls)
+	}
+}
+
+func TestWireGuardInactiveCleanupRejectsRuntimeStartImmediatelyBeforeDelete_SW2_FWBACKEND_001(t *testing.T) {
+	expected := exactWireGuardNFTIdentity()
+	expected.OwnershipToken = strings.Repeat("b", 64)
+	runner := &fakeWireGuardNFTRunner{
+		tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}}, detail: exactWireGuardNFTJSON(),
+	}
+	runtimeAttestations := 0
+	sentinel := errors.New("runtime became active immediately before delete")
+	err := cleanupAttestedInactiveWireGuardNFTTableWithRunner(
+		runner,
+		expected,
+		func() error { return nil },
+		func() error {
+			runtimeAttestations++
+			if runtimeAttestations == 3 {
+				return sentinel
+			}
+			return nil
+		},
+	)
+	if err == nil || !errors.Is(err, sentinel) || runtimeAttestations != 3 || len(runner.deleteCalls) != 0 {
+		t.Fatalf(
+			"late runtime activation was not fail-closed: err=%v attestations=%d deletes=%v",
+			err, runtimeAttestations, runner.deleteCalls,
+		)
+	}
+}
+
+func TestWireGuardInactiveCleanupPreservesUnmarkedActiveAndCurrentTables_SW2_FWBACKEND_001(t *testing.T) {
+	expected := exactWireGuardNFTIdentity()
+	expected.OwnershipToken = strings.Repeat("b", 64)
+	exact := string(exactWireGuardNFTJSON())
+	marker := `,"comment":"syswarden-wg-v1:` + strings.Repeat("a", 64) + `"`
+	for name, test := range map[string]struct {
+		detail       string
+		expected     wireguardstate.ServerConfigurationIdentity
+		runtimeError error
+	}{
+		"unmarked historical table": {
+			detail: strings.Replace(exact, marker, "", 1), expected: expected,
+		},
+		"active runtime": {
+			detail: exact, expected: expected, runtimeError: errors.New("service is active"),
+		},
+		"current manifest table": {
+			detail: exact, expected: exactWireGuardNFTIdentity(),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner := &fakeWireGuardNFTRunner{
+				tables: []fakeWireGuardNFTTable{{"inet", "syswarden_wg", 7}}, detail: []byte(test.detail),
+			}
+			err := cleanupAttestedInactiveWireGuardNFTTableWithRunner(
+				runner,
+				test.expected,
+				func() error { return nil },
+				func() error { return test.runtimeError },
+			)
+			if err == nil || len(runner.deleteCalls) != 0 {
+				t.Fatalf("protected table result: err=%v deletes=%v", err, runner.deleteCalls)
+			}
+		})
 	}
 }
 

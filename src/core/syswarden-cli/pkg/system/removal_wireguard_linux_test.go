@@ -55,8 +55,17 @@ func runWireGuardRemovalCrashWorker(t *testing.T) {
 	tail := wireGuardRemovalTail{
 		requireBarrier:   func() error { return nil },
 		reattestServices: func() error { return nil },
+		recoverForwarding: func() error {
+			return nil
+		},
 		cleanupOwnedNFT: func() error {
 			return appendWireGuardRemovalTestMarker(nftMarker, "nft")
+		},
+		cleanupStaleNFT: func() error {
+			return fmt.Errorf("owned-state crash worker invoked stale nftables cleanup")
+		},
+		cleanupOrphanedNFT: func() error {
+			return fmt.Errorf("owned-state crash worker invoked orphaned nftables cleanup")
 		},
 		inspectTransaction: func() (wireguardstate.TransactionOperation, bool, error) {
 			return wireguardstate.InspectTransaction(root, uid, gid)
@@ -160,8 +169,20 @@ func testWireGuardRemovalTail(order *[]string) wireGuardRemovalTail {
 			*order = append(*order, "services")
 			return nil
 		},
+		recoverForwarding: func() error {
+			*order = append(*order, "forwarding")
+			return nil
+		},
 		cleanupOwnedNFT: func() error {
 			*order = append(*order, "nft")
+			return nil
+		},
+		cleanupStaleNFT: func() error {
+			*order = append(*order, "stale")
+			return nil
+		},
+		cleanupOrphanedNFT: func() error {
+			*order = append(*order, "orphan")
 			return nil
 		},
 		inspectTransaction: func() (wireguardstate.TransactionOperation, bool, error) {
@@ -198,13 +219,69 @@ func TestWireGuardRemovalTailKeepsManifestUntilNFTCleanup_SW2_FWBACKEND_001(t *t
 	if err := tail.remove(); err != nil {
 		t.Fatal(err)
 	}
-	want := "barrier,services,transaction,inspect,manager,nft,barrier,services,prepare,sysctl,finalize,services,barrier"
+	want := "barrier,services,forwarding,transaction,inspect,manager,nft,barrier,services,prepare,sysctl,finalize,services,barrier"
 	if got := strings.Join(order, ","); got != want {
 		t.Fatalf("WireGuard removal order = %q, want %q", got, want)
 	}
 }
 
-func TestWireGuardRemovalTailSkipsNFTCleanupWithoutOwnedState_SW2_FWBACKEND_001(t *testing.T) {
+func TestWireGuardRemovalTailRecoversExactStaleTokenBeforeRemovingManifest_SW2_FWBACKEND_001(t *testing.T) {
+	var order []string
+	tail := testWireGuardRemovalTail(&order)
+	tail.cleanupOwnedNFT = func() error {
+		order = append(order, "nft")
+		return errors.New("manifest-bound token mismatch")
+	}
+	if err := tail.remove(); err != nil {
+		t.Fatal(err)
+	}
+	want := "barrier,services,forwarding,transaction,inspect,manager,nft,stale,barrier,services,prepare,sysctl,finalize,services,barrier"
+	if got := strings.Join(order, ","); got != want {
+		t.Fatalf("stale-token WireGuard removal order = %q, want %q", got, want)
+	}
+}
+
+func TestWireGuardRemovalTailRetainsEvidenceWhenStaleTokenRecoveryFails_SW2_FWBACKEND_001(t *testing.T) {
+	var order []string
+	tail := testWireGuardRemovalTail(&order)
+	primary := errors.New("manifest-bound token mismatch")
+	stale := errors.New("stale table topology mismatch")
+	tail.cleanupOwnedNFT = func() error {
+		order = append(order, "nft")
+		return primary
+	}
+	tail.cleanupStaleNFT = func() error {
+		order = append(order, "stale")
+		return stale
+	}
+	err := tail.remove()
+	if err == nil || !errors.Is(err, stale) || !strings.Contains(err.Error(), primary.Error()) ||
+		!strings.Contains(err.Error(), "tombstone") || !strings.Contains(err.Error(), "manifest") {
+		t.Fatalf("stale-token recovery failure = %v", err)
+	}
+	if got := strings.Join(order, ","); got != "barrier,services,forwarding,transaction,inspect,manager,nft,stale" {
+		t.Fatalf("stale-token recovery failure reached later removal phases: %q", got)
+	}
+}
+
+func TestWireGuardRemovalTailRefusesForwardingRecoveryDebtBeforeOwnershipInspection_SW2_WGSTATE_001(t *testing.T) {
+	var order []string
+	tail := testWireGuardRemovalTail(&order)
+	sentinel := errors.New("corrupt forwarding transition")
+	tail.recoverForwarding = func() error {
+		order = append(order, "forwarding")
+		return sentinel
+	}
+	err := tail.remove()
+	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "all WireGuard artifacts are retained") {
+		t.Fatalf("forwarding recovery refusal = %v", err)
+	}
+	if got := strings.Join(order, ","); got != "barrier,services,forwarding" {
+		t.Fatalf("forwarding recovery refusal reached later removal phases: %q", got)
+	}
+}
+
+func TestWireGuardRemovalTailReconcilesOnlyAttestedOrphanWithoutOwnedState_SW2_FWBACKEND_001(t *testing.T) {
 	var order []string
 	tail := testWireGuardRemovalTail(&order)
 	tail.inspectOwnedState = func() (bool, error) {
@@ -219,8 +296,30 @@ func TestWireGuardRemovalTailSkipsNFTCleanupWithoutOwnedState_SW2_FWBACKEND_001(
 		t.Fatal(err)
 	}
 	got := strings.Join(order, ",")
-	if strings.Contains(got, "nft") || strings.Contains(got, "sysctl") {
-		t.Fatalf("absent WireGuard state invoked runtime cleanup: %q", got)
+	if strings.Contains(got, "nft") || strings.Contains(got, "sysctl") || !strings.Contains(got, "manager,orphan,barrier") {
+		t.Fatalf("absent WireGuard state did not use only orphan reconciliation: %q", got)
+	}
+}
+
+func TestWireGuardRemovalTailRetainsTombstoneOnOrphanCleanupFailure_SW2_FWBACKEND_001(t *testing.T) {
+	var order []string
+	tail := testWireGuardRemovalTail(&order)
+	tail.inspectOwnedState = func() (bool, error) {
+		order = append(order, "inspect")
+		return false, nil
+	}
+	sentinel := errors.New("synthetic orphan cleanup failure")
+	tail.cleanupOrphanedNFT = func() error {
+		order = append(order, "orphan")
+		return sentinel
+	}
+	err := tail.remove()
+	if err == nil || !errors.Is(err, sentinel) || !strings.Contains(err.Error(), "tombstone") {
+		t.Fatalf("orphan cleanup failure = %v", err)
+	}
+	got := strings.Join(order, ",")
+	if strings.Contains(got, "prepare") || strings.Contains(got, "sysctl") || strings.Contains(got, "finalize") {
+		t.Fatalf("orphan cleanup failure reached later removal mutation: %q", got)
 	}
 }
 
@@ -233,6 +332,10 @@ func TestWireGuardRemovalTailRetainsEvidenceOnNFTOrArtifactFailure_SW2_FWBACKEND
 			if phase == "nft" {
 				tail.cleanupOwnedNFT = func() error {
 					order = append(order, "nft")
+					return sentinel
+				}
+				tail.cleanupStaleNFT = func() error {
+					order = append(order, "stale")
 					return sentinel
 				}
 			} else if phase == "prepare" {
@@ -296,7 +399,7 @@ func TestWireGuardRemovalTailOfflineSkipsRuntimeAndPreservesUnownedOpenRCLink_SW
 		t.Fatal(err)
 	}
 	got := strings.Join(order, ",")
-	if strings.Contains(got, "nft") || strings.Contains(got, "sysctl") || !strings.Contains(got, "prepare,services") {
+	if strings.Contains(got, "nft") || strings.Contains(got, "orphan") || strings.Contains(got, "sysctl") || !strings.Contains(got, "prepare,services") {
 		t.Fatalf("offline OpenRC removal order = %q", got)
 	}
 }
@@ -330,10 +433,18 @@ func TestWireGuardRemovalTailResumesRemovalDebtWithoutRepeatingNFTCleanup_SW2_FW
 		t.Fatal("retry must not repeat manifest-bound nftables cleanup")
 		return nil
 	}
+	retryTail.cleanupStaleNFT = func() error {
+		t.Fatal("retry must not attempt stale nftables cleanup")
+		return nil
+	}
+	retryTail.cleanupOrphanedNFT = func() error {
+		t.Fatal("retry must not attempt orphaned nftables cleanup")
+		return nil
+	}
 	if err := retryTail.remove(); err != nil {
 		t.Fatal(err)
 	}
-	want := "barrier,services,transaction,manager,barrier,services,prepare,sysctl,finalize,services,barrier"
+	want := "barrier,services,forwarding,transaction,manager,barrier,services,prepare,sysctl,finalize,services,barrier"
 	if got := strings.Join(retry, ","); got != want {
 		t.Fatalf("WireGuard removal retry order = %q, want %q", got, want)
 	}
@@ -359,7 +470,7 @@ func TestWireGuardRemovalTailRejectsUnprovenTransactionsWithoutMutation_SW2_FWBA
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("transaction %q refusal = %v", test.operation, err)
 			}
-			if got := strings.Join(order, ","); got != "barrier,services,transaction" {
+			if got := strings.Join(order, ","); got != "barrier,services,forwarding,transaction" {
 				t.Fatalf("transaction %q reached mutation: %q", test.operation, got)
 			}
 		})
@@ -477,8 +588,17 @@ func TestWireGuardRemovalTailRecoversRealSIGKILLBoundaries_SW2_FWBACKEND_001(t *
 			retry := wireGuardRemovalTail{
 				requireBarrier:   func() error { return nil },
 				reattestServices: func() error { return nil },
+				recoverForwarding: func() error {
+					return nil
+				},
 				cleanupOwnedNFT: func() error {
 					return fmt.Errorf("retry repeated nftables cleanup")
+				},
+				cleanupStaleNFT: func() error {
+					return fmt.Errorf("retry attempted stale nftables cleanup")
+				},
+				cleanupOrphanedNFT: func() error {
+					return fmt.Errorf("retry attempted orphaned nftables cleanup")
 				},
 				inspectTransaction: func() (wireguardstate.TransactionOperation, bool, error) {
 					return wireguardstate.InspectTransaction(root, uid, gid)

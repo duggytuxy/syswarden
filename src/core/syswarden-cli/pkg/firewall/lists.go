@@ -26,6 +26,22 @@ type approvedListFile struct {
 
 const legacyMetadataWhitelistIPv4 = "169.254.169.254"
 
+const maximumTransactionalListSnapshotBytes = 16 << 20
+
+type transactionalListSnapshot struct {
+	exists   bool
+	content  []byte
+	digest   [sha256.Size]byte
+	identity listFileIdentity
+}
+
+type transactionalListMutation struct {
+	target  approvedListFile
+	before  transactionalListSnapshot
+	after   listFileIdentity
+	changed bool
+}
+
 func approvedListFileForPath(path string) (approvedListFile, error) {
 	switch path {
 	case WhitelistV4:
@@ -440,6 +456,184 @@ func appendListFileInDirectory(directory *os.Root, target approvedListFile, cont
 	return nil
 }
 
+func snapshotTransactionalListFileInDirectory(directory *os.Root, target approvedListFile) (transactionalListSnapshot, error) {
+	pathInfo, err := directory.Lstat(target.name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return transactionalListSnapshot{}, nil
+	}
+	if err != nil {
+		return transactionalListSnapshot{}, err
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return transactionalListSnapshot{}, fmt.Errorf("list target is not a regular file: %s", target.name)
+	}
+	if pathInfo.Size() < 0 || pathInfo.Size() > maximumTransactionalListSnapshotBytes {
+		return transactionalListSnapshot{}, fmt.Errorf("list target %s exceeds the %d-byte transactional snapshot limit", target.name, maximumTransactionalListSnapshotBytes)
+	}
+	file, _, err := openListFileInRoot(directory, target, os.O_RDONLY, false)
+	if err != nil {
+		return transactionalListSnapshot{}, err
+	}
+	before, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return transactionalListSnapshot{}, err
+	}
+	content, readErr := io.ReadAll(io.LimitReader(file, maximumTransactionalListSnapshotBytes+1))
+	after, statErr := file.Stat()
+	closeErr := file.Close()
+	current, lstatErr := directory.Lstat(target.name)
+	if readErr != nil {
+		return transactionalListSnapshot{}, readErr
+	}
+	if statErr != nil || closeErr != nil || lstatErr != nil {
+		return transactionalListSnapshot{}, errors.Join(statErr, closeErr, lstatErr)
+	}
+	if len(content) > maximumTransactionalListSnapshotBytes || int64(len(content)) != after.Size() {
+		return transactionalListSnapshot{}, fmt.Errorf("list target %s changed size or exceeds the transactional snapshot limit", target.name)
+	}
+	if !os.SameFile(pathInfo, before) || !os.SameFile(before, after) || !os.SameFile(after, current) ||
+		before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		return transactionalListSnapshot{}, fmt.Errorf("list target changed while taking a transactional snapshot: %s", target.name)
+	}
+	identity := listFileIdentity{info: after, digest: sha256.Sum256(content)}
+	if stat, ok := after.Sys().(*syscall.Stat_t); ok {
+		identity.uid = int(stat.Uid)
+		identity.gid = int(stat.Gid)
+		identity.ownerKnown = true
+	}
+	return transactionalListSnapshot{
+		exists:   true,
+		content:  bytes.Clone(content),
+		digest:   identity.digest,
+		identity: identity,
+	}, nil
+}
+
+func mutateListFileTransactionally(
+	target approvedListFile,
+	createDirectory bool,
+	transform func([]byte, bool) ([]byte, bool, error),
+) (transactionalListMutation, error) {
+	directory, err := openListDirectory(target, createDirectory)
+	if errors.Is(err, fs.ErrNotExist) && !createDirectory {
+		return transactionalListMutation{target: target}, nil
+	}
+	if err != nil {
+		return transactionalListMutation{}, err
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockListDirectory(directory)
+	if err != nil {
+		return transactionalListMutation{}, err
+	}
+	defer unlockListDirectory(lockFile)
+
+	before, err := snapshotTransactionalListFileInDirectory(directory, target)
+	if err != nil {
+		return transactionalListMutation{}, err
+	}
+	updated, changed, err := transform(bytes.Clone(before.content), before.exists)
+	if err != nil {
+		return transactionalListMutation{}, err
+	}
+	mutation := transactionalListMutation{target: target, before: before}
+	if !changed {
+		return mutation, nil
+	}
+	if len(updated) > maximumTransactionalListSnapshotBytes {
+		return transactionalListMutation{}, fmt.Errorf("updated list target %s exceeds the %d-byte transactional snapshot limit", target.name, maximumTransactionalListSnapshotBytes)
+	}
+	afterDigest := sha256.Sum256(updated)
+
+	if before.exists {
+		err = writeListFileInDirectoryFromSnapshot(directory, target, updated, before.content)
+	} else {
+		err = appendListFileInDirectory(directory, target, updated)
+	}
+	current, snapshotErr := snapshotTransactionalListFileInDirectory(directory, target)
+	if current.exists && current.digest == afterDigest {
+		mutation.after = current.identity
+		mutation.changed = true
+		return mutation, errors.Join(err, snapshotErr)
+	}
+	if snapshotErr != nil {
+		return transactionalListMutation{}, errors.Join(err, snapshotErr)
+	}
+	if current.exists == before.exists && (!current.exists || current.digest == before.digest) {
+		return transactionalListMutation{}, err
+	}
+	return transactionalListMutation{}, errors.Join(err, fmt.Errorf("list target changed concurrently during transactional mutation: %s", target.name))
+}
+
+func rollbackTransactionalListMutation(mutation transactionalListMutation) error {
+	if !mutation.changed {
+		return nil
+	}
+	directory, err := openListDirectory(mutation.target, false)
+	if err != nil {
+		return fmt.Errorf("open list target for rollback: %w", err)
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockListDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer unlockListDirectory(lockFile)
+
+	current, err := snapshotTransactionalListFileInDirectory(directory, mutation.target)
+	if err != nil {
+		return fmt.Errorf("snapshot list target before rollback: %w", err)
+	}
+	if !current.exists || !sameListFileState(mutation.after, current.identity.info, current.digest) {
+		return fmt.Errorf("refuse to overwrite list target changed before rollback: %s", mutation.target.name)
+	}
+	if mutation.before.exists {
+		if err := writeListFileInDirectoryFromSnapshot(directory, mutation.target, mutation.before.content, current.content); err != nil {
+			return fmt.Errorf("restore list target %s: %w", mutation.target.name, err)
+		}
+	} else {
+		if err := directory.Remove(mutation.target.name); err != nil {
+			return fmt.Errorf("remove transaction-created list target %s: %w", mutation.target.name, err)
+		}
+		if err := syncListDirectory(directory); err != nil {
+			return err
+		}
+	}
+	restored, err := snapshotTransactionalListFileInDirectory(directory, mutation.target)
+	if err != nil {
+		return fmt.Errorf("verify restored list target %s: %w", mutation.target.name, err)
+	}
+	if restored.exists != mutation.before.exists || restored.exists && restored.digest != mutation.before.digest {
+		return fmt.Errorf("list target %s did not return to its exact previous content", mutation.target.name)
+	}
+	return nil
+}
+
+func rollbackTransactionalListMutations(mutations []transactionalListMutation) error {
+	var errs []error
+	for index := len(mutations) - 1; index >= 0; index-- {
+		if err := rollbackTransactionalListMutation(mutations[index]); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func failWithTransactionalListRollback(cause error, mutations []transactionalListMutation) error {
+	if isCommittedFirewallPolicyError(cause) {
+		return fmt.Errorf(
+			"local firewall and persistent list changes are committed; post-commit reconciliation is incomplete and no persistent list rollback was attempted: %w",
+			cause,
+		)
+	}
+	rollbackErr := rollbackTransactionalListMutations(mutations)
+	if rollbackErr == nil {
+		return cause
+	}
+	return errors.Join(cause, fmt.Errorf("restore persistent firewall lists after failure: %w", rollbackErr))
+}
+
 func removeFromListFileAt(target approvedListFile, line string) error {
 	requested, err := parseCanonicalRecoveryListEntry(line, true)
 	if err != nil {
@@ -545,16 +739,24 @@ func sanitizeLegacyListFileAt(target approvedListFile) (bool, error) {
 }
 
 func sanitizeLegacyOperatorLists() (bool, error) {
+	targets, err := approvedLegacyOperatorListTargets()
+	if err != nil {
+		return false, err
+	}
+	return sanitizeLegacyListTargets(targets)
+}
+
+func approvedLegacyOperatorListTargets() ([]approvedListFile, error) {
 	paths := []string{WhitelistV4, WhitelistV6, BlocklistV4, BlocklistV6, SSHBypass}
 	targets := make([]approvedListFile, 0, len(paths))
 	for _, path := range paths {
 		target, err := approvedListFileForPath(path)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		targets = append(targets, target)
 	}
-	return sanitizeLegacyListTargets(targets)
+	return targets, nil
 }
 
 func sanitizeLegacyListTargets(targets []approvedListFile) (bool, error) {
@@ -673,6 +875,93 @@ func addToListFileAt(target approvedListFile, line string) error {
 	return appendListFileInDirectory(directory, target, []byte(canonicalLine+"\n"))
 }
 
+func addToListFileTransactionally(target approvedListFile, line string) (transactionalListMutation, error) {
+	requested, err := parseCanonicalListEntry(line, true)
+	if err != nil {
+		return transactionalListMutation{}, fmt.Errorf("invalid list entry: %w", err)
+	}
+	canonicalLine := requested.String()
+	return mutateListFileTransactionally(target, true, func(content []byte, _ bool) ([]byte, bool, error) {
+		for _, existing := range strings.Split(string(content), "\n") {
+			cleanExisting := strings.TrimSpace(existing)
+			if cleanExisting == canonicalLine {
+				return content, false, nil
+			}
+			parsedExisting, parseErr := parseCanonicalListEntry(cleanExisting, true)
+			if parseErr == nil && sameListEntry(parsedExisting, requested) {
+				return content, false, nil
+			}
+		}
+		return append(content, []byte(canonicalLine+"\n")...), true, nil
+	})
+}
+
+func removeFromListFileTransactionally(target approvedListFile, line string) (transactionalListMutation, error) {
+	requested, err := parseCanonicalRecoveryListEntry(line, true)
+	if err != nil {
+		return transactionalListMutation{}, fmt.Errorf("invalid recovery list entry: %w", err)
+	}
+	return mutateListFileTransactionally(target, false, func(content []byte, exists bool) ([]byte, bool, error) {
+		if !exists {
+			return content, false, nil
+		}
+		lines := strings.Split(string(content), "\n")
+		newLines := make([]string, 0, len(lines))
+		changed := false
+		for _, existing := range lines {
+			cleanExisting := strings.TrimSpace(existing)
+			if cleanExisting == "" {
+				continue
+			}
+			if strings.HasPrefix(cleanExisting, "#") {
+				newLines = append(newLines, existing)
+				continue
+			}
+			parsedExisting, parseErr := parseCanonicalRecoveryListEntry(cleanExisting, true)
+			_, strictErr := parseCanonicalListEntry(cleanExisting, true)
+			if parseErr != nil || strictErr != nil || sameListEntry(parsedExisting, requested) {
+				changed = true
+				continue
+			}
+			newLines = append(newLines, existing)
+		}
+		if !changed {
+			return content, false, nil
+		}
+		return []byte(strings.Join(newLines, "\n") + "\n"), true, nil
+	})
+}
+
+func sanitizeLegacyListFileTransactionally(target approvedListFile) (transactionalListMutation, error) {
+	return mutateListFileTransactionally(target, false, func(content []byte, exists bool) ([]byte, bool, error) {
+		if !exists {
+			return content, false, nil
+		}
+		lines := strings.Split(string(content), "\n")
+		newLines := make([]string, 0, len(lines))
+		changed := false
+		for _, line := range lines {
+			cleanLine := strings.TrimSpace(line)
+			if cleanLine == "" {
+				continue
+			}
+			if strings.HasPrefix(cleanLine, "#") {
+				newLines = append(newLines, cleanLine)
+				continue
+			}
+			if _, err := parseCanonicalListEntry(cleanLine, true); err != nil {
+				changed = true
+				continue
+			}
+			newLines = append(newLines, cleanLine)
+		}
+		if !changed {
+			return content, false, nil
+		}
+		return []byte(strings.Join(newLines, "\n") + "\n"), true, nil
+	})
+}
+
 func removeIPFromListFileAt(target approvedListFile, ip string) (bool, bool, error) {
 	directory, err := openListDirectory(target, false)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -752,15 +1041,6 @@ func addToFile(path, line string) error {
 	return addToListFileAt(target, line)
 }
 
-// removeFromFile removes a line from a file
-func removeFromFile(path, line string) error {
-	target, err := approvedListFileForPath(path)
-	if err != nil {
-		return err
-	}
-	return removeFromListFileAt(target, line)
-}
-
 // AddToWhitelist appends an IP securely to the whitelist and reloads
 func AddToWhitelist(ip string, port string) error {
 	entry, err := newCanonicalListEntry(ip, port)
@@ -771,28 +1051,66 @@ func AddToWhitelist(ip string, port string) error {
 		return fmt.Errorf("validate firewall backend before whitelist mutation: %w", err)
 	}
 
-	// Remove from blocklist just in case
-	fileToRemove := BlocklistV6
+	blocklistPath := BlocklistV6
+	whitelistPath := WhitelistV6
 	if entry.isIPv4 {
-		fileToRemove = BlocklistV4
+		blocklistPath = BlocklistV4
+		whitelistPath = WhitelistV4
 	}
-	if err := removeFromFile(fileToRemove, entry.network); err != nil {
-		return fmt.Errorf("remove IP from blocklist before whitelisting: %w", err)
-	}
-
-	file := WhitelistV6
-	if entry.isIPv4 {
-		file = WhitelistV4
-	}
-
-	if err := addToFile(file, entry.String()); err != nil {
+	blocklistTarget, err := approvedListFileForPath(blocklistPath)
+	if err != nil {
 		return err
 	}
-	if err := ApplyPolicies(); err != nil {
+	whitelistTarget, err := approvedListFileForPath(whitelistPath)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("[SUCCESS] IP %s safely whitelisted.\n", entry.String())
-	return nil
+	return addToWhitelistAt(
+		entry,
+		whitelistTarget,
+		blocklistTarget,
+		os.Stdout,
+		ApplyPolicies,
+		applyPoliciesWithDynamicUnban,
+	)
+}
+
+func addToWhitelistAt(
+	entry canonicalListEntry,
+	whitelistTarget, blocklistTarget approvedListFile,
+	output io.Writer,
+	applyPolicies func() error,
+	applyPoliciesWithUnban func(string) error,
+) error {
+	var mutations []transactionalListMutation
+	if entry.port == "" {
+		mutation, err := removeFromListFileTransactionally(blocklistTarget, entry.network)
+		if mutation.changed {
+			mutations = append(mutations, mutation)
+		}
+		if err != nil {
+			return failWithTransactionalListRollback(fmt.Errorf("remove IP from blocklist before whitelisting: %w", err), mutations)
+		}
+	}
+
+	mutation, err := addToListFileTransactionally(whitelistTarget, entry.String())
+	if mutation.changed {
+		mutations = append(mutations, mutation)
+	}
+	if err != nil {
+		return failWithTransactionalListRollback(err, mutations)
+	}
+
+	if entry.port == "" {
+		err = applyPoliciesWithUnban(entry.network)
+	} else {
+		err = applyPolicies()
+	}
+	if err != nil {
+		return failWithTransactionalListRollback(err, mutations)
+	}
+	_, err = fmt.Fprintf(output, "[SUCCESS] IP %s safely whitelisted.\n", entry.String())
+	return err
 }
 
 // RemoveFromWhitelist removes an IP from the whitelist
@@ -885,18 +1203,68 @@ func RemoveFromBlocklist(ip string) error {
 		return fmt.Errorf("validate firewall backend before blocklist mutation: %w", err)
 	}
 
-	file := BlocklistV6
+	path := BlocklistV6
 	if entry.isIPv4 {
-		file = BlocklistV4
+		path = BlocklistV4
 	}
+	target, err := approvedListFileForPath(path)
+	if err != nil {
+		return err
+	}
+	sanitizeTargets, err := approvedLegacyOperatorListTargets()
+	if err != nil {
+		return err
+	}
+	return removeFromBlocklistAt(
+		entry.network,
+		target,
+		sanitizeTargets,
+		os.Stdout,
+		applyPoliciesWithDynamicUnban,
+		network.SyncHAUnban,
+	)
+}
 
-	if err := removeFromFile(file, entry.network); err != nil {
-		return err
+func removeFromBlocklistAt(
+	network string,
+	blocklistTarget approvedListFile,
+	sanitizeTargets []approvedListFile,
+	output io.Writer,
+	applyPolicies func(string) error,
+	syncHAUnban func([]string) error,
+) error {
+	var mutations []transactionalListMutation
+	mutation, err := removeFromListFileTransactionally(blocklistTarget, network)
+	if mutation.changed {
+		mutations = append(mutations, mutation)
 	}
-	if _, err := sanitizeLegacyOperatorLists(); err != nil {
-		return err
+	if err != nil {
+		return failWithTransactionalListRollback(err, mutations)
 	}
-	return completeBlocklistRemoval(entry.network, os.Stdout, ApplyPolicies, network.SyncHAUnban)
+	for _, target := range sanitizeTargets {
+		// The primary removal transform already validates and sanitizes this
+		// exact file. Mutating it a second time would create two sequential CAS
+		// records for one pathname and make an exact reverse rollback
+		// impossible after the second atomic rename changes its inode.
+		if target == blocklistTarget {
+			continue
+		}
+		mutation, err = sanitizeLegacyListFileTransactionally(target)
+		if mutation.changed {
+			mutations = append(mutations, mutation)
+		}
+		if err != nil {
+			return failWithTransactionalListRollback(fmt.Errorf("sanitize legacy operator list %s: %w", target.name, err), mutations)
+		}
+	}
+	if err := applyPolicies(network); err != nil {
+		return failWithTransactionalListRollback(fmt.Errorf("apply firewall policies after blocklist removal: %w", err), mutations)
+	}
+	if err := syncHAUnban([]string{network}); err != nil {
+		return fmt.Errorf("local firewall and persistent blocklist changes are committed; HA unban synchronization is incomplete: %w", err)
+	}
+	_, err = fmt.Fprintf(output, "[SUCCESS] IP %s removed from blocklist.\n", network)
+	return err
 }
 
 // AllowSSH adds an IP to the SSH bypass list

@@ -279,6 +279,9 @@ func (transaction *testWireGuardForwardingTransaction) Apply() error {
 }
 func (*testWireGuardForwardingTransaction) Restore() error { return nil }
 func (*testWireGuardForwardingTransaction) Close() error   { return nil }
+func (*testWireGuardForwardingTransaction) OriginalValue() string {
+	return "0"
+}
 
 func testWireGuardKey(fill byte) string {
 	return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{fill}, 32))

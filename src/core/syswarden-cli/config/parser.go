@@ -172,6 +172,8 @@ func loadOldConfig(path string) (loadErr error) {
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading config file: %w", err)
 	}
+	normalizedWhitelistIPs, retiredWhitelistEntries := neutralizeRetiredUnspecifiedWhitelistText(candidate.WhitelistIPs)
+	candidate.WhitelistIPs = normalizedWhitelistIPs
 	normalized, err := normalizeHistoricalLegacyHA(candidate)
 	if err != nil {
 		return err
@@ -189,6 +191,7 @@ func loadOldConfig(path string) (loadErr error) {
 		}
 	}
 
+	logRetiredUnspecifiedWhitelistEntries(retiredWhitelistEntries)
 	commitGlobalConfig(candidate, path)
 	return nil
 }
@@ -270,6 +273,7 @@ func validateLegacyConfig(candidate *Config) error {
 	if err != nil {
 		return err
 	}
+	neutralizeRetiredUnspecifiedWhitelistConfig(modular)
 	if err := validateConfig(modular); err != nil {
 		return fmt.Errorf("invalid legacy policy value: %w", err)
 	}

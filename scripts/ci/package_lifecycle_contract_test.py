@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import io
+import fcntl
 import hashlib
+import io
 import json
 import os
 import re
@@ -35,6 +36,9 @@ DEFERRED_PURGE_POSTINSTALL_HELPER = (
 )
 ALPINE_CRONIE_PREFLIGHT_HELPER = (
     REPOSITORY / "scripts" / "ci" / "package_alpine_cronie_preflight.sh"
+)
+SYSTEMD_ORDERING_PREFLIGHT_HELPER = (
+    REPOSITORY / "scripts" / "ci" / "package_systemd_ordering_preflight.sh"
 )
 REMOVAL_STATE_HELPER = REPOSITORY / "scripts" / "ci" / "package_removal_state.sh"
 SERVICE_SOURCE = REPOSITORY / "src" / "core" / "syswarden-cli" / "pkg" / "system" / "service_linux.go"
@@ -138,6 +142,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
             if name in {"preinst.sh", "postinst.sh"}:
                 prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+            if name == "preinst.sh":
+                prefix += SYSTEMD_ORDERING_PREFLIGHT_HELPER.read_text(encoding="utf-8")
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
             body = prefix + body
@@ -206,6 +212,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 prefix += DEFERRED_PURGE_POSTINSTALL_HELPER.read_text(encoding="utf-8")
             if name in {"preinst.sh", "postinst.sh"}:
                 prefix += ALPINE_CRONIE_PREFLIGHT_HELPER.read_text(encoding="utf-8")
+            if name == "preinst.sh":
+                prefix += SYSTEMD_ORDERING_PREFLIGHT_HELPER.read_text(encoding="utf-8")
             if name == "postrm.sh":
                 prefix += REMOVAL_STATE_HELPER.read_text(encoding="utf-8")
             body = prefix + body
@@ -298,6 +306,49 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("if: always()", self.workflow[verify:upload])
         self.assertNotIn("package_assets", self.workflow)
 
+    def test_packaged_binary_provenance_is_bound_to_the_uploaded_bytes(self) -> None:
+        stage = workflow_step_script(
+            self.workflow, "Validate Exact Linux Staging Inventories"
+        )
+        packaged = workflow_step_script(
+            self.workflow, "Validate Packaged Binary Provenance"
+        )
+        final_artifact = self.workflow.index("Validate Exact Package Artifact")
+        provenance = self.workflow.index("Validate Packaged Binary Provenance")
+        source_state = self.workflow.index("Prove Packaging Did Not Mutate Source")
+        upload = self.workflow.index("Upload Package Artifacts")
+        self.assertLess(final_artifact, provenance)
+        self.assertLess(provenance, source_state)
+        self.assertLess(source_state, upload)
+        self.assertEqual(stage.count("package_binary_provenance_gate.py"), 2)
+        self.assertEqual(packaged.count("package_binary_provenance_gate.py"), 3)
+        self.assertEqual(stage.count("--print-digest-contract"), 2)
+        self.assertIn("amd64_digest_contract", stage)
+        self.assertIn("apk_amd64_digest_contract", stage)
+        self.assertEqual(packaged.count("--expected-digest-contract"), 3)
+        self.assertEqual(
+            packaged.count('"${VALIDATED_AMD64_DIGEST_CONTRACT}"'), 3
+        )
+        self.assertEqual(
+            packaged.count('"${VALIDATED_APK_AMD64_DIGEST_CONTRACT}"'), 2
+        )
+        self.assertIn('extract_exact_member() {', packaged)
+        self.assertIn('dpkg-deb --fsys-tarfile', packaged)
+        self.assertIn('rpm2cpio "${package}"', packaged)
+        self.assertIn(
+            '"${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" "${relative}"',
+            packaged,
+        )
+        self.assertIn('cpio --extract --to-stdout --quiet', packaged)
+        self.assertNotIn('cpio --extract --make-directories', packaged)
+        self.assertNotIn('dpkg-deb --extract', packaged)
+        self.assertIn('tar --extract --to-stdout', packaged)
+        self.assertIn('syswarden_${VERSION}_x86_64.apk', packaged)
+        self.assertEqual(packaged.count('--reference-root "${STAGING_AMD64}"'), 2)
+        self.assertEqual(packaged.count('--reference-root "${STAGING_APK_AMD64}"'), 1)
+        self.assertIn("sha256sum --check --strict SHA256SUMS.txt", packaged)
+        self.assertIn('-exec chmod 0444 -- {} +', packaged)
+
     def test_local_builder_is_pinned_readonly_and_source_immutable(self) -> None:
         source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("set -euo pipefail", source)
@@ -305,8 +356,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertIn("go version go1.26.6 linux/amd64", source)
         self.assertIn(
             'SOURCE_TAG="$(PATH="${GO_TOOLCHAIN_ROOT}/bin:${PATH}" \\\n'
-            '    "${REPOSITORY_ROOT}/scripts/versioning.sh" inspect '
-            '--repo "${REPOSITORY_ROOT}")"',
+            '    GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \\\n'
+            '    GIT_DIR="${SOURCE_GIT_DIR}" GIT_WORK_TREE="${SOURCE_ROOT}" \\\n'
+            '    "${SOURCE_ROOT}/scripts/versioning.sh" inspect '
+            '--repo "${SOURCE_ROOT}")"',
             source,
         )
         self.assertIn('"$(fpm --version)" = "1.17.0"', source)
@@ -317,8 +370,13 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertNotIn("v2.43.0", source)
         self.assertNotIn("sudo ", source)
         self.assertNotIn("https://go.dev/dl/", source)
-        self.assertEqual(source.count('"${GO_BIN}" -C'), 3)
+        self.assertEqual(source.count('"${GO_BIN}" -C'), 4)
         self.assertIn("export GOWORK=off", source)
+        self.assertEqual(source.count('GOWORK="${SOURCE_ROOT}/go.work"'), 2)
+        self.assertEqual(
+            source.count('"${GO_BIN}" -C "${SOURCE_ROOT}" build'), 2
+        )
+        self.assertEqual(source.count('"./src/core/${module}"'), 2)
         self.assertIn("mod download", source)
         self.assertIn("-mod=readonly -trimpath -buildmode=pie", source)
         self.assertIn("staging/usr/local/bin", source)
@@ -334,22 +392,589 @@ class PackageLifecycleContractTests(unittest.TestCase):
             source,
         )
         self.assertIn("publish_local_package()", source)
+        self.assertIn("publish_local_checksums()", source)
+        self.assertIn("publish_local_artifacts() (", source)
         self.assertIn('temporary="$(mktemp "${LOCAL_PACKAGE_OUTPUT}/', source)
         self.assertIn('sync -f "${LOCAL_PACKAGE_OUTPUT}"', source)
         self.assertIn('! cmp -s -- "${source_path}" "${destination}"', source)
-        for variable in ("GOCACHE", "GOTMPDIR", "GOMODCACHE"):
+        self.assertIn(
+            'temporary="$(mktemp "${PACKAGE_WORKSPACE}/.SHA256SUMS.txt.XXXXXX")"',
+            source,
+        )
+        self.assertEqual(source.count("sha256sum --check --strict SHA256SUMS.txt"), 1)
+        self.assertIn('flock --exclusive "${publication_lock_fd}"', source)
+        self.assertIn('mv -fT -- "${temporary}" "${destination}"', source)
+        self.assertIn("publish_local_artifacts\n\n", source)
+        required_commands = source.split("for required_command in ", 1)[1].split(
+            "; do", 1
+        )[0]
+        self.assertIn("sha256sum", required_commands.split())
+        self.assertIn("flock", required_commands.split())
+        for variable in ("GOCACHE", "GOTMPDIR", "GOMODCACHE", "GOPATH"):
             with self.subTest(variable=variable):
                 self.assertIn(f'export {variable}="${{PACKAGE_WORKSPACE}}/', source)
+        self.assertIn("export GOCACHEPROG=", source)
+        self.assertIn("mod verify", source)
         self.assertIn("/tmp/syswarden-local-package.XXXXXX", source)
         self.assertIn("scripts/ci/repository_state.py", source)
         capture = source.index(" capture \\\n")
         compile_loop = source.index("for module in syswarden-cli")
         verify = source.rindex(" verify \\\n")
-        publication = source.index("for artifact in \\\n")
+        publication = source.rindex("publish_local_artifacts\n")
         self.assertLess(capture, compile_loop)
-        self.assertLess(publication, verify)
+        self.assertLess(verify, publication)
         self.assertIn("trap cleanup_package_workspace EXIT", source)
         self.assertIn("PACKAGE_STATE_VERIFIED=1", source)
+        for variable in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_NAMESPACE",
+            "GIT_REPLACE_REF_BASE",
+        ):
+            with self.subTest(git_environment_variable=variable):
+                self.assertIn(variable, source)
+        self.assertIn(
+            'SOURCE_GIT_DIR="$(git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" '
+            'rev-parse --absolute-git-dir)"',
+            source,
+        )
+        self.assertIn(
+            'SOURCE_GIT_COMMON_DIR="$(git -c core.fsmonitor=false -C '
+            '"${REPOSITORY_ROOT}" \\\n'
+            '    rev-parse --path-format=absolute --git-common-dir)"',
+            source,
+        )
+        self.assertIn(
+            'status --porcelain=v1 --untracked-files=normal',
+            source,
+        )
+        self.assertGreaterEqual(
+            source.count(
+                'GIT_DIR="${SOURCE_GIT_DIR}" '
+                'GIT_WORK_TREE="${SOURCE_ROOT}"'
+            ),
+            3,
+        )
+        self.assertGreaterEqual(
+            source.count('GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}"'),
+            4,
+        )
+        self.assertIn('SOURCE_ROOT="${PACKAGE_WORKSPACE}/source"', source)
+        self.assertIn('mkdir -- "${SOURCE_ROOT}/.git"', source)
+        self.assertIn('chmod 0500 "${SOURCE_ROOT}/.git"', source)
+        self.assertIn(
+            'find "${SOURCE_ROOT}/.git" -mindepth 1 -print -quit',
+            source,
+        )
+        self.assertIn('git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" archive', source)
+        self.assertIn('--untracked-files=all', source)
+        self.assertIn("export GOENV=off", source)
+        self.assertIn("export GOAMD64=v1", source)
+        self.assertIn("export GIT_NO_REPLACE_OBJECTS=1", source)
+        self.assertIn("validate_vcs_binary()", source)
+        self.assertEqual(source.count("-buildvcs=true"), 2)
+        for provenance in (
+            'vcs=git',
+            'vcs.revision=',
+            'vcs.time=',
+            'vcs.modified=false',
+            'vcs_total == 4',
+        ):
+            with self.subTest(provenance=provenance):
+                self.assertIn(provenance, source)
+
+    def local_publication_functions(self) -> str:
+        source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        start = source.index("publish_local_package() {")
+        end = source.index('\ncd "${REPOSITORY_ROOT}"\n', start)
+        return source[start:end]
+
+    def run_local_publication(
+        self,
+        workspace: Path,
+        output: Path,
+        *,
+        environment: dict[str, str] | None = None,
+        wait: bool = True,
+    ) -> subprocess.CompletedProcess[str] | subprocess.Popen[str]:
+        script = (
+            "set -euo pipefail\n"
+            + self.local_publication_functions()
+            + '\nVERSION="$1"\n'
+            + 'PACKAGE_WORKSPACE="$2"\n'
+            + 'LOCAL_PACKAGE_OUTPUT="$3"\n'
+            + "publish_local_artifacts\n"
+        )
+        command = [
+            "/bin/bash",
+            "-c",
+            script,
+            "local-publication-test",
+            "4.04.3",
+            str(workspace),
+            str(output),
+        ]
+        if not wait:
+            return subprocess.Popen(
+                command,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        return subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            env=environment,
+            text=True,
+        )
+
+    @staticmethod
+    def seed_local_packages(workspace: Path, marker: bytes = b"candidate\n") -> None:
+        for name in (
+            "syswarden_4.04.3_amd64.deb",
+            "syswarden-4.04.3-1.x86_64.rpm",
+            "syswarden_4.04.3_x86_64.apk",
+        ):
+            (workspace / name).write_bytes(marker + name.encode("ascii") + b"\n")
+
+    def test_local_checksum_publication_replaces_stale_manifest_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            output = root / "packages"
+            workspace.mkdir(mode=0o700)
+            output.mkdir(mode=0o700)
+            self.seed_local_packages(workspace)
+            manifest = output / "SHA256SUMS.txt"
+            manifest.write_text("stale manifest\n", encoding="ascii")
+
+            result = self.run_local_publication(workspace, output)
+            self.assertEqual(result.returncode, 0, result)
+            expected = "".join(
+                f"{hashlib.sha256((workspace / name).read_bytes()).hexdigest()}  {name}\n"
+                for name in (
+                    "syswarden_4.04.3_amd64.deb",
+                    "syswarden-4.04.3-1.x86_64.rpm",
+                    "syswarden_4.04.3_x86_64.apk",
+                )
+            )
+            self.assertEqual(manifest.read_text(encoding="ascii"), expected)
+            metadata = manifest.lstat()
+            self.assertTrue(stat.S_ISREG(metadata.st_mode))
+            self.assertEqual(stat.S_IMODE(metadata.st_mode), 0o644)
+            self.assertEqual(metadata.st_nlink, 1)
+
+    def test_local_checksum_publication_invalidates_stale_manifest_on_partial_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            output = root / "packages"
+            workspace.mkdir(mode=0o700)
+            output.mkdir(mode=0o700)
+            self.seed_local_packages(workspace)
+            missing = workspace / "syswarden-4.04.3-1.x86_64.rpm"
+            missing.unlink()
+            manifest = output / "SHA256SUMS.txt"
+            manifest.write_text("stale manifest\n", encoding="ascii")
+
+            result = self.run_local_publication(workspace, output)
+            self.assertNotEqual(result.returncode, 0, result)
+            self.assertFalse(manifest.exists() or manifest.is_symlink())
+            self.assertEqual(
+                (output / "syswarden_4.04.3_amd64.deb").read_bytes(),
+                (workspace / "syswarden_4.04.3_amd64.deb").read_bytes(),
+            )
+            self.assertFalse((output / missing.name).exists())
+
+    def test_local_checksum_publication_rejects_unsafe_manifest_before_packages(
+        self,
+    ) -> None:
+        for kind in ("symlink", "directory"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                workspace = root / "workspace"
+                output = root / "packages"
+                workspace.mkdir(mode=0o700)
+                output.mkdir(mode=0o700)
+                self.seed_local_packages(workspace)
+                manifest = output / "SHA256SUMS.txt"
+                sentinel = root / "sentinel"
+                sentinel.write_text("operator-owned\n", encoding="ascii")
+                if kind == "symlink":
+                    manifest.symlink_to(sentinel)
+                else:
+                    manifest.mkdir()
+
+                result = self.run_local_publication(workspace, output)
+                self.assertNotEqual(result.returncode, 0, result)
+                self.assertEqual(sentinel.read_text(encoding="ascii"), "operator-owned\n")
+                self.assertFalse((output / "syswarden_4.04.3_amd64.deb").exists())
+                if kind == "symlink":
+                    self.assertTrue(manifest.is_symlink())
+                else:
+                    self.assertTrue(manifest.is_dir())
+
+    def test_local_checksum_publication_rejects_unsafe_private_package(self) -> None:
+        for kind in ("symlink", "directory", "hardlink"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                workspace = root / "workspace"
+                output = root / "packages"
+                workspace.mkdir(mode=0o700)
+                output.mkdir(mode=0o700)
+                self.seed_local_packages(workspace)
+                package = workspace / "syswarden_4.04.3_amd64.deb"
+                package.unlink()
+                sentinel = root / "sentinel"
+                sentinel.write_text("operator-owned\n", encoding="ascii")
+                if kind == "symlink":
+                    package.symlink_to(sentinel)
+                elif kind == "directory":
+                    package.mkdir()
+                else:
+                    os.link(sentinel, package)
+                manifest = output / "SHA256SUMS.txt"
+                manifest.write_text("stale manifest\n", encoding="ascii")
+
+                result = self.run_local_publication(workspace, output)
+                self.assertNotEqual(result.returncode, 0, result)
+                self.assertFalse(manifest.exists() or manifest.is_symlink())
+                self.assertEqual(sentinel.read_text(encoding="ascii"), "operator-owned\n")
+                self.assertFalse((output / package.name).exists())
+
+    def test_local_checksum_publication_removes_manifest_after_final_check_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            output = root / "packages"
+            commands = root / "commands"
+            workspace.mkdir(mode=0o700)
+            output.mkdir(mode=0o700)
+            commands.mkdir(mode=0o700)
+            self.seed_local_packages(workspace)
+            real_sha256sum = shutil.which("sha256sum")
+            self.assertIsNotNone(real_sha256sum)
+            shim = commands / "sha256sum"
+            shim.write_text(
+                "#!/bin/sh\n"
+                'if [ "$PWD" = "$SYSWARDEN_TEST_FAIL_SHA_DIRECTORY" ] && '
+                '[ "${1:-}" = --check ]; then\n'
+                "    exit 73\n"
+                "fi\n"
+                'exec "$SYSWARDEN_TEST_REAL_SHA256SUM" "$@"\n',
+                encoding="ascii",
+            )
+            shim.chmod(0o700)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{commands}:{environment['PATH']}",
+                    "SYSWARDEN_TEST_FAIL_SHA_DIRECTORY": str(output),
+                    "SYSWARDEN_TEST_REAL_SHA256SUM": str(real_sha256sum),
+                }
+            )
+
+            result = self.run_local_publication(
+                workspace,
+                output,
+                environment=environment,
+            )
+            self.assertNotEqual(result.returncode, 0, result)
+            manifest = output / "SHA256SUMS.txt"
+            self.assertFalse(manifest.exists() or manifest.is_symlink())
+
+    def test_local_checksum_publication_waits_for_exclusive_directory_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            output = root / "packages"
+            workspace.mkdir(mode=0o700)
+            output.mkdir(mode=0o700)
+            self.seed_local_packages(workspace)
+            manifest = output / "SHA256SUMS.txt"
+            manifest.write_text("stale manifest\n", encoding="ascii")
+            directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY)
+            process: subprocess.Popen[str] | None = None
+            try:
+                fcntl.flock(directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                spawned = self.run_local_publication(workspace, output, wait=False)
+                self.assertIsInstance(spawned, subprocess.Popen)
+                process = spawned
+                time.sleep(0.2)
+                self.assertIsNone(process.poll(), "publisher did not wait for the lock")
+                self.assertEqual(manifest.read_text(encoding="ascii"), "stale manifest\n")
+                self.assertFalse((output / "syswarden_4.04.3_amd64.deb").exists())
+                fcntl.flock(directory_fd, fcntl.LOCK_UN)
+                stdout, stderr = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 0, (stdout, stderr))
+            finally:
+                fcntl.flock(directory_fd, fcntl.LOCK_UN)
+                os.close(directory_fd)
+                if process is not None and process.poll() is None:
+                    stop_test_process(process)
+
+    def test_local_builder_vcs_provenance_gate_is_exact(self) -> None:
+        source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
+        start = source.index("validate_vcs_binary() {")
+        end = source.index("\n}\n\nfor artifact", start) + len("\n}\n")
+        function = source[start:end]
+        revision = "a" * 40
+        commit_time = "2026-09-04T20:03:22Z"
+        valid = [
+            "/tmp/artifact: go1.26.6",
+            "\tbuild\tvcs=git",
+            f"\tbuild\tvcs.revision={revision}",
+            f"\tbuild\tvcs.time={commit_time}",
+            "\tbuild\tvcs.modified=false",
+        ]
+        cases = {
+            "valid": (valid, True),
+            "wrong revision": (
+                [line.replace(revision, "b" * 40) for line in valid],
+                False,
+            ),
+            "wrong time": (
+                [line.replace(commit_time, "2026-09-04T20:03:23Z") for line in valid],
+                False,
+            ),
+            "modified": (
+                [line.replace("vcs.modified=false", "vcs.modified=true") for line in valid],
+                False,
+            ),
+            "missing": (valid[:-1], False),
+            "duplicate": (valid + [f"\tbuild\tvcs.revision={revision}"], False),
+            "extra": (valid + ["\tbuild\tvcs.extra=unexpected"], False),
+        }
+        with tempfile.TemporaryDirectory(prefix="sw-vcs-gate-", dir="/tmp") as temporary:
+            root = Path(temporary)
+            fixture = root / "build-info.txt"
+            fake_go = root / "go"
+            fake_go.write_text(
+                "#!/bin/sh\n"
+                "[ \"$1\" = version ] && [ \"$2\" = -m ] || exit 2\n"
+                "cat \"${VCS_BUILD_INFO}\"\n",
+                encoding="utf-8",
+            )
+            fake_go.chmod(0o700)
+            environment = {
+                **os.environ,
+                "GO_BIN": str(fake_go),
+                "SOURCE_COMMIT": revision,
+                "SOURCE_VCS_TIME": commit_time,
+                "VCS_BUILD_INFO": str(fixture),
+            }
+            for name, (lines, accepted) in cases.items():
+                with self.subTest(name=name):
+                    fixture.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                    result = subprocess.run(
+                        (
+                            "/bin/bash",
+                            "-c",
+                            function + "\nvalidate_vcs_binary /tmp/artifact\n",
+                        ),
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                    )
+                    self.assertEqual(result.returncode == 0, accepted, result)
+
+    def test_linked_worktree_build_uses_exact_candidate_provenance(self) -> None:
+        git = shutil.which("git")
+        go = shutil.which("go")
+        if git is None or go is None:
+            self.skipTest("git and go are required for the linked-worktree regression")
+
+        with tempfile.TemporaryDirectory(
+            prefix="sw-linked-worktree-", dir="/tmp"
+        ) as temporary:
+            root = Path(temporary)
+            primary = root / "primary"
+            candidate = root / "candidate"
+
+            def run_git(
+                repository: Path,
+                *arguments: str,
+                environment: dict[str, str] | None = None,
+            ) -> str:
+                return subprocess.run(
+                    (
+                        git,
+                        "-c",
+                        "core.fsmonitor=false",
+                        "-C",
+                        str(repository),
+                        *arguments,
+                    ),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                ).stdout.strip()
+
+            def commit(repository: Path, message: str, timestamp: str) -> str:
+                environment = {
+                    **os.environ,
+                    "GIT_AUTHOR_DATE": timestamp,
+                    "GIT_COMMITTER_DATE": timestamp,
+                }
+                run_git(repository, "add", ".", environment=environment)
+                run_git(
+                    repository,
+                    "commit",
+                    "-m",
+                    message,
+                    environment=environment,
+                )
+                return run_git(repository, "rev-parse", "HEAD")
+
+            subprocess.run(
+                (git, "init", "--initial-branch=main", str(primary)),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            run_git(primary, "config", "user.name", "SysWarden CI")
+            run_git(primary, "config", "user.email", "ci@syswarden.invalid")
+            component = primary / "src/core/component"
+            component.mkdir(parents=True)
+            (primary / "go.work").write_text(
+                "go 1.26\n\nuse ./src/core/component\n",
+                encoding="utf-8",
+            )
+            (component / "go.mod").write_text(
+                "module example.invalid/syswarden-worktree\n\ngo 1.26\n",
+                encoding="utf-8",
+            )
+            (component / "main.go").write_text(
+                'package main\n\nfunc main() { println("base") }\n',
+                encoding="utf-8",
+            )
+            base_revision = commit(primary, "base", "2026-09-04T20:02:22Z")
+            run_git(primary, "worktree", "add", "-b", "candidate", str(candidate))
+            (candidate / "src/core/component/main.go").write_text(
+                'package main\n\nfunc main() { println("candidate") }\n',
+                encoding="utf-8",
+            )
+            candidate_revision = commit(
+                candidate,
+                "candidate",
+                "2026-09-04T20:03:22Z",
+            )
+            exclude_file = primary / ".git" / "info" / "exclude"
+            exclude_file.write_text(
+                exclude_file.read_text(encoding="utf-8") + "\nignored.go\n",
+                encoding="utf-8",
+            )
+            (candidate / "src/core/component/ignored.go").write_text(
+                'package main\n\nfunc init() { println("ignored injection") }\n',
+                encoding="utf-8",
+            )
+            self.assertNotEqual(candidate_revision, base_revision)
+            self.assertEqual(run_git(primary, "rev-parse", "HEAD"), base_revision)
+            self.assertEqual(
+                run_git(
+                    candidate,
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                ),
+                "",
+            )
+            git_directory = run_git(candidate, "rev-parse", "--absolute-git-dir")
+            git_common_directory = run_git(
+                candidate,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            )
+            exact_source = root / "exact-source"
+            exact_source.mkdir(mode=0o700)
+            source_archive = root / "exact-source.tar"
+            run_git(
+                candidate,
+                "archive",
+                "--format=tar",
+                f"--output={source_archive}",
+                candidate_revision,
+            )
+            with tarfile.open(source_archive, mode="r:") as archive:
+                archive.extractall(exact_source, filter="data")
+            self.assertFalse(
+                (exact_source / "src/core/component/ignored.go").exists()
+            )
+            vcs_sentinel = exact_source / ".git"
+            vcs_sentinel.mkdir(mode=0o500)
+            self.assertEqual(list(vcs_sentinel.iterdir()), [])
+            cache = root / "go-cache"
+            go_temporary = root / "go-tmp"
+            cache.mkdir(mode=0o700)
+            go_temporary.mkdir(mode=0o700)
+            binary = root / "candidate-binary"
+            build_environment = {
+                **os.environ,
+                "GIT_COMMON_DIR": git_common_directory,
+                "GIT_DIR": git_directory,
+                "GIT_WORK_TREE": str(exact_source),
+                "GIT_NO_REPLACE_OBJECTS": "1",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.fsmonitor",
+                "GIT_CONFIG_VALUE_0": "false",
+                "GOCACHE": str(cache),
+                "GOCACHEPROG": "",
+                "GOMODCACHE": str(root / "go-module-cache"),
+                "GOPATH": str(root / "go-path"),
+                "GOTMPDIR": str(go_temporary),
+                "GOAMD64": "v1",
+                "GOENV": "off",
+                "GOEXPERIMENT": "",
+                "GOFLAGS": "-mod=readonly",
+                "GOTOOLCHAIN": "local",
+                "GOWORK": str(exact_source / "go.work"),
+            }
+            build = subprocess.run(
+                (
+                    go,
+                    "build",
+                    "-buildvcs=true",
+                    "-trimpath",
+                    "-o",
+                    str(binary),
+                    "./src/core/component",
+                ),
+                cwd=exact_source,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=build_environment,
+            )
+            self.assertEqual(build.returncode, 0, build)
+            metadata = subprocess.run(
+                (go, "version", "-m", str(binary)),
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertIn("\tbuild\tvcs=git\n", metadata)
+            self.assertIn(
+                f"\tbuild\tvcs.revision={candidate_revision}\n",
+                metadata,
+            )
+            self.assertIn("\tbuild\tvcs.time=2026-09-04T20:03:22Z\n", metadata)
+            self.assertIn("\tbuild\tvcs.modified=false\n", metadata)
+            self.assertNotIn(f"\tbuild\tvcs.revision={base_revision}\n", metadata)
 
     def test_workflow_and_local_packages_have_exact_reproducibility_contract(self) -> None:
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
@@ -383,10 +1008,12 @@ class PackageLifecycleContractTests(unittest.TestCase):
         local_apk = local.split("# Generate Alpine APK", 1)[1]
 
         self.assertIn(
-            'SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"', version_step
+            'SOURCE_DATE_EPOCH="$(git -c core.fsmonitor=false log -1 '
+            '--format=%ct HEAD)"',
+            version_step,
         )
         self.assertIn(
-            'SOURCE_DATE_EPOCH="$(git -C "${REPOSITORY_ROOT}" log -1 '
+            'SOURCE_DATE_EPOCH="$(git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" log -1 '
             '--format=%ct HEAD)"',
             local,
         )
@@ -478,6 +1105,58 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         self.assertLess(local_normalizer_end, local.index("# Generate DEB"))
 
+        workflow_homepage = '--url "https://github.com/${{ github.repository }}"'
+        local_homepage = '--url "https://github.com/duggytuxy/syswarden"'
+        for block in (workflow_deb, workflow_rpm):
+            self.assertEqual(block.count(workflow_homepage), 1)
+        for block in (local_deb, local_rpm):
+            self.assertEqual(block.count(local_homepage), 1)
+        self.assertEqual(
+            workflow_apk.count(
+                'homepage: "https://github.com/${{ github.repository }}"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            local_apk.count('homepage: "https://github.com/duggytuxy/syswarden"'),
+            1,
+        )
+        self.assertIn(
+            '[[ "$(dpkg-deb --field "${path}" Homepage)" == '
+            '"https://github.com/${{ github.repository }}" ]]',
+            workflow_validation,
+        )
+        self.assertIn(
+            "actual_url=\"$(rpm --query --package --queryformat '%{URL}'",
+            workflow_validation,
+        )
+        self.assertIn(
+            '[[ "${actual_url}" == '
+            '"https://github.com/${{ github.repository }}" ]]',
+            workflow_validation,
+        )
+        self.assertIn(
+            "grep --fixed-strings --line-regexp --count -- "
+            "'url = https://github.com/${{ github.repository }}'",
+            workflow_validation,
+        )
+        self.assertEqual(local.count("validate_local_deb_homepage"), 2)
+        self.assertIn(
+            '[ "${homepage_lines}" = '
+            'https://github.com/duggytuxy/syswarden ]',
+            local,
+        )
+        self.assertIn(
+            "[ \"$(rpm -qp --qf '%{URL}' \"${rpm_path}\")\" = "
+            "https://github.com/duggytuxy/syswarden ] || return 1",
+            local,
+        )
+        self.assertEqual(local.count("validate_local_apk_homepage"), 2)
+        self.assertIn(
+            "grep -Fxc 'url = https://github.com/duggytuxy/syswarden'",
+            local,
+        )
+
         for block, count in (
             (workflow_deb, 1),
             (workflow_rpm, 1),
@@ -489,6 +1168,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 count,
             )
         rpm_defines = (
+            "_binary_filedigest_algorithm 8",
+            "_source_filedigest_algorithm 8",
             "use_source_date_epoch_as_buildtime 1",
             "clamp_mtime_to_source_date_epoch 1",
             "_buildhost syswarden-build.invalid",
@@ -498,6 +1179,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 flag = f'--rpm-rpmbuild-define "{definition}"'
                 self.assertEqual(workflow_rpm.count(flag), 1)
                 self.assertEqual(local_rpm.count(flag), 1)
+        self.assertEqual(workflow_rpm.count("--rpm-digest sha256"), 1)
+        self.assertEqual(local_rpm.count("--rpm-digest sha256"), 1)
         self.assertEqual(workflow_rpm.count('--rpm-changelog "${RPM_CHANGELOG}"'), 1)
         self.assertEqual(local_rpm.count('--rpm-changelog "${RPM_CHANGELOG}"'), 1)
         for rpm_block in (workflow_rpm, local_rpm):
@@ -626,6 +1309,172 @@ class PackageLifecycleContractTests(unittest.TestCase):
             )
             self.assertNotEqual(missing.returncode, 0, missing)
             self.assertIn("package timestamp target is missing", missing.stderr)
+
+    def test_workflow_build_environment_and_static_source_are_exact(self) -> None:
+        rejection = workflow_step_script(
+            self.workflow, "Reject Redirected Git Environment"
+        )
+        go_validation = workflow_step_script(
+            self.workflow, "Validate Hermetic Go Environment"
+        )
+        version = workflow_step_script(
+            self.workflow, "Validate and Export Version Contract"
+        )
+        workspace = workflow_step_script(
+            self.workflow, "Create Isolated Packaging Workspace"
+        )
+        static_build = workflow_step_script(
+            self.workflow, "Build and Stage Static Alpine Binaries"
+        )
+
+        self.assertLess(
+            self.workflow.index("Reject Redirected Git Environment"),
+            self.workflow.index("Checkout Source Code"),
+        )
+        for assignment in (
+            "GOAMD64: 'v1'",
+            "GOCACHEPROG: ''",
+            "GOENV: 'off'",
+            "GOEXPERIMENT: ''",
+            "GOFLAGS: '-mod=readonly'",
+            "GOTOOLCHAIN: 'local'",
+            "GOWORK: 'off'",
+            "GIT_NO_REPLACE_OBJECTS: '1'",
+        ):
+            with self.subTest(workflow_environment=assignment):
+                self.assertEqual(self.workflow.count(assignment), 1)
+
+        redirected = (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_ATTR_SOURCE",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+            "GIT_EXEC_PATH",
+            "GIT_NAMESPACE",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_SHALLOW_FILE",
+            "GIT_GRAFT_FILE",
+            "GIT_QUARANTINE_PATH",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+        )
+        for variable in redirected:
+            with self.subTest(rejected_git_environment=variable):
+                self.assertIn(f"  {variable}\n", rejection)
+        self.assertIn('if [[ -v "${variable}" ]]', rejection)
+        self.assertIn('[[ "${GIT_NO_REPLACE_OBJECTS}" == "1" ]]', rejection)
+        guarded_environment = {
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith("GIT_")
+        }
+        guarded_environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+        accepted = subprocess.run(
+            ("/bin/bash", "-c", rejection),
+            check=False,
+            capture_output=True,
+            text=True,
+            env=guarded_environment,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted)
+        for variable in (
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+            "GIT_REPLACE_REF_BASE",
+        ):
+            with self.subTest(functional_git_environment_rejection=variable):
+                rejected = subprocess.run(
+                    ("/bin/bash", "-c", rejection),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={**guarded_environment, variable: "/tmp/redirected"},
+                )
+                self.assertNotEqual(rejected.returncode, 0, rejected)
+                self.assertIn(f"inherited {variable}", rejected.stderr)
+
+        for check in (
+            '[[ "$(go env GOVERSION)" == "go1.26.6" ]]',
+            '[[ "${GOWORK}" == "off" ]]',
+            '[[ "${GOENV}" == "off" ]]',
+            '[[ "${GOAMD64}" == "v1" ]]',
+            '[[ -z "${GOCACHEPROG}" ]]',
+            '[[ "${GOTOOLCHAIN}" == "local" ]]',
+            '[[ "${GOFLAGS}" == "-mod=readonly" ]]',
+            '[[ -z "${GOEXPERIMENT}" ]]',
+        ):
+            with self.subTest(go_environment_check=check):
+                self.assertIn(check, go_validation)
+
+        self.assertIn("rev-parse --show-toplevel", version)
+        self.assertIn("rev-parse --absolute-git-dir", version)
+        self.assertIn(
+            "rev-parse --path-format=absolute --git-common-dir", version
+        )
+        self.assertIn(
+            '[[ "${SOURCE_GIT_COMMON_DIR}" != "${SOURCE_GIT_DIR}" ]]', version
+        )
+        self.assertIn("status --porcelain=v1 --untracked-files=all", version)
+        self.assertIn('echo "SOURCE_GIT_DIR=${SOURCE_GIT_DIR}"', version)
+        self.assertIn(
+            'echo "SOURCE_GIT_COMMON_DIR=${SOURCE_GIT_COMMON_DIR}"', version
+        )
+
+        self.assertIn('EXACT_SOURCE_ROOT="${PACKAGE_WORKSPACE}/source-exact"', workspace)
+        self.assertIn("git -c core.fsmonitor=false archive", workspace)
+        self.assertIn('"${SOURCE_COMMIT_SHA}"', workspace)
+        self.assertIn('GIT_WORK_TREE="${EXACT_SOURCE_ROOT}"', workspace)
+        self.assertIn("--untracked-files=all", workspace)
+        self.assertIn(
+            "the source snapshot differs from the exact source commit",
+            workspace,
+        )
+
+        for assignment in (
+            'GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}"',
+            'GIT_DIR="${SOURCE_GIT_DIR}"',
+            'GIT_NO_REPLACE_OBJECTS=1',
+            'GIT_WORK_TREE="${EXACT_SOURCE_ROOT}"',
+            "GOAMD64=v1",
+            "GOCACHEPROG=",
+            'GOMODCACHE="${GOMODCACHE}"',
+            'GOPATH="${GOPATH}"',
+            'GOTMPDIR="${GOTMPDIR}"',
+            "GOENV=off",
+            "GOEXPERIMENT=",
+            "GOFLAGS=-mod=readonly",
+            "GOTOOLCHAIN=local",
+            "GOWORK=off",
+        ):
+            with self.subTest(static_build_environment=assignment):
+                self.assertIn(assignment, static_build)
+        self.assertIn('GOWORK="${EXACT_SOURCE_ROOT}/go.work"', static_build)
+        self.assertIn('go -C "${EXACT_SOURCE_ROOT}" build', static_build)
+        self.assertIn('"./src/core/${component}"', static_build)
+        self.assertIn(
+            'go -C "${EXACT_SOURCE_ROOT}/src/core/${component}" mod download',
+            static_build,
+        )
+        self.assertIn(
+            'go -C "${EXACT_SOURCE_ROOT}/src/core/${component}" mod verify',
+            static_build,
+        )
+        self.assertNotIn('go -C "src/core/${component}" build', static_build)
+        self.assertIn(
+            '"${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json"',
+            static_build,
+        )
+        self.assertIn('"${EXACT_SOURCE_ROOT}/LICENSE"', static_build)
+        self.assertIn("GOAMD64=v1", static_build)
+        self.assertIn("baseline AMD64 level", static_build)
+        self.assertIn("chmod -R u+w -- $ResolvedGoModuleCache", BUILD_SCRIPT.read_text(encoding="utf-8"))
 
     def test_local_builder_closes_deb_mode_and_rpm_build_id_parity(self) -> None:
         source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
@@ -859,6 +1708,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertLess(
             preinstall.index("syswarden_preflight_alpine_cronie\n"),
             preinstall.index("syswarden_preflight_install_barriers\n"),
+        )
+        self.assertLess(
+            preinstall.index("syswarden_preflight_install_barriers\n"),
+            preinstall.index("syswarden_preflight_systemd_ordering_dropin\n"),
+        )
+        self.assertLess(
+            preinstall.index("syswarden_preflight_systemd_ordering_dropin\n"),
+            preinstall.index("secure_private_directory() {"),
         )
         self.assertLess(
             preinstall.index('export SYSWARDEN_PKG_INSTALL=1'),
@@ -3759,70 +4616,90 @@ class PackageLifecycleContractTests(unittest.TestCase):
         local_source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(
             self.workflow.count(
-                'cat scripts/ci/package_deferred_purge_postinstall.sh >> '
+                'cat "${EXACT_SOURCE_ROOT}/scripts/ci/'
+                'package_deferred_purge_postinstall.sh" >> '
                 '"${PACKAGE_SCRIPTS}/postinst.sh"'
             ),
             1,
         )
         self.assertEqual(
             self.workflow.count(
-                'cat scripts/ci/package_deferred_purge_postinstall.sh >> '
+                'cat "${EXACT_SOURCE_ROOT}/scripts/ci/'
+                'package_deferred_purge_postinstall.sh" >> '
                 '"${PACKAGE_SCRIPTS}/preinst.sh"'
             ),
             1,
         )
         self.assertEqual(
             local_source.count(
-                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'cat "${SOURCE_ROOT}/scripts/ci/'
                 'package_deferred_purge_postinstall.sh" >> preinst.sh'
             ),
             1,
         )
         self.assertEqual(
             local_source.count(
-                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'cat "${SOURCE_ROOT}/scripts/ci/'
                 'package_deferred_purge_postinstall.sh" >> postinst.sh'
             ),
             1,
         )
         self.assertEqual(
             self.workflow.count(
-                'cat scripts/ci/package_alpine_cronie_preflight.sh >> '
+                'cat "${EXACT_SOURCE_ROOT}/scripts/ci/'
+                'package_alpine_cronie_preflight.sh" >> '
                 '"${PACKAGE_SCRIPTS}/preinst.sh"'
             ),
             1,
         )
         self.assertEqual(
             self.workflow.count(
-                'cat scripts/ci/package_alpine_cronie_preflight.sh >> '
+                'cat "${EXACT_SOURCE_ROOT}/scripts/ci/'
+                'package_alpine_cronie_preflight.sh" >> '
                 '"${PACKAGE_SCRIPTS}/postinst.sh"'
             ),
             1,
         )
         self.assertEqual(
             local_source.count(
-                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'cat "${SOURCE_ROOT}/scripts/ci/'
                 'package_alpine_cronie_preflight.sh" >> preinst.sh'
             ),
             1,
         )
         self.assertEqual(
             local_source.count(
-                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'cat "${SOURCE_ROOT}/scripts/ci/'
                 'package_alpine_cronie_preflight.sh" >> postinst.sh'
             ),
             1,
         )
         self.assertEqual(
             self.workflow.count(
-                'cat scripts/ci/package_removal_state.sh >> '
+                'cat "${EXACT_SOURCE_ROOT}/scripts/ci/'
+                'package_systemd_ordering_preflight.sh" >> '
+                '"${PACKAGE_SCRIPTS}/preinst.sh"'
+            ),
+            1,
+        )
+        self.assertEqual(
+            local_source.count(
+                'cat "${SOURCE_ROOT}/scripts/ci/'
+                'package_systemd_ordering_preflight.sh" >> preinst.sh'
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.workflow.count(
+                'cat "${EXACT_SOURCE_ROOT}/scripts/ci/'
+                'package_removal_state.sh" >> '
                 '"${PACKAGE_SCRIPTS}/postrm.sh"'
             ),
             1,
         )
         self.assertEqual(
             local_source.count(
-                'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                'cat "${SOURCE_ROOT}/scripts/ci/'
                 'package_removal_state.sh" >> postrm.sh'
             ),
             1,
@@ -3831,14 +4708,15 @@ class PackageLifecycleContractTests(unittest.TestCase):
             with self.subTest(script=name):
                 self.assertEqual(
                     self.workflow.count(
-                        "cat scripts/ci/package_webtui_retirement.sh > "
+                        'cat "${EXACT_SOURCE_ROOT}/scripts/ci/'
+                        'package_webtui_retirement.sh" > '
                         f'"${{PACKAGE_SCRIPTS}}/{name}"'
                     ),
                     1,
                 )
                 self.assertEqual(
                     local_source.count(
-                        'cat "${REPOSITORY_ROOT}/scripts/ci/'
+                        'cat "${SOURCE_ROOT}/scripts/ci/'
                         f'package_webtui_retirement.sh" > {name}'
                     ),
                     1,
@@ -4050,16 +4928,190 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertNotIn('$(cat "${syswarden_tombstone}")', postremove)
         self.assertIn("0:0:600:1", postremove)
         removal_tail = postremove[postremove.rindex("export SYSWARDEN_PKG_INSTALL=1") :]
+        refresh_start = removal_tail.index(
+            "syswarden_refresh_systemd_after_rpm_payload_transition() {"
+        )
+        refresh_end = removal_tail.index(
+            "\n}\n\ncleanup_generated_runtime_artifacts() {", refresh_start
+        ) + len("\n}")
+        refresh = removal_tail[refresh_start:refresh_end]
+        outside_refresh = removal_tail[:refresh_start] + removal_tail[refresh_end:]
+        self.assertIn('[ "${1:-}" = 1 ] || return 0', refresh)
+        self.assertIn('[ ! -f /etc/alpine-release ] || return 1', refresh)
+        self.assertIn(
+            "syswarden_classify_service_manager / systemd isolated", refresh
+        )
+        self.assertEqual(refresh.count("systemctl "), 2)
+        self.assertEqual(refresh.count("command -v systemctl"), 1)
+        self.assertEqual(refresh.count("systemctl daemon-reload || return 1"), 1)
+        self.assertNotIn("systemctl ", outside_refresh)
+        self.assertEqual(
+            removal_tail.count(
+                'syswarden_refresh_systemd_after_rpm_payload_transition '
+                '"${1:-}" || exit 1'
+            ),
+            1,
+        )
         for forbidden in (
             "crontab -l",
             "crontab -r",
             "crontab - <",
-            "systemctl ",
             "rc-service ",
             "try-restart rsyslog",
             "/etc/rsyslog.d/99-syswarden",
         ):
             self.assertNotIn(forbidden, removal_tail)
+
+    def test_rpm_postremove_systemd_refresh_is_exact_and_fail_closed(self) -> None:
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        test_root = Path(temporary_directory.name)
+        postremove = self.script("postrm.sh")
+        helper_start = postremove.index(
+            "syswarden_refresh_systemd_after_rpm_payload_transition() {"
+        )
+        helper_end = postremove.index(
+            "\n}\n\ncleanup_generated_runtime_artifacts() {", helper_start
+        ) + len("\n}")
+        helper = postremove[helper_start:helper_end].replace(
+            "/etc/alpine-release", '"${ALPINE_MARKER}"'
+        )
+        shell = test_root / "rpm-postremove-systemd-refresh.sh"
+        shell.write_text(
+            """
+CALL_LOG="$1"
+CLASSIFIER_MODE="$2"
+SYSTEMCTL_MODE="$3"
+ALPINE_MARKER="$4"
+REFRESH_ARGUMENT="$5"
+syswarden_classify_service_manager() {
+    [ "$*" = '/ systemd isolated' ] || return 98
+    printf 'classify:%s\\n' "$*" >> "${CALL_LOG}"
+    classify_count="$(awk '/^classify:/ { count++ } END { print count + 0 }' \
+        "${CALL_LOG}")" || return 97
+    case "${CLASSIFIER_MODE}" in
+        ACTIVE) printf '%s\\n' ACTIVE ;;
+        ACTIVE_THEN_OFFLINE)
+            if [ "${classify_count}" -eq 1 ]; then
+                printf '%s\\n' ACTIVE
+            else
+                printf '%s\\n' OFFLINE
+            fi
+            ;;
+        OFFLINE) printf '%s\\n' OFFLINE ;;
+        AMBIGUOUS) printf '%s\\n' AMBIGUOUS ;;
+        ERROR) return 71 ;;
+        *) return 99 ;;
+    esac
+}
+systemctl() {
+    [ "$*" = daemon-reload ] || return 96
+    printf 'systemctl:%s\\n' "$*" >> "${CALL_LOG}"
+    [ "${SYSTEMCTL_MODE}" = success ]
+}
+"""
+            + helper
+            + '\nsyswarden_refresh_systemd_after_rpm_payload_transition '
+            '"${REFRESH_ARGUMENT}"\n',
+            encoding="utf-8",
+        )
+        shell.chmod(0o700)
+        call_log = test_root / "rpm-postremove-refresh-calls.log"
+        alpine_marker = test_root / "alpine-release"
+
+        def run_refresh(
+            argument: str,
+            classifier_mode: str,
+            systemctl_mode: str,
+            *,
+            alpine: bool = False,
+        ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+            call_log.write_text("", encoding="utf-8")
+            alpine_marker.unlink(missing_ok=True)
+            if alpine:
+                alpine_marker.write_text("3.24.0\n", encoding="ascii")
+            result = subprocess.run(
+                (
+                    shutil.which("dash") or "/bin/sh",
+                    str(shell),
+                    str(call_log),
+                    classifier_mode,
+                    systemctl_mode,
+                    str(alpine_marker),
+                    argument,
+                ),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            return result, call_log.read_text(encoding="utf-8").splitlines()
+
+        for argument in ("", "0", "remove", "purge", "4.04.3"):
+            with self.subTest(non_rpm_upgrade_argument=argument):
+                result, calls = run_refresh(argument, "ERROR", "failure")
+                self.assertEqual(result.returncode, 0, result)
+                self.assertEqual(calls, [])
+
+        result, calls = run_refresh("1", "OFFLINE", "failure")
+        self.assertEqual(result.returncode, 0, result)
+        self.assertEqual(calls, ["classify:/ systemd isolated"])
+
+        result, calls = run_refresh("1", "ACTIVE", "success")
+        self.assertEqual(result.returncode, 0, result)
+        self.assertEqual(
+            calls,
+            [
+                "classify:/ systemd isolated",
+                "systemctl:daemon-reload",
+                "classify:/ systemd isolated",
+            ],
+        )
+
+        for label, classifier_mode, systemctl_mode, expected_calls in (
+            (
+                "runtime-changed-after-reload",
+                "ACTIVE_THEN_OFFLINE",
+                "success",
+                [
+                    "classify:/ systemd isolated",
+                    "systemctl:daemon-reload",
+                    "classify:/ systemd isolated",
+                ],
+            ),
+            (
+                "daemon-reload-failed",
+                "ACTIVE",
+                "failure",
+                [
+                    "classify:/ systemd isolated",
+                    "systemctl:daemon-reload",
+                ],
+            ),
+            (
+                "ambiguous-runtime",
+                "AMBIGUOUS",
+                "success",
+                ["classify:/ systemd isolated"],
+            ),
+            (
+                "classifier-failed",
+                "ERROR",
+                "success",
+                ["classify:/ systemd isolated"],
+            ),
+        ):
+            with self.subTest(failure=label):
+                result, calls = run_refresh(
+                    "1", classifier_mode, systemctl_mode
+                )
+                self.assertNotEqual(result.returncode, 0, result)
+                self.assertEqual(calls, expected_calls)
+
+        result, calls = run_refresh(
+            "1", "ACTIVE", "success", alpine=True
+        )
+        self.assertNotEqual(result.returncode, 0, result)
+        self.assertEqual(calls, [])
 
     def test_package_removal_never_reads_filters_or_writes_root_crontab(self) -> None:
         scripts = (
@@ -4664,7 +5716,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         function_start = validation_step.index("validate_rpm_scriptlet() {")
         function_end = validation_step.index("\nvalidate_apk() {", function_start)
-        validate_rpm = validation_step[function_start:function_end]
+        validate_rpm = validation_step[function_start:function_end].replace(
+            "${{ github.repository }}", "duggytuxy/syswarden"
+        )
         for required in (
             'actual="$(rpm --query --package --queryformat "%{${tag}}"',
             'expected="$(cat "${expected_path}")"',
@@ -4714,6 +5768,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "  '%{BUILDHOST}') printf syswarden-build.invalid; exit \"${RPM_BUILDHOST_EXIT}\" ;;\n"
                 "  '%{CHANGELOGTIME}') printf '%s' \"${RPM_CHANGELOG_EPOCH}\"; exit \"${RPM_CHANGELOGTIME_EXIT}\" ;;\n"
                 "  '%{LICENSE}') printf '%s' \"${RPM_LICENSE}\"; exit \"${RPM_LICENSE_EXIT}\" ;;\n"
+                "  '%{URL}') printf '%s' \"${RPM_URL}\"; exit \"${RPM_URL_EXIT}\" ;;\n"
                 "  '%{PREIN}') cat \"${RPM_PREIN_FILE}\" ;;\n"
                 "  '%{POSTIN}') cat \"${RPM_POSTIN_FILE}\" ;;\n"
                 "  '%{PREUN}') cat \"${RPM_PREUN_FILE}\" ;;\n"
@@ -4740,6 +5795,8 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "RPM_CHANGELOGTIME_EXIT": "0",
                 "RPM_LICENSE": "GPL-3.0-or-later",
                 "RPM_LICENSE_EXIT": "0",
+                "RPM_URL": "https://github.com/duggytuxy/syswarden",
+                "RPM_URL_EXIT": "0",
             }
             tag_to_name = {
                 "PREIN": "preinst.sh",
@@ -4768,6 +5825,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 program_statuses: dict[str, str] | None = None,
                 metadata_statuses: dict[str, str] | None = None,
                 license_value: str = "GPL-3.0-or-later",
+                url_value: str = "https://github.com/duggytuxy/syswarden",
                 scriptlet_payload: str | None = None,
             ) -> subprocess.CompletedProcess[bytes]:
                 sources = source_bodies or canonical_bodies
@@ -4777,6 +5835,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 }
                 case_environment = dict(environment)
                 case_environment["RPM_LICENSE"] = license_value
+                case_environment["RPM_URL"] = url_value
                 for field, status in (metadata_statuses or {}).items():
                     case_environment[f"RPM_{field}_EXIT"] = status
                 for tag, name in tag_to_name.items():
@@ -4868,6 +5927,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 "BUILDHOST",
                 "CHANGELOGTIME",
                 "LICENSE",
+                "URL",
             ):
                 with self.subTest(mutation="metadata-query-failure", field=field):
                     rejected = validate(
@@ -4880,6 +5940,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 dict(canonical_bodies), license_value="unknown"
             )
             self.assertNotEqual(wrong_license.returncode, 0, wrong_license)
+
+            wrong_url = validate(
+                dict(canonical_bodies), url_value="http://example.com/no-uri-given"
+            )
+            self.assertNotEqual(wrong_url.returncode, 0, wrong_url)
 
             for forbidden in forbidden_tokens:
                 with self.subTest(forbidden=forbidden):
@@ -5094,10 +6159,18 @@ class PackageLifecycleContractTests(unittest.TestCase):
 
     def test_packaged_legacy_dynamic_quarantine_precedes_network_configuration(self) -> None:
         source = INSTALL_COMMAND_SOURCE.read_text(encoding="utf-8")
-        dependency_check = source.index("system.InstallDependencies()")
+        self.assertIn(
+            "var installDependenciesForInstall = system.InstallDependencies",
+            source,
+        )
+        self.assertIn(
+            "var configureSSHForInstall = system.ConfigureSSH",
+            source,
+        )
+        dependency_check = source.index("installDependenciesForInstall()")
         package_guard = source.index('os.Getenv("SYSWARDEN_PKG_INSTALL") == "1"')
         quarantine = source.index("preparePackagedLegacyDynamicBanUpgrade()")
-        ssh_configuration = source.index("system.ConfigureSSH()")
+        ssh_configuration = source.index("configureSSHForInstall()")
         self.assertLess(dependency_check, package_guard)
         self.assertLess(package_guard, quarantine)
         self.assertLess(quarantine, ssh_configuration)
@@ -5190,7 +6263,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         validate_start = validation_step.index("validate_apk() {")
         invocation_start = validation_step.index("\nvalidate_deb ", validate_start)
-        validate_function = validation_step[validate_start:invocation_start]
+        validate_function = validation_step[validate_start:invocation_start].replace(
+            "${{ github.repository }}", "duggytuxy/syswarden"
+        )
 
         hooks = {
             ".pre-install": b"#!/bin/sh\nprintf pre\n",
@@ -5204,6 +6279,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
             architecture: str,
             archive_hooks: dict[str, bytes],
             licenses: tuple[str, ...] = ("GPL-3.0-or-later",),
+            homepages: tuple[str, ...] = (
+                "https://github.com/duggytuxy/syswarden",
+            ),
         ) -> None:
             members = {
                 ".PKGINFO": (
@@ -5211,6 +6289,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                     "pkgver = 4.02.14\n"
                     f"arch = {architecture}\n"
                     + "".join(f"license = {license_name}\n" for license_name in licenses)
+                    + "".join(f"url = {homepage}\n" for homepage in homepages)
                     + "depend = openrc\n"
                     "depend = cronie\n"
                     "depend = cronie-openrc\n"
@@ -5258,6 +6337,20 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 with self.subTest(mutation=name):
                     mutated = root / f"{name}.apk"
                     write_apk(mutated, "x86_64", hooks, licenses)
+                    rejected = validate(mutated, "x86_64")
+                    self.assertNotEqual(rejected.returncode, 0, rejected)
+
+            for name, homepages in {
+                "missing-homepage": (),
+                "wrong-homepage": ("http://example.com/no-uri-given",),
+                "duplicate-homepage": (
+                    "https://github.com/duggytuxy/syswarden",
+                    "https://github.com/duggytuxy/syswarden",
+                ),
+            }.items():
+                with self.subTest(mutation=name):
+                    mutated = root / f"{name}.apk"
+                    write_apk(mutated, "x86_64", hooks, homepages=homepages)
                     rejected = validate(mutated, "x86_64")
                     self.assertNotEqual(rejected.returncode, 0, rejected)
 
@@ -5461,7 +6554,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         )
         self.assertEqual(
             local.count(
-                '--completion-contract "${REPOSITORY_ROOT}/scripts/ci/'
+                '--completion-contract "${SOURCE_ROOT}/scripts/ci/'
                 'package_completion_contract.json"'
             ),
             2,
@@ -5525,7 +6618,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertEqual(workflow_stage.count("install -m 0644"), 4)
+        self.assertEqual(workflow_stage.count("install -m 0644"), 5)
 
         local = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(local.count("GEOIP-DATA-LICENSE.txt"), 2)
@@ -5557,7 +6650,11 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertEqual(
             workflow_stage.count("usr/share/doc/syswarden/LICENSE.txt"), 2
         )
-        self.assertEqual(workflow_stage.count("install -m 0644 LICENSE"), 2)
+        self.assertEqual(workflow_stage.count("install -m 0644 LICENSE"), 0)
+        self.assertEqual(
+            workflow_stage.count('install -m 0644 "${EXACT_SOURCE_ROOT}/LICENSE"'),
+            2,
+        )
         self.assertEqual(self.workflow.count("--project-license-contract"), 2)
         self.assertEqual(
             self.workflow.count("package_project_license_contract.json"), 2
@@ -5613,6 +6710,13 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "syswarden_finalize_removal_state_root() { printf 'tombstone-root\\n'; }\n"
             "syswarden_resume_unmarked_terminal_state() { printf 'terminal-retry\\n'; }\n"
             "syswarden_transition_to_deferred_purge() { printf 'deferred\\n'; }\n"
+            "syswarden_refresh_systemd_after_rpm_payload_transition() {\n"
+            '    case "${1:-}" in\n'
+            "        1) printf 'systemd-refresh:1\\n' ;;\n"
+            "        remove|purge|0|4.03.3) : ;;\n"
+            "        *) return 97 ;;\n"
+            "    esac\n"
+            "}\n"
             + main
         )
         matrix = (
@@ -5635,8 +6739,9 @@ class PackageLifecycleContractTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result)
                 calls = result.stdout.splitlines()
                 if destructive is None:
-                    self.assertEqual(calls, [])
+                    self.assertEqual(calls, ["systemd-refresh:1"])
                     continue
+                self.assertNotIn("systemd-refresh:1", calls)
                 log_call = "root:/var/log/syswarden"
                 if destructive:
                     self.assertIn("barrier", calls)
@@ -5692,7 +6797,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         local_builder = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("BuildMode = 'pie'", build_script)
         self.assertIn(
-            "$BuildArguments = @('build', '-mod=readonly', '-trimpath')",
+            "$BuildArguments = @('build', '-buildvcs=true', '-mod=readonly', '-trimpath')",
             build_script,
         )
         self.assertIn("$TrimPathPattern", build_script)
@@ -5736,6 +6841,53 @@ class PackageLifecycleContractTests(unittest.TestCase):
             self.workflow, "Validate Compiled Inventory"
         )
         self.assertIn("-trimpath=true", linux_validation)
+        self.assertEqual(self.workflow.count("validate_vcs_provenance()"), 2)
+        self.assertEqual(
+            self.workflow.count(
+                "binary VCS provenance does not match the clean exact source commit"
+            ),
+            2,
+        )
+        for value in (
+            "SOURCE_COMMIT_SHA",
+            "SOURCE_VCS_TIME",
+            "vcs=git",
+            "vcs.revision=",
+            "vcs.time=",
+            "vcs.modified=false",
+            "vcs_total == 4",
+        ):
+            with self.subTest(workflow_vcs_contract=value):
+                self.assertIn(value, self.workflow)
+        for value in (
+            "$SourceRevision",
+            "$SourceVcsTime",
+            "$SourceGitDir",
+            "$SourceGitCommonDir",
+            "$env:GIT_COMMON_DIR = $SourceGitCommonDir",
+            "$env:GIT_DIR = $SourceGitDir",
+            "$env:GIT_WORK_TREE = $SourceRoot",
+            "$env:GOWORK = $WorkspaceFile",
+            "$VcsSentinel = Join-Path $SourceRoot '.git'",
+            "New-Item -ItemType Directory -Path $VcsSentinel",
+            "@(Get-ChildItem -LiteralPath $VcsSentinel -Force).Count -ne 0",
+            "Push-Location $SourceRoot",
+            "$BuildArguments += $Component.Package",
+            "vcs\\.modified=false",
+        ):
+            with self.subTest(powershell_vcs_contract=value):
+                self.assertIn(value, build_script)
+        self.assertEqual(build_script.count("-buildvcs=true"), 1)
+        self.assertEqual(self.workflow.count("-buildvcs=true"), 1)
+        packaging_workspace = workflow_step_script(
+            self.workflow, "Create Isolated Packaging Workspace"
+        )
+        self.assertIn('mkdir -- "${EXACT_SOURCE_ROOT}/.git"', packaging_workspace)
+        self.assertIn('chmod 0500 "${EXACT_SOURCE_ROOT}/.git"', packaging_workspace)
+        self.assertIn(
+            'find "${EXACT_SOURCE_ROOT}/.git" -mindepth 1 -print -quit',
+            packaging_workspace,
+        )
         self.assertIn("validate_static_apk_binary()", local_builder)
         self.assertIn('[ "${elf_type}" = "EXEC" ]', local_builder)
         self.assertIn("CGO_ENABLED=0", local_builder)

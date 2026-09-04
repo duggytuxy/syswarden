@@ -24,8 +24,8 @@ import package_qualification_matrix as qualification_matrix
 
 
 class QualificationFixture:
-    version = "v4.04.2"
-    previous_version = "v4.03.3"
+    version = "v4.04.3"
+    previous_version = "v4.04.2"
 
     def __init__(self, root: Path, *, profile: str = "release") -> None:
         self.root = root

@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	coreconfig "syswarden-core/config"
 )
 
 const (
 	maximumWhitelistSourceBytes = 1024 * 1024
 	maximumWhitelistLineBytes   = 4096
+	configuredWhitelistKey      = "network.whitelist_ips"
 )
 
 var (
@@ -75,12 +77,13 @@ func IsWhitelistedStrict(value string) (bool, error) {
 		return true, nil
 	}
 
-	sourceState := currentWhitelistSourceState(whitelistSourceFiles)
+	configuredWhitelist := configuredWhitelistValues()
+	sourceState := currentWhitelistSourceState(whitelistSourceFiles, configuredWhitelist)
 	cacheMutex.RLock()
 	needsRefresh := time.Since(lastLoad) > 60*time.Second || !whitelistCacheInitialized || whitelistCacheSourceState != sourceState
 	cacheMutex.RUnlock()
 	if needsRefresh {
-		refreshWhitelistCache(sourceState)
+		refreshWhitelistCache(sourceState, configuredWhitelist)
 	}
 
 	cacheMutex.RLock()
@@ -119,13 +122,38 @@ func canonicalWhitelistTarget(value string) (netip.Addr, error) {
 	return netip.Addr{}, fmt.Errorf("invalid whitelist target")
 }
 
-func refreshWhitelistCache(sourceState string) {
+func configuredWhitelistValues() []string {
+	return append([]string(nil), viper.GetStringSlice(configuredWhitelistKey)...)
+}
+
+func refreshWhitelistCache(sourceState string, configuredWhitelist []string) {
 	cacheMutex.Lock()
 	defer cacheMutex.Unlock()
 	if time.Since(lastLoad) <= 60*time.Second && whitelistCacheInitialized && whitelistCacheSourceState == sourceState {
 		return
 	}
 	addresses, prefixes, err := loadWhitelistSources(whitelistSourceFiles)
+	if err == nil {
+		var configuredAddresses map[netip.Addr]struct{}
+		var configuredPrefixes []netip.Prefix
+		configuredAddresses, configuredPrefixes, err = loadConfiguredWhitelist(configuredWhitelist)
+		if err == nil {
+			for address := range configuredAddresses {
+				addresses[address] = struct{}{}
+			}
+			prefixSet := make(map[netip.Prefix]struct{}, len(prefixes)+len(configuredPrefixes))
+			for _, prefix := range prefixes {
+				prefixSet[prefix] = struct{}{}
+			}
+			for _, prefix := range configuredPrefixes {
+				if _, duplicate := prefixSet[prefix]; duplicate {
+					continue
+				}
+				prefixSet[prefix] = struct{}{}
+				prefixes = append(prefixes, prefix)
+			}
+		}
+	}
 	lastLoad = time.Now()
 	whitelistCacheInitialized = true
 	whitelistCacheSourceState = sourceState
@@ -137,13 +165,44 @@ func refreshWhitelistCache(sourceState string) {
 	whitelistCIDRCache = prefixes
 }
 
-func currentWhitelistSourceState(sources []whitelistSource) string {
+func currentWhitelistSourceState(sources []whitelistSource, configuredWhitelist []string) string {
 	var state strings.Builder
 	for _, source := range sources {
 		enabled := source.enabled == nil || source.enabled()
 		fmt.Fprintf(&state, "%s\x00%t\x00", source.path, enabled)
 	}
+	fmt.Fprintf(&state, "%s\x00%d\x00", configuredWhitelistKey, len(configuredWhitelist))
+	for _, value := range configuredWhitelist {
+		fmt.Fprintf(&state, "%d\x00%s\x00", len(value), value)
+	}
 	return state.String()
+}
+
+func loadConfiguredWhitelist(values []string) (map[netip.Addr]struct{}, []netip.Prefix, error) {
+	addresses := make(map[netip.Addr]struct{})
+	prefixSet := make(map[netip.Prefix]struct{})
+	for index, value := range values {
+		if coreconfig.IsRetiredUnspecifiedWhitelistEntry(value) {
+			continue
+		}
+		address, prefix, portScoped, err := parseStrictWhitelistLine(value)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s[%d]: %w", configuredWhitelistKey, index, err)
+		}
+		if portScoped {
+			return nil, nil, fmt.Errorf("%s[%d]: port-scoped entries are not supported", configuredWhitelistKey, index)
+		}
+		if address.IsValid() {
+			addresses[address] = struct{}{}
+		} else {
+			prefixSet[prefix] = struct{}{}
+		}
+	}
+	prefixes := make([]netip.Prefix, 0, len(prefixSet))
+	for prefix := range prefixSet {
+		prefixes = append(prefixes, prefix)
+	}
+	return addresses, prefixes, nil
 }
 
 func loadWhitelistSources(sources []whitelistSource) (map[netip.Addr]struct{}, []netip.Prefix, error) {
@@ -208,6 +267,9 @@ func loadWhitelistSources(sources []whitelistSource) (map[netip.Addr]struct{}, [
 
 func parseStrictWhitelistLine(line string) (netip.Addr, netip.Prefix, bool, error) {
 	parseNetwork := func(value string) (netip.Addr, netip.Prefix, error) {
+		if err := coreconfig.ValidateWhitelistEntry(value); err != nil {
+			return netip.Addr{}, netip.Prefix{}, err
+		}
 		if address, err := netip.ParseAddr(value); err == nil {
 			if address.Is4In6() || address.Zone() != "" {
 				return netip.Addr{}, netip.Prefix{}, fmt.Errorf("unsupported address")
