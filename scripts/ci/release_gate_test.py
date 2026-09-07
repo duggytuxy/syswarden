@@ -2229,10 +2229,10 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         )[0]
         privileged = workflow.split("  attest-and-publish:", 1)[1]
         repository = "duggytuxy/syswarden"
-        release_tag = "v4.04.2"
+        release_tag = "v4.04.3"
         release_sha = "a" * 40
-        previous_tag = "v4.03.3"
-        previous_commit_sha = "cdd66600a1505bae1f1e754dea096ee71e9cee82"
+        previous_tag = "v4.04.2"
+        previous_commit_sha = "7a03d40f427a825917561e2a0930298e8fbbbc8b"
         context = {
             "schema_version": 2,
             "repository": repository,
@@ -2243,13 +2243,13 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             "candidate_package_workflow": "package.yml",
             "candidate_package_run_id": 101,
             "candidate_package_artifact_id": 102,
-            "candidate_package_artifact_name": "syswarden-packages-4.04.2",
-            "previous_release_id": 103,
+            "candidate_package_artifact_name": "syswarden-packages-4.04.3",
+            "previous_release_id": 381364611,
             "previous_package_asset_ids": [
-                {"id": 1, "name": "SHA256SUMS.txt"},
-                {"id": 2, "name": "syswarden-4.03.3-1.x86_64.rpm"},
-                {"id": 3, "name": "syswarden_4.03.3_amd64.deb"},
-                {"id": 4, "name": "syswarden_4.03.3_x86_64.apk"},
+                {"id": 541354557, "name": "SHA256SUMS.txt"},
+                {"id": 541354554, "name": "syswarden-4.04.2-1.x86_64.rpm"},
+                {"id": 541354594, "name": "syswarden_4.04.2_amd64.deb"},
+                {"id": 541354596, "name": "syswarden_4.04.2_x86_64.apk"},
             ],
         }
         aggregate = {"bindings": {"previous_version": previous_tag}}

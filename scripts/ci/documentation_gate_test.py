@@ -20,7 +20,7 @@ import release_gate
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SOURCE_CANDIDATE_VERSION = "v4.04.2"
+SOURCE_CANDIDATE_VERSION = "v4.04.3"
 STABLE_PUBLIC_VERSION = "v4.04.2"
 PUBLIC_REPORT_VERSION = "v4.03.3"
 OPERATIONAL_WIKI_BASELINE_VERSION = "v4.03.3"
@@ -201,7 +201,7 @@ class DocumentationGateTest(unittest.TestCase):
             [],
         )
         errors = documentation_gate.validate_public_version_order(
-            SOURCE_CANDIDATE_VERSION, "v4.04.3"
+            SOURCE_CANDIDATE_VERSION, "v4.04.4"
         )
         self.assertTrue(any("cannot be newer" in error for error in errors))
 
@@ -323,6 +323,7 @@ class DocumentationGateTest(unittest.TestCase):
             contract["forbidden_phrases"],
             SOURCE_CANDIDATE_VERSION,
             None,
+            (STABLE_PUBLIC_VERSION,),
         )
         errors = documentation_gate.validate_markdown(*common)
         self.assertFalse(any("non-current version" in error for error in errors))

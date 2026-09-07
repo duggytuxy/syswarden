@@ -435,17 +435,27 @@ func TestCoreServiceRequiresSuccessfulFirewallLoaderAtBoot_SW2_FWBACKEND_001(t *
 func TestSystemdFirewallServiceWaitsForInstalledCronProviderAtBoot(t *testing.T) {
 	const ordering = "After=network-online.target rsyslog.service cron.service crond.service\n"
 	if strings.Count(systemdFirewallService, ordering) != 1 {
-		t.Fatalf("systemd firewall unit lacks exact cron provider ordering %q", ordering)
+		t.Fatalf("systemd firewall unit lacks exact boot ordering %q", ordering)
 	}
-	for _, dependency := range []string{
-		"Wants=cron.service",
-		"Wants=crond.service",
-		"Requires=cron.service",
-		"Requires=crond.service",
-	} {
-		if strings.Contains(systemdFirewallService, dependency) {
-			t.Fatalf("systemd firewall unit must not pull in an absent cron provider alias via %q", dependency)
+	if strings.Contains(systemdFirewallService, "wg-quick@wg-syswarden.service") {
+		t.Fatal("rollback-compatible main systemd unit unexpectedly carries WireGuard ordering")
+	}
+	if systemdFirewallWireGuardOrderingDropIn != "[Unit]\nAfter=wg-quick@wg-syswarden.service\n" {
+		t.Fatalf("systemd WireGuard ordering drop-in is not exact: %q", systemdFirewallWireGuardOrderingDropIn)
+	}
+	for _, line := range strings.Split(systemdFirewallService, "\n") {
+		if !strings.HasPrefix(line, "Wants=") && !strings.HasPrefix(line, "Requires=") {
+			continue
 		}
+		for _, dependency := range strings.Fields(strings.SplitN(line, "=", 2)[1]) {
+			if dependency == "cron.service" || dependency == "crond.service" {
+				t.Fatalf("systemd firewall unit must not pull optional service %q", dependency)
+			}
+		}
+	}
+	if strings.Contains(systemdFirewallWireGuardOrderingDropIn, "Wants=") ||
+		strings.Contains(systemdFirewallWireGuardOrderingDropIn, "Requires=") {
+		t.Fatal("systemd ordering drop-in must not pull WireGuard into the boot transaction")
 	}
 }
 
@@ -456,6 +466,36 @@ func TestOpenRCFirewallServiceRequiresExactRuntimeProvidersAtBoot(t *testing.T) 
 	}
 	if !strings.Contains(openRCFirewallService, "\tbefore syswarden-core\n") {
 		t.Fatal("OpenRC firewall service does not start before the core service")
+	}
+	if strings.Contains(openRCFirewallService, "wg-quick.wg-syswarden") {
+		t.Fatal("rollback-compatible OpenRC service unexpectedly carries a package-unsafe overlay")
+	}
+	for _, line := range strings.Split(openRCFirewallService, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || (fields[0] != "need" && fields[0] != "use") {
+			continue
+		}
+		for _, dependency := range fields[1:] {
+			if dependency == "wg-quick.wg-syswarden" {
+				t.Fatalf("OpenRC firewall service must not pull WireGuard into the runlevel via %q", line)
+			}
+		}
+	}
+}
+
+func TestFirewallBootOrderingGraphIsAcyclicAndDoesNotPullWireGuard(t *testing.T) {
+	if !strings.Contains(systemdFirewallService, "Before=syswarden-core.service\n") ||
+		!strings.Contains(systemdCoreService, "After=network.target rsyslog.service syswarden-firewall.service\n") ||
+		!strings.Contains(systemdFirewallWireGuardOrderingDropIn, "After=wg-quick@wg-syswarden.service\n") {
+		t.Fatal("systemd service graph does not preserve WireGuard to firewall to core ordering")
+	}
+	if strings.Contains(systemdFirewallService+systemdFirewallWireGuardOrderingDropIn, "Before=wg-quick@wg-syswarden.service") ||
+		strings.Contains(systemdCoreService, "Before=syswarden-firewall.service") {
+		t.Fatal("systemd service graph contains a reverse edge")
+	}
+	if !strings.Contains(openRCFirewallService, "\tbefore syswarden-core\n") ||
+		!strings.Contains(openRCCoreService, "need net rsyslog syswarden-firewall\n") {
+		t.Fatal("OpenRC service graph does not preserve firewall to core ordering")
 	}
 }
 
@@ -501,6 +541,53 @@ func TestHistoricalV4028ServiceAnchors(t *testing.T) {
 				t.Fatalf("historical content SHA-256 = %s, want %s", got, test.wantSHA256)
 			}
 		})
+	}
+}
+
+func TestCurrentFirewallUnitsRemainByteCompatibleWithV4042(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		content    string
+		wantLength int
+		wantSHA256 string
+	}{
+		{
+			name:       "systemd",
+			content:    systemdFirewallService,
+			wantLength: 350,
+			wantSHA256: "989be4b60c43bba830333ef30949376e57658222a48947194395393794e328c1",
+		},
+		{
+			name:       "openrc",
+			content:    openRCFirewallService,
+			wantLength: 294,
+			wantSHA256: "d8c57c59dae9493523275026acb2a5c599bd4949ff8993add6760e725f89a5ba",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			digest := sha256.Sum256([]byte(test.content))
+			if len([]byte(test.content)) != test.wantLength || fmt.Sprintf("%x", digest) != test.wantSHA256 {
+				t.Fatalf("%s firewall unit is not byte-compatible with v4.04.2", test.name)
+			}
+		})
+	}
+}
+
+func TestSystemdWireGuardOrderingSourceMatchesCompiledContract(t *testing.T) {
+	sourcePath := filepath.Join(
+		"..", "..", "..", "..", "init", "systemd",
+		"syswarden-firewall.service.d", "10-syswarden-wireguard-ordering.conf",
+	)
+	content, err := os.ReadFile(sourcePath) // #nosec G304 -- repository-owned fixed test fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != systemdFirewallWireGuardOrderingDropIn {
+		t.Fatalf("systemd ordering source differs from the compiled contract: %q", content)
+	}
+	info, err := os.Lstat(sourcePath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0644 {
+		t.Fatalf("systemd ordering source metadata is not exact: %v, %v", info, err)
 	}
 }
 
@@ -721,6 +808,65 @@ func TestPublishOpenRCServicesMigratesExactV4028UnitsAtomicallyAndIdempotently(t
 		t.Fatalf("idempotent OpenRC publication replaced the current firewall unit: %v", err)
 	}
 	assertNoServiceMigrationArtifacts(t, unitDirectory)
+}
+
+func TestPublishServicesPreservesExactV4042FirewallUnits(t *testing.T) {
+	t.Run("systemd", func(t *testing.T) {
+		unitDirectory, wantsDirectory := withSystemdPublicationTestPaths(t)
+		mustWriteFile(t, filepath.Join(unitDirectory, "syswarden-core.service"), systemdCoreService)
+		firewallPath := filepath.Join(unitDirectory, "syswarden-firewall.service")
+		mustWriteFile(t, firewallPath, systemdFirewallService)
+		before, err := os.Lstat(firewallPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustMkdirAll(t, wantsDirectory)
+		if err := os.Symlink("../syswarden-core.service", filepath.Join(wantsDirectory, "syswarden-core.service")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../syswarden-firewall.service", filepath.Join(wantsDirectory, "syswarden-firewall.service")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := publishSystemdServices(); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.Lstat(firewallPath)
+		if err != nil || !os.SameFile(before, after) {
+			t.Fatalf("exact v4.04.2 systemd firewall unit was replaced: %v", err)
+		}
+		assertNoServiceMigrationArtifacts(t, unitDirectory)
+	})
+
+	t.Run("openrc", func(t *testing.T) {
+		unitDirectory, runlevelDirectory := withOpenRCPublicationTestPaths(t)
+		corePath := filepath.Join(unitDirectory, "syswarden-core")
+		firewallPath := filepath.Join(unitDirectory, "syswarden-firewall")
+		mustWriteFile(t, corePath, openRCCoreService)
+		mustWriteFile(t, firewallPath, openRCFirewallService)
+		mustChmodTestPath(t, corePath, 0755)
+		mustChmodTestPath(t, firewallPath, 0755)
+		before, err := os.Lstat(firewallPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustMkdirAll(t, runlevelDirectory)
+		if err := os.Symlink("/etc/init.d/syswarden-core", filepath.Join(runlevelDirectory, "syswarden-core")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("/etc/init.d/syswarden-firewall", filepath.Join(runlevelDirectory, "syswarden-firewall")); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := publishOpenRCServices(); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.Lstat(firewallPath)
+		if err != nil || !os.SameFile(before, after) {
+			t.Fatalf("exact v4.04.2 OpenRC firewall unit was replaced: %v", err)
+		}
+		assertNoServiceMigrationArtifacts(t, unitDirectory)
+	})
 }
 
 func TestPublishMigratableServiceFileRefusesNonExactHistoricalState(t *testing.T) {

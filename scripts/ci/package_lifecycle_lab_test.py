@@ -81,6 +81,7 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
             package_lifecycle_lab.BASH_COMPLETION_PATH: "644",
             package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH: "644",
             package_lifecycle_lab.PROJECT_LICENSE_PATH: "644",
+            package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH: "644",
         }
         file_digests = {
             package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH: (
@@ -88,6 +89,9 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
             ),
             package_lifecycle_lab.PROJECT_LICENSE_PATH: (
                 package_lifecycle_lab.PROJECT_LICENSE_SHA256
+            ),
+            package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH: (
+                package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_SHA256
             ),
         }
         link_targets = {
@@ -106,17 +110,30 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
             ),
         }
 
-        def render(version: str) -> tuple[list[str], list[str]]:
+        def render(version: str, role: str) -> tuple[list[str], list[str]]:
             licensed = (
                 package_lifecycle_lab.parse_syswarden_version(version)
                 >= package_lifecycle_lab.parse_syswarden_version("4.04.0")
             )
+            systemd_ordering = (
+                package_lifecycle_lab._uses_systemd_wireguard_ordering_payload(
+                    family, role, version
+                )
+            )
             if family == "deb":
-                paths = sorted(
+                path_set = set(
                     package_lifecycle_lab.LICENSED_DEB_PACKAGE_PATHS
                     if licensed
                     else package_lifecycle_lab.DEB_PACKAGE_PATHS
                 )
+                if systemd_ordering:
+                    path_set.update(
+                        package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DEB_DIRECTORIES
+                    )
+                    path_set.add(
+                        package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH
+                    )
+                paths = sorted(path_set)
             elif family == "apk":
                 paths = sorted(
                     package_lifecycle_lab.LICENSED_APK_PACKAGE_PATHS
@@ -124,7 +141,7 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
                     else package_lifecycle_lab.APK_PACKAGE_PATHS
                 )
             else:
-                paths = sorted(
+                path_set = (
                     set(
                         package_lifecycle_lab.LICENSED_PACKAGE_PAYLOAD_PATHS
                         if licensed
@@ -144,6 +161,11 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
                         "/usr/lib/.build-id/33/" + "3" * 38,
                     }
                 )
+                if systemd_ordering:
+                    path_set.add(
+                        package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH
+                    )
+                paths = sorted(path_set)
             filesystem: list[str] = []
             for path in paths:
                 if path in file_modes:
@@ -166,8 +188,8 @@ class _LegacyFakePodmanRunner(package_lifecycle_lab.CommandRunner):
             return paths, filesystem
 
         snapshots = {
-            "previous": render(previous_version),
-            "candidate": render(candidate_version),
+            "previous": render(previous_version, "previous"),
+            "candidate": render(candidate_version, "candidate"),
         }
         inventory_root = result_root / "inventories"
         inventory_root.mkdir()
@@ -1051,6 +1073,136 @@ class PackageLifecycleLabTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+    @staticmethod
+    def exact_v404x_inventory(
+        family: str,
+        version: str,
+        role: str,
+    ) -> tuple[list[str], list[dict[str, object]]]:
+        licensed = (
+            package_lifecycle_lab.parse_syswarden_version(version)
+            >= package_lifecycle_lab.parse_syswarden_version("4.04.0")
+        )
+        systemd_ordering = (
+            package_lifecycle_lab._uses_systemd_wireguard_ordering_payload(
+                family, role, version
+            )
+        )
+        if family == "deb":
+            path_set = set(
+                package_lifecycle_lab.LICENSED_DEB_PACKAGE_PATHS
+                if licensed
+                else package_lifecycle_lab.DEB_PACKAGE_PATHS
+            )
+            if systemd_ordering:
+                path_set.update(
+                    package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DEB_DIRECTORIES
+                )
+                path_set.add(
+                    package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH
+                )
+        elif family == "apk":
+            path_set = set(
+                package_lifecycle_lab.LICENSED_APK_PACKAGE_PATHS
+                if licensed
+                else package_lifecycle_lab.APK_PACKAGE_PATHS
+            )
+        elif family == "rpm":
+            path_set = set(
+                package_lifecycle_lab.LICENSED_PACKAGE_PAYLOAD_PATHS
+                if licensed
+                else package_lifecycle_lab.PACKAGE_PAYLOAD_PATHS
+            )
+            if licensed:
+                path_set.add(package_lifecycle_lab.RPM_DOCUMENTATION_ROOT)
+            if systemd_ordering:
+                path_set.add(
+                    package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH
+                )
+            path_set.update(
+                {
+                    "/usr/lib/.build-id",
+                    "/usr/lib/.build-id/11",
+                    "/usr/lib/.build-id/11/" + "1" * 38,
+                    "/usr/lib/.build-id/11/" + "2" * 38,
+                    "/usr/lib/.build-id/33",
+                    "/usr/lib/.build-id/33/" + "3" * 38,
+                }
+            )
+        else:
+            raise AssertionError(f"unsupported fixture family: {family}")
+
+        file_modes = {
+            "/opt/syswarden/bin/syswarden-cli": "750",
+            "/opt/syswarden/bin/syswarden-core": "750",
+            "/opt/syswarden/bin/syswarden-tui": "750",
+            "/opt/syswarden/signatures.json": "640",
+            package_lifecycle_lab.BASH_COMPLETION_PATH: "644",
+            package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH: "644",
+            package_lifecycle_lab.PROJECT_LICENSE_PATH: "644",
+            package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH: "644",
+        }
+        pinned_digests = {
+            package_lifecycle_lab.GEOIP_DATA_LICENSE_PATH: (
+                package_lifecycle_lab.GEOIP_DATA_LICENSE_SHA256
+            ),
+            package_lifecycle_lab.PROJECT_LICENSE_PATH: (
+                package_lifecycle_lab.PROJECT_LICENSE_SHA256
+            ),
+            package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH: (
+                package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_SHA256
+            ),
+        }
+        public_links = {
+            "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
+            "/usr/local/bin/syswarden-tui": "/opt/syswarden/bin/syswarden-tui",
+        }
+        build_links = {
+            "/usr/lib/.build-id/11/" + "1" * 38: (
+                "../../../../opt/syswarden/bin/syswarden-cli"
+            ),
+            "/usr/lib/.build-id/11/" + "2" * 38: (
+                "../../../../opt/syswarden/bin/syswarden-core"
+            ),
+            "/usr/lib/.build-id/33/" + "3" * 38: (
+                "../../../../opt/syswarden/bin/syswarden-tui"
+            ),
+        }
+        manager_paths = sorted(path_set)
+        filesystem: list[dict[str, object]] = []
+        for path in manager_paths:
+            if path in file_modes:
+                entry_type = "file"
+                mode = file_modes[path]
+                value = pinned_digests.get(path, "a" * 64)
+            elif path in public_links:
+                entry_type = "symlink"
+                mode = "777"
+                value = public_links[path]
+            elif path == "/usr/share/doc/syswarden/changelog.gz":
+                entry_type = "file"
+                mode = "644"
+                value = "b" * 64
+            elif path in build_links:
+                entry_type = "symlink"
+                mode = "777"
+                value = build_links[path]
+            else:
+                entry_type = "directory"
+                mode = "755"
+                value = "-"
+            filesystem.append(
+                {
+                    "path": path,
+                    "type": entry_type,
+                    "mode": mode,
+                    "uid": 0,
+                    "gid": 0,
+                    "value": value,
+                }
+            )
+        return manager_paths, filesystem
 
     def test_discovers_and_verifies_each_package_family(self) -> None:
         candidate, previous, pairs = package_lifecycle_lab.validate_inputs(
@@ -4318,6 +4470,550 @@ probe
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_v4043_systemd_ordering_inventory_is_version_and_family_bound(
+        self,
+    ) -> None:
+        dropin = package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH
+
+        def shell_inventory(
+            filesystem: list[dict[str, object]],
+        ) -> list[str]:
+            return [
+                "\t".join(
+                    str(entry[key])
+                    for key in ("path", "type", "mode", "uid", "gid", "value")
+                )
+                for entry in filesystem
+            ]
+
+        for family in ("deb", "rpm", "apk"):
+            with self.subTest(family=family, version="4.04.3"):
+                paths, filesystem = self.exact_v404x_inventory(
+                    family, "4.04.3", "candidate"
+                )
+                package_lifecycle_lab._validate_manager_paths(
+                    family,
+                    paths,
+                    role="candidate",
+                    version="4.04.3",
+                    candidate_version="4.04.3",
+                )
+                package_lifecycle_lab.validate_inventory_snapshot(
+                    family,
+                    paths,
+                    filesystem,
+                    role="candidate",
+                    version="4.04.3",
+                    candidate_version="4.04.3",
+                )
+                embedded = self.run_embedded_inventory_contract(
+                    family,
+                    paths,
+                    shell_inventory(filesystem),
+                    role="candidate",
+                    version="4.04.3",
+                    candidate_version="4.04.3",
+                )
+                self.assertEqual(embedded.returncode, 0, embedded.stderr)
+
+                if family in {"deb", "rpm"}:
+                    missing_paths = [path for path in paths if path != dropin]
+                    missing_filesystem = [
+                        dict(entry)
+                        for entry in filesystem
+                        if entry["path"] != dropin
+                    ]
+                    with self.assertRaises(
+                        package_lifecycle_lab.LifecycleLabError
+                    ):
+                        package_lifecycle_lab._validate_manager_paths(
+                            family,
+                            missing_paths,
+                            role="candidate",
+                            version="4.04.3",
+                            candidate_version="4.04.3",
+                        )
+                    self.assertNotEqual(
+                        self.run_embedded_inventory_contract(
+                            family,
+                            missing_paths,
+                            shell_inventory(missing_filesystem),
+                            role="candidate",
+                            version="4.04.3",
+                            candidate_version="4.04.3",
+                        ).returncode,
+                        0,
+                    )
+
+                    corrupt_filesystem = [dict(entry) for entry in filesystem]
+                    next(
+                        entry
+                        for entry in corrupt_filesystem
+                        if entry["path"] == dropin
+                    )["value"] = "f" * 64
+                    with self.assertRaises(
+                        package_lifecycle_lab.LifecycleLabError
+                    ):
+                        package_lifecycle_lab.validate_inventory_snapshot(
+                            family,
+                            paths,
+                            corrupt_filesystem,
+                            role="candidate",
+                            version="4.04.3",
+                            candidate_version="4.04.3",
+                        )
+                    self.assertNotEqual(
+                        self.run_embedded_inventory_contract(
+                            family,
+                            paths,
+                            shell_inventory(corrupt_filesystem),
+                            role="candidate",
+                            version="4.04.3",
+                            candidate_version="4.04.3",
+                        ).returncode,
+                        0,
+                    )
+                else:
+                    extra_paths = sorted((*paths, dropin))
+                    extra_filesystem = sorted(
+                        (
+                            *filesystem,
+                            {
+                                "path": dropin,
+                                "type": "file",
+                                "mode": "644",
+                                "uid": 0,
+                                "gid": 0,
+                                "value": (
+                                    package_lifecycle_lab.
+                                    SYSTEMD_WIREGUARD_ORDERING_DROPIN_SHA256
+                                ),
+                            },
+                        ),
+                        key=lambda entry: str(entry["path"]),
+                    )
+                    with self.assertRaises(
+                        package_lifecycle_lab.LifecycleLabError
+                    ):
+                        package_lifecycle_lab._validate_manager_paths(
+                            family,
+                            extra_paths,
+                            role="candidate",
+                            version="4.04.3",
+                            candidate_version="4.04.3",
+                        )
+                    self.assertNotEqual(
+                        self.run_embedded_inventory_contract(
+                            family,
+                            extra_paths,
+                            shell_inventory(extra_filesystem),
+                            role="candidate",
+                            version="4.04.3",
+                            candidate_version="4.04.3",
+                        ).returncode,
+                        0,
+                    )
+
+        for family in ("deb", "rpm"):
+            with self.subTest(family=family, rollback="4.04.2"):
+                paths, filesystem = self.exact_v404x_inventory(
+                    family, "4.04.2", "previous"
+                )
+                package_lifecycle_lab.validate_inventory_snapshot(
+                    family,
+                    paths,
+                    filesystem,
+                    role="previous",
+                    version="4.04.2",
+                    candidate_version="4.04.3",
+                )
+                embedded = self.run_embedded_inventory_contract(
+                    family,
+                    paths,
+                    shell_inventory(filesystem),
+                    role="previous",
+                    version="4.04.2",
+                    candidate_version="4.04.3",
+                )
+                self.assertEqual(embedded.returncode, 0, embedded.stderr)
+
+                residual_paths = sorted((*paths, dropin))
+                with self.assertRaises(package_lifecycle_lab.LifecycleLabError):
+                    package_lifecycle_lab._validate_manager_paths(
+                        family,
+                        residual_paths,
+                        role="previous",
+                        version="4.04.2",
+                        candidate_version="4.04.3",
+                    )
+                self.assertNotEqual(
+                    self.run_embedded_inventory_contract(
+                        family,
+                        residual_paths,
+                        role="previous",
+                        version="4.04.2",
+                        candidate_version="4.04.3",
+                    ).returncode,
+                    0,
+                )
+
+    def test_systemd_ordering_runtime_attestation_is_version_bound(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        version_start = source.index(
+            "version_uses_systemd_wireguard_ordering_payload() {"
+        )
+        version_end = source.index(
+            "\npackage_uses_systemd_wireguard_ordering_payload() {",
+            version_start,
+        )
+        token_start = source.index("systemd_property_token_count() {")
+        attestation_start = source.index(
+            "attest_systemd_wireguard_ordering_contract() {", token_start
+        )
+        attestation_end = source.index(
+            "\nprobe_forward_only_apk_payload() {", attestation_start
+        )
+        dropin = self.root / "10-syswarden-wireguard-ordering.conf"
+        original_dropin = (
+            package_lifecycle_lab.SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH
+        )
+        functions = (
+            source[version_start:version_end]
+            + "\n"
+            + source[token_start:attestation_end].replace(
+                original_dropin, str(dropin)
+            )
+        )
+        shell = self.root / "attest-systemd-ordering.sh"
+        shell.write_text(
+            """
+COMMAND_LOG="$1"
+SYSTEMCTL_CALLS="$2"
+PACKAGE_FAMILY="$3"
+INSTALLED_VERSION="$4"
+TEST_DROPINS="$5"
+TEST_AFTER="$6"
+TEST_SYSTEMCTL_MODE="$7"
+PREFIX=test
+hash_file() {
+    sha256sum "$1" | awk '{print $1}'
+}
+stat() {
+    if [ "$1" = -c ] && [ "$2" = '%f:%u:%g:%h:%s' ]; then
+        command stat -c '%f:0:0:%h:%s' "$3"
+    elif [ "$1" = -c ] && \
+         [ "$2" = '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' ]; then
+        command stat -c '%d:%i:%f:0:0:%h:%s:%Y:%Z' "$3"
+    else
+        command stat "$@"
+    fi
+}
+record() {
+    printf '%s\\t%s\\t%s\\n' "$1" "$2" "$3" >> "${COMMAND_LOG}"
+}
+systemctl() {
+    printf '%s\\n' "$*" >> "${SYSTEMCTL_CALLS}"
+    [ "${TEST_SYSTEMCTL_MODE}" = ok ] || return 91
+    case "$*" in
+        'show syswarden-firewall.service -p DropInPaths --value')
+            printf '%s\\n' "${TEST_DROPINS}"
+            ;;
+        'show syswarden-firewall.service -p After --value')
+            printf '%s\\n' "${TEST_AFTER}"
+            ;;
+        *) return 92 ;;
+    esac
+}
+"""
+            + functions
+            + "\nattest_systemd_wireguard_ordering_contract phase "
+            '"${INSTALLED_VERSION}"\n',
+            encoding="utf-8",
+        )
+        shell.chmod(0o700)
+        command_log = self.root / "systemd-ordering-events.tsv"
+        systemctl_calls = self.root / "systemd-ordering-systemctl.log"
+
+        def run_attestation(
+            family: str,
+            version: str,
+            *,
+            artifact: str,
+            dropins: str,
+            after: str,
+            systemctl_mode: str = "ok",
+        ) -> subprocess.CompletedProcess[str]:
+            dropin.unlink(missing_ok=True)
+            if artifact != "absent":
+                content = (
+                    "[Unit]\nAfter=wg-quick@wg-syswarden.service\n"
+                    if artifact in {"exact", "bad-mode"}
+                    else "[Unit]\nAfter=network.target\n"
+                )
+                dropin.write_text(content, encoding="ascii")
+                dropin.chmod(0o600 if artifact == "bad-mode" else 0o644)
+            command_log.write_text("", encoding="utf-8")
+            systemctl_calls.write_text("", encoding="utf-8")
+            return subprocess.run(
+                (
+                    shutil.which("dash") or "/bin/sh",
+                    str(shell),
+                    str(command_log),
+                    str(systemctl_calls),
+                    family,
+                    version,
+                    dropins,
+                    after,
+                    systemctl_mode,
+                ),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        exact_dropins = f"/usr/lib/systemd/system/service.d/base.conf {dropin}"
+        exact_after = "network.target wg-quick@wg-syswarden.service"
+        for family in ("deb", "rpm"):
+            with self.subTest(family=family, candidate="exact"):
+                result = run_attestation(
+                    family,
+                    "4.04.3",
+                    artifact="exact",
+                    dropins=exact_dropins,
+                    after=exact_after,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    "pass\ttest.phase.systemd_ordering\t",
+                    command_log.read_text(encoding="utf-8"),
+                )
+
+            mutations = {
+                "missing-file": ("absent", exact_dropins, exact_after, "ok"),
+                "wrong-content": ("wrong", exact_dropins, exact_after, "ok"),
+                "wrong-mode": ("bad-mode", exact_dropins, exact_after, "ok"),
+                "duplicate-dropin": (
+                    "exact",
+                    f"{dropin} {dropin}",
+                    exact_after,
+                    "ok",
+                ),
+                "missing-after": ("exact", exact_dropins, "network.target", "ok"),
+                "systemctl-failure": (
+                    "exact",
+                    exact_dropins,
+                    exact_after,
+                    "fail",
+                ),
+            }
+            for mutation, arguments in mutations.items():
+                with self.subTest(family=family, mutation=mutation):
+                    result = run_attestation(
+                        family,
+                        "4.04.3",
+                        artifact=arguments[0],
+                        dropins=arguments[1],
+                        after=arguments[2],
+                        systemctl_mode=arguments[3],
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(
+                        "fail\ttest.phase.systemd_ordering\t",
+                        command_log.read_text(encoding="utf-8"),
+                    )
+
+            with self.subTest(family=family, rollback="clean"):
+                result = run_attestation(
+                    family,
+                    "4.04.2",
+                    artifact="absent",
+                    dropins="/usr/lib/systemd/system/service.d/base.conf",
+                    after="network.target",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+            for residual, artifact, dropins, after in (
+                ("file", "exact", "", "network.target"),
+                (
+                    "dropin-property",
+                    "absent",
+                    str(dropin),
+                    "network.target",
+                ),
+                (
+                    "after-property",
+                    "absent",
+                    "",
+                    "wg-quick@wg-syswarden.service",
+                ),
+            ):
+                with self.subTest(family=family, rollback_residual=residual):
+                    result = run_attestation(
+                        family,
+                        "4.04.2",
+                        artifact=artifact,
+                        dropins=dropins,
+                        after=after,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+
+        with self.subTest(family="apk", state="absent"):
+            result = run_attestation(
+                "apk",
+                "4.04.3",
+                artifact="absent",
+                dropins="ignored",
+                after="ignored",
+                systemctl_mode="fail",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(systemctl_calls.read_text(encoding="utf-8"), "")
+        with self.subTest(family="apk", state="unexpected-file"):
+            result = run_attestation(
+                "apk",
+                "4.04.3",
+                artifact="exact",
+                dropins="ignored",
+                after="ignored",
+                systemctl_mode="fail",
+            )
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(systemctl_calls.read_text(encoding="utf-8"), "")
+
+    def test_seeded_kpi_readiness_is_bounded_and_keeps_core_active(self) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        wait_start = source.index("wait_for_seeded_kpi_telemetry() {")
+        wait_end = source.index(
+            "\nsanitize_historical_rollback_token() {", wait_start
+        )
+        shell = self.root / "wait-for-seeded-kpi.sh"
+        shell.write_text(
+            """
+COMMAND_LOG="$1"
+ATTEST_COUNT="$2"
+SCHEMA_COUNT="$3"
+SLEEP_COUNT="$4"
+READY_AFTER="$5"
+FAIL_ATTEST_AT="$6"
+CHANGE_IDENTITY_AT="$7"
+increment_counter() {
+    counter_file="$1"
+    IFS= read -r counter_value < "${counter_file}" || return 1
+    counter_value=$((counter_value + 1))
+    printf '%s\\n' "${counter_value}" > "${counter_file}"
+    printf '%s\\n' "${counter_value}"
+}
+live_telemetry_contract_for_version() {
+    case "$1" in
+        legacy) printf '%s\\n' legacy ;;
+        kpi) printf '%s\\n' kpi-v1 ;;
+        *) return 1 ;;
+    esac
+}
+attest_installed_core_process() {
+    attest_number="$(increment_counter "${ATTEST_COUNT}")" || return 1
+    if [ "${FAIL_ATTEST_AT}" -gt 0 ] && \
+       [ "${attest_number}" -eq "${FAIL_ATTEST_AT}" ]; then
+        return 1
+    fi
+    core_runtime_pid=417
+    core_runtime_path=/opt/syswarden/bin/syswarden-core
+    core_runtime_identity=runtime-stable
+    if [ "${CHANGE_IDENTITY_AT}" -gt 0 ] && \
+       [ "${attest_number}" -ge "${CHANGE_IDENTITY_AT}" ]; then
+        core_runtime_identity=runtime-changed
+    fi
+    core_runtime_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    core_installed_identity=installed-stable
+    core_installed_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+}
+live_telemetry_schema_valid() {
+    schema_number="$(increment_counter "${SCHEMA_COUNT}")" || return 1
+    [ "${READY_AFTER}" -gt 0 ] && \
+        [ "${schema_number}" -ge "${READY_AFTER}" ]
+}
+sleep() {
+    increment_counter "${SLEEP_COUNT}" >/dev/null
+}
+"""
+            + source[wait_start:wait_end]
+            + '\nwait_for_seeded_kpi_telemetry "$8"\n',
+            encoding="utf-8",
+        )
+        shell.chmod(0o700)
+        command_log = self.root / "telemetry-readiness.log"
+        attest_count = self.root / "telemetry-attest.count"
+        schema_count = self.root / "telemetry-schema.count"
+        sleep_count = self.root / "telemetry-sleep.count"
+
+        def run_wait(
+            contract: str,
+            *,
+            ready_after: int,
+            fail_attest_at: int = 0,
+            change_identity_at: int = 0,
+        ) -> tuple[subprocess.CompletedProcess[str], tuple[int, int, int], str]:
+            for path in (attest_count, schema_count, sleep_count):
+                path.write_text("0\n", encoding="ascii")
+            command_log.write_text("", encoding="utf-8")
+            result = subprocess.run(
+                (
+                    shutil.which("dash") or "/bin/sh",
+                    str(shell),
+                    str(command_log),
+                    str(attest_count),
+                    str(schema_count),
+                    str(sleep_count),
+                    str(ready_after),
+                    str(fail_attest_at),
+                    str(change_identity_at),
+                    contract,
+                ),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            counters = tuple(
+                int(path.read_text(encoding="ascii").strip())
+                for path in (attest_count, schema_count, sleep_count)
+            )
+            return result, counters, command_log.read_text(encoding="utf-8")
+
+        result, counters, log = run_wait("legacy", ready_after=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(counters, (0, 0, 0))
+        self.assertEqual(log, "")
+
+        result, counters, log = run_wait("kpi", ready_after=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(counters, (5, 3, 2))
+        self.assertIn("contract=kpi-v1 attempts=3 core_pid=417", log)
+
+        result, counters, log = run_wait("kpi", ready_after=0)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(counters, (46, 45, 44))
+        self.assertIn("failure=kpi-v1-timeout attempts=45", log)
+
+        result, counters, log = run_wait(
+            "kpi", ready_after=0, fail_attest_at=3
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(counters, (3, 1, 1))
+        self.assertIn("failure=core-not-active-during-wait", log)
+
+        result, counters, log = run_wait(
+            "kpi", ready_after=2, fail_attest_at=4
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(counters, (4, 2, 1))
+        self.assertIn("failure=core-not-active-after-publication", log)
+
+        result, counters, log = run_wait(
+            "kpi", ready_after=0, change_identity_at=3
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(counters, (3, 1, 1))
+        self.assertIn("failure=core-identity-changed-during-wait", log)
+
     def test_candidate_native_license_metadata_is_versioned_and_exact(self) -> None:
         check = "upgrade-rollback.metadata.candidate.license"
         baseline = package_lifecycle_lab.expected_event_checks(
@@ -4520,6 +5216,64 @@ probe
         self.assertIn("'[network]' 'interfaces = \"lo\"'", token_writer)
         self.assertNotIn('interfaces = "eth0"', token_writer)
 
+    def test_seed_state_write_failure_cannot_accept_stale_kpi_telemetry(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        seed_functions = source[
+            source.index("write_seeded_operator_token() {") : source.index(
+                "\nseed_deb_removal_log() {"
+            )
+        ]
+        test_root = self.root / "seed-failure-root"
+        stale_telemetry = test_root / "var/lib/syswarden/ui/data.json"
+        stale_telemetry.parent.mkdir(parents=True)
+        stale_telemetry.write_text(
+            '{"schema":"kpi-v1","stale":true}\n', encoding="ascii"
+        )
+        seed_functions = seed_functions.replace(
+            "/etc/syswarden", '${TEST_ROOT}/etc/syswarden'
+        ).replace(
+            "/var/lib/syswarden", '${TEST_ROOT}/var/lib/syswarden'
+        )
+        shell = self.root / "seed-state-fail-closed.sh"
+        shell.write_text(
+            """
+TEST_ROOT="$1"
+OPERATOR_STATE_FILE="${TEST_ROOT}/operator-state"
+PACKAGE_FAMILY=deb
+SCENARIO=upgrade-rollback
+hash_file() {
+    sha256sum "$1" | awk '{print $1}'
+}
+printf() {
+    case "$*" in
+        *github_stars*) return 73 ;;
+    esac
+    command printf "$@"
+}
+"""
+            + seed_functions
+            + "\nseed_state\n",
+            encoding="utf-8",
+        )
+        shell.chmod(0o700)
+        result = subprocess.run(
+            (shutil.which("dash") or "/bin/sh", str(shell), str(test_root)),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(
+            test_root.joinpath("etc/syswarden/tls/operator.pem").exists()
+        )
+        self.assertFalse(test_root.joinpath("operator-state").exists())
+        self.assertEqual(
+            source.count("seed_state || return"),
+            3,
+        )
+
     def test_networkless_preconfiguration_precedes_previous_install_and_full_seed_follows_probe(
         self,
     ) -> None:
@@ -4544,6 +5298,9 @@ probe
             initial.index('probe_payload previous previous "${PREVIOUS_VERSION}"'),
         )
         seed = initial.index("seed_state")
+        readiness = initial.index(
+            'wait_for_seeded_kpi_telemetry "${PREVIOUS_VERSION}" || return'
+        )
         preserved = initial.index("assert_all_state_preserved previous")
         candidate = initial.index(
             'run_install_step upgrade.candidate "${CANDIDATE_PACKAGE}"'
@@ -4554,7 +5311,8 @@ probe
         self.assertTrue(
             all(postinstall_attestation < probe < seed for probe in probes)
         )
-        self.assertLess(seed, preserved)
+        self.assertLess(seed, readiness)
+        self.assertLess(readiness, preserved)
         self.assertLess(preserved, candidate)
 
     def test_forward_only_apk_downgrade_flag_is_exactly_bounded(self) -> None:
@@ -4906,6 +5664,7 @@ probe
             "probe_forward_only_apk_payload() { :; }\n"
             "probe_payload() { :; }\n"
             "assert_all_state_preserved() { :; }\n"
+            "wait_for_seeded_kpi_telemetry() { :; }\n"
             + functions
             + "\nscenario_upgrade_rollback_initial\n"
             + "scenario_upgrade_rollback_restart_two\n",
@@ -4966,6 +5725,7 @@ probe
             'run_install_step() { printf "%s\\n" "$1" >> "${CALLS}"; }\n'
             "probe_payload() { :; }\n"
             "seed_state() { :; }\n"
+            "wait_for_seeded_kpi_telemetry() { :; }\n"
             "assert_all_state_preserved() { :; }\n"
             "seed_legacy_webtui_upgrade_state() {\n"
             '    if [ "${RECORD_SEED_FAILURE:-0}" = "1" ]; then\n'
@@ -8136,6 +8896,10 @@ probe
                 ("upgrade-rollback", "4.03.3", "4.04.2", label, "..")
                 for label in upgrade_labels
             ),
+            *(
+                ("upgrade-rollback", "4.04.2", "4.04.3", label, "..")
+                for label in upgrade_labels
+            ),
             ("remove", "4.03.2", "4.03.3", "fresh", ".."),
             (
                 "remove",
@@ -9267,7 +10031,10 @@ prepare_package_transition
             seed.index("STATE_TOKEN_HASH="),
         )
         self.assertLess(
-            source.index("seed_state\n", source.index("scenario_upgrade_rollback_initial() {")),
+            source.index(
+                "seed_state || return",
+                source.index("scenario_upgrade_rollback_initial() {"),
+            ),
             source.index("seed_legacy_saas_monitor_state || return"),
         )
         for scenario_name in ("scenario_remove() {", "scenario_purge() {"):
@@ -9342,11 +10109,20 @@ prepare_package_transition
             line.strip()
             for line in seed.splitlines()
             if line.strip().endswith(
-                "> /var/lib/syswarden/ui/lifecycle-operator.json"
+                "> /var/lib/syswarden/ui/lifecycle-operator.json || return 1"
             )
         )
         sentinel_tokens = shlex.split(sentinel_line)
-        self.assertEqual(sentinel_tokens[-2:], [">", "/var/lib/syswarden/ui/lifecycle-operator.json"])
+        self.assertEqual(
+            sentinel_tokens[-5:],
+            [
+                ">",
+                "/var/lib/syswarden/ui/lifecycle-operator.json",
+                "||",
+                "return",
+                "1",
+            ],
+        )
         sentinel_payload = sentinel_tokens[2].encode("utf-8") + b"\n"
         self.assertEqual(
             sentinel_payload,
@@ -9360,7 +10136,9 @@ prepare_package_transition
         telemetry_line = next(
             line.strip()
             for line in seed.splitlines()
-            if line.strip().endswith("> /var/lib/syswarden/ui/data.json")
+            if line.strip().endswith(
+                "> /var/lib/syswarden/ui/data.json || return 1"
+            )
         )
         telemetry_tokens = shlex.split(telemetry_line)
         telemetry = json.loads(telemetry_tokens[2])
@@ -9813,7 +10591,8 @@ assert_all_state_preserved "$1"
         self.assertIn("if v4028_to_v4032_transition_selected; then", contract)
         self.assertIn(
             "elif v4032_to_v4033_transition_selected || \\\n"
-            "         v4033_to_v4042_transition_selected; then",
+            "         v4033_to_v4042_transition_selected || \\\n"
+            "         v4042_to_v4043_transition_selected; then",
             contract,
         )
         self.assertIn("historical-webtui-credential", contract)
@@ -9883,10 +10662,22 @@ assert_all_state_preserved "$1"
             )
             for family in ("deb", "rpm")
         )
+        patch = (
+            (
+                "upgrade-rollback",
+                "4.04.2",
+                "4.04.3",
+                family,
+                "rollback",
+                "byte-exact",
+            )
+            for family in ("deb", "rpm")
+        )
         for scenario, previous, candidate, family, label, expected in (
             *accepted,
             *current,
             *minor,
+            *patch,
         ):
             with self.subTest(
                 scenario=scenario,
@@ -10199,7 +10990,8 @@ assert_preserved rollback token "$1" "$2" 640
         )
         self.assertIn(
             "if v4032_to_v4033_upgrade_selected || \\\n"
-            "           v4033_to_v4042_upgrade_selected; then\n"
+            "           v4033_to_v4042_upgrade_selected || \\\n"
+            "           v4042_to_v4043_upgrade_selected; then\n"
             "            attest_previous_webtui_retirement || \\\n"
             "                mark_postinstall_failure previous-webtui-retirement\n"
             "        else",
@@ -10441,6 +11233,92 @@ v4033_to_v4042_upgrade_selected
             with self.subTest(bound=label):
                 self.assertFalse(selected(overrides))
 
+    def test_v4042_to_v4043_previous_webtui_absence_is_exact_and_fail_closed(
+        self,
+    ) -> None:
+        source = package_lifecycle_lab.LIFECYCLE_SCRIPT
+        transition_start = source.index(
+            "v4042_to_v4043_transition_selected() {"
+        )
+        transition_end = source.index(
+            "\n}\n\nexpected_systemd_enablement_prefix() {",
+            transition_start,
+        ) + 2
+        transition = source[transition_start:transition_end]
+        selector_start = source.index("v4042_to_v4043_upgrade_selected() {")
+        selector_end = source.index(
+            "\n}\n\nattest_previous_webtui_retirement() {",
+            selector_start,
+        ) + 2
+        selector = source[selector_start:selector_end]
+        quiesce_start = source.index("quiesce_previous_webtui_runtime() {")
+        quiesce_end = source.index(
+            "\n}\n\nlifecycle_seed_hex_prefix() {", quiesce_start
+        )
+        quiesce = source[quiesce_start:quiesce_end]
+
+        self.assertIn(
+            '[ "${SCENARIO}" = upgrade-rollback ] && \\\n'
+            '        [ "${EXPECTED_PREVIOUS_VERSION}" = 4.04.2 ] && \\\n'
+            '        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.04.3 ]',
+            transition,
+        )
+        self.assertIn(
+            "v4042_to_v4043_upgrade_selected() {\n"
+            "    v4042_to_v4043_transition_selected && \\\n"
+            '        [ "$(installed_version 2>/dev/null || true)" = 4.04.2 ]\n'
+            "}",
+            selector,
+        )
+        self.assertIn(
+            "if v4042_to_v4043_upgrade_selected; then\n"
+            "        attest_v4042_previous_webtui_retirement || return 1\n"
+            "        return 0\n"
+            "    fi",
+            quiesce,
+        )
+
+        harness = (
+            "#!/bin/sh\nset -u\n"
+            + transition
+            + "\n"
+            + selector
+            + r'''
+installed_version() {
+    printf '%s\n' "${TEST_INSTALLED_VERSION}"
+}
+v4042_to_v4043_upgrade_selected
+'''
+        )
+
+        def selected(overrides: dict[str, str] | None = None) -> bool:
+            environment = {
+                **os.environ,
+                "SCENARIO": "upgrade-rollback",
+                "EXPECTED_PREVIOUS_VERSION": "4.04.2",
+                "EXPECTED_CANDIDATE_VERSION": "4.04.3",
+                "TEST_INSTALLED_VERSION": "4.04.2",
+            }
+            environment.update(overrides or {})
+            result = subprocess.run(
+                [shutil.which("dash") or "/bin/sh", "-c", harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            return result.returncode == 0
+
+        self.assertTrue(selected())
+        for label, overrides in (
+            ("scenario", {"SCENARIO": "remove"}),
+            ("previous", {"EXPECTED_PREVIOUS_VERSION": "4.04.1"}),
+            ("candidate", {"EXPECTED_CANDIDATE_VERSION": "4.04.4"}),
+            ("installed", {"TEST_INSTALLED_VERSION": "4.04.1"}),
+        ):
+            with self.subTest(bound=label):
+                self.assertFalse(selected(overrides))
+
     def test_upgrade_seeds_and_proves_exact_browser_retirement_with_port_isolation(self) -> None:
         script = package_lifecycle_lab.LIFECYCLE_SCRIPT
         syntax = subprocess.run(
@@ -10634,7 +11512,8 @@ v4033_to_v4042_upgrade_selected
 
         exact_skip = (
             "if v4032_to_v4033_upgrade_selected || \\\n"
-            "       v4033_to_v4042_upgrade_selected; then\n"
+            "       v4033_to_v4042_upgrade_selected || \\\n"
+            "       v4042_to_v4043_upgrade_selected; then\n"
             "        return 0\n"
             "    fi"
         )
@@ -10737,6 +11616,15 @@ seed_live_legacy_webtui_process
                     installed="4.03.3",
                 )
                 self.assertEqual(current.returncode, 0, current.stderr)
+                self.assertFalse(marker.exists())
+
+                patch = run_case(
+                    family=family,
+                    previous="4.04.2",
+                    candidate="4.04.3",
+                    installed="4.04.2",
+                )
+                self.assertEqual(patch.returncode, 0, patch.stderr)
                 self.assertFalse(marker.exists())
 
         bounds = (

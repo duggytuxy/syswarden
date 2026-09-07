@@ -44,6 +44,7 @@ var wireGuardAbsentOpenRCServiceInspector = inspectAbsentOpenRCWireGuardServiceS
 var wireGuardServiceRollback = restoreConfiguredWireGuardServiceState
 var attestWireGuardServiceDefinition = system.AttestWireGuardServiceDefinition
 var wireGuardReservedNFTCleanup = cleanupWireGuardReservedNFTTable
+var wireGuardStaleNFTCleanup = cleanupAttestedInactiveWireGuardNFTTable
 var wireGuardNFTActivationGuard = acquireWireGuardNFTActivationGuard
 var wireGuardNFTActivationPreflight = attestWireGuardNFTActivationState
 var wireGuardNFTExecutablePath = func() (string, error) { return resolveWireGuardExecutable("nft") }
@@ -117,6 +118,7 @@ type wireGuardForwardingTransaction interface {
 	Apply() error
 	Restore() error
 	Close() error
+	OriginalValue() string
 }
 
 type wireGuardNFTCommandRunner interface {
@@ -567,6 +569,13 @@ func (transaction *pinnedWireGuardForwardingTransaction) Close() error {
 	return transaction.file.Close()
 }
 
+func (transaction *pinnedWireGuardForwardingTransaction) OriginalValue() string {
+	if transaction == nil {
+		return ""
+	}
+	return transaction.original
+}
+
 func acquireWireGuardNFTActivationGuard() (func() error, error) {
 	fd, err := syscall.Open(
 		wireGuardNFTLockPath,
@@ -793,6 +802,17 @@ func exactServiceBoolean(output []byte, outputErr error, positive, negative stri
 	}
 }
 
+func exactSystemdServiceActivity(output []byte, outputErr error) (bool, error) {
+	if strings.TrimSpace(string(output)) == "failed" {
+		// A failed unit is inactive, but only the independent interface check
+		// below may prove that no WireGuard runtime remains. Keeping this state
+		// explicit lets a stale PostUp table be repaired and the exact service
+		// restarted or disabled without accepting transitional systemd states.
+		return false, nil
+	}
+	return exactServiceBoolean(output, outputErr, "active", "inactive")
+}
+
 func inspectWireGuardServiceState(
 	alpine bool,
 	output wireGuardServiceOutputRunner,
@@ -830,7 +850,7 @@ func inspectWireGuardServiceState(
 	} else {
 		const unit = "wg-quick@wg-syswarden.service"
 		active, activeErr := output("systemctl", "is-active", unit)
-		value, err := exactServiceBoolean(active, activeErr, "active", "inactive")
+		value, err := exactSystemdServiceActivity(active, activeErr)
 		if err != nil {
 			return wireGuardServiceState{}, fmt.Errorf("inspect systemd WireGuard active state: %w", err)
 		}
@@ -1093,10 +1113,17 @@ func validateExistingWireGuardNFTTable(wire []byte, identity wireguardstate.Serv
 					Comment string `json:"comment"`
 					Handle  uint64 `json:"handle"`
 				}
-				if err := decodeStrictWireGuardNFTObject(raw, &table, "table"); err != nil ||
-					table.Family != "inet" || table.Name != "syswarden_wg" ||
-					table.Comment != "syswarden-wg-v1:"+identity.OwnershipToken || table.Handle == 0 {
-					return 0, fmt.Errorf("existing WireGuard nftables table provenance mismatch")
+				if err := decodeStrictWireGuardNFTObject(raw, &table, "table"); err != nil {
+					return 0, fmt.Errorf("existing WireGuard nftables table object is not exact: %w", err)
+				}
+				if table.Family != "inet" || table.Name != "syswarden_wg" {
+					return 0, fmt.Errorf("existing WireGuard nftables table namespace mismatch")
+				}
+				if table.Comment != wireGuardNFTTableOwnershipCommentPrefix+identity.OwnershipToken {
+					return 0, fmt.Errorf("existing WireGuard nftables table ownership marker does not match the manifest-bound token")
+				}
+				if table.Handle == 0 {
+					return 0, fmt.Errorf("existing WireGuard nftables table has no stable handle")
 				}
 				tableCount++
 				tableHandle = table.Handle
@@ -1179,6 +1206,106 @@ func validateExistingWireGuardNFTTable(wire []byte, identity wireguardstate.Serv
 	return tableHandle, nil
 }
 
+const wireGuardNFTTableOwnershipCommentPrefix = "syswarden-wg-v1:"
+
+// identifyAttestedOrphanedWireGuardNFTTable accepts only the exact tokenized
+// table shape emitted by SysWarden v4.03.2 and later. The random ownership
+// marker is recovered from the table itself only after the complete table has
+// been proven to contain no additional chains, rules, or objects. Historical
+// unmarked tables remain deliberately ineligible for automatic removal.
+func identifyAttestedOrphanedWireGuardNFTTable(wire []byte) (wireguardstate.ServerConfigurationIdentity, uint64, error) {
+	var envelope struct {
+		NFTables []map[string]json.RawMessage `json:"nftables"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("decode orphaned WireGuard nftables table: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table has trailing data")
+	}
+
+	tableCount := 0
+	tableHandle := uint64(0)
+	ownershipToken := ""
+	activeInterface := ""
+	masqueradeRules := 0
+	for _, element := range envelope.NFTables {
+		if len(element) != 1 {
+			return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table contains an ambiguous element")
+		}
+		for kind, raw := range element {
+			switch kind {
+			case "metainfo", "chain":
+				continue
+			case "table":
+				var table struct {
+					Family  string `json:"family"`
+					Name    string `json:"name"`
+					Comment string `json:"comment"`
+					Handle  uint64 `json:"handle"`
+				}
+				if err := decodeStrictWireGuardNFTObject(raw, &table, "orphaned table"); err != nil ||
+					table.Family != "inet" || table.Name != "syswarden_wg" || table.Handle == 0 {
+					return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table identity mismatch")
+				}
+				token, ok := strings.CutPrefix(table.Comment, wireGuardNFTTableOwnershipCommentPrefix)
+				if !ok || !wireGuardOwnershipTokenName.MatchString(token) ||
+					table.Comment != wireGuardNFTTableOwnershipCommentPrefix+token {
+					return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table has no exact v4.03.2+ ownership marker")
+				}
+				tableCount++
+				tableHandle = table.Handle
+				ownershipToken = token
+			case "rule":
+				var rule struct {
+					Family string                       `json:"family"`
+					Table  string                       `json:"table"`
+					Chain  string                       `json:"chain"`
+					Expr   []map[string]json.RawMessage `json:"expr"`
+					Handle uint64                       `json:"handle"`
+				}
+				if err := decodeStrictWireGuardNFTObject(raw, &rule, "orphaned rule"); err != nil ||
+					rule.Family != "inet" || rule.Table != "syswarden_wg" || rule.Handle == 0 {
+					return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables rule identity mismatch")
+				}
+				signature, err := wireGuardNFTExpressionSignature(rule.Expr)
+				if err != nil {
+					return wireguardstate.ServerConfigurationIdentity{}, 0, err
+				}
+				const prefix = "oifname="
+				const suffix = ":masquerade"
+				if rule.Chain == "postrouting" && strings.HasPrefix(signature, prefix) && strings.HasSuffix(signature, suffix) {
+					candidate := strings.TrimSuffix(strings.TrimPrefix(signature, prefix), suffix)
+					if !wireGuardInterfaceName.MatchString(candidate) {
+						return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table has an invalid masquerade interface")
+					}
+					masqueradeRules++
+					activeInterface = candidate
+				}
+			default:
+				return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table contains unexpected %s state", kind)
+			}
+		}
+	}
+	if tableCount != 1 || tableHandle == 0 || masqueradeRules != 1 {
+		return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table lacks one exact ownership identity")
+	}
+	identity := wireguardstate.ServerConfigurationIdentity{
+		OwnershipToken:  ownershipToken,
+		ActiveInterface: activeInterface,
+	}
+	validatedHandle, err := validateExistingWireGuardNFTTable(wire, identity)
+	if err != nil {
+		return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("attest orphaned tokenized WireGuard nftables table: %w", err)
+	}
+	if validatedHandle != tableHandle {
+		return wireguardstate.ServerConfigurationIdentity{}, 0, fmt.Errorf("orphaned WireGuard nftables table handle changed during attestation")
+	}
+	return identity, tableHandle, nil
+}
+
 func reflectStringMap(actual, expected map[string]string) bool {
 	if len(actual) != len(expected) {
 		return false
@@ -1189,6 +1316,10 @@ func reflectStringMap(actual, expected map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func sameWireGuardNFTTableIdentity(left, right wireguardstate.ServerConfigurationIdentity) bool {
+	return left.OwnershipToken == right.OwnershipToken && left.ActiveInterface == right.ActiveInterface
 }
 
 func attestWireGuardNFTActivationState(expectation wireGuardNFTExpectation) error {
@@ -1225,13 +1356,17 @@ func attestWireGuardNFTActivationState(expectation wireGuardNFTExpectation) erro
 func cleanupWireGuardReservedNFTTableWithRunner(
 	runner wireGuardNFTCommandRunner,
 	expected wireguardstate.ServerConfigurationIdentity,
+	reattestExpectedIdentity func() error,
+	reattestInactiveRuntime func() error,
 ) error {
-	actual, err := wireGuardServerIdentityInspector()
-	if err != nil {
-		return fmt.Errorf("verify exact ownership manifest before nftables cleanup: %w", err)
+	if runner == nil || reattestExpectedIdentity == nil || reattestInactiveRuntime == nil {
+		return fmt.Errorf("owned WireGuard nftables cleanup dependencies are incomplete")
 	}
-	if actual != expected {
-		return fmt.Errorf("WireGuard nftables cleanup identity no longer matches its exact ownership manifest")
+	if err := reattestExpectedIdentity(); err != nil {
+		return err
+	}
+	if err := reattestInactiveRuntime(); err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -1243,12 +1378,42 @@ func cleanupWireGuardReservedNFTTableWithRunner(
 	if err != nil {
 		return fmt.Errorf("read owned WireGuard table before cleanup: %w: %s", err, strings.TrimSpace(string(wire)))
 	}
-	handle, err := validateExistingWireGuardNFTTable(wire, actual)
+	handle, err := validateExistingWireGuardNFTTable(wire, expected)
 	if err != nil || handle != inventoryHandle {
 		if err == nil {
 			err = fmt.Errorf("table handle changed during cleanup attestation")
 		}
 		return fmt.Errorf("refuse unproven WireGuard nftables cleanup: %w", err)
+	}
+	if err := reattestExpectedIdentity(); err != nil {
+		return fmt.Errorf("reattest manifest-bound WireGuard identity before owned-table cleanup: %w", err)
+	}
+	if err := reattestInactiveRuntime(); err != nil {
+		return fmt.Errorf("reattest inactive WireGuard runtime before owned-table cleanup: %w", err)
+	}
+	stillPresent, currentHandle, err := wireGuardReservedNFTTableIdentity(ctx, runner)
+	if err != nil {
+		return err
+	}
+	if !stillPresent || currentHandle != handle {
+		return fmt.Errorf("owned WireGuard nftables table identity changed before cleanup")
+	}
+	currentWire, err := runner.Run(ctx, "-a", "-j", "list", "table", "inet", "syswarden_wg")
+	if err != nil {
+		return fmt.Errorf("reattest owned WireGuard table before cleanup: %w: %s", err, strings.TrimSpace(string(currentWire)))
+	}
+	currentTableHandle, err := validateExistingWireGuardNFTTable(currentWire, expected)
+	if err != nil || currentTableHandle != handle {
+		if err == nil {
+			err = fmt.Errorf("owned table handle changed during final cleanup attestation")
+		}
+		return fmt.Errorf("refuse changed owned WireGuard nftables cleanup: %w", err)
+	}
+	if err := reattestExpectedIdentity(); err != nil {
+		return fmt.Errorf("reattest manifest-bound WireGuard identity immediately before owned-table cleanup: %w", err)
+	}
+	if err := reattestInactiveRuntime(); err != nil {
+		return fmt.Errorf("reattest inactive WireGuard runtime immediately before owned-table cleanup: %w", err)
 	}
 	output, err := runner.Run(ctx, "delete", "table", "inet", "handle", strconv.FormatUint(handle, 10))
 	if err != nil {
@@ -1265,7 +1430,278 @@ func cleanupWireGuardReservedNFTTableWithRunner(
 }
 
 func cleanupWireGuardReservedNFTTable(identity wireguardstate.ServerConfigurationIdentity) error {
-	return cleanupWireGuardReservedNFTTableWithRunner(execWireGuardNFTCommandRunner{}, identity)
+	reattestExpectedIdentity := func() error {
+		actual, err := wireGuardServerIdentityInspector()
+		if err != nil {
+			return fmt.Errorf("verify exact ownership manifest before nftables cleanup: %w", err)
+		}
+		if actual != identity {
+			return fmt.Errorf("WireGuard nftables cleanup identity no longer matches its exact ownership manifest")
+		}
+		return nil
+	}
+	reattestInactiveRuntime := func() error {
+		state, err := wireGuardServiceInspector()
+		if err != nil {
+			return fmt.Errorf("inspect WireGuard runtime before owned nftables cleanup: %w", err)
+		}
+		if state.Active || state.Interface {
+			return fmt.Errorf("refusing owned WireGuard nftables cleanup while the service or interface is active")
+		}
+		return nil
+	}
+	return cleanupWireGuardReservedNFTTableWithRunner(
+		execWireGuardNFTCommandRunner{}, identity, reattestExpectedIdentity, reattestInactiveRuntime,
+	)
+}
+
+func attestAbsentWireGuardOwnershipStateForRemoval() error {
+	inventory, err := wireguardstate.Inspect(wireGuardFilesystemRoot)
+	if err != nil {
+		return fmt.Errorf("inspect WireGuard ownership state before orphan cleanup: %w", err)
+	}
+	if !inventory.Empty() {
+		return fmt.Errorf("refusing orphan cleanup while WireGuard ownership evidence or a transaction remains: %#v", inventory)
+	}
+	return nil
+}
+
+func cleanupAttestedOrphanedWireGuardNFTTableWithRunner(
+	runner wireGuardNFTCommandRunner,
+	reattestAbsentOwnership func() error,
+	reattestInactiveRuntime func() error,
+) error {
+	if runner == nil || reattestAbsentOwnership == nil || reattestInactiveRuntime == nil {
+		return fmt.Errorf("orphaned WireGuard nftables cleanup dependencies are incomplete")
+	}
+	if err := reattestAbsentOwnership(); err != nil {
+		return err
+	}
+	if err := reattestInactiveRuntime(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	present, inventoryHandle, err := wireGuardReservedNFTTableIdentity(ctx, runner)
+	if err != nil || !present {
+		return err
+	}
+	wire, err := runner.Run(ctx, "-a", "-j", "list", "table", "inet", "syswarden_wg")
+	if err != nil {
+		return fmt.Errorf("read orphaned reserved WireGuard table: %w: %s", err, strings.TrimSpace(string(wire)))
+	}
+	identity, handle, err := identifyAttestedOrphanedWireGuardNFTTable(wire)
+	if err != nil || handle != inventoryHandle {
+		if err == nil {
+			err = fmt.Errorf("table handle changed during orphan attestation")
+		}
+		return fmt.Errorf("refuse unproven orphaned WireGuard nftables cleanup: %w", err)
+	}
+	if err := reattestAbsentOwnership(); err != nil {
+		return fmt.Errorf("reattest absent WireGuard ownership state before orphan cleanup: %w", err)
+	}
+	currentWire, err := runner.Run(ctx, "-a", "-j", "list", "table", "inet", "syswarden_wg")
+	if err != nil {
+		return fmt.Errorf("reattest orphaned reserved WireGuard table: %w: %s", err, strings.TrimSpace(string(currentWire)))
+	}
+	currentIdentity, currentTableHandle, err := identifyAttestedOrphanedWireGuardNFTTable(currentWire)
+	if err != nil || currentIdentity != identity || currentTableHandle != handle {
+		if err == nil {
+			err = fmt.Errorf("tokenized table identity changed")
+		}
+		return fmt.Errorf("refuse changed orphaned WireGuard nftables cleanup: %w", err)
+	}
+	stillPresent, currentHandle, err := wireGuardReservedNFTTableIdentity(ctx, runner)
+	if err != nil {
+		return err
+	}
+	if !stillPresent || currentHandle != handle {
+		return fmt.Errorf("orphaned WireGuard nftables table identity changed before cleanup")
+	}
+	if err := reattestInactiveRuntime(); err != nil {
+		return fmt.Errorf("reattest inactive WireGuard runtime immediately before orphan cleanup: %w", err)
+	}
+	output, err := runner.Run(ctx, "delete", "table", "inet", "handle", strconv.FormatUint(handle, 10))
+	if err != nil {
+		return fmt.Errorf("delete exactly attested orphaned WireGuard table handle %d: %w: %s", handle, err, strings.TrimSpace(string(output)))
+	}
+	remaining, remainingHandle, err := wireGuardReservedNFTTableIdentity(ctx, runner)
+	if err != nil {
+		return fmt.Errorf("verify orphaned WireGuard table cleanup: %w", err)
+	}
+	if remaining {
+		if remainingHandle == handle {
+			return fmt.Errorf("exact orphaned WireGuard table handle %d remains after cleanup", handle)
+		}
+		return fmt.Errorf("a replacement inet syswarden_wg table appeared during orphan cleanup")
+	}
+	return nil
+}
+
+func attestInactiveWireGuardRuntimeForOrphanRemoval() error {
+	alpine := wireGuardIsAlpine()
+	state, err := inspectDisabledWireGuardServiceState(wireguardstate.Manifest{}, alpine)
+	if err != nil {
+		return fmt.Errorf("inspect WireGuard runtime before orphaned nftables cleanup: %w", err)
+	}
+	if state.Alpine != alpine {
+		return fmt.Errorf("service-manager identity changed during orphaned WireGuard nftables cleanup")
+	}
+	if state.Active || state.Interface {
+		return fmt.Errorf("refusing orphaned WireGuard nftables cleanup while the service or interface is active")
+	}
+	return nil
+}
+
+func cleanupAttestedInactiveWireGuardNFTTableWithRunner(
+	runner wireGuardNFTCommandRunner,
+	expected wireguardstate.ServerConfigurationIdentity,
+	reattestExpectedIdentity func() error,
+	reattestInactiveRuntime func() error,
+) error {
+	if runner == nil || reattestExpectedIdentity == nil || reattestInactiveRuntime == nil {
+		return fmt.Errorf("inactive WireGuard nftables cleanup dependencies are incomplete")
+	}
+	if !wireGuardInterfaceName.MatchString(expected.ActiveInterface) ||
+		!wireGuardOwnershipTokenName.MatchString(expected.OwnershipToken) {
+		return fmt.Errorf("invalid manifest-bound WireGuard nftables cleanup identity")
+	}
+	if err := reattestExpectedIdentity(); err != nil {
+		return err
+	}
+	if err := reattestInactiveRuntime(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	present, inventoryHandle, err := wireGuardReservedNFTTableIdentity(ctx, runner)
+	if err != nil || !present {
+		return err
+	}
+	wire, err := runner.Run(ctx, "-a", "-j", "list", "table", "inet", "syswarden_wg")
+	if err != nil {
+		return fmt.Errorf("read inactive reserved WireGuard table: %w: %s", err, strings.TrimSpace(string(wire)))
+	}
+	staleIdentity, handle, err := identifyAttestedOrphanedWireGuardNFTTable(wire)
+	if err != nil || handle != inventoryHandle {
+		if err == nil {
+			err = fmt.Errorf("table handle changed during inactive attestation")
+		}
+		return fmt.Errorf("refuse unproven inactive WireGuard nftables cleanup: %w", err)
+	}
+	if sameWireGuardNFTTableIdentity(staleIdentity, expected) {
+		return fmt.Errorf("inactive WireGuard fallback received the current manifest-bound table unexpectedly")
+	}
+	if err := reattestExpectedIdentity(); err != nil {
+		return fmt.Errorf("reattest manifest-bound WireGuard identity before inactive cleanup: %w", err)
+	}
+	if err := reattestInactiveRuntime(); err != nil {
+		return fmt.Errorf("reattest inactive WireGuard runtime before stale-table cleanup: %w", err)
+	}
+	stillPresent, currentHandle, err := wireGuardReservedNFTTableIdentity(ctx, runner)
+	if err != nil {
+		return err
+	}
+	if !stillPresent || currentHandle != handle {
+		return fmt.Errorf("inactive WireGuard nftables table identity changed before cleanup")
+	}
+	currentWire, err := runner.Run(ctx, "-a", "-j", "list", "table", "inet", "syswarden_wg")
+	if err != nil {
+		return fmt.Errorf("reattest inactive reserved WireGuard table: %w: %s", err, strings.TrimSpace(string(currentWire)))
+	}
+	currentIdentity, currentTableHandle, err := identifyAttestedOrphanedWireGuardNFTTable(currentWire)
+	if err != nil || currentIdentity != staleIdentity || currentTableHandle != handle {
+		if err == nil {
+			err = fmt.Errorf("tokenized inactive table identity changed")
+		}
+		return fmt.Errorf("refuse changed inactive WireGuard nftables cleanup: %w", err)
+	}
+	if err := reattestInactiveRuntime(); err != nil {
+		return fmt.Errorf("reattest inactive WireGuard runtime immediately before stale-table cleanup: %w", err)
+	}
+	output, err := runner.Run(ctx, "delete", "table", "inet", "handle", strconv.FormatUint(handle, 10))
+	if err != nil {
+		return fmt.Errorf("delete exactly attested inactive WireGuard table handle %d: %w: %s", handle, err, strings.TrimSpace(string(output)))
+	}
+	remaining, remainingHandle, err := wireGuardReservedNFTTableIdentity(ctx, runner)
+	if err != nil {
+		return fmt.Errorf("verify inactive WireGuard table cleanup: %w", err)
+	}
+	if remaining {
+		if remainingHandle == handle {
+			return fmt.Errorf("exact inactive WireGuard table handle %d remains after cleanup", handle)
+		}
+		return fmt.Errorf("a replacement inet syswarden_wg table appeared during inactive cleanup")
+	}
+	return nil
+}
+
+func cleanupAttestedInactiveWireGuardNFTTable(expected wireguardstate.ServerConfigurationIdentity) error {
+	reattestExpectedIdentity := func() error {
+		actual, err := wireGuardServerIdentityInspector()
+		if err != nil {
+			return fmt.Errorf("verify manifest-bound WireGuard identity before inactive cleanup: %w", err)
+		}
+		if actual != expected {
+			return fmt.Errorf("manifest-bound WireGuard identity changed before inactive cleanup")
+		}
+		return nil
+	}
+	reattestInactiveRuntime := func() error {
+		state, err := wireGuardServiceInspector()
+		if err != nil {
+			return fmt.Errorf("inspect WireGuard runtime before inactive cleanup: %w", err)
+		}
+		if state.Active || state.Interface {
+			return fmt.Errorf("refusing stale WireGuard nftables cleanup while the service or interface is active")
+		}
+		return nil
+	}
+	return cleanupAttestedInactiveWireGuardNFTTableWithRunner(
+		execWireGuardNFTCommandRunner{}, expected, reattestExpectedIdentity, reattestInactiveRuntime,
+	)
+}
+
+// CleanupAttestedOrphanedWireGuardNFTStateForRemoval reconciles only a
+// v4.03.2+ tokenized table after the removal state machine has proven that no
+// manifest, transaction, or generated WireGuard artifact remains. Historical
+// unmarked tables and every table with additional state remain fail-closed.
+func CleanupAttestedOrphanedWireGuardNFTStateForRemoval() (resultErr error) {
+	release, err := wireGuardNFTActivationGuard()
+	if err != nil {
+		return fmt.Errorf("acquire orphaned WireGuard nftables cleanup guard: %w", err)
+	}
+	defer func() {
+		if err := release(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("release orphaned WireGuard nftables cleanup guard: %w", err))
+		}
+	}()
+	return cleanupAttestedOrphanedWireGuardNFTTableWithRunner(
+		execWireGuardNFTCommandRunner{},
+		attestAbsentWireGuardOwnershipStateForRemoval,
+		attestInactiveWireGuardRuntimeForOrphanRemoval,
+	)
+}
+
+// CleanupAttestedStaleWireGuardNFTStateForRemoval removes a tokenized table
+// whose identity differs from the still-attested ownership manifest. The
+// shared activation guard and the inactive service and interface checks keep
+// this fallback bounded to the stale-table recovery case.
+func CleanupAttestedStaleWireGuardNFTStateForRemoval() (resultErr error) {
+	release, err := wireGuardNFTActivationGuard()
+	if err != nil {
+		return fmt.Errorf("acquire stale WireGuard nftables cleanup guard: %w", err)
+	}
+	defer func() {
+		if err := release(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("release stale WireGuard nftables cleanup guard: %w", err))
+		}
+	}()
+	identity, err := wireGuardServerIdentityInspector()
+	if err != nil {
+		return fmt.Errorf("read manifest-bound WireGuard identity before stale-table cleanup: %w", err)
+	}
+	return wireGuardStaleNFTCleanup(identity)
 }
 
 // CleanupOwnedWireGuardNFTState removes only the table handle proven by the
@@ -1352,48 +1788,39 @@ func compensateWireGuardActivationGuarded(
 	return compensateWireGuardActivation(baseline, expectation)
 }
 
-func attestCommittedWireGuardRuntime(
+func attestFinalWireGuardRuntimeLocked(
 	backend string,
 	expectation wireGuardNFTExpectation,
 	baseline wireGuardServiceState,
-) (resultErr error) {
-	release, err := wireGuardNFTActivationGuard()
-	if err != nil {
-		return fmt.Errorf("acquire WireGuard nftables post-commit attestation guard: %w", err)
-	}
-	defer func() {
-		if err := release(); err != nil {
-			resultErr = errors.Join(resultErr, fmt.Errorf("release WireGuard nftables post-commit attestation guard: %w", err))
-		}
-	}()
+) error {
 	if err := wireGuardFirewallBackendPreflight(backend); err != nil {
-		return fmt.Errorf("firewall backend changed after WireGuard ownership commit: %w", err)
+		return fmt.Errorf("firewall backend changed before final WireGuard runtime attestation: %w", err)
 	}
 	if err := attestWireGuardServiceDefinition(); err != nil {
-		return fmt.Errorf("reattest exact WireGuard service definition after ownership commit: %w", err)
+		return fmt.Errorf("reattest exact WireGuard service definition during final runtime attestation: %w", err)
 	}
 	identity, err := wireGuardServerIdentityInspector()
 	if err != nil || identity != expectation.Identity {
 		if err == nil {
 			err = fmt.Errorf("configuration ownership identity changed")
 		}
-		return fmt.Errorf("reattest exact WireGuard configuration after ownership commit: %w", err)
+		return fmt.Errorf("reattest exact WireGuard configuration during final runtime attestation: %w", err)
 	}
 	if err := wireGuardServerHookExecutableAttestor(identity); err != nil {
-		return fmt.Errorf("reattest exact WireGuard hook executables after ownership commit: %w", err)
+		return fmt.Errorf("reattest exact WireGuard hook executables during final runtime attestation: %w", err)
 	}
 	activeState, err := wireGuardServiceInspector()
 	if err != nil || !activeState.ready() || activeState.Alpine != baseline.Alpine {
 		if err == nil {
 			err = fmt.Errorf("service is not exactly enabled, active, and interface-bound: %#v", activeState)
 		}
-		return fmt.Errorf("reattest exact WireGuard service state after ownership commit: %w", err)
+		return fmt.Errorf("reattest exact WireGuard service state during final runtime attestation: %w", err)
 	}
 	postExpectation := expectation
 	postExpectation.AllowExisting = true
 	postExpectation.RequirePresent = true
 	if err := wireGuardNFTActivationPreflight(postExpectation); err != nil {
-		return fmt.Errorf("reattest manifest-bound WireGuard nftables state after ownership commit: %w", err)
+		return fmt.Errorf("reattest manifest-bound WireGuard nftables state during final runtime attestation: %w", err)
 	}
 	return nil
 }
@@ -1408,29 +1835,40 @@ func activateWireGuardAfterBackendPreflight(
 	if err != nil {
 		return fmt.Errorf("acquire WireGuard nftables activation guard: %w", err)
 	}
-	needsRollback := false
 	defer func() {
 		if err := release(); err != nil {
 			releaseErr := fmt.Errorf("release WireGuard nftables activation guard: %w", err)
-			if needsRollback {
-				needsRollback = false
+			if resultErr == nil {
 				resultErr = rollbackWireGuardActivationGuarded(errors.Join(resultErr, releaseErr), baseline, expectation)
 			} else {
 				resultErr = errors.Join(resultErr, releaseErr)
 			}
 		}
 	}()
-	if err := wireGuardNFTActivationPreflight(expectation); err != nil {
-		return fmt.Errorf("attest reserved WireGuard nftables state before activation: %w", err)
-	}
+	return activateWireGuardAfterBackendPreflightLocked(backend, expectation, baseline, forwarding)
+}
+
+func activateWireGuardAfterBackendPreflightLocked(
+	backend string,
+	expectation wireGuardNFTExpectation,
+	baseline wireGuardServiceState,
+	forwarding wireGuardForwardingTransaction,
+) error {
 	if expectation.AllowExisting && !expectation.RequirePresent {
 		if err := wireGuardReservedNFTCleanup(expectation.Identity); err != nil {
-			return fmt.Errorf("retire manifest-bound inactive WireGuard nftables state before activation: %w", err)
+			if staleErr := wireGuardStaleNFTCleanup(expectation.Identity); staleErr != nil {
+				return fmt.Errorf(
+					"retire inactive WireGuard nftables state before activation: manifest-bound cleanup failed: %v; exact tokenized stale-table recovery failed: %w",
+					err, staleErr,
+				)
+			}
 		}
 		expectation.AllowExisting = false
 		if err := wireGuardNFTActivationPreflight(expectation); err != nil {
 			return fmt.Errorf("verify reserved WireGuard nftables state is absent before activation: %w", err)
 		}
+	} else if err := wireGuardNFTActivationPreflight(expectation); err != nil {
+		return fmt.Errorf("attest reserved WireGuard nftables state before activation: %w", err)
 	}
 	if forwarding == nil {
 		return fmt.Errorf("WireGuard forwarding transaction is unavailable")
@@ -1467,9 +1905,7 @@ func activateWireGuardAfterBackendPreflight(
 			fmt.Errorf("activate WireGuard service: %w", err), postBackendErr,
 		), baseline, expectation)
 	}
-	needsRollback = true
 	if err := wireGuardFirewallBackendPreflight(backend); err != nil {
-		needsRollback = false
 		return rollbackWireGuardActivation(fmt.Errorf("firewall backend changed after WireGuard activation: %w", err), baseline, expectation)
 	}
 	activeState, err := wireGuardServiceInspector()
@@ -1477,14 +1913,12 @@ func activateWireGuardAfterBackendPreflight(
 		if err == nil {
 			err = fmt.Errorf("service is not exactly enabled, active, and interface-bound: %#v", activeState)
 		}
-		needsRollback = false
 		return rollbackWireGuardActivation(fmt.Errorf("post-activation WireGuard service attestation failed: %w", err), baseline, expectation)
 	}
 	postExpectation := expectation
 	postExpectation.AllowExisting = true
 	postExpectation.RequirePresent = true
 	if err := wireGuardNFTActivationPreflight(postExpectation); err != nil {
-		needsRollback = false
 		return rollbackWireGuardActivation(fmt.Errorf("post-activation WireGuard nftables provenance attestation failed: %w", err), baseline, expectation)
 	}
 	return nil
@@ -1892,8 +2326,7 @@ func SetupWireguard() (resultErr error) {
 		return fmt.Errorf("WireGuard setup requires a loaded configuration")
 	}
 	if !config.GlobalConfig.EnableWG {
-		fmt.Println("[INFO] WireGuard is disabled in SYSWARDEN configuration. Skipping WireGuard setup.")
-		return nil
+		return wireGuardDisabledReconciler()
 	}
 	backend := configuredWireGuardFirewallBackend()
 	if backend != "nftables" {
@@ -1908,6 +2341,22 @@ func SetupWireguard() (resultErr error) {
 	}
 	if managerState != "ACTIVE" {
 		return fmt.Errorf("WireGuard setup requires an attestable active service manager; state is %s", managerState)
+	}
+	release, err := wireGuardNFTActivationGuard()
+	if err != nil {
+		return fmt.Errorf("acquire complete WireGuard setup guard: %w", err)
+	}
+	guardRelease := release
+	defer func() {
+		if guardRelease == nil {
+			return
+		}
+		if err := guardRelease(); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("release WireGuard nftables activation guard: %w", err))
+		}
+	}()
+	if err := recoverPendingWireGuardForwardingStateLocked(); err != nil {
+		return fmt.Errorf("recover interrupted WireGuard forwarding persistence before setup: %w", err)
 	}
 	alpine := wireGuardIsAlpine()
 	var baselineOpenRCLinkPresent bool
@@ -1973,6 +2422,12 @@ func SetupWireguard() (resultErr error) {
 				resultErr = errors.Join(resultErr, fmt.Errorf("recover WireGuard publication after setup: %w", err))
 			}
 		}()
+		manifest, err = wireguardstate.ReadManifest(
+			wireGuardFilesystemRoot, wireGuardExpectedOwnerUID, wireGuardExpectedOwnerGID,
+		)
+		if err != nil {
+			return fmt.Errorf("read newly published WireGuard ownership manifest: %w", err)
+		}
 	} else {
 		serverBytes, err := wireguardstate.ReadVerifiedArtifact(
 			wireGuardFilesystemRoot, manifest, wireguardstate.ServerConfigurationPath,
@@ -1991,6 +2446,10 @@ func SetupWireguard() (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("parse exact WireGuard runtime ownership identity: %w", err)
 	}
+	persistence, err := inspectWireGuardForwardingPersistence(manifest, identity)
+	if err != nil {
+		return fmt.Errorf("inspect WireGuard forwarding persistence before activation: %w", err)
+	}
 	expectation := wireGuardNFTExpectation{
 		AllowExisting:  reused,
 		RequirePresent: reused && baseline.Active,
@@ -1999,6 +2458,23 @@ func SetupWireguard() (resultErr error) {
 	forwarding, err := wireGuardForwardingTransactionFactory()
 	if err != nil {
 		return fmt.Errorf("pin net.ipv4.ip_forward before WireGuard activation: %w", err)
+	}
+	forwardingBaseline := persistence.Baseline
+	forwardingBaselineKnown := persistence.BaselineKnown
+	if !forwardingBaselineKnown && !baseline.Active && !baseline.Interface {
+		forwardingBaseline = forwarding.OriginalValue()
+		if forwardingBaseline != "0" && forwardingBaseline != "1" {
+			_ = forwarding.Close()
+			return fmt.Errorf("pinned net.ipv4.ip_forward transaction has no exact baseline")
+		}
+		forwardingBaselineKnown = true
+	}
+	activeForwardingContent, err := canonicalWireGuardForwardingContent(
+		identity, true, forwardingBaselineKnown, forwardingBaseline,
+	)
+	if err != nil {
+		_ = forwarding.Close()
+		return err
 	}
 	keepForwarding := false
 	removalReloadDebtPending := false
@@ -2028,18 +2504,26 @@ func SetupWireguard() (resultErr error) {
 	}()
 
 	fmt.Println(" -> Starting WireGuard Interface")
-	if err := activateWireGuardAfterBackendPreflight(backend, expectation, baseline, forwarding); err != nil {
+	if err := activateWireGuardAfterBackendPreflightLocked(backend, expectation, baseline, forwarding); err != nil {
 		return err
 	}
-	activationRollbackRequired := publication != nil
+	activationRollbackRequired := true
 	ownershipCommitted := false
+	persistenceRollbackRequired := false
 	defer func() {
 		if activationRollbackRequired && resultErr != nil {
 			cause := errors.Join(
 				resultErr, errors.New("WireGuard activation rolled back because final committed runtime attestation did not complete"),
 			)
-			converged, rollbackErr := compensateWireGuardActivationGuarded(baseline, expectation)
+			converged, rollbackErr := compensateWireGuardActivation(baseline, expectation)
 			resultErr = errors.Join(cause, rollbackErr)
+			if persistenceRollbackRequired {
+				if err := transitionWireGuardForwardingPersistence(identity, persistence.Content); err != nil {
+					resultErr = errors.Join(resultErr, fmt.Errorf("restore prior WireGuard forwarding persistence after failed setup: %w", err))
+				} else {
+					persistenceRollbackRequired = false
+				}
+			}
 			if ownershipCommitted {
 				current, err := wireGuardServiceInspector()
 				if !converged || err != nil || current != baseline {
@@ -2069,12 +2553,17 @@ func SetupWireguard() (resultErr error) {
 		}
 		ownershipCommitted = true
 		wireGuardAfterOwnershipCommit()
-		if err := attestCommittedWireGuardRuntime(backend, expectation, baseline); err != nil {
+	}
+	persistenceRollbackRequired = !bytes.Equal(persistence.Content, activeForwardingContent)
+	if err := transitionWireGuardForwardingPersistence(identity, activeForwardingContent); err != nil {
+		return fmt.Errorf("publish attested WireGuard forwarding persistence after activation: %w", err)
+	}
+	if err := attestFinalWireGuardRuntimeLocked(backend, expectation, baseline); err != nil {
+		if ownershipCommitted {
 			return fmt.Errorf("final WireGuard runtime attestation after ownership commit: %w", err)
 		}
+		return fmt.Errorf("final WireGuard runtime attestation for reused ownership: %w", err)
 	}
-	activationRollbackRequired = false
-	keepForwarding = true
 	if reused {
 		fmt.Println("[INFO] Existing fully attested WireGuard keys preserved and service activation verified.")
 	}
@@ -2090,6 +2579,15 @@ func SetupWireguard() (resultErr error) {
 
 	fmt.Println("=======================================================")
 	fmt.Println("Client config saved at: " + wireguardstate.ClientConfigurationPath)
+
+	activationRollbackRequired = false
+	persistenceRollbackRequired = false
+	keepForwarding = true
+	if err := guardRelease(); err != nil {
+		guardRelease = nil
+		return fmt.Errorf("release WireGuard nftables activation guard after verified commit: %w", err)
+	}
+	guardRelease = nil
 
 	return nil
 }

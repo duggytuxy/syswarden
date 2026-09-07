@@ -181,6 +181,8 @@ func TestLegacyHAAndTypedValidationMatchesModularFailClosedContract_SW_CFG_001(t
 		},
 		{name: "LAN subnet with host bits", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_LAN_SUBNETS=10.0.0.1/8\n"},
 		{name: "whitelist policy injection", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_WHITELIST_IPS='192.0.2.1;flush'\n"},
+		{name: "unsafe whitelist entry", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_WHITELIST_IPS=127.0.0.1\n"},
+		{name: "overbroad whitelist prefix", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_WHITELIST_IPS=8.8.0.0/16\n"},
 		{name: "invalid country", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_GEO_CODES=BEL\n"},
 		{name: "negative ASN", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_ASN_LIST=AS-1\n"},
 		{name: "interface policy injection", content: "SYSWARDEN_HA_ENABLED=n\nSYSWARDEN_INTERFACES='eth0;flush ruleset'\n"},

@@ -16,7 +16,12 @@ var removeOwnedCronStateForRemoval = system.RemoveOwnedCronStateForRemoval
 var prepareFirewallStateForRemoval = system.PrepareFirewallStateForRemoval
 var cleanupFirewallStateForRemoval = firewall.CleanupOwnedCompatibilityRulesForUninstall
 var removeOwnedWireGuardStateForRemoval = func() error {
-	return system.RemoveOwnedWireGuardArtifactsForRemoval(network.CleanupOwnedWireGuardNFTState)
+	return system.RemoveOwnedWireGuardArtifactsForRemoval(
+		network.RecoverPendingWireGuardForwardingState,
+		network.CleanupOwnedWireGuardNFTState,
+		network.CleanupAttestedStaleWireGuardNFTStateForRemoval,
+		network.CleanupAttestedOrphanedWireGuardNFTStateForRemoval,
+	)
 }
 var removePreparedServiceArtifacts = system.RemovePreparedServiceArtifactsForRemoval
 var removePreparedFirewallRuntimeLock = system.RemovePreparedFirewallRuntimeLockForRemoval

@@ -169,6 +169,9 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 `
+	systemdFirewallWireGuardOrderingDropIn = `[Unit]
+After=wg-quick@wg-syswarden.service
+`
 	historicalV4028SystemdFirewallService = `[Unit]
 Description=SYSWARDEN Firewall Persistence & Engine Loader
 After=network-online.target
@@ -186,6 +189,8 @@ WantedBy=multi-user.target
 `
 	historicalV4028SystemdFirewallServiceLength = 307
 	historicalV4028SystemdFirewallServiceSHA256 = "bc730793c007273a380261155b7602571c42efd93972f45ad2dd440f98251724"
+
+	systemdFirewallWireGuardOrderingDropInPath = "/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf"
 )
 
 var (
@@ -570,9 +575,20 @@ func openPinnedServiceDirectory(path string) (*pinnedServiceDirectory, error) {
 	if err := ensureServiceDirectory(path, 0755); err != nil {
 		return nil, err
 	}
+	return openExistingPinnedServiceDirectory(path)
+}
+
+// openExistingPinnedServiceDirectory pins an already existing trusted
+// directory without creating or repairing any path. Removal recovery uses this
+// read-only boundary before it is safe to mutate service-manager state.
+func openExistingPinnedServiceDirectory(path string) (*pinnedServiceDirectory, error) {
 	before, err := os.Lstat(path)
 	if err != nil {
 		return nil, fmt.Errorf("inspect service directory %s: %w", path, err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() || before.Mode().Perm()&0022 != 0 ||
+		!serviceFileOwnedByCurrentUser(before) {
+		return nil, fmt.Errorf("refusing unsafe service directory %s", path)
 	}
 	root, err := os.OpenRoot(path)
 	if err != nil {
@@ -1110,14 +1126,60 @@ func inspectHistoricalServiceArtifact(
 	name string,
 	artifact serviceArtifact,
 ) (os.FileInfo, error) {
-	return inspectAnchoredHistoricalServiceFile(
-		directory,
-		name,
-		artifact.historicalContent,
-		artifact.historicalContentLength,
-		artifact.historicalContentSHA256,
-		artifact.mode,
-	)
+	info, _, err := selectHistoricalServiceArtifact(directory, name, artifact)
+	return info, err
+}
+
+type historicalServiceContent struct {
+	content       string
+	contentLength int
+	contentSHA256 string
+}
+
+func historicalServiceContents(artifact serviceArtifact) []historicalServiceContent {
+	contents := make([]historicalServiceContent, 0, 1+len(artifact.historicalAlternates))
+	if artifact.historicalContent != "" {
+		contents = append(contents, historicalServiceContent{
+			content:       artifact.historicalContent,
+			contentLength: artifact.historicalContentLength,
+			contentSHA256: artifact.historicalContentSHA256,
+		})
+	}
+	return append(contents, artifact.historicalAlternates...)
+}
+
+func selectHistoricalServiceArtifact(
+	directory *pinnedServiceDirectory,
+	name string,
+	artifact serviceArtifact,
+) (os.FileInfo, historicalServiceContent, error) {
+	contents := historicalServiceContents(artifact)
+	if len(contents) == 0 {
+		return nil, historicalServiceContent{}, fmt.Errorf("historical service file has no exact content anchor")
+	}
+	for _, candidate := range contents {
+		digest := sha256.Sum256([]byte(candidate.content))
+		if len([]byte(candidate.content)) != candidate.contentLength ||
+			hex.EncodeToString(digest[:]) != candidate.contentSHA256 {
+			return nil, historicalServiceContent{}, fmt.Errorf("historical service file anchor is internally inconsistent")
+		}
+	}
+	var failures []error
+	for _, candidate := range contents {
+		info, err := inspectAnchoredHistoricalServiceFile(
+			directory,
+			name,
+			candidate.content,
+			candidate.contentLength,
+			candidate.contentSHA256,
+			artifact.mode,
+		)
+		if err == nil {
+			return info, candidate, nil
+		}
+		failures = append(failures, err)
+	}
+	return nil, historicalServiceContent{}, errors.Join(failures...)
 }
 
 func removePinnedServiceArtifactByIdentity(
@@ -1547,10 +1609,14 @@ func publishMigratableServiceFileUsing(
 	if _, err := inspectSingleLinkExactServiceFile(directory, name, artifact.content, artifact.mode); err == nil {
 		return change, directory.sync()
 	}
-	historicalIdentity, err := inspectHistoricalServiceArtifact(directory, name, artifact)
+	historicalIdentity, selectedHistorical, err := selectHistoricalServiceArtifact(directory, name, artifact)
 	if err != nil {
 		return change, fmt.Errorf("refusing non-exact historical service file %s: %w", artifact.path, err)
 	}
+	artifact.historicalContent = selectedHistorical.content
+	artifact.historicalContentLength = selectedHistorical.contentLength
+	artifact.historicalContentSHA256 = selectedHistorical.contentSHA256
+	artifact.historicalAlternates = nil
 
 	temporaryName, temporary, temporaryIdentity, err := createTemporaryServiceFile(directory)
 	if err != nil {
@@ -1753,6 +1819,7 @@ type serviceArtifact struct {
 	historicalContent       string
 	historicalContentLength int
 	historicalContentSHA256 string
+	historicalAlternates    []historicalServiceContent
 }
 
 type serviceArtifactChange struct {
@@ -1936,6 +2003,36 @@ func publishSystemdServices() error {
 	})
 }
 
+func attestSystemdFirewallOrderingBeforeActivation() error {
+	_, err := os.Lstat(systemdFirewallWireGuardOrderingDropInPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return attestAbsentSystemdFirewallOrderingDropIn(
+			hostFirewallExecutor(),
+			systemdFirewallWireGuardOrderingDropInPath,
+			servicePackageEnvironment("SYSWARDEN_PKG_INSTALL") == "1",
+		)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect packaged systemd ordering drop-in: %w", err)
+	}
+	if _, err := attestExactSystemdFirewallOrderingDropIn(
+		hostFirewallExecutor(), systemdFirewallWireGuardOrderingDropInPath,
+	); err != nil {
+		return fmt.Errorf("attest packaged systemd ordering drop-in: %w", err)
+	}
+	return nil
+}
+
+// PreflightSystemdFirewallOrdering rejects a missing or untrusted package-owned
+// ordering artifact before the installation pipeline can mutate the host.
+// SetupService repeats the same attestation immediately before activation.
+func PreflightSystemdFirewallOrdering() error {
+	if IsAlpine() {
+		return nil
+	}
+	return attestSystemdFirewallOrderingBeforeActivation()
+}
+
 // SetupService publishes and enables the two native SysWarden services.
 func SetupService() error {
 	alpine := IsAlpine()
@@ -1973,6 +2070,9 @@ func SetupService() error {
 	}
 
 	fmt.Println("[INFO] Configuring systemd services...")
+	if err := attestSystemdFirewallOrderingBeforeActivation(); err != nil {
+		return err
+	}
 	if err := publishSystemdServices(); err != nil {
 		return fmt.Errorf("publish systemd services: %w", err)
 	}

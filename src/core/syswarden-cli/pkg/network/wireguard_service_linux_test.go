@@ -250,6 +250,33 @@ func TestInspectWireGuardServiceStateRequiresExactManagerAndInterfaceTruth_SW2_W
 	}
 }
 
+func TestInspectWireGuardServiceStateClassifiesFailedUnitOnlyWhenInterfaceIsAbsent_SW2_WGSTATE_001(t *testing.T) {
+	interfacePresent := false
+	output := func(name string, args ...string) ([]byte, error) {
+		switch strings.Join(append([]string{name}, args...), " ") {
+		case "systemctl is-active wg-quick@wg-syswarden.service":
+			return []byte("failed\n"), errors.New("failed exit status")
+		case "systemctl is-enabled wg-quick@wg-syswarden.service":
+			return []byte("enabled\n"), nil
+		case "wg show interfaces":
+			if interfacePresent {
+				return []byte("wg-syswarden\n"), nil
+			}
+			return []byte("\n"), nil
+		default:
+			return nil, fmt.Errorf("unexpected state command %s %v", name, args)
+		}
+	}
+	state, err := inspectWireGuardServiceState(false, output)
+	if err != nil || state.Active || !state.Enabled || state.Interface {
+		t.Fatalf("failed inactive unit classification: state=%#v err=%v", state, err)
+	}
+	interfacePresent = true
+	if _, err := inspectWireGuardServiceState(false, output); err == nil || !strings.Contains(err.Error(), "incoherent") {
+		t.Fatalf("failed unit with live interface was accepted: %v", err)
+	}
+}
+
 func TestRestoreWireGuardServiceStatePreservesEveryInitialBoundary_SW2_WGSTATE_001(t *testing.T) {
 	seamExactWireGuardHookAttestation(t)
 	for _, alpine := range []bool{false, true} {

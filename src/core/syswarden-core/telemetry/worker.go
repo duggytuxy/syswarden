@@ -797,7 +797,19 @@ func processKernelDropLine(
 	}
 	if strings.Contains(line, "[CATCH-ALL]") {
 		ip := extractField(line, "SRC=")
-		if ip == "" || isWhitelisted(ip) {
+		if ip == "" {
+			return
+		}
+		// An IPv4 IGMP query emitted by a querier that has no usable source
+		// address uses 0.0.0.0 and the all-hosts destination. The kernel log
+		// does not expose enough IGMP payload detail to attest the query type,
+		// so this exception is deliberately limited to telemetry classification:
+		// the packet still follows the authoritative firewall decision. Any
+		// other protocol, source, or destination remains observable.
+		if isUnspecifiedSourceIGMPAllHostsTraffic(line) {
+			return
+		}
+		if isWhitelisted(ip) {
 			return
 		}
 		// Port 62026 is owned by the catalogued syswarden-l4-protect rule
@@ -881,6 +893,13 @@ func processKernelDropLine(
 		// source ban is claimed unless a firewall mutation actually succeeds.
 		logDetected(ip, evidence.RuleID, line, evidence)
 	}
+}
+
+func isUnspecifiedSourceIGMPAllHostsTraffic(line string) bool {
+	protocol := strings.ToUpper(extractField(line, "PROTO="))
+	return extractField(line, "SRC=") == "0.0.0.0" &&
+		extractField(line, "DST=") == "224.0.0.1" &&
+		(protocol == "IGMP" || protocol == "2")
 }
 
 func extractField(line, prefix string) string {

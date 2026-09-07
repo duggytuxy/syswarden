@@ -34,7 +34,6 @@ func ParseConfig(configPath string) error {
 			if err := loadModularConfig(configPath); err != nil {
 				return err
 			}
-			log.Println("[INFO] Using new modular TOML configuration format")
 			return nil
 		}
 	}
@@ -73,6 +72,7 @@ func loadModularConfig(configDir string) (loadErr error) {
 	v.AutomaticEnv()
 	v.SetEnvPrefix("SYSWARDEN")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+	_ = v.BindEnv("network.whitelist_ips")
 	_ = v.BindEnv("network.saas.allow_monitors")
 	_ = v.BindEnv("integrations.saas.enabled")
 
@@ -156,6 +156,10 @@ func loadModularConfig(configDir string) (loadErr error) {
 	if err := v.Unmarshal(&modConfig); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	retiredWhitelistEntries := neutralizeRetiredUnspecifiedWhitelistConfig(&modConfig)
+	if len(retiredWhitelistEntries) != 0 {
+		v.Set("network.whitelist_ips", modConfig.Network.WhitelistIPs)
+	}
 	if err := normalizeHistoricalModularHA(&modConfig, sources); err != nil {
 		return err
 	}
@@ -186,8 +190,18 @@ func loadModularConfig(configDir string) (loadErr error) {
 			policy:     cloneOperatorPolicy(candidate.OperatorPolicy),
 		}
 	}
+	logRetiredUnspecifiedWhitelistEntries(retiredWhitelistEntries)
 	commitGlobalConfig(candidate, configDir)
 	return nil
+}
+
+func logRetiredUnspecifiedWhitelistEntries(entries []string) {
+	for _, entry := range entries {
+		log.Printf(
+			"[WARNING] Ignoring deprecated network.whitelist_ips entry %q; exact IGMP control traffic is handled internally",
+			entry,
+		)
+	}
 }
 
 func setDefaults(v *viper.Viper, configDir string) {
@@ -232,6 +246,9 @@ func mapToGlobalConfig(m *ModularConfig) {
 }
 
 func mapModularToLegacy(m *ModularConfig) *Config {
+	normalized := *m
+	neutralizeRetiredUnspecifiedWhitelistConfig(&normalized)
+	m = &normalized
 	candidate := NewFailSafeConfig()
 
 	candidate.EnterpriseMode = m.Core.EnterpriseMode

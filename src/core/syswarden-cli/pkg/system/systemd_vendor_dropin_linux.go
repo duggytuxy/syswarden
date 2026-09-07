@@ -5,11 +5,13 @@ package system
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -20,6 +22,11 @@ const (
 	approvedSystemdServiceDropInRPMQueryFormat   = "%{NAME}\\t%{EVR}\\t%{ARCH}\\t%{FILEDIGESTALGO}\\n"
 	approvedSystemdServiceDropInRPMFilesFormat   = "[%{FILENAMES}\\n]"
 	approvedSystemdServiceDropInRPMDigestsFormat = "[%{FILEDIGESTS}\\n]"
+	syswardenDropInDPKGVersionFormat             = "${Version}\\t${Architecture}\\n"
+	syswardenDropInDPKGInstalledFormat           = "${Status}\\t${Architecture}\\t${Version}\\n"
+	syswardenDropInRPMOwnerFormat                = "%{NAME}\\t%{EVR}\\t%{ARCH}\\t%{FILEDIGESTALGO}\\n"
+	syswardenDropInDPKGAbsentEvidence            = "dpkg-query: no packages found matching syswarden\n"
+	syswardenDropInRPMAbsentEvidence             = "package syswarden is not installed\n"
 
 	approvedSystemdServiceDropInContent = `# This file is part of the systemd package.
 # See https://fedoraproject.org/wiki/Changes/Shorter_Shutdown_Timer.
@@ -330,5 +337,370 @@ func attestApprovedSystemdServiceDropIns(
 	executor firewallManagerExecutor,
 	dropIns string,
 ) (string, error) {
-	return attestApprovedSystemdServiceDropInsAt(executor, dropIns, approvedSystemdServiceDropInPath, "/", 0, 0)
+	if dropIns == "" {
+		return "", nil
+	}
+	paths := strings.Split(dropIns, " ")
+	if len(paths) > 2 {
+		return "", fmt.Errorf("systemd service has unapproved drop-ins")
+	}
+	evidence := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			return "", fmt.Errorf("systemd service has ambiguous drop-ins")
+		}
+		if _, duplicate := seen[path]; duplicate {
+			return "", fmt.Errorf("systemd service has duplicate drop-ins")
+		}
+		seen[path] = struct{}{}
+		switch path {
+		case approvedSystemdServiceDropInPath:
+			item, err := attestApprovedSystemdServiceDropInsAt(
+				executor, path, approvedSystemdServiceDropInPath, "/", 0, 0,
+			)
+			if err != nil {
+				return "", err
+			}
+			evidence = append(evidence, item)
+		case systemdFirewallWireGuardOrderingDropInPath:
+			item, err := attestExactSystemdFirewallOrderingDropIn(executor, path)
+			if err != nil {
+				return "", err
+			}
+			evidence = append(evidence, item)
+		default:
+			return "", fmt.Errorf("systemd service has unapproved drop-ins")
+		}
+	}
+	sort.Strings(evidence)
+	return strings.Join(evidence, ";"), nil
+}
+
+func attestExactSystemdFirewallOrderingDropIn(
+	executor firewallManagerExecutor,
+	path string,
+) (string, error) {
+	return attestExactSystemdFirewallOrderingDropInAt(
+		executor,
+		path,
+		systemdFirewallWireGuardOrderingDropInPath,
+		"/",
+		0,
+		0,
+	)
+}
+
+func attestExactSystemdFirewallOrderingDropInAt(
+	executor firewallManagerExecutor,
+	path string,
+	expectedPath string,
+	trustedRoot string,
+	expectedUID uint32,
+	expectedGID uint32,
+) (string, error) {
+	if path != expectedPath {
+		return "", fmt.Errorf("refusing unexpected SysWarden systemd ordering drop-in %s", path)
+	}
+	if err := attestApprovedSystemdServiceDropInParents(
+		path, trustedRoot, expectedUID, expectedGID,
+	); err != nil {
+		return "", fmt.Errorf("attest SysWarden systemd ordering drop-in parents: %w", err)
+	}
+	first, err := readFirewallRemovalFileWithOwner(path, 0644, expectedUID, expectedGID)
+	if err != nil {
+		return "", fmt.Errorf("attest SysWarden systemd ordering drop-in: %w", err)
+	}
+	if string(first.content) != systemdFirewallWireGuardOrderingDropIn {
+		return "", fmt.Errorf("refusing modified SysWarden systemd ordering drop-in %s", path)
+	}
+	firstPackageEvidence, err := attestSysWardenSystemdDropInPackageOwnership(executor, path)
+	if err != nil {
+		return "", err
+	}
+	second, err := readFirewallRemovalFileWithOwner(path, 0644, expectedUID, expectedGID)
+	if err != nil || !sameFirewallRemovalFileIdentity(first.identity, second.identity) ||
+		!bytes.Equal(first.content, second.content) {
+		return "", fmt.Errorf("SysWarden systemd ordering drop-in changed during attestation")
+	}
+	secondPackageEvidence, err := attestSysWardenSystemdDropInPackageOwnership(executor, path)
+	if err != nil || secondPackageEvidence != firstPackageEvidence {
+		return "", fmt.Errorf("SysWarden systemd ordering drop-in package ownership changed during attestation")
+	}
+	if err := attestApprovedSystemdServiceDropInParents(
+		path, trustedRoot, expectedUID, expectedGID,
+	); err != nil {
+		return "", fmt.Errorf("SysWarden systemd ordering drop-in parent chain changed: %w", err)
+	}
+	digest := sha256.Sum256(first.content)
+	return path + "#" + fmt.Sprintf("%x", digest) + "#" + firstPackageEvidence, nil
+}
+
+func attestSysWardenSystemdDropInPackageOwnership(
+	executor firewallManagerExecutor,
+	path string,
+) (string, error) {
+	var claims []string
+	var failures []string
+
+	dpkgQuery, dpkgPresent, err := resolveOptionalFirewallRemovalExecutable(executor, "dpkg-query")
+	if err != nil {
+		return "", err
+	}
+	if dpkgPresent {
+		files, queryErr := executor.output(dpkgQuery, "--listfiles", "syswarden")
+		if queryErr != nil {
+			failures = append(failures, "dpkg-query file inventory failed")
+		} else if err := attestSysWardenDPKGDropInFileList(files, path); err != nil {
+			failures = append(failures, "dpkg-query: "+err.Error())
+		} else {
+			version, versionErr := executor.output(
+				dpkgQuery, "--show", "--showformat="+syswardenDropInDPKGVersionFormat, "syswarden",
+			)
+			if versionErr != nil {
+				failures = append(failures, "dpkg-query version failed")
+			} else if claim, parseErr := parseSysWardenDPKGDropInOwner(version); parseErr != nil {
+				failures = append(failures, "dpkg-query: "+parseErr.Error())
+			} else {
+				claims = append(claims, claim)
+			}
+		}
+	}
+
+	rpm, rpmPresent, err := resolveOptionalFirewallRemovalExecutable(executor, "rpm")
+	if err != nil {
+		return "", err
+	}
+	if rpmPresent {
+		owner, queryErr := executor.output(
+			rpm, "--query", "--file", path, "--queryformat", syswardenDropInRPMOwnerFormat,
+		)
+		if queryErr != nil {
+			failures = append(failures, "RPM ownership query failed")
+		} else if claim, parseErr := parseSysWardenRPMDropInOwners(
+			owner, servicePackageEnvironment("SYSWARDEN_PKG_INSTALL") == "1",
+		); parseErr != nil {
+			failures = append(failures, "RPM: "+parseErr.Error())
+		} else {
+			claims = append(claims, claim)
+		}
+	}
+
+	if len(claims) == 1 {
+		return claims[0], nil
+	}
+	if len(claims) > 1 {
+		return "", fmt.Errorf("refusing multiple package authorities for the SysWarden systemd ordering drop-in")
+	}
+	if len(failures) == 0 {
+		return "", fmt.Errorf("no supported package authority can attest the SysWarden systemd ordering drop-in")
+	}
+	return "", fmt.Errorf(
+		"no package authority attested the SysWarden systemd ordering drop-in: %s",
+		strings.Join(failures, "; "),
+	)
+}
+
+func attestSysWardenDPKGDropInFileList(output []byte, path string) error {
+	if len(output) == 0 || output[len(output)-1] != '\n' || bytes.ContainsAny(output, "\x00\r") {
+		return fmt.Errorf("SysWarden dpkg file inventory is ambiguous")
+	}
+	matches := 0
+	for _, item := range strings.Split(strings.TrimSuffix(string(output), "\n"), "\n") {
+		if item == "" || !filepath.IsAbs(item) || (item != "/." && filepath.Clean(item) != item) {
+			return fmt.Errorf("SysWarden dpkg file inventory contains an unsafe path")
+		}
+		if item == path {
+			matches++
+		}
+	}
+	if matches != 1 {
+		return fmt.Errorf("SysWarden dpkg file inventory contains %d exact ordering paths, want 1", matches)
+	}
+	return nil
+}
+
+func parseSysWardenDPKGDropInOwner(output []byte) (string, error) {
+	if len(output) == 0 || output[len(output)-1] != '\n' || bytes.ContainsAny(output, "\x00\r") ||
+		bytes.Count(output, []byte{'\n'}) != 1 {
+		return "", fmt.Errorf("SysWarden dpkg owner is ambiguous")
+	}
+	fields := strings.Split(strings.TrimSuffix(string(output), "\n"), "\t")
+	if len(fields) != 2 || !safePackageVersion(fields[0]) || fields[1] != "amd64" {
+		return "", fmt.Errorf("SysWarden dpkg owner is not exact")
+	}
+	current, err := currentSysWardenPackageVersion()
+	if err != nil {
+		return "", err
+	}
+	if fields[0] != current {
+		return "", fmt.Errorf("SysWarden dpkg owner differs from the running release")
+	}
+	return "syswarden@" + fields[0] + "#amd64#dpkg", nil
+}
+
+func currentSysWardenPackageVersion() (string, error) {
+	version := strings.TrimPrefix(Version, "v")
+	if version == Version || !safePackageVersion(version) {
+		return "", fmt.Errorf("compiled SysWarden version is not an exact release version")
+	}
+	return version, nil
+}
+
+func currentSysWardenRPMEVR() (string, error) {
+	version, err := currentSysWardenPackageVersion()
+	if err != nil {
+		return "", err
+	}
+	return version + "-1", nil
+}
+
+func parseSysWardenRPMDropInOwners(output []byte, packageTransaction bool) (string, error) {
+	if len(output) == 0 || output[len(output)-1] != '\n' || bytes.ContainsAny(output, "\x00\r") {
+		return "", fmt.Errorf("SysWarden RPM ownership is ambiguous")
+	}
+	lines := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+	if len(lines) == 0 || len(lines) > 2 || (!packageTransaction && len(lines) != 1) {
+		return "", fmt.Errorf("SysWarden RPM ownership count is not exact")
+	}
+	currentEVR, err := currentSysWardenRPMEVR()
+	if err != nil {
+		return "", err
+	}
+	claims := make([]string, 0, len(lines))
+	currentPresent := false
+	for _, line := range lines {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 4 || fields[0] != "syswarden" || !safePackageVersion(fields[1]) ||
+			fields[2] != "x86_64" || fields[3] != "8" {
+			return "", fmt.Errorf("SysWarden RPM owner is not exact")
+		}
+		if fields[1] == currentEVR {
+			currentPresent = true
+		}
+		claims = append(claims, "syswarden@"+fields[1]+"#x86_64#sha256#rpm")
+	}
+	if !currentPresent {
+		return "", fmt.Errorf("SysWarden RPM ownership does not include the running release")
+	}
+	sort.Strings(claims)
+	return strings.Join(claims, ","), nil
+}
+
+func parseSysWardenRPMDropInOwner(output []byte) (string, error) {
+	return parseSysWardenRPMDropInOwners(output, false)
+}
+
+func parseInstalledSysWardenDPKG(output []byte) (string, error) {
+	if len(output) == 0 || output[len(output)-1] != '\n' || bytes.ContainsAny(output, "\x00\r") ||
+		bytes.Count(output, []byte{'\n'}) != 1 {
+		return "", fmt.Errorf("installed SysWarden dpkg state is ambiguous")
+	}
+	fields := strings.Split(strings.TrimSuffix(string(output), "\n"), "\t")
+	if len(fields) != 3 || fields[0] != "install ok installed" || fields[1] != "amd64" ||
+		!safePackageVersion(fields[2]) {
+		return "", fmt.Errorf("installed SysWarden dpkg state is not exact")
+	}
+	current, err := currentSysWardenPackageVersion()
+	if err != nil {
+		return "", err
+	}
+	if fields[2] != current {
+		return "", fmt.Errorf("installed SysWarden dpkg release differs from the running release")
+	}
+	return "syswarden@" + fields[2] + "#amd64#dpkg", nil
+}
+
+func detectInstalledSysWardenPackageAuthority(executor firewallManagerExecutor) (string, error) {
+	var claims []string
+	var failures []string
+
+	dpkgQuery, dpkgPresent, err := resolveOptionalFirewallRemovalExecutable(executor, "dpkg-query")
+	if err != nil {
+		return "", err
+	}
+	if dpkgPresent {
+		output, queryErr := executor.output(
+			dpkgQuery, "--show", "--showformat="+syswardenDropInDPKGInstalledFormat, "syswarden",
+		)
+		switch {
+		case queryErr == nil:
+			claim, parseErr := parseInstalledSysWardenDPKG(output)
+			if parseErr != nil {
+				failures = append(failures, "dpkg-query: "+parseErr.Error())
+			} else {
+				claims = append(claims, claim)
+			}
+		case bytes.Equal(output, []byte(syswardenDropInDPKGAbsentEvidence)):
+		default:
+			failures = append(failures, "dpkg-query package state failed ambiguously")
+		}
+	}
+
+	rpm, rpmPresent, err := resolveOptionalFirewallRemovalExecutable(executor, "rpm")
+	if err != nil {
+		return "", err
+	}
+	if rpmPresent {
+		output, queryErr := executor.output(
+			rpm, "--query", "syswarden", "--queryformat", syswardenDropInRPMOwnerFormat,
+		)
+		switch {
+		case queryErr == nil:
+			claim, parseErr := parseSysWardenRPMDropInOwner(output)
+			if parseErr != nil {
+				failures = append(failures, "RPM: "+parseErr.Error())
+			} else {
+				claims = append(claims, claim)
+			}
+		case bytes.Equal(output, []byte(syswardenDropInRPMAbsentEvidence)):
+		default:
+			failures = append(failures, "RPM package state failed ambiguously")
+		}
+	}
+
+	if len(failures) != 0 {
+		return "", fmt.Errorf("cannot attest installed SysWarden package state: %s", strings.Join(failures, "; "))
+	}
+	if len(claims) > 1 {
+		return "", fmt.Errorf("refusing multiple installed SysWarden package authorities")
+	}
+	if len(claims) == 1 {
+		return claims[0], nil
+	}
+	return "", nil
+}
+
+func attestAbsentSystemdFirewallOrderingDropIn(
+	executor firewallManagerExecutor,
+	path string,
+	packageTransaction bool,
+) error {
+	if packageTransaction {
+		return fmt.Errorf("packaged systemd ordering drop-in is absent")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return fmt.Errorf("reinspect absent packaged systemd ordering drop-in: %w", err)
+		}
+		return fmt.Errorf("packaged systemd ordering drop-in appeared during absence attestation")
+	}
+	first, err := detectInstalledSysWardenPackageAuthority(executor)
+	if err != nil {
+		return err
+	}
+	if first != "" {
+		return fmt.Errorf("packaged systemd ordering drop-in is absent for %s", first)
+	}
+	second, err := detectInstalledSysWardenPackageAuthority(executor)
+	if err != nil || second != first {
+		return fmt.Errorf("SysWarden package authority changed during ordering absence attestation")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return fmt.Errorf("finalize absent packaged systemd ordering drop-in: %w", err)
+		}
+		return fmt.Errorf("packaged systemd ordering drop-in appeared during absence attestation")
+	}
+	return nil
 }

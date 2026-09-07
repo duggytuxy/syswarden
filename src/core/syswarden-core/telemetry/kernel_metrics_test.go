@@ -81,6 +81,75 @@ func TestKernelPortscanCountsEveryObservationAndExactJail_SW_KPI_001(t *testing.
 	}
 }
 
+func TestKernelIGMPAllHostsControlTrafficDoesNotBecomePortscanEvidence_SW_KPI_001(t *testing.T) {
+	start := time.Date(2026, 9, 4, 6, 0, 0, 0, time.UTC)
+	for _, protocol := range []string{"IGMP", "2"} {
+		t.Run(protocol, func(t *testing.T) {
+			strikes := newKernelStrikeTracker()
+			firewall := &kernelTestFirewall{}
+			var bans, shadows, detections, whitelistLookups int
+			processKernelDropLine(
+				"kernel: [CATCH-ALL] SRC=0.0.0.0 DST=224.0.0.1 PROTO="+protocol,
+				start,
+				strikes,
+				firewall,
+				func(string, string, string, RuleEvidence) { bans++ },
+				func(string, string, string, RuleEvidence) { shadows++ },
+				func(string, string, string, RuleEvidence) { detections++ },
+				func(string) bool {
+					whitelistLookups++
+					return false
+				},
+			)
+			if bans != 0 || shadows != 0 || detections != 0 || whitelistLookups != 0 || len(firewall.bans) != 0 || len(strikes.observations) != 0 {
+				t.Fatalf(
+					"IGMP all-hosts control traffic produced telemetry: bans=%d shadows=%d detections=%d whitelist_lookups=%d firewall=%v strikes=%v",
+					bans,
+					shadows,
+					detections,
+					whitelistLookups,
+					firewall.bans,
+					strikes.observations,
+				)
+			}
+		})
+	}
+}
+
+func TestKernelIGMPExceptionKeepsOtherZeroSourceTrafficObservable_SW_KPI_001(t *testing.T) {
+	start := time.Date(2026, 9, 4, 6, 0, 0, 0, time.UTC)
+	tests := map[string]string{
+		"different destination": "kernel: [CATCH-ALL] SRC=0.0.0.0 DST=224.0.0.2 PROTO=IGMP",
+		"different source":      "kernel: [CATCH-ALL] SRC=198.51.100.42 DST=224.0.0.1 PROTO=IGMP",
+		"different protocol":    "kernel: [CATCH-ALL] SRC=0.0.0.0 DST=224.0.0.1 PROTO=UDP DPT=67",
+		"missing destination":   "kernel: [CATCH-ALL] SRC=0.0.0.0 PROTO=IGMP",
+	}
+	for name, line := range tests {
+		t.Run(name, func(t *testing.T) {
+			strikes := newKernelStrikeTracker()
+			firewall := &kernelTestFirewall{}
+			shadows := 0
+			whitelistLookups := 0
+			processKernelDropLine(
+				line,
+				start,
+				strikes,
+				firewall,
+				func(string, string, string, RuleEvidence) {},
+				func(string, string, string, RuleEvidence) { shadows++ },
+				nil,
+				func(string) bool {
+					whitelistLookups++
+					return false
+				},
+			)
+			if shadows != 1 || whitelistLookups != 1 || len(strikes.observations) != 1 {
+				t.Fatalf("near-match traffic was hidden: shadows=%d whitelist_lookups=%d strikes=%v", shadows, whitelistLookups, strikes.observations)
+			}
+		})
+	}
+}
+
 func TestKernelJailsDoNotShareThresholdAndFailuresRemainMeasured_SW_KPI_001(t *testing.T) {
 	start := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	strikes := newKernelStrikeTracker()

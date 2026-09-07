@@ -358,7 +358,7 @@ func TestNftablesCommittedJournalUnlinkSyncFailureDoesNotRollback_SW_FW_005(t *t
 	defer func() { nftJournalRemovalDirectorySync = previousSync }()
 
 	_, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan)
-	if err == nil || !strings.Contains(err.Error(), "committed, verified and persisted") ||
+	if err == nil || !isCommittedFirewallPolicyError(err) || !strings.Contains(err.Error(), "committed, verified and persisted") ||
 		!strings.Contains(err.Error(), "cleanup durability is uncertain") {
 		t.Fatalf("transaction error = %v, want committed cleanup uncertainty", err)
 	}
@@ -384,7 +384,7 @@ func TestNftablesCommittedJournalRemovalFailureDoesNotRollback_SW_FW_005(t *test
 	defer func() { nftJournalRemove = previousRemove }()
 
 	_, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan)
-	if err == nil || !strings.Contains(err.Error(), "committed, verified and persisted") ||
+	if err == nil || !isCommittedFirewallPolicyError(err) || !strings.Contains(err.Error(), "committed, verified and persisted") ||
 		!strings.Contains(err.Error(), "cleanup is incomplete and will be retried") {
 		t.Fatalf("transaction error = %v, want committed cleanup retry", err)
 	}
@@ -433,7 +433,7 @@ func TestNftablesPersistedPhaseSyncFailureDoesNotRollback_SW_FW_005(t *testing.T
 	defer func() { nftJournalWriteDirectorySync = previousSync }()
 
 	_, err := applyNftablesTransaction(context.Background(), runner, stateDirectory, minimalNftRules(), nil, plan)
-	if err == nil || !strings.Contains(err.Error(), "committed, verified and persisted") ||
+	if err == nil || !isCommittedFirewallPolicyError(err) || !strings.Contains(err.Error(), "committed, verified and persisted") ||
 		!strings.Contains(err.Error(), "persisted journal phase durability is uncertain") {
 		t.Fatalf("transaction error = %v, want persisted-phase durability uncertainty", err)
 	}
@@ -587,7 +587,7 @@ func TestNftablesTransactionPreservesDynamicBansAndRemainingExpiry_SW_FW_001(t *
 		"add element inet syswarden banned_ips6 { 2001:db8::-2001:db8::ffff:ffff:ffff:ffff timeout 3600s expires",
 		"add element netdev syswarden_hw_drop banned_ips { 198.51.100.0-198.51.100.255 timeout 3600s expires",
 		"add element netdev syswarden_hw_drop banned_ips6 { 2001:db8::-2001:db8::ffff:ffff:ffff:ffff timeout 3600s expires",
-		"203.0.113.9",
+		"51.195.135.163",
 	} {
 		if !strings.Contains(runner.lastCandidate, fragment) {
 			t.Fatalf("candidate omitted preserved dynamic fragment %q:\n%s", fragment, runner.lastCandidate)
@@ -600,8 +600,272 @@ func TestNftablesTransactionPreservesDynamicBansAndRemainingExpiry_SW_FW_001(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(persistent, []byte("timeout 3600s")) || bytes.Contains(persistent, []byte("203.0.113.9")) {
+	if bytes.Contains(persistent, []byte("timeout 3600s")) || bytes.Contains(persistent, []byte("51.195.135.163")) {
 		t.Fatalf("ephemeral dynamic bans leaked into reboot-persistent policy:\n%s", persistent)
+	}
+}
+
+func TestNftablesTransactionRemovesOnlyRequestedLocalDynamicBan_SW_FW_001(t *testing.T) {
+	plan := minimalVerificationPlan(0)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+	}
+
+	tests := []struct {
+		name              string
+		target            string
+		retainedFragments []string
+		removedFragments  []string
+		familySetName     string
+	}{
+		{
+			name:   "reported IPv4 host",
+			target: "51.195.135.163",
+			retainedFragments: []string{
+				"198.51.100.0-198.51.100.255",
+				"2001:db8::-2001:db8::ffff:ffff:ffff:ffff",
+				"2001:db8:ffff::9",
+			},
+			removedFragments: []string{"51.195.135.163"},
+			familySetName:    "banned_ips",
+		},
+		{
+			name:   "IPv6 CIDR",
+			target: "2001:db8::/64",
+			retainedFragments: []string{
+				"2001:db8:ffff::9",
+				"198.51.100.0-198.51.100.255",
+				"51.195.135.163",
+			},
+			removedFragments: []string{"2001:db8::-2001:db8::ffff:ffff:ffff:ffff"},
+			familySetName:    "banned_ips6",
+		},
+		{
+			name:   "partial IPv4 CIDR",
+			target: "198.51.100.64/26",
+			retainedFragments: []string{
+				"51.195.135.163",
+				"198.51.100.0-198.51.100.63 timeout 3600s expires",
+				"198.51.100.128-198.51.100.255 timeout 3600s expires",
+				"2001:db8::-2001:db8::ffff:ffff:ffff:ffff",
+				"2001:db8:ffff::9",
+			},
+			removedFragments: []string{
+				"198.51.100.0-198.51.100.255",
+				"198.51.100.64-198.51.100.127",
+			},
+			familySetName: "banned_ips",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateDirectory := t.TempDir()
+			runner := newFakeNFTRunner(plan,
+				nftTableTarget{family: "inet", name: "syswarden"},
+				nftTableTarget{family: "netdev", name: "syswarden_hw_drop"},
+			)
+			runner.rulesetDocuments = [][]byte{
+				nftVerificationJSONWithDynamicBans(plan, time.Hour),
+				nftVerificationJSONAfterDynamicRemoval(plan, time.Hour-time.Second, test.target),
+			}
+			removal, err := newNFTDynamicBanRemoval(test.target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := applyNftablesTransaction(
+				context.Background(),
+				runner,
+				stateDirectory,
+				minimalNftRules(),
+				nil,
+				plan,
+				removal,
+			); err != nil {
+				t.Fatalf("transactional dynamic unban failed: %v", err)
+			}
+
+			for _, fragment := range test.removedFragments {
+				if strings.Contains(runner.lastCandidate, fragment) {
+					t.Fatalf("candidate retained removed dynamic fragment %q:\n%s", fragment, runner.lastCandidate)
+				}
+			}
+			for _, fragment := range test.retainedFragments {
+				if count := strings.Count(runner.lastCandidate, fragment); count != 2 {
+					t.Fatalf("candidate retained fragment %q %d times, want both inet and netdev copies:\n%s", fragment, count, runner.lastCandidate)
+				}
+			}
+			for _, prefix := range []string{"add element inet syswarden ", "add element netdev syswarden_hw_drop "} {
+				if !strings.Contains(runner.lastCandidate, prefix+test.familySetName+" {") {
+					t.Fatalf("candidate omitted an expected %s copy for %s:\n%s", test.familySetName, test.target, runner.lastCandidate)
+				}
+			}
+			for _, key := range nftDynamicBanSets {
+				flush := fmt.Sprintf("flush set %s %s %s", key.family, key.table, key.name)
+				if strings.Contains(runner.lastCandidate, flush) {
+					t.Fatalf("candidate used broad dynamic set flush %q:\n%s", flush, runner.lastCandidate)
+				}
+			}
+		})
+	}
+}
+
+func TestNftablesTransactionRestoresRequestedDynamicBanOnRollback_SW_FW_001(t *testing.T) {
+	plan := minimalVerificationPlan(1)
+	plan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	badPlan := minimalVerificationPlan(0)
+	badPlan.tables[nftObjectKey{family: "netdev", name: "syswarden_hw_drop"}] = struct{}{}
+	for _, key := range nftDynamicBanSets {
+		plan.sets[key] = -1
+		badPlan.sets[key] = -1
+	}
+	runner := newFakeNFTRunner(plan,
+		nftTableTarget{family: "inet", name: "syswarden"},
+		nftTableTarget{family: "netdev", name: "syswarden_hw_drop"},
+	)
+	const target = "198.51.100.64/26"
+	runner.rulesetDocuments = [][]byte{
+		nftVerificationJSONWithDynamicBans(plan, time.Hour),
+		nftVerificationJSONAfterDynamicRemoval(badPlan, time.Hour-time.Second, target),
+	}
+	removal, err := newNFTDynamicBanRemoval(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyNftablesTransaction(
+		context.Background(),
+		runner,
+		t.TempDir(),
+		minimalNftRules(),
+		[]nftSetPopulation{{name: "fixture_set", entries: []string{"192.0.2.1"}}},
+		plan,
+		removal,
+	); err == nil {
+		t.Fatal("verification mismatch unexpectedly succeeded")
+	}
+	if runner.rollbackApplyCalls != 1 {
+		t.Fatalf("rollback calls = %d, want 1", runner.rollbackApplyCalls)
+	}
+	for _, fragment := range []string{
+		"add element inet syswarden banned_ips { 198.51.100.0-198.51.100.255 timeout 3600s expires",
+		"add element netdev syswarden_hw_drop banned_ips { 198.51.100.0-198.51.100.255 timeout 3600s expires",
+	} {
+		if !strings.Contains(runner.lastRollback, fragment) {
+			t.Fatalf("rollback did not restore requested dynamic ban with %q:\n%s", fragment, runner.lastRollback)
+		}
+	}
+	for _, residual := range []string{
+		"198.51.100.0-198.51.100.63",
+		"198.51.100.128-198.51.100.255",
+	} {
+		if count := strings.Count(runner.lastCandidate, residual); count != 2 {
+			t.Fatalf("candidate contains residual %q %d times, want inet and netdev copies:\n%s", residual, count, runner.lastCandidate)
+		}
+		if strings.Contains(runner.lastRollback, residual) {
+			t.Fatalf("rollback retained candidate-only residual %q instead of the original interval:\n%s", residual, runner.lastRollback)
+		}
+	}
+}
+
+func TestSubtractNFTDynamicBanPreservesIPv6ResidualMetadata_SW_FW_001(t *testing.T) {
+	original := nftDynamicBan{
+		start:   netip.MustParseAddr("2001:4860::"),
+		end:     netip.MustParseAddr("2001:4860::ffff"),
+		timeout: 24 * time.Hour,
+		expires: 23*time.Hour + 17*time.Minute,
+	}
+	removal, err := newNFTDynamicBanRemoval("2001:4860::4000/114")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := subtractNFTDynamicBan(original, removal)
+	want := []nftDynamicBan{
+		{
+			start:   netip.MustParseAddr("2001:4860::"),
+			end:     netip.MustParseAddr("2001:4860::3fff"),
+			timeout: original.timeout,
+			expires: original.expires,
+		},
+		{
+			start:   netip.MustParseAddr("2001:4860::8000"),
+			end:     netip.MustParseAddr("2001:4860::ffff"),
+			timeout: original.timeout,
+			expires: original.expires,
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("subtractNFTDynamicBan() = %#v, want %#v", got, want)
+	}
+}
+
+func TestNFTDynamicSnapshotWithoutRemovalsSubtractsEveryOverlap_SW_FW_001(t *testing.T) {
+	capturedAt := time.Unix(100, 0)
+	snapshot := newNFTDynamicSnapshot(capturedAt)
+	left := nftDynamicBan{
+		start:   netip.MustParseAddr("51.195.135.32"),
+		end:     netip.MustParseAddr("51.195.135.79"),
+		timeout: time.Hour,
+		expires: 45 * time.Minute,
+	}
+	contained := nftDynamicBan{
+		start: netip.MustParseAddr("51.195.135.80"),
+		end:   netip.MustParseAddr("51.195.135.80"),
+	}
+	right := nftDynamicBan{
+		start:   netip.MustParseAddr("51.195.135.120"),
+		end:     netip.MustParseAddr("51.195.135.159"),
+		timeout: 2 * time.Hour,
+		expires: 90 * time.Minute,
+	}
+	outside := nftDynamicBan{
+		start: netip.MustParseAddr("51.195.135.200"),
+		end:   netip.MustParseAddr("51.195.135.200"),
+	}
+	for _, key := range []nftObjectKey{
+		{family: "inet", table: "syswarden", name: "banned_ips"},
+		{family: "netdev", table: "syswarden_hw_drop", name: "banned_ips"},
+	} {
+		for _, ban := range []nftDynamicBan{left, contained, right, outside} {
+			snapshot.sets[key][dynamicBanIdentity(ban)] = ban
+		}
+	}
+	ipv6Key := nftObjectKey{family: "inet", table: "syswarden", name: "banned_ips6"}
+	ipv6 := nftDynamicBan{
+		start: netip.MustParseAddr("2606:4700::1111"),
+		end:   netip.MustParseAddr("2606:4700::1111"),
+	}
+	snapshot.sets[ipv6Key][dynamicBanIdentity(ipv6)] = ipv6
+
+	removal, err := newNFTDynamicBanRemoval("51.195.135.64/26")
+	if err != nil {
+		t.Fatal(err)
+	}
+	filtered := nftDynamicSnapshotWithoutRemovals(snapshot, []nftDynamicBanRemoval{removal})
+	want := map[string]nftDynamicBan{
+		"51.195.135.32-51.195.135.63": {
+			start:   left.start,
+			end:     netip.MustParseAddr("51.195.135.63"),
+			timeout: left.timeout,
+			expires: left.expires,
+		},
+		"51.195.135.128-51.195.135.159": {
+			start:   netip.MustParseAddr("51.195.135.128"),
+			end:     right.end,
+			timeout: right.timeout,
+			expires: right.expires,
+		},
+		dynamicBanIdentity(outside): outside,
+	}
+	for _, key := range []nftObjectKey{
+		{family: "inet", table: "syswarden", name: "banned_ips"},
+		{family: "netdev", table: "syswarden_hw_drop", name: "banned_ips"},
+	} {
+		if !reflect.DeepEqual(filtered.sets[key], want) {
+			t.Fatalf("filtered %s/%s/%s = %#v, want %#v", key.family, key.table, key.name, filtered.sets[key], want)
+		}
+	}
+	if got := filtered.sets[ipv6Key]; !reflect.DeepEqual(got, map[string]nftDynamicBan{dynamicBanIdentity(ipv6): ipv6}) {
+		t.Fatalf("IPv4 removal changed IPv6 dynamic bans: %#v", got)
 	}
 }
 
@@ -631,6 +895,38 @@ func TestCompareNFTDynamicSnapshotsAnchorsExpiryAtSuccessfulApply_SW_FW_001(t *t
 	expected.capturedAt = appliedAt
 	if err := compareNFTDynamicSnapshots(expected, observed, observedAt); err != nil {
 		t.Fatalf("successful-apply expiry anchor rejected exact restored expiry: %v", err)
+	}
+}
+
+func TestCompareNFTDynamicSnapshotsAccountsForBoundedNFTObservationLatency_SW_FW_001(t *testing.T) {
+	appliedAt := time.Unix(100, 0)
+	observationStartedAt := appliedAt.Add(100 * time.Millisecond)
+	observationFinishedAt := observationStartedAt.Add(2 * time.Second)
+	key := nftObjectKey{family: "netdev", table: "syswarden_hw_drop", name: "banned_ips"}
+	expected := newNFTDynamicSnapshot(appliedAt)
+	expected.sets[key]["51.195.135.163-51.195.135.163"] = nftDynamicBan{
+		start:   netip.MustParseAddr("51.195.135.163"),
+		end:     netip.MustParseAddr("51.195.135.163"),
+		timeout: 30 * 24 * time.Hour,
+		expires: 30*24*time.Hour - 7*time.Minute - 7*time.Second,
+	}
+	observed := newNFTDynamicSnapshot(observationStartedAt)
+	observedBan := expected.sets[key]["51.195.135.163-51.195.135.163"]
+	observed.sets[key]["51.195.135.163-51.195.135.163"] = observedBan
+	if err := compareNFTDynamicSnapshots(expected, observed, observationFinishedAt); err != nil {
+		t.Fatalf("bounded nft observation latency caused a false expiry drift: %v", err)
+	}
+
+	observedBan.expires = expected.sets[key]["51.195.135.163-51.195.135.163"].expires + 3*time.Second
+	observed.sets[key]["51.195.135.163-51.195.135.163"] = observedBan
+	if err := compareNFTDynamicSnapshots(expected, observed, observationFinishedAt); err == nil {
+		t.Fatal("real expiry extension was hidden by the observation window")
+	}
+
+	observedBan.expires = expected.sets[key]["51.195.135.163-51.195.135.163"].expires - 6*time.Second
+	observed.sets[key]["51.195.135.163-51.195.135.163"] = observedBan
+	if err := compareNFTDynamicSnapshots(expected, observed, observationFinishedAt); err == nil {
+		t.Fatal("real premature expiry was hidden by the observation window")
 	}
 }
 
@@ -1731,7 +2027,7 @@ func nftVerificationJSONWithDynamicBans(plan nftVerificationPlan, expires time.D
 	}
 	for _, key := range nftDynamicBanSets {
 		var timedValue any = map[string]any{"prefix": map[string]any{"addr": "198.51.100.0", "len": 24}}
-		permanentValue := "203.0.113.9"
+		permanentValue := "51.195.135.163"
 		if strings.HasSuffix(key.name, "6") {
 			timedValue = map[string]any{"prefix": map[string]any{"addr": "2001:db8::", "len": 64}}
 			permanentValue = "2001:db8:ffff::9"
@@ -1751,6 +2047,58 @@ func nftVerificationJSONWithDynamicBans(plan nftVerificationPlan, expires time.D
 		}})
 	}
 	content, _ := json.Marshal(document)
+	return content
+}
+
+func nftVerificationJSONAfterDynamicRemoval(plan nftVerificationPlan, expires time.Duration, target string) []byte {
+	document, err := decodeNFTJSON(nftVerificationJSONWithDynamicBans(plan, expires))
+	if err != nil {
+		panic(err)
+	}
+	removal, err := newNFTDynamicBanRemoval(target)
+	if err != nil {
+		panic(err)
+	}
+	for index := range document.NFTables {
+		element := document.NFTables[index].Element
+		if element == nil || removal.start.Is6() != strings.HasSuffix(element.Name, "6") {
+			continue
+		}
+		filtered := make([]json.RawMessage, 0, len(element.Elements)+1)
+		for _, raw := range element.Elements {
+			ban, err := parseNFTDynamicBan(raw)
+			if err != nil {
+				panic(err)
+			}
+			for _, residual := range subtractNFTDynamicBan(ban, removal) {
+				filtered = append(filtered, marshalNFTDynamicBanElement(residual))
+			}
+		}
+		element.Elements = filtered
+	}
+	content, err := json.Marshal(document)
+	if err != nil {
+		panic(err)
+	}
+	return content
+}
+
+func marshalNFTDynamicBanElement(ban nftDynamicBan) json.RawMessage {
+	var value any = ban.start.String()
+	if ban.start != ban.end {
+		value = map[string]any{"range": []any{ban.start.String(), ban.end.String()}}
+	}
+	if ban.timeout > 0 {
+		value = map[string]any{"elem": map[string]any{
+			"val":     value,
+			"timeout": int64(ban.timeout / time.Second),
+			"expires": int64(ban.expires / time.Second),
+		}}
+	}
+	content, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
 	return content
 }
 

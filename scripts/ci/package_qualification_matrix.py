@@ -66,9 +66,9 @@ EXPECTED_CANDIDATE_SOURCE = {
 }
 
 EXPECTED_BASELINE_SOURCE = {
-    "release": "v4.03.3",
-    "commit": "cdd66600a1505bae1f1e754dea096ee71e9cee82",
-    "release_id": 377680978,
+    "release": "v4.04.2",
+    "commit": "7a03d40f427a825917561e2a0930298e8fbbbc8b",
+    "release_id": 381364611,
     "release_state": "public-stable",
     "asset_selection": "github-asset-id",
 }
@@ -76,31 +76,31 @@ EXPECTED_BASELINE_SOURCE = {
 EXPECTED_BASELINE_ASSETS = (
     BaselineAsset(
         "SHA256SUMS.txt",
-        532015727,
+        541354557,
         283,
         "metadata",
-        "91c89428bf20d2386adf0d7529dc5edb26da6d490db872fab0771ddfce5364c2",
+        "ab2d4e8379ea77c0738c343065283eb4a8f3887a9465ba893f90dfac8967e0e9",
     ),
     BaselineAsset(
-        "syswarden_4.03.3_amd64.deb",
-        532015759,
-        13874730,
+        "syswarden_4.04.2_amd64.deb",
+        541354594,
+        14994704,
         "amd64",
-        "4d17e74b16022be31a3e6db8851386f8c0df14772ea38f04f7df45540c818c9b",
+        "edf4c44b08f97a4455faa6128bd82d3830d073b52a9086788c97d9481bb3eea6",
     ),
     BaselineAsset(
-        "syswarden-4.03.3-1.x86_64.rpm",
-        532015720,
-        14160347,
+        "syswarden-4.04.2-1.x86_64.rpm",
+        541354554,
+        15281125,
         "x86_64",
-        "42e207f7f5ae47384c0c35764cf4da179feed1cac34f4fb3bfbd3b59aee8881e",
+        "409398b4dd0bd8463d665ce856bb387236963a09eb2a371c2414aacf0ab2e011",
     ),
     BaselineAsset(
-        "syswarden_4.03.3_x86_64.apk",
-        532015763,
-        14039148,
+        "syswarden_4.04.2_x86_64.apk",
+        541354596,
+        15207236,
         "x86_64",
-        "73f2d1cf67f62e781dc3d78cc9f9b2d5732ec876fee6587b305aeaaa3830f3d5",
+        "b1914ce1665f81d9f8d9aeae1cc332cd5d8210dbf94e2f04d021e158e25dd39f",
     ),
 )
 
@@ -634,8 +634,8 @@ def validate_document(document: object) -> dict[str, Any]:
         raise QualificationMatrixError("schema_version must equal integer 1")
     if matrix["matrix_id"] != "syswarden-package-qualification/v1":
         raise QualificationMatrixError("matrix_id does not match the v1 contract")
-    if matrix["target_release"] != "v4.04.2":
-        raise QualificationMatrixError("target_release must equal v4.04.2")
+    if matrix["target_release"] != "v4.04.3":
+        raise QualificationMatrixError("target_release must equal v4.04.3")
     _require_exact_mapping(matrix["architecture"], EXPECTED_ARCHITECTURE, "architecture")
     _validate_package_sources(matrix["package_sources"])
     _validate_budgets(matrix["budgets"])

@@ -24,6 +24,22 @@ class RepositoryStateTests(unittest.TestCase):
             ["git", "-C", self.repository, "add", ".gitignore", "tracked.txt"],
             check=True,
         )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                self.repository,
+                "-c",
+                "user.name=SysWarden Test",
+                "-c",
+                "user.email=test@syswarden.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "baseline",
+            ],
+            check=True,
+        )
         self.snapshot = self.repository.parent / f"{self.repository.name}.state.json"
         repository_state.write_snapshot(self.repository, self.snapshot)
 
@@ -46,6 +62,29 @@ class RepositoryStateTests(unittest.TestCase):
             ["git", "-C", self.repository, "add", "staged.txt"], check=True
         )
         with self.assertRaises(repository_state.RepositoryStateError):
+            repository_state.verify_snapshot(self.repository, self.snapshot)
+
+    def test_head_change_without_file_or_index_change_fails(self) -> None:
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                self.repository,
+                "-c",
+                "user.name=SysWarden Test",
+                "-c",
+                "user.email=test@syswarden.invalid",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "move head only",
+            ],
+            check=True,
+        )
+        with self.assertRaisesRegex(
+            repository_state.RepositoryStateError, "<git-head>"
+        ):
             repository_state.verify_snapshot(self.repository, self.snapshot)
 
     def test_mode_change_fails(self) -> None:

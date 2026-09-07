@@ -781,6 +781,22 @@ PROJECT_LICENSE_SHA256 = (
     "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
 )
 PROJECT_LICENSE_EXPRESSION = "GPL-3.0-or-later"
+SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH = (
+    "/usr/lib/systemd/system/syswarden-firewall.service.d/"
+    "10-syswarden-wireguard-ordering.conf"
+)
+SYSTEMD_WIREGUARD_ORDERING_DROPIN_FIRST_VERSION = "4.04.3"
+SYSTEMD_WIREGUARD_ORDERING_DROPIN_SHA256 = (
+    "8c4b31f25436882197beec8c8bff5a7599389e564593bd7c353aa99ef3854483"
+)
+SYSTEMD_WIREGUARD_ORDERING_DEB_DIRECTORIES = frozenset(
+    {
+        "/usr/lib",
+        "/usr/lib/systemd",
+        "/usr/lib/systemd/system",
+        "/usr/lib/systemd/system/syswarden-firewall.service.d",
+    }
+)
 LEGACY_BASH_COMPLETION_PATH = "/etc/bash_completion.d/syswarden"
 LEGACY_BASH_COMPLETION_VERSION = "4.03.2"
 LEGACY_BASH_COMPLETION_SIZE = 16_339
@@ -877,6 +893,7 @@ def _installed_phase_event_checks(scenario: str, label: str) -> tuple[str, ...]:
         f"{scenario}.{label}.version",
         f"{scenario}.{label}.inventory.manager",
         f"{scenario}.{label}.inventory.filesystem",
+        f"{scenario}.{label}.systemd_ordering",
         f"{scenario}.{label}.executable",
         f"{scenario}.{label}.elf_contract",
         f"{scenario}.{label}.postinstall_contract",
@@ -2761,6 +2778,55 @@ package_uses_geoip_data_license_payload() {
     }
 }
 
+version_uses_systemd_wireguard_ordering_payload() {
+    systemd_ordering_version="$1"
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm) ;;
+        apk) return 1 ;;
+        *) return 2 ;;
+    esac
+    case "${systemd_ordering_version}" in
+        *.*.*) ;;
+        *) return 2 ;;
+    esac
+    systemd_ordering_major="${systemd_ordering_version%%.*}"
+    systemd_ordering_remainder="${systemd_ordering_version#*.}"
+    systemd_ordering_minor="${systemd_ordering_remainder%%.*}"
+    systemd_ordering_patch="${systemd_ordering_remainder#*.}"
+    case "${systemd_ordering_major}" in
+        ''|*[!0-9]*) return 2 ;;
+    esac
+    case "${systemd_ordering_minor}" in
+        ''|*[!0-9]*) return 2 ;;
+    esac
+    case "${systemd_ordering_patch}" in
+        ''|*[!0-9]*) return 2 ;;
+    esac
+    [ "${systemd_ordering_major}" -gt 4 ] || {
+        [ "${systemd_ordering_major}" -eq 4 ] && {
+            [ "${systemd_ordering_minor}" -gt 4 ] || {
+                [ "${systemd_ordering_minor}" -eq 4 ] && \
+                    [ "${systemd_ordering_patch}" -ge 3 ]
+            }
+        }
+    }
+}
+
+package_uses_systemd_wireguard_ordering_payload() {
+    systemd_ordering_role="$1"
+    case "${systemd_ordering_role}" in
+        candidate)
+            systemd_ordering_artifact_version="${EXPECTED_CANDIDATE_VERSION}"
+            ;;
+        previous)
+            systemd_ordering_artifact_version="${EXPECTED_PREVIOUS_VERSION}"
+            ;;
+        *) return 2 ;;
+    esac
+    version_uses_systemd_wireguard_ordering_payload \
+        "${systemd_ordering_artifact_version}"
+}
+
 validate_manifest_contract() {
     manifest="$1"
     artifact_role="$2"
@@ -2801,12 +2867,38 @@ validate_manifest_contract() {
         required_manifest_path "${manifest}" \
             /usr/share/doc/syswarden/LICENSE.txt && return 1
     fi
+    systemd_ordering_payload=0
+    if package_uses_systemd_wireguard_ordering_payload "${artifact_role}"; then
+        systemd_ordering_payload=1
+        required_manifest_path "${manifest}" \
+            /usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf || return 1
+        if [ "${PACKAGE_FAMILY}" = deb ]; then
+            for systemd_ordering_directory in \
+                /usr/lib \
+                /usr/lib/systemd \
+                /usr/lib/systemd/system \
+                /usr/lib/systemd/system/syswarden-firewall.service.d
+            do
+                required_manifest_path "${manifest}" \
+                    "${systemd_ordering_directory}" || return 1
+            done
+        fi
+    else
+        systemd_ordering_payload_rc=$?
+        [ "${systemd_ordering_payload_rc}" -eq 1 ] || return 1
+        required_manifest_path "${manifest}" \
+            /usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf && return 1
+    fi
 
     case "${PACKAGE_FAMILY}" in
         deb)
             if [ "${legacy_completion_payload}" -eq 1 ]; then
                 allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/changelog\.gz|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=16
+            elif [ "${geoip_data_license_payload}" -eq 1 ] && \
+                 [ "${systemd_ordering_payload}" -eq 1 ]; then
+                allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/lib|usr/lib/systemd|usr/lib/systemd/system|usr/lib/systemd/system/syswarden-firewall\.service\.d|usr/lib/systemd/system/syswarden-firewall\.service\.d/10-syswarden-wireguard-ordering\.conf|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/(changelog\.gz|GEOIP-DATA-LICENSE\.txt|LICENSE\.txt)|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
+                expected_manifest_count=26
             elif [ "${geoip_data_license_payload}" -eq 1 ]; then
                 allowed='^/(opt|opt/syswarden|opt/syswarden/bin|usr|usr/local|usr/local/bin|usr/share|usr/share/bash-completion|usr/share/bash-completion/completions|usr/share/bash-completion/completions/syswarden|usr/share/doc|usr/share/doc/syswarden|usr/share/doc/syswarden/(changelog\.gz|GEOIP-DATA-LICENSE\.txt|LICENSE\.txt)|opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?)$'
                 expected_manifest_count=21
@@ -2836,6 +2928,11 @@ validate_manifest_contract() {
         rpm)
             if [ "${legacy_completion_payload}" -eq 1 ]; then
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+            elif [ "${geoip_data_license_payload}" -eq 1 ] && \
+                 [ "${systemd_ordering_payload}" -eq 1 ]; then
+                allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt|usr/lib/systemd/system/syswarden-firewall\.service\.d/10-syswarden-wireguard-ordering\.conf|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
+                required_manifest_path "${manifest}" \
+                    /usr/share/doc/syswarden || return 1
             elif [ "${geoip_data_license_payload}" -eq 1 ]; then
                 allowed='^/(opt/syswarden/bin/syswarden-(cli|core|tui)|opt/syswarden/signatures\.json|usr/local/bin/syswarden(-tui)?|usr/share/bash-completion/completions/syswarden|usr/share/doc/syswarden|usr/share/doc/syswarden/(GEOIP-DATA-LICENSE|LICENSE)\.txt|usr/lib/\.build-id|usr/lib/\.build-id/[0-9a-f]{2}|usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38})$'
                 required_manifest_path "${manifest}" \
@@ -2927,6 +3024,20 @@ validate_inventory_contract() {
         geoip_data_license_rc=$?
         [ "${geoip_data_license_rc}" -eq 1 ] || return 1
     fi
+    systemd_ordering_payload=0
+    if package_uses_systemd_wireguard_ordering_payload "${artifact_role}"; then
+        systemd_ordering_payload=1
+        inventory_has_exact_entry "${inventory}" \
+            /usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf \
+            file 644 \
+            8c4b31f25436882197beec8c8bff5a7599389e564593bd7c353aa99ef3854483 || return 1
+    else
+        systemd_ordering_payload_rc=$?
+        [ "${systemd_ordering_payload_rc}" -eq 1 ] || return 1
+        grep -Fq \
+            '/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf' \
+            "${inventory}" && return 1
+    fi
     if awk -F '\t' '$2 == "missing" || $2 == "unsupported" { found = 1 } END { exit found ? 0 : 1 }' "${inventory}"; then
         return 1
     fi
@@ -2939,6 +3050,9 @@ validate_inventory_contract() {
         required_directories='/opt /opt/syswarden /opt/syswarden/bin /usr /usr/local /usr/local/bin /usr/share /usr/share/doc /usr/share/doc/syswarden'
         if [ "${legacy_completion_payload}" -eq 0 ]; then
             required_directories="${required_directories} /usr/share/bash-completion /usr/share/bash-completion/completions"
+        fi
+        if [ "${systemd_ordering_payload}" -eq 1 ]; then
+            required_directories="${required_directories} /usr/lib /usr/lib/systemd /usr/lib/systemd/system /usr/lib/systemd/system/syswarden-firewall.service.d"
         fi
         for directory in ${required_directories}; do
             inventory_has_exact_entry "${inventory}" "${directory}" directory 755 - || return 1
@@ -2988,11 +3102,124 @@ verify_package_artifact() {
     fi
 }
 
+systemd_property_token_count() {
+    systemd_property_value="$1"
+    systemd_property_token="$2"
+    printf '%s\n' "${systemd_property_value}" | awk \
+        -v token="${systemd_property_token}" '
+            {
+                for (field = 1; field <= NF; field++) {
+                    if ($field == token) {
+                        matches++
+                    }
+                }
+            }
+            END { print matches + 0 }
+        '
+}
+
+attest_systemd_wireguard_ordering_contract() {
+    systemd_ordering_label="$1"
+    systemd_ordering_installed_version="$2"
+    systemd_ordering_path=/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf
+    systemd_ordering_unit=wg-quick@wg-syswarden.service
+    systemd_ordering_expected=0
+    systemd_ordering_ok=1
+
+    if version_uses_systemd_wireguard_ordering_payload \
+        "${systemd_ordering_installed_version}"; then
+        systemd_ordering_expected=1
+    else
+        systemd_ordering_version_rc=$?
+        [ "${systemd_ordering_version_rc}" -eq 1 ] || systemd_ordering_ok=0
+    fi
+
+    if [ "${systemd_ordering_expected}" -eq 1 ]; then
+        systemd_ordering_identity_before="$(stat -c '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' \
+            "${systemd_ordering_path}" 2>/dev/null || true)"
+        systemd_ordering_metadata="$(stat -c '%f:%u:%g:%h:%s' \
+            "${systemd_ordering_path}" 2>/dev/null || true)"
+        systemd_ordering_digest="$(hash_file \
+            "${systemd_ordering_path}" 2>/dev/null || true)"
+        systemd_ordering_identity_after="$(stat -c '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' \
+            "${systemd_ordering_path}" 2>/dev/null || true)"
+        if [ ! -f "${systemd_ordering_path}" ] || \
+           [ -L "${systemd_ordering_path}" ] || \
+           [ "${systemd_ordering_metadata}" != 81a4:0:0:1:43 ] || \
+           [ -z "${systemd_ordering_identity_before}" ] || \
+           [ "${systemd_ordering_identity_after}" != \
+             "${systemd_ordering_identity_before}" ] || \
+           [ "${systemd_ordering_digest}" != \
+             8c4b31f25436882197beec8c8bff5a7599389e564593bd7c353aa99ef3854483 ]; then
+            systemd_ordering_ok=0
+        fi
+    elif [ -e "${systemd_ordering_path}" ] || \
+         [ -L "${systemd_ordering_path}" ]; then
+        systemd_ordering_ok=0
+    fi
+
+    case "${PACKAGE_FAMILY}" in
+        deb|rpm)
+            if systemd_ordering_dropins="$(systemctl show \
+                syswarden-firewall.service -p DropInPaths --value \
+                2>> "${COMMAND_LOG}")"; then
+                :
+            else
+                systemd_ordering_ok=0
+                systemd_ordering_dropins=
+            fi
+            if systemd_ordering_after="$(systemctl show \
+                syswarden-firewall.service -p After --value \
+                2>> "${COMMAND_LOG}")"; then
+                :
+            else
+                systemd_ordering_ok=0
+                systemd_ordering_after=
+            fi
+            systemd_ordering_dropin_count="$(systemd_property_token_count \
+                "${systemd_ordering_dropins}" "${systemd_ordering_path}")" || \
+                systemd_ordering_ok=0
+            systemd_ordering_after_count="$(systemd_property_token_count \
+                "${systemd_ordering_after}" "${systemd_ordering_unit}")" || \
+                systemd_ordering_ok=0
+            [ "${systemd_ordering_dropin_count}" = \
+                "${systemd_ordering_expected}" ] || systemd_ordering_ok=0
+            [ "${systemd_ordering_after_count}" = \
+                "${systemd_ordering_expected}" ] || systemd_ordering_ok=0
+            ;;
+        apk)
+            [ "${systemd_ordering_expected}" -eq 0 ] || systemd_ordering_ok=0
+            ;;
+        *)
+            systemd_ordering_ok=0
+            ;;
+    esac
+
+    if [ "${systemd_ordering_ok}" -eq 1 ]; then
+        if [ "${systemd_ordering_expected}" -eq 1 ]; then
+            record pass "${PREFIX}.${systemd_ordering_label}.systemd_ordering" \
+                "the exact package-owned drop-in contributes one effective WireGuard ordering dependency"
+        elif [ "${PACKAGE_FAMILY}" = apk ]; then
+            record pass "${PREFIX}.${systemd_ordering_label}.systemd_ordering" \
+                "the systemd-only ordering drop-in is absent from the OpenRC package and runtime"
+        else
+            record pass "${PREFIX}.${systemd_ordering_label}.systemd_ordering" \
+                "the pre-v4.04.3 drop-in and effective WireGuard ordering dependency are absent"
+        fi
+        return 0
+    fi
+    record fail "${PREFIX}.${systemd_ordering_label}.systemd_ordering" \
+        "the version-specific package file or effective ordering semantics differ from the exact contract"
+    return 1
+}
+
 probe_forward_only_apk_payload() {
     label="$1"
     actual_version="$(installed_version 2>/dev/null || true)"
     check_equal "${label}.version" "${EXPECTED_PREVIOUS_VERSION}" "${actual_version}"
     verify_installed_inventory "${label}" previous
+    attest_systemd_wireguard_ordering_contract \
+        "${label}" "${actual_version}" || true
 
     /opt/syswarden/bin/syswarden-cli --help \
         > /tmp/syswarden-historical-help.out 2>&1
@@ -3058,6 +3285,11 @@ v4033_to_v4042_upgrade_selected() {
         [ "$(installed_version 2>/dev/null || true)" = 4.03.3 ]
 }
 
+v4042_to_v4043_upgrade_selected() {
+    v4042_to_v4043_transition_selected && \
+        [ "$(installed_version 2>/dev/null || true)" = 4.04.2 ]
+}
+
 attest_previous_webtui_retirement() {
     previous_webtui_root="${1:-/}"
     previous_webtui_root="${previous_webtui_root%/}"
@@ -3098,6 +3330,11 @@ attest_v4032_previous_webtui_retirement() {
 
 attest_v4033_previous_webtui_retirement() {
     v4033_to_v4042_upgrade_selected || return 1
+    attest_previous_webtui_retirement "$@"
+}
+
+attest_v4042_previous_webtui_retirement() {
+    v4042_to_v4043_upgrade_selected || return 1
     attest_previous_webtui_retirement "$@"
 }
 
@@ -3451,6 +3688,12 @@ v4033_to_v4042_transition_selected() {
         [ "${EXPECTED_CANDIDATE_VERSION}" = 4.04.2 ]
 }
 
+v4042_to_v4043_transition_selected() {
+    [ "${SCENARIO}" = upgrade-rollback ] && \
+        [ "${EXPECTED_PREVIOUS_VERSION}" = 4.04.2 ] && \
+        [ "${EXPECTED_CANDIDATE_VERSION}" = 4.04.3 ]
+}
+
 expected_systemd_enablement_prefix() {
     label="$1"
     case "${SCENARIO}:${label}" in
@@ -3460,7 +3703,8 @@ expected_systemd_enablement_prefix() {
             if v4028_to_v4032_transition_selected; then
                 printf '%s\n' /etc/systemd/system
             elif v4032_to_v4033_transition_selected || \
-                 v4033_to_v4042_transition_selected; then
+                 v4033_to_v4042_transition_selected || \
+                 v4042_to_v4043_transition_selected; then
                 printf '%s\n' ..
             else
                 return 1
@@ -3858,7 +4102,8 @@ probe_postinstall_contract() {
         probe_seeded_operator_listener_preservation "${label}" || mark_postinstall_failure operator-listener
     elif [ "${actual_version}" = "${EXPECTED_PREVIOUS_VERSION}" ]; then
         if v4032_to_v4033_upgrade_selected || \
-           v4033_to_v4042_upgrade_selected; then
+           v4033_to_v4042_upgrade_selected || \
+           v4042_to_v4043_upgrade_selected; then
             attest_previous_webtui_retirement || \
                 mark_postinstall_failure previous-webtui-retirement
         else
@@ -3929,6 +4174,8 @@ probe_payload() {
     actual_version="$(installed_version 2>/dev/null || true)"
     check_equal "${label}.version" "${expected_version}" "${actual_version}"
     verify_installed_inventory "${label}" "${expected_label}" "${publish_inventory}"
+    attest_systemd_wireguard_ordering_contract \
+        "${label}" "${expected_version}" || true
 
     if /opt/syswarden/bin/syswarden-cli --help > /tmp/syswarden-help.out 2>&1; then
         if grep -q '^Usage:' /tmp/syswarden-help.out; then
@@ -4117,29 +4364,37 @@ write_seeded_operator_token() {
 }
 
 seed_state() {
-    mkdir -p /etc/syswarden/config/modules /etc/syswarden/lists /etc/syswarden/tls
-    mkdir -p /var/lib/syswarden/ui
-    printf '%s\n' 'operator-setting=preserve-exactly' > /etc/syswarden/config/lifecycle-operator.conf
-    write_seeded_operator_token /etc/syswarden/config/modules/99-user.toml
-    printf '%s\n' '198.51.100.42' > /etc/syswarden/lists/syswarden_blacklist.ipv4
-    printf '%s\n' '2001:db8::42' > /etc/syswarden/lists/syswarden_blacklist.ipv6
-    printf '%s\n' '{"schema":1,"sentinel":"lifecycle-operator-preserve-exactly"}' > /var/lib/syswarden/ui/lifecycle-operator.json
-    printf '%s\n' '{"timestamp":"1970-01-01T00:00:00Z","github_stars":"","github_release":"","profile_name":"lifecycle-operator","system":{"hostname":"lifecycle-fixture","uptime":"","load_average":"","ram_used_mb":0,"ram_total_mb":0,"disk_used_mb":0,"disk_total_mb":0,"cores":"0","arch":"unknown","os":"unknown","cpu_model":"","server_ip":"127.0.0.1","services":[],"ports":[]},"layer3":{"global_blocked":0,"geoip_blocked":0,"asn_blocked":0,"l7_banned":0,"zero_trust_mode":false},"waf":{"total_banned":0,"total_detected":0,"active_signatures":0,"signatures_data":[],"targeted_ports":[],"banned_ips":[],"top_attackers":[],"risk_radar":[],"sparkline_24h":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"allowed_events":[]},"whitelist":{"active_ips":0,"ips":[]}}' > /var/lib/syswarden/ui/data.json
-    printf '%s\n' '-----BEGIN CERTIFICATE-----' 'lot0-lifecycle-certificate' '-----END CERTIFICATE-----' > /etc/syswarden/tls/operator.pem
-    chmod 0640 /etc/syswarden/config/lifecycle-operator.conf
-    chmod 0640 /etc/syswarden/config/modules/99-user.toml
-    chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv4
-    chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv6
-    chmod 0600 /var/lib/syswarden/ui/lifecycle-operator.json
-    chmod 0600 /var/lib/syswarden/ui/data.json
-    chmod 0600 /etc/syswarden/tls/operator.pem
+    mkdir -p \
+        /etc/syswarden/config/modules \
+        /etc/syswarden/lists \
+        /etc/syswarden/tls || return 1
+    mkdir -p /var/lib/syswarden/ui || return 1
+    printf '%s\n' 'operator-setting=preserve-exactly' > \
+        /etc/syswarden/config/lifecycle-operator.conf || return 1
+    write_seeded_operator_token /etc/syswarden/config/modules/99-user.toml || return 1
+    printf '%s\n' '198.51.100.42' > /etc/syswarden/lists/syswarden_blacklist.ipv4 || return 1
+    printf '%s\n' '2001:db8::42' > /etc/syswarden/lists/syswarden_blacklist.ipv6 || return 1
+    printf '%s\n' '{"schema":1,"sentinel":"lifecycle-operator-preserve-exactly"}' > /var/lib/syswarden/ui/lifecycle-operator.json || return 1
+    printf '%s\n' '{"timestamp":"1970-01-01T00:00:00Z","github_stars":"","github_release":"","profile_name":"lifecycle-operator","system":{"hostname":"lifecycle-fixture","uptime":"","load_average":"","ram_used_mb":0,"ram_total_mb":0,"disk_used_mb":0,"disk_total_mb":0,"cores":"0","arch":"unknown","os":"unknown","cpu_model":"","server_ip":"127.0.0.1","services":[],"ports":[]},"layer3":{"global_blocked":0,"geoip_blocked":0,"asn_blocked":0,"l7_banned":0,"zero_trust_mode":false},"waf":{"total_banned":0,"total_detected":0,"active_signatures":0,"signatures_data":[],"targeted_ports":[],"banned_ips":[],"top_attackers":[],"risk_radar":[],"sparkline_24h":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"allowed_events":[]},"whitelist":{"active_ips":0,"ips":[]}}' > /var/lib/syswarden/ui/data.json || return 1
+    printf '%s\n' \
+        '-----BEGIN CERTIFICATE-----' \
+        'lot0-lifecycle-certificate' \
+        '-----END CERTIFICATE-----' > \
+        /etc/syswarden/tls/operator.pem || return 1
+    chmod 0640 /etc/syswarden/config/lifecycle-operator.conf || return 1
+    chmod 0640 /etc/syswarden/config/modules/99-user.toml || return 1
+    chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv4 || return 1
+    chmod 0600 /etc/syswarden/lists/syswarden_blacklist.ipv6 || return 1
+    chmod 0600 /var/lib/syswarden/ui/lifecycle-operator.json || return 1
+    chmod 0600 /var/lib/syswarden/ui/data.json || return 1
+    chmod 0600 /etc/syswarden/tls/operator.pem || return 1
 
-    STATE_CONFIG_HASH="$(hash_file /etc/syswarden/config/lifecycle-operator.conf)"
-    STATE_TOKEN_HASH="$(hash_file /etc/syswarden/config/modules/99-user.toml)"
-    STATE_LIST_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv4)"
-    STATE_LIST_IPV6_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv6)"
-    STATE_OPERATOR_DATA_HASH="$(hash_file /var/lib/syswarden/ui/lifecycle-operator.json)"
-    STATE_CERT_HASH="$(hash_file /etc/syswarden/tls/operator.pem)"
+    STATE_CONFIG_HASH="$(hash_file /etc/syswarden/config/lifecycle-operator.conf)" || return 1
+    STATE_TOKEN_HASH="$(hash_file /etc/syswarden/config/modules/99-user.toml)" || return 1
+    STATE_LIST_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv4)" || return 1
+    STATE_LIST_IPV6_HASH="$(hash_file /etc/syswarden/lists/syswarden_blacklist.ipv6)" || return 1
+    STATE_OPERATOR_DATA_HASH="$(hash_file /var/lib/syswarden/ui/lifecycle-operator.json)" || return 1
+    STATE_CERT_HASH="$(hash_file /etc/syswarden/tls/operator.pem)" || return 1
     {
         printf 'STATE_CONFIG_HASH=%s\n' "${STATE_CONFIG_HASH}"
         printf 'STATE_TOKEN_HASH=%s\n' "${STATE_TOKEN_HASH}"
@@ -4147,8 +4402,8 @@ seed_state() {
         printf 'STATE_LIST_IPV6_HASH=%s\n' "${STATE_LIST_IPV6_HASH}"
         printf 'STATE_OPERATOR_DATA_HASH=%s\n' "${STATE_OPERATOR_DATA_HASH}"
         printf 'STATE_CERT_HASH=%s\n' "${STATE_CERT_HASH}"
-    } > "${OPERATOR_STATE_FILE}"
-    chmod 0600 "${OPERATOR_STATE_FILE}"
+    } > "${OPERATOR_STATE_FILE}" || return 1
+    chmod 0600 "${OPERATOR_STATE_FILE}" || return 1
 }
 
 seed_deb_removal_log() {
@@ -4229,6 +4484,10 @@ quiesce_previous_webtui_runtime() {
     fi
     if v4033_to_v4042_upgrade_selected; then
         attest_v4033_previous_webtui_retirement || return 1
+        return 0
+    fi
+    if v4042_to_v4043_upgrade_selected; then
+        attest_v4042_previous_webtui_retirement || return 1
         return 0
     fi
     case "${PACKAGE_FAMILY}" in
@@ -4587,7 +4846,8 @@ seed_live_legacy_webtui_process() {
         *) return 0 ;;
     esac
     if v4032_to_v4033_upgrade_selected || \
-       v4033_to_v4042_upgrade_selected; then
+       v4033_to_v4042_upgrade_selected || \
+       v4042_to_v4043_upgrade_selected; then
         return 0
     fi
     /opt/syswarden/bin/syswarden-cli web-tui \
@@ -4930,6 +5190,71 @@ assert_live_telemetry_data() {
     check_equal "${label}.state.telemetry.schema" dashboard-data-v1 "${actual_schema}"
 }
 
+wait_for_seeded_kpi_telemetry() {
+    seeded_telemetry_version="$1"
+    seeded_telemetry_path=/var/lib/syswarden/ui/data.json
+    seeded_telemetry_contract="$(live_telemetry_contract_for_version \
+        "${seeded_telemetry_version}" 2>/dev/null)" || return 1
+    case "${seeded_telemetry_contract}" in
+        legacy) return 0 ;;
+        kpi-v1) ;;
+        *) return 1 ;;
+    esac
+
+    if ! attest_installed_core_process; then
+        printf '%s\n' \
+            'TELEMETRY READINESS failure=core-not-active-before-wait' \
+            >> "${COMMAND_LOG}"
+        return 1
+    fi
+    seeded_telemetry_core_identity="${core_runtime_pid}|${core_runtime_path}|${core_runtime_identity}|${core_runtime_sha256}|${core_installed_identity}|${core_installed_sha256}"
+    seeded_telemetry_attempt=0
+    while [ "${seeded_telemetry_attempt}" -lt 45 ]; do
+        if ! attest_installed_core_process; then
+            printf '%s\n' \
+                'TELEMETRY READINESS failure=core-not-active-during-wait' \
+                >> "${COMMAND_LOG}"
+            return 1
+        fi
+        seeded_telemetry_current_core_identity="${core_runtime_pid}|${core_runtime_path}|${core_runtime_identity}|${core_runtime_sha256}|${core_installed_identity}|${core_installed_sha256}"
+        if [ "${seeded_telemetry_current_core_identity}" != \
+             "${seeded_telemetry_core_identity}" ]; then
+            printf '%s\n' \
+                'TELEMETRY READINESS failure=core-identity-changed-during-wait' \
+                >> "${COMMAND_LOG}"
+            return 1
+        fi
+        if live_telemetry_schema_valid \
+            "${seeded_telemetry_path}" "${seeded_telemetry_contract}"; then
+            if ! attest_installed_core_process; then
+                printf '%s\n' \
+                    'TELEMETRY READINESS failure=core-not-active-after-publication' \
+                    >> "${COMMAND_LOG}"
+                return 1
+            fi
+            seeded_telemetry_final_core_identity="${core_runtime_pid}|${core_runtime_path}|${core_runtime_identity}|${core_runtime_sha256}|${core_installed_identity}|${core_installed_sha256}"
+            if [ "${seeded_telemetry_final_core_identity}" != \
+                 "${seeded_telemetry_core_identity}" ]; then
+                printf '%s\n' \
+                    'TELEMETRY READINESS failure=core-identity-changed-after-publication' \
+                    >> "${COMMAND_LOG}"
+                return 1
+            fi
+            printf 'TELEMETRY READINESS contract=kpi-v1 attempts=%s core_pid=%s\n' \
+                "$((seeded_telemetry_attempt + 1))" "${core_runtime_pid}" \
+                >> "${COMMAND_LOG}"
+            return 0
+        fi
+        seeded_telemetry_attempt=$((seeded_telemetry_attempt + 1))
+        [ "${seeded_telemetry_attempt}" -lt 45 ] || break
+        sleep 1 || return 1
+    done
+    printf '%s\n' \
+        'TELEMETRY READINESS failure=kpi-v1-timeout attempts=45' \
+        >> "${COMMAND_LOG}"
+    return 1
+}
+
 sanitize_historical_rollback_token() {
     rollback_token_source="$1"
     rollback_token_sanitized="$2"
@@ -5039,7 +5364,8 @@ expected_upgrade_rollback_token_contract() {
     if v4028_to_v4032_transition_selected; then
         printf '%s\n' historical-webtui-credential
     elif v4032_to_v4033_transition_selected || \
-         v4033_to_v4042_transition_selected; then
+         v4033_to_v4042_transition_selected || \
+         v4042_to_v4043_transition_selected; then
         printf '%s\n' byte-exact
     else
         return 1
@@ -5671,7 +5997,8 @@ scenario_upgrade_rollback_initial() {
     else
         probe_payload previous previous "${PREVIOUS_VERSION}"
     fi
-    seed_state
+    seed_state || return
+    wait_for_seeded_kpi_telemetry "${PREVIOUS_VERSION}" || return
     assert_all_state_preserved previous
     seed_legacy_webtui_upgrade_state || return
     seed_live_legacy_webtui_process || return
@@ -5724,7 +6051,7 @@ scenario_upgrade_rollback_restart_two() {
 
 scenario_remove() {
     prepare_expected_payloads || return
-    seed_state
+    seed_state || return
     if [ "${PACKAGE_FAMILY}" = deb ]; then
         seed_deb_removal_log || return
     fi
@@ -5792,7 +6119,7 @@ scenario_remove() {
 
 scenario_purge() {
     prepare_expected_payloads || return
-    seed_state
+    seed_state || return
     if [ "${PACKAGE_FAMILY}" = deb ]; then
         seed_deb_removal_log || return
     fi
@@ -5985,6 +6312,23 @@ def _uses_geoip_data_license_payload(
     )
 
 
+def _uses_systemd_wireguard_ordering_payload(
+    family: str,
+    role: str,
+    version: str,
+) -> bool:
+    if family not in EXPECTED_SCENARIOS:
+        raise LifecycleLabError(f"unsupported inventory family: {family!r}")
+    if role not in {"previous", "candidate"}:
+        raise LifecycleLabError(f"unsupported package artifact role: {role!r}")
+    return family in {"deb", "rpm"} and (
+        parse_syswarden_version(version)
+        >= parse_syswarden_version(
+            SYSTEMD_WIREGUARD_ORDERING_DROPIN_FIRST_VERSION
+        )
+    )
+
+
 def _validate_manager_paths(
     family: str,
     paths: list[str],
@@ -6017,6 +6361,9 @@ def _validate_manager_paths(
         forward_only_apk=forward_only_apk,
     )
     license_payloads = _uses_geoip_data_license_payload(role, version)
+    systemd_ordering_payload = _uses_systemd_wireguard_ordering_payload(
+        family, role, version
+    )
     expected_payload_paths = set(
         LEGACY_PACKAGE_PAYLOAD_PATHS
         if legacy_completion
@@ -6026,8 +6373,10 @@ def _validate_manager_paths(
             else PACKAGE_PAYLOAD_PATHS
         )
     )
+    if systemd_ordering_payload:
+        expected_payload_paths.add(SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH)
     if family == "deb":
-        expected = (
+        expected = set(
             LEGACY_DEB_PACKAGE_PATHS
             if legacy_completion
             else (
@@ -6036,6 +6385,9 @@ def _validate_manager_paths(
                 else DEB_PACKAGE_PATHS
             )
         )
+        if systemd_ordering_payload:
+            expected.update(SYSTEMD_WIREGUARD_ORDERING_DEB_DIRECTORIES)
+            expected.add(SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH)
         if observed != expected:
             raise LifecycleLabError("DEB native package inventory is not exact")
         return
@@ -6106,6 +6458,9 @@ def validate_inventory_snapshot(
         forward_only_apk=forward_only_apk,
     )
     license_payloads = _uses_geoip_data_license_payload(role, version)
+    systemd_ordering_payload = _uses_systemd_wireguard_ordering_payload(
+        family, role, version
+    )
     if len(filesystem) != len(manager_paths):
         raise LifecycleLabError(
             "filesystem inventory does not cover every native package path"
@@ -6156,6 +6511,8 @@ def validate_inventory_snapshot(
     }
     if not legacy_completion:
         file_modes[BASH_COMPLETION_PATH] = "644"
+    if systemd_ordering_payload:
+        file_modes[SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH] = "644"
     for path, mode in file_modes.items():
         entry = entries[path]
         if (
@@ -6185,6 +6542,12 @@ def validate_inventory_snapshot(
             raise LifecycleLabError(
                 "project license payload is not the pinned intact source"
             )
+    if systemd_ordering_payload:
+        ordering_dropin = entries[SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH]
+        if ordering_dropin["value"] != SYSTEMD_WIREGUARD_ORDERING_DROPIN_SHA256:
+            raise LifecycleLabError(
+                "systemd WireGuard ordering payload is not the pinned intact source"
+            )
     link_targets = {
         "/usr/local/bin/syswarden": "/opt/syswarden/bin/syswarden-cli",
         "/usr/local/bin/syswarden-tui": "/opt/syswarden/bin/syswarden-tui",
@@ -6200,7 +6563,7 @@ def validate_inventory_snapshot(
                 f"package public-link contract failed at {path}"
             )
     if family == "deb":
-        expected_paths = (
+        expected_paths = set(
             LEGACY_DEB_PACKAGE_PATHS
             if legacy_completion
             else (
@@ -6218,6 +6581,10 @@ def validate_inventory_snapshot(
                 else PACKAGE_PAYLOAD_PATHS
             )
         )
+        if systemd_ordering_payload:
+            expected_paths.update(SYSTEMD_WIREGUARD_ORDERING_DEB_DIRECTORIES)
+            expected_paths.add(SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH)
+            expected_payload_paths.add(SYSTEMD_WIREGUARD_ORDERING_DROPIN_PATH)
         for path in expected_paths - expected_payload_paths - {
             "/usr/share/doc/syswarden/changelog.gz"
         }:

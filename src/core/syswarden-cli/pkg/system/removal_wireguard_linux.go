@@ -11,7 +11,10 @@ import (
 type wireGuardRemovalTail struct {
 	requireBarrier         func() error
 	reattestServices       func() error
+	recoverForwarding      func() error
 	cleanupOwnedNFT        func() error
+	cleanupStaleNFT        func() error
+	cleanupOrphanedNFT     func() error
 	inspectTransaction     func() (wireguardstate.TransactionOperation, bool, error)
 	inspectOwnedState      func() (bool, error)
 	prepareOwnedArtifacts  func() (bool, error)
@@ -21,11 +24,19 @@ type wireGuardRemovalTail struct {
 	reloadSysctl           func() error
 }
 
-func productionWireGuardRemovalTail(cleanupOwnedNFT func() error) wireGuardRemovalTail {
+func productionWireGuardRemovalTail(
+	recoverForwarding func() error,
+	cleanupOwnedNFT func() error,
+	cleanupStaleNFT func() error,
+	cleanupOrphanedNFT func() error,
+) wireGuardRemovalTail {
 	return wireGuardRemovalTail{
-		requireBarrier:   RequireRemovalTombstone,
-		reattestServices: ReattestFirewallStatePreparedForRemoval,
-		cleanupOwnedNFT:  cleanupOwnedNFT,
+		requireBarrier:     RequireRemovalTombstone,
+		reattestServices:   ReattestFirewallStatePreparedForRemoval,
+		recoverForwarding:  recoverForwarding,
+		cleanupOwnedNFT:    cleanupOwnedNFT,
+		cleanupStaleNFT:    cleanupStaleNFT,
+		cleanupOrphanedNFT: cleanupOrphanedNFT,
 		inspectTransaction: func() (wireguardstate.TransactionOperation, bool, error) {
 			return wireguardstate.InspectTransaction("/", 0, 0)
 		},
@@ -63,6 +74,9 @@ func productionWireGuardRemovalTail(cleanupOwnedNFT func() error) wireGuardRemov
 
 func (tail wireGuardRemovalTail) validate() error {
 	if tail.requireBarrier == nil || tail.reattestServices == nil || tail.cleanupOwnedNFT == nil ||
+		tail.cleanupStaleNFT == nil ||
+		tail.cleanupOrphanedNFT == nil ||
+		tail.recoverForwarding == nil ||
 		tail.inspectTransaction == nil || tail.inspectOwnedState == nil ||
 		tail.prepareOwnedArtifacts == nil || tail.finalizeOwnedArtifacts == nil ||
 		tail.classifyRuntime == nil || tail.isAlpine == nil ||
@@ -81,6 +95,12 @@ func (tail wireGuardRemovalTail) remove() error {
 	}
 	if err := tail.reattestServices(); err != nil {
 		return fmt.Errorf("WireGuard removal requires prepared services: %w", err)
+	}
+	if err := tail.recoverForwarding(); err != nil {
+		return fmt.Errorf(
+			"recover exact WireGuard forwarding persistence before ownership removal; the durable removal tombstone and all WireGuard artifacts are retained: %w",
+			err,
+		)
 	}
 	operation, transactionPending, err := tail.inspectTransaction()
 	if err != nil {
@@ -117,8 +137,18 @@ func (tail wireGuardRemovalTail) remove() error {
 	}
 	if ownedState && !transactionPending {
 		if err := tail.cleanupOwnedNFT(); err != nil {
+			if staleErr := tail.cleanupStaleNFT(); staleErr != nil {
+				return fmt.Errorf(
+					"remove exact owned WireGuard nftables state before ownership evidence; manifest-bound cleanup failed: %v; exact tokenized stale-table recovery failed and the durable removal tombstone and WireGuard manifest are retained: %w",
+					err,
+					staleErr,
+				)
+			}
+		}
+	} else if !ownedState && !transactionPending && managerState == serviceManagerActive {
+		if err := tail.cleanupOrphanedNFT(); err != nil {
 			return fmt.Errorf(
-				"remove exact owned WireGuard nftables state before ownership evidence; the durable removal tombstone and WireGuard manifest are retained: %w",
+				"remove an exactly attested orphaned WireGuard nftables table before generic firewall cleanup; the durable removal tombstone is retained: %w",
 				err,
 			)
 		}
@@ -172,7 +202,13 @@ func (tail wireGuardRemovalTail) remove() error {
 // while the ownership manifest is still available, prepares durable removal
 // of only manifest-attributed artifacts, reloads external runtime state, and
 // then finalizes the retained removal debt. The caller supplies the network
-// cleanup callback to avoid a system/network import cycle.
-func RemoveOwnedWireGuardArtifactsForRemoval(cleanupOwnedNFT func() error) error {
-	return productionWireGuardRemovalTail(cleanupOwnedNFT).remove()
+// forwarding-recovery and nftables-cleanup callbacks to avoid a system/network
+// import cycle.
+func RemoveOwnedWireGuardArtifactsForRemoval(
+	recoverForwarding func() error,
+	cleanupOwnedNFT func() error,
+	cleanupStaleNFT func() error,
+	cleanupOrphanedNFT func() error,
+) error {
+	return productionWireGuardRemovalTail(recoverForwarding, cleanupOwnedNFT, cleanupStaleNFT, cleanupOrphanedNFT).remove()
 }

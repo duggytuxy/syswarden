@@ -9,8 +9,36 @@ echo "[*] Initializing SysWarden Local Package Builder..."
 
 REPOSITORY_ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 cd "${REPOSITORY_ROOT}"
+for git_environment_variable in \
+    GIT_DIR \
+    GIT_WORK_TREE \
+    GIT_COMMON_DIR \
+    GIT_INDEX_FILE \
+    GIT_OBJECT_DIRECTORY \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES \
+    GIT_ATTR_SOURCE \
+    GIT_CEILING_DIRECTORIES \
+    GIT_DISCOVERY_ACROSS_FILESYSTEM \
+    GIT_NAMESPACE \
+    GIT_REPLACE_REF_BASE \
+    GIT_SHALLOW_FILE \
+    GIT_GRAFT_FILE \
+    GIT_QUARANTINE_PATH \
+    GIT_CONFIG_COUNT \
+    GIT_CONFIG_PARAMETERS \
+    GIT_CONFIG_GLOBAL \
+    GIT_CONFIG_SYSTEM \
+    GIT_EXEC_PATH; do
+    if [[ -v "${git_environment_variable}" ]]; then
+        echo "[-] Refusing inherited Git repository influence: ${git_environment_variable}" >&2
+        exit 1
+    fi
+done
+export GIT_NO_REPLACE_OBJECTS=1
 PACKAGE_WORKSPACE="$(mktemp -d /tmp/syswarden-local-package.XXXXXX)"
 chmod 0700 "${PACKAGE_WORKSPACE}"
+SOURCE_ROOT="${PACKAGE_WORKSPACE}/source"
+SOURCE_ARCHIVE="${PACKAGE_WORKSPACE}/source.tar"
 PACKAGE_REPOSITORY_STATE="${PACKAGE_WORKSPACE}/repository-state.json"
 LOCAL_PACKAGE_OUTPUT="${REPOSITORY_ROOT}/dist/packages"
 PACKAGE_STATE_CAPTURED=0
@@ -53,7 +81,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for required_command in python3 git go fpm nfpm readelf file ar rpm tar touch date sed; do
+for required_command in python3 git go fpm nfpm readelf file ar rpm rpm2cpio cpio tar touch date sed sha256sum flock; do
     command -v "${required_command}" >/dev/null 2>&1 || {
         echo "[-] Required pinned build tool is unavailable: ${required_command}" >&2
         exit 1
@@ -100,7 +128,9 @@ else
     exit 1
 fi
 
-GO_TOOLCHAIN_ROOT="$(GOTOOLCHAIN=go1.26.6 GOPROXY=off go env GOROOT)" || {
+GO_TOOLCHAIN_ROOT="$(GOENV=off GOFLAGS='' GOWORK=off GOEXPERIMENT='' GOAMD64=v1 \
+    GOCACHEPROG='' \
+    GOTOOLCHAIN=go1.26.6 GOPROXY=off go env GOROOT)" || {
     echo "[-] Go 1.26.6 is not already installed; refusing an implicit toolchain download." >&2
     exit 1
 }
@@ -136,29 +166,115 @@ export GOARCH=amd64
 export CGO_ENABLED=0
 export GOFLAGS=-mod=readonly
 export GOWORK=off
+export GOENV=off
+export GOAMD64=v1
+export GOEXPERIMENT=
+export GOCACHEPROG=
 export GOCACHE="${PACKAGE_WORKSPACE}/go-build-cache"
 export GOTMPDIR="${PACKAGE_WORKSPACE}/go-tmp"
 export GOMODCACHE="${PACKAGE_WORKSPACE}/go-module-cache"
+export GOPATH="${PACKAGE_WORKSPACE}/go-path"
 mkdir -p \
     "${GOCACHE}" \
     "${GOTMPDIR}" \
     "${GOMODCACHE}" \
+    "${GOPATH}" \
     "${PACKAGE_WORKSPACE}/dist/bin" \
     "${PACKAGE_WORKSPACE}/dist/bin-apk"
 chmod 0700 \
     "${GOCACHE}" \
     "${GOTMPDIR}" \
     "${GOMODCACHE}" \
+    "${GOPATH}" \
     "${PACKAGE_WORKSPACE}/dist" \
     "${PACKAGE_WORKSPACE}/dist/bin" \
     "${PACKAGE_WORKSPACE}/dist/bin-apk"
-SOURCE_DATE_EPOCH="$(git -C "${REPOSITORY_ROOT}" log -1 --format=%ct HEAD)"
+REPOSITORY_TOPLEVEL="$(git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" rev-parse --show-toplevel)"
+if [ "$(CDPATH='' cd -- "${REPOSITORY_TOPLEVEL}" && pwd -P)" != "${REPOSITORY_ROOT}" ]; then
+    echo "[-] Git repository root does not match the builder location." >&2
+    exit 1
+fi
+SOURCE_DATE_EPOCH="$(git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" log -1 --format=%ct HEAD)"
 case "${SOURCE_DATE_EPOCH}" in
     ''|0|*[!0-9]*)
         echo "[-] Unable to derive a reproducible source timestamp." >&2
         exit 1
         ;;
 esac
+SOURCE_COMMIT="$(git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" rev-parse --verify 'HEAD^{commit}')"
+if ! printf '%s\n' "${SOURCE_COMMIT}" | grep -Eq '^[0-9a-f]{40}$'; then
+    echo "[-] Unable to derive the exact source commit." >&2
+    exit 1
+fi
+SOURCE_VCS_TIME="$(date --utc --date="@${SOURCE_DATE_EPOCH}" '+%Y-%m-%dT%H:%M:%SZ')" || {
+    echo "[-] Unable to derive the exact source commit time." >&2
+    exit 1
+}
+SOURCE_GIT_DIR="$(git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" rev-parse --absolute-git-dir)"
+case "${SOURCE_GIT_DIR}" in
+    /*) ;;
+    *)
+        echo "[-] Git returned a non-absolute repository directory." >&2
+        exit 1
+        ;;
+esac
+if [ -L "${SOURCE_GIT_DIR}" ] || [ ! -d "${SOURCE_GIT_DIR}" ]; then
+    echo "[-] Refusing an unsafe Git repository directory." >&2
+    exit 1
+fi
+SOURCE_GIT_COMMON_DIR="$(git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" \
+    rev-parse --path-format=absolute --git-common-dir)"
+case "${SOURCE_GIT_COMMON_DIR}" in
+    /*) ;;
+    *)
+        echo "[-] Git returned a non-absolute common repository directory." >&2
+        exit 1
+        ;;
+esac
+if [ -L "${SOURCE_GIT_COMMON_DIR}" ] || [ ! -d "${SOURCE_GIT_COMMON_DIR}" ]; then
+    echo "[-] Refusing an unsafe common Git repository directory." >&2
+    exit 1
+fi
+if ! SOURCE_STATUS="$(git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" status --porcelain=v1 --untracked-files=normal)"; then
+    echo "[-] Unable to verify the source repository state." >&2
+    exit 1
+fi
+if [ -n "${SOURCE_STATUS}" ]; then
+    echo "[-] Local release package builds require a clean exact commit." >&2
+    exit 1
+fi
+
+install -d -m 0700 "${SOURCE_ROOT}"
+git -c core.fsmonitor=false -C "${REPOSITORY_ROOT}" archive \
+    --format=tar --output="${SOURCE_ARCHIVE}" "${SOURCE_COMMIT}"
+tar --extract --file="${SOURCE_ARCHIVE}" --directory="${SOURCE_ROOT}" \
+    --no-same-owner --no-same-permissions
+rm -f -- "${SOURCE_ARCHIVE}"
+if [ -e "${SOURCE_ROOT}/.git" ] || [ -L "${SOURCE_ROOT}/.git" ]; then
+    echo "[-] Refusing a materialized source tree containing Git control data." >&2
+    exit 1
+fi
+if ! MATERIALIZED_STATUS="$(
+    GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \
+        GIT_DIR="${SOURCE_GIT_DIR}" GIT_WORK_TREE="${SOURCE_ROOT}" \
+        GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor \
+        GIT_CONFIG_VALUE_0=false \
+        git status --porcelain=v1 --untracked-files=all
+)"; then
+    echo "[-] Unable to verify the materialized exact source commit." >&2
+    exit 1
+fi
+if [ -n "${MATERIALIZED_STATUS}" ]; then
+    echo "[-] Materialized source does not match the exact source commit." >&2
+    exit 1
+fi
+mkdir -- "${SOURCE_ROOT}/.git"
+chmod 0500 "${SOURCE_ROOT}/.git"
+if [ -L "${SOURCE_ROOT}/.git" ] || [ ! -d "${SOURCE_ROOT}/.git" ] || \
+   [ -n "$(find "${SOURCE_ROOT}/.git" -mindepth 1 -print -quit)" ]; then
+    echo "[-] Refusing an unsafe VCS discovery sentinel." >&2
+    exit 1
+fi
 export SOURCE_DATE_EPOCH
 export LC_ALL=C
 export LANG=C
@@ -166,7 +282,9 @@ export TZ=UTC
 
 # Extract the version through the repository-wide version contract.
 SOURCE_TAG="$(PATH="${GO_TOOLCHAIN_ROOT}/bin:${PATH}" \
-    "${REPOSITORY_ROOT}/scripts/versioning.sh" inspect --repo "${REPOSITORY_ROOT}")"
+    GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \
+    GIT_DIR="${SOURCE_GIT_DIR}" GIT_WORK_TREE="${SOURCE_ROOT}" \
+    "${SOURCE_ROOT}/scripts/versioning.sh" inspect --repo "${SOURCE_ROOT}")"
 case "${SOURCE_TAG}" in
     v[0-9]*.[0-9]*.[0-9]*) ;;
     *)
@@ -181,15 +299,24 @@ echo "[+] Detected SysWarden Version: v${VERSION}"
 echo "[*] Compiling SysWarden Native Go Modules..."
 for module in syswarden-cli syswarden-core syswarden-tui; do
     echo " -> Downloading locked ${module} modules..."
-    "${GO_BIN}" -C "${REPOSITORY_ROOT}/src/core/${module}" mod download
+    "${GO_BIN}" -C "${SOURCE_ROOT}/src/core/${module}" mod download
+    "${GO_BIN}" -C "${SOURCE_ROOT}/src/core/${module}" mod verify
     echo " -> Compiling ${module}..."
-    "${GO_BIN}" -C "${REPOSITORY_ROOT}/src/core/${module}" build \
-        -mod=readonly -trimpath -buildmode=pie -ldflags="-s -w" \
-        -o "${PACKAGE_WORKSPACE}/dist/bin/${module}" .
+    GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \
+        GIT_DIR="${SOURCE_GIT_DIR}" GIT_WORK_TREE="${SOURCE_ROOT}" \
+        GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor \
+        GIT_CONFIG_VALUE_0=false GOWORK="${SOURCE_ROOT}/go.work" \
+        "${GO_BIN}" -C "${SOURCE_ROOT}" build \
+        -buildvcs=true -mod=readonly -trimpath -buildmode=pie -ldflags="-s -w" \
+        -o "${PACKAGE_WORKSPACE}/dist/bin/${module}" "./src/core/${module}"
     echo " -> Compiling static Alpine ${module}..."
-    "${GO_BIN}" -C "${REPOSITORY_ROOT}/src/core/${module}" build \
-        -mod=readonly -trimpath -ldflags="-s -w" \
-        -o "${PACKAGE_WORKSPACE}/dist/bin-apk/${module}" .
+    GIT_COMMON_DIR="${SOURCE_GIT_COMMON_DIR}" \
+        GIT_DIR="${SOURCE_GIT_DIR}" GIT_WORK_TREE="${SOURCE_ROOT}" \
+        GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor \
+        GIT_CONFIG_VALUE_0=false GOWORK="${SOURCE_ROOT}/go.work" \
+        "${GO_BIN}" -C "${SOURCE_ROOT}" build \
+        -buildvcs=true -mod=readonly -trimpath -ldflags="-s -w" \
+        -o "${PACKAGE_WORKSPACE}/dist/bin-apk/${module}" "./src/core/${module}"
 done
 
 validate_trimpath_binary() {
@@ -201,10 +328,41 @@ validate_trimpath_binary() {
     }
 }
 
+validate_vcs_binary() {
+    artifact="$1"
+    if ! "${GO_BIN}" version -m "${artifact}" | LC_ALL=C awk \
+        -v revision="${SOURCE_COMMIT}" \
+        -v commit_time="${SOURCE_VCS_TIME}" '
+        $1 == "build" && $2 == "vcs=git" { vcs_git++ }
+        $1 == "build" && $2 == "vcs.revision=" revision { vcs_revision++ }
+        $1 == "build" && $2 == "vcs.time=" commit_time { vcs_time++ }
+        $1 == "build" && $2 == "vcs.modified=false" { vcs_clean++ }
+        $1 == "build" && $2 ~ /^vcs(\.|=)/ { vcs_total++ }
+        END {
+            exit vcs_git == 1 && vcs_revision == 1 && vcs_time == 1 &&
+                 vcs_clean == 1 && vcs_total == 4 ? 0 : 1
+        }
+    '; then
+        echo "[-] Binary VCS provenance does not match the clean exact source commit: ${artifact}" >&2
+        return 1
+    fi
+}
+
+validate_amd64_level_binary() {
+    artifact="$1"
+    "${GO_BIN}" version -m "${artifact}" | grep -Eq \
+        '^[[:space:]]*build[[:space:]]+GOAMD64=v1$' || {
+        echo "[-] Binary does not attest the baseline AMD64 feature level: ${artifact}" >&2
+        return 1
+    }
+}
+
 for artifact in \
     "${PACKAGE_WORKSPACE}"/dist/bin/* \
     "${PACKAGE_WORKSPACE}"/dist/bin-apk/*; do
     validate_trimpath_binary "${artifact}"
+    validate_vcs_binary "${artifact}"
+    validate_amd64_level_binary "${artifact}"
 done
 
 echo "[+] Linux Compilation successful."
@@ -218,6 +376,10 @@ install -d -m 0755 \
     staging/opt/syswarden \
     staging/opt/syswarden/bin \
     staging/usr \
+    staging/usr/lib \
+    staging/usr/lib/systemd \
+    staging/usr/lib/systemd/system \
+    staging/usr/lib/systemd/system/syswarden-firewall.service.d \
     staging/usr/local \
     staging/usr/local/bin \
     staging/usr/share \
@@ -239,29 +401,32 @@ install -d -m 0755 \
     staging-apk/usr/share/doc/syswarden
 
 # Copy files
-cp "${REPOSITORY_ROOT}/src/core/syswarden-core/signatures.json" staging/opt/syswarden/
+cp "${SOURCE_ROOT}/src/core/syswarden-core/signatures.json" staging/opt/syswarden/
 cp dist/bin/syswarden-cli dist/bin/syswarden-core dist/bin/syswarden-tui staging/opt/syswarden/bin/
 ln -s /opt/syswarden/bin/syswarden-cli staging/usr/local/bin/syswarden
 ln -s /opt/syswarden/bin/syswarden-tui staging/usr/local/bin/syswarden-tui
 staging/opt/syswarden/bin/syswarden-cli completion bash > \
     staging/usr/share/bash-completion/completions/syswarden
 install -m 0644 \
-    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
+    "${SOURCE_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
     staging/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt
 install -m 0644 \
-    "${REPOSITORY_ROOT}/LICENSE" \
+    "${SOURCE_ROOT}/LICENSE" \
     staging/usr/share/doc/syswarden/LICENSE.txt
-cp "${REPOSITORY_ROOT}/src/core/syswarden-core/signatures.json" staging-apk/opt/syswarden/
+install -m 0644 \
+    "${SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
+    staging/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf
+cp "${SOURCE_ROOT}/src/core/syswarden-core/signatures.json" staging-apk/opt/syswarden/
 cp dist/bin-apk/syswarden-cli dist/bin-apk/syswarden-core dist/bin-apk/syswarden-tui staging-apk/opt/syswarden/bin/
 ln -s /opt/syswarden/bin/syswarden-cli staging-apk/usr/local/bin/syswarden
 ln -s /opt/syswarden/bin/syswarden-tui staging-apk/usr/local/bin/syswarden-tui
 staging-apk/opt/syswarden/bin/syswarden-cli completion bash > \
     staging-apk/usr/share/bash-completion/completions/syswarden
 install -m 0644 \
-    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
+    "${SOURCE_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
     staging-apk/usr/share/doc/syswarden/GEOIP-DATA-LICENSE.txt
 install -m 0644 \
-    "${REPOSITORY_ROOT}/LICENSE" \
+    "${SOURCE_ROOT}/LICENSE" \
     staging-apk/usr/share/doc/syswarden/LICENSE.txt
 
 # Permissions
@@ -272,27 +437,33 @@ chmod 750 staging-apk/opt/syswarden/bin/*
 chmod 640 staging-apk/opt/syswarden/signatures.json
 chmod 644 staging-apk/usr/share/bash-completion/completions/syswarden
 PYTHONDONTWRITEBYTECODE=1 python3 \
-    "${REPOSITORY_ROOT}/scripts/ci/package_stage_gate.py" \
+    "${SOURCE_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging \
-    --completion-contract "${REPOSITORY_ROOT}/scripts/ci/package_completion_contract.json" \
+    --service-manager systemd \
+    --systemd-ordering-contract \
+    "${SOURCE_ROOT}/scripts/ci/package_systemd_wireguard_ordering_contract.json" \
+    --systemd-ordering-source \
+    "${SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
+    --completion-contract "${SOURCE_ROOT}/scripts/ci/package_completion_contract.json" \
     --geoip-data-license-contract \
-    "${REPOSITORY_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
+    "${SOURCE_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
     --geoip-data-license-source \
-    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
+    "${SOURCE_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
     --project-license-contract \
-    "${REPOSITORY_ROOT}/scripts/ci/package_project_license_contract.json" \
-    --project-license-source "${REPOSITORY_ROOT}/LICENSE"
+    "${SOURCE_ROOT}/scripts/ci/package_project_license_contract.json" \
+    --project-license-source "${SOURCE_ROOT}/LICENSE"
 PYTHONDONTWRITEBYTECODE=1 python3 \
-    "${REPOSITORY_ROOT}/scripts/ci/package_stage_gate.py" \
+    "${SOURCE_ROOT}/scripts/ci/package_stage_gate.py" \
     linux --root staging-apk \
-    --completion-contract "${REPOSITORY_ROOT}/scripts/ci/package_completion_contract.json" \
+    --service-manager openrc \
+    --completion-contract "${SOURCE_ROOT}/scripts/ci/package_completion_contract.json" \
     --geoip-data-license-contract \
-    "${REPOSITORY_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
+    "${SOURCE_ROOT}/scripts/ci/package_geoip_data_license_contract.json" \
     --geoip-data-license-source \
-    "${REPOSITORY_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
+    "${SOURCE_ROOT}/src/core/syswarden-cli/pkg/geoip/LICENSE-CC0-1.0.txt" \
     --project-license-contract \
-    "${REPOSITORY_ROOT}/scripts/ci/package_project_license_contract.json" \
-    --project-license-source "${REPOSITORY_ROOT}/LICENSE"
+    "${SOURCE_ROOT}/scripts/ci/package_project_license_contract.json" \
+    --project-license-source "${SOURCE_ROOT}/LICENSE"
 
 validate_static_apk_binary() {
     artifact="$1"
@@ -378,14 +549,16 @@ prepare_rpm_build_id_links \
     staging-rpm/opt/syswarden/bin/syswarden-tui
 
 # Pre-Install / Pre-Upgrade script
-cat "${REPOSITORY_ROOT}/scripts/ci/package_webtui_retirement.sh" > preinst.sh
-cat "${REPOSITORY_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> preinst.sh
-cat "${REPOSITORY_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> preinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > preinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> preinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> preinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_preflight.sh" >> preinst.sh
 cat << 'EOF' >> preinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
 syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
+syswarden_preflight_systemd_ordering_dropin
 secure_private_directory() {
     path="$1"
     if [ -L "${path}" ] || { [ -e "${path}" ] && [ ! -d "${path}" ]; }; then
@@ -437,9 +610,9 @@ fi
 EOF
 
 # Global Execution Symlink handled via postinst script
-cat "${REPOSITORY_ROOT}/scripts/ci/package_webtui_retirement.sh" > postinst.sh
-cat "${REPOSITORY_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> postinst.sh
-cat "${REPOSITORY_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> postinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > postinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> postinst.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_alpine_cronie_preflight.sh" >> postinst.sh
 cat << 'EOF' >> postinst.sh
 set -e
 export SYSWARDEN_PKG_INSTALL=1
@@ -518,10 +691,30 @@ syswarden_verify_webtui_retirement /
 syswarden_consume_deferred_purge_marker
 EOF
 
-cat "${REPOSITORY_ROOT}/scripts/ci/package_webtui_retirement.sh" > postrm.sh
-cat "${REPOSITORY_ROOT}/scripts/ci/package_removal_state.sh" >> postrm.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > postrm.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_removal_state.sh" >> postrm.sh
 cat << 'EOF' >> postrm.sh
 export SYSWARDEN_PKG_INSTALL=1
+
+syswarden_refresh_systemd_after_rpm_payload_transition() {
+    [ "${1:-}" = 1 ] || return 0
+    [ ! -f /etc/alpine-release ] || return 1
+    syswarden_postremove_manager_state="$(
+        syswarden_classify_service_manager / systemd isolated
+    )" || return 1
+    case "${syswarden_postremove_manager_state}" in
+        ACTIVE)
+            command -v systemctl >/dev/null 2>&1 || return 1
+            systemctl daemon-reload || return 1
+            [ "$(syswarden_classify_service_manager / systemd isolated)" = ACTIVE ] || return 1
+            ;;
+        OFFLINE) ;;
+        *)
+            printf '%s\n' 'Refusing an ambiguous systemd runtime after an RPM payload transition.' >&2
+            return 1
+            ;;
+    esac
+}
 
 cleanup_generated_runtime_artifacts() {
     syswarden_verify_legacy_webtui_runtime_absent / || return 1
@@ -644,9 +837,10 @@ if [ -f /etc/alpine-release ] || [ "$1" = "0" ] || [ "$1" = "remove" ] || [ "$1"
         syswarden_transition_to_deferred_purge || exit 1
     fi
 fi
+syswarden_refresh_systemd_after_rpm_payload_transition "${1:-}" || exit 1
 EOF
 
-cat "${REPOSITORY_ROOT}/scripts/ci/package_webtui_retirement.sh" > prerm.sh
+cat "${SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > prerm.sh
 cat << 'EOF' >> prerm.sh
 export SYSWARDEN_PKG_INSTALL=1
 case "${APK_PACKAGE:-}:${APK_SCRIPT:-}:${1:-}" in
@@ -740,6 +934,7 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --vendor "SysWarden Security" \
         --maintainer "SysWarden Engineering" \
         --description "SysWarden Host-based Security Orchestrator for Linux" \
+        --url "https://github.com/duggytuxy/syswarden" \
         --license "GPL-3.0-or-later" \
         --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
         -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cron" -d "bash-completion" \
@@ -764,6 +959,7 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --vendor "SysWarden Security" \
         --maintainer "SysWarden Engineering" \
         --description "SysWarden Host-based Security Orchestrator for Linux" \
+        --url "https://github.com/duggytuxy/syswarden" \
         --license "GPL-3.0-or-later" \
         --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
         --rpm-changelog "${RPM_CHANGELOG}" \
@@ -774,7 +970,10 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --after-install "${RPM_SCRIPTS}/postinst.sh" \
         --before-remove "${RPM_SCRIPTS}/prerm.sh" \
         --after-remove "${RPM_SCRIPTS}/postrm.sh" \
+        --rpm-digest sha256 \
         --rpm-rpmbuild-define "_build_id_links none" \
+        --rpm-rpmbuild-define "_binary_filedigest_algorithm 8" \
+        --rpm-rpmbuild-define "_source_filedigest_algorithm 8" \
         --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
         --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
         --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
@@ -832,6 +1031,28 @@ EOF
     --packager apk \
     --target "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"
 
+PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
+    --format stage \
+    --root staging \
+    --source \
+    "${SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
+    --contract "${SOURCE_ROOT}/scripts/ci/package_systemd_wireguard_ordering_contract.json"
+PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
+    --format deb \
+    --package "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb" \
+    --source \
+    "${SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
+    --contract "${SOURCE_ROOT}/scripts/ci/package_systemd_wireguard_ordering_contract.json"
+PYTHONDONTWRITEBYTECODE=1 python3 \
+    "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
+    --format rpm \
+    --package "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" \
+    --source \
+    "${SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
+    --contract "${SOURCE_ROOT}/scripts/ci/package_systemd_wireguard_ordering_contract.json"
+
 validate_local_deb_changelog() {
     local deb_path="$1"
     local deb_data_members deb_changelog_metadata
@@ -864,11 +1085,29 @@ validate_local_deb_license() {
     [ "${license_lines}" = GPL-3.0-or-later ]
 }
 
+validate_local_deb_homepage() {
+    local deb_path="$1"
+    local homepage_lines
+    homepage_lines="$(
+        ar p "${deb_path}" control.tar.gz |
+            LC_ALL=C tar -xOzf - ./control |
+            LC_ALL=C awk -F ': ' '$1 == "Homepage" { print $2 }'
+    )" || return 1
+    [ "${homepage_lines}" = https://github.com/duggytuxy/syswarden ]
+}
+
 validate_local_apk_license() {
     local apk_path="$1"
     local metadata
     metadata="$(LC_ALL=C tar -xOzf "${apk_path}" .PKGINFO)" || return 1
     [ "$(grep -Fxc 'license = GPL-3.0-or-later' <<< "${metadata}")" -eq 1 ]
+}
+
+validate_local_apk_homepage() {
+    local apk_path="$1"
+    local metadata
+    metadata="$(LC_ALL=C tar -xOzf "${apk_path}" .PKGINFO)" || return 1
+    [ "$(grep -Fxc 'url = https://github.com/duggytuxy/syswarden' <<< "${metadata}")" -eq 1 ]
 }
 
 validate_local_rpm_scriptlet() {
@@ -897,6 +1136,7 @@ validate_local_rpm_build_ids() {
     [ "$(rpm -qp --qf '%{BUILDHOST}' "${rpm_path}")" = syswarden-build.invalid ] || return 1
     [ "$(rpm -qp --qf '%{CHANGELOGTIME}' "${rpm_path}")" = "${RPM_CHANGELOG_EPOCH}" ] || return 1
     [ "$(rpm -qp --qf '%{LICENSE}' "${rpm_path}")" = GPL-3.0-or-later ] || return 1
+    [ "$(rpm -qp --qf '%{URL}' "${rpm_path}")" = https://github.com/duggytuxy/syswarden ] || return 1
     validate_local_rpm_scriptlet "${rpm_path}" PREIN preinst.sh || return 1
     validate_local_rpm_scriptlet "${rpm_path}" POSTIN postinst.sh || return 1
     validate_local_rpm_scriptlet "${rpm_path}" PREUN prerm.sh || return 1
@@ -959,6 +1199,11 @@ if ! validate_local_deb_license \
     echo "[-] Local Debian license metadata validation failed." >&2
     exit 1
 fi
+if ! validate_local_deb_homepage \
+    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb"; then
+    echo "[-] Local Debian homepage metadata validation failed." >&2
+    exit 1
+fi
 if ! validate_local_rpm_build_ids \
     "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm"; then
     echo "[-] Local RPM build-id validation failed." >&2
@@ -970,6 +1215,11 @@ fi
 if ! validate_local_apk_license \
     "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; then
     echo "[-] Local Alpine license metadata validation failed." >&2
+    exit 1
+fi
+if ! validate_local_apk_homepage \
+    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; then
+    echo "[-] Local Alpine homepage metadata validation failed." >&2
     exit 1
 fi
 
@@ -997,8 +1247,11 @@ publish_local_package() {
         rm -f -- "${temporary}"
         return 1
     fi
-    mv -f -- "${temporary}" "${destination}"
-    sync -f "${LOCAL_PACKAGE_OUTPUT}"
+    if ! mv -fT -- "${temporary}" "${destination}" || \
+       ! sync -f "${LOCAL_PACKAGE_OUTPUT}"; then
+        rm -f -- "${temporary}"
+        return 1
+    fi
     if [ -L "${destination}" ] || [ ! -f "${destination}" ] || \
        [ "$(find "${destination}" -prune -user "${expected_user}" \
            -group "${expected_group}" -links 1 -perm 0644 -print)" != "${destination}" ] || \
@@ -1008,17 +1261,133 @@ publish_local_package() {
     fi
 }
 
-for artifact in \
-    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb" \
-    "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" \
-    "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; do
-    if [ ! -f "${artifact}" ] || [ -L "${artifact}" ]; then
-        echo "[-] Expected package artifact is missing or unsafe: ${artifact}" >&2
-        exit 1
+publish_local_checksums() {
+    local destination expected_group expected_user filename manifest temporary
+    local -a filenames=(
+        "syswarden_${VERSION}_amd64.deb"
+        "syswarden-${VERSION}-1.x86_64.rpm"
+        "syswarden_${VERSION}_x86_64.apk"
+    )
+    destination="${LOCAL_PACKAGE_OUTPUT}/SHA256SUMS.txt"
+    manifest="${PACKAGE_WORKSPACE}/SHA256SUMS.txt"
+    if [ -e "${manifest}" ] || [ -L "${manifest}" ]; then
+        echo "[-] Refusing an occupied private checksum path: ${manifest}" >&2
+        return 1
     fi
-    chmod 0644 "${artifact}"
-    publish_local_package "${artifact}"
-done
+    expected_user="$(id -un)"
+    expected_group="$(id -gn)"
+    for filename in "${filenames[@]}"; do
+        if [ -L "${PACKAGE_WORKSPACE}/${filename}" ] || \
+           [ ! -f "${PACKAGE_WORKSPACE}/${filename}" ] || \
+           [ "$(find "${PACKAGE_WORKSPACE}/${filename}" -prune \
+               -user "${expected_user}" -group "${expected_group}" \
+               -links 1 -perm 0644 -print)" != "${PACKAGE_WORKSPACE}/${filename}" ]; then
+            echo "[-] Refusing an unsafe private package for checksumming: ${filename}" >&2
+            return 1
+        fi
+    done
+    temporary="$(mktemp "${PACKAGE_WORKSPACE}/.SHA256SUMS.txt.XXXXXX")" || return 1
+    if ! (
+        cd "${PACKAGE_WORKSPACE}" || exit 1
+        sha256sum -- "${filenames[@]}"
+    ) >"${temporary}" || \
+       ! chmod 0644 "${temporary}" || \
+       ! sync -f "${temporary}"; then
+        rm -f -- "${temporary}"
+        return 1
+    fi
+    if [ -L "${temporary}" ] || [ ! -f "${temporary}" ] || \
+       [ "$(find "${temporary}" -prune -user "${expected_user}" \
+           -group "${expected_group}" -links 1 -perm 0644 -print)" != "${temporary}" ]; then
+        echo "[-] Refusing an unsafe staged local checksum file: ${temporary}" >&2
+        rm -f -- "${temporary}"
+        return 1
+    fi
+    if ! (
+        cd "${PACKAGE_WORKSPACE}" || exit 1
+        [ "$(wc -l < "$(basename -- "${temporary}")")" -eq "${#filenames[@]}" ] || exit 1
+        for filename in "${filenames[@]}"; do
+            [ "$(awk -v expected="${filename}" \
+                '$2 == expected { count++ } END { print count + 0 }' \
+                "$(basename -- "${temporary}")")" -eq 1 ] || exit 1
+        done
+        sha256sum --check --strict "$(basename -- "${temporary}")"
+    ); then
+        echo "[-] Private checksum manifest validation failed." >&2
+        rm -f -- "${temporary}"
+        return 1
+    fi
+    if ! mv -fT -- "${temporary}" "${manifest}" || \
+       ! sync -f "${manifest}"; then
+        rm -f -- "${temporary}" "${manifest}"
+        return 1
+    fi
+    if ! publish_local_package "${manifest}"; then
+        if ! rm -f -- "${destination}" || \
+           ! sync -f "${LOCAL_PACKAGE_OUTPUT}"; then
+            echo "[-] Unable to invalidate the failed local checksum publication." >&2
+        fi
+        return 1
+    fi
+    if ! (
+        cd "${LOCAL_PACKAGE_OUTPUT}" || exit 1
+        [ "$(wc -l < SHA256SUMS.txt)" -eq "${#filenames[@]}" ] || exit 1
+        for filename in "${filenames[@]}"; do
+            [ "$(awk -v expected="${filename}" \
+                '$2 == expected { count++ } END { print count + 0 }' \
+                SHA256SUMS.txt)" -eq 1 ] || exit 1
+        done
+        sha256sum --check --strict SHA256SUMS.txt
+    ); then
+        echo "[-] Local checksum publication verification failed: ${destination}" >&2
+        if ! rm -f -- "${destination}" || \
+           ! sync -f "${LOCAL_PACKAGE_OUTPUT}"; then
+            echo "[-] Unable to invalidate the failed local checksum publication." >&2
+        fi
+        return 1
+    fi
+}
+
+publish_local_artifacts() (
+    local checksum_destination expected_group expected_user publication_lock_fd
+    checksum_destination="${LOCAL_PACKAGE_OUTPUT}/SHA256SUMS.txt"
+    if [ -L "${LOCAL_PACKAGE_OUTPUT}" ] || [ ! -d "${LOCAL_PACKAGE_OUTPUT}" ]; then
+        echo "[-] Refusing an unsafe local package output directory." >&2
+        return 1
+    fi
+    if ! exec {publication_lock_fd}<"${LOCAL_PACKAGE_OUTPUT}" || \
+       ! flock --exclusive "${publication_lock_fd}"; then
+        echo "[-] Unable to lock the local package output directory." >&2
+        return 1
+    fi
+    if [ -L "${checksum_destination}" ] || \
+       { [ -e "${checksum_destination}" ] && [ ! -f "${checksum_destination}" ]; }; then
+        echo "[-] Refusing an unsafe local checksum destination: ${checksum_destination}" >&2
+        return 1
+    fi
+    if ! rm -f -- "${checksum_destination}" || \
+       ! sync -f "${LOCAL_PACKAGE_OUTPUT}"; then
+        echo "[-] Unable to invalidate the previous local checksum manifest." >&2
+        return 1
+    fi
+
+    expected_user="$(id -un)"
+    expected_group="$(id -gn)"
+    for artifact in \
+        "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb" \
+        "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" \
+        "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; do
+        if [ ! -f "${artifact}" ] || [ -L "${artifact}" ] || \
+           [ "$(find "${artifact}" -prune -user "${expected_user}" \
+               -group "${expected_group}" -links 1 -print)" != "${artifact}" ]; then
+            echo "[-] Expected package artifact is missing or unsafe: ${artifact}" >&2
+            return 1
+        fi
+        chmod 0644 "${artifact}" || return 1
+        publish_local_package "${artifact}" || return 1
+    done
+    publish_local_checksums || return 1
+)
 
 cd "${REPOSITORY_ROOT}"
 PYTHONDONTWRITEBYTECODE=1 python3 \
@@ -1026,6 +1395,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
     --repository "${REPOSITORY_ROOT}" verify \
     --snapshot "${PACKAGE_REPOSITORY_STATE}"
 PACKAGE_STATE_VERIFIED=1
+
+publish_local_artifacts
 
 echo "[SUCCESS] Packages have been generated in ${LOCAL_PACKAGE_OUTPUT}."
 ls -lh \

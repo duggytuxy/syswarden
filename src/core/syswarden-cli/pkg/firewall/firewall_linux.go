@@ -199,6 +199,18 @@ func validateLinuxWrapperBackendConstraint(backend string, activePaths map[strin
 
 // ApplyPolicies triggers the main Linux firewall injection using native Netlink / CLI Nftables
 func ApplyPolicies() error {
+	return applyPolicies(nil)
+}
+
+func applyPoliciesWithDynamicUnban(network string) error {
+	removal, err := newNFTDynamicBanRemoval(network)
+	if err != nil {
+		return err
+	}
+	return applyPolicies([]nftDynamicBanRemoval{removal})
+}
+
+func applyPolicies(dynamicBanRemovals []nftDynamicBanRemoval) error {
 	if err := RecoverPendingAuthoritativeTransaction(); err != nil {
 		return err
 	}
@@ -589,6 +601,7 @@ func ApplyPolicies() error {
 			return reattestLinuxWrapperPlan(wrapperPlan)
 		},
 		func() error { return reconcileLinuxFirewallWrapperPlan(wrapperPlan) },
+		dynamicBanRemovals...,
 	)
 	if err != nil {
 		return err
@@ -633,6 +646,7 @@ func applyNftablesPolicyWithWrappers(
 	populations []nftSetPopulation,
 	verification nftVerificationPlan,
 	preflightWrappers, precommitWrappers, reconcileWrappers func() error,
+	dynamicBanRemovals ...nftDynamicBanRemoval,
 ) (string, error) {
 	transactionID, err := newFirewallTransactionID()
 	if err != nil {
@@ -657,7 +671,7 @@ func applyNftablesPolicyWithWrappers(
 			return transactionID, fmt.Errorf("firewall transaction %s preserved the previous ruleset: compatibility wrapper preflight: %w", transactionID, err)
 		}
 	}
-	transactionID, err = applyNftablesTransactionLocked(ctx, runner, stateDirectory, baseRules, populations, verification, transactionID, precommitWrappers)
+	transactionID, err = applyNftablesTransactionLocked(ctx, runner, stateDirectory, baseRules, populations, verification, transactionID, precommitWrappers, dynamicBanRemovals...)
 	if err != nil {
 		return transactionID, err
 	}
@@ -678,7 +692,10 @@ func committedWrapperReconciliationError(transactionID string, err error) error 
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("nftables transaction %s is committed and remains authoritative; compatibility wrapper reconciliation is incomplete: %w", transactionID, err)
+	return markCommittedFirewallPolicyError(fmt.Errorf(
+		"nftables transaction %s is committed and remains authoritative; compatibility wrapper reconciliation is incomplete: %w",
+		transactionID, err,
+	))
 }
 
 // getLocalIPs fetches all local IPv4 addresses (excluding loopback) for ARP spoofing protection
@@ -797,8 +814,17 @@ func prepareNftSetPopulations(
 
 	ztASN4, ztASN6, ztASNSourceErr := configuredASNNftSources(listDirectory, strictAllow.asns, true)
 	asn4, asn6, asnErr := configuredASNNftSources(listDirectory, config.GlobalConfig.ASNList, false)
-	whitelistAddress4, whitelistPorts4, whitelist4Err := populateWhitelistSets(ctx, whitelist4, "syswarden_whitelist", "syswarden_whitelist_ports")
-	whitelistAddress6, whitelistPorts6, whitelist6Err := populateWhitelistSets(ctx, whitelist6, "syswarden_whitelist6", "syswarden_whitelist_ports6")
+	fileWhitelistAddress4, whitelistPorts4, whitelist4Err := populateWhitelistSets(ctx, whitelist4, "syswarden_whitelist", "syswarden_whitelist_ports")
+	fileWhitelistAddress6, whitelistPorts6, whitelist6Err := populateWhitelistSets(ctx, whitelist6, "syswarden_whitelist6", "syswarden_whitelist_ports6")
+	configuredWhitelist4, configuredWhitelist6, configuredWhitelistErr := configuredWhitelistAddressPopulations(
+		strings.Fields(config.GlobalConfig.WhitelistIPs),
+	)
+	whitelistAddress4, whitelist4MergeErr := mergeNFTAddressPopulations(
+		"syswarden_whitelist", fileWhitelistAddress4, configuredWhitelist4,
+	)
+	whitelistAddress6, whitelist6MergeErr := mergeNFTAddressPopulations(
+		"syswarden_whitelist6", fileWhitelistAddress6, configuredWhitelist6,
+	)
 	sshBypass4, sshBypass6, sshBypassErr := populateSSHBypassSets(ctx, nftListSource{path: SSHBypass}, effectiveSSHPort)
 	ztASN4Population, ztASN4Err := populateSet(ctx, ztASN4, "syswarden_zt_allowed")
 	ztASN6Population, ztASN6Err := populateSet(ctx, ztASN6, "syswarden_zt_allowed6")
@@ -860,7 +886,7 @@ func prepareNftSetPopulations(
 	errs := []error{
 		ztASNSourceErr, ztASN4Err, ztASN6Err, ztGeoErr, zt4MergeErr, zt6MergeErr, strictAllowPopulationErr,
 		blacklist4Err, blacklist6Err, geoErr, asnErr, asn4Err, asn6Err,
-		saasPairErr, whitelist4Err, whitelist6Err, sshBypassErr,
+		saasPairErr, whitelist4Err, whitelist6Err, configuredWhitelistErr, whitelist4MergeErr, whitelist6MergeErr, sshBypassErr,
 	}
 	return populations, errors.Join(errs...)
 }

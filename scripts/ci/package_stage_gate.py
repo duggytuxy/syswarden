@@ -76,6 +76,19 @@ LINUX_ENTRIES = {
     ),
 }
 
+SYSTEMD_ORDERING_PATH = (
+    "usr/lib/systemd/system/syswarden-firewall.service.d/"
+    "10-syswarden-wireguard-ordering.conf"
+)
+SYSTEMD_LINUX_ENTRIES = {
+    **LINUX_ENTRIES,
+    "usr/lib": DIRECTORY,
+    "usr/lib/systemd": DIRECTORY,
+    "usr/lib/systemd/system": DIRECTORY,
+    "usr/lib/systemd/system/syswarden-firewall.service.d": DIRECTORY,
+    SYSTEMD_ORDERING_PATH: ExpectedEntry("file", mode=0o644, nonempty=True),
+}
+
 def entry_kind(metadata: os.stat_result) -> str:
     if stat.S_ISDIR(metadata.st_mode):
         return "directory"
@@ -218,6 +231,7 @@ def validate(
     completion_contract: ContentContract | None = None,
     geoip_data_license_contract: ContentContract | None = None,
     project_license_contract: ContentContract | None = None,
+    systemd_ordering_contract: ContentContract | None = None,
 ) -> None:
     actual = inventory(root)
     actual_paths = set(actual)
@@ -279,6 +293,11 @@ def validate(
             root / "usr/share/doc/syswarden/LICENSE.txt",
             project_license_contract,
         )
+    if systemd_ordering_contract is not None:
+        validate_exact_content(
+            root / SYSTEMD_ORDERING_PATH,
+            systemd_ordering_contract,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -290,6 +309,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--geoip-data-license-source", type=Path, required=True)
     parser.add_argument("--project-license-contract", type=Path, required=True)
     parser.add_argument("--project-license-source", type=Path, required=True)
+    parser.add_argument(
+        "--service-manager", choices=("systemd", "openrc"), required=True
+    )
+    parser.add_argument("--systemd-ordering-contract", type=Path)
+    parser.add_argument("--systemd-ordering-source", type=Path)
     return parser
 
 
@@ -307,12 +331,31 @@ def main() -> int:
             args.geoip_data_license_source, geoip_data_license_contract
         )
         validate_exact_content(args.project_license_source, project_license_contract)
+        expected = LINUX_ENTRIES
+        systemd_ordering_contract = None
+        if args.service_manager == "systemd":
+            if args.systemd_ordering_contract is None or args.systemd_ordering_source is None:
+                raise PackageStageError(
+                    "systemd staging requires an ordering content contract and source"
+                )
+            systemd_ordering_contract = load_content_contract(
+                args.systemd_ordering_contract
+            )
+            validate_exact_content(
+                args.systemd_ordering_source, systemd_ordering_contract
+            )
+            expected = SYSTEMD_LINUX_ENTRIES
+        elif args.systemd_ordering_contract is not None or args.systemd_ordering_source is not None:
+            raise PackageStageError(
+                "OpenRC staging must not carry the systemd ordering contract"
+            )
         validate(
             args.root,
-            LINUX_ENTRIES,
+            expected,
             completion_contract,
             geoip_data_license_contract,
             project_license_contract,
+            systemd_ordering_contract,
         )
     except PackageStageError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

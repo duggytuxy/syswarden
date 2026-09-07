@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "matrix_id": "syswarden-package-qualification/v1",
-  "target_release": "v4.04.2",
+  "target_release": "v4.04.3",
   "architecture": {
     "oci_platform": "linux/amd64",
     "kernel": "x86_64",
@@ -17,39 +17,39 @@
       "local_rebuild_allowed": false
     },
     "baseline": {
-      "release": "v4.03.3",
-      "commit": "cdd66600a1505bae1f1e754dea096ee71e9cee82",
-      "release_id": 377680978,
+      "release": "v4.04.2",
+      "commit": "7a03d40f427a825917561e2a0930298e8fbbbc8b",
+      "release_id": 381364611,
       "release_state": "public-stable",
       "asset_selection": "github-asset-id",
       "assets": [
         {
           "name": "SHA256SUMS.txt",
-          "id": 532015727,
+          "id": 541354557,
           "size": 283,
           "architecture": "metadata",
-          "sha256": "91c89428bf20d2386adf0d7529dc5edb26da6d490db872fab0771ddfce5364c2"
+          "sha256": "ab2d4e8379ea77c0738c343065283eb4a8f3887a9465ba893f90dfac8967e0e9"
         },
         {
-          "name": "syswarden_4.03.3_amd64.deb",
-          "id": 532015759,
-          "size": 13874730,
+          "name": "syswarden_4.04.2_amd64.deb",
+          "id": 541354594,
+          "size": 14994704,
           "architecture": "amd64",
-          "sha256": "4d17e74b16022be31a3e6db8851386f8c0df14772ea38f04f7df45540c818c9b"
+          "sha256": "edf4c44b08f97a4455faa6128bd82d3830d073b52a9086788c97d9481bb3eea6"
         },
         {
-          "name": "syswarden-4.03.3-1.x86_64.rpm",
-          "id": 532015720,
-          "size": 14160347,
+          "name": "syswarden-4.04.2-1.x86_64.rpm",
+          "id": 541354554,
+          "size": 15281125,
           "architecture": "x86_64",
-          "sha256": "42e207f7f5ae47384c0c35764cf4da179feed1cac34f4fb3bfbd3b59aee8881e"
+          "sha256": "409398b4dd0bd8463d665ce856bb387236963a09eb2a371c2414aacf0ab2e011"
         },
         {
-          "name": "syswarden_4.03.3_x86_64.apk",
-          "id": 532015763,
-          "size": 14039148,
+          "name": "syswarden_4.04.2_x86_64.apk",
+          "id": 541354596,
+          "size": 15207236,
           "architecture": "x86_64",
-          "sha256": "73f2d1cf67f62e781dc3d78cc9f9b2d5732ec876fee6587b305aeaaa3830f3d5"
+          "sha256": "b1914ce1665f81d9f8d9aeae1cc332cd5d8210dbf94e2f04d021e158e25dd39f"
         }
       ]
     },

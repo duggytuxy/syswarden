@@ -21,7 +21,7 @@ class RepositoryStateError(ValueError):
 def git_bytes(repository: Path, *arguments: str) -> bytes:
     try:
         process = subprocess.run(
-            ["git", *arguments],
+            ["git", "-c", "core.fsmonitor=false", *arguments],
             cwd=repository,
             check=True,
             capture_output=True,
@@ -73,6 +73,15 @@ def capture(repository: Path) -> dict[str, Any]:
     git_dir = git_bytes(repository, "rev-parse", "--git-dir").strip()
     if not git_dir:
         raise RepositoryStateError(f"not a Git repository: {repository}")
+    head = git_bytes(repository, "rev-parse", "--verify", "HEAD^{commit}").strip()
+    try:
+        head_commit = head.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise RepositoryStateError("Git HEAD is not an ASCII commit ID") from exc
+    if len(head_commit) != 40 or any(
+        character not in "0123456789abcdef" for character in head_commit
+    ):
+        raise RepositoryStateError("Git HEAD is not an exact SHA-1 commit ID")
     raw_paths = git_bytes(
         repository,
         "ls-files",
@@ -87,7 +96,8 @@ def capture(repository: Path) -> dict[str, Any]:
         if item
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "head_commit": head_commit,
         "index_sha256": hashlib.sha256(
             git_bytes(repository, "ls-files", "--stage", "-z")
         ).hexdigest(),
@@ -123,6 +133,8 @@ def verify_snapshot(repository: Path, snapshot: Path) -> None:
         )
         if actual.get("index_sha256") != expected.get("index_sha256"):
             changed.insert(0, "<git-index>")
+        if actual.get("head_commit") != expected.get("head_commit"):
+            changed.insert(0, "<git-head>")
         raise RepositoryStateError(
             "repository state changed during validation: " + ", ".join(changed)
         )

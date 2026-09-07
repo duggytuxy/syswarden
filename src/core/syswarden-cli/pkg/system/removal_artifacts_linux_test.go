@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func fakeRemovalMountInfo(mountPoints ...string) []byte {
@@ -119,6 +121,230 @@ func TestDedicatedRemovalTreeMountPreflightPreservesEveryByteAndAllowsRetry_SW2_
 	}
 }
 
+func TestSharedParentDedicatedRemovalSupportsUbuntuLayoutAndPreservesSiblings_SW2_PKG_001(t *testing.T) {
+	uid, gid := systemTestIdentity(t)
+	sharedParent := filepath.Join(t.TempDir(), "var-log")
+	if err := os.Mkdir(sharedParent, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sharedParent, 0775); err != nil { // #nosec G302 -- reproduces the supported shared /var/log mode
+		t.Fatal(err)
+	}
+	product := filepath.Join(sharedParent, "syswarden")
+	if err := os.Mkdir(product, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(product, "product.log"), []byte("product"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(sharedParent, "operator.log")
+	if err := os.WriteFile(sibling, []byte("preserve exactly"), 0640); err != nil { // #nosec G306 -- reproduces a typical shared log sibling mode
+		t.Fatal(err)
+	}
+	siblingBefore, err := os.Lstat(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentBefore, err := os.Lstat(sharedParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlinks := 0
+	remove := func() error {
+		return removeDedicatedRemovalTreeFromSharedParentAtUsingMountInfo(
+			product,
+			uid,
+			gid,
+			uid,
+			func(root *os.Root, name string, _ string) error { return root.RemoveAll(name) },
+			func(fd int, name string, flags int) error {
+				unlinks++
+				return unix.Unlinkat(fd, name, flags)
+			},
+			func() ([]byte, error) { return fakeRemovalMountInfo("/"), nil },
+			sharedRemovalRaceHooks{},
+		)
+	}
+	if err := remove(); err != nil {
+		t.Fatalf("shared-parent removal: %v", err)
+	}
+	if err := remove(); err != nil {
+		t.Fatalf("idempotent shared-parent retry: %v", err)
+	}
+	if unlinks != 1 {
+		t.Fatalf("shared-parent rmdir calls = %d, want 1", unlinks)
+	}
+	if _, err := os.Lstat(product); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("product log root remains: %v", err)
+	}
+	if got, err := os.ReadFile(sibling); err != nil || string(got) != "preserve exactly" { // #nosec G304 -- sibling is confined to the private fixture
+		t.Fatalf("operator sibling changed: content=%q error=%v", got, err)
+	}
+	siblingAfter, err := os.Lstat(sibling)
+	if err != nil || !os.SameFile(siblingBefore, siblingAfter) || siblingBefore.Mode() != siblingAfter.Mode() {
+		t.Fatalf("operator sibling identity changed: %v", err)
+	}
+	parentAfter, err := os.Lstat(sharedParent)
+	if err != nil || !os.SameFile(parentBefore, parentAfter) || parentBefore.Mode() != parentAfter.Mode() {
+		t.Fatalf("shared parent identity changed: %v", err)
+	}
+}
+
+func TestSharedParentDedicatedRemovalRejectsUnsafeStateAndRaces_SW2_FWBACKEND_001(t *testing.T) {
+	uid, gid := systemTestIdentity(t)
+	newFixture := func(t *testing.T) (string, string) {
+		t.Helper()
+		parent := filepath.Join(t.TempDir(), "var-log")
+		if err := os.Mkdir(parent, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(parent, 0775); err != nil { // #nosec G302 -- reproduces the supported shared /var/log mode
+			t.Fatal(err)
+		}
+		product := filepath.Join(parent, "syswarden")
+		if err := os.Mkdir(product, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(product, "product.log"), []byte("product"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return parent, product
+	}
+	run := func(product string, hooks sharedRemovalRaceHooks, readMountInfo removalMountInfoReader) error {
+		return removeDedicatedRemovalTreeFromSharedParentAtUsingMountInfo(
+			product,
+			uid,
+			gid,
+			uid,
+			func(root *os.Root, name string, _ string) error { return root.RemoveAll(name) },
+			unix.Unlinkat,
+			readMountInfo,
+			hooks,
+		)
+	}
+
+	t.Run("world-writable parent", func(t *testing.T) {
+		parent, product := newFixture(t)
+		if err := os.Chmod(parent, 0777); err != nil { // #nosec G302 -- adversarial fixture must be world-writable
+			t.Fatal(err)
+		}
+		if err := run(product, sharedRemovalRaceHooks{}, func() ([]byte, error) { return fakeRemovalMountInfo("/"), nil }); err == nil {
+			t.Fatal("world-writable shared parent was accepted")
+		}
+		if got, err := os.ReadFile(filepath.Join(product, "product.log")); err != nil || string(got) != "product" { // #nosec G304 -- fixture path
+			t.Fatalf("unsafe-parent refusal changed product bytes: %q, %v", got, err)
+		}
+	})
+
+	t.Run("unsafe target", func(t *testing.T) {
+		_, product := newFixture(t)
+		if err := os.Chmod(product, 0770); err != nil { // #nosec G302 -- adversarial fixture must be group-writable
+			t.Fatal(err)
+		}
+		if err := run(product, sharedRemovalRaceHooks{}, func() ([]byte, error) { return fakeRemovalMountInfo("/"), nil }); err == nil {
+			t.Fatal("group-writable product root was accepted")
+		}
+	})
+
+	t.Run("nested mount", func(t *testing.T) {
+		_, product := newFixture(t)
+		calls := 0
+		err := removeDedicatedRemovalTreeFromSharedParentAtUsingMountInfo(
+			product,
+			uid,
+			gid,
+			uid,
+			func(*os.Root, string, string) error { calls++; return nil },
+			func(int, string, int) error { calls++; return nil },
+			func() ([]byte, error) { return fakeRemovalMountInfo("/", filepath.Join(product, "nested")), nil },
+			sharedRemovalRaceHooks{},
+		)
+		if err == nil || !strings.Contains(err.Error(), "mount boundary") || calls != 0 {
+			t.Fatalf("nested-mount refusal = %v, destructive calls = %d", err, calls)
+		}
+	})
+
+	t.Run("replacement before final rmdir", func(t *testing.T) {
+		parent, product := newFixture(t)
+		displaced := filepath.Join(parent, "syswarden-displaced")
+		replacementMarker := filepath.Join(product, "operator-data")
+		err := run(
+			product,
+			sharedRemovalRaceHooks{beforeFinalUnlink: func() {
+				if renameErr := os.Rename(product, displaced); renameErr != nil {
+					t.Fatalf("displace pinned product root: %v", renameErr)
+				}
+				if mkdirErr := os.Mkdir(product, 0750); mkdirErr != nil {
+					t.Fatalf("publish replacement root: %v", mkdirErr)
+				}
+				if writeErr := os.WriteFile(replacementMarker, []byte("operator"), 0600); writeErr != nil {
+					t.Fatalf("publish replacement marker: %v", writeErr)
+				}
+			}},
+			func() ([]byte, error) { return fakeRemovalMountInfo("/"), nil },
+		)
+		if err == nil || !strings.Contains(err.Error(), "changed at final boundary") {
+			t.Fatalf("replacement race error = %v", err)
+		}
+		if got, readErr := os.ReadFile(replacementMarker); readErr != nil || string(got) != "operator" { // #nosec G304 -- fixture path
+			t.Fatalf("replacement bytes changed: %q, %v", got, readErr)
+		}
+		if entries, readErr := os.ReadDir(displaced); readErr != nil || len(entries) != 0 {
+			t.Fatalf("pinned product root was not boundedly emptied: entries=%v error=%v", entries, readErr)
+		}
+	})
+
+	t.Run("replacement at final rmdir", func(t *testing.T) {
+		parent, product := newFixture(t)
+		displaced := filepath.Join(parent, "syswarden-displaced")
+		replacement := filepath.Join(parent, "syswarden")
+		err := removeDedicatedRemovalTreeFromSharedParentAtUsingMountInfo(
+			product,
+			uid,
+			gid,
+			uid,
+			func(root *os.Root, name string, _ string) error { return root.RemoveAll(name) },
+			func(fd int, name string, flags int) error {
+				if renameErr := os.Rename(product, displaced); renameErr != nil {
+					t.Fatalf("displace product at final rmdir: %v", renameErr)
+				}
+				if mkdirErr := os.Mkdir(replacement, 0750); mkdirErr != nil {
+					t.Fatalf("publish empty replacement at final rmdir: %v", mkdirErr)
+				}
+				return unix.Unlinkat(fd, name, flags)
+			},
+			func() ([]byte, error) { return fakeRemovalMountInfo("/"), nil },
+			sharedRemovalRaceHooks{},
+		)
+		if err == nil || !strings.Contains(err.Error(), "was not the directory removed") {
+			t.Fatalf("final-rmdir replacement race error = %v", err)
+		}
+		if entries, readErr := os.ReadDir(displaced); readErr != nil || len(entries) != 0 {
+			t.Fatalf("original pinned product root was not preserved empty: entries=%v error=%v", entries, readErr)
+		}
+	})
+}
+
+func TestStrictDedicatedRemovalStillRejectsGroupWritableParent_SW2_FWBACKEND_001(t *testing.T) {
+	uid, gid := systemTestIdentity(t)
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0775); err != nil { // #nosec G302 -- verifies strict removal rejects a group-writable parent
+		t.Fatal(err)
+	}
+	product := filepath.Join(parent, "syswarden")
+	if err := os.Mkdir(product, 0750); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	err := removeDedicatedRemovalTreeAt(product, uid, gid, func(*os.Root, string, string) error {
+		calls++
+		return nil
+	})
+	if err == nil || calls != 0 {
+		t.Fatalf("strict group-writable-parent refusal = %v, destructive calls = %d", err, calls)
+	}
+}
+
 func TestExactProductSymlinkRemovalPreservesLookalikes_SW2_FWBACKEND_001(t *testing.T) {
 	uid, gid := systemTestIdentity(t)
 	parent := t.TempDir()
@@ -127,6 +353,9 @@ func TestExactProductSymlinkRemovalPreservesLookalikes_SW2_FWBACKEND_001(t *test
 	regular := filepath.Join(parent, "regular")
 	if err := os.WriteFile(regular, []byte("operator"), 0600); err != nil {
 		t.Fatal(err)
+	}
+	if err := preflightExactProductSymlinkAt(regular, expected, uid, gid); err == nil {
+		t.Fatal("preflight accepted a regular link lookalike")
 	}
 	if err := removeExactProductSymlinkAt(regular, expected, uid, gid); err == nil {
 		t.Fatal("lookalike regular file was accepted")
@@ -139,6 +368,9 @@ func TestExactProductSymlinkRemovalPreservesLookalikes_SW2_FWBACKEND_001(t *test
 	if err := os.Symlink("/opt/operator/bin/syswarden-cli", wrong); err != nil {
 		t.Fatal(err)
 	}
+	if err := preflightExactProductSymlinkAt(wrong, expected, uid, gid); err == nil {
+		t.Fatal("preflight accepted an unexpected product link target")
+	}
 	if err := removeExactProductSymlinkAt(wrong, expected, uid, gid); err == nil {
 		t.Fatal("wrong symlink target was accepted")
 	}
@@ -149,6 +381,9 @@ func TestExactProductSymlinkRemovalPreservesLookalikes_SW2_FWBACKEND_001(t *test
 	exact := filepath.Join(parent, "exact")
 	if err := os.Symlink(expected, exact); err != nil {
 		t.Fatal(err)
+	}
+	if err := preflightExactProductSymlinkAt(exact, expected, uid, gid); err != nil {
+		t.Fatalf("preflight exact product symlink: %v", err)
 	}
 	if err := removeExactProductSymlinkAt(exact, expected, uid, gid); err != nil {
 		t.Fatal(err)
@@ -357,5 +592,24 @@ func TestUninstallTailHasNoAmbientCronProfileOrIgnoredRemovalMutation_SW2_FWBACK
 	finalize := strings.Index(content, "FinalizeRemovalTombstone()")
 	if success < 0 || finalize < 0 || success <= finalize {
 		t.Fatalf("success can be printed before finalization: success=%d finalize=%d", success, finalize)
+	}
+	preflight := strings.Index(content, "preflightHostProductRemovalArtifacts()")
+	start := strings.Index(content, `fmt.Println("[WARN] Starting verified SysWarden host removal...")`)
+	logRemoval := strings.Index(content, "removeDedicatedProductLogTree()")
+	configRemoval := strings.Index(content, `removeDedicatedRemovalTree("/etc/syswarden")`)
+	tuiLinkRemoval := strings.Index(content, `"/usr/local/bin/syswarden-tui", "/opt/syswarden/bin/syswarden-tui"`)
+	cliLinkRemoval := strings.Index(content, `"/usr/local/bin/syswarden", "/opt/syswarden/bin/syswarden-cli"`)
+	executableRemoval := strings.Index(content, `removeDedicatedRemovalTree("/opt/syswarden")`)
+	if preflight < 0 || start < 0 || logRemoval < 0 || configRemoval < 0 || tuiLinkRemoval < 0 ||
+		cliLinkRemoval < 0 || executableRemoval < 0 || preflight >= start || start >= logRemoval ||
+		logRemoval >= configRemoval || configRemoval >= tuiLinkRemoval || tuiLinkRemoval >= cliLinkRemoval ||
+		cliLinkRemoval >= executableRemoval {
+		t.Fatalf(
+			"unsafe uninstall ordering: preflight=%d start=%d log=%d config=%d tui-link=%d cli-link=%d executable=%d",
+			preflight, start, logRemoval, configRemoval, tuiLinkRemoval, cliLinkRemoval, executableRemoval,
+		)
+	}
+	if strings.Contains(content, `removeDedicatedRemovalTree("/var/log/syswarden")`) {
+		t.Fatal("uninstall tail uses the strict parent remover for the shared log root")
 	}
 }

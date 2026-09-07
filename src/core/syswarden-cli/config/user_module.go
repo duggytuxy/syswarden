@@ -209,17 +209,26 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 		if readErr != nil {
 			return nil, readErr
 		}
+		var previousUserContent []byte
 		if entry.Name() == userModuleName {
 			if expectedUser == nil || !expectedUser.matches(content, identity.info) {
 				return nil, fmt.Errorf("operator user module changed before merged validation")
 			}
+			previousUserContent = content
 			content = userContent
 			mergedUser = true
 		} else {
 			snapshot.modules[entry.Name()] = identity
 		}
-		if _, err := parseTOMLDocument(content, filepath.ToSlash(filepath.Join("modules", entry.Name()))); err != nil {
+		relative := filepath.ToSlash(filepath.Join("modules", entry.Name()))
+		document, err := parseTOMLDocument(content, relative)
+		if err != nil {
 			return nil, err
+		}
+		if entry.Name() == userModuleName {
+			if err := rejectNewRetiredUnspecifiedWhitelistEntries(previousUserContent, document); err != nil {
+				return nil, err
+			}
 		}
 		if err := v.MergeConfig(bytes.NewReader(content)); err != nil {
 			return nil, fmt.Errorf("merge module %s: %w", entry.Name(), err)
@@ -229,7 +238,11 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 		if expectedUser != nil {
 			return nil, fmt.Errorf("operator user module disappeared before merged validation")
 		}
-		if _, err := parseTOMLDocument(userContent, filepath.ToSlash(filepath.Join("modules", userModuleName))); err != nil {
+		document, err := parseTOMLDocument(userContent, filepath.ToSlash(filepath.Join("modules", userModuleName)))
+		if err != nil {
+			return nil, err
+		}
+		if err := rejectNewRetiredUnspecifiedWhitelistEntries(nil, document); err != nil {
 			return nil, err
 		}
 		if err := v.MergeConfig(bytes.NewReader(userContent)); err != nil {
@@ -240,6 +253,7 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 	if err := v.Unmarshal(&candidate); err != nil {
 		return nil, err
 	}
+	neutralizeRetiredUnspecifiedWhitelistConfig(&candidate)
 	if err := validateConfig(&candidate); err != nil {
 		return nil, err
 	}
@@ -247,6 +261,59 @@ func validateModularUserCandidate(configDir string, userContent []byte, expected
 		return nil, fmt.Errorf("configuration changed during merged validation: %w", err)
 	}
 	return snapshot, nil
+}
+
+func rejectNewRetiredUnspecifiedWhitelistEntries(previousContent []byte, candidate map[string]any) error {
+	previous := map[string]int{}
+	if len(previousContent) != 0 {
+		if document, err := parseTOMLDocument(previousContent, filepath.ToSlash(filepath.Join("modules", userModuleName))); err == nil {
+			previous = retiredUnspecifiedWhitelistEntryCounts(document)
+		}
+	}
+	candidateCounts := retiredUnspecifiedWhitelistEntryCounts(candidate)
+	for _, value := range []string{"0.0.0.0", "0.0.0.0/32"} {
+		if candidateCounts[value] > previous[value] {
+			return fmt.Errorf(
+				"modules/%s cannot add retired network.whitelist_ips value %q; remove it because exact IGMP control traffic is handled internally",
+				userModuleName,
+				value,
+			)
+		}
+	}
+	return nil
+}
+
+func retiredUnspecifiedWhitelistEntryCounts(document map[string]any) map[string]int {
+	counts := make(map[string]int, 2)
+	for key, rawNetwork := range document {
+		if !strings.EqualFold(key, "network") {
+			continue
+		}
+		network, ok := rawNetwork.(map[string]any)
+		if !ok {
+			continue
+		}
+		for networkKey, rawWhitelist := range network {
+			if !strings.EqualFold(networkKey, "whitelist_ips") {
+				continue
+			}
+			switch values := rawWhitelist.(type) {
+			case []any:
+				for _, rawValue := range values {
+					if value, ok := rawValue.(string); ok && IsRetiredUnspecifiedWhitelistEntry(value) {
+						counts[value]++
+					}
+				}
+			case []string:
+				for _, value := range values {
+					if IsRetiredUnspecifiedWhitelistEntry(value) {
+						counts[value]++
+					}
+				}
+			}
+		}
+	}
+	return counts
 }
 
 func readOptionalSecureFileIdentity(root *os.Root, name, displayPath string) (*secureFileIdentity, error) {

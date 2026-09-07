@@ -763,6 +763,14 @@ func (host firewallRemovalPreparationHost) reattest() error {
 // intentionally leaves owned services disabled; callers must report that
 // recoverable state if a later cleanup phase fails.
 func PrepareFirewallStateForRemoval() error {
+	if err := RequireRemovalTombstone(); err != nil {
+		return fmt.Errorf("firewall removal preparation requires the durable removal tombstone: %w", err)
+	}
+	if !IsAlpine() {
+		if err := productionPreparedSystemdServiceArtifactHost().recoverInterruptedRemoval(); err != nil {
+			return fmt.Errorf("recover interrupted systemd service artifact removal: %w", err)
+		}
+	}
 	return productionFirewallRemovalPreparationHost().prepare()
 }
 
@@ -787,6 +795,9 @@ func UninstallSystem() error {
 	}
 	if err := preflightHostRemovalMountBoundaries(); err != nil {
 		return fmt.Errorf("refusing host removal before mount-boundary preflight: %w", err)
+	}
+	if err := preflightHostProductRemovalArtifacts(); err != nil {
+		return fmt.Errorf("refusing host removal before product-root preflight: %w", err)
 	}
 	if err := retireLegacyWebTUIService(IsAlpine()); err != nil {
 		return fmt.Errorf("retire legacy Web-TUI service: %w", err)
@@ -813,15 +824,15 @@ func UninstallSystem() error {
 		"[WARN] Preserved ambiguous legacy hardening, rsyslog, shell-completion, legacy config, and root-crontab artifacts for manual recovery. Exact legacy SysWarden cron records may remain but cannot execute after the product binary is absent.",
 	)
 
-	// Remove the packaged executable root first. The durable tombstone remains
-	// until every subsequent attributable deletion has succeeded.
+	// Remove the shared-parent log root first while the executable remains
+	// available for a retry. The durable tombstone remains until every
+	// attributable deletion has succeeded, and the executable root is removed
+	// last so deterministic host-layout refusals cannot strand recovery.
 	fmt.Println(" -> Removing exact product files and state...")
-	if err := removeDedicatedRemovalTree("/opt/syswarden"); err != nil {
+	if err := removeDedicatedProductLogTree(); err != nil {
 		return err
 	}
-	if err := removeExactProductSymlinkAt(
-		"/usr/local/bin/syswarden", "/opt/syswarden/bin/syswarden-cli", 0, 0,
-	); err != nil {
+	if err := removeDedicatedRemovalTree("/etc/syswarden"); err != nil {
 		return err
 	}
 	if err := removeExactProductSymlinkAt(
@@ -829,10 +840,12 @@ func UninstallSystem() error {
 	); err != nil {
 		return err
 	}
-	if err := removeDedicatedRemovalTree("/etc/syswarden"); err != nil {
+	if err := removeExactProductSymlinkAt(
+		"/usr/local/bin/syswarden", "/opt/syswarden/bin/syswarden-cli", 0, 0,
+	); err != nil {
 		return err
 	}
-	if err := removeDedicatedRemovalTree("/var/log/syswarden"); err != nil {
+	if err := removeDedicatedRemovalTree("/opt/syswarden"); err != nil {
 		return err
 	}
 	if err := removeRemovalStateContents(); err != nil {

@@ -34,6 +34,35 @@ const supportedGeoIPCountryCodeText = "ad ae af ag ai al am ao aq ar as at au aw
 var (
 	loadMu                     sync.Mutex
 	supportedGeoIPCountryCodes = strings.Fields(supportedGeoIPCountryCodeText)
+	deniedWhitelistPrefixes    = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),
+		netip.MustParsePrefix("100.64.0.0/10"),
+		netip.MustParsePrefix("127.0.0.0/8"),
+		netip.MustParsePrefix("169.254.0.0/16"),
+		netip.MustParsePrefix("192.0.0.0/24"),
+		netip.MustParsePrefix("192.31.196.0/24"),
+		netip.MustParsePrefix("192.52.193.0/24"),
+		netip.MustParsePrefix("192.88.99.0/24"),
+		netip.MustParsePrefix("192.175.48.0/24"),
+		netip.MustParsePrefix("198.18.0.0/15"),
+		netip.MustParsePrefix("224.0.0.0/4"),
+		netip.MustParsePrefix("240.0.0.0/4"),
+		netip.MustParsePrefix("::/128"),
+		netip.MustParsePrefix("::/96"),
+		netip.MustParsePrefix("::1/128"),
+		netip.MustParsePrefix("64:ff9b::/96"),
+		netip.MustParsePrefix("64:ff9b:1::/48"),
+		netip.MustParsePrefix("100::/64"),
+		netip.MustParsePrefix("100:0:0:1::/64"),
+		netip.MustParsePrefix("2001::/23"),
+		netip.MustParsePrefix("2002::/16"),
+		netip.MustParsePrefix("2620:4f:8000::/48"),
+		netip.MustParsePrefix("3ffe::/16"),
+		netip.MustParsePrefix("5f00::/16"),
+		netip.MustParsePrefix("fec0::/10"),
+		netip.MustParsePrefix("fe80::/10"),
+		netip.MustParsePrefix("ff00::/8"),
+	}
 )
 
 type Diagnostics struct {
@@ -238,9 +267,10 @@ func LoadConfigDirectory(configPath string) (Diagnostics, error) {
 		return diagnostics, fmt.Errorf("publish validated runtime configuration: %w", err)
 	}
 	// An explicit Viper value has higher precedence than AutomaticEnv. Keep the
-	// validated file-backed policy authoritative even if the process environment
-	// changes after the preflight check.
+	// validated security-sensitive policy authoritative even if the process
+	// environment changes after the preflight check.
 	target.Set("operator_policy", candidate.Get("operator_policy"))
+	target.Set("network.whitelist_ips", candidate.Get("network.whitelist_ips"))
 	return diagnostics, nil
 }
 
@@ -344,12 +374,24 @@ func loadCandidate(configPath string) (*viper.Viper, Diagnostics, error) {
 		candidate.Set("integrations.ha.enabled", false)
 		candidate.Set("integrations.bunkerweb.enabled", false)
 	}
+	filteredWhitelistEntries, retiredWhitelistEntries := neutralizeRetiredUnspecifiedWhitelistEntries(typed.Network.WhitelistIPs)
+	typed.Network.WhitelistIPs = filteredWhitelistEntries
+	if len(retiredWhitelistEntries) != 0 {
+		for _, entry := range retiredWhitelistEntries {
+			diagnostics.DeprecatedKeys = append(
+				diagnostics.DeprecatedKeys,
+				fmt.Sprintf("network.whitelist_ips value %q (ignored; exact IGMP control traffic is handled internally)", entry),
+			)
+		}
+		sort.Strings(diagnostics.DeprecatedKeys)
+	}
 	if err := validateRuntimeConfig(&typed); err != nil {
 		return nil, diagnostics, err
 	}
-	// Freeze the strictly decoded file-backed representation above any later
-	// environment lookup performed by Viper.
+	// Freeze the strictly decoded security-sensitive representation above any
+	// later environment lookup performed by Viper.
 	candidate.Set("operator_policy", typed.OperatorPolicy)
+	candidate.Set("network.whitelist_ips", typed.Network.WhitelistIPs)
 	return candidate, diagnostics, nil
 }
 
@@ -529,8 +571,8 @@ func validateRuntimeConfig(value *runtimeConfig) error {
 		}
 	}
 	for _, entry := range value.Network.WhitelistIPs {
-		if !validIPOrPrefix(entry) {
-			return fmt.Errorf("invalid whitelist entry %q", entry)
+		if err := ValidateWhitelistEntry(entry); err != nil {
+			return fmt.Errorf("invalid whitelist entry %q: %w", entry, err)
 		}
 	}
 	for _, code := range append(append([]string{}, value.Network.Geo.Blocked...), value.Network.Geo.Allowed...) {
@@ -706,6 +748,78 @@ func validIPOrPrefix(value string) bool {
 		return address.Zone() == "" && !address.Is4In6()
 	}
 	return validCanonicalPrefix(value)
+}
+
+// ValidateWhitelistEntry applies the same bounded firewall-list policy used by
+// the privileged CLI before a modular configuration is published. Private and
+// documentation networks remain valid operator choices, while unspecified,
+// loopback, link-local, multicast and other special-use space is rejected.
+func ValidateWhitelistEntry(value string) error {
+	if value == "" || strings.TrimSpace(value) != value {
+		return fmt.Errorf("whitelist entry must not be empty or contain surrounding whitespace")
+	}
+
+	var prefix netip.Prefix
+	isHost := false
+	if address, err := netip.ParseAddr(value); err == nil {
+		if !address.IsValid() || address.Is4In6() || address.Zone() != "" || address.String() != value {
+			return fmt.Errorf("whitelist address is not canonical")
+		}
+		prefix = netip.PrefixFrom(address, address.BitLen())
+		isHost = true
+	} else {
+		parsed, parseErr := netip.ParsePrefix(value)
+		if parseErr != nil || !parsed.IsValid() || parsed.Addr().Is4In6() || parsed.Addr().Zone() != "" || parsed != parsed.Masked() || parsed.String() != value {
+			return fmt.Errorf("whitelist entry is not a canonical IP or CIDR")
+		}
+		prefix = parsed
+	}
+
+	minimumBits := 64
+	if prefix.Addr().Is4() {
+		minimumBits = 24
+	}
+	if !isHost && prefix.Bits() < minimumBits {
+		return fmt.Errorf("whitelist prefix is broader than the /%d minimum", minimumBits)
+	}
+	if !prefix.Addr().IsGlobalUnicast() || overlapsWhitelistSpecialUse(prefix) {
+		return fmt.Errorf("whitelist entry is non-routable or special-use")
+	}
+	return nil
+}
+
+// IsRetiredUnspecifiedWhitelistEntry identifies the two historical spellings
+// operators used to suppress the IGMP false positive. They are ignored during
+// configuration loading and never become broad firewall or telemetry policy.
+func IsRetiredUnspecifiedWhitelistEntry(value string) bool {
+	return value == "0.0.0.0" || value == "0.0.0.0/32"
+}
+
+func neutralizeRetiredUnspecifiedWhitelistEntries(values []string) ([]string, []string) {
+	filtered := make([]string, 0, len(values))
+	retired := make([]string, 0, 2)
+	seenRetired := make(map[string]struct{}, 2)
+	for _, value := range values {
+		if IsRetiredUnspecifiedWhitelistEntry(value) {
+			if _, seen := seenRetired[value]; !seen {
+				retired = append(retired, value)
+				seenRetired[value] = struct{}{}
+			}
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	return filtered, retired
+}
+
+func overlapsWhitelistSpecialUse(prefix netip.Prefix) bool {
+	for _, denied := range deniedWhitelistPrefixes {
+		if prefix.Addr().BitLen() == denied.Addr().BitLen() &&
+			(prefix.Contains(denied.Addr()) || denied.Contains(prefix.Addr())) {
+			return true
+		}
+	}
+	return false
 }
 
 func validASN(value string) bool {

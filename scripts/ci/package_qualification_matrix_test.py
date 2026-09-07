@@ -39,7 +39,7 @@ class PackageQualificationMatrixTests(unittest.TestCase):
     def test_repository_matrix_is_the_exact_frozen_contract(self) -> None:
         document = self.canonical
         self.assertEqual(document["schema_version"], 1)
-        self.assertEqual(document["target_release"], "v4.04.2")
+        self.assertEqual(document["target_release"], "v4.04.3")
         self.assertEqual(document["architecture"], matrix.EXPECTED_ARCHITECTURE)
         self.assertEqual(
             tuple(cell["id"] for cell in document["cells"]),
@@ -72,7 +72,7 @@ class PackageQualificationMatrixTests(unittest.TestCase):
         for arguments in (
             (),
             ("--check", str(matrix.DEFAULT_MATRIX)),
-            ("--expected-target-release", "v4.04.2"),
+            ("--expected-target-release", "v4.04.3"),
         ):
             with self.subTest(arguments=arguments):
                 stdout = io.StringIO()
@@ -81,7 +81,7 @@ class PackageQualificationMatrixTests(unittest.TestCase):
                     result = matrix.main(arguments)
                 self.assertEqual(result, 0, stderr.getvalue())
                 self.assertEqual(stderr.getvalue(), "")
-                self.assertIn("8 AMD64 cells for v4.04.2", stdout.getvalue())
+                self.assertIn("8 AMD64 cells for v4.04.3", stdout.getvalue())
                 self.assertRegex(stdout.getvalue(), r"sha256=[0-9a-f]{64}\n$")
 
     def test_cli_rejects_a_target_release_mismatch(self) -> None:
@@ -175,7 +175,7 @@ class PackageQualificationMatrixTests(unittest.TestCase):
         changed["package_sources"]["candidate"]["retry"] = True
         self.assert_invalid(changed, "candidate keys are not exact")
 
-    def test_baseline_source_is_exact_public_v4033_identity(self) -> None:
+    def test_baseline_source_is_exact_public_v4042_identity(self) -> None:
         mutations = {
             "release": "v4.03.2",
             "commit": "0" * 40,
@@ -188,7 +188,7 @@ class PackageQualificationMatrixTests(unittest.TestCase):
                 changed = self.document()
                 changed["package_sources"]["baseline"][key] = value
                 self.assert_invalid(changed, "baseline identity does not match")
-        for value in (True, 377680978.0, "377680978", None):
+        for value in (True, 381364611.0, "381364611", None):
             with self.subTest(release_id=value):
                 changed = self.document()
                 changed["package_sources"]["baseline"]["release_id"] = value
@@ -229,7 +229,7 @@ class PackageQualificationMatrixTests(unittest.TestCase):
         self.assert_invalid(reordered, r"assets\[0\] does not match")
         for field, value in (
             ("name", "renamed.deb"),
-            ("id", 532015728),
+            ("id", 541354558),
             ("size", 284),
             ("architecture", "x86_64"),
             ("sha256", "0" * 64),
@@ -240,8 +240,8 @@ class PackageQualificationMatrixTests(unittest.TestCase):
                 self.assert_invalid(changed, r"assets\[0\] does not match")
         for field, value in (
             ("id", True),
-            ("id", 532015727.0),
-            ("id", "532015727"),
+            ("id", 541354557.0),
+            ("id", "541354557"),
             ("id", None),
             ("size", True),
             ("size", 283.0),
