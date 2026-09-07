@@ -21,9 +21,9 @@ import release_gate
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_CANDIDATE_VERSION = "v4.04.3"
-STABLE_PUBLIC_VERSION = "v4.04.2"
+STABLE_PUBLIC_VERSION = "v4.04.3"
 PUBLIC_REPORT_VERSION = "v4.03.3"
-OPERATIONAL_WIKI_BASELINE_VERSION = "v4.03.3"
+OPERATIONAL_WIKI_BASELINE_VERSION = "v4.04.3"
 REPORT = REPO_ROOT / (
     f"docs/reports/PUBLIC_RELEASE_READINESS_REPORT_{PUBLIC_REPORT_VERSION}.md"
 )
@@ -216,8 +216,8 @@ class DocumentationGateTest(unittest.TestCase):
             [],
         )
         for report_version, wiki_version, key in (
-            ("v4.04.3", OPERATIONAL_WIKI_BASELINE_VERSION, "public_report_version"),
-            (PUBLIC_REPORT_VERSION, "v4.04.3", "operational_wiki_baseline_version"),
+            ("v4.04.4", OPERATIONAL_WIKI_BASELINE_VERSION, "public_report_version"),
+            (PUBLIC_REPORT_VERSION, "v4.04.4", "operational_wiki_baseline_version"),
         ):
             errors = documentation_gate.validate_documentation_version_order(
                 SOURCE_CANDIDATE_VERSION,
@@ -711,7 +711,7 @@ class DocumentationGateTest(unittest.TestCase):
         )
         self.assertTrue(any("exact release gate" in error for error in errors), errors)
 
-        changed["operational_wiki_baseline_version"] = STABLE_PUBLIC_VERSION
+        changed["operational_wiki_baseline_version"] = PUBLIC_REPORT_VERSION
         matrix_errors = documentation_gate.validate_package_source_contract(
             REPO_ROOT,
             changed["package_platform_contract"],
@@ -1307,7 +1307,7 @@ class DocumentationGateTest(unittest.TestCase):
             )
         self.assertEqual(errors, [])
 
-    def test_operational_page_archive_and_stable_baseline_are_both_rejected(
+    def test_operational_page_archive_and_stale_baseline_are_both_rejected(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1321,7 +1321,7 @@ class DocumentationGateTest(unittest.TestCase):
             deployment.write_text(
                 "# Deployment\n\n"
                 "> Status: Archive\n"
-                f"> Documentation baseline: {STABLE_PUBLIC_VERSION}\n",
+                f"> Documentation baseline: {PUBLIC_REPORT_VERSION}\n",
                 encoding="utf-8",
             )
             errors = documentation_gate.validate_wiki(
@@ -1345,7 +1345,7 @@ class DocumentationGateTest(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                f"current page baseline {STABLE_PUBLIC_VERSION} does not match "
+                f"current page baseline {PUBLIC_REPORT_VERSION} does not match "
                 f"{OPERATIONAL_WIKI_BASELINE_VERSION}" in error
                 for error in errors
             ),
