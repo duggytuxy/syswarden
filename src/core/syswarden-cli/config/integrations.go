@@ -10,10 +10,27 @@ type IntegrationsConfig struct {
 }
 
 type HAConfig struct {
-	Enabled  bool     `mapstructure:"enabled"`
-	PeerIPs  []string `mapstructure:"peer_ips" validate:"ha_peer_slice"`
-	PeerPort int      `mapstructure:"peer_port" validate:"min=1,max=65535"`
-	Token    string   `mapstructure:"token"`
+	Enabled                  bool     `mapstructure:"enabled"`
+	PeerIPs                  []string `mapstructure:"peer_ips" validate:"ha_peer_slice"`
+	PeerPort                 int      `mapstructure:"peer_port" validate:"min=1,max=65535"`
+	Token                    string   `mapstructure:"token"`
+	V2Enabled                bool     `mapstructure:"v2_enabled"`
+	ClusterID                string   `mapstructure:"cluster_id"`
+	Epoch                    uint64   `mapstructure:"epoch"`
+	NodeID                   string   `mapstructure:"node_id"`
+	PeerID                   string   `mapstructure:"peer_id"`
+	Role                     string   `mapstructure:"role"`
+	V2SecretFile             string   `mapstructure:"v2_secret_file"`
+	TLSCertFile              string   `mapstructure:"tls_cert_file"`
+	TLSKeyFile               string   `mapstructure:"tls_key_file"`
+	TLSCAFile                string   `mapstructure:"tls_ca_file"`
+	PeerTLSName              string   `mapstructure:"peer_tls_name"`
+	PeerCertSHA256           []string `mapstructure:"peer_cert_sha256"`
+	StateFile                string   `mapstructure:"state_file"`
+	TransactionFile          string   `mapstructure:"transaction_file"`
+	HeartbeatIntervalSeconds int      `mapstructure:"heartbeat_interval_seconds"`
+	HeartbeatTimeoutSeconds  int      `mapstructure:"heartbeat_timeout_seconds"`
+	RequestTimeoutSeconds    int      `mapstructure:"request_timeout_seconds"`
 }
 
 type SIEMConfig struct {
@@ -37,7 +54,8 @@ type WebhooksConfig struct {
 }
 
 type BunkerWebConfig struct {
-	Enabled bool `mapstructure:"enabled"`
+	Enabled      bool     `mapstructure:"enabled"`
+	SchedulerIPs []string `mapstructure:"scheduler_ips" validate:"ha_peer_slice"`
 }
 
 type WazuhConfig struct {

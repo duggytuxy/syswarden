@@ -588,6 +588,9 @@ func removeFeedTargets(targets ...feedFileTarget) error {
 	}
 	directory, err := openFeedDirectory(targets[0], firstSuffix, false)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 	defer func() { _ = directory.Close() }()
@@ -596,14 +599,40 @@ func removeFeedTargets(targets ...feedFileTarget) error {
 		return err
 	}
 	defer unlockFeedDirectory(lockFile)
+	// The provenance commit is the active-generation pointer. Remove and sync it
+	// first so an interrupted disable operation cannot leave a snapshot active.
 	for _, target := range targets {
-		if _, exists, err := inspectFeedDestination(directory, target); err != nil {
-			return fmt.Errorf("inspect feed target before removal %s: %w", target.name, err)
-		} else if !exists {
+		metadataTarget := provenanceTarget(target)
+		identity, exists, inspectErr := inspectFeedDestination(directory, metadataTarget)
+		if inspectErr != nil {
+			return fmt.Errorf("inspect feed provenance before removal %s: %w", target.name, inspectErr)
+		}
+		if !exists {
 			continue
 		}
-		if err := directory.Remove(target.name); err != nil {
+		if err := trustedOwnerOnlyFeed(identity, "feed provenance file"); err != nil {
+			return err
+		}
+		if err := directory.Remove(metadataTarget.name); err != nil {
+			return fmt.Errorf("remove feed provenance %s: %w", target.name, err)
+		}
+	}
+	if err := syncFeedDirectory(directory); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if identity, exists, err := inspectFeedDestination(directory, target); err != nil {
+			return fmt.Errorf("inspect feed target before removal %s: %w", target.name, err)
+		} else if !exists {
+			// Snapshot cleanup below still applies when the compatibility file is
+			// already absent.
+		} else if err := trustedOwnerOnlyFeed(identity, "feed compatibility file"); err != nil {
+			return err
+		} else if err := directory.Remove(target.name); err != nil {
 			return fmt.Errorf("remove feed target %s: %w", target.name, err)
+		}
+		if err := cleanupFeedSnapshotsInDirectory(directory, target); err != nil {
+			return fmt.Errorf("remove feed snapshots for %s: %w", target.name, err)
 		}
 	}
 	return syncFeedDirectory(directory)
@@ -986,6 +1015,83 @@ func validateFeedReplacement(candidate, previous canonicalCIDRFeed, previousExis
 	return nil
 }
 
+func prepareCanonicalFeedPublicationInDirectory(
+	directory *os.Root,
+	target feedFileTarget,
+	candidate canonicalCIDRFeed,
+	validation cidrFeedPolicy,
+	policy feedPublicationPolicy,
+) (canonicalCIDRFeed, feedFileIdentity, bool, error) {
+	var previous canonicalCIDRFeed
+	previousExists := false
+	metadataTarget := provenanceTarget(target)
+	_, provenanceExists, provenanceInspectErr := inspectFeedDestination(directory, metadataTarget)
+	if provenanceInspectErr != nil {
+		return canonicalCIDRFeed{}, feedFileIdentity{}, false, fmt.Errorf("inspect feed provenance: %w", provenanceInspectErr)
+	}
+	var previousContent []byte
+	if provenanceExists {
+		var activeMetadata feedProvenance
+		var readErr error
+		previousContent, activeMetadata, readErr = readAttestedFeedInDirectory(directory, target)
+		if readErr != nil {
+			return canonicalCIDRFeed{}, feedFileIdentity{}, false, fmt.Errorf("read attested last-known-good feed: %w", readErr)
+		}
+		if activeMetadata.LastKnownGoodSHA256 != activeMetadata.SHA256 {
+			return canonicalCIDRFeed{}, feedFileIdentity{}, false, fmt.Errorf("active feed is not a last-known-good snapshot")
+		}
+		previousExists = true
+	} else {
+		legacyContent, legacyIdentity, readErr := readFeedFileSnapshotInDirectory(directory, target)
+		if readErr == nil {
+			if err := trustedOwnerOnlyFeed(legacyIdentity, "legacy feed compatibility file"); err != nil {
+				return canonicalCIDRFeed{}, feedFileIdentity{}, false, err
+			}
+			previousContent = legacyContent
+			previousExists = true
+		} else if !errors.Is(readErr, fs.ErrNotExist) {
+			return canonicalCIDRFeed{}, feedFileIdentity{}, false, fmt.Errorf("read legacy feed: %w", readErr)
+		}
+	}
+	if previousExists {
+		previousPolicy := validation
+		previousPolicy.minimumEntries = 1
+		var err error
+		previous, err = canonicalizeCIDRFeed(previousContent, previousPolicy)
+		if err != nil && !policy.verified {
+			return canonicalCIDRFeed{}, feedFileIdentity{}, false, fmt.Errorf("preserve unparseable last-known-good feed: %w", err)
+		}
+		if err != nil {
+			previous = canonicalCIDRFeed{}
+			previousExists = false
+		}
+	}
+
+	if policy.mergePrevious && previousExists {
+		merged := append(append([]netip.Prefix{}, previous.prefixes...), candidate.prefixes...)
+		candidate = canonicalFeedFromPrefixes(merged)
+	}
+	if len(candidate.prefixes) > maximumCanonicalFeedEntries {
+		return canonicalCIDRFeed{}, feedFileIdentity{}, false, fmt.Errorf("canonical feed exceeds the %d-entry publication limit", maximumCanonicalFeedEntries)
+	}
+	if len(candidate.content) > maximumPublishedBytes {
+		return canonicalCIDRFeed{}, feedFileIdentity{}, false, fmt.Errorf("canonical feed exceeds the %d-byte publication limit", maximumPublishedBytes)
+	}
+	if err := validateFeedReplacement(candidate, previous, previousExists, policy); err != nil {
+		return canonicalCIDRFeed{}, feedFileIdentity{}, false, err
+	}
+	visibleIdentity, visibleExists, err := inspectFeedDestination(directory, target)
+	if err != nil {
+		return canonicalCIDRFeed{}, feedFileIdentity{}, false, fmt.Errorf("inspect feed compatibility file: %w", err)
+	}
+	if visibleExists {
+		if err := trustedOwnerOnlyFeed(visibleIdentity, "feed compatibility file"); err != nil {
+			return canonicalCIDRFeed{}, feedFileIdentity{}, false, err
+		}
+	}
+	return candidate, visibleIdentity, visibleExists, nil
+}
+
 func publishCanonicalFeedAt(target feedFileTarget, suffix string, candidate canonicalCIDRFeed, validation cidrFeedPolicy, policy feedPublicationPolicy) error {
 	directory, err := openFeedDirectory(target, suffix, true)
 	if err != nil {
@@ -997,45 +1103,107 @@ func publishCanonicalFeedAt(target feedFileTarget, suffix string, candidate cano
 		return err
 	}
 	defer unlockFeedDirectory(lockFile)
-
-	var previous canonicalCIDRFeed
-	previousExists := false
-	destinationExists := false
-	previousContent, previousIdentity, readErr := readFeedFileSnapshotInDirectory(directory, target)
-	if readErr == nil {
-		destinationExists = true
-		previousExists = true
-		previousPolicy := validation
-		previousPolicy.minimumEntries = 1
-		previous, err = canonicalizeCIDRFeed(previousContent, previousPolicy)
-		if err != nil && !policy.verified {
-			return fmt.Errorf("preserve unparseable last-known-good feed: %w", err)
-		}
-		if err != nil {
-			previous = canonicalCIDRFeed{}
-			previousExists = false
-		}
-	} else if !errors.Is(readErr, fs.ErrNotExist) {
-		return fmt.Errorf("read last-known-good feed: %w", readErr)
-	}
-
-	if policy.mergePrevious && previousExists {
-		merged := append(append([]netip.Prefix{}, previous.prefixes...), candidate.prefixes...)
-		candidate = canonicalFeedFromPrefixes(merged)
-	}
-	if len(candidate.prefixes) > maximumCanonicalFeedEntries {
-		return fmt.Errorf("canonical feed exceeds the %d-entry publication limit", maximumCanonicalFeedEntries)
-	}
-	if len(candidate.content) > maximumPublishedBytes {
-		return fmt.Errorf("canonical feed exceeds the %d-byte publication limit", maximumPublishedBytes)
-	}
-	if err := validateFeedReplacement(candidate, previous, previousExists, policy); err != nil {
+	candidate, visibleIdentity, visibleExists, err := prepareCanonicalFeedPublicationInDirectory(directory, target, candidate, validation, policy)
+	if err != nil {
 		return err
 	}
-	if destinationExists {
-		return writeFeedFileInDirectoryFromIdentity(directory, target, candidate.content, previousIdentity)
+	if visibleExists {
+		return writeFeedFileInDirectoryFromIdentity(directory, target, candidate.content, visibleIdentity)
 	}
 	return writeFeedFileInDirectoryBeforeRename(directory, target, candidate.content, nil)
+}
+
+func publishCanonicalFeedWithProvenanceAt(
+	target feedFileTarget,
+	suffix string,
+	candidate canonicalCIDRFeed,
+	validation cidrFeedPolicy,
+	policy feedPublicationPolicy,
+	rawURLs []string,
+	license string,
+) error {
+	return publishCanonicalFeedWithAuthorityAt(
+		target, suffix, candidate, validation, policy, rawURLs, license, "",
+	)
+}
+
+func publishCanonicalFeedWithAuthorityAt(
+	target feedFileTarget,
+	suffix string,
+	candidate canonicalCIDRFeed,
+	validation cidrFeedPolicy,
+	policy feedPublicationPolicy,
+	rawURLs []string,
+	license string,
+	authoritySHA256 string,
+) error {
+	directory, err := openFeedDirectory(target, suffix, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	lockFile, err := lockFeedDirectory(directory)
+	if err != nil {
+		return err
+	}
+	defer unlockFeedDirectory(lockFile)
+	var previousMetadata *feedProvenance
+	if policy.mergePrevious {
+		_, provenanceExists, inspectErr := inspectFeedDestination(directory, provenanceTarget(target))
+		if inspectErr != nil {
+			return fmt.Errorf("inspect previous feed provenance before merge: %w", inspectErr)
+		}
+		_, compatibilityExists, inspectErr := inspectFeedDestination(directory, target)
+		if inspectErr != nil {
+			return fmt.Errorf("inspect previous compatibility feed before merge: %w", inspectErr)
+		}
+		if compatibilityExists && !provenanceExists {
+			return errors.New("refusing to merge an active feed without authenticated source provenance")
+		}
+		if provenanceExists {
+			_, metadata, readErr := readAttestedFeedInDirectory(directory, target)
+			if readErr != nil {
+				return fmt.Errorf("read previous authenticated feed provenance before merge: %w", readErr)
+			}
+			previousMetadata = &metadata
+		}
+	}
+	candidate, visibleIdentity, visibleExists, err := prepareCanonicalFeedPublicationInDirectory(directory, target, candidate, validation, policy)
+	if err != nil {
+		return err
+	}
+	metadata, err := newCurrentFeedProvenanceFromSources(target, rawURLs, license, candidate)
+	if err != nil {
+		return fmt.Errorf("build feed provenance: %w", err)
+	}
+	if authoritySHA256 != "" {
+		canonicalAuthority, err := canonicalSHA256Digest(authoritySHA256)
+		if err != nil {
+			return fmt.Errorf("canonicalize feed authority digest: %w", err)
+		}
+		if len(rawURLs) != 1 || !policy.verified {
+			return fmt.Errorf("feed authority digest requires one verified source")
+		}
+		metadata.AuthoritySHA256 = canonicalAuthority
+	}
+	switch {
+	case previousMetadata != nil:
+		if err := mergeAuthenticatedFeedSources(&metadata, *previousMetadata); err != nil {
+			return fmt.Errorf("compose authenticated union provenance: %w", err)
+		}
+		metadata.EvidenceQuality = feedEvidenceAuthenticatedUnion
+	case len(rawURLs) > 1 && policy.mergePrevious:
+		metadata.EvidenceQuality = feedEvidenceIntersection
+	case len(rawURLs) > 1:
+		metadata.EvidenceQuality = feedEvidenceOriginQuorum
+	case policy.verified:
+		metadata.EvidenceQuality = feedEvidencePinnedDigest
+	case policy.allowList:
+		metadata.EvidenceQuality = feedEvidenceRestrictedHTTPS
+	default:
+		return fmt.Errorf("single-origin feed publication lacks an authenticated authority")
+	}
+	return publishAttestedFeedInDirectory(directory, target, candidate.content, metadata, visibleIdentity, visibleExists)
 }
 
 func downloadCanonicalCIDRFeed(ctx context.Context, client *http.Client, rawURL, expectedHash string, policy cidrFeedPolicy) (canonicalCIDRFeed, error) {
@@ -1075,10 +1243,22 @@ func secureDownloadWithClient(ctx context.Context, client *http.Client, rawURL s
 	verified := strings.TrimSpace(expectedHash) != ""
 	candidate, err := downloadCanonicalCIDRFeed(ctx, client, rawURL, expectedHash, validation)
 	if err != nil {
+		state := feedStateRejected
+		rejectedCount := 1
+		if ctx.Err() != nil {
+			state = feedStateUnavailable
+			rejectedCount = 0
+		}
+		if stateErr := markFeedProvenanceState(target, suffix, state, rejectedCount); stateErr != nil && !errors.Is(stateErr, fs.ErrNotExist) {
+			return fmt.Errorf("%w; record feed provenance failure: %v", err, stateErr)
+		}
 		return err
 	}
 	allowList := strings.HasPrefix(strings.ToLower(target.name), "allowed_")
 	if !verified && !allowList {
+		if stateErr := markFeedProvenanceState(target, suffix, feedStateRejected, 1); stateErr != nil && !errors.Is(stateErr, fs.ErrNotExist) {
+			return fmt.Errorf("unsigned single-origin feed is non-authoritative and provenance rejection could not be recorded: %w", stateErr)
+		}
 		return fmt.Errorf("unsigned single-origin feed is non-authoritative; last-known-good content was preserved")
 	}
 	publication := feedPublicationPolicy{
@@ -1089,7 +1269,18 @@ func secureDownloadWithClient(ctx context.Context, client *http.Client, rawURL s
 		minimumUnverifiedOverlap:    50,
 		plausibilityBaselineEntries: 10,
 	}
-	return publishCanonicalFeedAt(target, suffix, candidate, validation, publication)
+	if err := publishCanonicalFeedWithAuthorityAt(
+		target, suffix, candidate, validation, publication, []string{rawURL}, "", expectedHash,
+	); err != nil {
+		if stateErr := markFeedProvenanceState(target, suffix, feedStateRejected, 1); stateErr != nil && !errors.Is(stateErr, fs.ErrNotExist) {
+			return fmt.Errorf("%w; record feed provenance rejection: %v", err, stateErr)
+		}
+		return err
+	}
+	if _, status, statusErr := ReadAttestedFeedFile(filepath.Join(target.directory, target.name)); statusErr == nil {
+		fmt.Printf("[INFO] Feed %s provenance is %s at SHA-256 %s.\n", status.FeedName, status.State, status.SHA256)
+	}
+	return nil
 }
 
 // SecureDownloader downloads files with strict timeouts and resource limits
@@ -1112,8 +1303,9 @@ func SecureDownloader(ctx context.Context, rawURL string, destPath string, expec
 }
 
 type mirrorConsensusGroup struct {
-	feed    canonicalCIDRFeed
-	origins map[string]struct{}
+	feed       canonicalCIDRFeed
+	origins    map[string]struct{}
+	sourceURLs map[string]struct{}
 }
 
 type dataShieldFeedOutcome uint8
@@ -1235,10 +1427,15 @@ func downloadMirrorQuorumWithClient(ctx context.Context, client *http.Client, mi
 		digest := sha256.Sum256(candidate.content)
 		group := groups[digest]
 		if group == nil {
-			group = &mirrorConsensusGroup{feed: candidate, origins: make(map[string]struct{})}
+			group = &mirrorConsensusGroup{
+				feed:       candidate,
+				origins:    make(map[string]struct{}),
+				sourceURLs: make(map[string]struct{}),
+			}
 			groups[digest] = group
 		}
 		group.origins[origin] = struct{}{}
+		group.sourceURLs[mirror] = struct{}{}
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("mirror quorum caller context ended after download: %w", err)
@@ -1264,14 +1461,22 @@ func downloadMirrorQuorumWithClient(ctx context.Context, client *http.Client, mi
 		return fmt.Errorf("%w: ambiguous between equally supported canonical results", errFeedMirrorQuorum)
 	}
 	publication.verified = true
-	if err := publishCanonicalFeedAt(target, suffix, selected.feed, validation, publication); err != nil {
+	selectedSources := make([]string, 0, len(selected.sourceURLs))
+	for source := range selected.sourceURLs {
+		selectedSources = append(selectedSources, source)
+	}
+	if err := publishCanonicalFeedWithProvenanceAt(target, suffix, selected.feed, validation, publication, selectedSources, ""); err != nil {
 		return fmt.Errorf("publish quorum-verified feed: %w", err)
 	}
-	fmt.Printf("[INFO] Feed quorum verified by %d independent HTTPS origins.\n", selectedCount)
+	if _, status, statusErr := ReadAttestedFeedFile(filepath.Join(target.directory, target.name)); statusErr == nil {
+		fmt.Printf("[INFO] Feed quorum verified by %d independent HTTPS origins; provenance is %s at SHA-256 %s.\n", selectedCount, status.State, status.SHA256)
+	} else {
+		fmt.Printf("[INFO] Feed quorum verified by %d independent HTTPS origins.\n", selectedCount)
+	}
 	return nil
 }
 
-func attestDataShieldLastKnownGood(target feedFileTarget, suffix string, validation cidrFeedPolicy) (bool, error) {
+func attestDataShieldLastKnownGood(target feedFileTarget, suffix string, validation cidrFeedPolicy, sources []string) (bool, error) {
 	directory, err := openFeedDirectory(target, suffix, false)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -1286,6 +1491,26 @@ func attestDataShieldLastKnownGood(target feedFileTarget, suffix string, validat
 	}
 	defer unlockFeedDirectory(lockFile)
 
+	lastKnownGoodValidation := validation
+	lastKnownGoodValidation.minimumEntries = 1
+	_, provenanceExists, err := inspectFeedDestination(directory, provenanceTarget(target))
+	if err != nil {
+		return false, fmt.Errorf("inspect last-known-good feed provenance: %w", err)
+	}
+	if provenanceExists {
+		content, metadata, readErr := readAttestedFeedInDirectory(directory, target)
+		if readErr != nil {
+			return false, readErr
+		}
+		if metadata.LastKnownGoodSHA256 != metadata.SHA256 {
+			return false, fmt.Errorf("last-known-good feed %s has an inconsistent provenance digest", target.name)
+		}
+		if _, validateErr := canonicalizeCIDRFeed(content, lastKnownGoodValidation); validateErr != nil {
+			return false, fmt.Errorf("validate last-known-good feed %s: %w", target.name, validateErr)
+		}
+		return true, nil
+	}
+
 	content, identity, err := readFeedFileSnapshotInDirectory(directory, target)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -1293,16 +1518,22 @@ func attestDataShieldLastKnownGood(target feedFileTarget, suffix string, validat
 	if err != nil {
 		return false, err
 	}
-	if identity.info.Mode() != 0600 {
-		return false, fmt.Errorf("last-known-good feed %s has mode %s, want -rw-------", target.name, identity.info.Mode())
+	if err := trustedOwnerOnlyFeed(identity, "legacy last-known-good feed"); err != nil {
+		return false, err
 	}
-	if !identity.ownerKnown || identity.uid != os.Geteuid() || identity.gid != os.Getegid() {
-		return false, fmt.Errorf("last-known-good feed %s is not owned by the effective package identity", target.name)
-	}
-	lastKnownGoodValidation := validation
-	lastKnownGoodValidation.minimumEntries = 1
-	if _, err := canonicalizeCIDRFeed(content, lastKnownGoodValidation); err != nil {
+	candidate, err := canonicalizeCIDRFeed(content, lastKnownGoodValidation)
+	if err != nil {
 		return false, fmt.Errorf("validate last-known-good feed %s: %w", target.name, err)
+	}
+	metadata, err := newCurrentFeedProvenanceFromSources(target, sources, "", candidate)
+	if err != nil {
+		return false, fmt.Errorf("build migrated last-known-good provenance: %w", err)
+	}
+	metadata.State = feedStateStale
+	metadata.RetrievedAt = ""
+	metadata.EvidenceQuality = feedEvidenceLegacyLocal
+	if err := publishAttestedFeedInDirectory(directory, target, candidate.content, metadata, identity, true); err != nil {
+		return false, fmt.Errorf("attest legacy last-known-good feed: %w", err)
 	}
 	return true, nil
 }
@@ -1315,11 +1546,14 @@ func downloadDataShieldForLifecycleWithClient(ctx context.Context, client *http.
 	if !errors.Is(err, errFeedMirrorQuorum) {
 		return dataShieldFeedOmitted, err
 	}
-	preserved, attestErr := attestDataShieldLastKnownGood(target, suffix, validation)
+	preserved, attestErr := attestDataShieldLastKnownGood(target, suffix, validation, mirrors)
 	if attestErr != nil {
 		return dataShieldFeedOmitted, fmt.Errorf("Data-Shield quorum unavailable and last-known-good attestation failed: %w", attestErr)
 	}
 	if preserved {
+		if provenanceErr := markFeedProvenanceState(target, suffix, feedStateStale, 0); provenanceErr != nil && !errors.Is(provenanceErr, fs.ErrNotExist) {
+			return dataShieldFeedOmitted, fmt.Errorf("mark preserved Data-Shield provenance stale: %w", provenanceErr)
+		}
 		if tolerateQuorumUnavailable {
 			return dataShieldFeedPreserved, nil
 		}
@@ -1542,6 +1776,418 @@ func DownloadFeedsForInstall(mirrorURL, customURLIPv6, customHash, customHashIPv
 	return downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed, lanMode, useSpamhaus, feedDownloadPackageInstall)
 }
 
+type offlineQualificationFeedEvidence struct {
+	status          FeedProvenanceStatus
+	sourceIdentity  string
+	authoritySHA256 string
+}
+
+type offlineQualificationFeedReader func(string) ([]byte, offlineQualificationFeedEvidence, error)
+type offlineQualificationFeedRemover func(...feedFileTarget) error
+
+type selectedThreatIntelFeed struct {
+	target   feedFileTarget
+	path     string
+	family   int
+	required bool
+}
+
+func osintThreatIntelSources() []string {
+	return []string{
+		"https://cinsscore.com/list/ci-badguys.txt",
+		"https://lists.blocklist.de/lists/all.txt",
+	}
+}
+
+func selectedThreatIntelFeeds(mirrorURL, customURLIPv6, listChoice string, lanMode bool) []selectedThreatIntelFeed {
+	if lanMode || listChoice == "4" {
+		return nil
+	}
+	ipv4 := selectedThreatIntelFeed{
+		target: feedFileTarget{directory: approvedFeedDirectory, name: "syswarden_threatintel.ipv4"},
+		path:   "/etc/syswarden/lists/syswarden_threatintel.ipv4",
+		family: 4,
+	}
+	ipv6 := selectedThreatIntelFeed{
+		target: feedFileTarget{directory: approvedFeedDirectory, name: "syswarden_threatintel.ipv6"},
+		path:   "/etc/syswarden/lists/syswarden_threatintel.ipv6",
+		family: 6,
+	}
+	if listChoice == "3" {
+		selected := make([]selectedThreatIntelFeed, 0, 2)
+		if strings.TrimSpace(mirrorURL) != "" {
+			ipv4.required = true
+			selected = append(selected, ipv4)
+		}
+		if strings.TrimSpace(customURLIPv6) != "" {
+			ipv6.required = true
+			selected = append(selected, ipv6)
+		}
+		return selected
+	}
+	ipv4.required = true
+	return []selectedThreatIntelFeed{ipv4, ipv6}
+}
+
+func unselectedThreatIntelTargets(
+	mirrorURL, customURLIPv6, listChoice string,
+	lanMode bool,
+) []feedFileTarget {
+	ipv4 := feedFileTarget{directory: approvedFeedDirectory, name: "syswarden_threatintel.ipv4"}
+	ipv6 := feedFileTarget{directory: approvedFeedDirectory, name: "syswarden_threatintel.ipv6"}
+	if lanMode || listChoice == "4" {
+		return []feedFileTarget{ipv4, ipv6}
+	}
+	if listChoice != "3" {
+		return nil
+	}
+	targets := make([]feedFileTarget, 0, 2)
+	if strings.TrimSpace(mirrorURL) == "" {
+		targets = append(targets, ipv4)
+	}
+	if strings.TrimSpace(customURLIPv6) == "" {
+		targets = append(targets, ipv6)
+	}
+	return targets
+}
+
+func readOfflineQualificationFeed(path string) ([]byte, offlineQualificationFeedEvidence, error) {
+	suffix := filepath.Ext(path)
+	target, err := approvedFeedFileForPath(path, suffix)
+	if err != nil {
+		return nil, offlineQualificationFeedEvidence{}, err
+	}
+	directory, err := openFeedDirectory(target, suffix, false)
+	if err != nil {
+		return nil, offlineQualificationFeedEvidence{}, err
+	}
+	defer func() { _ = directory.Close() }()
+	content, metadata, err := readAttestedFeedInDirectory(directory, target)
+	if err != nil {
+		return nil, offlineQualificationFeedEvidence{}, err
+	}
+	status, err := publicFeedProvenanceStatus(metadata)
+	if err != nil {
+		return nil, offlineQualificationFeedEvidence{}, err
+	}
+	return content, offlineQualificationFeedEvidence{
+		status: status, sourceIdentity: metadata.SourceIdentity, authoritySHA256: metadata.AuthoritySHA256,
+	}, nil
+}
+
+type expectedFeedSource struct {
+	origin        string
+	logicalOrigin string
+}
+
+func expectedFeedSources(rawURLs []string) (map[string]expectedFeedSource, error) {
+	expected := make(map[string]expectedFeedSource, len(rawURLs))
+	for _, rawURL := range rawURLs {
+		origin, identity, err := sanitizedFeedSource(rawURL)
+		if err != nil {
+			return nil, err
+		}
+		logicalOrigin, err := feedOrigin(rawURL)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := expected[identity]; duplicate {
+			return nil, errors.New("configured feed source inventory contains duplicate identities")
+		}
+		expected[identity] = expectedFeedSource{origin: origin, logicalOrigin: logicalOrigin}
+	}
+	return expected, nil
+}
+
+func attestedFeedSourcePairs(evidence offlineQualificationFeedEvidence) ([]string, []string, error) {
+	origins := strings.Split(evidence.status.SourceOrigin, ",")
+	identities := strings.Split(evidence.sourceIdentity, ",")
+	if len(origins) == 0 || len(origins) != len(identities) || len(origins) > maximumFeedSources {
+		return nil, nil, errors.New("attested feed source inventory is invalid")
+	}
+	for index := range origins {
+		if origins[index] == "" || identities[index] == "" {
+			return nil, nil, errors.New("attested feed source inventory is incomplete")
+		}
+		if index > 0 && origins[index] <= origins[index-1] {
+			return nil, nil, errors.New("attested feed source inventory is not canonical")
+		}
+	}
+	return origins, identities, nil
+}
+
+func validateManagedThreatIntelEvidence(evidence offlineQualificationFeedEvidence, listChoice string, family int) error {
+	if evidence.authoritySHA256 != "" {
+		return errors.New("managed feed provenance unexpectedly contains an operator authority digest")
+	}
+	origins, identities, err := attestedFeedSourcePairs(evidence)
+	if err != nil {
+		return err
+	}
+	osintSources, err := expectedFeedSources(osintThreatIntelSources())
+	if err != nil {
+		return fmt.Errorf("derive managed OSINT source inventory: %w", err)
+	}
+	dataShieldSources := map[string]expectedFeedSource{}
+	if family == 4 {
+		dataShieldSources, err = expectedFeedSources(system.ThreatIntelMirrors(listChoice))
+		if err != nil {
+			return fmt.Errorf("derive managed Data-Shield source inventory: %w", err)
+		}
+	}
+	foundOSINT := make(map[string]struct{}, len(osintSources))
+	foundDataShieldOrigins := make(map[string]struct{})
+	for index, identity := range identities {
+		if source, ok := osintSources[identity]; ok && source.origin == origins[index] {
+			foundOSINT[identity] = struct{}{}
+			continue
+		}
+		if source, ok := dataShieldSources[identity]; ok && source.origin == origins[index] {
+			foundDataShieldOrigins[source.logicalOrigin] = struct{}{}
+			continue
+		}
+		return errors.New("managed feed provenance contains a source outside the selected mode")
+	}
+	allOSINT := len(foundOSINT) == len(osintSources)
+	switch evidence.status.EvidenceQuality {
+	case feedEvidenceOriginQuorum:
+		if family != 4 || len(foundOSINT) != 0 || len(foundDataShieldOrigins) < 2 {
+			return errors.New("managed feed quorum provenance does not prove the selected Data-Shield mode")
+		}
+	case feedEvidenceIntersection:
+		if family != 6 || !allOSINT || len(foundDataShieldOrigins) != 0 || len(identities) != len(osintSources) {
+			return errors.New("managed feed intersection provenance does not prove the configured OSINT origins")
+		}
+	case feedEvidenceAuthenticatedUnion:
+		if !allOSINT ||
+			(family == 4 && len(foundDataShieldOrigins) < 2) ||
+			(family == 6 && (len(foundDataShieldOrigins) != 0 || len(identities) != len(osintSources))) {
+			return errors.New("managed feed union provenance does not prove all contributing source authorities")
+		}
+	default:
+		return fmt.Errorf("managed feed evidence quality %q is incompatible with the selected mode", evidence.status.EvidenceQuality)
+	}
+	return nil
+}
+
+func validateCustomThreatIntelEvidence(
+	evidence offlineQualificationFeedEvidence,
+	configuredURL, configuredHash string,
+) error {
+	expectedOrigin, expectedIdentity, err := sanitizedFeedSource(configuredURL)
+	if err != nil {
+		return fmt.Errorf("derive configured custom feed identity: %w", err)
+	}
+	canonicalHash, err := canonicalSHA256Digest(configuredHash)
+	if err != nil {
+		return fmt.Errorf("canonicalize configured custom feed digest: %w", err)
+	}
+	if evidence.status.SourceOrigin != expectedOrigin || evidence.sourceIdentity != expectedIdentity ||
+		evidence.status.EvidenceQuality != feedEvidencePinnedDigest ||
+		evidence.authoritySHA256 != canonicalHash {
+		return errors.New("custom feed does not match its configured source and pinned digest")
+	}
+	return nil
+}
+
+func validateThreatIntelEvidenceForSelection(
+	evidence offlineQualificationFeedEvidence,
+	listChoice string,
+	family int,
+	customURL, customURLIPv6, customHash, customHashIPv6 string,
+) error {
+	if listChoice != "3" {
+		return validateManagedThreatIntelEvidence(evidence, listChoice, family)
+	}
+	configuredURL := customURL
+	configuredHash := customHash
+	if family == 6 {
+		configuredURL = customURLIPv6
+		configuredHash = customHashIPv6
+	}
+	return validateCustomThreatIntelEvidence(evidence, configuredURL, configuredHash)
+}
+
+func reconcileThreatIntelSelectionWith(
+	mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice string,
+	lanMode bool,
+	read offlineQualificationFeedReader,
+	remove offlineQualificationFeedRemover,
+) ([]string, error) {
+	if read == nil || remove == nil {
+		return nil, errors.New("threat intelligence selection reconciliation is unavailable")
+	}
+	targets := unselectedThreatIntelTargets(mirrorURL, customURLIPv6, listChoice, lanMode)
+	retired := make([]string, 0, 2)
+	for _, selected := range selectedThreatIntelFeeds(mirrorURL, customURLIPv6, listChoice, lanMode) {
+		_, evidence, err := read(selected.path)
+		if err == nil {
+			if validationErr := validateThreatIntelEvidenceForSelection(
+				evidence, listChoice, selected.family,
+				mirrorURL, customURLIPv6, customHash, customHashIPv6,
+			); validationErr == nil {
+				continue
+			}
+			retired = append(retired, selected.target.name)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			retired = append(retired, selected.target.name)
+		}
+		// Removal is intentionally idempotent for a missing provenance pointer. It
+		// also clears any legacy compatibility file that cannot be selected safely.
+		targets = append(targets, selected.target)
+	}
+	unique := make([]feedFileTarget, 0, len(targets))
+	seen := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if _, exists := seen[target.name]; exists {
+			continue
+		}
+		seen[target.name] = struct{}{}
+		unique = append(unique, target)
+	}
+	if len(unique) != 0 {
+		if err := remove(unique...); err != nil {
+			return nil, err
+		}
+	}
+	return retired, nil
+}
+
+// AttestOfflineQualificationFeeds reuses only the active last-known-good feed
+// snapshots already present on an upgrade host. It performs no mirror probing,
+// HTTP request, WHOIS query, or publication. Missing required snapshots fail
+// closed so the package manager cannot turn an offline qualification into an
+// implicit feed download.
+func AttestOfflineQualificationFeeds(
+	mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, geoAllowed string,
+	lanMode bool,
+) error {
+	return attestOfflineQualificationFeedsLifecycleWith(
+		mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, geoAllowed,
+		lanMode, readOfflineQualificationFeed, removeFeedTargets,
+	)
+}
+
+func attestOfflineQualificationFeedsLifecycleWith(
+	mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, geoAllowed string,
+	lanMode bool,
+	read offlineQualificationFeedReader,
+	remove offlineQualificationFeedRemover,
+) error {
+	if remove == nil {
+		return errors.New("offline qualification feed cleanup is unavailable")
+	}
+	if err := validateCustomFeedContract(listChoice, mirrorURL, customURLIPv6, customHash, customHashIPv6); err != nil {
+		return err
+	}
+	if _, err := selectEmbeddedGeoIPPolicy(io.Discard, "deny", geoCodes); err != nil {
+		return err
+	}
+	if _, err := selectEmbeddedGeoIPPolicy(io.Discard, "allow", geoAllowed); err != nil {
+		return err
+	}
+	retired, err := reconcileThreatIntelSelectionWith(
+		mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, lanMode, read, remove,
+	)
+	if err != nil {
+		return fmt.Errorf("reconcile offline threat intelligence selection: %w", err)
+	}
+	if len(retired) != 0 {
+		return fmt.Errorf(
+			"retired threat intelligence snapshots incompatible with the selected mode: %s; retry qualification with a matching attested snapshot",
+			strings.Join(retired, ","),
+		)
+	}
+	return attestOfflineQualificationFeedsWith(
+		mirrorURL,
+		customURLIPv6,
+		customHash,
+		customHashIPv6,
+		listChoice,
+		geoCodes,
+		geoAllowed,
+		lanMode,
+		read,
+	)
+}
+
+func attestOfflineQualificationFeedsWith(
+	mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, geoAllowed string,
+	lanMode bool,
+	read offlineQualificationFeedReader,
+) error {
+	if read == nil {
+		return errors.New("offline qualification feed reader is unavailable")
+	}
+	if err := validateCustomFeedContract(listChoice, mirrorURL, customURLIPv6, customHash, customHashIPv6); err != nil {
+		return err
+	}
+	if _, err := selectEmbeddedGeoIPPolicy(io.Discard, "deny", geoCodes); err != nil {
+		return err
+	}
+	if _, err := selectEmbeddedGeoIPPolicy(io.Discard, "allow", geoAllowed); err != nil {
+		return err
+	}
+	if lanMode || listChoice == "4" {
+		for _, path := range []string{
+			"/etc/syswarden/lists/syswarden_threatintel.ipv4",
+			"/etc/syswarden/lists/syswarden_threatintel.ipv6",
+		} {
+			if _, _, err := read(path); err == nil {
+				return fmt.Errorf("offline no-feed mode refuses active threat intelligence snapshot %s", filepath.Base(path))
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("attest absence of offline threat intelligence snapshot %s: %w", filepath.Base(path), err)
+			}
+		}
+		return nil
+	}
+
+	type requiredFeed struct {
+		path     string
+		family   int
+		required bool
+	}
+	requiredIPv4 := listChoice != "3" || mirrorURL != ""
+	requiredIPv6 := listChoice == "3" && customURLIPv6 != ""
+	for _, selected := range []requiredFeed{
+		{path: "/etc/syswarden/lists/syswarden_threatintel.ipv4", family: 4, required: requiredIPv4},
+		{path: "/etc/syswarden/lists/syswarden_threatintel.ipv6", family: 6, required: requiredIPv6},
+	} {
+		content, evidence, err := read(selected.path)
+		if errors.Is(err, fs.ErrNotExist) && !selected.required {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("attest offline last-known-good feed %s: %w", filepath.Base(selected.path), err)
+		}
+		validation := cidrFeedPolicy{
+			expectedFamily:         selected.family,
+			minimumEntries:         1,
+			minimumIPv4PrefixBits:  24,
+			minimumIPv6PrefixBits:  64,
+			requirePublicAddresses: true,
+		}
+		canonical, err := canonicalizeCIDRFeed(content, validation)
+		if err != nil {
+			return fmt.Errorf("validate offline last-known-good feed %s: %w", filepath.Base(selected.path), err)
+		}
+		status := evidence.status
+		digest := sha256.Sum256(content)
+		if status.FeedName != filepath.Base(selected.path) || status.ByteSize != int64(len(content)) ||
+			status.AcceptedCount != len(canonical.prefixes) || status.SHA256 != hex.EncodeToString(digest[:]) {
+			return fmt.Errorf("offline last-known-good feed %s has inconsistent provenance", filepath.Base(selected.path))
+		}
+		if err := validateThreatIntelEvidenceForSelection(
+			evidence, listChoice, selected.family,
+			mirrorURL, customURLIPv6, customHash, customHashIPv6,
+		); err != nil {
+			return fmt.Errorf("offline feed %s does not match the selected source mode: %w", filepath.Base(selected.path), err)
+		}
+		fmt.Printf("[INFO] Reusing attested offline feed %s at SHA-256 %s.\n", status.FeedName, status.SHA256)
+	}
+	return nil
+}
+
 func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, geoCodes, asnList, geoAllowed, asnAllowed string, lanMode, useSpamhaus bool, purpose feedDownloadPurpose) error {
 	fmt.Println("[INFO] Initializing Network Intelligence Feeds...")
 	if err := validateCustomFeedContract(listChoice, mirrorURL, customURLIPv6, customHash, customHashIPv6); err != nil {
@@ -1552,6 +2198,12 @@ func downloadFeeds(mirrorURL, customURLIPv6, customHash, customHashIPv6, listCho
 	}
 	if _, err := selectEmbeddedGeoIPPolicy(os.Stdout, "allow", geoAllowed); err != nil {
 		return err
+	}
+	if _, err := reconcileThreatIntelSelectionWith(
+		mirrorURL, customURLIPv6, customHash, customHashIPv6, listChoice, lanMode,
+		readOfflineQualificationFeed, removeFeedTargets,
+	); err != nil {
+		return fmt.Errorf("reconcile threat intelligence snapshots with selected mode: %w", err)
 	}
 
 	if lanMode {
@@ -1702,10 +2354,7 @@ func DownloadOSINT(ctx context.Context, destBase string) error {
 	if err != nil {
 		return err
 	}
-	urls := []string{
-		"https://cinsscore.com/list/ci-badguys.txt",
-		"https://lists.blocklist.de/lists/all.txt",
-	}
+	urls := osintThreatIntelSources()
 	return downloadOSINTWithClient(ctx, &http.Client{Timeout: feedHTTPTimeout}, urls, v4Target, v6Target, 4)
 }
 
@@ -1774,7 +2423,15 @@ func downloadOSINTWithClient(ctx context.Context, client *http.Client, urls []st
 			minimumIPv6PrefixBits:  64,
 			requirePublicAddresses: true,
 		}
-		if err := publishCanonicalFeedAt(v4Target, ".ipv4", canonicalFeedFromPrefixes(ipv4Prefixes), validation, publication); err != nil {
+		if err := publishCanonicalFeedWithProvenanceAt(
+			v4Target,
+			".ipv4",
+			canonicalFeedFromPrefixes(ipv4Prefixes),
+			validation,
+			publication,
+			urls,
+			"",
+		); err != nil {
 			return fmt.Errorf("publish OSINT IPv4 feed: %w", err)
 		}
 	}
@@ -1786,7 +2443,15 @@ func downloadOSINTWithClient(ctx context.Context, client *http.Client, urls []st
 			minimumIPv6PrefixBits:  64,
 			requirePublicAddresses: true,
 		}
-		if err := publishCanonicalFeedAt(v6Target, ".ipv6", canonicalFeedFromPrefixes(ipv6Prefixes), validation, publication); err != nil {
+		if err := publishCanonicalFeedWithProvenanceAt(
+			v6Target,
+			".ipv6",
+			canonicalFeedFromPrefixes(ipv6Prefixes),
+			validation,
+			publication,
+			urls,
+			"",
+		); err != nil {
 			return fmt.Errorf("publish OSINT IPv6 feed: %w", err)
 		}
 	}

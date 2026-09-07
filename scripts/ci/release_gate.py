@@ -25,8 +25,10 @@ BUNDLE_NAME = "syswarden-release.tar.gz"
 SBOM_NAME = "syswarden-sbom.spdx.json"
 COMPLIANCE_ARCHIVE_NAME = "plumber-report.zip"
 PLUMBER_REPORT_NAME = "plumber-report.json"
-# Native reports are currently under 32 KiB. This leaves bounded growth headroom.
-PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES = 64 * 1024
+# Plumber v0.4.55 embeds the exact analyzed workflows. The current report is
+# about 487 KiB; this bound leaves measured growth headroom without weakening
+# the independent one-megabyte aggregate archive ceiling.
+PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES = 768 * 1024
 COMPLIANCE_ARCHIVE_MAX_MEMBERS = 128
 COMPLIANCE_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 1024 * 1024
 PACKAGE_CHECKSUM_NAME = "SHA256SUMS.txt"
@@ -36,6 +38,9 @@ UPDATE_SIGNATURE_NAME = f"{UPDATE_MANIFEST_NAME}.sig"
 UPDATE_MANIFEST_TOOL = "scripts/ci/update_manifest.go"
 UPDATE_PRIVATE_KEY_ENV = "SYSWARDEN_UPDATE_ED25519_PRIVATE_KEY"
 FIRST_SIGNED_UPDATE_TAG = "v4.02.9"
+FIRST_NATIVE_SIGNED_PACKAGE_TAG = "v4.10.0"
+FIRST_BOUND_PLUMBER_REPORT_TAG = "v4.10.0"
+FIRST_RHEL_PACKAGE_OWNED_TAG = "v4.10.0"
 # One-release bridge for qualifying the current Linux release against its exact public predecessor.
 # Delete this bridge once v4.02.8 is no longer the qualification predecessor.
 HISTORICAL_LINUX_TRANSITION_TAG = "v4.02.8"
@@ -160,12 +165,55 @@ def signed_update_required(tag: str) -> bool:
     return tag_components(tag) >= tag_components(FIRST_SIGNED_UPDATE_TAG)
 
 
+def native_package_signatures_required(tag: str) -> bool:
+    return tag_components(tag) >= tag_components(FIRST_NATIVE_SIGNED_PACKAGE_TAG)
+
+
+def rhel_package_owned_required(tag: str) -> bool:
+    return tag_components(tag) >= tag_components(FIRST_RHEL_PACKAGE_OWNED_TAG)
+
+
+def bound_plumber_report_required(tag: str) -> bool:
+    return tag_components(tag) >= tag_components(FIRST_BOUND_PLUMBER_REPORT_TAG)
+
+
 def package_names(version: str) -> list[str]:
     return [
         f"syswarden_{version}_amd64.deb",
         f"syswarden-{version}-1.x86_64.rpm",
         f"syswarden_{version}_x86_64.apk",
     ]
+
+
+def deb_signature_name(version: str) -> str:
+    return f"syswarden_{version}_amd64.deb.asc"
+
+
+def rhel_package_owned_name(version: str) -> str:
+    return f"syswarden-{version}-1.rhelpo.x86_64.rpm"
+
+
+def validate_rhel_package_owned_rpm(path: Path, version: str) -> None:
+    expected_name = rhel_package_owned_name(version)
+    if path.name != expected_name:
+        raise ReleaseGateError(
+            "RHEL package-owned RPM filename is not canonical"
+        )
+    regular_nonempty_file(path, "RHEL package-owned RPM")
+
+
+def validate_deb_signature(path: Path) -> None:
+    regular_nonempty_file(path, "DEB detached signature")
+    try:
+        from scripts.ci import native_package_signature_gate
+    except ModuleNotFoundError:
+        import native_package_signature_gate
+    try:
+        native_package_signature_gate.validate_detached_signature_container(
+            path.read_bytes()
+        )
+    except native_package_signature_gate.SignatureGateError as exc:
+        raise ReleaseGateError(f"DEB detached signature is invalid: {exc}") from exc
 
 
 def sha256(path: Path) -> str:
@@ -591,7 +639,13 @@ def validate_sbom(path: Path) -> None:
         )
 
 
-def write_compliance_archive(source: Path, destination: Path) -> None:
+def write_compliance_archive(
+    source: Path,
+    destination: Path,
+    *,
+    repository: Path | None = None,
+    expected_commit: str | None = None,
+) -> None:
     files = directory_files(source, "Plumber report artifact")
     if not files:
         raise ReleaseGateError("Plumber report artifact contains no report files")
@@ -605,7 +659,11 @@ def write_compliance_archive(source: Path, destination: Path) -> None:
             info.external_attr = 0o100644 << 16
             archive.writestr(info, path.read_bytes())
     regular_nonempty_file(destination, "Plumber report archive")
-    validate_compliance_archive(destination)
+    validate_compliance_archive(
+        destination,
+        repository=repository,
+        expected_commit=expected_commit,
+    )
 
 
 def _strict_plumber_report(content: bytes) -> dict[str, Any]:
@@ -690,7 +748,129 @@ def _validate_plumber_verdict(report: dict[str, Any]) -> None:
             )
 
 
-def validate_compliance_archive(path: Path) -> None:
+def _validate_plumber_provenance(
+    report: dict[str, Any], repository: Path, expected_commit: str
+) -> None:
+    if re.fullmatch(r"[0-9a-f]{40}", expected_commit) is None:
+        raise ReleaseGateError(
+            f"invalid expected Plumber commit SHA: {expected_commit!r}"
+        )
+    if report.get("headCommitSha") != expected_commit:
+        raise ReleaseGateError(
+            "Plumber report headCommitSha does not match the exact release commit"
+        )
+    if (
+        "dataCollectionDegraded" in report
+        and report.get("dataCollectionDegraded") is not False
+    ):
+        raise ReleaseGateError("Plumber report data collection must not be degraded")
+    for field in ("degradedReasons", "warnings", "partialControls"):
+        if field in report and report.get(field) != []:
+            raise ReleaseGateError(
+                f"Plumber report {field} must be absent or an empty array"
+            )
+
+    branch_result = report.get("branchProtectionResult")
+    if (
+        not isinstance(branch_result, dict)
+        or branch_result.get("enabled") is not True
+        or branch_result.get("status") != "passed"
+    ):
+        raise ReleaseGateError(
+            "Plumber branch protection result must be enabled and passed"
+        )
+    branch_data = branch_result.get("data")
+    if (
+        not isinstance(branch_data, list)
+        or not branch_data
+        or any(
+            not isinstance(branch, dict)
+            or branch.get("protectionDetailsKnown") is not True
+            for branch in branch_data
+        )
+    ):
+        raise ReleaseGateError(
+            "Plumber branch protection details must be complete for every branch"
+        )
+    branch_metrics = branch_result.get("metrics")
+    if not isinstance(branch_metrics, dict):
+        raise ReleaseGateError("Plumber branch protection metrics are missing")
+    required_metrics = {
+        "branchesToProtect": lambda value: type(value) is int and value >= 1,
+        "nonCompliantBranches": lambda value: type(value) is int and value == 0,
+        "projectsCorrectlyProtected": lambda value: type(value) is int and value >= 1,
+    }
+    for metric, predicate in required_metrics.items():
+        if not predicate(branch_metrics.get(metric)):
+            raise ReleaseGateError(
+                f"Plumber branch protection metric {metric} is not release-ready"
+            )
+
+    workflow_root = repository.resolve() / ".github" / "workflows"
+    if workflow_root.is_symlink() or not workflow_root.is_dir():
+        raise ReleaseGateError("repository GitHub workflow directory is unsafe or missing")
+    expected_workflows: dict[str, str] = {}
+    for workflow in sorted(workflow_root.iterdir(), key=lambda item: item.name):
+        if workflow.suffix not in {".yml", ".yaml"}:
+            continue
+        if workflow.is_symlink() or not workflow.is_file():
+            raise ReleaseGateError(
+                f"repository workflow is not a regular file: {workflow.name}"
+            )
+        try:
+            expected_workflows[
+                f".github/workflows/{workflow.name}"
+            ] = workflow.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ReleaseGateError(
+                f"cannot read repository workflow {workflow.name}: {exc}"
+            ) from exc
+    if not expected_workflows:
+        raise ReleaseGateError("repository contains no GitHub workflows")
+
+    analyzed = report.get("analyzedCiConfig")
+    if not isinstance(analyzed, dict) or set(analyzed) != {"workflows"}:
+        raise ReleaseGateError(
+            "Plumber report analyzedCiConfig must contain exactly workflows"
+        )
+    workflows = analyzed.get("workflows")
+    if not isinstance(workflows, list):
+        raise ReleaseGateError("Plumber report workflows must be an array")
+    actual_workflows: dict[str, str] = {}
+    for entry in workflows:
+        if not isinstance(entry, dict) or set(entry) != {"path", "content"}:
+            raise ReleaseGateError(
+                "each Plumber workflow must contain exactly path and content"
+            )
+        workflow_path = entry.get("path")
+        workflow_content = entry.get("content")
+        if (
+            not isinstance(workflow_path, str)
+            or not workflow_path
+            or not isinstance(workflow_content, str)
+        ):
+            raise ReleaseGateError("Plumber workflow path or content is invalid")
+        if workflow_path not in expected_workflows:
+            raise ReleaseGateError(
+                f"Plumber report contains unexpected workflow path {workflow_path!r}"
+            )
+        if workflow_path in actual_workflows:
+            raise ReleaseGateError(
+                f"Plumber report contains duplicate workflow {workflow_path}"
+            )
+        actual_workflows[workflow_path] = workflow_content
+    if actual_workflows != expected_workflows:
+        raise ReleaseGateError(
+            "Plumber report workflow inventory or content does not match the exact checkout"
+        )
+
+
+def validate_compliance_archive(
+    path: Path,
+    *,
+    repository: Path | None = None,
+    expected_commit: str | None = None,
+) -> None:
     regular_nonempty_file(path, "Plumber report archive")
     try:
         with zipfile.ZipFile(path) as archive:
@@ -764,7 +944,7 @@ def validate_compliance_archive(path: Path) -> None:
                 )
             if report_member.file_size > PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES:
                 raise ReleaseGateError(
-                    "Plumber report exceeds the 64-KiB uncompressed size limit"
+                    "Plumber report exceeds the 768-KiB uncompressed size limit"
                 )
             bad_member = archive.testzip()
             if bad_member is not None:
@@ -777,9 +957,16 @@ def validate_compliance_archive(path: Path) -> None:
                 )
             if len(report_content) > PLUMBER_REPORT_MAX_UNCOMPRESSED_BYTES:
                 raise ReleaseGateError(
-                    "Plumber report exceeds the 64-KiB uncompressed size limit"
+                    "Plumber report exceeds the 768-KiB uncompressed size limit"
                 )
-            _validate_plumber_verdict(_strict_plumber_report(report_content))
+            report = _strict_plumber_report(report_content)
+            _validate_plumber_verdict(report)
+            if (repository is None) != (expected_commit is None):
+                raise ReleaseGateError(
+                    "Plumber provenance validation requires repository and expected commit together"
+                )
+            if repository is not None and expected_commit is not None:
+                _validate_plumber_provenance(report, repository, expected_commit)
     except zipfile.BadZipFile as exc:
         raise ReleaseGateError(f"invalid Plumber report archive: {exc}") from exc
 
@@ -886,6 +1073,7 @@ def verify_signed_update_manifest(
 def prepare(args: argparse.Namespace) -> None:
     repository = args.repository.resolve()
     version = parse_tag(args.tag)
+    expected_plumber_commit = getattr(args, "expected_plumber_commit", None)
     packages = args.packages.resolve()
     bundle_dir = args.bundle.resolve()
     sbom_dir = args.sbom.resolve()
@@ -894,6 +1082,30 @@ def prepare(args: argparse.Namespace) -> None:
     notes_output = args.notes_output.resolve()
 
     package_assets = validate_packages(packages, version)
+
+    native_signature_assets: list[str] = []
+    if native_package_signatures_required(args.tag):
+        signature_path = getattr(args, "deb_signature", None)
+        if signature_path is None:
+            raise ReleaseGateError(
+                f"DEB detached signature is required for {args.tag}"
+            )
+        signature_path = signature_path.resolve()
+        if signature_path.name != deb_signature_name(version):
+            raise ReleaseGateError("DEB detached signature filename is not canonical")
+        validate_deb_signature(signature_path)
+        native_signature_assets = [signature_path.name]
+
+    rhel_package_owned_assets: list[str] = []
+    if rhel_package_owned_required(args.tag):
+        package_path = getattr(args, "rhel_package_owned_rpm", None)
+        if package_path is None:
+            raise ReleaseGateError(
+                f"RHEL package-owned RPM is required for {args.tag}"
+            )
+        package_path = package_path.resolve()
+        validate_rhel_package_owned_rpm(package_path, version)
+        rhel_package_owned_assets = [package_path.name]
 
     signed_assets: list[str] = []
     if signed_update_required(args.tag):
@@ -927,9 +1139,29 @@ def prepare(args: argparse.Namespace) -> None:
 
     for name in package_assets + [PACKAGE_CHECKSUM_NAME]:
         shutil.copyfile(packages / name, output / name)
+    if native_signature_assets:
+        shutil.copyfile(args.deb_signature.resolve(), output / native_signature_assets[0])
+    if rhel_package_owned_assets:
+        shutil.copyfile(
+            args.rhel_package_owned_rpm.resolve(),
+            output / rhel_package_owned_assets[0],
+        )
     shutil.copyfile(bundle, output / BUNDLE_NAME)
     shutil.copyfile(sbom, output / SBOM_NAME)
-    write_compliance_archive(compliance, output / COMPLIANCE_ARCHIVE_NAME)
+    if bound_plumber_report_required(args.tag) and expected_plumber_commit is None:
+        raise ReleaseGateError(
+            f"expected Plumber commit SHA is required for {args.tag}"
+        )
+    write_compliance_archive(
+        compliance,
+        output / COMPLIANCE_ARCHIVE_NAME,
+        repository=repository if bound_plumber_report_required(args.tag) else None,
+        expected_commit=(
+            expected_plumber_commit
+            if bound_plumber_report_required(args.tag)
+            else None
+        ),
+    )
     if signed_assets:
         update_manifest_directory = args.update_manifest_dir.resolve()
         for name in signed_assets:
@@ -941,10 +1173,17 @@ def prepare(args: argparse.Namespace) -> None:
         SBOM_NAME,
         COMPLIANCE_ARCHIVE_NAME,
     } | set(signed_assets)
+    inventory_without_release_manifest |= set(native_signature_assets)
+    inventory_without_release_manifest |= set(rhel_package_owned_assets)
     write_checksum_manifest(
         output, inventory_without_release_manifest, RELEASE_CHECKSUM_NAME
     )
-    verify_assets(output, args.tag, repository)
+    verify_assets(
+        output,
+        args.tag,
+        repository,
+        expected_plumber_commit=expected_plumber_commit,
+    )
 
     notes = release_notes(repository, args.tag)
     notes_output.parent.mkdir(parents=True, exist_ok=True)
@@ -962,10 +1201,20 @@ def expected_release_assets(tag: str) -> set[str]:
     }
     if signed_update_required(tag):
         assets |= {UPDATE_MANIFEST_NAME, UPDATE_SIGNATURE_NAME}
+    if native_package_signatures_required(tag):
+        assets.add(deb_signature_name(version))
+    if rhel_package_owned_required(tag):
+        assets.add(rhel_package_owned_name(version))
     return assets
 
 
-def verify_assets(directory: Path, tag: str, repository: Path | None = None) -> None:
+def verify_assets(
+    directory: Path,
+    tag: str,
+    repository: Path | None = None,
+    *,
+    expected_plumber_commit: str | None = None,
+) -> None:
     expected = expected_release_assets(tag)
     exact_root_files(directory, expected, "release asset")
     version = parse_tag(tag)
@@ -975,7 +1224,24 @@ def verify_assets(directory: Path, tag: str, repository: Path | None = None) -> 
     validate_sbom(directory / SBOM_NAME)
     compliance_archive = directory / COMPLIANCE_ARCHIVE_NAME
     regular_nonempty_file(compliance_archive, "Plumber report archive")
-    validate_compliance_archive(compliance_archive)
+    if bound_plumber_report_required(tag):
+        if repository is None or expected_plumber_commit is None:
+            raise ReleaseGateError(
+                f"repository and expected Plumber commit SHA are required for {tag}"
+            )
+        validate_compliance_archive(
+            compliance_archive,
+            repository=repository,
+            expected_commit=expected_plumber_commit,
+        )
+    else:
+        validate_compliance_archive(compliance_archive)
+    if native_package_signatures_required(tag):
+        validate_deb_signature(directory / deb_signature_name(version))
+    if rhel_package_owned_required(tag):
+        validate_rhel_package_owned_rpm(
+            directory / rhel_package_owned_name(version), version
+        )
     if signed_update_required(tag):
         if repository is None:
             raise ReleaseGateError(
@@ -1052,11 +1318,15 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--output", type=Path, required=True)
     prepare_parser.add_argument("--notes-output", type=Path, required=True)
     prepare_parser.add_argument("--update-manifest-dir", type=Path)
+    prepare_parser.add_argument("--deb-signature", type=Path)
+    prepare_parser.add_argument("--rhel-package-owned-rpm", type=Path)
+    prepare_parser.add_argument("--expected-plumber-commit")
 
     verify_parser = subparsers.add_parser("verify", help="verify a final release asset directory")
     verify_parser.add_argument("--tag", required=True)
     verify_parser.add_argument("--assets", type=Path, required=True)
     verify_parser.add_argument("--repository", type=Path)
+    verify_parser.add_argument("--expected-plumber-commit")
 
     packages_parser = subparsers.add_parser(
         "verify-packages", help="verify a package workflow artifact directory"
@@ -1113,7 +1383,12 @@ def main() -> int:
             print(f"Release asset validation passed for {args.tag}")
         elif args.command == "verify":
             repository = args.repository.resolve() if args.repository is not None else None
-            verify_assets(args.assets.resolve(), args.tag, repository)
+            verify_assets(
+                args.assets.resolve(),
+                args.tag,
+                repository,
+                expected_plumber_commit=args.expected_plumber_commit,
+            )
             print(f"Release asset inventory passed for {args.tag}")
         elif args.command == "verify-packages":
             validate_packages(args.packages.resolve(), parse_tag(args.tag))

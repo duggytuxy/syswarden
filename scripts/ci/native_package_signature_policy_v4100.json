@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "profile": "syswarden-native-package-signatures/v4.10.0",
+  "status": "foundation-not-qualified",
+  "publishing": false,
+  "rpm": {
+    "mechanism": "rpm-openpgp",
+    "trusted_keys": []
+  },
+  "apk": {
+    "mechanism": "apk-rsa256",
+    "signer_image": "docker.io/alpinelinux/build-base@sha256:31d2a020ccd2058e6ab47940428bd0b7dc83e37b66880891f9ed903a12ea668b",
+    "trusted_keys": []
+  },
+  "deb": {
+    "channel": "github-release-assets",
+    "decision": "detached-package-signature",
+    "mechanism": "openpgp-detached",
+    "signature_suffix": ".asc",
+    "trusted_keys": [],
+    "implementation": "implemented-not-qualified"
+  }
+}

@@ -1,0 +1,5 @@
+	chain operator-policy {
+		ip saddr 198.51.100.0/24 meta l4proto tcp tcp dport 8443 counter accept comment "syswarden:operator-policy:v1:afeb52b854a1ea1f9e13e3659e4c51a7eb0067793b38135d22f92ba09d0aadbc"
+		ip6 saddr 2001:db8:1::/64 meta l4proto udp udp dport 51820 counter accept comment "syswarden:operator-policy:v1:2c510317b933278e4b1f0a1229a7f4bc12deef0dbcdf7a710f2d0e3b5a403907"
+		return comment "syswarden:operator-policy:v1:return"
+	}

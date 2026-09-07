@@ -1,0 +1,62 @@
+{
+  "schema_version": 2,
+  "profile": "rhel-package-owned-runtime/v2",
+  "status": "implemented-native-qualification-pending",
+  "activation": "explicit-opt-in-only",
+  "platform": {
+    "family": "rhel",
+    "minimum_major": 9,
+    "architecture": "x86_64",
+    "service_manager": "systemd",
+    "firewall_frontend": "operator-selected"
+  },
+  "rpm": {
+    "owns_units": true,
+    "owns_preset": true,
+    "owns_scriptlets": true,
+    "lifecycle": {
+      "pre_install": "scriptlets/pre-install.sh",
+      "post_install": "scriptlets/post-install.sh",
+      "pre_uninstall": "scriptlets/pre-uninstall.sh",
+      "post_uninstall": "scriptlets/post-uninstall.sh"
+    },
+    "package_name": "syswarden",
+    "package_release": "1.rhelpo",
+    "nevra_template": "syswarden-{version}-1.rhelpo.x86_64",
+    "filename_template": "syswarden-{version}-1.rhelpo.x86_64.rpm",
+    "mutual_exclusion": "same-rpm-name",
+    "payload_owner": "root:root"
+  },
+  "go_runtime_boundary": {
+    "systemd_integration_ownership": "rpm",
+    "firewall_integration_ownership": "rpm",
+    "firewall_frontend_selection": "operator",
+    "dynamic_policy_compilation_and_enforcement": "go-runtime",
+    "product_binary_role": "runtime-only",
+    "package_scriptlet_product_binary_calls": "forbidden"
+  },
+  "image_build_contract": {
+    "supported_build_roots": ["mock", "chroot"],
+    "running_systemd_required_during_transaction": false,
+    "service_start_during_transaction": "forbidden",
+    "first_real_boot_activation": "systemd-preset",
+    "upgrade_preset_reapplication": "forbidden",
+    "operator_configuration_replacement": "forbidden"
+  },
+  "firewall_frontend_contract": {
+    "preserve_operator_selection": true,
+    "supported_existing_frontends": ["firewalld", "nftables"],
+    "firewalld_service_transition": "forbidden",
+    "nftables_service_transition": "forbidden"
+  },
+  "selinux_contract": {
+    "required_mode": "enforcing",
+    "package_policy_mutation": "forbidden",
+    "native_rhel_9_and_10_qualification": "pending"
+  },
+  "build_integration": {
+    "entrypoint": "build_packages.sh --rhel-package-owned-profile",
+    "default_builder_behavior": "unchanged",
+    "activation": "explicit-command-line-flag"
+  }
+}

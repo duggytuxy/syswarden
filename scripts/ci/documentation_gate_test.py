@@ -20,7 +20,7 @@ import release_gate
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SOURCE_CANDIDATE_VERSION = "v4.04.3"
+SOURCE_CANDIDATE_VERSION = "v4.10.0"
 STABLE_PUBLIC_VERSION = "v4.04.3"
 PUBLIC_REPORT_VERSION = "v4.03.3"
 OPERATIONAL_WIKI_BASELINE_VERSION = "v4.04.3"
@@ -60,6 +60,42 @@ class DocumentationGateTest(unittest.TestCase):
         records, errors = documentation_gate.validate_repository(REPO_ROOT)
         self.assertEqual(errors, [])
         self.assertEqual([record.path for record in records], ["README.md"])
+
+    def test_native_package_procedures_include_exact_byte_bindings(self) -> None:
+        lifecycle = (
+            REPO_ROOT
+            / "docs/technical/NATIVE_PACKAGE_LIFECYCLE_QUALIFICATION_V4.10.0.md"
+        ).read_text(encoding="utf-8")
+        migration = (
+            REPO_ROOT
+            / "docs/technical/NODE01_MIGRATION_NATIVE_QUALIFICATION.md"
+        ).read_text(encoding="utf-8")
+        for option in (
+            "--rpm-package-name",
+            "--rpm-package-sha256",
+            "--rpm-package-size",
+            "--deb-package-name",
+            "--deb-package-sha256",
+            "--deb-package-size",
+            "--apk-package-name",
+            "--apk-package-sha256",
+            "--apk-package-size",
+        ):
+            with self.subTest(document="native lifecycle", option=option):
+                self.assertEqual(lifecycle.count(option), 1)
+        for option in (
+            "--candidate-package-name",
+            "--candidate-package-sha256",
+            "--candidate-package-size",
+        ):
+            with self.subTest(document="NODE01 migration", option=option):
+                self.assertEqual(migration.count(option), 2)
+        self.assertIn("`.packages.signed`", lifecycle)
+        self.assertIn("`RPM_NATIVE_VERIFICATION.json`", lifecycle)
+        self.assertIn("node05-almalinux9.8.json", lifecycle)
+        self.assertEqual(lifecycle.count("29 exact JSON captures"), 5)
+        self.assertIn("five observation files and their exact 145-file raw inventory", lifecycle)
+        self.assertIn("`.packages.signed`", migration)
 
     def test_operational_wiki_contract_is_required_without_network_access(self) -> None:
         contract = documentation_gate.load_contract(REPO_ROOT)
@@ -201,7 +237,7 @@ class DocumentationGateTest(unittest.TestCase):
             [],
         )
         errors = documentation_gate.validate_public_version_order(
-            SOURCE_CANDIDATE_VERSION, "v4.04.4"
+            SOURCE_CANDIDATE_VERSION, "v4.10.1"
         )
         self.assertTrue(any("cannot be newer" in error for error in errors))
 
@@ -741,6 +777,17 @@ class DocumentationGateTest(unittest.TestCase):
         )
         self.assertEqual(len(package_contract["artifacts"]), 3)
         self.assertEqual(
+            package_contract["optional_workflow_artifacts"],
+            [
+                {
+                    "family": "RPM",
+                    "architecture": "x86_64",
+                    "variant": "rhel-package-owned",
+                    "workflow_name": "syswarden-${VERSION}-1.rhelpo.x86_64.rpm",
+                }
+            ],
+        )
+        self.assertEqual(
             {entry["family"] for entry in package_contract["artifacts"]},
             {"DEB", "RPM", "APK"},
         )
@@ -949,7 +996,7 @@ class DocumentationGateTest(unittest.TestCase):
             "\n".join(wiki["Migration-v4.03.2-to-v4.03.3.md"])
         )
         for phrase in (
-            "pending manual release-owner gate",
+            "published v4.03.3 Patch release",
             "deterministic local TLS fixture",
             "four interval sets",
             "discard ambiguous legacy intervals",

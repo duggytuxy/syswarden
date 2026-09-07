@@ -194,6 +194,67 @@ profile_name = "production"
 	}
 }
 
+func TestHAV2ModularConfigurationSurvivesCLIMappingRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	modules := filepath.Join(root, "modules")
+	if err := os.MkdirAll(modules, 0750); err != nil {
+		t.Fatal(err)
+	}
+	configuration := minimalModularConfig + `
+[integrations.ha]
+enabled = true
+peer_ips = ["8.8.8.20"]
+peer_port = 62026
+token = "outer-bearer-token"
+v2_enabled = true
+cluster_id = "cluster-a"
+epoch = 7
+node_id = "node-a"
+peer_id = "node-b"
+role = "writer"
+v2_secret_file = "/etc/syswarden/ha/v2.secret"
+tls_cert_file = "/etc/syswarden/ha/node-a.crt"
+tls_key_file = "/etc/syswarden/ha/node-a.key"
+tls_ca_file = "/etc/syswarden/ha/ca.crt"
+peer_tls_name = "node-b"
+peer_cert_sha256 = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+state_file = "/var/lib/syswarden/ha/replication-v2.json"
+transaction_file = "/var/lib/syswarden/ha/replication-v2.wal.json"
+heartbeat_interval_seconds = 3
+heartbeat_timeout_seconds = 12
+request_timeout_seconds = 4
+`
+	// The second table declaration above intentionally replaces the minimal
+	// fixture's HA table, so remove its lone default key before parsing.
+	configuration = strings.Replace(configuration, "[integrations.ha]\npeer_port = 62026\n", "", 1)
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(configuration), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := GlobalConfig
+	t.Cleanup(func() { GlobalConfig = previous })
+	if err := loadModularConfig(root); err != nil {
+		t.Fatalf("load HA v2 configuration: %v", err)
+	}
+	if !GlobalConfig.HAV2Enabled || GlobalConfig.HAEpoch != 7 || GlobalConfig.HAClusterID != "cluster-a" ||
+		GlobalConfig.HANodeID != "node-a" || GlobalConfig.HAPeerID != "node-b" || GlobalConfig.HARole != "writer" ||
+		GlobalConfig.HAV2SecretFile != "/etc/syswarden/ha/v2.secret" || GlobalConfig.HATLSCertFile != "/etc/syswarden/ha/node-a.crt" ||
+		GlobalConfig.HATLSKeyFile != "/etc/syswarden/ha/node-a.key" || GlobalConfig.HATLSCAFile != "/etc/syswarden/ha/ca.crt" ||
+		GlobalConfig.HAPeerTLSName != "node-b" || len(GlobalConfig.HAPeerCertSHA256) != 1 ||
+		GlobalConfig.HAHeartbeatIntervalSeconds != 3 || GlobalConfig.HAHeartbeatTimeoutSeconds != 12 || GlobalConfig.HARequestTimeoutSeconds != 4 {
+		t.Fatalf("HA v2 fields were lost in modular-to-legacy mapping: %#v", GlobalConfig)
+	}
+	roundTrip, err := legacyConfigForPolicyValidation(GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ha := roundTrip.Integrations.HA
+	if !ha.V2Enabled || ha.ClusterID != "cluster-a" || ha.Epoch != 7 || ha.NodeID != "node-a" || ha.PeerID != "node-b" ||
+		ha.Role != "writer" || ha.PeerTLSName != "node-b" || len(ha.PeerCertSHA256) != 1 ||
+		ha.StateFile != "/var/lib/syswarden/ha/replication-v2.json" || ha.TransactionFile != "/var/lib/syswarden/ha/replication-v2.wal.json" {
+		t.Fatalf("HA v2 fields were lost in legacy-to-modular mapping: %#v", ha)
+	}
+}
+
 func TestUserModuleArrayPriorityContract_SW_CFG_002(t *testing.T) {
 	tests := []struct {
 		name       string

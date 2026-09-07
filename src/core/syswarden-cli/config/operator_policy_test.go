@@ -44,13 +44,14 @@ type operatorPolicyContractSemanticCase struct {
 }
 
 type operatorPolicyContractRule struct {
-	ID        string `json:"id"`
-	Family    string `json:"family"`
-	Direction string `json:"direction"`
-	Protocol  string `json:"protocol"`
-	ICMPType  string `json:"type"`
-	Source    string `json:"source"`
-	Action    string `json:"action"`
+	ID              string `json:"id"`
+	Family          string `json:"family"`
+	Direction       string `json:"direction"`
+	Protocol        string `json:"protocol"`
+	ICMPType        string `json:"type"`
+	DestinationPort uint16 `json:"destination_port"`
+	Source          string `json:"source"`
+	Action          string `json:"action"`
 }
 
 type operatorPolicyContractCountCase struct {
@@ -158,13 +159,14 @@ func loadOperatorPolicyContractCorpus(t *testing.T) operatorPolicyContractCorpus
 
 func (rule operatorPolicyContractRule) typed() OperatorPolicyRule {
 	return OperatorPolicyRule{
-		ID:        rule.ID,
-		Family:    OperatorPolicyFamily(rule.Family),
-		Direction: OperatorPolicyDirection(rule.Direction),
-		Protocol:  OperatorPolicyProtocol(rule.Protocol),
-		ICMPType:  OperatorPolicyICMPType(rule.ICMPType),
-		Source:    rule.Source,
-		Action:    OperatorPolicyAction(rule.Action),
+		ID:              rule.ID,
+		Family:          OperatorPolicyFamily(rule.Family),
+		Direction:       OperatorPolicyDirection(rule.Direction),
+		Protocol:        OperatorPolicyProtocol(rule.Protocol),
+		ICMPType:        OperatorPolicyICMPType(rule.ICMPType),
+		DestinationPort: rule.DestinationPort,
+		Source:          rule.Source,
+		Action:          OperatorPolicyAction(rule.Action),
 	}
 }
 
@@ -192,11 +194,14 @@ id = %q
 family = %q
 direction = %q
 protocol = %q
-type = %q
-source = %q
-action = %q
-
-`, rule.ID, rule.Family, rule.Direction, rule.Protocol, rule.ICMPType, rule.Source, rule.Action)
+`, rule.ID, rule.Family, rule.Direction, rule.Protocol)
+		if rule.ICMPType != "" {
+			fmt.Fprintf(&module, "type = %q\n", rule.ICMPType)
+		}
+		if rule.DestinationPort != 0 {
+			fmt.Fprintf(&module, "destination_port = %d\n", rule.DestinationPort)
+		}
+		fmt.Fprintf(&module, "source = %q\naction = %q\n\n", rule.Source, rule.Action)
 	}
 	return module.String()
 }
@@ -232,6 +237,48 @@ type = "echo-request"
 source = "2001:db8::/64"
 action = "accept"
 `
+
+const validTransportOperatorPolicyModule = `[[operator_policy.rules]]
+id = "allow-tcp-v4"
+family = "ipv4"
+direction = "ingress"
+protocol = "tcp"
+destination_port = 8443
+source = "192.0.2.0/24"
+action = "accept"
+
+[[operator_policy.rules]]
+id = "allow-udp-v6"
+family = "ipv6"
+direction = "ingress"
+protocol = "udp"
+destination_port = 51820
+source = "2001:db8:1::/64"
+action = "accept"
+`
+
+func TestOperatorPolicyTCPUDPMapsWithoutWeakCoercion_SW_OPPOL_013(t *testing.T) {
+	preserveOperatorPolicyGlobals(t)
+	root := operatorPolicyFixture(t, validTransportOperatorPolicyModule)
+	if err := loadModularConfig(root); err != nil {
+		t.Fatalf("load typed transport policy: %v", err)
+	}
+	if len(GlobalConfig.OperatorPolicy.Rules) != 2 ||
+		GlobalConfig.OperatorPolicy.Rules[0].DestinationPort != 8443 ||
+		GlobalConfig.OperatorPolicy.Rules[1].DestinationPort != 51820 {
+		t.Fatalf("typed transport policy mismatch: %#v", GlobalConfig.OperatorPolicy)
+	}
+	for _, invalid := range []string{
+		strings.Replace(validTransportOperatorPolicyModule, "destination_port = 8443", `destination_port = "8443"`, 1),
+		strings.Replace(validTransportOperatorPolicyModule, "destination_port = 8443", "destination_port = 0", 1),
+		strings.Replace(validTransportOperatorPolicyModule, "destination_port = 8443", "destination_port = 65536", 1),
+		strings.Replace(validTransportOperatorPolicyModule, "destination_port = 8443", "destination_port = 8443\nraw = \"tcp dport 22 accept\"", 1),
+	} {
+		if _, err := parseTOMLDocument([]byte(invalid), operatorPolicyModulePath); err == nil {
+			t.Fatalf("invalid transport policy was accepted:\n%s", invalid)
+		}
+	}
+}
 
 func operatorPolicyFixture(t *testing.T, userModule string) string {
 	t.Helper()

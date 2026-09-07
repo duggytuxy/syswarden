@@ -1,0 +1,426 @@
+name: SysWarden Go 1.27 Evaluation
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    name: Go 1.27 non-publishing evaluation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout candidate without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Capture candidate repository state
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py capture \
+            --output "${RUNNER_TEMP}/go127-repository-state.json"
+
+      - name: Install checksum-pinned Go toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="scripts/ci/go_toolchain_evaluation.json"
+          test "$(jq -er '.schema_version' "${metadata}")" = "2"
+          test "$(jq -er '.architecture' "${metadata}")" = "linux/amd64"
+          test "$(jq -er '.release_toolchain_unchanged' "${metadata}")" = "true"
+
+          for role in baseline candidate; do
+            version="$(jq -er --arg role "${role}" '.toolchains[$role].version' "${metadata}")"
+            filename="$(jq -er --arg role "${role}" '.toolchains[$role].filename' "${metadata}")"
+            url="$(jq -er --arg role "${role}" '.toolchains[$role].url' "${metadata}")"
+            size="$(jq -er --arg role "${role}" '.toolchains[$role].size' "${metadata}")"
+            sha256="$(jq -er --arg role "${role}" '.toolchains[$role].sha256' "${metadata}")"
+            archive="${RUNNER_TEMP}/${filename}"
+            root="${RUNNER_TEMP}/go-toolchain-${role}"
+
+            [[ "${version}" =~ ^go1\.[0-9]+\.[0-9]+$ ]]
+            [[ "${filename}" == "${version}.linux-amd64.tar.gz" ]]
+            [[ "${url}" == "https://go.dev/dl/${filename}" ]]
+            [[ "${size}" =~ ^[1-9][0-9]*$ ]]
+            [[ "${sha256}" =~ ^[0-9a-f]{64}$ ]]
+
+            curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              --fail --location --max-redirs 3 --connect-timeout 15 \
+              --max-time 300 --silent --show-error \
+              --output "${archive}" "${url}"
+            test "$(stat -c '%s' "${archive}")" = "${size}"
+            printf '%s  %s\n' "${sha256}" "${archive}" | sha256sum --check --strict
+
+            install -d -m 0700 "${root}"
+            tar --extract --gzip --file "${archive}" --directory "${root}" \
+              --no-same-owner --no-same-permissions
+            tool="${root}/go/bin/go"
+            test -x "${tool}"
+            test "$(GOTOOLCHAIN=local "${tool}" version)" = \
+              "go version ${version} linux/amd64"
+            variable="$(printf '%s_GO' "${role}" | tr '[:lower:]' '[:upper:]')"
+            printf '%s=%s\n' "${variable}" "${tool}" >> "${GITHUB_ENV}"
+          done
+
+      - name: Set up pinned Ruby for package comparison
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: '3.2'
+
+      - name: Install pinned package assembly tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes rpm
+          gem install --no-document fpm -v 1.17.0
+          tool_dir="${RUNNER_TEMP}/go127-tools"
+          install -d -m 0700 "${tool_dir}"
+          GOBIN="${tool_dir}" GOTOOLCHAIN=local "${BASELINE_GO}" install \
+            github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          test -x "${tool_dir}/nfpm"
+          GOTOOLCHAIN=local "${BASELINE_GO}" version -m "${tool_dir}/nfpm" | \
+            grep -F $'mod\tgithub.com/goreleaser/nfpm/v2\tv2.47.0' >/dev/null
+          printf 'PATH=%s:%s\n' "${tool_dir}" "${PATH}" >> "${GITHUB_ENV}"
+
+      - name: Run Go 1.27 functional, race and vet gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+            scripts/ci/go_toolchain_evaluation_test.py \
+            scripts/ci/go_toolchain_release_verdict_test.py \
+            -v
+          export GOTOOLCHAIN=local
+          export PATH="$(dirname "${CANDIDATE_GO}"):${PATH}"
+          modules=(
+            src/core/syswarden-cli
+            src/core/syswarden-core
+            src/core/syswarden-tui
+          )
+          for module in "${modules[@]}"; do
+            "${CANDIDATE_GO}" -C "${module}" test -mod=readonly -count=1 ./...
+            "${CANDIDATE_GO}" -C "${module}" test -race -mod=readonly -count=1 ./...
+            "${CANDIDATE_GO}" -C "${module}" vet -mod=readonly ./...
+            "${CANDIDATE_GO}" -C "${module}" vet -mod=readonly -stdversion=true ./...
+          done
+          GOWORK=off "${CANDIDATE_GO}" -C scripts/versionctl test -mod=readonly -count=1 ./...
+          GOWORK=off "${CANDIDATE_GO}" -C scripts/versionctl test -race -mod=readonly -count=1 ./...
+          GOWORK=off "${CANDIDATE_GO}" -C scripts/versionctl vet -mod=readonly ./...
+          GOWORK=off "${CANDIDATE_GO}" -C scripts/versionctl vet \
+            -mod=readonly -stdversion=true ./...
+          "${CANDIDATE_GO}" test -count=1 scripts/ci/go127_goroutineleak_probe_test.go
+          for experiment in jsonv2 nojsonv2; do
+            GOEXPERIMENT="${experiment}" "${CANDIDATE_GO}" \
+              -C src/core/syswarden-cli test -mod=readonly -count=1 \
+              ./config ./pkg/network
+            GOEXPERIMENT="${experiment}" "${CANDIDATE_GO}" \
+              -C src/core/syswarden-core test -mod=readonly -count=1 \
+              ./engine ./network ./telemetry ./webhook
+            GOEXPERIMENT="${experiment}" "${CANDIDATE_GO}" \
+              -C src/core/syswarden-tui test -mod=readonly -count=1 ./...
+            printf '%s\n' pass > "${RUNNER_TEMP}/go127-${experiment}.ok"
+          done
+          printf '%s\n' pass > "${RUNNER_TEMP}/go127-functional.ok"
+
+      - name: Run bounded Go 1.27 fuzz gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOTOOLCHAIN=local
+          fuzz_target() {
+            local module="$1"
+            local package="$2"
+            local target="$3"
+            "${CANDIDATE_GO}" -C "${module}" test -mod=readonly -run '^$' \
+              -fuzz "^${target}$" -fuzztime=100000x -parallel=2 "${package}"
+          }
+          fuzz_target src/core/syswarden-cli ./config FuzzMigratorParseFromMemory
+          fuzz_target src/core/syswarden-cli ./config FuzzIPCIDRPortValidators
+          fuzz_target src/core/syswarden-cli ./pkg/firewall FuzzIsValidIP
+          fuzz_target src/core/syswarden-cli ./pkg/firewall FuzzCompileOperatorTransportPolicyClosed
+          fuzz_target src/core/syswarden-cli ./pkg/geoip FuzzSelect
+          fuzz_target src/core/syswarden-cli ./pkg/network FuzzHASyncPayloadJSON
+          fuzz_target src/core/syswarden-core ./engine FuzzEngineNetworkAndURLInput
+          printf '%s\n' pass > "${RUNNER_TEMP}/go127-fuzz.ok"
+
+      - name: Compare reproducible binaries and sizes
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOTOOLCHAIN=local
+          install -d -m 0700 \
+            "${RUNNER_TEMP}/go126-bin-a" \
+            "${RUNNER_TEMP}/go126-bin-b" \
+            "${RUNNER_TEMP}/go127-bin-a" \
+            "${RUNNER_TEMP}/go127-bin-b"
+          modules=(syswarden-cli syswarden-core syswarden-tui)
+          records="${RUNNER_TEMP}/go127-binary-records.tsv"
+          : > "${records}"
+          for role in baseline candidate; do
+            case "${role}" in
+              baseline) tool="${BASELINE_GO}"; prefix=go126 ;;
+              candidate) tool="${CANDIDATE_GO}"; prefix=go127 ;;
+              *) exit 1 ;;
+            esac
+            for module in "${modules[@]}"; do
+              for repetition in a b; do
+                output="${RUNNER_TEMP}/${prefix}-bin-${repetition}/${module}"
+                CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+                  "${tool}" -C "src/core/${module}" build -mod=readonly \
+                  -trimpath -buildvcs=false -buildmode=pie -ldflags='-s -w' \
+                  -o "${output}" .
+              done
+              first="${RUNNER_TEMP}/${prefix}-bin-a/${module}"
+              second="${RUNNER_TEMP}/${prefix}-bin-b/${module}"
+              cmp --silent -- "${first}" "${second}"
+              printf '%s\t%s\t%s\t%s\n' \
+                "${role}" \
+                "${module}" \
+                "$(stat -c '%s' "${first}")" \
+                "$(sha256sum "${first}" | awk '{print $1}')" \
+                >> "${records}"
+            done
+          done
+          test "$(wc -l < "${records}")" -eq 6
+          {
+            echo '### Go toolchain binary size comparison'
+            echo
+            echo '| Binary | Go 1.26.6 bytes | Go 1.27.1 bytes | Delta bytes |'
+            echo '|---|---:|---:|---:|'
+            for module in "${modules[@]}"; do
+              baseline_size="$(awk -F '\t' -v module="${module}" '$1 == "baseline" && $2 == module {print $3}' "${records}")"
+              candidate_size="$(awk -F '\t' -v module="${module}" '$1 == "candidate" && $2 == module {print $3}' "${records}")"
+              [[ "${baseline_size}" =~ ^[1-9][0-9]*$ ]]
+              [[ "${candidate_size}" =~ ^[1-9][0-9]*$ ]]
+              delta="$((candidate_size - baseline_size))"
+              printf '| %s | %s | %s | %s |\n' \
+                "${module}" "${baseline_size}" "${candidate_size}" "${delta}"
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Compare bounded HTTP protocol and resource campaigns
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOTOOLCHAIN=local
+          records="${RUNNER_TEMP}/go127-protocol-records.jsonl"
+          : > "${records}"
+          for role in baseline candidate; do
+            case "${role}" in
+              baseline) tool="${BASELINE_GO}" ;;
+              candidate) tool="${CANDIDATE_GO}" ;;
+              *) exit 1 ;;
+            esac
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+              "${tool}" build -trimpath -buildvcs=false \
+              -o "${RUNNER_TEMP}/go127-protocol-probe-${role}" \
+              scripts/ci/go127_protocol_probe.go
+          done
+          for sample in $(seq 1 9); do
+            if (( sample % 2 == 1 )); then
+              roles=(baseline candidate)
+            else
+              roles=(candidate baseline)
+            fi
+            for role in "${roles[@]}"; do
+              output="${RUNNER_TEMP}/go127-protocol-${role}-${sample}.json"
+              "${RUNNER_TEMP}/go127-protocol-probe-${role}" > "${output}"
+              jq --compact-output --arg role "${role}" --argjson sample "${sample}" \
+                '. + {role: $role, sample: $sample}' "${output}" >> "${records}"
+            done
+          done
+          test "$(wc -l < "${records}")" -eq 18
+
+      - name: Compare actual DEB RPM and APK package sizes
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "${CANDIDATE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
+          records="${RUNNER_TEMP}/go127-package-records.tsv"
+          : > "${records}"
+          for role in baseline candidate; do
+            case "${role}" in
+              baseline) tool="${BASELINE_GO}"; version=go1.26.6 ;;
+              candidate) tool="${CANDIDATE_GO}"; version=go1.27.1 ;;
+              *) exit 1 ;;
+            esac
+            checkout="${RUNNER_TEMP}/go127-package-${role}"
+            git clone --quiet --no-hardlinks -- "${GITHUB_WORKSPACE}" "${checkout}"
+            test "$(git -C "${checkout}" rev-parse HEAD)" = "${CANDIDATE_COMMIT}"
+            if [[ "${role}" == candidate ]]; then
+              python3 - "${checkout}/build_packages.sh" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          wire = path.read_text(encoding="utf-8")
+          if wire.count("go1.26.6") != 2 or wire.count("Go 1.26.6") != 3:
+              raise SystemExit("package builder Go baseline anchors are ambiguous")
+          path.write_text(
+              wire.replace("go1.26.6", "go1.27.1").replace("Go 1.26.6", "Go 1.27.1"),
+              encoding="utf-8",
+          )
+          PY
+              test "$(git -C "${checkout}" diff --name-only)" = build_packages.sh
+            else
+              test -z "$(git -C "${checkout}" status --short)"
+            fi
+            PATH="$(dirname "${tool}"):${PATH}" \
+              GOTOOLCHAIN=local "${checkout}/build_packages.sh"
+            source_tag="$(PATH="$(dirname "${tool}"):${PATH}" \
+              "${checkout}/scripts/versioning.sh" inspect --repo "${checkout}")"
+            package_version="${source_tag#v}"
+            declare -A package_paths=(
+              [deb]="${checkout}/dist/packages/syswarden_${package_version}_amd64.deb"
+              [rpm]="${checkout}/dist/packages/syswarden-${package_version}-1.x86_64.rpm"
+              [apk]="${checkout}/dist/packages/syswarden_${package_version}_x86_64.apk"
+            )
+            for format in deb rpm apk; do
+              path="${package_paths[${format}]}"
+              test -s "${path}"
+              printf '%s\t%s\t%s\t%s\n' \
+                "${role}" "${format}" "$(stat -c '%s' "${path}")" \
+                "$(sha256sum "${path}" | awk '{print $1}')" >> "${records}"
+            done
+          done
+          test "$(wc -l < "${records}")" -eq 6
+
+      - name: Test explicit source rollback to Go 1.26.6
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          rollback_root="${RUNNER_TEMP}/go127-rollback"
+          git clone --quiet --no-hardlinks -- "${GITHUB_WORKSPACE}" "${rollback_root}"
+          test "$(git -C "${rollback_root}" rev-parse HEAD)" = "${CANDIDATE_COMMIT}"
+          mapfile -t required_files < <(jq -er '.rollback.required_files[]' \
+            scripts/ci/go_toolchain_evaluation.json)
+          test "${#required_files[@]}" -eq 6
+          python3 - "${rollback_root}" "${required_files[@]}" <<'PY'
+          import pathlib
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          for relative in sys.argv[2:]:
+              path = root / relative
+              wire = path.read_bytes()
+              if relative == "build_packages.sh":
+                  if wire.count(b"go1.26.6") != 2 or wire.count(b"Go 1.26.6") != 3:
+                      raise SystemExit("baseline package builder anchors are ambiguous")
+                  path.write_bytes(
+                      wire.replace(b"go1.26.6", b"go1.27.1").replace(
+                          b"Go 1.26.6", b"Go 1.27.1"
+                      )
+                  )
+                  continue
+              if wire.count(b"go 1.26.6\n") != 1 or b"go 1.27.1\n" in wire:
+                  raise SystemExit(f"baseline directive is ambiguous: {relative}")
+              path.write_bytes(wire.replace(b"go 1.26.6\n", b"go 1.27.1\n", 1))
+          PY
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/go_toolchain_rollback.py \
+            --repository "${rollback_root}" \
+            --from-toolchain go1.27.1 --to-toolchain go1.26.6
+          git -C "${rollback_root}" diff --exit-code -- "${required_files[@]}"
+          python3 - "${rollback_root}/build_packages.sh" <<'PY'
+          import pathlib
+          import sys
+
+          wire = pathlib.Path(sys.argv[1]).read_bytes()
+          if (
+              wire.count(b"go1.26.6") != 2
+              or wire.count(b"Go 1.26.6") != 3
+              or b"go1.27.1" in wire
+              or b"Go 1.27.1" in wire
+          ):
+              raise SystemExit("package builder was not restored to exact Go 1.26.6 anchors")
+          PY
+          bash -n "${rollback_root}/build_packages.sh"
+          export GOTOOLCHAIN=local
+          "${BASELINE_GO}" -C "${rollback_root}/src/core/syswarden-cli" \
+            test -mod=readonly -count=1 ./pkg/network
+          "${BASELINE_GO}" -C "${rollback_root}/src/core/syswarden-core" \
+            test -mod=readonly -count=1 ./network ./telemetry ./webhook
+          "${BASELINE_GO}" -C "${rollback_root}/src/core/syswarden-tui" \
+            test -mod=readonly -count=1 ./...
+          jq --null-input \
+            --arg from go1.27.1 --arg to go1.26.6 \
+            --arg builder_file "$(jq -er '.rollback.builder_file' scripts/ci/go_toolchain_evaluation.json)" \
+            --argjson directive_files "$(jq -c '.rollback.directive_files' scripts/ci/go_toolchain_evaluation.json)" \
+            --argjson required_files "$(jq -c '.rollback.required_files' scripts/ci/go_toolchain_evaluation.json)" \
+            '{schema_version: 1, from: $from, to: $to,
+              directive_files: $directive_files, builder_file: $builder_file,
+              required_files: $required_files, source_byte_exact: true,
+              builder_pin_verified: true,
+              baseline_protocol_tests: "pass"}' \
+            > "${RUNNER_TEMP}/go127-rollback.json"
+          printf '%s\n' pass > "${RUNNER_TEMP}/go127-rollback.ok"
+
+      - name: Prove the evaluation did not mutate source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py verify \
+            --snapshot "${RUNNER_TEMP}/go127-repository-state.json"
+
+      - name: Seal Go 1.27 evaluation evidence
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ github.sha }}
+          RUNNER_ARCH_CONTEXT: ${{ runner.arch }}
+          RUNNER_OS_CONTEXT: ${{ runner.os }}
+        run: |
+          set -euo pipefail
+          test "$(cat "${RUNNER_TEMP}/go127-functional.ok")" = pass
+          test "$(cat "${RUNNER_TEMP}/go127-fuzz.ok")" = pass
+          test "$(cat "${RUNNER_TEMP}/go127-jsonv2.ok")" = pass
+          test "$(cat "${RUNNER_TEMP}/go127-nojsonv2.ok")" = pass
+          test "$(cat "${RUNNER_TEMP}/go127-rollback.ok")" = pass
+          [[ "${CANDIDATE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
+          evidence_dir="${RUNNER_TEMP}/go127-evidence"
+          install -d -m 0700 "${evidence_dir}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/go_toolchain_evaluation.py \
+            --metadata scripts/ci/go_toolchain_evaluation.json \
+            --measurements "${RUNNER_TEMP}/go127-protocol-records.jsonl" \
+            --binaries "${RUNNER_TEMP}/go127-binary-records.tsv" \
+            --packages "${RUNNER_TEMP}/go127-package-records.tsv" \
+            --rollback "${RUNNER_TEMP}/go127-rollback.json" \
+            --candidate-commit "${CANDIDATE_COMMIT}" \
+            --runner-os "${RUNNER_OS_CONTEXT}" --runner-arch "${RUNNER_ARCH_CONTEXT}" \
+            --output "${evidence_dir}/evaluation.json"
+          jq --exit-status '
+            .schema_version == 2 and
+            .contract_id == "syswarden-go-toolchain-evaluation/v2" and
+            .candidate_commit == $commit and
+            .architecture == "linux/amd64" and
+            .runner == {os: "Linux", arch: "X64"} and
+            .adoption_decision == "defer-go1.27-keep-go1.26.6" and
+            .native_qualification == "pending-external-evidence" and
+            .gates.toolchain_rollback == "pass" and
+            .gates.package_size_bounds == "pass" and
+            .gates.performance_bounds == "pass" and
+            ([.binaries[] | keys | length] == [3, 3]) and
+            ([.packages[] | keys | length] == [3, 3])
+          ' --arg commit "${CANDIDATE_COMMIT}" "${evidence_dir}/evaluation.json"
+          sha256sum "${evidence_dir}/evaluation.json"
+
+      - name: Upload Go 1.27 evaluation evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: syswarden-go127-evaluation-${{ github.sha }}
+          path: ${{ runner.temp }}/go127-evidence/evaluation.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

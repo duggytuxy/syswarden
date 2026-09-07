@@ -95,6 +95,41 @@ func TestMigratedCoreDoesNotPublishObsoleteFirewallBackendClaim_SW2_FWBACKEND_00
 	}
 }
 
+func TestLegacyMigrationPublishesDisabledHAV2SchemaWithoutImplicitActivation(t *testing.T) {
+	content, err := (&Migrator{}).generateIntegrations(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Integrations struct {
+			HA struct {
+				V2Enabled                bool   `toml:"v2_enabled"`
+				ClusterID                string `toml:"cluster_id"`
+				Epoch                    uint64 `toml:"epoch"`
+				NodeID                   string `toml:"node_id"`
+				PeerID                   string `toml:"peer_id"`
+				Role                     string `toml:"role"`
+				StateFile                string `toml:"state_file"`
+				TransactionFile          string `toml:"transaction_file"`
+				HeartbeatIntervalSeconds int    `toml:"heartbeat_interval_seconds"`
+				HeartbeatTimeoutSeconds  int    `toml:"heartbeat_timeout_seconds"`
+				RequestTimeoutSeconds    int    `toml:"request_timeout_seconds"`
+			} `toml:"ha"`
+		} `toml:"integrations"`
+	}
+	if err := toml.Unmarshal([]byte(content), &document); err != nil {
+		t.Fatal(err)
+	}
+	ha := document.Integrations.HA
+	if ha.V2Enabled || ha.Epoch != 0 || ha.ClusterID != "" || ha.NodeID != "" || ha.PeerID != "" || ha.Role != "" {
+		t.Fatalf("legacy migration activated or invented HA v2 identity: %#v", ha)
+	}
+	if ha.StateFile != "/var/lib/syswarden/ha/replication-v2.json" || ha.TransactionFile != "/var/lib/syswarden/ha/replication-v2.wal.json" ||
+		ha.HeartbeatIntervalSeconds != 2 || ha.HeartbeatTimeoutSeconds != 10 || ha.RequestTimeoutSeconds != 5 {
+		t.Fatalf("legacy migration omitted HA v2 safe defaults: %#v", ha)
+	}
+}
+
 func TestMigratedFirewallBackendMapsHistoricalFirewalldAndRejectsWireGuardMismatch_SW2_FWBACKEND_001(t *testing.T) {
 	for _, test := range []struct {
 		legacy string

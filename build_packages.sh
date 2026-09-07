@@ -5,6 +5,19 @@
 
 set -euo pipefail
 umask 077
+
+RHEL_PACKAGE_OWNED_PROFILE=0
+case "$#:$*" in
+    0:) ;;
+    1:--rhel-package-owned-profile)
+        RHEL_PACKAGE_OWNED_PROFILE=1
+        ;;
+    *)
+        echo "Usage: $0 [--rhel-package-owned-profile]" >&2
+        exit 2
+        ;;
+esac
+
 echo "[*] Initializing SysWarden Local Package Builder..."
 
 REPOSITORY_ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
@@ -293,6 +306,11 @@ case "${SOURCE_TAG}" in
         ;;
 esac
 VERSION="${SOURCE_TAG#v}"
+RPM_PACKAGE_RELEASE="1"
+if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
+    RPM_PACKAGE_RELEASE="1.rhelpo"
+fi
+RPM_PACKAGE_FILENAME="syswarden-${VERSION}-${RPM_PACKAGE_RELEASE}.x86_64.rpm"
 echo "[+] Detected SysWarden Version: v${VERSION}"
 
 # 2. Compile Go Binaries
@@ -548,6 +566,27 @@ prepare_rpm_build_id_links \
     staging-rpm/opt/syswarden/bin/syswarden-core \
     staging-rpm/opt/syswarden/bin/syswarden-tui
 
+RHEL_PROFILE_STAGE=""
+if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
+    RHEL_PROFILE_STAGE="${PACKAGE_WORKSPACE}/rhel-package-owned-profile"
+    PYTHONDONTWRITEBYTECODE=1 python3 \
+        "${REPOSITORY_ROOT}/extensions/rhel-package-owned/stage.py" \
+        --enable-rhel-package-owned-profile \
+        --shared-base-payload "${PACKAGE_WORKSPACE}/staging-rpm" \
+        --output "${RHEL_PROFILE_STAGE}"
+    for profile_path in \
+        usr/lib/systemd/system/syswarden-core.service \
+        usr/lib/systemd/system/syswarden-firewall.service \
+        usr/lib/systemd/system-preset/90-syswarden-rhel-image.preset \
+        usr/share/doc/syswarden/rhel-package-owned-profile.json; do
+        if [ -e "staging-rpm/${profile_path}" ] || [ -L "staging-rpm/${profile_path}" ]; then
+            echo "[-] Refusing an RPM profile payload collision: ${profile_path}" >&2
+            exit 1
+        fi
+    done
+    cp -a "${RHEL_PROFILE_STAGE}/payload/." staging-rpm/
+fi
+
 # Pre-Install / Pre-Upgrade script
 cat "${SOURCE_ROOT}/scripts/ci/package_webtui_retirement.sh" > preinst.sh
 cat "${SOURCE_ROOT}/scripts/ci/package_deferred_purge_postinstall.sh" >> preinst.sh
@@ -559,6 +598,15 @@ export SYSWARDEN_PKG_INSTALL=1
 syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
 syswarden_preflight_systemd_ordering_dropin
+if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
+    if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+       [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+        printf '%s\n' 'Offline qualification requires an installation state without deferred removal barriers.' >&2
+        exit 1
+    fi
+    printf '%s\n' 'SysWarden offline qualification staging: pre-install host mutation deferred.'
+    exit 0
+fi
 secure_private_directory() {
     path="$1"
     if [ -L "${path}" ] || { [ -e "${path}" ] && [ ! -d "${path}" ]; }; then
@@ -618,6 +666,15 @@ set -e
 export SYSWARDEN_PKG_INSTALL=1
 syswarden_preflight_alpine_cronie
 syswarden_preflight_install_barriers
+if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
+    if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+       [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+        printf '%s\n' 'Offline qualification requires an installation state without deferred removal barriers.' >&2
+        exit 1
+    fi
+    printf '%s\n' 'SysWarden offline qualification staging: post-install host mutation deferred.'
+    exit 0
+fi
 ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
 ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
 
@@ -875,14 +932,24 @@ prepare_rpm_scriptlet() {
         return 1
     fi
 }
-for script_name in preinst.sh postinst.sh prerm.sh postrm.sh; do
-    prepare_rpm_scriptlet \
-        "${PACKAGE_WORKSPACE}/${script_name}" \
-        "${RPM_SCRIPTS}/${script_name}"
-done
+RPM_EXPECTED_PREIN="${PACKAGE_WORKSPACE}/preinst.sh"
+RPM_EXPECTED_POSTIN="${PACKAGE_WORKSPACE}/postinst.sh"
+RPM_EXPECTED_PREUN="${PACKAGE_WORKSPACE}/prerm.sh"
+RPM_EXPECTED_POSTUN="${PACKAGE_WORKSPACE}/postrm.sh"
+if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
+    RPM_EXPECTED_PREIN="${RHEL_PROFILE_STAGE}/rpm-scriptlets/pre-install.sh"
+    RPM_EXPECTED_POSTIN="${RHEL_PROFILE_STAGE}/rpm-scriptlets/post-install.sh"
+    RPM_EXPECTED_PREUN="${RHEL_PROFILE_STAGE}/rpm-scriptlets/pre-uninstall.sh"
+    RPM_EXPECTED_POSTUN="${RHEL_PROFILE_STAGE}/rpm-scriptlets/post-uninstall.sh"
+fi
+prepare_rpm_scriptlet "${RPM_EXPECTED_PREIN}" "${RPM_SCRIPTS}/preinst.sh"
+prepare_rpm_scriptlet "${RPM_EXPECTED_POSTIN}" "${RPM_SCRIPTS}/postinst.sh"
+prepare_rpm_scriptlet "${RPM_EXPECTED_PREUN}" "${RPM_SCRIPTS}/prerm.sh"
+prepare_rpm_scriptlet "${RPM_EXPECTED_POSTUN}" "${RPM_SCRIPTS}/postrm.sh"
 
 prepare_rpm_changelog() {
     local destination="$1"
+    local package_release="$2"
     local changelog_date
     local changelog_day
     changelog_day="$(date --utc --date="@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d')" || return 1
@@ -891,8 +958,8 @@ prepare_rpm_changelog() {
     case "${RPM_CHANGELOG_EPOCH}" in
         ''|0|*[!0-9]*) return 1 ;;
     esac
-    printf '* %s SysWarden Engineering - %s-1\n- Package created with FPM\n' \
-        "${changelog_date}" "${VERSION}" > "${destination}"
+    printf '* %s SysWarden Engineering - %s-%s\n- Package created with FPM\n' \
+        "${changelog_date}" "${VERSION}" "${package_release}" > "${destination}"
     chmod 0600 "${destination}"
 }
 normalize_package_mtimes() {
@@ -907,7 +974,7 @@ normalize_package_mtimes() {
     done
 }
 RPM_CHANGELOG="${PACKAGE_WORKSPACE}/rpm-changelog"
-prepare_rpm_changelog "${RPM_CHANGELOG}"
+prepare_rpm_changelog "${RPM_CHANGELOG}" "${RPM_PACKAGE_RELEASE}"
 normalize_package_mtimes \
     staging \
     staging-rpm \
@@ -921,6 +988,31 @@ normalize_package_mtimes \
 
 # 4. Generate Packages
 echo "[*] Generating .deb and .rpm packages via FPM..."
+
+RPM_PROFILE_DEPENDENCIES=()
+RPM_PROFILE_FPM_OPTIONS=()
+if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
+    RPM_PROFILE_DEPENDENCIES=(-d "systemd")
+    RPM_PROFILE_FPM_OPTIONS=(
+        --rpm-digest sha256
+        --directories /etc/syswarden
+        --directories /etc/syswarden/config
+        --directories /etc/syswarden/config/modules
+        --directories /etc/syswarden/lists
+        --directories /etc/syswarden/tls
+        --directories /var/lib/syswarden
+        --directories /var/lib/syswarden/ui
+        --directories /var/log/syswarden
+        --rpm-attr "0750,root,root:/etc/syswarden"
+        --rpm-attr "0750,root,root:/etc/syswarden/config"
+        --rpm-attr "0750,root,root:/etc/syswarden/config/modules"
+        --rpm-attr "0750,root,root:/etc/syswarden/lists"
+        --rpm-attr "0750,root,root:/etc/syswarden/tls"
+        --rpm-attr "0750,root,root:/var/lib/syswarden"
+        --rpm-attr "0750,root,root:/var/lib/syswarden/ui"
+        --rpm-attr "0750,root,root:/var/log/syswarden"
+    )
+fi
 
 # Generate DEB
 (
@@ -956,6 +1048,7 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
     fpm -f -s dir -t rpm \
         -n syswarden \
         -v "${VERSION}" \
+        --iteration "${RPM_PACKAGE_RELEASE}" \
         --vendor "SysWarden Security" \
         --maintainer "SysWarden Engineering" \
         --description "SysWarden Host-based Security Orchestrator for Linux" \
@@ -966,6 +1059,8 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         -d "nftables" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
         -d "wireguard-tools" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
         -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
+        "${RPM_PROFILE_DEPENDENCIES[@]}" \
+        "${RPM_PROFILE_FPM_OPTIONS[@]}" \
         --before-install "${RPM_SCRIPTS}/preinst.sh" \
         --after-install "${RPM_SCRIPTS}/postinst.sh" \
         --before-remove "${RPM_SCRIPTS}/prerm.sh" \
@@ -979,7 +1074,7 @@ echo "[*] Generating .deb and .rpm packages via FPM..."
         --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
         --directories /usr/lib/.build-id \
         --directories /usr/share/doc/syswarden \
-        -p "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" \
+        -p "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" \
         -C staging-rpm .
 )
 
@@ -1048,7 +1143,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 PYTHONDONTWRITEBYTECODE=1 python3 \
     "${SOURCE_ROOT}/scripts/ci/package_systemd_ordering_artifact_gate.py" \
     --format rpm \
-    --package "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" \
+    --package "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" \
     --source \
     "${SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
     --contract "${SOURCE_ROOT}/scripts/ci/package_systemd_wireguard_ordering_contract.json"
@@ -1137,10 +1232,10 @@ validate_local_rpm_build_ids() {
     [ "$(rpm -qp --qf '%{CHANGELOGTIME}' "${rpm_path}")" = "${RPM_CHANGELOG_EPOCH}" ] || return 1
     [ "$(rpm -qp --qf '%{LICENSE}' "${rpm_path}")" = GPL-3.0-or-later ] || return 1
     [ "$(rpm -qp --qf '%{URL}' "${rpm_path}")" = https://github.com/duggytuxy/syswarden ] || return 1
-    validate_local_rpm_scriptlet "${rpm_path}" PREIN preinst.sh || return 1
-    validate_local_rpm_scriptlet "${rpm_path}" POSTIN postinst.sh || return 1
-    validate_local_rpm_scriptlet "${rpm_path}" PREUN prerm.sh || return 1
-    validate_local_rpm_scriptlet "${rpm_path}" POSTUN postrm.sh || return 1
+    validate_local_rpm_scriptlet "${rpm_path}" PREIN "${RPM_EXPECTED_PREIN}" || return 1
+    validate_local_rpm_scriptlet "${rpm_path}" POSTIN "${RPM_EXPECTED_POSTIN}" || return 1
+    validate_local_rpm_scriptlet "${rpm_path}" PREUN "${RPM_EXPECTED_PREUN}" || return 1
+    validate_local_rpm_scriptlet "${rpm_path}" POSTUN "${RPM_EXPECTED_POSTUN}" || return 1
     rpm_inventory="$(
         rpm -qp --qf \
             '[%{FILENAMES}\t%{FILEMODES:perms}\t%{FILEUSERNAME}:%{FILEGROUPNAME}\t%{FILELINKTOS}\n]' \
@@ -1205,12 +1300,26 @@ if ! validate_local_deb_homepage \
     exit 1
 fi
 if ! validate_local_rpm_build_ids \
-    "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm"; then
+    "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}"; then
     echo "[-] Local RPM build-id validation failed." >&2
     rpm -qp --qf \
         '[%{FILENAMES}\t%{FILEMODES:perms}\t%{FILEUSERNAME}:%{FILEGROUPNAME}\t%{FILELINKTOS}\n]' \
-        "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" >&2 || true
+        "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" >&2 || true
     exit 1
+fi
+if [ "${RHEL_PACKAGE_OWNED_PROFILE}" -eq 1 ]; then
+    RPM_PROFILE_SHA256="$(
+        sha256sum "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" |
+            awk 'NF == 2 && $1 ~ /^[0-9a-f]{64}$/ { print $1 }'
+    )"
+    if [[ ! "${RPM_PROFILE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "[-] Unable to bind the RHEL package-owned RPM digest." >&2
+        exit 1
+    fi
+    PYTHONDONTWRITEBYTECODE=1 python3 \
+        "${REPOSITORY_ROOT}/extensions/rhel-package-owned/verify-rpm.py" \
+        --rpm "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" \
+        --sha256 "${RPM_PROFILE_SHA256}"
 fi
 if ! validate_local_apk_license \
     "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; then
@@ -1265,7 +1374,7 @@ publish_local_checksums() {
     local destination expected_group expected_user filename manifest temporary
     local -a filenames=(
         "syswarden_${VERSION}_amd64.deb"
-        "syswarden-${VERSION}-1.x86_64.rpm"
+        "${RPM_PACKAGE_FILENAME}"
         "syswarden_${VERSION}_x86_64.apk"
     )
     destination="${LOCAL_PACKAGE_OUTPUT}/SHA256SUMS.txt"
@@ -1375,7 +1484,7 @@ publish_local_artifacts() (
     expected_group="$(id -gn)"
     for artifact in \
         "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_amd64.deb" \
-        "${PACKAGE_WORKSPACE}/syswarden-${VERSION}-1.x86_64.rpm" \
+        "${PACKAGE_WORKSPACE}/${RPM_PACKAGE_FILENAME}" \
         "${PACKAGE_WORKSPACE}/syswarden_${VERSION}_x86_64.apk"; do
         if [ ! -f "${artifact}" ] || [ -L "${artifact}" ] || \
            [ "$(find "${artifact}" -prune -user "${expected_user}" \
@@ -1401,5 +1510,5 @@ publish_local_artifacts
 echo "[SUCCESS] Packages have been generated in ${LOCAL_PACKAGE_OUTPUT}."
 ls -lh \
     "${LOCAL_PACKAGE_OUTPUT}/syswarden_${VERSION}_amd64.deb" \
-    "${LOCAL_PACKAGE_OUTPUT}/syswarden-${VERSION}-1.x86_64.rpm" \
+    "${LOCAL_PACKAGE_OUTPUT}/${RPM_PACKAGE_FILENAME}" \
     "${LOCAL_PACKAGE_OUTPUT}/syswarden_${VERSION}_x86_64.apk"

@@ -463,6 +463,7 @@ type attackerMetric struct {
 	recordedHits            int
 	legacyHits              int
 	riskCategory            string
+	policyAction            string
 	severityScore           int
 	severity                string
 	peakWindowHits          int
@@ -620,6 +621,7 @@ func buildAttackerMetrics(events []TelemetryEvent, catalog riskCatalog) ([]attac
 			continue
 		}
 		metric.riskCategory = selected.profile.category
+		metric.policyAction = selected.profile.action
 		metric.enforcementJail = selected.lastEnforcementRuleID
 		metric.enforcementAction = selected.lastEnforcementAction
 		metric.severityScore = selectedScore

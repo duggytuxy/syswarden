@@ -2,17 +2,27 @@ package system
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"syscall"
 	"time"
 )
+
+var offlineQualificationDependencyLookPath = exec.LookPath
 
 // InstallDependencies installs core system prerequisites securely with timeout context
 func InstallDependencies() error {
 	fmt.Println("[INFO] Checking and installing dependencies securely...")
 
 	if os.Getenv("SYSWARDEN_PKG_INSTALL") == "1" {
+		if OfflineQualificationOperation() {
+			if err := attestOfflineQualificationDependencies(); err != nil {
+				return fmt.Errorf("attest offline package dependencies: %w", err)
+			}
+		}
 		fmt.Println("[INFO] Package manager install detected. Skipping manual dependency resolution.")
 		return nil
 	}
@@ -53,5 +63,95 @@ func InstallDependencies() error {
 		fmt.Println("[WARN] No supported package manager found. Please install dependencies manually.")
 	}
 
+	return nil
+}
+
+func attestOfflineQualificationDependencies() error {
+	return attestOfflineQualificationDependenciesWith(
+		offlineQualificationDependencyLookPath,
+		func(path string) error {
+			return validateOfflineQualificationDependency(path, os.Geteuid())
+		},
+	)
+}
+
+func attestOfflineQualificationDependenciesWith(
+	lookPath func(string) (string, error),
+	validate func(string) error,
+) error {
+	if lookPath == nil || validate == nil {
+		return errors.New("offline dependency attestation is unavailable")
+	}
+	type dependencyProfile struct {
+		manager string
+		paths   []string
+	}
+	profiles := []dependencyProfile{
+		{
+			manager: "apt-get",
+			paths:   []string{"chattr", "cron", "curl", "ipset", "jq", "nft", "ps", "qrencode", "rsyslogd", "wg", "wget"},
+		},
+		{
+			manager: "dnf",
+			paths:   []string{"chattr", "checkpolicy", "crond", "curl", "ipset", "jq", "nft", "ps", "rsyslogd", "semanage", "wg", "wget"},
+		},
+		{
+			manager: "yum",
+			paths:   []string{"chattr", "checkpolicy", "crond", "curl", "ipset", "jq", "nft", "ps", "rsyslogd", "semanage", "wg", "wget"},
+		},
+		{
+			manager: "apk",
+			paths:   []string{"chattr", "crond", "curl", "jq", "nft", "ps", "qrencode", "rsyslogd", "wg", "wget"},
+		},
+	}
+	for _, profile := range profiles {
+		managerPath, err := lookPath(profile.manager)
+		if err != nil {
+			continue
+		}
+		if !trustedPackageManagerPath(profile.manager, managerPath) {
+			return fmt.Errorf("package manager %q resolved to untrusted path %q", profile.manager, managerPath)
+		}
+		for _, dependency := range profile.paths {
+			resolved, err := lookPath(dependency)
+			if err != nil {
+				return fmt.Errorf("required dependency %q is unavailable: %w", dependency, err)
+			}
+			if err := validate(resolved); err != nil {
+				return fmt.Errorf("required dependency %q is untrusted: %w", dependency, err)
+			}
+		}
+		return nil
+	}
+	return errors.New("no supported package manager is available for offline dependency attestation")
+}
+
+func validateOfflineQualificationDependency(path string, expectedUID int) error {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return fmt.Errorf("dependency path is not canonical and absolute: %q", path)
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	trusted := false
+	for _, directory := range []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin"} {
+		if filepath.Dir(canonical) == directory {
+			trusted = true
+			break
+		}
+	}
+	if !trusted {
+		return fmt.Errorf("dependency resolves outside trusted system directories: %q", canonical)
+	}
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return err
+	}
+	status, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 || info.Mode().Perm()&0022 != 0 ||
+		int(status.Uid) != expectedUID {
+		return errors.New("dependency is not an owner-controlled regular executable")
+	}
 	return nil
 }

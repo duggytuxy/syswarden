@@ -407,6 +407,14 @@ func TestExternalCommandContractRejectsUnexpectedArguments(t *testing.T) {
 	if err := validateExternalCommand("/usr/bin/apt-get", validAPT); err != nil {
 		t.Fatalf("validateExternalCommand() rejected exact installer contract: %v", err)
 	}
+	validRPM := []string{"--setopt=localpkg_gpgcheck=1", "install", "-y", "/var/tmp/syswarden-update-safe/package.rpm"}
+	if err := validateExternalCommand("/usr/bin/dnf", validRPM); err != nil {
+		t.Fatalf("validateExternalCommand() rejected native RPM signature contract: %v", err)
+	}
+	validAPK := []string{"add", "/var/tmp/syswarden-update-safe/package.apk"}
+	if err := validateExternalCommand("/sbin/apk", validAPK); err != nil {
+		t.Fatalf("validateExternalCommand() rejected native APK signature contract: %v", err)
+	}
 	invalid := []struct {
 		name string
 		args []string
@@ -422,7 +430,9 @@ func TestExternalCommandContractRejectsUnexpectedArguments(t *testing.T) {
 		{name: "/usr/bin/apt-get", args: []string{"-o", aptDPkgLockTimeoutOption, "install", "-y", "/tmp/package.deb"}},
 		{name: "/usr/bin/apt-get", args: []string{"remove", "-y", validPackage}},
 		{name: "/usr/bin/dnf", args: validAPT},
-		{name: "/sbin/apk", args: []string{"add", "/var/tmp/syswarden-update-safe/package.apk"}},
+		{name: "/usr/bin/dnf", args: []string{"install", "-y", "/var/tmp/syswarden-update-safe/package.rpm"}},
+		{name: "/usr/bin/dnf", args: []string{"--setopt=localpkg_gpgcheck=0", "install", "-y", "/var/tmp/syswarden-update-safe/package.rpm"}},
+		{name: "/sbin/apk", args: []string{"add", "--allow-untrusted", "/var/tmp/syswarden-update-safe/package.apk"}},
 		{name: "/usr/sbin/service", args: []string{"syswarden", "stop"}},
 		{name: "/usr/sbin/service", args: []string{"operator-service", "restart"}},
 		{name: "/opt/syswarden/bin/syswarden-cli", args: []string{"web-token"}},
@@ -611,7 +621,7 @@ func TestUpdaterDoesNotRetryFailedDEBInstallation(t *testing.T) {
 	assertEmptyDirectory(t, tempBase)
 }
 
-func TestAPKAllowUntrustedIsReachableOnlyAfterManifestAndPackageVerification(t *testing.T) {
+func TestAPKNativeSignatureVerificationIsReachableOnlyAfterManifestAndPackageVerification(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey() error = %v", err)
@@ -663,9 +673,9 @@ func TestAPKAllowUntrustedIsReachableOnlyAfterManifestAndPackageVerification(t *
 						return nil
 					}
 					if !manifestDownloaded.Load() || !signatureDownloaded.Load() || !packageDownloaded.Load() {
-						t.Fatal("APK native-signature bypass ran before independent Ed25519/package verification")
+						t.Fatal("APK native-signature verification ran before independent Ed25519/package verification")
 					}
-					if len(args) != 3 || args[0] != "add" || args[1] != "--allow-untrusted" {
+					if len(args) != 2 || args[0] != "add" {
 						t.Fatalf("APK installer arguments = %#v", args)
 					}
 					installs.Add(1)

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "contract_id": "syswarden-ha-v2-native-qualification/v1",
+  "target_release": "v4.10.0",
+  "architecture": "amd64",
+  "node_count": 2,
+  "roles": ["standby", "writer"],
+  "tls": {
+    "minimum_version": "TLS1.3",
+    "mutual_authentication": true,
+    "identity_binding": ["cluster_id", "epoch", "node_id", "peer_certificate_sha256"]
+  },
+  "required_scenarios": [
+    "asymmetric-partition",
+    "crash-head-recovery",
+    "crash-wal-recovery",
+    "heartbeat-monotonic-receipt-timeout",
+    "instance-lease-exclusion",
+    "normal-replication-ack-checkpoint",
+    "partition-fence-split-brain",
+    "rejoin-explicit",
+    "rolling-rollback",
+    "rolling-upgrade"
+  ],
+  "guardrails": {
+    "observations": "real-native-two-node-lab-only",
+    "synthetic_observations": false,
+    "attestation_required": true,
+    "single_restart_recovery": true,
+    "automatic_rejoin": false
+  },
+  "limits": {
+    "maximum_input_bytes": 1048576,
+    "maximum_clock_skew_seconds": 300,
+    "maximum_scenario_seconds": 1800
+  }
+}

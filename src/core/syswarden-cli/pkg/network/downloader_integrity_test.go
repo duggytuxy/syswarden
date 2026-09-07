@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -336,6 +337,13 @@ func TestDataShieldLifecyclePreservesValidatedLastKnownGoodOnQuorumDisagreement(
 	}
 	if string(content) != string(old) {
 		t.Fatalf("last-known-good content changed: %q", content)
+	}
+	metadata, provenanceErr := readFeedProvenance(target, ".ipv4")
+	if provenanceErr != nil {
+		t.Fatalf("legacy last-known-good provenance: %v", provenanceErr)
+	}
+	if metadata.State != feedStateStale || metadata.EvidenceQuality != feedEvidenceLegacyLocal || metadata.RetrievedAt != "" {
+		t.Fatalf("legacy last-known-good provenance = %#v", metadata)
 	}
 
 	outcome, err = downloadDataShieldForLifecycleWithClient(
@@ -780,7 +788,19 @@ func TestOSINTPublishesOnlyCanonicalIntersection(t *testing.T) {
 	directory := t.TempDir()
 	v4Target := feedFileTarget{directory: directory, name: "feed.ipv4"}
 	v6Target := feedFileTarget{directory: directory, name: "feed.ipv6"}
-	if err := writeFeedFileAt(v4Target, ".ipv4", []byte("208.67.222.222/32\n")); err != nil {
+	previous := canonicalFeedFromPrefixes([]netip.Prefix{netip.MustParsePrefix("208.67.222.222/32")})
+	if err := publishCanonicalFeedWithProvenanceAt(
+		v4Target,
+		".ipv4",
+		previous,
+		cidrFeedPolicy{
+			expectedFamily: 4, minimumEntries: 1, minimumIPv4PrefixBits: 24,
+			minimumIPv6PrefixBits: 64, requirePublicAddresses: true,
+		},
+		feedPublicationPolicy{verified: true},
+		[]string{"https://mirror-one.example/feed", "https://mirror-two.example/feed"},
+		"",
+	); err != nil {
 		t.Fatal(err)
 	}
 	client := newMirrorTestClient(t, map[string]*httptest.Server{

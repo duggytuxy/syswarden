@@ -2,6 +2,7 @@ package logger
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -443,5 +444,178 @@ func TestLoggerCloseWaitsForOwnedAsyncWorkAndRejectsLateWork_SW_KPI_001(t *testi
 	eventLogger.Close()
 	if content := readLoggerTestFile(t, path); len(content) != 0 {
 		t.Fatalf("logger wrote after close: %q", content)
+	}
+}
+
+func TestLoggerCloseCancelsWebhookWorkWithinBound_SW_INT_011(t *testing.T) {
+	eventLogger := NewLogger(filepath.Join(t.TempDir(), "waf.json"))
+	eventLogger.asyncGracePeriod = 20 * time.Millisecond
+	eventLogger.asyncCancelPeriod = time.Second
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	eventLogger.runAsyncWebhookContextKey("cancel-on-close", func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+	})
+	<-started
+
+	closed := make(chan struct{})
+	go func() {
+		eventLogger.Close()
+		close(closed)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("webhook operation did not observe shutdown cancellation")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("logger close exceeded its bounded cancellation period")
+	}
+	select {
+	case <-eventLogger.asyncDone:
+	default:
+		t.Fatal("asynchronous webhook worker leaked after cancellation")
+	}
+}
+
+func TestLoggerAsyncQueueIsBoundedAndDropsNewestWithoutBlocking_SW_INT_001(t *testing.T) {
+	eventLogger := NewLogger(filepath.Join(t.TempDir(), "waf.json"))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	eventLogger.runAsync(func() {
+		close(started)
+		<-release
+	})
+	<-started
+
+	executed := make(chan struct{}, asyncOperationQueueCapacity)
+	for index := 0; index < asyncOperationQueueCapacity; index++ {
+		eventLogger.runAsync(func() { executed <- struct{}{} })
+	}
+	returned := make(chan struct{})
+	eventLogger.runAsync(func() { t.Error("overflow operation must be dropped") })
+	close(returned)
+	select {
+	case <-returned:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("overflow submission blocked")
+	}
+	if dropped := eventLogger.asyncDropped.Load(); dropped != 1 {
+		t.Fatalf("dropped operations = %d, want 1", dropped)
+	}
+
+	close(release)
+	eventLogger.Close()
+	if len(executed) != asyncOperationQueueCapacity {
+		t.Fatalf("executed queued operations = %d, want %d", len(executed), asyncOperationQueueCapacity)
+	}
+}
+
+func TestLoggerZeroValueCloseAndNilAsyncWorkAreSafe_SW_INT_001(t *testing.T) {
+	var eventLogger Logger
+	eventLogger.runAsync(nil)
+	eventLogger.runAsyncKey("bounded-key", func() { t.Error("zero-value logger executed asynchronous work") })
+	eventLogger.Close()
+	eventLogger.Close()
+	if dropped := eventLogger.asyncDropped.Load(); dropped != 1 {
+		t.Fatalf("zero-value logger dropped operations = %d, want 1", dropped)
+	}
+}
+
+func TestLoggerCoalescesOnlyIdenticalPendingWebhookWork_SW_INT_008(t *testing.T) {
+	eventLogger := NewLogger(filepath.Join(t.TempDir(), "waf.json"))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	executed := make(chan string, 2)
+	key := webhookDeduplicationKey("detect", "192.0.2.80", "BF-SSH", "same payload")
+
+	eventLogger.runAsyncKey(key, func() {
+		close(started)
+		<-release
+		executed <- "first"
+	})
+	<-started
+	eventLogger.runAsyncKey(key, func() { executed <- "duplicate" })
+	eventLogger.runAsyncKey(webhookDeduplicationKey("detect", "192.0.2.80", "BF-SSH", "different payload"), func() {
+		executed <- "distinct"
+	})
+	if got := eventLogger.asyncDeduplicated.Load(); got != 1 {
+		t.Fatalf("coalesced operations = %d, want 1", got)
+	}
+	close(release)
+	eventLogger.Close()
+	close(executed)
+
+	seen := make(map[string]bool)
+	for value := range executed {
+		seen[value] = true
+	}
+	if !seen["first"] || !seen["distinct"] || seen["duplicate"] {
+		t.Fatalf("pending webhook coalescing changed delivered operations: %#v", seen)
+	}
+	if webhookDeduplicationKey("ab", "c") == webhookDeduplicationKey("a", "bc") {
+		t.Fatal("length-delimited webhook key components collided")
+	}
+}
+
+func TestLoggerRejectsOversizedWebhookCaptureBeforeQueueing_SW_INT_009(t *testing.T) {
+	eventLogger := NewLogger(filepath.Join(t.TempDir(), "waf.json"))
+	executed := false
+	eventLogger.runAsyncWebhookKey(
+		webhookDeduplicationKey("oversized"),
+		func() { executed = true },
+		strings.Repeat("x", asyncWebhookFieldBytes+1),
+	)
+	eventLogger.Close()
+	if executed {
+		t.Fatal("oversized webhook capture was executed")
+	}
+	if got := eventLogger.asyncOversized.Load(); got != 1 {
+		t.Fatalf("oversized webhook captures = %d, want 1", got)
+	}
+}
+
+func TestLoggerPendingDeduplicationSetIsBoundedAtSaturation_SW_INT_010(t *testing.T) {
+	eventLogger := NewLogger(filepath.Join(t.TempDir(), "waf.json"))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	eventLogger.runAsyncKey("active", func() {
+		close(started)
+		<-release
+	})
+	<-started
+
+	executed := make(chan struct{}, asyncOperationQueueCapacity)
+	for index := 0; index < asyncOperationQueueCapacity; index++ {
+		key := "queued-" + strconv.Itoa(index)
+		eventLogger.runAsyncKey(key, func() { executed <- struct{}{} })
+	}
+	eventLogger.runAsyncKey("overflow", func() { t.Error("overflow operation must not execute") })
+
+	eventLogger.lifecycleMu.Lock()
+	pending := len(eventLogger.asyncPending)
+	_, retainedOverflow := eventLogger.asyncPending["overflow"]
+	eventLogger.lifecycleMu.Unlock()
+	if pending != asyncOperationQueueCapacity+1 || retainedOverflow {
+		t.Fatalf("pending keys=%d retained_overflow=%t", pending, retainedOverflow)
+	}
+	if got := eventLogger.asyncDropped.Load(); got != 1 {
+		t.Fatalf("dropped operations = %d, want 1", got)
+	}
+
+	close(release)
+	eventLogger.Close()
+	if len(executed) != asyncOperationQueueCapacity {
+		t.Fatalf("executed queued operations = %d, want %d", len(executed), asyncOperationQueueCapacity)
+	}
+	eventLogger.lifecycleMu.Lock()
+	pending = len(eventLogger.asyncPending)
+	eventLogger.lifecycleMu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pending keys after close = %d, want 0", pending)
 	}
 }

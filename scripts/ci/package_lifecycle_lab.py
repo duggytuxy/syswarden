@@ -580,10 +580,30 @@ syswarden_namespace_file_record() {{
 
 
 QUALIFICATION_MATRIX_PATH = qualification_matrix.DEFAULT_MATRIX
+_QUALIFICATION_MATRIX_SNAPSHOTS = {
+    target: qualification_matrix.load_matrix_snapshot(path)
+    for target, path in qualification_matrix.MATRIX_PATHS_BY_TARGET.items()
+}
 QUALIFICATION_MATRIX_DOCUMENT, QUALIFICATION_MATRIX_SHA256 = (
-    qualification_matrix.load_matrix_snapshot(QUALIFICATION_MATRIX_PATH)
+    _QUALIFICATION_MATRIX_SNAPSHOTS["v4.04.3"]
 )
 QUALIFICATION_MATRIX_ID = str(QUALIFICATION_MATRIX_DOCUMENT["matrix_id"])
+_QUALIFICATION_MATRIX_BINDINGS = {
+    target: {
+        "matrix_id": str(document["matrix_id"]),
+        "sha256": digest,
+    }
+    for target, (document, digest) in _QUALIFICATION_MATRIX_SNAPSHOTS.items()
+}
+if (
+    len({binding["sha256"] for binding in _QUALIFICATION_MATRIX_BINDINGS.values()})
+    != len(_QUALIFICATION_MATRIX_BINDINGS)
+    or any(
+        binding["matrix_id"] != QUALIFICATION_MATRIX_ID
+        for binding in _QUALIFICATION_MATRIX_BINDINGS.values()
+    )
+):
+    raise LifecycleLabError("supported qualification matrix identities are ambiguous")
 
 _PLATFORM_NAMES = {
     "debian": "Debian",
@@ -603,7 +623,9 @@ _PURGE_SEMANTICS = {
 }
 
 
-def _platform_from_matrix_cell(cell: dict[str, object]) -> PlatformSpec:
+def _platform_from_matrix_cell(
+    cell: dict[str, object], matrix_document: dict[str, object]
+) -> PlatformSpec:
     distribution = str(cell["distribution"])
     family = str(cell["family"])
     version = str(cell["version"])
@@ -622,12 +644,8 @@ def _platform_from_matrix_cell(cell: dict[str, object]) -> PlatformSpec:
         package_architecture=EXPECTED_PACKAGE_ARCHITECTURES[
             (family, architecture)
         ],
-        podman_platform=str(
-            QUALIFICATION_MATRIX_DOCUMENT["architecture"]["oci_platform"]
-        ),
-        uname_architecture=str(
-            QUALIFICATION_MATRIX_DOCUMENT["architecture"]["kernel"]
-        ),
+        podman_platform=str(matrix_document["architecture"]["oci_platform"]),
+        uname_architecture=str(matrix_document["architecture"]["kernel"]),
         official_repository=OFFICIAL_REPOSITORIES[distribution],
         image=str(cell["image"]),
         package_pattern=EXPECTED_PACKAGE_PATTERNS[(family, architecture)],
@@ -637,12 +655,23 @@ def _platform_from_matrix_cell(cell: dict[str, object]) -> PlatformSpec:
     )
 
 
-DEFAULT_PLATFORMS = tuple(
-    _platform_from_matrix_cell(cell)
-    for cell in QUALIFICATION_MATRIX_DOCUMENT["cells"]
-)
+def _runtime_platforms_from_matrix(
+    matrix_document: dict[str, object],
+) -> tuple[PlatformSpec, ...]:
+    return tuple(
+        _platform_from_matrix_cell(cell, matrix_document)
+        for cell in matrix_document["cells"]
+    )
+
+
+DEFAULT_PLATFORMS = _runtime_platforms_from_matrix(QUALIFICATION_MATRIX_DOCUMENT)
 if len(DEFAULT_PLATFORMS) != 8:
     raise LifecycleLabError("frozen qualification matrix must contain exactly 8 cells")
+for _target, (_document, _digest) in _QUALIFICATION_MATRIX_SNAPSHOTS.items():
+    if _runtime_platforms_from_matrix(_document) != DEFAULT_PLATFORMS:
+        raise LifecycleLabError(
+            f"qualification matrix {_target} changes the frozen container runtime projection"
+        )
 
 REQUIRED_PLATFORM_COORDINATES = frozenset(
     (spec.cell_id, spec.architecture) for spec in DEFAULT_PLATFORMS
@@ -713,37 +742,52 @@ NATIVE_SHARD_RECORD_KEYS = frozenset(
 )
 
 
-def qualification_matrix_binding(path: Path) -> dict[str, str]:
+def qualification_matrix_binding(
+    path: Path, expected_target_release: str | None = None
+) -> dict[str, str]:
     """Load and byte-bind the exact frozen matrix used by this lab run."""
 
     try:
         document, digest = qualification_matrix.load_matrix_snapshot(path)
     except qualification_matrix.QualificationMatrixError as exc:
         raise LifecycleLabError(f"qualification matrix is invalid: {exc}") from exc
-    if document != QUALIFICATION_MATRIX_DOCUMENT:
+    target = document.get("target_release")
+    canonical = _QUALIFICATION_MATRIX_SNAPSHOTS.get(str(target))
+    if canonical is None or document != canonical[0]:
         raise LifecycleLabError(
-            "qualification matrix differs from the frozen lifecycle contract"
+            "qualification matrix differs from every frozen lifecycle contract"
         )
-    if digest != QUALIFICATION_MATRIX_SHA256:
+    if digest != canonical[1]:
         raise LifecycleLabError(
             "qualification matrix bytes differ from the frozen lifecycle contract"
         )
+    if expected_target_release is not None and target != expected_target_release:
+        raise LifecycleLabError(
+            "qualification matrix target differs from the expected release"
+        )
     if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         raise LifecycleLabError("qualification matrix SHA-256 is invalid")
-    return {"matrix_id": QUALIFICATION_MATRIX_ID, "sha256": digest}
+    return dict(_QUALIFICATION_MATRIX_BINDINGS[str(target)])
 
 
-def validate_qualification_matrix_binding(value: object) -> dict[str, str]:
+def validate_qualification_matrix_binding(
+    value: object, *, expected: dict[str, str] | None = None
+) -> dict[str, str]:
     if (
         not isinstance(value, dict)
         or set(value) != QUALIFICATION_MATRIX_KEYS
         or value.get("matrix_id") != QUALIFICATION_MATRIX_ID
         or not isinstance(value.get("sha256"), str)
         or re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256"))) is None
-        or value.get("sha256") != QUALIFICATION_MATRIX_SHA256
+        or value not in _QUALIFICATION_MATRIX_BINDINGS.values()
     ):
         raise LifecycleLabError("qualification matrix report binding is invalid")
-    return {"matrix_id": str(value["matrix_id"]), "sha256": str(value["sha256"])}
+    binding = {"matrix_id": str(value["matrix_id"]), "sha256": str(value["sha256"])}
+    if expected is not None and binding != expected:
+        raise LifecycleLabError(
+            "qualification matrix report binding differs from the selected matrix"
+        )
+    return binding
 
 
 def qualification_matrix_container_scenarios() -> list[dict[str, object]]:
@@ -4944,7 +4988,10 @@ live_telemetry_contract_for_version() {
     case "${live_telemetry_minor}" in ''|*[!0-9]*) return 1 ;; esac
     if [ "${live_telemetry_major}" -gt 4 ] || \
        { [ "${live_telemetry_major}" -eq 4 ] && \
-         [ "${live_telemetry_minor}" -ge 4 ]; }; then
+         [ "${live_telemetry_minor}" -ge 10 ]; }; then
+        printf '%s\n' kpi-feed-v1
+    elif [ "${live_telemetry_major}" -eq 4 ] && \
+         [ "${live_telemetry_minor}" -ge 4 ]; then
         printf '%s\n' kpi-v1
     else
         printf '%s\n' legacy
@@ -4954,11 +5001,17 @@ live_telemetry_contract_for_version() {
 live_telemetry_schema_valid() {
     live_telemetry_path="$1"
     live_telemetry_contract="$2"
-    case "${live_telemetry_contract}" in legacy|kpi-v1) ;; *) return 1 ;; esac
+    case "${live_telemetry_contract}" in legacy|kpi-v1|kpi-feed-v1) ;; *) return 1 ;; esac
     [ -f "${live_telemetry_path}" ] && [ ! -L "${live_telemetry_path}" ] || return 1
     live_telemetry_size="$(wc -c < "${live_telemetry_path}" 2>/dev/null | tr -d ' ')" || return 1
     case "${live_telemetry_size}" in ''|*[!0-9]*) return 1 ;; esac
     [ "${live_telemetry_size}" -gt 0 ] && [ "${live_telemetry_size}" -le 8388608 ] || return 1
+    # jq object construction keeps only the last duplicate key. Compare the
+    # original streaming parse with its normalized parse before applying the
+    # schema so duplicated keys cannot disappear at that trust boundary.
+    live_telemetry_stream_sha256="$({ jq -c --stream 'select(length == 2)' "${live_telemetry_path}" || printf 'stream-error\n'; } | sha256sum | awk '{print $1}')" || return 1
+    live_telemetry_normalized_stream_sha256="$({ jq -c . "${live_telemetry_path}" || printf 'parse-error\n'; } | jq -c --stream 'select(length == 2)' | sha256sum | awk '{print $1}')" || return 1
+    [ "${live_telemetry_stream_sha256}" = "${live_telemetry_normalized_stream_sha256}" ] || return 1
     jq -e --arg kpi_contract "${live_telemetry_contract}" '
         def integer: type == "number" and (floor == .);
         def optional_string($key):
@@ -4973,9 +5026,277 @@ live_telemetry_schema_valid() {
         def attacker_base_keys:
             ["asn", "country", "hits", "ip", "last_seen", "org", "port", "severity", "threat"];
         def attacker_kpi_optional_keys:
-            ["attested_hits", "degraded_hits", "effective_threshold", "effective_window_seconds", "enforcement_action", "enforcement_jail", "first_seen", "hit_evidence", "hit_quality", "jail_hits", "legacy_hits", "metric_quality", "metric_scope", "peak_window_hits", "policy_hits", "primary_jail", "recorded_hits", "risk_category", "risk_model_version", "selected_policy_quality", "severity_score", "signature_catalog_sha256", "signature_catalog_version", "threshold_evidence", "threshold_reached"];
+            ["attested_hits", "degraded_hits", "effective_threshold", "effective_window_seconds", "enforcement_action", "enforcement_jail", "first_seen", "hit_evidence", "hit_quality", "jail_hits", "legacy_hits", "metric_quality", "metric_scope", "peak_window_hits", "policy_action", "policy_hits", "primary_jail", "recorded_hits", "risk_category", "risk_model_version", "selected_policy_quality", "severity_score", "signature_catalog_sha256", "signature_catalog_version", "threshold_evidence", "threshold_reached"];
+        def enforcement_state_valid:
+            . == "active" or . == "expired" or . == "deleted" or
+            . == "tombstoned" or . == "absent" or . == "unknown";
+        def grc_timestamp_epoch:
+            capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<fraction>[0-9]{1,9}))?Z$") as $parts |
+            ($parts.whole + "Z") as $whole |
+            ($whole | fromdateiso8601) as $epoch |
+            if ($epoch | strftime("%Y-%m-%dT%H:%M:%SZ")) == $whole then
+                $epoch + (("0." + ($parts.fraction // "0")) | tonumber)
+            else error("invalid calendar timestamp") end;
+        def canonical_grc_timestamp:
+            type == "string" and
+            test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$") and
+            (try (grc_timestamp_epoch | type == "number") catch false);
+        # HA v2 heartbeats time out after at most 120 seconds. A five-minute
+        # envelope covers serialization latency and bounded host clock skew.
+        def grc_runtime_checkpoint_timing_valid:
+            .runtime_checkpoint_at as $checkpoint_at |
+            .runtime_captured_at as $captured_at |
+            ($checkpoint_at | grc_timestamp_epoch) as $checkpoint_epoch |
+            ($captured_at | grc_timestamp_epoch) as $captured_epoch |
+            ($checkpoint_epoch <= $captured_epoch + 300) and
+            (.runtime_coordination != "healthy" or $checkpoint_epoch >= $captured_epoch - 300);
+        def printable_grc_text($maximum):
+            type == "string" and length > 0 and length <= $maximum and
+            test("^[!-~]+$");
+        def grc_catalog_valid($allow_empty):
+            type == "object" and
+            keys == ["risk_model_version", "sha256", "version"] and
+            ((.version == "" and .sha256 == "" and .risk_model_version == "" and $allow_empty) or
+             (.version | printable_grc_text(128)) and
+             (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+             .risk_model_version == "sw-risk-v1");
+        def grc_risk_base($category):
+            if $category == "exploit" then 50
+            elif $category == "brute_force" or $category == "reconnaissance" then 20
+            elif $category == "denial_of_service" then 40
+            elif $category == "abuse" then 10
+            else -1 end;
+        def grc_expected_score:
+            grc_risk_base(.risk_category) as $base |
+            (if .policy_action == "ban" then
+                $base + 20 + 10 * (if .policy_hits < 4 then .policy_hits else 4 end)
+             elif .policy_action == "detect" then
+                $base + 10 + 10 * (if .policy_hits < 4 then .policy_hits else 4 end)
+             else
+                (if .peak_window_hits < .effective_threshold then .peak_window_hits else .effective_threshold end) as $peak |
+                $base + (((40 * $peak + .effective_threshold - 1) / .effective_threshold) | floor) +
+                (if .peak_window_hits >= .effective_threshold or .threshold_reached then 20 else 0 end)
+             end) as $score |
+            if $score > 100 then 100 elif $score < 0 then 0 else $score end;
+        def grc_lifecycle_valid:
+            type == "object" and
+            (.deletion_records | integer and . >= 0) and
+            (.expiry_records | integer and . >= 0) and
+            (.tombstone_records | integer and . >= 0) and
+            (.runtime_state_linked | type == "boolean") and
+            (if .runtime_state_linked then
+                ((keys - ["active_claims", "deleted_claims", "expired_claims", "runtime_peer_checkpoint_sha256", "tombstoned_claims"]) ==
+                 ["deletion_records", "expiry_records", "runtime_captured_at", "runtime_checkpoint_at", "runtime_checkpoint_sha256", "runtime_cluster_id", "runtime_coordination", "runtime_epoch", "runtime_model_sha256", "runtime_node_id", "runtime_role", "runtime_snapshot_complete", "runtime_snapshot_truncated", "runtime_state_linked", "scope", "tombstone_records"] or
+                 (keys - ["active_claims", "deleted_claims", "expired_claims", "runtime_peer_checkpoint_sha256", "runtime_snapshot_truncated", "tombstoned_claims"]) ==
+                 ["deletion_records", "expiry_records", "runtime_captured_at", "runtime_checkpoint_at", "runtime_checkpoint_sha256", "runtime_cluster_id", "runtime_coordination", "runtime_epoch", "runtime_model_sha256", "runtime_node_id", "runtime_role", "runtime_snapshot_complete", "runtime_state_linked", "scope", "tombstone_records"] or
+                 (keys - ["active_claims", "deleted_claims", "expired_claims", "runtime_peer_checkpoint_sha256", "runtime_snapshot_complete", "tombstoned_claims"]) ==
+                 ["deletion_records", "expiry_records", "runtime_captured_at", "runtime_checkpoint_at", "runtime_checkpoint_sha256", "runtime_cluster_id", "runtime_coordination", "runtime_epoch", "runtime_model_sha256", "runtime_node_id", "runtime_role", "runtime_snapshot_truncated", "runtime_state_linked", "scope", "tombstone_records"]) and
+                .scope == "ha-v2-runtime-snapshot" and
+                ((has("runtime_snapshot_complete") and .runtime_snapshot_complete == true and
+                  (has("runtime_snapshot_truncated") | not)) or
+                 (has("runtime_snapshot_truncated") and .runtime_snapshot_truncated == true and
+                  (has("runtime_snapshot_complete") | not))) and
+                (.runtime_role == "writer" or .runtime_role == "standby") and
+                (.runtime_coordination == "healthy" or .runtime_coordination == "degraded" or
+                 .runtime_coordination == "fenced" or .runtime_coordination == "recovering") and
+                (.runtime_cluster_id | type == "string" and test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+                (.runtime_epoch | integer and . > 0) and
+                (.runtime_node_id | type == "string" and test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+                (.runtime_model_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+                (.runtime_checkpoint_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+                ((has("runtime_peer_checkpoint_sha256") | not) or
+                 (.runtime_peer_checkpoint_sha256 | type == "string" and test("^[0-9a-f]{64}$"))) and
+                (.runtime_coordination != "healthy" or
+                 (has("runtime_peer_checkpoint_sha256") and
+                  .runtime_peer_checkpoint_sha256 == .runtime_checkpoint_sha256)) and
+                (.runtime_checkpoint_at | canonical_grc_timestamp) and
+                (.runtime_captured_at | canonical_grc_timestamp) and
+                grc_runtime_checkpoint_timing_valid and
+                optional_nonnegative_integer("active_claims") and
+                optional_nonnegative_integer("expired_claims") and
+                optional_nonnegative_integer("deleted_claims") and
+                optional_nonnegative_integer("tombstoned_claims") and
+                ([.active_claims // 0, .expired_claims // 0, .deleted_claims // 0, .tombstoned_claims // 0] |
+                 all(.[]; . <= 16384) and add <= 16384)
+             else
+                keys == ["deletion_records", "expiry_records", "runtime_state_linked", "scope", "tombstone_records"] and
+                .scope == "observed-telemetry-records-only"
+             end);
+        def grc_record_valid:
+            . as $record |
+            type == "object" and
+            keys == ["catalog", "degraded_hits", "effective_threshold", "effective_window_seconds", "enforcement", "enforcement_state", "first_observed", "hit_evidence", "hit_quality", "ip", "jail_hits", "last_observed", "metric_quality", "peak_window_hits", "physical_hits", "policy_action", "policy_hits", "policy_quality", "risk_category", "selected_jail", "severity_label", "severity_score", "threshold_evidence", "threshold_reached"] and
+            (.ip | printable_grc_text(64)) and
+            (.first_observed | canonical_grc_timestamp) and
+            (.last_observed | canonical_grc_timestamp) and
+            (.selected_jail | printable_grc_text(256)) and
+            (.physical_hits | integer and . > 0) and
+            (.jail_hits | integer and . > 0 and . <= $record.physical_hits) and
+            (.policy_hits | integer and . > 0 and . <= $record.jail_hits) and
+            (.enforcement | type == "object" and
+             ((keys == [] and . == {}) or
+              (keys == ["action", "jail"] and (.jail | printable_grc_text(256)) and
+               (.action == "ban" or .action == "detect" or .action == "track")))) and
+            (.enforcement_state | enforcement_state_valid) and
+            (.risk_category == "exploit" or .risk_category == "brute_force" or
+             .risk_category == "reconnaissance" or .risk_category == "denial_of_service" or
+             .risk_category == "abuse") and
+            (.policy_action == "ban" or .policy_action == "detect" or .policy_action == "track") and
+            (.severity_score | integer and . >= 0 and . <= 100) and
+            ((.severity_score >= 80 and .severity_label == "Critical") or
+             (.severity_score >= 50 and .severity_score < 80 and .severity_label == "High Risk") or
+             (.severity_score < 50 and .severity_label == "Suspicious")) and
+            (.peak_window_hits | integer and . >= 0 and . <= $record.policy_hits) and
+            (.effective_threshold | integer and . > 0 and . <= 1000000000) and
+            (.effective_window_seconds | integer and . >= 0 and . <= 31536000) and
+            (.threshold_reached | type == "boolean") and
+            (.metric_quality == "attested" or .metric_quality == "recorded-unverified" or
+             .metric_quality == "mixed" or .metric_quality == "legacy-estimate") and
+            (.policy_quality == "attested" or .policy_quality == "recorded-unverified" or
+             .policy_quality == "legacy-estimate") and
+            (((.metric_quality == "attested" or .metric_quality == "recorded-unverified" or
+               .metric_quality == "legacy-estimate") and .metric_quality == .policy_quality) or
+             .metric_quality == "mixed") and
+            (.hit_quality == "measured" or .hit_quality == "degraded" or
+             .hit_quality == "mixed" or .hit_quality == "legacy-estimate") and
+            (.hit_evidence == "collector-content-window-v1" or
+             .hit_evidence == "collector-content-window-degraded-v1" or
+             .hit_evidence == "kernel-log-observation-v1" or
+             .hit_evidence == "kernel-log-observation-degraded-v1" or
+             .hit_evidence == "mixed" or .hit_evidence == "legacy-estimate") and
+            (.degraded_hits | integer and . >= 0 and . <= $record.physical_hits) and
+            (if .hit_quality == "measured" then
+                .degraded_hits == 0 and .hit_evidence != "legacy-estimate" and
+                (.hit_evidence | contains("degraded") | not)
+             elif .hit_quality == "degraded" then
+                .degraded_hits > 0 and (.hit_evidence == "mixed" or (.hit_evidence | contains("degraded")))
+             elif .hit_quality == "mixed" then .hit_evidence == "mixed"
+             else .degraded_hits == 0 and .hit_evidence == "legacy-estimate" end) and
+            (if .policy_quality == "legacy-estimate" then
+                .enforcement == {} and (.catalog | grc_catalog_valid(true)) and .catalog.version == ""
+             else
+                .enforcement != {} and (.catalog | grc_catalog_valid(false))
+             end) and
+            (if .policy_action == "ban" or .policy_action == "detect" then
+                .effective_threshold == 1 and .effective_window_seconds == 0 and
+                .peak_window_hits == 0 and .threshold_reached and
+                .threshold_evidence == "immediate-rule"
+             else
+                .effective_window_seconds > 0 and
+                ((.threshold_evidence == "observed-window" and .threshold_reached and
+                  .peak_window_hits >= .effective_threshold) or
+                 (.threshold_evidence == "decision-event" and .threshold_reached and
+                  .peak_window_hits < .effective_threshold) or
+                 (.threshold_evidence == "none" and (.threshold_reached | not) and
+                  .peak_window_hits < .effective_threshold))
+             end) and
+            .severity_score == grc_expected_score;
+        def grc_kpi_valid:
+            . as $grc |
+            type == "object" and
+            keys == ["catalog", "evidence", "lifecycle", "records", "schema_version", "status", "window"] and
+            .schema_version == 1 and (.status == "complete" or .status == "degraded") and
+            (.catalog | grc_catalog_valid($grc.status == "degraded")) and
+            (.window | type == "object" and
+             (keys - ["first_observed", "last_observed"]) == ["complete", "scope"] and
+             (.complete | type == "boolean") and
+             ((.complete and .scope == "retained-telemetry-journal") or
+              ((.complete | not) and .scope == "retained-telemetry-journal-tail")) and
+             ((has("first_observed") and has("last_observed") and
+               (.first_observed | canonical_grc_timestamp) and
+               (.last_observed | canonical_grc_timestamp)) or
+              ((has("first_observed") | not) and (has("last_observed") | not)))) and
+            (.evidence | type == "object" and
+             keys == ["admitted_events", "excluded_events", "journal_bytes_scanned", "journal_bytes_total", "journal_decode_errors", "records_truncated", "rejected_events"] and
+             all(.[]; integer and . >= 0) and
+             .journal_bytes_scanned <= .journal_bytes_total) and
+            (.lifecycle | grc_lifecycle_valid) and
+            (.records | type == "array" and length <= 512 and all(.[]; grc_record_valid)) and
+            ((.records | length) == 0 and
+             ((.window | has("first_observed")) | not) and ((.window | has("last_observed")) | not) or
+             (.records | length) > 0 and (.window | has("first_observed")) and (.window | has("last_observed"))) and
+            (([.records[].ip] | length) == ([.records[].ip] | unique | length)) and
+            ((.lifecycle.deletion_records + .lifecycle.expiry_records + .lifecycle.tombstone_records) <= .evidence.excluded_events) and
+            (if .evidence.records_truncated == 0 then
+                ([.records[].physical_hits] | add // 0) == .evidence.admitted_events
+             else
+                (.records | length) == 512 and
+                ([.records[].physical_hits] | add // 0) < .evidence.admitted_events and
+                (.evidence.admitted_events - ([.records[].physical_hits] | add // 0)) >= .evidence.records_truncated
+             end) and
+            (if .status == "complete" then
+                .window.complete and .evidence.journal_decode_errors == 0 and
+                .evidence.rejected_events == 0 and .evidence.records_truncated == 0 and
+                .catalog.version != "" and
+                .lifecycle.runtime_state_linked and
+                .lifecycle.runtime_peer_checkpoint_sha256 == .lifecycle.runtime_checkpoint_sha256 and
+                all(.records[];
+                    .catalog == $grc.catalog and .metric_quality == "attested" and
+                    .policy_quality == "attested" and .hit_quality == "measured" and
+                    .degraded_hits == 0 and .enforcement_state != "unknown") and
+                .lifecycle.runtime_snapshot_complete == true and
+                .lifecycle.runtime_coordination == "healthy"
+             else true end);
+        def feed_required_keys:
+            ["accepted_count", "address_family", "attestation", "feed_name", "freshness", "rejected_count", "skipped_count", "source_origins", "state"];
+        def feed_optional_keys:
+            ["age_seconds", "evidence_quality", "license_identifier", "retrieved_at", "sha256"];
+        def feed_evidence_valid:
+            type == "object" and
+            (keys - feed_optional_keys) == feed_required_keys and
+            (.address_family == "ipv4" or .address_family == "ipv6") and
+            (.state == "current" or .state == "stale" or .state == "unavailable" or .state == "rejected") and
+            (.freshness == "current" or .freshness == "expired" or .freshness == "stale" or .freshness == "unavailable" or .freshness == "rejected") and
+            (.attestation == "verified" or .attestation == "missing" or .attestation == "rejected") and
+            (.source_origins | type == "array" and length <= 16 and all(.[]; type == "string" and test("^https://[^/?#]+$"))) and
+            (.accepted_count | integer and . >= 0 and . <= 250000) and
+            (.skipped_count | integer and . >= 0 and . <= 250000) and
+            (.rejected_count | integer and . >= 0 and . <= 250000) and
+            (if .attestation == "verified" then
+                (.accepted_count > 0) and
+                (.source_origins | length > 0) and
+                (has("evidence_quality") and (.evidence_quality | type == "string" and length > 0)) and
+                (has("license_identifier") and (.license_identifier | type == "string" and length > 0)) and
+                (has("sha256") and (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))) and
+                (if .evidence_quality == "legacy-local-validation" then
+                    .state == "stale" and .freshness == "stale" and
+                    (has("retrieved_at") | not) and (has("age_seconds") | not)
+                 else
+                    has("retrieved_at") and (.retrieved_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+                    has("age_seconds") and (.age_seconds | integer and . >= 0)
+                 end) and
+                (if .state == "current" then
+                    (.freshness == "current" or .freshness == "expired") and .rejected_count == 0
+                 elif .state == "rejected" then
+                    .freshness == "rejected" and .rejected_count > 0
+                 elif .state == "unavailable" then
+                    .freshness == "unavailable" and .rejected_count == 0
+                 else
+                    .freshness == "stale"
+                 end)
+             else
+                .state == "unavailable" and .freshness == "unavailable" and
+                (.source_origins | length == 0) and .accepted_count == 0 and
+                .skipped_count == 0 and .rejected_count == 0 and
+                (has("age_seconds") | not) and (has("evidence_quality") | not) and
+                (has("license_identifier") | not) and (has("retrieved_at") | not) and
+                (has("sha256") | not)
+             end);
+        . as $dashboard |
         type == "object" and
-        (keys == ["github_release", "github_stars", "layer3", "profile_name", "system", "timestamp", "waf", "whitelist"]) and
+        ((($kpi_contract == "kpi-feed-v1") and
+          keys == ["github_release", "github_stars", "layer3", "profile_name", "projection", "system", "timestamp", "waf", "whitelist"] and
+          (.projection | type == "object" and
+           ((keys == ["quality"] and .quality == "complete") or
+            (keys == ["payloads_projected", "quality", "reason"] and
+             .quality == "degraded" and
+             (.payloads_projected | integer and . > 0) and
+             (.payloads_projected <=
+              ((($dashboard.waf.banned_ips // []) | length) +
+               (($dashboard.waf.allowed_events // []) | length))) and
+             (.reason == "display-payload-bound" or .reason == "dashboard-envelope-bound"))))) or
+         (($kpi_contract != "kpi-feed-v1") and
+          keys == ["github_release", "github_stars", "layer3", "profile_name", "system", "timestamp", "waf", "whitelist"])) and
         (has("ha") | not) and
         (.timestamp | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
         (.github_stars | type == "string") and
@@ -5011,15 +5332,21 @@ live_telemetry_schema_valid() {
                 (.protocol | type == "string")))) and
         (.layer3 |
             type == "object" and
-            (keys == ["asn_blocked", "geoip_blocked", "global_blocked", "l7_banned", "zero_trust_mode"]) and
+            ((keys - ["threat_feeds"]) == ["asn_blocked", "geoip_blocked", "global_blocked", "l7_banned", "zero_trust_mode"]) and
             (.global_blocked | integer) and
             (.geoip_blocked | integer) and
             (.asn_blocked | integer) and
             (.l7_banned | integer) and
-            (.zero_trust_mode | type == "boolean")) and
+            (.zero_trust_mode | type == "boolean") and
+            (($kpi_contract == "kpi-feed-v1" and has("threat_feeds") and
+              (.threat_feeds | type == "array" and length == 2 and
+               .[0].address_family == "ipv4" and .[0].feed_name == "syswarden_threatintel.ipv4" and
+               .[1].address_family == "ipv6" and .[1].feed_name == "syswarden_threatintel.ipv6" and
+               all(.[]; feed_evidence_valid))) or
+             ($kpi_contract != "kpi-feed-v1" and (has("threat_feeds") | not)))) and
         (.waf |
             type == "object" and
-            ((keys - ["journal_bytes_scanned", "journal_bytes_total", "journal_decode_errors", "journal_scan_complete", "kpi_evidence_quality", "metric_admitted_events", "metric_excluded_events", "metric_rejected_events"]) == ["active_signatures", "allowed_events", "banned_ips", "risk_radar", "signatures_data", "sparkline_24h", "targeted_ports", "top_attackers", "total_banned", "total_detected"]) and
+            ((keys - ["grc_kpi", "journal_bytes_scanned", "journal_bytes_total", "journal_decode_errors", "journal_scan_complete", "kpi_evidence_quality", "metric_admitted_events", "metric_excluded_events", "metric_rejected_events"]) == ["active_signatures", "allowed_events", "banned_ips", "risk_radar", "signatures_data", "sparkline_24h", "targeted_ports", "top_attackers", "total_banned", "total_detected"]) and
             (.total_banned | integer) and
             (.total_detected | integer) and
             (.active_signatures | integer) and
@@ -5033,7 +5360,7 @@ live_telemetry_schema_valid() {
                  (has("metric_rejected_events") | not) and
                  (has("metric_excluded_events") | not) and
                  (has("metric_admitted_events") | not)) or
-                ($kpi_contract == "kpi-v1" and
+                (($kpi_contract == "kpi-v1" or $kpi_contract == "kpi-feed-v1") and
                  has("kpi_evidence_quality") and
                  has("journal_scan_complete") and
                  has("journal_bytes_total") and
@@ -5059,6 +5386,8 @@ live_telemetry_schema_valid() {
                       .metric_rejected_events == 0
                   else true end))
             ) and
+            (($kpi_contract == "kpi-feed-v1" and has("grc_kpi") and (.grc_kpi | grc_kpi_valid)) or
+             ($kpi_contract != "kpi-feed-v1" and (has("grc_kpi") | not))) and
             (.signatures_data | type == "array" and all(.[];
                 type == "object" and
                 (keys == ["count", "mitre", "name"]) and
@@ -5075,7 +5404,12 @@ live_telemetry_schema_valid() {
                     (.unique_ips | integer)))) and
             (.banned_ips | type == "array" and all(.[];
                 type == "object" and
-                (keys == ["action", "ip", "jail", "mitre", "payload", "timestamp"]) and
+                (($kpi_contract == "kpi-feed-v1" and
+                  (keys - ["enforcement_state"]) == ["action", "ip", "jail", "mitre", "payload", "timestamp"] and
+                  optional_string("enforcement_state") and
+                  ((has("enforcement_state") | not) or (.enforcement_state | enforcement_state_valid))) or
+                 ($kpi_contract != "kpi-feed-v1" and
+                  keys == ["action", "ip", "jail", "mitre", "payload", "timestamp"])) and
                 (.timestamp | type == "string") and
                 (.ip | type == "string") and
                 (.jail | type == "string") and
@@ -5086,7 +5420,11 @@ live_telemetry_schema_valid() {
                 type == "object" and
                 (($kpi_contract == "legacy" and keys == attacker_base_keys) or
                  ($kpi_contract == "kpi-v1" and
-                  (keys - attacker_kpi_optional_keys) == attacker_base_keys)) and
+                  (keys - attacker_kpi_optional_keys) == attacker_base_keys and
+                  (has("enforcement_state") | not)) or
+                 ($kpi_contract == "kpi-feed-v1" and
+                  (keys - (attacker_kpi_optional_keys + ["enforcement_state"])) == attacker_base_keys and
+                  has("enforcement_state") and (.enforcement_state | enforcement_state_valid))) and
                 (.ip | type == "string") and
                 (.severity | type == "string") and
                 (.port | type == "string") and
@@ -5100,6 +5438,7 @@ live_telemetry_schema_valid() {
                 optional_string("primary_jail") and
                 optional_string("enforcement_jail") and
                 optional_string("enforcement_action") and
+                optional_string("policy_action") and
                 optional_nonnegative_integer("jail_hits") and
                 optional_nonnegative_integer("policy_hits") and
                 optional_nonnegative_integer("attested_hits") and
@@ -11043,6 +11382,7 @@ def validate_report_version_contract(
     report: dict[str, object],
     *,
     required_platform_coordinates: frozenset[tuple[str, str]] = REQUIRED_PLATFORM_COORDINATES,
+    expected_matrix_binding: dict[str, str] | None = None,
 ) -> None:
     """Reject a report whose artifact-version evidence is incomplete or mutable."""
 
@@ -11051,7 +11391,9 @@ def validate_report_version_contract(
         raise LifecycleLabError(
             f"package lifecycle report schema must be {SCHEMA_VERSION}"
         )
-    validate_qualification_matrix_binding(report.get("qualification_matrix"))
+    validate_qualification_matrix_binding(
+        report.get("qualification_matrix"), expected=expected_matrix_binding
+    )
     contract = report.get("package_version_contract")
     if not isinstance(contract, dict):
         raise LifecycleLabError("package lifecycle report lacks a version contract")
@@ -11450,7 +11792,9 @@ def run_lab(
     matrix_path = Path(
         getattr(args, "qualification_matrix", QUALIFICATION_MATRIX_PATH)
     )
-    matrix_binding = qualification_matrix_binding(matrix_path)
+    matrix_binding = qualification_matrix_binding(
+        matrix_path, getattr(args, "expected_target_release", None)
+    )
     architecture_shard = getattr(args, "architecture_shard", None)
     required_platform_coordinates = (
         required_coordinates_for_architecture(architecture_shard)
@@ -11732,6 +12076,7 @@ def run_lab(
     validate_report_version_contract(
         report,
         required_platform_coordinates=required_platform_coordinates,
+        expected_matrix_binding=matrix_binding,
     )
     return report
 
@@ -11741,6 +12086,7 @@ def validate_native_shard_report(
     *,
     architecture: str,
     expected_binding: dict[str, object],
+    expected_matrix_binding: dict[str, str],
 ) -> None:
     expected_top_keys = {
         "schema_version",
@@ -11761,7 +12107,9 @@ def validate_native_shard_report(
     }
     if set(report) != expected_top_keys:
         raise LifecycleLabError("native shard report top-level schema is not exact")
-    validate_qualification_matrix_binding(report.get("qualification_matrix"))
+    validate_qualification_matrix_binding(
+        report.get("qualification_matrix"), expected=expected_matrix_binding
+    )
     required_coordinates = required_coordinates_for_architecture(architecture)
     validate_qualification_binding(
         report.get("qualification_binding"), expected=expected_binding
@@ -11883,6 +12231,7 @@ def validate_native_shard_report(
     validate_report_version_contract(
         report,
         required_platform_coordinates=required_coordinates,
+        expected_matrix_binding=expected_matrix_binding,
     )
 
 
@@ -12060,7 +12409,9 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
     matrix_path = Path(
         getattr(args, "qualification_matrix", QUALIFICATION_MATRIX_PATH)
     )
-    matrix_binding = qualification_matrix_binding(matrix_path)
+    matrix_binding = qualification_matrix_binding(
+        matrix_path, getattr(args, "expected_target_release", None)
+    )
     candidate_root, previous_root, pairs = validate_inputs(
         args.packages_dir,
         args.previous_packages_dir,
@@ -12088,6 +12439,7 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
             report,
             architecture=architecture,
             expected_binding=expected_binding,
+            expected_matrix_binding=matrix_binding,
         )
         if report.get("qualification_matrix") != matrix_binding:
             raise LifecycleLabError(
@@ -12264,7 +12616,9 @@ def aggregate_native_shard_reports(args: argparse.Namespace) -> dict[str, object
             "reports": native_records,
         },
     }
-    validate_report_version_contract(report)
+    validate_report_version_contract(
+        report, expected_matrix_binding=matrix_binding
+    )
     return report
 
 
@@ -12310,6 +12664,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--qualification-matrix",
         type=Path,
         default=QUALIFICATION_MATRIX_PATH,
+    )
+    parser.add_argument(
+        "--expected-target-release",
+        choices=tuple(sorted(_QUALIFICATION_MATRIX_BINDINGS)),
     )
     parser.add_argument("--package-tmp-dir", type=Path)
     parser.add_argument("--qualification-repository")
@@ -12402,7 +12760,14 @@ def configured_platforms(args: argparse.Namespace) -> tuple[PlatformSpec, ...]:
     )
 
 
-def error_report(exc: Exception) -> dict[str, object]:
+def error_report(
+    exc: Exception, matrix_binding: dict[str, str] | None = None
+) -> dict[str, object]:
+    selected_matrix_binding = (
+        dict(_QUALIFICATION_MATRIX_BINDINGS["v4.04.3"])
+        if matrix_binding is None
+        else validate_qualification_matrix_binding(matrix_binding)
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -12411,10 +12776,7 @@ def error_report(exc: Exception) -> dict[str, object]:
         "release_ready": False,
         "blocker_ids": [],
         "unexpected_failed_checks": [f"harness:{exc}"],
-        "qualification_matrix": {
-            "matrix_id": QUALIFICATION_MATRIX_ID,
-            "sha256": QUALIFICATION_MATRIX_SHA256,
-        },
+        "qualification_matrix": selected_matrix_binding,
         "error": str(exc),
     }
 
@@ -12423,26 +12785,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     aggregate_requested = args.aggregate_amd64_report is not None
-    if aggregate_requested and (
-        args.architecture_shard is not None
-    ):
-        report = error_report(
-            LifecycleLabError(
-                "aggregation requires the exact AMD64 shard report and forbids shard mode"
-            )
+    selected_matrix_binding: dict[str, str] | None = None
+    try:
+        selected_matrix_binding = qualification_matrix_binding(
+            args.qualification_matrix, args.expected_target_release
         )
-    elif args.scenario_timeout < 30:
-        report = error_report(
-            LifecycleLabError("--scenario-timeout must be at least 30 seconds")
-        )
+    except (LifecycleLabError, OSError) as exc:
+        report = error_report(exc)
     else:
-        try:
-            if aggregate_requested:
-                report = aggregate_native_shard_reports(args)
-            else:
-                report = run_lab(args, platforms=configured_platforms(args))
-        except (LifecycleLabError, OSError) as exc:
-            report = error_report(exc)
+        if aggregate_requested and (
+            args.architecture_shard is not None
+        ):
+            report = error_report(
+                LifecycleLabError(
+                    "aggregation requires the exact AMD64 shard report and forbids shard mode"
+                ),
+                selected_matrix_binding,
+            )
+        elif args.scenario_timeout < 30:
+            report = error_report(
+                LifecycleLabError("--scenario-timeout must be at least 30 seconds"),
+                selected_matrix_binding,
+            )
+        else:
+            try:
+                if aggregate_requested:
+                    report = aggregate_native_shard_reports(args)
+                else:
+                    report = run_lab(args, platforms=configured_platforms(args))
+            except (LifecycleLabError, OSError) as exc:
+                report = error_report(exc, selected_matrix_binding)
 
     serialized = json.dumps(
         report, indent=2 if args.pretty else None, sort_keys=True
@@ -12451,7 +12823,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             write_report(args.output, report, args.pretty)
         except LifecycleLabError as exc:
-            report = error_report(exc)
+            report = error_report(exc, selected_matrix_binding)
             serialized = json.dumps(
                 report, indent=2 if args.pretty else None, sort_keys=True
             ) + "\n"

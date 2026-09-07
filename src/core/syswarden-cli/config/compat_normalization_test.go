@@ -209,7 +209,9 @@ func TestV4028LegacyHADefaultNormalizesWithoutWeakeningPartialStates_SW_CFG_001(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(integrations), "[integrations.ha]\nenabled = false") ||
+	if !strings.Contains(string(integrations), "[integrations.ha]\n") ||
+		!strings.Contains(string(integrations), "enabled = false") ||
+		!strings.Contains(string(integrations), "v2_enabled = false") ||
 		!strings.Contains(string(integrations), "[integrations.bunkerweb]\n") {
 		t.Fatalf("normalized migration output omitted explicit safe gates:\n%s", integrations)
 	}

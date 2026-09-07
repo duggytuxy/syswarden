@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "v4.04.3"
+var Version = "v4.10.0"
 
 const (
 	latestReleaseAPI             = "https://api.github.com/repos/duggytuxy/syswarden/releases/latest"
@@ -28,6 +28,7 @@ const (
 	metadataDownloadTimeout      = 30 * time.Second
 	packageDownloadTimeout       = 10 * time.Minute
 	packageInstallationTimeout   = 30 * time.Minute
+	qualificationAttestTimeout   = 2 * time.Minute
 	postInstallationCommandLimit = 2 * time.Minute
 	productionTempBase           = "/var/tmp"
 )
@@ -41,25 +42,36 @@ func firstSignedUpdaterVersion() string {
 }
 
 type commandRunner func(context.Context, string, ...string) error
+type installedRPMReleaseAttestor func(context.Context, string) error
+type installedVersionAttestor func(context.Context, packageTarget, int) (installedQualificationEvidence, error)
+type qualificationActivator func(context.Context, installedQualificationEvidence) error
+type qualificationDependencyAttestor func(context.Context, packageTarget) error
+type qualificationCandidateCLIAttestor func(context.Context, packageTarget, *os.File) (string, error)
 
 type updater struct {
-	client          *http.Client
-	latestURL       string
-	downloadBaseURL string
-	currentVersion  string
-	goos            string
-	goarch          string
-	tempBase        string
-	trustedKeys     map[string]ed25519.PublicKey
-	lookPath        func(string) (string, error)
-	runCommand      commandRunner
-	effectiveUID    int
-	requireRoot     bool
-	stdout          io.Writer
-	metadataTimeout time.Duration
-	packageTimeout  time.Duration
-	installTimeout  time.Duration
-	retireWebTUI    func() error
+	client             *http.Client
+	latestURL          string
+	downloadBaseURL    string
+	currentVersion     string
+	goos               string
+	goarch             string
+	tempBase           string
+	trustedKeys        map[string]ed25519.PublicKey
+	lookPath           func(string) (string, error)
+	runCommand         commandRunner
+	effectiveUID       int
+	requireRoot        bool
+	stdout             io.Writer
+	metadataTimeout    time.Duration
+	packageTimeout     time.Duration
+	installTimeout     time.Duration
+	attestTimeout      time.Duration
+	retireWebTUI       func() error
+	attestRPM          installedRPMReleaseAttestor
+	attestInstalled    installedVersionAttestor
+	attestDependencies qualificationDependencyAttestor
+	attestCandidateCLI qualificationCandidateCLIAttestor
+	activateCandidate  qualificationActivator
 }
 
 func productionHTTPClient() *http.Client {
@@ -96,6 +108,33 @@ func runExternalCommand(ctx context.Context, name string, args ...string) error 
 	if err := validateExternalCommand(name, args); err != nil {
 		return err
 	}
+	return executeExternalCommand(ctx, name, productionExternalCommandEnvironment(), args...)
+}
+
+func productionExternalCommandEnvironment() []string {
+	environment := os.Environ()
+	filtered := make([]string, 0, len(environment))
+	privatePrefixes := []string{
+		offlineQualificationEnvironment + "=",
+		"SYSWARDEN_PKG_INSTALL=",
+	}
+	for _, entry := range environment {
+		private := false
+		for _, prefix := range privatePrefixes {
+			if strings.HasPrefix(entry, prefix) {
+				private = true
+				break
+			}
+		}
+		if private {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func executeExternalCommand(ctx context.Context, name string, environment []string, args ...string) error {
 	var cmd *exec.Cmd
 	switch name {
 	case "/usr/bin/apt-get":
@@ -122,6 +161,9 @@ func runExternalCommand(ctx context.Context, name string, args ...string) error 
 		return fmt.Errorf("refusing untrusted executable path %q", name)
 	}
 	cmd.Args = append([]string{cmd.Path}, args...)
+	if environment != nil {
+		cmd.Env = environment
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -130,28 +172,45 @@ func runExternalCommand(ctx context.Context, name string, args ...string) error 
 func validateExternalCommand(name string, args []string) error {
 	switch name {
 	case "/usr/bin/apt-get":
-		if len(args) == 5 && args[0] == "-o" && args[1] == aptDPkgLockTimeoutOption &&
-			args[2] == "install" && args[3] == "-y" && validSecurePackageArgument(args[4]) {
+		if len(args) != 5 {
+			break
+		}
+		if args[0] == "-o" && args[1] == aptDPkgLockTimeoutOption && args[2] == "install" &&
+			args[3] == "-y" && validSecurePackageArgument(args[4]) {
 			return nil
 		}
 	case "/usr/bin/dnf", "/usr/bin/yum":
-		if len(args) == 3 && args[0] == "install" && args[1] == "-y" && validSecurePackageArgument(args[2]) {
+		if len(args) != 4 {
+			break
+		}
+		if args[0] == "--setopt=localpkg_gpgcheck=1" && args[1] == "install" &&
+			args[2] == "-y" && validSecurePackageArgument(args[3]) {
 			return nil
 		}
 	case "/sbin/apk", "/usr/sbin/apk":
-		if len(args) == 3 && args[0] == "add" && args[1] == "--allow-untrusted" && validSecurePackageArgument(args[2]) {
+		if len(args) != 2 {
+			break
+		}
+		if args[0] == "add" && validSecurePackageArgument(args[1]) {
 			return nil
 		}
 	case "/sbin/rc-service", "/usr/sbin/rc-service":
-		if len(args) == 2 && args[0] == "syswarden-core" && args[1] == "restart" {
+		if len(args) != 2 {
+			break
+		}
+		if args[0] == "syswarden-core" && args[1] == "restart" {
 			return nil
 		}
 	case "/bin/systemctl", "/usr/bin/systemctl":
-		if len(args) == 1 && args[0] == "daemon-reload" {
-			return nil
-		}
-		if len(args) == 2 && args[0] == "restart" && args[1] == "syswarden-core" {
-			return nil
+		switch len(args) {
+		case 1:
+			if args[0] == "daemon-reload" {
+				return nil
+			}
+		case 2:
+			if args[0] == "restart" && args[1] == "syswarden-core" {
+				return nil
+			}
 		}
 	}
 	return fmt.Errorf("refusing unexpected arguments for %q", name)
@@ -189,6 +248,7 @@ func newProductionUpdater() (*updater, error) {
 		metadataTimeout: metadataDownloadTimeout,
 		packageTimeout:  packageDownloadTimeout,
 		installTimeout:  packageInstallationTimeout,
+		attestRPM:       attestInstalledStandardRPMRelease,
 		retireWebTUI: func() error {
 			return config.RemoveRetiredWebTUIConfiguration("/etc/syswarden/config")
 		},
@@ -242,6 +302,9 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	if err != nil {
 		return err
 	}
+	if err := u.attestStandardRPMChannel(ctx, target, "before release asset download"); err != nil {
+		return err
+	}
 
 	fmt.Fprintln(u.stdout, "[+] A new Enterprise version is available!")
 	fmt.Fprintf(u.stdout, "[INFO] Selected %s package %s for %s/%s.\n", target.format, target.filename, u.goos, u.goarch)
@@ -291,6 +354,9 @@ func (u *updater) run(ctx context.Context) (returnErr error) {
 	}
 	if err := verifySecurePackageForInstallation(packageFile, packagePath, artifact, u.effectiveUID); err != nil {
 		return fmt.Errorf("verify package immediately before installation: %w", err)
+	}
+	if err := u.attestStandardRPMChannel(ctx, target, "immediately before package installation"); err != nil {
+		return err
 	}
 
 	fmt.Fprintf(u.stdout, "[INFO] Installing authenticated %s package...\n", target.format)

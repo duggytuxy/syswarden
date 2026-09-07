@@ -1,0 +1,14 @@
+[Unit]
+Description=SYSWARDEN Firewall Persistence & Engine Loader
+After=network-online.target rsyslog.service cron.service crond.service
+Wants=network-online.target
+Before=syswarden-core.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/syswarden/bin/syswarden-cli reload --no-restart
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

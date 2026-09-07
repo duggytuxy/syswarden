@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+
+name="syswarden-firewall"
+description="SYSWARDEN Firewall Persistence & Engine Loader"
+
+depend() {
+	need net rsyslog cronie
+	before syswarden-core
+}
+
+start() {
+	ebegin "Loading SYSWARDEN Firewall Persistence"
+	/opt/syswarden/bin/syswarden-cli reload --no-restart
+	eend $?
+}

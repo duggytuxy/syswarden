@@ -1,0 +1,52 @@
+{
+  "catalog_version": "sw-allocation-signatures-v1",
+  "risk_model_version": "sw-risk-v1",
+  "risk_categories": {
+    "exploit": ["allocation-sqli"],
+    "brute_force": ["allocation-unused-brute-force"],
+    "reconnaissance": ["allocation-unused-reconnaissance"],
+    "denial_of_service": ["allocation-unused-denial-of-service"],
+    "abuse": ["allocation-unused-abuse"]
+  },
+  "metric_excluded_rules": [],
+  "rules": [
+    {
+      "id": "allocation-sqli",
+      "type": "aho-corasick",
+      "patterns": ["UNION SELECT"],
+      "service": "http",
+      "match_scope": "request-target",
+      "action": "ban"
+    },
+    {
+      "id": "allocation-unused-brute-force",
+      "type": "aho-corasick",
+      "patterns": ["SYSWARDEN_ALLOCATION_UNUSED_BRUTE_FORCE"],
+      "service": "fixture",
+      "action": "track",
+      "threshold": 3,
+      "window": 60
+    },
+    {
+      "id": "allocation-unused-reconnaissance",
+      "type": "aho-corasick",
+      "patterns": ["SYSWARDEN_ALLOCATION_UNUSED_RECONNAISSANCE"],
+      "service": "fixture",
+      "action": "detect"
+    },
+    {
+      "id": "allocation-unused-denial-of-service",
+      "type": "aho-corasick",
+      "patterns": ["SYSWARDEN_ALLOCATION_UNUSED_DENIAL_OF_SERVICE"],
+      "service": "fixture",
+      "action": "ban"
+    },
+    {
+      "id": "allocation-unused-abuse",
+      "type": "aho-corasick",
+      "patterns": ["SYSWARDEN_ALLOCATION_UNUSED_ABUSE"],
+      "service": "fixture",
+      "action": "detect"
+    }
+  ]
+}

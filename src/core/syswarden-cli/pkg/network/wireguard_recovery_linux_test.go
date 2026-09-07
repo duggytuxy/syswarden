@@ -174,7 +174,6 @@ func TestRecoverPendingWireguardStateWaitsForActivePublication_SW2_WGSTATE_001(t
 		t.Fatalf("committed publication changed by recovery: inventory=%#v err=%v", inventory, err)
 	}
 }
-
 func TestRecoverPendingWireguardStateRefusesCorruptJournalWithoutMutation_SW2_WGSTATE_001(t *testing.T) {
 	root := prepareWireGuardRecoveryRoot(t)
 	useWireGuardRecoveryRoot(t, root)

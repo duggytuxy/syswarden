@@ -42,11 +42,29 @@ import (
 )
 
 type HAConfig struct {
-	Enabled          string
-	Token            string
-	PeerIPs          []string
-	Port             string
-	BunkerWebEnabled bool
+	Enabled               string
+	Token                 string
+	PeerIPs               []string
+	Port                  string
+	BunkerWebEnabled      bool
+	BunkerWebSchedulerIPs []string
+	V2Enabled             bool
+	ClusterID             string
+	Epoch                 uint64
+	NodeID                string
+	PeerID                string
+	Role                  string
+	V2SecretFile          string
+	TLSCertFile           string
+	TLSKeyFile            string
+	TLSCAFile             string
+	PeerTLSName           string
+	PeerCertSHA256        []string
+	StateFile             string
+	TransactionFile       string
+	HeartbeatInterval     time.Duration
+	HeartbeatTimeout      time.Duration
+	RequestTimeout        time.Duration
 }
 
 func loadHAConfig() HAConfig {
@@ -61,6 +79,7 @@ func loadHAConfig() HAConfig {
 		cfg.Enabled = "y"
 	}
 	cfg.BunkerWebEnabled = viper.GetBool("integrations.bunkerweb.enabled")
+	cfg.BunkerWebSchedulerIPs = viper.GetStringSlice("integrations.bunkerweb.scheduler_ips")
 
 	if token := viper.GetString("integrations.ha.token"); token != "" {
 		cfg.Token = token
@@ -68,6 +87,23 @@ func loadHAConfig() HAConfig {
 	if ips := viper.GetStringSlice("integrations.ha.peer_ips"); len(ips) > 0 {
 		cfg.PeerIPs = ips
 	}
+	cfg.V2Enabled = viper.GetBool("integrations.ha.v2_enabled")
+	cfg.ClusterID = viper.GetString("integrations.ha.cluster_id")
+	cfg.Epoch = viper.GetUint64("integrations.ha.epoch")
+	cfg.NodeID = viper.GetString("integrations.ha.node_id")
+	cfg.PeerID = viper.GetString("integrations.ha.peer_id")
+	cfg.Role = viper.GetString("integrations.ha.role")
+	cfg.V2SecretFile = viper.GetString("integrations.ha.v2_secret_file")
+	cfg.TLSCertFile = viper.GetString("integrations.ha.tls_cert_file")
+	cfg.TLSKeyFile = viper.GetString("integrations.ha.tls_key_file")
+	cfg.TLSCAFile = viper.GetString("integrations.ha.tls_ca_file")
+	cfg.PeerTLSName = viper.GetString("integrations.ha.peer_tls_name")
+	cfg.PeerCertSHA256 = viper.GetStringSlice("integrations.ha.peer_cert_sha256")
+	cfg.StateFile = viper.GetString("integrations.ha.state_file")
+	cfg.TransactionFile = viper.GetString("integrations.ha.transaction_file")
+	cfg.HeartbeatInterval = time.Duration(viper.GetInt("integrations.ha.heartbeat_interval_seconds")) * time.Second
+	cfg.HeartbeatTimeout = time.Duration(viper.GetInt("integrations.ha.heartbeat_timeout_seconds")) * time.Second
+	cfg.RequestTimeout = time.Duration(viper.GetInt("integrations.ha.request_timeout_seconds")) * time.Second
 
 	port := viper.GetInt("integrations.ha.peer_port")
 	if port > 0 {
@@ -146,6 +182,8 @@ type HAActiveBan struct {
 	PeerScope    string `json:"peer_scope"`
 	OriginPeerIP string `json:"origin_peer_ip"`
 	ExpiresAt    string `json:"expires_at"`
+	Provenance   string `json:"provenance,omitempty"`
+	HAOwner      string `json:"ha_owner,omitempty"`
 }
 
 const (
@@ -389,6 +427,8 @@ func syncDirectory(directory string) (resultErr error) {
 type haAPI struct {
 	cfg                     HAConfig
 	allowedPeers            []netip.Prefix
+	bunkerWebSchedulers     []netip.Prefix
+	apiClients              []netip.Prefix
 	fwManager               firewall.Manager
 	coreVersion             string
 	blacklistIPv4           string
@@ -396,6 +436,7 @@ type haAPI struct {
 	telemetryFile           string
 	banLedgerFile           string
 	fence                   *haFenceController
+	replicationV2           *haRuntimeV2Adapter
 	now                     func() time.Time
 	localInterfaceAddresses func() ([]netip.Addr, error)
 	isWhitelisted           func(string) (bool, error)
@@ -430,9 +471,38 @@ func newHAAPI(cfg HAConfig, fwManager firewall.Manager, coreVersion, blacklistIP
 		}
 		return allowedPeers[i].String() < allowedPeers[j].String()
 	})
+	bunkerWebSchedulers := make([]netip.Prefix, 0, len(cfg.BunkerWebSchedulerIPs))
+	if cfg.BunkerWebEnabled {
+		configuredSchedulers := cfg.BunkerWebSchedulerIPs
+		if len(configuredSchedulers) == 0 && !cfg.V2Enabled {
+			// Preserve the deployed v1 contract while keeping the v2 node identity
+			// distinct from the BunkerWeb scheduler authorization boundary.
+			configuredSchedulers = cfg.PeerIPs
+		}
+		if len(configuredSchedulers) == 0 {
+			return nil, fmt.Errorf("HA v2 BunkerWeb integration requires at least one scheduler IP or CIDR")
+		}
+		seenSchedulers := make(map[string]struct{}, len(configuredSchedulers))
+		for _, configuredScheduler := range configuredSchedulers {
+			scheduler, err := canonicalHAPeerPrefix(configuredScheduler)
+			if err != nil {
+				return nil, fmt.Errorf("invalid configured BunkerWeb scheduler: %w", err)
+			}
+			key := scheduler.String()
+			if _, duplicate := seenSchedulers[key]; duplicate {
+				continue
+			}
+			seenSchedulers[key] = struct{}{}
+			bunkerWebSchedulers = append(bunkerWebSchedulers, scheduler)
+		}
+		sortHAPrefixes(bunkerWebSchedulers)
+	}
+	apiClients := uniqueSortedHAPrefixes(append(append([]netip.Prefix(nil), allowedPeers...), bunkerWebSchedulers...))
 	api := &haAPI{
 		cfg:                     cfg,
 		allowedPeers:            allowedPeers,
+		bunkerWebSchedulers:     bunkerWebSchedulers,
+		apiClients:              apiClients,
 		fwManager:               fwManager,
 		coreVersion:             coreVersion,
 		blacklistIPv4:           filepath.Clean(blacklistIPv4),
@@ -454,11 +524,39 @@ func newHAAPI(cfg HAConfig, fwManager firewall.Manager, coreVersion, blacklistIP
 	return api, nil
 }
 
+func sortHAPrefixes(prefixes []netip.Prefix) {
+	sort.Slice(prefixes, func(i, j int) bool {
+		if prefixes[i].Bits() != prefixes[j].Bits() {
+			return prefixes[i].Bits() > prefixes[j].Bits()
+		}
+		return prefixes[i].String() < prefixes[j].String()
+	})
+}
+
+func uniqueSortedHAPrefixes(prefixes []netip.Prefix) []netip.Prefix {
+	seen := make(map[string]struct{}, len(prefixes))
+	result := make([]netip.Prefix, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		if _, duplicate := seen[prefix.String()]; duplicate {
+			continue
+		}
+		seen[prefix.String()] = struct{}{}
+		result = append(result, prefix)
+	}
+	sortHAPrefixes(result)
+	return result
+}
+
 func (api *haAPI) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ha/sync", api.handleSync)
 	mux.HandleFunc("/ha/telemetry", api.handleTelemetry)
 	mux.HandleFunc("/ha/status", api.handleStatus)
+	if api.replicationV2 != nil {
+		mux.HandleFunc("/ha/v2/replication", api.handleV2Replication)
+		mux.HandleFunc("/ha/v2/heartbeat", api.handleV2Heartbeat)
+		mux.HandleFunc("/ha/v2/recovery", api.handleV2Recovery)
+	}
 	return mux
 }
 
@@ -523,7 +621,7 @@ func (api *haAPI) canonicalHAFirewallTarget(value string) (string, error) {
 	}
 	return utils.CanonicalFirewallMutationTarget(value, utils.FirewallTargetPolicy{
 		LocalAddresses:    localAddresses,
-		ProtectedPrefixes: api.allowedPeers,
+		ProtectedPrefixes: api.apiClients,
 		IsWhitelisted:     api.isWhitelisted,
 	})
 }
@@ -600,7 +698,7 @@ type haPeerIdentity struct {
 	Scope string
 }
 
-func (api *haAPI) authorizePeer(w http.ResponseWriter, r *http.Request) (haPeerIdentity, bool) {
+func (api *haAPI) authorizePeerWithin(w http.ResponseWriter, r *http.Request, allowed []netip.Prefix) (haPeerIdentity, bool) {
 	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		http.Error(w, "Forbidden", http.StatusForbidden)
@@ -612,7 +710,7 @@ func (api *haAPI) authorizePeer(w http.ResponseWriter, r *http.Request) (haPeerI
 		return haPeerIdentity{}, false
 	}
 	matchedScope := ""
-	for _, peer := range api.allowedPeers {
+	for _, peer := range allowed {
 		if peer.Contains(remoteIP) {
 			matchedScope = peer.String()
 			break
@@ -633,8 +731,29 @@ func (api *haAPI) authorizePeer(w http.ResponseWriter, r *http.Request) (haPeerI
 	return haPeerIdentity{IP: remoteIP.String(), Scope: matchedScope}, true
 }
 
+func (api *haAPI) authorizePeer(w http.ResponseWriter, r *http.Request) (haPeerIdentity, bool) {
+	return api.authorizePeerWithin(w, r, api.allowedPeers)
+}
+
+func (api *haAPI) authorizeAPIClient(w http.ResponseWriter, r *http.Request) (haPeerIdentity, bool) {
+	return api.authorizePeerWithin(w, r, api.apiClients)
+}
+
+func peerIdentityWithin(ip string, allowed []netip.Prefix) (haPeerIdentity, bool) {
+	address, err := netip.ParseAddr(ip)
+	if err != nil || address.Is4In6() || address.Zone() != "" {
+		return haPeerIdentity{}, false
+	}
+	for _, prefix := range allowed {
+		if prefix.Contains(address) {
+			return haPeerIdentity{IP: address.String(), Scope: prefix.String()}, true
+		}
+	}
+	return haPeerIdentity{}, false
+}
+
 func (api *haAPI) handleSync(w http.ResponseWriter, r *http.Request) {
-	peer, authorized := api.authorizePeer(w, r)
+	peer, authorized := api.authorizeAPIClient(w, r)
 	if !authorized {
 		return
 	}
@@ -685,10 +804,29 @@ func (api *haAPI) handleSync(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "BunkerWeb integration is disabled; configure integrations.bunkerweb.enabled", http.StatusForbidden)
 			return
 		}
+		if len(mutation.temporaries) > 0 {
+			scheduler, schedulerAuthorized := peerIdentityWithin(peer.IP, api.bunkerWebSchedulers)
+			if !schedulerAuthorized {
+				http.Error(w, "BunkerWeb scheduler is not authorized", http.StatusForbidden)
+				return
+			}
+			peer = scheduler
+		} else if haPeer, peerAuthorized := peerIdentityWithin(peer.IP, api.allowedPeers); peerAuthorized {
+			peer = haPeer
+		} else {
+			http.Error(w, "HA peer is not authorized for static synchronization", http.StatusForbidden)
+			return
+		}
 		if r.Method == http.MethodPost {
 			if err := api.validateHAMutationTargets(mutation); err != nil {
 				log.Printf("[HA Cluster] Rejected a protected firewall mutation target: %v", err)
 				http.Error(w, "Rejected firewall target", http.StatusBadRequest)
+				return
+			}
+		}
+		if api.replicationV2 != nil {
+			if err := api.replicationV2.localMutationReadiness(api.now()); err != nil {
+				http.Error(w, "HA v2 mutations require the healthy static writer", http.StatusLocked)
 				return
 			}
 		}
@@ -777,6 +915,17 @@ type haMutationRequest struct {
 type haTemporaryDeleteResult struct {
 	Status  string `json:"status"`
 	Deleted int    `json:"deleted"`
+}
+
+type haV2SourceAwareBanManager interface {
+	banSourceWithTTL(ip, source string, ttl time.Duration) error
+	unbanSource(ip, source string) error
+	sourceClaimState(ip, source string, requiredUntil, now time.Time) (bool, bool, error)
+}
+
+func haV2BunkerWebClaimSource(claimedSource, peerScope string) string {
+	digest := sha256.Sum256([]byte(peerScope + "\x00" + claimedSource))
+	return "bunkerweb." + hex.EncodeToString(digest[:24])
 }
 
 func decodeHAMutationPayload(w http.ResponseWriter, r *http.Request) (haMutationRequest, bool) {
@@ -1613,6 +1762,7 @@ func (api *haAPI) readHASyncSnapshot(now time.Time) ([]string, []HAActiveBan, er
 	now = now.UTC()
 	all := append([]string(nil), staticIPs...)
 	bans := make([]HAActiveBan, 0, len(ledger.Bans))
+	completeV2Claims := make(map[string]struct{}, len(ledger.Bans))
 	for _, record := range ledger.Bans {
 		expires, err := parseCanonicalHATime(record.ExpiresAt)
 		if err != nil {
@@ -1624,7 +1774,21 @@ func (api *haAPI) readHASyncSnapshot(now time.Time) ([]string, []HAActiveBan, er
 		all = append(all, record.IP)
 		bans = append(bans, HAActiveBan{
 			IP: record.IP, Source: record.Source, Reason: record.Reason, PeerScope: record.PeerScope,
-			OriginPeerIP: record.OriginPeerIP, ExpiresAt: record.ExpiresAt,
+			OriginPeerIP: record.OriginPeerIP, ExpiresAt: record.ExpiresAt, Provenance: "complete",
+		})
+		completeV2Claims[record.IP+"\x00"+haV2BunkerWebClaimSource(record.Source, record.PeerScope)] = struct{}{}
+	}
+	for _, claim := range api.activeHAV2Claims(now) {
+		all = append(all, claim.IP)
+		if !strings.HasPrefix(claim.Source, "bunkerweb.") {
+			continue
+		}
+		if _, complete := completeV2Claims[claim.IP+"\x00"+claim.Source]; complete {
+			continue
+		}
+		bans = append(bans, HAActiveBan{
+			IP: claim.IP, Source: claim.Source, ExpiresAt: claim.ExpiresAt,
+			Provenance: "opaque_v2", HAOwner: claim.Owner,
 		})
 	}
 	all = uniqueSortedHAAddresses(all)
@@ -1644,6 +1808,15 @@ func (api *haAPI) readHASyncSnapshot(now time.Time) ([]string, []HAActiveBan, er
 		return bans[i].ExpiresAt < bans[j].ExpiresAt
 	})
 	return all, bans, nil
+}
+
+func (api *haAPI) activeHAV2Claims(now time.Time) []haReplicationClaim {
+	if api == nil || api.replicationV2 == nil {
+		return nil
+	}
+	api.replicationV2.mu.Lock()
+	defer api.replicationV2.mu.Unlock()
+	return api.replicationV2.coordinator.model.activeClaims(now)
 }
 
 func uniqueSortedHAAddresses(addresses []string) []string {
@@ -1904,6 +2077,44 @@ func (api *haAPI) markHATemporaryBansActive(keys map[string]struct{}, successful
 	})
 }
 
+func (api *haAPI) applyHAV2TemporaryClaims(manager haV2SourceAwareBanManager, keys map[string]struct{}, now time.Time) (map[string]struct{}, []error, error) {
+	ledger, err := api.readHALedger()
+	if err != nil {
+		return nil, nil, err
+	}
+	totals := make(map[string]int)
+	succeeded := make(map[string]int)
+	var mutationErrors []error
+	for _, record := range ledger.Bans {
+		if _, selected := keys[haLedgerRecordKey(record)]; !selected {
+			continue
+		}
+		totals[record.IP]++
+		expiresAt, err := parseCanonicalHATime(record.ExpiresAt)
+		if err != nil {
+			mutationErrors = append(mutationErrors, err)
+			continue
+		}
+		source := haV2BunkerWebClaimSource(record.Source, record.PeerScope)
+		_, covers, err := manager.sourceClaimState(record.IP, source, expiresAt, now)
+		if err == nil && !covers {
+			err = manager.banSourceWithTTL(record.IP, source, boundedHARemainingTTL(expiresAt, now))
+		}
+		if err != nil {
+			mutationErrors = append(mutationErrors, err)
+			continue
+		}
+		succeeded[record.IP]++
+	}
+	successfulIPs := make(map[string]struct{}, len(totals))
+	for ip, total := range totals {
+		if succeeded[ip] == total {
+			successfulIPs[ip] = struct{}{}
+		}
+	}
+	return successfulIPs, mutationErrors, nil
+}
+
 func (api *haAPI) applyHATemporaryBans(w http.ResponseWriter, peer haPeerIdentity, requests []haTemporaryBanRequest) {
 	if err := api.validateHAMutationTargets(haMutationRequest{temporaries: requests}); err != nil {
 		http.Error(w, "Rejected firewall target", http.StatusBadRequest)
@@ -1951,12 +2162,20 @@ func (api *haAPI) applyHATemporaryBans(w http.ResponseWriter, peer haPeerIdentit
 	}
 	successfulIPs := make(map[string]struct{}, len(uniqueIPs))
 	var mutationErrors []error
-	for _, ip := range uniqueIPs {
-		if _, err := api.applyDesiredHABan(ip, now); err != nil {
-			mutationErrors = append(mutationErrors, err)
-			continue
+	if sourceManager, ok := api.fwManager.(haV2SourceAwareBanManager); ok {
+		successfulIPs, mutationErrors, err = api.applyHAV2TemporaryClaims(sourceManager, keys, now)
+		if err != nil {
+			http.Error(w, "HA ban ledger unavailable", http.StatusInternalServerError)
+			return
 		}
-		successfulIPs[ip] = struct{}{}
+	} else {
+		for _, ip := range uniqueIPs {
+			if _, err := api.applyDesiredHABan(ip, now); err != nil {
+				mutationErrors = append(mutationErrors, err)
+				continue
+			}
+			successfulIPs[ip] = struct{}{}
+		}
 	}
 	if err := api.markHATemporaryBansActive(keys, successfulIPs, now); err != nil {
 		http.Error(w, "HA ban ledger publication failed", http.StatusInternalServerError)
@@ -2044,10 +2263,35 @@ func (api *haAPI) applyHATemporaryUnbans(w http.ResponseWriter, peer haPeerIdent
 	var mutationErrors []error
 	deleted := 0
 	for _, ip := range ips {
-		desired, err := api.reconcileDesiredHABanAfterRemoval(ip, now)
-		if err != nil {
-			mutationErrors = append(mutationErrors, err)
-			continue
+		desired := false
+		if sourceManager, ok := api.fwManager.(haV2SourceAwareBanManager); ok {
+			failed := false
+			sources := make([]string, 0, len(byIP[ip]))
+			for source := range byIP[ip] {
+				sources = append(sources, source)
+			}
+			sort.Strings(sources)
+			for _, claimedSource := range sources {
+				source := haV2BunkerWebClaimSource(claimedSource, peer.Scope)
+				present, _, claimErr := sourceManager.sourceClaimState(ip, source, time.Time{}, now)
+				if claimErr == nil && present {
+					claimErr = sourceManager.unbanSource(ip, source)
+				}
+				if claimErr != nil {
+					mutationErrors = append(mutationErrors, claimErr)
+					failed = true
+				}
+			}
+			if failed {
+				continue
+			}
+		} else {
+			var reconcileErr error
+			desired, reconcileErr = api.reconcileDesiredHABanAfterRemoval(ip, now)
+			if reconcileErr != nil {
+				mutationErrors = append(mutationErrors, reconcileErr)
+				continue
+			}
 		}
 		if err := api.removeHATemporaryDeletes(ip, byIP[ip], peer.Scope); err != nil {
 			mutationErrors = append(mutationErrors, err)
@@ -2066,7 +2310,91 @@ func (api *haAPI) applyHATemporaryUnbans(w http.ResponseWriter, peer haPeerIdent
 	writeHAJSON(w, http.StatusOK, haTemporaryDeleteResult{Status: "ok", Deleted: deleted})
 }
 
+func (api *haAPI) updateHAV2LedgerRecord(key string, state string, remove bool, now time.Time) error {
+	return api.mutateHALedgerIfChanged(func(ledger *haBanLedger) (bool, error) {
+		changed := false
+		remaining := ledger.Bans[:0]
+		for _, record := range ledger.Bans {
+			if haLedgerRecordKey(record) != key {
+				remaining = append(remaining, record)
+				continue
+			}
+			if remove {
+				changed = true
+				continue
+			}
+			if record.State != state {
+				record.State = state
+				record.UpdatedAt = now.Format(time.RFC3339)
+				changed = true
+			}
+			remaining = append(remaining, record)
+		}
+		ledger.Bans = remaining
+		return changed, nil
+	})
+}
+
+func (api *haAPI) reconcileHAV2LedgerRecord(manager haV2SourceAwareBanManager, record haBanLedgerRecord, now time.Time) error {
+	expiresAt, err := parseCanonicalHATime(record.ExpiresAt)
+	if err != nil {
+		return err
+	}
+	key := haLedgerRecordKey(record)
+	source := haV2BunkerWebClaimSource(record.Source, record.PeerScope)
+	present, covers, err := manager.sourceClaimState(record.IP, source, expiresAt, now)
+	if err != nil {
+		return err
+	}
+	if record.State == haBanPendingDelete || !expiresAt.After(now) {
+		if present {
+			if err := manager.unbanSource(record.IP, source); err != nil {
+				return err
+			}
+		}
+		return api.updateHAV2LedgerRecord(key, "", true, now)
+	}
+	if !covers {
+		if err := manager.banSourceWithTTL(record.IP, source, boundedHARemainingTTL(expiresAt, now)); err != nil {
+			return err
+		}
+	}
+	if record.State == haBanPendingApply {
+		return api.updateHAV2LedgerRecord(key, haBanActive, false, now)
+	}
+	return nil
+}
+
+func (api *haAPI) reconcileHAV2BansLocked(now time.Time, limit int, manager haV2SourceAwareBanManager) error {
+	ledger, err := api.readHALedger()
+	if err != nil {
+		return err
+	}
+	if len(ledger.Bans) == 0 || limit <= 0 {
+		api.sweepCursor = 0
+		return nil
+	}
+	if limit > len(ledger.Bans) {
+		limit = len(ledger.Bans)
+	}
+	start := api.sweepCursor % len(ledger.Bans)
+	candidates := make([]haBanLedgerRecord, 0, limit)
+	for offset := 0; offset < limit; offset++ {
+		candidates = append(candidates, ledger.Bans[(start+offset)%len(ledger.Bans)])
+	}
+	api.sweepCursor = (start + limit) % len(ledger.Bans)
+	for _, record := range candidates {
+		if err := api.reconcileHAV2LedgerRecord(manager, record, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (api *haAPI) reconcileHABansLocked(now time.Time, limit int) error {
+	if sourceManager, ok := api.fwManager.(haV2SourceAwareBanManager); ok {
+		return api.reconcileHAV2BansLocked(now, limit, sourceManager)
+	}
 	ledger, err := api.readHALedger()
 	if err != nil {
 		return err
@@ -2186,7 +2514,7 @@ func writeHAJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func (api *haAPI) handleTelemetry(w http.ResponseWriter, r *http.Request) {
-	if _, authorized := api.authorizePeer(w, r); !authorized {
+	if _, authorized := api.authorizeAPIClient(w, r); !authorized {
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -2203,7 +2531,7 @@ func (api *haAPI) handleTelemetry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *haAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if _, authorized := api.authorizePeer(w, r); !authorized {
+	if _, authorized := api.authorizeAPIClient(w, r); !authorized {
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -2230,8 +2558,26 @@ func (api *haAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	capabilities := []string{"auth_all_routes", haFenceCapability, "peer_cidr", "tls_verified_client"}
-	if api.cfg.BunkerWebEnabled {
+	statusText := "online"
+	bunkerWebMutationReady := api.replicationV2 == nil
+	var v2Status *haRuntimeV2Status
+	if api.replicationV2 != nil {
+		status, statusErr := api.replicationV2.status(api.now())
+		if statusErr != nil {
+			http.Error(w, "HA v2 status unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		v2Status = &status
+		if status.State != haCoordinationHealthy {
+			statusText = string(status.State)
+		}
+		bunkerWebMutationReady = status.Role == haRuntimeV2Writer && status.State == haCoordinationHealthy
+	}
+	if api.cfg.BunkerWebEnabled && bunkerWebMutationReady {
 		capabilities = []string{"auth_all_routes", haFenceCapability, "peer_cidr", "sync_ttl", "sync_provenance", "tls_verified_client"}
+	}
+	if api.replicationV2 != nil {
+		capabilities = append(capabilities, "ha_replication_v2")
 	}
 	fenceStatus, fenceErr := api.fence.status(challenge)
 	if fenceErr != nil {
@@ -2248,9 +2594,10 @@ func (api *haAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 		APIVersion      string                  `json:"api_version"`
 		Capabilities    []string                `json:"capabilities"`
 		NativeSyncFence haNativeSyncFenceStatus `json:"native_sync_fence"`
+		ReplicationV2   *haRuntimeV2Status      `json:"replication_v2,omitempty"`
 	}{
-		Hostname: hostname, OS: osName, Version: api.coreVersion, Status: "online", APIVersion: "2",
-		Capabilities: capabilities, NativeSyncFence: fenceStatus,
+		Hostname: hostname, OS: osName, Version: api.coreVersion, Status: statusText, APIVersion: "2",
+		Capabilities: capabilities, NativeSyncFence: fenceStatus, ReplicationV2: v2Status,
 	})
 }
 
@@ -2280,14 +2627,153 @@ func prepareHAServerAPI(api *haAPI) error {
 	return api.reconcileHABans(time.Now(), maxHALedgerRecords)
 }
 
+func (api *haAPI) attestRetainedBunkerWebSchedulerScopes(ledger haBanLedger) error {
+	for _, record := range ledger.Bans {
+		identity, authorized := peerIdentityWithin(record.OriginPeerIP, api.bunkerWebSchedulers)
+		if !authorized || identity.Scope != record.PeerScope {
+			return fmt.Errorf("retained BunkerWeb provenance scope %s no longer resolves exactly from integrations.bunkerweb.scheduler_ips", record.PeerScope)
+		}
+	}
+	return nil
+}
+
+func attestRetainedBunkerWebModelClaims(ledger haBanLedger, model *haReplicationModel, now time.Time) error {
+	if model == nil || model.localNodeID == "" {
+		return fmt.Errorf("retained BunkerWeb provenance requires an initialized HA v2 writer model")
+	}
+	now = now.UTC()
+	for _, record := range ledger.Bans {
+		expiresAt, err := parseCanonicalHATime(record.ExpiresAt)
+		if err != nil {
+			return err
+		}
+		if record.State == haBanPendingDelete || !expiresAt.After(now) {
+			continue
+		}
+		source := haV2BunkerWebClaimSource(record.Source, record.PeerScope)
+		operation, exists := model.claims[model.localNodeID+"\x00"+source+"\x00"+record.IP]
+		if !exists || operation.Action != "upsert" || operation.ExpiresAt == "" {
+			return fmt.Errorf("retained BunkerWeb provenance record for %s is not represented by the durable HA v2 writer model", record.IP)
+		}
+		claimExpiry, err := parseCanonicalHATime(operation.ExpiresAt)
+		if err != nil || claimExpiry.Before(expiresAt) {
+			return fmt.Errorf("retained BunkerWeb provenance record for %s exceeds its durable HA v2 writer claim", record.IP)
+		}
+	}
+	return nil
+}
+
+// attestHAV2LegacyHandoff ensures that no untracked legacy writer or retained
+// provenance record can mutate the authoritative firewall beside the HA v2
+// transaction model. Enriched BunkerWeb requests remain available on the
+// healthy writer and are routed through the replicated manager after startup.
+func attestHAV2LegacyHandoff(api *haAPI) error {
+	if api == nil || api.fence == nil {
+		return fmt.Errorf("HA v2 requires the legacy writer fence")
+	}
+	status, err := api.fence.status(nil)
+	if err != nil {
+		return fmt.Errorf("attest HA v2 legacy writer fence: %w", err)
+	}
+	if status.State != haFenceStateActiveDrained || status.Condition == "" || status.DrainedAt == nil {
+		return fmt.Errorf("HA v2 requires an active drained legacy writer fence")
+	}
+	ledger, err := api.readHALedger()
+	if err != nil {
+		return fmt.Errorf("attest HA v2 legacy provenance ledger: %w", err)
+	}
+	if len(ledger.Bans) != 0 {
+		if api.cfg.Role != string(haRuntimeV2Writer) {
+			return fmt.Errorf("HA v2 requires the legacy provenance ledger to be drained on standby")
+		}
+		if err := api.attestRetainedBunkerWebSchedulerScopes(ledger); err != nil {
+			return fmt.Errorf("attest HA v2 retained scheduler authority: %w", err)
+		}
+		model, err := loadHAReplicationModel(api.cfg.StateFile, os.Geteuid(), api.cfg.ClusterID)
+		if err != nil {
+			return fmt.Errorf("HA v2 first activation requires the legacy provenance ledger to be drained: %w", err)
+		}
+		if model.epoch != api.cfg.Epoch || model.localNodeID != api.cfg.NodeID || model.peerNodeID != api.cfg.PeerID ||
+			model.staticRole != api.cfg.Role {
+			return fmt.Errorf("HA v2 provenance ledger does not match the durable writer identity")
+		}
+		if err := model.validateStaticRole(api.cfg.NodeID, api.cfg.PeerID, api.cfg.Role); err != nil {
+			return fmt.Errorf("attest HA v2 provenance ledger owner: %w", err)
+		}
+		anchor, present, err := readHAV2StateAnchor(api.cfg.StateFile+".anchor.json", os.Geteuid())
+		if err != nil || !present {
+			return fmt.Errorf("HA v2 provenance ledger requires an established durable state anchor")
+		}
+		expectedAnchor, err := stateAnchorForModel(model)
+		if err != nil {
+			return fmt.Errorf("HA v2 provenance ledger state anchor does not attest the durable writer")
+		}
+		store, storeErr := newHAV2TransactionStore(api.cfg.StateFile, api.cfg.TransactionFile, os.Geteuid())
+		if storeErr != nil {
+			return fmt.Errorf("attest HA v2 provenance ledger recovery state: %w", storeErr)
+		}
+		candidate, headPending, _, headErr := store.attestHeadJournalDurablePair(api.cfg.ClusterID, api.cfg.Epoch)
+		if headErr != nil {
+			return fmt.Errorf("HA v2 provenance ledger pending head proof is invalid: %w", headErr)
+		}
+		if headPending {
+			model = candidate
+		} else {
+			journal, _, transactionPending, transactionErr := readHAV2Transaction(store)
+			if transactionErr != nil {
+				return fmt.Errorf("HA v2 provenance ledger pending firewall proof is invalid: %w", transactionErr)
+			}
+			if transactionPending {
+				candidate, candidateErr := validateHAV2FirewallTransaction(journal)
+				if candidateErr != nil {
+					return fmt.Errorf("HA v2 provenance ledger pending firewall proof is invalid: %w", candidateErr)
+				}
+				if transactionErr := store.attestTransactionStage(journal, candidate); transactionErr != nil {
+					return fmt.Errorf("HA v2 provenance ledger pending firewall proof is invalid: %w", transactionErr)
+				}
+				model = candidate
+			} else if anchor != expectedAnchor {
+				return fmt.Errorf("HA v2 provenance ledger state anchor does not attest the durable writer")
+			}
+		}
+		if model.epoch != api.cfg.Epoch || model.localNodeID != api.cfg.NodeID || model.peerNodeID != api.cfg.PeerID ||
+			model.staticRole != api.cfg.Role {
+			return fmt.Errorf("HA v2 provenance ledger does not match the durable writer identity")
+		}
+		if err := model.validateStaticRole(api.cfg.NodeID, api.cfg.PeerID, api.cfg.Role); err != nil {
+			return fmt.Errorf("attest HA v2 provenance ledger owner: %w", err)
+		}
+		if err := attestRetainedBunkerWebModelClaims(ledger, model, api.now()); err != nil {
+			return fmt.Errorf("attest HA v2 retained provenance model: %w", err)
+		}
+	}
+	return nil
+}
+
 func StartHAServer(fwManager firewall.Manager) {
-	cfg := loadHAConfig()
-	if (cfg.Enabled != "y" && cfg.Enabled != "true" && cfg.Enabled != "1") || len(cfg.PeerIPs) == 0 {
+	if loadHAConfig().V2Enabled {
+		log.Printf("[HA Cluster] Refusing HA v2 through the legacy server entry point; use StartHAServerContext to retain the replicated manager")
 		return
 	}
+	if _, err := StartHAServerContext(context.Background(), fwManager); err != nil {
+		log.Printf("[HA Cluster] Refusing startup: %v", err)
+	}
+}
+
+// StartHAServerContext starts the legacy-compatible HA API and, when the
+// explicit v2 contract is enabled, returns the only firewall manager that the
+// daemon may expose to local writers. Any incomplete v2 attestation is a hard
+// startup error rather than a silent fallback to unreplicated mutations.
+func StartHAServerContext(ctx context.Context, fwManager firewall.Manager) (firewall.Manager, error) {
+	cfg := loadHAConfig()
+	if (cfg.Enabled != "y" && cfg.Enabled != "true" && cfg.Enabled != "1") || len(cfg.PeerIPs) == 0 {
+		return fwManager, nil
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("HA server requires a lifecycle context")
+	}
 	if cfg.Token == "" || strings.TrimSpace(cfg.Token) != cfg.Token {
-		log.Printf("[HA Cluster] Refusing to start: HA token is required")
-		return
+		return nil, fmt.Errorf("HA token is required")
 	}
 
 	coreVersion := "unknown"
@@ -2302,27 +2788,73 @@ func StartHAServer(fwManager firewall.Manager) {
 		}
 	}
 
-	cert, err := loadOrCreateHATLSCertificate(haTLSDir)
-	if err != nil {
-		log.Printf("[HA Cluster] Failed to load persistent TLS identity: %v", err)
-		return
-	}
 	api, err := newHAAPI(cfg, fwManager, coreVersion, haRuntimeBlacklistIPv4, haRuntimeBlacklistIPv6, haRuntimeTelemetryFile, haRuntimeBanLedgerFile)
 	if err != nil {
-		log.Printf("[HA Cluster] Refusing invalid HA configuration: %v", err)
-		return
+		return nil, fmt.Errorf("invalid HA configuration: %w", err)
 	}
-	if err := prepareHAServerAPI(api); err != nil {
-		log.Printf("[HA Cluster] Initial temporary-ban reconciliation failed: %v", err)
-		return
+	effectiveManager := fwManager
+	var certificate tls.Certificate
+	var components *haRuntimeV2Components
+	v2LeaseCommitted := false
+	defer func() {
+		if components != nil && !v2LeaseCommitted {
+			components.adapter.transactionStore.releaseInstanceLock()
+		}
+	}()
+	if cfg.V2Enabled {
+		if err := attestHAV2LegacyHandoff(api); err != nil {
+			return nil, err
+		}
+		components, err = prepareHARuntimeV2(ctx, cfg, fwManager, time.Now)
+		if err != nil {
+			return nil, fmt.Errorf("prepare HA v2: %w", err)
+		}
+		api.replicationV2 = components.adapter
+		certificate = components.identity.Certificate
+		effectiveManager = components.manager
+		api.fwManager = effectiveManager
+	} else {
+		certificate, err = loadOrCreateHATLSCertificate(haTLSDir)
+		if err != nil {
+			return nil, fmt.Errorf("load persistent TLS identity: %w", err)
+		}
 	}
-	api.startHASweeper(context.Background())
+	if components == nil {
+		if err := prepareHAServerAPI(api); err != nil {
+			return nil, fmt.Errorf("initial temporary-ban reconciliation failed: %w", err)
+		}
+	}
 
-	server := newHAServer(fmt.Sprintf(":%s", cfg.Port), api.handler(), cert)
+	server := newHAServer(fmt.Sprintf(":%s", cfg.Port), api.handler(), certificate)
+	if components != nil {
+		if err := configureHAV2ServerTLS(server, components.identity); err != nil {
+			return nil, err
+		}
+	}
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("bind HA listener: %w", err)
+	}
+	api.startHASweeper(ctx)
+	if components != nil {
+		components.startLoops(ctx, cfg.HeartbeatInterval)
+	}
 	log.Printf("[HA Cluster] Starting bounded TLS P2P API on port %s", cfg.Port)
 	go func() {
-		if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		tlsListener := tls.NewListener(listener, server.TLSConfig)
+		if err := server.Serve(tlsListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("[HA Cluster] Server failed: %v", err)
 		}
 	}()
+	go func() {
+		<-ctx.Done()
+		shutdownContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownContext)
+	}()
+	if components != nil {
+		retainHAV2InstanceLease(components.adapter.transactionStore)
+	}
+	v2LeaseCommitted = true
+	return effectiveManager, nil
 }

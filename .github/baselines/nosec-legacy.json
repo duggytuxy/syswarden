@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "baseline_commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc",
-  "policy": "The 48 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
+  "policy": "The 43 legacy annotations remain tracked debt. Deletions and fully qualified replacements are allowed; new, moved, or reintroduced unqualified annotations fail.",
   "legacy": [
     {
       "count": 2,
@@ -79,10 +79,6 @@
       "source_sha256": "f7d39535e61261c52e5dba1b61fb63b9fa17255e5edeacc3d357f315ca3b8c32"
     },
     {
-      "file": "src/core/syswarden-cli/pkg/integration/webhook.go",
-      "source_sha256": "e1d2a2508de003fdd398945bdc32f5a49c6f22b1538fc841e571b2b431350ba3"
-    },
-    {
       "file": "src/core/syswarden-cli/pkg/system/audit_linux.go",
       "source_sha256": "30d6c5d2adc1b8d3b9c36996e4330b4dce60c0f967eabaecf060e7f2f37d2fbf"
     },
@@ -148,10 +144,6 @@
     },
     {
       "file": "src/core/syswarden-core/telemetry/worker.go",
-      "source_sha256": "72a05269559be04474bda2f86084423c8f6f3e291074aa9e7426cde3b4b6efdc"
-    },
-    {
-      "file": "src/core/syswarden-core/telemetry/worker.go",
       "source_sha256": "9567064fa583a660078ad085e8c183da078d7477291002d03aed5055e6216d25"
     },
     {
@@ -172,19 +164,7 @@
     },
     {
       "file": "src/core/syswarden-core/telemetry/worker.go",
-      "source_sha256": "f1ff9de73dc1223a2c00ecdaafa5fc70797e4a066e5380c594c05ff9d8fa236f"
-    },
-    {
-      "file": "src/core/syswarden-core/telemetry/worker.go",
       "source_sha256": "fe7a13f811e83c2a895135b3fea5937cab23eadcab4509c5665e35c6e3e6cd8f"
-    },
-    {
-      "file": "src/core/syswarden-tui/main.go",
-      "source_sha256": "8f0c62de35880732fd4ce51e319dd29e4d56b972a10f1c6fa19ac9c89df4182d"
-    },
-    {
-      "file": "src/core/syswarden-tui/main.go",
-      "source_sha256": "ea82adfdabd8170987efaa96dd83ebaddf0c45caf7a0832dfc27ff28ea6abe5f"
     }
   ]
 }

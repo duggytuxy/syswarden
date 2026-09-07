@@ -10,12 +10,13 @@ import os
 import re
 import stat
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
 
 DEFAULT_MATRIX = Path(__file__).with_suffix(".json")
+V4100_MATRIX = Path(__file__).with_name("package_qualification_matrix_v4.10.0.json")
 MAX_MATRIX_BYTES = 128 * 1024
 IMAGE_PATTERN = re.compile(
     r"^(?P<repository>[a-z0-9][a-z0-9./_-]*):"
@@ -48,6 +49,16 @@ class BaselineAsset:
     size: int
     architecture: str
     sha256: str
+
+
+@dataclass(frozen=True)
+class MatrixContract:
+    target_release: str
+    path: Path
+    baseline_source: dict[str, Any]
+    baseline_assets: tuple[BaselineAsset, ...]
+    required_evidence: tuple[str, ...]
+    cells: tuple[CellContract, ...]
 
 
 EXPECTED_ARCHITECTURE = {
@@ -298,6 +309,92 @@ EXPECTED_CELLS = (
     ),
 )
 
+V4100_BASELINE_SOURCE = {
+    "release": "v4.04.3",
+    "commit": "381c1f8d91459a9b20605629c725900abd81dee8",
+    "release_id": 384037482,
+    "release_state": "public-stable",
+    "asset_selection": "github-asset-id",
+}
+
+V4100_BASELINE_ASSETS = (
+    BaselineAsset(
+        "SHA256SUMS.txt",
+        548677391,
+        283,
+        "metadata",
+        "331bd7ae9d8afeee7e9a76f0925b057d12287215574c5dc11bb891912cc755d0",
+    ),
+    BaselineAsset(
+        "syswarden_4.04.3_amd64.deb",
+        548677417,
+        15129624,
+        "amd64",
+        "e9ea3252de5668eaa10794333b4cb533a0acedfeac60105b50e512aa915b2612",
+    ),
+    BaselineAsset(
+        "syswarden-4.04.3-1.x86_64.rpm",
+        548677392,
+        15415655,
+        "x86_64",
+        "15271aecd6bc5801eb80387a2e40928ac5cf8851cf2da9899fa1a0905efae4fd",
+    ),
+    BaselineAsset(
+        "syswarden_4.04.3_x86_64.apk",
+        548677418,
+        15327844,
+        "x86_64",
+        "adab88015ac97d6c351a4e4cecae85658bceca1af047b83055fec3fa091e1538",
+    ),
+)
+
+V4100_EVIDENCE = EXPECTED_EVIDENCE + (
+    "native-package-signature-verification",
+    "native-extended-capability-verdict",
+    "second-rhel-profile-lifecycle-verdict",
+    "go127-pilot-verdict",
+)
+
+
+def _v4100_cells() -> tuple[CellContract, ...]:
+    contracts: list[CellContract] = []
+    for cell in EXPECTED_CELLS:
+        checks = cell.required_checks + (
+            "native-package-verification",
+            "native-extended-capabilities",
+        )
+        if cell.identifier == "RPM-A9":
+            cell = replace(cell, real_host_mode="required", reboot_count=2)
+        contracts.append(replace(cell, required_checks=checks))
+    return tuple(contracts)
+
+
+V4100_CELLS = _v4100_cells()
+
+V4043_CONTRACT = MatrixContract(
+    target_release="v4.04.3",
+    path=DEFAULT_MATRIX,
+    baseline_source=EXPECTED_BASELINE_SOURCE,
+    baseline_assets=EXPECTED_BASELINE_ASSETS,
+    required_evidence=EXPECTED_EVIDENCE,
+    cells=EXPECTED_CELLS,
+)
+V4100_CONTRACT = MatrixContract(
+    target_release="v4.10.0",
+    path=V4100_MATRIX,
+    baseline_source=V4100_BASELINE_SOURCE,
+    baseline_assets=V4100_BASELINE_ASSETS,
+    required_evidence=V4100_EVIDENCE,
+    cells=V4100_CELLS,
+)
+CONTRACTS_BY_TARGET = {
+    contract.target_release: contract
+    for contract in (V4043_CONTRACT, V4100_CONTRACT)
+}
+MATRIX_PATHS_BY_TARGET = {
+    target: contract.path for target, contract in CONTRACTS_BY_TARGET.items()
+}
+
 TOP_LEVEL_KEYS = {
     "schema_version",
     "matrix_id",
@@ -458,17 +555,19 @@ def _require_exact_list(value: object, expected: tuple[str, ...], label: str) ->
         raise QualificationMatrixError(f"{label} does not match the frozen order")
 
 
-def _validate_baseline_assets(value: object) -> None:
+def _validate_baseline_assets(
+    value: object, expected_assets: tuple[BaselineAsset, ...]
+) -> None:
     if not isinstance(value, list):
         raise QualificationMatrixError("package_sources.baseline.assets must be an array")
-    if len(value) != len(EXPECTED_BASELINE_ASSETS):
+    if len(value) != len(expected_assets):
         raise QualificationMatrixError(
             "package_sources.baseline.assets must contain exactly four entries"
         )
     names: list[str] = []
     identifiers: list[int] = []
     for index, (raw, contract) in enumerate(
-        zip(value, EXPECTED_BASELINE_ASSETS, strict=True)
+        zip(value, expected_assets, strict=True)
     ):
         label = f"package_sources.baseline.assets[{index}]"
         asset = _require_exact_keys(raw, BASELINE_ASSET_KEYS, label)
@@ -494,7 +593,7 @@ def _validate_baseline_assets(value: object) -> None:
         raise QualificationMatrixError("baseline asset IDs must be unique")
 
 
-def _validate_package_sources(value: object) -> None:
+def _validate_package_sources(value: object, contract: MatrixContract) -> None:
     sources = _require_exact_keys(
         value, {"candidate", "baseline", "artifact_inventory"}, "package_sources"
     )
@@ -503,19 +602,19 @@ def _validate_package_sources(value: object) -> None:
     )
     baseline = _require_exact_keys(
         sources["baseline"],
-        set(EXPECTED_BASELINE_SOURCE) | {"assets"},
+        set(contract.baseline_source) | {"assets"},
         "package_sources.baseline",
     )
     _require_exact_mapping(
-        {key: baseline[key] for key in EXPECTED_BASELINE_SOURCE},
-        EXPECTED_BASELINE_SOURCE,
+        {key: baseline[key] for key in contract.baseline_source},
+        contract.baseline_source,
         "package_sources.baseline identity",
     )
     if COMMIT_PATTERN.fullmatch(baseline["commit"]) is None:
         raise QualificationMatrixError("baseline commit is not a full lowercase SHA")
     if type(baseline["release_id"]) is not int or baseline["release_id"] <= 0:
         raise QualificationMatrixError("baseline release_id must be a positive integer")
-    _validate_baseline_assets(baseline["assets"])
+    _validate_baseline_assets(baseline["assets"], contract.baseline_assets)
     _require_exact_list(
         sources["artifact_inventory"],
         EXPECTED_ARTIFACT_INVENTORY,
@@ -580,16 +679,16 @@ def _validate_real_host(value: object, contract: CellContract, label: str) -> No
         raise QualificationMatrixError(f"{label} does not match the frozen obligation")
 
 
-def _validate_cells(value: object) -> None:
+def _validate_cells(value: object, expected_cells: tuple[CellContract, ...]) -> None:
     if not isinstance(value, list):
         raise QualificationMatrixError("cells must be an array")
-    if len(value) != len(EXPECTED_CELLS):
+    if len(value) != len(expected_cells):
         raise QualificationMatrixError(
-            f"cells must contain exactly {len(EXPECTED_CELLS)} entries"
+            f"cells must contain exactly {len(expected_cells)} entries"
         )
     identifiers: list[str] = []
     images: list[str] = []
-    for index, (raw, contract) in enumerate(zip(value, EXPECTED_CELLS, strict=True)):
+    for index, (raw, contract) in enumerate(zip(value, expected_cells, strict=True)):
         label = f"cells[{index}]"
         cell = _require_exact_keys(raw, CELL_KEYS, label)
         for field, expected in (
@@ -627,20 +726,36 @@ def _validate_cells(value: object) -> None:
         raise QualificationMatrixError("cell image identities must be unique")
 
 
+def contract_for_target(target_release: object) -> MatrixContract:
+    if not isinstance(target_release, str):
+        raise QualificationMatrixError("target_release must be a string")
+    try:
+        return CONTRACTS_BY_TARGET[target_release]
+    except KeyError as exc:
+        raise QualificationMatrixError(
+            f"target_release is unsupported: {target_release!r}"
+        ) from exc
+
+
+def matrix_path_for_target(target_release: str) -> Path:
+    return contract_for_target(target_release).path
+
+
 def validate_document(document: object) -> dict[str, Any]:
     matrix = _require_exact_keys(document, TOP_LEVEL_KEYS, "matrix")
     _reject_active_arm_tokens(matrix)
+    contract = contract_for_target(matrix["target_release"])
     if type(matrix["schema_version"]) is not int or matrix["schema_version"] != 1:
         raise QualificationMatrixError("schema_version must equal integer 1")
     if matrix["matrix_id"] != "syswarden-package-qualification/v1":
         raise QualificationMatrixError("matrix_id does not match the v1 contract")
-    if matrix["target_release"] != "v4.04.3":
-        raise QualificationMatrixError("target_release must equal v4.04.3")
     _require_exact_mapping(matrix["architecture"], EXPECTED_ARCHITECTURE, "architecture")
-    _validate_package_sources(matrix["package_sources"])
+    _validate_package_sources(matrix["package_sources"], contract)
     _validate_budgets(matrix["budgets"])
-    _require_exact_list(matrix["required_evidence"], EXPECTED_EVIDENCE, "required_evidence")
-    _validate_cells(matrix["cells"])
+    _require_exact_list(
+        matrix["required_evidence"], contract.required_evidence, "required_evidence"
+    )
+    _validate_cells(matrix["cells"], contract.cells)
     return matrix
 
 
@@ -662,9 +777,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check",
         type=Path,
-        default=DEFAULT_MATRIX,
+        default=None,
         metavar="PATH",
-        help=f"matrix to validate (default: {DEFAULT_MATRIX})",
+        help=(
+            "matrix to validate (default: the versioned matrix selected by "
+            "--expected-target-release, otherwise the v4.04.3 snapshot)"
+        ),
     )
     parser.add_argument(
         "--expected-target-release",
@@ -676,7 +794,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        matrix, matrix_sha256 = load_matrix_snapshot(args.check)
+        selected_path = args.check
+        if selected_path is None:
+            selected_path = (
+                matrix_path_for_target(args.expected_target_release)
+                if args.expected_target_release is not None
+                else DEFAULT_MATRIX
+            )
+        matrix, matrix_sha256 = load_matrix_snapshot(selected_path)
         if (
             args.expected_target_release is not None
             and matrix["target_release"] != args.expected_target_release

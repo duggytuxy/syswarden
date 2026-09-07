@@ -138,6 +138,8 @@ func main() {
 		log.Fatalf("[SYSWARDEN-Core] Failed to initialize firewall: %v", err)
 	}
 	log.Printf("[SYSWARDEN-Core] Firewall backend initialized: %s", fwManager.Name())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Load WAAP Config to get global threshold defaults
 	waapConfig := network.LoadWAAPConfig()
@@ -149,8 +151,14 @@ func main() {
 	}
 	log.Printf("[SYSWARDEN-Core] Loaded %d threat signatures", threatEngine.RuleCount())
 
+	// Start HA before exposing any daemon-originated firewall writer. In HA v2
+	// mode this returns the fail-closed replicated manager used by every worker.
+	fwManager, err = network.StartHAServerContext(ctx, fwManager)
+	if err != nil {
+		log.Fatalf("[SYSWARDEN-Core] Failed to initialize HA runtime: %v", err)
+	}
+
 	// Initialize Unix Domain Socket
-	ctx, cancel := context.WithCancel(context.Background())
 	udsServer := network.NewUDSServer(ctx, "/var/run/syswarden.sock", threatEngine, fwManager, telemetryLogger)
 	if err := udsServer.Start(); err != nil {
 		log.Fatalf("[SYSWARDEN-Core] Failed to start UDS server: %v", err)
@@ -197,9 +205,6 @@ func main() {
 	// Start L7 WAAP Analytics Engine (Log Forwarder)
 	waapEngine := network.NewWAAPEngine(fwManager, telemetryLogger, threatEngine)
 	waapEngine.StartContext(ctx)
-
-	// Start HA P2P Server (Zero-Touch TLS)
-	network.StartHAServer(fwManager)
 
 	// Start the selected local hardening checks. These checks are not a
 	// compliance assessment.

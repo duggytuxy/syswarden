@@ -166,10 +166,10 @@
       "SysWarden package rollback is an explicit package and configuration recovery procedure, not a general host-state reversal."
     ],
     "Migration-v4.03.2-to-v4.03.3.md": [
-      "This runbook covers the supported AMD64 Linux package transition from the published v4.03.2 release to the v4.03.3 Patch candidate.",
-      "The Ubuntu 26.04 installation through a deterministic local TLS fixture on supported OSINT source paths is a pending manual release-owner gate.",
+      "This runbook covers the supported AMD64 Linux package transition from the published v4.03.2 release to the published v4.03.3 Patch release.",
+      "The v4.03.3 qualification included an Ubuntu 26.04 installation through deterministic local TLS fixtures on supported OSINT source paths.",
       "SysWarden maintains the same logical dynamic bans in four interval sets:",
-      "The candidate reload must demonstrate that it can inspect the old state, preserve only unambiguous valid dynamic bans and discard ambiguous legacy intervals.",
+      "The v4.03.3 reload must demonstrate that it can inspect the old state, preserve only unambiguous valid dynamic bans and discard ambiguous legacy intervals.",
       "`syswarden update` cannot repair that path by itself.",
       "flush set inet \"syswarden\" banned_ips",
       "Each warned interval must be absent from all four post-upgrade sets.",
@@ -188,9 +188,16 @@
     {
       "case": "root",
       "stream": "stdout",
-      "reason": "Advance the minor version while preserving the bounded built-in operator reference.",
+      "reason": "Advance the Major version while preserving the bounded built-in operator reference.",
       "before": "SYSWARDEN v4.02.8 CLI\nUse 'syswarden manual' for the comprehensive SysAdmin documentation, or 'syswarden --help' for standard commands.\n",
-      "after": "SYSWARDEN v4.04.3 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+      "after": "SYSWARDEN v4.10.0 CLI\nUse 'syswarden manual' for the built-in operator reference, or 'syswarden --help' for command help.\n"
+    },
+    {
+      "case": "help:syswarden update",
+      "stream": "stdout",
+      "reason": "Approve the exact offline qualification description and its two inseparable explicit selector flags.",
+      "before": "Check and install SYSWARDEN updates\n\nUsage:\n  syswarden update [flags]\n\nFlags:\n  -h, --help   help for update\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n",
+      "after": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. The v4.02.8 first upgrade must use a separately verified manual package procedure.\n\nUsage:\n  syswarden update [flags]\n\nFlags:\n      --candidate-version string      exact candidate version required from the offline qualification bundle\n  -h, --help                          help for update\n      --qualification-bundle string   absolute path to a protected local signed-candidate bundle; disables all network discovery\n\nGlobal Flags:\n      --config string   config file (default \"/opt/syswarden/syswarden-auto.conf\")\n"
     },
     {
       "case": "help:syswarden",
@@ -556,9 +563,79 @@
     {
       "path": "syswarden update",
       "field": "long",
-      "reason": "Document the signed-manifest verification boundary and the manual v4.02.8 first hop.",
+      "reason": "Document the signed-manifest verification boundary, the explicit offline qualification channel and the manual v4.02.8 first hop.",
       "before": "",
-      "after": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. The v4.02.8 first upgrade must use a separately verified manual package procedure."
+      "after": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. The v4.02.8 first upgrade must use a separately verified manual package procedure."
+    },
+    {
+      "path": "syswarden update",
+      "field": "flags",
+      "reason": "Approve the two inseparable explicit selectors for the protected local qualification channel.",
+      "before": [
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for update"
+        }
+      ],
+      "after": [
+        {
+          "name": "candidate-version",
+          "type": "string",
+          "default": "",
+          "usage": "exact candidate version required from the offline qualification bundle"
+        },
+        {
+          "name": "config",
+          "type": "string",
+          "default": "/opt/syswarden/syswarden-auto.conf",
+          "usage": "config file",
+          "persistent": true
+        },
+        {
+          "name": "help",
+          "shorthand": "h",
+          "type": "bool",
+          "default": "false",
+          "no_option": "true",
+          "usage": "help for update"
+        },
+        {
+          "name": "qualification-bundle",
+          "type": "string",
+          "default": "",
+          "usage": "absolute path to a protected local signed-candidate bundle; disables all network discovery"
+        }
+      ]
+    },
+    {
+      "path": "syswarden update",
+      "field": "arg_outcomes",
+      "reason": "Approve the fail-closed removal of positional arguments from the update command.",
+      "before": {
+        "0": "ok",
+        "1": "ok",
+        "2": "ok",
+        "3": "ok",
+        "4": "ok"
+      },
+      "after": {
+        "0": "ok",
+        "1": "unknown command \"arg-1\" for \"syswarden update\"",
+        "2": "unknown command \"arg-1\" for \"syswarden update\"",
+        "3": "unknown command \"arg-1\" for \"syswarden update\"",
+        "4": "unknown command \"arg-1\" for \"syswarden update\""
+      }
     },
     {
       "path": "syswarden update",
@@ -674,6 +751,14 @@
         "architecture": "x86_64",
         "release_name": "syswarden_{version}_x86_64.apk",
         "workflow_name": "syswarden_${VERSION}_x86_64.apk"
+      }
+    ],
+    "optional_workflow_artifacts": [
+      {
+        "family": "RPM",
+        "architecture": "x86_64",
+        "variant": "rhel-package-owned",
+        "workflow_name": "syswarden-${VERSION}-1.rhelpo.x86_64.rpm"
       }
     ],
     "inventory_phrases": {

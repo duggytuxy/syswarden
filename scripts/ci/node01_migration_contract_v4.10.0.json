@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "contract_id": "syswarden-node01-native-migration/v1",
+  "target_release": "v4.10.0",
+  "qualification_state": "candidate-not-qualified",
+  "repository": "duggytuxy/syswarden",
+  "host": {
+    "node_id": "node01",
+    "profile_id": "DEB-13",
+    "os_id": "debian",
+    "os_version": "13",
+    "architecture": "amd64",
+    "package_family": "deb",
+    "service_manager": "systemd"
+  },
+  "versions": {
+    "baseline": {
+      "tag": "v4.02.8",
+      "commit": "371d353e871fedb410b08f0618a1ae6aa2f7fedc"
+    },
+    "trust_bootstrap": {
+      "tag": "v4.03.2",
+      "commit": "2eae757bbdee510fdd1058ba7770f2c5564ecb23"
+    },
+    "stable": {
+      "tag": "v4.04.3",
+      "commit": "381c1f8d91459a9b20605629c725900abd81dee8"
+    },
+    "candidate": {
+      "tag": "v4.10.0",
+      "commit_source": "validation-argument"
+    }
+  },
+  "update_trust": {
+    "manifest_signature_algorithm": "Ed25519",
+    "key_id": "syswarden-update-2026-01",
+    "public_key_sha256": "4234be4f695141ffd7c2e136745d9742934b139c0d097a6ab5ce425b1dd8fda6"
+  },
+  "native_package_trust": {
+    "signature_algorithm": "OpenPGP-RSA-SHA256",
+    "fingerprint_source": "validation-argument-must-match-qualified-signing-policy"
+  },
+  "candidate_channel": {
+    "command": "syswarden update --qualification-bundle /absolute/path --candidate-version v4.10.0",
+    "executor": "candidate-cli-attested-before-execution",
+    "required_flags_together": true,
+    "network_requests": 0,
+    "fallback": false,
+    "bundle_identity": "producer-attested-canonical-descriptor",
+    "candidate_sha_binding": "protected-producer-sha-bound-to-bundle-descriptor-outside-update-manifest-v1",
+    "manifest_contains_candidate_sha": false,
+    "prevalidation_config_loads": 0,
+    "prevalidation_firewall_recovery_runs": 0,
+    "operator_state_until_install": "unchanged",
+    "firewall_state_until_install": "unchanged"
+  },
+  "limits": {
+    "maximum_input_bytes": 1048576,
+    "maximum_campaign_seconds": 21600,
+    "maximum_future_skew_seconds": 300,
+    "maximum_reference_bytes": 128
+  },
+  "guardrails": {
+    "observation_origin": "real-native-node01",
+    "synthetic_observations": false,
+    "ci_execution": "validator-unit-tests-only",
+    "host_changes": "operator-authorized-native-lab-only",
+    "snapshot_restore": "provider-console-operator-action",
+    "candidate_installation": "offline-signed-qualification-bundle",
+    "post_publication_updater_acceptance": "separate-required-check-after-publication",
+    "publication": false
+  },
+  "checkpoints": [
+    {"id": "baseline-v4028", "sequence": 1, "version": "v4.02.8", "service_state": "active"},
+    {"id": "bootstrap-v4032-initial", "sequence": 2, "version": "v4.03.2", "service_state": "active"},
+    {"id": "stable-v4043-initial", "sequence": 3, "version": "v4.04.3", "service_state": "active"},
+    {"id": "candidate-v4100-initial", "sequence": 4, "version": "v4.10.0", "service_state": "active"},
+    {"id": "stable-v4043-rollback", "sequence": 5, "version": "v4.04.3", "service_state": "active"},
+    {"id": "baseline-v4028-snapshot", "sequence": 6, "version": "v4.02.8", "service_state": "active"},
+    {"id": "bootstrap-v4032-reupgrade", "sequence": 7, "version": "v4.03.2", "service_state": "active"},
+    {"id": "stable-v4043-reupgrade", "sequence": 8, "version": "v4.04.3", "service_state": "active"},
+    {"id": "candidate-v4100-reupgrade", "sequence": 9, "version": "v4.10.0", "service_state": "active"},
+    {"id": "purged", "sequence": 10, "version": "absent", "service_state": "absent"}
+  ],
+  "scenarios": [
+    {
+      "id": "baseline-v4028-attested",
+      "sequence": 1,
+      "from_checkpoint": "baseline-v4028",
+      "to_checkpoint": "baseline-v4028",
+      "verified_manifests": [],
+      "required_checks": [
+        "native_host_attested",
+        "baseline_version_exact",
+        "package_manager_healthy",
+        "services_active",
+        "firewall_owned_rules_present",
+        "configuration_and_state_canary_seeded"
+      ]
+    },
+    {
+      "id": "verified-manual-trust-bootstrap-v4028-to-v4032",
+      "sequence": 2,
+      "from_checkpoint": "baseline-v4028",
+      "to_checkpoint": "bootstrap-v4032-initial",
+      "verified_manifests": [],
+      "required_checks": [
+        "historical_updater_not_used",
+        "manual_first_hop_procedure_used",
+        "release_checksum_file_verified",
+        "package_sha256_matched_release_checksum",
+        "bootstrap_release_commit_bound",
+        "bootstrap_version_exact",
+        "package_manager_healthy"
+      ]
+    },
+    {
+      "id": "signed-update-v4032-to-v4043",
+      "sequence": 3,
+      "from_checkpoint": "bootstrap-v4032-initial",
+      "to_checkpoint": "stable-v4043-initial",
+      "verified_manifests": ["v4.04.3"],
+      "required_checks": [
+        "syswarden_update_used",
+        "manifest_signature_verified_before_install",
+        "package_digest_matched_manifest",
+        "stable_version_exact",
+        "package_manager_healthy"
+      ]
+    },
+    {
+      "id": "stable-v4043-operational",
+      "sequence": 4,
+      "from_checkpoint": "stable-v4043-initial",
+      "to_checkpoint": "stable-v4043-initial",
+      "verified_manifests": [],
+      "required_checks": [
+        "services_active",
+        "firewall_owned_rules_effective",
+        "local_audit_clean",
+        "configuration_and_state_preserved"
+      ]
+    },
+    {
+      "id": "verified-candidate-install-v4043-to-v4100",
+      "sequence": 5,
+      "from_checkpoint": "stable-v4043-initial",
+      "to_checkpoint": "candidate-v4100-initial",
+      "verified_manifests": ["v4.10.0"],
+      "required_checks": [
+        "offline_qualification_update_channel_used",
+        "candidate_cli_attested_before_execution",
+        "offline_qualification_bundle_used",
+        "exact_qualification_command_used",
+        "zero_network_and_no_fallback",
+        "prevalidation_config_loads_zero",
+        "prevalidation_firewall_recovery_runs_zero",
+        "preinstallation_operator_state_unchanged",
+        "preinstallation_firewall_state_unchanged",
+        "bundle_identity_and_digest_bound",
+        "producer_candidate_sha_bound_outside_manifest",
+        "manifest_signature_verified_before_install",
+        "package_digest_matched_manifest",
+        "detached_deb_signature_verified",
+        "candidate_commit_bound",
+        "candidate_version_exact",
+        "package_manager_healthy"
+      ]
+    },
+    {
+      "id": "candidate-configuration-state-preservation",
+      "sequence": 6,
+      "from_checkpoint": "baseline-v4028",
+      "to_checkpoint": "candidate-v4100-initial",
+      "verified_manifests": [],
+      "required_checks": [
+        "configuration_semantics_equal",
+        "operator_state_canary_equal",
+        "complete_state_inventory_reviewed",
+        "ownership_and_modes_safe",
+        "migration_backup_present",
+        "defaults_did_not_overwrite_operator_values"
+      ]
+    },
+    {
+      "id": "candidate-native-capabilities",
+      "sequence": 7,
+      "from_checkpoint": "candidate-v4100-initial",
+      "to_checkpoint": "candidate-v4100-initial",
+      "verified_manifests": [],
+      "required_checks": [
+        "services_active",
+        "firewall_owned_rules_effective",
+        "hids_real_event_detected",
+        "hips_controlled_attack_blocked",
+        "waap_controlled_request_classified",
+        "asn_enrichment_exact",
+        "geo_enrichment_exact",
+        "local_audit_clean"
+      ]
+    },
+    {
+      "id": "signed-rollback-v4100-to-v4043",
+      "sequence": 8,
+      "from_checkpoint": "candidate-v4100-initial",
+      "to_checkpoint": "stable-v4043-rollback",
+      "verified_manifests": ["v4.04.3"],
+      "required_checks": [
+        "supported_rollback_path_used",
+        "manifest_signature_verified_before_install",
+        "package_digest_matched_manifest",
+        "stable_version_exact",
+        "configuration_and_state_preserved",
+        "services_and_firewall_recovered"
+      ]
+    },
+    {
+      "id": "snapshot-recovery-v4028",
+      "sequence": 9,
+      "from_checkpoint": "stable-v4043-rollback",
+      "to_checkpoint": "baseline-v4028-snapshot",
+      "verified_manifests": [],
+      "required_checks": [
+        "provider_snapshot_restored",
+        "new_boot_attested",
+        "baseline_version_exact",
+        "configuration_and_state_preserved",
+        "services_and_firewall_recovered",
+        "package_manager_healthy"
+      ]
+    },
+    {
+      "id": "verified-reupgrade-v4028-through-v4043-to-v4100",
+      "sequence": 10,
+      "from_checkpoint": "baseline-v4028-snapshot",
+      "to_checkpoint": "candidate-v4100-reupgrade",
+      "verified_manifests": ["v4.04.3", "v4.10.0"],
+      "required_checks": [
+        "manual_first_hop_procedure_used",
+        "release_checksum_file_verified",
+        "bootstrap_package_sha256_matched_release_checksum",
+        "stable_signed_syswarden_update_hop_used",
+        "candidate_offline_qualification_bundle_used",
+        "candidate_cli_attested_before_execution",
+        "zero_network_and_no_fallback",
+        "prevalidation_config_loads_zero",
+        "prevalidation_firewall_recovery_runs_zero",
+        "preinstallation_operator_state_unchanged",
+        "preinstallation_firewall_state_unchanged",
+        "bundle_identity_and_digest_bound",
+        "producer_candidate_sha_bound_outside_manifest",
+        "both_manifest_signatures_verified_before_install",
+        "both_package_digests_matched_manifests",
+        "candidate_detached_deb_signature_verified",
+        "candidate_commit_bound",
+        "intermediate_bootstrap_checkpoint_attested",
+        "intermediate_stable_checkpoint_attested",
+        "configuration_and_state_preserved",
+        "services_and_firewall_recovered"
+      ]
+    },
+    {
+      "id": "candidate-clean-uninstall-purge",
+      "sequence": 11,
+      "from_checkpoint": "candidate-v4100-reupgrade",
+      "to_checkpoint": "purged",
+      "verified_manifests": [],
+      "required_checks": [
+        "package_absent",
+        "services_absent",
+        "processes_absent",
+        "dedicated_firewall_objects_absent",
+        "dedicated_configuration_absent",
+        "dedicated_state_absent",
+        "dedicated_logs_absent",
+        "package_manager_healthy"
+      ]
+    }
+  ]
+}

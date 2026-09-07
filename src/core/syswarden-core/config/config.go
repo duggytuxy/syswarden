@@ -172,10 +172,27 @@ type integrationsConfig struct {
 }
 
 type haConfig struct {
-	Enabled  bool     `mapstructure:"enabled"`
-	PeerIPs  []string `mapstructure:"peer_ips"`
-	PeerPort int      `mapstructure:"peer_port"`
-	Token    string   `mapstructure:"token"`
+	Enabled                  bool     `mapstructure:"enabled"`
+	PeerIPs                  []string `mapstructure:"peer_ips"`
+	PeerPort                 int      `mapstructure:"peer_port"`
+	Token                    string   `mapstructure:"token"`
+	V2Enabled                bool     `mapstructure:"v2_enabled"`
+	ClusterID                string   `mapstructure:"cluster_id"`
+	Epoch                    uint64   `mapstructure:"epoch"`
+	NodeID                   string   `mapstructure:"node_id"`
+	PeerID                   string   `mapstructure:"peer_id"`
+	Role                     string   `mapstructure:"role"`
+	V2SecretFile             string   `mapstructure:"v2_secret_file"`
+	TLSCertFile              string   `mapstructure:"tls_cert_file"`
+	TLSKeyFile               string   `mapstructure:"tls_key_file"`
+	TLSCAFile                string   `mapstructure:"tls_ca_file"`
+	PeerTLSName              string   `mapstructure:"peer_tls_name"`
+	PeerCertSHA256           []string `mapstructure:"peer_cert_sha256"`
+	StateFile                string   `mapstructure:"state_file"`
+	TransactionFile          string   `mapstructure:"transaction_file"`
+	HeartbeatIntervalSeconds int      `mapstructure:"heartbeat_interval_seconds"`
+	HeartbeatTimeoutSeconds  int      `mapstructure:"heartbeat_timeout_seconds"`
+	RequestTimeoutSeconds    int      `mapstructure:"request_timeout_seconds"`
 }
 
 type siemConfig struct {
@@ -199,7 +216,8 @@ type webhooksConfig struct {
 }
 
 type bunkerWebConfig struct {
-	Enabled bool `mapstructure:"enabled"`
+	Enabled      bool     `mapstructure:"enabled"`
+	SchedulerIPs []string `mapstructure:"scheduler_ips"`
 }
 
 type wazuhConfig struct {
@@ -426,6 +444,11 @@ func setDefaults(v *viper.Viper, configPath string) {
 	v.SetDefault("waap.bruteforce_window_seconds", 60)
 	v.SetDefault("security.compliance.check_interval", "24h")
 	v.SetDefault("integrations.ha.peer_port", 62026)
+	v.SetDefault("integrations.ha.state_file", "/var/lib/syswarden/ha/replication-v2.json")
+	v.SetDefault("integrations.ha.transaction_file", "/var/lib/syswarden/ha/replication-v2.wal.json")
+	v.SetDefault("integrations.ha.heartbeat_interval_seconds", 2)
+	v.SetDefault("integrations.ha.heartbeat_timeout_seconds", 10)
+	v.SetDefault("integrations.ha.request_timeout_seconds", 5)
 	v.SetDefault("integrations.bunkerweb.enabled", false)
 }
 
@@ -657,11 +680,55 @@ func validateRuntimeConfig(value *runtimeConfig) error {
 			return fmt.Errorf("invalid HA peer %q", peer)
 		}
 	}
+	for _, scheduler := range value.Integrations.BunkerWeb.SchedulerIPs {
+		if !validBoundedPeerPrefix(scheduler) {
+			return fmt.Errorf("invalid BunkerWeb scheduler IP or CIDR %q", scheduler)
+		}
+	}
 	if value.Integrations.HA.Enabled && (!validToken(value.Integrations.HA.Token) || len(value.Integrations.HA.PeerIPs) == 0) {
 		return fmt.Errorf("enabled HA requires authenticated canonical peers")
 	}
+	if value.Integrations.HA.V2Enabled {
+		if !value.Integrations.HA.Enabled || len(value.Integrations.HA.PeerIPs) != 1 ||
+			!validHAV2ID(value.Integrations.HA.ClusterID) || value.Integrations.HA.Epoch == 0 ||
+			!validHAV2ID(value.Integrations.HA.NodeID) || !validHAV2ID(value.Integrations.HA.PeerID) ||
+			value.Integrations.HA.NodeID == value.Integrations.HA.PeerID ||
+			(value.Integrations.HA.Role != "writer" && value.Integrations.HA.Role != "standby") ||
+			!validHAV2AbsolutePath(value.Integrations.HA.V2SecretFile) || !validHAV2AbsolutePath(value.Integrations.HA.TLSCertFile) ||
+			!validHAV2AbsolutePath(value.Integrations.HA.TLSKeyFile) || !validHAV2AbsolutePath(value.Integrations.HA.TLSCAFile) ||
+			!validHAV2AbsolutePath(value.Integrations.HA.StateFile) || !validHAV2AbsolutePath(value.Integrations.HA.TransactionFile) ||
+			value.Integrations.HA.StateFile == value.Integrations.HA.TransactionFile ||
+			value.Integrations.HA.TransactionFile == value.Integrations.HA.StateFile+".anchor.json" ||
+			value.Integrations.HA.TransactionFile == value.Integrations.HA.StateFile+".head.wal.json" ||
+			value.Integrations.HA.TransactionFile == value.Integrations.HA.StateFile+".instance.lock" ||
+			value.Integrations.HA.HeartbeatIntervalSeconds < 1 || value.Integrations.HA.HeartbeatIntervalSeconds > 60 ||
+			value.Integrations.HA.HeartbeatTimeoutSeconds < value.Integrations.HA.HeartbeatIntervalSeconds*2 || value.Integrations.HA.HeartbeatTimeoutSeconds > 120 ||
+			value.Integrations.HA.RequestTimeoutSeconds < 1 || value.Integrations.HA.RequestTimeoutSeconds > 30 ||
+			value.Integrations.HA.PeerTLSName != value.Integrations.HA.PeerID || len(value.Integrations.HA.PeerCertSHA256) < 1 ||
+			len(value.Integrations.HA.PeerCertSHA256) > 2 {
+			return fmt.Errorf("HA v2 requires one cluster epoch, exactly two identified static nodes, one role, secure absolute state paths, and bounded transport timing")
+		}
+		fingerprints := make(map[string]struct{}, len(value.Integrations.HA.PeerCertSHA256))
+		for _, digest := range value.Integrations.HA.PeerCertSHA256 {
+			if len(digest) != 64 || digest != strings.ToLower(digest) || !validSHA256(digest) {
+				return fmt.Errorf("HA v2 peer certificate fingerprint is invalid")
+			}
+			if _, duplicate := fingerprints[digest]; duplicate {
+				return fmt.Errorf("HA v2 peer certificate fingerprints must be unique")
+			}
+			fingerprints[digest] = struct{}{}
+		}
+		peer, err := netip.ParseAddr(value.Integrations.HA.PeerIPs[0])
+		if err != nil || peer.String() != value.Integrations.HA.PeerIPs[0] || peer.Is4In6() || peer.Zone() != "" || peer.IsUnspecified() || peer.IsMulticast() ||
+			peer.IsLoopback() || peer.IsLinkLocalUnicast() {
+			return fmt.Errorf("HA v2 requires one exact peer address")
+		}
+	}
 	if value.Integrations.BunkerWeb.Enabled && !value.Integrations.HA.Enabled {
 		return fmt.Errorf("BunkerWeb integration requires HA")
+	}
+	if value.Integrations.BunkerWeb.Enabled && value.Integrations.HA.V2Enabled && len(value.Integrations.BunkerWeb.SchedulerIPs) == 0 {
+		return fmt.Errorf("HA v2 BunkerWeb integration requires integrations.bunkerweb.scheduler_ips")
 	}
 	if value.Integrations.Wazuh.IP != "" {
 		address, err := netip.ParseAddr(value.Integrations.Wazuh.IP)
@@ -709,6 +776,23 @@ func validateRuntimeConfig(value *runtimeConfig) error {
 	return nil
 }
 
+func validHAV2ID(value string) bool {
+	if value == "" || len(value) > 64 || !((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= '0' && value[0] <= '9')) {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validHAV2AbsolutePath(value string) bool {
+	return filepath.IsAbs(value) && filepath.Clean(value) == value
+}
+
 func validGeoIPCountryCode(code string) bool {
 	if len(code) != 2 ||
 		(code[0] < 'A' || code[0] > 'Z') && (code[0] < 'a' || code[0] > 'z') ||
@@ -748,6 +832,24 @@ func validIPOrPrefix(value string) bool {
 		return address.Zone() == "" && !address.Is4In6()
 	}
 	return validCanonicalPrefix(value)
+}
+
+func validBoundedPeerPrefix(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value {
+		return false
+	}
+	if address, err := netip.ParseAddr(value); err == nil {
+		return address.String() == value && address.Zone() == "" && !address.Is4In6()
+	}
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil || prefix.String() != value || prefix != prefix.Masked() || prefix.Addr().Zone() != "" || prefix.Addr().Is4In6() {
+		return false
+	}
+	minimumBits := 64
+	if prefix.Addr().Is4() {
+		minimumBits = 24
+	}
+	return prefix.Bits() >= minimumBits
 }
 
 // ValidateWhitelistEntry applies the same bounded firewall-list policy used by

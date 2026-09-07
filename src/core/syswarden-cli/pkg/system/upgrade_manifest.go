@@ -441,12 +441,9 @@ func (target packageTarget) installArguments(packagePath string) []string {
 		// or retries outside its independent installation deadline.
 		return []string{"-o", aptDPkgLockTimeoutOption, "install", "-y", packagePath}
 	case packageFormatRPM:
-		return []string{"install", "-y", packagePath}
+		return []string{"--setopt=localpkg_gpgcheck=1", "install", "-y", packagePath}
 	case packageFormatAPK:
-		// APK repository signing is not provisioned yet. The independent
-		// Ed25519 manifest is mandatory before this narrowly scoped native
-		// package-signature bypass can be reached.
-		return []string{"add", "--allow-untrusted", packagePath}
+		return []string{"add", packagePath}
 	default:
 		return nil
 	}

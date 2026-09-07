@@ -415,6 +415,80 @@ func TestBunkerWebFeatureGateRequiresAuthenticatedHA_SW_CFG_002(t *testing.T) {
 	}
 }
 
+func TestHAV2ValidatorRejectsDuplicatePinsAndLocalPeer(t *testing.T) {
+	base := &ModularConfig{}
+	base.Core.ConfigDir = "/etc/syswarden/config/modules"
+	base.Core.LogLevel = "INFO"
+	base.Core.FirewallBackend = "keep"
+	base.Core.SSHPort = "2222"
+	base.Network.Wireguard.Port = "51820"
+	base.Network.Wireguard.Subnet = "10.10.0.0/24"
+	base.Security.Compliance.CheckInterval = "24h"
+	base.WAAP.EnforcementMode = "enforcing"
+	base.WAAP.BruteforceThreshold = 5
+	base.WAAP.BruteforceWindowSeconds = 60
+	base.Integrations.HA = HAConfig{ // #nosec G101 -- this test-only token is a non-secret fixture used to validate HA configuration
+		Enabled: true, PeerIPs: []string{"192.0.2.20"}, PeerPort: 62026, Token: "shared-token",
+		V2Enabled: true, ClusterID: "cluster-a", Epoch: 1, NodeID: "node-a", PeerID: "node-b", Role: "writer",
+		V2SecretFile: "/etc/syswarden/ha/v2.secret", TLSCertFile: "/etc/syswarden/ha/node-a.crt",
+		TLSKeyFile: "/etc/syswarden/ha/node-a.key", TLSCAFile: "/etc/syswarden/ha/ca.crt", PeerTLSName: "node-b",
+		PeerCertSHA256: []string{strings.Repeat("a", 64)}, StateFile: "/var/lib/syswarden/ha/replication-v2.json",
+		TransactionFile: "/var/lib/syswarden/ha/replication-v2.wal.json", HeartbeatIntervalSeconds: 2,
+		HeartbeatTimeoutSeconds: 10, RequestTimeoutSeconds: 5,
+	}
+	if err := validateConfig(base); err != nil {
+		t.Fatalf("valid HA v2 configuration rejected: %v", err)
+	}
+	bunkerWeb := *base
+	bunkerWeb.Integrations = base.Integrations
+	bunkerWeb.Integrations.BunkerWeb.Enabled = true
+	if err := validateConfig(&bunkerWeb); err == nil {
+		t.Fatal("HA v2 BunkerWeb integration reused the static peer identity as scheduler authorization")
+	}
+	bunkerWeb.Integrations.BunkerWeb.SchedulerIPs = []string{"192.0.2.40", "2001:db8:40::/64"}
+	if err := validateConfig(&bunkerWeb); err != nil {
+		t.Fatalf("valid BunkerWeb scheduler allowlist rejected: %v", err)
+	}
+	bunkerWeb.Integrations.BunkerWeb.SchedulerIPs = []string{"192.0.0.0/16"}
+	if err := validateConfig(&bunkerWeb); err == nil {
+		t.Fatal("overbroad BunkerWeb scheduler allowlist accepted")
+	}
+	bunkerWeb.Integrations.BunkerWeb.SchedulerIPs = []string{"2001:0db8:40::1"}
+	if err := validateConfig(&bunkerWeb); err == nil {
+		t.Fatal("non-canonical BunkerWeb scheduler address accepted")
+	}
+	duplicate := *base
+	duplicate.Integrations.HA = base.Integrations.HA
+	duplicate.Integrations.HA.PeerCertSHA256 = []string{strings.Repeat("a", 64), strings.Repeat("a", 64)}
+	if err := validateConfig(&duplicate); err == nil {
+		t.Fatal("duplicate HA v2 certificate pins accepted")
+	}
+	loopback := *base
+	loopback.Integrations.HA = base.Integrations.HA
+	loopback.Integrations.HA.PeerIPs = []string{"127.0.0.1"}
+	if err := validateConfig(&loopback); err == nil {
+		t.Fatal("loopback HA v2 peer accepted")
+	}
+	anchorCollision := *base
+	anchorCollision.Integrations.HA = base.Integrations.HA
+	anchorCollision.Integrations.HA.TransactionFile = anchorCollision.Integrations.HA.StateFile + ".anchor.json"
+	if err := validateConfig(&anchorCollision); err == nil {
+		t.Fatal("HA v2 transaction path colliding with the durable state anchor was accepted")
+	}
+	headCollision := *base
+	headCollision.Integrations.HA = base.Integrations.HA
+	headCollision.Integrations.HA.TransactionFile = headCollision.Integrations.HA.StateFile + ".head.wal.json"
+	if err := validateConfig(&headCollision); err == nil {
+		t.Fatal("HA v2 transaction path colliding with the durable head journal was accepted")
+	}
+	lockCollision := *base
+	lockCollision.Integrations.HA = base.Integrations.HA
+	lockCollision.Integrations.HA.TransactionFile = lockCollision.Integrations.HA.StateFile + ".instance.lock"
+	if err := validateConfig(&lockCollision); err == nil {
+		t.Fatal("HA v2 transaction path colliding with the instance lock was accepted")
+	}
+}
+
 func TestMapToGlobalConfigCompatibility(t *testing.T) {
 	previous := GlobalConfig
 	t.Cleanup(func() { GlobalConfig = previous })

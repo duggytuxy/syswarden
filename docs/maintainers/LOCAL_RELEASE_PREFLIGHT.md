@@ -59,6 +59,9 @@ remains mandatory on the exact GitHub candidate or merged SHA.
 | `auto-versioning.yml` | Version inspection, recognized transition validation and candidate-bound Act event | Actual `main` push identity and protected branch result |
 | `security-audit.yml` | Hygiene, tests, race, vet, fuzz, lint, gosec, nosec debt, Gitleaks, Trivy, SBOM, bundle and isolated golden test | Exact Ubuntu AppArmor host proof when unavailable locally, SARIF upload, OIDC attestation and GitHub artifact identity |
 | `package.yml` | Validators, reproducible AMD64 builds, three package files, metadata, inventory and checksums in the pinned build environment | Unique successful `main` run and immutable GitHub package artifact identity |
+| `go-127-evaluation.yml` | Pinned Go 1.27 toolchain identity, functional, vet, race and dual JSON contract checks with candidate-bound evidence | GitHub runner identity and immutable evaluation artifact identity |
+| `native-package-signing.yml` | Signature policy, two-phase bootstrap, signing-bundle, distinct-identity, family-secret isolation, offline-verifier and workflow contract tests | Protected signing environment, approved deployment, native RPM, APK and DEB signing keys, reviewed bootstrap evidence, policy promotion, signer image and immutable phase 2 signed evidence |
+| `native-release-evidence.yml` | HA v2, native capability and performance evidence validators with candidate-bound manifest rehearsal | Protected native-evidence environment, dedicated ephemeral AMD64 runner, real pre-staged observations, GitHub attestation and immutable artifact identity |
 | `scorecard.yml` | Workflow and policy contract tests | GitHub repository posture, Scorecard service result and SARIF publication |
 | `compliance.yml` | Workflow and policy contract tests | Plumber service execution, GitHub OIDC result and remote score publication |
 | `release-qualification.yml` | Optional native lifecycle, kernel and evidence-schema rehearsal when matching hardware and inputs exist | Protected environment review, ephemeral runner identity, authoritative run and artifact IDs, sealing and protected signing secret |
@@ -284,6 +287,14 @@ After review and user-approved merge, require all main-push checks on the exact
 merged SHA, then run the protected qualification. Compare eligible package
 bytes and semantic evidence contracts with any local rehearsal, never evidence
 file digests. Treat the protected result as authoritative.
+
+Initial native-key enrollment requires two protected signing phases. First,
+merge the reviewed public keys under the non-publishing foundation policy and
+run `bootstrap-qualification`. Review its explicitly non-release evidence.
+Then merge a separate non-versioning policy promotion, rebuild packages from
+the new exact `main` SHA and run `qualified-policy`. No bootstrap package or
+observation may be reused. Official native campaigns and release qualification
+consume only the phase 2 bundle and its provenance-selected key identities.
 
 After qualification succeeds, create the exact inspected candidate version
 locally as an annotated SSH- or GPG-signed tag whose peeled commit is the exact

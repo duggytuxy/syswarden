@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -473,6 +474,87 @@ func (m *NftablesManager) Unban(ip string) error {
 	}
 
 	return m.applyRequestedState(entry, false, 0, false, false)
+}
+
+func validateRecoverableMutation(mutation RecoverableMutation) (firewallEntry, error) {
+	entry, err := parseFirewallEntry(mutation.Entry)
+	if err != nil {
+		return firewallEntry{}, err
+	}
+	if !mutation.Present {
+		if mutation.Permanent || mutation.TTL != 0 {
+			return firewallEntry{}, fmt.Errorf("absent recoverable firewall state must not carry lifetime metadata")
+		}
+		return entry, nil
+	}
+	if mutation.Permanent {
+		if mutation.TTL != 0 {
+			return firewallEntry{}, fmt.Errorf("permanent recoverable firewall state must not carry a TTL")
+		}
+		return entry, nil
+	}
+	if err := validateBanTTL(mutation.TTL); err != nil {
+		return firewallEntry{}, err
+	}
+	return entry, nil
+}
+
+// RunRecoverableMutation holds the same process and inter-process lock used by
+// every other core firewall write from WAL preparation through durable commit.
+// The mutation is idempotent, so an intact WAL can be replayed after a crash or
+// an ambiguous response without widening the firewall policy.
+func (m *NftablesManager) RunRecoverableMutation(ctx context.Context, mutation RecoverableMutation, hooks RecoverableMutationHooks) error {
+	entry, err := validateRecoverableMutation(mutation)
+	if err != nil {
+		return err
+	}
+	if hooks.Prepare == nil || hooks.Persist == nil || hooks.Commit == nil {
+		return fmt.Errorf("recoverable firewall mutation requires prepare, persist, and commit hooks")
+	}
+	if ctx == nil {
+		return fmt.Errorf("recoverable firewall mutation requires a context")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	lock, err := acquireFirewallRuntimeLock()
+	if err != nil {
+		m.mu.Lock()
+		m.markOperationFailureLocked(err)
+		m.mu.Unlock()
+		return fmt.Errorf("acquire shared firewall transaction lock: %w", err)
+	}
+	defer releaseFirewallRuntimeLock(lock)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := hooks.Prepare(); err != nil {
+		m.markOperationFailureLocked(err)
+		return fmt.Errorf("prepare recoverable firewall mutation: %w", err)
+	}
+	select {
+	case <-ctx.Done():
+		m.markOperationFailureLocked(ctx.Err())
+		return ctx.Err()
+	default:
+	}
+	if err := m.mutateAndVerifyLocked(entry, mutation.Present, mutation.TTL, mutation.Permanent, !mutation.Permanent); err != nil {
+		m.markOperationFailureLocked(err)
+		return fmt.Errorf("apply recoverable firewall mutation: %w", err)
+	}
+	if err := hooks.Persist(); err != nil {
+		m.markOperationFailureLocked(err)
+		return fmt.Errorf("persist recoverable firewall model: %w", err)
+	}
+	if err := hooks.Commit(); err != nil {
+		m.markOperationFailureLocked(err)
+		return fmt.Errorf("commit recoverable firewall mutation: %w", err)
+	}
+	m.lastErr = nil
+	return nil
 }
 
 func (m *NftablesManager) applyRequestedState(entry firewallEntry, add bool, ttl time.Duration, permanent, exactTTL bool) error {

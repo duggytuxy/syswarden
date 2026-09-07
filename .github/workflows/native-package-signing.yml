@@ -1,0 +1,1131 @@
+name: SysWarden Protected Native Package Signing
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact v4.10.0 source version
+        required: true
+        type: string
+      release_sha:
+        description: Exact full commit SHA on main
+        required: true
+        type: string
+      unsigned_package_run_id:
+        description: Exact successful package.yml main run ID
+        required: true
+        type: string
+      unsigned_artifact_id:
+        description: Exact immutable unsigned package artifact ID
+        required: true
+        type: string
+      rhel_package_owned_artifact_id:
+        description: Exact immutable unsigned RHEL package-owned artifact ID
+        required: true
+        type: string
+      rpm_key_id:
+        description: Reviewed RPM key ID from the committed policy
+        required: true
+        type: string
+      apk_key_id:
+        description: Reviewed APK key ID from the committed policy
+        required: true
+        type: string
+      deb_key_id:
+        description: Reviewed DEB OpenPGP key ID from the committed policy
+        required: true
+        type: string
+      qualification_mode:
+        description: Bootstrap the reviewed foundation or use an already qualified policy
+        required: true
+        type: choice
+        options:
+          - bootstrap-qualification
+          - qualified-policy
+      authorization:
+        description: Enter SIGN-NATIVE-PACKAGES-NO-PUBLISH
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  LANG: C
+  LC_ALL: C
+  TZ: UTC
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: syswarden-native-package-signing-v4100
+  cancel-in-progress: false
+
+jobs:
+  sign-native-packages:
+    name: Sign Exact RPM, APK and DEB Without Publishing
+    environment: syswarden-native-package-signing-v4100
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Validate Protected Manual Context
+        shell: bash
+        env:
+          APK_SIGNER_IMAGE: ${{ vars.SYSWARDEN_APK_SIGNER_IMAGE }}
+          AUTHORIZATION: ${{ inputs.authorization }}
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          EVENT_REF_TYPE: ${{ github.ref_type }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          UNSIGNED_ARTIFACT_ID: ${{ inputs.unsigned_artifact_id }}
+          RHEL_PACKAGE_OWNED_ARTIFACT_ID: ${{ inputs.rhel_package_owned_artifact_id }}
+          UNSIGNED_PACKAGE_RUN_ID: ${{ inputs.unsigned_package_run_id }}
+          RPM_KEY_ID: ${{ inputs.rpm_key_id }}
+          APK_KEY_ID: ${{ inputs.apk_key_id }}
+          DEB_KEY_ID: ${{ inputs.deb_key_id }}
+          QUALIFICATION_MODE: ${{ inputs.qualification_mode }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" != "workflow_dispatch" || \
+                "${EVENT_REF_TYPE}" != "branch" || \
+                "${EVENT_REF_NAME}" != "main" || \
+                "${EVENT_REF}" != "refs/heads/main" || \
+                "${EVENT_SHA}" != "${RELEASE_SHA}" || \
+                "${WORKFLOW_SHA}" != "${RELEASE_SHA}" ]]; then
+            echo "ERROR: native signing must target the exact current main workflow SHA." >&2
+            exit 1
+          fi
+          if [[ "${EVENT_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${EVENT_TRIGGERING_ACTOR}" != "${REPOSITORY_OWNER}" || \
+                "${RUN_ATTEMPT}" != "1" ]]; then
+            echo "ERROR: native signing requires one owner-dispatched attempt." >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" != "v4.10.0" || \
+                ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ || \
+                "${AUTHORIZATION}" != "SIGN-NATIVE-PACKAGES-NO-PUBLISH" ]]; then
+            echo "ERROR: v4.10.0 signing inputs or no-publication authorization are invalid." >&2
+            exit 1
+          fi
+          if [[ ! "${APK_SIGNER_IMAGE}" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: SYSWARDEN_APK_SIGNER_IMAGE must be an exact OCI digest reference." >&2
+            exit 1
+          fi
+          for identifier in \
+            "${UNSIGNED_PACKAGE_RUN_ID}" \
+            "${UNSIGNED_ARTIFACT_ID}" \
+            "${RHEL_PACKAGE_OWNED_ARTIFACT_ID}"; do
+            [[ "${identifier}" =~ ^[1-9][0-9]*$ ]] || {
+              echo "ERROR: unsigned run and artifact IDs must be positive integers." >&2
+              exit 1
+            }
+          done
+          for key_id in "${RPM_KEY_ID}" "${APK_KEY_ID}" "${DEB_KEY_ID}"; do
+            [[ "${key_id}" =~ ^[A-Za-z0-9._+-]{1,128}$ ]] || {
+              echo "ERROR: selected native key ID is malformed." >&2
+              exit 1
+            }
+          done
+          case "${QUALIFICATION_MODE}" in
+            bootstrap-qualification|qualified-policy) ;;
+            *) echo "ERROR: native signing qualification mode is invalid." >&2; exit 1 ;;
+          esac
+
+      - name: Checkout Exact Candidate Source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+
+      - name: Create Private Signing Workspace
+        id: workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "${RUNNER_TEMP:-}"
+          test -d "${RUNNER_TEMP}"
+          signing_root="$(mktemp -d "${RUNNER_TEMP%/}/syswarden-native-signing.XXXXXX")"
+          unsigned_dir="${signing_root}/unsigned"
+          signed_dir="${signing_root}/signed"
+          rhel_unsigned_dir="${signing_root}/rhel-package-owned-unsigned"
+          rhel_signed_dir="${signing_root}/rhel-package-owned-signed"
+          apk_work_dir="${signing_root}/apk-work"
+          proof_dir="${signing_root}/proof"
+          secret_dir="${signing_root}/private"
+          install -d -m 0700 \
+            "${unsigned_dir}" "${signed_dir}" \
+            "${rhel_unsigned_dir}" "${rhel_signed_dir}" "${apk_work_dir}" \
+            "${proof_dir}" "${secret_dir}"
+          {
+            printf 'SIGNING_ROOT=%s\n' "${signing_root}"
+            printf 'UNSIGNED_DIR=%s\n' "${unsigned_dir}"
+            printf 'SIGNED_DIR=%s\n' "${signed_dir}"
+            printf 'RHEL_UNSIGNED_DIR=%s\n' "${rhel_unsigned_dir}"
+            printf 'RHEL_SIGNED_DIR=%s\n' "${rhel_signed_dir}"
+            printf 'APK_WORK_DIR=%s\n' "${apk_work_dir}"
+            printf 'PROOF_DIR=%s\n' "${proof_dir}"
+            printf 'SECRET_DIR=%s\n' "${secret_dir}"
+          } >> "${GITHUB_ENV}"
+          printf 'unsigned_dir=%s\n' "${unsigned_dir}" >> "${GITHUB_OUTPUT}"
+          printf 'rhel_unsigned_dir=%s\n' "${rhel_unsigned_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate Source and Signature Policy Foundation
+        shell: bash
+        env:
+          APK_SIGNER_IMAGE: ${{ vars.SYSWARDEN_APK_SIGNER_IMAGE }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RPM_KEY_ID: ${{ inputs.rpm_key_id }}
+          APK_KEY_ID: ${{ inputs.apk_key_id }}
+          DEB_KEY_ID: ${{ inputs.deb_key_id }}
+          QUALIFICATION_MODE: ${{ inputs.qualification_mode }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify 'HEAD^{commit}')" = "${RELEASE_SHA}"
+          test "$(git rev-parse --verify 'origin/main^{commit}')" = "${RELEASE_SHA}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(./scripts/versioning.sh inspect --repo "${GITHUB_WORKSPACE}")" = "${RELEASE_TAG}"
+          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          as_of="$(date -u +%F)"
+          PYTHONDONTWRITEBYTECODE=1 python3 - "${policy}" "${as_of}" \
+            "${RPM_KEY_ID}" "${APK_KEY_ID}" "${DEB_KEY_ID}" \
+            "${APK_SIGNER_IMAGE}" "${QUALIFICATION_MODE}" <<'PY'
+          import sys
+          from pathlib import Path
+          from scripts.ci import native_package_signature_gate as gate
+
+          (
+              policy_path,
+              as_of,
+              rpm_key_id,
+              apk_key_id,
+              deb_key_id,
+              signer_image,
+              qualification_mode,
+          ) = sys.argv[1:]
+          document = gate.load_json(Path(policy_path), "signature policy")
+          day = gate.parse_day(as_of, "signing date")
+          gate.validate_policy(document, day)
+          if document["apk"]["signer_image"] != signer_image:
+              raise SystemExit("APK signer image differs from the committed policy")
+          selected_ids = {
+              "rpm": rpm_key_id,
+              "apk": apk_key_id,
+              "deb": deb_key_id,
+          }
+          if qualification_mode == "bootstrap-qualification":
+              if (
+                  document["status"] != "foundation-not-qualified"
+                  or document["publishing"] is not False
+                  or document["deb"]["implementation"] != "implemented-not-qualified"
+              ):
+                  raise SystemExit(
+                      "bootstrap qualification requires the exact non-publishing foundation policy"
+                  )
+              for family, selected_id in selected_ids.items():
+                  keys = document[family]["trusted_keys"]
+                  if len(keys) != 1 or keys[0]["id"] != selected_id:
+                      raise SystemExit(
+                          f"bootstrap qualification requires one exact selected {family} key"
+                      )
+                  gate.select_key(document, family, selected_id, day)
+          elif qualification_mode == "qualified-policy":
+              if document["status"] != "qualified":
+                  raise SystemExit("signature policy is not qualified")
+              for family, selected_id in selected_ids.items():
+                  gate.select_key(document, family, selected_id, day)
+          else:
+              raise SystemExit("native signing qualification mode is invalid")
+          PY
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py \
+            --repository "${GITHUB_WORKSPACE}" capture \
+            --output "${SIGNING_ROOT}/repository-state.json"
+          source_date_epoch="$(git log -1 --format=%ct HEAD)"
+          [[ "${source_date_epoch}" =~ ^[1-9][0-9]*$ ]]
+          printf 'SIGNING_DATE=%s\n' "${as_of}" >> "${GITHUB_ENV}"
+          printf 'SOURCE_DATE_EPOCH=%s\n' "${source_date_epoch}" >> "${GITHUB_ENV}"
+
+      - name: Resolve Exact Unsigned Package Run and Artifact
+        id: unsigned
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REQUESTED_ARTIFACT_ID: ${{ inputs.unsigned_artifact_id }}
+          REQUESTED_RHEL_ARTIFACT_ID: ${{ inputs.rhel_package_owned_artifact_id }}
+          REQUESTED_RUN_ID: ${{ inputs.unsigned_package_run_id }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          expected_name="syswarden-packages-${version}"
+          expected_rhel_name="syswarden-rhel-package-owned-${version}"
+          runs_json="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/package.yml/runs" \
+            -f event=push -f head_sha="${RELEASE_SHA}" -f per_page=100)"
+          matches="$(jq --arg sha "${RELEASE_SHA}" '[
+            .[] | .workflow_runs[]? | select(
+              .head_sha == $sha and .head_branch == "main" and
+              .event == "push" and .status == "completed" and
+              .conclusion == "success" and .run_attempt == 1
+            )
+          ]' <<< "${runs_json}")"
+          if [[ "$(jq 'length' <<< "${matches}")" != "1" || \
+                "$(jq -r '.[0].id | tostring' <<< "${matches}")" != "${REQUESTED_RUN_ID}" || \
+                "$(jq -r '.[0].path' <<< "${matches}")" != ".github/workflows/package.yml" ]]; then
+            echo "ERROR: requested package run is not the unique successful main attempt." >&2
+            exit 1
+          fi
+          artifacts="$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${REQUESTED_RUN_ID}/artifacts" \
+            -f per_page=100)"
+          match="$(jq --arg name "${expected_name}" --argjson id "${REQUESTED_ARTIFACT_ID}" '[
+            .[] | .artifacts[]? | select(.name == $name and .id == $id)
+          ]' <<< "${artifacts}")"
+          rhel_match="$(jq --arg name "${expected_rhel_name}" --argjson id "${REQUESTED_RHEL_ARTIFACT_ID}" '[
+            .[] | .artifacts[]? | select(.name == $name and .id == $id)
+          ]' <<< "${artifacts}")"
+          if [[ "$(jq 'length' <<< "${match}")" != "1" || \
+                "$(jq -r '.[0].expired' <<< "${match}")" != "false" || \
+                ! "$(jq -r '.[0].size_in_bytes | tostring' <<< "${match}")" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: requested unsigned package artifact is absent, ambiguous, expired, or empty." >&2
+            exit 1
+          fi
+          if [[ "$(jq 'length' <<< "${rhel_match}")" != "1" || \
+                "$(jq -r '.[0].expired' <<< "${rhel_match}")" != "false" || \
+                ! "$(jq -r '.[0].size_in_bytes | tostring' <<< "${rhel_match}")" =~ ^[1-9][0-9]*$ ]]; then
+            echo "ERROR: requested unsigned RHEL package-owned artifact is absent, ambiguous, expired, or empty." >&2
+            exit 1
+          fi
+          expected_inventory="$(jq -c '[.[] | .artifacts[]? | select(.expired == false) | .name] | sort' <<< "${artifacts}")"
+          [[ "${expected_inventory}" == "[\"${expected_name}\",\"${expected_rhel_name}\"]" ]] || {
+            echo "ERROR: package run artifact inventory is not the exact two-lane contract." >&2
+            exit 1
+          }
+          artifact_digest="$(jq -r '.[0].digest // ""' <<< "${match}")"
+          rhel_artifact_digest="$(jq -r '.[0].digest // ""' <<< "${rhel_match}")"
+          if [[ ! "${artifact_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: unsigned GitHub artifact lacks a canonical immutable digest." >&2
+            exit 1
+          fi
+          if [[ ! "${rhel_artifact_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: unsigned RHEL package-owned GitHub artifact lacks a canonical immutable digest." >&2
+            exit 1
+          fi
+          {
+            printf 'artifact_digest=%s\n' "${artifact_digest}"
+            printf 'artifact_name=%s\n' "${expected_name}"
+            printf 'rhel_artifact_digest=%s\n' "${rhel_artifact_digest}"
+            printf 'rhel_artifact_name=%s\n' "${expected_rhel_name}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Download Exact Unsigned Package Artifact by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ inputs.unsigned_artifact_id }}
+          path: ${{ steps.workspace.outputs.unsigned_dir }}
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.unsigned_package_run_id }}
+
+      - name: Download Exact Unsigned RHEL Package-owned Artifact by ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ inputs.rhel_package_owned_artifact_id }}
+          path: ${{ steps.workspace.outputs.rhel_unsigned_dir }}
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.unsigned_package_run_id }}
+
+      - name: Verify Exact Unsigned Package Bytes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify-packages \
+            --tag "${RELEASE_TAG}" --packages "${UNSIGNED_DIR}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py \
+            inventory --release "${RELEASE_TAG}" --packages "${UNSIGNED_DIR}" \
+            --output "${PROOF_DIR}/unsigned-inventory.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py \
+            rhel-package-owned-inventory --release "${RELEASE_TAG}" \
+            --packages "${RHEL_UNSIGNED_DIR}" \
+            --output "${PROOF_DIR}/rhel-unsigned-inventory.json"
+
+      - name: Prepare Native Signing Tools Before Loading Secrets
+        shell: bash
+        env:
+          APK_SIGNER_IMAGE: ${{ vars.SYSWARDEN_APK_SIGNER_IMAGE }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gnupg rpm
+          for tool in docker gpg gpgconf gpgv openssl rpm rpm2cpio rpmkeys rpmsign; do
+            command -v "${tool}" >/dev/null || {
+              echo "ERROR: required native signing tool is unavailable: ${tool}." >&2
+              exit 1
+            }
+          done
+          docker pull "${APK_SIGNER_IMAGE}"
+          docker run --rm --pull never --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --pids-limit 64 --memory 256m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777,size=16m \
+            --entrypoint /bin/sh "${APK_SIGNER_IMAGE}" -eu -c '
+              command -v abuild-sign >/dev/null
+              command -v apk >/dev/null
+              command -v openssl >/dev/null
+              command -v tar >/dev/null
+            '
+
+      - name: Sign Exact RPM in Family-Scoped Private Workspace
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RPM_KEY_ID: ${{ inputs.rpm_key_id }}
+          RPM_SIGNING_PASSPHRASE: ${{ secrets.SYSWARDEN_RPM_SIGNING_PASSPHRASE }}
+          RPM_SIGNING_PRIVATE_KEY: ${{ secrets.SYSWARDEN_RPM_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          declare +x rpm_private_material="${RPM_SIGNING_PRIVATE_KEY-}"
+          declare +x rpm_passphrase_material="${RPM_SIGNING_PASSPHRASE-}"
+          unset RPM_SIGNING_PRIVATE_KEY RPM_SIGNING_PASSPHRASE
+          test -n "${rpm_private_material}"
+          test -n "${rpm_passphrase_material}"
+          rpm_secret_dir="${SECRET_DIR}/rpm"
+          rpm_private="${rpm_secret_dir}/private.asc"
+          rpm_passphrase="${rpm_secret_dir}/passphrase"
+          rpm_gnupg="${rpm_secret_dir}/gnupg"
+          rpm_agent_socket=""
+          case "${rpm_secret_dir}" in
+            "${SECRET_DIR}"/rpm) ;;
+            *) echo "ERROR: refusing unsafe RPM secret path." >&2; exit 1 ;;
+          esac
+          wait_for_rpm_agent_stop() {
+            if [[ -z "${rpm_agent_socket}" ]]; then
+              return 0
+            fi
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if [[ ! -S "${rpm_agent_socket}" ]]; then
+                return 0
+              fi
+              sleep 0.1
+            done
+            return 1
+          }
+          cleanup_rpm_secret() {
+            unset -v RPM_SIGNING_PRIVATE_KEY RPM_SIGNING_PASSPHRASE \
+              rpm_private_material rpm_passphrase_material
+            local cleanup_status=0
+            if [[ -d "${rpm_gnupg}" || -n "${rpm_agent_socket}" ]]; then
+              if command -v gpgconf >/dev/null 2>&1; then
+                if [[ -z "${rpm_agent_socket}" ]] && \
+                   ! rpm_agent_socket="$(gpgconf --homedir "${rpm_gnupg}" \
+                     --list-dirs agent-socket 2>/dev/null)"; then
+                  cleanup_status=1
+                fi
+                if ! gpgconf --homedir "${rpm_gnupg}" --kill gpg-agent \
+                  >/dev/null 2>&1; then
+                  cleanup_status=1
+                fi
+                if ! wait_for_rpm_agent_stop; then
+                  cleanup_status=1
+                fi
+              else
+                cleanup_status=1
+              fi
+            fi
+            if [[ -d "${rpm_secret_dir}" ]]; then
+              if ! chmod -R u+rwX "${rpm_secret_dir}"; then
+                cleanup_status=1
+              fi
+              if ! rm -rf -- "${rpm_secret_dir}"; then
+                cleanup_status=1
+              fi
+            fi
+            if [[ -e "${rpm_secret_dir}" || -L "${rpm_secret_dir}" ]]; then
+              cleanup_status=1
+            fi
+            return "${cleanup_status}"
+          }
+          trap cleanup_rpm_secret EXIT
+          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          version="${RELEASE_TAG#v}"
+          rpm_name="syswarden-${version}-1.x86_64.rpm"
+          rhel_rpm_name="syswarden-${version}-1.rhelpo.x86_64.rpm"
+          install -m 0600 "${UNSIGNED_DIR}/${rpm_name}" "${SIGNED_DIR}/${rpm_name}"
+          install -m 0600 \
+            "${RHEL_UNSIGNED_DIR}/${rhel_rpm_name}" \
+            "${RHEL_SIGNED_DIR}/${rhel_rpm_name}"
+
+          rpm_public_rel="$(jq -er --arg id "${RPM_KEY_ID}" '
+            [.rpm.trusted_keys[] | select(.id == $id)] |
+            if length == 1 then .[0].public_key else error("RPM key is not unique") end
+          ' "${policy}")"
+          rpm_expected_fingerprint="$(jq -er --arg id "${RPM_KEY_ID}" '
+            [.rpm.trusted_keys[] | select(.id == $id)][0].fingerprint
+          ' "${policy}")"
+          policy_root="$(realpath -e -- "$(dirname -- "${policy}")")"
+          rpm_public="$(realpath -e -- "${policy_root}/${rpm_public_rel}")"
+          case "${rpm_public}" in
+            "${policy_root}"/*) ;;
+            *) echo "ERROR: selected RPM public key escaped the committed policy directory." >&2; exit 1 ;;
+          esac
+
+          install -d -m 0700 "${rpm_secret_dir}"
+          install -d -m 0700 "${rpm_gnupg}"
+          rpm_agent_socket="$(gpgconf --homedir "${rpm_gnupg}" --list-dirs agent-socket)"
+          test -n "${rpm_agent_socket}"
+          printf '%s' "${rpm_private_material}" > "${rpm_private}"
+          printf '%s' "${rpm_passphrase_material}" > "${rpm_passphrase}"
+          unset -v rpm_private_material rpm_passphrase_material
+          gpg --batch --no-options --homedir "${rpm_gnupg}" --no-tty \
+            --pinentry-mode loopback --passphrase-file "${rpm_passphrase}" \
+            --import "${rpm_private}" >/dev/null
+          mapfile -t secret_fingerprints < <(
+            gpg --batch --no-options --homedir "${rpm_gnupg}" --with-colons \
+              --fingerprint --list-secret-keys | awk -F: '
+                $1 == "sec" { primary = 1; next }
+                primary && $1 == "fpr" { print $10; primary = 0 }
+              '
+          )
+          if [[ "${#secret_fingerprints[@]}" -ne 1 || \
+                "${secret_fingerprints[0]}" != "${rpm_expected_fingerprint}" ]]; then
+            echo "ERROR: protected RPM private key does not match the committed key identity." >&2
+            exit 1
+          fi
+          gpgconf --homedir "${rpm_gnupg}" --kill gpg-agent
+          wait_for_rpm_agent_stop || {
+            echo "ERROR: RPM GnuPG agent did not stop after the cache reset." >&2
+            exit 1
+          }
+          rpm_unprotected_probe="${rpm_secret_dir}/unprotected-probe.sig"
+          if gpg --batch --yes --no-options --homedir "${rpm_gnupg}" --no-tty \
+            --pinentry-mode loopback --passphrase '' \
+            --local-user "${rpm_expected_fingerprint}" \
+            --output "${rpm_unprotected_probe}" --detach-sign /dev/null \
+            >/dev/null 2>&1; then
+            echo "ERROR: protected RPM private key must require a non-empty passphrase." >&2
+            exit 1
+          fi
+          rm -f -- "${rpm_unprotected_probe}"
+
+          rpm_unsigned_signatures="$(rpm -qp --qf \
+            '%{SIGPGP:pgpsig}\n%{SIGGPG:pgpsig}\n%{RSAHEADER:pgpsig}\n%{DSAHEADER:pgpsig}\n' \
+            "${SIGNED_DIR}/${rpm_name}")"
+          if [[ "${rpm_unsigned_signatures}" != $'(none)\n(none)\n(none)\n(none)' ]]; then
+            echo "ERROR: RPM input already carries an unexpected native signature." >&2
+            exit 1
+          fi
+          rpm_header_before="$(rpm -qp --qf '%{SHA256HEADER}' "${SIGNED_DIR}/${rpm_name}")"
+          rpm_payload_before="$(rpm2cpio "${SIGNED_DIR}/${rpm_name}" | sha256sum | awk '{print $1}')"
+          [[ "${rpm_header_before}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${rpm_payload_before}" =~ ^[0-9a-f]{64}$ ]]
+          rpmsign \
+            --define "_gpg_name ${rpm_expected_fingerprint}" \
+            --define "_gpg_path ${rpm_gnupg}" \
+            --define "_gpg_digest_algo sha256" \
+            --define "_gpg_sign_cmd_extra_args --batch --no-tty --pinentry-mode loopback --passphrase-file ${rpm_passphrase} --no-auto-key-retrieve --auto-key-locate clear" \
+            --addsign "${SIGNED_DIR}/${rpm_name}"
+          rpm_header_after="$(rpm -qp --qf '%{SHA256HEADER}' "${SIGNED_DIR}/${rpm_name}")"
+          rpm_payload_after="$(rpm2cpio "${SIGNED_DIR}/${rpm_name}" | sha256sum | awk '{print $1}')"
+          [[ "${rpm_header_after}" == "${rpm_header_before}" ]]
+          [[ "${rpm_payload_after}" == "${rpm_payload_before}" ]]
+
+          jq -n -S \
+            --arg rpm_header_before "${rpm_header_before}" \
+            --arg rpm_header_after "${rpm_header_after}" \
+            --arg rpm_payload_before "${rpm_payload_before}" \
+            --arg rpm_payload_after "${rpm_payload_after}" '
+            {
+              schema_version: 1,
+              profile: "syswarden-rpm-payload-preservation/v4.10.0",
+              status: "preserved",
+              unsigned: {
+                immutable_header_sha256: $rpm_header_before,
+                payload_cpio_sha256: $rpm_payload_before
+              },
+              signed: {
+                immutable_header_sha256: $rpm_header_after,
+                payload_cpio_sha256: $rpm_payload_after
+              }
+            }
+          ' > "${PROOF_DIR}/rpm-proof.json"
+
+          rhel_rpm_unsigned_signatures="$(rpm -qp --qf \
+            '%{SIGPGP:pgpsig}\n%{SIGGPG:pgpsig}\n%{RSAHEADER:pgpsig}\n%{DSAHEADER:pgpsig}\n' \
+            "${RHEL_SIGNED_DIR}/${rhel_rpm_name}")"
+          if [[ "${rhel_rpm_unsigned_signatures}" != $'(none)\n(none)\n(none)\n(none)' ]]; then
+            echo "ERROR: RHEL package-owned RPM input already carries an unexpected native signature." >&2
+            exit 1
+          fi
+          rhel_rpm_header_before="$(rpm -qp --qf '%{SHA256HEADER}' \
+            "${RHEL_SIGNED_DIR}/${rhel_rpm_name}")"
+          rhel_rpm_payload_before="$(rpm2cpio \
+            "${RHEL_SIGNED_DIR}/${rhel_rpm_name}" | sha256sum | awk '{print $1}')"
+          [[ "${rhel_rpm_header_before}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${rhel_rpm_payload_before}" =~ ^[0-9a-f]{64}$ ]]
+          rpmsign \
+            --define "_gpg_name ${rpm_expected_fingerprint}" \
+            --define "_gpg_path ${rpm_gnupg}" \
+            --define "_gpg_digest_algo sha256" \
+            --define "_gpg_sign_cmd_extra_args --batch --no-tty --pinentry-mode loopback --passphrase-file ${rpm_passphrase} --no-auto-key-retrieve --auto-key-locate clear" \
+            --addsign "${RHEL_SIGNED_DIR}/${rhel_rpm_name}"
+          rhel_rpm_header_after="$(rpm -qp --qf '%{SHA256HEADER}' \
+            "${RHEL_SIGNED_DIR}/${rhel_rpm_name}")"
+          rhel_rpm_payload_after="$(rpm2cpio \
+            "${RHEL_SIGNED_DIR}/${rhel_rpm_name}" | sha256sum | awk '{print $1}')"
+          [[ "${rhel_rpm_header_after}" == "${rhel_rpm_header_before}" ]]
+          [[ "${rhel_rpm_payload_after}" == "${rhel_rpm_payload_before}" ]]
+          jq -n -S \
+            --arg rpm_header_before "${rhel_rpm_header_before}" \
+            --arg rpm_header_after "${rhel_rpm_header_after}" \
+            --arg rpm_payload_before "${rhel_rpm_payload_before}" \
+            --arg rpm_payload_after "${rhel_rpm_payload_after}" '
+            {
+              schema_version: 1,
+              profile: "syswarden-rpm-payload-preservation/v4.10.0",
+              status: "preserved",
+              unsigned: {
+                immutable_header_sha256: $rpm_header_before,
+                payload_cpio_sha256: $rpm_payload_before
+              },
+              signed: {
+                immutable_header_sha256: $rpm_header_after,
+                payload_cpio_sha256: $rpm_payload_after
+              }
+            }
+          ' > "${PROOF_DIR}/rhel-rpm-proof.json"
+          cleanup_rpm_secret
+          trap - EXIT
+          test ! -e "${rpm_secret_dir}"
+
+      - name: Sign Exact DEB in Family-Scoped Private Workspace
+        shell: bash
+        env:
+          DEB_KEY_ID: ${{ inputs.deb_key_id }}
+          DEB_SIGNING_PASSPHRASE: ${{ secrets.SYSWARDEN_DEB_SIGNING_PASSPHRASE }}
+          DEB_SIGNING_PRIVATE_KEY: ${{ secrets.SYSWARDEN_DEB_SIGNING_PRIVATE_KEY }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          umask 077
+          declare +x deb_private_material="${DEB_SIGNING_PRIVATE_KEY-}"
+          declare +x deb_passphrase_material="${DEB_SIGNING_PASSPHRASE-}"
+          unset DEB_SIGNING_PRIVATE_KEY DEB_SIGNING_PASSPHRASE
+          test -n "${deb_private_material}"
+          test -n "${deb_passphrase_material}"
+          deb_secret_dir="${SECRET_DIR}/deb"
+          deb_private="${deb_secret_dir}/private.asc"
+          deb_passphrase="${deb_secret_dir}/passphrase"
+          deb_gnupg="${deb_secret_dir}/gnupg"
+          deb_signature="${PROOF_DIR}/syswarden_${RELEASE_TAG#v}_amd64.deb.asc"
+          deb_agent_socket=""
+          case "${deb_secret_dir}" in
+            "${SECRET_DIR}"/deb) ;;
+            *) echo "ERROR: refusing unsafe DEB secret path." >&2; exit 1 ;;
+          esac
+          wait_for_deb_agent_stop() {
+            if [[ -z "${deb_agent_socket}" ]]; then
+              return 0
+            fi
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if [[ ! -S "${deb_agent_socket}" ]]; then
+                return 0
+              fi
+              sleep 0.1
+            done
+            return 1
+          }
+          cleanup_deb_secret() {
+            unset -v DEB_SIGNING_PRIVATE_KEY DEB_SIGNING_PASSPHRASE \
+              deb_private_material deb_passphrase_material
+            local cleanup_status=0
+            if [[ -d "${deb_gnupg}" || -n "${deb_agent_socket}" ]]; then
+              if command -v gpgconf >/dev/null 2>&1; then
+                if [[ -z "${deb_agent_socket}" ]] && \
+                   ! deb_agent_socket="$(gpgconf --homedir "${deb_gnupg}" \
+                     --list-dirs agent-socket 2>/dev/null)"; then
+                  cleanup_status=1
+                fi
+                if ! gpgconf --homedir "${deb_gnupg}" --kill gpg-agent \
+                  >/dev/null 2>&1; then
+                  cleanup_status=1
+                fi
+                if ! wait_for_deb_agent_stop; then
+                  cleanup_status=1
+                fi
+              else
+                cleanup_status=1
+              fi
+            fi
+            if [[ -d "${deb_secret_dir}" ]]; then
+              if ! chmod -R u+rwX "${deb_secret_dir}"; then
+                cleanup_status=1
+              fi
+              if ! rm -rf -- "${deb_secret_dir}"; then
+                cleanup_status=1
+              fi
+            fi
+            if [[ -e "${deb_secret_dir}" || -L "${deb_secret_dir}" ]]; then
+              cleanup_status=1
+            fi
+            return "${cleanup_status}"
+          }
+          trap cleanup_deb_secret EXIT
+          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          version="${RELEASE_TAG#v}"
+          deb_name="syswarden_${version}_amd64.deb"
+          install -m 0600 "${UNSIGNED_DIR}/${deb_name}" "${SIGNED_DIR}/${deb_name}"
+          deb_public_rel="$(jq -er --arg id "${DEB_KEY_ID}" '
+            [.deb.trusted_keys[] | select(.id == $id)] |
+            if length == 1 then .[0].public_key else error("DEB key is not unique") end
+          ' "${policy}")"
+          deb_expected_fingerprint="$(jq -er --arg id "${DEB_KEY_ID}" '
+            [.deb.trusted_keys[] | select(.id == $id)][0].fingerprint
+          ' "${policy}")"
+          policy_root="$(realpath -e -- "$(dirname -- "${policy}")")"
+          deb_public="$(realpath -e -- "${policy_root}/${deb_public_rel}")"
+          case "${deb_public}" in
+            "${policy_root}"/*) ;;
+            *) echo "ERROR: selected DEB public key escaped the committed policy directory." >&2; exit 1 ;;
+          esac
+
+          install -d -m 0700 "${deb_secret_dir}"
+          install -d -m 0700 "${deb_gnupg}"
+          deb_agent_socket="$(gpgconf --homedir "${deb_gnupg}" --list-dirs agent-socket)"
+          test -n "${deb_agent_socket}"
+          printf '%s' "${deb_private_material}" > "${deb_private}"
+          printf '%s' "${deb_passphrase_material}" > "${deb_passphrase}"
+          unset -v deb_private_material deb_passphrase_material
+          gpg --batch --no-options --homedir "${deb_gnupg}" --no-tty \
+            --pinentry-mode loopback --passphrase-file "${deb_passphrase}" \
+            --import "${deb_private}" >/dev/null
+          mapfile -t deb_secret_fingerprints < <(
+            gpg --batch --no-options --homedir "${deb_gnupg}" --with-colons \
+              --fingerprint --list-secret-keys | awk -F: '
+                $1 == "sec" { primary = 1; next }
+                primary && $1 == "fpr" { print $10; primary = 0 }
+              '
+          )
+          if [[ "${#deb_secret_fingerprints[@]}" -ne 1 || \
+                "${deb_secret_fingerprints[0]}" != "${deb_expected_fingerprint}" ]]; then
+            echo "ERROR: protected DEB private key does not match the committed key identity." >&2
+            exit 1
+          fi
+          gpgconf --homedir "${deb_gnupg}" --kill gpg-agent
+          wait_for_deb_agent_stop || {
+            echo "ERROR: DEB GnuPG agent did not stop after the cache reset." >&2
+            exit 1
+          }
+          deb_unprotected_probe="${deb_secret_dir}/unprotected-probe.asc"
+          if gpg --batch --yes --no-options --homedir "${deb_gnupg}" --no-tty \
+            --pinentry-mode loopback --passphrase '' \
+            --local-user "${deb_expected_fingerprint}" --digest-algo SHA256 \
+            --armor --output "${deb_unprotected_probe}" \
+            --detach-sign "${SIGNED_DIR}/${deb_name}" >/dev/null 2>&1; then
+            echo "ERROR: protected DEB private key must require a non-empty passphrase." >&2
+            exit 1
+          fi
+          rm -f -- "${deb_unprotected_probe}"
+          gpg --batch --yes --no-options --homedir "${deb_gnupg}" --no-tty \
+            --pinentry-mode loopback --passphrase-file "${deb_passphrase}" \
+            --local-user "${deb_expected_fingerprint}" --digest-algo SHA256 \
+            --armor --output "${deb_signature}" \
+            --detach-sign "${SIGNED_DIR}/${deb_name}"
+          cmp --silent "${UNSIGNED_DIR}/${deb_name}" "${SIGNED_DIR}/${deb_name}" || {
+            echo "ERROR: detached DEB signing changed the package bytes." >&2
+            exit 1
+          }
+          cleanup_deb_secret
+          trap - EXIT
+          test ! -e "${deb_secret_dir}"
+
+      - name: Sign Exact APK in Family-Scoped Private Workspace
+        shell: bash
+        env:
+          APK_KEY_ID: ${{ inputs.apk_key_id }}
+          APK_SIGNER_IMAGE: ${{ vars.SYSWARDEN_APK_SIGNER_IMAGE }}
+          APK_SIGNING_PASSPHRASE: ${{ secrets.SYSWARDEN_APK_SIGNING_PASSPHRASE }}
+          APK_SIGNING_PRIVATE_KEY: ${{ secrets.SYSWARDEN_APK_SIGNING_PRIVATE_KEY }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          umask 077
+          declare +x apk_private_material="${APK_SIGNING_PRIVATE_KEY-}"
+          declare +x apk_passphrase_material="${APK_SIGNING_PASSPHRASE-}"
+          unset APK_SIGNING_PRIVATE_KEY APK_SIGNING_PASSPHRASE
+          test -n "${apk_private_material}"
+          test -n "${apk_passphrase_material}"
+          apk_secret_dir="${SECRET_DIR}/apk"
+          case "${apk_secret_dir}" in
+            "${SECRET_DIR}"/apk) ;;
+            *) echo "ERROR: refusing unsafe APK secret path." >&2; exit 1 ;;
+          esac
+          cleanup_apk_secret() {
+            unset -v APK_SIGNING_PRIVATE_KEY APK_SIGNING_PASSPHRASE \
+              apk_private_material apk_passphrase_material
+            local cleanup_status=0
+            if [[ -d "${apk_secret_dir}" ]]; then
+              if ! chmod -R u+rwX "${apk_secret_dir}"; then
+                cleanup_status=1
+              fi
+              if ! rm -rf -- "${apk_secret_dir}"; then
+                cleanup_status=1
+              fi
+            fi
+            if [[ -e "${apk_secret_dir}" || -L "${apk_secret_dir}" ]]; then
+              cleanup_status=1
+            fi
+            return "${cleanup_status}"
+          }
+          trap cleanup_apk_secret EXIT
+          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          if [[ "$(jq -er '.apk.signer_image' "${policy}")" != "${APK_SIGNER_IMAGE}" ]]; then
+            echo "ERROR: APK signer image differs from the committed signature policy." >&2
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          apk_name="syswarden_${version}_x86_64.apk"
+          install -m 0600 "${UNSIGNED_DIR}/${apk_name}" "${APK_WORK_DIR}/${apk_name}"
+          apk_public_rel="$(jq -er --arg id "${APK_KEY_ID}" '
+            [.apk.trusted_keys[] | select(.id == $id)] |
+            if length == 1 then .[0].public_key else error("APK key is not unique") end
+          ' "${policy}")"
+          policy_root="$(realpath -e -- "$(dirname -- "${policy}")")"
+          apk_public="$(realpath -e -- "${policy_root}/${apk_public_rel}")"
+          case "${apk_public}" in
+            "${policy_root}"/*) ;;
+            *) echo "ERROR: selected APK public key escaped the committed policy directory." >&2; exit 1 ;;
+          esac
+
+          apk_public_name="$(basename -- "${apk_public}")"
+          [[ "${apk_public_name}" =~ ^[A-Za-z0-9._+-]+\.rsa\.pub$ ]]
+          apk_private_name="${apk_public_name%.pub}"
+          apk_private="${apk_secret_dir}/${apk_private_name}"
+          apk_private_encrypted="${apk_secret_dir}/encrypted-${apk_private_name}.pem"
+          apk_passphrase="${apk_secret_dir}/passphrase"
+          apk_public_staged="${apk_secret_dir}/${apk_public_name}"
+          apk_public_derived="${apk_secret_dir}/derived-${apk_public_name}"
+          install -d -m 0700 "${apk_secret_dir}"
+          printf '%s' "${apk_private_material}" > "${apk_private_encrypted}"
+          printf '%s' "${apk_passphrase_material}" > "${apk_passphrase}"
+          unset -v apk_private_material apk_passphrase_material
+          if openssl pkey -in "${apk_private_encrypted}" -passin file:/dev/null \
+            -noout >/dev/null 2>&1; then
+            echo "ERROR: protected APK private key must require a non-empty passphrase." >&2
+            exit 1
+          fi
+          openssl pkey -in "${apk_private_encrypted}" \
+            -passin "file:${apk_passphrase}" -out "${apk_private}"
+          chmod 0600 "${apk_private}"
+          install -m 0600 "${apk_public}" "${apk_public_staged}"
+          openssl pkey -in "${apk_private}" -pubout -out "${apk_public_derived}"
+          cmp --silent "${apk_public_derived}" "${apk_public_staged}" || {
+            echo "ERROR: protected APK private key does not match the committed public key bytes." >&2
+            exit 1
+          }
+          uid="$(id -u)"
+          gid="$(id -g)"
+          apk_work_real="$(realpath -e -- "${APK_WORK_DIR}")"
+          private_real="$(realpath -e -- "${apk_private}")"
+          public_real="$(realpath -e -- "${apk_public_staged}")"
+          docker run --rm --pull never --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --pids-limit 64 --memory 256m --cpus 1 \
+            --user "${uid}:${gid}" \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777,size=16m \
+            --mount "type=bind,src=${apk_work_real},dst=/work" \
+            --mount "type=bind,src=${private_real},dst=/run/${apk_private_name},readonly" \
+            --mount "type=bind,src=${public_real},dst=/run/${apk_public_name},readonly" \
+            --env "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" \
+            --entrypoint /bin/sh "${APK_SIGNER_IMAGE}" -eu -c '
+              abuild-sign -t RSA256 -k "$1" "$2"
+            ' sh "/run/${apk_private_name}" "/work/${apk_name}"
+          install -m 0600 "${APK_WORK_DIR}/${apk_name}" "${SIGNED_DIR}/${apk_name}"
+          cleanup_apk_secret
+          trap - EXIT
+          test ! -e "${apk_secret_dir}"
+
+      - name: Seal Exact Signed Package Checksums
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          rpm_name="syswarden-${version}-1.x86_64.rpm"
+          apk_name="syswarden_${version}_x86_64.apk"
+          deb_name="syswarden_${version}_amd64.deb"
+          (
+            cd "${SIGNED_DIR}"
+            sha256sum "${rpm_name}" "${apk_name}" "${deb_name}" | LC_ALL=C sort -k2 > SHA256SUMS.txt
+            sha256sum --check --strict SHA256SUMS.txt
+          )
+          rhel_rpm_name="syswarden-${version}-1.rhelpo.x86_64.rpm"
+          (
+            cd "${RHEL_SIGNED_DIR}"
+            sha256sum "${rhel_rpm_name}" > SHA256SUMS.txt
+            sha256sum --check --strict SHA256SUMS.txt
+          )
+
+      - name: Verify Native Signatures with Isolated Trust Roots
+        shell: bash
+        env:
+          APK_KEY_ID: ${{ inputs.apk_key_id }}
+          APK_SIGNER_IMAGE: ${{ vars.SYSWARDEN_APK_SIGNER_IMAGE }}
+          DEB_KEY_ID: ${{ inputs.deb_key_id }}
+          QUALIFICATION_MODE: ${{ inputs.qualification_mode }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RPM_KEY_ID: ${{ inputs.rpm_key_id }}
+          SYSWARDEN_APK_SIGNER_IMAGE: ${{ vars.SYSWARDEN_APK_SIGNER_IMAGE }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          policy="scripts/ci/native_package_signature_policy_v4100.json"
+          bootstrap_args=()
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" ]]; then
+            bootstrap_args+=(--bootstrap-qualification)
+          elif [[ "${QUALIFICATION_MODE}" != "qualified-policy" ]]; then
+            echo "ERROR: native signing qualification mode is invalid." >&2
+            exit 1
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py \
+            inventory --release "${RELEASE_TAG}" --packages "${SIGNED_DIR}" \
+            --output "${PROOF_DIR}/signed-inventory.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py \
+            rhel-package-owned-inventory --release "${RELEASE_TAG}" \
+            --packages "${RHEL_SIGNED_DIR}" \
+            --output "${PROOF_DIR}/rhel-signed-inventory.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signature_gate.py rpm \
+            --policy "${policy}" \
+            --inventory "${PROOF_DIR}/signed-inventory.json" \
+            --package "${SIGNED_DIR}/syswarden-${version}-1.x86_64.rpm" \
+            --release "${RELEASE_TAG}" --key-id "${RPM_KEY_ID}" \
+            --as-of "${SIGNING_DATE}" --purpose qualification \
+            "${bootstrap_args[@]}" \
+            --evidence-output "${PROOF_DIR}/rpm-verification.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signature_gate.py rpm \
+            --policy "${policy}" \
+            --inventory "${PROOF_DIR}/rhel-signed-inventory.json" \
+            --package "${RHEL_SIGNED_DIR}/syswarden-${version}-1.rhelpo.x86_64.rpm" \
+            --package-role rhel-package-owned \
+            --release "${RELEASE_TAG}" --key-id "${RPM_KEY_ID}" \
+            --as-of "${SIGNING_DATE}" --purpose qualification \
+            "${bootstrap_args[@]}" \
+            --evidence-output "${PROOF_DIR}/rhel-rpm-verification.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signature_gate.py apk \
+            --policy "${policy}" \
+            --inventory "${PROOF_DIR}/signed-inventory.json" \
+            --package "${SIGNED_DIR}/syswarden_${version}_x86_64.apk" \
+            --release "${RELEASE_TAG}" --key-id "${APK_KEY_ID}" \
+            --as-of "${SIGNING_DATE}" --purpose qualification \
+            "${bootstrap_args[@]}" \
+            --apk "${GITHUB_WORKSPACE}/scripts/ci/apk_verify_isolated.sh" \
+            --evidence-output "${PROOF_DIR}/apk-verification.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signature_gate.py deb \
+            --policy "${policy}" \
+            --inventory "${PROOF_DIR}/signed-inventory.json" \
+            --package "${SIGNED_DIR}/syswarden_${version}_amd64.deb" \
+            --signature "${PROOF_DIR}/syswarden_${version}_amd64.deb.asc" \
+            --release "${RELEASE_TAG}" --key-id "${DEB_KEY_ID}" \
+            --as-of "${SIGNING_DATE}" --purpose qualification \
+            "${bootstrap_args[@]}" \
+            --evidence-output "${PROOF_DIR}/deb-verification.json"
+
+      - name: Attest Family-Scoped Private Material Is Absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${SECRET_DIR}" in
+            "${SIGNING_ROOT}"/private) ;;
+            *) echo "ERROR: refusing unsafe private-key cleanup path." >&2; exit 1 ;;
+          esac
+          for family in rpm apk deb; do
+            test ! -e "${SECRET_DIR}/${family}" || {
+              echo "ERROR: ${family} private signing material survived its family step." >&2
+              exit 1
+            }
+          done
+          if find "${SECRET_DIR}" -mindepth 1 -print -quit | grep -q .; then
+            echo "ERROR: unexpected material remains in the private signing directory." >&2
+            exit 1
+          fi
+          rmdir "${SECRET_DIR}"
+          test ! -e "${SECRET_DIR}"
+
+      - name: Build and Verify Immutable Signed Package Bundle
+        id: bundle
+        shell: bash
+        env:
+          APK_SIGNER_IMAGE: ${{ vars.SYSWARDEN_APK_SIGNER_IMAGE }}
+          QUALIFICATION_MODE: ${{ inputs.qualification_mode }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          UNSIGNED_ARTIFACT_DIGEST: ${{ steps.unsigned.outputs.artifact_digest }}
+          UNSIGNED_ARTIFACT_NAME: ${{ steps.unsigned.outputs.artifact_name }}
+          UNSIGNED_ARTIFACT_ID: ${{ inputs.unsigned_artifact_id }}
+          RHEL_UNSIGNED_ARTIFACT_DIGEST: ${{ steps.unsigned.outputs.rhel_artifact_digest }}
+          RHEL_UNSIGNED_ARTIFACT_NAME: ${{ steps.unsigned.outputs.rhel_artifact_name }}
+          RHEL_UNSIGNED_ARTIFACT_ID: ${{ inputs.rhel_package_owned_artifact_id }}
+          UNSIGNED_PACKAGE_RUN_ID: ${{ inputs.unsigned_package_run_id }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          bundle_root="${SIGNING_ROOT}/bundle"
+          bootstrap_args=()
+          if [[ "${QUALIFICATION_MODE}" == "bootstrap-qualification" ]]; then
+            bootstrap_args+=(--bootstrap-qualification)
+          elif [[ "${QUALIFICATION_MODE}" != "qualified-policy" ]]; then
+            echo "ERROR: native signing qualification mode is invalid." >&2
+            exit 1
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py finalize \
+            --release "${RELEASE_TAG}" --release-sha "${RELEASE_SHA}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --unsigned-packages "${UNSIGNED_DIR}" --signed-packages "${SIGNED_DIR}" \
+            --rhel-unsigned-packages "${RHEL_UNSIGNED_DIR}" \
+            --rhel-signed-packages "${RHEL_SIGNED_DIR}" \
+            --unsigned-run-id "${UNSIGNED_PACKAGE_RUN_ID}" \
+            --unsigned-artifact-id "${UNSIGNED_ARTIFACT_ID}" \
+            --unsigned-artifact-name "${UNSIGNED_ARTIFACT_NAME}" \
+            --unsigned-artifact-digest "${UNSIGNED_ARTIFACT_DIGEST}" \
+            --rhel-unsigned-artifact-id "${RHEL_UNSIGNED_ARTIFACT_ID}" \
+            --rhel-unsigned-artifact-name "${RHEL_UNSIGNED_ARTIFACT_NAME}" \
+            --rhel-unsigned-artifact-digest "${RHEL_UNSIGNED_ARTIFACT_DIGEST}" \
+            --signing-run-id "${GITHUB_RUN_ID}" --signing-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --signing-workflow-sha "${WORKFLOW_SHA}" \
+            --source-date-epoch "${SOURCE_DATE_EPOCH}" \
+            --signer-image "${APK_SIGNER_IMAGE}" \
+            --policy scripts/ci/native_package_signature_policy_v4100.json \
+            --as-of "${SIGNING_DATE}" --rpm-proof "${PROOF_DIR}/rpm-proof.json" \
+            --rpm-verification "${PROOF_DIR}/rpm-verification.json" \
+            --rhel-rpm-proof "${PROOF_DIR}/rhel-rpm-proof.json" \
+            --rhel-rpm-verification "${PROOF_DIR}/rhel-rpm-verification.json" \
+            --apk-verification "${PROOF_DIR}/apk-verification.json" \
+            --deb-signature "${PROOF_DIR}/syswarden_${RELEASE_TAG#v}_amd64.deb.asc" \
+            --deb-verification "${PROOF_DIR}/deb-verification.json" \
+            "${bootstrap_args[@]}" \
+            --output "${bundle_root}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py verify \
+            --bundle "${bundle_root}" --release "${RELEASE_TAG}" --release-sha "${RELEASE_SHA}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/repository_state.py \
+            --repository "${GITHUB_WORKSPACE}" verify \
+            --snapshot "${SIGNING_ROOT}/repository-state.json"
+          artifact_name="syswarden-native-signed-packages-${RELEASE_TAG#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RELEASE_SHA}"
+          printf 'artifact_name=%s\n' "${artifact_name}" >> "${GITHUB_OUTPUT}"
+          printf 'bundle_root=%s\n' "${bundle_root}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload Exact Signed Package Bundle
+        id: signed-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.bundle.outputs.artifact_name }}
+          path: ${{ steps.bundle.outputs.bundle_root }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Validate Uploaded Signed Artifact Identity
+        shell: bash
+        env:
+          SIGNED_ARTIFACT_DIGEST: ${{ steps.signed-upload.outputs.artifact-digest }}
+          SIGNED_ARTIFACT_ID: ${{ steps.signed-upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          [[ "${SIGNED_ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]] || {
+            echo "ERROR: uploaded signed artifact ID is invalid." >&2
+            exit 1
+          }
+          [[ "${SIGNED_ARTIFACT_DIGEST}" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "ERROR: uploaded signed artifact digest is invalid." >&2
+            exit 1
+          }
+
+      - name: Remove Ephemeral Signing Workspace
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup_status=0
+          if [[ -z "${SIGNING_ROOT:-}" ]]; then
+            exit 0
+          fi
+          case "${SIGNING_ROOT}" in
+            "${RUNNER_TEMP%/}"/syswarden-native-signing.*) ;;
+            *) echo "ERROR: refusing unsafe signing-workspace cleanup path." >&2; exit 1 ;;
+          esac
+          test ! -L "${SIGNING_ROOT}"
+          if command -v gpgconf >/dev/null 2>&1; then
+            for family in rpm deb; do
+              gnupg_home="${SIGNING_ROOT}/private/${family}/gnupg"
+              agent_socket=""
+              if ! agent_socket="$(gpgconf --homedir "${gnupg_home}" \
+                --list-dirs agent-socket 2>/dev/null)"; then
+                cleanup_status=1
+              fi
+              if ! gpgconf --homedir "${gnupg_home}" --kill gpg-agent \
+                >/dev/null 2>&1; then
+                cleanup_status=1
+              fi
+              if [[ -n "${agent_socket}" ]]; then
+                for _ in 1 2 3 4 5 6 7 8 9 10; do
+                  if [[ ! -S "${agent_socket}" ]]; then
+                    break
+                  fi
+                  sleep 0.1
+                done
+                if [[ -S "${agent_socket}" ]]; then
+                  cleanup_status=1
+                fi
+              fi
+            done
+          elif [[ -d "${SIGNING_ROOT}/private/rpm/gnupg" || \
+                  -d "${SIGNING_ROOT}/private/deb/gnupg" ]]; then
+            cleanup_status=1
+          fi
+          if ! chmod -R u+rwX "${SIGNING_ROOT}"; then
+            cleanup_status=1
+          fi
+          if ! rm -rf -- "${SIGNING_ROOT}"; then
+            cleanup_status=1
+          fi
+          if [[ -e "${SIGNING_ROOT}" || -L "${SIGNING_ROOT}" ]]; then
+            cleanup_status=1
+          fi
+          exit "${cleanup_status}"
+
+  native-package-signing:
+    name: Native RPM, APK and DEB Signing
+    needs: [sign-native-packages]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce protected signing result
+        shell: bash
+        env:
+          SIGNING_RESULT: ${{ needs.sign-native-packages.result }}
+        run: |
+          set -euo pipefail
+          if [[ "${SIGNING_RESULT}" != "success" ]]; then
+            echo "ERROR: protected native package signing concluded ${SIGNING_RESULT}." >&2
+            exit 1
+          fi

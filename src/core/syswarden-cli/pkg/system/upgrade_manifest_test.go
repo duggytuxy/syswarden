@@ -203,13 +203,19 @@ func TestDetectPackageTargetSelectsAMD64PackageFormat(t *testing.T) {
 	}
 }
 
-func TestAPKUnsignedFlagRemainsBehindVerifiedManifestPipeline(t *testing.T) {
+func TestAPKInstallRequiresNativeTrustedKeyVerification(t *testing.T) {
 	t.Parallel()
 
 	arguments := (packageTarget{format: packageFormatAPK}).installArguments("/var/tmp/syswarden-update-safe/package.apk")
-	if len(arguments) != 3 || arguments[0] != "add" || arguments[1] != "--allow-untrusted" ||
-		arguments[2] != "/var/tmp/syswarden-update-safe/package.apk" {
+	if len(arguments) != 2 || arguments[0] != "add" ||
+		arguments[1] != "/var/tmp/syswarden-update-safe/package.apk" {
 		t.Fatalf("APK install arguments = %#v", arguments)
+	}
+	if err := validateExternalCommand(
+		"/sbin/apk",
+		[]string{"add", "--allow-untrusted", "/var/tmp/syswarden-update-safe/package.apk"},
+	); err == nil {
+		t.Fatal("production updater accepted an APK native-signature bypass")
 	}
 }
 
@@ -227,14 +233,17 @@ func TestDEBInstallArgumentsUseExactBoundedDPkgLockWait(t *testing.T) {
 	}
 }
 
-func TestRPMInstallArgumentsRemainUnchanged(t *testing.T) {
+func TestRPMInstallArgumentsRequireLocalPackageSignatureVerification(t *testing.T) {
 	t.Parallel()
 
 	packagePath := "/var/tmp/syswarden-update-safe/package.rpm"
 	arguments := (packageTarget{format: packageFormatRPM}).installArguments(packagePath)
-	if len(arguments) != 3 || arguments[0] != "install" || arguments[1] != "-y" ||
-		arguments[2] != packagePath {
+	if len(arguments) != 4 || arguments[0] != "--setopt=localpkg_gpgcheck=1" ||
+		arguments[1] != "install" || arguments[2] != "-y" || arguments[3] != packagePath {
 		t.Fatalf("RPM install arguments = %#v", arguments)
+	}
+	if err := validateExternalCommand("/usr/bin/dnf", []string{"install", "-y", packagePath}); err == nil {
+		t.Fatal("production updater accepted an RPM native-signature bypass")
 	}
 }
 
