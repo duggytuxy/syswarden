@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "stable_public_version": "v4.04.2",
+  "stable_public_version": "v4.04.3",
   "public_report_version": "v4.03.3",
-  "operational_wiki_baseline_version": "v4.03.3",
+  "operational_wiki_baseline_version": "v4.04.3",
   "current_operational_wiki_pages": [
     "Deployment-Tutorial.md",
     "RHEL-9-Image-Extensions.md",
@@ -691,17 +691,17 @@
           [
             "Debian or Ubuntu",
             "amd64",
-            "`syswarden_4.03.3_amd64.deb`"
+            "`syswarden_4.04.3_amd64.deb`"
           ],
           [
             "Fedora or RHEL family",
             "x86_64",
-            "`syswarden-4.03.3-1.x86_64.rpm`"
+            "`syswarden-4.04.3-1.x86_64.rpm`"
           ],
           [
             "Alpine",
             "x86_64",
-            "`syswarden_4.03.3_x86_64.apk`"
+            "`syswarden_4.04.3_x86_64.apk`"
           ]
         ]
       }
