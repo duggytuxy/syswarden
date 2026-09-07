@@ -1,0 +1,30 @@
+{
+  "schema_version": "syswarden.bunkerweb-compatibility.v1",
+  "retrieved_at": "2026-09-03T00:00:00Z",
+  "repository": "https://github.com/bunkerity/bunkerweb-plugins",
+  "ref": "dev",
+  "commit": "90fe786729cf6912203196aac4d17517ab2fa3cb",
+  "commit_verified": true,
+  "plugin_version": "1.11",
+  "blobs": {
+    "syswarden/jobs/syswarden-ban-push.py": "a5b0024d7ece77b5da91817f6699a5f3dfc6784e",
+    "syswarden/jobs/syswarden_client.py": "71e1895be5025b95423ac334cab889ebe3894af9",
+    "syswarden/jobs/syswarden_helpers.py": "8ce4f1bc48dcc0c3fffa1d3c550b542790edb612",
+    "syswarden/plugin.json": "434059b55dcd4d0c46ebf975920187943a83f63c"
+  },
+  "api_version": "2",
+  "status_path": "/ha/status",
+  "sync_path": "/ha/sync",
+  "authentication": "bearer",
+  "required_capabilities": ["sync_provenance", "sync_ttl"],
+  "ha_v2_role_aware_mutation_routing": false,
+  "ha_v2_multi_peer_requires_complete_fence_manifest": true,
+  "maximum_legacy_items": 1024,
+  "maximum_provenance_items": 500,
+  "minimum_ttl_seconds": 1,
+  "maximum_ttl_seconds": 2592000,
+  "maximum_reason_bytes": 512,
+  "maximum_source_bytes": 64,
+  "tls_modes": ["ca_bundle", "explicit_insecure", "sha256_fingerprint"],
+  "mutation_methods": ["DELETE", "POST"]
+}

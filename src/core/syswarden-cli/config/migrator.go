@@ -322,6 +322,58 @@ func EnsureDefaults(outputDir string) error {
 	return ensureMissingConfigFile(outputDir, "config.toml", []byte(master))
 }
 
+// ModularConfigurationComplete reports whether the complete package migration
+// inventory is already present as secure regular files. It never creates or
+// rewrites configuration and fails closed on an unsafe existing path.
+func ModularConfigurationComplete(outputDir string) (bool, error) {
+	info, err := os.Lstat(outputDir)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect modular configuration root: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, fmt.Errorf("modular configuration root is not a real directory")
+	}
+	root, err := openConfigDirectory(outputDir, false, 0)
+	if err != nil {
+		return false, fmt.Errorf("open modular configuration root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if _, _, err := readSecureRegularFileSnapshot(root, "config.toml", filepath.Join(outputDir, "config.toml")); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	modulesPath := filepath.Join(outputDir, "modules")
+	modules, err := openConfigDirectory(modulesPath, false, 0)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("open modular configuration modules: %w", err)
+	}
+	defer func() { _ = modules.Close() }()
+	for _, name := range []string{
+		"00-core.toml",
+		"10-network.toml",
+		"20-security.toml",
+		"30-waap.toml",
+		"40-integrations.toml",
+		"99-user.toml",
+	} {
+		if _, _, err := readSecureRegularFileSnapshot(modules, name, filepath.Join(modulesPath, name)); err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	return true, nil
+}
+
 func ensureConfigDirectory(path string, mode os.FileMode) error {
 	root, err := openConfigDirectory(path, true, mode)
 	if err != nil {
@@ -1151,6 +1203,26 @@ peer_port = ` + haPeerPort + `
 # Generate a secure token using: openssl rand -hex 32
 token = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_HA_TOKEN", "")) + `
 
+# HA v2 is an explicit two-node runtime contract. Legacy migration never
+# enables it automatically; provision the attested files before opting in.
+v2_enabled = false
+cluster_id = ""
+epoch = 0
+node_id = ""
+peer_id = ""
+role = ""
+v2_secret_file = ""
+tls_cert_file = ""
+tls_key_file = ""
+tls_ca_file = ""
+peer_tls_name = ""
+peer_cert_sha256 = []
+state_file = "/var/lib/syswarden/ha/replication-v2.json"
+transaction_file = "/var/lib/syswarden/ha/replication-v2.wal.json"
+heartbeat_interval_seconds = 2
+heartbeat_timeout_seconds = 10
+request_timeout_seconds = 5
+
 [integrations.siem]
 enabled = ` + siemEnabled + `
 ip = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_SIEM_IP", "")) + `
@@ -1171,6 +1243,9 @@ slack_url = ` + quoteTOML(legacyValue(oldConfig, "SYSWARDEN_WEBHOOK_URL_SLACK", 
 [integrations.bunkerweb]
 # Enables the enriched BunkerWeb TTL and provenance contract over authenticated HA.
 enabled = ` + bunkerWebEnabled + `
+# Authorized BunkerWeb scheduler source IPs or bounded CIDRs. HA v2 does not
+# reuse integrations.ha.peer_ips for scheduler authorization.
+scheduler_ips = []
 
 [integrations.wazuh]
 enabled = ` + wazuhEnabled + `

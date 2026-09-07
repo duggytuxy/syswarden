@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -59,6 +60,61 @@ type migrationArtifact struct {
 	content   []byte
 	preserve  bool
 	noReplace bool
+}
+
+// ArchiveMigratedLegacySource moves a completed retained migration source to
+// the package lifecycle archive name without following links or overwriting an
+// existing path. Both names must be canonical siblings in one secure directory.
+func ArchiveMigratedLegacySource(retainedPath, archivePath string) error {
+	if retainedPath == "" || archivePath == "" || !filepath.IsAbs(retainedPath) || !filepath.IsAbs(archivePath) ||
+		filepath.Clean(retainedPath) != retainedPath || filepath.Clean(archivePath) != archivePath ||
+		filepath.Dir(retainedPath) != filepath.Dir(archivePath) || filepath.Base(retainedPath) == filepath.Base(archivePath) {
+		return fmt.Errorf("legacy migration archive paths must be distinct canonical absolute siblings")
+	}
+	parent := filepath.Dir(retainedPath)
+	root, err := openDirectoryNoSymlinks(parent, false, 0)
+	if err != nil {
+		return fmt.Errorf("open legacy migration archive parent: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := validateConfigDirectory(root, parent); err != nil {
+		return err
+	}
+	retainedName := filepath.Base(retainedPath)
+	archiveName := filepath.Base(archivePath)
+	content, before, err := readSecureRegularFileSnapshot(root, retainedName, retainedPath)
+	if err != nil {
+		return fmt.Errorf("attest retained legacy migration source: %w", err)
+	}
+	status, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || status.Nlink != 1 || int(status.Uid) != os.Geteuid() {
+		return fmt.Errorf("retained legacy migration source has unsafe ownership or link count")
+	}
+	if _, err := root.Lstat(archiveName); err == nil {
+		return fmt.Errorf("refusing to overwrite existing legacy configuration archive %s", archivePath)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("inspect legacy configuration archive: %w", err)
+	}
+	if err := root.Rename(retainedName, archiveName); err != nil {
+		return fmt.Errorf("archive retained legacy migration source: %w", err)
+	}
+	afterContent, after, err := readSecureRegularFileSnapshot(root, archiveName, archivePath)
+	sameRenamedIdentity := false
+	if err == nil {
+		beforeStatus, beforeOK := before.Sys().(*syscall.Stat_t)
+		afterStatus, afterOK := after.Sys().(*syscall.Stat_t)
+		sameRenamedIdentity = beforeOK && afterOK && os.SameFile(before, after) &&
+			before.Mode() == after.Mode() && before.Size() == after.Size() && before.ModTime().Equal(after.ModTime()) &&
+			beforeStatus.Uid == afterStatus.Uid && beforeStatus.Gid == afterStatus.Gid && beforeStatus.Nlink == afterStatus.Nlink
+	}
+	if err != nil || !bytes.Equal(content, afterContent) || !sameRenamedIdentity {
+		restoreErr := root.Rename(archiveName, retainedName)
+		return fmt.Errorf("legacy configuration archive failed identity verification (restore: %v)", restoreErr)
+	}
+	if _, err := root.Lstat(retainedName); !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("retained legacy migration source remained after archival")
+	}
+	return syncRootDirectory(root)
 }
 
 type migrationArtifactPublisher func(directory, name string, content []byte, noReplace bool) error

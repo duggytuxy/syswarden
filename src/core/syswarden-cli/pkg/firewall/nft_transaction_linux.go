@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"syswarden-cli/config"
+	"syswarden-cli/pkg/network"
 )
 
 const (
@@ -274,6 +275,7 @@ func (runner execNFTCommandRunner) Run(ctx context.Context, stdin []byte, args .
 type nftListSource struct {
 	path     string
 	required bool
+	attested bool
 }
 
 type nftSetPopulation struct {
@@ -372,6 +374,22 @@ func readRootedNFTFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("nftables input is not a regular file: %s", path)
 	}
 	return io.ReadAll(file)
+}
+
+var readAttestedNFTFeed = network.ReadAttestedFeedFile
+
+func readNFTListSource(source nftListSource) ([]byte, error) {
+	if !source.attested {
+		return readRootedNFTFile(source.path)
+	}
+	content, status, err := readAttestedNFTFeed(source.path)
+	if err != nil {
+		return nil, fmt.Errorf("read attested threat feed: %w", err)
+	}
+	if status.State != "current" && status.State != "stale" && status.State != "unavailable" && status.State != "rejected" {
+		return nil, fmt.Errorf("read attested threat feed: unsupported provenance state %q", status.State)
+	}
+	return content, nil
 }
 
 func openPrivateNFTCommandFile(path string) (*os.File, error) {
@@ -1060,7 +1078,7 @@ func populateSet(ctx context.Context, sources []nftListSource, setName string) (
 			errs = append(errs, err)
 			break
 		}
-		content, err := readRootedNFTFile(source.path)
+		content, err := readNFTListSource(source)
 		if errors.Is(err, fs.ErrNotExist) && !source.required {
 			continue
 		}
@@ -2273,15 +2291,8 @@ func expectedOperatorPolicyExpressions(expected operatorPolicyRuleExpectation) (
 	}
 
 	sourceProtocol := "ip"
-	transportProtocol := "icmp"
-	protocolExpression := map[string]any{"match": map[string]any{
-		"op":    "==",
-		"left":  map[string]any{"payload": map[string]any{"protocol": "ip", "field": "protocol"}},
-		"right": "icmp",
-	}}
 	if expected.family == config.OperatorPolicyFamilyIPv6 {
 		sourceProtocol = "ip6"
-		transportProtocol = "icmpv6"
 	} else if expected.family != config.OperatorPolicyFamilyIPv4 {
 		return nil, fmt.Errorf("unsupported family %q", expected.family)
 	}
@@ -2293,18 +2304,42 @@ func expectedOperatorPolicyExpressions(expected operatorPolicyRuleExpectation) (
 			"right": source,
 		}},
 	}
-	if expected.family == config.OperatorPolicyFamilyIPv4 {
-		expressions = append(expressions, protocolExpression)
+	switch expected.protocol {
+	case config.OperatorPolicyProtocolICMP:
+		if expected.family != config.OperatorPolicyFamilyIPv4 || expected.destinationPort != 0 {
+			return nil, fmt.Errorf("invalid IPv4 ICMP expectation")
+		}
+		expressions = append(expressions,
+			map[string]any{"match": map[string]any{
+				"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": "ip", "field": "protocol"}}, "right": "icmp",
+			}},
+			map[string]any{"match": map[string]any{
+				"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": "icmp", "field": "type"}}, "right": "echo-request",
+			}},
+		)
+	case config.OperatorPolicyProtocolICMPv6:
+		if expected.family != config.OperatorPolicyFamilyIPv6 || expected.destinationPort != 0 {
+			return nil, fmt.Errorf("invalid IPv6 ICMP expectation")
+		}
+		expressions = append(expressions, map[string]any{"match": map[string]any{
+			"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": "icmpv6", "field": "type"}}, "right": "echo-request",
+		}})
+	case config.OperatorPolicyProtocolTCP, config.OperatorPolicyProtocolUDP:
+		if expected.destinationPort == 0 {
+			return nil, fmt.Errorf("transport destination port is absent")
+		}
+		expressions = append(expressions,
+			map[string]any{"match": map[string]any{
+				"op": "==", "left": map[string]any{"meta": map[string]any{"key": "l4proto"}}, "right": string(expected.protocol),
+			}},
+			map[string]any{"match": map[string]any{
+				"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": string(expected.protocol), "field": "dport"}}, "right": int(expected.destinationPort),
+			}},
+		)
+	default:
+		return nil, fmt.Errorf("unsupported protocol %q", expected.protocol)
 	}
-	expressions = append(expressions,
-		map[string]any{"match": map[string]any{
-			"op":    "==",
-			"left":  map[string]any{"payload": map[string]any{"protocol": transportProtocol, "field": "type"}},
-			"right": "echo-request",
-		}},
-		map[string]any{"counter": map[string]any{}},
-		map[string]any{"accept": nil},
-	)
+	expressions = append(expressions, map[string]any{"counter": map[string]any{}}, map[string]any{"accept": nil})
 	return expressions, nil
 }
 

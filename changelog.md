@@ -1,3 +1,187 @@
+# Release v4.10.0
+
+> Candidate status: v4.10.0 is the active Major development line. This block
+> records implemented and verified changes only and does not authorize a tag
+> or public Release.
+
+### ADDED
+
+- **Authenticated HA v2 replication:** Add a two-node writer and standby state
+  model with explicit cluster, node, peer and epoch identities, TLS 1.3 mutual
+  authentication, durable WAL and head journals, heartbeats, acknowledgements,
+  tombstones, checkpoints, fencing, rejoin and deterministic resynchronization.
+- **Threat-feed provenance and freshness:** Record source identity, retrieval
+  time, license, size, checksums, normalization result and current, stale,
+  unavailable or rejected state for accepted feed snapshots. Preserve an
+  attested last-known-good snapshot through bounded atomic publication. Expose
+  the resulting provenance and freshness state through `syswarden audit`.
+- **Offline candidate qualification channel:** Add an explicit, no-fallback
+  updater path for protected native labs. It binds the signed manifest,
+  package bytes, embedded CLI, installed package record and activated CLI to
+  the same candidate before any service activation.
+- **Versioned TUI and GRC evidence:** Add stable KPI fields for admitted and
+  rejected events, HITS, highest signature-backed severity, enforcement jail,
+  policy action, evidence quality and time window. The TUI and exported
+  dashboard data now consume the same evidence model.
+- **Bounded multi-provider webhooks:** Add deterministic Teams, Slack and
+  Discord delivery contracts with HTTPS-only targets, strict payload and
+  response limits, idempotency keys, bounded retries, rate-limit handling,
+  backoff with jitter and explicit delivery-state reporting.
+- **Typed TCP and UDP operator policy:** Extend the closed operator-policy
+  schema with one canonical destination port for bounded inbound TCP and UDP
+  allow rules while preserving the existing ICMP and ICMPv6 contract.
+- **Native package-signing foundation:** Add explicit non-publishing bootstrap
+  and qualified-policy paths for RPM OpenPGP signatures, APK RSA256 signatures
+  and detached DEB OpenPGP signatures. Seal the selected key identities into
+  immutable bundle provenance and isolate each family's protected secrets and
+  cleanup.
+- **Package-owned RHEL 9+ profile:** Add a separate opt-in RPM profile where
+  the package owns flat systemd assets, presets and scriptlets while Go remains
+  runtime-only. The profile does not configure firewalld, change SELinux
+  policy or assemble an image. Its distinct `1.rhelpo` RPM, sealed signing
+  provenance and updater exclusion support explicit RHEL 9+ ISO integration
+  through an offline `mock` or chroot transaction. Release qualification binds
+  separate AlmaLinux 9 and AlmaLinux 10 package-owned campaigns, first real
+  boot and two subsequent reboots to the exact signed candidate.
+- **Native release evidence framework:** Add candidate-bound contracts and
+  validators for AMD64 package lifecycle, product capabilities, HA v2,
+  performance and NODE01 migration.
+- **Real native performance producer:** Add a reviewed, configuration-bound
+  adapter that measures package installation, service startup, CPU, RSS,
+  admitted WAAP throughput, event-to-rule latency, nftables transactions and
+  process disk I/O from real host observations. Final evidence is pinned to
+  the checked-in probe and adapter, the protected configuration and the
+  verified DEB lifecycle package identities.
+- **Source-bound allocation qualification:** Add an independent Go heap-object
+  and byte-allocation channel for the reviewed WAAP engine scan path. It binds
+  the exact v4.04.3 baseline and v4.10.0 candidate source commits, requires 60
+  fresh processes across three paired campaigns and has no allocation waiver.
+- **Go 1.27 evaluation lane:** Add isolated workflow, protocol, JSON v2,
+  goroutine, reproducibility, performance and byte-exact rollback probes. The
+  release remains pinned to Go 1.26.6 until native evidence supports adoption.
+- **Unified Plumber baseline:** Align the GitHub compliance and score lanes
+  with Plumber v0.4.55 at its immutable action commit while retaining binary
+  checksum and provenance-attestation verification. Bind the release report to
+  the exact commit and byte-exact workflow inventory, reject degraded metadata
+  or warnings and retain strict 768 KiB report and 1 MiB archive ceilings.
+
+### CHANGED
+
+- **HA configuration contract:** Add closed, validated settings for HA v2
+  identity, role, peer certificates, state and transaction files, heartbeat
+  timing and request deadlines without changing the legacy HA path by default.
+- **Feed authority boundaries:** Keep enforcement sources explicit and
+  checksum-bound, skip individually safe special-use entries with a recorded
+  reason, and keep OSINT enrichment display-only so it cannot set severity or
+  firewall action.
+- **BunkerWeb compatibility contract:** Revalidate the out-of-band plugin
+  schema at the pinned plugin commit and preserve strict source-IP, event and
+  log-follower boundaries without introducing an inline proxy role. Because
+  that plugin is not HA-role-aware, a two-endpoint BunkerWeb deployment now
+  requires a complete active-drained fence manifest; otherwise operators must
+  expose only the writer or disable ban push. The separately validated
+  `integrations.bunkerweb.scheduler_ips` list remains independent of the one
+  HA peer authority.
+- **HA crash and scheduler convergence:** Recover an attested head journal
+  before the firewall journal, reject simultaneous recovery journals and
+  refuse writer startup when a non-expired active or pending BunkerWeb ledger
+  record lacks its exact durable claim. Retained scheduler scopes must still
+  resolve to the exact configured authority after restart or reconfiguration.
+- **HA delivery and claim convergence:** Treat bounded HTTP 208 replay as an
+  idempotent acknowledgement after a lost response, advance checkpoints only
+  within the attested convergence window and namespace BunkerWeb claims by
+  source and scheduler scope. Delete, expiry, restart and resynchronization no
+  longer shorten or remove an independent local claim.
+- **HA role-aware integration state:** Advertise BunkerWeb mutation capability
+  only from a healthy writer, expose the complete `/ha/sync` state there and
+  preserve explicit `opaque_v2` provenance on standby projections that cannot
+  attest the originating scheduler claim.
+- **Bounded dashboard projection:** Use one 1 MiB telemetry envelope across
+  the producer, HA transport and TUI. Display payload projection is
+  deterministic and explicitly reported, while an oversized essential state
+  preserves the last valid snapshot and records a publication failure.
+- **Persistent blocklist initialization:** Create and attest both IPv4 and
+  IPv6 persistent list files during installation, including an initialization
+  marker. A later disappearance fails closed instead of silently recreating a
+  privileged security input.
+- **Webhook cancellation outcomes:** Report cancellation before a POST as a
+  discarded delivery and cancellation after a POST may have started as a
+  transport-ambiguous degraded delivery.
+- **Performance qualification model:** Bind three paired campaigns to the same
+  candidate, artifacts, host, probe and adapter, with exact quotas for runtime,
+  install and size samples and a separate source-bound Go allocation gate.
+- **Release qualification sequencing:** Separate diagnostic pre-merge
+  rehearsals from official post-merge evidence so signed packages and every
+  native result identify the exact resulting main commit.
+
+### SECURITY
+
+- **HA split-brain refusal:** Fence ambiguous or concurrent writers, bind
+  replication to authenticated peer and instance identities, and prevent stale
+  peers from resurrecting removed, expired or tombstoned state.
+- **Descriptor-bound update verification:** Reject symbolic links, hard links,
+  ownership or mode drift, substituted package members, changed installed CLI
+  bytes, unbounded package-manager children and unsigned or network-fallback
+  qualification paths.
+- **Fail-closed native trust policy:** Reject missing, wrong, expired, revoked
+  or substituted RPM, APK and DEB signing identities. Production trust roots,
+  protected secrets and native signature proof remain required before release.
+- **Native signing identity separation:** Reject cross-family key ID and
+  public-key digest reuse, reject a shared RPM and DEB OpenPGP fingerprint, and
+  prevent bootstrap provenance from satisfying release qualification.
+- **Webhook containment:** Bound attacker-controlled fields before encoding,
+  forbid redirects and unsafe targets, redact credential-bearing endpoints and
+  prevent recursive or unbounded delivery storms.
+- **Terminal rendering containment:** Bound dashboard strings to 4096 bytes,
+  reject control characters and escape untrusted values before dynamic TUI
+  rendering so telemetry cannot inject formatting or terminal content.
+- **WAAP log-source integrity:** Require the exact expected owner UID, reject
+  group-writable or other-writable log files, and re-attest descriptor and
+  path identity, ownership, mode and size boundaries during reads, rotations
+  and truncations.
+- **Deterministic transport policy:** Compile typed ICMP, ICMPv6, TCP and UDP
+  rules in canonical order, reject protocol and family ambiguity and preserve
+  the authoritative terminal product policy.
+- **Native evidence integrity:** Require owner-controlled, single-link inputs,
+  exact digests, immutable output creation and externally verifiable
+  attestations for release-critical host observations.
+- **Allocation evidence isolation:** Produce source allocation evidence only
+  on a protected runner through canonical root-owned system executables, a
+  read-only repository and host root, unshared network namespaces and
+  read-only probe-visible persistent filesystems. The final performance result
+  requires independent PASS verdicts from both native and allocation channels.
+
+### TESTING
+
+- **HA adversarial coverage:** Add deterministic tests for partitions,
+  asymmetric reachability, stale epochs, split-brain fencing, WAL recovery,
+  crash-before-claim recovery, simultaneous-journal refusal, exact scheduler
+  scope re-attestation, tombstones, restart, rejoin, mixed-version behavior and
+  authenticated outbound replication. Cover response-loss replay, bounded 208
+  convergence, independent local and scheduler claims, writer-only mutation
+  capability and standby provenance across delete, expiry and restart.
+- **Feed and offline-update coverage:** Add current, stale, unavailable,
+  malformed, substituted and recovery cases plus package-payload and installed
+  CLI identity tests for DEB, RPM and APK.
+- **TUI, KPI and webhook coverage:** Replay brute-force and exploit evidence,
+  event-quality states, queue pressure, deduplication, rate limits, retry
+  boundaries, cancellation ambiguity, bounded dashboard projection, malicious
+  terminal strings, secret-safe failures and provider-specific wire payloads.
+- **Package and release contracts:** Add fail-closed tests for native signing,
+  bootstrap mode boundaries, cross-family key reuse, family-scoped secret
+  cleanup, lifecycle evidence, NODE01 migration, protected workflows and final
+  release aggregation. Require package-owned RHEL offline staging and first
+  boot evidence on AlmaLinux 9 and AlmaLinux 10 without reusing standard RPM
+  proofs. Native host execution and production-key verification remain release
+  gates for every shipped package.
+- **Performance evidence coverage:** Add real native adapter, source-bound
+  campaign identities, aggregate sample quotas, median and p95 calculations,
+  a 10 percent stable regression gate, rejection of missing or substituted
+  native observations and rejection of duplicated, synthetic or proxy
+  allocation measurements.
+
+---
+
 # Release v4.04.3
 
 > Candidate status: v4.04.3 is the Patch candidate for the stable corrections

@@ -28,9 +28,11 @@ type compiledOperatorPolicy struct {
 }
 
 type operatorPolicyRuleExpectation struct {
-	family  config.OperatorPolicyFamily
-	source  string
-	comment string
+	family          config.OperatorPolicyFamily
+	protocol        config.OperatorPolicyProtocol
+	destinationPort uint16
+	source          string
+	comment         string
 }
 
 type operatorPolicyVerification struct {
@@ -68,17 +70,21 @@ func compileOperatorPolicyBounded(rules []config.OperatorPolicyRule, maximumByte
 	}
 
 	type compiledRule struct {
-		id      string
-		family  config.OperatorPolicyFamily
-		source  string
-		comment string
+		id              string
+		family          config.OperatorPolicyFamily
+		protocol        config.OperatorPolicyProtocol
+		destinationPort uint16
+		source          string
+		comment         string
 	}
 	compiled := make([]compiledRule, 0, len(rules))
 	seenIDs := make(map[string]struct{}, len(rules))
 	seenPrefixes := make([]struct {
-		id     string
-		family config.OperatorPolicyFamily
-		value  netip.Prefix
+		id       string
+		family   config.OperatorPolicyFamily
+		protocol config.OperatorPolicyProtocol
+		port     uint16
+		value    netip.Prefix
 	}, 0, len(rules))
 
 	for index, rule := range rules {
@@ -92,23 +98,27 @@ func compileOperatorPolicyBounded(rules []config.OperatorPolicyRule, maximumByte
 		if rule.Direction != config.OperatorPolicyDirectionIngress {
 			return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q has unsupported direction %q", rule.ID, rule.Direction)
 		}
-		if rule.ICMPType != config.OperatorPolicyTypeEchoRequest {
-			return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q has unsupported ICMP type %q", rule.ID, rule.ICMPType)
-		}
 		if rule.Action != config.OperatorPolicyActionAccept {
 			return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q has unsupported action %q", rule.ID, rule.Action)
 		}
-		switch rule.Family {
-		case config.OperatorPolicyFamilyIPv4:
-			if rule.Protocol != config.OperatorPolicyProtocolICMP {
-				return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q requires protocol %q", rule.ID, config.OperatorPolicyProtocolICMP)
+		if rule.Family != config.OperatorPolicyFamilyIPv4 && rule.Family != config.OperatorPolicyFamilyIPv6 {
+			return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q has unsupported family %q", rule.ID, rule.Family)
+		}
+		switch rule.Protocol {
+		case config.OperatorPolicyProtocolICMP:
+			if rule.Family != config.OperatorPolicyFamilyIPv4 || rule.ICMPType != config.OperatorPolicyTypeEchoRequest || rule.DestinationPort != 0 {
+				return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q has invalid ICMP fields", rule.ID)
 			}
-		case config.OperatorPolicyFamilyIPv6:
-			if rule.Protocol != config.OperatorPolicyProtocolICMPv6 {
-				return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q requires protocol %q", rule.ID, config.OperatorPolicyProtocolICMPv6)
+		case config.OperatorPolicyProtocolICMPv6:
+			if rule.Family != config.OperatorPolicyFamilyIPv6 || rule.ICMPType != config.OperatorPolicyTypeEchoRequest || rule.DestinationPort != 0 {
+				return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q has invalid ICMPv6 fields", rule.ID)
+			}
+		case config.OperatorPolicyProtocolTCP, config.OperatorPolicyProtocolUDP:
+			if rule.ICMPType != "" || rule.DestinationPort == 0 {
+				return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q has invalid transport fields", rule.ID)
 			}
 		default:
-			return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q has unsupported family %q", rule.ID, rule.Family)
+			return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q has unsupported protocol %q", rule.ID, rule.Protocol)
 		}
 
 		canonical, isIPv4, err := canonicalIPOrPrefix(rule.Source)
@@ -124,7 +134,7 @@ func compileOperatorPolicyBounded(rules []config.OperatorPolicyRule, maximumByte
 			return compiledOperatorPolicy{}, fmt.Errorf("operator policy rule %q source: %w", rule.ID, err)
 		}
 		for _, existing := range seenPrefixes {
-			if existing.family != rule.Family {
+			if existing.family != rule.Family || existing.protocol != rule.Protocol || existing.port != rule.DestinationPort {
 				continue
 			}
 			if networkPrefixesOverlap(existing.value, prefix) {
@@ -132,15 +142,19 @@ func compileOperatorPolicyBounded(rules []config.OperatorPolicyRule, maximumByte
 			}
 		}
 		seenPrefixes = append(seenPrefixes, struct {
-			id     string
-			family config.OperatorPolicyFamily
-			value  netip.Prefix
-		}{id: rule.ID, family: rule.Family, value: prefix})
+			id       string
+			family   config.OperatorPolicyFamily
+			protocol config.OperatorPolicyProtocol
+			port     uint16
+			value    netip.Prefix
+		}{id: rule.ID, family: rule.Family, protocol: rule.Protocol, port: rule.DestinationPort, value: prefix})
 		compiled = append(compiled, compiledRule{
-			id:      rule.ID,
-			family:  rule.Family,
-			source:  canonical,
-			comment: operatorPolicyRuleComment(rule),
+			id:              rule.ID,
+			family:          rule.Family,
+			protocol:        rule.Protocol,
+			destinationPort: rule.DestinationPort,
+			source:          canonical,
+			comment:         operatorPolicyRuleComment(rule),
 		})
 	}
 
@@ -157,23 +171,40 @@ func compileOperatorPolicyBounded(rules []config.OperatorPolicyRule, maximumByte
 	_, _ = fmt.Fprintf(&rendered, "\tchain %s {\n", operatorPolicyChainName)
 	for _, rule := range compiled {
 		verification.rules = append(verification.rules, operatorPolicyRuleExpectation{
-			family:  rule.family,
-			source:  rule.source,
-			comment: rule.comment,
+			family:          rule.family,
+			protocol:        rule.protocol,
+			destinationPort: rule.destinationPort,
+			source:          rule.source,
+			comment:         rule.comment,
 		})
-		switch rule.family {
-		case config.OperatorPolicyFamilyIPv4:
+		switch rule.protocol {
+		case config.OperatorPolicyProtocolICMP:
 			_, _ = fmt.Fprintf(
 				&rendered,
 				"\t\tip saddr %s ip protocol icmp icmp type echo-request counter accept comment %q\n",
 				rule.source,
 				rule.comment,
 			)
-		case config.OperatorPolicyFamilyIPv6:
+		case config.OperatorPolicyProtocolICMPv6:
 			_, _ = fmt.Fprintf(
 				&rendered,
 				"\t\tip6 saddr %s icmpv6 type echo-request counter accept comment %q\n",
 				rule.source,
+				rule.comment,
+			)
+		case config.OperatorPolicyProtocolTCP, config.OperatorPolicyProtocolUDP:
+			familyToken := "ip"
+			if rule.family == config.OperatorPolicyFamilyIPv6 {
+				familyToken = "ip6"
+			}
+			_, _ = fmt.Fprintf(
+				&rendered,
+				"\t\t%s saddr %s meta l4proto %s %s dport %d counter accept comment %q\n",
+				familyToken,
+				rule.source,
+				rule.protocol,
+				rule.protocol,
+				rule.destinationPort,
 				rule.comment,
 			)
 		}
@@ -188,7 +219,7 @@ func compileOperatorPolicyBounded(rules []config.OperatorPolicyRule, maximumByte
 func operatorPolicyRuleComment(rule config.OperatorPolicyRule) string {
 	hash := sha256.New()
 	var length [8]byte
-	for _, field := range []string{
+	fields := []string{
 		rule.ID,
 		string(rule.Family),
 		string(rule.Direction),
@@ -196,7 +227,11 @@ func operatorPolicyRuleComment(rule config.OperatorPolicyRule) string {
 		string(rule.ICMPType),
 		rule.Source,
 		string(rule.Action),
-	} {
+	}
+	if rule.Protocol == config.OperatorPolicyProtocolTCP || rule.Protocol == config.OperatorPolicyProtocolUDP {
+		fields = append(fields, fmt.Sprintf("%d", rule.DestinationPort))
+	}
+	for _, field := range fields {
 		binary.BigEndian.PutUint64(length[:], uint64(len(field)))
 		_, _ = hash.Write(length[:])
 		_, _ = hash.Write([]byte(field))

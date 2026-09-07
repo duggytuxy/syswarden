@@ -1,0 +1,472 @@
+name: SysWarden Native Release Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact candidate release tag
+        required: true
+        type: string
+      release_sha:
+        description: Exact full candidate SHA on main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: syswarden-native-release-evidence
+  cancel-in-progress: false
+
+jobs:
+  seal-native-evidence:
+    runs-on: [self-hosted, linux, x64, syswarden-native-evidence]
+    environment: native-release-evidence
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Validate Protected Native Evidence Context
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          NODE02_SSH_HOST_KEY_SHA256: ${{ vars.NODE02_SSH_HOST_KEY_SHA256 }}
+          NODE03_SSH_HOST_KEY_SHA256: ${{ vars.NODE03_SSH_HOST_KEY_SHA256 }}
+          NODE04_SSH_HOST_KEY_SHA256: ${{ vars.NODE04_SSH_HOST_KEY_SHA256 }}
+          NODE05_SSH_HOST_KEY_SHA256: ${{ vars.NODE05_SSH_HOST_KEY_SHA256 }}
+        run: |
+          set -euo pipefail
+          [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${RELEASE_TAG}" = "v4.10.0"
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "${GITHUB_SHA}" = "${RELEASE_SHA}"
+          test "${GITHUB_RUN_ATTEMPT}" = "1"
+          test "${GITHUB_ACTOR}" = "${GITHUB_REPOSITORY_OWNER}"
+          test "${GITHUB_TRIGGERING_ACTOR}" = "${GITHUB_REPOSITORY_OWNER}"
+
+      - name: Checkout Exact Candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+
+      - name: Validate and Seal Pre-Staged Native Evidence
+        id: seal
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          NODE02_SSH_HOST_KEY_SHA256: ${{ vars.NODE02_SSH_HOST_KEY_SHA256 }}
+          NODE03_SSH_HOST_KEY_SHA256: ${{ vars.NODE03_SSH_HOST_KEY_SHA256 }}
+          NODE04_SSH_HOST_KEY_SHA256: ${{ vars.NODE04_SSH_HOST_KEY_SHA256 }}
+          NODE05_SSH_HOST_KEY_SHA256: ${{ vars.NODE05_SSH_HOST_KEY_SHA256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "${NODE02_SSH_HOST_KEY_SHA256}" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]
+          [[ "${NODE03_SSH_HOST_KEY_SHA256}" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]
+          [[ "${NODE04_SSH_HOST_KEY_SHA256}" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]
+          [[ "${NODE05_SSH_HOST_KEY_SHA256}" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]
+          test "${NODE02_SSH_HOST_KEY_SHA256}" != "${NODE03_SSH_HOST_KEY_SHA256}"
+          test "${NODE02_SSH_HOST_KEY_SHA256}" != "${NODE04_SSH_HOST_KEY_SHA256}"
+          test "${NODE02_SSH_HOST_KEY_SHA256}" != "${NODE05_SSH_HOST_KEY_SHA256}"
+          test "${NODE03_SSH_HOST_KEY_SHA256}" != "${NODE04_SSH_HOST_KEY_SHA256}"
+          test "${NODE03_SSH_HOST_KEY_SHA256}" != "${NODE05_SSH_HOST_KEY_SHA256}"
+          test "${NODE04_SSH_HOST_KEY_SHA256}" != "${NODE05_SSH_HOST_KEY_SHA256}"
+          source_root="/var/lib/syswarden/native-release-evidence/${RELEASE_SHA}"
+          test -d "${source_root}"
+          test ! -L "${source_root}"
+          test "$(stat -c '%u' "${source_root}")" = "$(id -u)"
+          test "$(stat -c '%a' "${source_root}")" = "700"
+          for directory in ha-v2 ha-v2/raw native-capability performance node01-migration node01-migration/artifacts native-lifecycle native-lifecycle/artifacts native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages source-allocation source-allocation/raw source-allocation/raw/allocation-campaign-01 source-allocation/raw/allocation-campaign-02 source-allocation/raw/allocation-campaign-03; do
+            path="${source_root}/${directory}"
+            test -d "${path}"; test ! -L "${path}"
+            test "$(stat -c '%u' "${path}")" = "$(id -u)"
+            test "$(stat -c '%a' "${path}")" = "700"
+          done
+          output_root="$(mktemp -d "${RUNNER_TEMP%/}/native-release-evidence.XXXXXXXXXX")"
+          chmod 0700 "${output_root}"
+          mkdir -m 0700 "${output_root}/ha-v2" "${output_root}/native-capability" "${output_root}/performance" "${output_root}/node01-migration" "${output_root}/native-lifecycle" "${output_root}/source-allocation"
+          mkdir -m 0700 "${output_root}/source-allocation/raw" \
+            "${output_root}/source-allocation/raw/allocation-campaign-01" \
+            "${output_root}/source-allocation/raw/allocation-campaign-02" \
+            "${output_root}/source-allocation/raw/allocation-campaign-03"
+
+          require_input() {
+            local relative=$1 expected_mode=${2:-600} path="${source_root}/$1"
+            test -f "${path}"; test ! -L "${path}"
+            test "$(stat -c '%u' "${path}")" = "$(id -u)"
+            test "$(stat -c '%a' "${path}")" = "${expected_mode}"
+            test "$(stat -c '%h' "${path}")" = "1"
+            test -s "${path}"
+          }
+          raw_names=(node01-attestation.json node02-attestation.json asymmetric-partition.json crash-head-recovery.json crash-wal-recovery.json heartbeat-monotonic-receipt-timeout.json instance-lease-exclusion.json normal-replication-ack-checkpoint.json partition-fence-split-brain.json rejoin-explicit.json rolling-rollback.json rolling-upgrade.json)
+          expected_source=(ha-v2/HA_V2_NATIVE_EVIDENCE.json native-capability/APK-324.json native-capability/DEB-13.json native-capability/DEB-U2604.json native-capability/RPM-A10.json native-capability/RPM-A9-RHELPO.json native-capability/RPM-A10-RHELPO.json performance/ADAPTER_CONFIG.json performance/EVIDENCE.json)
+          candidate_version="${RELEASE_TAG#v}"
+          native_signing_files=(
+            native-signing/SIGNED_ARTIFACT_SHA256SUMS.txt
+            native-signing/evidence/APK_NATIVE_VERIFICATION.json
+            native-signing/evidence/DEB_NATIVE_VERIFICATION.json
+            native-signing/evidence/NATIVE_SIGNING_PROVENANCE.json
+            native-signing/evidence/RPM_NATIVE_VERIFICATION.json
+            native-signing/evidence/RPM_PAYLOAD_PROOF.json
+            native-signing/evidence/UNSIGNED_SHA256SUMS.txt
+            native-signing/packages/SHA256SUMS.txt
+            "native-signing/packages/syswarden-${candidate_version}-1.x86_64.rpm"
+            "native-signing/packages/syswarden_${candidate_version}_amd64.deb"
+            "native-signing/packages/syswarden_${candidate_version}_amd64.deb.asc"
+            "native-signing/packages/syswarden_${candidate_version}_x86_64.apk"
+            native-signing/rhel-package-owned/SIGNED_ARTIFACT_SHA256SUMS.txt
+            native-signing/rhel-package-owned/evidence/RPM_NATIVE_VERIFICATION.json
+            native-signing/rhel-package-owned/evidence/RPM_PAYLOAD_PROOF.json
+            native-signing/rhel-package-owned/evidence/SIGNING_PROVENANCE.json
+            native-signing/rhel-package-owned/evidence/UNSIGNED_SHA256SUMS.txt
+            native-signing/rhel-package-owned/packages/SHA256SUMS.txt
+            "native-signing/rhel-package-owned/packages/syswarden-${candidate_version}-1.rhelpo.x86_64.rpm"
+          )
+          expected_source+=("${native_signing_files[@]}")
+          allocation_metadata=(environment.json execution-control-attestation.json build-attestation.json benchmark-source.go fixture.json signature-catalog.json)
+          allocation_probes=(baseline-probe candidate-probe)
+          allocation_campaigns=(allocation-campaign-01 allocation-campaign-02 allocation-campaign-03)
+          allocation_roles=(baseline candidate)
+          allocation_samples=(01 02 03 04 05 06 07 08 09 10)
+          for name in "${allocation_metadata[@]}" "${allocation_probes[@]}"; do
+            expected_source+=("source-allocation/${name}")
+          done
+          for campaign in "${allocation_campaigns[@]}"; do
+            for role in "${allocation_roles[@]}"; do
+              for sample in "${allocation_samples[@]}"; do
+                expected_source+=("source-allocation/raw/${campaign}/${role}-${sample}.json")
+              done
+            done
+          done
+          signing_validation_root="$(mktemp -d "${RUNNER_TEMP%/}/native-signing-validation.XXXXXXXXXX")"
+          chmod 0700 "${signing_validation_root}"
+          trap 'rm -rf -- "${signing_validation_root}"' EXIT
+          mkdir -m 0700 \
+            "${signing_validation_root}/evidence" \
+            "${signing_validation_root}/packages" \
+            "${signing_validation_root}/rhel-package-owned" \
+            "${signing_validation_root}/rhel-package-owned/evidence" \
+            "${signing_validation_root}/rhel-package-owned/packages"
+          for relative in "${native_signing_files[@]}"; do
+            require_input "${relative}"
+            target_relative="${relative#native-signing/}"
+            install -m 0600 -- "${source_root}/${relative}" "${signing_validation_root}/${target_relative}"
+          done
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py verify \
+            --bundle "${signing_validation_root}" --release "${RELEASE_TAG}" \
+            --release-sha "${RELEASE_SHA}"
+          signing_provenance="${signing_validation_root}/evidence/NATIVE_SIGNING_PROVENANCE.json"
+          rhel_signing_provenance="${signing_validation_root}/rhel-package-owned/evidence/SIGNING_PROVENANCE.json"
+          signature_policy="scripts/ci/native_package_signature_policy_v4100.json"
+          signature_policy_sha256="$(sha256sum "${signature_policy}" | awk '{print $1}')"
+          jq -e --arg repository "${GITHUB_REPOSITORY}" \
+            --arg release_sha "${RELEASE_SHA}" --arg release_tag "${RELEASE_TAG}" \
+            --arg policy_sha256 "${signature_policy_sha256}" '
+              .status == "native-signatures-verified-not-release-qualified" and
+              .public_release == false and .release_qualified == false and
+              .repository == $repository and .source.release_sha == $release_sha and
+              .source.release_tag == $release_tag and .policy_sha256 == $policy_sha256
+            ' "${signing_provenance}" >/dev/null
+          jq -e --arg repository "${GITHUB_REPOSITORY}" \
+            --arg release_sha "${RELEASE_SHA}" --arg release_tag "${RELEASE_TAG}" \
+            --arg version "${candidate_version}" --arg policy_sha256 "${signature_policy_sha256}" \
+            --argjson standard_rpm_key "$(jq -c '.rpm_signature.key' "${signing_provenance}")" '
+              .schema_version == 1 and
+              .profile == "syswarden-rhel-package-owned-signing/v4.10.0" and
+              .package_role == "rhel-package-owned" and
+              .status == "native-signatures-verified-not-release-qualified" and
+              .public_release == false and .release_qualified == false and
+              .updater_manifest_included == false and
+              .repository == $repository and .source.release_sha == $release_sha and
+              .source.release_tag == $release_tag and .policy_sha256 == $policy_sha256 and
+              .rpm_identity == {
+                architecture: "x86_64",
+                filename: ("syswarden-" + $version + "-1.rhelpo.x86_64.rpm"),
+                name: "syswarden",
+                release: "1.rhelpo",
+                version: $version
+              } and
+              .rpm_signature.key == $standard_rpm_key
+            ' "${rhel_signing_provenance}" >/dev/null
+          attested_native_identities="$(jq -ce '
+            def exact_key:
+              if type == "object" and
+                 (keys | sort) == ["fingerprint","id","public_key","public_key_sha256"] and
+                 (.id | type == "string" and test("^[a-z0-9][a-z0-9._-]{0,63}$")) and
+                 (.public_key | type == "string" and length > 0) and
+                 (.public_key_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+              then . else error("native signing provenance key identity is malformed") end;
+            {rpm:(.rpm_signature.key | exact_key),apk:(.apk_signature.key | exact_key),deb:(.deb_signature.key | exact_key)} |
+            if (.rpm.fingerprint | type == "string" and test("^[0-9A-F]{40}$")) and
+               (.deb.fingerprint | type == "string" and test("^[0-9A-F]{40}$")) and
+               (.apk.fingerprint | type == "string" and test("^[0-9a-f]{64}$")) and
+               .apk.fingerprint == .apk.public_key_sha256 and
+               .rpm.id != .apk.id and .rpm.id != .deb.id and .apk.id != .deb.id and
+               .rpm.public_key_sha256 != .apk.public_key_sha256 and
+               .rpm.public_key_sha256 != .deb.public_key_sha256 and
+               .apk.public_key_sha256 != .deb.public_key_sha256 and
+               .rpm.fingerprint != .deb.fingerprint
+            then . else error("native signing provenance identities are invalid or ambiguous") end
+          ' "${signing_provenance}")"
+          attested_standard_packages="$(jq -ce \
+            --arg rpm_name "syswarden-${candidate_version}-1.x86_64.rpm" \
+            --arg deb_name "syswarden_${candidate_version}_amd64.deb" \
+            --arg apk_name "syswarden_${candidate_version}_x86_64.apk" '
+            def exact_package($name):
+              if type == "object" and
+                 (keys | sort) == ["name","sha256","size"] and
+                 .name == $name and
+                 (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+                 (.size | type == "number" and floor == . and . > 0 and . <= 268435456)
+              then . else error("native signing provenance package record is malformed") end;
+            def exactly_one($name):
+              [.packages.signed[] | select(type == "object" and .name == $name)] |
+              if length == 1 then (.[0] | exact_package($name))
+              else error("native signing provenance package record is missing or ambiguous") end;
+            {rpm: exactly_one($rpm_name), deb: exactly_one($deb_name), apk: exactly_one($apk_name)}
+          ' "${signing_provenance}")"
+          attested_rhel_package="$(jq -ce \
+            --arg rpm_name "syswarden-${candidate_version}-1.rhelpo.x86_64.rpm" '
+            def exact_package($name):
+              if type == "object" and
+                 (keys | sort) == ["name","sha256","size"] and
+                 .name == $name and
+                 (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+                 (.size | type == "number" and floor == . and . > 0 and . <= 268435456)
+              then . else error("RHEL package-owned signing provenance package record is malformed") end;
+            .packages.signed | exact_package($rpm_name)
+          ' "${rhel_signing_provenance}")"
+          rpm_package_name="$(jq -er '.rpm.name' <<< "${attested_standard_packages}")"
+          rpm_package_sha256="$(jq -er '.rpm.sha256' <<< "${attested_standard_packages}")"
+          rpm_package_size="$(jq -er '.rpm.size' <<< "${attested_standard_packages}")"
+          deb_package_name="$(jq -er '.deb.name' <<< "${attested_standard_packages}")"
+          deb_package_sha256="$(jq -er '.deb.sha256' <<< "${attested_standard_packages}")"
+          deb_package_size="$(jq -er '.deb.size' <<< "${attested_standard_packages}")"
+          apk_package_name="$(jq -er '.apk.name' <<< "${attested_standard_packages}")"
+          apk_package_sha256="$(jq -er '.apk.sha256' <<< "${attested_standard_packages}")"
+          apk_package_size="$(jq -er '.apk.size' <<< "${attested_standard_packages}")"
+          rhel_rpm_package_name="$(jq -er '.name' <<< "${attested_rhel_package}")"
+          rhel_rpm_package_sha256="$(jq -er '.sha256' <<< "${attested_rhel_package}")"
+          rhel_rpm_package_size="$(jq -er '.size' <<< "${attested_rhel_package}")"
+          test "${rhel_rpm_package_name}" != "${rpm_package_name}"
+          test "${rhel_rpm_package_sha256}" != "${rpm_package_sha256}"
+          lifecycle_observations=(
+            "${source_root}/native-lifecycle/node02-ubuntu26.04.json"
+            "${source_root}/native-lifecycle/node05-almalinux9.8.json"
+            "${source_root}/native-lifecycle/node04-alpine3.24.json"
+            "${source_root}/native-lifecycle/node05-almalinux9.8-rhelpo.json"
+            "${source_root}/native-lifecycle/node03-almalinux10.2-rhelpo.json"
+          )
+          for observation in "${lifecycle_observations[@]}"; do require_input "native-lifecycle/${observation##*/}"; done
+          deb_signer_fingerprint="$(jq -er '.deb.fingerprint' <<< "${attested_native_identities}")"
+          rpm_signer_fingerprint="$(jq -er '.rpm.fingerprint' <<< "${attested_native_identities}")"
+          apk_public_key_sha256="$(jq -er '.apk.public_key_sha256' <<< "${attested_native_identities}")"
+          lifecycle_verdict="${output_root}/native-lifecycle/VERDICT.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_lifecycle_evidence.py \
+            --candidate-commit "${RELEASE_SHA}" \
+            --observation "${lifecycle_observations[0]}" \
+            --observation "${lifecycle_observations[1]}" \
+            --observation "${lifecycle_observations[2]}" \
+            --observation "${lifecycle_observations[3]}" \
+            --observation "${lifecycle_observations[4]}" \
+            --artifact-root "${source_root}/native-lifecycle/artifacts" \
+            --rpm-signer-fingerprint "${rpm_signer_fingerprint}" \
+            --deb-signer-fingerprint "${deb_signer_fingerprint}" \
+            --apk-public-key-sha256 "${apk_public_key_sha256}" \
+            --rpm-package-name "${rpm_package_name}" \
+            --rpm-package-sha256 "${rpm_package_sha256}" \
+            --rpm-package-size "${rpm_package_size}" \
+            --rhel-rpm-package-name "${rhel_rpm_package_name}" \
+            --rhel-rpm-package-sha256 "${rhel_rpm_package_sha256}" \
+            --rhel-rpm-package-size "${rhel_rpm_package_size}" \
+            --deb-package-name "${deb_package_name}" \
+            --deb-package-sha256 "${deb_package_sha256}" \
+            --deb-package-size "${deb_package_size}" \
+            --apk-package-name "${apk_package_name}" \
+            --apk-package-sha256 "${apk_package_sha256}" \
+            --apk-package-size "${apk_package_size}" \
+            --node02-ssh-host-key-sha256 "${NODE02_SSH_HOST_KEY_SHA256}" \
+            --node03-ssh-host-key-sha256 "${NODE03_SSH_HOST_KEY_SHA256}" \
+            --node04-ssh-host-key-sha256 "${NODE04_SSH_HOST_KEY_SHA256}" \
+            --node05-ssh-host-key-sha256 "${NODE05_SSH_HOST_KEY_SHA256}" \
+            --output "${lifecycle_verdict}"
+          require_input node01-migration/observations.json
+          openpgp_fingerprint="${deb_signer_fingerprint}"
+          [[ "${openpgp_fingerprint}" =~ ^[A-F0-9]{40}$ ]]
+          node01_evidence="${output_root}/node01-migration/EVIDENCE.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/node01_migration_evidence.py assemble \
+            --observations "${source_root}/node01-migration/observations.json" \
+            --artifact-root "${source_root}/node01-migration/artifacts" \
+            --candidate-sha "${RELEASE_SHA}" --release-tag "${RELEASE_TAG}" \
+            --openpgp-fingerprint "${openpgp_fingerprint}" \
+            --candidate-package-name "${deb_package_name}" \
+            --candidate-package-sha256 "${deb_package_sha256}" \
+            --candidate-package-size "${deb_package_size}" --output "${node01_evidence}"
+          node01_verdict="${output_root}/node01-migration/VERDICT.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/node01_migration_evidence.py validate \
+            --evidence "${node01_evidence}" \
+            --artifact-root "${source_root}/node01-migration/artifacts" \
+            --candidate-sha "${RELEASE_SHA}" --release-tag "${RELEASE_TAG}" \
+            --openpgp-fingerprint "${openpgp_fingerprint}" \
+            --candidate-package-name "${deb_package_name}" \
+            --candidate-package-sha256 "${deb_package_sha256}" \
+            --candidate-package-size "${deb_package_size}" --output "${node01_verdict}"
+          while IFS= read -r relative; do expected_source+=("${relative}"); done < <(
+            find -P "${source_root}/node01-migration" -type f -printf 'node01-migration/%P\n' | LC_ALL=C sort
+          )
+          mapfile -t lifecycle_references < <(jq -r '.. | objects | .evidence_ref? // empty' "${lifecycle_observations[@]}" | LC_ALL=C sort -u)
+          test "${#lifecycle_references[@]}" -eq 145
+          expected_source+=(
+            native-lifecycle/node02-ubuntu26.04.json
+            native-lifecycle/node05-almalinux9.8.json
+            native-lifecycle/node04-alpine3.24.json
+            native-lifecycle/node05-almalinux9.8-rhelpo.json
+            native-lifecycle/node03-almalinux10.2-rhelpo.json
+          )
+          for reference in "${lifecycle_references[@]}"; do expected_source+=("native-lifecycle/artifacts/${reference}"); done
+          for name in "${raw_names[@]}"; do expected_source+=("ha-v2/raw/${name}"); done
+          mapfile -t actual_source < <(find -P "${source_root}" -type f -printf '%P\n' | LC_ALL=C sort)
+          mapfile -t sorted_source < <(printf '%s\n' "${expected_source[@]}" | LC_ALL=C sort)
+          test "${actual_source[*]}" = "${sorted_source[*]}"
+          while IFS= read -r -d '' entry; do
+            if [[ -d "${entry}" && ! -L "${entry}" ]]; then
+              test "$(stat -c '%u' "${entry}")" = "$(id -u)"
+              test "$(stat -c '%a' "${entry}")" = "700"
+            elif [[ ! -f "${entry}" || -L "${entry}" ]]; then
+              echo "ERROR: pre-staged native evidence contains an unsafe entry." >&2
+              exit 1
+            fi
+          done < <(find -P "${source_root}" -mindepth 1 -print0)
+          require_input ha-v2/HA_V2_NATIVE_EVIDENCE.json
+          mkdir -m 0700 "${output_root}/ha-v2/raw"
+          install -m 0600 -- "${source_root}/ha-v2/HA_V2_NATIVE_EVIDENCE.json" "${output_root}/ha-v2/HA_V2_NATIVE_EVIDENCE.json"
+          for name in "${raw_names[@]}"; do
+            require_input "ha-v2/raw/${name}"
+            install -m 0600 -- "${source_root}/ha-v2/raw/${name}" "${output_root}/ha-v2/raw/${name}"
+          done
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/ha_v2_native_evidence.py \
+            --bundle "${output_root}/ha-v2" --evidence "${output_root}/ha-v2/HA_V2_NATIVE_EVIDENCE.json" \
+            --candidate-sha "${RELEASE_SHA}" --release-tag "${RELEASE_TAG}" \
+            --output "${output_root}/ha-v2/HA_V2_NATIVE_VERDICT.json"
+
+          capability_verdicts=()
+          for profile in DEB-13 DEB-U2604 RPM-A10 APK-324 RPM-A9-RHELPO RPM-A10-RHELPO; do
+            relative="native-capability/${profile}.json"
+            require_input "${relative}"
+            install -m 0600 -- "${source_root}/${relative}" "${output_root}/${relative}"
+            capability_verdicts+=(--verdict "${output_root}/${relative}")
+          done
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_capability_evidence.py aggregate \
+            --candidate-commit "${RELEASE_SHA}" "${capability_verdicts[@]}" \
+            --signing-bundle "${signing_validation_root}" \
+            --output "${output_root}/native-capability/AGGREGATE.json"
+
+          for name in "${allocation_metadata[@]}"; do
+            require_input "source-allocation/${name}"
+            install -m 0600 -- "${source_root}/source-allocation/${name}" \
+              "${output_root}/source-allocation/${name}"
+          done
+          for name in "${allocation_probes[@]}"; do
+            require_input "source-allocation/${name}" 700
+            install -m 0700 -- "${source_root}/source-allocation/${name}" \
+              "${output_root}/source-allocation/${name}"
+          done
+          for campaign in "${allocation_campaigns[@]}"; do
+            for role in "${allocation_roles[@]}"; do
+              for sample in "${allocation_samples[@]}"; do
+                relative="source-allocation/raw/${campaign}/${role}-${sample}.json"
+                require_input "${relative}"
+                install -m 0600 -- "${source_root}/${relative}" "${output_root}/${relative}"
+              done
+            done
+          done
+          allocation_bundle="${output_root}/source-allocation"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/source_allocation_gate.py assemble \
+            --contract scripts/ci/source_allocation_contract_v4.10.0.json \
+            --bundle-root "${allocation_bundle}" --candidate-commit "${RELEASE_SHA}" \
+            --evidence "${allocation_bundle}/EVIDENCE.json" \
+            --report "${allocation_bundle}/REPORT.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/source_allocation_gate.py validate \
+            --contract scripts/ci/source_allocation_contract_v4.10.0.json \
+            --bundle-root "${allocation_bundle}" --candidate-commit "${RELEASE_SHA}" \
+            --evidence "${allocation_bundle}/EVIDENCE.json" \
+            --report "${allocation_bundle}/REPORT.json"
+
+          require_input performance/ADAPTER_CONFIG.json
+          require_input performance/EVIDENCE.json
+          install -m 0600 -- "${source_root}/performance/ADAPTER_CONFIG.json" "${output_root}/performance/ADAPTER_CONFIG.json"
+          install -m 0600 -- "${source_root}/performance/EVIDENCE.json" "${output_root}/performance/EVIDENCE.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/performance_gate.py \
+            --evidence "${output_root}/performance/EVIDENCE.json" \
+            --adapter-config "${output_root}/performance/ADAPTER_CONFIG.json" \
+            --native-lifecycle-verdict "${lifecycle_verdict}" \
+            --candidate-commit "${RELEASE_SHA}" --report "${output_root}/performance/REPORT.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/performance_channel_aggregate.py \
+            --native-contract scripts/ci/performance_contract_v4.10.0.json \
+            --allocation-contract scripts/ci/source_allocation_contract_v4.10.0.json \
+            --native-evidence "${output_root}/performance/EVIDENCE.json" \
+            --native-report "${output_root}/performance/REPORT.json" \
+            --adapter-config "${output_root}/performance/ADAPTER_CONFIG.json" \
+            --native-lifecycle-verdict "${lifecycle_verdict}" \
+            --allocation-evidence "${allocation_bundle}/EVIDENCE.json" \
+            --allocation-report "${allocation_bundle}/REPORT.json" \
+            --candidate-commit "${RELEASE_SHA}" \
+            --output "${output_root}/performance/AGGREGATE.json"
+
+          (
+            cd "${source_root}/node01-migration"
+            tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+              -cf "${output_root}/node01-migration/RAW_EVIDENCE.tar" observations.json artifacts
+          )
+          chmod 0600 "${output_root}/node01-migration/RAW_EVIDENCE.tar"
+          (
+            cd "${source_root}/native-lifecycle"
+            tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+              -cf "${output_root}/native-lifecycle/RAW_EVIDENCE.tar" \
+              node02-ubuntu26.04.json \
+              node05-almalinux9.8.json \
+              node04-alpine3.24.json \
+              node05-almalinux9.8-rhelpo.json \
+              node03-almalinux10.2-rhelpo.json \
+              artifacts
+          )
+          chmod 0600 "${output_root}/native-lifecycle/RAW_EVIDENCE.tar"
+
+          python3 - "${output_root}" "${GITHUB_REPOSITORY}" "${RELEASE_TAG}" "${RELEASE_SHA}" "${GITHUB_RUN_ID}" "${NODE02_SSH_HOST_KEY_SHA256}" "${NODE03_SSH_HOST_KEY_SHA256}" "${NODE04_SSH_HOST_KEY_SHA256}" "${NODE05_SSH_HOST_KEY_SHA256}" "${signing_provenance}" "${rhel_signing_provenance}" <<'PY'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          provenance_path = pathlib.Path(sys.argv[10])
+          rhel_provenance_path = pathlib.Path(sys.argv[11])
+          provenance_bytes = provenance_path.read_bytes()
+          rhel_provenance_bytes = rhel_provenance_path.read_bytes()
+          provenance = json.loads(provenance_bytes)
+          rhel_provenance = json.loads(rhel_provenance_bytes)
+          records = []
+          for path in sorted(p for p in root.rglob('*') if p.is_file()):
+              records.append({"path": path.relative_to(root).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size})
+          manifest = {"schema_version": 2, "repository": sys.argv[2], "release_tag": sys.argv[3], "release_sha": sys.argv[4], "run_id": int(sys.argv[5]), "run_attempt": 1, "contracts": {"ha_v2": hashlib.sha256(pathlib.Path('scripts/ci/ha_v2_native_contract_v4.10.0.json').read_bytes()).hexdigest(), "native_capability": hashlib.sha256(pathlib.Path('scripts/ci/native_capability_contract_v4.10.0.json').read_bytes()).hexdigest(), "performance": hashlib.sha256(pathlib.Path('scripts/ci/performance_contract_v4.10.0.json').read_bytes()).hexdigest(), "source_allocation": hashlib.sha256(pathlib.Path('scripts/ci/source_allocation_contract_v4.10.0.json').read_bytes()).hexdigest(), "node01_migration": hashlib.sha256(pathlib.Path('scripts/ci/node01_migration_contract_v4.10.0.json').read_bytes()).hexdigest(), "native_lifecycle": hashlib.sha256(pathlib.Path('scripts/ci/native_lifecycle_contract_v4.10.0.json').read_bytes()).hexdigest()}, "native_signing": {"policy_sha256": provenance["policy_sha256"], "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(), "selected_keys": {"rpm": provenance["rpm_signature"]["key"], "apk": provenance["apk_signature"]["key"], "deb": provenance["deb_signature"]["key"]}, "status": provenance["status"], "rhel_package_owned": {"package": rhel_provenance["packages"]["signed"], "provenance_sha256": hashlib.sha256(rhel_provenance_bytes).hexdigest(), "selected_rpm_key": rhel_provenance["rpm_signature"]["key"], "status": rhel_provenance["status"], "updater_manifest_included": rhel_provenance["updater_manifest_included"]}}, "trusted_host_keys": {"node02": sys.argv[6], "node03": sys.argv[7], "node04": sys.argv[8], "node05": sys.argv[9]}, "files": records}
+          (root / 'NATIVE_RELEASE_EVIDENCE_MANIFEST.json').write_text(json.dumps(manifest, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
+          PY
+          artifact_name="syswarden-native-evidence-${RELEASE_TAG}-${RELEASE_SHA}"
+          printf 'artifact_name=%s\n' "${artifact_name}" >> "${GITHUB_OUTPUT}"
+          printf 'output_root=%s\n' "${output_root}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest Native Evidence Manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.seal.outputs.output_root }}/NATIVE_RELEASE_EVIDENCE_MANIFEST.json
+
+      - name: Upload Exact Native Evidence Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.seal.outputs.artifact_name }}
+          path: ${{ steps.seal.outputs.output_root }}
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

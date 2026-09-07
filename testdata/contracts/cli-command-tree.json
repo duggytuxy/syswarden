@@ -1150,8 +1150,14 @@
     "path": "syswarden update",
     "use": "update",
     "short": "Install a release verified by a signed manifest",
-    "long": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. The v4.02.8 first upgrade must use a separately verified manual package procedure.",
+    "long": "Downloads and installs a release package only after verifying its canonical manifest, Ed25519 signature, platform metadata, size, and SHA-256 digest. An explicitly selected offline qualification bundle is never discovered on the network and has no network fallback. The v4.02.8 first upgrade must use a separately verified manual package procedure.",
     "flags": [
+      {
+        "name": "candidate-version",
+        "type": "string",
+        "default": "",
+        "usage": "exact candidate version required from the offline qualification bundle"
+      },
       {
         "name": "config",
         "type": "string",
@@ -1166,14 +1172,20 @@
         "default": "false",
         "no_option": "true",
         "usage": "help for update"
+      },
+      {
+        "name": "qualification-bundle",
+        "type": "string",
+        "default": "",
+        "usage": "absolute path to a protected local signed-candidate bundle; disables all network discovery"
       }
     ],
     "arg_outcomes": {
       "0": "ok",
-      "1": "ok",
-      "2": "ok",
-      "3": "ok",
-      "4": "ok"
+      "1": "unknown command \"arg-1\" for \"syswarden update\"",
+      "2": "unknown command \"arg-1\" for \"syswarden update\"",
+      "3": "unknown command \"arg-1\" for \"syswarden update\"",
+      "4": "unknown command \"arg-1\" for \"syswarden update\""
     }
   },
   {

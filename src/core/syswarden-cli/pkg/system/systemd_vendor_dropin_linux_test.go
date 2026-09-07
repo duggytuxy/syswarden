@@ -350,16 +350,16 @@ func TestSysWardenSystemdOrderingDropInRequiresOneStablePackageAuthority(t *test
 		rpm           bool
 		wantAuthority string
 	}{
-		{name: "dpkg", dpkg: true, wantAuthority: "syswarden@4.04.3#amd64#dpkg"},
-		{name: "rpm", rpm: true, wantAuthority: "syswarden@4.04.3-1#x86_64#sha256#rpm"},
+		{name: "dpkg", dpkg: true, wantAuthority: "syswarden@4.10.0#amd64#dpkg"},
+		{name: "rpm", rpm: true, wantAuthority: "syswarden@4.10.0-1#x86_64#sha256#rpm"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			root, path, uid, gid := testSysWardenSystemdOrderingFixture(t)
 			executor := testSysWardenOrderingPackageExecutor(t, path, testCase.dpkg, testCase.rpm, func(manager string) string {
 				if manager == "dpkg" {
-					return "4.04.3"
+					return "4.10.0"
 				}
-				return "4.04.3-1"
+				return "4.10.0-1"
 			})
 			evidence, err := attestExactSystemdFirewallOrderingDropInAt(
 				executor, path, path, root, uid, gid,
@@ -380,9 +380,9 @@ func TestSysWardenSystemdOrderingDropInRejectsAmbiguousOrDriftingAuthority(t *te
 	driftingVersion := func(string) string {
 		driftCalls++
 		if driftCalls == 1 {
-			return "4.04.3"
+			return "4.10.0"
 		}
-		return "4.04.2"
+		return "4.04.3"
 	}
 	for _, testCase := range []struct {
 		name    string
@@ -390,12 +390,12 @@ func TestSysWardenSystemdOrderingDropInRejectsAmbiguousOrDriftingAuthority(t *te
 		rpm     bool
 		version func(string) string
 	}{
-		{name: "no authority", version: func(string) string { return "4.04.3-1" }},
+		{name: "no authority", version: func(string) string { return "4.10.0-1" }},
 		{name: "dual authority", dpkg: true, rpm: true, version: func(manager string) string {
 			if manager == "dpkg" {
-				return "4.04.3"
+				return "4.10.0"
 			}
-			return "4.04.3-1"
+			return "4.10.0-1"
 		}},
 		{name: "authority drift", dpkg: true, version: driftingVersion},
 	} {
@@ -419,12 +419,12 @@ func TestSysWardenSystemdOrderingPackageMetadataParsersFailClosed(t *testing.T) 
 	if err := attestSysWardenDPKGDropInFileList(validList, path); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := parseSysWardenDPKGDropInOwner([]byte("4.04.3\tamd64\n")); err != nil ||
-		got != "syswarden@4.04.3#amd64#dpkg" {
+	if got, err := parseSysWardenDPKGDropInOwner([]byte("4.10.0\tamd64\n")); err != nil ||
+		got != "syswarden@4.10.0#amd64#dpkg" {
 		t.Fatalf("dpkg owner = %q, %v", got, err)
 	}
-	if got, err := parseSysWardenRPMDropInOwner([]byte("syswarden\t4.04.3-1\tx86_64\t8\n")); err != nil ||
-		got != "syswarden@4.04.3-1#x86_64#sha256#rpm" {
+	if got, err := parseSysWardenRPMDropInOwner([]byte("syswarden\t4.10.0-1\tx86_64\t8\n")); err != nil ||
+		got != "syswarden@4.10.0-1#x86_64#sha256#rpm" {
 		t.Fatalf("RPM owner = %q, %v", got, err)
 	}
 	for _, invalid := range [][]byte{
@@ -438,20 +438,20 @@ func TestSysWardenSystemdOrderingPackageMetadataParsersFailClosed(t *testing.T) 
 		}
 	}
 	for _, invalid := range [][]byte{
-		[]byte("4.04.3-1\tarm64\n"),
-		[]byte("4.04.3 1\tamd64\n"),
-		[]byte("4.04.2\tamd64\n"),
-		[]byte("4.04.3-1\tamd64\nextra\n"),
+		[]byte("4.10.0-1\tarm64\n"),
+		[]byte("4.10.0 1\tamd64\n"),
+		[]byte("4.04.3\tamd64\n"),
+		[]byte("4.10.0-1\tamd64\nextra\n"),
 	} {
 		if _, err := parseSysWardenDPKGDropInOwner(invalid); err == nil {
 			t.Fatalf("invalid dpkg owner was accepted: %q", invalid)
 		}
 	}
 	for _, invalid := range [][]byte{
-		[]byte("operator\t4.04.3-1\tx86_64\t8\n"),
-		[]byte("syswarden\t4.04.3-1\taarch64\t8\n"),
-		[]byte("syswarden\t4.04.3 1\tx86_64\t8\n"),
-		[]byte("syswarden\t4.04.3-1\tx86_64\t1\n"),
+		[]byte("operator\t4.10.0-1\tx86_64\t8\n"),
+		[]byte("syswarden\t4.10.0-1\taarch64\t8\n"),
+		[]byte("syswarden\t4.10.0 1\tx86_64\t8\n"),
+		[]byte("syswarden\t4.10.0-1\tx86_64\t1\n"),
 	} {
 		if _, err := parseSysWardenRPMDropInOwner(invalid); err == nil {
 			t.Fatalf("invalid RPM owner was accepted: %q", invalid)
@@ -460,9 +460,9 @@ func TestSysWardenSystemdOrderingPackageMetadataParsersFailClosed(t *testing.T) 
 }
 
 func TestSysWardenRPMDropInOwnershipBoundsPackageTransactionOverlap(t *testing.T) {
-	current := "syswarden\t4.04.3-1\tx86_64\t8\n"
-	old := "syswarden\t4.04.2-1\tx86_64\t8\n"
-	wantCurrent := "syswarden@4.04.3-1#x86_64#sha256#rpm"
+	current := "syswarden\t4.10.0-1\tx86_64\t8\n"
+	old := "syswarden\t4.04.3-1\tx86_64\t8\n"
+	wantCurrent := "syswarden@4.10.0-1#x86_64#sha256#rpm"
 	for _, testCase := range []struct {
 		name   string
 		output string
@@ -472,7 +472,7 @@ func TestSysWardenRPMDropInOwnershipBoundsPackageTransactionOverlap(t *testing.T
 		{
 			name:   "upgrade",
 			output: old + current,
-			want:   "syswarden@4.04.2-1#x86_64#sha256#rpm," + wantCurrent,
+			want:   "syswarden@4.04.3-1#x86_64#sha256#rpm," + wantCurrent,
 		},
 		{
 			name:   "reinstall",
@@ -494,9 +494,9 @@ func TestSysWardenRPMDropInOwnershipBoundsPackageTransactionOverlap(t *testing.T
 	for _, invalid := range []string{
 		old,
 		current + current + current,
-		"operator\t4.04.3-1\tx86_64\t8\n" + current,
-		"syswarden\t4.04.3-1\taarch64\t8\n" + current,
-		"syswarden\t4.04.3-1\tx86_64\t1\n" + current,
+		"operator\t4.10.0-1\tx86_64\t8\n" + current,
+		"syswarden\t4.10.0-1\taarch64\t8\n" + current,
+		"syswarden\t4.10.0-1\tx86_64\t1\n" + current,
 	} {
 		if _, err := parseSysWardenRPMDropInOwners([]byte(invalid), true); err == nil {
 			t.Fatalf("invalid transaction ownership was accepted: %q", invalid)
@@ -586,14 +586,14 @@ func TestSystemdOrderingAbsenceDistinguishesSourceAndPackagedInstall(t *testing.
 		{
 			name: "dpkg managed",
 			executor: testInstalledSysWardenPackageExecutor(
-				t, []byte("install ok installed\tamd64\t4.04.3\n"), nil, nil, nil,
+				t, []byte("install ok installed\tamd64\t4.10.0\n"), nil, nil, nil,
 			),
 			wantError: true,
 		},
 		{
 			name: "RPM managed",
 			executor: testInstalledSysWardenPackageExecutor(
-				t, nil, nil, []byte("syswarden\t4.04.3-1\tx86_64\t8\n"), nil,
+				t, nil, nil, []byte("syswarden\t4.10.0-1\tx86_64\t8\n"), nil,
 			),
 			wantError: true,
 		},
@@ -623,17 +623,17 @@ func TestSystemdOrderingAbsenceDistinguishesSourceAndPackagedInstall(t *testing.
 }
 
 func TestInstalledSysWardenDPKGStateRequiresRunningRelease(t *testing.T) {
-	for _, valid := range []string{"install ok installed\tamd64\t4.04.3\n"} {
+	for _, valid := range []string{"install ok installed\tamd64\t4.10.0\n"} {
 		if _, err := parseInstalledSysWardenDPKG([]byte(valid)); err != nil {
 			t.Fatalf("valid dpkg package state rejected: %q: %v", valid, err)
 		}
 	}
 	for _, invalid := range []string{
-		"deinstall ok config-files\tamd64\t4.04.3\n",
-		"install ok installed\tarm64\t4.04.3\n",
-		"install ok installed\tamd64\t4.04.2\n",
-		"install ok installed\tamd64\t4.04.3-1\n",
-		"install ok installed\tamd64\t4.04.3\nextra\n",
+		"deinstall ok config-files\tamd64\t4.10.0\n",
+		"install ok installed\tarm64\t4.10.0\n",
+		"install ok installed\tamd64\t4.04.3\n",
+		"install ok installed\tamd64\t4.10.0-1\n",
+		"install ok installed\tamd64\t4.10.0\nextra\n",
 	} {
 		if _, err := parseInstalledSysWardenDPKG([]byte(invalid)); err == nil {
 			t.Fatalf("invalid dpkg package state accepted: %q", invalid)

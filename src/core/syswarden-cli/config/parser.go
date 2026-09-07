@@ -337,7 +337,16 @@ func legacyConfigForPolicyValidation(candidate *Config) (*ModularConfig, error) 
 			BruteforceThreshold: threshold, BruteforceWindowSeconds: windowSeconds, ModsecLogs: candidate.ModsecLogs,
 		},
 		Integrations: IntegrationsConfig{
-			HA:        HAConfig{Enabled: candidate.HAEnabled, PeerIPs: split(candidate.HAPeerIP), PeerPort: mustLegacyInt(candidate.HAPeerPort), Token: candidate.HAToken},
+			HA: HAConfig{
+				Enabled: candidate.HAEnabled, PeerIPs: split(candidate.HAPeerIP), PeerPort: mustLegacyInt(candidate.HAPeerPort), Token: candidate.HAToken,
+				V2Enabled: candidate.HAV2Enabled, ClusterID: candidate.HAClusterID, Epoch: candidate.HAEpoch,
+				NodeID: candidate.HANodeID, PeerID: candidate.HAPeerID, Role: candidate.HARole, V2SecretFile: candidate.HAV2SecretFile,
+				TLSCertFile: candidate.HATLSCertFile, TLSKeyFile: candidate.HATLSKeyFile, TLSCAFile: candidate.HATLSCAFile,
+				PeerTLSName: candidate.HAPeerTLSName, PeerCertSHA256: append([]string(nil), candidate.HAPeerCertSHA256...),
+				StateFile: candidate.HAStateFile, TransactionFile: candidate.HATransactionFile,
+				HeartbeatIntervalSeconds: candidate.HAHeartbeatIntervalSeconds, HeartbeatTimeoutSeconds: candidate.HAHeartbeatTimeoutSeconds,
+				RequestTimeoutSeconds: candidate.HARequestTimeoutSeconds,
+			},
 			SIEM:      SIEMConfig{Enabled: candidate.SiemEnabled, IP: candidate.SiemIP, Port: candidate.SiemPort, Protocol: candidate.SiemProto, TLSCA: candidate.SiemTLSCA},
 			AbuseIPDB: AbuseIPDBConfig{Enabled: candidate.EnableAbuse, APIKey: candidate.AbuseAPIKey},
 			Webhooks:  WebhooksConfig{Enabled: candidate.EnableWebhook, DiscordURL: candidate.WebhookURLDiscord, TeamsURL: candidate.WebhookURLTeams, SlackURL: candidate.WebhookURLSlack},

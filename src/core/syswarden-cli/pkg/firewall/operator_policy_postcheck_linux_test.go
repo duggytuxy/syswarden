@@ -38,6 +38,24 @@ func operatorPolicyPostcheckPlan(t *testing.T) nftVerificationPlan {
 			Source:    "2001:db8::42/128",
 			Action:    config.OperatorPolicyActionAccept,
 		},
+		{
+			ID:              "charlie-tcp-v4",
+			Family:          config.OperatorPolicyFamilyIPv4,
+			Direction:       config.OperatorPolicyDirectionIngress,
+			Protocol:        config.OperatorPolicyProtocolTCP,
+			DestinationPort: 8443,
+			Source:          "203.0.113.0/24",
+			Action:          config.OperatorPolicyActionAccept,
+		},
+		{
+			ID:              "delta-udp-v6",
+			Family:          config.OperatorPolicyFamilyIPv6,
+			Direction:       config.OperatorPolicyDirectionIngress,
+			Protocol:        config.OperatorPolicyProtocolUDP,
+			DestinationPort: 51820,
+			Source:          "2001:db8:1::/64",
+			Action:          config.OperatorPolicyActionAccept,
+		},
 	})
 	if err != nil {
 		t.Fatalf("compile operator policy postcheck fixture: %v", err)
@@ -226,8 +244,8 @@ func TestOperatorPolicyPostcheckMatchesNFT116HostPrefixNormalization_SW_FW_006(t
 
 func TestOperatorPolicyPostcheckKeepsZeroLengthPrefixes_SW_FW_006(t *testing.T) {
 	for _, test := range []operatorPolicyRuleExpectation{
-		{family: config.OperatorPolicyFamilyIPv4, source: "0.0.0.0/0"},
-		{family: config.OperatorPolicyFamilyIPv6, source: "::/0"},
+		{family: config.OperatorPolicyFamilyIPv4, protocol: config.OperatorPolicyProtocolICMP, source: "0.0.0.0/0"},
+		{family: config.OperatorPolicyFamilyIPv6, protocol: config.OperatorPolicyProtocolICMPv6, source: "::/0"},
 	} {
 		expressions, err := expectedOperatorPolicyExpressions(test)
 		if err != nil {
@@ -237,6 +255,29 @@ func TestOperatorPolicyPostcheckKeepsZeroLengthPrefixes_SW_FW_006(t *testing.T) 
 		right, ok := match["right"].(map[string]any)
 		if !ok || right["prefix"] == nil {
 			t.Fatalf("zero-length source %q normalized to %#v, want a prefix object", test.source, match["right"])
+		}
+	}
+}
+
+func TestOperatorPolicyTransportPostcheckRejectsProtocolAndPortDrift_SW_FW_007(t *testing.T) {
+	plan := operatorPolicyPostcheckPlan(t)
+	for _, mutate := range []func(*mutableNFTVerificationDocument){
+		func(candidate *mutableNFTVerificationDocument) {
+			nftMatchAt(t, *candidate, operatorPolicyChainName, 2, 1)["right"] = "udp"
+		},
+		func(candidate *mutableNFTVerificationDocument) {
+			nftMatchAt(t, *candidate, operatorPolicyChainName, 2, 2)["right"] = float64(443)
+		},
+		func(candidate *mutableNFTVerificationDocument) {
+			nftMatchAt(t, *candidate, operatorPolicyChainName, 3, 2)["right"] = float64(51821)
+		},
+	} {
+		candidate := mutableNFTVerificationFixture(t, plan)
+		mutate(&candidate)
+		runner := newFakeNFTRunner(plan)
+		runner.rulesetDocuments = [][]byte{marshalMutableNFTVerificationFixture(t, candidate)}
+		if err := verifyNftablesState(context.Background(), runner, plan); err == nil {
+			t.Fatal("transport protocol or port drift passed exact post-apply verification")
 		}
 	}
 }

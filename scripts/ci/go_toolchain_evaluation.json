@@ -1,0 +1,106 @@
+{
+  "schema_version": 2,
+  "architecture": "linux/amd64",
+  "release_toolchain_unchanged": true,
+  "measurement": {
+    "samples_per_toolchain": 9,
+    "operations_per_sample": 2048,
+    "protocols": [
+      "http1_keepalive",
+      "tls13",
+      "bounded_response_headers",
+      "strict_json",
+      "ed25519_manifest"
+    ],
+    "bounds": {
+      "cpu_nanoseconds_per_request": {
+        "unit": "nanoseconds",
+        "direction": "lower",
+        "maximum_regression_percent": 10.0,
+        "absolute_noise_allowance": 5000.0
+      },
+      "rss_bytes": {
+        "unit": "bytes",
+        "direction": "lower",
+        "maximum_regression_percent": 10.0,
+        "absolute_noise_allowance": 2097152.0
+      },
+      "allocations_per_request": {
+        "unit": "count",
+        "direction": "lower",
+        "maximum_regression_percent": 10.0,
+        "absolute_noise_allowance": 0.25
+      },
+      "allocated_bytes_per_request": {
+        "unit": "bytes",
+        "direction": "lower",
+        "maximum_regression_percent": 10.0,
+        "absolute_noise_allowance": 128.0
+      },
+      "http_requests_per_second": {
+        "unit": "requests_per_second",
+        "direction": "higher",
+        "maximum_regression_percent": 10.0,
+        "absolute_noise_allowance": 0.0
+      },
+      "binary_bytes": {
+        "unit": "bytes",
+        "direction": "lower",
+        "maximum_regression_percent": 10.0,
+        "absolute_noise_allowance": 0.0
+      },
+      "package_bytes": {
+        "unit": "bytes",
+        "direction": "lower",
+        "maximum_regression_percent": 10.0,
+        "absolute_noise_allowance": 0.0
+      }
+    },
+    "binaries": [
+      "syswarden-cli",
+      "syswarden-core",
+      "syswarden-tui"
+    ],
+    "packages": [
+      "deb",
+      "rpm",
+      "apk"
+    ]
+  },
+  "rollback": {
+    "from": "go1.27.1",
+    "to": "go1.26.6",
+    "directive_files": [
+      "go.work",
+      "src/core/syswarden-cli/go.mod",
+      "src/core/syswarden-core/go.mod",
+      "src/core/syswarden-tui/go.mod",
+      "scripts/versionctl/go.mod"
+    ],
+    "builder_file": "build_packages.sh",
+    "required_files": [
+      "go.work",
+      "src/core/syswarden-cli/go.mod",
+      "src/core/syswarden-core/go.mod",
+      "src/core/syswarden-tui/go.mod",
+      "scripts/versionctl/go.mod",
+      "build_packages.sh"
+    ]
+  },
+  "toolchains": {
+    "baseline": {
+      "version": "go1.26.6",
+      "filename": "go1.26.6.linux-amd64.tar.gz",
+      "url": "https://go.dev/dl/go1.26.6.linux-amd64.tar.gz",
+      "size": 66890545,
+      "sha256": "708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89"
+    },
+    "candidate": {
+      "version": "go1.27.1",
+      "filename": "go1.27.1.linux-amd64.tar.gz",
+      "url": "https://go.dev/dl/go1.27.1.linux-amd64.tar.gz",
+      "size": 70553950,
+      "sha256": "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445"
+    }
+  }
+}

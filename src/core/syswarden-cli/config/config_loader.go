@@ -220,6 +220,11 @@ func setDefaults(v *viper.Viper, configDir string) {
 	v.SetDefault("waap.bruteforce_window_seconds", 60)
 	v.SetDefault("security.compliance.check_interval", "24h")
 	v.SetDefault("integrations.ha.peer_port", 62026)
+	v.SetDefault("integrations.ha.state_file", "/var/lib/syswarden/ha/replication-v2.json")
+	v.SetDefault("integrations.ha.transaction_file", "/var/lib/syswarden/ha/replication-v2.wal.json")
+	v.SetDefault("integrations.ha.heartbeat_interval_seconds", 2)
+	v.SetDefault("integrations.ha.heartbeat_timeout_seconds", 10)
+	v.SetDefault("integrations.ha.request_timeout_seconds", 5)
 	v.SetDefault("integrations.bunkerweb.enabled", false)
 }
 
@@ -287,6 +292,23 @@ func mapModularToLegacy(m *ModularConfig) *Config {
 	candidate.HAToken = m.Integrations.HA.Token
 	candidate.HAPeerIP = strings.Join(m.Integrations.HA.PeerIPs, " ")
 	candidate.HAPeerPort = strconv.Itoa(m.Integrations.HA.PeerPort)
+	candidate.HAV2Enabled = m.Integrations.HA.V2Enabled
+	candidate.HAClusterID = m.Integrations.HA.ClusterID
+	candidate.HAEpoch = m.Integrations.HA.Epoch
+	candidate.HANodeID = m.Integrations.HA.NodeID
+	candidate.HAPeerID = m.Integrations.HA.PeerID
+	candidate.HARole = m.Integrations.HA.Role
+	candidate.HAV2SecretFile = m.Integrations.HA.V2SecretFile
+	candidate.HATLSCertFile = m.Integrations.HA.TLSCertFile
+	candidate.HATLSKeyFile = m.Integrations.HA.TLSKeyFile
+	candidate.HATLSCAFile = m.Integrations.HA.TLSCAFile
+	candidate.HAPeerTLSName = m.Integrations.HA.PeerTLSName
+	candidate.HAPeerCertSHA256 = append([]string(nil), m.Integrations.HA.PeerCertSHA256...)
+	candidate.HAStateFile = m.Integrations.HA.StateFile
+	candidate.HATransactionFile = m.Integrations.HA.TransactionFile
+	candidate.HAHeartbeatIntervalSeconds = m.Integrations.HA.HeartbeatIntervalSeconds
+	candidate.HAHeartbeatTimeoutSeconds = m.Integrations.HA.HeartbeatTimeoutSeconds
+	candidate.HARequestTimeoutSeconds = m.Integrations.HA.RequestTimeoutSeconds
 
 	candidate.SiemEnabled = m.Integrations.SIEM.Enabled
 	candidate.SiemIP = m.Integrations.SIEM.IP

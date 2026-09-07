@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"syswarden-core/internal/runtimepaths"
 	"syswarden-core/utils"
@@ -126,11 +128,12 @@ type platformSystemStats struct {
 }
 
 type Layer3 struct {
-	GlobalBlocked int  `json:"global_blocked"`
-	GeoIPBlocked  int  `json:"geoip_blocked"`
-	ASNBlocked    int  `json:"asn_blocked"`
-	L7Banned      int  `json:"l7_banned"`
-	ZeroTrustMode bool `json:"zero_trust_mode"`
+	GlobalBlocked int                `json:"global_blocked"`
+	GeoIPBlocked  int                `json:"geoip_blocked"`
+	ASNBlocked    int                `json:"asn_blocked"`
+	L7Banned      int                `json:"l7_banned"`
+	ZeroTrustMode bool               `json:"zero_trust_mode"`
+	ThreatFeeds   []ThreatFeedStatus `json:"threat_feeds,omitempty"`
 }
 
 type JailData struct {
@@ -147,12 +150,13 @@ type AllowedEvent struct {
 }
 
 type BannedIP struct {
-	Timestamp string `json:"timestamp"`
-	IP        string `json:"ip"`
-	Jail      string `json:"jail"`
-	Payload   string `json:"payload"`
-	Mitre     string `json:"mitre"`
-	Action    string `json:"action"`
+	Timestamp        string `json:"timestamp"`
+	IP               string `json:"ip"`
+	Jail             string `json:"jail"`
+	Payload          string `json:"payload"`
+	Mitre            string `json:"mitre"`
+	Action           string `json:"action"`
+	EnforcementState string `json:"enforcement_state,omitempty"`
 }
 
 type Attacker struct {
@@ -169,12 +173,14 @@ type Attacker struct {
 	PrimaryJail             string `json:"primary_jail,omitempty"`
 	EnforcementJail         string `json:"enforcement_jail,omitempty"`
 	EnforcementAction       string `json:"enforcement_action,omitempty"`
+	EnforcementState        string `json:"enforcement_state,omitempty"`
 	JailHits                int    `json:"jail_hits,omitempty"`
 	PolicyHits              int    `json:"policy_hits,omitempty"`
 	AttestedHits            int    `json:"attested_hits,omitempty"`
 	RecordedHits            int    `json:"recorded_hits,omitempty"`
 	LegacyHits              int    `json:"legacy_hits,omitempty"`
 	RiskCategory            string `json:"risk_category,omitempty"`
+	PolicyAction            string `json:"policy_action,omitempty"`
 	SeverityScore           int    `json:"severity_score,omitempty"`
 	PeakWindowHits          int    `json:"peak_window_hits,omitempty"`
 	EffectiveThreshold      int    `json:"effective_threshold,omitempty"`
@@ -200,24 +206,25 @@ type TargetedPort struct {
 }
 
 type WAF struct {
-	TotalBanned          int            `json:"total_banned"`
-	TotalDetected        int            `json:"total_detected"`
-	ActiveSignatures     int            `json:"active_signatures"`
-	KPIEvidenceQuality   string         `json:"kpi_evidence_quality,omitempty"`
-	JournalScanComplete  *bool          `json:"journal_scan_complete,omitempty"`
-	JournalBytesTotal    *int64         `json:"journal_bytes_total,omitempty"`
-	JournalBytesScanned  *int64         `json:"journal_bytes_scanned,omitempty"`
-	JournalDecodeErrors  *int           `json:"journal_decode_errors,omitempty"`
-	MetricRejectedEvents *int           `json:"metric_rejected_events,omitempty"`
-	MetricExcludedEvents *int           `json:"metric_excluded_events,omitempty"`
-	MetricAdmittedEvents *int           `json:"metric_admitted_events,omitempty"`
-	SignaturesData       []JailData     `json:"signatures_data"`
-	TargetedPorts        []TargetedPort `json:"targeted_ports"`
-	BannedIPs            []BannedIP     `json:"banned_ips"`
-	TopAttackers         []Attacker     `json:"top_attackers"`
-	RiskRadar            []int          `json:"risk_radar"`
-	Sparkline24h         [24]int        `json:"sparkline_24h"`
-	AllowedEvents        []AllowedEvent `json:"allowed_events"`
+	TotalBanned          int             `json:"total_banned"`
+	TotalDetected        int             `json:"total_detected"`
+	ActiveSignatures     int             `json:"active_signatures"`
+	KPIEvidenceQuality   string          `json:"kpi_evidence_quality,omitempty"`
+	JournalScanComplete  *bool           `json:"journal_scan_complete,omitempty"`
+	JournalBytesTotal    *int64          `json:"journal_bytes_total,omitempty"`
+	JournalBytesScanned  *int64          `json:"journal_bytes_scanned,omitempty"`
+	JournalDecodeErrors  *int            `json:"journal_decode_errors,omitempty"`
+	MetricRejectedEvents *int            `json:"metric_rejected_events,omitempty"`
+	MetricExcludedEvents *int            `json:"metric_excluded_events,omitempty"`
+	MetricAdmittedEvents *int            `json:"metric_admitted_events,omitempty"`
+	SignaturesData       []JailData      `json:"signatures_data"`
+	TargetedPorts        []TargetedPort  `json:"targeted_ports"`
+	BannedIPs            []BannedIP      `json:"banned_ips"`
+	TopAttackers         []Attacker      `json:"top_attackers"`
+	RiskRadar            []int           `json:"risk_radar"`
+	Sparkline24h         [24]int         `json:"sparkline_24h"`
+	AllowedEvents        []AllowedEvent  `json:"allowed_events"`
+	GRCKPI               *GRCKPIDocument `json:"grc_kpi,omitempty"`
 }
 
 const (
@@ -228,18 +235,20 @@ const (
 )
 
 type kpiEvidenceState struct {
-	catalogAvailable     bool
-	journalScanComplete  bool
-	journalBytesTotal    int64
-	journalBytesScanned  int64
-	journalDecodeErrors  int
-	metricRejectedEvents int
-	metricExcludedEvents int
-	metricAdmittedEvents int
+	catalogAvailable            bool
+	journalScanComplete         bool
+	persistentEnforcementUnsafe bool
+	journalBytesTotal           int64
+	journalBytesScanned         int64
+	journalDecodeErrors         int
+	metricRejectedEvents        int
+	metricExcludedEvents        int
+	metricAdmittedEvents        int
 }
 
 func (state kpiEvidenceState) quality() string {
-	if !state.catalogAvailable || !state.journalScanComplete || state.journalDecodeErrors > 0 || state.metricRejectedEvents > 0 ||
+	if !state.catalogAvailable || !state.journalScanComplete || state.persistentEnforcementUnsafe ||
+		state.journalDecodeErrors > 0 || state.metricRejectedEvents > 0 ||
 		state.journalBytesTotal < 0 || state.journalBytesScanned < 0 ||
 		state.journalBytesScanned > state.journalBytesTotal ||
 		state.journalScanComplete && state.journalBytesScanned != state.journalBytesTotal {
@@ -513,17 +522,35 @@ type Whitelist struct {
 	IPs       []string `json:"ips"`
 }
 
-type DashboardData struct {
-	Timestamp     string       `json:"timestamp"`
-	GithubStars   string       `json:"github_stars"`
-	GithubRelease string       `json:"github_release"`
-	ProfileName   string       `json:"profile_name"`
-	System        SystemData   `json:"system"`
-	Layer3        Layer3       `json:"layer3"`
-	WAF           WAF          `json:"waf"`
-	Whitelist     Whitelist    `json:"whitelist"`
-	HA            *HATelemetry `json:"ha,omitempty"`
+type DashboardProjection struct {
+	Quality           string `json:"quality"`
+	Reason            string `json:"reason,omitempty"`
+	PayloadsProjected int    `json:"payloads_projected,omitempty"`
 }
+
+type DashboardData struct {
+	Timestamp     string               `json:"timestamp"`
+	GithubStars   string               `json:"github_stars"`
+	GithubRelease string               `json:"github_release"`
+	ProfileName   string               `json:"profile_name"`
+	System        SystemData           `json:"system"`
+	Layer3        Layer3               `json:"layer3"`
+	WAF           WAF                  `json:"waf"`
+	Whitelist     Whitelist            `json:"whitelist"`
+	HA            *HATelemetry         `json:"ha,omitempty"`
+	Projection    *DashboardProjection `json:"projection,omitempty"`
+}
+
+const (
+	maxDashboardJSONBytes              = 1024 * 1024
+	maxDashboardDisplayStringBytes     = 4096
+	maxDashboardEntries                = 65536
+	dashboardProjectionQualityComplete = "complete"
+	dashboardProjectionQualityDegraded = "degraded"
+	dashboardProjectionReasonPayload   = "display-payload-bound"
+	dashboardProjectionReasonEnvelope  = "dashboard-envelope-bound"
+	dashboardProjectionPayloadOmission = ""
+)
 
 // TelemetryEvent parses lines from waf.json
 type TelemetryEvent struct {
@@ -573,7 +600,7 @@ func StartWorker(
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
-		generateTelemetry()
+		generateTelemetry(fwManager)
 
 		for {
 			select {
@@ -581,7 +608,7 @@ func StartWorker(
 				log.Println("[Telemetry Worker] Shutting down gracefully...")
 				return
 			case <-ticker.C:
-				generateTelemetry()
+				generateTelemetry(fwManager)
 			}
 		}
 	}()
@@ -913,7 +940,259 @@ func extractField(line, prefix string) string {
 	return ""
 }
 
-func generateTelemetry() {
+func marshalDashboardDataForPublication(input DashboardData) ([]byte, error) {
+	projected := input
+	projected.WAF.BannedIPs = append([]BannedIP{}, input.WAF.BannedIPs...)
+	projected.WAF.AllowedEvents = append([]AllowedEvent(nil), input.WAF.AllowedEvents...)
+
+	projectionReason := ""
+	for index := range projected.WAF.BannedIPs {
+		payload, changed := projectDashboardDisplayPayload(projected.WAF.BannedIPs[index].Payload)
+		projected.WAF.BannedIPs[index].Payload = payload
+		if changed {
+			projectionReason = dashboardProjectionReasonPayload
+		}
+	}
+	for index := range projected.WAF.AllowedEvents {
+		payload, changed := projectDashboardDisplayPayload(projected.WAF.AllowedEvents[index].Payload)
+		projected.WAF.AllowedEvents[index].Payload = payload
+		if changed {
+			projectionReason = dashboardProjectionReasonPayload
+		}
+	}
+	projected.Projection = dashboardProjectionMetadata(input, projected, projectionReason)
+	if err := validateDashboardPublicationData(projected); err != nil {
+		return nil, err
+	}
+
+	wire, err := json.Marshal(projected)
+	if err != nil {
+		return nil, fmt.Errorf("marshal dashboard telemetry: %w", err)
+	}
+	if len(wire) <= maxDashboardJSONBytes {
+		return wire, nil
+	}
+
+	for index := range projected.WAF.BannedIPs {
+		projected.WAF.BannedIPs[index].Payload = dashboardProjectionPayloadOmission
+	}
+	for index := range projected.WAF.AllowedEvents {
+		projected.WAF.AllowedEvents[index].Payload = dashboardProjectionPayloadOmission
+	}
+	projected.Projection = dashboardProjectionMetadata(input, projected, dashboardProjectionReasonEnvelope)
+	wire, err = json.Marshal(projected)
+	if err != nil {
+		return nil, fmt.Errorf("marshal bounded dashboard telemetry: %w", err)
+	}
+	if len(wire) > maxDashboardJSONBytes {
+		return nil, fmt.Errorf("dashboard telemetry exceeds %d bytes after deterministic payload projection", maxDashboardJSONBytes)
+	}
+	return wire, nil
+}
+
+func dashboardProjectionMetadata(original, projected DashboardData, reason string) *DashboardProjection {
+	projectedPayloads := 0
+	for index := range original.WAF.BannedIPs {
+		if index >= len(projected.WAF.BannedIPs) || original.WAF.BannedIPs[index].Payload != projected.WAF.BannedIPs[index].Payload {
+			projectedPayloads++
+		}
+	}
+	for index := range original.WAF.AllowedEvents {
+		if index >= len(projected.WAF.AllowedEvents) || original.WAF.AllowedEvents[index].Payload != projected.WAF.AllowedEvents[index].Payload {
+			projectedPayloads++
+		}
+	}
+	if projectedPayloads == 0 {
+		return &DashboardProjection{Quality: dashboardProjectionQualityComplete}
+	}
+	return &DashboardProjection{
+		Quality:           dashboardProjectionQualityDegraded,
+		Reason:            reason,
+		PayloadsProjected: projectedPayloads,
+	}
+}
+
+func projectDashboardDisplayPayload(value string) (string, bool) {
+	projected := strings.ToValidUTF8(value, "\uFFFD")
+	projected = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, projected)
+	if len(projected) > maxDashboardDisplayStringBytes {
+		boundary := maxDashboardDisplayStringBytes
+		for boundary > 0 && !utf8.ValidString(projected[:boundary]) {
+			boundary--
+		}
+		projected = projected[:boundary]
+	}
+	return projected, projected != value
+}
+
+func validateDashboardPublicationStrings(snapshot DashboardData) error {
+	return validateDashboardPublicationValue(reflect.ValueOf(snapshot), "dashboard")
+}
+
+func validateDashboardPublicationData(snapshot DashboardData) error {
+	if err := validateDashboardPublicationStrings(snapshot); err != nil {
+		return err
+	}
+	if snapshot.Projection == nil {
+		return fmt.Errorf("dashboard projection evidence is missing")
+	}
+	switch snapshot.Projection.Quality {
+	case dashboardProjectionQualityComplete:
+		if snapshot.Projection.Reason != "" || snapshot.Projection.PayloadsProjected != 0 {
+			return fmt.Errorf("complete dashboard projection carries degradation evidence")
+		}
+	case dashboardProjectionQualityDegraded:
+		if snapshot.Projection.PayloadsProjected <= 0 ||
+			(snapshot.Projection.Reason != dashboardProjectionReasonPayload && snapshot.Projection.Reason != dashboardProjectionReasonEnvelope) {
+			return fmt.Errorf("degraded dashboard projection lacks valid evidence")
+		}
+		if snapshot.Projection.PayloadsProjected > len(snapshot.WAF.BannedIPs)+len(snapshot.WAF.AllowedEvents) {
+			return fmt.Errorf("degraded dashboard projection exceeds the payload inventory")
+		}
+	default:
+		return fmt.Errorf("dashboard projection quality is invalid")
+	}
+	if snapshot.System.RamUsedMb < 0 || snapshot.System.RamTotalMb < 0 || snapshot.System.DiskUsedMb < 0 || snapshot.System.DiskTotalMb < 0 ||
+		(snapshot.System.RamTotalMb == 0 && snapshot.System.RamUsedMb != 0) ||
+		(snapshot.System.DiskTotalMb == 0 && snapshot.System.DiskUsedMb != 0) {
+		return fmt.Errorf("system capacity counters are outside dashboard bounds")
+	}
+	if snapshot.Layer3.GlobalBlocked < 0 || snapshot.Layer3.GeoIPBlocked < 0 || snapshot.Layer3.ASNBlocked < 0 ||
+		snapshot.Layer3.L7Banned < 0 || snapshot.WAF.TotalBanned < 0 || snapshot.WAF.TotalDetected < 0 ||
+		snapshot.WAF.ActiveSignatures < 0 || snapshot.Whitelist.ActiveIPs < 0 {
+		return fmt.Errorf("dashboard counters are outside accepted bounds")
+	}
+	collections := []int{
+		len(snapshot.System.Services), len(snapshot.System.Ports), len(snapshot.Layer3.ThreatFeeds),
+		len(snapshot.WAF.SignaturesData), len(snapshot.WAF.TargetedPorts), len(snapshot.WAF.BannedIPs),
+		len(snapshot.WAF.TopAttackers), len(snapshot.WAF.RiskRadar), len(snapshot.WAF.AllowedEvents), len(snapshot.Whitelist.IPs),
+	}
+	for _, count := range collections {
+		if count > maxDashboardEntries {
+			return fmt.Errorf("dashboard inventory exceeds accepted bounds")
+		}
+	}
+	for _, feed := range snapshot.Layer3.ThreatFeeds {
+		if feed.AcceptedCount < 0 || feed.SkippedCount < 0 || feed.RejectedCount < 0 || feed.AgeSeconds != nil && *feed.AgeSeconds < 0 {
+			return fmt.Errorf("threat feed counters are outside accepted bounds")
+		}
+	}
+	for _, jail := range snapshot.WAF.SignaturesData {
+		if jail.Count < 0 {
+			return fmt.Errorf("signature counter is outside accepted bounds")
+		}
+	}
+	for _, port := range snapshot.WAF.TargetedPorts {
+		if port.Hits < 0 || port.UniqueIPs < 0 || port.UniqueIPs > port.Hits {
+			return fmt.Errorf("targeted port counters are outside accepted bounds")
+		}
+	}
+	for _, attacker := range snapshot.WAF.TopAttackers {
+		if attacker.Hits < 0 || attacker.JailHits < 0 || attacker.PolicyHits < 0 || attacker.AttestedHits < 0 ||
+			attacker.RecordedHits < 0 || attacker.LegacyHits < 0 || attacker.DegradedHits < 0 || attacker.PeakWindowHits < 0 ||
+			attacker.EffectiveThreshold < 0 || attacker.SeverityScore < 0 || attacker.SeverityScore > 100 ||
+			attacker.EffectiveWindowSeconds != nil && *attacker.EffectiveWindowSeconds < 0 {
+			return fmt.Errorf("attacker metrics are outside accepted bounds")
+		}
+	}
+	for _, count := range snapshot.WAF.RiskRadar {
+		if count < 0 {
+			return fmt.Errorf("risk radar counter is outside accepted bounds")
+		}
+	}
+	for _, count := range snapshot.WAF.Sparkline24h {
+		if count < 0 {
+			return fmt.Errorf("sparkline counter is outside accepted bounds")
+		}
+	}
+	if snapshot.WAF.JournalBytesTotal != nil && *snapshot.WAF.JournalBytesTotal < 0 ||
+		snapshot.WAF.JournalBytesScanned != nil && *snapshot.WAF.JournalBytesScanned < 0 ||
+		snapshot.WAF.JournalDecodeErrors != nil && *snapshot.WAF.JournalDecodeErrors < 0 ||
+		snapshot.WAF.MetricRejectedEvents != nil && *snapshot.WAF.MetricRejectedEvents < 0 ||
+		snapshot.WAF.MetricExcludedEvents != nil && *snapshot.WAF.MetricExcludedEvents < 0 ||
+		snapshot.WAF.MetricAdmittedEvents != nil && *snapshot.WAF.MetricAdmittedEvents < 0 {
+		return fmt.Errorf("KPI evidence counter is outside accepted bounds")
+	}
+	if snapshot.WAF.GRCKPI != nil {
+		if _, err := marshalGRCKPIDocument(*snapshot.WAF.GRCKPI); err != nil {
+			return fmt.Errorf("GRC KPI evidence is invalid: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateDashboardPublicationValue(value reflect.Value, path string) error {
+	if !value.IsValid() {
+		return nil
+	}
+	for value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return nil
+		}
+		value = value.Elem()
+	}
+	switch value.Kind() {
+	case reflect.String:
+		text := value.String()
+		if len(text) > maxDashboardDisplayStringBytes || !utf8.ValidString(text) {
+			return fmt.Errorf("%s string is outside dashboard display bounds", path)
+		}
+		for _, r := range text {
+			if unicode.IsControl(r) {
+				return fmt.Errorf("%s string contains terminal control characters", path)
+			}
+		}
+	case reflect.Struct:
+		valueType := value.Type()
+		for index := 0; index < value.NumField(); index++ {
+			if err := validateDashboardPublicationValue(value.Field(index), path+"."+valueType.Field(index).Name); err != nil {
+				return err
+			}
+		}
+	case reflect.Array, reflect.Slice:
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			return nil
+		}
+		for index := 0; index < value.Len(); index++ {
+			if err := validateDashboardPublicationValue(value.Index(index), fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		iterator := value.MapRange()
+		for iterator.Next() {
+			if err := validateDashboardPublicationValue(iterator.Key(), path+".key"); err != nil {
+				return err
+			}
+			if err := validateDashboardPublicationValue(iterator.Value(), path+".value"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func publishDashboardData(dataFile string, data DashboardData) error {
+	jsonData, err := marshalDashboardDataForPublication(data)
+	if err != nil {
+		return err
+	}
+	tmpFile := dataFile + ".tmp"
+	if err := os.WriteFile(tmpFile, jsonData, 0600); err != nil {
+		return fmt.Errorf("write dashboard telemetry: %w", err)
+	}
+	if err := os.Rename(tmpFile, dataFile); err != nil {
+		return fmt.Errorf("publish dashboard telemetry: %w", err)
+	}
+	return nil
+}
+
+func generateTelemetry(fwManager FirewallManager) {
 	data := DashboardData{
 		Timestamp:     time.Now().UTC().Format(time.RFC3339),
 		GithubStars:   getGithubStars(),
@@ -921,7 +1200,7 @@ func generateTelemetry() {
 		ProfileName:   viper.GetString("user.profile_name"),
 		System:        getSystemStats(),
 		Layer3:        getLayer3Stats(),
-		WAF:           getWAFStats(),
+		WAF:           getWAFStats(fwManager),
 		Whitelist:     getWhitelistStats(),
 		HA:            getHATelemetry(),
 	}
@@ -929,22 +1208,8 @@ func generateTelemetry() {
 	uiDir := "/var/lib/syswarden/ui"
 	_ = os.MkdirAll(uiDir, 0750)
 	dataFile := filepath.Join(uiDir, "data.json")
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		log.Printf("[Telemetry Worker] Error marshaling telemetry data: %v", err)
-		return
-	}
-
-	// Write atomically using a tmp file
-	tmpFile := dataFile + ".tmp"
-	if err := os.WriteFile(tmpFile, jsonData, 0600); err != nil {
-		log.Printf("[Telemetry Worker] Error writing telemetry data: %v", err)
-		return
-	}
-
-	if err := os.Rename(tmpFile, dataFile); err != nil {
-		log.Printf("[Telemetry Worker] Error moving telemetry data: %v", err)
+	if err := publishDashboardData(dataFile, data); err != nil {
+		log.Printf("[Telemetry Worker] Error publishing telemetry data: %v", err)
 	}
 }
 
@@ -1112,7 +1377,13 @@ func collectLayer3Stats(listDirectory string, geoIPBlockedCount func() int) Laye
 	}
 
 	l3.L7Banned = countLinesInFile(filepath.Join(listDirectory, "syswarden_blacklist.ipv4")) + countLinesInFile(filepath.Join(listDirectory, "syswarden_blacklist.ipv6"))
-	l3.GlobalBlocked = l3.L7Banned + countLinesInFile(filepath.Join(listDirectory, "syswarden_threatintel.ipv4")) + countLinesInFile(filepath.Join(listDirectory, "syswarden_threatintel.ipv6"))
+	l3.GlobalBlocked = l3.L7Banned
+	l3.ThreatFeeds = collectThreatFeedStatuses(listDirectory, threatFeedNow().UTC())
+	for _, feed := range l3.ThreatFeeds {
+		if feed.Attestation == "verified" {
+			l3.GlobalBlocked += feed.AcceptedCount
+		}
+	}
 
 	if matches, err := filepath.Glob(filepath.Join(listDirectory, "AS*.ipv*")); err == nil {
 		for _, m := range matches {
@@ -1760,7 +2031,7 @@ func getGithubRelease() string {
 var cachedWAF WAF
 var lastWAFFetch time.Time
 
-func getWAFStats() WAF {
+func getWAFStats(fwManager FirewallManager) WAF {
 	if !lastWAFFetch.IsZero() && time.Since(lastWAFFetch) < 15*time.Second {
 		return cachedWAF
 	}
@@ -1790,22 +2061,21 @@ func getWAFStats() WAF {
 		waf.ActiveSignatures = parsed.ruleCount
 	}
 
-	activeBans := make(map[string]bool)
-	if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv4"); err == nil { // #nosec
-		for _, line := range strings.Split(string(content), "\n") {
-			if ip := strings.TrimSpace(line); ip != "" {
-				activeBans[ip] = true
-			}
+	persistentBans, persistentErr := collectPersistentEnforcementView("/etc/syswarden/lists")
+	if persistentErr != nil {
+		evidenceState.persistentEnforcementUnsafe = true
+		log.Printf("[Telemetry Worker] Persistent enforcement snapshot is unavailable: %v", persistentErr)
+	}
+	runtimeView, runtimeErr := collectRuntimeEnforcementView(fwManager)
+	if runtimeErr != nil {
+		log.Printf("[Telemetry Worker] HA runtime enforcement snapshot is unavailable: %v", runtimeErr)
+	}
+	waf.TotalBanned = persistentBans.entryCount()
+	for ip, state := range runtimeView.byIP {
+		if state == "active" && !persistentBans.contains(ip) {
+			waf.TotalBanned++
 		}
 	}
-	if content, err := os.ReadFile("/etc/syswarden/lists/syswarden_blacklist.ipv6"); err == nil { // #nosec
-		for _, line := range strings.Split(string(content), "\n") {
-			if ip := strings.TrimSpace(line); ip != "" {
-				activeBans[ip] = true
-			}
-		}
-	}
-	waf.TotalBanned = len(activeBans)
 
 	// Parse the protected NDJSON journal without deriving historical actions
 	// from the current firewall state.
@@ -1824,6 +2094,8 @@ func getWAFStats() WAF {
 	var allBans []BannedIP
 	var allAllowed []AllowedEvent
 	var metricEvents []TelemetryEvent
+	var lifecycleCounts grcKPILifecycleCounts
+	lifecycleStates := make(map[string]runtimeLifecycleObservation)
 
 	processJournalRecord := func(wire []byte) {
 		var event TelemetryEvent
@@ -1831,6 +2103,8 @@ func getWAFStats() WAF {
 			evidenceState.journalDecodeErrors++
 			return
 		}
+		observeGRCKPILifecycle(event.Action, &lifecycleCounts)
+		observeRuntimeLifecycleEvent(event, lifecycleStates)
 		isAllowed := event.Action == "ALLOWED"
 		if isAllowed {
 			allAllowed = append(allAllowed, AllowedEvent{
@@ -1933,6 +2207,13 @@ func getWAFStats() WAF {
 		if seenIPs[allBans[i].IP] {
 			continue
 		}
+		if allBans[i].Action == "BANNED" {
+			allBans[i].EnforcementState = resolveRuntimeEnforcementState(allBans[i].IP, runtimeView, persistentBans, lifecycleStates)
+			switch allBans[i].EnforcementState {
+			case "expired", "deleted", "tombstoned", "absent":
+				continue
+			}
+		}
 		seenIPs[allBans[i].IP] = true
 		waf.BannedIPs = append(waf.BannedIPs, allBans[i])
 	}
@@ -1946,6 +2227,11 @@ func getWAFStats() WAF {
 	if rejectedMetrics > 0 {
 		evidenceState.metricRejectedEvents += rejectedMetrics
 	}
+	grcMetrics := append([]attackerMetric(nil), metrics...)
+	grcEnforcementStates := make(map[string]string, len(grcMetrics))
+	for _, metric := range grcMetrics {
+		grcEnforcementStates[metric.ip] = resolveRuntimeEnforcementState(metric.ip, runtimeView, persistentBans, lifecycleStates)
+	}
 	if len(metrics) > 50 {
 		metrics = metrics[:50]
 	}
@@ -1957,12 +2243,14 @@ func getWAFStats() WAF {
 		attacker.PrimaryJail = metric.primaryJail
 		attacker.EnforcementJail = metric.enforcementJail
 		attacker.EnforcementAction = metric.enforcementAction
+		attacker.EnforcementState = grcEnforcementStates[metric.ip]
 		attacker.JailHits = metric.jailHits
 		attacker.PolicyHits = metric.policyHits
 		attacker.AttestedHits = metric.attestedHits
 		attacker.RecordedHits = metric.recordedHits
 		attacker.LegacyHits = metric.legacyHits
 		attacker.RiskCategory = metric.riskCategory
+		attacker.PolicyAction = metric.policyAction
 		attacker.SeverityScore = metric.severityScore
 		attacker.Severity = metric.severity
 		attacker.PeakWindowHits = metric.peakWindowHits
@@ -2081,6 +2369,14 @@ func getWAFStats() WAF {
 		categoryCounts["abuse"],
 	}
 	evidenceState.apply(&waf)
+	grcKPI, grcKPIErr := prepareGRCKPIDocumentWithRuntime(
+		grcMetrics, catalog, evidenceState, lifecycleCounts, runtimeView, grcEnforcementStates,
+	)
+	if grcKPIErr != nil {
+		log.Printf("[Telemetry Worker] GRC KPI evidence validation failed; publishing a degraded fallback: %v", grcKPIErr)
+		waf.KPIEvidenceQuality = kpiEvidenceQualityDegraded
+	}
+	waf.GRCKPI = grcKPI
 	evidenceState.logDegraded()
 
 	cachedWAF = waf

@@ -115,15 +115,31 @@ jobs:
             scripts/ci/package_binary_provenance_gate_test.py \
             scripts/ci/package_systemd_ordering_artifact_gate_test.py \
             scripts/ci/package_systemd_ordering_preflight_test.py \
+            scripts/ci/go_toolchain_evaluation_test.py \
+            scripts/ci/native_package_signature_gate_test.py \
+            scripts/ci/native_package_signing_bundle_test.py \
+            scripts/ci/native_package_signing_workflow_test.py \
+            scripts/ci/native_capability_evidence_test.py \
+            scripts/ci/native_performance_adapter_test.py \
+            scripts/ci/native_performance_probe_test.py \
+            scripts/ci/native_release_evidence_workflow_test.py \
             scripts/ci/package_qualification_matrix_test.py \
             scripts/ci/package_lifecycle_contract_test.py \
             scripts/ci/package_lifecycle_lab_test.py \
             scripts/ci/package_stage_gate_test.py \
+            scripts/ci/performance_evidence_test.py \
+            scripts/ci/performance_gate_test.py \
+            scripts/ci/source_allocation_producer_test.py \
+            scripts/ci/source_allocation_gate_test.py \
+            scripts/ci/performance_channel_aggregate_test.py \
             scripts/ci/release_gate_test.py \
             scripts/ci/release_qualification_adapter_test.py \
             scripts/ci/release_qualification_gate_test.py \
             scripts/ci/release_qualification_workflow_test.py \
             scripts/ci/repository_state_test.py \
+            -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+            extensions/rhel-package-owned/tests/test_stage.py \
             -v
 
       - name: Validate and Export Version Contract
@@ -295,6 +311,10 @@ jobs:
           sudo apt-get install -y cpio rpm
           gem install --no-document fpm -v 1.17.0
 
+      - name: Test Opt-in RHEL Package-owned RPM Assembly
+        shell: bash
+        run: bash extensions/rhel-package-owned/tests/test-rpm-assembly.sh
+
       - name: Create Isolated Packaging Workspace
         id: package_workspace
         shell: bash
@@ -308,6 +328,10 @@ jobs:
           EXACT_SOURCE_ROOT="${PACKAGE_WORKSPACE}/source-exact"
           EXACT_SOURCE_ARCHIVE="${PACKAGE_WORKSPACE}/source-exact.tar"
           PACKAGE_ASSETS="${PACKAGE_WORKSPACE}/assets"
+          RHEL_PROFILE_STAGING="${PACKAGE_WORKSPACE}/staging-rhel-package-owned"
+          RHEL_PROFILE_SOURCE="${PACKAGE_WORKSPACE}/rhel-package-owned-source"
+          RHEL_PROFILE_ASSETS="${PACKAGE_WORKSPACE}/assets-rhel-package-owned"
+          RHEL_PROFILE_RPM_SCRIPTS="${PACKAGE_WORKSPACE}/rhel-package-owned-rpm-scripts"
           PACKAGE_SCRIPTS="${PACKAGE_WORKSPACE}/scripts"
           PACKAGE_RPM_SCRIPTS="${PACKAGE_WORKSPACE}/rpm-scripts"
           PACKAGE_CONFIGS="${PACKAGE_WORKSPACE}/configs"
@@ -318,11 +342,14 @@ jobs:
           install -d -m 0755 \
             "${STAGING_AMD64}" \
             "${STAGING_APK_AMD64}" \
+            "${RHEL_PROFILE_STAGING}" \
             "${EXACT_SOURCE_ROOT}" \
-            "${PACKAGE_ASSETS}"
+            "${PACKAGE_ASSETS}" \
+            "${RHEL_PROFILE_ASSETS}"
           install -d -m 0700 \
             "${PACKAGE_SCRIPTS}" \
             "${PACKAGE_RPM_SCRIPTS}" \
+            "${RHEL_PROFILE_RPM_SCRIPTS}" \
             "${PACKAGE_CONFIGS}" \
             "${GO_BUILD_CACHE}" \
             "${GO_PATH}" \
@@ -375,6 +402,10 @@ jobs:
             printf 'STAGING_APK_AMD64=%s\n' "${STAGING_APK_AMD64}"
             printf 'EXACT_SOURCE_ROOT=%s\n' "${EXACT_SOURCE_ROOT}"
             printf 'PACKAGE_ASSETS=%s\n' "${PACKAGE_ASSETS}"
+            printf 'RHEL_PROFILE_STAGING=%s\n' "${RHEL_PROFILE_STAGING}"
+            printf 'RHEL_PROFILE_SOURCE=%s\n' "${RHEL_PROFILE_SOURCE}"
+            printf 'RHEL_PROFILE_ASSETS=%s\n' "${RHEL_PROFILE_ASSETS}"
+            printf 'RHEL_PROFILE_RPM_SCRIPTS=%s\n' "${RHEL_PROFILE_RPM_SCRIPTS}"
             printf 'PACKAGE_SCRIPTS=%s\n' "${PACKAGE_SCRIPTS}"
             printf 'PACKAGE_RPM_SCRIPTS=%s\n' "${PACKAGE_RPM_SCRIPTS}"
             printf 'PACKAGE_CONFIGS=%s\n' "${PACKAGE_CONFIGS}"
@@ -384,6 +415,7 @@ jobs:
             printf 'GOTMPDIR=%s\n' "${GO_BUILD_TMP}"
           } >> "${GITHUB_ENV}"
           printf 'assets=%s\n' "${PACKAGE_ASSETS}" >> "${GITHUB_OUTPUT}"
+          printf 'rhel_profile_assets=%s\n' "${RHEL_PROFILE_ASSETS}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare Staging Environment (AMD64)
         run: |
@@ -423,6 +455,58 @@ jobs:
           install -m 0644 \
             "${EXACT_SOURCE_ROOT}/src/init/systemd/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf" \
             "${STAGING_AMD64}/usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf"
+
+      - name: Stage Opt-in RHEL Package-owned RPM Payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -a "${STAGING_AMD64}/." "${RHEL_PROFILE_STAGING}/"
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            "${EXACT_SOURCE_ROOT}/extensions/rhel-package-owned/stage.py" \
+            --enable-rhel-package-owned-profile \
+            --shared-base-payload "${RHEL_PROFILE_STAGING}" \
+            --output "${RHEL_PROFILE_SOURCE}"
+          for relative in \
+            usr/lib/systemd/system/syswarden-core.service \
+            usr/lib/systemd/system/syswarden-firewall.service \
+            usr/lib/systemd/system-preset/90-syswarden-rhel-image.preset \
+            usr/share/doc/syswarden/rhel-package-owned-profile.json; do
+            if [[ -e "${RHEL_PROFILE_STAGING}/${relative}" || \
+                  -L "${RHEL_PROFILE_STAGING}/${relative}" ]]; then
+              echo "ERROR: RHEL package-owned payload collision: ${relative}" >&2
+              exit 1
+            fi
+          done
+          cp -a "${RHEL_PROFILE_SOURCE}/payload/." "${RHEL_PROFILE_STAGING}/"
+          shared="usr/lib/systemd/system/syswarden-firewall.service.d/10-syswarden-wireguard-ordering.conf"
+          cmp -s \
+            "${STAGING_AMD64}/${shared}" \
+            "${RHEL_PROFILE_STAGING}/${shared}"
+          [[ "$(stat -c '%a:%u:%g' "${STAGING_AMD64}/${shared}")" == \
+              "$(stat -c '%a:%u:%g' "${RHEL_PROFILE_STAGING}/${shared}")" ]]
+          prepare_profile_rpm_scriptlet() {
+            local source="$1"
+            local destination="$2"
+            [[ -f "${source}" && ! -L "${source}" ]]
+            LC_ALL=C sed 's/%/%%/g' -- "${source}" > "${destination}"
+            chmod 0700 "${destination}"
+            [[ -f "${destination}" && ! -L "${destination}" ]]
+            cmp -s \
+              <(LC_ALL=C sed 's/%%/%/g' -- "${destination}") \
+              "${source}"
+          }
+          prepare_profile_rpm_scriptlet \
+            "${RHEL_PROFILE_SOURCE}/rpm-scriptlets/pre-install.sh" \
+            "${RHEL_PROFILE_RPM_SCRIPTS}/pre-install.sh"
+          prepare_profile_rpm_scriptlet \
+            "${RHEL_PROFILE_SOURCE}/rpm-scriptlets/post-install.sh" \
+            "${RHEL_PROFILE_RPM_SCRIPTS}/post-install.sh"
+          prepare_profile_rpm_scriptlet \
+            "${RHEL_PROFILE_SOURCE}/rpm-scriptlets/pre-uninstall.sh" \
+            "${RHEL_PROFILE_RPM_SCRIPTS}/pre-uninstall.sh"
+          prepare_profile_rpm_scriptlet \
+            "${RHEL_PROFILE_SOURCE}/rpm-scriptlets/post-uninstall.sh" \
+            "${RHEL_PROFILE_RPM_SCRIPTS}/post-uninstall.sh"
 
       - name: Build and Stage Static Alpine Binaries
         shell: bash
@@ -671,6 +755,15 @@ jobs:
           syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
           syswarden_preflight_systemd_ordering_dropin
+          if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
+              if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+                 [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+                  printf '%s\n' 'Offline qualification requires an installation state without deferred removal barriers.' >&2
+                  exit 1
+              fi
+              printf '%s\n' 'SysWarden offline qualification staging: pre-install host mutation deferred.'
+              exit 0
+          fi
           secure_private_directory() {
               path="$1"
               if [ -L "${path}" ] || { [ -e "${path}" ] && [ ! -d "${path}" ]; }; then
@@ -729,6 +822,15 @@ jobs:
           export SYSWARDEN_PKG_INSTALL=1
           syswarden_preflight_alpine_cronie
           syswarden_preflight_install_barriers
+          if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then
+              if [ "${syswarden_deferred_present:-0}" -ne 0 ] || \
+                 [ "${syswarden_finalizing_present:-0}" -ne 0 ]; then
+                  printf '%s\n' 'Offline qualification requires an installation state without deferred removal barriers.' >&2
+                  exit 1
+              fi
+              printf '%s\n' 'SysWarden offline qualification staging: post-install host mutation deferred.'
+              exit 0
+          fi
           ln -sf /opt/syswarden/bin/syswarden-cli /usr/local/bin/syswarden
           ln -sf /opt/syswarden/bin/syswarden-tui /usr/local/bin/syswarden-tui
 
@@ -1000,6 +1102,7 @@ jobs:
           set -euo pipefail
           prepare_rpm_changelog() {
             local destination="$1"
+            local package_release="$2"
             local changelog_date
             local changelog_day
             changelog_day="$(date --utc --date="@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d')" || return 1
@@ -1008,8 +1111,8 @@ jobs:
             case "${RPM_CHANGELOG_EPOCH}" in
               ''|0|*[!0-9]*) return 1 ;;
             esac
-            printf '* %s SysWarden Engineering - %s-1\n- Package created with FPM\n' \
-              "${changelog_date}" "${VERSION}" > "${destination}"
+            printf '* %s SysWarden Engineering - %s-%s\n- Package created with FPM\n' \
+              "${changelog_date}" "${VERSION}" "${package_release}" > "${destination}"
             chmod 0600 "${destination}"
           }
           normalize_package_mtimes() {
@@ -1024,15 +1127,22 @@ jobs:
             done
           }
           RPM_CHANGELOG="${PACKAGE_CONFIGS}/rpm-changelog"
-          prepare_rpm_changelog "${RPM_CHANGELOG}"
+          RHEL_PROFILE_RPM_CHANGELOG="${PACKAGE_CONFIGS}/rpm-changelog-rhelpo"
+          prepare_rpm_changelog "${RPM_CHANGELOG}" 1
+          prepare_rpm_changelog "${RHEL_PROFILE_RPM_CHANGELOG}" 1.rhelpo
           normalize_package_mtimes \
             "${STAGING_AMD64}" \
             "${STAGING_APK_AMD64}" \
+            "${RHEL_PROFILE_STAGING}" \
+            "${RHEL_PROFILE_SOURCE}" \
+            "${RHEL_PROFILE_RPM_SCRIPTS}" \
             "${PACKAGE_SCRIPTS}" \
             "${PACKAGE_RPM_SCRIPTS}" \
-            "${RPM_CHANGELOG}"
+            "${RPM_CHANGELOG}" \
+            "${RHEL_PROFILE_RPM_CHANGELOG}"
           echo "RPM_CHANGELOG=${RPM_CHANGELOG}" >> "${GITHUB_ENV}"
           echo "RPM_CHANGELOG_EPOCH=${RPM_CHANGELOG_EPOCH}" >> "${GITHUB_ENV}"
+          echo "RHEL_PROFILE_RPM_CHANGELOG=${RHEL_PROFILE_RPM_CHANGELOG}" >> "${GITHUB_ENV}"
 
       - name: Build Debian Package (.deb)
         run: |
@@ -1086,6 +1196,55 @@ jobs:
             --after-remove "${PACKAGE_RPM_SCRIPTS}/postrm.sh" \
             --directories /usr/share/doc/syswarden \
             -C "${STAGING_AMD64}" .
+
+      - name: Build Opt-in RHEL Package-owned Variant (.rpm)
+        shell: bash
+        run: |
+          set -euo pipefail
+          fpm -s dir -t rpm \
+            -n syswarden \
+            -v "${VERSION}" \
+            --iteration 1.rhelpo \
+            -p "${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm" \
+            --vendor "SysWarden Security" \
+            --maintainer "SysWarden Engineering" \
+            --description "SysWarden package-owned runtime profile for RHEL images" \
+            --url "https://github.com/${{ github.repository }}" \
+            --license "GPL-3.0-or-later" \
+            --architecture x86_64 \
+            --source-date-epoch-default "${SOURCE_DATE_EPOCH}" \
+            --rpm-changelog "${RHEL_PROFILE_RPM_CHANGELOG}" \
+            --rpm-digest sha256 \
+            --rpm-rpmbuild-define "_binary_filedigest_algorithm 8" \
+            --rpm-rpmbuild-define "_source_filedigest_algorithm 8" \
+            --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1" \
+            --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1" \
+            --rpm-rpmbuild-define "_buildhost syswarden-build.invalid" \
+            -d "nftables" -d "systemd" -d "ipset" -d "curl" -d "wget" -d "rsyslog" -d "cronie" -d "bash-completion" \
+            -d "wireguard-tools" -d "jq" -d "checkpolicy" -d "policycoreutils-python-utils" \
+            -d "dnf-automatic" -d "procps-ng" -d "e2fsprogs" \
+            --before-install "${RHEL_PROFILE_RPM_SCRIPTS}/pre-install.sh" \
+            --after-install "${RHEL_PROFILE_RPM_SCRIPTS}/post-install.sh" \
+            --before-remove "${RHEL_PROFILE_RPM_SCRIPTS}/pre-uninstall.sh" \
+            --after-remove "${RHEL_PROFILE_RPM_SCRIPTS}/post-uninstall.sh" \
+            --directories /etc/syswarden \
+            --directories /etc/syswarden/config \
+            --directories /etc/syswarden/config/modules \
+            --directories /etc/syswarden/lists \
+            --directories /etc/syswarden/tls \
+            --directories /var/lib/syswarden \
+            --directories /var/lib/syswarden/ui \
+            --directories /var/log/syswarden \
+            --rpm-attr "0750,root,root:/etc/syswarden" \
+            --rpm-attr "0750,root,root:/etc/syswarden/config" \
+            --rpm-attr "0750,root,root:/etc/syswarden/config/modules" \
+            --rpm-attr "0750,root,root:/etc/syswarden/lists" \
+            --rpm-attr "0750,root,root:/etc/syswarden/tls" \
+            --rpm-attr "0750,root,root:/var/lib/syswarden" \
+            --rpm-attr "0750,root,root:/var/lib/syswarden/ui" \
+            --rpm-attr "0750,root,root:/var/log/syswarden" \
+            --directories /usr/share/doc/syswarden \
+            -C "${RHEL_PROFILE_STAGING}" .
 
       - name: Build Alpine Package (.apk)
         run: |
@@ -1281,6 +1440,40 @@ jobs:
           validate_rpm "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" x86_64
           validate_apk "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" x86_64
 
+      - name: Validate Opt-in RHEL Package-owned Variant
+        shell: bash
+        run: |
+          set -euo pipefail
+          standard="${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm"
+          profile="${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm"
+          [[ "$(rpm --query --package --queryformat '%{NAME}' "${standard}")" == syswarden ]]
+          [[ "$(rpm --query --package --queryformat '%{RELEASE}' "${standard}")" == 1 ]]
+          [[ "$(rpm --query --package --queryformat '%{NAME}' "${profile}")" == syswarden ]]
+          [[ "$(rpm --query --package --queryformat '%{VERSION}' "${profile}")" == "${VERSION}" ]]
+          [[ "$(rpm --query --package --queryformat '%{RELEASE}' "${profile}")" == 1.rhelpo ]]
+          if cmp -s "${standard}" "${profile}"; then
+            echo "ERROR: standard and package-owned RPM variants are byte-identical." >&2
+            exit 1
+          fi
+          profile_sha256="$(sha256sum "${profile}" | awk 'NF == 2 { print $1 }')"
+          [[ "${profile_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            "${EXACT_SOURCE_ROOT}/extensions/rhel-package-owned/verify-rpm.py" \
+            --rpm "${profile}" \
+            --sha256 "${profile_sha256}"
+
+      - name: Generate Opt-in RHEL Package-owned Checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="syswarden-${VERSION}-1.rhelpo.x86_64.rpm"
+          (
+            cd "${RHEL_PROFILE_ASSETS}"
+            test -s "${name}"
+            sha256sum "${name}" > SHA256SUMS.txt
+            sha256sum --check --strict SHA256SUMS.txt
+          )
+
       - name: Generate Checksums
         shell: bash
         run: |
@@ -1342,6 +1535,7 @@ jobs:
             "${PAYLOAD_ATTEST_ROOT}" \
             "${PAYLOAD_ATTEST_ROOT}/deb/opt/syswarden/bin" \
             "${PAYLOAD_ATTEST_ROOT}/rpm/opt/syswarden/bin" \
+            "${PAYLOAD_ATTEST_ROOT}/rpm-rhel-package-owned/opt/syswarden/bin" \
             "${PAYLOAD_ATTEST_ROOT}/apk/opt/syswarden/bin"
 
           extract_exact_member() {
@@ -1366,7 +1560,7 @@ jobs:
                   tar --extract --to-stdout --file=- "${archive_member}" > \
                     "${temporary}"
                 ;;
-              rpm)
+              rpm|rpm-rhel-package-owned)
                 archive_member="./${relative}"
                 count="$(
                   rpm2cpio "${package}" |
@@ -1409,6 +1603,8 @@ jobs:
               "${PACKAGE_ASSETS}/syswarden_${VERSION}_amd64.deb" "${relative}"
             extract_exact_member rpm \
               "${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" "${relative}"
+            extract_exact_member rpm-rhel-package-owned \
+              "${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm" "${relative}"
             extract_exact_member apk \
               "${PACKAGE_ASSETS}/syswarden_${VERSION}_x86_64.apk" "${relative}"
           done
@@ -1437,6 +1633,17 @@ jobs:
             "${VALIDATED_AMD64_DIGEST_CONTRACT}"
           PYTHONDONTWRITEBYTECODE=1 python3 \
             "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
+            --root "${PAYLOAD_ATTEST_ROOT}/rpm-rhel-package-owned" \
+            --mode pie \
+            --revision "${SOURCE_COMMIT_SHA}" \
+            --vcs-time "${SOURCE_VCS_TIME}" \
+            --signatures-source \
+            "${EXACT_SOURCE_ROOT}/src/core/syswarden-core/signatures.json" \
+            --reference-root "${RHEL_PROFILE_STAGING}" \
+            --expected-digest-contract \
+            "${VALIDATED_AMD64_DIGEST_CONTRACT}"
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            "${EXACT_SOURCE_ROOT}/scripts/ci/package_binary_provenance_gate.py" \
             --root "${PAYLOAD_ATTEST_ROOT}/apk" \
             --mode static \
             --revision "${SOURCE_COMMIT_SHA}" \
@@ -1450,7 +1657,12 @@ jobs:
             cd "${PACKAGE_ASSETS}"
             sha256sum --check --strict SHA256SUMS.txt
           )
+          (
+            cd "${RHEL_PROFILE_ASSETS}"
+            sha256sum --check --strict SHA256SUMS.txt
+          )
           find "${PACKAGE_ASSETS}" -maxdepth 1 -type f -exec chmod 0444 -- {} +
+          find "${RHEL_PROFILE_ASSETS}" -maxdepth 1 -type f -exec chmod 0444 -- {} +
 
       - name: Prove Packaging Did Not Mutate Source
         if: always()
@@ -1475,6 +1687,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload Opt-in RHEL Package-owned Artifact
+        if: ${{ !github.event.act }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: syswarden-rhel-package-owned-${{ env.VERSION }}
+          path: ${{ steps.package_workspace.outputs.rhel_profile_assets }}
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload Package Artifacts with Act-compatible protocol
         if: ${{ github.event.act }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -1483,6 +1704,17 @@ jobs:
         with:
           name: syswarden-packages-${{ env.VERSION }}
           path: ${{ steps.package_workspace.outputs.assets }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Opt-in RHEL Package-owned Artifact with Act-compatible protocol
+        if: ${{ github.event.act }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        env:
+          ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'
+        with:
+          name: syswarden-rhel-package-owned-${{ env.VERSION }}
+          path: ${{ steps.package_workspace.outputs.rhel_profile_assets }}
           if-no-files-found: error
           retention-days: 30
 

@@ -13,8 +13,48 @@ import (
 	"reflect"
 	"strings"
 	"syscall"
+	"syswarden-cli/pkg/network"
 	"testing"
 )
+
+func TestPopulateSetRequiresAttestedReaderForThreatFeeds_SW_FEED_010(t *testing.T) {
+	previous := readAttestedNFTFeed
+	defer func() { readAttestedNFTFeed = previous }()
+	calls := 0
+	readAttestedNFTFeed = func(path string) ([]byte, network.FeedProvenanceStatus, error) {
+		calls++
+		if path != "/etc/syswarden/lists/syswarden_threatintel.ipv4" {
+			t.Fatalf("attested path = %q", path)
+		}
+		return []byte("8.8.8.8/32\n"), network.FeedProvenanceStatus{State: "current"}, nil
+	}
+	population, err := populateSet(
+		context.Background(),
+		[]nftListSource{{
+			path:     "/etc/syswarden/lists/syswarden_threatintel.ipv4",
+			attested: true,
+		}},
+		"syswarden_blacklist",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || !reflect.DeepEqual(population.entries, []string{"8.8.8.8/32"}) {
+		t.Fatalf("attested reader calls=%d entries=%#v", calls, population.entries)
+	}
+
+	rejected := errors.New("missing matching provenance")
+	readAttestedNFTFeed = func(string) ([]byte, network.FeedProvenanceStatus, error) {
+		return nil, network.FeedProvenanceStatus{}, rejected
+	}
+	if _, err := populateSet(
+		context.Background(),
+		[]nftListSource{{path: "/etc/syswarden/lists/syswarden_threatintel.ipv4", attested: true}},
+		"syswarden_blacklist",
+	); !errors.Is(err, rejected) {
+		t.Fatalf("unattested source error = %v", err)
+	}
+}
 
 func TestPopulateSetListGrammarContract_SW_LIST_001(t *testing.T) {
 	root := t.TempDir()

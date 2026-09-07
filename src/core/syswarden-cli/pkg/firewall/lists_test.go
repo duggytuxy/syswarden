@@ -512,3 +512,253 @@ func TestListFileAtomicRewritePreservesOwnerAndHardensMode(t *testing.T) {
 		t.Fatalf("rewritten list mode = %04o, want 0600", after.Mode().Perm())
 	}
 }
+
+func TestPersistentBlocklistPairInitializationCoversFreshAndSingleFamilyStates_SW_GRC_025(t *testing.T) {
+	t.Parallel()
+	for _, fixture := range []struct {
+		name    string
+		initial map[string]string
+	}{
+		{name: "fresh install", initial: map[string]string{}},
+		{name: "IPv4 only", initial: map[string]string{"syswarden_blacklist.ipv4": "192.0.2.10\n"}},
+		{name: "IPv6 only", initial: map[string]string{"syswarden_blacklist.ipv6": "2001:db8::10\n"}},
+	} {
+		fixture := fixture
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Parallel()
+			directory := t.TempDir()
+			targets := persistentBlocklistTargetsForTest(directory)
+			initialIdentity := make(map[string]os.FileInfo, len(fixture.initial))
+			for name, content := range fixture.initial {
+				path := filepath.Join(directory, name)
+				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+				info, err := os.Lstat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				initialIdentity[name] = info
+			}
+
+			if err := ensurePersistentBlocklistPairAt(targets, nil); err != nil {
+				t.Fatal(err)
+			}
+			for _, target := range targets {
+				content, err := os.ReadFile(filepath.Join(directory, target.name)) // #nosec G304 -- directory is created by t.TempDir and target names are fixed product constants
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := fixture.initial[target.name]; string(content) != want {
+					t.Fatalf("%s content = %q, want %q", target.name, content, want)
+				}
+				info, err := os.Lstat(filepath.Join(directory, target.name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				stat, ok := info.Sys().(*syscall.Stat_t)
+				if !ok || !info.Mode().IsRegular() || info.Mode() != 0600 || stat.Nlink != 1 ||
+					int64(stat.Uid) != int64(os.Geteuid()) || int64(stat.Gid) != int64(os.Getegid()) {
+					t.Fatalf("%s identity is unsafe: mode=%v stat=%#v", target.name, info.Mode(), stat)
+				}
+				if before := initialIdentity[target.name]; before != nil && !os.SameFile(before, info) {
+					t.Fatalf("existing %s was replaced during pair initialization", target.name)
+				}
+			}
+			markerPath := filepath.Join(directory, persistentBlocklistPairMarkerName)
+			marker, err := os.ReadFile(markerPath) // #nosec G304 -- markerPath is a fixed product filename beneath t.TempDir
+			if err != nil || string(marker) != persistentBlocklistPairMarkerBytes {
+				t.Fatalf("pair marker = %q, err=%v", marker, err)
+			}
+			markerInfo, err := os.Lstat(markerPath)
+			if err != nil || !markerInfo.Mode().IsRegular() || markerInfo.Mode() != 0600 {
+				t.Fatalf("pair marker identity is unsafe: info=%#v err=%v", markerInfo, err)
+			}
+		})
+	}
+}
+
+func TestPersistentBlocklistPairInitializationSerializesConcurrentInstallers_SW_GRC_026(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	targets := persistentBlocklistTargetsForTest(directory)
+	const workers = 16
+	errorsSeen := make(chan error, workers)
+	var group sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			errorsSeen <- ensurePersistentBlocklistPairAt(targets, nil)
+		}()
+	}
+	group.Wait()
+	close(errorsSeen)
+	for err := range errorsSeen {
+		if err != nil {
+			t.Fatalf("concurrent initialization failed: %v", err)
+		}
+	}
+	for _, target := range targets {
+		content, err := os.ReadFile(filepath.Join(directory, target.name)) // #nosec G304 -- directory is created by t.TempDir and target names are fixed product constants
+		if err != nil || len(content) != 0 {
+			t.Fatalf("%s after concurrent initialization: content=%q err=%v", target.name, content, err)
+		}
+	}
+	marker, err := os.ReadFile(filepath.Join(directory, persistentBlocklistPairMarkerName)) // #nosec G304 -- the marker is a fixed product filename beneath t.TempDir
+	if err != nil || string(marker) != persistentBlocklistPairMarkerBytes {
+		t.Fatalf("pair marker after concurrent initialization = %q, err=%v", marker, err)
+	}
+}
+
+func TestPersistentBlocklistPairInitializationRejectsUnsafeIdentityAndCreateRace_SW_GRC_027(t *testing.T) {
+	t.Parallel()
+	t.Run("unsafe existing mode", func(t *testing.T) {
+		directory := t.TempDir()
+		targets := persistentBlocklistTargetsForTest(directory)
+		path := filepath.Join(directory, targets[0].name)
+		if err := os.WriteFile(path, []byte("192.0.2.10\n"), 0644); err != nil { // #nosec G306 -- this adversarial fixture deliberately uses an unsafe mode
+			t.Fatal(err)
+		}
+		if err := ensurePersistentBlocklistPairAt(targets, nil); err == nil || !strings.Contains(err.Error(), "regular 0600 file") {
+			t.Fatalf("unsafe existing mode error = %v", err)
+		}
+		content, err := os.ReadFile(path) // #nosec G304 -- path is a fixed product filename beneath t.TempDir
+		if err != nil || string(content) != "192.0.2.10\n" {
+			t.Fatalf("unsafe existing file was changed: content=%q err=%v", content, err)
+		}
+	})
+
+	t.Run("target appears before exclusive create", func(t *testing.T) {
+		directory := t.TempDir()
+		targets := persistentBlocklistTargetsForTest(directory)
+		collidingPath := filepath.Join(directory, targets[0].name)
+		hookCalls := 0
+		err := ensurePersistentBlocklistPairAt(targets, func(target approvedListFile) error {
+			hookCalls++
+			if hookCalls == 1 {
+				return os.WriteFile(collidingPath, []byte("operator-race\n"), 0600)
+			}
+			return nil
+		})
+		if err == nil || (!strings.Contains(err.Error(), "create persistent blocklist file") &&
+			!strings.Contains(err.Error(), "appeared during initialization")) {
+			t.Fatalf("create race error = %v", err)
+		}
+		content, readErr := os.ReadFile(collidingPath) // #nosec G304 -- collidingPath is a fixed product filename beneath t.TempDir
+		if readErr != nil || string(content) != "operator-race\n" {
+			t.Fatalf("create race target was overwritten: content=%q err=%v", content, readErr)
+		}
+	})
+
+	t.Run("unsafe directory mode", func(t *testing.T) {
+		directory := t.TempDir()
+		if err := os.Chmod(directory, 0770); err != nil { // #nosec G302 -- this adversarial fixture deliberately creates a group-writable directory
+			t.Fatal(err)
+		}
+		if err := ensurePersistentBlocklistPairAt(persistentBlocklistTargetsForTest(directory), nil); err == nil ||
+			!strings.Contains(err.Error(), "without group or world write access") {
+			t.Fatalf("unsafe directory mode error = %v", err)
+		}
+	})
+
+	t.Run("oversized evidence", func(t *testing.T) {
+		directory := t.TempDir()
+		path := filepath.Join(directory, persistentBlocklistIPv4Name)
+		if err := os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Truncate(path, maximumPersistentBlocklistEvidenceBytes+1); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensurePersistentBlocklistPairAt(persistentBlocklistTargetsForTest(directory), nil); err == nil {
+			t.Fatal("oversized persistent blocklist evidence was accepted")
+		}
+	})
+
+	t.Run("post-initialization absence remains visible", func(t *testing.T) {
+		directory := t.TempDir()
+		targets := persistentBlocklistTargetsForTest(directory)
+		if err := ensurePersistentBlocklistPairAt(targets, nil); err != nil {
+			t.Fatal(err)
+		}
+		missingPath := filepath.Join(directory, persistentBlocklistIPv6Name)
+		if err := os.Remove(missingPath); err != nil {
+			t.Fatal(err)
+		}
+		err := ensurePersistentBlocklistPairAt(targets, nil)
+		if err == nil || !strings.Contains(err.Error(), "unexpectedly missing after pair initialization") {
+			t.Fatalf("unexpected post-initialization absence error = %v", err)
+		}
+		if _, err := os.Lstat(missingPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("unexpected absence was masked: %v", err)
+		}
+	})
+
+	t.Run("invalid pair marker remains visible", func(t *testing.T) {
+		directory := t.TempDir()
+		targets := persistentBlocklistTargetsForTest(directory)
+		if err := ensurePersistentBlocklistPairAt(targets, nil); err != nil {
+			t.Fatal(err)
+		}
+		markerPath := filepath.Join(directory, persistentBlocklistPairMarkerName)
+		if err := os.WriteFile(markerPath, []byte("invalid\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensurePersistentBlocklistPairAt(targets, nil); err == nil ||
+			!strings.Contains(err.Error(), "marker content is invalid") {
+			t.Fatalf("invalid pair marker error = %v", err)
+		}
+		marker, err := os.ReadFile(markerPath) // #nosec G304 -- markerPath is a fixed product filename beneath t.TempDir
+		if err != nil || string(marker) != "invalid\n" {
+			t.Fatalf("invalid marker was masked: marker=%q err=%v", marker, err)
+		}
+	})
+
+	for _, fixture := range []struct {
+		name    string
+		prepare func(*testing.T, string, string)
+	}{
+		{
+			name: "symbolic link",
+			prepare: func(t *testing.T, directory, path string) {
+				target := filepath.Join(directory, "operator-target")
+				if err := os.WriteFile(target, []byte("operator\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "hard link",
+			prepare: func(t *testing.T, directory, path string) {
+				target := filepath.Join(directory, "operator-target")
+				if err := os.WriteFile(target, []byte("operator\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(target, path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		fixture := fixture
+		t.Run(fixture.name, func(t *testing.T) {
+			directory := t.TempDir()
+			path := filepath.Join(directory, persistentBlocklistIPv4Name)
+			fixture.prepare(t, directory, path)
+			if err := ensurePersistentBlocklistPairAt(persistentBlocklistTargetsForTest(directory), nil); err == nil {
+				t.Fatal("unsafe persistent blocklist identity was accepted")
+			}
+		})
+	}
+}
+
+func persistentBlocklistTargetsForTest(directory string) []approvedListFile {
+	return []approvedListFile{
+		{directory: directory, name: persistentBlocklistIPv4Name},
+		{directory: directory, name: persistentBlocklistIPv6Name},
+	}
+}

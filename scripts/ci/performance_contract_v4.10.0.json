@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "contract_id": "syswarden-performance/v1",
+  "target_release": "v4.10.0",
+  "baseline_release": "v4.04.3",
+  "baseline_commit": "381c1f8d91459a9b20605629c725900abd81dee8",
+  "minimum_campaigns": 3,
+  "stable_regression_percent": 10.0,
+  "metrics": {
+    "idle_cpu_percent": {"unit": "percent", "direction": "lower", "minimum_samples": 30},
+    "loaded_cpu_percent": {"unit": "percent", "direction": "lower", "minimum_samples": 30},
+    "rss_bytes": {"unit": "bytes", "direction": "lower", "minimum_samples": 30},
+    "startup_milliseconds": {"unit": "milliseconds", "direction": "lower", "minimum_samples": 30},
+    "install_milliseconds": {"unit": "milliseconds", "direction": "lower", "minimum_samples": 3},
+    "event_to_rule_milliseconds": {"unit": "milliseconds", "direction": "lower", "minimum_samples": 30},
+    "waap_events_per_second": {"unit": "events_per_second", "direction": "higher", "minimum_samples": 30},
+    "nft_transaction_milliseconds": {"unit": "milliseconds", "direction": "lower", "minimum_samples": 30},
+    "disk_io_bytes_per_event": {"unit": "bytes", "direction": "lower", "minimum_samples": 30},
+    "binary_bytes": {"unit": "bytes", "direction": "lower", "minimum_samples": 3},
+    "package_bytes": {"unit": "bytes", "direction": "lower", "minimum_samples": 3}
+  }
+}

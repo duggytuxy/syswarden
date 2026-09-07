@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestSecureWAAPLogFollowerRejectsDiscoverySwapAndSpecialFiles_SW_CFG_002(t *testing.T) {
@@ -250,6 +252,108 @@ func TestSecureWAAPLogFollowerHandlesCopyTruncate_SW_CFG_002(t *testing.T) {
 		t.Fatal(err)
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+}
+
+func TestSecureWAAPLogFollowerCompletesDelayedPartialWrite_SW_HIDS_001(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "access.log")
+	if err := os.WriteFile(logPath, []byte("delayed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	follower, err := newSecureWAAPLogFollower(logPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower.pollInterval = 5 * time.Millisecond
+	defer func() { _ = follower.Close() }()
+
+	result := make(chan string, 1)
+	errs := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() {
+		line, nextErr := follower.Next(ctx)
+		if nextErr != nil {
+			errs <- nextErr
+			return
+		}
+		result <- line
+	}()
+	time.Sleep(30 * time.Millisecond)
+	appendWAAPTestLine(t, logPath, "-write\n")
+	select {
+	case line := <-result:
+		if line != "delayed-write" {
+			t.Fatalf("delayed line = %q", line)
+		}
+	case err := <-errs:
+		t.Fatal(err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
+func TestSecureWAAPLogFollowerDrainsDelayedRotatedWriteBeforeReplacement_SW_HIDS_001(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	logPath := filepath.Join(root, "access.log")
+	rotatedPath := logPath + ".1"
+	if err := os.WriteFile(logPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	follower, err := newSecureWAAPLogFollower(logPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower.pollInterval = 5 * time.Millisecond
+	defer func() { _ = follower.Close() }()
+	if err := os.Rename(logPath, rotatedPath); err != nil {
+		t.Fatal(err)
+	}
+	appendWAAPTestLine(t, rotatedPath, "late-old-file\n")
+	if err := os.WriteFile(logPath, []byte("new-file\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextWAAPTestLine(t, follower); got != "late-old-file" {
+		t.Fatalf("delayed rotated line = %q", got)
+	}
+	if got := nextWAAPTestLine(t, follower); got != "new-file" {
+		t.Fatalf("replacement line = %q", got)
+	}
+}
+
+func TestSecureWAAPLogFollowerRejectsUnsafeModeOwnerAndRuntimeDrift_SW_HIDS_001(t *testing.T) {
+	t.Parallel()
+
+	identity := unix.Stat_t{Uid: uint32(os.Geteuid()), Mode: unix.S_IFREG | 0600} // #nosec G115 -- the kernel UID field is uint32 and this test uses the current process identity
+	if err := validateWAAPLogSecurity(identity, int64(identity.Uid)+1); err == nil || !strings.Contains(err.Error(), "owner UID") {
+		t.Fatalf("owner mismatch error = %v", err)
+	}
+	identity.Mode = unix.S_IFREG | 0620
+	if err := validateWAAPLogSecurity(identity, int64(identity.Uid)); err == nil || !strings.Contains(err.Error(), "write bits") {
+		t.Fatalf("unsafe mode error = %v", err)
+	}
+
+	logPath := filepath.Join(t.TempDir(), "access.log")
+	if err := os.WriteFile(logPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	follower, err := newSecureWAAPLogFollower(logPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	follower.pollInterval = 5 * time.Millisecond
+	defer func() { _ = follower.Close() }()
+	if err := os.Chmod(logPath, 0620); err != nil { // #nosec G302 -- this adversarial fixture deliberately makes the monitored log group-writable
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := follower.Next(ctx); err == nil || !strings.Contains(err.Error(), "mode drifted") {
+		t.Fatalf("runtime mode drift error = %v", err)
 	}
 }
 

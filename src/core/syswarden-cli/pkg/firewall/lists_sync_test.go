@@ -18,7 +18,10 @@ func TestCompleteBlocklistRemovalStopsBeforeHASyncWhenFirewallApplyFails(t *test
 	err := completeBlocklistRemoval(
 		"198.51.100.7",
 		&output,
-		func() error {
+		func(ip string) error {
+			if ip != "198.51.100.7" {
+				t.Fatalf("firewall removal target = %q", ip)
+			}
 			calls = append(calls, "apply")
 			return applyErr
 		},
@@ -47,7 +50,10 @@ func TestCompleteBlocklistRemovalReportsSuccessOnlyAfterVerificationAndHASync(t 
 	err := completeBlocklistRemoval(
 		"2001:db8::7",
 		&output,
-		func() error {
+		func(ip string) error {
+			if ip != "2001:db8::7" {
+				t.Fatalf("firewall removal target = %q", ip)
+			}
 			if output.Len() != 0 {
 				t.Fatal("success was reported before firewall verification")
 			}

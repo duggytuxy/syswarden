@@ -42,6 +42,7 @@ type secureWAAPLogFollower struct {
 	identity     unix.Stat_t
 	offset       int64
 	pollInterval time.Duration
+	expectedUID  int64
 }
 
 func newSecureWAAPLogFollower(path string, startAtEnd bool) (*secureWAAPLogFollower, error) {
@@ -50,7 +51,8 @@ func newSecureWAAPLogFollower(path string, startAtEnd bool) (*secureWAAPLogFollo
 		return nil, err
 	}
 
-	file, identity, err := openRegularWAAPLogAt(dirFD, name, path)
+	expectedUID := int64(os.Geteuid())
+	file, identity, err := openRegularWAAPLogAt(dirFD, name, path, expectedUID)
 	if err != nil {
 		_ = unix.Close(dirFD)
 		return nil, err
@@ -75,6 +77,7 @@ func newSecureWAAPLogFollower(path string, startAtEnd bool) (*secureWAAPLogFollo
 		identity:     identity,
 		offset:       offset,
 		pollInterval: defaultWAAPLogPollInterval,
+		expectedUID:  expectedUID,
 	}, nil
 }
 
@@ -109,7 +112,7 @@ func openPinnedWAAPLogParent(path string) (int, string, error) {
 	return fd, components[len(components)-1], nil
 }
 
-func openRegularWAAPLogAt(dirFD int, name, path string) (*os.File, unix.Stat_t, error) {
+func openRegularWAAPLogAt(dirFD int, name, path string, expectedUID int64) (*os.File, unix.Stat_t, error) {
 	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, unix.Stat_t{}, fmt.Errorf("open WAAP log %q without following links: %w", path, err)
@@ -127,6 +130,9 @@ func openRegularWAAPLogAt(dirFD int, name, path string) (*os.File, unix.Stat_t, 
 	if opened.Mode&unix.S_IFMT != unix.S_IFREG {
 		return closeOnError(fmt.Errorf("WAAP log %q is not a real regular file", path))
 	}
+	if err := validateWAAPLogSecurity(opened, expectedUID); err != nil {
+		return closeOnError(fmt.Errorf("WAAP log %q has unsafe ownership or mode: %w", path, err))
+	}
 
 	var linked unix.Stat_t
 	if err := unix.Fstatat(dirFD, name, &linked, unix.AT_SYMLINK_NOFOLLOW); err != nil {
@@ -134,6 +140,9 @@ func openRegularWAAPLogAt(dirFD int, name, path string) (*os.File, unix.Stat_t, 
 	}
 	if linked.Mode&unix.S_IFMT != unix.S_IFREG || !sameWAAPLogIdentity(opened, linked) {
 		return closeOnError(fmt.Errorf("WAAP log %q changed while opening", path))
+	}
+	if err := validateWAAPLogSecurity(linked, expectedUID); err != nil {
+		return closeOnError(fmt.Errorf("WAAP log %q ownership or mode changed while opening: %w", path, err))
 	}
 
 	file := os.NewFile(uintptr(fd), path)
@@ -147,6 +156,16 @@ func sameWAAPLogIdentity(left, right unix.Stat_t) bool {
 	return left.Dev == right.Dev && left.Ino == right.Ino
 }
 
+func validateWAAPLogSecurity(identity unix.Stat_t, expectedUID int64) error {
+	if int64(identity.Uid) != expectedUID {
+		return fmt.Errorf("owner UID %d does not match expected UID %d", identity.Uid, expectedUID)
+	}
+	if identity.Mode&0022 != 0 {
+		return fmt.Errorf("group or other write bits are set")
+	}
+	return nil
+}
+
 func (f *secureWAAPLogFollower) Next(ctx context.Context) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -158,6 +177,9 @@ func (f *secureWAAPLogFollower) Next(ctx context.Context) (string, error) {
 		case <-ctx.Done():
 			return "", ctx.Err()
 		default:
+		}
+		if err := f.attestOpenFile(); err != nil {
+			return "", err
 		}
 
 		chunk, readErr := f.reader.ReadSlice('\n')
@@ -206,6 +228,20 @@ func (f *secureWAAPLogFollower) Next(ctx context.Context) (string, error) {
 	}
 }
 
+func (f *secureWAAPLogFollower) attestOpenFile() error {
+	var opened unix.Stat_t
+	if err := unix.Fstat(int(f.file.Fd()), &opened); err != nil {
+		return fmt.Errorf("reinspect opened WAAP log %q: %w", f.path, err)
+	}
+	if opened.Mode&unix.S_IFMT != unix.S_IFREG || !sameWAAPLogIdentity(opened, f.identity) {
+		return fmt.Errorf("opened WAAP log %q identity drifted", f.path)
+	}
+	if err := validateWAAPLogSecurity(opened, f.expectedUID); err != nil {
+		return fmt.Errorf("opened WAAP log %q ownership or mode drifted: %w", f.path, err)
+	}
+	return nil
+}
+
 func (f *secureWAAPLogFollower) refresh() (waapLogRefresh, error) {
 	var linked unix.Stat_t
 	err := unix.Fstatat(f.dirFD, f.name, &linked, unix.AT_SYMLINK_NOFOLLOW)
@@ -217,6 +253,9 @@ func (f *secureWAAPLogFollower) refresh() (waapLogRefresh, error) {
 	}
 	if linked.Mode&unix.S_IFMT != unix.S_IFREG {
 		return waapLogUnchanged, fmt.Errorf("WAAP log %q was replaced by a non-regular file", f.path)
+	}
+	if err := validateWAAPLogSecurity(linked, f.expectedUID); err != nil {
+		return waapLogUnchanged, fmt.Errorf("WAAP log %q ownership or mode drifted: %w", f.path, err)
 	}
 
 	if sameWAAPLogIdentity(f.identity, linked) {
@@ -232,7 +271,7 @@ func (f *secureWAAPLogFollower) refresh() (waapLogRefresh, error) {
 		return waapLogTruncated, nil
 	}
 
-	next, identity, err := openRegularWAAPLogAt(f.dirFD, f.name, f.path)
+	next, identity, err := openRegularWAAPLogAt(f.dirFD, f.name, f.path, f.expectedUID)
 	if errors.Is(err, unix.ENOENT) {
 		return waapLogUnchanged, nil
 	}

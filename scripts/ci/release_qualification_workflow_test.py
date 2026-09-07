@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -66,6 +67,85 @@ def workflow_job(workflow: str, job_name: str) -> str:
     if next_job is not None:
         remainder = remainder[: next_job.start()]
     return marker + remainder
+
+
+def native_identity_filter(workflow: str) -> str:
+    script = workflow_step_script(
+        workflow, "Revalidate Candidate-Bound Native Release Evidence"
+    )
+    prefix = 'attested_native_identities="$(jq -ce \'\n'
+    suffix = (
+        '\n\' "${signing_provenance}")"\n'
+        'attested_standard_packages="$(jq -ce \\'
+    )
+    if script.count(prefix) != 1:
+        raise AssertionError("expected one native identity jq filter")
+    remainder = script.split(prefix, 1)[1]
+    if remainder.count(suffix) != 1:
+        raise AssertionError("expected one native identity jq filter terminator")
+    return textwrap.dedent(remainder.split(suffix, 1)[0])
+
+
+def run_native_identity_filter(
+    jq_filter: str, provenance: dict[str, object]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["jq", "-ce", jq_filter],
+        input=json.dumps(provenance, separators=(",", ":")),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def native_package_filter(workflow: str) -> str:
+    script = workflow_step_script(
+        workflow, "Revalidate Candidate-Bound Native Release Evidence"
+    )
+    block_prefix = 'attested_standard_packages="$(jq -ce \\\n'
+    prefix = "  def exact_package($name):\n"
+    suffix = (
+        '\n\' "${signing_provenance}")"\n'
+        'attested_rhel_package='
+    )
+    if script.count(block_prefix) != 1:
+        raise AssertionError("expected one standard native package jq block")
+    standard_block = script.split(block_prefix, 1)[1]
+    if standard_block.count(prefix) < 1:
+        raise AssertionError("expected one native package jq filter")
+    remainder = standard_block.split(prefix, 1)[1]
+    if remainder.count(suffix) != 1:
+        raise AssertionError("expected one native package jq filter terminator")
+    return "def exact_package($name):\n" + textwrap.dedent(
+        remainder.split(suffix, 1)[0]
+    )
+
+
+def run_native_package_filter(
+    jq_filter: str, provenance: dict[str, object]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "jq",
+            "-ce",
+            "--arg",
+            "rpm_name",
+            "syswarden-4.10.0-1.x86_64.rpm",
+            "--arg",
+            "deb_name",
+            "syswarden_4.10.0_amd64.deb",
+            "--arg",
+            "apk_name",
+            "syswarden_4.10.0_x86_64.apk",
+            jq_filter,
+        ],
+        input=json.dumps(provenance, separators=(",", ":")),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
 
 
 def valid_environment() -> dict[str, object]:
@@ -296,6 +376,61 @@ esac
         )
         output_text = output.read_text(encoding="utf-8") if output.exists() else ""
         return result, output_text
+
+
+def run_native_signing_resolver(
+    script: str,
+    runs: list[dict[str, object]],
+    artifacts: list[dict[str, object]],
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        binary = root / "bin"
+        binary.mkdir()
+        gh = binary / "gh"
+        gh.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"actions/workflows/native-package-signing.yml/runs"*)
+    printf '%s\n' "${TEST_RUNS_JSON:?}"
+    ;;
+  *"/actions/runs/456/artifacts"*)
+    printf '%s\n' "${TEST_ARTIFACTS_JSON:?}"
+    ;;
+  *) exit 64 ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        gh.chmod(0o700)
+        output = root / "output"
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "GITHUB_OUTPUT": str(output),
+                "GITHUB_REPOSITORY": "duggytuxy/syswarden",
+                "PATH": f"{binary}{os.pathsep}{environment['PATH']}",
+                "RELEASE_SHA": "a" * 40,
+                "RELEASE_TAG": "v4.10.0",
+                "TEST_RUNS_JSON": json.dumps(
+                    [{"workflow_runs": runs}], separators=(",", ":")
+                ),
+                "TEST_ARTIFACTS_JSON": json.dumps(
+                    [{"artifacts": artifacts}], separators=(",", ":")
+                ),
+            }
+        )
+        result = subprocess.run(
+            ["/bin/bash", "-c", script],
+            cwd=REPOSITORY,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result, output.read_text(encoding="utf-8") if output.exists() else ""
 
 
 class ReleaseQualificationWorkflowTests(unittest.TestCase):
@@ -705,6 +840,74 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 self.assertIn(contract, script)
         self.assertEqual(self.workflow.count("actions/workflows/package.yml/runs"), 2)
 
+        for step_name, output_reference in (
+            (
+                "Download Exact Candidate Package Artifact",
+                "${{ steps.candidate.outputs.artifact_id }}",
+            ),
+            (
+                "Download Exact Package Main Bytes for Hosted Signing",
+                "${{ steps.hosted_candidate.outputs.artifact_id }}",
+            ),
+        ):
+            step = workflow_step(self.workflow, step_name)
+            self.assertIn(f"artifact-ids: {output_reference}", step)
+            self.assertIn("merge-multiple: true", step)
+            self.assertNotIn("\n          name:", step)
+
+    def test_native_signing_run_and_single_artifact_are_exact(self) -> None:
+        script = workflow_step_script(
+            self.workflow, "Resolve Unique Protected Native Signing Bundle"
+        )
+        release_sha = "a" * 40
+        name = f"syswarden-native-signed-packages-4.10.0-456-1-{release_sha}"
+        run = {
+            "id": 456,
+            "path": ".github/workflows/native-package-signing.yml",
+            "head_sha": release_sha,
+            "head_branch": "main",
+            "event": "workflow_dispatch",
+            "run_attempt": 1,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        artifact = {
+            "id": 789,
+            "name": name,
+            "expired": False,
+            "size_in_bytes": 4096,
+            "digest": "sha256:" + "b" * 64,
+            "workflow_run": {"id": 456, "head_sha": release_sha},
+        }
+        result, output = run_native_signing_resolver(script, [run], [artifact])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run_id=456\n", output)
+        self.assertIn("artifact_id=789\n", output)
+        self.assertIn("artifact_digest=sha256:" + "b" * 64 + "\n", output)
+
+        failed_run = {**run, "id": 455, "conclusion": "failure"}
+        result, output = run_native_signing_resolver(
+            script, [failed_run, run], [artifact]
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run_id=456\n", output)
+
+        cases = (
+            ([run, run], [artifact]),
+            ([{**run, "head_branch": "feature"}], [artifact]),
+            ([{**run, "event": "push"}], [artifact]),
+            ([{**run, "run_attempt": 2}], [artifact]),
+            ([{**run, "conclusion": "failure"}], [artifact]),
+            ([run], [artifact, {**artifact, "id": 790}]),
+            ([run], [{**artifact, "expired": True}]),
+            ([run], [{**artifact, "digest": ""}]),
+            ([run], [{**artifact, "workflow_run": {"id": 456, "head_sha": "c" * 40}}]),
+        )
+        for runs, artifacts in cases:
+            with self.subTest(runs=runs, artifacts=artifacts):
+                failed, _ = run_native_signing_resolver(script, runs, artifacts)
+                self.assertNotEqual(failed.returncode, 0)
+
     def test_unsigned_artifact_is_resolved_by_exact_run_bound_identity(self) -> None:
         script = workflow_step_script(
             self.workflow, "Resolve Exact Unsigned Qualification Artifact"
@@ -881,6 +1084,9 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
                 script.count('"${STATUS_DIR}/package-lab-amd64.rc"'), 2
             )
             self.assertEqual(script.count("scripts/ci/package_lifecycle_lab.py"), 2)
+            self.assertEqual(
+                script.count('--expected-target-release "${RELEASE_TAG}"'), 2
+            )
             self.assertEqual(len(re.findall(r"(?m)^set \+e$", script)), 1)
             self.assertEqual(len(re.findall(r"(?m)^set -e$", script)), 1)
             self.assertEqual(script.count("--pull-policy never"), 1)
@@ -1106,10 +1312,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "--expected-previous-release-id",
         ):
             self.assertEqual(self.workflow.count(argument), 3, argument)
-        matrix_argument = (
-            '--qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/'
-            'package_qualification_matrix.json"'
-        )
+        matrix_argument = '--qualification-matrix "${GITHUB_WORKSPACE}/${QUALIFICATION_MATRIX_PATH}"'
         self.assertEqual(lifecycle.count(matrix_argument), 2)
         self.assertEqual(self.workflow.count(matrix_argument), 5)
         for step_name in (
@@ -1125,7 +1328,7 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
         provenance = workflow_step_script(
             self.workflow, "Record Qualification Provenance Context"
         )
-        self.assertIn("schema_version: 2", provenance)
+        self.assertIn("schema_version: 5", provenance)
         for key in (
             "repository",
             "release_tag",
@@ -1135,6 +1338,15 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "candidate_package_run_id",
             "candidate_package_artifact_id",
             "candidate_package_artifact_name",
+            "candidate_package_artifact_digest",
+            "native_signing_run_id",
+            "native_signing_artifact_id",
+            "native_signing_artifact_name",
+            "native_signing_artifact_digest",
+            "native_evidence_run_id",
+            "native_evidence_artifact_id",
+            "native_evidence_artifact_name",
+            "native_evidence_artifact_digest",
             "previous_release_id",
             "previous_package_asset_ids",
         ):
@@ -1158,7 +1370,384 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             "map({name, id}) | sort_by(.name)",
         ):
             self.assertIn(matrix_binding, self.workflow)
-        self.assertEqual(self.workflow.count(".schema_version == 2"), 1)
+        self.assertEqual(self.workflow.count(".schema_version == 5"), 1)
+
+    def test_native_release_evidence_is_unique_attested_and_revalidated(self) -> None:
+        resolver = workflow_step_script(
+            self.workflow, "Resolve Unique Protected Native Release Evidence"
+        )
+        for contract in (
+            "actions/workflows/native-release-evidence.yml/runs",
+            '.path == ".github/workflows/native-release-evidence.yml"',
+            '.run_attempt == 1',
+            '.conclusion == "success"',
+            "actions/runs/${run_id}/artifacts",
+            "sha256:[0-9a-f]{64}",
+        ):
+            self.assertIn(contract, resolver)
+        download = workflow_step(self.workflow, "Download Exact Native Release Evidence")
+        self.assertIn("artifact-ids: ${{ steps.native_evidence.outputs.artifact_id }}", download)
+        gate = workflow_step_script(
+            self.workflow, "Revalidate Candidate-Bound Native Release Evidence"
+        )
+        for contract in (
+            "ha_v2_native_evidence.py",
+            "native_capability_evidence.py aggregate",
+            "performance_gate.py",
+            "performance/ADAPTER_CONFIG.json",
+            "source_allocation_gate.py validate",
+            "performance_channel_aggregate.py",
+            "source_allocation_contract_v4.10.0.json",
+            '"${allocation_bundle}/EVIDENCE.json"',
+            "performance/AGGREGATE.json",
+            "node01_migration_evidence.py validate",
+            "node01_migration_contract_v4.10.0.json",
+            "native_lifecycle_evidence.py",
+            "native_lifecycle_bundle_verify.py",
+            "native_lifecycle_contract_v4.10.0.json",
+            "native-lifecycle/RAW_EVIDENCE.tar",
+            "native-lifecycle/VERDICT.json",
+            "gh attestation verify",
+            "NATIVE_RELEASE_EVIDENCE_MANIFEST.json",
+            "QUALIFICATION_BINDING.json",
+        ):
+            self.assertIn(contract, gate)
+        for rhel_contract in (
+            "RPM-A9-RHELPO",
+            "RPM-A10-RHELPO",
+            '--signing-bundle "${NATIVE_SIGNING_DIR}"',
+            "rhel-package-owned/evidence/SIGNING_PROVENANCE.json",
+            "node05-almalinux9.8-rhelpo.json",
+            "node03-almalinux10.2-rhelpo.json",
+            '--rhel-rpm-package-name "${rhel_rpm_package_name}"',
+            '--node03-ssh-host-key-sha256',
+            "rhel_package_owned:{",
+            "updater_manifest_included:false",
+        ):
+            self.assertIn(rhel_contract, gate)
+        self.assertIn(
+            'find -P "${NATIVE_RELEASE_EVIDENCE_DIR}" -mindepth 1 -print0',
+            gate,
+        )
+        self.assertIn(
+            "downloaded native evidence contains a symlink or foreign owner",
+            gate,
+        )
+        self.assertIn(
+            "downloaded native evidence contains a special entry",
+            gate,
+        )
+        manifest_bytes = gate.index("manifest.get(\"files\")")
+        mode_normalization = gate.index('chmod -R go-rwx "${NATIVE_RELEASE_EVIDENCE_DIR}"')
+        probe_modes = gate.index('chmod 0700 \\\n  "${NATIVE_RELEASE_EVIDENCE_DIR}/source-allocation/baseline-probe"')
+        private_adapter_config = gate.index(
+            'install -m 0600 -- \\\n  "${NATIVE_RELEASE_EVIDENCE_DIR}/performance/ADAPTER_CONFIG.json"'
+        )
+        performance_gate = gate.index("performance_gate.py")
+        allocation_validation = gate.index("source_allocation_gate.py validate")
+        performance_aggregate = gate.index("performance_channel_aggregate.py")
+        aggregate_comparison = gate.index(
+            'cmp -- "${temporary}/PERFORMANCE_AGGREGATE.json"'
+        )
+        self.assertLess(manifest_bytes, mode_normalization)
+        self.assertLess(mode_normalization, probe_modes)
+        self.assertLess(probe_modes, private_adapter_config)
+        self.assertLess(private_adapter_config, performance_gate)
+        self.assertLess(performance_gate, allocation_validation)
+        self.assertLess(allocation_validation, performance_aggregate)
+        self.assertLess(performance_aggregate, aggregate_comparison)
+        self.assertIn(
+            "Artifact transport does not preserve producer modes.", gate
+        )
+        self.assertEqual(
+            gate.count('--adapter-config "${performance_adapter_config}"'),
+            2,
+        )
+        self.assertIn(
+            "source_allocation:$source_allocation_contract", gate
+        )
+
+    def test_native_rotation_selects_exact_bundle_attested_identities(self) -> None:
+        gate = workflow_step_script(
+            self.workflow, "Revalidate Candidate-Bound Native Release Evidence"
+        )
+        self.assertNotIn("select(.revoked == false)", gate)
+        self.assertNotIn("one active DEB key is required", gate)
+        for contract in (
+            'rpm: (.rpm_signature.key | exact_key)',
+            'apk: (.apk_signature.key | exact_key)',
+            'deb: (.deb_signature.key | exact_key)',
+            '--rpm-signer-fingerprint "${rpm_signer_fingerprint}"',
+            '--openpgp-fingerprint "${deb_signer_fingerprint}"',
+            '--deb-signer-fingerprint "${deb_signer_fingerprint}"',
+            '--apk-public-key-sha256 "${apk_public_key_sha256}"',
+            '.packages.signed[]',
+            '--candidate-package-name "${deb_package_name}"',
+            '--candidate-package-sha256 "${deb_package_sha256}"',
+            '--candidate-package-size "${deb_package_size}"',
+            '--rpm-package-name "${rpm_package_name}"',
+            '--rpm-package-sha256 "${rpm_package_sha256}"',
+            '--rpm-package-size "${rpm_package_size}"',
+            '--deb-package-name "${deb_package_name}"',
+            '--deb-package-sha256 "${deb_package_sha256}"',
+            '--deb-package-size "${deb_package_size}"',
+            '--apk-package-name "${apk_package_name}"',
+            '--apk-package-sha256 "${apk_package_sha256}"',
+            '--apk-package-size "${apk_package_size}"',
+            '--rhel-rpm-package-name "${rhel_rpm_package_name}"',
+            '--rhel-rpm-package-sha256 "${rhel_rpm_package_sha256}"',
+            '--rhel-rpm-package-size "${rhel_rpm_package_size}"',
+            'signing_provenance_sha256="$(sha256sum "${signing_provenance}"',
+            'rhel_signing_provenance_sha256="$(sha256sum "${rhel_signing_provenance}"',
+            '--argjson selected_keys "${attested_native_identities}"',
+            '--argjson rhel_package "${attested_rhel_package}"',
+            '.schema_version == 2',
+            'node05-almalinux9.8.json',
+            'node05-almalinux9.8-rhelpo.json',
+            'node03-almalinux10.2-rhelpo.json',
+            '--node05-ssh-host-key-sha256',
+            '--node03-ssh-host-key-sha256',
+            '(.trusted_host_keys | keys | sort) == ["node02","node03","node04","node05"]',
+            'provenance_sha256:$rhel_signing_provenance_sha256',
+            'selected_rpm_key:$selected_keys.rpm',
+        ):
+            self.assertIn(contract, gate)
+        self.assertNotIn(
+            "'.packages.candidate.signer_identity' \"${node02_lifecycle}\"",
+            gate,
+        )
+        self.assertNotIn(
+            "'.packages.candidate.signer_identity' \"${node04_lifecycle}\"",
+            gate,
+        )
+        self.assertNotIn(
+            "'.packages.candidate.signer_identity' \"${node05_lifecycle}\"",
+            gate,
+        )
+
+    def test_bootstrap_signing_provenance_cannot_enter_release_qualification(self) -> None:
+        gate = workflow_step_script(
+            self.workflow, "Verify and Bind Exact Native Signing Bundle"
+        )
+        self.assertIn(
+            '.status == "native-signatures-verified-not-release-qualified"', gate
+        )
+        self.assertIn(
+            '.public_release == false and .release_qualified == false', gate
+        )
+        for contract in (
+            'rhel_provenance="${NATIVE_SIGNING_DIR}/rhel-package-owned/evidence/SIGNING_PROVENANCE.json"',
+            'rhel_artifact_name="syswarden-rhel-package-owned-',
+            'actions/runs/${UNSIGNED_RUN_ID}/artifacts',
+            'must expose exactly the standard and opt-in RHEL package artifacts',
+            '.profile == "syswarden-rhel-package-owned-signing/v4.10.0"',
+            '.package_role == "rhel-package-owned"',
+            '.updater_manifest_included == false',
+            '.source.unsigned_package_run_id == $run_id',
+            '.source.unsigned_artifact_id == $artifact_id',
+            '.source.unsigned_artifact_digest == $artifact_digest',
+            'release:"1.rhelpo"',
+        ):
+            self.assertIn(contract, gate)
+
+        rpm_key = {
+            "fingerprint": "1" * 40,
+            "id": "rpm-rotation-2026-b",
+            "public_key": "syswarden-rpm-rotation-2026-b.asc",
+            "public_key_sha256": "a" * 64,
+        }
+        apk_key = {
+            "fingerprint": "b" * 64,
+            "id": "apk-rotation-2026-b",
+            "public_key": "syswarden-apk-rotation-2026-b.rsa.pub",
+            "public_key_sha256": "b" * 64,
+        }
+        deb_key = {
+            "fingerprint": "2" * 40,
+            "id": "deb-rotation-2026-b",
+            "public_key": "syswarden-deb-rotation-2026-b.asc",
+            "public_key_sha256": "c" * 64,
+        }
+        provenance = {
+            "rpm_signature": {"key": rpm_key},
+            "apk_signature": {"key": apk_key},
+            "deb_signature": {"key": deb_key},
+        }
+        result = run_native_identity_filter(
+            native_identity_filter(self.workflow), provenance
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"rpm": rpm_key, "apk": apk_key, "deb": deb_key},
+        )
+
+    def test_bundle_attested_identity_selection_fails_closed(self) -> None:
+        rpm_key = {
+            "fingerprint": "1" * 40,
+            "id": "rpm-2026",
+            "public_key": "rpm.asc",
+            "public_key_sha256": "a" * 64,
+        }
+        apk_key = {
+            "fingerprint": "b" * 64,
+            "id": "apk-2026",
+            "public_key": "apk.rsa.pub",
+            "public_key_sha256": "b" * 64,
+        }
+        deb_key = {
+            "fingerprint": "2" * 40,
+            "id": "deb-2026",
+            "public_key": "deb.asc",
+            "public_key_sha256": "c" * 64,
+        }
+        valid = {
+            "rpm_signature": {"key": rpm_key},
+            "apk_signature": {"key": apk_key},
+            "deb_signature": {"key": deb_key},
+        }
+        invalid_documents: list[dict[str, object]] = []
+        for mutation in (
+            lambda item: item.pop("deb_signature"),
+            lambda item: item["rpm_signature"]["key"].__setitem__(
+                "unexpected", True
+            ),
+            lambda item: item["deb_signature"]["key"].__setitem__(
+                "fingerprint", "2" * 39
+            ),
+            lambda item: item["apk_signature"]["key"].__setitem__(
+                "fingerprint", "d" * 64
+            ),
+            lambda item: item["apk_signature"]["key"].__setitem__(
+                "id", "rpm-2026"
+            ),
+            lambda item: item["deb_signature"]["key"].__setitem__(
+                "public_key_sha256", "a" * 64
+            ),
+            lambda item: item["deb_signature"]["key"].__setitem__(
+                "fingerprint", "1" * 40
+            ),
+        ):
+            document = json.loads(json.dumps(valid))
+            mutation(document)
+            invalid_documents.append(document)
+        jq_filter = native_identity_filter(self.workflow)
+        for document in invalid_documents:
+            with self.subTest(document=document):
+                result = run_native_identity_filter(jq_filter, document)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_bundle_attested_standard_package_selection_is_exact_and_fails_closed(
+        self,
+    ) -> None:
+        deb = {
+            "name": "syswarden_4.10.0_amd64.deb",
+            "sha256": "d" * 64,
+            "size": 12_345_678,
+        }
+        apk = {
+            "name": "syswarden_4.10.0_x86_64.apk",
+            "sha256": "a" * 64,
+            "size": 9_876_543,
+        }
+        rpm = {
+            "name": "syswarden-4.10.0-1.x86_64.rpm",
+            "sha256": "e" * 64,
+            "size": 11_111_111,
+        }
+        valid = {"packages": {"signed": [rpm, deb, apk], "unsigned": []}}
+        jq_filter = native_package_filter(self.workflow)
+        result = run_native_package_filter(jq_filter, valid)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout), {"rpm": rpm, "deb": deb, "apk": apk}
+        )
+
+        invalid_documents: list[dict[str, object]] = []
+        for mutation in (
+            lambda item: item["packages"]["signed"].append(copy.deepcopy(deb)),
+            lambda item: item["packages"]["signed"].append(copy.deepcopy(rpm)),
+            lambda item: item["packages"]["signed"][0].__setitem__(
+                "sha256", "E" * 64
+            ),
+            lambda item: item["packages"]["signed"][1].__setitem__(
+                "sha256", "D" * 64
+            ),
+            lambda item: item["packages"]["signed"][2].__setitem__("size", 0),
+            lambda item: item["packages"]["signed"][2].__setitem__("size", True),
+            lambda item: item["packages"]["signed"][1].__setitem__(
+                "size", 268_435_457
+            ),
+            lambda item: item["packages"]["signed"][1].__setitem__(
+                "unexpected", True
+            ),
+            lambda item: item["packages"]["signed"].pop(2),
+        ):
+            document = copy.deepcopy(valid)
+            mutation(document)
+            invalid_documents.append(document)
+        for document in invalid_documents:
+            with self.subTest(document=document):
+                result = run_native_package_filter(jq_filter, document)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_source_allocation_inventory_is_exact_in_every_seal(self) -> None:
+        for step_name in (
+            "Seal Exact Unsigned Qualification Evidence Inventory",
+            "Require Successful Qualification Before Release Signing",
+            "Seal Exact Qualification Evidence Inventory",
+        ):
+            script = workflow_step_script(self.workflow, step_name)
+            for relative in (
+                "native-release-evidence/performance/AGGREGATE.json",
+                "native-release-evidence/performance/ADAPTER_CONFIG.json",
+                "native-release-evidence/source-allocation/EVIDENCE.json",
+                "native-release-evidence/source-allocation/REPORT.json",
+                "native-release-evidence/source-allocation/baseline-probe",
+                "native-release-evidence/source-allocation/benchmark-source.go",
+                "native-release-evidence/source-allocation/build-attestation.json",
+                "native-release-evidence/source-allocation/candidate-probe",
+                "native-release-evidence/source-allocation/environment.json",
+                "native-release-evidence/source-allocation/execution-control-attestation.json",
+                "native-release-evidence/source-allocation/fixture.json",
+                "native-release-evidence/source-allocation/signature-catalog.json",
+                "native-release-evidence/source-allocation/raw",
+                "native-release-evidence/source-allocation/raw/allocation-campaign-01",
+                "native-release-evidence/source-allocation/raw/allocation-campaign-02",
+                "native-release-evidence/source-allocation/raw/allocation-campaign-03",
+            ):
+                self.assertIn(relative, script, (step_name, relative))
+            self.assertEqual(
+                script.count(
+                    "native-release-evidence/source-allocation/raw/"
+                    "allocation-campaign-${campaign}/${role}-${sample}.json"
+                ),
+                1,
+                step_name,
+            )
+            self.assertIn("for campaign in 01 02 03; do", script)
+            self.assertIn("for role in baseline candidate; do", script)
+            self.assertIn(
+                "for sample in 01 02 03 04 05 06 07 08 09 10; do", script
+            )
+
+    def test_v4100_uses_its_versioned_qualification_matrix_everywhere(self) -> None:
+        self.assertIn(
+            "QUALIFICATION_MATRIX_PATH: ${{ inputs.release_tag == 'v4.10.0' && "
+            "'scripts/ci/package_qualification_matrix_v4.10.0.json' || "
+            "'scripts/ci/package_qualification_matrix.json' }}",
+            self.workflow,
+        )
+        self.assertEqual(
+            self.workflow.count(
+                "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json"
+            ),
+            0,
+        )
+        self.assertGreaterEqual(
+            self.workflow.count("${GITHUB_WORKSPACE}/${QUALIFICATION_MATRIX_PATH}"),
+            9,
+        )
 
     def test_raw_package_failure_summary_never_claims_global_release_readiness(self) -> None:
         script = workflow_step_script(
@@ -1181,11 +1770,16 @@ class ReleaseQualificationWorkflowTests(unittest.TestCase):
             self.package_workflow, "Test Package and Release Validators"
         )
         for test_file in (
+            "scripts/ci/native_performance_probe_test.py",
+            "scripts/ci/native_release_evidence_workflow_test.py",
             "scripts/ci/package_qualification_matrix_test.py",
             "scripts/ci/package_lifecycle_lab_test.py",
+            "scripts/ci/performance_channel_aggregate_test.py",
             "scripts/ci/release_qualification_adapter_test.py",
             "scripts/ci/release_qualification_gate_test.py",
             "scripts/ci/release_qualification_workflow_test.py",
+            "scripts/ci/source_allocation_gate_test.py",
+            "scripts/ci/source_allocation_producer_test.py",
         ):
             self.assertEqual(step.count(test_file), 1, test_file)
 

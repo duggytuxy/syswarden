@@ -1723,16 +1723,91 @@ class PackageLifecycleLabTests(unittest.TestCase):
             package_lifecycle_lab.validate_platforms((altered_runtime,))
 
     def test_matrix_binding_rejects_semantically_equal_but_different_bytes(self) -> None:
-        rewritten = self.root / "qualification-matrix.json"
-        rewritten.write_text(
-            json.dumps(package_lifecycle_lab.QUALIFICATION_MATRIX_DOCUMENT),
-            encoding="utf-8",
+        for target, snapshot in (
+            package_lifecycle_lab._QUALIFICATION_MATRIX_SNAPSHOTS.items()
+        ):
+            with self.subTest(target=target):
+                document, _ = snapshot
+                rewritten = self.root / f"qualification-matrix-{target}.json"
+                rewritten.write_text(json.dumps(document), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    package_lifecycle_lab.LifecycleLabError,
+                    "matrix bytes differ",
+                ):
+                    package_lifecycle_lab.qualification_matrix_binding(rewritten)
+
+    def test_matrix_binding_accepts_every_supported_exact_snapshot(self) -> None:
+        for target, path in (
+            package_lifecycle_lab.qualification_matrix.MATRIX_PATHS_BY_TARGET.items()
+        ):
+            with self.subTest(target=target):
+                binding = package_lifecycle_lab.qualification_matrix_binding(path)
+                self.assertEqual(
+                    binding,
+                    package_lifecycle_lab._QUALIFICATION_MATRIX_BINDINGS[target],
+                )
+                self.assertEqual(
+                    package_lifecycle_lab.validate_qualification_matrix_binding(binding),
+                    binding,
+                )
+
+    def test_supported_matrices_share_one_exact_container_runtime_projection(self) -> None:
+        for target, (document, _) in (
+            package_lifecycle_lab._QUALIFICATION_MATRIX_SNAPSHOTS.items()
+        ):
+            with self.subTest(target=target):
+                self.assertEqual(
+                    package_lifecycle_lab._runtime_platforms_from_matrix(document),
+                    package_lifecycle_lab.DEFAULT_PLATFORMS,
+                )
+
+    def test_matrix_binding_rejects_cross_release_selection(self) -> None:
+        v4043 = package_lifecycle_lab.qualification_matrix_binding(
+            package_lifecycle_lab.qualification_matrix.DEFAULT_MATRIX,
+            "v4.04.3",
+        )
+        v4100 = package_lifecycle_lab.qualification_matrix_binding(
+            package_lifecycle_lab.qualification_matrix.V4100_MATRIX,
+            "v4.10.0",
         )
         with self.assertRaisesRegex(
-            package_lifecycle_lab.LifecycleLabError,
-            "matrix bytes differ",
+            package_lifecycle_lab.LifecycleLabError, "target differs"
         ):
-            package_lifecycle_lab.qualification_matrix_binding(rewritten)
+            package_lifecycle_lab.qualification_matrix_binding(
+                package_lifecycle_lab.qualification_matrix.DEFAULT_MATRIX,
+                "v4.10.0",
+            )
+        with self.assertRaisesRegex(
+            package_lifecycle_lab.LifecycleLabError, "selected matrix"
+        ):
+            package_lifecycle_lab.validate_qualification_matrix_binding(
+                v4043, expected=v4100
+            )
+
+    def test_v4100_run_uses_and_reports_the_exact_selected_matrix(self) -> None:
+        for root in (self.candidate, self.previous):
+            for child in root.iterdir():
+                child.unlink()
+        self.create_package_set(self.candidate, b"candidate-v4100", "4.10.0")
+        self.create_package_set(self.previous, b"previous-v4043", "4.04.3")
+        report = package_lifecycle_lab.run_lab(
+            self.args(
+                qualification_matrix=(
+                    package_lifecycle_lab.qualification_matrix.V4100_MATRIX
+                ),
+                expected_target_release="v4.10.0",
+            ),
+            runner=FakePodmanRunner(),
+        )
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(
+            report["qualification_matrix"],
+            package_lifecycle_lab._QUALIFICATION_MATRIX_BINDINGS["v4.10.0"],
+        )
+        self.assertEqual(
+            [item["cell_id"] for item in report["platforms"]],
+            [spec.cell_id for spec in package_lifecycle_lab.DEFAULT_PLATFORMS],
+        )
 
     def test_removed_arm64_architecture_is_rejected(self) -> None:
         removed = replace(
@@ -10212,11 +10287,16 @@ prepare_package_transition
                 result = contract(version)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, "legacy\n")
-        for version in ("4.04.0", "4.10.0", "5.00.0"):
+        for version in ("4.04.0", "4.09.9"):
             with self.subTest(version=version):
                 result = contract(version)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, "kpi-v1\n")
+        for version in ("4.10.0", "4.10.1", "5.00.0"):
+            with self.subTest(version=version):
+                result = contract(version)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "kpi-feed-v1\n")
         for version in ("", "4", "4.x.0", "v4.04.0"):
             with self.subTest(invalid=version):
                 self.assertNotEqual(contract(version).returncode, 0)
@@ -10360,6 +10440,156 @@ assert_all_state_preserved "$1"
         kpi_payload = json.dumps(kpi).encode("utf-8")
         self.assertTrue(accepted(kpi_payload, "kpi-v1"))
         self.assertFalse(accepted(kpi_payload, "legacy"))
+        self.assertFalse(accepted(kpi_payload, "kpi-feed-v1"))
+
+        feed_kpi = json.loads(json.dumps(kpi))
+        feed_kpi["projection"] = {"quality": "complete"}
+        feed_kpi["layer3"]["threat_feeds"] = [
+            {
+                "feed_name": "syswarden_threatintel.ipv4",
+                "address_family": "ipv4",
+                "state": "current",
+                "freshness": "current",
+                "attestation": "verified",
+                "source_origins": ["https://feed.example.test"],
+                "retrieved_at": "2026-09-03T10:00:00Z",
+                "age_seconds": 3600,
+                "license_identifier": "CC-BY-4.0",
+                "evidence_quality": "source-validated",
+                "sha256": "a" * 64,
+                "accepted_count": 2,
+                "skipped_count": 1,
+                "rejected_count": 0,
+            },
+            {
+                "feed_name": "syswarden_threatintel.ipv6",
+                "address_family": "ipv6",
+                "state": "unavailable",
+                "freshness": "unavailable",
+                "attestation": "missing",
+                "source_origins": [],
+                "accepted_count": 0,
+                "skipped_count": 0,
+                "rejected_count": 0,
+            },
+        ]
+        feed_kpi["waf"]["banned_ips"][0]["enforcement_state"] = "active"
+        feed_kpi["waf"]["top_attackers"][0]["enforcement_state"] = "active"
+        feed_kpi["waf"]["grc_kpi"] = {
+            "schema_version": 1,
+            "status": "complete",
+            "window": {
+                "scope": "retained-telemetry-journal",
+                "first_observed": "2026-09-03T10:00:00Z",
+                "last_observed": "2026-09-03T10:01:00Z",
+                "complete": True,
+            },
+            "catalog": {
+                "version": "catalog-v1",
+                "sha256": "a" * 64,
+                "risk_model_version": "sw-risk-v1",
+            },
+            "evidence": {
+                "journal_bytes_total": 4096,
+                "journal_bytes_scanned": 4096,
+                "journal_decode_errors": 0,
+                "admitted_events": 4,
+                "rejected_events": 0,
+                "excluded_events": 2,
+                "records_truncated": 0,
+            },
+            "lifecycle": {
+                "scope": "ha-v2-runtime-snapshot",
+                "deletion_records": 0,
+                "expiry_records": 0,
+                "tombstone_records": 0,
+                "runtime_state_linked": True,
+                "runtime_snapshot_complete": True,
+                "runtime_cluster_id": "cluster-a",
+                "runtime_epoch": 7,
+                "runtime_node_id": "node-a",
+                "runtime_role": "writer",
+                "runtime_coordination": "healthy",
+                "runtime_model_sha256": "b" * 64,
+                "runtime_checkpoint_sha256": "c" * 64,
+                "runtime_peer_checkpoint_sha256": "c" * 64,
+                "runtime_checkpoint_at": "2026-09-03T10:01:00Z",
+                "runtime_captured_at": "2026-09-03T10:01:01Z",
+                "active_claims": 1,
+            },
+            "records": [
+                {
+                    "ip": "198.51.100.8",
+                    "physical_hits": 4,
+                    "first_observed": "2026-09-03T10:00:00Z",
+                    "last_observed": "2026-09-03T10:01:00Z",
+                    "selected_jail": "BF-SSH",
+                    "jail_hits": 4,
+                    "policy_hits": 4,
+                    "enforcement": {"jail": "BF-SSH", "action": "track"},
+                    "enforcement_state": "active",
+                    "risk_category": "brute_force",
+                    "policy_action": "track",
+                    "severity_score": 80,
+                    "severity_label": "Critical",
+                    "peak_window_hits": 4,
+                    "effective_threshold": 4,
+                    "effective_window_seconds": 60,
+                    "threshold_reached": True,
+                    "threshold_evidence": "observed-window",
+                    "metric_quality": "attested",
+                    "policy_quality": "attested",
+                    "hit_evidence": "kernel-log-observation-v1",
+                    "hit_quality": "measured",
+                    "degraded_hits": 0,
+                    "catalog": {
+                        "version": "catalog-v1",
+                        "sha256": "a" * 64,
+                        "risk_model_version": "sw-risk-v1",
+                    },
+                }
+            ],
+        }
+        feed_kpi_payload = json.dumps(feed_kpi).encode("utf-8")
+        self.assertTrue(accepted(feed_kpi_payload, "kpi-feed-v1"))
+        self.assertFalse(accepted(feed_kpi_payload, "kpi-v1"))
+        self.assertFalse(accepted(feed_kpi_payload, "legacy"))
+
+        empty_ban_inventory = json.loads(json.dumps(feed_kpi))
+        empty_ban_inventory["waf"]["banned_ips"] = []
+        empty_ban_inventory["waf"]["allowed_events"] = None
+        self.assertTrue(
+            accepted(json.dumps(empty_ban_inventory).encode("utf-8"), "kpi-feed-v1")
+        )
+
+        degraded_projection = json.loads(json.dumps(feed_kpi))
+        degraded_projection["projection"] = {
+            "quality": "degraded",
+            "reason": "display-payload-bound",
+            "payloads_projected": 1,
+        }
+        self.assertTrue(
+            accepted(json.dumps(degraded_projection).encode("utf-8"), "kpi-feed-v1")
+        )
+        for invalid_projection in (
+            {},
+            {"quality": "complete", "reason": "display-payload-bound"},
+            {"quality": "degraded", "reason": "display-payload-bound", "payloads_projected": 0},
+            {"quality": "degraded", "reason": "display-payload-bound", "payloads_projected": 3},
+            {"quality": "degraded", "reason": "unknown", "payloads_projected": 1},
+            {"quality": "unknown"},
+        ):
+            drifted = json.loads(json.dumps(feed_kpi))
+            drifted["projection"] = invalid_projection
+            self.assertFalse(
+                accepted(json.dumps(drifted).encode("utf-8"), "kpi-feed-v1")
+            )
+
+        missing_projection = json.loads(json.dumps(feed_kpi))
+        del missing_projection["projection"]
+        self.assertFalse(
+            accepted(json.dumps(missing_projection).encode("utf-8"), "kpi-feed-v1")
+        )
         assertion_end = source.index(
             "\n}\n\nsanitize_historical_rollback_token() {", start
         ) + 2
@@ -10519,6 +10749,155 @@ assert_all_state_preserved "$1"
                     accepted(json.dumps(document).encode("utf-8"), "kpi-v1")
                 )
 
+        feed_variants: dict[str, dict[str, object]] = {}
+        missing_grc = json.loads(json.dumps(feed_kpi))
+        del missing_grc["waf"]["grc_kpi"]
+        feed_variants["missing required GRC evidence"] = missing_grc
+        invalid_runtime_digest = json.loads(json.dumps(feed_kpi))
+        invalid_runtime_digest["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_model_sha256"
+        ] = "B" * 64
+        feed_variants["noncanonical GRC runtime digest"] = invalid_runtime_digest
+        missing_runtime_epoch = json.loads(json.dumps(feed_kpi))
+        del missing_runtime_epoch["waf"]["grc_kpi"]["lifecycle"]["runtime_epoch"]
+        feed_variants["missing GRC runtime epoch"] = missing_runtime_epoch
+        missing_runtime_cluster = json.loads(json.dumps(feed_kpi))
+        del missing_runtime_cluster["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_cluster_id"
+        ]
+        feed_variants["missing GRC runtime cluster identity"] = (
+            missing_runtime_cluster
+        )
+        invalid_runtime_node = json.loads(json.dumps(feed_kpi))
+        invalid_runtime_node["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_node_id"
+        ] = "Node A"
+        feed_variants["noncanonical GRC runtime node identity"] = (
+            invalid_runtime_node
+        )
+        missing_runtime_checkpoint = json.loads(json.dumps(feed_kpi))
+        del missing_runtime_checkpoint["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_checkpoint_sha256"
+        ]
+        feed_variants["missing GRC runtime checkpoint"] = (
+            missing_runtime_checkpoint
+        )
+        mismatched_peer_checkpoint = json.loads(json.dumps(feed_kpi))
+        mismatched_peer_checkpoint["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_peer_checkpoint_sha256"
+        ] = "d" * 64
+        feed_variants["mismatched GRC peer checkpoint"] = (
+            mismatched_peer_checkpoint
+        )
+        degraded_mismatched_peer_checkpoint = json.loads(json.dumps(feed_kpi))
+        degraded_mismatched_peer_checkpoint["waf"]["grc_kpi"]["status"] = (
+            "degraded"
+        )
+        degraded_mismatched_peer_checkpoint["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_peer_checkpoint_sha256"
+        ] = "d" * 64
+        feed_variants["healthy peer mismatch in degraded GRC document"] = (
+            degraded_mismatched_peer_checkpoint
+        )
+        invalid_calendar_checkpoint = json.loads(json.dumps(feed_kpi))
+        invalid_calendar_checkpoint["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_checkpoint_at"
+        ] = "2026-02-30T10:01:00Z"
+        feed_variants["invalid calendar checkpoint date"] = (
+            invalid_calendar_checkpoint
+        )
+        stale_healthy_checkpoint = json.loads(json.dumps(feed_kpi))
+        stale_healthy_checkpoint["waf"]["grc_kpi"]["status"] = "degraded"
+        stale_healthy_checkpoint["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_checkpoint_at"
+        ] = "2026-09-03T09:56:00Z"
+        feed_variants["stale healthy checkpoint in degraded GRC document"] = (
+            stale_healthy_checkpoint
+        )
+        future_degraded_checkpoint = json.loads(json.dumps(feed_kpi))
+        future_degraded_checkpoint["waf"]["grc_kpi"]["status"] = "degraded"
+        future_degraded_checkpoint["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_coordination"
+        ] = "degraded"
+        future_degraded_checkpoint["waf"]["grc_kpi"]["lifecycle"][
+            "runtime_checkpoint_at"
+        ] = "2026-09-03T10:06:02Z"
+        feed_variants["future checkpoint in degraded GRC document"] = (
+            future_degraded_checkpoint
+        )
+        unknown_complete_state = json.loads(json.dumps(feed_kpi))
+        unknown_complete_state["waf"]["grc_kpi"]["records"][0][
+            "enforcement_state"
+        ] = "unknown"
+        feed_variants["complete GRC evidence with unknown state"] = (
+            unknown_complete_state
+        )
+        unlinked_complete = json.loads(json.dumps(feed_kpi))
+        unlinked_complete["waf"]["grc_kpi"]["lifecycle"] = {
+            "scope": "observed-telemetry-records-only",
+            "deletion_records": 0,
+            "expiry_records": 0,
+            "tombstone_records": 0,
+            "runtime_state_linked": False,
+        }
+        feed_variants["complete GRC evidence without runtime link"] = (
+            unlinked_complete
+        )
+        mismatched_physical_hits = json.loads(json.dumps(feed_kpi))
+        mismatched_physical_hits["waf"]["grc_kpi"]["records"][0][
+            "physical_hits"
+        ] = 3
+        feed_variants["GRC physical hits do not match evidence"] = (
+            mismatched_physical_hits
+        )
+        invalid_attacker_state = json.loads(json.dumps(feed_kpi))
+        invalid_attacker_state["waf"]["top_attackers"][0][
+            "enforcement_state"
+        ] = "maybe"
+        feed_variants["invalid attacker enforcement state"] = invalid_attacker_state
+        duplicate_family = json.loads(json.dumps(feed_kpi))
+        duplicate_family["layer3"]["threat_feeds"][1]["address_family"] = "ipv4"
+        feed_variants["duplicate feed family"] = duplicate_family
+        wrong_digest = json.loads(json.dumps(feed_kpi))
+        wrong_digest["layer3"]["threat_feeds"][0]["sha256"] = "A" * 64
+        feed_variants["noncanonical feed digest"] = wrong_digest
+        missing_source = json.loads(json.dumps(feed_kpi))
+        missing_source["layer3"]["threat_feeds"][0]["source_origins"] = []
+        feed_variants["verified feed without source"] = missing_source
+        overclaimed_missing = json.loads(json.dumps(feed_kpi))
+        overclaimed_missing["layer3"]["threat_feeds"][1]["accepted_count"] = 1
+        feed_variants["missing feed with entries"] = overclaimed_missing
+        unknown_feed_key = json.loads(json.dumps(feed_kpi))
+        unknown_feed_key["layer3"]["threat_feeds"][0]["unexpected"] = True
+        feed_variants["unknown feed key"] = unknown_feed_key
+        for name, document in feed_variants.items():
+            with self.subTest(name=name):
+                self.assertFalse(
+                    accepted(
+                        json.dumps(document).encode("utf-8"), "kpi-feed-v1"
+                    )
+                )
+
+        duplicate_grc_status = json.dumps(feed_kpi).encode("utf-8").replace(
+            b'"status": "complete"',
+            b'"status": "degraded", "status": "complete"',
+            1,
+        )
+        self.assertFalse(accepted(duplicate_grc_status, "kpi-feed-v1"))
+
+        legacy_with_grc = json.loads(json.dumps(kpi))
+        legacy_with_grc["waf"]["grc_kpi"] = feed_kpi["waf"]["grc_kpi"]
+        self.assertFalse(
+            accepted(json.dumps(legacy_with_grc).encode("utf-8"), "kpi-v1")
+        )
+        kpi_with_runtime_state = json.loads(json.dumps(kpi))
+        kpi_with_runtime_state["waf"]["top_attackers"][0][
+            "enforcement_state"
+        ] = "active"
+        self.assertFalse(
+            accepted(json.dumps(kpi_with_runtime_state).encode("utf-8"), "kpi-v1")
+        )
+
         target = self.root / "live-telemetry-target.json"
         target.write_text(json.dumps(baseline), encoding="utf-8")
         link = self.root / "live-telemetry-link.json"
@@ -10537,7 +10916,8 @@ assert_all_state_preserved "$1"
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("8388608", function)
-        self.assertIn('(keys == ["github_release", "github_stars"', function)
+        self.assertIn('keys == ["github_release", "github_stars"', function)
+        self.assertIn('"projection", "system", "timestamp"', function)
         self.assertIn('(has("ha") | not)', function)
 
     def test_production_feed_default_and_install_failure_remain_fail_closed(self) -> None:
@@ -10556,14 +10936,28 @@ assert_all_state_preserved "$1"
             'legacyValue(oldConfig, "SYSWARDEN_LIST_CHOICE", "1")',
             migrator,
         )
-        download = install.index("if err := network.DownloadFeedsForInstall(")
+        production_helper = install.index("func prepareNetworkIntelligenceForInstall() error")
+        offline_branch = install.index(
+            "if system.OfflineQualificationOperation()", production_helper
+        )
+        offline_attestation = install.index(
+            "if err := attestOfflineQualificationFeedsForInstall(", offline_branch
+        )
+        offline_return = install.index("return nil", offline_attestation)
+        download = install.index("if err := downloadFeedsForInstall(", offline_return)
         fatal = install.index(
             'return installStageError("failed to download threat intelligence feeds", err)',
             download,
         )
-        cron = install.index("if err := network.SetupFeedsCron()", fatal)
+        self.assertLess(offline_branch, offline_attestation)
+        self.assertLess(offline_attestation, offline_return)
+        self.assertLess(offline_return, download)
         self.assertLess(download, fatal)
-        self.assertLess(fatal, cron)
+        prepare_call = install.index("if err := prepareNetworkIntelligenceForInstall()")
+        prepare_fatal = install.index("return err", prepare_call)
+        cron = install.index("if err := network.SetupFeedsCron()", prepare_fatal)
+        self.assertLess(prepare_call, prepare_fatal)
+        self.assertLess(prepare_fatal, cron)
         self.assertIn("return network.DownloadFeeds(", update_feeds)
         self.assertNotIn("DownloadFeedsForInstall", update_feeds)
 
@@ -12181,6 +12575,63 @@ seed_live_legacy_webtui_process
         self.assertEqual(report["status"], "fail")
         stdout.write.assert_called_once()
 
+    def test_v4100_timeout_error_report_retains_selected_matrix(self) -> None:
+        output = self.root / "v4100-timeout-report.json"
+        with mock.patch("sys.stdout"):
+            return_code = package_lifecycle_lab.main(
+                (
+                    "--packages-dir",
+                    str(self.candidate),
+                    "--previous-packages-dir",
+                    str(self.previous),
+                    "--qualification-matrix",
+                    str(package_lifecycle_lab.qualification_matrix.V4100_MATRIX),
+                    "--expected-target-release",
+                    "v4.10.0",
+                    "--scenario-timeout",
+                    "1",
+                    "--output",
+                    str(output),
+                )
+            )
+        self.assertEqual(return_code, 1)
+        report = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(report["status"], "fail")
+        self.assertEqual(
+            report["qualification_matrix"],
+            package_lifecycle_lab._QUALIFICATION_MATRIX_BINDINGS["v4.10.0"],
+        )
+
+    def test_v4100_runtime_error_report_retains_selected_matrix(self) -> None:
+        output = self.root / "v4100-runtime-report.json"
+        with mock.patch.object(
+            package_lifecycle_lab,
+            "run_lab",
+            side_effect=package_lifecycle_lab.LifecycleLabError("runtime failure"),
+        ), mock.patch("sys.stdout"):
+            return_code = package_lifecycle_lab.main(
+                (
+                    "--packages-dir",
+                    str(self.candidate),
+                    "--previous-packages-dir",
+                    str(self.previous),
+                    "--qualification-matrix",
+                    str(package_lifecycle_lab.qualification_matrix.V4100_MATRIX),
+                    "--expected-target-release",
+                    "v4.10.0",
+                    "--output",
+                    str(output),
+                )
+            )
+        self.assertEqual(return_code, 1)
+        report = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(report["status"], "fail")
+        self.assertEqual(report["error"], "runtime failure")
+        self.assertEqual(
+            report["qualification_matrix"],
+            package_lifecycle_lab._QUALIFICATION_MATRIX_BINDINGS["v4.10.0"],
+        )
+
     def test_main_returns_nonzero_for_incomplete_architecture_report(self) -> None:
         incomplete = {
             "schema_version": package_lifecycle_lab.SCHEMA_VERSION,
@@ -12216,6 +12667,7 @@ seed_live_legacy_webtui_process
             args.qualification_matrix,
             package_lifecycle_lab.QUALIFICATION_MATRIX_PATH,
         )
+        self.assertIsNone(args.expected_target_release)
         self.assertEqual(len(configured), 8)
         self.assertEqual(
             {package_lifecycle_lab.platform_coordinate(spec) for spec in configured},

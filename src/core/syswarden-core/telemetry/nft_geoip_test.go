@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestParseNftGeoIPSetCountCountsCanonicalLogicalEntries(t *testing.T) {
@@ -275,7 +276,14 @@ func TestLayer3TelemetryIgnoresRetainedLegacyCountryFiles(t *testing.T) {
 	directory := t.TempDir()
 	writeTelemetryLines(t, filepath.Join(directory, "syswarden_blacklist.ipv4"), 2)
 	writeTelemetryLines(t, filepath.Join(directory, "syswarden_blacklist.ipv6"), 1)
-	writeTelemetryLines(t, filepath.Join(directory, "syswarden_threatintel.ipv4"), 4)
+	writeThreatFeedProjectionFixture(
+		t,
+		directory,
+		"syswarden_threatintel.ipv4",
+		"1.1.1.1/32\n8.8.8.8/32\n9.9.9.9/32\n4.2.2.2/32\n",
+		"current",
+		time.Now().UTC(),
+	)
 	writeTelemetryLines(t, filepath.Join(directory, "AS64500.ipv4"), 5)
 	writeTelemetryLines(t, filepath.Join(directory, "ru.ipv4"), 97)
 	writeTelemetryLines(t, filepath.Join(directory, "cn.ipv6"), 89)

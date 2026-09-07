@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "workload_id": "syswarden-waap-engine-scan-allocation-workload/v1",
+  "record": "198.51.100.42 - - [10/Sep/2026:08:00:00 +0000] \"GET /search?q=UNION%20SELECT HTTP/1.1\" 403 0 \"-\" \"syswarden-allocation-probe/v1\"",
+  "expected": {
+    "rule_id": "allocation-sqli",
+    "service": "http",
+    "risk_category": "exploit",
+    "action": "ban",
+    "threshold": 1,
+    "window": 0,
+    "source_ip": "198.51.100.42",
+    "metric_eligible": true
+  }
+}

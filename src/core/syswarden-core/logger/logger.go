@@ -2,6 +2,7 @@ package logger
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -19,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,6 +34,11 @@ const (
 	persistentBlacklistIPv6File = "/etc/syswarden/lists/syswarden_blacklist.ipv6"
 	maxPersistentBlocklistBytes = 1024 * 1024
 	maxTelemetryLogBytes        = 16 * 1024 * 1024
+	asyncOperationQueueCapacity = 128
+	asyncWebhookFieldBytes      = 4 * 1024
+	asyncWebhookCaptureBytes    = 8 * 1024
+	asyncShutdownGracePeriod    = 2 * time.Second
+	asyncShutdownCancelPeriod   = 2 * time.Second
 
 	// InternalLogMarker identifies process-log records owned by SysWarden. Log
 	// ingestion boundaries must reject records carrying this marker so an event
@@ -334,11 +341,41 @@ type Logger struct {
 	compactRotationLogFile func(string, int64) error
 	mu                     sync.Mutex
 	lifecycleMu            sync.Mutex
-	asyncWG                sync.WaitGroup
+	asyncContext           context.Context
+	asyncCancel            context.CancelFunc
+	asyncDone              chan struct{}
+	asyncGracePeriod       time.Duration
+	asyncCancelPeriod      time.Duration
+	asyncQueue             chan asyncOperation
+	asyncPending           map[string]struct{}
+	asyncDropped           atomic.Uint64
+	asyncDeduplicated      atomic.Uint64
+	asyncOversized         atomic.Uint64
 	closed                 bool
 }
 
+type asyncOperation struct {
+	deduplicationKey string
+	run              func(context.Context)
+}
+
 func (l *Logger) runAsync(operation func()) {
+	l.runAsyncKey("", operation)
+}
+
+// runAsyncKey coalesces only byte-identical notifications that are still
+// pending in the bounded queue. The synchronous telemetry event is always
+// retained, and a later notification can be enqueued again after delivery.
+// This prevents short alert bursts from exhausting the integration queue
+// without turning the webhook path into an authoritative event counter.
+func (l *Logger) runAsyncKey(deduplicationKey string, operation func()) {
+	if operation == nil {
+		return
+	}
+	l.runAsyncContextKey(deduplicationKey, func(context.Context) { operation() })
+}
+
+func (l *Logger) runAsyncContextKey(deduplicationKey string, operation func(context.Context)) {
 	if operation == nil {
 		return
 	}
@@ -347,12 +384,95 @@ func (l *Logger) runAsync(operation func()) {
 		l.lifecycleMu.Unlock()
 		return
 	}
-	l.asyncWG.Add(1)
+	if l.asyncQueue == nil {
+		l.asyncDropped.Add(1)
+		l.lifecycleMu.Unlock()
+		return
+	}
+	if deduplicationKey != "" {
+		if l.asyncPending == nil {
+			l.asyncPending = make(map[string]struct{}, asyncOperationQueueCapacity)
+		}
+		if _, pending := l.asyncPending[deduplicationKey]; pending {
+			l.asyncDeduplicated.Add(1)
+			l.lifecycleMu.Unlock()
+			return
+		}
+		l.asyncPending[deduplicationKey] = struct{}{}
+	}
+	// Overflow deliberately drops the newest notification. Security telemetry
+	// remains synchronous and independent from this best-effort integration
+	// path; blocking a detector on a remote webhook would create backpressure in
+	// the wrong direction. Delivery failures only use the process logger and do
+	// not enqueue another webhook, preventing recursive alert fan-out.
+	select {
+	case l.asyncQueue <- asyncOperation{deduplicationKey: deduplicationKey, run: operation}:
+	default:
+		delete(l.asyncPending, deduplicationKey)
+		l.asyncDropped.Add(1)
+	}
 	l.lifecycleMu.Unlock()
+}
+
+// runAsyncWebhookKey keeps both the queue length and retained closure inputs
+// bounded. Callers list every dynamic string retained by operation. Oversized
+// notifications are discarded from the best-effort integration path while
+// their synchronous telemetry event remains available to local consumers.
+func (l *Logger) runAsyncWebhookKey(deduplicationKey string, operation func(), capturedValues ...string) {
+	if operation == nil {
+		return
+	}
+	l.runAsyncWebhookContextKey(deduplicationKey, func(context.Context) { operation() }, capturedValues...)
+}
+
+func (l *Logger) runAsyncWebhookContextKey(
+	deduplicationKey string,
+	operation func(context.Context),
+	capturedValues ...string,
+) {
+	if operation == nil {
+		return
+	}
+	total := 0
+	for _, value := range capturedValues {
+		if len(value) > asyncWebhookFieldBytes || len(value) > asyncWebhookCaptureBytes-total {
+			l.asyncOversized.Add(1)
+			return
+		}
+		total += len(value)
+	}
+	l.runAsyncContextKey(deduplicationKey, operation)
+}
+
+func (l *Logger) startAsyncWorker() {
+	l.asyncContext, l.asyncCancel = context.WithCancel(context.Background())
+	l.asyncDone = make(chan struct{})
+	l.asyncGracePeriod = asyncShutdownGracePeriod
+	l.asyncCancelPeriod = asyncShutdownCancelPeriod
+	l.asyncQueue = make(chan asyncOperation, asyncOperationQueueCapacity)
+	l.asyncPending = make(map[string]struct{}, asyncOperationQueueCapacity)
 	go func() {
-		defer l.asyncWG.Done()
-		operation()
+		defer close(l.asyncDone)
+		for operation := range l.asyncQueue {
+			if l.asyncContext.Err() == nil {
+				operation.run(l.asyncContext)
+			}
+			if operation.deduplicationKey != "" {
+				l.lifecycleMu.Lock()
+				delete(l.asyncPending, operation.deduplicationKey)
+				l.lifecycleMu.Unlock()
+			}
+		}
 	}()
+}
+
+func webhookDeduplicationKey(parts ...string) string {
+	digest := sha256.New()
+	for _, part := range parts {
+		_, _ = fmt.Fprintf(digest, "%d:", len(part))
+		_, _ = digest.Write([]byte(part))
+	}
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 // TelemetryEvent represents a banned or allowed IP event
@@ -928,6 +1048,7 @@ func newLoggerWithRotationLimit(logPath string, rotationLimit int64) *Logger {
 		createRotationLogFile:  createExclusiveTelemetryLog,
 		compactRotationLogFile: compactTelemetryGenerationTail,
 	}
+	logger.startAsyncWorker()
 	dir := filepath.Dir(logPath)
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		log.Printf("[Logger] Warning: failed to create log dir: %v", err)
@@ -969,7 +1090,9 @@ func (l *Logger) LogBan(ip, jail, payload string) {
 func (l *Logger) LogBanWithRule(ip, jail, payload string, rule RuleContext) {
 	event := newTelemetryEvent("BANNED", ip, jail, payload, 10, &rule)
 	telemetry.ReportAbuseAsync(ip, jail, payload)
-	l.runAsync(func() { webhook.SendBanAlert(ip, jail, "WAF Drop (L7)") })
+	l.runAsyncWebhookContextKey(webhookDeduplicationKey("ban", ip, jail, payload), func(ctx context.Context) {
+		webhook.SendBanAlertContext(ctx, ip, jail, "WAF Drop (L7)")
+	}, ip, jail)
 	if err := persistBanToDisk(ip); err != nil {
 		log.Printf("[Logger] Failed to persist WAF ban: %v", err)
 	}
@@ -981,7 +1104,9 @@ func (l *Logger) LogBanWithRule(ip, jail, payload string, rule RuleContext) {
 
 // LogAllowed writes a JSON telemetry event when an IP is successfully allowed (e.g. login)
 func (l *Logger) LogAllowed(ip, service, payload string) {
-	l.runAsync(func() { webhook.SendAllowAlert(ip, service) })
+	l.runAsyncWebhookContextKey(webhookDeduplicationKey("allow", ip, service, payload), func(ctx context.Context) {
+		webhook.SendAllowAlertContext(ctx, ip, service)
+	}, ip, service)
 	event := newTelemetryEvent("ALLOWED", ip, service, payload, 3, nil)
 	l.writeTelemetry(event)
 
@@ -1000,7 +1125,9 @@ func (l *Logger) LogDetectedWithRule(ip, jail, payload string, rule RuleContext)
 	if event.ObservationDisposition == "kernel-packet-dropped" {
 		description = "Kernel Packet Dropped (No Source Ban)"
 	}
-	l.runAsync(func() { webhook.SendDetectedAlert(ip, jail, description) })
+	l.runAsyncWebhookContextKey(webhookDeduplicationKey("detect", ip, jail, payload, description), func(ctx context.Context) {
+		webhook.SendDetectedAlertContext(ctx, ip, jail, description)
+	}, ip, jail, description)
 	l.writeTelemetry(event)
 
 	log.Print(internalSecurityEventLine("DETECTED", ip, jail, payload))
@@ -1013,7 +1140,9 @@ func (l *Logger) LogShadowAlert(ip, jail, payload string) {
 
 // LogShadowAlertWithRule records a threshold observation with its exact rule policy.
 func (l *Logger) LogShadowAlertWithRule(ip, jail, payload string, rule RuleContext) {
-	l.runAsync(func() { webhook.SendShadowAlert(ip, jail) })
+	l.runAsyncWebhookContextKey(webhookDeduplicationKey("shadow", ip, jail, payload), func(ctx context.Context) {
+		webhook.SendShadowAlertContext(ctx, ip, jail)
+	}, ip, jail)
 	event := newTelemetryEvent("SHADOW-ALERT", ip, jail, payload, 8, &rule)
 	l.writeTelemetry(event)
 
@@ -1047,7 +1176,9 @@ func (l *Logger) LogComplianceDrift(msg string) {
 	event := newTelemetryEvent("COMPLIANCE-DRIFT", "127.0.0.1", "NIS2-AUDIT", msg, 0, nil)
 	l.writeTelemetry(event)
 
-	l.runAsync(func() { webhook.SendComplianceAlert(msg, "DRIFT") })
+	l.runAsyncWebhookContextKey(webhookDeduplicationKey("local-check", "DRIFT", msg), func(ctx context.Context) {
+		webhook.SendComplianceAlertContext(ctx, msg, "DRIFT")
+	}, msg)
 
 	log.Print(internalSecurityEventLine("LOCAL-CHECK-DRIFT", "127.0.0.1", "NIS2-AUDIT", msg))
 }
@@ -1059,7 +1190,9 @@ func (l *Logger) LogComplianceOK(msg string) {
 	event := newTelemetryEvent("COMPLIANCE-OK", "127.0.0.1", "NIS2-AUDIT", msg, 0, nil)
 	l.writeTelemetry(event)
 
-	l.runAsync(func() { webhook.SendComplianceAlert(msg, "OK") })
+	l.runAsyncWebhookContextKey(webhookDeduplicationKey("local-check", "OK", msg), func(ctx context.Context) {
+		webhook.SendComplianceAlertContext(ctx, msg, "OK")
+	}, msg)
 
 	log.Print(internalSecurityEventLine("LOCAL-CHECK-OK", "127.0.0.1", "NIS2-AUDIT", msg))
 }
@@ -1071,9 +1204,49 @@ func (l *Logger) Close() {
 		return
 	}
 	l.closed = true
+	if l.asyncQueue != nil {
+		close(l.asyncQueue)
+	}
+	asyncDone := l.asyncDone
+	asyncCancel := l.asyncCancel
+	gracePeriod := l.asyncGracePeriod
+	cancelPeriod := l.asyncCancelPeriod
 	l.lifecycleMu.Unlock()
 
-	l.asyncWG.Wait()
+	if asyncDone != nil {
+		graceTimer := time.NewTimer(gracePeriod)
+		select {
+		case <-asyncDone:
+			if !graceTimer.Stop() {
+				<-graceTimer.C
+			}
+		case <-graceTimer.C:
+			if asyncCancel != nil {
+				asyncCancel()
+			}
+			cancelTimer := time.NewTimer(cancelPeriod)
+			select {
+			case <-asyncDone:
+				if !cancelTimer.Stop() {
+					<-cancelTimer.C
+				}
+			case <-cancelTimer.C:
+				log.Printf("[Logger] Asynchronous webhook worker did not stop within the bounded cancellation period")
+			}
+		}
+	}
+	if asyncCancel != nil {
+		asyncCancel()
+	}
+	if dropped := l.asyncDropped.Load(); dropped != 0 {
+		log.Printf("[Logger] Dropped %d asynchronous webhook notifications because the bounded queue was full", dropped)
+	}
+	if deduplicated := l.asyncDeduplicated.Load(); deduplicated != 0 {
+		log.Printf("[Logger] Coalesced %d duplicate asynchronous webhook notifications while delivery was pending", deduplicated)
+	}
+	if oversized := l.asyncOversized.Load(); oversized != 0 {
+		log.Printf("[Logger] Discarded %d asynchronous webhook notifications because their retained input exceeded the memory bound", oversized)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file != nil {

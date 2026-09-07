@@ -1566,6 +1566,14 @@ func TestHAReplaceAndWAAPPersistenceShareAtomicDirectoryLock_SW_HA_003(t *testin
 
 func TestHATelemetryResponseIsBounded_SW_HA_003(t *testing.T) {
 	fixture := newHAAPITestFixture(t, &recordingHAFirewallManager{}, []string{"9.9.9.10"})
+	if err := os.Truncate(fixture.telemetry, maxHATelemetryBytes); err != nil {
+		t.Fatal(err)
+	}
+	response := requestDirectHAPath(t, fixture.handler, http.MethodGet, "/ha/telemetry", "Bearer shared-secret", "", "9.9.9.10:43123")
+	if response.Code != http.StatusOK || response.Body.Len() != maxHATelemetryBytes {
+		t.Fatalf("exact-boundary telemetry = status:%d bytes:%d", response.Code, response.Body.Len())
+	}
+
 	telemetry, err := os.OpenFile(fixture.telemetry, os.O_WRONLY, 0600)
 	if err != nil {
 		t.Fatal(err)
@@ -1577,7 +1585,7 @@ func TestHATelemetryResponseIsBounded_SW_HA_003(t *testing.T) {
 	if err := telemetry.Close(); err != nil {
 		t.Fatal(err)
 	}
-	response := requestDirectHAPath(t, fixture.handler, http.MethodGet, "/ha/telemetry", "Bearer shared-secret", "", "9.9.9.10:43123")
+	response = requestDirectHAPath(t, fixture.handler, http.MethodGet, "/ha/telemetry", "Bearer shared-secret", "", "9.9.9.10:43123")
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("oversized telemetry = %d, %q", response.Code, response.Body.String())
 	}

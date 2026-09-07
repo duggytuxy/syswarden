@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "contract_id": "syswarden-native-capability-qualification/v1",
+  "target_release": "v4.10.0",
+  "architecture": "amd64",
+  "limits": {
+    "maximum_input_bytes": 1048576,
+    "maximum_campaign_seconds": 5400,
+    "maximum_future_skew_seconds": 300,
+    "maximum_identifier_bytes": 64,
+    "maximum_evidence_reference_bytes": 256
+  },
+  "guardrails": {
+    "ci_execution": "harness-tests-only",
+    "authentication_journal_access": "read-only",
+    "authentication_event_source": "real-controlled-network-attempts",
+    "synthetic_authentication_journal_writes": false,
+    "host_changes": "native-lab-only-ephemeral-and-restored"
+  },
+  "host_profiles": [
+    {
+      "id": "DEB-13",
+      "host_id": "node01",
+      "os_id": "debian",
+      "os_version": "13",
+      "package_family": "deb",
+      "package_variant": "standard",
+      "evidence_namespace": "standard-deb13"
+    },
+    {
+      "id": "DEB-U2604",
+      "host_id": "node02",
+      "os_id": "ubuntu",
+      "os_version": "26.04",
+      "package_family": "deb",
+      "package_variant": "standard",
+      "evidence_namespace": "standard-deb-u2604"
+    },
+    {
+      "id": "RPM-A10",
+      "host_id": "node03",
+      "os_id": "almalinux",
+      "os_version": "10.2",
+      "package_family": "rpm",
+      "package_variant": "standard",
+      "evidence_namespace": "standard-rpm-a10"
+    },
+    {
+      "id": "APK-324",
+      "host_id": "node04",
+      "os_id": "alpine",
+      "os_version": "3.24",
+      "package_family": "apk",
+      "package_variant": "standard",
+      "evidence_namespace": "standard-apk-324"
+    },
+    {
+      "id": "RPM-A9-RHELPO",
+      "host_id": "node05",
+      "os_id": "almalinux",
+      "os_version": "9.8",
+      "package_family": "rpm",
+      "package_variant": "package-owned",
+      "evidence_namespace": "rhelpo-rpm-a9"
+    },
+    {
+      "id": "RPM-A10-RHELPO",
+      "host_id": "node03",
+      "os_id": "almalinux",
+      "os_version": "10.2",
+      "package_family": "rpm",
+      "package_variant": "package-owned",
+      "evidence_namespace": "rhelpo-rpm-a10"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "hids",
+      "scenario_id": "hids-native-auth-log-detection"
+    },
+    {
+      "id": "hips",
+      "scenario_id": "hips-native-ssh-bruteforce"
+    },
+    {
+      "id": "waap",
+      "scenario_id": "waap-native-sqli-request"
+    },
+    {
+      "id": "asn",
+      "scenario_id": "asn-attested-enrichment"
+    },
+    {
+      "id": "geo",
+      "scenario_id": "geo-attested-enrichment"
+    },
+    {
+      "id": "osint",
+      "scenario_id": "osint-history-enrichment"
+    },
+    {
+      "id": "tui_grc",
+      "scenario_id": "tui-grc-kpi-coherence"
+    },
+    {
+      "id": "extended_controls",
+      "scenario_id": "native-extended-controls"
+    }
+  ],
+  "native_controls": [
+    {"id": "operator-policy-tcp-apply", "assertions": {"protocol": "tcp", "exact_nft_ruleset_verified": true}},
+    {"id": "operator-policy-udp-apply", "assertions": {"protocol": "udp", "exact_nft_ruleset_verified": true}},
+    {"id": "operator-policy-concurrent-mutation", "assertions": {"serialized": true, "lost_update": false}},
+    {"id": "operator-policy-rollback-restart", "assertions": {"rollback_verified": true, "restart_verified": true}},
+    {"id": "operator-policy-third-party-preservation", "assertions": {"third_party_rules_unchanged": true}},
+    {"id": "hids-log-rotation", "assertions": {"events_preserved": true, "duplicates": 0}},
+    {"id": "hids-log-truncation", "assertions": {"events_preserved": true, "duplicates": 0}},
+    {"id": "hids-log-replacement", "assertions": {"replacement_attested": true, "events_preserved": true}},
+    {"id": "hids-delayed-write", "assertions": {"delayed_event_observed": true, "duplicates": 0}},
+    {"id": "hids-unsafe-path-refusal", "assertions": {"symlink_refused": true, "special_file_refused": true, "wrong_owner_refused": true, "wrong_mode_refused": true}},
+    {"id": "hips-bf-slow", "assertions": {"real_network_attempts": true, "admitted_hits_match": true, "jail_match": true}},
+    {"id": "waap-exploit-severity", "assertions": {"signature_catalog_bound": true, "severity_match": true}},
+    {"id": "waap-deduplication", "assertions": {"duplicate_events_suppressed": true, "physical_hits_preserved": true}},
+    {"id": "waap-backpressure", "assertions": {"queue_bounded": true, "degraded_evidence_reported": true}},
+    {"id": "waap-non-recursion", "assertions": {"recursive_alerts": 0}}
+  ],
+  "package_owned_controls": [
+    {"id": "rhelpo-go-runtime-only", "assertions": {"go_runtime_scope": "runtime-only", "system_configuration_mutations": false}},
+    {"id": "rhelpo-package-owned-system-state", "assertions": {"configuration_owned_by_package": true, "firewall_owned_by_package": true, "systemd_units_owned_by_package": true}},
+    {"id": "rhelpo-first-boot-after-chroot", "assertions": {"installation_context": "rhel9-image-chroot", "first_boot_verified": true}}
+  ],
+  "attack_scenarios": [
+    {
+      "id": "hips-native-ssh-bruteforce",
+      "capability": "hips",
+      "rule_id": "ssh-auth",
+      "risk_category": "brute_force",
+      "observation_origin": "real-controlled-network-attempts",
+      "required_event_count": 4
+    },
+    {
+      "id": "waap-native-sqli-request",
+      "capability": "waap",
+      "rule_id": "sqli",
+      "risk_category": "exploit",
+      "observation_origin": "real-controlled-http-request",
+      "required_event_count": 1
+    }
+  ],
+  "lifecycle_sequences": [
+    {
+      "id": "manual-deletion",
+      "binding_type": "bound-attack",
+      "capability": "hips",
+      "scenario_id": "hips-native-ssh-bruteforce",
+      "rule_id": "ssh-auth",
+      "states": [
+        "active",
+        "deleted",
+        "tombstoned"
+      ]
+    },
+    {
+      "id": "ttl-expiry",
+      "binding_type": "controlled-temporary-ban",
+      "source": "native-capability-lab",
+      "ttl_seconds": 60,
+      "states": [
+        "active",
+        "expired",
+        "tombstoned"
+      ]
+    }
+  ]
+}

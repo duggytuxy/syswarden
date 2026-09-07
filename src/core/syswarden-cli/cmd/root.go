@@ -19,6 +19,25 @@ var rootCmd = &cobra.Command{
 	Short: "SYSWARDEN Security Orchestrator",
 	Long:  "SYSWARDEN is a host firewall orchestrator and out-of-band security-log analysis toolkit; it is not an inline WAF.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if system.OfflineQualificationPackageInstall() {
+			topLevel := topLevelCommand(cmd)
+			if topLevel != nil && topLevel.Name() == "install" {
+				// The package-script stage must not recover firewall state, load
+				// configuration, or activate candidate code before the updater
+				// reattests the installed package and fixed CLI.
+				return enforceRemovalState(cmd)
+			}
+		}
+		qualificationSelected, qualificationErr := qualificationUpdateSelection(cmd)
+		if qualificationErr != nil {
+			return qualificationErr
+		}
+		if qualificationSelected {
+			// The candidate CLI must authenticate the protected offline bundle
+			// before it runs configuration loading or firewall recovery code.
+			// The removal tombstone remains a mandatory read-only safety gate.
+			return enforceRemovalState(cmd)
+		}
 		if commandRequiresEarlyFirewallRecovery(cmd) {
 			if err := recoverPendingFirewallTransactionHook(); err != nil {
 				return fmt.Errorf("[ERROR] authoritative firewall recovery failed before command preparation: %w", err)

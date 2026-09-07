@@ -794,6 +794,11 @@ def validate_package_source_contract(
     artifacts = value.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         return ["documentation package artifact contract must be a non-empty list"]
+    optional_workflow_artifacts = value.get("optional_workflow_artifacts")
+    if not isinstance(optional_workflow_artifacts, list):
+        return [
+            "documentation package optional_workflow_artifacts must be a list"
+        ]
 
     errors: list[str] = []
     release_names: list[str] = []
@@ -848,6 +853,31 @@ def validate_package_source_contract(
                     f"`{artifact['release_name'].format(version=documented_version)}`",
                 ]
             )
+
+    optional_workflow_names: list[str] = []
+    for index, artifact in enumerate(optional_workflow_artifacts):
+        expected = {
+            "family": "RPM",
+            "architecture": "x86_64",
+            "variant": "rhel-package-owned",
+            "workflow_name": "syswarden-${VERSION}-1.rhelpo.x86_64.rpm",
+        }
+        if artifact != expected:
+            errors.append(
+                "documentation optional workflow artifact "
+                f"{index} must equal {expected!r}"
+            )
+            continue
+        optional_workflow_names.append(artifact["workflow_name"])
+
+    if len(optional_workflow_names) != len(set(optional_workflow_names)):
+        errors.append("duplicate documentation optional workflow artifact")
+    overlap = set(workflow_names) & set(optional_workflow_names)
+    if overlap:
+        errors.append(
+            "documentation optional workflow artifacts overlap public packages: "
+            f"{sorted(overlap)}"
+        )
 
     expected_release_names = release_gate.package_names("9.99.9")
     if release_names != expected_release_names:
@@ -904,11 +934,12 @@ def validate_package_source_contract(
 
     workflow = read_text(repo_root / ".github/workflows/package.yml")
     discovered_workflow_names = set(WORKFLOW_PACKAGE_NAME_RE.findall(workflow))
-    if discovered_workflow_names != set(workflow_names):
+    documented_workflow_names = set(workflow_names) | set(optional_workflow_names)
+    if discovered_workflow_names != documented_workflow_names:
         errors.append(
             "documentation/package workflow asset inventory mismatch; "
-            f"workflow-only={sorted(discovered_workflow_names - set(workflow_names))}, "
-            f"documentation-only={sorted(set(workflow_names) - discovered_workflow_names)}"
+            f"workflow-only={sorted(discovered_workflow_names - documented_workflow_names)}, "
+            f"documentation-only={sorted(documented_workflow_names - discovered_workflow_names)}"
         )
     return errors
 

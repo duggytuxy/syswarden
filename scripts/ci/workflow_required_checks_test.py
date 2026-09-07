@@ -12,8 +12,8 @@ from pathlib import Path
 REPOSITORY = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPOSITORY / ".github" / "workflows"
 PLUMBER_ACTION = (
-    "getplumber/plumber@7bdbfee1f067431ce13f1b239c76f724ccadd0bf"
-    " # v0.4.41"
+    "getplumber/plumber@6452d3d9c12dfa4aecaecde6bc6c528eea3b21a5"
+    " # v0.4.55"
 )
 OFFICIAL_LOGO_SHA256 = (
     "616227e08ee7a93e27582976af16664c86d049319f2a8d6774ec5da4c7881895"
@@ -118,8 +118,9 @@ class RequiredCheckWorkflowTests(unittest.TestCase):
         self.assertNotIn("id-token: write", analysis)
         self.assertNotIn("security-events: write", analysis)
         self.assertIn(f"        uses: {PLUMBER_ACTION}\n", analysis)
-        self.assertIn("          version: v0.4.41\n", analysis)
+        self.assertIn("          version: v0.4.55\n", analysis)
         self.assertIn("          min-points: 100\n", analysis)
+        self.assertIn("          fail-warnings: true\n", analysis)
         self.assertIn("          score-push: false\n", analysis)
         self.assertIn("          upload-sarif: false\n", analysis)
         self.assertIn("          artifact-name: plumber-report\n", analysis)
@@ -135,8 +136,9 @@ class RequiredCheckWorkflowTests(unittest.TestCase):
         self.assertIn("      id-token: write\n", publication)
         self.assertIn("      security-events: write\n", publication)
         self.assertIn(f"        uses: {PLUMBER_ACTION}\n", publication)
-        self.assertIn("          version: v0.4.41\n", publication)
+        self.assertIn("          version: v0.4.55\n", publication)
         self.assertIn("          min-points: 100\n", publication)
+        self.assertIn("          fail-warnings: true\n", publication)
         self.assertIn("          score-push: true\n", publication)
         self.assertIn("          upload-sarif: true\n", publication)
         self.assertIn("          artifact-name: plumber-report\n", publication)
@@ -144,8 +146,9 @@ class RequiredCheckWorkflowTests(unittest.TestCase):
 
     def test_plumber_action_and_score_gate_have_no_weaker_path(self) -> None:
         self.assertEqual(self.compliance.count(f"uses: {PLUMBER_ACTION}"), 2)
-        self.assertEqual(self.compliance.count("          version: v0.4.41\n"), 2)
+        self.assertEqual(self.compliance.count("          version: v0.4.55\n"), 2)
         self.assertEqual(self.compliance.count("          min-points: 100\n"), 2)
+        self.assertEqual(self.compliance.count("          fail-warnings: true\n"), 2)
         self.assertEqual(self.compliance.count("          score-push: false\n"), 1)
         self.assertEqual(self.compliance.count("          score-push: true\n"), 1)
         self.assertNotIn("threshold:", self.compliance)

@@ -330,7 +330,7 @@ def qualification_matrix_binding(
     payload = _git_bytes(
         binding.root,
         "show",
-        f"{binding.commit_sha}:{QUALIFICATION_MATRIX_PATH}",
+        f"{binding.commit_sha}:{qualification_matrix_path(binding.version)}",
     )
     try:
         document = qualification_matrix.validate_document(
@@ -455,7 +455,16 @@ BINDING_KEYS = frozenset(
 COVERAGE_KEYS = frozenset({"coordinates"})
 COORDINATE_KEYS = frozenset({"cell_id", "architecture", "status"})
 QUALIFICATION_MATRIX_BINDING_KEYS = frozenset({"matrix_id", "sha256"})
-QUALIFICATION_MATRIX_PATH = "scripts/ci/package_qualification_matrix.json"
+LEGACY_QUALIFICATION_MATRIX_PATH = "scripts/ci/package_qualification_matrix.json"
+V4100_QUALIFICATION_MATRIX_PATH = "scripts/ci/package_qualification_matrix_v4.10.0.json"
+# Compatibility alias for historical fixtures. Operational consumers resolve by version.
+QUALIFICATION_MATRIX_PATH = LEGACY_QUALIFICATION_MATRIX_PATH
+
+
+def qualification_matrix_path(version: str) -> str:
+    if version == "v4.10.0":
+        return V4100_QUALIFICATION_MATRIX_PATH
+    return LEGACY_QUALIFICATION_MATRIX_PATH
 EVIDENCE_SCOPE_KEYS = frozenset(
     {
         "coverage_kind",

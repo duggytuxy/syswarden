@@ -482,5 +482,133 @@ class PackageQualificationMatrixTests(unittest.TestCase):
             self.assertTrue(stderr.getvalue().startswith("ERROR: "))
 
 
+class PackageQualificationMatrixV4100Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.canonical = matrix.load_matrix(matrix.V4100_MATRIX)
+
+    def document(self) -> dict[str, object]:
+        return copy.deepcopy(self.canonical)
+
+    def test_v4043_snapshot_remains_byte_exact(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(matrix.DEFAULT_MATRIX.read_bytes()).hexdigest(),
+            "5ffa6b59b40f033a2ecceefb70be056cdda2be5f168d973ed9f70dfa754b5075",
+        )
+
+    def test_v4100_contract_selects_the_versioned_matrix(self) -> None:
+        self.assertEqual(matrix.matrix_path_for_target("v4.10.0"), matrix.V4100_MATRIX)
+        self.assertEqual(self.canonical["target_release"], "v4.10.0")
+        self.assertEqual(len(self.canonical["cells"]), 8)
+        self.assertEqual(self.canonical["architecture"], matrix.EXPECTED_ARCHITECTURE)
+
+    def test_v4100_baseline_is_the_exact_public_v4043_release(self) -> None:
+        baseline = self.canonical["package_sources"]["baseline"]
+        self.assertEqual(
+            {key: baseline[key] for key in matrix.V4100_BASELINE_SOURCE},
+            matrix.V4100_BASELINE_SOURCE,
+        )
+        self.assertEqual(
+            tuple(
+                (
+                    asset["name"],
+                    asset["id"],
+                    asset["size"],
+                    asset["architecture"],
+                    asset["sha256"],
+                )
+                for asset in baseline["assets"]
+            ),
+            tuple(
+                (
+                    asset.name,
+                    asset.identifier,
+                    asset.size,
+                    asset.architecture,
+                    asset.sha256,
+                )
+                for asset in matrix.V4100_BASELINE_ASSETS
+            ),
+        )
+
+    def test_v4100_evidence_extensions_are_exact_and_economic(self) -> None:
+        self.assertEqual(
+            tuple(self.canonical["required_evidence"]), matrix.V4100_EVIDENCE
+        )
+        self.assertEqual(
+            matrix.V4100_EVIDENCE[len(matrix.EXPECTED_EVIDENCE) :],
+            (
+                "native-package-signature-verification",
+                "native-extended-capability-verdict",
+                "second-rhel-profile-lifecycle-verdict",
+                "go127-pilot-verdict",
+            ),
+        )
+
+    def test_v4100_cell_obligations_are_exact(self) -> None:
+        cells = self.canonical["cells"]
+        self.assertEqual(
+            tuple(tuple(cell["required_checks"]) for cell in cells),
+            tuple(contract.required_checks for contract in matrix.V4100_CELLS),
+        )
+        self.assertTrue(
+            all(
+                "native-package-verification" in cell["required_checks"]
+                for cell in cells
+            )
+        )
+        self.assertTrue(
+            all(
+                "native-extended-capabilities" in cell["required_checks"]
+                for cell in cells
+            )
+        )
+        rpm_cells = {cell["id"]: cell for cell in cells if cell["family"] == "rpm"}
+        self.assertEqual(set(rpm_cells), {"RPM-A9", "RPM-A10", "RPM-F44"})
+        self.assertTrue(
+            all(
+                "second-rhel-profile" not in cell["required_checks"]
+                for cell in rpm_cells.values()
+            )
+        )
+        self.assertEqual(
+            rpm_cells["RPM-A9"]["real_host"],
+            {"mode": "required", "reboot_count": 2},
+        )
+
+    def test_cli_auto_selects_v4100_and_rejects_unknown_targets(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = matrix.main(("--expected-target-release", "v4.10.0"))
+        self.assertEqual(result, 0, stderr.getvalue())
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertIn("8 AMD64 cells for v4.10.0", stdout.getvalue())
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = matrix.main(("--expected-target-release", "v4.10.1"))
+        self.assertEqual(result, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("target_release is unsupported", stderr.getvalue())
+
+    def test_explicit_old_snapshot_cannot_satisfy_v4100(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = matrix.main(
+                (
+                    "--check",
+                    str(matrix.DEFAULT_MATRIX),
+                    "--expected-target-release",
+                    "v4.10.0",
+                )
+            )
+        self.assertEqual(result, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("does not match --expected-target-release", stderr.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

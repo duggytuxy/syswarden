@@ -1,11 +1,75 @@
 package firewall
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
 	"time"
 )
+
+// RecoverableMutation describes one exact desired firewall state. It is kept
+// deliberately small so security subsystems can durably journal their own
+// model before asking the authoritative firewall manager to mutate the host.
+type RecoverableMutation struct {
+	Entry     string
+	Present   bool
+	Permanent bool
+	TTL       time.Duration
+}
+
+// RecoverableMutationHooks are executed while the shared inter-process
+// firewall lock is held. Prepare must durably publish a WAL record, Persist
+// must publish the caller's post-mutation model, and Commit must durably retire
+// the WAL record. A failure leaves the WAL available for idempotent recovery.
+type RecoverableMutationHooks struct {
+	Prepare func() error
+	Persist func() error
+	Commit  func() error
+}
+
+// RecoverableMutationManager couples a caller-owned durable model to the
+// authoritative firewall mutation under one shared host lock.
+type RecoverableMutationManager interface {
+	RunRecoverableMutation(context.Context, RecoverableMutation, RecoverableMutationHooks) error
+}
+
+// HAReplicationClaimSnapshot is a bounded, read-only view of one HA v2 claim.
+// State is one of active, expired, deleted, or tombstoned.
+type HAReplicationClaimSnapshot struct {
+	Owner          string `json:"owner"`
+	Source         string `json:"source"`
+	IP             string `json:"ip"`
+	State          string `json:"state"`
+	ExpiresAt      string `json:"expires_at,omitempty"`
+	TombstoneUntil string `json:"tombstone_until,omitempty"`
+}
+
+type HAReplicationSnapshot struct {
+	SchemaVersion        int                          `json:"schema_version"`
+	ClusterID            string                       `json:"cluster_id"`
+	Epoch                uint64                       `json:"epoch"`
+	NodeID               string                       `json:"node_id"`
+	Role                 string                       `json:"role"`
+	Coordination         string                       `json:"coordination"`
+	ModelSHA256          string                       `json:"model_sha256"`
+	CheckpointSHA256     string                       `json:"checkpoint_sha256"`
+	PeerCheckpointSHA256 string                       `json:"peer_checkpoint_sha256,omitempty"`
+	CheckpointAt         string                       `json:"checkpoint_at"`
+	CapturedAt           string                       `json:"captured_at"`
+	Active               int                          `json:"active"`
+	Expired              int                          `json:"expired"`
+	Deleted              int                          `json:"deleted"`
+	Tombstoned           int                          `json:"tombstoned"`
+	Truncated            bool                         `json:"truncated"`
+	Claims               []HAReplicationClaimSnapshot `json:"claims"`
+}
+
+// HAReplicationStateReporter exposes no mutator, key material, or transport
+// metadata. Callers must select a bound from 1 through 1024 records.
+type HAReplicationStateReporter interface {
+	HAReplicationStateSnapshot(limit int) (HAReplicationSnapshot, error)
+}
 
 // HealthState describes whether a firewall manager can enforce all, some, or
 // none of its configured blocking layers.

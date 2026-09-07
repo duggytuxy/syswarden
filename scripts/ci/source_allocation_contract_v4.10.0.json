@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "schema_id": "syswarden-source-allocation-contract/v1",
+  "repository": "duggytuxy/syswarden",
+  "target_release": "v4.10.0",
+  "baseline_release": "v4.04.3",
+  "baseline_commit": "381c1f8d91459a9b20605629c725900abd81dee8",
+  "architecture": "linux/amd64",
+  "kernel_machine": "x86_64",
+  "toolchain_version": "go1.26.6",
+  "toolchain_archive_sha256": "708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89",
+  "workload": {
+    "id": "syswarden-waap-engine-scan-allocation-workload/v1",
+    "entrypoint": "syswarden-core/engine.Engine.Scan",
+    "warmup_events": 256,
+    "requested_events": 2048,
+    "admitted_events": 2048,
+    "rejected_events": 0,
+    "duplicate_events": 0,
+    "degraded_events": 0,
+    "gomaxprocs": 1,
+    "goroutines_before": 2,
+    "goroutines_after": 2,
+    "garbage_collection_during_measurement": false
+  },
+  "schemas": {
+    "raw": "syswarden-allocation-raw-sample/v1",
+    "evidence": "syswarden-allocation-evidence/v1",
+    "report": "syswarden-allocation-report/v1",
+    "aggregate": "syswarden-performance-aggregate/v1"
+  },
+  "campaigns": [
+    "allocation-campaign-01",
+    "allocation-campaign-02",
+    "allocation-campaign-03"
+  ],
+  "samples_per_subject_per_campaign": 10,
+  "stable_regression": {
+    "threshold_numerator": "1",
+    "threshold_denominator": "10",
+    "minimum_regressed_campaigns": 2
+  },
+  "metrics": {
+    "waap_detection_allocations_per_admitted_event": {
+      "unit": "count_per_event",
+      "direction": "lower"
+    },
+    "waap_detection_allocated_bytes_per_admitted_event": {
+      "unit": "bytes_per_event",
+      "direction": "lower"
+    }
+  }
+}

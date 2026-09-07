@@ -102,6 +102,22 @@ jobs:
           go-version: '1.26.6'
           cache: false
 
+      - name: Resolve Versioned Qualification Matrix for Coordination
+        id: qualification_matrix
+        if: ${{ steps.context.outputs.candidate == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          case "${RELEASE_TAG}" in
+            v4.10.0) matrix_path="scripts/ci/package_qualification_matrix_v4.10.0.json" ;;
+            *) matrix_path="scripts/ci/package_qualification_matrix.json" ;;
+          esac
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/package_qualification_matrix.py \
+            --check "${matrix_path}" --expected-target-release "${RELEASE_TAG}"
+          printf 'path=%s\n' "${matrix_path}" >> "${GITHUB_OUTPUT}"
+
       - name: Validate Tag, Source, Changelog, and Main Ancestry
         if: ${{ steps.context.outputs.candidate == 'true' }}
         shell: bash
@@ -366,6 +382,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+    env:
+      QUALIFICATION_MATRIX_PATH: ${{ inputs.release_tag == 'v4.10.0' && 'scripts/ci/package_qualification_matrix_v4.10.0.json' || 'scripts/ci/package_qualification_matrix.json' }}
     outputs:
       ready: ${{ steps.upstream.outputs.ready }}
       release_tag: ${{ steps.context.outputs.release_tag }}
@@ -661,8 +679,8 @@ jobs:
           test -s "${QUALIFICATION_ROOT}/EVIDENCE_SHA256SUMS.txt"
           test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
-          qualification_root_directories=(aggregate bound packages raw status)
-          qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
+          qualification_root_directories=(aggregate bound go127-evidence native-release-evidence native-signing packages raw status)
+          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
           qualification_raw_files=(
             nftables-raw.json
             package-lifecycle-amd64.json
@@ -717,18 +735,42 @@ jobs:
               <(find . -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n' | LC_ALL=C sort)
             sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
           )
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_lifecycle_bundle_verify.py \
+            --bundle "${QUALIFICATION_ROOT}/native-release-evidence/native-lifecycle" \
+            --signing-evidence "${QUALIFICATION_ROOT}/native-signing/evidence" \
+            --candidate-commit "${RELEASE_SHA}" \
+            --node02-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node02' "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
+            --node03-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node03' "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
+            --node05-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node05' "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
+            --node04-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node04' "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")"
           jq --exit-status \
             --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
             --slurpfile qualification_matrix \
-              "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
+              "${GITHUB_WORKSPACE}/${QUALIFICATION_MATRIX_PATH}" \
             --arg repository "${GITHUB_REPOSITORY}" \
             --arg release_tag "${RELEASE_TAG}" \
             --arg release_sha "${RELEASE_SHA}" \
             '(keys | sort) == [
+              "candidate_package_artifact_digest",
               "candidate_package_artifact_id",
               "candidate_package_artifact_name",
               "candidate_package_run_id",
               "candidate_package_workflow",
+              "go127_artifact_digest",
+              "go127_artifact_id",
+              "go127_artifact_name",
+              "go127_run_id",
+              "go127_workflow",
+              "native_evidence_artifact_digest",
+              "native_evidence_artifact_id",
+              "native_evidence_artifact_name",
+              "native_evidence_run_id",
+              "native_evidence_workflow",
+              "native_signing_artifact_digest",
+              "native_signing_artifact_id",
+              "native_signing_artifact_name",
+              "native_signing_run_id",
+              "native_signing_workflow",
               "previous_commit_sha",
               "previous_package_asset_ids",
               "previous_release_id",
@@ -738,7 +780,7 @@ jobs:
               "repository",
               "schema_version"
             ] and
-            .schema_version == 2 and
+            .schema_version == 5 and
             .repository == $repository and
             .release_tag == $release_tag and
             .release_sha == $release_sha and
@@ -749,6 +791,31 @@ jobs:
             .candidate_package_run_id > 0 and
             (.candidate_package_artifact_id | type) == "number" and
             .candidate_package_artifact_id > 0 and
+            (.candidate_package_artifact_digest | type) == "string" and
+            (.candidate_package_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
+            .go127_workflow == "go-127-evaluation.yml" and
+            (.go127_run_id | type) == "number" and .go127_run_id > 0 and
+            (.go127_artifact_id | type) == "number" and .go127_artifact_id > 0 and
+            .go127_artifact_name == ("syswarden-go127-evaluation-" + $release_sha) and
+            (.go127_artifact_digest | type) == "string" and
+            (.go127_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
+            .native_signing_workflow == "native-package-signing.yml" and
+            (.native_signing_run_id | type) == "number" and
+            .native_signing_run_id > 0 and
+            (.native_signing_artifact_id | type) == "number" and
+            .native_signing_artifact_id > 0 and
+            (.native_signing_artifact_name | type) == "string" and
+            .native_signing_artifact_name ==
+              ("syswarden-native-signed-packages-" + ($release_tag | ltrimstr("v")) + "-" +
+               (.native_signing_run_id | tostring) + "-1-" + $release_sha) and
+            (.native_signing_artifact_digest | type) == "string" and
+            (.native_signing_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
+            .native_evidence_workflow == "native-release-evidence.yml" and
+            (.native_evidence_run_id | type) == "number" and .native_evidence_run_id > 0 and
+            (.native_evidence_artifact_id | type) == "number" and .native_evidence_artifact_id > 0 and
+            .native_evidence_artifact_name == ("syswarden-native-evidence-" + $release_tag + "-" + $release_sha) and
+            (.native_evidence_artifact_digest | type) == "string" and
+            (.native_evidence_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
             (.previous_release_id | type) == "number" and
             .previous_release_id > 0 and
             (.previous_tag | type) == "string" and
@@ -769,6 +836,21 @@ jobs:
               (.id | type) == "number" and .id > 0 and
               (.name | type) == "string" and (.name | length) > 0
             )' "${QUALIFICATION_ROOT}/qualification-context.json"
+          pinned_toolchain="go$(awk '$1 == "go" {print $2}' go.work)"
+          go_verdict="$(mktemp "${RUNNER_TEMP}/go127-manager-verdict.XXXXXXXXXX")"
+          rm -f -- "${go_verdict}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/go_toolchain_release_verdict.py \
+            --evidence "${QUALIFICATION_ROOT}/go127-evidence/evaluation.json" \
+            --metadata scripts/ci/go_toolchain_evaluation.json \
+            --release-sha "${RELEASE_SHA}" --release-tag "${RELEASE_TAG}" \
+            --pinned-toolchain "${pinned_toolchain}" --repository "${GITHUB_REPOSITORY}" \
+            --run-id "$(jq -r '.go127_run_id' "${QUALIFICATION_ROOT}/qualification-context.json")" \
+            --artifact-id "$(jq -r '.go127_artifact_id' "${QUALIFICATION_ROOT}/qualification-context.json")" \
+            --artifact-name "$(jq -r '.go127_artifact_name' "${QUALIFICATION_ROOT}/qualification-context.json")" \
+            --artifact-digest "$(jq -r '.go127_artifact_digest' "${QUALIFICATION_ROOT}/qualification-context.json")" \
+            --output "${go_verdict}"
+          cmp -- "${go_verdict}" "${QUALIFICATION_ROOT}/go127-evidence/RELEASE_VERDICT.json"
+          rm -f -- "${go_verdict}"
           candidate_run_id="$(jq -r '.candidate_package_run_id' \
             "${QUALIFICATION_ROOT}/qualification-context.json")"
           candidate_artifact_id="$(jq -r '.candidate_package_artifact_id' \
@@ -797,7 +879,7 @@ jobs:
             --nft-raw "${QUALIFICATION_ROOT}/raw/nftables-raw.json" \
             --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
             --package-amd64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json" \
-            --qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
+            --qualification-matrix "${GITHUB_WORKSPACE}/${QUALIFICATION_MATRIX_PATH}" \
             --expected-repository "${GITHUB_REPOSITORY}" \
             --expected-workflow-run-id "${QUALIFICATION_RUN_ID}" \
             --expected-workflow-run-attempt 1 \
@@ -821,26 +903,31 @@ jobs:
             --aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
             --require-tag
 
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py verify \
+            --bundle "${QUALIFICATION_ROOT}/native-signing" \
+            --release "${RELEASE_TAG}" --release-sha "${RELEASE_SHA}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify-packages \
-            --tag "${RELEASE_TAG}" \
-            --packages "incoming/syswarden-packages-${VERSION}"
+            --tag "${RELEASE_TAG}" --packages "incoming/syswarden-packages-${VERSION}"
           package_names=(
             "syswarden_${VERSION}_amd64.deb"
             "syswarden-${VERSION}-1.x86_64.rpm"
             "syswarden_${VERSION}_x86_64.apk"
-            "SHA256SUMS.txt"
           )
           for package_name in "${package_names[@]}"; do
-            cmp --silent \
-              "${QUALIFICATION_ROOT}/packages/candidate/${package_name}" \
-              "incoming/syswarden-packages-${VERSION}/${package_name}"
+            unsigned_sha="$(awk -v name="${package_name}" '$2 == name {print $1}' \
+              "${QUALIFICATION_ROOT}/native-signing/evidence/UNSIGNED_SHA256SUMS.txt")"
+            [[ "${unsigned_sha}" =~ ^[0-9a-f]{64}$ ]]
+            test "$(sha256sum "incoming/syswarden-packages-${VERSION}/${package_name}" | awk '{print $1}')" = "${unsigned_sha}"
+            cmp --silent "${QUALIFICATION_ROOT}/packages/candidate/${package_name}" \
+              "${QUALIFICATION_ROOT}/native-signing/packages/${package_name}"
           done
-          echo "Qualification run ${QUALIFICATION_RUN_ID} and the exact tag package bytes are release-ready."
+          echo "Qualification run ${QUALIFICATION_RUN_ID}, unsigned package provenance, and exact signed package bytes are release-ready."
 
       - name: Validate and Assemble Exact Release Inventory
         if: ${{ steps.upstream.outputs.ready == 'true' }}
         shell: bash
         env:
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
           RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
         run: |
           set -euo pipefail
@@ -858,7 +945,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py prepare \
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
-            --packages "incoming/syswarden-packages-${VERSION}" \
+            --expected-plumber-commit "${RELEASE_SHA}" \
+            --packages "${RUNNER_TEMP}/syswarden-release-qualification-stage/packages/candidate" \
+            --deb-signature "${RUNNER_TEMP}/syswarden-release-qualification-stage/native-signing/packages/syswarden_${VERSION}_amd64.deb.asc" \
+            --rhel-package-owned-rpm "${RUNNER_TEMP}/syswarden-release-qualification-stage/native-signing/rhel-package-owned/packages/syswarden-${VERSION}-1.rhelpo.x86_64.rpm" \
             --bundle incoming/syswarden-attested-bundle \
             --sbom incoming/syswarden-sbom \
             --compliance incoming/plumber-report \
@@ -895,6 +985,8 @@ jobs:
       attestations: write
       contents: write
       id-token: write
+    env:
+      QUALIFICATION_MATRIX_PATH: ${{ inputs.release_tag == 'v4.10.0' && 'scripts/ci/package_qualification_matrix_v4.10.0.json' || 'scripts/ci/package_qualification_matrix.json' }}
 
     steps:
       - name: Require Protected Maintainer Release Environment
@@ -1196,6 +1288,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
+            --expected-plumber-commit "${RELEASE_SHA}" \
             --assets release_payload/assets
           test -s release_payload/release_notes.md
 
@@ -1206,8 +1299,8 @@ jobs:
           test -s "${QUALIFICATION_ROOT}/EVIDENCE_SHA256SUMS.txt"
           test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
-          qualification_root_directories=(aggregate bound packages raw status)
-          qualification_all_directories=(aggregate bound packages packages/candidate packages/previous raw status)
+          qualification_root_directories=(aggregate bound go127-evidence native-release-evidence native-signing packages raw status)
+          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
           qualification_raw_files=(
             nftables-raw.json
             package-lifecycle-amd64.json
@@ -1262,18 +1355,42 @@ jobs:
               <(find . -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n' | LC_ALL=C sort)
             sha256sum --check --strict EVIDENCE_SHA256SUMS.txt
           )
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_lifecycle_bundle_verify.py \
+            --bundle "${QUALIFICATION_ROOT}/native-release-evidence/native-lifecycle" \
+            --signing-evidence "${QUALIFICATION_ROOT}/native-signing/evidence" \
+            --candidate-commit "${RELEASE_SHA}" \
+            --node02-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node02' "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
+            --node03-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node03' "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
+            --node05-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node05' "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
+            --node04-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node04' "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")"
           jq --exit-status \
             --slurpfile aggregate "${QUALIFICATION_ROOT}/aggregate/release-qualification.json" \
             --slurpfile qualification_matrix \
-              "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
+              "${GITHUB_WORKSPACE}/${QUALIFICATION_MATRIX_PATH}" \
             --arg repository "${GITHUB_REPOSITORY}" \
             --arg release_tag "${RELEASE_TAG}" \
             --arg release_sha "${RELEASE_SHA}" \
             '(keys | sort) == [
+              "candidate_package_artifact_digest",
               "candidate_package_artifact_id",
               "candidate_package_artifact_name",
               "candidate_package_run_id",
               "candidate_package_workflow",
+              "go127_artifact_digest",
+              "go127_artifact_id",
+              "go127_artifact_name",
+              "go127_run_id",
+              "go127_workflow",
+              "native_evidence_artifact_digest",
+              "native_evidence_artifact_id",
+              "native_evidence_artifact_name",
+              "native_evidence_run_id",
+              "native_evidence_workflow",
+              "native_signing_artifact_digest",
+              "native_signing_artifact_id",
+              "native_signing_artifact_name",
+              "native_signing_run_id",
+              "native_signing_workflow",
               "previous_commit_sha",
               "previous_package_asset_ids",
               "previous_release_id",
@@ -1283,7 +1400,7 @@ jobs:
               "repository",
               "schema_version"
             ] and
-            .schema_version == 2 and
+            .schema_version == 5 and
             .repository == $repository and
             .release_tag == $release_tag and
             .release_sha == $release_sha and
@@ -1294,6 +1411,31 @@ jobs:
             .candidate_package_run_id > 0 and
             (.candidate_package_artifact_id | type) == "number" and
             .candidate_package_artifact_id > 0 and
+            (.candidate_package_artifact_digest | type) == "string" and
+            (.candidate_package_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
+            .go127_workflow == "go-127-evaluation.yml" and
+            (.go127_run_id | type) == "number" and .go127_run_id > 0 and
+            (.go127_artifact_id | type) == "number" and .go127_artifact_id > 0 and
+            .go127_artifact_name == ("syswarden-go127-evaluation-" + $release_sha) and
+            (.go127_artifact_digest | type) == "string" and
+            (.go127_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
+            .native_signing_workflow == "native-package-signing.yml" and
+            (.native_signing_run_id | type) == "number" and
+            .native_signing_run_id > 0 and
+            (.native_signing_artifact_id | type) == "number" and
+            .native_signing_artifact_id > 0 and
+            (.native_signing_artifact_name | type) == "string" and
+            .native_signing_artifact_name ==
+              ("syswarden-native-signed-packages-" + ($release_tag | ltrimstr("v")) + "-" +
+               (.native_signing_run_id | tostring) + "-1-" + $release_sha) and
+            (.native_signing_artifact_digest | type) == "string" and
+            (.native_signing_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
+            .native_evidence_workflow == "native-release-evidence.yml" and
+            (.native_evidence_run_id | type) == "number" and .native_evidence_run_id > 0 and
+            (.native_evidence_artifact_id | type) == "number" and .native_evidence_artifact_id > 0 and
+            .native_evidence_artifact_name == ("syswarden-native-evidence-" + $release_tag + "-" + $release_sha) and
+            (.native_evidence_artifact_digest | type) == "string" and
+            (.native_evidence_artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
             (.previous_release_id | type) == "number" and
             .previous_release_id > 0 and
             (.previous_tag | type) == "string" and
@@ -1314,6 +1456,21 @@ jobs:
               (.id | type) == "number" and .id > 0 and
               (.name | type) == "string" and (.name | length) > 0
             )' "${QUALIFICATION_ROOT}/qualification-context.json"
+          pinned_toolchain="go$(awk '$1 == "go" {print $2}' go.work)"
+          go_verdict="$(mktemp "${RUNNER_TEMP}/go127-manager-verdict.XXXXXXXXXX")"
+          rm -f -- "${go_verdict}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/go_toolchain_release_verdict.py \
+            --evidence "${QUALIFICATION_ROOT}/go127-evidence/evaluation.json" \
+            --metadata scripts/ci/go_toolchain_evaluation.json \
+            --release-sha "${RELEASE_SHA}" --release-tag "${RELEASE_TAG}" \
+            --pinned-toolchain "${pinned_toolchain}" --repository "${GITHUB_REPOSITORY}" \
+            --run-id "$(jq -r '.go127_run_id' "${QUALIFICATION_ROOT}/qualification-context.json")" \
+            --artifact-id "$(jq -r '.go127_artifact_id' "${QUALIFICATION_ROOT}/qualification-context.json")" \
+            --artifact-name "$(jq -r '.go127_artifact_name' "${QUALIFICATION_ROOT}/qualification-context.json")" \
+            --artifact-digest "$(jq -r '.go127_artifact_digest' "${QUALIFICATION_ROOT}/qualification-context.json")" \
+            --output "${go_verdict}"
+          cmp -- "${go_verdict}" "${QUALIFICATION_ROOT}/go127-evidence/RELEASE_VERDICT.json"
+          rm -f -- "${go_verdict}"
           candidate_run_id="$(jq -r '.candidate_package_run_id' \
             "${QUALIFICATION_ROOT}/qualification-context.json")"
           candidate_artifact_id="$(jq -r '.candidate_package_artifact_id' \
@@ -1342,7 +1499,7 @@ jobs:
             --nft-raw "${QUALIFICATION_ROOT}/raw/nftables-raw.json" \
             --package-raw "${QUALIFICATION_ROOT}/raw/package-lifecycle-raw.json" \
             --package-amd64-shard "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json" \
-            --qualification-matrix "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json" \
+            --qualification-matrix "${GITHUB_WORKSPACE}/${QUALIFICATION_MATRIX_PATH}" \
             --expected-repository "${GITHUB_REPOSITORY}" \
             --expected-workflow-run-id "${QUALIFICATION_RUN_ID}" \
             --expected-workflow-run-attempt 1 \
@@ -1377,6 +1534,15 @@ jobs:
               "${QUALIFICATION_ROOT}/packages/candidate/${package_name}" \
               "release_payload/assets/${package_name}"
           done
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py verify \
+            --bundle "${QUALIFICATION_ROOT}/native-signing" \
+            --release "${RELEASE_TAG}" --release-sha "${RELEASE_SHA}"
+          cmp --silent \
+            "${QUALIFICATION_ROOT}/native-signing/packages/syswarden_${VERSION}_amd64.deb.asc" \
+            "release_payload/assets/syswarden_${VERSION}_amd64.deb.asc"
+          cmp --silent \
+            "${QUALIFICATION_ROOT}/native-signing/rhel-package-owned/packages/syswarden-${VERSION}-1.rhelpo.x86_64.rpm" \
+            "release_payload/assets/syswarden-${VERSION}-1.rhelpo.x86_64.rpm"
           if [[ "${SIGNED_UPDATE_REQUIRED}" == "true" ]]; then
             for update_asset in \
               syswarden-update-manifest-v1.json \
@@ -1430,6 +1596,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
+            --expected-plumber-commit "${RELEASE_SHA}" \
             --assets existing_release_assets
           cmp --silent \
             release_payload/assets/RELEASE_SHA256SUMS.txt \
@@ -1500,6 +1667,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
+            --expected-plumber-commit "${RELEASE_SHA}" \
             --assets draft_release_assets
           cmp --silent \
             release_payload/assets/RELEASE_SHA256SUMS.txt \
@@ -1705,6 +1873,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify \
             --repository "${GITHUB_WORKSPACE}" \
             --tag "${RELEASE_TAG}" \
+            --expected-plumber-commit "${RELEASE_SHA}" \
             --assets published_release_assets
           cmp --silent \
             release_payload/assets/RELEASE_SHA256SUMS.txt \

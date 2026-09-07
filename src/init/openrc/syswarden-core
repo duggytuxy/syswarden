@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+
+name="syswarden-core"
+description="SYSWARDEN WAF and Core Engine"
+command="/opt/syswarden/bin/syswarden-core"
+command_background=true
+pidfile="/run/syswarden-core.pid"
+retry="TERM/5/KILL/5"
+
+depend() {
+	need net rsyslog syswarden-firewall
+}

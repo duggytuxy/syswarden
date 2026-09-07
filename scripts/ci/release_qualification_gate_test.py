@@ -23,6 +23,18 @@ import release_qualification_gate as gate
 import package_qualification_matrix as qualification_matrix
 
 
+class QualificationMatrixResolutionTests(unittest.TestCase):
+    def test_release_matrix_path_is_version_aware_and_fail_closed_by_validation(self) -> None:
+        self.assertEqual(
+            gate.qualification_matrix_path("v4.10.0"),
+            "scripts/ci/package_qualification_matrix_v4.10.0.json",
+        )
+        self.assertEqual(
+            gate.qualification_matrix_path("v4.04.2"),
+            "scripts/ci/package_qualification_matrix.json",
+        )
+
+
 class QualificationFixture:
     version = "v4.04.3"
     previous_version = "v4.04.2"

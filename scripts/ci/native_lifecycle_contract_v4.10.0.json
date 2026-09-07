@@ -1,0 +1,297 @@
+{
+  "schema_version": 1,
+  "contract_id": "syswarden-native-package-lifecycle/v1",
+  "target_release": "v4.10.0",
+  "baseline_release": "v4.04.3",
+  "baseline_commit": "381c1f8d91459a9b20605629c725900abd81dee8",
+  "qualification_state": "candidate-not-qualified",
+  "publishing": false,
+  "architecture": "amd64",
+  "profiles": [
+    {
+      "id": "DEB-U2604",
+      "host_id": "node02",
+      "os_id": "ubuntu",
+      "os_version": "26.04",
+      "package_family": "deb",
+      "package_variant": "standard",
+      "installation_mode": "native-live-host",
+      "package_manager": "dpkg",
+      "service_manager": "systemd",
+      "firewall_backend": "nftables",
+      "candidate_signature_mechanism": "openpgp-detached"
+    },
+    {
+      "id": "RPM-A9",
+      "host_id": "node05",
+      "os_id": "almalinux",
+      "os_version": "9.8",
+      "package_family": "rpm",
+      "package_variant": "standard",
+      "installation_mode": "native-live-host",
+      "package_manager": "rpm",
+      "service_manager": "systemd",
+      "firewall_backend": "nftables",
+      "candidate_signature_mechanism": "rpm-openpgp"
+    },
+    {
+      "id": "APK-324",
+      "host_id": "node04",
+      "os_id": "alpine",
+      "os_version": "3.24",
+      "package_family": "apk",
+      "package_variant": "standard",
+      "installation_mode": "native-live-host",
+      "package_manager": "apk",
+      "service_manager": "openrc",
+      "firewall_backend": "nftables",
+      "candidate_signature_mechanism": "apk-rsa256"
+    },
+    {
+      "id": "RPM-A9-RHELPO",
+      "host_id": "node05",
+      "os_id": "almalinux",
+      "os_version": "9.8",
+      "package_family": "rpm",
+      "package_variant": "rhel-package-owned",
+      "installation_mode": "offline-chroot-first-boot",
+      "package_manager": "rpm",
+      "service_manager": "systemd",
+      "firewall_backend": "nftables",
+      "candidate_signature_mechanism": "rpm-openpgp"
+    },
+    {
+      "id": "RPM-A10-RHELPO",
+      "host_id": "node03",
+      "os_id": "almalinux",
+      "os_version": "10.2",
+      "package_family": "rpm",
+      "package_variant": "rhel-package-owned",
+      "installation_mode": "offline-chroot-first-boot",
+      "package_manager": "rpm",
+      "service_manager": "systemd",
+      "firewall_backend": "nftables",
+      "candidate_signature_mechanism": "rpm-openpgp"
+    }
+  ],
+  "limits": {
+    "maximum_input_bytes": 1048576,
+    "maximum_raw_evidence_bytes": 1048576,
+    "maximum_campaign_seconds": 28800,
+    "maximum_future_skew_seconds": 300,
+    "maximum_reference_bytes": 240,
+    "required_raw_evidence_per_profile": 29
+  },
+  "guardrails": {
+    "ci_execution": "harness-tests-only",
+    "observations": "real-native-host-only",
+    "synthetic_observations": false,
+    "host_mutation": "operator-approved-native-lab-only",
+    "network_boundary": "provider-firewall-default-drop",
+    "candidate_installation": "verified-local-native-package-only",
+    "snapshot_policy": "operator-created-pre-lab-and-restorable",
+    "final_host_state": "syswarden-purged-and-operator-state-preserved"
+  },
+  "package_trust": {
+    "baseline_origin": "github-release-v4.04.3",
+    "baseline_digest_source": "release-sha256sums",
+    "baseline_release_id": 384037482,
+    "baseline_tag_object": "2f37c7e61c68c1d07318ab0286a9eedff54725be",
+    "baseline_tag_signature": {
+      "mechanism": "ssh",
+      "payload_sha256": "0cac52c6cef90d1aa42b322204afbd7aa20399a4c2ac28dd29d8a3631b9b2dbc",
+      "signature_sha256": "dc62181289036f6022d7a1ab8bdacc2aa00d8aaa4caf303d9d7d466050f70182",
+      "status": "verified",
+      "verified_at": "2026-09-07T11:10:46Z"
+    },
+    "baseline_checksum_asset": {
+      "id": 548677391,
+      "name": "SHA256SUMS.txt",
+      "sha256": "331bd7ae9d8afeee7e9a76f0925b057d12287215574c5dc11bb891912cc755d0",
+      "size": 283
+    },
+    "baseline_packages": {
+      "apk": {
+        "id": 548677418,
+        "name": "syswarden_4.04.3_x86_64.apk",
+        "sha256": "adab88015ac97d6c351a4e4cecae85658bceca1af047b83055fec3fa091e1538",
+        "size": 15327844
+      },
+      "deb": {
+        "id": 548677417,
+        "name": "syswarden_4.04.3_amd64.deb",
+        "sha256": "e9ea3252de5668eaa10794333b4cb533a0acedfeac60105b50e512aa915b2612",
+        "size": 15129624
+      },
+      "rpm": {
+        "id": 548677392,
+        "name": "syswarden-4.04.3-1.x86_64.rpm",
+        "sha256": "15271aecd6bc5801eb80387a2e40928ac5cf8851cf2da9899fa1a0905efae4fd",
+        "size": 15415655
+      }
+    },
+    "candidate_origin": "protected-native-signing-artifact",
+    "candidate_digest_source": "native-signing-provenance",
+    "verification_timing": "before-every-installation"
+  },
+  "checkpoints": [
+    {"id": "clean-host", "sequence": 1, "version": "absent", "service_state": "absent", "syswarden_firewall_state": "absent"},
+    {"id": "candidate-clean-installed", "sequence": 2, "version": "v4.10.0", "service_state": "active", "syswarden_firewall_state": "effective"},
+    {"id": "candidate-configured", "sequence": 3, "version": "v4.10.0", "service_state": "active", "syswarden_firewall_state": "effective"},
+    {"id": "clean-install-purged", "sequence": 4, "version": "absent", "service_state": "absent", "syswarden_firewall_state": "absent"},
+    {"id": "stable-v4043-configured", "sequence": 5, "version": "v4.04.3", "service_state": "active", "syswarden_firewall_state": "effective"},
+    {"id": "candidate-v4100-upgraded", "sequence": 6, "version": "v4.10.0", "service_state": "active", "syswarden_firewall_state": "effective"},
+    {"id": "candidate-v4100-reboot1", "sequence": 7, "version": "v4.10.0", "service_state": "active", "syswarden_firewall_state": "effective"},
+    {"id": "candidate-v4100-reboot2", "sequence": 8, "version": "v4.10.0", "service_state": "active", "syswarden_firewall_state": "effective"},
+    {"id": "stable-v4043-rollback", "sequence": 9, "version": "v4.04.3", "service_state": "active", "syswarden_firewall_state": "effective"},
+    {"id": "candidate-v4100-reupgraded", "sequence": 10, "version": "v4.10.0", "service_state": "active", "syswarden_firewall_state": "effective"},
+    {"id": "candidate-v4100-recovered", "sequence": 11, "version": "v4.10.0", "service_state": "active", "syswarden_firewall_state": "effective"},
+    {"id": "final-purged", "sequence": 12, "version": "absent", "service_state": "absent", "syswarden_firewall_state": "absent"}
+  ],
+  "scenarios": [
+    {
+      "id": "native-host-preflight",
+      "sequence": 1,
+      "from_checkpoint": "clean-host",
+      "to_checkpoint": "clean-host",
+      "required_checks": ["exact_os_release", "architecture_amd64", "ssh_host_key_matched_operator_pin", "provider_firewall_default_drop", "provider_firewall_ssh_allowlist_preserved", "package_manager_healthy", "syswarden_package_absent", "syswarden_services_absent", "syswarden_firewall_objects_absent", "syswarden_owned_paths_absent"]
+    },
+    {
+      "id": "candidate-clean-install",
+      "sequence": 2,
+      "from_checkpoint": "clean-host",
+      "to_checkpoint": "candidate-clean-installed",
+      "required_checks": ["candidate_package_digest_verified", "candidate_native_signature_verified_before_install", "candidate_producer_commit_bound", "native_package_manager_used", "package_database_consistent", "core_service_active", "firewall_service_active", "syswarden_firewall_effective", "provider_firewall_preserved", "operator_state_preserved"]
+    },
+    {
+      "id": "candidate-configuration",
+      "sequence": 3,
+      "from_checkpoint": "candidate-clean-installed",
+      "to_checkpoint": "candidate-configured",
+      "required_checks": ["configuration_applied", "configuration_validated", "configuration_semantic_digest_captured", "core_service_active", "firewall_service_active", "syswarden_firewall_effective", "third_party_firewall_preserved", "operator_state_preserved", "package_manager_healthy"]
+    },
+    {
+      "id": "clean-cycle-uninstall-purge",
+      "sequence": 4,
+      "from_checkpoint": "candidate-configured",
+      "to_checkpoint": "clean-install-purged",
+      "required_checks": ["native_remove_and_purge_used", "package_record_absent", "services_and_units_absent", "processes_absent", "dedicated_firewall_objects_absent", "dedicated_configuration_absent", "dedicated_state_absent", "dedicated_logs_absent", "operator_state_preserved", "third_party_firewall_preserved", "package_manager_healthy", "zero_syswarden_residuals"]
+    },
+    {
+      "id": "stable-baseline-install-configure",
+      "sequence": 5,
+      "from_checkpoint": "clean-install-purged",
+      "to_checkpoint": "stable-v4043-configured",
+      "required_checks": ["baseline_release_digest_verified", "baseline_release_commit_bound", "native_package_manager_used", "baseline_version_exact", "configuration_applied", "configuration_validated", "core_service_active", "firewall_service_active", "syswarden_firewall_effective", "operator_state_preserved", "third_party_firewall_preserved", "package_manager_healthy"]
+    },
+    {
+      "id": "candidate-upgrade-v4043-v4100",
+      "sequence": 6,
+      "from_checkpoint": "stable-v4043-configured",
+      "to_checkpoint": "candidate-v4100-upgraded",
+      "required_checks": ["source_version_v4043_exact", "candidate_package_digest_verified", "candidate_native_signature_verified_before_install", "candidate_producer_commit_bound", "native_package_manager_used", "target_version_v4100_exact", "configuration_semantics_preserved", "persistent_state_preserved", "operator_state_preserved", "third_party_firewall_preserved", "services_and_firewall_recovered", "package_manager_healthy"]
+    },
+    {
+      "id": "candidate-reboot-one",
+      "sequence": 7,
+      "from_checkpoint": "candidate-v4100-upgraded",
+      "to_checkpoint": "candidate-v4100-reboot1",
+      "required_checks": ["real_host_reboot", "new_boot_id", "ssh_host_key_pin_preserved", "target_version_v4100_exact", "configuration_semantics_preserved", "persistent_state_preserved", "operator_state_preserved", "third_party_firewall_preserved", "services_and_firewall_recovered", "package_manager_healthy"]
+    },
+    {
+      "id": "candidate-reboot-two",
+      "sequence": 8,
+      "from_checkpoint": "candidate-v4100-reboot1",
+      "to_checkpoint": "candidate-v4100-reboot2",
+      "required_checks": ["real_host_reboot", "new_boot_id", "ssh_host_key_pin_preserved", "target_version_v4100_exact", "configuration_semantics_preserved", "persistent_state_preserved", "operator_state_preserved", "third_party_firewall_preserved", "services_and_firewall_recovered", "package_manager_healthy"]
+    },
+    {
+      "id": "verified-rollback-v4100-v4043",
+      "sequence": 9,
+      "from_checkpoint": "candidate-v4100-reboot2",
+      "to_checkpoint": "stable-v4043-rollback",
+      "required_checks": ["supported_native_rollback_used", "baseline_release_digest_verified_before_install", "baseline_release_commit_bound", "rollback_version_v4043_exact", "configuration_semantics_preserved", "persistent_state_preserved", "operator_state_preserved", "third_party_firewall_preserved", "services_and_firewall_recovered", "package_manager_healthy"]
+    },
+    {
+      "id": "candidate-reupgrade-v4043-v4100",
+      "sequence": 10,
+      "from_checkpoint": "stable-v4043-rollback",
+      "to_checkpoint": "candidate-v4100-reupgraded",
+      "required_checks": ["candidate_package_digest_verified", "candidate_native_signature_verified_before_install", "candidate_producer_commit_bound", "native_package_manager_used", "target_version_v4100_exact", "configuration_semantics_preserved", "persistent_state_preserved", "operator_state_preserved", "third_party_firewall_preserved", "services_and_firewall_recovered", "package_manager_healthy"]
+    },
+    {
+      "id": "candidate-runtime-recovery",
+      "sequence": 11,
+      "from_checkpoint": "candidate-v4100-reupgraded",
+      "to_checkpoint": "candidate-v4100-recovered",
+      "required_checks": ["controlled_service_interruption_observed", "controlled_firewall_state_loss_observed", "single_recovery_operation_used", "core_service_recovered", "firewall_service_recovered", "syswarden_firewall_recovered", "configuration_semantics_preserved", "persistent_state_preserved", "operator_state_preserved", "third_party_firewall_preserved", "no_unexpected_reboot", "package_manager_healthy"]
+    },
+    {
+      "id": "candidate-final-uninstall-purge",
+      "sequence": 12,
+      "from_checkpoint": "candidate-v4100-recovered",
+      "to_checkpoint": "final-purged",
+      "required_checks": ["native_remove_and_purge_used", "package_record_absent", "services_and_units_absent", "processes_absent", "dedicated_firewall_objects_absent", "dedicated_configuration_absent", "dedicated_state_absent", "dedicated_logs_absent", "operator_state_preserved", "third_party_firewall_preserved", "package_manager_healthy", "zero_syswarden_residuals"]
+    }
+  ],
+  "scenario_package_verifications": {
+    "native-host-preflight": [],
+    "candidate-clean-install": ["v4.10.0"],
+    "candidate-configuration": [],
+    "clean-cycle-uninstall-purge": [],
+    "stable-baseline-install-configure": ["v4.04.3"],
+    "candidate-upgrade-v4043-v4100": ["v4.10.0"],
+    "candidate-reboot-one": [],
+    "candidate-reboot-two": [],
+    "verified-rollback-v4100-v4043": ["v4.04.3"],
+    "candidate-reupgrade-v4043-v4100": ["v4.10.0"],
+    "candidate-runtime-recovery": [],
+    "candidate-final-uninstall-purge": []
+  },
+  "profile_scenario_checks": {
+    "RPM-A9-RHELPO": {
+      "candidate-clean-install": ["offline_chroot_stage_succeeded", "active_systemd_not_required_during_stage", "package_owned_units_installed", "package_owned_configuration_installed", "package_owned_firewall_assets_installed", "first_real_boot_observed", "first_real_boot_services_activated", "first_real_boot_firewall_activated"]
+    },
+    "RPM-A10-RHELPO": {
+      "candidate-clean-install": ["offline_chroot_stage_succeeded", "active_systemd_not_required_during_stage", "package_owned_units_installed", "package_owned_configuration_installed", "package_owned_firewall_assets_installed", "first_real_boot_observed", "first_real_boot_services_activated", "first_real_boot_firewall_activated"]
+    }
+  },
+  "zero_residue_paths": [
+    "/opt/syswarden",
+    "/etc/syswarden",
+    "/var/lib/syswarden",
+    "/var/lib/.syswarden-removal-finalizing-v1",
+    "/var/log/syswarden",
+    "/run/syswarden.sock",
+    "/var/run/syswarden.sock",
+    "/run/syswarden-core.pid",
+    "/run/syswarden-firewall.lock",
+    "/run/syswarden-webtui.pid",
+    "/etc/systemd/system/syswarden-core.service",
+    "/etc/systemd/system/syswarden-firewall.service",
+    "/etc/systemd/system/syswarden-webtui.service",
+    "/etc/systemd/system/syswarden-webtui.service.syswarden-retiring",
+    "/etc/systemd/system/syswarden-webtui.service.d",
+    "/etc/systemd/system/multi-user.target.wants/syswarden-core.service",
+    "/etc/systemd/system/multi-user.target.wants/syswarden-firewall.service",
+    "/etc/systemd/system/multi-user.target.wants/syswarden-webtui.service",
+    "/run/systemd/system/syswarden-webtui.service",
+    "/run/systemd/system/syswarden-webtui.service.d",
+    "/etc/init.d/syswarden-core",
+    "/etc/init.d/syswarden-firewall",
+    "/etc/init.d/syswarden-webtui",
+    "/etc/conf.d/syswarden-webtui",
+    "/etc/runlevels/default/syswarden-core",
+    "/etc/runlevels/default/syswarden-firewall",
+    "/etc/runlevels/default/syswarden-webtui",
+    "/usr/local/bin/syswarden",
+    "/usr/local/bin/syswarden-tui",
+    "/usr/share/bash-completion/completions/syswarden",
+    "/usr/share/doc/syswarden",
+    "/etc/cron.d/syswarden",
+    "/etc/rsyslog.d/99-syswarden-waf-bridge.conf",
+    "/etc/init.d/wg-quick.wg-syswarden",
+    "/etc/runlevels/default/wg-quick.wg-syswarden",
+    "/etc/wireguard/wg-syswarden.conf"
+  ]
+}

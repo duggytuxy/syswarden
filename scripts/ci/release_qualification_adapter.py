@@ -28,6 +28,10 @@ import package_qualification_matrix as qualification_matrix
 import release_qualification_gate as gate
 
 
+# Compatibility alias for historical fixtures. Operational consumers resolve by version.
+PACKAGE_QUALIFICATION_MATRIX_PATH = gate.LEGACY_QUALIFICATION_MATRIX_PATH
+
+
 OUTPUT_NAMES = {
     "nft": "nftables-bound.json",
     "package": "package-lifecycle-bound.json",
@@ -672,7 +676,6 @@ PACKAGE_QUALIFICATION_BINDING_KEYS = frozenset(
     }
 )
 PACKAGE_QUALIFICATION_MATRIX_KEYS = frozenset({"matrix_id", "sha256"})
-PACKAGE_QUALIFICATION_MATRIX_PATH = "scripts/ci/package_qualification_matrix.json"
 PACKAGE_NATIVE_SHARDS_KEYS = frozenset({"schema_version", "mode", "reports"})
 PACKAGE_NATIVE_SHARD_RECORD_KEYS = frozenset(
     {
@@ -986,8 +989,9 @@ def _load_qualification_matrix(
     path: Path,
     binding: gate.RepositoryBinding,
 ) -> QualificationMatrix:
+    matrix_path = gate.qualification_matrix_path(binding.version)
     expected_path = gate._absolute_without_symlinks(
-        binding.root / PACKAGE_QUALIFICATION_MATRIX_PATH,
+        binding.root / matrix_path,
         "repository package qualification matrix",
     )
     supplied_path = gate._absolute_without_symlinks(
@@ -997,10 +1001,10 @@ def _load_qualification_matrix(
     if supplied_path != expected_path:
         _fail(
             "package qualification matrix must be the exact repository contract "
-            f"at {PACKAGE_QUALIFICATION_MATRIX_PATH}"
+            f"at {matrix_path}"
         )
     snapshot = gate.read_snapshot(supplied_path, "package qualification matrix")
-    committed_payload = _git_blob_bytes(binding, PACKAGE_QUALIFICATION_MATRIX_PATH)
+    committed_payload = _git_blob_bytes(binding, matrix_path)
     if snapshot.payload != committed_payload:
         _fail("package qualification matrix bytes differ from the exact Git commit")
     try:
@@ -1268,6 +1272,10 @@ def _validate_package_shard_binding(
                 raw.document,
                 architecture=architecture,
                 expected_binding=expected_binding,
+                expected_matrix_binding={
+                    "matrix_id": expected_matrix.matrix_id,
+                    "sha256": expected_matrix.sha256,
+                },
             )
         except (package_lab.LifecycleLabError, KeyError, TypeError, ValueError) as exc:
             raise AdapterError(
@@ -2881,7 +2889,7 @@ def _revalidate_all(
     gate.revalidate(matrix.snapshot, "package qualification matrix")
     if (
         matrix.snapshot.payload
-        != _git_blob_bytes(binding, PACKAGE_QUALIFICATION_MATRIX_PATH)
+        != _git_blob_bytes(binding, gate.qualification_matrix_path(binding.version))
     ):
         _fail("package qualification matrix changed after validation")
     for raw in (*raws.values(), *package_shards.values()):

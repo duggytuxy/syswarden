@@ -31,6 +31,8 @@ const (
 
 	OperatorPolicyProtocolICMP   OperatorPolicyProtocol = "icmp"
 	OperatorPolicyProtocolICMPv6 OperatorPolicyProtocol = "icmpv6"
+	OperatorPolicyProtocolTCP    OperatorPolicyProtocol = "tcp"
+	OperatorPolicyProtocolUDP    OperatorPolicyProtocol = "udp"
 
 	OperatorPolicyTypeEchoRequest OperatorPolicyICMPType = "echo-request"
 
@@ -38,25 +40,29 @@ const (
 )
 
 // OperatorPolicyConfig is the closed, typed operator-owned policy surface.
-// Rules are intentionally limited to ICMP echo requests in this schema.
+// Rules are intentionally limited to ICMP echo requests and single TCP or UDP
+// destination ports in this schema.
 type OperatorPolicyConfig struct {
 	Rules []OperatorPolicyRule `mapstructure:"rules"`
 }
 
 type OperatorPolicyRule struct {
-	ID        string                  `mapstructure:"id"`
-	Family    OperatorPolicyFamily    `mapstructure:"family"`
-	Direction OperatorPolicyDirection `mapstructure:"direction"`
-	Protocol  OperatorPolicyProtocol  `mapstructure:"protocol"`
-	ICMPType  OperatorPolicyICMPType  `mapstructure:"type"`
-	Source    string                  `mapstructure:"source"`
-	Action    OperatorPolicyAction    `mapstructure:"action"`
+	ID              string                  `mapstructure:"id"`
+	Family          OperatorPolicyFamily    `mapstructure:"family"`
+	Direction       OperatorPolicyDirection `mapstructure:"direction"`
+	Protocol        OperatorPolicyProtocol  `mapstructure:"protocol"`
+	ICMPType        OperatorPolicyICMPType  `mapstructure:"type"`
+	DestinationPort uint16                  `mapstructure:"destination_port"`
+	Source          string                  `mapstructure:"source"`
+	Action          OperatorPolicyAction    `mapstructure:"action"`
 }
 
 type validatedOperatorPolicyRule struct {
-	id     string
-	family OperatorPolicyFamily
-	source netip.Prefix
+	id       string
+	family   OperatorPolicyFamily
+	protocol OperatorPolicyProtocol
+	port     uint16
+	source   netip.Prefix
 }
 
 type operatorPolicySourceAttestation struct {
@@ -127,7 +133,7 @@ func validateOperatorPolicyDocument(relative string, document map[string]any) er
 		}
 		for key := range rule {
 			switch key {
-			case "id", "family", "direction", "protocol", "type", "source", "action":
+			case "id", "family", "direction", "protocol", "type", "destination_port", "source", "action":
 			default:
 				return fmt.Errorf("%s operator_policy.rules[%d] contains unknown key %q", relative, index, key)
 			}
@@ -160,9 +166,21 @@ func validateOperatorPolicyDocument(relative string, document map[string]any) er
 		if err != nil {
 			return err
 		}
-		icmpType, err := readString("type")
-		if err != nil {
-			return err
+		icmpType := ""
+		if value, exists := rule["type"]; exists {
+			var ok bool
+			icmpType, ok = value.(string)
+			if !ok {
+				return fmt.Errorf("%s operator_policy.rules[%d].type must be a string", relative, index)
+			}
+		}
+		var destinationPort uint16
+		if value, exists := rule["destination_port"]; exists {
+			port, ok := value.(int64)
+			if !ok || port < 1 || port > 65535 {
+				return fmt.Errorf("%s operator_policy.rules[%d].destination_port must be an integer from 1 to 65535", relative, index)
+			}
+			destinationPort = uint16(port)
 		}
 		source, err := readString("source")
 		if err != nil {
@@ -173,13 +191,14 @@ func validateOperatorPolicyDocument(relative string, document map[string]any) er
 			return err
 		}
 		typed.Rules = append(typed.Rules, OperatorPolicyRule{
-			ID:        id,
-			Family:    OperatorPolicyFamily(family),
-			Direction: OperatorPolicyDirection(direction),
-			Protocol:  OperatorPolicyProtocol(protocol),
-			ICMPType:  OperatorPolicyICMPType(icmpType),
-			Source:    source,
-			Action:    OperatorPolicyAction(action),
+			ID:              id,
+			Family:          OperatorPolicyFamily(family),
+			Direction:       OperatorPolicyDirection(direction),
+			Protocol:        OperatorPolicyProtocol(protocol),
+			ICMPType:        OperatorPolicyICMPType(icmpType),
+			DestinationPort: destinationPort,
+			Source:          source,
+			Action:          OperatorPolicyAction(action),
 		})
 	}
 	if err := ValidateOperatorPolicy(typed); err != nil {
@@ -227,23 +246,32 @@ func ValidateOperatorPolicy(policy OperatorPolicyConfig) error {
 		if rule.Direction != OperatorPolicyDirectionIngress {
 			return fmt.Errorf("operator_policy rule %q direction must be %q", rule.ID, OperatorPolicyDirectionIngress)
 		}
-		if rule.ICMPType != OperatorPolicyTypeEchoRequest {
-			return fmt.Errorf("operator_policy rule %q type must be %q", rule.ID, OperatorPolicyTypeEchoRequest)
-		}
 		if rule.Action != OperatorPolicyActionAccept {
 			return fmt.Errorf("operator_policy rule %q action must be %q", rule.ID, OperatorPolicyActionAccept)
 		}
-		switch rule.Family {
-		case OperatorPolicyFamilyIPv4:
-			if rule.Protocol != OperatorPolicyProtocolICMP {
+		if rule.Family != OperatorPolicyFamilyIPv4 && rule.Family != OperatorPolicyFamilyIPv6 {
+			return fmt.Errorf("operator_policy rule %q family must be %q or %q", rule.ID, OperatorPolicyFamilyIPv4, OperatorPolicyFamilyIPv6)
+		}
+		switch rule.Protocol {
+		case OperatorPolicyProtocolTCP, OperatorPolicyProtocolUDP:
+			if rule.ICMPType != "" || rule.DestinationPort == 0 {
+				return fmt.Errorf("operator_policy rule %q protocol %q requires one destination_port and no type", rule.ID, rule.Protocol)
+			}
+		case OperatorPolicyProtocolICMP, OperatorPolicyProtocolICMPv6:
+			if rule.ICMPType != OperatorPolicyTypeEchoRequest {
+				return fmt.Errorf("operator_policy rule %q type must be %q", rule.ID, OperatorPolicyTypeEchoRequest)
+			}
+			if rule.DestinationPort != 0 {
+				return fmt.Errorf("operator_policy rule %q ICMP must not declare destination_port", rule.ID)
+			}
+			if rule.Family == OperatorPolicyFamilyIPv4 && rule.Protocol != OperatorPolicyProtocolICMP {
 				return fmt.Errorf("operator_policy rule %q requires protocol %q for family %q", rule.ID, OperatorPolicyProtocolICMP, rule.Family)
 			}
-		case OperatorPolicyFamilyIPv6:
-			if rule.Protocol != OperatorPolicyProtocolICMPv6 {
+			if rule.Family == OperatorPolicyFamilyIPv6 && rule.Protocol != OperatorPolicyProtocolICMPv6 {
 				return fmt.Errorf("operator_policy rule %q requires protocol %q for family %q", rule.ID, OperatorPolicyProtocolICMPv6, rule.Family)
 			}
 		default:
-			return fmt.Errorf("operator_policy rule %q family must be %q or %q", rule.ID, OperatorPolicyFamilyIPv4, OperatorPolicyFamilyIPv6)
+			return fmt.Errorf("operator_policy rule %q protocol is unsupported", rule.ID)
 		}
 
 		source, err := canonicalOperatorPolicySource(rule.Source, rule.Family)
@@ -251,14 +279,14 @@ func ValidateOperatorPolicy(policy OperatorPolicyConfig) error {
 			return fmt.Errorf("operator_policy rule %q source: %w", rule.ID, err)
 		}
 		for _, existing := range validated {
-			if existing.family != rule.Family {
+			if existing.family != rule.Family || existing.protocol != rule.Protocol || existing.port != rule.DestinationPort {
 				continue
 			}
 			if existing.source.Contains(source.Addr()) || source.Contains(existing.source.Addr()) {
 				return fmt.Errorf("operator_policy rules %q and %q have equivalent or overlapping sources", existing.id, rule.ID)
 			}
 		}
-		validated = append(validated, validatedOperatorPolicyRule{id: rule.ID, family: rule.Family, source: source})
+		validated = append(validated, validatedOperatorPolicyRule{id: rule.ID, family: rule.Family, protocol: rule.Protocol, port: rule.DestinationPort, source: source})
 	}
 	return nil
 }

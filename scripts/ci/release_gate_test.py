@@ -376,6 +376,101 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertIn(release_gate.UPDATE_MANIFEST_NAME, signed)
         self.assertIn(release_gate.UPDATE_SIGNATURE_NAME, signed)
 
+    def test_v4100_release_requires_exact_deb_detached_signature_asset(self) -> None:
+        self.assertFalse(release_gate.native_package_signatures_required("v4.04.2"))
+        self.assertTrue(release_gate.native_package_signatures_required("v4.10.0"))
+        self.assertTrue(release_gate.native_package_signatures_required("v5.00.0"))
+        signature_name = "syswarden_4.10.0_amd64.deb.asc"
+        self.assertNotIn(
+            signature_name, release_gate.expected_release_assets("v4.04.2")
+        )
+        self.assertIn(signature_name, release_gate.expected_release_assets("v4.10.0"))
+        signature = self.root / signature_name
+        signature.write_bytes(
+            b"-----BEGIN PGP SIGNATURE-----\nproof\n-----END PGP SIGNATURE-----\n"
+        )
+        release_gate.validate_deb_signature(signature)
+        signature.write_bytes(
+            b"-----BEGIN PGP SIGNATURE-----\nproof\n-----END PGP SIGNATURE-----\nextra\n"
+        )
+        with self.assertRaises(release_gate.ReleaseGateError):
+            release_gate.validate_deb_signature(signature)
+
+    def test_v4100_release_requires_opt_in_rhel_package_owned_asset(self) -> None:
+        self.assertFalse(release_gate.rhel_package_owned_required("v4.04.3"))
+        self.assertTrue(release_gate.rhel_package_owned_required("v4.10.0"))
+        self.assertTrue(release_gate.rhel_package_owned_required("v5.00.0"))
+        package_name = "syswarden-4.10.0-1.rhelpo.x86_64.rpm"
+        assets = release_gate.expected_release_assets("v4.10.0")
+        self.assertEqual(len(assets), 12)
+        self.assertIn(package_name, assets)
+        package = self.root / package_name
+        package.write_bytes(b"signed-rhel-package-owned-rpm\n")
+        release_gate.validate_rhel_package_owned_rpm(package, "4.10.0")
+        wrong = self.root / "syswarden-4.10.0-2.rhelpo.x86_64.rpm"
+        wrong.write_bytes(b"wrong-release\n")
+        with self.assertRaisesRegex(
+            release_gate.ReleaseGateError, "filename is not canonical"
+        ):
+            release_gate.validate_rhel_package_owned_rpm(wrong, "4.10.0")
+
+    def test_v4100_prepare_fails_before_staging_without_rhel_package_owned_rpm(
+        self,
+    ) -> None:
+        self.tag = "v4.10.0"
+        self.version = "4.10.0"
+        signature = self.root / release_gate.deb_signature_name(self.version)
+        signature.write_bytes(
+            b"-----BEGIN PGP SIGNATURE-----\nproof\n-----END PGP SIGNATURE-----\n"
+        )
+        args = type(
+            "Args",
+            (),
+            {
+                "repository": self.make_repository(),
+                "tag": self.tag,
+                "packages": self.make_packages(),
+                "bundle": self.root / "unused-bundle",
+                "sbom": self.root / "unused-sbom",
+                "compliance": self.root / "unused-compliance",
+                "output": self.root / "output",
+                "notes_output": self.root / "notes",
+                "update_manifest_dir": None,
+                "deb_signature": signature,
+                "rhel_package_owned_rpm": None,
+            },
+        )()
+        with self.assertRaisesRegex(
+            release_gate.ReleaseGateError, "RHEL package-owned RPM is required"
+        ):
+            release_gate.prepare(args)
+        self.assertFalse(args.output.exists())
+
+    def test_v4100_prepare_fails_before_staging_without_deb_signature(self) -> None:
+        self.tag = "v4.10.0"
+        self.version = "4.10.0"
+        args = type(
+            "Args",
+            (),
+            {
+                "repository": self.make_repository(),
+                "tag": self.tag,
+                "packages": self.make_packages(),
+                "bundle": self.root / "unused-bundle",
+                "sbom": self.root / "unused-sbom",
+                "compliance": self.root / "unused-compliance",
+                "output": self.root / "output",
+                "notes_output": self.root / "notes",
+                "update_manifest_dir": None,
+                "deb_signature": None,
+            },
+        )()
+        with self.assertRaisesRegex(
+            release_gate.ReleaseGateError, "DEB detached signature is required"
+        ):
+            release_gate.prepare(args)
+        self.assertFalse(args.output.exists())
+
     def test_signed_update_predicate_cli_is_semantic_and_machine_readable(self) -> None:
         for tag, expected in (
             ("v4.02.7", "false"),
@@ -1022,7 +1117,138 @@ class ReleaseGateTests(unittest.TestCase):
         archive = self.make_compliance_archive(
             [(release_gate.PLUMBER_REPORT_NAME, over_limit)]
         )
-        with self.assertRaisesRegex(release_gate.ReleaseGateError, "64-KiB"):
+        with self.assertRaisesRegex(release_gate.ReleaseGateError, "768-KiB"):
+            release_gate.validate_compliance_archive(archive)
+
+    def test_bound_plumber_report_matches_commit_and_exact_workflows(self) -> None:
+        repository = self.root / "bound-repository"
+        workflows = repository / ".github" / "workflows"
+        self.write_file(workflows / "package.yml", b"name: Package\n")
+        self.write_file(workflows / "security.yml", b"name: Security\n")
+        expected_commit = "a" * 40
+        report = self.plumber_report()
+        report.update(
+            {
+                "headCommitSha": expected_commit,
+                "dataCollectionDegraded": False,
+                "degradedReasons": [],
+                "warnings": [],
+                "branchProtectionResult": {
+                    "enabled": True,
+                    "status": "passed",
+                    "data": [
+                        {
+                            "branchName": "main",
+                            "protectionDetailsKnown": True,
+                        }
+                    ],
+                    "metrics": {
+                        "branchesToProtect": 1,
+                        "nonCompliantBranches": 0,
+                        "projectsCorrectlyProtected": 1,
+                    },
+                },
+                "analyzedCiConfig": {
+                    "workflows": [
+                        {
+                            "path": ".github/workflows/package.yml",
+                            "content": "name: Package\n",
+                        },
+                        {
+                            "path": ".github/workflows/security.yml",
+                            "content": "name: Security\n",
+                        },
+                    ]
+                },
+            }
+        )
+
+        def validate(document: dict[str, object]) -> None:
+            content = (
+                json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+            archive = self.make_compliance_archive(
+                [(release_gate.PLUMBER_REPORT_NAME, content)]
+            )
+            release_gate.validate_compliance_archive(
+                archive,
+                repository=repository,
+                expected_commit=expected_commit,
+            )
+
+        validate(report)
+        omitted_healthy_fields = json.loads(json.dumps(report))
+        for field in ("dataCollectionDegraded", "degradedReasons", "warnings"):
+            omitted_healthy_fields.pop(field)
+        validate(omitted_healthy_fields)
+        mutations = {
+            "wrong commit": lambda value: value.update(headCommitSha="b" * 40),
+            "degraded": lambda value: value.update(dataCollectionDegraded=True),
+            "degraded reason": lambda value: value.update(
+                degradedReasons=["metadata unavailable"]
+            ),
+            "warning": lambda value: value.update(warnings=["warning"]),
+            "partial control": lambda value: value.update(
+                partialControls=[{"control": "branchMustBeProtected"}]
+            ),
+            "branch status": lambda value: value["branchProtectionResult"].update(
+                status="error"
+            ),
+            "branch control disabled": lambda value: value[
+                "branchProtectionResult"
+            ].update(enabled=False),
+            "unknown protection details": lambda value: value[
+                "branchProtectionResult"
+            ]["data"][0].update(protectionDetailsKnown=False),
+            "noncompliant branch": lambda value: value[
+                "branchProtectionResult"
+            ]["metrics"].update(nonCompliantBranches=1),
+            "no protected project": lambda value: value[
+                "branchProtectionResult"
+            ]["metrics"].update(projectsCorrectlyProtected=0),
+            "invalid metric type": lambda value: value[
+                "branchProtectionResult"
+            ]["metrics"].update(branchesToProtect=True),
+            "changed workflow": lambda value: value["analyzedCiConfig"][
+                "workflows"
+            ][0].update(content="name: Changed\n"),
+            "unexpected workflow path": lambda value: value[
+                "analyzedCiConfig"
+            ]["workflows"][0].update(path="package.yml"),
+            "duplicate workflow": lambda value: value["analyzedCiConfig"][
+                "workflows"
+            ][1].update(path=".github/workflows/package.yml"),
+            "missing workflow": lambda value: value["analyzedCiConfig"][
+                "workflows"
+            ].pop(),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                changed = json.loads(json.dumps(report))
+                mutate(changed)
+                with self.assertRaises(release_gate.ReleaseGateError):
+                    validate(changed)
+
+    def test_compliance_archive_accepts_only_bounded_aggregate_size(self) -> None:
+        report = self.plumber_report_bytes()
+        companion_size = (
+            release_gate.COMPLIANCE_ARCHIVE_MAX_UNCOMPRESSED_BYTES - len(report)
+        )
+        archive = self.make_compliance_archive(
+            [
+                (release_gate.PLUMBER_REPORT_NAME, report),
+                ("native/companion.bin", b"A" * companion_size),
+            ]
+        )
+        release_gate.validate_compliance_archive(archive)
+
+        archive = self.make_compliance_archive(
+            [
+                (release_gate.PLUMBER_REPORT_NAME, report),
+                ("native/companion.bin", b"A" * (companion_size + 1)),
+            ]
+        )
+        with self.assertRaisesRegex(release_gate.ReleaseGateError, "aggregate"):
             release_gate.validate_compliance_archive(archive)
 
     def test_compliance_archive_bounds_companion_expansion_and_member_count(
@@ -1484,6 +1710,20 @@ class ReleaseGateTests(unittest.TestCase):
     ) -> None:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
         self.assert_generic_release_validation_contract(workflow)
+
+    def test_release_manager_binds_every_full_plumber_verification_to_commit(
+        self,
+    ) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        binding = '            --expected-plumber-commit "${RELEASE_SHA}" '
+        self.assertEqual(workflow.count(binding + chr(92)), 5)
+        assemble = workflow_step_script(
+            workflow, "Validate and Assemble Exact Release Inventory"
+        )
+        self.assertIn(
+            '--expected-plumber-commit "${RELEASE_SHA}" ' + chr(92),
+            assemble,
+        )
 
     def test_release_manager_generic_release_validation_rejects_mutations(
         self,
@@ -1992,7 +2232,7 @@ printf 'gh\\n' >> "${FAKE_LOG}"
         )
         self.assertEqual(workflow.count("--slurpfile qualification_matrix"), 2)
         self.assertEqual(workflow.count('"previous_commit_sha",'), 2)
-        self.assertEqual(workflow.count(".schema_version == 2"), 2)
+        self.assertEqual(workflow.count(".schema_version == 5"), 2)
         self.assertNotIn(".schema_version == 1", workflow)
         self.assertEqual(
             workflow.count(
@@ -2009,6 +2249,12 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             1,
         )
         for section in (validate, privileged):
+            self.assertIn("native_lifecycle_bundle_verify.py", section)
+            self.assertIn("native-release-evidence/native-lifecycle", section)
+            self.assertIn("--node02-ssh-host-key-sha256", section)
+            self.assertIn("--node03-ssh-host-key-sha256", section)
+            self.assertIn("--node05-ssh-host-key-sha256", section)
+            self.assertIn("--node04-ssh-host-key-sha256", section)
             for argument in (
                 "--package-amd64-shard",
                 "--expected-repository",
@@ -2021,7 +2267,29 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             ):
                 self.assertIn(argument, section)
             self.assertIn("EVIDENCE_SHA256SUMS.txt qualification-context.json", section)
-            self.assertIn("aggregate bound packages raw status", section)
+            self.assertIn(
+                "qualification_root_directories=(aggregate bound "
+                "go127-evidence native-release-evidence native-signing packages raw status)",
+                section,
+            )
+            self.assertIn(
+                "native-release-evidence/ha-v2 "
+                "native-release-evidence/ha-v2/raw "
+                "native-release-evidence/native-capability "
+                "native-release-evidence/native-lifecycle "
+                "native-release-evidence/node01-migration "
+                "native-release-evidence/performance",
+                section,
+            )
+            self.assertNotIn("native-release-evidence/rhel-package-owned", section)
+            self.assertIn(
+                "native-release-evidence/source-allocation "
+                "native-release-evidence/source-allocation/raw "
+                "native-release-evidence/source-allocation/raw/allocation-campaign-01 "
+                "native-release-evidence/source-allocation/raw/allocation-campaign-02 "
+                "native-release-evidence/source-allocation/raw/allocation-campaign-03",
+                section,
+            )
             self.assertIn("qualification_root_directories+=(update)", section)
             self.assertIn("qualification_all_directories+=(update)", section)
             for raw_name in (
@@ -2041,7 +2309,11 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             self.assertIn("test -z \"$(find \"${QUALIFICATION_ROOT}\" -type l", section)
             self.assertIn("! -type f ! -type d -print -quit", section)
             self.assertIn(
-                "aggregate bound packages packages/candidate packages/previous raw status",
+                "native-signing native-signing/evidence native-signing/packages "
+                "native-signing/rhel-package-owned "
+                "native-signing/rhel-package-owned/evidence "
+                "native-signing/rhel-package-owned/packages "
+                "packages packages/candidate packages/previous raw status",
                 section,
             )
             self.assertIn('.repository == $repository', section)
@@ -2184,7 +2456,7 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                 "${QUALIFICATION_ROOT}/raw/package-lifecycle-amd64.json"
             ),
             "--qualification-matrix": (
-                "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json"
+                "${GITHUB_WORKSPACE}/${QUALIFICATION_MATRIX_PATH}"
             ),
             "--expected-repository": "${GITHUB_REPOSITORY}",
             "--expected-workflow-run-id": "${QUALIFICATION_RUN_ID}",
@@ -2222,19 +2494,30 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                 )
                 self.assertEqual(provided_arguments, expected_arguments)
 
-    def test_release_manager_executes_schema_v2_context_contract(self) -> None:
+    def test_release_manager_executes_schema_v5_native_evidence_context_contract(self) -> None:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "QUALIFICATION_MATRIX_PATH: ${{ inputs.release_tag == 'v4.10.0' && "
+            "'scripts/ci/package_qualification_matrix_v4.10.0.json' || "
+            "'scripts/ci/package_qualification_matrix.json' }}",
+            workflow,
+        )
+        self.assertNotIn(
+            "${GITHUB_WORKSPACE}/scripts/ci/package_qualification_matrix.json",
+            workflow,
+        )
+
         validate = workflow.split("  validate-and-stage:", 1)[1].split(
             "  attest-and-publish:", 1
         )[0]
         privileged = workflow.split("  attest-and-publish:", 1)[1]
         repository = "duggytuxy/syswarden"
-        release_tag = "v4.04.3"
+        release_tag = "v4.10.0"
         release_sha = "a" * 40
         previous_tag = "v4.04.2"
         previous_commit_sha = "7a03d40f427a825917561e2a0930298e8fbbbc8b"
         context = {
-            "schema_version": 2,
+            "schema_version": 5,
             "repository": repository,
             "release_tag": release_tag,
             "release_sha": release_sha,
@@ -2243,7 +2526,23 @@ printf 'gh\\n' >> "${FAKE_LOG}"
             "candidate_package_workflow": "package.yml",
             "candidate_package_run_id": 101,
             "candidate_package_artifact_id": 102,
-            "candidate_package_artifact_name": "syswarden-packages-4.04.3",
+            "candidate_package_artifact_name": "syswarden-packages-4.10.0",
+            "candidate_package_artifact_digest": "sha256:" + "d" * 64,
+            "native_signing_workflow": "native-package-signing.yml",
+            "native_signing_run_id": 104,
+            "native_signing_artifact_id": 105,
+            "native_signing_artifact_name": "syswarden-native-signed-packages-4.10.0-104-1-" + release_sha,
+            "native_signing_artifact_digest": "sha256:" + "e" * 64,
+            "native_evidence_workflow": "native-release-evidence.yml",
+            "native_evidence_run_id": 106,
+            "native_evidence_artifact_id": 107,
+            "native_evidence_artifact_name": "syswarden-native-evidence-v4.10.0-" + release_sha,
+            "native_evidence_artifact_digest": "sha256:" + "f" * 64,
+            "go127_workflow": "go-127-evaluation.yml",
+            "go127_run_id": 108,
+            "go127_artifact_id": 109,
+            "go127_artifact_name": "syswarden-go127-evaluation-" + release_sha,
+            "go127_artifact_digest": "sha256:" + "1" * 64,
             "previous_release_id": 381364611,
             "previous_package_asset_ids": [
                 {"id": 541354557, "name": "SHA256SUMS.txt"},
@@ -2310,6 +2609,15 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                 for mutation, mutate in (
                     ("schema", lambda value: value.__setitem__("schema_version", 1)),
                     ("commit", lambda value: value.__setitem__("previous_commit_sha", "b" * 40)),
+                    ("unsigned digest", lambda value: value.__setitem__("candidate_package_artifact_digest", "sha256:" + "0" * 63)),
+                    ("native run", lambda value: value.__setitem__("native_signing_run_id", 999)),
+                    ("native artifact", lambda value: value.__setitem__("native_signing_artifact_id", 0)),
+                    ("native name", lambda value: value.__setitem__("native_signing_artifact_name", "wrong")),
+                    ("native digest", lambda value: value.__setitem__("native_signing_artifact_digest", "sha256:" + "0" * 63)),
+                    ("native evidence run", lambda value: value.__setitem__("native_evidence_run_id", 0)),
+                    ("native evidence artifact", lambda value: value.__setitem__("native_evidence_artifact_id", 0)),
+                    ("native evidence name", lambda value: value.__setitem__("native_evidence_artifact_name", "wrong")),
+                    ("native evidence digest", lambda value: value.__setitem__("native_evidence_artifact_digest", "sha256:" + "0" * 63)),
                     ("extra", lambda value: value.__setitem__("unexpected", True)),
                     ("missing", lambda value: value.pop("previous_commit_sha")),
                 ):
@@ -2317,6 +2625,58 @@ printf 'gh\\n' >> "${FAKE_LOG}"
                     mutate(candidate)
                     with self.subTest(stage=stage, mutation=mutation):
                         self.assertNotEqual(execute(candidate).returncode, 0)
+
+    def test_workflow_run_coordination_resolves_v4100_matrix_from_resolved_tag(self) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        coordinate = workflow.split("  coordinate-release:", 1)[1].split(
+            "  dispatch-release:", 1
+        )[0]
+        self.assertNotIn("inputs.release_tag", coordinate)
+        self.assertIn(
+            "RELEASE_TAG: ${{ steps.context.outputs.release_tag }}", coordinate
+        )
+        self.assertIn(
+            'v4.10.0) matrix_path="scripts/ci/package_qualification_matrix_v4.10.0.json"',
+            coordinate,
+        )
+        self.assertIn(
+            '--check "${matrix_path}" --expected-target-release "${RELEASE_TAG}"',
+            coordinate,
+        )
+
+    def test_publisher_uses_only_qualified_signed_packages_and_signatures(self) -> None:
+        workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")
+        stage = workflow.split(
+            "      - name: Validate and Assemble Exact Release Inventory", 1
+        )[1].split("      - name: Upload Validated Release Payload", 1)[0]
+        self.assertIn(
+            '--packages "${RUNNER_TEMP}/syswarden-release-qualification-stage/packages/candidate"',
+            stage,
+        )
+        self.assertIn(
+            '--deb-signature "${RUNNER_TEMP}/syswarden-release-qualification-stage/native-signing/packages/syswarden_${VERSION}_amd64.deb.asc"',
+            stage,
+        )
+        self.assertIn(
+            '--rhel-package-owned-rpm "${RUNNER_TEMP}/syswarden-release-qualification-stage/native-signing/rhel-package-owned/packages/syswarden-${VERSION}-1.rhelpo.x86_64.rpm"',
+            stage,
+        )
+        self.assertNotIn('--packages "incoming/syswarden-packages-${VERSION}"', stage)
+        revalidation = workflow.split(
+            "      - name: Revalidate Exact Pre-Tag Qualification and Candidate Packages",
+            1,
+        )[1].split("      - name: Validate and Assemble Exact Release Inventory", 1)[0]
+        self.assertIn("native-signing/evidence/UNSIGNED_SHA256SUMS.txt", revalidation)
+        self.assertIn("native-signing/packages/${package_name}", revalidation)
+        privileged = workflow.split("  attest-and-publish:", 1)[1]
+        self.assertIn(
+            'native-signing/rhel-package-owned/packages/syswarden-${VERSION}-1.rhelpo.x86_64.rpm',
+            privileged,
+        )
+        self.assertIn(
+            'release_payload/assets/syswarden-${VERSION}-1.rhelpo.x86_64.rpm',
+            privileged,
+        )
 
     def test_privileged_publisher_requires_a_protected_maintainer_environment(self) -> None:
         workflow = RELEASE_MANAGER_WORKFLOW.read_text(encoding="utf-8")

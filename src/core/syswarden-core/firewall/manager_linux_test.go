@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,91 @@ import (
 
 	"github.com/google/nftables"
 )
+
+func TestNftablesRecoverableMutationHoldsSharedLockThroughCommit(t *testing.T) {
+	connection := fullFakeNftablesConnection()
+	manager, err := newNftablesManager(func() nftablesConnection { return connection })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const entry = "8.8.8.81"
+	prepared := make(chan struct{})
+	releasePersist := make(chan struct{})
+	transactionDone := make(chan error, 1)
+	go func() {
+		transactionDone <- manager.RunRecoverableMutation(context.Background(), RecoverableMutation{
+			Entry: entry, Present: true, TTL: time.Hour,
+		}, RecoverableMutationHooks{
+			Prepare: func() error {
+				close(prepared)
+				return nil
+			},
+			Persist: func() error {
+				parsed, parseErr := parseFirewallEntry(entry)
+				if parseErr != nil {
+					return parseErr
+				}
+				for _, layer := range manager.layersForKeyLocked(parsed.key) {
+					if !fakeElementPresent(connection.elements[fakeNftSetKey(layer.set)], nftables.SetElement{Key: parsed.key}) {
+						return fmt.Errorf("firewall mutation was not verified before persistence")
+					}
+				}
+				<-releasePersist
+				return nil
+			},
+			Commit: func() error { return nil },
+		})
+	}()
+
+	select {
+	case <-prepared:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recoverable transaction did not reach prepare")
+	}
+	competingDone := make(chan error, 1)
+	go func() { competingDone <- manager.Unban(entry) }()
+	select {
+	case err := <-competingDone:
+		t.Fatalf("competing mutation escaped the shared transaction lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releasePersist)
+	if err := <-transactionDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-competingDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNftablesRecoverableMutationValidatesHooksAndCancellation(t *testing.T) {
+	connection := fullFakeNftablesConnection()
+	manager, err := newNftablesManager(func() nftablesConnection { return connection })
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks := RecoverableMutationHooks{
+		Prepare: func() error { return nil }, Persist: func() error { return nil }, Commit: func() error { return nil },
+	}
+	if err := manager.RunRecoverableMutation(context.Background(), RecoverableMutation{Entry: "8.8.8.82", Present: true}, hooks); err == nil {
+		t.Fatal("timed mutation without TTL was accepted")
+	}
+	if err := manager.RunRecoverableMutation(context.Background(), RecoverableMutation{Entry: "8.8.8.82"}, RecoverableMutationHooks{}); err == nil {
+		t.Fatal("mutation without durable hooks was accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	prepared := false
+	cancelHooks := hooks
+	cancelHooks.Prepare = func() error { prepared = true; return nil }
+	if err := manager.RunRecoverableMutation(ctx, RecoverableMutation{Entry: "8.8.8.82"}, cancelHooks); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled transaction returned %v", err)
+	}
+	if prepared || connection.flushCalls != 0 {
+		t.Fatal("canceled transaction reached WAL or firewall mutation")
+	}
+}
 
 func TestMain(m *testing.M) {
 	directory, err := os.MkdirTemp("", "syswarden-core-firewall-tests-")

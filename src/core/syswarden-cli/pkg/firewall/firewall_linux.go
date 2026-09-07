@@ -800,7 +800,10 @@ func prepareNftSetPopulations(
 		defer unlockNftListSnapshot(listSnapshotLock)
 	}
 	optional := func(name string) nftListSource {
-		return nftListSource{path: filepath.Join(listDirectory, name)}
+		return nftListSource{
+			path:     filepath.Join(listDirectory, name),
+			attested: name == "syswarden_threatintel.ipv4" || name == "syswarden_threatintel.ipv6",
+		}
 	}
 
 	includeSaaSPair := false

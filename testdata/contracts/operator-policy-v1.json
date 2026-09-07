@@ -13,6 +13,12 @@
       "want_error": ""
     },
     {
+      "name": "accept-closed-tcp-rule",
+      "relative_path": "modules/99-user.toml",
+      "toml": "[[operator_policy.rules]]\nid = \"allow-tcp-v4\"\nfamily = \"ipv4\"\ndirection = \"ingress\"\nprotocol = \"tcp\"\ndestination_port = 8443\nsource = \"192.0.2.0/24\"\naction = \"accept\"\n",
+      "want_error": ""
+    },
+    {
       "name": "reject-wrong-module",
       "relative_path": "modules/10-network.toml",
       "toml": "[[operator_policy.rules]]\nid = \"allow-icmp-v4\"\nfamily = \"ipv4\"\ndirection = \"ingress\"\nprotocol = \"icmp\"\ntype = \"echo-request\"\nsource = \"192.0.2.10\"\naction = \"accept\"\n",
@@ -56,6 +62,27 @@
     }
   ],
   "semantic_cases": [
+    {
+      "name": "accept-tcp-ipv4",
+      "rules": [
+        {"id": "allow-tcp-v4", "family": "ipv4", "direction": "ingress", "protocol": "tcp", "type": "", "destination_port": 8443, "source": "192.0.2.0/24", "action": "accept"}
+      ],
+      "want_error": ""
+    },
+    {
+      "name": "accept-udp-ipv6",
+      "rules": [
+        {"id": "allow-udp-v6", "family": "ipv6", "direction": "ingress", "protocol": "udp", "type": "", "destination_port": 51820, "source": "2001:db8:1::/64", "action": "accept"}
+      ],
+      "want_error": ""
+    },
+    {
+      "name": "reject-transport-zero-port",
+      "rules": [
+        {"id": "allow-tcp-v4", "family": "ipv4", "direction": "ingress", "protocol": "tcp", "type": "", "destination_port": 0, "source": "192.0.2.10", "action": "accept"}
+      ],
+      "want_error": "requires one destination_port"
+    },
     {
       "name": "accept-ipv4-host",
       "rules": [

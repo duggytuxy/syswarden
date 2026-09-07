@@ -124,6 +124,17 @@ func validateConfig(config *ModularConfig) error {
 		if len(config.Integrations.HA.PeerIPs) == 0 {
 			return fmt.Errorf("integrations.bunkerweb.enabled requires at least one exact IP or canonical CIDR in integrations.ha.peer_ips")
 		}
+		if config.Integrations.HA.V2Enabled && len(config.Integrations.BunkerWeb.SchedulerIPs) == 0 {
+			return fmt.Errorf("HA v2 BunkerWeb integration requires at least one exact IP or canonical CIDR in integrations.bunkerweb.scheduler_ips")
+		}
+		if config.Integrations.HA.V2Enabled {
+			for _, scheduler := range config.Integrations.BunkerWeb.SchedulerIPs {
+				canonical, err := CanonicalHAPeer(scheduler)
+				if err != nil || canonical != scheduler {
+					return fmt.Errorf("integrations.bunkerweb.scheduler_ips must contain canonical exact IPs or bounded CIDRs")
+				}
+			}
+		}
 	}
 	if config.Integrations.HA.Enabled {
 		if !validBearerToken(config.Integrations.HA.Token) {
@@ -137,6 +148,40 @@ func validateConfig(config *ModularConfig) error {
 			if sshPort == config.Integrations.HA.PeerPort {
 				return fmt.Errorf("integrations.ha.peer_port must not equal core.ssh_port while WireGuard is enabled")
 			}
+		}
+	}
+	if config.Integrations.HA.V2Enabled {
+		ha := config.Integrations.HA
+		if !ha.Enabled || len(ha.PeerIPs) != 1 || !validHAIdentity(ha.ClusterID) || ha.Epoch == 0 ||
+			!validHAIdentity(ha.NodeID) || !validHAIdentity(ha.PeerID) || ha.NodeID == ha.PeerID ||
+			(ha.Role != "writer" && ha.Role != "standby") || ha.PeerTLSName != ha.PeerID ||
+			!validCleanAbsolutePath(ha.V2SecretFile) || !validCleanAbsolutePath(ha.TLSCertFile) ||
+			!validCleanAbsolutePath(ha.TLSKeyFile) || !validCleanAbsolutePath(ha.TLSCAFile) ||
+			!validCleanAbsolutePath(ha.StateFile) || !validCleanAbsolutePath(ha.TransactionFile) || ha.StateFile == ha.TransactionFile ||
+			ha.TransactionFile == ha.StateFile+".anchor.json" || ha.TransactionFile == ha.StateFile+".head.wal.json" ||
+			ha.TransactionFile == ha.StateFile+".instance.lock" ||
+			ha.HeartbeatIntervalSeconds < 1 || ha.HeartbeatIntervalSeconds > 60 ||
+			ha.HeartbeatTimeoutSeconds < ha.HeartbeatIntervalSeconds*2 || ha.HeartbeatTimeoutSeconds > 120 ||
+			ha.RequestTimeoutSeconds < 1 || ha.RequestTimeoutSeconds > 30 || len(ha.PeerCertSHA256) < 1 || len(ha.PeerCertSHA256) > 2 {
+			return fmt.Errorf("integrations.ha v2 requires one cluster epoch, two static identities, one role, secure absolute paths, and bounded timing")
+		}
+		peer, err := netip.ParseAddr(ha.PeerIPs[0])
+		if err != nil || peer.String() != ha.PeerIPs[0] || peer.Is4In6() || peer.Zone() != "" || peer.IsUnspecified() || peer.IsMulticast() ||
+			peer.IsLoopback() || peer.IsLinkLocalUnicast() {
+			return fmt.Errorf("integrations.ha v2 requires one exact peer address")
+		}
+		fingerprints := make(map[string]struct{}, len(ha.PeerCertSHA256))
+		for _, fingerprint := range ha.PeerCertSHA256 {
+			if len(fingerprint) != 64 {
+				return fmt.Errorf("integrations.ha v2 peer certificate fingerprint is invalid")
+			}
+			if decoded, err := hex.DecodeString(fingerprint); err != nil || hex.EncodeToString(decoded) != fingerprint {
+				return fmt.Errorf("integrations.ha v2 peer certificate fingerprint is invalid")
+			}
+			if _, duplicate := fingerprints[fingerprint]; duplicate {
+				return fmt.Errorf("integrations.ha v2 peer certificate fingerprints must be unique")
+			}
+			fingerprints[fingerprint] = struct{}{}
 		}
 	}
 	if config.Integrations.SIEM.Enabled {
@@ -156,6 +201,16 @@ func validateConfig(config *ModularConfig) error {
 		return fmt.Errorf("enabled Wazuh configuration requires an IP, communication port, and enrollment port")
 	}
 	return nil
+}
+
+var haIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+func validHAIdentity(value string) bool {
+	return haIdentityPattern.MatchString(value)
+}
+
+func validCleanAbsolutePath(value string) bool {
+	return value != "" && filepath.IsAbs(value) && filepath.Clean(value) == value
 }
 
 func validateCIDR(fl validator.FieldLevel) bool {

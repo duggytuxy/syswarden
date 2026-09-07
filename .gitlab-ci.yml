@@ -3,7 +3,7 @@
 # Before enabling this pipeline on a self-managed GitLab instance:
 # 1. Mirror https://gitlab.com/getplumber/plumber into the same instance at
 #    infrastructure/ci-components/plumber, preserving the pinned commit below.
-# 2. Mirror getplumber/plumber:0.4.51 into this project's container registry as
+# 2. Mirror getplumber/plumber:0.4.55 into this project's container registry as
 #    $CI_REGISTRY_IMAGE/plumber and verify that the manifest digest remains the
 #    immutable digest pinned below. If the registry rewrites the manifest,
 #    replace the digest with the verified internal-registry digest.
@@ -29,10 +29,10 @@ workflow:
     - when: never
 
 include:
-  - component: $CI_SERVER_FQDN/infrastructure/ci-components/plumber/plumber@de6c51afb28f0becedc1dcde385321bcb95d8512 # Plumber v0.4.51
+  - component: $CI_SERVER_FQDN/infrastructure/ci-components/plumber/plumber@37b44609c34b3094dad6cf0dedf218e77a8fbc70 # Plumber v0.4.55
     inputs:
       stage: compliance
-      image: $CI_REGISTRY_IMAGE/plumber@sha256:de2ce9f239f2069ecb97be599abffd0a2fbbccd89a4e40d5061f31d9bcddd6fc
+      image: $CI_REGISTRY_IMAGE/plumber@sha256:28d08dda9b93e1163080e95c679b82b2181f4e910a1269124edd85d1cd058e93
       config_file: .plumber.yaml
       min_points: "100"
       output_file: plumber-report.json

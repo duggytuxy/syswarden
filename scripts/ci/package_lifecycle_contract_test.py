@@ -246,6 +246,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
         required_assets = {
             'syswarden_${VERSION}_amd64.deb',
             "syswarden-${VERSION}-1.x86_64.rpm",
+            "syswarden-${VERSION}-1.rhelpo.x86_64.rpm",
             'syswarden_${VERSION}_x86_64.apk',
         }
         for asset in required_assets:
@@ -262,6 +263,10 @@ class PackageLifecycleContractTests(unittest.TestCase):
             ("STAGING_AMD64", "staging-amd64"),
             ("STAGING_APK_AMD64", "staging-apk-amd64"),
             ("PACKAGE_ASSETS", "assets"),
+            ("RHEL_PROFILE_STAGING", "staging-rhel-package-owned"),
+            ("RHEL_PROFILE_SOURCE", "rhel-package-owned-source"),
+            ("RHEL_PROFILE_ASSETS", "assets-rhel-package-owned"),
+            ("RHEL_PROFILE_RPM_SCRIPTS", "rhel-package-owned-rpm-scripts"),
             ("PACKAGE_SCRIPTS", "scripts"),
             ("PACKAGE_RPM_SCRIPTS", "rpm-scripts"),
             ("PACKAGE_CONFIGS", "configs"),
@@ -321,13 +326,13 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertLess(provenance, source_state)
         self.assertLess(source_state, upload)
         self.assertEqual(stage.count("package_binary_provenance_gate.py"), 2)
-        self.assertEqual(packaged.count("package_binary_provenance_gate.py"), 3)
+        self.assertEqual(packaged.count("package_binary_provenance_gate.py"), 4)
         self.assertEqual(stage.count("--print-digest-contract"), 2)
         self.assertIn("amd64_digest_contract", stage)
         self.assertIn("apk_amd64_digest_contract", stage)
-        self.assertEqual(packaged.count("--expected-digest-contract"), 3)
+        self.assertEqual(packaged.count("--expected-digest-contract"), 4)
         self.assertEqual(
-            packaged.count('"${VALIDATED_AMD64_DIGEST_CONTRACT}"'), 3
+            packaged.count('"${VALIDATED_AMD64_DIGEST_CONTRACT}"'), 4
         )
         self.assertEqual(
             packaged.count('"${VALIDATED_APK_AMD64_DIGEST_CONTRACT}"'), 2
@@ -339,15 +344,41 @@ class PackageLifecycleContractTests(unittest.TestCase):
             '"${PACKAGE_ASSETS}/syswarden-${VERSION}-1.x86_64.rpm" "${relative}"',
             packaged,
         )
+        self.assertIn(
+            '"${RHEL_PROFILE_ASSETS}/syswarden-${VERSION}-1.rhelpo.x86_64.rpm" "${relative}"',
+            packaged,
+        )
         self.assertIn('cpio --extract --to-stdout --quiet', packaged)
         self.assertNotIn('cpio --extract --make-directories', packaged)
         self.assertNotIn('dpkg-deb --extract', packaged)
         self.assertIn('tar --extract --to-stdout', packaged)
         self.assertIn('syswarden_${VERSION}_x86_64.apk', packaged)
         self.assertEqual(packaged.count('--reference-root "${STAGING_AMD64}"'), 2)
+        self.assertEqual(
+            packaged.count('--reference-root "${RHEL_PROFILE_STAGING}"'), 1
+        )
         self.assertEqual(packaged.count('--reference-root "${STAGING_APK_AMD64}"'), 1)
         self.assertIn("sha256sum --check --strict SHA256SUMS.txt", packaged)
         self.assertIn('-exec chmod 0444 -- {} +', packaged)
+
+    def test_rhel_package_owned_scriptlets_are_escaped_before_fpm(self) -> None:
+        staging = workflow_step_script(
+            self.workflow, "Stage Opt-in RHEL Package-owned RPM Payload"
+        )
+        build = workflow_step_script(
+            self.workflow, "Build Opt-in RHEL Package-owned Variant (.rpm)"
+        )
+        self.assertIn("LC_ALL=C sed 's/%/%%/g'", staging)
+        self.assertIn("LC_ALL=C sed 's/%%/%/g'", staging)
+        for name in (
+            "pre-install.sh",
+            "post-install.sh",
+            "pre-uninstall.sh",
+            "post-uninstall.sh",
+        ):
+            self.assertIn(f'"${{RHEL_PROFILE_RPM_SCRIPTS}}/{name}"', staging)
+            self.assertIn(f'"${{RHEL_PROFILE_RPM_SCRIPTS}}/{name}"', build)
+        self.assertNotIn('"${RHEL_PROFILE_SOURCE}/rpm-scriptlets/', build)
 
     def test_local_builder_is_pinned_readonly_and_source_immutable(self) -> None:
         source = LOCAL_BUILD_SCRIPT.read_text(encoding="utf-8")
@@ -509,6 +540,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
             + '\nVERSION="$1"\n'
             + 'PACKAGE_WORKSPACE="$2"\n'
             + 'LOCAL_PACKAGE_OUTPUT="$3"\n'
+            + 'RPM_PACKAGE_FILENAME="syswarden-${VERSION}-1.x86_64.rpm"\n'
             + "publish_local_artifacts\n"
         )
         command = [
@@ -1044,8 +1076,12 @@ class PackageLifecycleContractTests(unittest.TestCase):
         for changelog in (workflow_changelog, local_changelog):
             self.assertIn('date --utc --date="@${SOURCE_DATE_EPOCH}"', changelog)
             self.assertIn('date --utc --date="${changelog_day} 12:00:00"', changelog)
-            self.assertIn("SysWarden Engineering - %s-1", changelog)
+            self.assertIn("SysWarden Engineering - %s-%s", changelog)
             self.assertIn('chmod 0600 "${destination}"', changelog)
+        self.assertIn('local package_release="$2"', workflow_changelog)
+        self.assertIn('"${package_release}"', workflow_changelog)
+        self.assertIn('local package_release="$2"', local_changelog)
+        self.assertIn('"${package_release}"', local_changelog)
 
         workflow_normalizer_start = normalization_step.index(
             "normalize_package_mtimes() {"
@@ -1075,8 +1111,13 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "PACKAGE_RPM_SCRIPTS",
         ):
             self.assertEqual(normalization_step.count(f'"${{{target}}}"'), 1, target)
-        self.assertIn('prepare_rpm_changelog "${RPM_CHANGELOG}"', normalization_step)
-        self.assertIn('"${RPM_CHANGELOG}"\n', normalization_step)
+        self.assertIn('prepare_rpm_changelog "${RPM_CHANGELOG}" 1', normalization_step)
+        self.assertIn(
+            'prepare_rpm_changelog "${RHEL_PROFILE_RPM_CHANGELOG}" 1.rhelpo',
+            normalization_step,
+        )
+        self.assertIn('  "${RPM_CHANGELOG}" \\\n', normalization_step)
+        self.assertIn('  "${RHEL_PROFILE_RPM_CHANGELOG}"\n', normalization_step)
         self.assertIn('echo "RPM_CHANGELOG=${RPM_CHANGELOG}"', normalization_step)
         self.assertIn(
             'echo "RPM_CHANGELOG_EPOCH=${RPM_CHANGELOG_EPOCH}"',
@@ -1242,7 +1283,7 @@ class PackageLifecycleContractTests(unittest.TestCase):
                         "/bin/bash",
                         "-c",
                         local_changelog
-                        + '\nprepare_rpm_changelog "$1"\n'
+                        + '\nprepare_rpm_changelog "$1" 1\n'
                         + 'printf "%s" "${RPM_CHANGELOG_EPOCH}"',
                         "rpm-changelog-cross-day-contract",
                         str(destination),
@@ -1689,6 +1730,14 @@ class PackageLifecycleContractTests(unittest.TestCase):
             "path: ${{ steps.package_workspace.outputs.assets }}",
             self.workflow,
         )
+        self.assertIn(
+            "name: syswarden-rhel-package-owned-${{ env.VERSION }}",
+            self.workflow,
+        )
+        self.assertIn(
+            "path: ${{ steps.package_workspace.outputs.rhel_profile_assets }}",
+            self.workflow,
+        )
 
     def test_linux_install_and_upgrade_preservation_contract(self) -> None:
         preinstall = self.script("preinst.sh")
@@ -1749,6 +1798,60 @@ class PackageLifecycleContractTests(unittest.TestCase):
         self.assertNotRegex(postinstall, r"migrate-config[^\n]*\|\|\s*true")
         self.assertIn('/opt/syswarden/bin/syswarden-cli install', postinstall)
         self.assertIn('[ -f /etc/alpine-release ]', postinstall)
+
+    def test_offline_qualification_hooks_preflight_then_exit_before_mutation(self) -> None:
+        guard = 'if [ "${SYSWARDEN_OFFLINE_QUALIFICATION:-}" = 1 ]; then'
+        for source_name, loader in (
+            ("workflow", self.script),
+            ("local", self.local_build_script),
+        ):
+            for script_name, mutation_tokens in (
+                (
+                    "preinst.sh",
+                    (
+                        "secure_private_directory() {",
+                        "syswarden_retire_legacy_webtui / || exit 1",
+                        "mv /opt/syswarden/syswarden-auto.conf",
+                    ),
+                ),
+                (
+                    "postinst.sh",
+                    (
+                        "ln -sf /opt/syswarden/bin/syswarden-cli",
+                        "migrate_legacy_configuration\n",
+                        "/opt/syswarden/bin/syswarden-cli install",
+                        "syswarden_consume_deferred_purge_marker",
+                    ),
+                ),
+            ):
+                with self.subTest(source=source_name, script=script_name):
+                    script = loader(script_name)
+                    body = script[script.rindex("set -e\nexport SYSWARDEN_PKG_INSTALL=1\n") :]
+                    self.assertEqual(body.count(guard), 1)
+                    guard_index = body.index(guard)
+                    self.assertLess(
+                        body.index("syswarden_preflight_alpine_cronie\n"),
+                        guard_index,
+                    )
+                    self.assertLess(
+                        body.index("syswarden_preflight_install_barriers\n"),
+                        guard_index,
+                    )
+                    guard_body = body[guard_index : body.index("\nfi\n", guard_index)]
+                    self.assertIn("exit 0", guard_body)
+                    self.assertIn("syswarden_deferred_present", guard_body)
+                    self.assertIn("syswarden_finalizing_present", guard_body)
+                    for token in mutation_tokens:
+                        self.assertLess(guard_index, body.index(token), token)
+
+        install_source = INSTALL_COMMAND_SOURCE.read_text(encoding="utf-8")
+        activation = install_source.index("if system.OfflineQualificationActivation()")
+        migration = install_source.index(
+            "prepareOfflineQualificationActivationConfiguration(", activation
+        )
+        defaults = install_source.index("preflightConfiguredCronScheduling()", migration)
+        self.assertLess(activation, migration)
+        self.assertLess(migration, defaults)
 
     def test_alpine_cronie_runlevel_parser_matches_openrc_verbose_output(self) -> None:
         node04_runlevels = (
@@ -6116,7 +6219,7 @@ systemctl() {
             )
         self.assertEqual(self.workflow.count('-d "qrencode"'), 1)
         for dependency in ("checkpolicy", "policycoreutils-python-utils"):
-            self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 1)
+            self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 2)
         for dependency in (
             "wireguard-tools",
             "libqrencode-tools",
@@ -6137,7 +6240,7 @@ systemctl() {
             self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 1, dependency)
             self.assertEqual(local.count(f'-d "{dependency}"'), 1, dependency)
         for dependency in ("dnf-automatic", "procps-ng"):
-            self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 1, dependency)
+            self.assertEqual(self.workflow.count(f'-d "{dependency}"'), 2, dependency)
             self.assertEqual(local.count(f'-d "{dependency}"'), 1, dependency)
         self.assertEqual(self.workflow.count("            - procps-ng\n"), 1)
         self.assertEqual(local.count("  - procps-ng\n"), 1)
@@ -6167,11 +6270,16 @@ systemctl() {
             "var configureSSHForInstall = system.ConfigureSSH",
             source,
         )
-        dependency_check = source.index("installDependenciesForInstall()")
+        dependency_check = source.rindex("installDependenciesForInstall()")
+        wireguard_recovery = source.index("recoverPendingWireGuardForInstall()")
+        wireguard_preflight = source.index("preflightWireGuardForInstall()")
         package_guard = source.index('os.Getenv("SYSWARDEN_PKG_INSTALL") == "1"')
         quarantine = source.index("preparePackagedLegacyDynamicBanUpgrade()")
         ssh_configuration = source.index("configureSSHForInstall()")
         self.assertLess(dependency_check, package_guard)
+        self.assertLess(dependency_check, wireguard_recovery)
+        self.assertLess(wireguard_recovery, wireguard_preflight)
+        self.assertLess(wireguard_preflight, package_guard)
         self.assertLess(package_guard, quarantine)
         self.assertLess(quarantine, ssh_configuration)
 
@@ -6659,7 +6767,7 @@ systemctl() {
         self.assertEqual(
             self.workflow.count("package_project_license_contract.json"), 2
         )
-        self.assertEqual(self.workflow.count('--license "GPL-3.0-or-later"'), 2)
+        self.assertEqual(self.workflow.count('--license "GPL-3.0-or-later"'), 3)
         self.assertEqual(self.workflow.count('license: "GPL-3.0-or-later"'), 1)
         validation_step = workflow_step_script(
             self.workflow, "Validate Package Metadata"
@@ -6776,12 +6884,18 @@ systemctl() {
     def test_package_artifact_upload_is_github_strict_and_act_compatible(self) -> None:
         github_sha = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
         act_sha = "ea165f8d65b6e75b540449e92b4886f43607fa02"
-        self.assertEqual(self.workflow.count(f"actions/upload-artifact@{github_sha}"), 1)
-        self.assertEqual(self.workflow.count(f"actions/upload-artifact@{act_sha}"), 1)
+        self.assertEqual(self.workflow.count(f"actions/upload-artifact@{github_sha}"), 2)
+        self.assertEqual(self.workflow.count(f"actions/upload-artifact@{act_sha}"), 2)
         self.assertIn("if: ${{ !github.event.act }}", self.workflow)
         self.assertIn("if: ${{ github.event.act }}", self.workflow)
         self.assertIn("ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY: '1'", self.workflow)
         self.assertEqual(self.workflow.count("name: syswarden-packages-${{ env.VERSION }}"), 2)
+        self.assertEqual(
+            self.workflow.count(
+                "name: syswarden-rhel-package-owned-${{ env.VERSION }}"
+            ),
+            2,
+        )
 
     def test_apk_metadata_accepts_only_equivalent_numeric_version_components(self) -> None:
         self.assertIn('package_version="$(sed -n \'s/^pkgver = //p\'', self.workflow)

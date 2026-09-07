@@ -31,6 +31,108 @@ func validOperatorPolicyRule(id string, family config.OperatorPolicyFamily, sour
 	}
 }
 
+func validTransportOperatorPolicyRule(id string, family config.OperatorPolicyFamily, protocol config.OperatorPolicyProtocol, source string, port uint16) config.OperatorPolicyRule {
+	return config.OperatorPolicyRule{
+		ID: id, Family: family, Direction: config.OperatorPolicyDirectionIngress,
+		Protocol: protocol, DestinationPort: port, Source: source,
+		Action: config.OperatorPolicyActionAccept,
+	}
+}
+
+func TestCompileOperatorPolicyTCPUDPClosedDeterministicTemplates_SW_FW_007(t *testing.T) {
+	rules := []config.OperatorPolicyRule{
+		validTransportOperatorPolicyRule("zeta-udp-v6", config.OperatorPolicyFamilyIPv6, config.OperatorPolicyProtocolUDP, "2001:db8:1::/64", 51820),
+		validTransportOperatorPolicyRule("alpha-tcp-v4", config.OperatorPolicyFamilyIPv4, config.OperatorPolicyProtocolTCP, "198.51.100.0/24", 8443),
+	}
+	policy, err := compileOperatorPolicy(rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join("..", "..", "..", "..", "..", "testdata", "firewall", "operator-policy-transport-v4.10.0.nft")
+	want, err := os.ReadFile(wantPath) // #nosec G304 -- fixed repository golden
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.chain != string(want)+"\n" {
+		t.Fatalf("compiled transport policy changed; review %s:\n%s\nwant:\n%s", wantPath, policy.chain, want)
+	}
+	for _, exact := range []string{
+		"ip saddr 198.51.100.0/24 meta l4proto tcp tcp dport 8443 counter accept comment \"",
+		"ip6 saddr 2001:db8:1::/64 meta l4proto udp udp dport 51820 counter accept comment \"",
+	} {
+		if strings.Count(policy.chain, exact) != 1 {
+			t.Fatalf("compiled transport policy lacks exact closed template %q:\n%s", exact, policy.chain)
+		}
+	}
+	if strings.Contains(policy.chain, "alpha-tcp-v4") || strings.Contains(policy.chain, "zeta-udp-v6") {
+		t.Fatal("compiled transport policy leaked operator identifiers")
+	}
+	reordered, err := compileOperatorPolicy([]config.OperatorPolicyRule{rules[1], rules[0]})
+	if err != nil || reordered.chain != policy.chain {
+		t.Fatalf("transport compilation is not stable across input order: %v", err)
+	}
+	verification := policy.verificationPlan()
+	if verification.rules[0].protocol != config.OperatorPolicyProtocolTCP || verification.rules[0].destinationPort != 8443 ||
+		verification.rules[1].protocol != config.OperatorPolicyProtocolUDP || verification.rules[1].destinationPort != 51820 {
+		t.Fatalf("transport verification plan lost typed fields: %#v", verification.rules)
+	}
+}
+
+func TestCompileOperatorPolicyTCPUDPConflictsAndBoundsFailClosed_SW_FW_007(t *testing.T) {
+	base := validTransportOperatorPolicyRule("tcp-net", config.OperatorPolicyFamilyIPv4, config.OperatorPolicyProtocolTCP, "198.51.100.0/24", 443)
+	for _, mutate := range []func(*config.OperatorPolicyRule){
+		func(rule *config.OperatorPolicyRule) { rule.DestinationPort = 0 },
+		func(rule *config.OperatorPolicyRule) { rule.ICMPType = config.OperatorPolicyTypeEchoRequest },
+		func(rule *config.OperatorPolicyRule) {
+			rule.Protocol = config.OperatorPolicyProtocol("tcp; counter drop")
+		},
+	} {
+		rule := base
+		mutate(&rule)
+		if _, err := compileOperatorPolicy([]config.OperatorPolicyRule{rule}); err == nil {
+			t.Fatalf("invalid transport rule compiled: %#v", rule)
+		}
+	}
+	overlap := validTransportOperatorPolicyRule("tcp-host", config.OperatorPolicyFamilyIPv4, config.OperatorPolicyProtocolTCP, "198.51.100.42", 443)
+	if _, err := compileOperatorPolicy([]config.OperatorPolicyRule{base, overlap}); err == nil {
+		t.Fatal("overlapping same-protocol same-port sources were accepted")
+	}
+	differentPort := overlap
+	differentPort.ID = "tcp-host-alt"
+	differentPort.DestinationPort = 8443
+	differentProtocol := overlap
+	differentProtocol.ID = "udp-host"
+	differentProtocol.Protocol = config.OperatorPolicyProtocolUDP
+	if _, err := compileOperatorPolicy([]config.OperatorPolicyRule{base, differentPort, differentProtocol}); err != nil {
+		t.Fatalf("independent transport tuples were rejected: %v", err)
+	}
+}
+
+func FuzzCompileOperatorTransportPolicyClosed(f *testing.F) {
+	f.Add("tcp", "ipv4", "198.51.100.42", uint16(443), "allow-tcp")
+	f.Add("udp", "ipv6", "2001:db8::42", uint16(51820), "allow-udp")
+	f.Add("tcp; drop", "ipv4", "0.0.0.0/0; counter accept", uint16(22), "raw-rule")
+	f.Fuzz(func(t *testing.T, protocolValue, familyValue, source string, port uint16, id string) {
+		rule := config.OperatorPolicyRule{
+			ID: id, Family: config.OperatorPolicyFamily(familyValue),
+			Direction:       config.OperatorPolicyDirectionIngress,
+			Protocol:        config.OperatorPolicyProtocol(protocolValue),
+			DestinationPort: port, Source: source, Action: config.OperatorPolicyActionAccept,
+		}
+		first, firstErr := compileOperatorPolicy([]config.OperatorPolicyRule{rule})
+		second, secondErr := compileOperatorPolicy([]config.OperatorPolicyRule{rule})
+		if (firstErr == nil) != (secondErr == nil) {
+			t.Fatal("compiler verdict is not deterministic")
+		}
+		if firstErr == nil && first.chain != second.chain {
+			t.Fatal("compiler output is not deterministic")
+		}
+		if firstErr == nil && (strings.Contains(first.chain, ";") || strings.Contains(first.chain, "\n\n\n")) {
+			t.Fatalf("accepted transport policy escaped the closed renderer: %q", first.chain)
+		}
+	})
+}
+
 func TestCompileOperatorPolicyUsesClosedDeterministicTemplates_SW_FW_005(t *testing.T) {
 	rules := []config.OperatorPolicyRule{
 		validOperatorPolicyRule("zeta-v6", config.OperatorPolicyFamilyIPv6, "2001:db8:abcd::/48"),
