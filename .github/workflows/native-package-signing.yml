@@ -858,6 +858,12 @@ jobs:
           version="${RELEASE_TAG#v}"
           apk_name="syswarden_${version}_x86_64.apk"
           install -m 0600 "${UNSIGNED_DIR}/${apk_name}" "${APK_WORK_DIR}/${apk_name}"
+          apk_control_name="unsigned-control.tar.gz"
+          apk_control="${APK_WORK_DIR}/${apk_control_name}"
+          apk_signed="${APK_WORK_DIR}/signed-${apk_name}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py \
+            apk-control --unsigned-package "${APK_WORK_DIR}/${apk_name}" \
+            --output "${apk_control}"
           apk_public_rel="$(jq -er --arg id "${APK_KEY_ID}" '
             [.apk.trusted_keys[] | select(.id == $id)] |
             if length == 1 then .[0].public_key else error("APK key is not unique") end
@@ -909,9 +915,15 @@ jobs:
             --mount "type=bind,src=${public_real},dst=/run/${apk_public_name},readonly" \
             --env "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" \
             --entrypoint /bin/sh "${APK_SIGNER_IMAGE}" -eu -c '
-              abuild-sign -t RSA256 -k "$1" "$2"
-            ' sh "/run/${apk_private_name}" "/work/${apk_name}"
-          install -m 0600 "${APK_WORK_DIR}/${apk_name}" "${SIGNED_DIR}/${apk_name}"
+              abuild-sign -t RSA256 -k "$1" -p "$2" "$3"
+            ' sh "/run/${apk_private_name}" "/run/${apk_public_name}" \
+            "/work/${apk_control_name}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py \
+            apk-assemble --unsigned-package "${APK_WORK_DIR}/${apk_name}" \
+            --signed-control "${apk_control}" \
+            --public-key-name "${apk_public_name}" \
+            --source-date-epoch "${SOURCE_DATE_EPOCH}" --output "${apk_signed}"
+          install -m 0600 "${apk_signed}" "${SIGNED_DIR}/${apk_name}"
           cleanup_apk_secret
           trap - EXIT
           test ! -e "${apk_secret_dir}"

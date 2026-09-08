@@ -128,12 +128,13 @@ before and after `rpmsign`, then verifies the result against a private temporary
 RPM database containing only the selected public key. The native verdict must
 identify an RSA/SHA256 signature made by one currently valid signing-capable
 RSA primary key or subkey between 3072 and 8192 bits in that committed
-certificate. APK signing uses
-`abuild-sign -t RSA256` with the source commit timestamp; the finalizer requires
-the signed APK to consist of one canonical, singular and bounded gzip archive
-containing only the expected RSA256 signature, followed by the complete
-unsigned APK byte stream. A second offline container invocation runs native
-`apk verify` with a directory
+certificate. APK signing isolates the exact first `control.tar.gz` gzip member
+from the unsigned APK v2 byte stream and applies `abuild-sign -t RSA256` to that
+member with the source commit timestamp. The assembler requires the signed
+control stream to preserve the original control bytes exactly, then emits one
+canonical, singular and bounded gzip archive containing only the expected
+RSA256 signature followed by the complete unsigned APK byte stream. A second
+offline container invocation runs native `apk verify` with a directory
 containing only the selected public key. DEB signing writes one detached
 ASCII-armored `.asc` signature and leaves the package bytes unchanged. The
 offline gate accepts only one RSA/SHA256 signature, checks its complete primary
