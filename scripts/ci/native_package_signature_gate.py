@@ -904,28 +904,13 @@ def validate_deb_public_key_container(path: Path, data: bytes) -> None:
         fail("DEB public key armor is not singular and canonical")
 
 
-def run_gpgv_status(command: list[str]) -> list[tuple[str, list[str]]]:
-    environment = {"PATH": os.environ.get("PATH", ""), "LC_ALL": "C"}
-    try:
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=environment,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        fail(f"cannot execute isolated DEB gpgv verification: {exc}")
-    if (
-        len(result.stdout.encode("utf-8")) > MAX_VERIFIER_OUTPUT_BYTES
-        or len(result.stderr.encode("utf-8")) > MAX_VERIFIER_OUTPUT_BYTES
-    ):
-        fail("isolated DEB gpgv verification output exceeds its bound")
-    if result.returncode != 0:
-        fail("isolated DEB gpgv verification rejected the signature")
+def parse_gpgv_status_output(output: str) -> list[tuple[str, list[str]]]:
+    """Parse the exact accepted gpgv status channel."""
+
+    if len(output.encode("utf-8")) > MAX_VERIFIER_OUTPUT_BYTES:
+        fail("isolated DEB gpgv status output exceeds its bound")
     statuses: list[tuple[str, list[str]]] = []
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         if not line.startswith("[GNUPG:] "):
             fail("DEB gpgv status channel contains non-status output")
         fields = line.removeprefix("[GNUPG:] ").split()
@@ -946,6 +931,83 @@ def run_gpgv_status(command: list[str]) -> list[tuple[str, list[str]]]:
     if not statuses or any(tag not in allowed for tag, _ in statuses):
         fail("DEB gpgv status is incomplete or contains a rejection record")
     return statuses
+
+
+def run_gpgv_status_capture(
+    command: list[str],
+) -> tuple[list[tuple[str, list[str]]], bytes, bytes]:
+    """Run gpgv once and preserve the exact validated status and logger channels."""
+
+    environment = {"PATH": os.environ.get("PATH", ""), "LC_ALL": "C"}
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=environment,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        fail(f"cannot execute isolated DEB gpgv verification: {exc}")
+    if (
+        len(result.stdout.encode("utf-8")) > MAX_VERIFIER_OUTPUT_BYTES
+        or len(result.stderr.encode("utf-8")) > MAX_VERIFIER_OUTPUT_BYTES
+    ):
+        fail("isolated DEB gpgv verification output exceeds its bound")
+    if result.returncode != 0:
+        fail("isolated DEB gpgv verification rejected the signature")
+    statuses = parse_gpgv_status_output(result.stdout)
+    return statuses, result.stdout.encode("utf-8"), result.stderr.encode("utf-8")
+
+
+def run_gpgv_status(command: list[str]) -> list[tuple[str, list[str]]]:
+    statuses, _, _ = run_gpgv_status_capture(command)
+    return statuses
+
+
+def write_raw_exclusive(path: Path, payload: bytes, label: str) -> None:
+    """Write one bounded private raw verifier channel without replacement."""
+
+    if len(payload) > MAX_VERIFIER_OUTPUT_BYTES:
+        fail(f"{label} exceeds its size bound")
+    parent = path.parent
+    try:
+        lexical_parent = parent.absolute()
+        resolved_parent = parent.resolve(strict=True)
+        metadata = resolved_parent.lstat()
+    except OSError as exc:
+        fail(f"cannot inspect {label} output directory: {exc}")
+    if (
+        lexical_parent != resolved_parent
+        or not stat.S_ISDIR(metadata.st_mode)
+        or parent.is_symlink()
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+    ):
+        fail(f"{label} output directory must be owner-controlled")
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        fail(f"cannot create {label}: {exc}")
+    try:
+        os.fchmod(descriptor, 0o600)
+        written = 0
+        while written < len(payload):
+            count = os.write(descriptor, payload[written:])
+            if count <= 0:
+                fail(f"short write while creating {label}")
+            written += count
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def one_status(
@@ -1022,7 +1084,11 @@ def verify_deb(
     gpg: str,
     gpgv: str,
     as_of: dt.date,
+    gpgv_status_output: Path | None = None,
+    gpgv_logger_output: Path | None = None,
 ) -> tuple[bytes, str]:
+    if (gpgv_status_output is None) != (gpgv_logger_output is None):
+        fail("DEB gpgv raw outputs must be requested together")
     key = select_key(policy, "deb", key_id, as_of)
     public_key_path, public_key_data = key_path(policy_path, key)
     validate_deb_public_key_container(public_key_path, public_key_data)
@@ -1070,7 +1136,7 @@ def verify_deb(
             ],
             "DEB OpenPGP trust-root conversion",
         )
-        statuses = run_gpgv_status(
+        statuses, status_wire, logger_wire = run_gpgv_status_capture(
             [
                 gpgv,
                 "--homedir",
@@ -1092,6 +1158,9 @@ def verify_deb(
         validate_deb_openpgp_certificate(
             records, key["fingerprint"], signing_fingerprint, as_of
         )
+        if gpgv_status_output is not None and gpgv_logger_output is not None:
+            write_raw_exclusive(gpgv_status_output, status_wire, "DEB gpgv status")
+            write_raw_exclusive(gpgv_logger_output, logger_wire, "DEB gpgv logger")
     if regular_bytes(
         signature, MAX_DEB_SIGNATURE_BYTES, "DEB detached signature"
     ) != signature_data:
@@ -1116,6 +1185,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apk", default="apk")
     parser.add_argument("--openssl", default="openssl")
     parser.add_argument("--signature", type=Path)
+    parser.add_argument("--gpgv-status-output", type=Path)
+    parser.add_argument("--gpgv-logger-output", type=Path)
     parser.add_argument(
         "--purpose", choices=("qualification", "publishing"), default="qualification"
     )
@@ -1152,6 +1223,11 @@ def main(argv: list[str] | None = None) -> int:
             args.purpose,
             args.bootstrap_qualification,
         )
+        if args.family != "deb" and (
+            args.gpgv_status_output is not None
+            or args.gpgv_logger_output is not None
+        ):
+            fail("gpgv raw outputs are valid only for DEB verification")
         signature_data: bytes | None = None
         signature_created_at: str | None = None
         with tempfile.TemporaryDirectory(prefix="syswarden-native-package-") as raw:
@@ -1191,6 +1267,8 @@ def main(argv: list[str] | None = None) -> int:
                     args.gpg,
                     args.gpgv,
                     as_of,
+                    args.gpgv_status_output,
+                    args.gpgv_logger_output,
                 )
         if (
             regular_bytes(args.policy, MAX_JSON_BYTES, "signature policy")

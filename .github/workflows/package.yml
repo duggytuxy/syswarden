@@ -121,6 +121,8 @@ jobs:
             scripts/ci/native_package_signing_bundle_test.py \
             scripts/ci/native_package_signing_workflow_test.py \
             scripts/ci/native_capability_evidence_test.py \
+            scripts/ci/native_feed_evidence_test.py \
+            scripts/ci/osint_tls_fixture_test.py \
             scripts/ci/native_lifecycle_evidence_test.py \
             scripts/ci/native_performance_adapter_test.py \
             scripts/ci/native_performance_probe_test.py \

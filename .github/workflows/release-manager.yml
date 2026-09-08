@@ -679,8 +679,33 @@ jobs:
           test -s "${QUALIFICATION_ROOT}/EVIDENCE_SHA256SUMS.txt"
           test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
+          native_feed_raw_root="${QUALIFICATION_ROOT}/native-release-evidence/native-feed/raw"
+          while IFS= read -r -d '' directory; do
+            chmod 0700 -- "${directory}"
+          done < <(find -P "${native_feed_raw_root}" -type d -print0)
+          while IFS= read -r -d '' file; do
+            chmod 0600 -- "${file}"
+          done < <(find -P "${native_feed_raw_root}" -type f -print0)
           qualification_root_directories=(aggregate bound go127-evidence native-release-evidence native-signing packages raw status)
-          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/candidate-update native-release-evidence/candidate-update/node01 native-release-evidence/candidate-update/verification native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
+          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/candidate-update native-release-evidence/candidate-update/node01 native-release-evidence/candidate-update/verification native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-feed native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
+          mapfile -t native_feed_raw_inventory < <(
+            jq -er '.raw_evidence.inventory[]' \
+              scripts/ci/native_feed_contract_v4.10.0.json
+          )
+          test "${#native_feed_raw_inventory[@]}" -eq 110
+          native_feed_raw_directories=("native-release-evidence/native-feed/raw")
+          for relative in "${native_feed_raw_inventory[@]}"; do
+            IFS=/ read -r -a components <<< "${relative}"
+            current="native-release-evidence/native-feed/raw"
+            for ((index = 0; index < ${#components[@]} - 1; index++)); do
+              current+="/${components[index]}"
+              native_feed_raw_directories+=("${current}")
+            done
+          done
+          mapfile -t native_feed_raw_directories < <(
+            printf '%s\n' "${native_feed_raw_directories[@]}" | LC_ALL=C sort -u
+          )
+          qualification_all_directories+=("${native_feed_raw_directories[@]}")
           qualification_raw_files=(
             nftables-raw.json
             package-lifecycle-amd64.json
@@ -912,6 +937,31 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py verify \
             --bundle "${QUALIFICATION_ROOT}/native-signing" \
             --release "${RELEASE_TAG}" --release-sha "${RELEASE_SHA}"
+          signing_provenance="${QUALIFICATION_ROOT}/native-signing/evidence/NATIVE_SIGNING_PROVENANCE.json"
+          deb_package_name="syswarden_${VERSION}_amd64.deb"
+          deb_key_id="$(jq -er '.deb_signature.key.id' "${signing_provenance}")"
+          deb_signature_date="$(jq -er '.deb_signature.as_of' "${signing_provenance}")"
+          feed_verify_root="$(mktemp -d "${RUNNER_TEMP%/}/native-feed-verify.XXXXXXXXXX")"
+          chmod 0700 "${feed_verify_root}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_feed_evidence.py assemble \
+            --contract "${GITHUB_WORKSPACE}/scripts/ci/native_feed_contract_v4.10.0.json" \
+            --raw-root "${native_feed_raw_root}" \
+            --candidate-sha "${RELEASE_SHA}" \
+            --deb-package "${QUALIFICATION_ROOT}/native-signing/packages/${deb_package_name}" \
+            --deb-signature "${QUALIFICATION_ROOT}/native-signing/packages/${deb_package_name}.asc" \
+            --signature-policy "${GITHUB_WORKSPACE}/scripts/ci/native_package_signature_policy_v4100.json" \
+            --deb-key-id "${deb_key_id}" \
+            --deb-signature-date "${deb_signature_date}" \
+            --node02-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node02' \
+              "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
+            --output-evidence "${feed_verify_root}/EVIDENCE.json" \
+            --output-verdict "${feed_verify_root}/VERDICT.json"
+          cmp -- "${feed_verify_root}/EVIDENCE.json" \
+            "${QUALIFICATION_ROOT}/native-release-evidence/native-feed/EVIDENCE.json"
+          cmp -- "${feed_verify_root}/VERDICT.json" \
+            "${QUALIFICATION_ROOT}/native-release-evidence/native-feed/VERDICT.json"
+          rm -f -- "${feed_verify_root}/EVIDENCE.json" "${feed_verify_root}/VERDICT.json"
+          rmdir -- "${feed_verify_root}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/release_gate.py verify-packages \
             --tag "${RELEASE_TAG}" --packages "incoming/syswarden-packages-${VERSION}"
           package_names=(
@@ -1305,8 +1355,33 @@ jobs:
           test -s "${QUALIFICATION_ROOT}/EVIDENCE_SHA256SUMS.txt"
           test -z "$(find "${QUALIFICATION_ROOT}" -type l -print -quit)"
           test -z "$(find "${QUALIFICATION_ROOT}" -mindepth 1 ! -type f ! -type d -print -quit)"
+          native_feed_raw_root="${QUALIFICATION_ROOT}/native-release-evidence/native-feed/raw"
+          while IFS= read -r -d '' directory; do
+            chmod 0700 -- "${directory}"
+          done < <(find -P "${native_feed_raw_root}" -type d -print0)
+          while IFS= read -r -d '' file; do
+            chmod 0600 -- "${file}"
+          done < <(find -P "${native_feed_raw_root}" -type f -print0)
           qualification_root_directories=(aggregate bound go127-evidence native-release-evidence native-signing packages raw status)
-          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/candidate-update native-release-evidence/candidate-update/node01 native-release-evidence/candidate-update/verification native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
+          qualification_all_directories=(aggregate bound go127-evidence native-release-evidence native-release-evidence/candidate-update native-release-evidence/candidate-update/node01 native-release-evidence/candidate-update/verification native-release-evidence/ha-v2 native-release-evidence/ha-v2/raw native-release-evidence/native-capability native-release-evidence/native-feed native-release-evidence/native-lifecycle native-release-evidence/node01-migration native-release-evidence/performance native-release-evidence/source-allocation native-release-evidence/source-allocation/raw native-release-evidence/source-allocation/raw/allocation-campaign-01 native-release-evidence/source-allocation/raw/allocation-campaign-02 native-release-evidence/source-allocation/raw/allocation-campaign-03 native-signing native-signing/evidence native-signing/packages native-signing/rhel-package-owned native-signing/rhel-package-owned/evidence native-signing/rhel-package-owned/packages packages packages/candidate packages/previous raw status)
+          mapfile -t native_feed_raw_inventory < <(
+            jq -er '.raw_evidence.inventory[]' \
+              scripts/ci/native_feed_contract_v4.10.0.json
+          )
+          test "${#native_feed_raw_inventory[@]}" -eq 110
+          native_feed_raw_directories=("native-release-evidence/native-feed/raw")
+          for relative in "${native_feed_raw_inventory[@]}"; do
+            IFS=/ read -r -a components <<< "${relative}"
+            current="native-release-evidence/native-feed/raw"
+            for ((index = 0; index < ${#components[@]} - 1; index++)); do
+              current+="/${components[index]}"
+              native_feed_raw_directories+=("${current}")
+            done
+          done
+          mapfile -t native_feed_raw_directories < <(
+            printf '%s\n' "${native_feed_raw_directories[@]}" | LC_ALL=C sort -u
+          )
+          qualification_all_directories+=("${native_feed_raw_directories[@]}")
           qualification_raw_files=(
             nftables-raw.json
             package-lifecycle-amd64.json
@@ -1549,6 +1624,31 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_package_signing_bundle.py verify \
             --bundle "${QUALIFICATION_ROOT}/native-signing" \
             --release "${RELEASE_TAG}" --release-sha "${RELEASE_SHA}"
+          signing_provenance="${QUALIFICATION_ROOT}/native-signing/evidence/NATIVE_SIGNING_PROVENANCE.json"
+          deb_package_name="syswarden_${VERSION}_amd64.deb"
+          deb_key_id="$(jq -er '.deb_signature.key.id' "${signing_provenance}")"
+          deb_signature_date="$(jq -er '.deb_signature.as_of' "${signing_provenance}")"
+          feed_verify_root="$(mktemp -d "${RUNNER_TEMP%/}/native-feed-verify.XXXXXXXXXX")"
+          chmod 0700 "${feed_verify_root}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci/native_feed_evidence.py assemble \
+            --contract "${GITHUB_WORKSPACE}/scripts/ci/native_feed_contract_v4.10.0.json" \
+            --raw-root "${native_feed_raw_root}" \
+            --candidate-sha "${RELEASE_SHA}" \
+            --deb-package "${QUALIFICATION_ROOT}/native-signing/packages/${deb_package_name}" \
+            --deb-signature "${QUALIFICATION_ROOT}/native-signing/packages/${deb_package_name}.asc" \
+            --signature-policy "${GITHUB_WORKSPACE}/scripts/ci/native_package_signature_policy_v4100.json" \
+            --deb-key-id "${deb_key_id}" \
+            --deb-signature-date "${deb_signature_date}" \
+            --node02-ssh-host-key-sha256 "$(jq -er '.trusted_host_keys.node02' \
+              "${QUALIFICATION_ROOT}/native-release-evidence/NATIVE_RELEASE_EVIDENCE_MANIFEST.json")" \
+            --output-evidence "${feed_verify_root}/EVIDENCE.json" \
+            --output-verdict "${feed_verify_root}/VERDICT.json"
+          cmp -- "${feed_verify_root}/EVIDENCE.json" \
+            "${QUALIFICATION_ROOT}/native-release-evidence/native-feed/EVIDENCE.json"
+          cmp -- "${feed_verify_root}/VERDICT.json" \
+            "${QUALIFICATION_ROOT}/native-release-evidence/native-feed/VERDICT.json"
+          rm -f -- "${feed_verify_root}/EVIDENCE.json" "${feed_verify_root}/VERDICT.json"
+          rmdir -- "${feed_verify_root}"
           cmp --silent \
             "${QUALIFICATION_ROOT}/native-signing/packages/syswarden_${VERSION}_amd64.deb.asc" \
             "release_payload/assets/syswarden_${VERSION}_amd64.deb.asc"
